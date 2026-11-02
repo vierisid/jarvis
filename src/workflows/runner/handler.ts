@@ -1,3 +1,5 @@
+import { prepareSubmission, submissionConfig } from '../runtime/form-submission';
+import { claimSubmissionRun } from '../db/repos/trigger-fire';
 /**
  * RUN_FLOW worker handler. Bridges the queue to flow execution:
  *   1. Claim a RUN_FLOW job (the worker has already done that for us).
@@ -275,11 +277,24 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
     try {
       assertRunIngredientsReady(run, version.trigger,
         typed.payload.executionType === 'RESUME' ? undefined : typed.payload);
+      let payload = typed.payload.payload ?? {};
+      if (version.trigger.settings?.pieceName === 'webhook') {
+        const config = submissionConfig(version.trigger.settings.input);
+        if (config && !resuming) {
+          if (typed.payload.stepNameToTest) throw new FlowExecutionError('Test the complete form workflow with a submission payload; isolated step previews bypass submission validation and are disabled for this flow.', { name: 'trigger', displayName: 'Validate form submission' });
+          try {
+            const prepared = prepareSubmission(payload, config);
+            claimSubmissionRun(run.flowId, version.id, prepared.key, run.id);
+            payload = prepared.data;
+            if (Object.hasOwn(typed.payload.payload ?? {}, '_webhook')) payload._webhook = typed.payload.payload!._webhook;
+          } catch (error) { throw new FlowExecutionError((error as Error).message, { name: 'trigger', displayName: 'Validate form submission' }); }
+        }
+      }
       const result = await withRunCancellation(runId, () => opts.executor.execute({
         run,
         version,
         job: typed,
-        payload: typed.payload.payload ?? {},
+        payload,
         signal: cancellation.signal,
       }));
       updateRun(runId, {

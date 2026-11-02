@@ -79,6 +79,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
     || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE) && managedPieceChanges(piece, action))
     || (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
+    || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
     // #961: an HTTP request that is not a read is a send whose outcome the
     // server alone knows, so a retry after a lost or failed request is
@@ -974,6 +975,22 @@ function mailchimpMemberStatusCategory(input: Record<string, unknown>): ActionCa
 
 /** Every adapter: the verified catalog pieces, the vendored core pieces, then the managed ones. */
 export const ALL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [...GOVERNED_PIECE_ADAPTERS, ...CORE_PIECE_ADAPTERS, ...MANAGED_PIECE_ADAPTERS];
+// Narrow audited action coverage; this does not promote the entire Sheets
+// package to the Library's VERIFIED set or claim coverage of its other actions.
+const SHEETS_APPEND_ADAPTER: GovernedPieceAdapter = {
+  catalogId: 'google-sheets', pieceName: '@activepieces/piece-google-sheets',
+  unknownActionCategory: 'delete_data',
+  targetProps: ['spreadsheet_id', 'spreadsheetId', 'worksheet_title', 'sheetId', 'sheet_id', 'range', 'values', 'value_input_option', 'as_string'],
+  categories: { write_data: ['insert_row', 'sheets_append_values', 'sheets_add_row'] },
+};
+
+/**
+ * Adapters that govern only some of a piece's actions, outside the verified
+ * set. Their other actions resolve to null and stay community steps. Exported
+ * for the job contract, which must judge a governed action the way the
+ * runtime does.
+ */
+export const PARTIAL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [SHEETS_APPEND_ADAPTER];
 
 const BY_PIECE_NAME = new Map<string, GovernedPieceAdapter>();
 const ACTION_CATEGORY = new Map<string, Map<string, ActionCategory>>();
@@ -999,7 +1016,7 @@ for (const adapter of ALL_PIECE_ADAPTERS) {
 /** True for a piece with a governed adapter. The engine-side guard asks this
  * first, so an ungoverned piece costs no round trip at all. */
 export function isGovernedPiece(pieceName: unknown): boolean {
-  return typeof pieceName === 'string' && BY_PIECE_NAME.has(pieceName);
+  return typeof pieceName === 'string' && (BY_PIECE_NAME.has(pieceName) || pieceName === SHEETS_APPEND_ADAPTER.pieceName);
 }
 
 /**
@@ -1010,6 +1027,10 @@ export function isGovernedPiece(pieceName: unknown): boolean {
  */
 export function resolveGovernedPieceAction(pieceName: unknown, actionName: unknown, input?: unknown): ResolvedPieceAction | null {
   if (typeof pieceName !== 'string' || typeof actionName !== 'string') return null;
+  if (pieceName === SHEETS_APPEND_ADAPTER.pieceName) {
+    return tracksPieceCompletion(pieceName, actionName)
+      ? { adapter: SHEETS_APPEND_ADAPTER, action: actionName, category: 'write_data', known: true, byInput: false } : null;
+  }
   const adapter = BY_PIECE_NAME.get(pieceName);
   if (!adapter) return null;
   const mapped = ACTION_CATEGORY.get(pieceName)!.get(actionName);

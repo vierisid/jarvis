@@ -265,13 +265,16 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('Contract constraints govern future workflow execution. A request not to execute real actions while drafting is satisfied by a disabled draft; do not turn it into a ban on the requested future reads or notifications. Preserve every required output, not a diagnostic-only scaffold.');
 
   lines.push('The action calls the LLM under the hood, validates against the piece catalog, and either persists a');
-  lines.push('DISABLED draft or returns `{ ok: false, errors, rawResponse }`. Treat failures as iterative: read the errors,');
-  lines.push('refine the description with concrete piece/tool names from the messages, and call `compose` again.');
+  lines.push('DISABLED draft or returns setup questions or concrete errors. Continue setup through continue_setup;');
+  lines.push('other errors need a targeted repair that preserves the original request. Do not weaken requirements.');
   if (!piecesManaged) {
-    lines.push('A failure can also carry `suggestedInstalls: [{ id, displayName, reason }]` -- community-library pieces that');
-    lines.push('would make the request possible. Relay those to the user (installs happen from the dashboard\'s Library page)');
-    lines.push('and offer to compose again after installing; do not retry compose unchanged.');
+    lines.push('When a Library connector is missing, compose returns setup.status needs_installation with setup.continueWith.install naming it. Call that continueWith as given: the user approves installing exactly those connectors on a software-install card. Nothing is installed when nothing is missing. Set install_missing:false only if the user forbids installation.');
+    lines.push('If the install card is denied, say which connectors were not installed and that the workflow stays Setup required; do not retry the install. If installation fails, installationErrors and suggestedInstalls identify the remaining dependency; do not repeatedly retry it.');
   }
+  lines.push('Save the full disabled processing graph even when payload paths, destination, column mapping or account are unknown. Leave inputs empty/null for Setup required in the editor; configuration alone must not block saving. Never invent values or substitute diagnostic steps.');
+  lines.push('When setup is returned without a saved draft, ask its nextQuestion directly and keep the compositionRecordId. On the answer call continue_setup { composition_id, answers }. It retains the original job and earlier answers; never ask the user to repeat the workflow prompt or tell you to continue.');
+  lines.push('Once a draft is saved, its remaining fields are set in the workflow editor (setup.editor): continue_setup refuses answers and installs for a saved draft and only rechecks readiness. Point the user to the editor instead.');
+  lines.push('Guide account connection through secure Connected workspace setup and selection in the workflow. Never request credentials in chat. Recheck with continue_setup { composition_id } after setup; keep the workflow disabled and do not run external actions while drafting.');
   lines.push('Do not surface raw error JSON to the user, translate it. After a successful compose, summarize what was');
   lines.push('built and confirm with the user before calling `publish` (which locks the draft and enables it).');
   lines.push('');
@@ -279,7 +282,7 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('The tool rejects `create` without `empty: true` (or a `description`) -- this is intentional, to stop weak models from');
   lines.push('picking `create` just because the verb matches. If you pass `description`, the call silently reroutes to `compose`.');
   lines.push('Use `run { flow, payload? }` to trigger an existing flow; `flow` accepts display name or id.');
-  lines.push('Sub-actions: compose / create / list / get / run / enable / disable / publish / delete / list_runs / get_run.');
+  lines.push('Sub-actions: compose / continue_setup / create / list / get / run / enable / disable / publish / delete / list_runs / get_run.');
   lines.push('');
   lines.push('### delegate_task');
   lines.push('Send a task to a specialist sub-agent (research analyst, software engineer, etc.). The specialist works independently and returns results.');

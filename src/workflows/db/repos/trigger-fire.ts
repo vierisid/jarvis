@@ -49,7 +49,7 @@ interface FireRow {
 
 /** A start that ran past this is shown as delayed. */
 export const DELAYED_AFTER_MS = 60_000;
-/** Ledger rows older than this are pruned. */
+/** Ordinary delivery history is pruned; form identities survive while the workflow exists. */
 export const FIRE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const DETAIL_MAX = 2_000;
 
@@ -291,9 +291,9 @@ export function fireLabel(fire: TriggerFire, runStatus: string | null, now = Dat
   return runStatus.toLowerCase();
 }
 
-/** Keep the ledger bounded. */
+/** Prune ordinary history. Keep accepted form identities for the lifetime of the workflow. */
 export function pruneFires(now = Date.now()): number {
-  return db().run(`DELETE FROM workflow_trigger_fire WHERE observed_at < ?`, [now - FIRE_RETENTION_MS]).changes;
+  return db().run(`DELETE FROM workflow_trigger_fire WHERE observed_at < ? AND (dedupe_key IS NULL OR source != 'webhook' OR dedupe_key NOT LIKE 'submission:v1:%' OR NOT EXISTS (SELECT 1 FROM flow WHERE flow.id = workflow_trigger_fire.flow_id))`, [now - FIRE_RETENTION_MS]).changes;
 }
 
 export interface ScheduleWatch { flowId: string; expression: string; watchedSince: number }
@@ -313,4 +313,18 @@ export function setScheduleWatch(flowId: string, expression: string, since = Dat
 /** A turned-off or deleted workflow is owed nothing. */
 export function clearScheduleWatch(flowId: string): void {
   db().run(`DELETE FROM workflow_schedule_watch WHERE flow_id = ?`, [flowId]);
+}
+
+/** The same form identity protects manual runs and survives ordinary history pruning.
+ * A resumed owning run may continue; a new run may never replay that submission. */
+export function claimSubmissionRun(flowId: string, versionId: string, key: string, runId: string): void {
+  if (!/^submission:v1:[a-f0-9]{64}$/.test(key)) throw Error('Invalid submission identity');
+  db().transaction(() => {
+    const previous = db().query<{run_id: string | null}, [string, string]>(
+      "SELECT run_id FROM workflow_trigger_fire WHERE flow_id = ? AND source = 'webhook' AND dedupe_key = ?").get(flowId, key);
+    if (previous?.run_id === runId) return;
+    if (previous) throw Error('This submission ID was already accepted. No new spreadsheet write was attempted. Inspect the original run if its outcome is uncertain.');
+    claimFire({ flowId, flowVersionId: versionId, source: 'webhook', dedupeKey: key,
+      detail: { delivery: 'form submission ID' } }, () => ({ runId }));
+  }).immediate();
 }

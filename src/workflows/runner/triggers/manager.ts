@@ -1,3 +1,4 @@
+import { submissionConfig } from '../../runtime/form-submission';
 import { workflowRemovalState, workflowTriggerCurrent } from '../../db/repos/workflow-removal-state';
 /**
  * `TriggerManager` -- runtime owner of trigger subscriptions for the new
@@ -492,7 +493,7 @@ export class TriggerManager {
     const input = (trigger.settings?.input ?? {}) as Record<string, unknown>;
     const secret = typeof input.secret === "string" && input.secret ? input.secret : undefined;
     const generation = workflowRemovalState(flowId).generation;
-    this.webhooks.register(flowId, secret, generation);
+    this.webhooks.register(flowId, secret, generation, submissionConfig(input));
     this.subs.set(flowId, {
       generation,
       flowId,

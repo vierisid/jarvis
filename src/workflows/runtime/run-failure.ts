@@ -22,6 +22,8 @@ import { providerCode } from '../../failures/evidence';
 import { failureText, NOTHING_DONE, projectFailure, recoverySteps, type FailureEvidence, type FailureLinks, type UserFailure } from '../../failures/projection';
 import { getFlowRun, type FlowRun } from '../db/repos/flow-run';
 import { getFlowVersion } from '../db/repos/flow-version';
+import { latestDelegation } from '../db/repos/delegation';
+import { digest } from './effect-context';
 import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { walkFlowNodes } from '../db/flow-graph';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
@@ -127,7 +129,11 @@ function credentialFailureFor(run: FlowRun, node: FlowTriggerNode): RunConnectio
 export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: FlowTriggerNode[]): UserFailure | null {
   if (!ENDED_BADLY.has(run.status)) return null;
   const records = effects ?? listWorkflowEffects(run.id);
-  const graph = nodes ?? walkFlowNodes(getFlowVersion(run.flowVersionId)?.trigger);
+  // Loaded at most once per run: for the graph when the caller has none, and
+  // otherwise only when a delegation checkpoint has to be matched to it.
+  let version: ReturnType<typeof getFlowVersion> | undefined;
+  const loadVersion = () => (version ??= getFlowVersion(run.flowVersionId));
+  const graph = nodes ?? walkFlowNodes(loadVersion()?.trigger);
   const step = run.failedStep;
   const links: FailureLinks = { runId: run.id, flowId: run.flowId, ...(step ? { stepName: step.name } : {}) };
 
@@ -152,11 +158,17 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   const label = `The step "${step.displayName}"`;
   const own = records.filter(effect => effect.stepName === step.name).sort((a, b) => a.createdAt - b.createdAt);
   const record = own.findLast(effect => failure(effect) !== null);
-  const outcome = record ? failure(record) : null;
+  // A delegate step's own outcome is in its checkpoint, not in the spawn's
+  // effect record; inside a loop, the latest iteration's checkpoint.
+  const recorded = record ? failure(record) : null;
+  const checkpoint = recorded ? null : latestDelegation(run.id, step.name);
+  const delegated = checkpoint?.result?.outcome && checkpoint.versionDigest === digest(loadVersion()?.trigger)
+    ? checkpoint.result.outcome : undefined;
+  const outcome = recorded ?? (delegated && delegated.status !== 'succeeded' ? delegated : null);
   let evidence: FailureEvidence;
   let sideEffects = true;
   const node = graph.find(n => n.name === step.name);
-  const binding = !(record && outcome) && node ? credentialFailureFor(run, node) : null;
+  const binding = !outcome && node ? credentialFailureFor(run, node) : null;
   if (binding?.credentialFailure) {
     // A typed reason recorded by the connection fetch: that fetch handed nothing out.
     const { code, message } = binding.credentialFailure;
@@ -171,9 +183,9 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
       : typed;
     return withOtherSteps(reading, otherSteps(run, records, graph, step.name), 'Steps before it');
   }
-  if (record && outcome) {
-    Object.assign(links, { effectId: record.id, ...(record.approvalId ? { approvalId: record.approvalId } : {}) });
-    const provider = record.route === 'llm' ? providerCode(outcome.code) : null;
+  if (outcome) {
+    if (record) Object.assign(links, { effectId: record.id, ...(record.approvalId ? { approvalId: record.approvalId } : {}) });
+    const provider = record?.route === 'llm' ? providerCode(outcome.code) : null;
     if (provider) {
       // An AI call changes nothing outside Jarvis; what failed is the provider.
       evidence = { source: 'provider', code: provider, message: outcome.message };

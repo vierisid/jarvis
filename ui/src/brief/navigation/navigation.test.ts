@@ -5,7 +5,7 @@ import { DESTINATIONS, destination, legacyLink, roomIntent, targetHref, type Des
 import { NavigationCompatibility, destinationPort } from "./controller";
 import { ROOM_KEYS } from "../../v2/router";
 import { settingsTabFromHref } from "../../v2/shell/settings-tab-request";
-import { attentionKey, attentionView, notificationTarget, openNotification, type AttentionIdentity, type AttentionItem, type AttentionSnapshot } from "./notifications";
+import { attentionKey, attentionView, dashboardAttentionItems, dashboardAttentionSnapshot, dashboardToastNotice, notificationTarget, openNotification, type AttentionIdentity, type AttentionItem, type AttentionSnapshot } from "./notifications";
 
 const ready: NavigationReadiness = { destinations: true, guardedNavigation: true, roomIntents: true, notificationsOutsideChat: true };
 const caps = (enabled = true) => new BriefCapabilities(registerNavigationCompatibility(() => ready), enabled ? ["navigationCompatibility"] : []).snapshot();
@@ -215,3 +215,24 @@ test("workflow history readiness is rechecked after the shared draft guard", asy
   expect((await pending).state).toBe("unavailable");
   expect(f.opened).toEqual([]); expect(read).toEqual([]);
 });
+
+test("the dashboard list keeps approvals unless the decisions list shows them, and toasts only proactive notices", () => {
+  const row = (id: string, kind: "approval" | "clarifier" | "repeat-back" | "system", extra: { proactive?: boolean } = {}) =>
+    ({ id, kind, title: id, text: "", timestamp: 1, tone: "neutral" as const, unread: true, ...extra });
+  const items = [row("a", "approval"), row("c", "clarifier"), row("r", "repeat-back"), row("w", "system"), row("p", "system", { proactive: true })];
+  expect(dashboardAttentionItems(items, true).map(item => item.id)).toEqual(["w", "p"]);
+  expect(dashboardAttentionItems(items, false).map(item => item.id)).toEqual(["a", "w", "p"]);
+  expect(dashboardToastNotice(items)?.id).toBe("p");
+  expect(dashboardToastNotice(items.filter(item => item.id !== "p"))).toBeUndefined();
+});
+
+test("the dashboard reads the decisions capability to decide whether approvals leave the Notifications list", () => {
+  const approval = { id: "a", kind: "approval" as const, title: "a", text: "", timestamp: 1, tone: "warn" as const, unread: true };
+  const decisions = (on: boolean) => new BriefCapabilities([{ id: "decisions", provider: { readiness: () => "ready" } as never }], on ? ["decisions"] : []).snapshot();
+  const ids = (snapshot: AttentionSnapshot) => snapshot.status === "ready" ? snapshot.items.map(item => item.id) : null;
+  expect(ids(dashboardAttentionSnapshot(true, [approval], decisions(true)))).toEqual([]);
+  expect(ids(dashboardAttentionSnapshot(true, [approval], decisions(false)))).toEqual(["a"]);
+  expect(ids(dashboardAttentionSnapshot(true, [approval], undefined))).toEqual(["a"]);
+  expect(dashboardAttentionSnapshot(false, [approval], decisions(true))).toEqual({ status: "unavailable" });
+});
+

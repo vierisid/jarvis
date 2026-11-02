@@ -62,7 +62,7 @@ const tool = createManageWorkflowTool();
  */
 const FRAMED_ACTIONS = new Set([
   "get", "list_runs", "get_run",
-  "list", "create", "enable", "disable", "publish", "compose",
+  "list", "create", "enable", "disable", "publish", "compose", "continue_setup",
 ]);
 
 /**
@@ -442,6 +442,35 @@ describe("manage_workflow tool", () => {
 describe("manage_workflow: compose", () => {
   const makeReg = () => sampleCatalog();
 
+  test("incomplete submission processing returns actionable blockers without saving a notification scaffold", async () => {
+    const registry = sampleCatalog();
+    let turn = 0;
+    const llm: ComposerLlmClient = {
+      chat: async () => { throw new Error("Unexpected fallback"); },
+      chatTools: async () => ({ content: "", tool_calls: ++turn === 1
+        ? [{ id: "submit", name: "submit_flow", arguments: {
+          displayName: "Incomplete form processor",
+          blockers: ["Submission normalization, validation and atomic deduplication are not implemented"],
+          trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: {} },
+            nextAction: { name: "diagnostic", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "Configuration blockers", channels: ["dashboard"] } } } },
+        } }]
+        : [{ id: "blocked", name: "report_blocked", arguments: {
+          reason: "Cannot guarantee one row per submission with the discovered actions.",
+          configurationQuestions: ["Provide a sample submission and identify the ID and email fields.", "Choose the Google account, spreadsheet, tab and columns."],
+          capabilityGaps: ["Run-scoped receipts do not deduplicate separate webhook runs."],
+        } }], }),
+    };
+    const t = createManageWorkflowTool({ llm, pieceRegistry: registry });
+    const result = await callFrom(t, "compose", { name: "Form processor", description: "Validate submissions and append once per submission ID." }) as any;
+    expect(result.ok).toBe(false);
+    expect(result.blocked).toBe(true);
+    expect(result.configurationQuestions).toHaveLength(2);
+    expect(result.capabilityGaps).toEqual(["Run-scoped receipts do not deduplicate separate webhook runs."]);
+    expect(result.flow).toBeUndefined();
+    expect((await callFrom(t, "list") as any).flows).toHaveLength(0);
+    expect(getWorkflowComposition(result.compositionRecordId)?.state).toBe("FAILED");
+  });
+
   test("chat installs a missing connector and saves a disabled draft blocked on account binding", async () => {
     const registry = sampleCatalog();
     configureWorkflowReadiness({ pieces: registry });
@@ -451,7 +480,7 @@ describe("manage_workflow: compose", () => {
     const llm: ComposerLlmClient = {
       chat: async () => { throw new Error("Unexpected one-shot fallback"); },
       chatTools: async () => ({ content: "", tool_calls: ++turn === 1
-        ? [{ id: "install", name: "install_library_piece", arguments: { id: "google-calendar" } }]
+        ? [{ id: "missing", name: "report_blocked", arguments: { reason: "Calendar connector is not installed", suggestedPieces: [{ id: "google-calendar", reason: "Read events" }] } }]
         : [{ id: "submit", name: "submit_flow", arguments: { displayName: "Calendar fixture", trigger: {
           name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", input: { cron_expression: "0 8 * * 1-5", timezone: "Europe/Rome" } },
           nextAction: { name: "calendar", type: "PIECE", settings: { pieceName: name, actionName: "events", input: {} } },
@@ -463,10 +492,21 @@ describe("manage_workflow: compose", () => {
         auth: { type: "OAUTH2" }, actions: { events: { name: "events", displayName: "List events", description: "fixture" } },
       }); },
     });
-    expect(t.authorityGate?.({ action: 'compose', name: 'Calendar fixture', install_missing: true })).toMatchObject({ actionCategory: 'install_software' });
-    expect(t.authorityGate?.({ action: 'create', name: 'Calendar fixture', install_missing: true })).toMatchObject({ actionCategory: 'install_software' });
-    expect(t.authorityGate?.({ action: 'compose', name: 'Calendar fixture' })).toBeNull();
-    const saved = await callFrom(t, "compose", { name: "Calendar fixture", description: "Save a disabled calendar draft", install_missing: true }) as {
+    // No card until a call names what it installs.
+    expect(t.authorityGate?.({ action: 'compose', name: 'Calendar fixture', install_missing: true })).toBeNull();
+    expect(t.authorityGate?.({ action: 'create', name: 'Calendar fixture', description: 'Build a calendar draft' })).toBeNull();
+    expect(t.authorityGate?.({ action: 'compose', install_missing: false, install: 'google-calendar' })).toBeNull();
+    expect(t.authorityGate?.({ action: 'create', empty: true, install: 'google-calendar' })).toBeNull();
+    const first = await callFrom(t, "compose", { name: "Calendar fixture", description: "Save a disabled calendar draft" }) as {
+      ok: boolean; setup: { status: string; continueWith: Record<string, unknown> };
+    };
+    expect(first.ok).toBe(false);
+    expect(installed).toEqual([]);
+    expect(first.setup.status).toBe("needs_installation");
+    expect(t.authorityGate?.(first.setup.continueWith)).toMatchObject({ actionCategory: 'install_software', confirm: 'above_level',
+      intent: expect.stringContaining('Google Calendar (google-calendar)') });
+    const { action, ...rest } = first.setup.continueWith;
+    const saved = await callFrom(t, String(action), rest) as {
       ok: boolean; flow: { id: string; status: string }; versionId: string; compositionRecordId: string; readiness: { ready: boolean; issues: { code: string }[] };
     };
     expect(saved.ok).toBe(true);

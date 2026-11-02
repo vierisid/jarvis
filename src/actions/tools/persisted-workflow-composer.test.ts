@@ -1,3 +1,4 @@
+import { COMPOSER_PROMPT_VERSION } from './composition-provenance';
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -173,7 +174,7 @@ test("composition provenance is durable and catalog changes cannot alter a repai
   expect(result.ok).toBe(true);
   closeWorkflowDb(); initWorkflowDb(path);
   const provenance = getWorkflowComposition(result.compositionRecordId)!.specification.provenance!;
-  expect(provenance).toMatchObject({ schemaVersion: 1, promptVersion: "w8-8", planningPolicy: "deterministic-first-v1" });
+  expect(provenance).toMatchObject({ schemaVersion: 1, promptVersion: COMPOSER_PROMPT_VERSION, planningPolicy: "deterministic-first-v1" });
   expect(provenance.catalogSha256).toMatch(/^[a-f0-9]{64}$/);
   expect(provenance.environmentSha256).toMatch(/^[a-f0-9]{64}$/);
 });
@@ -185,4 +186,45 @@ test("production composition keeps the baseline prompt unless a policy is chosen
   } } }, request);
   expect(result.ok).toBe(true);
   expect(getWorkflowComposition(result.compositionRecordId)!.specification.provenance!.planningPolicy).toBe("baseline-v1");
+});
+
+test("approved preinstalls run before composing and the composer loop gets no installer of its own", async () => {
+  const catalog = sampleCatalog();
+  const name = "@activepieces/piece-fixture-calendar";
+  const library = [{ id: "fixture-calendar", npmPackage: name, displayName: "Fixture Calendar", description: "fixture" },
+    { id: "fixture-other", npmPackage: "@activepieces/piece-fixture-other", displayName: "Fixture Other", description: "fixture" }];
+  const installs: string[] = [];
+  let tools: string[] = [];
+  const llm: ComposerLlmClient = { chat: async () => { throw new Error("unused"); }, chatTools: async (_messages, defs) => {
+    tools = defs.map(d => d.name);
+    return { content: "", tool_calls: [{ id: "submit", name: "submit_flow", arguments: JSON.parse(valid) }] };
+  } };
+  const result = await composePersistedFlow({ pieceRegistry: catalog, llm, library, installLibraryPiece: async id => {
+    installs.push(id);
+    if (id !== "fixture-calendar") throw new Error("fixture refused");
+    catalog.upsert({ name, displayName: "Fixture Calendar", description: "fixture", actions: {} });
+  } }, request, undefined, undefined, ["fixture-calendar", "fixture-other"]);
+  expect(result.ok).toBe(true);
+  expect(installs).toEqual(["fixture-calendar", "fixture-other"]);
+  expect(result.installedPieces).toEqual(["fixture-calendar"]);
+  expect(result.installationErrors).toEqual(["Could not install fixture-other: fixture refused"]);
+  expect(tools).toContain("search_library");
+  expect(tools).not.toContain("install_library_piece");
+  expect(getWorkflowComposition(result.compositionRecordId)!.specification.provenance!.installedPieces!.map(p => p.id)).toEqual(["fixture-calendar"]);
+});
+
+test("a stalled preinstall is stopped at its bound, reported as failed, and the journal still finishes", async () => {
+  const library = [{ id: "fixture-calendar", npmPackage: "@activepieces/piece-fixture-calendar", displayName: "Fixture Calendar", description: "fixture" }];
+  let received: AbortSignal | undefined;
+  const llm: ComposerLlmClient = { chat: async () => { throw new Error("unused"); }, chatTools: async () =>
+    ({ content: "", tool_calls: [{ id: "submit", name: "submit_flow", arguments: JSON.parse(valid) }] }) };
+  // Never settles and ignores its signal: the bound alone must end the wait.
+  const result = await composePersistedFlow({ pieceRegistry: sampleCatalog(), llm, library, installTimeoutMs: 20,
+    installLibraryPiece: (_id, signal) => { received = signal; return new Promise<void>(() => {}); } },
+    request, undefined, undefined, ["fixture-calendar"]);
+  expect(result.ok).toBe(true);
+  expect(result.installedPieces).toBeUndefined();
+  expect(result.installationErrors).toEqual([expect.stringMatching(/^Could not install fixture-calendar: installation timed out/)]);
+  expect(received?.aborted).toBe(true);
+  expect(getWorkflowComposition(result.compositionRecordId)!.state).toBe("VALIDATED");
 });

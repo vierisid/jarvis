@@ -366,3 +366,12 @@
 .brief-root .wf-props__configuration { border: 0; padding: 0; margin: 0; min-width: 0; }
 .brief-root .wf-library__search { display: flex; align-items: center; gap: 8px; }
 .brief-root .wf-library__search input { flex: 1; min-width: 0; }
+
+/* Setup is part of the saved draft, with links into its existing inspector. */
+.brief-root .brief-canvas-setup { margin-block: 4px 12px; max-height: 200px; overflow: auto; font-size: 14px; }
+.brief-root .brief-canvas-setup summary { cursor: pointer; font-weight: 600; }
+.brief-root .brief-canvas-setup p { margin-block: 8px; max-width: 75ch; color: var(--brief-secondary); }
+.brief-root .brief-canvas-setup ul { margin: 0; padding: 0; list-style: none; }
+.brief-root .brief-canvas-setup li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-block: 4px; }
+.brief-root .brief-canvas-setup li span { overflow-wrap: anywhere; color: var(--brief-secondary); }
+.brief-root .brief-canvas-setup summary:focus-visible { outline: 2px solid var(--brief-focus); outline-offset: 2px; }

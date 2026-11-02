@@ -114,6 +114,24 @@ describe('validating a contract', () => {
   });
 });
 
+describe('Google Sheets: only its governed appends are bounded', () => {
+  const SHEETS = '@activepieces/piece-google-sheets';
+  const append = () => step(SHEETS, 'sheets_append_values', { spreadsheet_id: 'fixture', values: [['a']] });
+  test('an append is judged as the write_data the runtime governs it as', () => {
+    // A contract that requires the append and forbids sends is keepable, and one that forbids writes is not.
+    expect(refuse({ outputs: [{ piece: 'google-sheets', action: 'sheets_append_values' }], forbidden: { effects: ['send_email'] } })).toBeNull();
+    expect(refuse({ outputs: [{ piece: 'google-sheets', action: 'insert_row' }], forbidden: { effects: ['write_data'] } })).toContain('which would write data');
+    const contract: JobContract = { trigger: { kind: 'webhook' }, outputs: [{ piece: 'google-sheets', action: 'sheets_append_values' }], forbidden: { effects: ['send_email', 'delete_data'] } };
+    const trigger: FlowTriggerNode = { name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input: {} }, nextAction: append() };
+    expect(check(trigger, contract).violations).toEqual([]);
+  });
+  test('its other actions stay ungoverned, decided when they run', () => {
+    expect(refuse({ outputs: [{ piece: 'google-sheets', action: 'clear_sheet' }], forbidden: { effects: ['send_email'] } })).toContain('decided when it runs');
+    const clear = step(SHEETS, 'clear_sheet', { spreadsheet_id: 'fixture' });
+    expect(check(manual(clear), { forbidden: { effects: ['delete_data'] } }).violations.join(' ')).toContain('which Jarvis does not govern');
+  });
+});
+
 describe('checking a graph against the contract', () => {
   test('a graph that keeps the contract passes, and says what it proved and what a person must confirm', () => {
     const { violations, report } = check(good(), CONTRACT);

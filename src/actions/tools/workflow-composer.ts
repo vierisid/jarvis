@@ -163,7 +163,7 @@ export interface ComposeOk {
 /**
  * A community-library piece the composer thinks would satisfy the request if
  * it were installed. Surfaced on `ComposeFail` so the calling agent can offer
- * the install to the user; the composer itself never installs anything.
+ * the install to the user; no production caller lets the composer install.
  */
 export interface SuggestedInstall {
   /** Library catalog id (e.g. "discord"). */
@@ -191,6 +191,9 @@ export interface ComposerLibraryEntry {
 export interface ComposeFail {
   /** Explicit report_blocked decision, distinct from provider/validation failure. */
   blocked?: boolean;
+  /** Missing user configuration, separate from platform capability gaps. Never credentials. */
+  configurationQuestions?: string[];
+  capabilityGaps?: string[];
   ok: false;
   compositionRecordId?: string;
   /** One or more reasons the compose attempt failed. */
@@ -324,13 +327,19 @@ export interface ComposeDeps {
   /**
    * Optional community-library index. When present (and the tool loop is
    * active), the composer exposes a `search_library` tool so the model can
-   * find an installable piece when nothing installed fits. Interactive callers
-   * can also supply installLibraryPiece; other callers report the missing dependency.
+   * find an installable piece when nothing installed fits. It
+   * reports the missing dependency as suggestedInstalls.
    */
   library?: ComposerLibraryEntry[];
-  /** Interactive callers may install catalog entries and refresh pieceRegistry.
-   * Absent for background composition and host-managed libraries. Never grants credentials. */
+  /** Installs a catalog entry and refreshes pieceRegistry. composePersistedFlow
+   * uses it only for approved preinstalls and removes it before the tool loop
+   * runs, so in production the loop never offers install_library_piece; only
+   * tests hand it to composeFlow directly. Never grants credentials. */
   installLibraryPiece?: (id: string, signal?: AbortSignal) => Promise<void>;
+  /** Per-install bound for composePersistedFlow's preinstalls (default five
+   * minutes). On expiry the signal passed to installLibraryPiece is aborted
+   * and the install is reported as failed, so the journal always finishes. */
+  installTimeoutMs?: number;
   /**
    * Optional inventory of the machines a step can execute on: the enrolled
    * sidecars plus the brain's own host. When present the composer (a) renders
@@ -619,6 +628,7 @@ async function composeWithTools(
 
   const maxSubmits = deps.maxAttempts ?? 4;
   let submits = 0;
+  let configurationRedirected = false;
   let nudges = 0;
   let lastErrors: string[] = [];
   let lastRaw: string | null = null;
@@ -738,6 +748,17 @@ async function composeWithTools(
         continue;
       }
       if (call.name === "report_blocked") {
+        if (!configurationRedirected && diagnosticItems(call.arguments.configurationQuestions).length
+          && !diagnosticItems(call.arguments.capabilityGaps).length
+          && !(Array.isArray(call.arguments.suggestedPieces) && call.arguments.suggestedPieces.length)) {
+          configurationRedirected = true;
+          messages.push(toolResult(call, 'Missing configuration does not block a disabled draft. Call submit_flow with the full supported processing graph and empty/null inputs for unknown payload paths, destination and column mapping. Keep both form webhook mapping keys, empty if unknown. Do not invent values or substitute a diagnostic step. Activation and execution remain blocked until setup is complete. Use report_blocked only if actual functionality is unavailable.'));
+          continue;
+        }
+
+        // No installation happens here: manage_workflow installs only the
+        // entries an approval card named, before composing, and relays the
+        // rest as suggestedInstalls.
         return blockedResult(call.arguments, deps.library, lastRaw);
       }
       // Piece metadata/output samples and library descriptions are outside data.
@@ -780,6 +801,13 @@ function safeStringify(v: unknown): string {
   }
 }
 
+/** Bounded model-authored diagnostics, never execution authority. */
+function diagnosticItems(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && !!item.trim())
+    .slice(0, 20).map(item => item.trim().slice(0, 1000));
+}
+
 /** Build the ComposeFail for a report_blocked call, resolving library labels. */
 function blockedResult(
   args: Record<string, unknown>,
@@ -810,6 +838,10 @@ function blockedResult(
   logAttempt(1, "tool-loop-blocked", reason);
   const fail: ComposeFail = { ok: false, blocked: true, errors: [reason], rawResponse: lastRaw };
   if (suggestedInstalls.length > 0) fail.suggestedInstalls = suggestedInstalls;
+  const questions = diagnosticItems(args.configurationQuestions);
+  const gaps = diagnosticItems(args.capabilityGaps);
+  if (questions.length) fail.configurationQuestions = questions;
+  if (gaps.length) fail.capabilityGaps = gaps;
   return fail;
 }
 
@@ -846,11 +878,14 @@ function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean, canIn
       description:
         "Submit the finished workflow for validation. Arguments are the flow object itself: " +
         '{ "displayName": "...", "trigger": { ... } } in the exact shape from the system prompt. ' +
-        "If validation fails you get the error list back -- fix every error and submit again.",
+        "If validation fails you get the error list back -- fix every error and submit again. " +
+        "Do not submit a diagnostic notification instead of the requested processing. If functionality is unsupported, use report_blocked. Missing user configuration is NOT unsupported behavior: submit the full disabled draft with empty/null inputs for setup later. " +
+        "Declare remaining unimplemented requirements in blockers; a nonempty list rejects the candidate without saving it.",
       parameters: {
         type: "object",
         properties: {
           displayName: { type: "string", description: "Short human title for the workflow." },
+          blockers: { type: "array", items: { type: "string" }, description: "Unimplemented requirements. Must be empty to submit a complete graph. Missing user configuration (payload paths, destination, column mappings or account) is setup, not an unimplemented requirement. Leave those inputs empty or null; save the full disabled graph." },
           trigger: {
             type: "object",
             description: "The trigger node with the full nextAction chain, per the flow JSON shape.",
@@ -871,6 +906,8 @@ function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean, canIn
       parameters: {
         type: "object",
         properties: {
+          configurationQuestions: { type: "array", items: { type: "string" }, description: "Concrete questions needed to configure the workflow, such as sample payload, ID/email mapping and destination. Never request secrets in chat." },
+          capabilityGaps: { type: "array", items: { type: "string" }, description: "Unsupported requirements and discovery evidence, including actions inspected and their precise limits. Separate these from missing user configuration." },
           reason: {
             type: "string",
             description: "One or two sentences: what the request needs and why it isn't available.",
@@ -1060,6 +1097,10 @@ function renderPrimitiveDetails(name: "schedule" | "webhook"): string {
     "webhook (built-in trigger primitive): fires the flow on an HTTP POST to /api/webhooks/<flow_id>.",
     "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'webhook', input: { secret: '<optional HMAC secret>' } }.",
     "  - input.secret: string, optional; when set, requests must carry a valid HMAC signature.",
+    "  - Form submissions: set input.submission_id_field and input.submission_email_field to explicit payload field paths (e.g. id and email, or form.id and form.email). Both are required together. If unknown, save both fields as empty strings in the disabled draft; the editor will collect the paths later. Do not invent payload paths.",
+    "  - With these mappings Jarvis trims all string values recursively, lowercases and validates the email, rejects invalid/missing IDs or emails with HTTP 422 before queuing, and atomically accepts each normalized submission ID once per workflow. The identity survives restart, republish and ordinary history pruning. Changing headers or using a manual run cannot create another write for that ID. Numeric safe-integer IDs become strings; IDs are case-sensitive.",
+    "  - The trigger output retains the original normalized field structure. Connect it directly to an inspected Sheets append action (prefer sheets_append_values with value_input_option RAW to preserve form text). No AI, lookup-before-append or separate normalization step is needed.",
+    "  - Sheets insert_row, sheets_append_values and sheets_add_row have durable completion receipts. A completed dispatch is replayed from its receipt; an uncertain append is blocked, never automatically resent. A failed accepted submission needs review of its original run, not another append under a new ID.",
     "  The POSTed JSON body becomes the trigger output: reference its fields as {{trigger.<field>}}.",
   ].join("\n");
 }
@@ -1145,7 +1186,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "  - Step names MUST match /^[a-zA-Z_][a-zA-Z0-9_]*$/ (identifier-style; no spaces or dashes).",
     "  - Use type='EMPTY' for manual / on-demand flows. Use type='PIECE_TRIGGER' for scheduled, webhook, or event-driven.",
     "  - For schedule triggers: pieceName='schedule', input.cron_expression='<5-field cron>' (e.g. '0 8 * * *' for 8am daily); add input.timezone (IANA, e.g. 'Europe/Rome') only when the job contract names trigger.timezone, and then use exactly that zone; a bare time means Jarvis's time zone, so write no zone.",
-    "  - For webhook triggers: pieceName='webhook', input.secret optional.",
+    "  - For webhook triggers: pieceName='webhook', input.secret optional. Form processing uses paired input.submission_id_field / input.submission_email_field with known payload paths: trims all strings, lowercases/validates email, rejects invalid IDs/emails before queuing, and atomically accepts each ID once per workflow, across restarts and manual runs. Use an inspected Sheets append with RAW values; leave unknown payload paths as empty strings and unknown destination/column values null for editor setup; never invent them. Failed accepted submissions require review, never a blind append retry.",
     "  - For event triggers: pieceName='jarvis-trigger', triggerName='on_event', input.eventType='<event type>'.",
     "  - For action steps, type MUST be 'PIECE' and settings MUST include pieceName + actionName.",
     "  - To iterate over a list, emit a LOOP_ON_ITEMS step:",
@@ -1192,7 +1233,10 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "    safe choice is `{{step}}` (the whole output) and let downstream steps drill in.",
     "",
     "## Hard rules",
-    "  - Every required input field MUST be present.",
+    "  - Preserve the original request. A disabled draft still needs the requested processing graph. Do not replace missing normalization, validation, writes or deduplication with a notification explaining their absence. Missing user inputs may remain empty/null in a saved disabled draft. Only unsupported functionality calls for report_blocked with evidence-backed capabilityGaps. Do not weaken the request to save a scaffold.",
+    "  - Build deterministic transformations and validation with inspected actions where available. Missing destination/account configuration does not prove transformations are unsupported. A partial candidate can remain in composition diagnostics; it must not be presented as a completed workflow.",
+    "  - Duplicate prevention must match the requested scope. Jarvis effect receipts are keyed by run and step; they do NOT deduplicate a submission ID across separate webhook runs. For form webhooks, inspect get_piece_details(webhook): its submission ID/email mapping provides atomic, persistent per-workflow admission, including manual runs. Use the tracked Google Sheets append actions for completion receipts. Other workflows still need an inspected persistent/atomic capability. A lookup followed by append, an AI instruction or a browser step does not establish concurrency-safe deduplication. Consider uncertain append outcomes and retries, not just simultaneous requests. Cite the inspected capability and exact gap; never claim runtime receipt replay provides cross-run idempotency.",
+    "  - Include known required input values; leave unknown user configuration empty/null for later setup in the disabled draft. Never invent values to satisfy validation.",
     "  - The composed flow is created DISABLED. Do NOT claim the flow is running; the user reviews and publishes it explicitly.",
     "  - Installing a connector does not connect an account. Never invent credentials or connection IDs. If no real connection binding was supplied, leave auth unset in the disabled draft and explain that connecting the account is required before execution. Never execute actions to validate a draft.",
     "  - Prefer installed native tools or connector actions. If a native connector is unavailable OR unusable because account/calendar bindings or required behavior are missing, evaluate a jarvis-agent:delegate browser draft before declaring the whole job blocked, but ONLY when AI/browser use is allowed by the request, registered browser tools exist, a connected machine advertises browser capability, and the chosen role permits browser tools. Inspect the agent and browser schemas first. A role description alone is not proof of browser access.",
@@ -1217,7 +1261,7 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
 const BUILTIN_PRIMITIVE_LINES = [
   "Built-in trigger primitives (no piece registration needed):",
   "- schedule: settings={pieceName:'schedule', input:{cron_expression:'0 8 * * *'}} fires at 08:00 in Jarvis's time zone. Only when the job contract names a zone, add it, e.g. timezone:'Europe/Rome' fires at 08:00 there, including daylight-saving changes.",
-  "- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>'}} fires on HTTP POST to /api/webhooks/<flow_id>.",
+  "- webhook:  settings={pieceName:'webhook',  input:{secret:'<optional HMAC secret>',submission_id_field:'<known ID path>',submission_email_field:'<known email path>'}} (submission mappings optional together) fires on HTTP POST to /api/webhooks/<flow_id>.",
 ];
 
 /**
@@ -1355,7 +1399,7 @@ function buildToolLoopSystemPrompt(
         ? "  4. If no installed piece or Jarvis tool covers the request, search_library, install the matching entry with install_library_piece, then inspect its actual schema and continue building. Respect any user restriction against installation. If installation fails, explain the exact failure; do not claim the connector is available."
         : "  4. If no installed piece or Jarvis tool covers the request, call search_library for an installable piece,\n     then evaluate the permitted browser fallback described below. If neither route covers the request, call report_blocked suggesting the best match. Never force a wrong piece to fit.")
       : "  4. If no native piece or tool covers the request, evaluate the permitted browser fallback described below before report_blocked.\n     Never force a wrong piece to fit.",
-    "  5. Before report_blocked, distinguish connector setup from platform capability. An installed connector can still be unusable (missing account/calendar or undocumented pagination). Inspect a permitted browser-agent route in that case; do not stop at native setup alone. If it can cover the job, save that disabled draft with explicit runtime access/completeness checks. Otherwise explain why that alternative is unavailable or prohibited too. Never relax the user's constraints or a supplied job contract to make a graph pass.",
+    "  5. For missing payload mappings or destinations, submit the full supported processing graph NOW with empty/null input values. The saved disabled draft exposes Setup required in the editor. Never call report_blocked solely for missing payload, destination, column mapping or account. For form webhooks keep BOTH submission_id_field and submission_email_field keys with empty strings when unknown so validation/deduplication stay configured as required setup. Leave Sheets values null until the column mapping is known, never fabricate trigger field references. Do not ask for secrets; account binding uses secure Connected workspace setup. Before report_blocked, distinguish connector setup from platform capability. Missing account/calendar selection stays as deferred setup. If an installed connector lacks required functionality (for example complete pagination), inspect a permitted browser-agent route; do not stop at native setup alone. If it can cover the job, save that disabled draft with explicit runtime access/completeness checks. Otherwise explain why that alternative is unavailable or prohibited too. Never relax the user's constraints or a supplied job contract to make a graph pass.",
     "  Keep detail lookups targeted -- fetch the pieces you shortlisted, not the whole catalog.",
     "",
     envText,
@@ -1491,6 +1535,10 @@ function renderPieceBlockLines(
   }
   for (const action of Object.values(piece.actions)) {
     lines.push(`    action  ${action.name}: ${action.description}`);
+    if (action.aiMetadata) {
+      if (action.aiMetadata.description) lines.push(`      author guidance: ${action.aiMetadata.description}`);
+      if (typeof action.aiMetadata.idempotent === 'boolean') lines.push(`      author-declared idempotent: ${action.aiMetadata.idempotent} (action-level claim, not proof of cross-run deduplication)`);
+    }
     lines.push(...renderSchemaLines(action.inputSchema, 6));
     lines.push(...renderOutputLines((action as { outputSample?: unknown }).outputSample, 6));
   }
@@ -1672,6 +1720,15 @@ function validateComposedFlow(
     return { ok: false, errors: ["expected an object at the top level"] };
   }
   const root = raw as Record<string, unknown>;
+  if (root.blockers !== undefined) {
+    if (!Array.isArray(root.blockers) || root.blockers.some(item => typeof item !== 'string')) {
+      return { ok: false, errors: ['blockers must be an array of unimplemented requirement descriptions'] };
+    }
+    if (root.blockers.length) return { ok: false, errors: [
+      'The candidate has unimplemented requirements. Build those steps or use report_blocked with configurationQuestions and capabilityGaps. Do not replace processing with a blocker notification.',
+      ...diagnosticItems(root.blockers),
+    ] };
+  }
   const displayName = typeof root.displayName === "string" && root.displayName.trim() ? root.displayName.trim() : fallbackName;
   const triggerRaw = root.trigger;
   if (typeof triggerRaw !== "object" || triggerRaw === null) {
@@ -1870,25 +1927,10 @@ function validateStep(
     return step;
   }
 
-  // Required-field check.
+  // Missing user configuration belongs in a saved disabled draft. The shared
+  // compiler validates supplied values and records absent ones as setup issues;
+  // activation/run use its strict phase and reject them before dispatch.
   const input = (settings.input ?? {}) as Record<string, unknown>;
-  const schema = (sub as { inputSchema?: PieceInputSchema }).inputSchema;
-  if (schema) {
-    for (const field of schema.fields) {
-      if (!field.required) continue;
-      // `flow_ref` is required at run time but cannot be filled at
-      // compose time: the LLM has no list of valid flow ids on the
-      // user's machine. The editor's flow picker fills it after the
-      // flow is composed. Exempt from this check so the LLM doesn't
-      // hallucinate an id just to satisfy validation.
-      if (field.type === "flow_ref") continue;
-      const v = input[field.name];
-      const empty = v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
-      if (empty) {
-        errors.push(`step "${name}" (${pieceName}:${subName}) missing required input "${field.name}"`);
-      }
-    }
-  }
 
   // Delegate-role check: a `jarvis-agent:delegate` step's optional `role` must
   // name a specialist that actually exists. The LLM otherwise invents plausible

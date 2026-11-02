@@ -158,9 +158,12 @@ export interface PieceAgentDelegateResult {
   /**
    * The declared business outcome, present on every finished delegation:
    * `succeeded` when the conversation finished and every required tool
-   * completed, otherwise an `error` naming what is missing.
+   * completed. Browser tasks also require an explicit completion report;
+   * blocked or incomplete work is returned as a non-success outcome.
    */
   outcome?: ActionOutcome;
+  /** Agent task report, separate from tool execution. Kept across durable replay. */
+  taskOutcome?: ActionOutcome;
 }
 
 /**
