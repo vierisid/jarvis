@@ -16,6 +16,7 @@ export const propsProcessor = {
         auth: PieceAuthProperty | PieceAuthProperty[] | undefined,
         requireAuth: boolean,
         propertySettings: Record<string, PropertySettings>,
+        fileContext?: { apiUrl: string; engineToken: string },
     ): Promise<{ processedInput: StaticPropsValue<PiecePropertyMap>, errors: PropsValidationError }> => {
         let dynamaicPropertiesSchema: Record<string, InputPropertyMap> | undefined = undefined
         if (Object.keys(propertySettings).length > 0) {
@@ -33,6 +34,7 @@ export const propsProcessor = {
                     undefined,
                     false,
                     {},
+                    fileContext,
                 )
                 processedInput[AUTHENTICATION_PROPERTY_NAME] = authProcessedInput
                 if (Object.keys(authErrors).length > 0) {
@@ -52,6 +54,7 @@ export const propsProcessor = {
                     undefined,
                     false,
                     {},
+                    fileContext,
                 )
                 processedInput[key] = itemProcessedInput
                 if (Object.keys(itemErrors).length > 0) {
@@ -69,6 +72,7 @@ export const propsProcessor = {
                         undefined,
                         false,
                         {},
+                        fileContext,
                     )
                     processedArray.push(itemProcessedInput)
                     processedErrors.push(itemErrors)
@@ -83,7 +87,7 @@ export const propsProcessor = {
             }
             const processor = processors[property.type]
             if (processor) {
-                processedInput[key] = await processor(property, processedInput[key])
+                processedInput[key] = await processor(property, processedInput[key], fileContext)
             }
 
             const shouldValidate = key !== AUTHENTICATION_PROPERTY_NAME && property.type !== PropertyType.MARKDOWN

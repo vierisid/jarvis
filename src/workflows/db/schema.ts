@@ -25,6 +25,11 @@ export const DEFAULT_IDS = {
 } as const;
 
 const STATEMENTS: string[] = [
+  // Cross-run contact/notification fences survive run-history cleanup. Keys are
+  // scoped hashes, not credentials or personal data. No lease can expire an uncertain write.
+  `CREATE TABLE IF NOT EXISTS workflow_effect_identity (
+    identity TEXT PRIMARY KEY, owner TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0
+  )`,
   // Immutable authoring requirements. Graph edits and disabling F-08 cannot erase pins.
   `CREATE TABLE IF NOT EXISTS workflow_composition_ingredients (
     flow_id TEXT PRIMARY KEY REFERENCES flow(id) ON DELETE CASCADE,

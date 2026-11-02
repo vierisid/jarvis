@@ -235,7 +235,7 @@ test('setup continuation preserves the original request and answers, then saves 
   f.complete();
   const saved = await call(f.tool, { action: 'continue_setup', composition_id: initial.compositionRecordId, answers: { spreadsheet: 'fixture-only' } });
   expect(saved.ok).toBe(true); expect(saved.flow.status).toBe('DISABLED');
-  expect(saved.readiness.ready).toBe(false);
+  expect(saved.validation.readyToRun).toBe(false);
   expect(saved.setup.status).toBe('needs_configuration');
   expect(saved.setup.accountSetup).toContain('Connected workspace');
   expect(f.prompts.at(-1)).toContain('fixture-1');
@@ -278,6 +278,21 @@ test('answers or installs sent after the draft is saved are refused, pointing to
   for (const answers of [null, {}]) {
     expect(await call(f.tool, { ...saved.setup.recheckWith, answers })).toMatchObject({ ok: true, flow: { id: saved.flow.id } });
   }
+});
+
+test('a saved draft with a genuine structural error reports needs_repair, not setup', async () => {
+  const f = setup();
+  f.registry.upsert(piece);
+  f.complete();
+  const saved = await call(f.tool, { action: 'compose', name: 'Submission processor', description: 'Trim, validate, append once.' });
+  expect(saved.setup.status).toBe('needs_configuration');
+  // An action the installed connector does not have is a graph error, not a missing connector.
+  const broken = structuredClone(getFlowVersion(saved.versionId)!.trigger) as any;
+  let node = broken; while (node && node.settings?.pieceName !== piece.name) node = node.nextAction;
+  node.settings.actionName = 'no_such_action';
+  updateDraftVersion(saved.versionId, { trigger: broken });
+  const recheck = await call(f.tool, saved.setup.recheckWith);
+  expect(recheck).toMatchObject({ ok: true, setup: { status: 'needs_repair', label: 'Validation failed' } });
 });
 
 test('explicit no-install stays disabled and is retained across setup continuation', async () => {
@@ -424,9 +439,14 @@ test('unconfigured processor saves disabled and becomes ready only after setup',
   const saved = await call(tool, { action: 'compose', name: 'Submission processor', description: 'Save disabled with setup required; normalize webhook submissions and append once to Sheets. Payload and destination are unknown.' });
   expect(saved.ok).toBe(true);
   expect(saved.flow.status).toBe('DISABLED');
-  expect(saved.validation).toEqual({ structureValid: true, readyToRun: false });
+  expect(saved.validation).toMatchObject({ structureValid: true, readyToRun: false, functionalTesting: 'not_performed' });
   expect(saved.setup.status).toBe('needs_configuration');
-  expect(saved.setup.fields.map((f: any) => f.path)).toEqual(expect.arrayContaining([
+  let report = '', cursor: string | undefined;
+  do {
+    const page = await call(tool, { action: 'get', flow: saved.flow.id, version_id: saved.versionId, view: 'validation', ...(cursor ? { cursor } : {}) });
+    report += page.content; cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+  expect(JSON.parse(report).readiness.issues.map((f: any) => f.path)).toEqual(expect.arrayContaining([
     'settings.input.submission_id_field', 'settings.input.submission_email_field',
     'settings.input.spreadsheet_id', 'settings.input.values', 'settings.input.auth',
   ]));
@@ -492,7 +512,7 @@ test('configuration-only blocker is repaired into a saved draft without asking t
   expect(turns).toBe(2);
   expect(result.ok).toBe(true);
   expect(result.setup.label).toBe('Setup required');
-  expect(result.readiness.ready).toBe(false);
+  expect(result.validation.readyToRun).toBe(false);
   expect(result.flow.status).toBe('DISABLED');
 });
 

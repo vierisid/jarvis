@@ -294,6 +294,7 @@ export const PATCHED_VENDOR_SOURCES = [
   // either without registering them here would leave a cached engine running
   // the old table -- a stale bundle that silently governs the wrong actions.
   '../../runtime/piece-effects.ts',
+  '../../runtime/hubspot-contact.ts',
   '../../runtime/piece-effect-guard.ts',
   '../../runtime/managed-mailchimp.ts',
   '../../runtime/managed-asana.ts',
@@ -318,6 +319,8 @@ export const PATCHED_VENDOR_SOURCES = [
   'server/engine/src/lib/core/code/no-op-code-sandbox.ts',
   'server/engine/src/lib/variables/props-resolver.ts',
   'server/engine/src/lib/variables/props-processor.ts',
+  'server/engine/src/lib/variables/processors/file.ts',
+  'server/engine/src/lib/variables/processors/types.ts',
   'server/engine/src/lib/handler/piece-executor.ts',
   // Jarvis: a CODE step asks the daemon about Pause and Kill before it runs (Q-08).
   'server/engine/src/lib/handler/code-executor.ts',

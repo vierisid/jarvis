@@ -6,7 +6,7 @@ import axios from 'axios'
 // Jarvis (#961): a file URL is fetched through the HTTP step's egress guard.
 import { egressPolicyFromEnv, egressRefusalIn, guardedFileDownload } from '../../../../../../../../runtime/http-egress'
 
-export const fileProcessor: ProcessorFn = async (_property, urlOrBase64) => {
+export const fileProcessor: ProcessorFn = async (_property, urlOrBase64, fileContext) => {
     if (isNil(urlOrBase64) || !isString(urlOrBase64)) {
         return null
     }
@@ -15,7 +15,7 @@ export const fileProcessor: ProcessorFn = async (_property, urlOrBase64) => {
         if (!isNil(file)) {
             return file
         }
-        return await handleUrlFile(urlOrBase64)
+        return await handleUrlFile(urlOrBase64, fileContext)
     }
     catch (e) {
         // Jarvis (#961): a refused address fails the step naming the rule.
@@ -43,21 +43,30 @@ function handleBase64File(propertyValue: string): ApFile | null {
     )
 }
 
-async function handleUrlFile(path: string): Promise<ApFile | null> {
-    // Jarvis (#961): resolved, checked and connected to through the egress
-    // guard, redirects included; never a plain fetch of a flow-chosen URL.
-    const fileResponse = await guardedFileDownload(axios, path, egressPolicyFromEnv())
-    const header = (name: string): string | null => {
-        const value = fileResponse.headers[name]
-        return typeof value === 'string' ? value : null
+async function handleUrlFile(path: string, context?: { apiUrl: string; engineToken: string }): Promise<ApFile | null> {
+    // Only a stored-file path receives the engine credential, never a caller URL.
+    const stored = /^\/v1\/step-files\/[A-Za-z0-9_-]+$/.test(path)
+    if (stored && !context) throw new Error('Stored file requires the workflow context')
+    const url = stored ? new URL(path.slice(1), context!.apiUrl).toString() : path
+    let data: Buffer
+    let header: (name: string) => string | null
+    if (stored) {
+        const response = await fetch(url, { headers: { Authorization: 'Bearer ' + context!.engineToken }, redirect: 'error' })
+        if (!response.ok) throw new Error('File download failed: ' + response.status)
+        data = Buffer.from(await response.arrayBuffer())
+        header = (name) => response.headers.get(name)
+    } else {
+        // Caller URLs retain main's checked DNS, connection and redirect policy.
+        const response = await guardedFileDownload(axios, path, egressPolicyFromEnv())
+        data = response.data
+        header = (name) => typeof response.headers[name] === 'string' ? response.headers[name] : null
     }
-
-    const filename = getFileName(path, header('content-disposition'), header('content-type') ?? undefined) ?? 'unknown'
+    const filename = getFileName(url, header('content-disposition'), header('content-type') ?? undefined) ?? 'unknown'
     const extension = filename.split('.').length > 1 ? filename.split('.').pop() : undefined
 
     return new ApFile(
         filename,
-        fileResponse.data,
+        data,
         extension,
     )
 }

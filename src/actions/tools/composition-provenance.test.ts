@@ -20,6 +20,27 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-12: HubSpot contact coordination, keyed lead notifications and resolve_effect for uncertain identities.
+  'w8-12': {
+    bare: 'b7d8e23f84b712632c305e25bbb2f6621212d35cf2667f1c38a9c2f584a75525',
+    production: '9cecfe12f86ec7cf1807d657fc2d5d3ca1c3898e863e7026f9fa25569aebd421',
+    'hosted production': '5c31d8a82984ac9baf5dae74d054c4833f489ea82c641d84d7406138a3540c4b',
+    'tool names only': '5c4739f7a173b7ad9644a5cc1034bf560eee1d67b38735f504ab730e521d7053',
+  },
+  // w8-11: invoice extraction, schema validation and complete readback.
+  'w8-11': {
+    bare: '75efb1295411133d02534d3b1f92363370d634aad4ddadf11df132a929544d79',
+    production: 'cbed103e2327dbfc97961cacbd1e0c32d6c044cda703b7b48dfb449e2da15f82',
+    'hosted production': '478b71ed5780ee2a5f0e16b39fd59389f6cb52918334ba5295a4665cf5ce7f2d',
+    'tool names only': '4ef91135e7dcff0980a28318bc721e5e7af84c75864d36ab04edb66aa2aa5575',
+  },
+  // w8-10: Gmail triage, persistent message admission covering manual runs only when they carry a payload.id.
+  'w8-10': {
+    bare: '21cc6e0220440ff1fe3217a63b8d483c8bdfc737d03aa28af57d321dbe9e836e',
+    production: '1088d9babdd3a8d10b38cf87f1435e498e95d6263d89bb35d337496840cf247e',
+    'hosted production': 'f6283bdb24ca178b75917cfd6784ce7cf5141ce67d6d094cfa31f198eabcbd31',
+    'tool names only': 'b317e86b850c113b217af53300694a222880ed1325e61f21cd7283c1df802024',
+  },
   // w8-9: deferred setup, connector continuation and form processing; the composer never installs.
   'w8-9': {
     bare: '0e5ea5dffb6128bb806328d5cb23715f9a1ba256ca8ef3842d480baa71130901',
