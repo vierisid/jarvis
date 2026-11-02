@@ -17,6 +17,7 @@ import { JarvisGitHubConnectionSource } from "../credentials/github-source";
 import { JarvisTrelloConnectionSource } from "../credentials/trello-source";
 import { JarvisDropboxConnectionSource } from "../credentials/dropbox-source";
 import { JarvisSlackConnectionSource } from "../credentials/slack-source";
+import { JarvisAirtableConnectionSource } from "../credentials/airtable-source";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +43,7 @@ const MAILCHIMP = "@activepieces/piece-mailchimp";
 const GITHUB = "@activepieces/piece-github";
 const TRELLO = "@activepieces/piece-trello";
 const DROPBOX = "@activepieces/piece-dropbox";
+const AIRTABLE = "@activepieces/piece-airtable";
 
 const pieces = new PieceCatalog([
   { name: GMAIL, displayName: "Gmail", description: "", auth: { type: "OAUTH2" }, actions: {
@@ -109,6 +111,22 @@ const pieces = new PieceCatalog([
     ] } },
   }, triggers: {
     new_message: { name: "new_message", displayName: "", description: "" },
+  } },
+  { name: AIRTABLE, displayName: "Airtable", description: "", auth: { type: "SECRET_TEXT" }, actions: {
+    get_record: { name: "get_record", displayName: "", description: "", inputSchema: { fields: [
+      { name: "base_id", label: "", type: "string", required: false },
+      { name: "table_id_or_name", label: "", type: "string", required: false },
+      { name: "record_id", label: "", type: "string", required: false },
+    ] } },
+    delete_record_ai: { name: "delete_record_ai", displayName: "", description: "", inputSchema: { fields: [
+      { name: "record_id", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  }, triggers: {
+    new_record: { name: "new_record", displayName: "", description: "" },
   } },
   { name: ASANA, displayName: "Asana", description: "", auth: { type: "OAUTH2" }, actions: {
     get_task: { name: "get_task", displayName: "", description: "", inputSchema: { fields: [
@@ -453,6 +471,55 @@ describe("managed Asana is scoped to its five qualified Asana actions", () => {
     const response = await fetchFor(runOf(trigger), "jarvis:asana");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: ASANA, value: { access_token: ASANA_TOKEN, jarvis_managed: "asana" } });
+  });
+});
+
+describe("managed Airtable is scoped to its four qualified record actions", () => {
+  const AIRTABLE_TOKEN = "synthetic-managed-airtable-access-token";
+  const ref = "{{connections.jarvis:airtable}}";
+  const location = { base_id: "appAAAAAAAAAAAAAA", table_id_or_name: "tblAAAAAAAAAAAAAA", record_id: "recAAAAAAAAAAAAAA" };
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "airtable-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "airtable.json"), JSON.stringify({ version: 1, provider: "airtable", status: "connected",
+      generation: crypto.randomUUID(), access_token: AIRTABLE_TOKEN, refresh_token: "synthetic-refresh",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(), account: { id: "usr1", label: "owner" },
+      workspaces: [], connected_at: new Date().toISOString(),
+      refresh: { url: "https://app.usejarvis.dev/api/integrations/airtable/refresh", instance_id: crypto.randomUUID(), secret: "a".repeat(64) } }));
+    credentials.register(new JarvisAirtableConnectionSource({ daemon: { data_dir: dataDir },
+      usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (actionName: string | undefined, input: Record<string, unknown> = { auth: ref, ...location }): any => ({
+    name: "airtable", type: "PIECE", settings: { pieceName: AIRTABLE, ...(actionName ? { actionName } : {}), input },
+  });
+  const airtableCall = (url: string): any => step("custom_api_call", { auth: ref, method: "GET", url: { url } });
+  const airtableTrigger = (): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: AIRTABLE, triggerName: "new_record", actionName: "get_record", input: { auth: ref, ...location } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["an Airtable action outside the qualified four", empty(step("delete_record_ai"))],
+    ["an Airtable step with no action", empty(step(undefined))],
+    ["an Airtable custom API call, even on api.airtable.com", empty(airtableCall("https://api.airtable.com/v0/meta/whoami"))],
+    ["an Airtable custom API call with a relative path", empty(airtableCall("/meta/whoami"))],
+    ["an Airtable trigger that carries a stray actionName", airtableTrigger()],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:airtable");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(AIRTABLE_TOKEN);
+    });
+  }
+  test("a qualified Airtable step auth is ready and resolves", async () => {
+    const trigger = empty(step("get_record"));
+    expect(bindingIssues(trigger)).toEqual([]);
+    const response = await fetchFor(runOf(trigger), "jarvis:airtable");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ type: "SECRET_TEXT", pieceName: AIRTABLE, value: { secret_text: AIRTABLE_TOKEN, jarvis_managed: "airtable" } });
   });
 });
 
