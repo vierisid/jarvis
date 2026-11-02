@@ -1,3 +1,4 @@
+import { isMondayReference, mondayInputSchema } from "./managed-monday-inputs";
 import {managedAirtableIssue} from './managed-airtable';
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
 import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
@@ -480,7 +481,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           const sub: PieceCatalogAction | undefined = entries && typeof settings[key] === 'string' && Object.hasOwn(entries, settings[key]) ? entries[settings[key]] : undefined;
           if (!sub) issue(node, `settings.${key}`, 'ACTION', `Unknown ${key} for ${pieceName}`);
           else if (object(input)) {
-            for (const field of sub.inputSchema?.fields ?? []) {
+            const schema = !root && isMondayReference(pieceName, input.auth) ? mondayInputSchema(settings.actionName) ?? sub.inputSchema : sub.inputSchema;
+            for (const field of schema?.fields ?? []) {
               const value = input[field.name];
               const path = `settings.input.${field.name}`;
               if (field.required && emptyInput(value)) {

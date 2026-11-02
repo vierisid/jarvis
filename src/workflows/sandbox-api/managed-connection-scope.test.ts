@@ -14,6 +14,7 @@ import { JarvisMailchimpConnectionSource } from "../credentials/mailchimp-source
 import { JarvisAsanaConnectionSource } from "../credentials/asana-source";
 import { JarvisTodoistConnectionSource } from "../credentials/todoist-source";
 import { JarvisIntercomConnectionSource } from "../credentials/intercom-source";
+import { JarvisMondayConnectionSource } from "../credentials/monday-source";
 import type { JarvisConfig } from "../../config/types";
 import { JarvisGitHubConnectionSource } from "../credentials/github-source";
 import { JarvisTrelloConnectionSource } from "../credentials/trello-source";
@@ -45,6 +46,7 @@ const CLICKUP = "@activepieces/piece-clickup";
 const ASANA = "@activepieces/piece-asana";
 const TODOIST = "@activepieces/piece-todoist";
 const INTERCOM = "@activepieces/piece-intercom";
+const MONDAY = "@activepieces/piece-monday";
 const MAILCHIMP = "@activepieces/piece-mailchimp";
 const GITHUB = "@activepieces/piece-github";
 const TRELLO = "@activepieces/piece-trello";
@@ -133,6 +135,17 @@ const pieces = new PieceCatalog([
     ] } },
   }, triggers: {
     newConversationFromUser: { name: "newConversationFromUser", displayName: "", description: "" },
+  } },
+  { name: MONDAY, displayName: "monday.com", description: "", auth: { type: "SECRET_TEXT" }, actions: {
+    monday_get_item_column_values: { name: "monday_get_item_column_values", displayName: "", description: "", inputSchema: { fields: [
+      { name: "board_id", label: "", type: "string", required: false },
+      { name: "item_id", label: "", type: "string", required: false },
+    ] } },
+    monday_delete_item: { name: "monday_delete_item", displayName: "", description: "", inputSchema: { fields: [
+      { name: "item_id", label: "", type: "string", required: false },
+    ] } },
+  }, triggers: {
+    monday_new_item_in_board: { name: "monday_new_item_in_board", displayName: "", description: "" },
   } },
   { name: AIRTABLE, displayName: "Airtable", description: "", auth: { type: "SECRET_TEXT" }, actions: {
     get_record: { name: "get_record", displayName: "", description: "", inputSchema: { fields: [
@@ -582,6 +595,56 @@ describe("managed Intercom is scoped to its six qualified Intercom actions", () 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: INTERCOM,
       value: { access_token: INTERCOM_TOKEN, jarvis_managed: "intercom", api_host: "api.intercom.io", admin_id: "admin1" } });
+  });
+});
+
+describe("managed monday.com is scoped to its five qualified item actions", () => {
+  const MONDAY_TOKEN = "synthetic-managed-monday-access-token";
+  const ref = "{{connections.jarvis:monday}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "monday-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    // A still-valid access token, so resolving it needs no renewal request.
+    writeFileSync(join(dataDir, "connections", "monday.json"), JSON.stringify({ version: 1, provider: "monday", status: "connected",
+      generation: crypto.randomUUID(), access_token: MONDAY_TOKEN, account: { id: "12:34", label: "owner@example.test" },
+      workspaces: [{ id: "12", name: "Sandbox" }], connected_at: new Date().toISOString(),
+      refresh_token: "synthetic-monday-refresh-token", expires_at: new Date(Date.now() + 3600000).toISOString(),
+      refresh: { url: "https://app.usejarvis.dev/api/integrations/monday/refresh", instance_id: "instance", secret: "a".repeat(64) } }));
+    credentials.register(new JarvisMondayConnectionSource({ daemon: { data_dir: dataDir },
+      usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (actionName: string | undefined, input: Record<string, unknown> = { auth: ref, board_id: "100", item_id: "200" }): any => ({
+    name: "monday", type: "PIECE", settings: { pieceName: MONDAY, ...(actionName ? { actionName } : {}), input },
+  });
+  // A trigger whose settings also carry a stray actionName of a qualified action.
+  const mondayTrigger = (): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: MONDAY, triggerName: "monday_new_item_in_board", actionName: "monday_get_item_column_values", input: { auth: ref } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a monday.com delete, outside the qualified five", empty(step("monday_delete_item", { auth: ref, item_id: "200" }))],
+    ["a monday.com step without an action name", empty(step(undefined))],
+    ["a monday.com trigger that carries a stray actionName", mondayTrigger()],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is refused by the route`, async () => {
+      const response = await fetchFor(runOf(trigger), "jarvis:monday");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(MONDAY_TOKEN);
+    });
+  }
+  test("a qualified monday.com step auth is ready and resolves", async () => {
+    const trigger = empty(step("monday_get_item_column_values"));
+    expect(bindingIssues(trigger)).toEqual([]);
+    const response = await fetchFor(runOf(trigger), "jarvis:monday");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ type: "SECRET_TEXT", pieceName: MONDAY, value: { secret_text: MONDAY_TOKEN, jarvis_managed: "monday" } });
+    // The refresh token and the renewal secret never reach the sandbox.
+    expect(JSON.stringify(body)).not.toContain("synthetic-monday-refresh-token");
+    expect(JSON.stringify(body)).not.toContain("a".repeat(64));
   });
 });
 

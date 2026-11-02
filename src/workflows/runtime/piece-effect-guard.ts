@@ -24,6 +24,7 @@ import { managedNotionInput, managedNotionIssue, runManagedNotionAction } from '
  * Imported BY THE ENGINE BUNDLE: keep it pure. `fetch` only, no node built-ins.
  */
 
+import {managedMondayInput, runManagedMondayAction} from './managed-monday';
 import {managedLinearInput, runManagedLinearAction} from './managed-linear';
 import {managedTypeformInput, runManagedTypeformAction} from './managed-typeform';
 import {managedTodoistInput, runManagedTodoistAction} from './managed-todoist';
@@ -256,6 +257,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     const issue = managedTrelloIssue(params.action, trello);
     if (issue) throw new Error(issue);
   }
+  const monday = params.piece === "@activepieces/piece-monday" ? managedMondayInput(params.input) : null;
   const todoist = params.piece === "@activepieces/piece-todoist" ? managedTodoistInput(params.input) : null;
   const asana = params.piece === "@activepieces/piece-asana" ? managedAsanaInput(params.input) : null;
   const dropbox = params.piece === '@activepieces/piece-dropbox' ? managedDropboxInput(params.input) : null;
@@ -282,6 +284,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (github) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
     raw = await runManagedGitHubAction(String(params.action), github);
+  } else if (monday) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Monday dispatch was not authorized');
+    raw = await runManagedMondayAction(String(params.action), monday);
   } else if (linear) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Linear dispatch was not authorized');
     raw = await runManagedLinearAction(String(params.action), linear);

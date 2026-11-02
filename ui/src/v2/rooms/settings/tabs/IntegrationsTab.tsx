@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
 import { MailchimpConnection } from "../../../integrations/MailchimpConnection";
 import { AsanaConnection } from "../../../integrations/AsanaConnection";
+import { MondayConnection } from "../../../integrations/MondayConnection";
 import { TodoistConnection } from "../../../integrations/TodoistConnection";
 import { GitHubConnection } from "../../../integrations/GitHubConnection";
 import { DropboxConnection } from "../../../integrations/DropboxConnection";
@@ -346,6 +347,7 @@ export function IntegrationsTab({
       <DropboxConnection optional />
       <TrelloConnection optional />
       <LinearConnection optional />
+      <MondayConnection optional />
       <TypeformConnection optional />
       <AirtableConnection optional />
       <TodoistConnection optional /><AsanaConnection optional />

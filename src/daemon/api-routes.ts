@@ -2482,6 +2482,21 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         catch (error) { return json({error: error instanceof ClickUpOptionsError ? error.message : 'Could not load ClickUp choices.'}, error instanceof ClickUpOptionsError ? error.status : 502); }
       },
     },
+    '/api/integrations/monday': {
+      GET: async () => { const {mondayStatus} = await import('../integrations/monday-connection'); return json(mondayStatus(ctx.config)); },
+    },
+    '/api/integrations/monday/options': {
+      GET: async (req: Request) => {
+        const q = new URL(req.url).searchParams, kind = q.get('kind');
+        if (kind !== 'boards' && kind !== 'groups' && kind !== 'columns') return json({error: 'Choose boards, groups or columns.'}, 400);
+        const {mondayOptions, MondayOptionsInputError} = await import('../integrations/monday-options');
+        try { return json(await mondayOptions(ctx.config, kind, q.get('board_id'), q.get('cursor'))); }
+        catch (error) {
+          if (error instanceof MondayOptionsInputError) return json({error: error.message}, 400);
+          return json({error: 'Could not load monday.com choices. Check your connection or enter an ID.'}, 502);
+        }
+      },
+    },
     '/api/integrations/linear/teams': {
       GET: async (req: Request) => {
         const {linearTeamOptions, LinearOptionsInputError} = await import('../integrations/linear-options');
