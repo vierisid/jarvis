@@ -83,11 +83,10 @@ export function isGmailTrackedSend(action: unknown): boolean {
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
   return isHubspotContact(piece, action)
-    || (piece === '@activepieces/piece-monday' && ['monday_create_item','monday_update_item_name','monday_update_column_values_of_item','monday_create_update'].includes(String(action)))
     || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === MONDAY_PIECE) && managedPieceChanges(piece, action))
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
     || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
@@ -102,6 +101,7 @@ const CLICKUP_PIECE = '@activepieces/piece-clickup';
 const MAILCHIMP_PIECE = '@activepieces/piece-mailchimp';
 const ASANA_PIECE = '@activepieces/piece-asana';
 const INTERCOM_PIECE = '@activepieces/piece-intercom';
+const MONDAY_PIECE = '@activepieces/piece-monday';
 /** Every ClickUp, Mailchimp, Asana or Intercom action that changes the account (write,
  * send, email, delete or an access change). None parks its flow, so each one
  * can be tracked; a read never is. A category the adapter does not map tracks
@@ -178,6 +178,44 @@ export function asanaDuplicateProjectCategory(input: Record<string, unknown>): A
   if (!present(input.include)) return 'write_data';
   return Array.isArray(input.include) && input.include.every(part => ASANA_DUPLICATE_CONTENT_PARTS.has(part))
     ? 'write_data' : 'modify_settings';
+}
+
+/**
+ * monday.com `create_board`: a public board is visible to the whole account,
+ * a shareable one can take guests, and owners or subscribers are people given
+ * the board. Only a private board with no owners or subscribers is the
+ * caller's alone, a write. Anything else, a templated value included, is the
+ * worst case.
+ */
+export function mondayCreateBoardCategory(input: Record<string, unknown>): ActionCategory {
+  const none = (v: unknown) => !present(v) || (Array.isArray(v) && v.length === 0);
+  return input.board_kind === 'private' && none(input.board_owner_ids) && none(input.board_subscriber_ids)
+    ? 'write_data' : 'modify_settings';
+}
+
+/** monday.com `create_workspace`: an open workspace is visible to everyone in
+ * the account; only an explicitly closed one is the caller's alone. */
+export function mondayCreateWorkspaceCategory(input: Record<string, unknown>): ActionCategory {
+  return input.kind === 'closed' ? 'write_data' : 'modify_settings';
+}
+
+/** monday.com `update_workspace`: its kind (open or closed) or account product
+ * decides who can see it; a rename or description is a write. */
+export function mondayUpdateWorkspaceCategory(input: Record<string, unknown>): ActionCategory {
+  return present(input.kind) || present(input.account_product_id) ? 'modify_settings' : 'write_data';
+}
+
+/** monday.com `update_board_hierarchy` and `update_folder`: moving a board or
+ * folder to another workspace or account product changes who can see it; a
+ * folder change or rename inside the same workspace is a write. */
+export function mondayMoveAcrossWorkspacesCategory(input: Record<string, unknown>): ActionCategory {
+  return present(input.workspace_id) || present(input.account_product_id) ? 'modify_settings' : 'write_data';
+}
+
+/** monday.com `duplicate_board`: keeping subscribers gives the original's
+ * people the copy. Without them (upstream's default) it is a write. */
+export function mondayDuplicateBoardCategory(input: Record<string, unknown>): ActionCategory {
+  return !present(input.keep_subscribers) || input.keep_subscribers === false ? 'write_data' : 'modify_settings';
 }
 
 const DROPBOX_PIECE = '@activepieces/piece-dropbox';
@@ -760,9 +798,69 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
-  catalogId: 'monday', pieceName: '@activepieces/piece-monday', unknownActionCategory: 'modify_settings',
-  targetProps: ['board_id','group_id','item_id','item_name','name','column_values','column_ids','body'],
-  categories: {read_data: ['monday_get_item_column_values'], write_data: ['monday_create_item','monday_update_item_name','monday_update_column_values_of_item','monday_create_update']},
+  // monday.com, a community piece whose managed `jarvis:monday` connection
+  // made it governed. Every action of the pinned 0.4.0 bundle is named
+  // (`managed-monday.test.ts` pins the list and the engine test checks it
+  // against the installed package), so a workflow on the user's own API token
+  // keeps its reads and writes at the default level. The managed connection
+  // itself is limited to MANAGED_MONDAY_ACTIONS. The bundle has no
+  // `custom_api_call`; an action added upstream falls back to `modify_settings`.
+  catalogId: 'monday', pieceName: MONDAY_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['workspace_id', 'folder_id', 'board_id', 'source_board_id', 'group_id', 'item_id', 'item_ids',
+    'parent_item_id', 'parent_id', 'update_id', 'column_id', 'column_ids', 'doc_id', 'block_id', 'tag_name',
+    'user_id', 'user_ids', 'team_ids', 'board_owner_ids', 'board_subscriber_ids', 'kind', 'board_kind',
+    'keep_subscribers', 'account_product_id', 'target_type', 'target_id', 'board_name', 'group_title', 'item_name',
+    'name', 'title', 'column_values', 'value', 'body', 'text'],
+  categories: {
+    read_data: ['monday_get_board_values', 'monday_get_item_column_values', 'monday_get_board_activity_logs',
+      'monday_list_board_views', 'monday_list_boards', 'monday_get_column_type_schema', 'monday_list_columns',
+      'monday_export_doc_as_markdown', 'monday_get_doc_blocks', 'monday_list_docs', 'monday_get_assets',
+      'monday_list_folders', 'monday_list_groups', 'monday_get_items', 'monday_list_board_items',
+      'monday_list_subitems', 'monday_search_items_by_column_values', 'monday_aggregate_board_data',
+      'monday_get_board_mute_settings', 'monday_get_favorites', 'monday_get_form', 'monday_list_notifications',
+      'monday_list_tags', 'monday_search', 'monday_list_board_updates', 'monday_list_item_updates',
+      'monday_get_account', 'monday_get_me', 'monday_list_teams', 'monday_list_users', 'monday_list_workspaces'],
+    // Content that lands in front of other people, including an edit of it: an
+    // update (or reply) notifies the item's subscribers and mentioned people,
+    // as an Asana comment does; a bell notification goes to the chosen user.
+    send_message: ['monday_create_update', 'monday_post_item_update', 'monday_edit_update',
+      'monday_send_notification'],
+    // Board, item and doc content under the caller's own access. Moving an item
+    // to another group or board is a move, as a Trello card move is; none of
+    // these changes who can see a board, workspace or folder.
+    write_data: ['monday_create_item', 'monday_create_board_item', 'monday_create_subitem', 'monday_duplicate_item',
+      'monday_update_item_name', 'monday_rename_item', 'monday_update_column_values_of_item',
+      'monday_set_item_column_values', 'monday_change_column_value', 'monday_change_simple_column_value',
+      'monday_change_item_position', 'monday_move_item_to_group', 'monday_move_item_to_board',
+      'monday_upload_file_to_column', 'monday_upload_file', 'monday_update_assets_on_item', 'monday_create_column',
+      'monday_add_board_column', 'monday_update_column', 'monday_create_group', 'monday_add_board_group',
+      'monday_duplicate_group', 'monday_update_group', 'monday_update_board', 'monday_create_doc',
+      'monday_import_doc_from_html', 'monday_duplicate_doc', 'monday_rename_doc', 'monday_append_markdown_to_doc',
+      'monday_create_doc_block', 'monday_update_doc_block', 'monday_create_folder', 'monday_create_or_get_tag',
+      'monday_like_update', 'monday_unlike_update', 'monday_pin_update', 'monday_unpin_update'],
+    // Every delete and archive, and the removals of people from a board or
+    // workspace (as Asana's member removals).
+    delete_data: ['monday_delete_item', 'monday_archive_item', 'monday_clear_item_updates', 'monday_delete_update',
+      'monday_delete_column', 'monday_delete_group', 'monday_archive_group', 'monday_delete_board',
+      'monday_archive_board', 'monday_delete_doc', 'monday_delete_doc_block', 'monday_delete_folder',
+      'monday_delete_workspace', 'monday_remove_board_subscribers', 'monday_remove_teams_from_board',
+      'monday_delete_users_from_workspace', 'monday_delete_teams_from_workspace'],
+    // Who can see or do what: adding people or teams to a board or workspace,
+    // the user's own notification settings, and the creates, copies and moves
+    // below at their worst case (narrowed by input in `categoryFromInput`).
+    modify_settings: ['monday_add_users_to_board', 'monday_add_teams_to_board', 'monday_add_users_to_workspace',
+      'monday_add_teams_to_workspace', 'monday_update_board_mute_settings', 'monday_create_board',
+      'monday_duplicate_board', 'monday_create_workspace', 'monday_update_workspace',
+      'monday_update_board_hierarchy', 'monday_update_folder'],
+  },
+  categoryFromInput: {
+    monday_create_board: { props: ['board_kind', 'board_owner_ids', 'board_subscriber_ids'], category: mondayCreateBoardCategory },
+    monday_duplicate_board: { props: ['keep_subscribers'], category: mondayDuplicateBoardCategory },
+    monday_create_workspace: { props: ['kind'], category: mondayCreateWorkspaceCategory },
+    monday_update_workspace: { props: ['kind', 'account_product_id'], category: mondayUpdateWorkspaceCategory },
+    monday_update_board_hierarchy: { props: ['workspace_id', 'account_product_id'], category: mondayMoveAcrossWorkspacesCategory },
+    monday_update_folder: { props: ['workspace_id'], category: mondayMoveAcrossWorkspacesCategory },
+  },
 }, {
   // Intercom, a community piece whose managed `jarvis:intercom` connection made
   // it governed. Every action of the pinned 0.9.2 bundle is named

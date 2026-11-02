@@ -252,6 +252,12 @@ test.skipIf(!gate)(
         process.env.MONDAY_CATALOG_FIXTURE,
         JSON.stringify(metadata),
       );
+    // Every action the installed package declares is in the governed table, so
+    // an upstream addition fails here instead of falling to modify_settings.
+    const all = Object.keys(metadata.actions);
+    expect(all.length).toBe(100);
+    expect(all.filter((name) => !resolveGovernedPieceAction(piece, name)!.known)).toEqual([]);
+    expect(Object.keys(metadata.triggers ?? {}).sort()).toEqual(["monday_new_item_in_board", "monday_specific_column_updated"]);
     const actions = [
       "monday_create_item",
       "monday_get_item_column_values",

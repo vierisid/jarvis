@@ -1730,7 +1730,7 @@ describe('#961: the core HTTP piece is governed by method', () => {
     // at 40 sorted keys, so the props the rule reads are gone from what it
     // sees while the piece still receives them.
     const padding = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`a${String(i).padStart(2, '0')}`, i]));
-    const samples: unknown[] = [undefined, false, true, null, '', 'GET', 'HEAD', 'get', 'subscribed', 'pending', 'transactional', 'private'];
+    const samples: unknown[] = [undefined, false, true, null, '', 'GET', 'HEAD', 'get', 'subscribed', 'pending', 'transactional', 'private', 'closed'];
     let rules = 0;
     const covered: string[] = [];
     for (const adapter of ALL_PIECE_ADAPTERS) {
@@ -1760,6 +1760,10 @@ describe('#961: the core HTTP piece is governed by method', () => {
     // Every input-narrowed Asana rule is among those checked.
     expect(covered).toEqual(expect.arrayContaining(['asana/create_project', 'asana/instantiate_project_template',
       'asana/create_team', 'asana/duplicate_project', 'asana/update_project', 'asana/update_team']));
+    // And every monday.com one.
+    expect(covered).toEqual(expect.arrayContaining(['monday/monday_create_board', 'monday/monday_duplicate_board',
+      'monday/monday_create_workspace', 'monday/monday_update_workspace', 'monday/monday_update_board_hierarchy',
+      'monday/monday_update_folder']));
   });
 
   test('padding inside the body cannot hide its data from the read rule', () => {

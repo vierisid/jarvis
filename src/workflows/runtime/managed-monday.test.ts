@@ -5,6 +5,7 @@ import {
   mondayGraphql,
 } from "./managed-monday";
 import {
+  MANAGED_PIECE_ADAPTERS,
   resolveGovernedPieceAction,
   tracksPieceCompletion,
 } from "./piece-effects";
@@ -65,23 +66,95 @@ const normal = (q: string, v: any) =>
                 name: JSON.parse(v.values).name ?? "Item",
               }),
             };
-test("five operations have explicit read/write governance and completion receipts", () => {
-  expect(MANAGED_MONDAY_ACTIONS).toHaveLength(5);
-  for (const name of MANAGED_MONDAY_ACTIONS) {
-    const read = name === "monday_get_item_column_values";
-    expect(
-      resolveGovernedPieceAction("@activepieces/piece-monday", name)?.category,
-    ).toBe(read ? "read_data" : "write_data");
-    expect(tracksPieceCompletion("@activepieces/piece-monday", name)).toBe(
-      !read,
-    );
+/** Every action of the pinned 0.4.0 bundle, in upstream's order. The engine
+ * test checks this list against the installed package. */
+const MONDAY_040_ACTIONS = [
+  "monday_create_column", "monday_create_group", "monday_create_item", "monday_create_update",
+  "monday_get_board_values", "monday_get_item_column_values", "monday_update_column_values_of_item",
+  "monday_update_item_name", "monday_upload_file_to_column", "monday_add_teams_to_board",
+  "monday_add_users_to_board", "monday_archive_board", "monday_create_board", "monday_delete_board",
+  "monday_duplicate_board", "monday_get_board_activity_logs", "monday_list_board_views",
+  "monday_list_boards", "monday_remove_board_subscribers", "monday_remove_teams_from_board",
+  "monday_update_board_hierarchy", "monday_update_board", "monday_add_board_column", "monday_delete_column",
+  "monday_get_column_type_schema", "monday_list_columns", "monday_update_column",
+  "monday_append_markdown_to_doc", "monday_create_doc_block", "monday_create_doc", "monday_delete_doc_block",
+  "monday_delete_doc", "monday_duplicate_doc", "monday_export_doc_as_markdown", "monday_get_doc_blocks",
+  "monday_import_doc_from_html", "monday_list_docs", "monday_rename_doc", "monday_update_doc_block",
+  "monday_get_assets", "monday_upload_file", "monday_create_folder", "monday_delete_folder",
+  "monday_list_folders", "monday_update_folder", "monday_add_board_group", "monday_archive_group",
+  "monday_delete_group", "monday_duplicate_group", "monday_list_groups", "monday_update_group",
+  "monday_archive_item", "monday_change_column_value", "monday_change_item_position",
+  "monday_change_simple_column_value", "monday_clear_item_updates", "monday_create_board_item",
+  "monday_create_subitem", "monday_delete_item", "monday_duplicate_item", "monday_get_items",
+  "monday_list_board_items", "monday_list_subitems", "monday_move_item_to_board",
+  "monday_move_item_to_group", "monday_rename_item", "monday_search_items_by_column_values",
+  "monday_set_item_column_values", "monday_update_assets_on_item", "monday_aggregate_board_data",
+  "monday_create_or_get_tag", "monday_get_board_mute_settings", "monday_get_favorites", "monday_get_form",
+  "monday_list_notifications", "monday_list_tags", "monday_search", "monday_send_notification",
+  "monday_update_board_mute_settings", "monday_delete_update", "monday_edit_update", "monday_like_update",
+  "monday_list_board_updates", "monday_list_item_updates", "monday_pin_update", "monday_post_item_update",
+  "monday_unlike_update", "monday_unpin_update", "monday_get_account", "monday_get_me", "monday_list_teams",
+  "monday_list_users", "monday_add_teams_to_workspace", "monday_add_users_to_workspace",
+  "monday_create_workspace", "monday_delete_teams_from_workspace", "monday_delete_users_from_workspace",
+  "monday_delete_workspace", "monday_list_workspaces", "monday_update_workspace",
+];
+const MONDAY = "@activepieces/piece-monday";
+const SENDS = ["monday_create_update", "monday_post_item_update", "monday_edit_update", "monday_send_notification"];
+const DELETES = ["monday_delete_item", "monday_archive_item", "monday_clear_item_updates", "monday_delete_update",
+  "monday_delete_column", "monday_delete_group", "monday_archive_group", "monday_delete_board", "monday_archive_board",
+  "monday_delete_doc", "monday_delete_doc_block", "monday_delete_folder", "monday_delete_workspace",
+  "monday_remove_board_subscribers", "monday_remove_teams_from_board", "monday_delete_users_from_workspace",
+  "monday_delete_teams_from_workspace"];
+const SETTINGS = ["monday_add_users_to_board", "monday_add_teams_to_board", "monday_add_users_to_workspace",
+  "monday_add_teams_to_workspace", "monday_update_board_mute_settings", "monday_create_board", "monday_duplicate_board",
+  "monday_create_workspace", "monday_update_workspace", "monday_update_board_hierarchy", "monday_update_folder"];
+const READ = /^monday_(get|list|search|export|aggregate)_|^monday_search$/;
+test("the monday.com adapter names every action of the pinned bundle, each in the category it should have", () => {
+  expect(MONDAY_040_ACTIONS).toHaveLength(100);
+  const adapter = MANAGED_PIECE_ADAPTERS.find((a) => a.pieceName === MONDAY)!;
+  expect((Object.values(adapter.categories).flat() as string[]).sort()).toEqual([...MONDAY_040_ACTIONS].sort());
+  const expected = (name: string) => SENDS.includes(name) ? "send_message" : DELETES.includes(name) ? "delete_data"
+    : SETTINGS.includes(name) ? "modify_settings" : READ.test(name) ? "read_data" : "write_data";
+  for (const name of MONDAY_040_ACTIONS) {
+    const resolved = resolveGovernedPieceAction(MONDAY, name)!;
+    expect(`${name}: ${resolved.category} ${resolved.known}`).toBe(`${name}: ${expected(name)} true`);
+    // A completion receipt for every change, never for a read.
+    expect(`${name}: ${tracksPieceCompletion(MONDAY, name)}`).toBe(`${name}: ${expected(name) !== "read_data"}`);
   }
-  expect(
-    resolveGovernedPieceAction(
-      "@activepieces/piece-monday",
-      "monday_create_column",
-    )?.category,
-  ).toBe("modify_settings");
+  for (const name of ["custom_api_call", "added_upstream_later"])
+    expect(resolveGovernedPieceAction(MONDAY, name)).toMatchObject({ category: "modify_settings", known: false });
+  // The managed connection runs a subset of the governed table.
+  expect(MANAGED_MONDAY_ACTIONS).toHaveLength(5);
+  for (const name of MANAGED_MONDAY_ACTIONS) expect(MONDAY_040_ACTIONS).toContain(name);
+  expect(resolveGovernedPieceAction(MONDAY, "monday_get_item_column_values")?.category).toBe("read_data");
+  expect(resolveGovernedPieceAction(MONDAY, "monday_create_update")?.category).toBe("send_message");
+});
+test("monday.com board, workspace and folder access changes narrow only by input", () => {
+  const category = (action: string, input?: Record<string, unknown>) => resolveGovernedPieceAction(MONDAY, action, input)!.category;
+  expect(category("monday_create_board")).toBe("modify_settings");
+  expect(category("monday_create_board", { board_name: "Mine", board_kind: "private" })).toBe("write_data");
+  expect(category("monday_create_board", { board_kind: "private", board_owner_ids: [] , board_subscriber_ids: [] })).toBe("write_data");
+  expect(category("monday_create_board", { board_kind: "public" })).toBe("modify_settings");
+  expect(category("monday_create_board", { board_kind: "share" })).toBe("modify_settings");
+  expect(category("monday_create_board", { board_kind: "{{trigger.kind}}" })).toBe("modify_settings");
+  expect(category("monday_create_board", { board_kind: "private", board_subscriber_ids: ["1"] })).toBe("modify_settings");
+  expect(category("monday_create_board", { board_kind: "private", board_owner_ids: ["1"] })).toBe("modify_settings");
+  expect(category("monday_duplicate_board", { board_id: "1" })).toBe("write_data");
+  expect(category("monday_duplicate_board", { board_id: "1", keep_subscribers: false })).toBe("write_data");
+  expect(category("monday_duplicate_board", { board_id: "1", keep_subscribers: true })).toBe("modify_settings");
+  expect(category("monday_create_workspace", { name: "W", kind: "closed" })).toBe("write_data");
+  expect(category("monday_create_workspace", { name: "W", kind: "open" })).toBe("modify_settings");
+  expect(category("monday_create_workspace", { name: "W" })).toBe("modify_settings");
+  expect(category("monday_update_workspace", { workspace_id: "1", name: "W" })).toBe("write_data");
+  expect(category("monday_update_workspace", { workspace_id: "1", kind: "open" })).toBe("modify_settings");
+  expect(category("monday_update_workspace", { workspace_id: "1", account_product_id: "2" })).toBe("modify_settings");
+  expect(category("monday_update_board_hierarchy", { board_id: "1", folder_id: "2" })).toBe("write_data");
+  expect(category("monday_update_board_hierarchy", { board_id: "1", workspace_id: "2" })).toBe("modify_settings");
+  expect(category("monday_update_folder", { folder_id: "1", name: "F" })).toBe("write_data");
+  expect(category("monday_update_folder", { folder_id: "1", workspace_id: "2" })).toBe("modify_settings");
+  // A cut projection is never read: the worst case stands.
+  const padded = Object.fromEntries(Array.from({ length: 41 }, (_, i) => ["a" + String(i).padStart(2, "0"), 1]));
+  expect(category("monday_create_board", { ...padded, board_kind: "private" })).toBe("modify_settings");
 });
 test("read verifies board and ID and exposes column text under column IDs", async () => {
   const m = mock(normal);
