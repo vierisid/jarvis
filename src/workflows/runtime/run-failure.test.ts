@@ -86,6 +86,19 @@ describe('runFailure (Q-19)', () => {
       outcome: 'It may already have taken effect. Steps before it had already run.' });
   });
 
+  test('a step blocked partway, saying it may have acted, counts as having run for a later step', () => {
+    // A blocked outcome that may have occurred (a skill stopped by the desktop switch midway,
+    // or a resumable import stopped between slices) is not "never dispatched".
+    for (const effect of ['may_have_occurred', 'not_started'] as const) {
+      const { effect: save, fail } = setup('RUNNING', 'jarvisOnly');
+      save('notify', { route: 'tool', status: 'blocked', outcome: { status: 'blocked', code: 'DESKTOP_DISABLED', message: 'desktop off', effect } });
+      save('notify_again', { status: 'blocked', outcome: { status: 'blocked', code: 'AUTHORITY_DENIED', message: 'denied', effect: 'not_started' } });
+      const outcome = runFailure(fail({ name: 'notify_again', displayName: 'Tell me' }))!.outcome;
+      if (effect === 'may_have_occurred') expect(outcome).toBe('This step did nothing. Steps before it had already run.');
+      else expect(outcome).not.toContain('had already run');
+    }
+  });
+
   test('a refused step after completed steps did nothing itself', () => {
     const { effect, fail } = setup();
     effect('notify', { route: 'notify', status: 'succeeded' });

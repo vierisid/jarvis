@@ -23,6 +23,7 @@ import { TrelloConnection } from "../../integrations/TrelloConnection";
 import { SlackConnection, useSlackStatus } from "../../integrations/SlackConnection";
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
+import { IntercomConnection, useIntercomStatus } from "../../integrations/IntercomConnection";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { AsanaConnection, useAsanaStatus } from "../../integrations/AsanaConnection";
 import { MondayConnection, useMondayStatus } from "../../integrations/MondayConnection";
@@ -32,6 +33,11 @@ import { DropboxConnection, useDropboxStatus } from "../../integrations/DropboxC
 import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
 import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConnection";
 import { GitHubRepository } from "../../integrations/GitHubRepository";
+import { MEETING_ACCOUNT_FIELDS } from "../../../../../src/workflows/meeting-accounts";
+import { SALES_ACCOUNT_FIELDS } from "../../../../../src/workflows/sales-accounts";
+import { REPORT_ACCOUNT_FIELDS } from "../../../../../src/workflows/report-accounts";
+import { REFUND_ACCOUNT_FIELDS, REFUND_ACTION, REFUND_PIECE } from "../../../../../src/workflows/refund-accounts";
+import { IMPORT_ACCOUNT_FIELDS, IMPORT_ACTION, IMPORT_PIECE, importAccountFields } from "../../../../../src/workflows/import-accounts";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { BriefTabs } from "../../../brief/components/controls/Choices";
@@ -3414,8 +3420,20 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     && JSON.stringify(step.settings?.input?.custom_fields) === "{}" && step.settings?.input?.check_required_custom_fields === true;
   const managedSchema = standardFields && rawSchema ? {...rawSchema, fields: rawSchema.fields.filter(f => !["custom_fields", "check_required_custom_fields"].includes(f.name))} : rawSchema;
   const formInput = step.settings?.input ?? {};
+  const meetingAccounts = piece?.name === '@jarvispieces/piece-jarvis-context' && subName === 'meeting_briefs'
+    ? MEETING_ACCOUNT_FIELDS
+    : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups' ? SALES_ACCOUNT_FIELDS
+      : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report' ? REPORT_ACCOUNT_FIELDS
+        : piece?.name === REFUND_PIECE && subName === REFUND_ACTION ? REFUND_ACCOUNT_FIELDS
+        : piece?.name === IMPORT_PIECE && subName === IMPORT_ACTION
+          // The source account is asked for only when the source uses OAuth2.
+          ? IMPORT_ACCOUNT_FIELDS.filter(([field]) => importAccountFields(formInput).includes(field)) : [];
+
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
-  const schema = formWebhook ? { fields: [
+  const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
+    {name:'cron_expression',label:'Schedule (cron)',type:'string' as const,required:true,description:'Choose the execution time before running. For weekdays, use minute hour * * 1-5.'},
+    {name:'timezone',label:'Timezone',type:'string' as const,required:false,description:'IANA timezone. Empty uses the timezone configured for Jarvis.'},
+  ]} : formWebhook ? { fields: [
     { name: 'submission_id_field', label: 'Submission ID field', type: 'string' as const, required: true, description: 'The field path containing the unique submission ID, for example form.id.' },
     { name: 'submission_email_field', label: 'Email field', type: 'string' as const, required: true, description: 'The field path containing the email address, for example form.email.' },
     ...Object.keys(formInput).filter(key => !['submission_id_field', 'submission_email_field', 'secret'].includes(key)).map(key => ({ name: key, label: key, type: 'string' as const, required: false })),
@@ -3539,6 +3557,8 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
             <Button variant="ghost" size="sm" disabled={!!step.settings?.input?.custom_fields && JSON.stringify(step.settings.input.custom_fields) !== "{}"}
               onClick={props.onUseStandardClickUpFields}>Use standard task fields</Button></>}
       </div>}
+      {meetingAccounts.length ? <MeetingAccountPickers fields={meetingAccounts} connections={connections} input={formInput} onSetInput={onSetInput} /> : null}
+
       {!isLoop && !isRouter ? (
         <div className="wf-props__inputs">
           {/* No "Inputs" section title: the panel only has one
@@ -3556,7 +3576,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
             </>
           ) : schema ? (
             <SchemaInputs
-              schema={schema}
+              schema={meetingAccounts.length ? {...schema, fields:schema.fields.filter(f=>!meetingAccounts.some(([field])=>field===f.name))} : schema}
               input={(step.settings?.input ?? {}) as Record<string, unknown>}
               onSetInput={onSetInput}
             />
@@ -3745,6 +3765,17 @@ function AdvancedSettings(props: {
  * here would duplicate the OAuth redirect handling already in that
  * panel and isn't worth the complexity.
  */
+/** The credential kind a saved-account picker offers: a Stripe account is a secret key, the others are OAuth. */
+export function accountPickerAuthType(provider: string): PieceCatalogAuth["type"] {
+  return provider === '@activepieces/piece-stripe' ? 'SECRET_TEXT' : 'OAUTH2';
+}
+export function MeetingAccountPickers({connections,input,onSetInput,fields=MEETING_ACCOUNT_FIELDS}: {connections:ConnectionMeta[];input:Record<string,unknown>;onSetInput:(field:string,value:string)=>void;fields?:ReadonlyArray<readonly [string,string,string]>}) {
+  return <>{fields.map(([field,provider,label]) =>
+    <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType={accountPickerAuthType(provider)}
+      connections={connections} currentValue={input[field] ? `{{connections.${input[field]}}}` : ''}
+      onPick={template=>onSetInput(field,template ? template.slice(14,-2) : '')} />)}</>;
+}
+
 function ConnectionPicker({
   pieceName,
   pieceDisplayName,
@@ -3775,6 +3806,8 @@ function ConnectionPicker({
   const currentExternalId = m ? m[1]! : "";
   // ClickUp and GitHub may also offer the hosted connection; without it
   // (self-hosted, or not connected) the picker reads exactly as for any other piece.
+  const isIntercom = pieceName === "@activepieces/piece-intercom";
+  const managedIntercom = useIntercomStatus(isIntercom)?.connected === true;
   const isClickUp = pieceName === "@activepieces/piece-clickup";
   const isMonday = pieceName === "@activepieces/piece-monday";
   const managedMonday = useMondayStatus(isMonday)?.connected === true;
@@ -3791,6 +3824,8 @@ function ConnectionPicker({
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
       {pieceName === "@activepieces/piece-mailchimp" && <MailchimpConnection onPick={onPick} currentValue={currentValue} />}
+      {isIntercom && <><IntercomConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedIntercom && <p className="wf-props__hint">Supports contact lookup, conversation reading, internal notes and contact tags. Use record IDs or workflow variables. Customer replies and triggers are not supported yet.</p>}</>}
       {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
       {isDropbox && <><DropboxConnection optional onPick={onPick} currentValue={currentValue} />
         {managedDropbox && <p className="wf-props__hint">This account supports file-name search, folder listings, basic metadata and creating folders in Dropbox home. Use / for the home folder. Advanced search filters and metadata options are unavailable.</p>}</>}
@@ -3804,7 +3839,7 @@ function ConnectionPicker({
         {managedMonday ? "monday.com account" : authDisplayName}
         {!managedMonday && <span className="wf-props__connection-type">({authType})</span>}
       </label>
-      {matching.length === 0 && !managedMonday && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana ? (
+      {matching.length === 0 && !managedMonday && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

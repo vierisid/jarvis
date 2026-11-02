@@ -13,7 +13,7 @@
  * editor's "Not approval-gated" badge and the daemon's admission cannot drift.
  */
 
-import { governedPieceAdapter } from './piece-effects';
+import { isGovernedPiece, resolveGovernedPieceAction } from './piece-effects';
 
 /** Jarvis's own pieces: each of their effects passes the boundary and is audited there. */
 export const JARVIS_PIECE_PREFIX = '@jarvispieces/';
@@ -43,7 +43,17 @@ export const IN_RUN_STEP_PIECES: ReadonlySet<string> = new Set([
  * governed categories say; each dispatch is audited and obeys Pause and Kill.
  */
 export function isCommunityPiece(pieceName: string): boolean {
-  // The adapter, not isGovernedPiece: Google Sheets has only its append
-  // actions governed, and its other actions must stay audited and badged.
-  return !governedPieceAdapter(pieceName) && !pieceName.startsWith(JARVIS_PIECE_PREFIX) && !IN_RUN_STEP_PIECES.has(pieceName);
+  // A partly governed piece (Sheets append, HubSpot contact upsert) is not a
+  // community piece: its ungoverned actions are audited and badged one by one
+  // through isCommunityAction below.
+  return !isGovernedPiece(pieceName) && !pieceName.startsWith(JARVIS_PIECE_PREFIX) && !IN_RUN_STEP_PIECES.has(pieceName);
+}
+
+/**
+ * An action that runs as a community piece's would: every action of a
+ * community piece, and an action of a partly governed piece (Sheets append,
+ * HubSpot contact upsert) that has no adapter. Audited and badged the same way.
+ */
+export function isCommunityAction(pieceName: string, actionName: unknown): boolean {
+  return isCommunityPiece(pieceName) || (isGovernedPiece(pieceName) && !resolveGovernedPieceAction(pieceName, actionName));
 }

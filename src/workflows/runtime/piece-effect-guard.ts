@@ -1,3 +1,4 @@
+import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
 /**
  * Engine-side half of the governed-piece adapter.
  *
@@ -24,6 +25,7 @@
 import {managedMondayInput, runManagedMondayAction} from './managed-monday';
 import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
+import {managedIntercomInput, runManagedIntercomAction} from './managed-intercom';
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
@@ -126,12 +128,17 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   }
   const governed = isGovernedPiece(params.piece) && typeof params.action === 'string' && params.action.length > 0;
   const url = `${params.apiUrl.replace(/\/+$/u, '')}${PIECE_AUTHORIZE_PATH}`;
+  const contact = isHubspotContact(params.piece, params.action) ? hubspotContactInput(params.input) : null;
+  if (contact) {
+    const auth = (params.input as Record<string,unknown>).auth;
+    params.input = { ...contact, auth };
+  }
   const editable = documentInput(params.piece, params.action, params.input);
   const body: PieceAuthorizeRequest = {
     piece: typeof params.piece === 'string' && params.piece ? params.piece : 'unknown',
     action: typeof params.action === 'string' && params.action ? params.action : 'unknown',
     // Only a governed piece's input is reviewed; nothing else's leaves the subprocess.
-    input: governed ? editable ?? sanitizePieceInput(params.input, params.piece) : {},
+    input: governed ? contact ?? editable ?? sanitizePieceInput(params.input, params.piece) : {},
     ...(governed ? { inputDigest: await pieceInputDigest(params.input) } : {}),
     // F-14: a supported document travels whole, so a reviewer can revise it.
     ...(governed && editable ? { documentProtocol: 1 as const } : {}),
@@ -190,6 +197,7 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   if (reply.dispatch === 'approval_required' && reply.approval?.waitpointId) return reply;
   if (reply.dispatch === 'completed' && tracked) return reply;
   if (reply.dispatch === 'authorized') {
+    if (isHubspotContact(params.piece, params.action)) throw new Error('HubSpot contact execution requires the qualified daemon adapter; legacy dispatch refused');
     if (tracked && !reply.effectId) throw new Error('Completion receipt protocol unavailable; send refused');
     if (reply.document !== undefined) {
       if (!editable) throw new Error('Document authorization requires a compatible engine input');
@@ -229,6 +237,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   const monday = params.piece === "@activepieces/piece-monday" ? managedMondayInput(params.input) : null;
   const asana = params.piece === "@activepieces/piece-asana" ? managedAsanaInput(params.input) : null;
   const dropbox = params.piece === '@activepieces/piece-dropbox' ? managedDropboxInput(params.input) : null;
+  const intercom = params.piece === '@activepieces/piece-intercom' ? managedIntercomInput(params.input) : null;
   const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
   if (slack) {
     // Recheck after an approval document has applied edits.
@@ -254,6 +263,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (dropbox) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Dropbox dispatch was not authorized');
     raw = await runManagedDropboxAction(String(params.action), dropbox);
+  } else if (intercom) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Intercom dispatch was not authorized');
+    raw = await runManagedIntercomAction(String(params.action), intercom);
   } else if (slack) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Slack dispatch was not authorized');
     if (params.action === 'slack_post_message' || params.action === 'send_channel_message') raw = await sendManagedSlackMessage(slack);

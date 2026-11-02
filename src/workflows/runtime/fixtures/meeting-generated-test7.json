@@ -1,0 +1,57 @@
+{
+  "name": "trigger",
+  "type": "PIECE_TRIGGER",
+  "displayName": "Every ten minutes (Europe/Rome)",
+  "settings": {
+    "pieceName": "schedule",
+    "input": {
+      "cron_expression": "*/10 * * * *",
+      "timezone": "Europe/Rome"
+    }
+  },
+  "nextAction": {
+    "name": "step_1",
+    "type": "PIECE",
+    "displayName": "Prepare upcoming external meeting briefs",
+    "settings": {
+      "pieceName": "@jarvispieces/piece-jarvis-context",
+      "actionName": "meeting_briefs",
+      "input": {
+        "calendarConnection": "",
+        "gmailConnection": "",
+        "hubspotConnection": "",
+        "calendarId": "",
+        "ownerEmail": "",
+        "internalDomains": "",
+        "hubspotPortalId": "",
+        "recentDays": 30,
+        "timezone": "Europe/Rome"
+      }
+    },
+    "nextAction": {
+      "name": "loop_1",
+      "type": "LOOP_ON_ITEMS",
+      "displayName": "Notify for each qualifying meeting",
+      "settings": {
+        "items": "{{step_1.meetings}}"
+      },
+      "firstLoopAction": {
+        "name": "step_2",
+        "type": "PIECE",
+        "displayName": "Deliver guarded meeting brief once",
+        "settings": {
+          "pieceName": "@jarvispieces/piece-jarvis-notify",
+          "actionName": "notify",
+          "input": {
+            "message": "{{loop_1.item.brief}}",
+            "meetingGuard": "{{loop_1.item.guard}}",
+            "idempotencyKey": "{{loop_1.item.notificationKey}}",
+            "channels": [
+              "dashboard"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

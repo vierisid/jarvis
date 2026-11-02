@@ -1,3 +1,12 @@
+import { MEETING_ACCOUNTS, meetingSetup, meetingSetupMatches, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
+import { createSalesFollowupsService } from './sales-service';
+import { createWeeklyReportService } from './report-service';
+import { createRefundService } from './refund-service';
+import { createContactImportService } from './import-service';
+import type { ImportRequest } from './contact-import';
+import { connectionBindings, enforceRunConnectionBinding, recordRunCredentialOutcome } from '../db/repos/binding-pins';
+import { walkFlowNodes } from '../db/flow-graph';
+import { isMeetingBriefsStep, MANAGED_HUBSPOT_REFUSAL, MEETING_ACCOUNT_LABELS } from '../meeting-accounts';
 import { withWorkflowMemory } from '../../vault/memory-use-context';
 import { documentInput, projectDocument } from './decision-document';
 /**
@@ -11,6 +20,9 @@ import { documentInput, projectDocument } from './decision-document';
  * Lives outside `adapters/` so the eventual K3 deletion of the legacy
  * adapters doesn't have to thread through this file.
  */
+import { HUBSPOT_CLAIM_WAIT_MS, HubspotNotStartedError, HubspotWriteRefusedError, hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
+import { getConnection } from '../db/repos/app-connection';
+import { claimIdentity, completeIdentity, IdentityUnresolvedError, releaseIdentity } from '../db/repos/effect-identity';
 import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
 import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
 import type { ApprovalManager } from '../../authority/approval';
@@ -43,7 +55,8 @@ import type { AgentDelegateFn } from "../sandbox-api/routes/jarvis-agent";
 import type { EventsPollFn } from "../sandbox-api/routes/jarvis-events";
 import type { WorkflowsStartFn } from "../sandbox-api/routes/jarvis-workflows";
 import type { SandboxApiServices } from "../sandbox-api/server";
-import type { CredentialResolver } from "../credentials/adapter";
+import { managedConnectionMisuse, managedSourceFor, type CredentialResolver } from "../credentials/adapter";
+import { ConnectionCredentialError, OAUTH2_TYPES } from "../credentials/pasted-oauth2";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
@@ -55,13 +68,13 @@ import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR } from './piece-effects';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
-import { captureProviderBinding } from './provider-reconciliation';
+import { captureProviderBinding, providerBindingHolds } from './provider-reconciliation';
 import { recordPieceCompletion } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
-import { isCommunityPiece } from './step-admission';
+import { isCommunityAction } from './step-admission';
 import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
 import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
 import { getFlowRun } from '../db/repos/flow-run';
@@ -80,7 +93,58 @@ import { escapedLiteralForCard, forCard, withoutCardInvisibles } from '../../uti
 import { AGENT_TASK_MAX_CHARS, checkSpecialistId, SPECIALIST_ID_MAX_CHARS } from '../../actions/tools/agents.ts';
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
 
+/** A refusal raised before anything was sent, typed as not started. The
+ * boundary records an untyped error from inside an effect as uncertain, so a
+ * checkpoint refusal (run stopped, approval withdrawn, Authority changed) that
+ * provably came first is retyped here, keeping its own code where it has one. */
+function notStartedOutcome(error: unknown): ActionOutcomeError {
+  if (error instanceof ActionOutcomeError && error.outcome.effect === 'not_started') return error;
+  const code = (error as { code?: unknown } | null)?.code;
+  return new ActionOutcomeError({ status: 'blocked', code: typeof code === 'string' && code ? code : 'DISPATCH_BLOCKED',
+    message: error instanceof Error ? error.message : String(error), effect: 'not_started' });
+}
+
+/** A notification owner only fans out to channels; its key is consumed once,
+ * so a waiter that gives up loses no delivery. */
+const NOTIFY_CLAIM_WAIT_MS = 2_000;
+
+/** Claim a cross-run identity, waiting while a competing claim is still
+ * dispatching. Never steals an unresolved claim: a crash can leave an
+ * uncertain provider effect behind. A claim that stays unresolved stops this
+ * effect before it starts, typed as not started. */
+async function claimSettledIdentity(identity: string, owner: string, once: boolean, checkpoint: () => void, waitMs: number): Promise<'claimed' | 'duplicate'> {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    // Nothing is claimed or sent yet: a refusal here started nothing.
+    try { checkpoint(); } catch (error) { throw notStartedOutcome(error); }
+    try { return claimIdentity(identity, owner, once); }
+    catch (error) {
+      if (!(error instanceof IdentityUnresolvedError)) throw error;
+      const ownerEffect = getWorkflowEffect(error.owner);
+      if (ownerEffect?.status !== 'dispatching' || Date.now() >= deadline)
+        throw new ActionOutcomeError({ status: 'blocked', code: 'IDENTITY_UNRESOLVED', effect: 'not_started',
+          message: ownerEffect && ownerEffect.status !== 'dispatching'
+            ? `An earlier write for this identity is unresolved: effect ${error.owner} in run ${ownerEffect.runId}. Check the provider, then resolve it (manage_workflow resolve_effect, or POST /api/workflow-runs/${ownerEffect.runId}/effects/${error.owner}/identity): mark_done if it happened, release if it did not.`
+            : error.message });
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+}
+
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
+  /** Test transport injection; production always uses the fixed HubSpot host. */
+  hubspotFetch?: typeof fetch;
+  meetingFetch?: typeof fetch;
+  meetingNow?: () => number;
+  reportFetch?: typeof fetch;
+  reportNow?: () => number;
+  refundFetch?: typeof fetch;
+  refundNow?: () => number;
+  importRequest?: ImportRequest;
+  importNow?: () => number;
+  importBudget?: () => import('./import-service').ImportCallBudget;
+  salesFetch?: typeof fetch;
+  salesNow?: () => number;
   /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
   decisionDocumentsEnabled?: boolean;
   credentialResolver: CredentialResolver;
@@ -374,9 +438,80 @@ export function buildSandboxServiceBackends(
     },
     ...(opts.sendDesktop ? { sendDesktop: opts.sendDesktop } : {}),
   };
+  /**
+   * The fixed read transport for one meeting step. `providers` limits which
+   * saved accounts it resolves, refreshes and pin-checks: the freshness
+   * recheck before delivery reads Calendar only.
+   */
+  const meetingRequest = async (setup: MeetingSetup, ctx: WorkflowEffectContext, checkpoint: () => void,
+    providers: ReadonlyArray<'calendar'|'gmail'|'hubspot'> = ['calendar','gmail','hubspot']) => {
+    const run = getFlowRun(ctx.runId);
+    const version = run && getFlowVersion(run.flowVersionId);
+    const step = version && walkFlowNodes(version.trigger).find(node =>
+      isMeetingBriefsStep(node.type, node.settings) && meetingSetupMatches(node.settings?.input as any ?? {}, setup));
+    if (!version || !step) throw Error('Meeting configuration must match a saved meeting preparation step');
+    const fields = (Object.keys(MEETING_ACCOUNTS) as Array<keyof typeof MEETING_ACCOUNTS>)
+      .filter(field => providers.includes(field.replace('Connection','') as 'calendar'));
+    const tokens = {} as Record<'calendar'|'gmail'|'hubspot',string>;
+    for (const field of fields) {
+      const pieceName = MEETING_ACCOUNTS[field], externalId = setup[field];
+      if (!connectionBindings(version.trigger).has(externalId)) throw Error('Meeting account is not bound to this workflow');
+      // The readiness rule, before the binding is checked or anything is
+      // resolved: a managed connection only by the meeting exemption
+      // (jarvis:google for Calendar and Gmail), so a refused id writes nothing.
+      if (externalId.startsWith('jarvis:')) {
+        if (field === 'hubspotConnection') throw Error(MANAGED_HUBSPOT_REFUSAL);
+        const source = managedSourceFor(opts.credentialResolver.list(), externalId);
+        const misuse = source ? managedConnectionMisuse(source, pieceName, `settings.input.${field}`, step.settings, step.type) : 'Managed connection source is unavailable';
+        if (misuse) throw Error(misuse);
+      }
+      const refusal = enforceRunConnectionBinding(ctx.runId, ctx.projectId, externalId, opts.credentialResolver);
+      if (refusal) throw Error(refusal);
+      let resolved = await opts.credentialResolver.resolve({projectId:ctx.projectId,pieceName,externalId});
+      if (resolved?.pieceName && resolved.pieceName !== pieceName) throw Error('Meeting account belongs to a different provider');
+      if (!resolved || resolved.type !== 'OAUTH2' || resolved.status && resolved.status !== 'ACTIVE')
+        throw Error('Connect the selected meeting account securely before running');
+      // A stored OAuth2 token is refreshed when it is about to expire, only
+      // after the run's binding check passed (as the engine's connection route does).
+      try { resolved = await opts.credentialResolver.fresh(resolved); }
+      catch (error) {
+        if (!(error instanceof ConnectionCredentialError)) throw error;
+        // Typed on the run's binding, as the engine's connection route records it, for the failure card.
+        recordRunCredentialOutcome(ctx.runId, externalId, { code: error.code, message: error.message });
+        // Only an expired or refused credential needs a person to reconnect; the others pass.
+        const account = `the selected ${MEETING_ACCOUNT_LABELS[field]} account (${externalId})`;
+        throw Error(error.code === 'CONNECTION_EXPIRED' ? `Reconnect ${account}: ${error.message}`
+          : error.code === 'CONNECTION_REFRESH_UNREACHABLE' ? `Nothing was read: Jarvis could not refresh ${account} just now, which is usually temporary. Start a new run later. ${error.message}`
+          : `Nothing was read: ${account} changed while Jarvis refreshed it. Start a new run. ${error.message}`);
+      }
+      if (resolved.stored && OAUTH2_TYPES.has(resolved.type)) recordRunCredentialOutcome(ctx.runId, externalId, null);
+      if (typeof resolved.value.access_token !== 'string') throw Error('Connect the selected meeting account securely before running');
+      tokens[field.replace('Connection','') as keyof typeof tokens] = resolved.value.access_token;
+    }
+    return meetingTransport(tokens, () => {
+      checkpoint();
+      for (const field of fields) {
+        const refusal = enforceRunConnectionBinding(ctx.runId,ctx.projectId,setup[field],opts.credentialResolver);
+        if (refusal) throw Error(refusal);
+      }
+    }, opts.meetingFetch);
+  };
+  const meetingBriefs: NonNullable<SandboxApiServices['meetingBriefs']> = async (input, ctx) => {
+    const setup = meetingSetup(input);
+    const reply = await effects.invoke({context:ctx,piece:'@jarvispieces/piece-jarvis-context',action:'meeting_briefs',
+      route:'meeting-briefs',toolName:'workflow_meeting_briefs',category:'read_data',toolCategory:'context',request:{...setup},
+      prepare:()=>({arguments:{...setup},target:{calendar:setup.calendarId,accounts:Object.keys(MEETING_ACCOUNTS).map(k=>setup[k as keyof typeof MEETING_ACCOUNTS])}}),
+      execute:async(args,checkpoint)=>prepareMeetingBriefs(meetingSetup(args),await meetingRequest(meetingSetup(args),ctx,checkpoint),opts.meetingNow?.() ?? Date.now())});
+    return reply.approval ? {approval:reply.approval} : reply.result;
+  };
   const notify: NotifyFn = async (req, ctx) => {
+    const guard = req.meetingGuard == null ? null : parseMeetingGuard(req.meetingGuard);
+    if (guard) {
+      if (req.channels.length !== 1 || req.channels[0] !== 'dashboard') throw Error('Meeting briefs only notify the dashboard');
+      req = {...req, meetingGuard:guard, idempotencyKey:meetingNotificationKey(guard)};
+    }
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-notify', action: 'notify',
-      route: 'notify', toolName: 'workflow_notify', category: 'send_message', toolCategory: 'notification', request: { ...req },
+      route: 'notify', toolName: 'workflow_notify', category: 'send_message', ...(guard ? {categories:['read_data','send_message'] as ActionCategory[]} : {}), toolCategory: 'notification', request: { ...req },
       prepare: () => {
         const requested = req.channels.length ? req.channels : ['auto'];
         const channels = new Set<string>();
@@ -398,36 +533,68 @@ export function buildSandboxServiceBackends(
           target: { channels: [...channels], recipients, ...(fallback.fallback ? { fallback: fallback.fallback } : {}) } };
       },
       execute: async (args, checkpoint) => {
-        const recipients = args.recipients as Record<string, string | null>;
-        const guardedNotifier = new JarvisNotifierAdapter({ ...notifierDeps,
-          broadcastToDashboard: (text, priority) => { checkpoint(); return opts.wsService.broadcastNotificationToDashboard(text, priority); },
-          broadcastToChannels: async (channels, text) => {
-            const report: ChannelDeliveryReport = { delivered: [], failed: [], unknown: [] };
-            for (const channel of channels) {
-              try { checkpoint(); } catch (error) { report.failed.push({ channel, error: (error as Error).message }); continue; }
-              try {
-                await opts.channelService.sendWorkflowNotification(channel, recipients[channel] ?? null, text);
-                report.delivered.push(channel);
-              } catch (error) {
-                // Q-19: a send that may have arrived is reported unknown, never as not sent.
-                (sendMayHaveArrived(error) ? report.unknown : report.failed).push({ channel, error: (error as Error).message });
-              }
-            }
-            return report;
-          },
-          sendVoice: async text => { checkpoint(); return (await opts.wsService.broadcastProactiveVoice(text)) > 0; },
-          ...(opts.sendDesktop ? { sendDesktop: async (title: string, body: string) => { checkpoint(); return opts.sendDesktop!(title, body); } } : {}),
-        });
-        const report = await guardedNotifier.notify({ message: args.message as string, channels: args.channels as any, priority: args.priority as any,
-          ...(args.autoDashboard === true ? { autoDashboard: true } : {}) });
-        // Q-19, owner decision: the step reports each channel and fails only
-        // when nothing was sent anywhere. A channel that may have taken it
-        // counts as sent: failing would invite a resend that could repeat it.
-        if (report.delivered.length === 0 && report.unknown.length === 0) {
-          throw new DeliveryFailedError({ status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started',
-            message: `Not sent on any channel: ${report.failed.map(f => `${f.channel} (${f.error})`).join('; ')}` }, report);
+        // Re-read after any approval wait and immediately before claiming delivery.
+        // A stale result must not consume the key, so a later poll can prepare it anew.
+        if (args.meetingGuard) {
+          const currentGuard = parseMeetingGuard(args.meetingGuard);
+          if (!await meetingStillCurrent(currentGuard, await meetingRequest(currentGuard.setup,ctx,checkpoint,['calendar']),opts.meetingNow?.() ?? Date.now()))
+            return {delivered:[],failed:[],unknown:[],skipped:'Meeting changed, cancelled, declined or outside the upcoming window'};
         }
-        return report;
+        const notifyKey = typeof args.idempotencyKey === 'string' ? args.idempotencyKey : null;
+        const currentRun = getFlowRun(ctx.runId);
+        const identity = notifyKey && currentRun ? digest(['workflow-notify-v1',ctx.projectId,currentRun.flowId,notifyKey]) : null;
+        const owner = workflowEffectId(ctx.runId,ctx.stepName!,ctx.executionPath ?? [],'notify');
+        checkpoint();
+        if (identity && await claimSettledIdentity(identity,owner,true,checkpoint,NOTIFY_CLAIM_WAIT_MS) === 'duplicate') return { delivered: [], failed: [], unknown: [], deduplicated: true };
+        // The notifier reports a thrown dashboard, voice or desktop send as
+        // failed, but it may have reached someone: such a key stays consumed.
+        let mayHaveArrived = false;
+        const sent = <T>(send: () => T): T => {
+          try { const result = send(); if (result instanceof Promise) result.catch(() => { mayHaveArrived = true; }); return result; }
+          catch (error) { mayHaveArrived = true; throw error; }
+        };
+        try {
+          const recipients = args.recipients as Record<string, string | null>;
+          const guardedNotifier = new JarvisNotifierAdapter({ ...notifierDeps,
+            broadcastToDashboard: (text, priority) => { checkpoint(); return sent(() => opts.wsService.broadcastNotificationToDashboard(text, priority)); },
+            broadcastToChannels: async (channels, text) => {
+              const report: ChannelDeliveryReport = { delivered: [], failed: [], unknown: [] };
+              for (const channel of channels) {
+                try { checkpoint(); } catch (error) { report.failed.push({ channel, error: (error as Error).message }); continue; }
+                try {
+                  await opts.channelService.sendWorkflowNotification(channel, recipients[channel] ?? null, text);
+                  report.delivered.push(channel);
+                } catch (error) {
+                  // Q-19: a send that may have arrived is reported unknown, never as not sent.
+                  (sendMayHaveArrived(error) ? report.unknown : report.failed).push({ channel, error: (error as Error).message });
+                }
+              }
+              return report;
+            },
+            sendVoice: async text => { checkpoint(); return (await sent(() => opts.wsService.broadcastProactiveVoice(text))) > 0; },
+            ...(opts.sendDesktop ? { sendDesktop: async (title: string, body: string) => { checkpoint(); return sent(() => opts.sendDesktop!(title, body)); } } : {}),
+          });
+          const report = await guardedNotifier.notify({ message: args.message as string, channels: args.channels as any, priority: args.priority as any,
+            ...(args.autoDashboard === true ? { autoDashboard: true } : {}) });
+          // Q-19, owner decision: the step reports each channel and fails only
+          // when nothing was sent anywhere. A channel that may have taken it
+          // counts as sent: failing would invite a resend that could repeat it.
+          if (report.delivered.length === 0 && report.unknown.length === 0) {
+            const failures = report.failed.map(f => `${f.channel} (${f.error})`).join('; ');
+            // A thrown dashboard, voice or desktop send may have reached
+            // someone, so its key stays consumed below; the outcome says so
+            // too, rather than telling an operator nothing was sent.
+            throw new DeliveryFailedError(mayHaveArrived
+              ? { status: 'unknown', code: 'DELIVERY_UNCERTAIN', effect: 'may_have_occurred', message: `Not confirmed on any channel; it may have arrived: ${failures}` }
+              : { status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started', message: `Not sent on any channel: ${failures}` }, report);
+          }
+          if (identity) completeIdentity(identity,owner);
+          return report;
+        } catch (error) {
+          // Definitely sent on no channel: the key was not consumed, so a later run may alert.
+          if (identity && error instanceof DeliveryFailedError && !mayHaveArrived) releaseIdentity(identity,owner);
+          throw error;
+        }
       },
     });
     return reply.approval ? { delivered: [], failed: [], unknown: [], approval: reply.approval } : reply.result as Awaited<ReturnType<NotifyFn>>;
@@ -880,8 +1047,8 @@ export function buildSandboxServiceBackends(
       const hold = holdStep({ runId: run.id, projectId: run.projectId, stepName: ctx.stepName ?? 'unknown step' });
       return { governed: false, dispatch: 'held', approval: { effectId: '', approvalId: '', waitpointId: hold.id, hold: PAUSED_REASON } };
     }
-    // `isCommunityPiece` is also what the editor's "Not approval-gated" badge reads (#955).
-    if (req.piece === CODE_STEP_PIECE || isCommunityPiece(req.piece)) {
+    // `isCommunityAction` is also what the editor's "Not approval-gated" badge reads (#955).
+    if (req.piece === CODE_STEP_PIECE || isCommunityAction(req.piece, req.action)) {
       try {
         opts.auditTrail?.log({ agent_id: `workflow:${run.id}`, agent_name: `Workflow ${run.id} / ${stepName}`,
           tool_name: req.piece === CODE_STEP_PIECE ? 'code step' : `community piece ${boundedReceiptText(`${req.piece}/${req.action}`, 160)}`,
@@ -1003,11 +1170,14 @@ export function buildSandboxServiceBackends(
     const previous = getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], route));
     const document = whole && (previous ? previous.requestDigest === digest(requestOf(whole, true))
       : opts.decisionDocumentsEnabled === true && digest(defangPieceProjection(whole)) === digest(whole)) ? whole : null;
-    const input = document ?? projected;
+    const contact = isHubspotContact(req.piece, req.action) ? hubspotContactInput(req.input) : null;
+    if (contact && digest(contact) !== req.inputDigest) throw new Error('HubSpot contact input digest mismatch');
+    const input = contact ?? document ?? projected;
     const providerBinding = tracked ? captureProviderBinding({ projectId: ctx.projectId, versionId: run.flowVersionId,
-      stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest }) : undefined;
+      stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest, runId: ctx.runId }) : undefined;
+    if (contact && !providerBinding) throw new Error('HubSpot contact upsert requires a saved, active HubSpot 0.12.1 OAuth connection; choose it in setup');
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
-      externalDispatch: tracked, providerBinding,
+      externalDispatch: tracked && !contact, providerBinding,
       // #953: a governed send or payment over the workflow's level asks
       // instead of failing the step, as a gated tool does; deletes and
       // settings changes stay denied by level.
@@ -1031,7 +1201,61 @@ export function buildSandboxServiceBackends(
       revalidate: record => assertRecipientFactsCurrent((record.bindings as { facts?: FactPin[] } | undefined)?.facts),
       revalidateOnReplay: true,
       // The engine applies exactly the reviewed document it is handed here.
-      execute: async (args, checkpoint) => { checkpoint(); return { dispatch: 'authorized',
+      execute: async (args, checkpoint) => {
+        checkpoint();
+        if (contact) {
+          // The row the engine resolved, still holding the same account's
+          // credential: a token refresh since then keeps it, a person
+          // replacing the credential does not.
+          const connection = getConnection(providerBinding!.connectionId);
+          if (!providerBindingHolds(providerBinding!, connection, ctx.projectId, req.piece))
+            throw new Error('HubSpot connection changed before dispatch');
+          // A stored OAuth2 token about to expire is refreshed here (#954), as
+          // the engine's connection route does, only once the binding held.
+          // A failure is before any HubSpot call and before the contact is
+          // claimed, so a later submission can still write it.
+          let token: unknown;
+          try {
+            token = (await opts.credentialResolver.fresh({ type: connection.type, value: connection.value,
+              pieceName: connection.pieceName, status: connection.status,
+              stored: { id: connection.id, projectId: connection.projectId, externalId: connection.externalId, generation: connection.credentialGeneration } })).value.access_token;
+          } catch (error) {
+            if (!(error instanceof ConnectionCredentialError)) throw error;
+            // Only an expired or refused credential needs a person to reconnect; the others pass.
+            const account = `the selected HubSpot account (${connection.externalId})`;
+            const message = error.code === 'CONNECTION_EXPIRED' ? `Reconnect ${account}: ${error.message}`
+              : error.code === 'CONNECTION_REFRESH_UNREACHABLE' ? `Nothing was sent: Jarvis could not refresh ${account} just now, which is usually temporary. Start a new run later. ${error.message}`
+              : `Nothing was sent: ${account} changed while Jarvis refreshed it. Start a new run. ${error.message}`;
+            throw new ActionOutcomeError({ status: 'blocked', code: error.code, message, effect: 'not_started' });
+          }
+          if (typeof token !== 'string' || !token)
+            throw new ActionOutcomeError({ status: 'blocked', code: 'CONNECTION_EXPIRED',
+              message: `Reconnect the selected HubSpot account (${connection.externalId}): it holds no access token`, effect: 'not_started' });
+          checkpoint();
+          const values = hubspotContactInput(args);
+          const identity = digest(['hubspot-contact-v1',ctx.projectId,connection.id,values.email]);
+          const owner = workflowEffectId(ctx.runId,ctx.stepName!,ctx.executionPath ?? [],route);
+          await claimSettledIdentity(identity, owner, false, checkpoint, HUBSPOT_CLAIM_WAIT_MS);
+          let result: Awaited<ReturnType<typeof upsertHubspotContact>>;
+          try { result = await upsertHubspotContact(values, token, checkpoint, opts.hubspotFetch); }
+          catch (error) {
+            // A definite refusal, a checkpoint refusal before any possible
+            // write, or a failed read-only lookup changed nothing: release the
+            // contact and record the step as not started. Anything else stays
+            // fenced until a person resolves it (recovery mark_done/release).
+            if (error instanceof HubspotNotStartedError) {
+              releaseIdentity(identity, owner);
+              throw error.refusal !== undefined ? notStartedOutcome(error.refusal)
+                : new ActionOutcomeError({ status: 'error', code: 'PROVIDER_UNAVAILABLE', message: error.message, effect: 'not_started' });
+            }
+            if (!(error instanceof HubspotWriteRefusedError)) throw error;
+            releaseIdentity(identity, owner);
+            throw new ActionOutcomeError({ status: 'error', code: 'PROVIDER_REFUSED', message: error.message, effect: 'not_started' });
+          }
+          completeIdentity(identity, owner);
+          return result;
+        }
+        return { dispatch: 'authorized',
         ...(document ? { document: projectDocument(req.piece, req.action, args) } : {}) }; } });
     if (reply.approval) return { governed: true, dispatch: 'approval_required', approval: reply.approval };
     const approved = () => document ? { document: (reply.result as { document: ReturnType<typeof projectDocument> }).document } : {};
@@ -1046,6 +1270,11 @@ export function buildSandboxServiceBackends(
 
   const services: SandboxApiServices = {
     credentialResolver: opts.credentialResolver,
+    meetingBriefs: cancellableWorkflowService(meetingBriefs),
+    weeklyReport: cancellableWorkflowService(createWeeklyReportService({effects,credentials:opts.credentialResolver,fetchImpl:opts.reportFetch,now:opts.reportNow})),
+    approvalRefund: cancellableWorkflowService(createRefundService({effects,credentials:opts.credentialResolver,fetchImpl:opts.refundFetch,now:opts.refundNow})),
+    contactImport: cancellableWorkflowService(createContactImportService({effects,credentials:opts.credentialResolver,request:opts.importRequest,now:opts.importNow,budget:opts.importBudget})),
+    salesFollowups: cancellableWorkflowService(createSalesFollowupsService({effects,credentials:opts.credentialResolver,fetchImpl:opts.salesFetch,now:opts.salesNow})),
     pieceAuthorize: cancellableWorkflowService(pieceAuthorize),
     pieceReceipt: (ctx, id, result) => recordPieceCompletion(ctx, id, result, opts),
     llmChat: cancellableWorkflowService(llmChat),

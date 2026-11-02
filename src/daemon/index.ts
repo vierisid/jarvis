@@ -7,6 +7,7 @@ import { mailchimpStatus } from "../integrations/mailchimp-connection";
 import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
 import { asanaStatus } from '../integrations/asana-connection';
+import { intercomStatus } from '../integrations/intercom-connection';
 import { slackStatus } from "../integrations/slack-connection";
 import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
@@ -110,7 +111,7 @@ import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
-import { ApprovalManager, approvalNeedsClick, executionState, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
+import { ApprovalManager, approvalNeedsClick, executionState, onApprovalDeadlineExpired, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
 import { applyEmergencyState } from "./emergency-state.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
@@ -4312,6 +4313,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     };
     expireUnanswered();
     setInterval(expireUnanswered, 10 * 60_000).unref?.();
+    // A workflow card past its explicit deadline leaves the dashboard the same way.
+    onApprovalDeadlineExpired(request => wsService.broadcastApprovalUpdate(request));
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
     wsService.setApprovalManager(approvalManager);
     wsService.setDeferredExecutor(deferredExecutor);
@@ -4764,6 +4767,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       github: () => githubStatus(jarvisConfig),
       trello: () => trelloStatus(jarvisConfig),
       asana: () => asanaStatus(jarvisConfig),
+      intercom: () => intercomStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
@@ -5021,6 +5025,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisSlackConnectionSource } = await import("../workflows/credentials/slack-source");
       credentialResolver.register(new JarvisSlackConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisIntercomConnectionSource } = await import("../workflows/credentials/intercom-source");
+      credentialResolver.register(new JarvisIntercomConnectionSource(jarvisConfig));
       logWithTimestamp(
         "Workflow credential resolver: registered jarvis:google source",
       );

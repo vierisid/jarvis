@@ -2519,6 +2519,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json({...status, connected: status.connected && !reconnect, reconnect});
       },
     },
+    '/api/integrations/intercom': {
+      GET: async () => {
+        const {intercomStatus} = await import('../integrations/intercom-connection');
+        return json(intercomStatus(ctx.config));
+      },
+    },
     '/api/integrations/clickup': {
       GET: async () => {
         const { clickUpStatus } = await import('../integrations/clickup-connection');

@@ -46,6 +46,7 @@
  * built-ins, no daemon singletons.
  */
 
+import { isHubspotContact, HUBSPOT_PIECE, HUBSPOT_UPSERT } from './hubspot-contact';
 import type { ActionCategory } from '../../roles/authority';
 import type { ToolDefinition } from '../../actions/tools/registry';
 
@@ -67,19 +68,28 @@ export const PIECE_TOOL_CATEGORY = 'workflow-piece';
 const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_send_email', 'reply_to_email',
   'gmail_reply_to_thread', 'gmail_send_draft', 'gmail_forward_message']);
 
+/** True for a Gmail action that sends mail and returns once sent (its result is a sent message). */
+export function isGmailTrackedSend(action: unknown): boolean {
+  return GMAIL_TRACKED_SENDS.has(action);
+}
+
 /**
  * Q-07's bounded completion-receipt protocol. These actions never park
- * themselves. Every Gmail send that returns once sent is tracked, so an engine
- * retry of a send whose outcome is unknown is refused instead of sending again
- * (#953 made these reachable at the default level).
+ * themselves. Every Gmail send that returns once sent is tracked, and so is
+ * adding a label to a message, so an engine retry of either whose outcome is
+ * unknown is refused instead of repeated (#953 made these reachable at the
+ * default level). Only the sends have a provider readback: a label change
+ * returns the labeled (incoming) message, which is not a send receipt.
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-monday' && ['monday_create_item','monday_update_item_name','monday_update_column_values_of_item','monday_create_update'].includes(String(action)))
+  return isHubspotContact(piece, action)
+    || (piece === '@activepieces/piece-monday' && ['monday_create_item','monday_update_item_name','monday_update_column_values_of_item','monday_create_update'].includes(String(action)))
     || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE) && managedPieceChanges(piece, action))
-    || (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE) && managedPieceChanges(piece, action))
+    || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
+    || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
     // #961: an HTTP request that is not a read is a send whose outcome the
@@ -91,7 +101,8 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
 const CLICKUP_PIECE = '@activepieces/piece-clickup';
 const MAILCHIMP_PIECE = '@activepieces/piece-mailchimp';
 const ASANA_PIECE = '@activepieces/piece-asana';
-/** Every ClickUp, Mailchimp or Asana action that changes the account (write,
+const INTERCOM_PIECE = '@activepieces/piece-intercom';
+/** Every ClickUp, Mailchimp, Asana or Intercom action that changes the account (write,
  * send, email, delete or an access change). None parks its flow, so each one
  * can be tracked; a read never is. A category the adapter does not map tracks
  * nothing, so ClickUp (no send_email or modify_settings names) and Mailchimp
@@ -753,6 +764,49 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
   targetProps: ['board_id','group_id','item_id','item_name','name','column_values','column_ids','body'],
   categories: {read_data: ['monday_get_item_column_values'], write_data: ['monday_create_item','monday_update_item_name','monday_update_column_values_of_item','monday_create_update']},
 }, {
+  // Intercom, a community piece whose managed `jarvis:intercom` connection made
+  // it governed. Every action of the pinned 0.9.2 bundle is named
+  // (`intercom-connection.test.ts` pins the list and the engine test checks it
+  // against the installed package), so a workflow on the user's own Intercom
+  // connection keeps running at the default level for reads, writes and
+  // messages. The managed connection itself is limited to
+  // MANAGED_INTERCOM_ACTIONS. Only `custom_api_call` and an action added
+  // upstream fall back to `modify_settings`. The piece has no delete action.
+  catalogId: 'intercom', pieceName: INTERCOM_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['target', 'recordId', 'contactId', 'conversationId', 'ticketId', 'companyId', 'leadId', 'userId',
+    'lookupBy', 'value', 'searchField', 'searchValue', 'email', 'to', 'from', 'tagId', 'tagName', 'untag', 'remove',
+    'assigneeId', 'adminId', 'ticketTypeId', 'state', 'isShared', 'messageType', 'message_type', 'subject', 'title',
+    'name', 'eventName', 'body', 'closingMessage'],
+  categories: {
+    read_data: ['find-company', 'find-conversation', 'find-lead', 'find-user', 'get-conversation',
+      'get_conversation_by_id', 'get_contact', 'get_ticket', 'get_company', 'list-all-tags', 'search_contacts',
+      'list_contact_notes', 'search_conversations', 'search_tickets', 'list_ticket_types', 'list_admins',
+      'list_teams', 'list_data_attributes', 'list_companies', 'search_articles', 'list_segments'],
+    // Content that lands in front of other people: a reply or a message reaches
+    // the customer, a note (contact, conversation or ticket) the team, a new
+    // conversation the inbox. A state change can carry a closing message the
+    // customer sees, an assignment an assignment note, an article create can
+    // publish to the Help Center and a ticket update can share the ticket with
+    // its customer, so these sit here whatever their input (send_message and
+    // write_data need the same level; no input rule is needed to narrow them).
+    send_message: ['add-note-to-user', 'addNoteToConversation', 'add_note_to_contact', 'add_note_to_conversation_by_id',
+      'replyToConversation', 'reply_to_conversation_by_id', 'reply_to_ticket', 'create-conversation',
+      'create_conversation_from_contact', 'assignConversationAction', 'set_conversation_state', 'create-article',
+      'create_help_center_article', 'update_ticket_by_id'],
+    // An admin message to a contact, email by default. An in-app message is
+    // gated as email too: a rule could only narrow from the piece's worst
+    // case (modify_settings), which would over-gate the email default instead.
+    send_email: ['send_message', 'send_message_to_contact'],
+    // Workspace records under the caller's own access: contacts, companies,
+    // tickets, tags and events. None changes who can see or do what. A data
+    // event can start a series the owner built, as Mailchimp's custom event does.
+    write_data: ['add-or-remove-tag-on-contact', 'add-or-remove-tag-on-company', 'add-or-remove-tag-on-conversation',
+      'tag_or_untag_record', 'create_tag', 'create-data-event', 'create-ticket', 'create_ticket_by_type_id',
+      'update-ticket', 'convert_conversation_to_ticket', 'create-user', 'create-or-update-company',
+      'create-or-update-lead', 'create-or-update-user', 'find-or-create-company', 'find-or-create-lead',
+      'update_contact', 'attach_contact_to_company', 'assign_conversation_by_id'],
+  },
+}, {
   // Asana: every action of the pinned 0.7.2 bundle (`asana-connection.test.ts`
   // pins the list and the engine test checks it against the installed
   // package), so a workflow on the user's own Asana connection keeps running
@@ -982,6 +1036,10 @@ function mailchimpMemberStatusCategory(input: Record<string, unknown>): ActionCa
 export const ALL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [...GOVERNED_PIECE_ADAPTERS, ...CORE_PIECE_ADAPTERS, ...MANAGED_PIECE_ADAPTERS];
 // Narrow audited action coverage; this does not promote the entire Sheets
 // package to the Library's VERIFIED set or claim coverage of its other actions.
+const HUBSPOT_CONTACT_ADAPTER: GovernedPieceAdapter = {
+  catalogId: 'hubspot', pieceName: HUBSPOT_PIECE, unknownActionCategory: 'delete_data',
+  targetProps: ['email','objectProperties'], categories: { write_data: [HUBSPOT_UPSERT] },
+};
 const SHEETS_APPEND_ADAPTER: GovernedPieceAdapter = {
   catalogId: 'google-sheets', pieceName: '@activepieces/piece-google-sheets',
   unknownActionCategory: 'delete_data',
@@ -995,7 +1053,7 @@ const SHEETS_APPEND_ADAPTER: GovernedPieceAdapter = {
  * for the job contract, which must judge a governed action the way the
  * runtime does.
  */
-export const PARTIAL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [SHEETS_APPEND_ADAPTER];
+export const PARTIAL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [SHEETS_APPEND_ADAPTER, HUBSPOT_CONTACT_ADAPTER];
 
 const BY_PIECE_NAME = new Map<string, GovernedPieceAdapter>();
 const ACTION_CATEGORY = new Map<string, Map<string, ActionCategory>>();
@@ -1021,7 +1079,7 @@ for (const adapter of ALL_PIECE_ADAPTERS) {
 /** True for a piece with a governed adapter. The engine-side guard asks this
  * first, so an ungoverned piece costs no round trip at all. */
 export function isGovernedPiece(pieceName: unknown): boolean {
-  return typeof pieceName === 'string' && (BY_PIECE_NAME.has(pieceName) || pieceName === SHEETS_APPEND_ADAPTER.pieceName);
+  return typeof pieceName === 'string' && (BY_PIECE_NAME.has(pieceName) || pieceName === SHEETS_APPEND_ADAPTER.pieceName || pieceName === HUBSPOT_PIECE);
 }
 
 /**
@@ -1032,6 +1090,7 @@ export function isGovernedPiece(pieceName: unknown): boolean {
  */
 export function resolveGovernedPieceAction(pieceName: unknown, actionName: unknown, input?: unknown): ResolvedPieceAction | null {
   if (typeof pieceName !== 'string' || typeof actionName !== 'string') return null;
+  if (isHubspotContact(pieceName, actionName)) return { adapter: HUBSPOT_CONTACT_ADAPTER, action: actionName, category: 'write_data', known: true, byInput: false };
   if (pieceName === SHEETS_APPEND_ADAPTER.pieceName) {
     return tracksPieceCompletion(pieceName, actionName)
       ? { adapter: SHEETS_APPEND_ADAPTER, action: actionName, category: 'write_data', known: true, byInput: false } : null;

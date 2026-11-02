@@ -21,12 +21,15 @@ const VALID_CHANNELS: ReadonlySet<string> = new Set(PIECE_NOTIFY_CHANNELS);
 const VALID_PRIORITIES = new Set(["low", "normal", "high"]);
 
 export interface NotifyRequest {
+  meetingGuard?: unknown;
   message: string;
+  idempotencyKey?: string;
   channels: string[];
   priority: "low" | "normal" | "high";
 }
 
 export interface NotifyResponse {
+  deduplicated?: boolean;
   delivered: string[];
   failed: { channel: string; error: string }[];
   /** Channels that may have taken it without confirming. Never reported as not sent. */
@@ -90,10 +93,12 @@ export function createJarvisNotifyRoute(
       }
       priority = raw.priority as "low" | "normal" | "high";
     }
+    if (raw.idempotencyKey !== undefined && (typeof raw.idempotencyKey !== 'string' || !raw.idempotencyKey.trim() || raw.idempotencyKey.length > 256))
+      return err('idempotencyKey must be a non-empty string of at most 256 characters',400);
     let reply: NotifyResponse;
     try {
       reply = await cancellableWorkflowService(deps.notify)(
-        { message: raw.message, channels, priority },
+        { message: raw.message, channels, priority, ...(raw.meetingGuard == null ? {} : { meetingGuard: raw.meetingGuard }), ...(typeof raw.idempotencyKey === 'string' ? {idempotencyKey:raw.idempotencyKey} : {}) },
         workflowEffectContext(ctx),
       );
     } catch (error) {

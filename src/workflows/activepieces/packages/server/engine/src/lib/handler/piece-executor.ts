@@ -77,7 +77,7 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
 
         stepOutput.input = censoredInput
 
-        const { processedInput, errors } = await propsProcessor.applyProcessorsAndValidators(resolvedInput, mondayEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? pieceAction.props, piece.auth, pieceAction.requireAuth, action.settings.propertySettings)
+        const { processedInput, errors } = await propsProcessor.applyProcessorsAndValidators(resolvedInput, mondayEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? pieceAction.props, piece.auth, pieceAction.requireAuth, action.settings.propertySettings, { apiUrl: constants.internalApiUrl, engineToken: constants.engineToken })
         if (Object.keys(errors).length > 0) {
             throw new Error(JSON.stringify(errors, null, 2))
         }
