@@ -2497,6 +2497,62 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         }
       },
     },
+    '/api/integrations/linear/teams': {
+      GET: async (req: Request) => {
+        const {linearTeamOptions, LinearOptionsInputError} = await import('../integrations/linear-options');
+        try { return json(await linearTeamOptions(ctx.config, new URL(req.url).searchParams.get('cursor'))); }
+        catch (error) {
+          if (error instanceof LinearOptionsInputError) return json({error: error.message}, 400);
+          return json({error: 'Could not load Linear teams. Check your connection or enter a team ID.'}, 502);
+        }
+      },
+    },
+    '/api/integrations/linear': {
+      GET: async () => {
+        const {linearStatus} = await import('../integrations/linear-connection');
+        return json(linearStatus(ctx.config));
+      },
+    },
+    '/api/integrations/typeform': {
+      GET: async () => {
+        const {typeformStatus} = await import('../integrations/typeform-connection');
+        return json(typeformStatus(ctx.config));
+      },
+    },
+    '/api/integrations/airtable/options': {
+      GET: async (req: Request) => {
+        const {airtableOptions,AirtableOptionsError}=await import('../integrations/airtable-options');
+        try {return json(await airtableOptions(ctx.config,new URL(req.url).searchParams));}
+        catch(error){return json({error:error instanceof AirtableOptionsError?error.message:'Could not load Airtable choices.'},error instanceof AirtableOptionsError?error.status:502);}
+      },
+    },
+    '/api/integrations/airtable': {
+      GET: async () => {
+        const {airtableStatus} = await import('../integrations/airtable-connection');
+        return json(airtableStatus(ctx.config));
+      },
+    },
+    '/api/integrations/calendly': {
+      GET: async () => {
+        const {calendlyStatus} = await import('../integrations/calendly-connection');
+        return json(calendlyStatus(ctx.config));
+      },
+    },
+    '/api/integrations/todoist': {
+      GET: async () => { const {todoistStatus} = await import('../integrations/todoist-connection'); return json(todoistStatus(ctx.config)); },
+    },
+    '/api/integrations/todoist/options': {
+      GET: async (req: Request) => {
+        const q = new URL(req.url).searchParams, kind = q.get('kind');
+        if (kind !== 'projects' && kind !== 'sections') return json({error: 'Choose projects or sections.'}, 400);
+        const {todoistOptions, TodoistOptionsInputError} = await import('../integrations/todoist-options');
+        try { return json(await todoistOptions(ctx.config, kind, q.get('project_id'), q.get('cursor'))); }
+        catch (error) {
+          if (error instanceof TodoistOptionsInputError) return json({error: error.message}, 400);
+          return json({error: 'Could not load Todoist choices. Check your connection or enter an ID.'}, 502);
+        }
+      },
+    },
     '/api/integrations/asana/options': {
       GET: async (req: Request) => {
         const {asanaOptions, AsanaOptionsInputError} = await import('../integrations/asana-options');
@@ -2526,6 +2582,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: async () => {
         const {intercomStatus} = await import('../integrations/intercom-connection');
         return json(intercomStatus(ctx.config));
+      },
+    },
+    '/api/integrations/notion/options': {
+      GET: async (req: Request) => {
+        const {notionOptions,NotionOptionsError}=await import('../integrations/notion-options');
+        try {return json(await notionOptions(ctx.config,new URL(req.url).searchParams));}
+        catch(error){return json({error:error instanceof NotionOptionsError?error.message:'Could not load Notion choices.'},error instanceof NotionOptionsError?error.status:502);}
+      },
+    },
+    '/api/integrations/notion': {
+      GET: async () => {
+        const {notionStatus} = await import('../integrations/notion-connection');
+        return json(notionStatus(ctx.config));
       },
     },
     '/api/integrations/clickup': {

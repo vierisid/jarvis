@@ -1903,3 +1903,43 @@ describe('Dropbox action permissions', () => {
     expect(tracksPieceCompletion(adapter.pieceName, 'custom_api_call')).toBe(false);
   });
 });
+
+describe('Typeform action permissions', () => {
+  const TYPEFORM = '@activepieces/piece-typeform';
+  test('deletes and form replacement require delete_data; an unmapped action stays modify_settings', async () => {
+    for (const action of ['delete_form', 'delete_responses', 'delete_workspace', 'delete_theme', 'delete_image', 'replace_form']) {
+      expect(resolveGovernedPieceAction(TYPEFORM, action)).toMatchObject({category:'delete_data', known:true});
+    }
+    await expect(fixture(TYPEFORM, 'delete_responses', 3).authorize({form_id:'f1', responseIds:['r1']})).rejects.toThrow(/Authority denied/);
+    for (const action of ['custom_api_call', 'typeform_added_upstream_later']) {
+      expect(resolveGovernedPieceAction(TYPEFORM, action)).toMatchObject({category:'modify_settings', known:false});
+    }
+  });
+
+  test('update_form is a move with a workspace, a setting with isPublic, otherwise a write', () => {
+    expect(resolveGovernedPieceAction(TYPEFORM, 'update_form')!.category).toBe('delete_data');
+    expect(resolveGovernedPieceAction(TYPEFORM, 'update_form', {form_id:'f1', workspace:'w2'})!.category).toBe('delete_data');
+    expect(resolveGovernedPieceAction(TYPEFORM, 'update_form', {form_id:'f1', isPublic:'false'})!.category).toBe('modify_settings');
+    expect(resolveGovernedPieceAction(TYPEFORM, 'update_form', {form_id:'f1', isPublic:7})!.category).toBe('modify_settings');
+    expect(resolveGovernedPieceAction(TYPEFORM, 'update_form', {form_id:'f1', title:'New', workspace:'  ', isPublic:null})!.category).toBe('write_data');
+  });
+
+  test('reads and writes on the user\'s own connection run at the default level 3 without a card', async () => {
+    for (const [action, input] of [['list_responses', {form_id:'f1'}], ['get_form', {form_id:'f1'}],
+      ['create_form', {title:'New'}], ['update_form', {form_id:'f1', title:'Renamed'}]] as const) {
+      const f = fixture(TYPEFORM, action, 3);
+      expect({action, reply: await f.authorize(input)}).toMatchObject({action, reply: {governed:true, dispatch:'authorized'}});
+      expect(f.approvals.getPending()).toHaveLength(0);
+    }
+  });
+
+  test('every Typeform write and delete carries a completion receipt; no read does', () => {
+    const adapter = ALL_PIECE_ADAPTERS.find(a => a.catalogId === 'typeform')!;
+    for (const [category, names] of Object.entries(adapter.categories)) {
+      for (const action of names ?? []) {
+        expect(`${action}: ${tracksPieceCompletion(adapter.pieceName, action)}`).toBe(`${action}: ${category !== 'read_data'}`);
+      }
+    }
+    expect(tracksPieceCompletion(adapter.pieceName, 'custom_api_call')).toBe(false);
+  });
+});
