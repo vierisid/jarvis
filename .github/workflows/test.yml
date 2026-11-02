@@ -171,9 +171,12 @@ jobs:
           src/workflows/pieces-library/clickup-engine.test.ts
           src/workflows/pieces-library/typeform-engine.test.ts
           src/workflows/pieces-library/asana-engine.test.ts
+          src/workflows/pieces-library/calendly-engine.test.ts
           src/workflows/pieces-library/mailchimp-engine.test.ts
           src/workflows/pieces-library/dropbox-engine.test.ts
           src/workflows/pieces-library/slack-engine.test.ts
+          src/workflows/pieces-library/airtable-engine.test.ts
+          src/workflows/pieces-library/intercom-engine.test.ts
       # Not retried: deterministic.
       - run: bunx tsc --noEmit
 

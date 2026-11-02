@@ -124,22 +124,53 @@ test("lost ack is retried from durable storage without another provider refresh"
   expect(refreshes).toBe(1);
   expect(acks).toBe(2);
 });
-test("two independent refresher instances cannot overwrite each other's rotation", async () => {
+test("a concurrent renewal in another instance waits for the first and reuses its rotation", async () => {
   let release!: () => void;
   const wait = new Promise<void>((r) => (release = r));
-  let started = false;
+  let started = false,
+    refreshes = 0;
   const request = transport(async (body) => {
     if (body.ack) return Response.json({ acknowledged: true });
+    refreshes++;
+    expect(body.refreshToken).toBe("r1");
     started = true;
     await wait;
     return rotated();
   });
   const first = fresh().fresh(config, request);
   for (let i = 0; i < 100 && !started; i++) await Bun.sleep(1);
-  await expect(fresh().fresh(config, request)).rejects.toThrow("in progress");
+  expect(started).toBe(true);
+  // The second instance waits for the lock instead of failing or refreshing.
+  let settled = false;
+  const second = fresh()
+    .fresh(config, request)
+    .finally(() => (settled = true));
+  await Bun.sleep(250);
+  expect(settled).toBe(false);
   release();
-  await first;
-  expect((await fresh().fresh(config, request)).access_token).toBe("a2");
+  const [x, y] = await Promise.all([first, second]);
+  expect([x.access_token, y.access_token]).toEqual(["a2", "a2"]);
+  expect([x.refresh_token, y.refresh_token]).toEqual(["r2", "r2"]);
+  // One provider rotation only: the single-use r1 is never presented twice.
+  expect(refreshes).toBe(1);
+});
+test("a renewal that outlasts the wait is refused, never repeated", async () => {
+  let release!: () => void;
+  const wait = new Promise<void>((r) => (release = r));
+  let refreshes = 0;
+  const request = transport(async (body) => {
+    if (body.ack) return Response.json({ acknowledged: true });
+    refreshes++;
+    await wait;
+    return rotated();
+  });
+  const first = fresh().fresh(config, request);
+  for (let i = 0; i < 100 && refreshes === 0; i++) await Bun.sleep(1);
+  const impatient = createManagedRotatingRefresher("typeform", "Typeform", readTypeformConnection, { lockWaitMs: 150 });
+  await expect(impatient.fresh(config, request)).rejects.toThrow("in progress");
+  expect(refreshes).toBe(1);
+  release();
+  expect((await first).access_token).toBe("a2");
 });
 test("disconnect or reconnect during renewal never resurrects old credentials", async () => {
   const request = transport(() => {

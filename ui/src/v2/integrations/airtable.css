@@ -1,0 +1,100 @@
+.airtable-connection {
+  padding: var(--s-4, 16px) 0;
+  border-bottom: 1px solid var(--rule, #e2e7ec);
+  color: var(--ink, #13161a);
+}
+.airtable-connection h3 {
+  margin: 0 0 6px;
+  font: inherit;
+  font-weight: 600;
+}
+.airtable-connection p {
+  margin: 6px 0;
+  color: var(--ink2, #535b63);
+  overflow-wrap: anywhere;
+}
+.airtable-connection__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+.airtable-connection__button,
+.airtable-connection button {
+  font: inherit;
+  padding: 8px 12px;
+  border: 1px solid var(--rule, #e2e7ec);
+  border-radius: var(--corner-sm, 9px 2px 9px 9px);
+  color: var(--ink, #13161a);
+  background: var(--raise, white);
+  text-decoration: none;
+  cursor: pointer;
+}
+.airtable-connection__button:hover,
+.airtable-connection button:hover {
+  background: var(--panel, #eff2f5);
+}
+.airtable-connection button:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+.airtable-connection :is(a, button):focus-visible {
+  outline: 2px solid var(--ink2, #535b63);
+  outline-offset: 3px;
+}
+
+.airtable-location {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+}
+.airtable-location label {
+  display: grid;
+  gap: 6px;
+  color: var(--ink2);
+}
+.airtable-location :is(input, select) {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  color: var(--ink);
+  background: var(--raise);
+  border: 1px solid var(--rule);
+  padding: 8px;
+}
+.airtable-location button {
+  justify-self: start;
+  font: inherit;
+  color: var(--ink2);
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.airtable-location :is(input, select, button):focus-visible {
+  outline: 2px solid var(--ink2);
+  outline-offset: 2px;
+}
+
+/* Onboarding deliberately shares Google's service-card layout and theme. */
+.airtable-onboarding .on-google__service {
+  margin-block-start: 0;
+}
+.airtable-onboarding__link {
+  text-decoration: none;
+}
+.airtable-onboarding__link:hover {
+  background: var(--og-panel);
+}
+.airtable-onboarding__feedback .on-google__control {
+  padding-inline: 0;
+}
+
+.airtable-location details {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.airtable-location summary {
+  cursor: pointer;
+}

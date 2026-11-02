@@ -6,7 +6,10 @@ import { GitHubConnection } from "../../../integrations/GitHubConnection";
 import { DropboxConnection } from "../../../integrations/DropboxConnection";
 import { TrelloConnection } from "../../../integrations/TrelloConnection";
 import { TypeformConnection } from "../../../integrations/TypeformConnection";
+import { AirtableConnection } from "../../../integrations/AirtableConnection";
 import { SlackConnection } from "../../../integrations/SlackConnection";
+import { IntercomConnection } from "../../../integrations/IntercomConnection";
+import { CalendlyConnection } from "../../../integrations/CalendlyConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 
@@ -340,8 +343,11 @@ export function IntegrationsTab({
       <DropboxConnection optional />
       <TrelloConnection optional />
       <TypeformConnection optional />
+      <AirtableConnection optional />
       <AsanaConnection optional />
       <SlackConnection optional />
+      <IntercomConnection optional />
+      <CalendlyConnection optional />
     </div>
   );
 }

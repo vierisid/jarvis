@@ -8,7 +8,10 @@ import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
 import { asanaStatus } from '../integrations/asana-connection';
 import { typeformStatus } from '../integrations/typeform-connection';
+import { intercomStatus } from '../integrations/intercom-connection';
+import { calendlyStatus } from '../integrations/calendly-connection';
 import { slackStatus } from "../integrations/slack-connection";
+import { airtableStatus } from "../integrations/airtable-connection";
 import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
@@ -4768,7 +4771,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       trello: () => trelloStatus(jarvisConfig),
       asana: () => asanaStatus(jarvisConfig),
       typeform: () => typeformStatus(jarvisConfig),
+      intercom: () => intercomStatus(jarvisConfig),
+      calendly: () => calendlyStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
+      airtable: () => airtableStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
         return Object.fromEntries((['telegram', 'discord'] as const).map(name => [name, {
@@ -5023,8 +5029,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisTypeformConnectionSource } = await import("../workflows/credentials/typeform-source");
       credentialResolver.register(new JarvisTypeformConnectionSource(jarvisConfig));
+      const { JarvisAirtableConnectionSource } = await import("../workflows/credentials/airtable-source");
+      credentialResolver.register(new JarvisAirtableConnectionSource(jarvisConfig));
       const { JarvisSlackConnectionSource } = await import("../workflows/credentials/slack-source");
       credentialResolver.register(new JarvisSlackConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisIntercomConnectionSource } = await import("../workflows/credentials/intercom-source");
+      credentialResolver.register(new JarvisIntercomConnectionSource(jarvisConfig));
+      const { JarvisCalendlyConnectionSource } = await import("../workflows/credentials/calendly-source");
+      credentialResolver.register(new JarvisCalendlyConnectionSource(jarvisConfig));
       logWithTimestamp(
         "Workflow credential resolver: registered jarvis:google source",
       );
