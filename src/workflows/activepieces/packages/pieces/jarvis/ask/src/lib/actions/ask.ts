@@ -34,6 +34,11 @@ export const askAction = createAction({
     outcome: { status: 'succeeded' },
   },
   props: {
+    pdfFile: Property.ShortText({
+      displayName: "PDF file",
+      description: "Optional stored workflow file reference, for example {{trigger.attachment.data}} from Gmail new_attachment. Extracts text locally before asking the model. No browsing, tools or payments. Text PDFs up to 1 MiB, 40 pages, 128000 text characters; unreadable/scanned/encrypted files return an error outcome for Needs review when Require valid output is off.",
+      required: false,
+    }),
     prompt: Property.LongText({
       displayName: "Prompt",
       description: "The user prompt to send to the LLM.",
@@ -62,7 +67,7 @@ export const askAction = createAction({
     outputSchema: Property.LongText({
       displayName: "Output schema (JSON)",
       description:
-        "Optional JSON Schema the parsed reply must match. Supported keywords: type, properties, required, additionalProperties, items, enum, minItems, maxItems, minLength, maxLength, minimum, maximum. Any other keyword is refused before the prompt is sent. Implies Parse JSON. Describe the shape in the prompt as well: the schema checks the reply, it does not steer the model.",
+        "Optional JSON Schema the parsed reply must match. Supported keywords: type, properties, required, additionalProperties, items, enum, minItems, maxItems, minLength, maxLength, minimum, maximum. Type accepts a single type or a two-element array containing one type and null (for example, a nullable number). Other unions and unsupported keywords are refused before the prompt is sent. Implies Parse JSON. Describe the shape in the prompt as well: the schema checks the reply, it does not steer the model.",
       required: false,
     }),
     requireSuccess: Property.Checkbox({
@@ -78,6 +83,7 @@ export const askAction = createAction({
     const body: Record<string, unknown> = {
       prompt: context.propsValue["prompt"],
     };
+    if (context.propsValue["pdfFile"] !== undefined && context.propsValue["pdfFile"] !== null && context.propsValue["pdfFile"] !== "") body["pdfFile"] = context.propsValue["pdfFile"];
     if (context.propsValue["system"]) body["system"] = context.propsValue["system"];
     if (context.propsValue["overrideSystem"]) body["overrideSystem"] = true;
     if (context.propsValue["parseJson"]) body["parseJson"] = true;

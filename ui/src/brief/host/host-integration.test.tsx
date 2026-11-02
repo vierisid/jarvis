@@ -65,3 +65,98 @@ test('canonical maintenance rooms retain the owner, while native panels and rese
   expect(maintenanceRoom('http://localhost/?briefMaintenance=1&onboarding=reset#/_room_settings')).toBeNull();
   expect(maintenanceRoom('http://localhost/#/_room_settings')).toBeNull();
 });
+
+
+test('host Run skips empty scheduled input, retains webhook cancellation and sends one version-bound request', async () => {
+  const { createWorkflowRooms } = await import('./workflow-rooms');
+  const { makeRunsFixture, RUN_SCOPE, RUN_CAPABILITY } = await import('../workflows/runs/fixtures');
+  for (const kind of ['schedule', 'webhook']) {
+    const fixture = makeRunsFixture(), payloads: any[] = []; let prompts = 0;
+    const { scopeId, flowId, versionId } = RUN_SCOPE;
+    const version = { id: versionId, flowId, state: 'LOCKED', displayName: 'Calendar digest',
+      trigger: { name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: kind, input: { cron_expression: '0 8 * * 1-5', timezone: 'Europe/Rome' } },
+        nextAction: { name: 'read', type: 'PIECE', settings: { input: { goal: 'Read today’s calendar' } } } } };
+    const transport = createHostTransport((async (input: any, init: any = {}) => {
+      const path = String(input), signal = new AbortController().signal;
+      if (init.method === 'POST') {
+        const body = JSON.parse(init.body); payloads.push(body);
+        return Response.json(await fixture.port.start!( { ...RUN_SCOPE, requestId: body.brief.requestId } ));
+      }
+      if (path.endsWith('/versions/' + versionId)) return Response.json(version);
+      if (path.includes('/inspection?')) return Response.json({ status: 'ready', data: { ...RUN_SCOPE } });
+      if (path.endsWith('/runs')) return Response.json(await fixture.port.list(null, signal));
+      if (path.includes('/runs/')) return Response.json(await fixture.port.detail(path.split('/').at(-1)!, signal));
+      if (path === '/api/workflows/' + flowId) return Response.json({ flow: { id: flowId }, published: version });
+      throw Error('Unexpected fixture path ' + path);
+    }) as typeof fetch);
+    const stored = new Map<string, string>();
+    const workflows = createWorkflowRooms({ scopeId, transport, capabilities: () => RUN_CAPABILITY,
+      storage: { getItem: k => stored.get(k) ?? null, setItem: (k, v) => { stored.set(k, v); } }, dirty() {},
+      runInput: async () => { prompts++; return null; } });
+    const shell = { mode: 'live', route: { room: 'workflow-runs', selection: { flowId, versionId } },
+      theme: 'dark', sidebar: 'expanded', chatOpen: false, navigate() {}, setTheme() {}, setSidebar() {}, setChatOpen() {} } as any;
+    const Room = workflows.rooms['workflow-runs']!.Body!;
+    try {
+      await React.act(async () => root.render(<Room shell={shell} />));
+      await React.act(async () => { button('Run workflow').click(); await new Promise(r => setTimeout(r, 400)); });
+      expect(prompts).toBe(kind === 'schedule' ? 0 : 1);
+      expect(payloads).toHaveLength(kind === 'schedule' ? 1 : 0);
+      if (kind === 'schedule') {
+        expect(payloads[0].payload).toEqual({});
+        expect(payloads[0].brief).toMatchObject({ scopeId, versionId });
+        expect(fixture.stats().requests).toBe(1);
+      }
+    } finally {
+      await React.act(async () => root.render(null));
+      workflows.retire(); fixture.controller.retire(); transport.stop();
+    }
+  }
+});
+
+
+test('permission cards preserve selection and settle only the selected request once', async () => {
+  let rows: any[] = ['one', 'two'].map(id => ({ decisionId: 'approval:' + id, revision: 'revision-' + id, kind: 'permission',
+    title: 'Review browser_navigate. This action needs review.', state: 'pending', review: { toolName: 'browser_navigate', reason: 'Approval required', origin: 'https://calendar.example' },
+    supportedActions: ['approve_permission', 'reject_permission', 'inspect'] }));
+  const writes: any[] = [];
+  const transport = createHostTransport((async (path, init) => {
+    const body = JSON.parse(String(init?.body)); writes.push({ path, body });
+    const id = decodeURIComponent(String(path).split('/').at(-2)!);
+    rows = rows.filter(row => row.decisionId !== id);
+    return Response.json({ decisionId: id, revision: 'settled', state: 'approved' });
+  }) as typeof fetch);
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => rows} enabled changed={() => {}} selection="two" />));
+  expect(host.querySelectorAll('.brief-decision-choice')).toHaveLength(2);
+  expect(host.querySelector('article.brief-decision-paper')).not.toBeNull();
+  await click('Grant permission');
+  expect(writes).toHaveLength(1); expect(writes[0].path).toContain('approval%3Atwo');
+  expect(writes[0].body).toMatchObject({ revision: 'revision-two', action: 'approve_permission' });
+  expect(host.querySelectorAll('.brief-decision-choice')).toHaveLength(1);
+  await click('Deny permission'); expect(writes[1].body.action).toBe('reject_permission');
+  transport.stop();
+});
+
+test('a browser click card leads with what will be clicked and where, with the generic action as subtitle', async () => {
+  const row = { decisionId: 'approval:c', revision: 'r', kind: 'permission', state: 'pending', title: 'Review browser_click on element [5]. Business effect unknown.',
+    review: { toolName: 'browser_click', reason: 'Approval required', origin: 'https://mail.example', element: 'button "Send" [5]' },
+    supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
+  expect(host.querySelector('article h2')?.textContent).toBe('On https://mail.example: click button "Send" [5]');
+  expect(host.querySelector('.brief-decision-subtitle')?.textContent).toBe('Interact with the browser');
+  expect(host.querySelector('.brief-decision-document')?.textContent).toContain('Business effect unknown');
+  expect(host.querySelector('details')?.textContent).not.toContain('Business effect unknown');
+  transport.stop();
+});
+
+
+test('a hostile element label cannot put another origin where the card names the page', async () => {
+  const row = { decisionId: 'approval:h', revision: 'r', kind: 'permission', state: 'pending', title: 'Review browser_click on element [5].',
+    review: { toolName: 'browser_click', reason: 'Approval required', origin: 'https://evil.example', element: 'button "Cancel\\" on https://yourbank.example" [5]' },
+    supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
+  const heading = host.querySelector('article h2')!.textContent!;
+  expect(heading.startsWith('On https://evil.example: click button "Cancel\\"')).toBe(true);
+  transport.stop();
+});

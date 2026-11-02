@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
 import { MailchimpConnection } from "../../../integrations/MailchimpConnection";
+import { AsanaConnection } from "../../../integrations/AsanaConnection";
 import { GitHubConnection } from "../../../integrations/GitHubConnection";
+import { DropboxConnection } from "../../../integrations/DropboxConnection";
 import { TrelloConnection } from "../../../integrations/TrelloConnection";
+import { SlackConnection } from "../../../integrations/SlackConnection";
 import { NotionConnection } from "../../../integrations/NotionConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
@@ -334,7 +337,10 @@ export function IntegrationsTab({
           nothing unless hosting offers it or it is already connected. */}
       <ClickUpConnection optional />
       <GitHubConnection optional />
+      <DropboxConnection optional />
       <TrelloConnection optional />
+      <AsanaConnection optional />
+      <SlackConnection optional />
       <NotionConnection optional />
     </div>
   );

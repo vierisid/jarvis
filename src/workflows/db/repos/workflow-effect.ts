@@ -25,8 +25,16 @@ export interface WorkflowEffect {
    * succeeded; the service was not called again.
    */
   replayRefusal?: { outcome: ActionOutcome; at: number };
-  /** Q-07: native connection identity at dispatch; no credential is retained. */
-  providerBinding?: { connectionId: string; credentialDigest: string };
+  /**
+   * Q-07: the native connection the engine resolved when the effect was
+   * recorded; no credential is retained. Recovery's provider readback checks
+   * the row against it. A dispatch checks the binding it captures on that
+   * call, not this stored copy. `credentialDigest` is the engine's token;
+   * `credentialGeneration` is the row's credential generation then (a token
+   * refresh keeps it, a person replacing the credential advances it). A
+   * binding recorded before the generation existed has none.
+   */
+  providerBinding?: { connectionId: string; credentialDigest: string; credentialGeneration?: number };
   /**
    * #1039: the step is waiting for a place in its flow's card budget, since
    * `since`. Kept when it waits again, so it keeps its place in the queue.
@@ -34,6 +42,14 @@ export interface WorkflowEffect {
   deferral?: { budget: 'start' | 'other'; since: number };
   /** F-14 document generation; unchanged by policy/receipt writes. */
   documentRevision?: number;
+  /**
+   * Resumable native work (deferCompletion) that has already run at least one
+   * slice and is pending only until its next slice. Such an effect is not
+   * "never dispatched": an ending run must not receipt it as not_started.
+   */
+  partial?: { slices: number; at: number };
+  /** The "started" audit row of resumable work is written: once, whichever slice first completes. */
+  startLogged?: true;
 }
 export function getWorkflowEffect(id: string): WorkflowEffect | null {
   const row = getWorkflowDb().query('SELECT record FROM workflow_effect WHERE id = ?').get(id) as { record: string } | null;
