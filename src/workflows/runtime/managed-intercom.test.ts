@@ -33,3 +33,14 @@ test("notes require send authority; tags require write authority; completed/held
  expect(await executeAuthorizedPiece(params,{dispatch:"completed",result:{id:"saved"}} as any,async()=>{dispatched++;})).toEqual({id:"saved"});
  await expect(executeAuthorizedPiece(params,{dispatch:"held"} as any,async()=>{dispatched++;})).rejects.toThrow("authorization");expect(dispatched).toBe(0);
 });
+test("a managed Intercom step without an authorized governed dispatch never reaches Intercom", async () => {
+  const realFetch = globalThis.fetch;
+  let requests = 0, executed = 0;
+  globalThis.fetch = (async () => { requests++; return Response.json({id: "n1"}); }) as unknown as typeof fetch;
+  try {
+    const params = {piece: "@activepieces/piece-intercom", action: "add_note_to_contact", input: {auth, contactId: "c1", body: "Note"}} as any;
+    for (const governance of [{governed: false}, {governed: true, dispatch: "denied"}] as any[])
+      await expect(executeAuthorizedPiece(params, governance, async () => { executed++; })).rejects.toThrow("Intercom dispatch was not authorized");
+  } finally { globalThis.fetch = realFetch; }
+  expect({requests, executed}).toEqual({requests: 0, executed: 0});
+});

@@ -259,6 +259,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Dropbox dispatch was not authorized');
     raw = await runManagedDropboxAction(String(params.action), dropbox);
   } else if (intercom) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Intercom dispatch was not authorized');
     raw = await runManagedIntercomAction(String(params.action), intercom);
   } else if (slack) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Slack dispatch was not authorized');

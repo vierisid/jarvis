@@ -82,11 +82,10 @@ export function isGmailTrackedSend(action: unknown): boolean {
  * returns the labeled (incoming) message, which is not a send receipt.
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-intercom' && ['add_note_to_contact', 'add_note_to_conversation_by_id', 'add-or-remove-tag-on-contact'].includes(String(action)))
-    || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
+  return isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE) && managedPieceChanges(piece, action))
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
     || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
@@ -100,7 +99,8 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
 const CLICKUP_PIECE = '@activepieces/piece-clickup';
 const MAILCHIMP_PIECE = '@activepieces/piece-mailchimp';
 const ASANA_PIECE = '@activepieces/piece-asana';
-/** Every ClickUp, Mailchimp or Asana action that changes the account (write,
+const INTERCOM_PIECE = '@activepieces/piece-intercom';
+/** Every ClickUp, Mailchimp, Asana or Intercom action that changes the account (write,
  * send, email, delete or an access change). None parks its flow, so each one
  * can be tracked; a read never is. A category the adapter does not map tracks
  * nothing, so ClickUp (no send_email or modify_settings names) and Mailchimp
@@ -758,9 +758,48 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
-  catalogId: 'intercom', pieceName: '@activepieces/piece-intercom', unknownActionCategory: 'modify_settings',
-  targetProps: ['lookupBy', 'value', 'conversationId', 'plainText', 'contactId', 'body', 'adminId', 'tagId', 'untag'],
-  categories: {read_data: ['get_contact', 'get_conversation_by_id', 'list-all-tags'], write_data: ['add-or-remove-tag-on-contact'], send_message: ['add_note_to_contact', 'add_note_to_conversation_by_id']},
+  // Intercom, a community piece whose managed `jarvis:intercom` connection made
+  // it governed. Every action of the pinned 0.9.2 bundle is named
+  // (`intercom-connection.test.ts` pins the list and the engine test checks it
+  // against the installed package), so a workflow on the user's own Intercom
+  // connection keeps running at the default level for reads, writes and
+  // messages. The managed connection itself is limited to
+  // MANAGED_INTERCOM_ACTIONS. Only `custom_api_call` and an action added
+  // upstream fall back to `modify_settings`. The piece has no delete action.
+  catalogId: 'intercom', pieceName: INTERCOM_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['target', 'recordId', 'contactId', 'conversationId', 'ticketId', 'companyId', 'leadId', 'userId',
+    'lookupBy', 'value', 'searchField', 'searchValue', 'email', 'to', 'from', 'tagId', 'tagName', 'untag', 'remove',
+    'assigneeId', 'adminId', 'ticketTypeId', 'state', 'isShared', 'messageType', 'message_type', 'subject', 'title',
+    'name', 'eventName', 'body', 'closingMessage'],
+  categories: {
+    read_data: ['find-company', 'find-conversation', 'find-lead', 'find-user', 'get-conversation',
+      'get_conversation_by_id', 'get_contact', 'get_ticket', 'get_company', 'list-all-tags', 'search_contacts',
+      'list_contact_notes', 'search_conversations', 'search_tickets', 'list_ticket_types', 'list_admins',
+      'list_teams', 'list_data_attributes', 'list_companies', 'search_articles', 'list_segments'],
+    // Content that lands in front of other people: a reply or a message reaches
+    // the customer, a note (contact, conversation or ticket) the team, a new
+    // conversation the inbox. A state change can carry a closing message the
+    // customer sees, an assignment an assignment note, an article create can
+    // publish to the Help Center and a ticket update can share the ticket with
+    // its customer, so these sit here whatever their input (send_message and
+    // write_data need the same level; no input rule is needed to narrow them).
+    send_message: ['add-note-to-user', 'addNoteToConversation', 'add_note_to_contact', 'add_note_to_conversation_by_id',
+      'replyToConversation', 'reply_to_conversation_by_id', 'reply_to_ticket', 'create-conversation',
+      'create_conversation_from_contact', 'assignConversationAction', 'set_conversation_state', 'create-article',
+      'create_help_center_article', 'update_ticket_by_id'],
+    // An admin message to a contact, email by default. An in-app message is
+    // gated as email too: a rule could only narrow from the piece's worst
+    // case (modify_settings), which would over-gate the email default instead.
+    send_email: ['send_message', 'send_message_to_contact'],
+    // Workspace records under the caller's own access: contacts, companies,
+    // tickets, tags and events. None changes who can see or do what. A data
+    // event can start a series the owner built, as Mailchimp's custom event does.
+    write_data: ['add-or-remove-tag-on-contact', 'add-or-remove-tag-on-company', 'add-or-remove-tag-on-conversation',
+      'tag_or_untag_record', 'create_tag', 'create-data-event', 'create-ticket', 'create_ticket_by_type_id',
+      'update-ticket', 'convert_conversation_to_ticket', 'create-user', 'create-or-update-company',
+      'create-or-update-lead', 'create-or-update-user', 'find-or-create-company', 'find-or-create-lead',
+      'update_contact', 'attach_contact_to_company', 'assign_conversation_by_id'],
+  },
 }, {
   // Asana: every action of the pinned 0.7.2 bundle (`asana-connection.test.ts`
   // pins the list and the engine test checks it against the installed

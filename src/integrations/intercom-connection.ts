@@ -1,7 +1,7 @@
 /** Read the hosting-owned grant on every use so reconnect/disconnect needs no restart. */
 import {join} from "node:path";
 import type {JarvisConfig} from "../config/types";
-import {readManagedConnectionFile} from "./managed-connection-file";
+import {readConnectionFile} from "./connection-file";
 export const INTERCOM_PIECE = "@activepieces/piece-intercom";
 export const INTERCOM_CONNECTION = "jarvis:intercom";
 export const INTERCOM_HOSTS = {us:"api.intercom.io", eu:"api.eu.intercom.io", au:"api.au.intercom.io"} as const;
@@ -13,7 +13,7 @@ export interface IntercomConnection {
 const text = (v:unknown,max=512):v is string => typeof v === "string" && v.length > 0 && v.length <= max && !/[\x00-\x1f\x7f-\x9f]/.test(v);
 export function readIntercomConnection(dataDir:string):IntercomConnection|null {
   try {
-    const v=JSON.parse(readManagedConnectionFile(join(dataDir,"connections","intercom.json")));
+    const v=JSON.parse(readConnectionFile(join(dataDir,"connections","intercom.json")));
     if(v.version!==1 || v.provider!=="intercom" || v.status!=="connected" || !text(v.generation) || !/^[a-f0-9-]{36}$/.test(v.generation) ||
       !text(v.access_token,16384) || v.refresh_token!==undefined || v.expires_at!==undefined || !text(v.account?.id) || !text(v.account?.label) ||
       !Array.isArray(v.workspaces) || v.workspaces.length!==1 || !text(v.workspaces[0]?.id,256) || !text(v.workspaces[0]?.name) ||

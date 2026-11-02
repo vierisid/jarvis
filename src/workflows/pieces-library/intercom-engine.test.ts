@@ -181,6 +181,11 @@ test.skipIf(!gate)(
     const metadata = catalog.get(piece)!;
     expect(metadata.auth?.type).toBe("OAUTH2");
     if (process.env.INTERCOM_CATALOG_FIXTURE) writeFileSync(process.env.INTERCOM_CATALOG_FIXTURE,JSON.stringify(metadata));
+    // Every action the installed package declares is in the governed table, so
+    // an upstream addition fails here instead of falling to modify_settings.
+    const actions = Object.keys(metadata.actions);
+    expect(actions.length).toBe(57);
+    expect(actions.filter((name) => name !== "custom_api_call" && !resolveGovernedPieceAction(piece, name)!.known)).toEqual([]);
     for (const name of [
       "get_contact", "get_conversation_by_id", "add_note_to_contact", "add_note_to_conversation_by_id", "list-all-tags", "add-or-remove-tag-on-contact",
     ]) {
