@@ -1,5 +1,7 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   writeFileSync,
@@ -122,22 +124,97 @@ test("lost ack is retried from durable storage without another provider refresh"
   expect(refreshes).toBe(1);
   expect(acks).toBe(2);
 });
-test("two independent refresher instances cannot overwrite each other's rotation", async () => {
+test("a concurrent renewal in another instance waits for the first and reuses its rotation", async () => {
   let release!: () => void;
   const wait = new Promise<void>((r) => (release = r));
-  let started = false;
+  let started = false,
+    refreshes = 0,
+    acks = 0;
   const request = transport(async (body) => {
-    if (body.ack) return Response.json({ acknowledged: true });
+    if (body.ack) {
+      acks++;
+      return Response.json({ acknowledged: true });
+    }
+    refreshes++;
+    expect(body.refreshToken).toBe("r1");
     started = true;
     await wait;
     return rotated();
   });
   const first = fresh().fresh(config, request);
   for (let i = 0; i < 100 && !started; i++) await Bun.sleep(1);
-  await expect(fresh().fresh(config, request)).rejects.toThrow("in progress");
+  expect(started).toBe(true);
+  // The second holds no lock yet: it waits instead of failing or refreshing.
+  let settled = false;
+  const second = fresh()
+    .fresh(config, request)
+    .finally(() => (settled = true));
+  await Bun.sleep(250);
+  expect(settled).toBe(false);
   release();
-  await first;
+  const [a, b] = await Promise.all([first, second]);
+  expect([a.access_token, b.access_token]).toEqual(["a2", "a2"]);
+  expect([a.refresh_token, b.refresh_token]).toEqual(["r2", "r2"]);
+  // One provider rotation only; the single-use r1 is never presented twice.
+  expect(refreshes).toBe(1);
+  expect(acks).toBeGreaterThanOrEqual(1);
   expect((await fresh().fresh(config, request)).access_token).toBe("a2");
+  expect(refreshes).toBe(1);
+});
+test("a renewal that outlasts the wait is refused, never repeated", async () => {
+  let release!: () => void;
+  const wait = new Promise<void>((r) => (release = r));
+  let refreshes = 0;
+  const request = transport(async (body) => {
+    if (body.ack) return Response.json({ acknowledged: true });
+    refreshes++;
+    await wait;
+    return rotated();
+  });
+  const first = fresh().fresh(config, request);
+  for (let i = 0; i < 100 && refreshes === 0; i++) await Bun.sleep(1);
+  const impatient = createManagedRotatingRefresher(
+    "calendly",
+    "Calendly",
+    readCalendlyConnection,
+    { lockWaitMs: 150 },
+  );
+  await expect(impatient.fresh(config, request)).rejects.toThrow("in progress");
+  expect(refreshes).toBe(1);
+  release();
+  expect((await first).access_token).toBe("a2");
+});
+test("the renewal store is created owner-only without relying on a later chmod", async () => {
+  const previous = process.umask(0o022);
+  const chmod = spyOn(fs, "chmodSync").mockImplementation(() => {});
+  try {
+    const request = transport((body) =>
+      body.ack ? Response.json({ acknowledged: true }) : rotated(),
+    );
+    await fresh().fresh(config, request);
+  } finally {
+    chmod.mockRestore();
+    process.umask(previous);
+  }
+  const path = join(dir, "connections/calendly-renewal.sqlite");
+  expect(statSync(path).mode & 0o777).toBe(0o600);
+  // SQLite gives the rollback journal the database file's mode.
+  const db = new Database(path);
+  try {
+    expect((db.query("PRAGMA journal_mode").get() as any).journal_mode).toBe("delete");
+    // PERSIST (this connection only) keeps the journal after commit so its mode can be read.
+    db.exec("PRAGMA journal_mode=PERSIST");
+    expect(db.query("UPDATE renewal SET value=value || ' ' WHERE id=1").run().changes).toBe(1);
+    expect(statSync(path + "-journal").mode & 0o777).toBe(0o600);
+  } finally {
+    db.close();
+  }
+});
+test("a status read never creates the renewal store", () => {
+  const path = join(dir, "connections/calendly-renewal.sqlite");
+  expect(calendlyStatus(config)).toMatchObject({ connected: true, reconnect: false });
+  expect(new JarvisCalendlyConnectionSource(config).identity("jarvis:calendly")).not.toBeNull();
+  expect(existsSync(path)).toBe(false);
 });
 test("disconnect or reconnect during renewal never resurrects old credentials", async () => {
   const request = transport(() => {
