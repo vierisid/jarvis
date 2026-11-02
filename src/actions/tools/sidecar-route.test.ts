@@ -459,6 +459,12 @@ describe("collectExecutionTargets", () => {
     expect(targets.find((t) => t.id === "sc-pc")?.connected).toBe(false);
   });
 
+  test("does not advertise an unavailable browser to workflow discovery", () => {
+    setSidecarManagerRef(stubManager([{ ...mac, capabilities: ["terminal", "browser"],
+      unavailable_capabilities: [{ name: "browser", reason: "Chromium unavailable" }] }]));
+    expect(collectExecutionTargets().find(t => t.id === mac.id)?.capabilities).toEqual(["terminal"]);
+  });
+
   test("appends the brain host", () => {
     setSidecarManagerRef(stubManager([mac]));
     const host = collectExecutionTargets().find((t) => t.isHost);

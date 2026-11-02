@@ -14,15 +14,9 @@ import { cancellableWorkflowService } from "../../runtime/cancellation";
 import { workflowEffectContext } from './effect-context';
 import { ActionOutcomeError, type ActionFailure } from '../../../actions/action-outcome';
 import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
+import { PIECE_NOTIFY_CHANNELS } from '../../jarvis-pieces/types';
 
-const VALID_CHANNELS = new Set([
-  "auto",
-  "telegram",
-  "discord",
-  "voice",
-  "dashboard",
-  "desktop",
-]);
+const VALID_CHANNELS: ReadonlySet<string> = new Set(PIECE_NOTIFY_CHANNELS);
 
 const VALID_PRIORITIES = new Set(["low", "normal", "high"]);
 

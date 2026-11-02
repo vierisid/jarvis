@@ -39,10 +39,10 @@ import ts from 'typescript';
 import { PATCHED_VENDOR_SOURCES } from '../runner/engine-runtime/build';
 
 /** Relative to this directory. All must also be cache-invalidation inputs.
- * managed-github, managed-trello, managed-mailchimp, managed-slack and managed-dropbox are the
+ * managed-github, managed-trello, managed-mailchimp, managed-slack, managed-dropbox and managed-asana are the
  * engine's fetch-only send adapters; checking them here prevents a future
  * dependency from silently escaping the bundle hash. */
-const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'managed-github.ts', 'managed-trello.ts', 'managed-mailchimp.ts', 'managed-slack.ts', 'managed-dropbox.ts'];
+const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'managed-github.ts', 'managed-trello.ts', 'managed-mailchimp.ts', 'managed-slack.ts', 'managed-dropbox.ts', 'managed-asana.ts'];
 
 /**
  * A value import of ANOTHER registered source is fine, and is the one shape

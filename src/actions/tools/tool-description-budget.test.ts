@@ -103,6 +103,17 @@ describe('#504 tool description budget', () => {
     expect(bytes(workflowWithLibrary)).toBeGreaterThan(bytes(workflowNoLibrary));
   });
 
+
+  it('manage_workflow stays bounded with automatic connector installation available', () => {
+    const tool = createManageWorkflowTool(stub({
+      library: [{ id: 'x', displayName: 'X', description: 'x' }],
+      installLibraryPiece: async () => ({}),
+    }));
+    expect(bytes(tool)).toBeLessThanOrEqual(3350);
+    expect(tool.description).toContain('software-install Authority');
+    expect(tool.description).toContain('Account connection is separate');
+  });
+
   it('the six together stay well under a third of the budget', () => {
     const total = TOOLS.reduce((s, { tool }) => s + bytes(tool), 0);
     // 14,072 B before #504. The point of the ceiling is that the trim holds;

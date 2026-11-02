@@ -11,7 +11,7 @@
  *   - `readManifest()` /  `writeManifest(m)` JSON I/O
  *
  * Single-writer semantics: callers must serialize concurrent install /
- * uninstall calls. The API route layer holds an in-process mutex; we don't
+ * uninstall calls. UI and composer callers share withLibraryLock; we don't
  * defend against concurrent processes touching the same on-disk dir.
  */
 
@@ -294,4 +294,20 @@ export function runPiecesBunInstall(cwd: string, label: string): Promise<void> {
     });
     child.on("error", rej);
   });
+}
+
+/**
+ * In-process mutex shared by Library routes and workflow composition. Two concurrent installs would
+ * race on the shared `~/.jarvis/pieces/package.json` + bun-install
+ * invocation; we serialize them across both entry points. One daemon, one
+ * writer.
+ */
+let libraryMutex: Promise<void> = Promise.resolve();
+export function withLibraryLock<T>(fn: () => Promise<T>): Promise<T> {
+  const release = libraryMutex.then(() => fn());
+  libraryMutex = release.then(
+    () => undefined,
+    () => undefined,
+  );
+  return release;
 }

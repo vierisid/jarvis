@@ -20,6 +20,27 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-8: a schedule names a time zone only when the job contract does; a bare time is Jarvis's zone.
+  'w8-8': {
+    bare: '0b7e8cc85a1f50a5411c050a7b2286a8236ad400367feed39f04f57c6ae56496',
+    production: 'ced53dbe7a008e923abc9694e3f52d44fde5156e7503b3a1d1923a635a7df466',
+    'hosted production': '9dec78536da3bcd905dc0c854bfcb767fda12073e9c9e5ce9a12c8222d586fda',
+    'tool names only': 'c35f5d375dfacfa242c841699cc31103ee6726ed71208f53be69e2c2ab0de478',
+  },
+  // w8-7: inspect browser fallback before refusing missing connector setup.
+  'w8-7': {
+    bare: '79604471f26e16b11f4deb6edbe2cab47ef1f00db537552f941868629d3d0398',
+    production: 'b5aeaacab78d6cc49a7114a0e0a78c999223c770ec77823baede1c502bb0633f',
+    'hosted production': '8ac8119fae556bb38786262ea77c29cf603ffb3fe7d3bab60a2aad8cfc86a4d0',
+    'tool names only': '3214fa331beaf6102355ce7b1ae40f10c3233aa86f8b9af7c64982e434b27d1b',
+  },
+  // w8-6: timezone discovery, Library installation, account binding and browser fallback rules.
+  'w8-6': {
+    bare: '382e95a19295d50c84df2d0e145a16fc91ce3df2eda7d9f8702fb317415c25ec',
+    production: '44f7016457a38ea9d6cd89962b27304fb5fbdf601c4e40f9655b2e528bddf518',
+    'hosted production': '2ddabb25acb07cfe34a0303a0ff2fb89203133eb8e4a68beb420573d510bbd76',
+    'tool names only': '9ee9f57faaf5b943916e5f96905d11a72aa9306aaef95398c5a4018b36b2eebd',
+  },
   // w8-3 (#1065) fences catalog, tool, role and repair text as untrusted content.
   'w8-3': {
     bare: '62395ceb35fe6215beb7a36a19338c5a706f5bf9283e95bf339d400d314fbeee',

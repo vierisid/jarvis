@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { composeFlow } from "./workflow-composer";
+import { setCronTimezone } from "../../lib/cron-scheduler";
+import { canonicalZone, chosenScheduleZone, scheduleZoneWarning, statedScheduleZone } from "../../workflows/runner/triggers/schedule-zone";
 import { sampleCatalog } from "../../workflows/runtime/test-fixtures";
 import { PieceCatalog, type PieceCatalogEntry, type PieceLookup } from "../../workflows/runtime/piece-catalog";
 import type {
@@ -161,9 +163,10 @@ describe("composeFlow", () => {
   });
 
   test("schedule and webhook are accepted as built-in trigger primitives", async () => {
+    const action = { name: "notify", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: "hi" } } };
     const replyA = JSON.stringify({
       displayName: "S",
-      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", input: { cron_expression: "0 * * * *" } } },
+      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", input: { cron_expression: "0 * * * *" } }, nextAction: action },
     });
     const a = await composeFlow(
       { llm: new StubLlm(replyA), pieceRegistry: makeRegistry() },
@@ -173,7 +176,7 @@ describe("composeFlow", () => {
 
     const replyB = JSON.stringify({
       displayName: "W",
-      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: {} } },
+      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: {} }, nextAction: action },
     });
     const b = await composeFlow(
       { llm: new StubLlm(replyB), pieceRegistry: makeRegistry() },
@@ -1477,6 +1480,97 @@ describe("tool-loop composer", () => {
     },
   ];
 
+
+  test("installs a catalog entry, discovers refreshed schemas, then composes without credentials", async () => {
+    const registry = makeRegistry();
+    const installed: string[] = [];
+    const piece: PieceCatalogEntry = { name: library[0]!.npmPackage, displayName: "Discord", description: "fixture",
+      auth: { type: "OAUTH2" }, actions: { send: { name: "send", displayName: "Send", description: "fixture",
+        inputSchema: { fields: [{ name: "text", label: "Text", type: "string", required: true }] } } } };
+    const flow = validFlowArgs();
+    Object.assign(flow.trigger.nextAction.settings, { pieceName: piece.name, actionName: "send", input: { text: "hello" } });
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("s", "search_library", { query: "discord" })] },
+      { tool_calls: [tc("i", "install_library_piece", { id: "discord" })] },
+      { tool_calls: [tc("d", "get_piece_details", { pieceName: piece.name })] },
+      { tool_calls: [tc("v", "submit_flow", flow)] },
+    ]);
+    const result = await composeFlow({ llm, pieceRegistry: registry, library,
+      installLibraryPiece: async id => { installed.push(id); registry.upsert(piece); },
+    }, { name: "Discord", description: "Save a disabled Discord notification draft" });
+    expect(result.ok).toBe(true);
+    expect(installed).toEqual(["discord"]);
+    expect(llm.toolTurns[0]!.tools.some(t => t.name === "install_library_piece")).toBe(true);
+    expect(llm.toolTurns[2]!.messages.at(-1)!.content).toContain("schemas refreshed");
+    expect(llm.toolTurns[3]!.messages.at(-1)!.content).toContain("Connection required: OAUTH2");
+    expect(llm.toolTurns[3]!.messages.at(-1)!.content).toContain("input.text");
+  });
+
+  test("rejects unknown installs and does not repeat a failed installation", async () => {
+    const installed: string[] = [];
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("a", "install_library_piece", { id: "made-up-package" })] },
+      { tool_calls: [tc("b", "install_library_piece", { id: "discord" })] },
+      { tool_calls: [tc("c", "install_library_piece", { id: "discord" })] },
+      { tool_calls: [tc("d", "report_blocked", { reason: "Network install unavailable" })] },
+    ]);
+    const result = await composeFlow({ llm, pieceRegistry: makeRegistry(), library,
+      installLibraryPiece: async id => { installed.push(id); throw new Error("Network install unavailable"); },
+    }, { name: "x", description: "x" });
+    expect(result.ok).toBe(false);
+    expect(installed).toEqual(["discord"]);
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("Unknown Library ID");
+    expect(llm.toolTurns[2]!.messages.at(-1)!.content).toContain("Network install unavailable");
+    expect(llm.toolTurns[3]!.messages.at(-1)!.content).toContain("already attempted");
+  });
+
+  test("does not claim success until installation refreshes the actual catalog", async () => {
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("i", "install_library_piece", { id: "discord" })] },
+      { tool_calls: [tc("b", "report_blocked", { reason: "Metadata unavailable" })] },
+    ]);
+    await composeFlow({ llm, pieceRegistry: makeRegistry(), library, installLibraryPiece: async () => {} }, { name: "x", description: "x" });
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("action schemas are unavailable");
+  });
+
+  test("managed/background contexts cannot install even when a model fabricates the call", async () => {
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("i", "install_library_piece", { id: "discord" })] },
+      { tool_calls: [tc("b", "report_blocked", { reason: "Installation unavailable" })] },
+    ]);
+    await composeFlow({ llm, pieceRegistry: makeRegistry(), library }, { name: "x", description: "x" });
+    expect(llm.toolTurns[0]!.tools.some(t => t.name === "install_library_piece")).toBe(false);
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("not available in this context");
+  });
+
+  test("bounds installs to three distinct catalog entries", async () => {
+    const entries = Array.from({ length: 4 }, (_, i) => ({ ...library[0]!, id: `entry-${i}`, npmPackage: `piece-${i}` }));
+    const installed: string[] = [];
+    const llm = new StubToolLlm([
+      { tool_calls: entries.map(e => tc(e.id, "install_library_piece", { id: e.id })) },
+      { tool_calls: [tc("b", "report_blocked", { reason: "Install limit" })] },
+    ]);
+    await composeFlow({ llm, pieceRegistry: makeRegistry(), library: entries,
+      installLibraryPiece: async id => { installed.push(id); },
+    }, { name: "x", description: "x" });
+    expect(installed).toHaveLength(3);
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("limit reached");
+  });
+
+  test("rejects a schedule-only draft with invented readiness prose instead of real actions", async () => {
+    const empty = { displayName: "Incomplete calendar", trigger: { name: "trigger", type: "PIECE_TRIGGER",
+      settings: { pieceName: "schedule", input: { cron_expression: "0 8 * * 1-5", timezone: "Europe/Rome" } },
+      readiness: { ready: true, accountConnectionRequired: true, remainingSpecification: "Read events and notify" },
+    } };
+    const llm = new StubToolLlm([
+      { tool_calls: [tc("s", "submit_flow", empty)] },
+      { tool_calls: [tc("b", "report_blocked", { reason: "No supported retrieval path" })] },
+    ]);
+    const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: "Calendar", description: "Read events and notify" });
+    expect(result.ok).toBe(false);
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain("at least one actual action step");
+  });
+
   test("explores with tools then submits a valid flow", async () => {
     const llm = new StubToolLlm([
       { tool_calls: [tc("1", "list_pieces")] },
@@ -1505,6 +1599,116 @@ describe("tool-loop composer", () => {
     // Turn 3 saw the piece details, including the input schema.
     const detailsResult = llm.toolTurns[2]!.messages.at(-1)!;
     expect(detailsResult.content).toContain("input.message");
+  });
+
+  test('schedule discovery advertises timezone and preserves the weekday reminder graph', async () => {
+    const flow = validFlowArgs();
+    Object.assign(flow.trigger, { type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5', timezone: 'Europe/Rome' } } });
+    flow.trigger.nextAction.settings.input.message = 'Choose your three priorities for today.';
+    const llm = new StubToolLlm([
+      { tool_calls: [tc('1', 'get_piece_details', { pieceName: 'schedule' })] },
+      { tool_calls: [tc('2', 'submit_flow', flow)] },
+    ]);
+    const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, {
+      name: 'Weekday priorities', description: 'Every weekday at 09:00 Europe/Rome, notify me. No AI step.',
+      contract: { trigger: { kind: 'schedule', timezone: 'Europe/Rome' } },
+    });
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain('input.timezone');
+    expect(llm.toolTurns[1]!.messages.at(-1)!.content).toContain('daylight-saving');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.flow.trigger.settings?.input).toEqual({ cron_expression: '0 9 * * 1-5', timezone: 'Europe/Rome' });
+      // The contract names the zone the graph uses, so it is recorded as chosen and honoured.
+      expect((result.flow.trigger.settings as Record<string, unknown>).chosenTimezone).toBe('Europe/Rome');
+      expect(result.flow.trigger.nextAction?.settings?.input?.message).toBe('Choose your three priorities for today.');
+      expect(result.flow.trigger.nextAction?.nextAction).toBeUndefined();
+    }
+  });
+
+  test('schedule discovery tells the model to name a zone only when the request does', async () => {
+    const llm = new StubToolLlm([
+      { tool_calls: [tc('1', 'get_piece_details', { pieceName: 'schedule' })] },
+      { tool_calls: [tc('2', 'submit_flow', validFlowArgs())] },
+    ]);
+    await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: 'x', description: 'x' });
+    const details = llm.toolTurns[1]!.messages.at(-1)!.content;
+    expect(details).toContain("Set it to exactly the job contract's trigger.timezone");
+    expect(details).not.toContain("timezone: '<IANA timezone>'");
+    const system = llm.toolTurns[0]!.messages[0]!.content;
+    expect(system).toContain("only when the job contract names trigger.timezone");
+    expect(system).toContain("a bare time means Jarvis's time zone, so write no zone");
+  });
+
+  test('a zone the model writes without a contract naming it stays unchosen: it runs in Jarvis\'s zone, warned', async () => {
+    setCronTimezone('Europe/Rome');
+    try {
+      for (const contract of [undefined, { trigger: { kind: 'schedule' as const } }, { trigger: { kind: 'schedule' as const, timezone: 'America/New_York' } }]) {
+        const flow = validFlowArgs();
+        Object.assign(flow.trigger, { type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5', timezone: 'UTC' } } });
+        const llm = new StubToolLlm([{ tool_calls: [tc('1', 'submit_flow', flow)] }, { tool_calls: [tc('b', 'report_blocked', { reason: 'x' })] }]);
+        const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: 'x', description: 'Remind me every weekday at 9', ...(contract ? { contract } : {}) });
+        if (contract?.trigger.timezone) { expect(result.ok).toBe(false); continue; } // the contract check refuses UTC for New York
+        expect(result.ok).toBe(true);
+        if (!result.ok) continue;
+        expect(result.flow.trigger.settings).not.toHaveProperty('chosenTimezone');
+        expect(chosenScheduleZone(result.flow.trigger.settings)).toBeUndefined();
+        expect(scheduleZoneWarning('0 9 * * 1-5', statedScheduleZone(result.flow.trigger.settings))).toContain('This schedule names UTC');
+      }
+      // With the contract naming the zone (spelt differently), it is chosen.
+      const flow = validFlowArgs();
+      Object.assign(flow.trigger, { type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5', timezone: 'UTC' } } });
+      const llm = new StubToolLlm([{ tool_calls: [tc('1', 'submit_flow', flow)] }]);
+      const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: 'x', description: 'Every weekday at 9 UTC',
+        contract: { trigger: { kind: 'schedule', timezone: 'utc' } } });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(chosenScheduleZone(result.flow.trigger.settings)).toBe('UTC');
+      // Any name of UTC in the contract matches any other written in the graph.
+      for (const [written, stated] of [['Etc/UTC', 'UTC'], ['UTC', 'Etc/UCT'], ['GMT', 'Zulu'], ['Universal', 'Etc/GMT']]) {
+        const f = validFlowArgs();
+        Object.assign(f.trigger, { type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5', timezone: written } } });
+        const r = await composeFlow({ llm: new StubToolLlm([{ tool_calls: [tc('1', 'submit_flow', f)] }]), pieceRegistry: makeRegistry() },
+          { name: 'x', description: 'x', contract: { trigger: { kind: 'schedule', timezone: stated! } } });
+        expect(chosenScheduleZone(r.ok ? r.flow.trigger.settings : null)).toBe(written!);
+      }
+      expect(canonicalZone('Etc/UTC')).toBe('UTC');
+      expect(canonicalZone('Europe/London')).toBe('Europe/London');
+      expect(canonicalZone('Mars/Olympus')).toBeNull();
+    } finally { setCronTimezone(null); }
+  });
+
+  test('the schedule piece\'s details give Jarvis\'s zone as the timezone default, not UTC', async () => {
+    const registry = new PieceCatalog([...makeRegistry().list(), { name: '@activepieces/piece-schedule', displayName: 'Schedule', description: 'Schedules', actions: {}, triggers: {
+      every_day: { name: 'every_day', displayName: 'Every Day', description: 'Daily', inputSchema: { fields: [
+        { name: 'timezone', label: 'Timezone', type: 'enum', required: true, default: 'UTC', options: [{ value: 'UTC', label: 'UTC' }, { value: 'Europe/Rome', label: 'Rome' }] },
+      ] } },
+    } } as PieceCatalogEntry]);
+    setCronTimezone('Europe/Rome');
+    try {
+      const llm = new StubToolLlm([
+        { tool_calls: [tc('1', 'get_piece_details', { pieceName: '@activepieces/piece-schedule' })] },
+        { tool_calls: [tc('b', 'report_blocked', { reason: 'x' })] },
+      ]);
+      await composeFlow({ llm, pieceRegistry: registry }, { name: 'x', description: 'x' });
+      const details = llm.toolTurns[1]!.messages.at(-1)!.content;
+      expect(details).toContain('timezone');
+      expect(details).toContain('Europe/Rome');
+      expect(details).not.toMatch(/default[^\n]*UTC/i);
+    } finally { setCronTimezone(null); }
+  });
+
+  test('a composed schedule without a zone, or with a model-written record, is not marked chosen', async () => {
+    for (const settings of [
+      { pieceName: 'schedule', input: { cron_expression: '0 9 * * 1-5' } },
+      { pieceName: 'schedule', chosenTimezone: 'UTC', input: { cron_expression: '0 9 * * 1-5' } },
+      { pieceName: 'schedule', chosenTimezone: 'UTC', input: { cron_expression: '0 9 * * 1-5', timezone: 'UTC' } },
+    ]) {
+      const flow = validFlowArgs();
+      Object.assign(flow.trigger, { type: 'PIECE_TRIGGER', settings });
+      const llm = new StubToolLlm([{ tool_calls: [tc('1', 'submit_flow', flow)] }]);
+      const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: 'x', description: 'Every weekday at 9, notify me' });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.flow.trigger.settings).not.toHaveProperty('chosenTimezone');
+    }
   });
 
   test("feeds validation errors back as the submit_flow tool result", async () => {

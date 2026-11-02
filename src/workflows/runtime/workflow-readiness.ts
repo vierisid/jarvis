@@ -2,11 +2,12 @@ import {managedMailchimpIssue} from './managed-mailchimp';
 import {managedGitHubIssue} from './managed-github';
 import {managedTrelloIssue} from './managed-trello';
 import {managedSlackIssue} from './managed-slack';
-import { validateCronExpression } from '../../lib/cron-scheduler';
+import { validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
 import { emptyInput, inputIssue } from './input-validation';
 import { declaredDependencies } from './code-step-manifest';
+import { chosenScheduleZone, statedScheduleZone } from '../runner/triggers/schedule-zone';
 
 export interface ReadinessIssue {
   node: string;
@@ -287,8 +288,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       try {
         if (typeof input?.cronExpression !== 'string') throw new Error('Schedule requires a static cron expression');
         validateCronExpression(input.cronExpression);
-        if (typeof input.timezone !== 'string') throw new Error('Schedule requires a timezone');
-        new Intl.DateTimeFormat('en-US', { timeZone: input.timezone });
+        validateCronTimezone(input.timezone);
       } catch (error) { issue(node, 'settings.input.cronExpression', 'CRON', (error as Error).message); }
     }
     if (type === 'PIECE' || type === 'PIECE_TRIGGER') {
@@ -298,6 +298,14 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           if (typeof cron !== 'string') throw new Error('Schedule requires a static cron expression');
           validateCronExpression(cron);
         } catch (error) { issue(node, 'settings.input.cron_expression', 'CRON', (error as Error).message); }
+        // An empty zone means Jarvis's. A zone nobody chose is not used (the
+        // trigger list warns), so a saved schedule is not refused for one;
+        // a chosen zone, or any zone a composition writes, must be real.
+        const stated = statedScheduleZone(settings);
+        if (stated !== undefined && (context.phase === 'composition' || chosenScheduleZone(settings) !== undefined)) {
+          try { validateCronTimezone(stated); }
+          catch (error) { issue(node, 'settings.input.timezone', 'TIMEZONE', (error as Error).message); }
+        }
       } else if (!(root && pieceName === 'webhook')) {
         const piece = context.pieces?.get(pieceName);
         if (!piece) issue(node, 'settings.pieceName', 'PIECE', context.pieces ? `Unknown piece "${pieceName}"` : 'Piece catalog is unavailable; readiness cannot be verified');

@@ -6,6 +6,7 @@ import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
 import { mailchimpStatus } from "../integrations/mailchimp-connection";
 import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
+import { asanaStatus } from '../integrations/asana-connection';
 import { slackStatus } from "../integrations/slack-connection";
 import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
@@ -4762,6 +4763,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       mailchimp: () => mailchimpStatus(jarvisConfig),
       github: () => githubStatus(jarvisConfig),
       trello: () => trelloStatus(jarvisConfig),
+      asana: () => asanaStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
@@ -5007,6 +5009,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisClickUpConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisMailchimpConnectionSource } = await import("../workflows/credentials/mailchimp-source");
       credentialResolver.register(new JarvisMailchimpConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisAsanaConnectionSource } = await import("../workflows/credentials/asana-source");
+      credentialResolver.register(new JarvisAsanaConnectionSource(jarvisConfig));
       const { JarvisGitHubConnectionSource } = await import("../workflows/credentials/github-source");
       credentialResolver.register(new JarvisGitHubConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisDropboxConnectionSource } = await import("../workflows/credentials/dropbox-source");
@@ -5351,8 +5355,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const llmManager = agentService.getLLMManager();
       const composeLlm = createComposerLlmClient(llmManager);
       // Compact community-library index for the composer's search_library
-      // tool: lets it suggest "install piece X first" when the user asks for
-      // a service that isn't installed, instead of forcing a wrong fit.
+      // tool: interactive chat can install a matching entry with the software-install
+      // gate; background callers can only suggest the missing dependency.
       //
       // Withheld on a HOST-MANAGED install, where that suggestion is a
       // dead end. The host installed the whole catalog, so every piece the
@@ -5393,6 +5397,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               })),
           }
         : undefined;
+      const { installPiece, withLibraryLock } = await import('../workflows/pieces-library/installer.ts');
+      const installComposerLibraryPiece = composerLibrary.length && onPieceLibraryChanged
+        ? async (id: string, signal?: AbortSignal) => withLibraryLock(async () => {
+            signal?.throwIfAborted();
+            if (piecesManagedByHost(sharedRuntime.piecesDir)) throw new Error('This Library is managed by the host.');
+            if (!composerLibrary.some(entry => entry.id === id)) throw new Error('Unknown Library entry.');
+            const result = await installPiece(id);
+            await onPieceLibraryChanged({ kind: 'installed', piece: result.piece });
+          })
+        : undefined;
       const manageWorkflowTool = createManageWorkflowTool({
         triggerManager: triggerManager ?? undefined,
         llm: composeLlm,
@@ -5410,8 +5424,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             id: r.id,
             name: r.name,
             description: r.description,
+            tools: r.tools,
           })),
         library: composerLibrary,
+        installLibraryPiece: installComposerLibraryPiece,
         // Give the composer the machine inventory (sidecars + this host, each
         // with its OS and arch) so it writes commands for the machine the step
         // actually lands on. Without it the model guesses -- "open notepad"
@@ -5430,7 +5446,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           llm: composeLlm, pieceRegistry,
           tools: composerToolRegistry?.listDetailed(),
           specialistRoles: Array.from(agentService.getSpecialists().values()).map(r => ({
-            id: r.id, name: r.name, description: r.description,
+            id: r.id, name: r.name, description: r.description, tools: r.tools,
           })),
           library: composerLibrary, executionTargets: collectExecutionTargets(),
         });

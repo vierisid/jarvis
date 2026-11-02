@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   installPiece,
+  withLibraryLock,
   readManifest,
   synthesizePackageJson,
   uninstallPiece,
@@ -286,4 +287,19 @@ describe("#971: installPiece refuses an excluded piece, with its reason", () => 
     expect(calls).toEqual([]);
     expect(await readManifest(base)).toEqual(before);
   });
+});
+
+test("Library writers serialize and a failed install does not poison the queue", async () => {
+  const order: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const a = withLibraryLock(async () => { order.push("install started"); await gate; throw new Error("install failed"); });
+  const failure = a.catch(e => e.message);
+  const b = withLibraryLock(async () => { order.push("next writer"); });
+  await Promise.resolve();
+  expect(order).toEqual(["install started"]);
+  release();
+  expect(await failure).toBe("install failed");
+  await b;
+  expect(order).toEqual(["install started", "next writer"]);
 });

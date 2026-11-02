@@ -584,3 +584,32 @@ test('#633: a nested workflow binding cannot amplify a stored node name', () => 
   expect(nested!.message.length).toBeLessThan(1_500);
   expect(new WorkflowReadinessError(readiness).message.length).toBeLessThan(2_000);
 });
+
+
+test('built-in schedule validates a chosen or composed timezone without requiring one on legacy drafts', () => {
+  const composing = (g: unknown) => compileWorkflow(g, { pieces, phase: 'composition' });
+  for (const timezone of ['Mars/Olympus', 42, '{{trigger.timezone}}', ' Europe/Rome ']) {
+    const g = cron();
+    g.settings.input.timezone = timezone;
+    expect(composing(g).issues).toContainEqual(expect.objectContaining({ node: 'trigger', path: 'settings.input.timezone', code: 'TIMEZONE' }));
+    // Saved without a choice, the zone is not used (the trigger list warns), so the schedule is not refused.
+    if (timezone !== '{{trigger.timezone}}') expect(compile(g).ready).toBe(true);
+    if (typeof timezone !== 'string') continue;
+    g.settings.chosenTimezone = timezone;
+    expect(compile(g).issues).toContainEqual(expect.objectContaining({ node: 'trigger', path: 'settings.input.timezone', code: 'TIMEZONE' }));
+  }
+  // An empty zone means Jarvis's.
+  for (const timezone of ['', null]) {
+    const g = cron();
+    g.settings.input.timezone = timezone;
+    expect(composing(g).ready).toBe(true);
+    expect(compile(g).ready).toBe(true);
+  }
+  const g = cron();
+  g.settings.input.timezone = 'Europe/Rome';
+  g.settings.chosenTimezone = 'Europe/Rome';
+  expect(compile(g).ready).toBe(true);
+  expect(composing(g).ready).toBe(true);
+  delete g.settings.input.timezone;
+  expect(compile(g).ready).toBe(true);
+});

@@ -61,7 +61,7 @@ import {
   type FlowTriggerNode,
 } from "../../workflows/db/repos/flow-version.ts";
 import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts";
-import { assertVersionReady } from '../../workflows/db/repos/flow-readiness';
+import { assertVersionReady, versionReadiness } from '../../workflows/db/repos/flow-readiness';
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow } from '../../workflows/db/repos/flow-turn-off';
 import { assertFlowDeletable } from '../../workflows/db/repos/workflow-removal-state';
 import { listFlowFires } from '../../workflows/db/repos/trigger-fire';
@@ -125,6 +125,7 @@ export interface ManageWorkflowDeps {
    * wording from this tool's description and from the composer's prompt.
    */
   library?: ComposerLibraryEntry[];
+  installLibraryPiece?: ComposeDeps["installLibraryPiece"];
   /**
    * Optional. The machines a composed step can execute on -- the enrolled
    * sidecars plus the brain's own host. When provided, the composer knows
@@ -179,34 +180,12 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
     name: "manage_workflow",
     description: [
       "Create, run, and manage the user's Jarvis workflows (automations).",
-      "",
-      "compose { name, description } is the PRIMARY action: use it whenever the user",
-      "describes what an automation should DO (\"make a workflow that ...\", \"automate X",
-      "every morning\"). It drafts a flow from plain English (LLM-backed). On",
-      "{ ok: false, errors } read the errors, refine the description with concrete",
-      "piece/tool names, and call compose again.",
-      ...(hasLibrary
-        ? [
-            "A failure may also carry suggestedInstalls: community-library pieces that would",
-            "make the request possible. Relay them (the user installs them from the",
-            "dashboard's Library page) and offer to compose again after; do NOT retry",
-            "compose unchanged.",
-          ]
-        : []),
-      "Composed flows are DISABLED: publish once the user confirms, then run to test.",
-      "create makes an EMPTY workflow with a manual trigger and REQUIRES empty: true.",
-      "Use it only for an explicitly blank canvas, never for a workflow the user",
-      "described -- that case is always compose.",
-      "",
-      "Other actions: list, get (full detail), run (queues a run, returns run_id),",
-      "enable, disable, publish (locks the latest draft and enables it), delete",
-      "(permanent), list_runs, get_run (full run detail with step outputs).",
-      "",
-      "A flow containing a CODE step runs arbitrary JavaScript with this machine's full",
-      "privileges, so publish, enable and run are REFUSED for it until the user turns",
-      "code steps on for that one flow. The error explains how; relay it and let the user",
-      "decide. Do not retry, and do not try to route around it -- there is no tool action",
-      "that grants the permission, by design.",
+      "compose { name, description } builds the requested graph. Preserve every requirement; never substitute a diagnostic-only scaffold.",
+      "Inspect real schemas; never invent credentials or IDs. Native notifications use dashboard. Check an authorized browser alternative when native actions cannot cover the job; verify tools, computer and permissions, never assume login.",
+      "Composed flows are DISABLED. Publish only with user confirmation; publish enables the flow. Draft-only restrictions are not bans on future workflow actions.",
+      "create requires empty: true for an explicitly blank canvas; otherwise compose.",
+      "CODE steps: publish, enable and run are REFUSED until the user permits code for that flow; no tool action grants permission. Never bypass this refusal.",
+      ...(hasLibrary ? [deps.installLibraryPiece ? "When authorized, install_missing:true installs required Library connectors under software-install Authority. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
     category: "automation",
     /**
@@ -260,38 +239,39 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       },
       flow: {
         type: "string",
-        description: "Workflow display name (case-insensitive) or id. Required for get/run/enable/disable/publish/delete; optional filter for list_runs.",
+        description: "Name or ID; required for get/run/enable/disable/publish/delete; optional list_runs filter.",
         required: false,
       },
       name: {
         type: "string",
-        description: "Short descriptive display name. Required for create and compose.",
+        description: "Display name for compose/create.",
         required: false,
       },
       payload: {
         type: "object",
-        description: "Trigger payload for run, when the flow expects input data.",
+        description: "run: trigger input.",
         required: false,
       },
       run_id: {
         type: "string",
-        description: "Run id for get_run; returned by run and list_runs.",
+        description: "get_run: ID from run/list_runs.",
         required: false,
       },
       description: {
         type: "string",
         description:
-          'What the workflow should do, for compose. Quote the user where possible, and include the trigger ' +
-          '(schedule, webhook, manual) and any concrete services / actions (e.g. "send a Gmail to ...").',
+          "compose: the user's complete request, including trigger, outputs and restrictions.",
+        required: false,
+      },
+      install_missing: {
+        type: "boolean",
+        description: "Allow required Library installation (default false); software-install Authority applies. No account connection or execution.",
         required: false,
       },
       contract: {
         type: "object",
         description:
-          "compose: check the user's explicit requirements. trigger {kind: " +
-          "manual|schedule|webhook|event|piece, cron, every, timezone, eventType, piece, trigger}; sources, outputs: " +
-          "[{notify: {channels}} | {tool, params} | {piece, action, target}]; recipients; forbidden {effects e.g. " +
-          "send_email, pieces, actions, tools, channels, agents}; review. Outputs list all it may send or address.",
+          "compose: explicit future-run constraints, known schemas only. trigger {kind,cron,every,timezone,eventType,piece,trigger}; timezone only when the person names one (a bare time is Jarvis's zone: omit it); sources/outputs [{notify:{channels}}|{tool,params}|{piece,action,target}]; recipients; forbidden {effects,pieces,actions,tools,channels,agents}; review. Unknown choices stay in description.",
         required: false,
       },
       limit: {
@@ -302,8 +282,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       empty: {
         type: "boolean",
         description:
-          "Confirms the user wants a blank canvas with no steps. Required by `create` when no `description` is given; " +
-          "if the user described what the flow should DO, call `compose` instead. Defaults to false.",
+          "create: explicitly blank canvas only; otherwise compose. Default false.",
         required: false,
       },
     },
@@ -334,6 +313,11 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
     authorityGate: (params) => {
       const action = String(params.action ?? "");
       switch (action) {
+        case "compose":
+        case "create":
+          return params.install_missing === true && deps.installLibraryPiece
+            ? { actionCategory: "install_software", confirm: "above_level", intent: `Install required Library connectors while composing workflow: ${forCard(params.name)}` }
+            : null;
         case "enable":
         case "publish": {
           // Q-05: enabling or publishing accepts the connections and computer
@@ -400,7 +384,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           const name = requireString(params, "name");
           const description = typeof params["description"] === "string" ? params["description"].trim() : "";
           if (description.length > 0) {
-            const composed = await actCompose(name, description, deps, project, params["contract"]);
+            const composed = await actCompose(name, description, deps, project, params["contract"], params["install_missing"] === true);
             // ACCEPTED COST of one block per action: `note` is repo-authored
             // guidance to the model, and framing the whole return puts it under
             // a preamble that says not to follow instructions inside the block.
@@ -462,7 +446,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           );
         case "compose":
           return framedForModel(
-            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project, params["contract"]),
+            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project, params["contract"], params["install_missing"] === true),
             "a composed workflow and the composer's text",
           );
         default:
@@ -962,14 +946,21 @@ export function versionForModel<V extends { trigger?: unknown } | null | undefin
   return { ...version, trigger: { ...trigger, settings: { ...trigger!.settings, input: { ...input, secret: "[redacted]" } } } };
 }
 
+/** Recompute readiness on read; the stored valid bit is only a historical hint. No execution. */
+function checkedVersion(flowId: string, version: ReturnType<typeof getFlowVersion>) {
+  if (!version) return null;
+  const readiness = versionReadiness(flowId, version.id);
+  return { ...version, valid: readiness.ready, readiness };
+}
+
 function actGet(flow: FlowRow): Record<string, unknown> {
   const summary = summarizeFlow(flow);
   const draft = getLatestDraft(flow.id);
   const published = flow.published_version_id ? getFlowVersion(flow.published_version_id) : null;
   return {
     ...summary,
-    latestDraft: versionForModel(draft),
-    published: versionForModel(published),
+    latestDraft: versionForModel(checkedVersion(flow.id, draft)),
+    published: versionForModel(checkedVersion(flow.id, published)),
     // Q-06: what became of its latest scheduled times, deliveries and events,
     // so "why didn't it run?" has an answer: missed, blocked, skipped,
     // delayed, or the run's own state, with how many repeats each absorbed.
@@ -1136,6 +1127,7 @@ async function actCompose(
   deps: ManageWorkflowDeps,
   project: string,
   contract?: unknown,
+  installMissing = false,
 ): Promise<Record<string, unknown>> {
   if (!deps.llm) {
     throw new Error("compose: an LLM client is not configured for this build");
@@ -1175,6 +1167,7 @@ async function actCompose(
     if (roles.length > 0) composeDeps.specialistRoles = roles;
   }
   if (deps.library && deps.library.length > 0) composeDeps.library = deps.library;
+  if (installMissing && deps.installLibraryPiece) composeDeps.installLibraryPiece = deps.installLibraryPiece;
   if (deps.executionTargets) {
     const targets = deps.executionTargets();
     if (targets.length > 0) composeDeps.executionTargets = targets;
@@ -1214,6 +1207,7 @@ async function actCompose(
     ...(result.contractReport ? { contractReport: result.contractReport } : {}),
     flow: summarizeFlow(getFlow(flow.id) ?? flow),
     versionId: version.id,
+    readiness: versionReadiness(flow.id, version.id),
     compositionRecordId: result.compositionRecordId,
   };
 }

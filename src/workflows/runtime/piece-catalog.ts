@@ -313,7 +313,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "14"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts
+export const CATALOG_SCHEMA_VERSION = "15"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -892,6 +892,23 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-asana') {
+    for (const action of Object.values(entry.actions)) {
+      if (action.name !== 'create_task') continue;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.sourceType === 'DROPDOWN') {field.type='string';field.placeholder='Asana ID or workflow variable';delete field.options;}
+        if (field.name === 'due_on') {field.placeholder='YYYY-MM-DD';field.description='The hosted Jarvis Asana connection requires the date as YYYY-MM-DD.';}
+        if (field.name === 'tags') {field.type='json';field.sourceType='ARRAY';field.placeholder='[]';field.description='Tag IDs or exact tag names. The hosted Jarvis Asana connection does not support tags yet: leave this empty when using it.';delete field.options;}
+      }
+    }
+    const task = {gid:'123456', resource_type:'task', name:'Example task', notes:'Task description', completed:false, due_on:'2026-10-30', due_at:null, start_on:null, assignee:{gid:'123', name:'Owner'}, projects:[{gid:'456',name:'Project'}], workspace:{gid:'789',name:'Workspace'}, permalink_url:'https://app.asana.com/0/456/123456'};
+    const samples: Record<string,unknown> = {
+      create_task:task, get_task:task, update_task:task,
+      list_project_tasks:{data:[task],next_offset:null},
+      add_task_comment:{gid:'654321',resource_type:'story',resource_subtype:'comment_added',type:'comment',text:'Task comment',created_at:'2026-10-27T12:00:00Z',created_by:{gid:'123',name:'Owner'},target:{gid:'123456',name:'Example task'},is_pinned:false},
+    };
+    for (const [name,sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample=sample;
+  }
   if (entry.name === '@activepieces/piece-dropbox') {
     const listPath = entry.actions.list_dropbox_folder?.inputSchema?.fields.find(field => field.name === 'path');
     if (listPath) listPath.placeholder = '/ for Dropbox home, /folder or a workflow variable';
