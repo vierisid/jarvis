@@ -7,6 +7,7 @@ import { mailchimpStatus } from "../integrations/mailchimp-connection";
 import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
 import { asanaStatus } from '../integrations/asana-connection';
+import { intercomStatus } from '../integrations/intercom-connection';
 import { calendlyStatus } from '../integrations/calendly-connection';
 import { slackStatus } from "../integrations/slack-connection";
 import { clickUpStatus } from '../integrations/clickup-connection';
@@ -4767,6 +4768,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       github: () => githubStatus(jarvisConfig),
       trello: () => trelloStatus(jarvisConfig),
       asana: () => asanaStatus(jarvisConfig),
+      intercom: () => intercomStatus(jarvisConfig),
       calendly: () => calendlyStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
       channels: () => {
@@ -5023,6 +5025,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisSlackConnectionSource } = await import("../workflows/credentials/slack-source");
       credentialResolver.register(new JarvisSlackConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisIntercomConnectionSource } = await import("../workflows/credentials/intercom-source");
+      credentialResolver.register(new JarvisIntercomConnectionSource(jarvisConfig));
       const { JarvisCalendlyConnectionSource } = await import("../workflows/credentials/calendly-source");
       credentialResolver.register(new JarvisCalendlyConnectionSource(jarvisConfig));
       logWithTimestamp(

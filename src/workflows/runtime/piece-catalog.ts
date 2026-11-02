@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "17"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Calendly meeting and booking-link output contracts
+export const CATALOG_SCHEMA_VERSION = "18"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -935,6 +935,25 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
       search_dropbox: {matches: [{metadata: {'.tag': 'metadata', metadata: item}}], has_more: false},
     };
     for (const [name, sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample = sample;
+  }
+  if (entry.name === '@activepieces/piece-intercom') {
+    // Legacy tag dropdowns enumerate contacts. Accept IDs/expressions without loading customer data into the editor.
+    for (const field of entry.actions['add-or-remove-tag-on-contact']?.inputSchema?.fields ?? []) {
+      if (field.sourceType === 'DROPDOWN') {field.type='string';field.placeholder='Intercom ID or workflow variable';delete field.options;}
+    }
+    const contact={type:'contact',id:'contact_1',role:'user',email:'contact@example.test',name:'Example contact',external_id:'customer_1'};
+    const note={type:'note',id:'note_1',body:'Internal note',created_at:1793188800,contact:{type:'contact',id:'contact_1'},author:{type:'admin',id:'admin_1',name:'Owner'}};
+    const tag={type:'tag',id:'tag_1',name:'Follow up'};
+    const conversation={type:'conversation',id:'conversation_1',title:'Support request',state:'open',source:{body:'How can I update my account?'},contacts:{contacts:[{type:'contact',id:'contact_1'}]}};
+    const part={id:'part_1',part_type:'note',body:'Internal note',created_at:1793188800,author:{type:'admin',id:'admin_1',name:'Owner'}};
+    const samples:Record<string,unknown>={
+      get_contact:contact,
+      get_conversation_by_id:{...conversation,parts:[{id:part.id,part_type:part.part_type,body:part.body,created_at:part.created_at,author_type:'admin',author_id:'admin_1',author_name:'Owner'}]},
+      add_note_to_contact:note,
+      add_note_to_conversation_by_id:{...conversation,conversation_parts:{type:'conversation_part.list',conversation_parts:[part],total_count:1}},
+      'list-all-tags':{type:'list',data:[tag]},'add-or-remove-tag-on-contact':tag,
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
   }
 
   // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
