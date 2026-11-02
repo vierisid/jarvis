@@ -5,6 +5,8 @@ import {
   mondayGraphql,
   mondayId,
 } from "../workflows/runtime/managed-monday";
+/** A bad request from the caller (400), as opposed to monday.com or renewal failing (502). */
+export class MondayOptionsInputError extends Error {}
 /** Bounded setup choices from the same renewed grant used for execution. */
 export async function mondayOptions(
   config: JarvisConfig,
@@ -14,9 +16,12 @@ export async function mondayOptions(
   request: typeof fetch = fetch,
 ) {
   if (cursor && !/^[1-9][0-9]{0,3}$/.test(cursor))
-    throw Error("Invalid monday.com page.");
+    throw new MondayOptionsInputError("Invalid monday.com page.");
   if (kind !== "boards" && !board) return { options: [], next_cursor: null };
-  if (board) mondayId(board);
+  if (board && !/^[1-9][0-9]{0,29}$/.test(board))
+    throw new MondayOptionsInputError("Enter a monday.com board ID.");
+  if (cursor && kind !== "boards")
+    throw new MondayOptionsInputError("These choices do not accept a page.");
   const c = await freshMondayConnection(config, request);
   if (kind === "boards") {
     const page = cursor ? Number(cursor) : 1;
@@ -37,7 +42,6 @@ export async function mondayOptions(
       next_cursor: options.length === 100 ? String(page + 1) : null,
     };
   }
-  if (cursor) throw Error("These choices do not accept a page.");
   const meta = await mondayBoard(c.access_token, board!, request);
   const values = kind === "groups" ? meta.groups : meta.columns;
   if (values.length > 1000)

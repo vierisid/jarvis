@@ -2489,9 +2489,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: async (req: Request) => {
         const q = new URL(req.url).searchParams, kind = q.get('kind');
         if (kind !== 'boards' && kind !== 'groups' && kind !== 'columns') return json({error: 'Choose boards, groups or columns.'}, 400);
-        const {mondayOptions} = await import('../integrations/monday-options');
+        const {mondayOptions, MondayOptionsInputError} = await import('../integrations/monday-options');
         try { return json(await mondayOptions(ctx.config, kind, q.get('board_id'), q.get('cursor'))); }
-        catch { return json({error: 'Could not load monday.com choices. Check your connection or enter an ID.'}, 502); }
+        catch (error) {
+          if (error instanceof MondayOptionsInputError) return json({error: error.message}, 400);
+          return json({error: 'Could not load monday.com choices. Check your connection or enter an ID.'}, 502);
+        }
       },
     },
     '/api/integrations/asana/options': {

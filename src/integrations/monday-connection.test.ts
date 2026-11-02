@@ -271,10 +271,19 @@ test("board and group choices use the renewed grant and validate pagination", as
     options: [],
     next_cursor: null,
   });
-  await expect(
-    mondayOptions(config, "boards", null, "https://evil.test", request),
-  ).rejects.toThrow("Invalid");
-  await expect(
-    mondayOptions(config, "groups", "wrong", null, request),
-  ).rejects.toThrow("ID");
+  // Caller mistakes are input errors (the route answers 400), never sent anywhere.
+  const { MondayOptionsInputError } = await import("./monday-options");
+  for (const [kind, board, cursor] of [
+    ["boards", null, "https://evil.test"],
+    ["groups", "wrong", null],
+    ["groups", "123", "2"],
+  ] as const)
+    await expect(
+      mondayOptions(config, kind, board, cursor, request),
+    ).rejects.toBeInstanceOf(MondayOptionsInputError);
+  // A provider failure is not (the route answers 502).
+  const failing = (async () => new Response("no", { status: 500 })) as unknown as typeof fetch;
+  const failure = await mondayOptions(config, "boards", null, null, failing).catch((e) => e);
+  expect(failure).toBeInstanceOf(Error);
+  expect(failure).not.toBeInstanceOf(MondayOptionsInputError);
 });
