@@ -13,6 +13,7 @@ import { JarvisClickUpConnectionSource } from "../credentials/clickup-source";
 import { JarvisMailchimpConnectionSource } from "../credentials/mailchimp-source";
 import { JarvisAsanaConnectionSource } from "../credentials/asana-source";
 import { JarvisTodoistConnectionSource } from "../credentials/todoist-source";
+import { JarvisIntercomConnectionSource } from "../credentials/intercom-source";
 import type { JarvisConfig } from "../../config/types";
 import { JarvisGitHubConnectionSource } from "../credentials/github-source";
 import { JarvisTrelloConnectionSource } from "../credentials/trello-source";
@@ -40,6 +41,7 @@ const SLACK = "@activepieces/piece-slack";
 const CLICKUP = "@activepieces/piece-clickup";
 const ASANA = "@activepieces/piece-asana";
 const TODOIST = "@activepieces/piece-todoist";
+const INTERCOM = "@activepieces/piece-intercom";
 const MAILCHIMP = "@activepieces/piece-mailchimp";
 const GITHUB = "@activepieces/piece-github";
 const TRELLO = "@activepieces/piece-trello";
@@ -111,6 +113,20 @@ const pieces = new PieceCatalog([
     ] } },
   }, triggers: {
     new_message: { name: "new_message", displayName: "", description: "" },
+  } },
+  { name: INTERCOM, displayName: "Intercom", description: "", auth: { type: "OAUTH2" }, actions: {
+    get_contact: { name: "get_contact", displayName: "", description: "", inputSchema: { fields: [
+      { name: "value", label: "", type: "string", required: false },
+    ] } },
+    reply_to_conversation_by_id: { name: "reply_to_conversation_by_id", displayName: "", description: "", inputSchema: { fields: [
+      { name: "body", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  }, triggers: {
+    newConversationFromUser: { name: "newConversationFromUser", displayName: "", description: "" },
   } },
   { name: TODOIST, displayName: "Todoist", description: "", auth: { type: "OAUTH2" }, actions: {
     find_task: { name: "find_task", displayName: "", description: "", inputSchema: { fields: [
@@ -469,6 +485,54 @@ describe("managed Asana is scoped to its five qualified Asana actions", () => {
     const response = await fetchFor(runOf(trigger), "jarvis:asana");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: ASANA, value: { access_token: ASANA_TOKEN, jarvis_managed: "asana" } });
+  });
+});
+
+describe("managed Intercom is scoped to its six qualified Intercom actions", () => {
+  const INTERCOM_TOKEN = "synthetic-managed-intercom-access-token";
+  const ref = "{{connections.jarvis:intercom}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "intercom-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "intercom.json"), JSON.stringify({ version: 1, provider: "intercom", status: "connected",
+      generation: crypto.randomUUID(), access_token: INTERCOM_TOKEN, account: { id: "ws1:admin1", label: "owner@example.test" },
+      workspaces: [{ id: "ws1", name: "Sandbox" }], connected_at: new Date().toISOString(),
+      settings: { region: "us", api_host: "api.intercom.io", admin_id: "admin1" } }));
+    credentials.register(new JarvisIntercomConnectionSource({ daemon: { data_dir: dataDir },
+      usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (actionName: string, input: Record<string, unknown> = { auth: ref, value: "c1" }): any => ({
+    name: "intercom", type: "PIECE", settings: { pieceName: INTERCOM, actionName, input },
+  });
+  const intercomCall = (url: string): any => step("custom_api_call", { auth: ref, method: "GET", url: { url } });
+  // A trigger whose settings also carry a stray actionName of a qualified action.
+  const intercomTrigger = (): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: INTERCOM, triggerName: "newConversationFromUser", actionName: "get_contact", input: { auth: ref } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["an Intercom customer reply, outside the qualified six", empty(step("reply_to_conversation_by_id", { auth: ref, body: "Hi" }))],
+    ["an Intercom custom API call, even on api.intercom.io", empty(intercomCall("https://api.intercom.io/me"))],
+    ["an Intercom custom API call with a relative path", empty(intercomCall("/me"))],
+    ["an Intercom trigger that carries a stray actionName", intercomTrigger()],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:intercom");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(INTERCOM_TOKEN);
+    });
+  }
+  test("a qualified Intercom step auth is ready and resolves", async () => {
+    const trigger = empty(step("get_contact"));
+    expect(bindingIssues(trigger)).toEqual([]);
+    const response = await fetchFor(runOf(trigger), "jarvis:intercom");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: INTERCOM,
+      value: { access_token: INTERCOM_TOKEN, jarvis_managed: "intercom", api_host: "api.intercom.io", admin_id: "admin1" } });
   });
 });
 

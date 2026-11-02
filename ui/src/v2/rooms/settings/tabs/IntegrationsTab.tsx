@@ -7,6 +7,7 @@ import { GitHubConnection } from "../../../integrations/GitHubConnection";
 import { DropboxConnection } from "../../../integrations/DropboxConnection";
 import { TrelloConnection } from "../../../integrations/TrelloConnection";
 import { SlackConnection } from "../../../integrations/SlackConnection";
+import { IntercomConnection } from "../../../integrations/IntercomConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 
@@ -341,6 +342,7 @@ export function IntegrationsTab({
       <TrelloConnection optional />
       <TodoistConnection optional /><AsanaConnection optional />
       <SlackConnection optional />
+      <IntercomConnection optional />
     </div>
   );
 }
