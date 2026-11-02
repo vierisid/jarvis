@@ -1,0 +1,35 @@
+{
+  "name": "trigger",
+  "type": "PIECE_TRIGGER",
+  "displayName": "Every Monday — time requires setup",
+  "settings": {
+    "pieceName": "schedule",
+    "input": {
+      "cron_expression": "",
+      "timezone": "Europe/Rome"
+    }
+  },
+  "nextAction": {
+    "name": "step_1",
+    "type": "PIECE",
+    "displayName": "Create verified weekly Stripe and HubSpot Google Doc",
+    "settings": {
+      "pieceName": "@jarvispieces/piece-jarvis-report",
+      "actionName": "weekly_operating_report",
+      "input": {
+        "stripeConnection": "",
+        "hubspotConnection": "",
+        "googleConnection": "",
+        "stripeAccountId": "",
+        "stripeMode": "",
+        "stripeDateBasis": "",
+        "hubspotPortalId": "",
+        "dealDateProperty": "",
+        "dealStageIds": "",
+        "googleEmail": "",
+        "folderId": "",
+        "timezone": "Europe/Rome"
+      }
+    }
+  }
+}

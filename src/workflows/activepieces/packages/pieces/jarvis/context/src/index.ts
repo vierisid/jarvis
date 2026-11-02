@@ -11,6 +11,7 @@ import { vaultSearchAction } from "./lib/actions/vault-search";
 import { vaultGetEntityAction } from "./lib/actions/vault-get-entity";
 import { awarenessRecentAction } from "./lib/actions/awareness-recent";
 import { commitmentsListAction } from "./lib/actions/commitments-list";
+import { meetingBriefsAction } from './lib/actions/meeting-briefs';
 
 export const jarvisContextPiece = createPiece({
   displayName: "Jarvis: Context",
@@ -21,6 +22,7 @@ export const jarvisContextPiece = createPiece({
   logoUrl: "",
   authors: ["jarvis"],
   actions: [
+    meetingBriefsAction,
     vaultSearchAction,
     vaultGetEntityAction,
     awarenessRecentAction,

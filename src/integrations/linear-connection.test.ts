@@ -15,6 +15,11 @@ import { readLinearConnection, linearStatus } from "./linear-connection";
 import { createManagedRotatingRefresher } from "./managed-rotating-refresh";
 import { JarvisLinearConnectionSource } from "../workflows/credentials/linear-source";
 import { managedConnectionMisuse } from "../workflows/credentials/adapter";
+import {
+  MANAGED_PIECE_ADAPTERS,
+  resolveGovernedPieceAction,
+  tracksPieceCompletion,
+} from "../workflows/runtime/piece-effects";
 let dir: string, config: any, grant: any;
 const receipt = randomUUID();
 beforeEach(() => {
@@ -229,7 +234,7 @@ test("expired delivery receipt asks for reconnect instead of repeating acknowled
 });
 
 test("team choices use the current grant and preserve page cursors without exposing tokens", async () => {
-  const { linearTeamOptions } = await import("./linear-options");
+  const { linearTeamOptions, LinearOptionsInputError } = await import("./linear-options");
   grant.expires_at = new Date(Date.now() + 3600000).toISOString();
   writeFileSync(join(dir, "connections/linear.json"), JSON.stringify(grant));
   const request = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -264,12 +269,71 @@ test("team choices use the current grant and preserve page cursors without expos
   });
   await expect(
     linearTeamOptions(config, "x".repeat(2049), request),
-  ).rejects.toThrow("Invalid");
+  ).rejects.toBeInstanceOf(LinearOptionsInputError);
   writeFileSync(
     join(dir, "connections/linear.json"),
     JSON.stringify({ ...grant, status: "disconnected" }),
   );
-  await expect(linearTeamOptions(config, null, request)).rejects.toThrow(
-    "Connect Linear",
-  );
+  const missing = linearTeamOptions(config, null, request);
+  await expect(missing).rejects.toThrow("Connect Linear");
+  await expect(missing).rejects.not.toBeInstanceOf(LinearOptionsInputError);
+});
+
+const LINEAR = "@activepieces/piece-linear";
+/** Every action of the pinned @activepieces/piece-linear 0.9.1 bundle, keyed by
+ * the `classification` upstream gives it. The engine test checks the installed
+ * package against the adapter too. */
+const LINEAR_091_BY_UPSTREAM: Record<string, string[]> = {
+  READ: [
+    "linear_get_issue", "linear_issue_get", "linear_team_get", "linear_viewer_get", "linear_comment_get",
+    "linear_attachment_get", "linear_upload_download", "linear_project_get", "linear_project_status_update_get",
+  ],
+  SEARCH: [
+    "linear_search_issues", "linear_issues_list", "linear_issues_search", "linear_issue_labels_list",
+    "linear_workflow_states_list", "linear_teams_list", "linear_users_list", "linear_cycles_list",
+    "linear_comments_list", "linear_projects_list", "linear_project_status_updates_list",
+  ],
+  WRITE: [
+    "linear_create_issue", "linear_update_issue", "linear_create_project", "linear_update_project",
+    "linear_create_comment", "linear_add_label_to_issue", "linear_remove_label_from_issue", "linear_attach_link",
+    "linear_create_project_status_update", "linear_issue_create", "linear_issue_update", "linear_issue_unarchive",
+    "linear_issue_relation_create", "linear_issue_add_label", "linear_issue_remove_label", "linear_issue_label_create",
+    "linear_team_create", "linear_team_update", "linear_comment_create", "linear_comment_update",
+    "linear_comment_resolve", "linear_comment_unresolve", "linear_comment_reaction_create", "linear_attachment_create",
+    "linear_project_create", "linear_project_update", "linear_project_unarchive", "linear_project_milestone_create",
+    "linear_project_status_update_create", "linear_project_status_update_edit", "linear_project_status_update_unarchive",
+  ],
+  DESTRUCTIVE: [
+    "linear_delete_issue", "linear_issue_archive", "linear_issue_delete", "linear_reaction_delete",
+    "linear_project_delete", "linear_project_status_update_archive",
+  ],
+};
+/** Where Jarvis departs from upstream's label: messages to people, and team settings. */
+const SENDS = ["linear_create_comment", "linear_comment_create", "linear_comment_update",
+  "linear_create_project_status_update", "linear_project_status_update_create", "linear_project_status_update_edit"];
+const SETTINGS = ["linear_team_create", "linear_team_update", "linear_project_update"];
+const expectedCategory = (upstream: string, name: string) =>
+  SENDS.includes(name) ? "send_message" : SETTINGS.includes(name) ? "modify_settings"
+    : upstream === "READ" || upstream === "SEARCH" ? "read_data" : upstream === "DESTRUCTIVE" ? "delete_data" : "write_data";
+test("the Linear adapter names every action of the pinned bundle, each in the category it should have", () => {
+  const all = Object.values(LINEAR_091_BY_UPSTREAM).flat();
+  expect(all).toHaveLength(57);
+  const adapter = MANAGED_PIECE_ADAPTERS.find((a) => a.pieceName === LINEAR)!;
+  expect((Object.values(adapter.categories).flat() as string[]).sort()).toEqual([...all].sort());
+  const table = Object.fromEntries(Object.entries(LINEAR_091_BY_UPSTREAM).flatMap(([upstream, names]) =>
+    names.map((name) => [name, expectedCategory(upstream, name)])));
+  expect(Object.fromEntries(all.map((name) => [name, resolveGovernedPieceAction(LINEAR, name)!.category as string]))).toEqual(table);
+  // Any query or mutation, and anything added upstream later, is the worst case.
+  for (const name of ["rawGraphqlQuery", "custom_api_call", "added_upstream_later"])
+    expect(resolveGovernedPieceAction(LINEAR, name)).toMatchObject({ category: "modify_settings", known: false });
+  // A completion receipt for every change, never for a read.
+  for (const name of all)
+    expect(`${name}: ${tracksPieceCompletion(LINEAR, name)}`).toBe(`${name}: ${table[name] !== "read_data"}`);
+});
+test("a project update that names teams is a settings change; a plain edit is a write", () => {
+  const category = (input?: Record<string, unknown>) => resolveGovernedPieceAction(LINEAR, "linear_project_update", input)!.category;
+  expect(category()).toBe("modify_settings");
+  expect(category({ project_id: "p", name: "Renamed" })).toBe("write_data");
+  expect(category({ project_id: "p", team_ids: ["t"] })).toBe("modify_settings");
+  expect(category({ project_id: "p", team_ids: "{{trigger.teams}}" })).toBe("modify_settings");
 });

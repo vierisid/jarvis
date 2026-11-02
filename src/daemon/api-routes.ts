@@ -2484,15 +2484,43 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
     '/api/integrations/linear/teams': {
       GET: async (req: Request) => {
-        const {linearTeamOptions} = await import('../integrations/linear-options');
+        const {linearTeamOptions, LinearOptionsInputError} = await import('../integrations/linear-options');
         try { return json(await linearTeamOptions(ctx.config, new URL(req.url).searchParams.get('cursor'))); }
-        catch { return json({error: 'Could not load Linear teams. Check your connection or enter a team ID.'}, 502); }
+        catch (error) {
+          if (error instanceof LinearOptionsInputError) return json({error: error.message}, 400);
+          return json({error: 'Could not load Linear teams. Check your connection or enter a team ID.'}, 502);
+        }
       },
     },
     '/api/integrations/linear': {
       GET: async () => {
         const {linearStatus} = await import('../integrations/linear-connection');
         return json(linearStatus(ctx.config));
+      },
+    },
+    '/api/integrations/asana/options': {
+      GET: async (req: Request) => {
+        const {asanaOptions, AsanaOptionsInputError} = await import('../integrations/asana-options');
+        try { return json(await asanaOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch(error) { return json({error:error instanceof Error ? error.message : 'Could not load Asana projects.'}, error instanceof AsanaOptionsInputError ? 400 : 502); }
+      },
+    },
+    '/api/integrations/asana': {
+      GET: async () => {
+        const {asanaStatus, readAsanaConnection} = await import('../integrations/asana-connection');
+        const {asanaNeedsReconnect} = await import('../integrations/asana-refresh');
+        const status = asanaStatus(ctx.config), c = readAsanaConnection(ctx.config.daemon.data_dir);
+        const reconnect = !!c && asanaNeedsReconnect(ctx.config, c);
+        return json({...status, connected: status.connected && !reconnect, reconnect});
+      },
+    },
+    '/api/integrations/dropbox': {
+      GET: async () => {
+        const {dropboxStatus, readDropboxConnection} = await import('../integrations/dropbox-connection');
+        const {dropboxNeedsReconnect} = await import('../integrations/dropbox-refresh');
+        const status = dropboxStatus(ctx.config), c = readDropboxConnection(ctx.config.daemon.data_dir);
+        const reconnect = !!c && dropboxNeedsReconnect(ctx.config, c);
+        return json({...status, connected: status.connected && !reconnect, reconnect});
       },
     },
     '/api/integrations/clickup': {
@@ -2539,6 +2567,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: async () => {
         const { mailchimpStatus } = await import('../integrations/mailchimp-connection');
         return json(mailchimpStatus(ctx.config));
+      },
+    },
+
+    '/api/integrations/slack/options': {
+      GET: async (req: Request) => {
+        const {slackOptions, SlackOptionsError} = await import('../integrations/slack-options');
+        try { return json(await slackOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) { return json({error: error instanceof SlackOptionsError ? error.message : 'Could not load Slack choices.'}, error instanceof SlackOptionsError ? error.status : 502); }
+      },
+    },
+    '/api/integrations/slack': {
+      GET: async () => {
+        const { slackStatus } = await import('../integrations/slack-connection');
+        return json(slackStatus(ctx.config));
       },
     },
 

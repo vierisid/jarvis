@@ -81,7 +81,7 @@ describe('engine piece-executor admission gate', () => {
     expect(block).not.toBeNull();
     // Paths are relative to VENDOR_PACKAGES; each must resolve to a real file.
     const vendorPackages = resolve(__dirname, '../activepieces/packages');
-    for (const rel of ['../../runtime/piece-effects.ts', '../../runtime/piece-effect-guard.ts',
+    for (const rel of ['../../runtime/piece-effects.ts', '../../runtime/piece-effect-guard.ts', '../../runtime/hubspot-contact.ts',
       '../../runtime/decision-document.ts', 'server/engine/src/lib/handler/piece-executor.ts', 'server/engine/src/lib/handler/code-executor.ts']) {
       expect(block![1]!).toContain(`'${rel}'`);
       expect(existsSync(resolve(vendorPackages, rel))).toBe(true);

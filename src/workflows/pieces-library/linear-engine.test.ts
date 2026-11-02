@@ -258,6 +258,18 @@ test.skipIf(!gate)(
         process.env.LINEAR_CATALOG_FIXTURE,
         JSON.stringify(metadata),
       );
+    // Every action the installed package declares is in the governed table
+    // (except the raw GraphQL escape hatch, which stays the worst case), so an
+    // upstream addition fails here instead of silently falling to modify_settings.
+    const actions = Object.keys(metadata.actions);
+    expect(actions.length).toBeGreaterThan(50);
+    expect(
+      actions.filter(
+        (name) =>
+          name !== "rawGraphqlQuery" &&
+          !resolveGovernedPieceAction(piece, name)!.known,
+      ),
+    ).toEqual([]);
     for (const name of [
       "linear_get_issue",
       "linear_search_issues",

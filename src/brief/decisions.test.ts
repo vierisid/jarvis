@@ -386,3 +386,16 @@ test('effects and runs of another project are not listed, read by id or filtered
   const other = new DecisionQueue(getDb(), { approvalManager: manager, deferredExecutor: executor }, 'proj_other_f12');
   expect((await other.read({ limit: 100 })).data.items.map(item => item.decisionId)).toEqual([`effect:${theirs.id}`]);
 });
+
+test('a browser click card names the element and page captured when it was raised', () => {
+  const a = manager.createRequest({ agentId: 'fixture', agentName: 'Fixture', toolName: 'browser_click', toolArguments: { element_id: 5 },
+    actionCategory: 'control_app', urgency: 'normal', reason: 'Review', executionMode: 'workflow',
+    context: JSON.stringify({ confirm: 'always', intent: 'Review browser_click on element [5].',
+      reviewSubject: { origin: 'https://mail.example', element: 'button "Send" [5]' } }) });
+  expect(queue.get(`approval:${a.id}`).review).toEqual({ toolName: 'browser_click', reason: 'Review',
+    origin: 'https://mail.example', element: 'button "Send" [5]' });
+  const bad = manager.createRequest({ agentId: 'fixture', agentName: 'Fixture', toolName: 'browser_click', toolArguments: { element_id: 5 },
+    actionCategory: 'control_app', urgency: 'normal', reason: 'Review', executionMode: 'workflow',
+    context: JSON.stringify({ confirm: 'always', reviewSubject: { origin: 'javascript:alert(1)' } }) });
+  expect(queue.get(`approval:${bad.id}`).review).toEqual({ toolName: 'browser_click', reason: 'Review' });
+});

@@ -28,7 +28,7 @@ test("five qualified actions have governance and writes have completion receipts
       resolveGovernedPieceAction("@activepieces/piece-linear", a),
     ).toMatchObject({
       known: true,
-      category: write ? "write_data" : "read_data",
+      category: a === "linear_create_comment" ? "send_message" : write ? "write_data" : "read_data",
     });
     expect(tracksPieceCompletion("@activepieces/piece-linear", a)).toBe(write);
   }

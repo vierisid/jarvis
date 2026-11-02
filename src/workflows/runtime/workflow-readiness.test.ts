@@ -584,3 +584,71 @@ test('#633: a nested workflow binding cannot amplify a stored node name', () => 
   expect(nested!.message.length).toBeLessThan(1_500);
   expect(new WorkflowReadinessError(readiness).message.length).toBeLessThan(2_000);
 });
+
+
+test('built-in schedule validates a chosen or composed timezone without requiring one on legacy drafts', () => {
+  const composing = (g: unknown) => compileWorkflow(g, { pieces, phase: 'composition' });
+  for (const timezone of ['Mars/Olympus', 42, '{{trigger.timezone}}', ' Europe/Rome ']) {
+    const g = cron();
+    g.settings.input.timezone = timezone;
+    expect(composing(g).issues).toContainEqual(expect.objectContaining({ node: 'trigger', path: 'settings.input.timezone', code: 'TIMEZONE' }));
+    // Saved without a choice, the zone is not used (the trigger list warns), so the schedule is not refused.
+    if (timezone !== '{{trigger.timezone}}') expect(compile(g).ready).toBe(true);
+    if (typeof timezone !== 'string') continue;
+    g.settings.chosenTimezone = timezone;
+    expect(compile(g).issues).toContainEqual(expect.objectContaining({ node: 'trigger', path: 'settings.input.timezone', code: 'TIMEZONE' }));
+  }
+  // An empty zone means Jarvis's.
+  for (const timezone of ['', null]) {
+    const g = cron();
+    g.settings.input.timezone = timezone;
+    expect(composing(g).ready).toBe(true);
+    expect(compile(g).ready).toBe(true);
+  }
+  const g = cron();
+  g.settings.input.timezone = 'Europe/Rome';
+  g.settings.chosenTimezone = 'Europe/Rome';
+  expect(compile(g).ready).toBe(true);
+  expect(composing(g).ready).toBe(true);
+  delete g.settings.input.timezone;
+  expect(compile(g).ready).toBe(true);
+});
+
+
+test('form webhook mapping can be incomplete in drafts but must be safe and complete for activation', () => {
+  for (const phase of ['composition', 'activation'] as const) {
+    for (const input of [{ submission_id_field: 'id' }, { submission_id_field: 'id', submission_email_field: '' }, { submission_id_field: '__proto__.id', submission_email_field: 'email' }]) {
+      expect(compileWorkflow({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input } }, { pieces, phase }).ready).toBe(phase === 'composition' && input.submission_id_field !== '__proto__.id');
+    }
+    expect(compileWorkflow({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input: { submission_id_field: 'id', submission_email_field: 'email' } } }, { pieces, phase }).ready).toBe(true);
+  }
+});
+
+
+test('Ask embedded contracts are validated before composition, publish and run', () => {
+  const ask = new PieceCatalog([{ name: 'jarvis-ask', displayName: 'Ask', description: '', actions: { ask: { name: 'ask', displayName: 'Ask', description: '' } } }]);
+  const g = (outputSchema: unknown) => ({ name: 'trigger', type: 'EMPTY', nextAction: { name: 'extract', type: 'PIECE', settings: { pieceName: 'jarvis-ask', actionName: 'ask', input: { prompt: 'Extract', outputSchema } } } });
+  for (const phase of ['composition', 'activation'] as const) {
+    for (const schema of ['{broken', JSON.stringify({ type: 'object', properties: { total: { type: 'number', unsupported: true } } })]) {
+      const result = compileWorkflow(g(schema), { pieces: ask, phase });
+      expect(result.ready).toBe(false);
+      expect(result.issues).toContainEqual(expect.objectContaining({ node: 'extract', path: 'settings.input.outputSchema', code: 'OUTPUT_SCHEMA' }));
+    }
+    expect(compileWorkflow(g(JSON.stringify({ type: 'number', minimum: 0 })), { pieces: ask, phase }).ready).toBe(true);
+    expect(compileWorkflow(g(''), { pieces: ask, phase }).ready).toBe(true);
+    const dynamic = compileWorkflow(g('{{trigger.schema}}'), { pieces: ask, phase });
+    expect(dynamic.runtimeChecks).toContainEqual(expect.objectContaining({ node: 'extract', path: 'settings.input.outputSchema', guard: 'piece-input' }));
+  }
+});
+
+
+test('a saved malformed extraction schema cannot publish or queue a manual run', async () => {
+  configureWorkflowReadiness({ pieces: new PieceCatalog([{name:'jarvis-ask',displayName:'Ask',description:'',actions:{ask:{name:'ask',displayName:'Ask',description:''}}}]) });
+  const { flow, version } = draft({name:'trigger',type:'EMPTY',nextAction:{name:'extract',type:'PIECE',settings:{pieceName:'jarvis-ask',actionName:'ask',input:{prompt:'Extract',outputSchema:'{broken'}}}});
+  expect(versionReadiness(flow.id,version.id).issues).toContainEqual(expect.objectContaining({code:'OUTPUT_SCHEMA'}));
+  for (const path of ['/api/workflows/:id/publish','/api/workflows/:id/run']) expect((await request(path,'POST',{id:flow.id},{versionId:version.id})).status).toBe(422);
+  const tool=createManageWorkflowTool();
+  for (const action of ['publish','run','enable']) await expect(tool.execute({action,flow:flow.id})).rejects.toThrow();
+  expect(getFlow(flow.id)?.status).toBe('DISABLED');expect(getFlow(flow.id)?.published_version_id).toBeNull();
+  expect(getWorkflowDb().query('SELECT count(*) AS n FROM flow_run').get()).toEqual({n:0});
+});

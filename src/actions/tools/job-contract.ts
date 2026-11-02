@@ -28,8 +28,10 @@ import { TOOL_ACTION_MAP } from '../../authority/tool-action-map';
 import { getCronTimezone } from '../../lib/cron-scheduler';
 import { VERIFIED_MANIFESTS } from '../../workflows/pieces-library/verified-manifests-generated';
 import { BOUNDED_TOOL_NAMES } from '../../workflows/runtime/effect-capabilities';
-import { ALL_PIECE_ADAPTERS, GOVERNED_PIECE_ADAPTERS, resolveGovernedPieceAction } from '../../workflows/runtime/piece-effects';
+import { ALL_PIECE_ADAPTERS, GOVERNED_PIECE_ADAPTERS, PARTIAL_PIECE_ADAPTERS, resolveGovernedPieceAction } from '../../workflows/runtime/piece-effects';
+import { PIECE_NOTIFY_CHANNELS } from '../../workflows/jarvis-pieces/types';
 import { walkFlowNodes } from '../../workflows/db/flow-graph';
+import { canonicalZone, chosenScheduleZone } from '../../workflows/runner/triggers/schedule-zone';
 import type { FlowTriggerNode } from '../../workflows/db/repos/flow-version';
 
 export type ContractValue = string | number | boolean | string[];
@@ -113,6 +115,9 @@ function step(value: unknown, where: string, notify: boolean): ContractStep {
     only(value.notify as Record<string, unknown>, ['channels'], `${where}.notify`);
     const channels = texts((value.notify as Record<string, unknown>).channels, `${where}.notify.channels`);
     if (channels.includes('auto')) fail(`${where}.notify.channels must name channels; auto is decided at run time`);
+    if (channels.some(c => !(PIECE_NOTIFY_CHANNELS as readonly string[]).includes(c))) {
+      fail(`${where}.notify.channels contains an unsupported channel. Native Jarvis in-app notifications use dashboard. Supported channels: ${PIECE_NOTIFY_CHANNELS.filter(c => c !== 'auto').join(', ')}. Correct the contract without changing the user's requested destination.`);
+    }
     return { notify: { channels } };
   }
   if ('tool' in value) {
@@ -141,11 +146,9 @@ function cadence(cron: string): ContractCadence | null {
   if (dom === '*' && one(dow)) return 'week';
   return one(dom) && dow === '*' ? 'month' : null;
 }
-/** The canonical IANA name, or null for an unknown zone. */
-function zoneName(zone: string): string | null {
-  try { return new Intl.DateTimeFormat('en-US', { timeZone: zone }).resolvedOptions().timeZone; } catch { return null; }
-}
-/** The time zone every workflow schedule runs in: Jarvis's configured one, else this machine's (lib/cron-scheduler.ts). */
+/** The canonical IANA name (every alias of UTC is UTC), or null for an unknown zone. */
+const zoneName = (zone: string): string | null => canonicalZone(zone);
+/** Where a schedule runs unless a person chose its zone: Jarvis's configured one, else this machine's. */
 export function scheduleTimeZone(): string {
   return zoneName(getCronTimezone() ?? Intl.DateTimeFormat().resolvedOptions().timeZone) ?? 'UTC';
 }
@@ -160,13 +163,21 @@ interface Kind {
   agent?: true;
 }
 function pieceKind(pieceName: string, actionName: string | undefined): Kind | null {
+  if (samePiece('jarvis-report', pieceName) && actionName === 'weekly_operating_report') return { effect: 'write_data' };
+  if (samePiece('jarvis-refund', pieceName) && actionName === 'approval_refund') return { effect: 'make_payment' };
+  if (samePiece('jarvis-import', pieceName) && actionName === 'resumable_contact_import') return { effect: 'write_data' };
+  if (samePiece('jarvis-sales', pieceName) && actionName === 'draft_followups') return { effect: 'write_data' };
   if (samePiece(pieceName, AGENT)) return { effect: 'spawn_agent', open: 'delegates to an agent, which chooses its own tools when it runs', agent: true };
   if (samePiece(pieceName, WORKFLOW)) return { effect: 'spawn_agent', open: 'starts another workflow, whose steps this check does not see' };
-  const adapter = ALL_PIECE_ADAPTERS.find(a => samePiece(pieceName, a.pieceName));
+  const ungoverned: Kind = { effect: null, open: `uses ${pieceName}${actionName ? ' ' + actionName : ''}, which Jarvis does not govern`, serviceOnly: true };
+  // A partial adapter (Google Sheets) governs only some actions: those are
+  // bounded as the runtime bounds them, the rest stay ungoverned.
+  const partial = PARTIAL_PIECE_ADAPTERS.find(a => samePiece(pieceName, a.pieceName));
+  const adapter = ALL_PIECE_ADAPTERS.find(a => samePiece(pieceName, a.pieceName)) ?? partial;
   if (adapter) {
-    if (!actionName) return null;
+    if (!actionName) return partial ? ungoverned : null;
     const governed = resolveGovernedPieceAction(adapter.pieceName, actionName);
-    if (!governed) return null;
+    if (!governed) return partial ? ungoverned : null;
     // An action decided by its input (an HTTP request's method, #961) is open
     // here: a contract names the step, not the value, so only the worst case bounds it.
     return OPEN_ACTIONS.has(actionName) || !governed.known || governed.byInput
@@ -174,7 +185,7 @@ function pieceKind(pieceName: string, actionName: string | undefined): Kind | nu
       : { effect: governed.category };
   }
   if (JARVIS_READS.some(p => samePiece(p, pieceName))) return { effect: 'read_data' };
-  return { effect: null, open: `uses ${pieceName}${actionName ? ' ' + actionName : ''}, which Jarvis does not govern`, serviceOnly: true };
+  return ungoverned;
 }
 function toolKind(toolName: string): Kind {
   const effect = Object.hasOwn(TOOL_ACTION_MAP, toolName) ? TOOL_ACTION_MAP[toolName]! : null;
@@ -224,8 +235,6 @@ export function validateJobContract(value: unknown): JobContract {
     if (timezone !== undefined) {
       const zone = zoneName(timezone);
       if (!zone) fail(`trigger.timezone ${timezone} is not a known time zone`);
-      // Every schedule runs in one time zone, so a job set in another one would run at the wrong hour.
-      if (zone !== scheduleTimeZone()) unmet(`schedules run in ${scheduleTimeZone()}, Jarvis's time zone; the job asks for ${timezone}`);
     }
   }
   for (const key of ['sources', 'outputs'] as const) {
@@ -452,6 +461,12 @@ function checkTrigger(trigger: FlowTriggerNode, want: NonNullable<JobContract['t
       const runs = cadence(cron ?? '');
       violations.push(`the schedule "${cron ?? ''}" ${runs ? `runs once every ${runs}` : 'is not an hourly, daily, weekly or monthly schedule'}; the job asks for once every ${want.every}`);
     }
+    if (want.timezone) {
+      // The zone it fires in: the step's own only when a person chose it, else Jarvis's (schedule-zone.ts).
+      const chosen = chosenScheduleZone(settings);
+      const actual = chosen === undefined ? scheduleTimeZone() : zoneName(chosen);
+      if (actual !== zoneName(want.timezone)) violations.push(`the schedule timezone is ${actual ?? 'invalid'}; the job asks for ${want.timezone}`);
+    }
     if (want.eventType && input.eventType !== want.eventType) violations.push(`the flow listens for ${clip(input.eventType ?? 'no event')}; the job asks for ${want.eventType}`);
     const piece = String(settings.pieceName ?? ''), name = String(settings.triggerName ?? '');
     if (want.piece && !samePiece(want.piece, piece)) violations.push(`the flow starts on ${piece}; the job asks for ${want.piece}`);
@@ -460,7 +475,6 @@ function checkTrigger(trigger: FlowTriggerNode, want: NonNullable<JobContract['t
   if (violations.length === before) verified.push(`starts with ${TRIGGER_WORDS[want.kind]}${want.cron ? ` on "${want.cron}"` : ''}`
     + `${want.every ? `, once every ${want.every}` : ''}${want.eventType ? ` (${want.eventType})` : ''}`
     + `${want.piece ? `: ${want.piece}${want.trigger ? ' ' + want.trigger : ''}` : ''}`
-    // The zone is Jarvis's configuration, checked when the contract was validated, not part of the graph.
     + `${want.timezone ? `; schedules run in ${want.timezone}, as the job asks` : ''}`);
 }
 

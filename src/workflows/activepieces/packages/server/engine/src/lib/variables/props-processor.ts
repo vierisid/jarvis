@@ -16,6 +16,7 @@ export const propsProcessor = {
         auth: PieceAuthProperty | PieceAuthProperty[] | undefined,
         requireAuth: boolean,
         propertySettings: Record<string, PropertySettings>,
+        fileContext?: { apiUrl: string; engineToken: string },
     ): Promise<{ processedInput: StaticPropsValue<PiecePropertyMap>, errors: PropsValidationError }> => {
         let dynamaicPropertiesSchema: Record<string, InputPropertyMap> | undefined = undefined
         if (Object.keys(propertySettings).length > 0) {
@@ -33,6 +34,7 @@ export const propsProcessor = {
                     undefined,
                     false,
                     {},
+                    fileContext,
                 )
                 processedInput[AUTHENTICATION_PROPERTY_NAME] = authProcessedInput
                 if (Object.keys(authErrors).length > 0) {
@@ -52,6 +54,7 @@ export const propsProcessor = {
                     undefined,
                     false,
                     {},
+                    fileContext,
                 )
                 processedInput[key] = itemProcessedInput
                 if (Object.keys(itemErrors).length > 0) {
@@ -69,6 +72,7 @@ export const propsProcessor = {
                         undefined,
                         false,
                         {},
+                        fileContext,
                     )
                     processedArray.push(itemProcessedInput)
                     processedErrors.push(itemErrors)
@@ -83,7 +87,7 @@ export const propsProcessor = {
             }
             const processor = processors[property.type]
             if (processor) {
-                processedInput[key] = await processor(property, processedInput[key])
+                processedInput[key] = await processor(property, processedInput[key], fileContext)
             }
 
             const shouldValidate = key !== AUTHENTICATION_PROPERTY_NAME && property.type !== PropertyType.MARKDOWN
@@ -110,37 +114,43 @@ export const propsProcessor = {
 }
 
 const validateProperty = (property: PieceProperty, value: unknown, originalValue: unknown): string[] => {
+    // Engine-resolved objects can have a null prototype. Coercing them in an
+    // error-message template throws before JSON validation even runs.
+    let shownValue: string
+    try { shownValue = (typeof originalValue === 'object' ? JSON.stringify(originalValue) : String(originalValue)).slice(0, 500) }
+    catch { shownValue = '[unprintable value]' }
+
     let schema
     switch (property.type) {
         case PropertyType.SHORT_TEXT:
         case PropertyType.LONG_TEXT:
             schema = z.string({
-                error: `Expected string, received: ${originalValue}`,
+                error: `Expected string, received: ${shownValue}`,
             })
             break
         case PropertyType.NUMBER:
             schema = z.number({
-                error: `Expected number, received: ${originalValue}`,
+                error: `Expected number, received: ${shownValue}`,
             })
             break
         case PropertyType.CHECKBOX:
             schema = z.boolean({
-                error: `Expected boolean, received: ${originalValue}`,
+                error: `Expected boolean, received: ${shownValue}`,
             })
             break
         case PropertyType.DATE_TIME:
             schema = z.string({
-                error: `Invalid datetime format. Expected ISO format (e.g. 2024-03-14T12:00:00.000Z), received: ${originalValue}`,
+                error: `Invalid datetime format. Expected ISO format (e.g. 2024-03-14T12:00:00.000Z), received: ${shownValue}`,
             })
             break
         case PropertyType.ARRAY:
             schema = z.array(z.any(), {
-                error: `Expected array, received: ${originalValue}`,
+                error: `Expected array, received: ${shownValue}`,
             })
             break
         case PropertyType.OBJECT:
             schema = z.record(z.any(), z.any(), {
-                error: `Expected object, received: ${originalValue}`,
+                error: `Expected object, received: ${shownValue}`,
             })
             break
         case PropertyType.JSON: {
@@ -149,12 +159,12 @@ const validateProperty = (property: PieceProperty, value: unknown, originalValue
             }
             const originalValueProvidedAndFailed = !isNil(originalValue) && isNil(value)
             if (originalValueProvidedAndFailed) {
-                return [`Expected JSON, received: ${originalValue}`]
+                return [`Expected JSON, received: ${shownValue}`]
             }
             schema = z.any().refine(
                 (val) => isObject(val) || Array.isArray(val),
                 {
-                    message: `Expected JSON, received: ${originalValue}`,
+                    message: `Expected JSON, received: ${shownValue}`,
                 },
             )
             break
@@ -163,7 +173,7 @@ const validateProperty = (property: PieceProperty, value: unknown, originalValue
             schema = z.any().refine(
                 (val) => isObject(val),
                 {
-                    message: `Expected file url or base64 with mimeType, received: ${originalValue}`,
+                    message: `Expected file url or base64 with mimeType, received: ${shownValue}`,
                 },
             )
             break

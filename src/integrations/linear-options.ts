@@ -1,6 +1,8 @@
 import type { JarvisConfig } from "../config/types";
 import { freshLinearConnection } from "./linear-refresh";
 import { linearGraphql } from "../workflows/runtime/managed-linear";
+/** An error in the request itself (a bad page cursor), reported as 400. */
+export class LinearOptionsInputError extends Error {}
 /** One bounded page, using the same renewed grant as workflow execution. */
 export async function linearTeamOptions(
   config: JarvisConfig,
@@ -8,7 +10,7 @@ export async function linearTeamOptions(
   request: typeof fetch = fetch,
 ) {
   if (cursor && (cursor.length > 2048 || /[\x00-\x1f\x7f]/.test(cursor)))
-    throw new Error("Invalid Linear page cursor.");
+    throw new LinearOptionsInputError("Invalid Linear page cursor.");
   const c = await freshLinearConnection(config, request);
   const data = await linearGraphql(
     c.access_token,

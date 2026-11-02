@@ -51,6 +51,8 @@ export const JARVIS_ON_EVENT_TRIGGER = {
 } as const;
 
 export interface PieceCatalogAction {
+  /** Author-declared guidance, not a runtime guarantee or authority grant. */
+  aiMetadata?: { description?: string; idempotent?: boolean };
   name: string;
   displayName: string;
   description: string;
@@ -313,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "13"; // v12: managed Mailchimp outputs; v13: Linear issue and comment output contracts
+export const CATALOG_SCHEMA_VERSION = "17"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Linear issue and comment output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -797,14 +799,13 @@ export interface RawPieceMetadata {
    * CUSTOM_AUTH variants; we read it loosely here and project only the
    * fields the editor needs (`type`, `displayName`, `description`).
    */
-  auth?: {
-    type?: string;
-    displayName?: string;
-    description?: string;
-  } | null;
+  auth?: RawPieceAuth | RawPieceAuth[] | null;
 }
 
+interface RawPieceAuth { type?: string; displayName?: string; description?: string }
+
 export interface RawActionOrTrigger {
+  aiMetadata?: { description?: unknown; idempotent?: unknown };
   requireAuth?: boolean;
   name?: string;
   displayName?: string;
@@ -859,7 +860,10 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
   // The piece's auth.type comes from upstream's PropertyType -- map it
   // to our AppConnectionType vocabulary so the editor + connection
   // listing share one name space.
-  const auth = m.auth;
+  // Newer community pieces (including Slack 0.23.1) declare several auth
+  // methods. The picker lists accounts across methods; use the first supported
+  // method for its setup label instead of hiding authentication entirely.
+  const auth = Array.isArray(m.auth) ? m.auth.find(a => a && typeof a.type === 'string' && projectAuthType(a.type)) : m.auth;
   if (auth && typeof auth === "object" && typeof auth.type === "string") {
     const projected = projectAuthType(auth.type);
     if (projected) {
@@ -901,6 +905,36 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
       linear_create_comment:{success:true,lastSyncId:1,comment:{id:'33333333-3333-4333-8333-333333333333',body:'Ready for review',url:'https://linear.app/example/issue/ENG-123#comment'}},
     };
     for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
+  if (entry.name === '@activepieces/piece-asana') {
+    for (const action of Object.values(entry.actions)) {
+      if (action.name !== 'create_task') continue;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.sourceType === 'DROPDOWN') {field.type='string';field.placeholder='Asana ID or workflow variable';delete field.options;}
+        if (field.name === 'due_on') {field.placeholder='YYYY-MM-DD';field.description='The hosted Jarvis Asana connection requires the date as YYYY-MM-DD.';}
+        if (field.name === 'tags') {field.type='json';field.sourceType='ARRAY';field.placeholder='[]';field.description='Tag IDs or exact tag names. The hosted Jarvis Asana connection does not support tags yet: leave this empty when using it.';delete field.options;}
+      }
+    }
+    const task = {gid:'123456', resource_type:'task', name:'Example task', notes:'Task description', completed:false, due_on:'2026-10-30', due_at:null, start_on:null, assignee:{gid:'123', name:'Owner'}, projects:[{gid:'456',name:'Project'}], workspace:{gid:'789',name:'Workspace'}, permalink_url:'https://app.asana.com/0/456/123456'};
+    const samples: Record<string,unknown> = {
+      create_task:task, get_task:task, update_task:task,
+      list_project_tasks:{data:[task],next_offset:null},
+      add_task_comment:{gid:'654321',resource_type:'story',resource_subtype:'comment_added',type:'comment',text:'Task comment',created_at:'2026-10-27T12:00:00Z',created_by:{gid:'123',name:'Owner'},target:{gid:'123456',name:'Example task'},is_pinned:false},
+    };
+    for (const [name,sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample=sample;
+  }
+  if (entry.name === '@activepieces/piece-dropbox') {
+    const listPath = entry.actions.list_dropbox_folder?.inputSchema?.fields.find(field => field.name === 'path');
+    if (listPath) listPath.placeholder = '/ for Dropbox home, /folder or a workflow variable';
+    const filenameOnly = entry.actions.search_dropbox?.inputSchema?.fields.find(field => field.name === 'filename_only');
+    if (filenameOnly) filenameOnly.description = (filenameOnly.description ? filenameOnly.description + ' ' : '') + 'The hosted Jarvis Dropbox connection always matches file names only.';
+    const item = {'.tag': 'folder', id: 'id:example', name: 'Example', path_lower: '/example', path_display: '/Example'};
+    const samples: Record<string, unknown> = {
+      create_new_dropbox_folder: {metadata: item}, get_dropbox_file_metadata: item,
+      list_dropbox_folder: {entries: [item], cursor: 'example', has_more: false},
+      search_dropbox: {matches: [{metadata: {'.tag': 'metadata', metadata: item}}], has_more: false},
+    };
+    for (const [name, sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample = sample;
   }
 
   // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
@@ -959,6 +993,18 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
     const card = {id:'cccccccccccccccccccccccc',name:'Example task',desc:'',idBoard:board.id,idList:list.id,closed:false,url:'https://trello.com/c/abcd1234'};
     for (const [name,sample] of Object.entries({list_boards:{boards:[board],count:1},list_lists:{lists:[list],count:1},get_card:card,create_card:card,move_card:card})) {
       const action=entry.actions[name];if(action && action.outputSample===undefined)action.outputSample=sample;
+    }
+  }
+  if (entry.name === '@activepieces/piece-slack') {
+    const channel = {id: 'C0123456789', name: 'jarvis-sandbox', is_member: true, is_archived: false};
+    const find = entry.actions.slack_find_channel, info = entry.actions.slack_get_channel_info;
+    if (find && find.outputSample === undefined) find.outputSample = channel;
+    if (info && info.outputSample === undefined) info.outputSample = {ok: true, channel};
+    for (const name of ['send_channel_message', 'slack_post_message']) {
+      const action = entry.actions[name];
+      if (action && action.outputSample === undefined) action.outputSample = {
+        ok: true, channel: 'C0123456789', ts: '1710304378.475129', message: {text: 'Example message', ts: '1710304378.475129'},
+      };
     }
   }
   if (entry.name !== JARVIS_ON_EVENT_TRIGGER.piece) return;
@@ -1082,6 +1128,12 @@ function rawActionToCatalogAction(
     description: typeof raw.description === "string" ? raw.description : "",
   };
   if (typeof raw.requireAuth === 'boolean') out.requireAuth = raw.requireAuth;
+  if (raw.aiMetadata && typeof raw.aiMetadata === 'object') {
+    const metadata: NonNullable<PieceCatalogAction['aiMetadata']> = {};
+    if (typeof raw.aiMetadata.description === 'string') metadata.description = raw.aiMetadata.description.slice(0, 4000);
+    if (typeof raw.aiMetadata.idempotent === 'boolean') metadata.idempotent = raw.aiMetadata.idempotent;
+    if (Object.keys(metadata).length) out.aiMetadata = metadata;
+  }
   if (raw.props) {
     out.inputSchema = propsToInputSchema(raw.props);
   }
