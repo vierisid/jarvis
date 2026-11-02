@@ -124,6 +124,70 @@ test("lost ack is retried from durable storage without another provider refresh"
   expect(refreshes).toBe(1);
   expect(acks).toBe(2);
 });
+test("a hosting outage during a pending acknowledgement keeps serving the still-valid token without rotating", async () => {
+  const store = join(dir, "connections/calendly-renewal.sqlite");
+  const row = () => {
+    const db = new Database(store, { readonly: true });
+    try {
+      return JSON.parse((db.query("SELECT value FROM renewal").get() as any).value);
+    } finally {
+      db.close();
+    }
+  };
+  let refreshes = 0,
+    acks = 0,
+    hosting: "down" | "error" | "stale" | "up" = "down";
+  const request = transport((body) => {
+    if (!body.ack) {
+      refreshes++;
+      return rotated();
+    }
+    acks++;
+    if (hosting === "down") throw new Error("hosting unreachable");
+    if (hosting === "error") return Response.json({ error: "x" }, { status: 503 });
+    if (hosting === "stale") return Response.json({ error: "stale" }, { status: 409 });
+    return Response.json({ acknowledged: true });
+  });
+  // The rotation lands, its acknowledgement does not.
+  expect((await fresh().fresh(config, request)).access_token).toBe("a2");
+  expect(row().receipt).toBe(receipt);
+  for (const state of ["down", "error"] as const) {
+    hosting = state;
+    const got = await fresh().fresh(config, request);
+    expect([got.access_token, got.refresh_token]).toEqual(["a2", "r2"]);
+    expect(row().receipt).toBe(receipt);
+  }
+  expect(refreshes).toBe(1);
+  // A 409 without reconnect means the grant moved on: never served.
+  hosting = "stale";
+  await expect(fresh().fresh(config, request)).rejects.toThrow();
+  // Hosting back: the pending acknowledgement completes, still no rotation.
+  hosting = "up";
+  expect((await fresh().fresh(config, request)).access_token).toBe("a2");
+  expect(row().receipt).toBeUndefined();
+  expect(refreshes).toBe(1);
+  expect(acks).toBe(5);
+});
+test("an expired token with an unacknowledged rotation is refused, never renewed again", async () => {
+  const store = join(dir, "connections/calendly-renewal.sqlite");
+  let refreshes = 0;
+  const request = transport((body) => {
+    if (!body.ack) {
+      refreshes++;
+      return rotated();
+    }
+    throw new Error("hosting unreachable");
+  });
+  await fresh().fresh(config, request);
+  const db = new Database(store);
+  const value = JSON.parse((db.query("SELECT value FROM renewal").get() as any).value);
+  db.query("UPDATE renewal SET value=? WHERE id=1").run(
+    JSON.stringify({ ...value, expires_at: new Date(Date.now() + 30000).toISOString() }),
+  );
+  db.close();
+  await expect(fresh().fresh(config, request)).rejects.toThrow("Could not confirm");
+  expect(refreshes).toBe(1);
+});
 test("a concurrent renewal in another instance waits for the first and reuses its rotation", async () => {
   let release!: () => void;
   const wait = new Promise<void>((r) => (release = r));

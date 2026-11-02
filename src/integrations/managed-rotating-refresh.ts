@@ -258,13 +258,38 @@ export function createManagedRotatingRefresher<
         if (current.receipt) {
           db.exec("COMMIT");
           transaction = false;
-          const ack = await post(
-            config,
-            c,
-            current.refresh_token!,
-            request,
-            current.receipt,
-          );
+          let ack: Awaited<ReturnType<typeof post>> | null;
+          try {
+            ack = await post(
+              config,
+              c,
+              current.refresh_token!,
+              request,
+              current.receipt,
+            );
+          } catch {
+            ack = null;
+          }
+          if (!ack || ack.response.status !== 409) {
+            if (!ack || !ack.response.ok || ack.value.acknowledged !== true) {
+              // Hosting is unreachable or failed: the acknowledgement stays
+              // pending and is retried next time. Hosting's contract forbids
+              // renewing before it is acknowledged, so no rotation happens
+              // here, but a stored access token that is still valid for this
+              // exact grant is safe to use meanwhile.
+              const latest = get(db, key);
+              if (latest && !latest.reconnect && usable(latest) && same(config, c))
+                return {
+                  ...c,
+                  access_token: latest.access_token!,
+                  refresh_token: latest.refresh_token!,
+                  expires_at: latest.expires_at!,
+                };
+              throw new Error(
+                `Could not confirm ${name} renewal. Try again shortly.`,
+              );
+            }
+          }
           await lock(db);
           transaction = true;
           if (
