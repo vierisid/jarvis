@@ -8,6 +8,7 @@ import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
 import { asanaStatus } from '../integrations/asana-connection';
 import { slackStatus } from "../integrations/slack-connection";
+import { notionStatus } from "../integrations/notion-connection";
 import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
@@ -4767,6 +4768,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       trello: () => trelloStatus(jarvisConfig),
       asana: () => asanaStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
+      notion: () => notionStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
         return Object.fromEntries((['telegram', 'discord'] as const).map(name => [name, {

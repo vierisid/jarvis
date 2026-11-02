@@ -161,6 +161,16 @@ test('managed ClickUp shows its stored grant and routes setup without exposing c
   expect(new ConnectedWorkspace(db,sources,'other','other',()=>true).read().rows.some(r=>r.sourceId==='native:clickup')).toBe(false);
 });
 
+test('managed Notion shows its stored grant, a renewal that needs reconnect, and routes setup to its own hosted integration', () => {
+  sources.notion = () => ({configured:true, connected:true, reconnect:false, account:{id:'9',label:'Workspace'}});
+  expect(row('native:notion')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'9',label:'Notion: Workspace',setupActionId:'setup:notion'});
+  expect(provider.read().setup.find(s => s.id === 'setup:notion')?.target).toEqual({kind:'hosted_integration',provider:'notion'});
+  sources.notion = () => ({configured:true, connected:false, reconnect:true, account:{id:'9',label:'Workspace'}});
+  expect(row('native:notion')).toMatchObject({status:'reconnect_required',authenticated:false,availability:'unavailable',evidence:'none'});
+  sources.notion = () => ({configured:false,connected:false,reconnect:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:notion')).toBe(false);
+});
+
 test('managed Asana shows its stored grant and routes setup to its own hosted integration', () => {
   sources.asana = () => ({configured:true, connected:true, account:{id:'8',label:'owner@example.test'}});
   expect(row('native:asana')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'8',setupActionId:'setup:asana'});

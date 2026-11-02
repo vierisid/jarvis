@@ -12,6 +12,7 @@ export interface ConnectedWorkspaceSources {
   mailchimp?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   asana?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   slack?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  notion?: () => { configured: boolean; connected: boolean; reconnect: boolean; account: {id: string; label: string} | null };
   google?: () => { mode: 'self' | 'managed' | 'none' | 'unavailable'; authenticated: boolean; reconnect: boolean; canSetup: boolean };
   channels?: () => Partial<Record<'telegram' | 'discord', { enabled: boolean; connected: boolean; authentication?: 'verified' | 'rejected' | 'unknown' }>>;
   pieces?: () => PieceLookup | null;
@@ -175,6 +176,23 @@ export class ConnectedWorkspace {
             row.evidence = c.connected ? 'stored_grant' : 'none';
             if (c.configured) offer(row, {id: 'setup:slack', label: 'Slack',
               target: {kind: 'hosted_integration', provider: 'slack'}, verifies: {kind: 'native_service', serviceId: 'slack'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.notion) {
+        const row = base('native:notion', 'native_service', 'notion', 'Notion');
+        try {
+          const c = this.sources.notion();
+          if (c.configured || c.connected || c.reconnect) {
+            row.authenticated = c.connected;
+            row.status = c.connected ? 'connected' : c.reconnect ? 'reconnect_required' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Notion: ' + c.account.label) : 'Notion';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:notion', label: 'Notion',
+              target: {kind: 'hosted_integration', provider: 'notion'}, verifies: {kind: 'native_service', serviceId: 'notion'}});
             rows.push(row);
           }
         } catch { row.status = 'unavailable'; rows.push(row); }
