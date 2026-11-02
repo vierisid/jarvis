@@ -112,3 +112,36 @@ describe('cron timezone: DST day-boundary regressions (review findings)', () => 
     expect(next?.toISOString()).toBe('2026-11-02T13:00:00.000Z'); // 8am EST
   });
 });
+
+
+describe('per-workflow time zones', () => {
+  afterEach(() => setCronTimezone(null));
+  test('Rome weekdays stay at 09:00 across both DST weekends independently of the default zone', () => {
+    setCronTimezone('America/New_York');
+    const expr = '0 9 * * 1-5';
+    for (const [from, expected] of [
+      ['2026-03-27T08:00:00Z', '2026-03-30T07:00:00.000Z'],
+      ['2026-10-23T07:00:00Z', '2026-10-26T08:00:00.000Z'],
+    ]) {
+      expect(CronScheduler.nextRun(expr, new Date(from!), undefined, 'Europe/Rome')?.toISOString()).toBe(expected!);
+    }
+    const occurrences = CronScheduler.occurrencesBetween(expr, Date.parse('2026-10-23T06:59:00Z'), Date.parse('2026-10-27T09:00:00Z'), 10, 'Europe/Rome');
+    expect(occurrences.map(o => [new Date(o.at).toISOString(), o.key])).toEqual([
+      ['2026-10-23T07:00:00.000Z', '2026-10-23T09:00'],
+      ['2026-10-26T08:00:00.000Z', '2026-10-26T09:00'],
+      ['2026-10-27T08:00:00.000Z', '2026-10-27T09:00'],
+    ]);
+    expect(getCronTimezone()).toBe('America/New_York');
+  });
+});
+
+
+test('invalid explicit job zones fail before a timer is registered', () => {
+  const scheduler = new CronScheduler();
+  try {
+    for (const timezone of ['Mars/Olympus', '', ' Europe/Rome ', 42, null]) {
+      expect(() => scheduler.schedule('bad-zone', '0 9 * * 1-5', () => {}, { timezone: timezone as any })).toThrow();
+    }
+    expect(scheduler.getJobs()).toHaveLength(0);
+  } finally { scheduler.cancelAll(); }
+});

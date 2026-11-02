@@ -37,6 +37,8 @@ import {
   parseSourceHandle,
   removeStep,
   reorderChain as treeReorderChain,
+  withStepInput,
+  withoutChosenZone,
   type ConnectionHandle,
 } from "./tree";
 
@@ -74,6 +76,12 @@ export interface FlowStepNode {
      * this flag, so the editor treats it as the more flexible Router.
      */
     routerKind?: "if" | "router";
+    /**
+     * Schedule triggers: the zone a person picked for this step. The brain
+     * uses `input.timezone` only while it equals this; otherwise the schedule
+     * runs in Jarvis's zone. Written by `withStepInput` (tree.ts).
+     */
+    chosenTimezone?: string;
     /**
      * PIECE / CODE: per-step error-handling toggles consumed by the engine
      * at `src/workflows/activepieces/.../helper/error-handling.ts`.
@@ -166,6 +174,9 @@ export interface PieceCatalogActionOrTrigger {
   displayName: string;
   description: string;
   inputSchema: PieceInputSchema | null;
+  requireAuth?: boolean;
+  /** Set by the daemon on an ungoverned action of a partly governed piece (#955). */
+  notApprovalGated?: boolean;
   /**
    * Optional declared output for the action or trigger. Used by the
    * variable picker to surface field-level rows even before the step has
@@ -469,9 +480,7 @@ export function useWorkflowEditor(flowId: string | null) {
   const updateStepInput = useCallback(
     (stepName: string, key: string, value: unknown): void => {
       mutateAnyStep(stepName, (target) => {
-        const settings = target.settings ? { ...target.settings } : {};
-        settings.input = { ...(settings.input ?? {}), [key]: value };
-        target.settings = settings;
+        target.settings = withStepInput(target, key, value);
       });
     },
     [mutateAnyStep],
@@ -1017,8 +1026,10 @@ export function useWorkflowEditor(flowId: string | null) {
           }
         }
 
+        const changed = target.settings?.pieceName !== pieceName
+          || (isTrigger ? target.settings?.triggerName : target.settings?.actionName) !== actionName;
         const settings: NonNullable<FlowStepNode["settings"]> = {
-          ...(target.settings ?? {}),
+          ...(changed ? withoutChosenZone(target.settings) : (target.settings ?? {})),
           pieceName,
           input: seed,
         };
@@ -1398,8 +1409,8 @@ export function useWorkflowEditor(flowId: string | null) {
 
   /**
    * Walk every step and collect required-but-empty inputs (according to the
-   * piece's declared schema). The dashboard uses this for a save-time
-   * confirm; the executor's `parseInput` is the real gate.
+   * piece's declared schema). The dashboard links these to editor setup.
+   * Server readiness remains the gate for publish, enable and execution.
    */
   const validationGaps = useMemo<EditorValidationGap[]>(
     () => collectValidationGaps(allSteps, catalog),
@@ -1535,12 +1546,23 @@ export interface EditorValidationGap {
   fieldLabel: string;
 }
 
-function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEntry[]): EditorValidationGap[] {
+export function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEntry[]): EditorValidationGap[] {
   const gaps: EditorValidationGap[] = [];
   for (const entry of steps) {
     const step = entry.step;
     const isTrigger = step.type === "PIECE_TRIGGER" || step.type === "EMPTY";
     if (step.type === "EMPTY") continue; // manual triggers carry no inputs
+    const input = step.settings?.input ?? {};
+    const add = (fieldName: string, fieldLabel: string) => gaps.push({ stepName: step.name, stepDisplayName: step.displayName ?? step.name, fieldName, fieldLabel });
+    const empty = (value: unknown) => value == null || (typeof value === 'string' && !value.trim());
+    if (isTrigger && step.settings?.pieceName === 'webhook') {
+      if ('submission_id_field' in input || 'submission_email_field' in input) {
+        if (empty(input.submission_id_field)) add('submission_id_field', 'Submission ID field');
+        if (empty(input.submission_email_field)) add('submission_email_field', 'Email field');
+      }
+      continue;
+    }
+    if ((isTrigger && step.settings?.pieceName === 'schedule') || step.type === 'LOOP_ON_ITEMS' || step.type === 'ROUTER') continue;
     const subName = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
     if (!step.settings?.pieceName || !subName) {
       gaps.push({
@@ -1556,17 +1578,12 @@ function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEntry[]):
       ? piece?.triggers.find((t) => t.name === subName)
       : piece?.actions.find((a) => a.name === subName);
     const schema = sub?.inputSchema;
+    if (piece?.auth && sub?.requireAuth !== false && empty(input.auth)) add('auth', 'Account');
     if (!schema) continue;
-    const input = (step.settings.input ?? {}) as Record<string, unknown>;
     for (const field of schema.fields) {
       if (!field.required) continue;
       const v = input[field.name];
-      const empty =
-        v === undefined ||
-        v === null ||
-        v === "" ||
-        (Array.isArray(v) && v.length === 0);
-      if (empty) {
+      if (empty(v)) {
         gaps.push({
           stepName: step.name,
           stepDisplayName: step.displayName ?? step.name,

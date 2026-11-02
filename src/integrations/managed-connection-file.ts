@@ -1,4 +1,4 @@
-import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
+import {closeSync, constants, fstatSync, openSync, readSync} from "node:fs";
 
 const MAX_CONNECTION_BYTES = 65536;
 /**
@@ -17,7 +17,6 @@ export function readManagedConnectionFile(path: string): string {
       let n;
       size < buffer.length &&
       (n = readSync(fd, buffer, size, buffer.length - size, null)) > 0;
-
     )
       size += n;
     if (size > MAX_CONNECTION_BYTES) throw new Error("too large");

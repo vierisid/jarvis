@@ -18,20 +18,22 @@ export function AttentionRoutes({ snapshot, navigation, roomAvailable, markRead 
   // A pending guard must recheck the latest snapshot even if this component rerenders.
   const latest = React.useRef({ snapshot, roomAvailable, markRead });
   latest.current = { snapshot, roomAvailable, markRead };
-  return <section aria-label="Notifications">
-    <h2>Needs your attention</h2>
+  if (view.status === "ready" && view.items.length === 0) return null;
+  return <section className="brief-attention-feed" aria-label="Notifications">
+    <h2 className="brief-type-section-heading">Notifications</h2>
     {view.status !== "ready" ? <p role="status">Notifications are {view.status}. Open Authority, task recovery or device settings to inspect their current state.</p>
-      : view.items.length === 0 ? <p>No pending notifications.</p>
-      : <ul>{view.items.map(item => <li key={attentionKey(item)}>
+      : <ul>{view.items.map(item => <li className="brief-attention-item" key={attentionKey(item)}>
+        <h3>{item.title}</h3>
+        {item.text && <p>{item.text}</p>}
         <button type="button" disabled={!navigation.available()} onClick={async () => {
+          if (item.source === "system") { markRead(item); return; }
           const result = await openNotification(attentionKey(item), {
             snapshot: () => latest.current.snapshot,
             roomAvailable: room => latest.current.roomAvailable(room),
             markRead: identity => latest.current.markRead(identity),
           }, navigation);
           setMessage(result.state === "opened" ? null : result.state === "cancelled" ? "Navigation cancelled. The notification is still available." : "This notification could not be opened. Refresh or use the retained controls.");
-        }}>{item.title}</button>
-        {item.text && <p>{item.text}</p>}
+        }}>{item.source === "system" ? item.unread ? "Mark as read" : "Read" : "Open details"}</button>
       </li>)}</ul>}
     {message && <p role="status">{message}</p>}
   </section>;

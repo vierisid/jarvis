@@ -1,3 +1,4 @@
+import type { ToolRegistry } from '../../actions/tools/registry';
 import { collectActionVerification } from '../../actions/action-verification';
 import type { ActionOutcome } from '../../actions/action-outcome';
 import { projectDocument } from './decision-document';
@@ -61,7 +62,11 @@ export interface EffectInvocation {
   /** Only the validated versioned piece document protocol can enroll a review. */
   documentReview?: boolean;
   /** A reviewed UI capability cannot be auto-allowed by category overrides. */
-  confirmation?: { confirm: 'always'; intent: string };
+  confirmation?: { confirm: 'always'; intent: string; reason?: string };
+  /** Process-bound browser review; never reconstructed after restart. */
+  reviewRegistry?: ToolRegistry;
+  /** Display only: what a reviewed browser call acts on, for its card. Never matched on. */
+  reviewSubject?: { origin?: string; element?: string };
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown>; bindings?: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
   /**
@@ -94,8 +99,14 @@ export interface EffectInvocation {
   principal?: EffectPrincipal;
   /** The caller's gate already found this effect needs approval; the boundary never concludes otherwise. */
   approvalRequired?: boolean;
+  /** Trusted native action deadline, persisted with the exact review. */
+  approvalExpiresAt?: number;
   /** The engine owns this dispatch. Only its completion receipt can finish it. */
   externalDispatch?: boolean;
+  /** Qualified native resumable work owns its own dispatch/checkpoint ledger.
+   * Keep the same approval pending between timer slices, and recheck policy on
+   * every slice. Only the final confirmed result completes the effect. */
+  deferCompletion?: (result: unknown) => boolean;
   providerBinding?: WorkflowEffect['providerBinding'];
   /**
    * The tool's own gate asked for `confirm` and this is its floor: a pure
@@ -377,7 +388,7 @@ export class WorkflowEffectBoundary {
       // A capability whose UI effect cannot be described is reviewed whatever
       // the category check concluded; the card carries the uncertainty.
       if (input.confirmation) return { ...decision, requiresApproval: true,
-        reason: `${decision.reason}; ${input.toolName} requires user review of uncertain UI effects` };
+        reason: `${decision.reason}; ${input.confirmation.reason ?? `${input.toolName} requires user review of uncertain UI effects`}` };
       // A gate that already required approval for this principal is never
       // overruled by a recomputation here that happens to be looser.
       if (input.approvalRequired && !decision.requiresApproval) {
@@ -504,14 +515,18 @@ export class WorkflowEffectBoundary {
             toolName: input.toolName, toolArguments: record.arguments, actionCategory: decision.actionCategory,
             urgency: decision.actionCategory === 'make_payment' ? 'urgent' : 'normal', reason: decision.reason,
             // `stepName` here is a label too: the context is read back only for
-            // `target`, `confirm` and `intent`, and nothing matches on it.
+            // `target`, `confirm`, `intent` and `reviewSubject` (the Brief card
+            // shows it, display only), and nothing matches on it.
             context: canonicalJson({ effectId: id, runId: record.runId, versionId: record.versionId,
               stepName: stepLabel, executionPath: record.executionPath, target: record.target,
               // Mandatory review has to be visible in the context, not only in
               // the decision: `approvalNeedsClick` reads it, so voice and
               // auto-approval cannot satisfy this card.
               ...(input.confirmation ? { confirm: input.confirmation.confirm } : {}),
-              ...(intent ? { intent } : {}) }), executionMode: 'workflow' });
+              ...(input.reviewSubject && Object.keys(input.reviewSubject).length ? { reviewSubject: input.reviewSubject } : {}),
+              ...(intent ? { intent } : {}),
+              ...(input.approvalExpiresAt !== undefined ? { expiresAt: input.approvalExpiresAt } : {}) }), executionMode: 'workflow',
+            ...(input.reviewRegistry ? { toolRegistry: input.reviewRegistry } : {}) });
           record.approvalId = request.id;
           delete record.deferral;
           record.waitpointId = createWaitpoint({ flowRunId: record.runId, projectId: record.projectId,
@@ -615,6 +630,16 @@ export class WorkflowEffectBoundary {
       // records the hand-off now, as it does for every piece authorization:
       // a lost completion receipt must not leave a send with no audit row.
       if (input.externalDispatch) { log(true); return { result }; }
+      if (input.deferCompletion?.(result)) {
+        // One audit row when the work first runs, and one when it completes;
+        // the slices between are recorded on the effect, not the trail. Its own
+        // flag, not `partial`: a first slice that died mid-dispatch is counted
+        // as run but never logged, so the next completed slice logs it.
+        const first=!record.startLogged;
+        record.status='pending'; record.result=null; record.startLogged=true;
+        record.partial={slices:(record.partial?.slices??0)+1,at:Date.now()};
+        saveWorkflowEffect(record); if(first) log(true); return {result};
+      }
       if (verification) record.outcome = { status: 'succeeded', verification };
       // NOT bounded and NOT defanged, deliberately: this is replay and
       // idempotency state that a resumed run reads back instead of acting again,

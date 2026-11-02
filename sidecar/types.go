@@ -203,7 +203,8 @@ type FilesystemConfig struct {
 
 type BrowserConfig struct {
 	// ExecutablePath optionally pins the Chromium-based browser to drive. When
-	// empty the sidecar auto-detects one: on Linux and Windows the OS default
+	// empty the sidecar auto-detects one: on Windows a running browser first,
+	// then on Linux and Windows the OS default
 	// browser if it is Chromium-based, then a known install on every platform
 	// (Chrome, Chromium, Edge, Brave, Vivaldi, plus Opera on Linux/Windows and
 	// Arc as a last resort on macOS). macOS has no default-browser stage.

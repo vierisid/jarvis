@@ -160,3 +160,11 @@ test('managed ClickUp shows its stored grant and routes setup without exposing c
   expect(row('native:clickup').status).toBe('disconnected');
   expect(new ConnectedWorkspace(db,sources,'other','other',()=>true).read().rows.some(r=>r.sourceId==='native:clickup')).toBe(false);
 });
+
+test('managed Asana shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.asana = () => ({configured:true, connected:true, account:{id:'8',label:'owner@example.test'}});
+  expect(row('native:asana')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'8',setupActionId:'setup:asana'});
+  expect(provider.read().setup.find(s => s.id === 'setup:asana')?.target).toEqual({kind:'hosted_integration',provider:'asana'});
+  sources.asana = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:asana')).toBe(false);
+});

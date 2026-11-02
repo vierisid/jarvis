@@ -21,6 +21,8 @@
 import type { Server } from "bun";
 import { WorkflowCancellationError } from "../runtime/cancellation";
 import { ActionOutcomeError } from '../../actions/action-outcome';
+import { PIECE_AUTHORIZE_IDLE_TIMEOUT_S } from "../runtime/hubspot-contact";
+import { PIECE_AUTHORIZE_PATH } from "../runtime/piece-effect-guard";
 
 // We don't attach per-connection state to upgrades on this server (yet --
 // socket.io will own that in B4), so the Bun.Server generic gets `unknown`.
@@ -33,6 +35,11 @@ import { WorkerRpcServer } from "./worker-rpc";
 import { DefaultWorkerHandlers } from "./worker-handlers";
 import { DEFAULT_IDS } from "../db/schema";
 import { createConnectionsRoute } from "./routes/connections";
+import { createMeetingBriefsRoute, type MeetingBriefsFn } from './routes/jarvis-meetings';
+import { createWeeklyReportRoute, type WeeklyReportFn } from './routes/jarvis-report';
+import { createApprovalRefundRoute, type ApprovalRefundFn } from './routes/jarvis-refund';
+import { createContactImportRoute, type ContactImportFn } from './routes/jarvis-import';
+import { createSalesFollowupsRoute, type SalesFollowupsFn } from './routes/jarvis-sales';
 import {
   deleteStoreEntryRoute,
   getStoreEntryRoute,
@@ -86,6 +93,11 @@ import { json, err, type RouteContext, type RouteHandler } from "./routes/shared
 import { runWithOrigin } from "../../llm/origin.ts";
 
 export interface SandboxApiServices {
+  meetingBriefs?: MeetingBriefsFn;
+  weeklyReport?: WeeklyReportFn;
+  approvalRefund?: ApprovalRefundFn;
+  contactImport?: ContactImportFn;
+  salesFollowups?: SalesFollowupsFn;
   credentialResolver: CredentialResolver;
   /**
    * URL prefix used to mint resumeUrl values for waitpoints. Engine pieces
@@ -280,6 +292,11 @@ export class SandboxApi {
         method: "POST",
         handler: createJarvisNotifyRoute(this.services),
       },
+      { path: '/v1/jarvis/context/meeting-briefs', method: 'POST', handler: createMeetingBriefsRoute(this.services) },
+      { path: '/v1/jarvis/reports/weekly', method: 'POST', handler: createWeeklyReportRoute(this.services) },
+      { path: '/v1/jarvis/refunds/approval', method: 'POST', handler: createApprovalRefundRoute(this.services) },
+      { path: '/v1/jarvis/imports/contacts', method: 'POST', handler: createContactImportRoute(this.services) },
+      { path: '/v1/jarvis/sales/followups', method: 'POST', handler: createSalesFollowupsRoute(this.services) },
       {
         path: "/v1/jarvis/context/vault-search",
         method: "POST",
@@ -336,7 +353,12 @@ export class SandboxApi {
     this.server = Bun.serve({
       hostname: host,
       port,
-      fetch: (req) => this.dispatch(req),
+      fetch: (req, server) => {
+        // A HubSpot contact upsert runs inside its authorize request and may
+        // first wait for a competing write of the same contact.
+        if (req.method === "POST" && new URL(req.url).pathname === PIECE_AUTHORIZE_PATH) server.timeout(req, PIECE_AUTHORIZE_IDLE_TIMEOUT_S);
+        return this.dispatch(req);
+      },
     });
 
     await this.workerRpc.start();

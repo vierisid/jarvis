@@ -17,7 +17,8 @@ export class OutputSchemaError extends Error {
 export type OutputSchemaType = 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean' | 'null';
 
 export interface OutputSchema {
-  type: OutputSchemaType;
+  /** A single type or a nullable pair, in either order. Other unions are refused. */
+  type: OutputSchemaType | OutputSchemaType[];
   properties?: Record<string, OutputSchema>;
   required?: string[];
   /** Defaults to true, as in JSON Schema. */
@@ -98,10 +99,13 @@ function parseNode(value: unknown, path: string, depth: number, budget: { nodes:
   if (depth > OUTPUT_SCHEMA_LIMITS.depth) fail(`schema nesting exceeds ${OUTPUT_SCHEMA_LIMITS.depth} levels`);
   for (const key of Object.keys(value)) if (!KEYWORDS.has(key)) fail(`unsupported schema keyword "${key}"`);
   const type = value.type;
-  if (typeof type !== 'string' || !TYPES.has(type)) fail('"type" must be one of object, array, string, number, integer, boolean, null');
-  const schema: OutputSchema = { type: type as OutputSchemaType };
+  const nullable = Array.isArray(type) && type.length === 2 && type.includes('null')
+    && new Set(type).size === 2 && type.every(t => typeof t === 'string' && TYPES.has(t));
+  if (!nullable && (typeof type !== 'string' || !TYPES.has(type))) fail('"type" must be one of object, array, string, number, integer, boolean, null, or a pair of one type and null');
+  const schema: OutputSchema = { type: (nullable ? [...type as string[]] : type) as OutputSchema['type'] };
+  const baseType = nullable ? (type as OutputSchemaType[]).find(t => t !== 'null')! : type as OutputSchemaType;
   const only = (keyword: string, ...types: OutputSchemaType[]) => {
-    if (own(value, keyword) && !types.includes(schema.type)) fail(`"${keyword}" applies to ${types.join(' or ')} only`);
+    if (own(value, keyword) && !types.includes(baseType)) fail(`"${keyword}" applies to ${types.join(' or ')} only`);
   };
   const integerAtLeastZero = (keyword: 'minItems' | 'maxItems' | 'minLength' | 'maxLength') => {
     if (!own(value, keyword)) return;
@@ -162,12 +166,17 @@ function parseNode(value: unknown, path: string, depth: number, budget: { nodes:
     if (!Array.isArray(values) || values.length === 0) fail('"enum" must be a non-empty array');
     if (values.length > OUTPUT_SCHEMA_LIMITS.enumValues) fail(`"enum" exceeds ${OUTPUT_SCHEMA_LIMITS.enumValues} values`);
     if (!values.every(isPrimitive)) fail('"enum" values must be strings, numbers, booleans or null');
-    if (values.some(candidate => jsonType(candidate) !== schema.type && !(schema.type === 'number' && jsonType(candidate) === 'integer'))) {
+    if (values.some(candidate => !acceptsType(schema, jsonType(candidate)))) {
       fail(`"enum" contains a value that is not of type ${schema.type}`);
     }
     schema.enum = values as OutputSchema['enum'];
   }
   return schema;
+}
+
+function acceptsType(schema: OutputSchema, actual: OutputSchemaType | 'unknown'): boolean {
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+  return types.some(type => type === actual || (type === 'number' && actual === 'integer'));
 }
 
 function jsonType(value: unknown): OutputSchemaType | 'unknown' {
@@ -197,28 +206,28 @@ export function validateOutput(value: unknown, schema: OutputSchema): string[] {
 function check(value: unknown, schema: OutputSchema, path: string, report: (message: string) => void): void {
   const at = path || '/';
   const actual = jsonType(value);
-  const typeMatches = actual === schema.type || (schema.type === 'number' && actual === 'integer');
+  const typeMatches = acceptsType(schema, actual);
   if (!typeMatches) { report(`expected ${schema.type} at ${at}, got ${actual}`); return; }
   if (schema.enum && !schema.enum.some(candidate => candidate === value)) {
     report(`value at ${at} is not one of the allowed values`);
   }
-  if (schema.type === 'string') {
+  if (actual === 'string') {
     const length = (value as string).length;
     if (schema.minLength !== undefined && length < schema.minLength) report(`string at ${at} is shorter than ${schema.minLength}`);
     if (schema.maxLength !== undefined && length > schema.maxLength) report(`string at ${at} is longer than ${schema.maxLength}`);
   }
-  if (schema.type === 'number' || schema.type === 'integer') {
+  if (actual === 'number' || actual === 'integer') {
     const n = value as number;
     if (schema.minimum !== undefined && n < schema.minimum) report(`number at ${at} is below ${schema.minimum}`);
     if (schema.maximum !== undefined && n > schema.maximum) report(`number at ${at} is above ${schema.maximum}`);
   }
-  if (schema.type === 'array') {
+  if (actual === 'array') {
     const items = value as unknown[];
     if (schema.minItems !== undefined && items.length < schema.minItems) report(`array at ${at} has fewer than ${schema.minItems} items`);
     if (schema.maxItems !== undefined && items.length > schema.maxItems) report(`array at ${at} has more than ${schema.maxItems} items`);
     if (schema.items) items.forEach((item, index) => check(item, schema.items!, `${path}/${index}`, report));
   }
-  if (schema.type === 'object') {
+  if (actual === 'object') {
     const object = value as Record<string, unknown>;
     for (const name of schema.required ?? []) if (!own(object, name)) report(`missing required property "${label(name)}" at ${at}`);
     for (const name of Object.keys(object)) {

@@ -258,3 +258,17 @@ func TestBrowserNotFoundMessageNamesWhatWeAccept(t *testing.T) {
 		}
 	}
 }
+
+func TestRunningBrowserBeatsUnrelatedDefault(t *testing.T) {
+	candidates := []string{"/apps/chrome.exe", "/apps/msedge.exe"}
+	exists := func(p string) bool { return p == candidates[0] || p == candidates[1] }
+	if got := pickRunningBrowser(candidates, map[string]bool{"chrome.exe": true}, candidates[1], exists); got != candidates[0] {
+		t.Fatalf("got %s, want running Chrome", got)
+	}
+	if got := pickRunningBrowser(candidates, nil, candidates[1], exists); got != candidates[1] {
+		t.Fatalf("got %s, want configured OS default", got)
+	}
+	if got := pickRunningBrowser(candidates, map[string]bool{"chrome.exe": true}, candidates[1], func(p string) bool { return p == candidates[1] }); got != candidates[1] {
+		t.Fatalf("missing Chrome should fall back, got %s", got)
+	}
+}
