@@ -73,7 +73,13 @@ export async function notionOptions(
       e instanceof NotionRequestError
         ? e.message
         : "Could not load shared Notion pages. Check the connection and try again.",
-      e instanceof NotionRequestError ? e.status : 502,
+      // A provider status is not this route's: a Notion 401 or 404 passed
+      // through would read as the dashboard's own auth or a missing route.
+      e instanceof NotionRequestError && [401, 403, 404].includes(e.status)
+        ? 409
+        : e instanceof NotionRequestError && e.status === 429
+          ? 429
+          : 502,
     );
   }
 }

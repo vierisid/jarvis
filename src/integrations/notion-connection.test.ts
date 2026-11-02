@@ -353,3 +353,16 @@ test("page options expose bounded shared-page choices and reject stale generatio
     ),
   ).rejects.toMatchObject({ status: 409 });
 });
+test("provider refusals on page options never pass Notion's own status through", async () => {
+  grant.expires_at = null;
+  writeFileSync(join(dir, "connections/notion.json"), JSON.stringify(grant));
+  for (const [upstream, expected] of [[401, 409], [403, 409], [404, 409], [429, 429], [400, 502], [500, 502]] as const) {
+    const request = (async (url: Parameters<typeof fetch>[0]) =>
+      String(url).endsWith("/users/me")
+        ? Response.json({ id: "u1", type: "bot" })
+        : new Response("{}", { status: upstream })) as unknown as typeof fetch;
+    await expect(
+      notionOptions(config, new URLSearchParams({ query: "Notes" }), request),
+    ).rejects.toMatchObject({ status: expected });
+  }
+});
