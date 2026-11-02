@@ -123,19 +123,25 @@ test("lost ack is retried from durable storage without another provider refresh"
 test("two independent refresher instances cannot overwrite each other's rotation", async () => {
   let release!: () => void;
   const wait = new Promise<void>((r) => (release = r));
-  let started = false;
+  let refreshes = 0;
   const request = transport(async (body) => {
     if (body.ack) return Response.json({ acknowledged: true });
-    started = true;
+    refreshes++;
     await wait;
     return rotated();
   });
   const first = fresh().fresh(config, request);
-  for (let i = 0; i < 100 && !started; i++) await Bun.sleep(1);
-  await expect(fresh().fresh(config, request)).rejects.toThrow("in progress");
+  for (let i = 0; i < 100 && refreshes === 0; i++) await Bun.sleep(1);
+  // One that cannot outlast the holder is refused, never repeated.
+  const impatient = createManagedRotatingRefresher("notion", "Notion", readNotionConnection, { lockWaitMs: 150 });
+  await expect(impatient.fresh(config, request)).rejects.toThrow("in progress");
+  // One that waits gets the holder's stored pair, without a second rotation.
+  const second = fresh().fresh(config, request);
+  await Bun.sleep(20);
   release();
-  await first;
-  expect((await fresh().fresh(config, request)).access_token).toBe("a2");
+  const [x, y] = await Promise.all([first, second]);
+  expect([x.access_token, y.access_token]).toEqual(["a2", "a2"]);
+  expect(refreshes).toBe(1);
 });
 test("disconnect or reconnect during renewal never resurrects old credentials", async () => {
   const request = transport(() => {
@@ -365,4 +371,70 @@ test("provider refusals on page options never pass Notion's own status through",
       notionOptions(config, new URLSearchParams({ query: "Notes" }), request),
     ).rejects.toMatchObject({ status: expected });
   }
+});
+test("a missing or invalid account page URL reads as renewal not configured, with no request", async () => {
+  for (const page_url of [undefined, "", "not a url"]) {
+    let calls = 0;
+    await expect(
+      fresh().fresh({ ...config, usejarvis_integrations: { page_url } }, (async () => {
+        calls++;
+        return rotated();
+      }) as unknown as typeof fetch),
+    ).rejects.toThrow("Notion renewal is not configured");
+    expect(calls).toBe(0);
+  }
+});
+test("unknown expiry and access checks are opt-in: without them a null expiry is never treated as live", async () => {
+  grant.expires_at = null;
+  writeFileSync(join(dir, "connections/notion.json"), JSON.stringify(grant));
+  let renewals = 0;
+  const request = transport((body) => {
+    if (body.ack) return Response.json({ acknowledged: true });
+    renewals++;
+    return rotated();
+  });
+  // The shared default (Calendly, Airtable, Typeform): renew, as before.
+  expect((await fresh().fresh(config, request)).access_token).toBe("a2");
+  expect(renewals).toBe(1);
+});
+test("during an acknowledgement outage a token of unknown expiry is served only after the provider accepts it", async () => {
+  grant.expires_at = null;
+  writeFileSync(join(dir, "connections/notion.json"), JSON.stringify(grant));
+  let hostingUp = true,
+    renewals = 0,
+    acks = 0,
+    a2Valid = true;
+  const request = (async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const u = String(url);
+    if (u.endsWith("/users/me")) {
+      const token = new Headers(init?.headers).get("Authorization");
+      return token === "Bearer a2" && a2Valid
+        ? Response.json({ id: "u1", type: "bot" })
+        : Response.json({}, { status: 401 });
+    }
+    if (!hostingUp) throw new Error("hosting unreachable");
+    const body = JSON.parse(String(init?.body));
+    if (body.ack) {
+      acks++;
+      throw new Error("lost ack");
+    }
+    renewals++;
+    return Response.json({ access_token: "a2", refresh_token: "r2", expires_at: null, receipt });
+  }) as unknown as typeof fetch;
+  const source = new JarvisNotionConnectionSource(config, request);
+  // a1 is refused, so it renews once to a2; the acknowledgement is lost.
+  expect((await source.resolve("jarvis:notion"))?.value).toMatchObject({ access_token: "a2" });
+  expect([renewals, acks]).toEqual([1, 1]);
+  // Hosting down: the pending ack cannot finish, but a2 is confirmed live.
+  hostingUp = false;
+  expect((await source.resolve("jarvis:notion"))?.value).toMatchObject({ access_token: "a2" });
+  // Once Notion refuses a2, nothing is served and nothing rotates.
+  a2Valid = false;
+  await expect(source.resolve("jarvis:notion")).rejects.toThrow("Could not confirm");
+  expect(renewals).toBe(1);
+  // Unknown expiry with no way to check the token: never served.
+  a2Valid = true;
+  const unchecked = createManagedRotatingRefresher("notion", "Notion", readNotionConnection, { allowUnknownExpiry: true });
+  await expect(unchecked.fresh(config, request)).rejects.toThrow("Could not confirm");
+  expect(renewals).toBe(1);
 });

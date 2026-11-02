@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "17"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Notion page output contracts
+export const CATALOG_SCHEMA_VERSION = "21"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts; v20: Typeform form and response output contracts; v21: Notion page output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -988,6 +988,44 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
       }
     }
   }
+  if (entry.name === '@activepieces/piece-typeform') {
+    // Accept IDs/expressions without upstream dropdown calls or an editor credential leak.
+    for (const field of entry.actions.list_responses?.inputSchema?.fields ?? []) {
+      if (field.name === 'form_id') {field.type='string';field.placeholder='Form ID or workflow variable';delete field.options;}
+    }
+    const form={id:'form_1',title:'Customer feedback',type:'form',fields:[{id:'field_1',ref:'feedback',title:'Your feedback',type:'short_text'}]};
+    const samples:Record<string,unknown>={
+      get_form:form,
+      list_forms:{total_items:1,page_count:1,items:[{id:form.id,title:form.title,type:'form'}]},
+      list_workspaces:{total_items:1,page_count:1,items:[{id:'workspace_1',name:'Team workspace'}]},
+      list_responses:{total_items:1,page_count:1,items:[{response_id:'response_1',token:'response_1',response_type:'completed',submitted_at:'2026-10-28T10:00:00Z',answers:[{field:{id:'field_1',ref:'feedback',type:'short_text'},type:'text',text:'Useful service'}]}]},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
+  if(entry.name==='@activepieces/piece-airtable') {
+    const record={id:'recAAAAAAAAAAAAAA',createdTime:'2026-10-28T10:00:00.000Z',fields:{Name:'Example record'}};
+    for(const name of ['create_record_ai','update_record_ai','get_record','search_records']) {
+      const action=entry.actions[name];if(!action)continue;
+      action.displayName=({create_record_ai:'Create Record',update_record_ai:'Update Record',get_record:'Get Record',search_records:'Find Records'} as Record<string,string>)[name]!;
+      action.outputSample=name==='search_records'?{records:[record],count:1}:record;
+      for(const field of action.inputSchema?.fields ?? []) {
+        if(field.sourceType==='DROPDOWN'){field.type='string';field.placeholder='ID or workflow variable';delete field.options;}
+        if(field.name==='record_id')field.description='Record ID, or the id output from an earlier Create Record or Find Records step.';
+        if(field.name==='fields'){field.type='json';field.description='Existing field IDs or names and values as a JSON object. Managed connections support text, numbers, checkboxes, dates and existing select choices.';field.placeholder='{"Name":"Example record"}';}
+      }
+    }
+  }
+  if (entry.name === '@activepieces/piece-calendly') {
+    const event={uri:'https://api.calendly.com/scheduled_events/event_1',name:'Introduction',status:'active',start_time:'2026-10-28T10:00:00Z',end_time:'2026-10-28T10:30:00Z',event_type:'https://api.calendly.com/event_types/type_1'};
+    const samples:Record<string,unknown>={
+      get_scheduled_event:event,
+      list_scheduled_events:{items:[event],count:1,next_page_token:'next-page-token'},
+      list_event_invitees:{items:[{uri:'https://api.calendly.com/scheduled_events/event_1/invitees/invitee_1',name:'Alex',email:'alex@example.test',status:'active',event:event.uri}],count:1,next_page_token:'next-page-token'},
+      list_event_types:{items:[{uri:event.event_type,name:'Introduction',active:true,duration:30,scheduling_url:'https://calendly.com/example/introduction'}],count:1,next_page_token:'next-page-token'},
+      create_scheduling_link:{booking_url:'https://calendly.com/d/example/introduction',owner:event.event_type,owner_type:'EventType'},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
   if (entry.name === '@activepieces/piece-asana') {
     for (const action of Object.values(entry.actions)) {
       if (action.name !== 'create_task') continue;
@@ -1017,6 +1055,25 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
       search_dropbox: {matches: [{metadata: {'.tag': 'metadata', metadata: item}}], has_more: false},
     };
     for (const [name, sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample = sample;
+  }
+  if (entry.name === '@activepieces/piece-intercom') {
+    // Legacy tag dropdowns enumerate contacts. Accept IDs/expressions without loading customer data into the editor.
+    for (const field of entry.actions['add-or-remove-tag-on-contact']?.inputSchema?.fields ?? []) {
+      if (field.sourceType === 'DROPDOWN') {field.type='string';field.placeholder='Intercom ID or workflow variable';delete field.options;}
+    }
+    const contact={type:'contact',id:'contact_1',role:'user',email:'contact@example.test',name:'Example contact',external_id:'customer_1'};
+    const note={type:'note',id:'note_1',body:'Internal note',created_at:1793188800,contact:{type:'contact',id:'contact_1'},author:{type:'admin',id:'admin_1',name:'Owner'}};
+    const tag={type:'tag',id:'tag_1',name:'Follow up'};
+    const conversation={type:'conversation',id:'conversation_1',title:'Support request',state:'open',source:{body:'How can I update my account?'},contacts:{contacts:[{type:'contact',id:'contact_1'}]}};
+    const part={id:'part_1',part_type:'note',body:'Internal note',created_at:1793188800,author:{type:'admin',id:'admin_1',name:'Owner'}};
+    const samples:Record<string,unknown>={
+      get_contact:contact,
+      get_conversation_by_id:{...conversation,parts:[{id:part.id,part_type:part.part_type,body:part.body,created_at:part.created_at,author_type:'admin',author_id:'admin_1',author_name:'Owner'}]},
+      add_note_to_contact:note,
+      add_note_to_conversation_by_id:{...conversation,conversation_parts:{type:'conversation_part.list',conversation_parts:[part],total_count:1}},
+      'list-all-tags':{type:'list',data:[tag]},'add-or-remove-tag-on-contact':tag,
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
   }
 
   // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
