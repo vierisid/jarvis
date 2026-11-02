@@ -25,6 +25,7 @@ import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
 import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import {managedIntercomInput, runManagedIntercomAction} from './managed-intercom';
+import {managedCalendlyInput, runManagedCalendlyAction} from './managed-calendly';
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
@@ -215,6 +216,7 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
 export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
   if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
+  const calendly = params.piece === "@activepieces/piece-calendly" ? managedCalendlyInput(params.input) : null;
   const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
   if (mailchimp) {
     // Recheck after an approval document has applied edits.
@@ -261,6 +263,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (intercom) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Intercom dispatch was not authorized');
     raw = await runManagedIntercomAction(String(params.action), intercom);
+  } else if (calendly) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Calendly dispatch was not authorized');
+    raw = await runManagedCalendlyAction(String(params.action), calendly);
   } else if (slack) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Slack dispatch was not authorized');
     if (params.action === 'slack_post_message' || params.action === 'send_channel_message') raw = await sendManagedSlackMessage(slack);

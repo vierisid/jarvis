@@ -23,6 +23,7 @@ import { SlackConnection, useSlackStatus } from "../../integrations/SlackConnect
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
 import { IntercomConnection, useIntercomStatus } from "../../integrations/IntercomConnection";
+import { CalendlyConnection, useCalendlyStatus } from "../../integrations/CalendlyConnection";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { AsanaConnection, useAsanaStatus } from "../../integrations/AsanaConnection";
 import { AsanaTaskLocation } from "../../integrations/AsanaTaskLocation";
@@ -3798,6 +3799,10 @@ function ConnectionPicker({
   // the dropdown reflect the user's choice on re-open.
   const m = /^\{\{connections\.([^}]+)\}\}$/.exec(currentValue.trim());
   const currentExternalId = m ? m[1]! : "";
+  // ClickUp may also offer the hosted connection; without it (self-hosted, or
+  // not connected) the picker reads exactly as for any other piece.
+  const isCalendly = pieceName === "@activepieces/piece-calendly";
+  const managedCalendly = useCalendlyStatus(isCalendly)?.connected === true;
   // ClickUp and GitHub may also offer the hosted connection; without it
   // (self-hosted, or not connected) the picker reads exactly as for any other piece.
   const isIntercom = pieceName === "@activepieces/piece-intercom";
@@ -3815,6 +3820,8 @@ function ConnectionPicker({
   return (
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isCalendly && <><CalendlyConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedCalendly && <p className="wf-props__hint">Read your meetings, invitees and event types, or create a single-use booking link. Leave User and Organization empty to use your account. Use an event URI, ID or workflow variable. Cancellation and instant booking triggers are not supported yet.</p>}</>}
       {pieceName === "@activepieces/piece-mailchimp" && <MailchimpConnection onPick={onPick} currentValue={currentValue} />}
       {isIntercom && <><IntercomConnection optional onPick={onPick} currentValue={currentValue} />
         {managedIntercom && <p className="wf-props__hint">Supports contact lookup, conversation reading, internal notes and contact tags. Use record IDs or workflow variables. Customer replies and triggers are not supported yet.</p>}</>}
@@ -3826,10 +3833,10 @@ function ConnectionPicker({
         {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
       {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
-        {authDisplayName}
-        <span className="wf-props__connection-type">({authType})</span>
+        {managedCalendly ? "Calendly account" : authDisplayName}
+        {!managedCalendly && <span className="wf-props__connection-type">({authType})</span>}
       </label>
-      {matching.length === 0 && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom ? (
+      {matching.length === 0 && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.
