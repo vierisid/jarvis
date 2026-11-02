@@ -216,6 +216,19 @@ test('managed Typeform shows its stored grant, a reconnect as disconnected, and 
   expect(provider.read().rows.some(r=>r.sourceId==='native:typeform')).toBe(false);
 });
 
+test('managed Todoist shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.todoist = () => ({configured:true, connected:true, account:{id:'9',label:'owner@example.test'}});
+  expect(row('native:todoist')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'9',setupActionId:'setup:todoist'});
+  expect(provider.read().setup.find(s => s.id === 'setup:todoist')?.target).toEqual({kind:'hosted_integration',provider:'todoist'});
+  sources.todoist = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:todoist')).toBe(false);
+});
+
+test('a Todoist grant that needs reconnecting reads as disconnected and still offers setup', () => {
+  sources.todoist = () => ({configured:true, connected:false, account:{id:'9',label:'owner@example.test'}});
+  expect(row('native:todoist')).toMatchObject({status:'disconnected',evidence:'none',setupActionId:'setup:todoist'});
+});
+
 test('managed Intercom shows its stored grant and routes setup to its own hosted integration', () => {
   sources.intercom = () => ({configured:true, connected:true, account:{id:'workspace:admin',label:'owner@example.test'}});
   expect(row('native:intercom')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'workspace:admin',setupActionId:'setup:intercom'});

@@ -2523,6 +2523,21 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json(calendlyStatus(ctx.config));
       },
     },
+    '/api/integrations/todoist': {
+      GET: async () => { const {todoistStatus} = await import('../integrations/todoist-connection'); return json(todoistStatus(ctx.config)); },
+    },
+    '/api/integrations/todoist/options': {
+      GET: async (req: Request) => {
+        const q = new URL(req.url).searchParams, kind = q.get('kind');
+        if (kind !== 'projects' && kind !== 'sections') return json({error: 'Choose projects or sections.'}, 400);
+        const {todoistOptions, TodoistOptionsInputError} = await import('../integrations/todoist-options');
+        try { return json(await todoistOptions(ctx.config, kind, q.get('project_id'), q.get('cursor'))); }
+        catch (error) {
+          if (error instanceof TodoistOptionsInputError) return json({error: error.message}, 400);
+          return json({error: 'Could not load Todoist choices. Check your connection or enter an ID.'}, 502);
+        }
+      },
+    },
     '/api/integrations/asana/options': {
       GET: async (req: Request) => {
         const {asanaOptions, AsanaOptionsInputError} = await import('../integrations/asana-options');

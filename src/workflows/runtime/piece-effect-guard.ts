@@ -26,6 +26,7 @@ import { managedNotionInput, managedNotionIssue, runManagedNotionAction } from '
 
 import {managedLinearInput, runManagedLinearAction} from './managed-linear';
 import {managedTypeformInput, runManagedTypeformAction} from './managed-typeform';
+import {managedTodoistInput, runManagedTodoistAction} from './managed-todoist';
 import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import {managedIntercomInput, runManagedIntercomAction} from './managed-intercom';
@@ -255,6 +256,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     const issue = managedTrelloIssue(params.action, trello);
     if (issue) throw new Error(issue);
   }
+  const todoist = params.piece === "@activepieces/piece-todoist" ? managedTodoistInput(params.input) : null;
   const asana = params.piece === "@activepieces/piece-asana" ? managedAsanaInput(params.input) : null;
   const dropbox = params.piece === '@activepieces/piece-dropbox' ? managedDropboxInput(params.input) : null;
   const intercom = params.piece === '@activepieces/piece-intercom' ? managedIntercomInput(params.input) : null;
@@ -286,6 +288,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (typeform) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Typeform dispatch was not authorized');
     raw = await runManagedTypeformAction(String(params.action), typeform);
+  } else if (todoist) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Todoist dispatch was not authorized');
+    raw = await runManagedTodoistAction(String(params.action), todoist);
   } else if (asana) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Asana dispatch was not authorized');
     raw = await runManagedAsanaAction(String(params.action), asana);

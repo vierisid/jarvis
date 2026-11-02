@@ -87,7 +87,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE) && managedPieceChanges(piece, action))
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
     || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
@@ -101,6 +101,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
 const CLICKUP_PIECE = '@activepieces/piece-clickup';
 const MAILCHIMP_PIECE = '@activepieces/piece-mailchimp';
 const ASANA_PIECE = '@activepieces/piece-asana';
+const TODOIST_PIECE = '@activepieces/piece-todoist';
 const CALENDLY_PIECE = '@activepieces/piece-calendly';
 const INTERCOM_PIECE = '@activepieces/piece-intercom';
 const TYPEFORM_PIECE = '@activepieces/piece-typeform';
@@ -794,6 +795,34 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  // Todoist: every action of the pinned 0.6.1 bundle (`managed-todoist.test.ts`
+  // pins the list and the engine test checks it against the installed
+  // package). The managed `jarvis:todoist` connection runs only four of
+  // these (`managed-todoist.ts`). Only `custom_api_call` and an action added
+  // upstream fall back to `modify_settings`; Todoist 0.6.1 has no action that
+  // shares a project or invites a person.
+  catalogId: 'todoist', pieceName: TODOIST_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['task_id', 'project_id', 'section_id', 'parent_id', 'label_id', 'comment_id', 'name', 'new_name',
+    'content', 'text', 'description', 'labels', 'priority', 'due_date', 'query'],
+  categories: {
+    read_data: ['find_task', 'todoist_find_task', 'todoist_filter_tasks', 'todoist_get_task',
+      'todoist_list_completed_tasks', 'todoist_list_completed_tasks_by_due_date', 'todoist_get_project',
+      'todoist_list_projects', 'todoist_search_projects', 'todoist_list_archived_projects', 'todoist_get_section',
+      'todoist_list_sections', 'todoist_search_sections', 'todoist_list_archived_sections', 'todoist_get_label',
+      'todoist_list_labels', 'todoist_search_labels', 'todoist_list_shared_labels', 'todoist_get_comment',
+      'todoist_list_comments', 'todoist_get_current_user', 'todoist_get_productivity_stats',
+      'todoist_list_activity_log'],
+    // A comment is shown to every collaborator of a shared project.
+    send_message: ['todoist_create_task_comment', 'todoist_create_project_comment'],
+    write_data: ['create_task', 'update_task', 'mark_task_completed', 'todoist_create_task', 'todoist_update_task',
+      'todoist_complete_task', 'todoist_reopen_task', 'todoist_move_task', 'todoist_quick_add_task',
+      'todoist_create_project', 'todoist_update_project', 'todoist_unarchive_project', 'todoist_create_section',
+      'todoist_update_section', 'todoist_create_label', 'todoist_update_label', 'todoist_rename_shared_label'],
+    // Every delete, and removing a shared label from every task that has it.
+    delete_data: ['todoist_delete_task', 'todoist_delete_section', 'todoist_delete_label',
+      'todoist_remove_shared_label'],
+  },
+}, {
   // Linear: every action of the pinned 0.9.1 bundle (`linear-connection.test.ts`
   // pins the list and the engine test checks it against the installed
   // package), so a workflow on the user's own Linear key keeps running at the

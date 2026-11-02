@@ -7,6 +7,7 @@ import { mailchimpStatus } from "../integrations/mailchimp-connection";
 import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
 import { asanaStatus } from '../integrations/asana-connection';
+import { todoistStatus } from '../integrations/todoist-connection';
 import { linearStatus } from '../integrations/linear-connection';
 import { typeformStatus } from '../integrations/typeform-connection';
 import { intercomStatus } from '../integrations/intercom-connection';
@@ -4772,6 +4773,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       github: () => githubStatus(jarvisConfig),
       trello: () => trelloStatus(jarvisConfig),
       asana: () => asanaStatus(jarvisConfig),
+      todoist: () => todoistStatus(jarvisConfig),
       typeform: () => typeformStatus(jarvisConfig),
       intercom: () => intercomStatus(jarvisConfig),
       calendly: () => calendlyStatus(jarvisConfig),
@@ -5023,6 +5025,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisClickUpConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisMailchimpConnectionSource } = await import("../workflows/credentials/mailchimp-source");
       credentialResolver.register(new JarvisMailchimpConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisTodoistConnectionSource } = await import("../workflows/credentials/todoist-source");
+      credentialResolver.register(new JarvisTodoistConnectionSource(jarvisConfig));
       const { JarvisAsanaConnectionSource } = await import("../workflows/credentials/asana-source");
       credentialResolver.register(new JarvisAsanaConnectionSource(jarvisConfig));
       const { JarvisGitHubConnectionSource } = await import("../workflows/credentials/github-source");
