@@ -2495,6 +2495,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json(airtableStatus(ctx.config));
       },
     },
+    '/api/integrations/calendly': {
+      GET: async () => {
+        const {calendlyStatus} = await import('../integrations/calendly-connection');
+        return json(calendlyStatus(ctx.config));
+      },
+    },
     '/api/integrations/asana/options': {
       GET: async (req: Request) => {
         const {asanaOptions, AsanaOptionsInputError} = await import('../integrations/asana-options');
@@ -2518,6 +2524,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const status = dropboxStatus(ctx.config), c = readDropboxConnection(ctx.config.daemon.data_dir);
         const reconnect = !!c && dropboxNeedsReconnect(ctx.config, c);
         return json({...status, connected: status.connected && !reconnect, reconnect});
+      },
+    },
+    '/api/integrations/intercom': {
+      GET: async () => {
+        const {intercomStatus} = await import('../integrations/intercom-connection');
+        return json(intercomStatus(ctx.config));
       },
     },
     '/api/integrations/clickup': {

@@ -171,10 +171,28 @@ test('managed Airtable shows its stored grant, reads a reconnect as disconnected
   expect(provider.read().rows.some(r=>r.sourceId==='native:airtable')).toBe(false);
 });
 
+test('managed Calendly shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.calendly = () => ({configured:true, connected:true, account:{id:'cal-1',label:'owner@example.test'}});
+  expect(row('native:calendly')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'cal-1',setupActionId:'setup:calendly'});
+  expect(provider.read().setup.find(s => s.id === 'setup:calendly')?.target).toEqual({kind:'hosted_integration',provider:'calendly'});
+  sources.calendly = () => ({configured:true,connected:false,account:null});
+  expect(row('native:calendly').status).toBe('disconnected');
+  sources.calendly = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:calendly')).toBe(false);
+});
+
 test('managed Asana shows its stored grant and routes setup to its own hosted integration', () => {
   sources.asana = () => ({configured:true, connected:true, account:{id:'8',label:'owner@example.test'}});
   expect(row('native:asana')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'8',setupActionId:'setup:asana'});
   expect(provider.read().setup.find(s => s.id === 'setup:asana')?.target).toEqual({kind:'hosted_integration',provider:'asana'});
   sources.asana = () => ({configured:false,connected:false,account:null});
   expect(provider.read().rows.some(r=>r.sourceId==='native:asana')).toBe(false);
+});
+
+test('managed Intercom shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.intercom = () => ({configured:true, connected:true, account:{id:'workspace:admin',label:'owner@example.test'}});
+  expect(row('native:intercom')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'workspace:admin',setupActionId:'setup:intercom'});
+  expect(provider.read().setup.find(s => s.id === 'setup:intercom')?.target).toEqual({kind:'hosted_integration',provider:'intercom'});
+  sources.intercom = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:intercom')).toBe(false);
 });

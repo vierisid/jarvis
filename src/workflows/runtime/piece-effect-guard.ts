@@ -25,6 +25,8 @@ import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
 
 import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
+import {managedIntercomInput, runManagedIntercomAction} from './managed-intercom';
+import {managedCalendlyInput, runManagedCalendlyAction} from './managed-calendly';
 import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
@@ -219,6 +221,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
   const airtable = params.piece === '@activepieces/piece-airtable' && managedAirtableInput(params.input);
   if (airtable) {const issue=managedAirtableIssue(params.action,airtable);if(issue)throw new Error(issue);}
+  const calendly = params.piece === "@activepieces/piece-calendly" ? managedCalendlyInput(params.input) : null;
   const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
   if (mailchimp) {
     // Recheck after an approval document has applied edits.
@@ -239,6 +242,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   }
   const asana = params.piece === "@activepieces/piece-asana" ? managedAsanaInput(params.input) : null;
   const dropbox = params.piece === '@activepieces/piece-dropbox' ? managedDropboxInput(params.input) : null;
+  const intercom = params.piece === '@activepieces/piece-intercom' ? managedIntercomInput(params.input) : null;
   const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
   if (slack) {
     // Recheck after an approval document has applied edits.
@@ -264,6 +268,12 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (dropbox) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Dropbox dispatch was not authorized');
     raw = await runManagedDropboxAction(String(params.action), dropbox);
+  } else if (intercom) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Intercom dispatch was not authorized');
+    raw = await runManagedIntercomAction(String(params.action), intercom);
+  } else if (calendly) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Calendly dispatch was not authorized');
+    raw = await runManagedCalendlyAction(String(params.action), calendly);
   } else if (slack) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Slack dispatch was not authorized');
     if (params.action === 'slack_post_message' || params.action === 'send_channel_message') raw = await sendManagedSlackMessage(slack);
