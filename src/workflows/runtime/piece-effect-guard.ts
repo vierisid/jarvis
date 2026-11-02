@@ -24,6 +24,7 @@ import { managedNotionInput, managedNotionIssue, runManagedNotionAction } from '
  * Imported BY THE ENGINE BUNDLE: keep it pure. `fetch` only, no node built-ins.
  */
 
+import {managedLinearInput, runManagedLinearAction} from './managed-linear';
 import {managedTypeformInput, runManagedTypeformAction} from './managed-typeform';
 import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
@@ -226,6 +227,7 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
 export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
   if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
+  const linear = params.piece === "@activepieces/piece-linear" ? managedLinearInput(params.input) : null;
   const typeform = params.piece === "@activepieces/piece-typeform" ? managedTypeformInput(params.input) : null;
   const airtable = params.piece === '@activepieces/piece-airtable' && managedAirtableInput(params.input);
   if (airtable) {const issue=managedAirtableIssue(params.action,airtable);if(issue)throw new Error(issue);}
@@ -278,6 +280,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (github) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
     raw = await runManagedGitHubAction(String(params.action), github);
+  } else if (linear) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Linear dispatch was not authorized');
+    raw = await runManagedLinearAction(String(params.action), linear);
   } else if (typeform) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Typeform dispatch was not authorized');
     raw = await runManagedTypeformAction(String(params.action), typeform);

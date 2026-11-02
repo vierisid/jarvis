@@ -87,7 +87,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE) && managedPieceChanges(piece, action))
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
     || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
@@ -104,7 +104,8 @@ const ASANA_PIECE = '@activepieces/piece-asana';
 const CALENDLY_PIECE = '@activepieces/piece-calendly';
 const INTERCOM_PIECE = '@activepieces/piece-intercom';
 const TYPEFORM_PIECE = '@activepieces/piece-typeform';
-/** Every ClickUp, Mailchimp, Asana, Intercom, Calendly or Typeform action that changes the account (write,
+const LINEAR_PIECE = '@activepieces/piece-linear';
+/** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform or Linear action that changes the account (write,
  * send, email, delete or an access change). None parks its flow, so each one
  * can be tracked; a read never is. A category the adapter does not map tracks
  * nothing, so ClickUp (no send_email or modify_settings names) and Mailchimp
@@ -126,6 +127,15 @@ export function asanaUpdateProjectCategory(input: Record<string, unknown>): Acti
   if (present(input.privacy_setting) || present(input.owner)) return 'modify_settings';
   if (present(input.archived) && input.archived !== false) return 'delete_data';
   return 'write_data';
+}
+
+/**
+ * Linear `linear_project_update` (AI): `team_ids` replaces the teams the
+ * project belongs to, so adding one shows the project to that team's members.
+ * Without it the update is a plain edit.
+ */
+export function linearProjectUpdateCategory(input: Record<string, unknown>): ActionCategory {
+  return present(input.team_ids) ? 'modify_settings' : 'write_data';
 }
 
 /** Asana `update_team`: visibility or endorsement is a team setting; a rename or description is a write. */
@@ -784,6 +794,50 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  // Linear: every action of the pinned 0.9.1 bundle (`linear-connection.test.ts`
+  // pins the list and the engine test checks it against the installed
+  // package), so a workflow on the user's own Linear key keeps running at the
+  // default level. The managed `jarvis:linear` connection is narrower still:
+  // `managed-linear.ts` runs only five of these. Only `rawGraphqlQuery` (any
+  // query or mutation) and an action added upstream fall back to
+  // `modify_settings`.
+  catalogId: 'linear', pieceName: LINEAR_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['team_id', 'team_ids', 'issue_id', 'related_issue_id', 'comment_id', 'resolving_comment_id', 'reaction_id',
+    'attachment_id', 'project_id', 'project_milestone_id', 'status_update_id', 'label_id', 'label_ids', 'add_label_ids',
+    'remove_label_ids', 'labels', 'title', 'name', 'key', 'description', 'body', 'url', 'state_id', 'status_id',
+    'priority_id', 'priority', 'assignee_id', 'lead_id', 'cycle_id', 'parent_id', 'template_id', 'due_date',
+    'estimate', 'user_id', 'term', 'include_comments', 'include_archived', 'limit', 'cursor'],
+  categories: {
+    read_data: ['linear_get_issue', 'linear_search_issues', 'linear_issue_get', 'linear_issues_list',
+      'linear_issues_search', 'linear_issue_labels_list', 'linear_workflow_states_list', 'linear_teams_list',
+      'linear_team_get', 'linear_users_list', 'linear_viewer_get', 'linear_cycles_list', 'linear_comment_get',
+      'linear_comments_list', 'linear_attachment_get', 'linear_upload_download', 'linear_projects_list',
+      'linear_project_get', 'linear_project_status_update_get', 'linear_project_status_updates_list'],
+    // Content that lands in front of other people, including an edit of it: a
+    // comment notifies the issue's subscribers, a project update the project's
+    // members (as Asana's comments and status updates).
+    send_message: ['linear_create_comment', 'linear_comment_create', 'linear_comment_update',
+      'linear_create_project_status_update', 'linear_project_status_update_create', 'linear_project_status_update_edit'],
+    // Workspace content under the caller's own access; none grants anyone
+    // access.
+    write_data: ['linear_create_issue', 'linear_update_issue', 'linear_create_project', 'linear_update_project',
+      'linear_add_label_to_issue', 'linear_remove_label_from_issue', 'linear_attach_link', 'linear_issue_create',
+      'linear_issue_update', 'linear_issue_unarchive', 'linear_issue_relation_create', 'linear_issue_add_label',
+      'linear_issue_remove_label', 'linear_issue_label_create', 'linear_comment_resolve', 'linear_comment_unresolve',
+      'linear_comment_reaction_create', 'linear_attachment_create', 'linear_project_create',
+      'linear_project_unarchive', 'linear_project_milestone_create', 'linear_project_status_update_unarchive'],
+    // Every delete, and every archive (hidden from where people find it).
+    delete_data: ['linear_delete_issue', 'linear_issue_delete', 'linear_issue_archive', 'linear_reaction_delete',
+      'linear_project_delete', 'linear_project_status_update_archive'],
+    // Team creation and team settings (cycles, triage, key, timezone). The AI
+    // project update sits here at its worst case (`team_ids` shows the
+    // project to other teams) and narrows by input.
+    modify_settings: ['linear_team_create', 'linear_team_update', 'linear_project_update'],
+  },
+  categoryFromInput: {
+    linear_project_update: { props: ['team_ids'], category: linearProjectUpdateCategory },
+  },
+}, {
   // Calendly: every action of the pinned 0.7.1 bundle (`managed-calendly.test.ts`
   // pins the list and the engine test checks it against the installed
   // package), so a workflow on the user's own Calendly token keeps running at

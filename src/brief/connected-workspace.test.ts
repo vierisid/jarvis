@@ -198,6 +198,13 @@ test('managed Asana shows its stored grant and routes setup to its own hosted in
   sources.asana = () => ({configured:false,connected:false,account:null});
   expect(provider.read().rows.some(r=>r.sourceId==='native:asana')).toBe(false);
 });
+test('managed Linear shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.linear = () => ({configured:true, connected:true, account:{id:'8',label:'owner@example.test'}});
+  expect(row('native:linear')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'8',setupActionId:'setup:linear'});
+  expect(provider.read().setup.find(s => s.id === 'setup:linear')?.target).toEqual({kind:'hosted_integration',provider:'linear'});
+  sources.linear = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:linear')).toBe(false);
+});
 
 test('managed Typeform shows its stored grant, a reconnect as disconnected, and routes setup to its own hosted integration', () => {
   sources.typeform = () => ({configured:true, connected:true, account:{id:'01TF',label:'owner@example.test'}});

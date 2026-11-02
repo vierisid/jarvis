@@ -2482,6 +2482,22 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         catch (error) { return json({error: error instanceof ClickUpOptionsError ? error.message : 'Could not load ClickUp choices.'}, error instanceof ClickUpOptionsError ? error.status : 502); }
       },
     },
+    '/api/integrations/linear/teams': {
+      GET: async (req: Request) => {
+        const {linearTeamOptions, LinearOptionsInputError} = await import('../integrations/linear-options');
+        try { return json(await linearTeamOptions(ctx.config, new URL(req.url).searchParams.get('cursor'))); }
+        catch (error) {
+          if (error instanceof LinearOptionsInputError) return json({error: error.message}, 400);
+          return json({error: 'Could not load Linear teams. Check your connection or enter a team ID.'}, 502);
+        }
+      },
+    },
+    '/api/integrations/linear': {
+      GET: async () => {
+        const {linearStatus} = await import('../integrations/linear-connection');
+        return json(linearStatus(ctx.config));
+      },
+    },
     '/api/integrations/typeform': {
       GET: async () => {
         const {typeformStatus} = await import('../integrations/typeform-connection');

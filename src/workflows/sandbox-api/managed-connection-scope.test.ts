@@ -18,6 +18,7 @@ import { JarvisGitHubConnectionSource } from "../credentials/github-source";
 import { JarvisTrelloConnectionSource } from "../credentials/trello-source";
 import { JarvisDropboxConnectionSource } from "../credentials/dropbox-source";
 import { JarvisSlackConnectionSource } from "../credentials/slack-source";
+import { JarvisLinearConnectionSource } from "../credentials/linear-source";
 import { JarvisAirtableConnectionSource } from "../credentials/airtable-source";
 import { JarvisNotionConnectionSource } from "../credentials/notion-source";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -46,6 +47,7 @@ const MAILCHIMP = "@activepieces/piece-mailchimp";
 const GITHUB = "@activepieces/piece-github";
 const TRELLO = "@activepieces/piece-trello";
 const DROPBOX = "@activepieces/piece-dropbox";
+const LINEAR = "@activepieces/piece-linear";
 const AIRTABLE = "@activepieces/piece-airtable";
 const NOTION = "@activepieces/piece-notion";
 
@@ -145,6 +147,19 @@ const pieces = new PieceCatalog([
     ] } },
   }, triggers: {
     new_record: { name: "new_record", displayName: "", description: "" },
+  } },
+  { name: LINEAR, displayName: "Linear", description: "", auth: { type: "SECRET_TEXT" }, actions: {
+    linear_get_issue: { name: "linear_get_issue", displayName: "", description: "", inputSchema: { fields: [
+      { name: "issue_id", label: "", type: "string", required: false },
+    ] } },
+    linear_delete_issue: { name: "linear_delete_issue", displayName: "", description: "", inputSchema: { fields: [
+      { name: "issue_id", label: "", type: "string", required: false },
+    ] } },
+    rawGraphqlQuery: { name: "rawGraphqlQuery", displayName: "", description: "", inputSchema: { fields: [
+      { name: "query", label: "", type: "string", required: false },
+    ] } },
+  }, triggers: {
+    new_issue: { name: "new_issue", displayName: "", description: "" },
   } },
   { name: ASANA, displayName: "Asana", description: "", auth: { type: "OAUTH2" }, actions: {
     get_task: { name: "get_task", displayName: "", description: "", inputSchema: { fields: [
@@ -649,6 +664,52 @@ describe("managed Notion is scoped to its four qualified Notion actions", () => 
     const response = await fetchFor(runOf(trigger), "jarvis:notion");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: NOTION, value: { access_token: NOTION_TOKEN, jarvis_managed: "notion" } });
+  });
+});
+
+describe("managed Linear is scoped to its five qualified Linear actions", () => {
+  const LINEAR_TOKEN = "synthetic-managed-linear-access-token";
+  const ref = "{{connections.jarvis:linear}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "linear-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "linear.json"), JSON.stringify({ version: 1, provider: "linear", status: "connected",
+      generation: crypto.randomUUID(), access_token: LINEAR_TOKEN, refresh_token: "synthetic-refresh",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(), account: { id: crypto.randomUUID(), label: "owner" },
+      workspaces: [{ id: "8", name: "Sandbox" }], connected_at: new Date().toISOString(),
+      refresh: { url: "https://app.usejarvis.dev/api/integrations/linear/refresh", instance_id: crypto.randomUUID(), secret: "a".repeat(64) } }));
+    credentials.register(new JarvisLinearConnectionSource({ daemon: { data_dir: dataDir },
+      usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (actionName: string, input: Record<string, unknown> = { auth: ref, issue_id: "ENG-1" }): any => ({
+    name: "linear", type: "PIECE", settings: { pieceName: LINEAR, actionName, input },
+  });
+  // A trigger whose settings also carry a stray actionName of a qualified action.
+  const linearTrigger = (): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: LINEAR, triggerName: "new_issue", actionName: "linear_get_issue", input: { auth: ref } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Linear action outside the qualified five", empty(step("linear_delete_issue"))],
+    ["a raw Linear GraphQL query", empty(step("rawGraphqlQuery", { auth: ref, query: "query { viewer { id } }" }))],
+    ["a Linear trigger that carries a stray actionName", linearTrigger()],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:linear");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(LINEAR_TOKEN);
+    });
+  }
+  test("a qualified Linear step auth is ready and resolves", async () => {
+    const trigger = empty(step("linear_get_issue"));
+    expect(bindingIssues(trigger)).toEqual([]);
+    const response = await fetchFor(runOf(trigger), "jarvis:linear");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ type: "SECRET_TEXT", pieceName: LINEAR, value: { secret_text: LINEAR_TOKEN, jarvis_managed: "linear" } });
   });
 });
 

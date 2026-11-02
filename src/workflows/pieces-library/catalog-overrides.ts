@@ -157,6 +157,7 @@ export const VERSION_PIN: Record<
   string,
   { versionRange: string; vettedVersion: string; reason: string }
 > = {
+  linear: {versionRange:"0.9.1",vettedVersion:"0.9.1",reason:"Governed action table (MANAGED_PIECE_ADAPTERS) and five managed issue and comment actions qualified against 0.9.1; review before upgrading"},
   typeform: {versionRange:"0.7.1",vettedVersion:"0.7.1",reason:"Managed Typeform actions and outputs qualified against this published bundle; review upgrades"},
   airtable: {versionRange:"0.9.2",vettedVersion:"0.9.2",reason:"Managed Airtable actions and outputs qualified against this published bundle; review upgrades"},
   asana: {versionRange: "0.7.2", vettedVersion: "0.7.2", reason: "Managed OAuth and five governed task actions qualified against the real engine; review before upgrading"},

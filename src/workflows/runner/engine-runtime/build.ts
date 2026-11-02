@@ -307,6 +307,7 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/managed-intercom.ts',
   '../../runtime/managed-calendly.ts',
   '../../runtime/managed-notion.ts',
+  '../../runtime/managed-linear.ts',
   // The egress guard the engine's file-property download goes through (#961).
   '../../runtime/http-egress.ts',
   '../../runtime/decision-document.ts',

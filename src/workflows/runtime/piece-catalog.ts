@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "21"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts; v20: Typeform form and response output contracts; v21: Notion page output contracts
+export const CATALOG_SCHEMA_VERSION = "22"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts; v20: Typeform form and response output contracts; v21: Notion page output contracts; v22: Linear issue and comment output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -895,6 +895,17 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === '@activepieces/piece-linear') {
+    const issue = {id:'11111111-1111-4111-8111-111111111111',identifier:'ENG-123',title:'Fix login timeout',url:'https://linear.app/example/issue/ENG-123',priority:2};
+    const samples:Record<string,unknown> = {
+      linear_get_issue: {...issue,team_id:'22222222-2222-4222-8222-222222222222',team_name:'Engineering',team_key:'ENG'},
+      linear_search_issues:{items:[issue],count:1,total_count:1,has_next_page:false,end_cursor:'cursor'},
+      linear_create_issue:{success:true,lastSyncId:1,issue},
+      linear_update_issue:{success:true,lastSyncId:1,issue},
+      linear_create_comment:{success:true,lastSyncId:1,comment:{id:'33333333-3333-4333-8333-333333333333',body:'Ready for review',url:'https://linear.app/example/issue/ENG-123#comment'}},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
   if (entry.name === "@activepieces/piece-notion") {
     const id = "11111111-1111-4111-8111-111111111111";
     const page = {

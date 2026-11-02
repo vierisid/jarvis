@@ -20,6 +20,7 @@ export interface ConnectedWorkspaceSources {
   google?: () => { mode: 'self' | 'managed' | 'none' | 'unavailable'; authenticated: boolean; reconnect: boolean; canSetup: boolean };
   channels?: () => Partial<Record<'telegram' | 'discord', { enabled: boolean; connected: boolean; authentication?: 'verified' | 'rejected' | 'unknown' }>>;
   pieces?: () => PieceLookup | null;
+  linear?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   hosted: () => boolean;
 }
 export const CONNECTED_LIMIT = 1000;
@@ -261,6 +262,22 @@ export class ConnectedWorkspace {
             row.evidence = c.connected ? 'stored_grant' : 'none';
             if (c.configured) offer(row, {id: 'setup:notion', label: 'Notion',
               target: {kind: 'hosted_integration', provider: 'notion'}, verifies: {kind: 'native_service', serviceId: 'notion'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.linear) {
+        const row = base('native:linear', 'native_service', 'linear', 'Linear');
+        try {
+          const c = this.sources.linear();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Linear: ' + c.account.label) : 'Linear';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:linear', label: 'Linear',
+              target: {kind: 'hosted_integration', provider: 'linear'}, verifies: {kind: 'native_service', serviceId: 'linear'}});
             rows.push(row);
           }
         } catch { row.status = 'unavailable'; rows.push(row); }
