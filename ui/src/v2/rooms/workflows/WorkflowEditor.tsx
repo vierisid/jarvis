@@ -3830,8 +3830,8 @@ function ConnectionPicker({
         {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
       {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
-        {managedTodoist ? "Todoist account" : authDisplayName}
-        {!managedTodoist && <span className="wf-props__connection-type">({authType})</span>}
+        {authDisplayName}
+        <span className="wf-props__connection-type">({authType})</span>
       </label>
       {matching.length === 0 && !managedTodoist && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana ? (
         <p className="wf-props__hint wf-props__connection-empty">

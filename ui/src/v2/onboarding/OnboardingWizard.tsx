@@ -1351,7 +1351,7 @@ export function OnboardingWizard({
         return (
           <div className="obw-body"><div className="obw-wrap wide">
             <h2>Connect your everyday tools.</h2>
-            <ClickUpConnection optional /><GitHubConnection optional /><TrelloConnection optional /><MailchimpConnection optional /><SlackConnection optional /><DropboxConnection optional /><TodoistConnection optional appearance="onboarding" /><AsanaConnection optional />
+            <ClickUpConnection optional /><GitHubConnection optional /><TrelloConnection optional /><MailchimpConnection optional /><SlackConnection optional /><DropboxConnection optional /><TodoistConnection optional /><AsanaConnection optional />
             <div className="obw-sub">Start with the tools involved in your daily work. All optional, all revocable from Settings.</div>
             <div className="obw-rows" style={{ marginTop: 14 }}>
               {rows.map(([id, ic, nm, bd]) => {

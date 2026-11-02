@@ -12,6 +12,7 @@ import { JarvisGoogleConnectionSource } from "../credentials/google-source";
 import { JarvisClickUpConnectionSource } from "../credentials/clickup-source";
 import { JarvisMailchimpConnectionSource } from "../credentials/mailchimp-source";
 import { JarvisAsanaConnectionSource } from "../credentials/asana-source";
+import { JarvisTodoistConnectionSource } from "../credentials/todoist-source";
 import type { JarvisConfig } from "../../config/types";
 import { JarvisGitHubConnectionSource } from "../credentials/github-source";
 import { JarvisTrelloConnectionSource } from "../credentials/trello-source";
@@ -38,6 +39,7 @@ const HTTP = "@activepieces/piece-http";
 const SLACK = "@activepieces/piece-slack";
 const CLICKUP = "@activepieces/piece-clickup";
 const ASANA = "@activepieces/piece-asana";
+const TODOIST = "@activepieces/piece-todoist";
 const MAILCHIMP = "@activepieces/piece-mailchimp";
 const GITHUB = "@activepieces/piece-github";
 const TRELLO = "@activepieces/piece-trello";
@@ -109,6 +111,20 @@ const pieces = new PieceCatalog([
     ] } },
   }, triggers: {
     new_message: { name: "new_message", displayName: "", description: "" },
+  } },
+  { name: TODOIST, displayName: "Todoist", description: "", auth: { type: "OAUTH2" }, actions: {
+    find_task: { name: "find_task", displayName: "", description: "", inputSchema: { fields: [
+      { name: "name", label: "", type: "string", required: false },
+    ] } },
+    todoist_delete_task: { name: "todoist_delete_task", displayName: "", description: "", inputSchema: { fields: [
+      { name: "task_id", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  }, triggers: {
+    task_completed: { name: "task_completed", displayName: "", description: "" },
   } },
   { name: ASANA, displayName: "Asana", description: "", auth: { type: "OAUTH2" }, actions: {
     get_task: { name: "get_task", displayName: "", description: "", inputSchema: { fields: [
@@ -453,6 +469,53 @@ describe("managed Asana is scoped to its five qualified Asana actions", () => {
     const response = await fetchFor(runOf(trigger), "jarvis:asana");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: ASANA, value: { access_token: ASANA_TOKEN, jarvis_managed: "asana" } });
+  });
+});
+
+describe("managed Todoist is scoped to its four qualified Todoist actions", () => {
+  const TODOIST_TOKEN = "synthetic-managed-todoist-access-token";
+  const ref = "{{connections.jarvis:todoist}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "todoist-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "todoist.json"), JSON.stringify({ version: 1, provider: "todoist", status: "connected",
+      generation: crypto.randomUUID(), access_token: TODOIST_TOKEN, refresh_token: "synthetic-refresh",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(), account: { id: "7", label: "owner" },
+      workspaces: [], connected_at: new Date().toISOString(),
+      refresh: { url: "https://app.usejarvis.dev/api/integrations/todoist/refresh", instance_id: crypto.randomUUID(), secret: "a".repeat(64) } }));
+    credentials.register(new JarvisTodoistConnectionSource({ daemon: { data_dir: dataDir },
+      usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (actionName: string, input: Record<string, unknown> = { auth: ref, name: "Task" }): any => ({
+    name: "todoist", type: "PIECE", settings: { pieceName: TODOIST, actionName, input },
+  });
+  const todoistCall = (url: string): any => step("custom_api_call", { auth: ref, method: "GET", url: { url } });
+  const todoistTrigger = (): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: TODOIST, triggerName: "task_completed", actionName: "find_task", input: { auth: ref } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Todoist action outside the qualified four", empty(step("todoist_delete_task"))],
+    ["a Todoist custom API call, even on api.todoist.com", empty(todoistCall("https://api.todoist.com/api/v1/user"))],
+    ["a Todoist custom API call with a relative path", empty(todoistCall("/user"))],
+    ["a Todoist trigger that carries a stray actionName", todoistTrigger()],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:todoist");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(TODOIST_TOKEN);
+    });
+  }
+  test("a qualified Todoist step auth is ready and resolves", async () => {
+    const trigger = empty(step("find_task"));
+    expect(bindingIssues(trigger)).toEqual([]);
+    const response = await fetchFor(runOf(trigger), "jarvis:todoist");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: TODOIST, value: { access_token: TODOIST_TOKEN, jarvis_managed: "todoist" } });
   });
 });
 
