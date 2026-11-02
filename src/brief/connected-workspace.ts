@@ -12,6 +12,7 @@ export interface ConnectedWorkspaceSources {
   mailchimp?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   asana?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   slack?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  airtable?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   google?: () => { mode: 'self' | 'managed' | 'none' | 'unavailable'; authenticated: boolean; reconnect: boolean; canSetup: boolean };
   channels?: () => Partial<Record<'telegram' | 'discord', { enabled: boolean; connected: boolean; authentication?: 'verified' | 'rejected' | 'unknown' }>>;
   pieces?: () => PieceLookup | null;
@@ -175,6 +176,22 @@ export class ConnectedWorkspace {
             row.evidence = c.connected ? 'stored_grant' : 'none';
             if (c.configured) offer(row, {id: 'setup:slack', label: 'Slack',
               target: {kind: 'hosted_integration', provider: 'slack'}, verifies: {kind: 'native_service', serviceId: 'slack'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.airtable) {
+        const row = base('native:airtable', 'native_service', 'airtable', 'Airtable');
+        try {
+          const c = this.sources.airtable();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Airtable: ' + c.account.label) : 'Airtable';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:airtable', label: 'Airtable',
+              target: {kind: 'hosted_integration', provider: 'airtable'}, verifies: {kind: 'native_service', serviceId: 'airtable'}});
             rows.push(row);
           }
         } catch { row.status = 'unavailable'; rows.push(row); }

@@ -161,6 +161,16 @@ test('managed ClickUp shows its stored grant and routes setup without exposing c
   expect(new ConnectedWorkspace(db,sources,'other','other',()=>true).read().rows.some(r=>r.sourceId==='native:clickup')).toBe(false);
 });
 
+test('managed Airtable shows its stored grant, reads a reconnect as disconnected and routes setup to its own hosted integration', () => {
+  sources.airtable = () => ({configured:true, connected:true, account:{id:'usr1',label:'owner@example.test'}});
+  expect(row('native:airtable')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'usr1',setupActionId:'setup:airtable'});
+  expect(provider.read().setup.find(s => s.id === 'setup:airtable')?.target).toEqual({kind:'hosted_integration',provider:'airtable'});
+  sources.airtable = () => ({configured:true, connected:false, account:{id:'usr1',label:'owner@example.test'}});
+  expect(row('native:airtable')).toMatchObject({status:'disconnected',availability:'unavailable',evidence:'none'});
+  sources.airtable = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:airtable')).toBe(false);
+});
+
 test('managed Asana shows its stored grant and routes setup to its own hosted integration', () => {
   sources.asana = () => ({configured:true, connected:true, account:{id:'8',label:'owner@example.test'}});
   expect(row('native:asana')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'8',setupActionId:'setup:asana'});
