@@ -5,6 +5,8 @@ import {
   todoistPage,
   todoistRequest,
 } from "../workflows/runtime/managed-todoist";
+/** The request itself is wrong (a 400), as opposed to Todoist or the connection failing (a 502). */
+export class TodoistOptionsInputError extends Error {}
 /** One page of setup choices, with the same renewed grant as workflow execution. */
 export async function todoistOptions(
   config: JarvisConfig,
@@ -14,11 +16,15 @@ export async function todoistOptions(
   request: typeof fetch = fetch,
 ) {
   if (cursor && (cursor.length > 2048 || /[\x00-\x1f\x7f]/.test(cursor)))
-    throw Error("Invalid Todoist cursor.");
+    throw new TodoistOptionsInputError("Invalid Todoist cursor.");
   const params = new URLSearchParams({ limit: "100" });
   if (kind === "sections") {
     if (!project) return { options: [], next_cursor: null };
-    params.set("project_id", todoistId(project));
+    try {
+      params.set("project_id", todoistId(project));
+    } catch {
+      throw new TodoistOptionsInputError("Enter a valid Todoist project ID.");
+    }
   }
   if (cursor) params.set("cursor", cursor);
   const c = await freshTodoistConnection(config, request);

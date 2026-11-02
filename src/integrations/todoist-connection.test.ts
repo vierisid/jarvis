@@ -121,18 +121,28 @@ test("lost ack is retried from durable storage without another provider refresh"
 test("two independent refresher instances cannot overwrite each other's rotation", async () => {
   let release!: () => void;
   const wait = new Promise<void>((r) => (release = r));
-  let started = false;
+  let started = false,
+    refreshes = 0;
   const request = transport(async (body) => {
     if (body.ack) return Response.json({ acknowledged: true });
+    refreshes++;
     started = true;
     await wait;
     return rotated();
   });
   const first = fresh().fresh(config, request);
   for (let i = 0; i < 100 && !started; i++) await Bun.sleep(1);
-  await expect(fresh().fresh(config, request)).rejects.toThrow("in progress");
+  // The second either refuses while the first holds the lock, or waits for it
+  // and reuses the stored result; it never rotates the consumed token again.
+  const second = fresh()
+    .fresh(config, request)
+    .then((c) => c.access_token, (e) => String(e));
+  await Bun.sleep(20);
   release();
-  await first;
+  expect((await first).access_token).toBe("a2");
+  const other = await second;
+  expect(other === "a2" || other.includes("in progress")).toBe(true);
+  expect(refreshes).toBe(1);
   expect((await fresh().fresh(config, request)).access_token).toBe("a2");
 });
 test("disconnect or reconnect during renewal never resurrects old credentials", async () => {
@@ -230,7 +240,7 @@ test("expired delivery receipt asks for reconnect instead of repeating acknowled
 });
 
 test("project and section choices use the current grant, bounded pages and safe cursors", async () => {
-  const { todoistOptions } = await import("./todoist-options");
+  const { todoistOptions, TodoistOptionsInputError } = await import("./todoist-options");
   grant.expires_at = new Date(Date.now() + 3600000).toISOString();
   writeFileSync(join(dir, "connections/todoist.json"), JSON.stringify(grant));
   const request = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -256,9 +266,16 @@ test("project and section choices use the current grant, bounded pages and safe 
   await expect(
     todoistOptions(config, "sections", "wrong", "opaque+/=", request),
   ).rejects.toThrow("invalid setup");
+  // A bad request is the caller's (400); a Todoist or connection failure is not (502).
   await expect(
     todoistOptions(config, "projects", null, "x".repeat(2049), request),
-  ).rejects.toThrow("Invalid");
+  ).rejects.toBeInstanceOf(TodoistOptionsInputError);
+  await expect(
+    todoistOptions(config, "sections", "../projects", null, request),
+  ).rejects.toBeInstanceOf(TodoistOptionsInputError);
+  const invalidSetup = await todoistOptions(config, "sections", "wrong", "opaque+/=", request).catch((e) => e);
+  expect(String(invalidSetup)).toContain("invalid setup");
+  expect(invalidSetup).not.toBeInstanceOf(TodoistOptionsInputError);
   writeFileSync(
     join(dir, "connections/todoist.json"),
     JSON.stringify({ ...grant, status: "disconnected" }),

@@ -2489,9 +2489,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: async (req: Request) => {
         const q = new URL(req.url).searchParams, kind = q.get('kind');
         if (kind !== 'projects' && kind !== 'sections') return json({error: 'Choose projects or sections.'}, 400);
-        const {todoistOptions} = await import('../integrations/todoist-options');
+        const {todoistOptions, TodoistOptionsInputError} = await import('../integrations/todoist-options');
         try { return json(await todoistOptions(ctx.config, kind, q.get('project_id'), q.get('cursor'))); }
-        catch { return json({error: 'Could not load Todoist choices. Check your connection or enter an ID.'}, 502); }
+        catch (error) {
+          if (error instanceof TodoistOptionsInputError) return json({error: error.message}, 400);
+          return json({error: 'Could not load Todoist choices. Check your connection or enter an ID.'}, 502);
+        }
       },
     },
     '/api/integrations/asana/options': {
