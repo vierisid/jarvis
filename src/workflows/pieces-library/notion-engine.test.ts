@@ -1,7 +1,7 @@
 /** Actual npm piece in the real engine. Only fetch to its provider host is redirected
  * in a disposable engine copy; no live Notion calls or account credentials are used.
  * Gated on JARVIS_TEST_ENGINE_BUILD=1 like the other engine tests; CI runs it
- * in notion-qualification.yml. It installs the pinned 0.8.1 from npm. */
+ * in the engine step of the required `test` job. It installs the pinned 0.8.1 from npm. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {
   mkdtempSync,
@@ -92,7 +92,8 @@ beforeAll(async () => {
         url: "https://www.notion.so/" + id,
         created_time: "2026-10-28T10:00:00Z",
         last_edited_time: "2026-10-28T10:00:00Z",
-        archived: false,
+        // The 2026-03-11 API shape: trash is `in_trash`, there is no `archived`.
+        in_trash: false,
         parent: { type: "page_id", page_id: id },
         properties: {
           title: {

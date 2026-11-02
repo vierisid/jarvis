@@ -183,6 +183,10 @@ function page(raw: Record<string, any>) {
     throw new NotionRequestError(
       "Notion returned an invalid page. Check the workspace before trying again.",
     );
+  // API version 2026-03-11 reports trash as `in_trash` and no longer sends
+  // `archived`; outputs keep the piece's `archived` field for downstream steps.
+  if (typeof raw.archived !== "boolean" && typeof raw.in_trash === "boolean")
+    return { ...raw, archived: raw.in_trash };
   return raw;
 }
 function list(raw: Record<string, any>): Record<string, any>[] {
