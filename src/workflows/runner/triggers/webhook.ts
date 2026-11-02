@@ -1,3 +1,4 @@
+import { prepareSubmission, type SubmissionConfig } from '../../runtime/form-submission';
 /**
  * WebhookManager — manages inbound webhook endpoints for workflow triggers
  *
@@ -11,6 +12,7 @@ import { KeyedRateLimiter } from './rate-limiter.ts';
 
 export type WebhookRoute = {
   workflowId: string;
+  submission?: SubmissionConfig;
   path: string;
   secret: string | null;
   registeredAt: number;
@@ -171,7 +173,7 @@ export class WebhookManager {
    * Register a workflow webhook.
    * @returns the webhook path (e.g. "/webhooks/wf_abc123")
    */
-  register(workflowId: string, secret?: string, generation?: number): string {
+  register(workflowId: string, secret?: string, generation?: number, submission?: SubmissionConfig): string {
     const path = `/webhooks/${workflowId}`;
 
     this.routes.set(workflowId, {
@@ -179,6 +181,7 @@ export class WebhookManager {
       path,
       secret: secret ?? null,
       registeredAt: Date.now(),
+      ...(submission ? { submission } : {}),
       ...(generation === undefined ? {} : { generation }),
     });
 
@@ -306,6 +309,18 @@ export class WebhookManager {
       }
     }
 
+    let delivery = webhookDelivery(req.headers, data, verifiedSignature);
+    if (route.submission) {
+      try {
+        const prepared = prepareSubmission(data, route.submission);
+        data = prepared.data;
+        // Payload identity outranks unsigned headers and signature time windows.
+        delivery = { key: prepared.key, label: 'form submission ID' };
+      } catch (error) {
+        return json(422, { error: (error as Error).message });
+      }
+    }
+
     // Enrich with request metadata
     data._webhook = {
       method: req.method,
@@ -318,7 +333,7 @@ export class WebhookManager {
     let result: unknown;
     if (this.triggerCallback) {
       try {
-        result = this.triggerCallback(workflowId, data, webhookDelivery(req.headers, data, verifiedSignature), route.generation);
+        result = this.triggerCallback(workflowId, data, delivery, route.generation);
       } catch (err) {
         console.error(`[WebhookManager] Trigger callback threw for workflow "${workflowId}":`, err);
         result = { outcome: 'error', reason: 'The delivery could not be recorded; retry later.' };

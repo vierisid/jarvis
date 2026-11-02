@@ -246,3 +246,23 @@ describe("approval rehydrate on socket open merges with live events (#1087)", ()
     expect(ids()).toEqual(["b"]);
   });
 });
+
+
+test("proactive dashboard notifications enter the visible notice feed with stable identity", async () => {
+  const socket = sockets[0]!;
+  const event = { data: JSON.stringify({ id: "agenda-fixture", type: "chat", payload: { source: "proactive", text: "No meetings today" }, priority: "normal", timestamp: 123 }) };
+  await deliver(socket, event); await deliver(socket, event);
+  expect(state.notices.filter(n => n.id === "agenda-fixture")).toHaveLength(1);
+  expect(state.notices.find(n => n.id === "agenda-fixture")).toMatchObject({ title: "Jarvis notification", text: "No meetings today", timestamp: 123, level: "info" });
+});
+
+test("a burst of warnings does not evict unread proactive notices, and a bold lead line becomes the title", async () => {
+  const socket = sockets[0]!;
+  for (const id of ["p1", "p2"]) await deliver(socket, { data: JSON.stringify({ id, type: "chat",
+    payload: { source: "proactive", text: `**Opportunity ${id}**\nA **cheaper** plan is available` }, priority: "normal", timestamp: 1 }) });
+  for (let i = 0; i < 5; i++) await deliver(socket, { data: JSON.stringify({ id: `w${i}`, type: "notification",
+    payload: { source: "sidecar_event", event: { type: "sidecar_disconnect", reason: `box-${i} went away` } }, timestamp: 2 }) });
+  expect(state.notices.filter(n => n.source === "proactive").map(n => n.id).sort()).toEqual(["p1", "p2"]);
+  expect(state.notices.filter(n => n.source !== "proactive")).toHaveLength(3);
+  expect(state.notices.find(n => n.id === "p1")).toMatchObject({ title: "Opportunity p1", text: "A cheaper plan is available" });
+});

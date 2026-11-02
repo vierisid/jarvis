@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   TRIGGER_KINDS,
   detectTriggerKind,
+  needsManualRunInput,
   makeEmptyStash,
   transitionTriggerKind,
   type TriggerKindStash,
@@ -145,5 +146,35 @@ describe("transitionTriggerKind", () => {
       // started undefined and stays that way).
       expect(r.nextStash.schedule).toBeUndefined();
     });
+  });
+});
+
+
+describe('manual run input', () => {
+  const withAction = (trigger: FlowStepNode, input: unknown, type = 'PIECE'): FlowStepNode => ({
+    ...trigger, nextAction: { name: 'step_1', type, settings: { input } },
+  } as FlowStepNode);
+  test('calendar browser digests and literal reminders run without a payload prompt', () => {
+    const trigger = pieceTrigger('trigger', 'schedule', undefined, { cron_expression: '0 8 * * 1-5', timezone: 'Europe/Rome' });
+    expect(needsManualRunInput(withAction(trigger, { goal: 'Read today’s calendar in the browser' }))).toBe(false);
+    expect(needsManualRunInput(withAction(trigger, { message: '{{step_1.finalMessage}}' }))).toBe(false);
+    expect(needsManualRunInput(withAction(empty('trigger'), { message: 'Choose your three priorities for today.' }))).toBe(false);
+  });
+  test('event and webhook tests retain sample input even without an explicit reference', () => {
+    for (const name of ['webhook', '@jarvispieces/piece-jarvis-trigger', '@activepieces/piece-google-calendar'])
+      expect(needsManualRunInput(withAction(pieceTrigger('trigger', name), {}))).toBe(true);
+  });
+  test('trigger references in nested expressions, branches and custom trigger names retain input', () => {
+    for (const value of ['{{trigger.body}}', '{{step_1.ok ? trigger["payload"] : []}}', '{{custom?.count ?? 0}}'])
+      expect(needsManualRunInput(withAction(pieceTrigger('custom', 'schedule'), { nested: [value] }))).toBe(true);
+    const graph = pieceTrigger('trigger', 'schedule');
+    (graph as any).nextAction = { name: 'branch', type: 'ROUTER', children: [withAction(empty('child'), { message: '{{trigger.subject}}' })] };
+    expect(needsManualRunInput(graph)).toBe(true);
+  });
+  test('unknown graphs, code and malformed expressions do not silently discard test input', () => {
+    expect(needsManualRunInput(undefined)).toBe(true);
+    expect(needsManualRunInput(withAction(empty('trigger'), {}, 'CODE'))).toBe(true);
+    expect(needsManualRunInput(withAction(empty('trigger'), { text: '{{trigger.bad(}}' }))).toBe(true);
+    expect(needsManualRunInput(withAction(empty('trigger'), { text: '{{"trigger.body"}}' }))).toBe(false);
   });
 });

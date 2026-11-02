@@ -68,9 +68,20 @@ judging each required step by the same rules the check applies to a graph:
 - it limits recipients and requires a send that cannot state its recipient
   (`gmail_send_draft`);
 - its cron does not run at its stated cadence;
-- it names a time zone other than the one schedules run in. Every schedule runs
-  in Jarvis's configured time zone (`src/lib/cron-scheduler.ts`), so a flow
-  cannot carry its own.
+- it names an invalid time zone.
+
+A schedule fires in its own `settings.input.timezone` only when a person chose
+it (`settings.chosenTimezone` names the same zone); otherwise in Jarvis's
+configured time zone (`src/workflows/runner/triggers/schedule-zone.ts`). The
+check compares the zone the saved graph actually fires in with the one the job
+asks for, so an unchosen zone on a step does not satisfy it. The composer
+records a zone it writes as chosen only when the contract's `trigger.timezone`
+names that same zone: a model may write a zone out of habit, and background
+composers have no person's request at all. A zone written without one stays
+unmarked, runs in Jarvis's zone and is flagged in the trigger list.
+The chat tool is told to put a zone the person names into
+`contract.trigger.timezone`, and to write none for a bare time. Every name of
+UTC (`UTC`, `Etc/UTC`, `GMT`, `Zulu`, ...) counts as the same zone.
 
 ## The check and the repair loop
 

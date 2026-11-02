@@ -47,8 +47,9 @@ afterEach(async () => { await React.act(async () => root.unmount()); element.rem
 afterAll(() => GlobalRegistrator.unregister());
 const mount = async (node: React.ReactNode) => { await React.act(async () => root.render(node)); };
 async function click(text: string) {
-  const button = [...element.querySelectorAll("button")].find(b => b.textContent === text)!;
-  expect(button).toBeDefined(); await React.act(async () => button.click());
+  const card = [...element.querySelectorAll(".brief-attention-item")].find(item => item.querySelector("h3")?.textContent === text);
+  const button = card?.querySelector("button") ?? [...element.querySelectorAll("button")].find(b => b.textContent === text);
+  expect(button).toBeDefined(); await React.act(async () => button!.click());
 }
 function controller(allow = true) {
   const opened: unknown[] = [], nav = new NavigationCompatibility({ roomAvailable: () => false, canLeave: async () => allow, commit: target => opened.push(target), explain() {} });
@@ -98,7 +99,9 @@ test("colliding update and notification-center IDs mark only their source owner 
   expect(JSON.parse(localStorage.getItem("jarvis:notif-read")!)).toEqual([]);
   await click("System warning");
   expect(centerUnread).toBe(false); expect(updateUnread).toBe(false);
-  expect(f.opened).toEqual([DESTINATIONS.devices.legacy, DESTINATIONS.logs.legacy]);
+  // System cards acknowledge the notice in place; only the device card navigates.
+  expect(f.opened).toEqual([DESTINATIONS.devices.legacy]);
+  expect([...element.querySelectorAll(".brief-attention-item")].find(item => item.querySelector("h3")?.textContent === "System warning")?.querySelector("button")?.textContent).toBe("Read");
   localStorage.removeItem("jarvis:notif-read");
 });
 

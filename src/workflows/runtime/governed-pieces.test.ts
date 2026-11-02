@@ -35,7 +35,7 @@ import { digest } from './effect-context';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, wrapUntrusted } from '../../roles/untrusted';
 import { authorizePieceDispatch, CODE_STEP_PIECE, PIECE_RECEIPT_MAX_BYTES, pieceInputDigest, receiptBody } from './piece-effect-guard';
 import { getWaitpoint } from '../db/repos/waitpoint';
-import { isCommunityPiece } from './step-admission';
+import { isCommunityAction, isCommunityPiece } from './step-admission';
 import { WebSocketService } from '../../daemon/ws-service';
 import { SandboxApi } from '../sandbox-api/server';
 import { EngineTokenSigner } from '../sandbox-api/engine-token';
@@ -80,6 +80,29 @@ const SEND_INPUT = {
   receiver: ['finance@example.test'], cc: [], subject: 'Q3 invoice',
   body: 'The invoice is attached.', sender_name: 'Jarvis',
 };
+
+test('Sheets append blocks uncertain replay and returns a persisted completion without another dispatch', async () => {
+  for (const action of ['insert_row', 'sheets_append_values', 'sheets_add_row']) {
+    const f = fixture('@activepieces/piece-google-sheets', action);
+    const input = { spreadsheet_id: 'fixture-sheet', worksheet_title: 'Submissions', values: [['one', 'me@example.test']] };
+    const authorized = await f.authorize(input) as { effectId: string };
+    expect(authorized).toMatchObject({ dispatch: 'authorized' });
+    await expect(f.authorize(input)).rejects.toThrow(/uncertain|replay is blocked/);
+    f.backends.pieceReceipt!(f.context, authorized.effectId, { updatedRange: 'Submissions!A2:B2', updatedRows: 1 });
+    expect(await f.authorize(input)).toMatchObject({ dispatch: 'completed', result: { updatedRows: 1 } });
+    await expect(f.authorize({ ...input, values: [['changed']] })).rejects.toThrow(/changed/);
+    expect(listWorkflowEffects(f.run.id)).toHaveLength(1);
+  }
+});
+
+test('other Sheets actions stay ungoverned community steps: audited and badged', async () => {
+  const sheets = '@activepieces/piece-google-sheets';
+  expect(isCommunityAction(sheets, 'clear_sheet')).toBe(true);
+  const f = fixture(COMMUNITY_PIECE, 'create_contact');
+  expect(await f.backends.pieceAuthorize!({ piece: sheets, action: 'clear_sheet', input: {} }, f.context)).toEqual({ governed: false });
+  expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([
+    expect.objectContaining({ tool_name: `community piece ${sheets}/clear_sheet`, authority_decision: 'allowed' })]);
+});
 
 describe('governed piece adapters: the catalogue stays open', () => {
   test('a community piece is reported ungoverned and leaves no effect record', async () => {
@@ -1471,6 +1494,31 @@ describe('#955: the editor badge and the admission agree on which steps skip app
   });
 });
 
+describe('#955: a partly governed piece badges and audits its ungoverned actions', () => {
+  test('a HubSpot action other than the contact upsert is admitted, audited and badged as community', async () => {
+    const HUBSPOT = '@activepieces/piece-hubspot';
+    expect(isCommunityPiece(HUBSPOT)).toBe(false);
+    expect(isCommunityAction(HUBSPOT, 'create-or-update-contact')).toBe(false);
+    expect(isCommunityAction(HUBSPOT, 'create-deal')).toBe(true);
+    expect(isCommunityAction(GMAIL, 'not_a_gmail_action')).toBe(false);
+    const f = fixture(COMMUNITY_PIECE, 'create-deal');
+    const reply = await f.backends.pieceAuthorize!({ piece: HUBSPOT, action: 'create-deal', input: {}, inputDigest: await pieceInputDigest({}) }, f.context);
+    expect(reply).toEqual({ governed: false });
+    expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([expect.objectContaining({ tool_name: `community piece ${HUBSPOT}/create-deal`, executed: 1 })]);
+  });
+  test('a Sheets action other than append is admitted, audited and badged as community', async () => {
+    const SHEETS = '@activepieces/piece-google-sheets';
+    expect(isCommunityPiece(SHEETS)).toBe(false);
+    for (const append of ['insert_row', 'sheets_append_values', 'sheets_add_row']) expect(isCommunityAction(SHEETS, append)).toBe(false);
+    expect(isCommunityAction(SHEETS, 'update_row')).toBe(true);
+    const f = fixture(SHEETS, 'update_row');
+    const reply = await f.backends.pieceAuthorize!({ piece: SHEETS, action: 'update_row', input: {}, inputDigest: await pieceInputDigest({}) }, f.context);
+    expect(reply).toEqual({ governed: false });
+    expect(listWorkflowEffects(f.run.id)).toHaveLength(0);
+    expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([expect.objectContaining({ tool_name: `community piece ${SHEETS}/update_row`, executed: 1 })]);
+  });
+});
+
 describe('#961: the core HTTP piece is governed by method', () => {
   const HTTP = '@activepieces/piece-http';
   const shipped = () => {
@@ -1677,6 +1725,77 @@ describe('#961: the core HTTP piece is governed by method', () => {
     }
   });
 
+  test('padding that pushes a rule\'s props out of the projection takes the blind category for every rule', () => {
+    // 40 keys that sort before any rule prop: the engine cuts the projection
+    // at 40 sorted keys, so the props the rule reads are gone from what it
+    // sees while the piece still receives them.
+    const padding = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`a${String(i).padStart(2, '0')}`, i]));
+    const samples: unknown[] = [undefined, false, true, null, '', 'GET', 'HEAD', 'get', 'subscribed', 'pending', 'transactional', 'private'];
+    let rules = 0;
+    const covered: string[] = [];
+    for (const adapter of ALL_PIECE_ADAPTERS) {
+      for (const [action, rule] of Object.entries(adapter.categoryFromInput ?? {})) {
+        rules++;
+        covered.push(`${adapter.catalogId}/${action}`);
+        const blind = resolveGovernedPieceAction(adapter.pieceName, action)!.category;
+        let narrowed = false;
+        const combos = rule.props.reduce<Record<string, unknown>[]>((acc, prop) =>
+          acc.flatMap(base => samples.map(value => value === undefined ? base : { ...base, [prop]: value })), [{}]);
+        for (const props of combos) {
+          if (resolveGovernedPieceAction(adapter.pieceName, action, props)!.category !== blind) narrowed = true;
+          // `zz` keeps the object over 40 keys even when the rule's props are left out.
+          const raw = { ...padding, ...props, zz: 'target' };
+          const engine = sanitizePieceInput(raw, adapter.pieceName);
+          const daemon = reprojectPieceInput(engine, adapter.pieceName);
+          const label = `${adapter.catalogId}/${action} ${JSON.stringify(props)}`;
+          for (const input of [raw, engine, daemon]) {
+            expect(`${label}: ${resolveGovernedPieceAction(adapter.pieceName, action, input)!.category}`).toBe(`${label}: ${blind}`);
+          }
+        }
+        // The samples reach a narrow case, so the padded assertions above are not vacuous.
+        expect(`${adapter.catalogId}/${action} narrows: ${narrowed}`).toBe(`${adapter.catalogId}/${action} narrows: true`);
+      }
+    }
+    expect(rules).toBeGreaterThan(0);
+    // Every input-narrowed Asana rule is among those checked.
+    expect(covered).toEqual(expect.arrayContaining(['asana/create_project', 'asana/instantiate_project_template',
+      'asana/create_team', 'asana/duplicate_project', 'asana/update_project', 'asana/update_team']));
+  });
+
+  test('padding inside the body cannot hide its data from the read rule', () => {
+    const inner = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`a${String(i).padStart(2, '0')}`, 0]));
+    for (const method of ['GET', 'HEAD']) {
+      const raw = { url: 'https://x.test/', method, body: { ...inner, data: 'exfil' } };
+      const engine = sanitizePieceInput(raw, HTTP);
+      const daemon = reprojectPieceInput(engine, HTTP);
+      expect('data' in (engine.body as object)).toBe(false);
+      for (const [label, input] of [['raw', raw], ['engine', engine], ['daemon', daemon]] as const) {
+        expect(`${method} ${label}: ${resolveGovernedPieceAction(HTTP, 'send_request', input)!.category}`).toBe(`${method} ${label}: send_message`);
+        expect(`${method} ${label}: ${tracksPieceCompletion(HTTP, 'send_request', input)}`).toBe(`${method} ${label}: true`);
+      }
+      // A wide body with no data at all is not judged a read either: the cut could have hidden one.
+      const wideNoData = sanitizePieceInput({ url: 'https://x.test/', method, body: { ...inner, zz: 0 } }, HTTP);
+      expect(resolveGovernedPieceAction(HTTP, 'send_request', wideNoData)!.category).toBe('send_message');
+      // A small body with no data is still a read.
+      expect(resolveGovernedPieceAction(HTTP, 'send_request', sanitizePieceInput({ url: 'https://x.test/', method, body: { a: 1 } }, HTTP))!.category).toBe('read_data');
+    }
+  });
+
+  test('a field spelled like the cut marker neither hides a cut nor narrows a rule', () => {
+    const http = (extra: Record<string, unknown>) => sanitizePieceInput({ method: 'GET', url: 'https://x.test/', ...extra }, HTTP);
+    // Not cut: the field is escaped, so the rule still reads the GET.
+    expect(resolveGovernedPieceAction(HTTP, 'send_request', http({ omittedFields: 0 }))!.category).toBe('read_data');
+    // Cut: whatever the input spells, the bare marker is the count and the worst case holds.
+    const pad = Object.fromEntries(Array.from({ length: 45 }, (_, i) => [`z${String(i).padStart(2, '0')}`, i]));
+    for (const spoof of [{}, { omittedFields: 0 }, { '~omittedFields': 0 }]) {
+      const cut = http({ ...pad, ...spoof });
+      expect(cut.method).toBe('GET');
+      expect(typeof cut.omittedFields).toBe('number');
+      expect(resolveGovernedPieceAction(HTTP, 'send_request', cut)!.category).toBe('delete_data');
+      expect(tracksPieceCompletion(HTTP, 'send_request', cut)).toBe(true);
+    }
+  });
+
   test('an HTTP receipt too large for the route keeps the status and says how much body it left out', () => {
     const effectId = `wfe_${'a'.repeat(64)}`;
     const small = { status: 200, headers: { a: 'b' }, body: { ok: true } };
@@ -1734,6 +1853,44 @@ describe('managed ClickUp task permissions', () => {
 
   test('every ClickUp write, send and delete carries a completion receipt; no read does', () => {
     const adapter = ALL_PIECE_ADAPTERS.find(a => a.catalogId === 'clickup')!;
+    for (const [category, names] of Object.entries(adapter.categories)) {
+      for (const action of names ?? []) {
+        expect(`${action}: ${tracksPieceCompletion(adapter.pieceName, action)}`).toBe(`${action}: ${category !== 'read_data'}`);
+      }
+    }
+    expect(tracksPieceCompletion(adapter.pieceName, 'custom_api_call')).toBe(false);
+  });
+});
+
+describe('Dropbox action permissions', () => {
+  const DROPBOX = '@activepieces/piece-dropbox';
+  test('deletes and moves require delete_data, links are sends, and an unmapped action stays modify_settings', async () => {
+    for (const action of ['delete_dropbox_file', 'delete_dropbox_folder', 'delete_dropbox_entry', 'start_dropbox_delete_batch',
+      'move_dropbox_file', 'move_dropbox_folder', 'move_dropbox_entry', 'start_dropbox_move_batch']) {
+      expect(resolveGovernedPieceAction(DROPBOX, action)).toMatchObject({category:'delete_data', known:true});
+    }
+    for (const action of ['get_dropbox_file_link', 'create_dropbox_upload_link', 'create_dropbox_copy_reference']) {
+      expect(resolveGovernedPieceAction(DROPBOX, action)).toMatchObject({category:'send_message', known:true});
+    }
+    await expect(fixture(DROPBOX, 'delete_dropbox_file', 3).authorize({path:'/Sandbox/a.txt'})).rejects.toThrow(/Authority denied/);
+    await expect(fixture(DROPBOX, 'move_dropbox_folder', 3).authorize({from_path:'/a', to_path:'/b'})).rejects.toThrow(/Authority denied/);
+    expect(await fixture(DROPBOX, 'delete_dropbox_file', 9).authorize({path:'/Sandbox/a.txt'})).toMatchObject({governed:true, dispatch:'authorized'});
+    for (const action of ['custom_api_call', 'dropbox_added_upstream_later']) {
+      expect(resolveGovernedPieceAction(DROPBOX, action)).toMatchObject({category:'modify_settings', known:false});
+    }
+  });
+
+  test('reads and writes on the user\'s own connection run at the default level 3 without a card', async () => {
+    for (const [action, input] of [['list_dropbox_folder', {path:'/Sandbox'}], ['downloadFile', {path:'/Sandbox/a.txt'}],
+      ['create_new_dropbox_folder', {path:'/Sandbox/New'}], ['upload_dropbox_file', {path:'/Sandbox/b.txt'}]] as const) {
+      const f = fixture(DROPBOX, action, 3);
+      expect({action, reply: await f.authorize(input)}).toMatchObject({action, reply: {governed:true, dispatch:'authorized'}});
+      expect(f.approvals.getPending()).toHaveLength(0);
+    }
+  });
+
+  test('every Dropbox write, send and delete carries a completion receipt; no read does', () => {
+    const adapter = ALL_PIECE_ADAPTERS.find(a => a.catalogId === 'dropbox')!;
     for (const [category, names] of Object.entries(adapter.categories)) {
       for (const action of names ?? []) {
         expect(`${action}: ${tracksPieceCompletion(adapter.pieceName, action)}`).toBe(`${action}: ${category !== 'read_data'}`);

@@ -46,6 +46,7 @@
  * built-ins, no daemon singletons.
  */
 
+import { isHubspotContact, HUBSPOT_PIECE, HUBSPOT_UPSERT } from './hubspot-contact';
 import type { ActionCategory } from '../../roles/authority';
 import type { ToolDefinition } from '../../actions/tools/registry';
 
@@ -67,32 +68,121 @@ export const PIECE_TOOL_CATEGORY = 'workflow-piece';
 const GMAIL_TRACKED_SENDS: ReadonlySet<unknown> = new Set(['send_email', 'gmail_send_email', 'reply_to_email',
   'gmail_reply_to_thread', 'gmail_send_draft', 'gmail_forward_message']);
 
+/** True for a Gmail action that sends mail and returns once sent (its result is a sent message). */
+export function isGmailTrackedSend(action: unknown): boolean {
+  return GMAIL_TRACKED_SENDS.has(action);
+}
+
 /**
  * Q-07's bounded completion-receipt protocol. These actions never park
- * themselves. Every Gmail send that returns once sent is tracked, so an engine
- * retry of a send whose outcome is unknown is refused instead of sending again
- * (#953 made these reachable at the default level).
+ * themselves. Every Gmail send that returns once sent is tracked, and so is
+ * adding a label to a message, so an engine retry of either whose outcome is
+ * unknown is refused instead of repeated (#953 made these reachable at the
+ * default level). Only the sends have a provider readback: a label change
+ * returns the labeled (incoming) message, which is not a send receipt.
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
+  return isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
+    || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || (piece === MAILCHIMP_PIECE && managedPieceChanges(MAILCHIMP_PIECE, action))
-    || (piece === CLICKUP_PIECE && managedPieceChanges(CLICKUP_PIECE, action))
-    || (piece === '@activepieces/piece-gmail' && GMAIL_TRACKED_SENDS.has(action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE) && managedPieceChanges(piece, action))
+    || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
+    || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
+    || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
     || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'))
     // #961: an HTTP request that is not a read is a send whose outcome the
     // server alone knows, so a retry after a lost or failed request is
     // refused rather than repeated. Without the input it is assumed a send.
-    || (piece === HTTP_PIECE && action === 'send_request' && !httpRequestIsRead(inputObject(input) ?? {}));
+    || (piece === HTTP_PIECE && action === 'send_request' && !httpRequestIsRead(ruleInput(input) ?? {}));
 }
 
 const CLICKUP_PIECE = '@activepieces/piece-clickup';
 const MAILCHIMP_PIECE = '@activepieces/piece-mailchimp';
-/** Every ClickUp or Mailchimp action that changes the account (write, send or
- * delete). None parks its flow, so each one can be tracked; a read never is. */
+const ASANA_PIECE = '@activepieces/piece-asana';
+/** Every ClickUp, Mailchimp or Asana action that changes the account (write,
+ * send, email, delete or an access change). None parks its flow, so each one
+ * can be tracked; a read never is. A category the adapter does not map tracks
+ * nothing, so ClickUp (no send_email or modify_settings names) and Mailchimp
+ * (no modify_settings names) track exactly what they did on their own. */
 function managedPieceChanges(pieceName: string, action: unknown): boolean {
   const categories = MANAGED_PIECE_ADAPTERS.find(a => a.pieceName === pieceName)!.categories;
-  return typeof action === 'string' && (['write_data', 'send_message', 'send_email', 'delete_data'] as const)
+  return typeof action === 'string' && (['write_data', 'send_message', 'send_email', 'delete_data', 'modify_settings'] as const)
+    .some(category => categories[category]?.includes(action));
+}
+
+const present = (value: unknown) => value !== undefined && value !== null && value !== '';
+
+/**
+ * Asana `update_project`: a privacy or owner change decides who can see the
+ * project, and archiving hides it (as a Trello archive, gated as a deletion).
+ * A plain field edit is a write. `archived: false` restores, a write too.
+ */
+export function asanaUpdateProjectCategory(input: Record<string, unknown>): ActionCategory {
+  if (present(input.privacy_setting) || present(input.owner)) return 'modify_settings';
+  if (present(input.archived) && input.archived !== false) return 'delete_data';
+  return 'write_data';
+}
+
+/** Asana `update_team`: visibility or endorsement is a team setting; a rename or description is a write. */
+export function asanaUpdateTeamCategory(input: Record<string, unknown>): ActionCategory {
+  return present(input.visibility) || present(input.endorsed) ? 'modify_settings' : 'write_data';
+}
+
+/**
+ * Asana `create_project`: the new project is shared with a team, and a
+ * privacy setting other than private opens it to the workspace. Without
+ * either it is a private project of the caller's, a write. Anything else, a
+ * templated value included, is the worst case. An absent privacy setting is
+ * the workspace default; this treats it as a write.
+ */
+export function asanaCreateProjectCategory(input: Record<string, unknown>): ActionCategory {
+  if (present(input.team)) return 'modify_settings';
+  return !present(input.privacy_setting) || input.privacy_setting === 'private' ? 'write_data' : 'modify_settings';
+}
+
+/**
+ * Asana `instantiate_project_template`: the new project always lands in a
+ * team (a left-out team is the template's own, upstream's "Leave empty to use
+ * the template's team"), so with no privacy setting, or any but private, it
+ * is shared with that team; template roles put people on it. Only an
+ * explicitly private project with no requested roles (left out or an empty
+ * list) is the caller's alone, a write. Anything else, a templated value
+ * included, is the worst case.
+ */
+export function asanaInstantiateProjectTemplateCategory(input: Record<string, unknown>): ActionCategory {
+  const roles = input.requested_roles;
+  const noRoles = !present(roles) || (Array.isArray(roles) && roles.length === 0);
+  return input.privacy_setting === 'private' && noRoles ? 'write_data' : 'modify_settings';
+}
+
+/** Asana `create_team`: a secret team is visible only to its members (the
+ * caller); any other visibility, a templated one included, lets the
+ * organization see or join it. Absent is Asana's default, treated as a write. */
+export function asanaCreateTeamCategory(input: Record<string, unknown>): ActionCategory {
+  return !present(input.visibility) || input.visibility === 'secret' ? 'write_data' : 'modify_settings';
+}
+
+/** `duplicate_project` parts that copy only content, never who has access. */
+const ASANA_DUPLICATE_CONTENT_PARTS: ReadonlySet<unknown> = new Set(['notes', 'forms', 'allocations', 'task_assignee',
+  'task_attachments', 'task_dates', 'task_dependencies', 'task_followers', 'task_notes', 'task_projects',
+  'task_subtasks', 'task_tags', 'task_templates', 'task_type_default']);
+
+/** Asana `duplicate_project`: copying `members` or `permissions` grants the
+ * original's people access to the copy. A list of content parts only is a
+ * write; anything else (those two, an unknown part, a templated value or a
+ * non-list) is the worst case. */
+export function asanaDuplicateProjectCategory(input: Record<string, unknown>): ActionCategory {
+  if (!present(input.include)) return 'write_data';
+  return Array.isArray(input.include) && input.include.every(part => ASANA_DUPLICATE_CONTENT_PARTS.has(part))
+    ? 'write_data' : 'modify_settings';
+}
+
+const DROPBOX_PIECE = '@activepieces/piece-dropbox';
+/** Every Dropbox action that changes the account or hands out access (write,
+ * send or delete). None parks its flow, so each one can be tracked. */
+function dropboxTracked(action: unknown): boolean {
+  const categories = MANAGED_PIECE_ADAPTERS.find(a => a.pieceName === DROPBOX_PIECE)!.categories;
+  return typeof action === 'string' && (['write_data', 'send_message', 'delete_data'] as const)
     .some(category => categories[category]?.includes(action));
 }
 
@@ -103,9 +193,12 @@ export const HTTP_PIECE = '@activepieces/piece-http';
  * True for an HTTP method that only reads: GET and HEAD, in any letter case
  * (axios upper-cases the method it sends). Anything else, including a method
  * with surrounding space or one that is not a string, is not a read. A request
- * is a read only when `httpRequestIsRead` also finds no body; the category,
+ * is a read only when `httpRequestIsRead` also finds no body. The category,
  * the completion tracking, the in-piece retry and the redirect rule all ask
- * that one function, so they cannot disagree about a request.
+ * that one function, but not of the same value: the daemon and the engine ask
+ * of the bounded projection, the piece of its raw props. They agree because a
+ * cut can only take a request away from being a read (see `httpRequestIsRead`
+ * and `ruleInput`), never make one.
  */
 export function httpMethodIsRead(method: unknown): boolean {
   return typeof method === 'string' && /^(get|head)$/iu.test(method);
@@ -115,22 +208,66 @@ export function httpMethodIsRead(method: unknown): boolean {
  * True for an HTTP request that only reads: a GET or HEAD that carries no
  * body. The piece sends `body.data` whatever the method (axios puts a body on
  * a GET too, measured), so a GET with one is content leaving for the host,
- * not a read (#961 security review). A projection that cut the body still has
- * a non-empty value there, so it never reads as body-less.
+ * not a read (#961 security review).
+ *
+ * A cut never makes a request read as body-less. A cut string or array is
+ * still a non-empty value. A `body` object cut at 40 keys can have lost
+ * `data` to keys that sort before it (`{a00..a39, data}` projects as
+ * `{a00..a39, omittedFields: 1}`), so a body object carrying the bare marker,
+ * or over 40 keys as the piece's raw props, is never a read. The top-level
+ * cut is `ruleInput`'s, which callers apply before asking.
  */
 export function httpRequestIsRead(input: Record<string, unknown>): boolean {
-  // On a projection cut at 40 keys, `body` sorts before `method`: a body lost
-  // to the cut takes the method with it, and a request with no method is
-  // never a read. So a cut can never make a request with a body read as one.
   if (!httpMethodIsRead(input.method)) return false;
   const body = input.body;
   if (body === undefined || body === null || body === '') return true;
-  const data = inputObject(body) ? (body as Record<string, unknown>).data : body;
+  const fields = inputObject(body);
+  if (fields && (Object.hasOwn(fields, OMITTED_FIELDS) || Object.keys(fields).length > MAX_KEYS)) return false;
+  const data = fields ? fields.data : body;
   return data === undefined || data === null || data === '';
 }
 
 function inputObject(input: unknown): Record<string, unknown> | null {
   return input !== null && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : null;
+}
+
+/**
+ * The input a `categoryFromInput` rule may read, or null when it must take the
+ * table's worst case. A rule reads the projection, and a projection cut at 40
+ * keys (sorted) has lost fields the piece still receives: the engine passes
+ * the piece the whole resolved input and nothing rejects an unknown prop, so
+ * 40 padding keys that sort first (`a00`...) would push the rule's props out
+ * of the projection, and a rule that reads an absent prop as the narrow case
+ * (a Trello update with no `closed`) would be defeated. So a cut object -- one
+ * carrying the bare `omittedFields` count, which a real field can never spell
+ * (`escapeMarkerSpelling`), or one over 40 keys that was never projected -- is
+ * not read at all. The engine and the daemon both ask this, so the category
+ * and the completion tracking agree on either side.
+ *
+ * WHAT THIS MOVED. `bound()` is untouched, so every projection, and with it
+ * every `requestDigest`, is byte-exact as before. What changed is the category
+ * and the tracking read FROM a cut projection, and only for an input whose
+ * top-level object (or HTTP `body` object, `httpRequestIsRead`) has over 40
+ * keys:
+ *   - A padded Trello card update (or any rule that read an absent prop as the
+ *     narrow case) recorded or approved as `write_data` now resolves to the
+ *     blind `delete_data`. When it re-authorizes (a resume, an engine retry),
+ *     the recorded `actionCategory` no longer matches, so `effect-boundary.ts`
+ *     fails it with "Workflow effect changed since it was recorded; start a
+ *     new run ..." and the new run asks at the real category.
+ *   - A padded HTTP GET (method kept, or a body whose `data` was cut) that was
+ *     recorded as an untracked read is now a tracked send. A legacy record
+ *     still `pending` under the untracked route is blocked with
+ *     `WORKFLOW_UPGRADED` (`service-backends.ts`, the legacy branch of
+ *     `pieceAuthorize`) rather than moved to the tracked identity.
+ *   - Completion receipts are unaffected: a step already tracked stays tracked.
+ * This file is in `PATCHED_VENDOR_SOURCES`, so the edit rebuilds every cached
+ * engine bundle.
+ */
+function ruleInput(input: unknown): Record<string, unknown> | null {
+  const fields = inputObject(input);
+  if (!fields) return null;
+  return Object.hasOwn(fields, OMITTED_FIELDS) || Object.keys(fields).length > MAX_KEYS ? null : fields;
 }
 
 /**
@@ -184,7 +321,8 @@ export interface GovernedPieceAdapter {
    * its input can reach, which is what a caller that cannot see the input (a
    * job contract, a stored provenance) is told. The rule may only narrow that
    * (`governed-pieces.test.ts` pins it), and it reads the projected input,
-   * whose whole original the engine's `inputDigest` binds.
+   * whose whole original the engine's `inputDigest` binds. A projection cut at
+   * 40 keys is never read: the action takes the worst case (`ruleInput`).
    */
   categoryFromInput?: Readonly<Record<string, InputCategoryRule>>;
   /**
@@ -619,9 +757,103 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
-  catalogId: 'typeform', pieceName: '@activepieces/piece-typeform', unknownActionCategory: 'modify_settings',
-  targetProps: ['form_id', 'workspace', 'accountId', 'search', 'query', 'page', 'pageSize', 'sortBy', 'orderBy', 'since', 'until', 'responseType', 'includedResponseIds', 'sort', 'before', 'after'],
-  categories: {read_data: ['list_forms', 'get_form', 'list_responses', 'list_workspaces']},
+  // Asana: every action of the pinned 0.7.2 bundle (`asana-connection.test.ts`
+  // pins the list and the engine test checks it against the installed
+  // package), so a workflow on the user's own Asana connection keeps running
+  // at the default level. The managed `jarvis:asana` connection is narrower
+  // still: `managed-asana.ts` runs only five of these. Only `custom_api_call`
+  // and an action added upstream fall back to `modify_settings`.
+  catalogId: 'asana', pieceName: '@activepieces/piece-asana', unknownActionCategory: 'modify_settings',
+  targetProps: ['workspace', 'organization', 'team', 'project', 'section', 'task', 'parent', 'story', 'tag', 'user',
+    'member', 'members', 'followers', 'membership', 'status_update', 'project_brief', 'attachment', 'custom_field',
+    'enum_option', 'portfolio', 'item', 'goal', 'allocation', 'access_request', 'target', 'project_template',
+    'name', 'title', 'notes', 'html_notes', 'assignee', 'due_on', 'due_at', 'start_on', 'completed', 'archived',
+    'privacy_setting', 'owner', 'visibility', 'access_level', 'text', 'html_text', 'is_pinned', 'completed_since',
+    'include', 'requested_roles', 'limit', 'offset'],
+  categories: {
+    read_data: ['get_allocation', 'get_attachment', 'get_current_user', 'get_custom_field', 'get_goal', 'get_job',
+      'get_membership', 'get_portfolio', 'get_project', 'get_project_brief', 'get_project_task_counts', 'get_section',
+      'get_status_update', 'get_story', 'get_tag', 'get_task', 'get_team', 'get_team_membership', 'get_time_period',
+      'get_user', 'get_workspace', 'get_workspace_membership', 'list_access_requests', 'list_allocations',
+      'list_assigned_tasks', 'list_attachments', 'list_custom_fields', 'list_custom_types', 'list_favorites',
+      'list_goal_relationships', 'list_goals', 'list_memberships', 'list_portfolio_items', 'list_portfolios',
+      'list_projects', 'list_project_tasks', 'list_project_templates', 'list_reactions', 'list_sections',
+      'list_section_tasks', 'list_status_updates', 'list_subtasks', 'list_tags', 'list_tag_tasks',
+      'list_task_dependencies', 'list_task_projects', 'list_task_stories', 'list_task_tags', 'list_task_templates',
+      'list_team_memberships', 'list_teams', 'list_time_periods', 'list_time_tracking_entries', 'list_users',
+      'list_user_teams', 'list_workspace_memberships', 'list_workspaces', 'search_tasks', 'search_workspace_objects'],
+    // Content that lands in front of other people, including an edit of it: a
+    // comment notifies the task's followers, a status update the project's
+    // members, an access request the owner.
+    send_message: ['add_task_comment', 'update_comment', 'create_status_update', 'create_access_request'],
+    // Workspace content under the caller's own access; none of these grants a
+    // person access to a project, team or workspace. Task followers
+    // (`add_task_followers`, and `followers` on `create_project_task` and
+    // `create_subtask`) only get the task's notifications: a follower who
+    // cannot see the project gains that one task, not the project, so these
+    // stay writes. Project followers are different (below).
+    write_data: ['add_goal_supporting_relationship', 'add_portfolio_item', 'add_tag_to_task',
+      'add_task_dependencies', 'add_task_followers', 'add_task_to_project', 'create_allocation', 'create_custom_field',
+      'create_custom_field_enum_option', 'create_project_brief', 'create_project_task',
+      'create_section', 'create_subtask', 'create_tag', 'create_task',
+      'duplicate_task', 'move_section', 'move_task_to_section', 'reject_access_request',
+      'remove_portfolio_item', 'remove_project_followers', 'remove_tag_from_task', 'remove_task_dependencies',
+      'remove_task_followers', 'remove_task_from_project', 'reorder_custom_field_enum_option', 'set_task_parent',
+      'update_allocation', 'update_custom_field', 'update_custom_field_enum_option', 'update_project_brief',
+      'update_section', 'update_tag', 'update_task', 'update_user', 'upload_attachment'],
+    // Every delete, and the removals upstream labels DESTRUCTIVE.
+    delete_data: ['delete_allocation', 'delete_attachment', 'delete_comment', 'delete_custom_field',
+      'delete_membership', 'delete_project', 'delete_project_brief', 'delete_section', 'delete_status_update',
+      'delete_tag', 'delete_task', 'remove_project_members', 'remove_user_from_team', 'remove_user_from_workspace'],
+    // Who can see or do what: granting a person access to a project, team or
+    // workspace. `add_project_followers` makes a follower who is not yet a
+    // member a member (upstream's own description). The project and team
+    // creates, `duplicate_project`, `update_project` and `update_team` sit
+    // here at their worst case (team, privacy, owner, visibility, copied
+    // members or permissions) and narrow by input.
+    modify_settings: ['add_project_followers', 'add_project_members', 'add_user_to_team', 'add_user_to_workspace',
+      'approve_access_request', 'create_membership', 'create_project', 'create_team', 'duplicate_project',
+      'instantiate_project_template', 'update_project', 'update_team'],
+  },
+  categoryFromInput: {
+    create_project: { props: ['team', 'privacy_setting'], category: asanaCreateProjectCategory },
+    instantiate_project_template: { props: ['privacy_setting', 'requested_roles'], category: asanaInstantiateProjectTemplateCategory },
+    create_team: { props: ['visibility'], category: asanaCreateTeamCategory },
+    duplicate_project: { props: ['include'], category: asanaDuplicateProjectCategory },
+    update_project: { props: ['privacy_setting', 'owner', 'archived'], category: asanaUpdateProjectCategory },
+    update_team: { props: ['visibility', 'endorsed'], category: asanaUpdateTeamCategory },
+  },
+}, {
+  // Dropbox, a community piece whose managed `jarvis:dropbox` connection made
+  // it governed. Every action of the pinned 0.9.2 bundle is named
+  // (`dropbox-connection.test.ts` pins the list and the engine test checks it
+  // against the installed package), so a workflow on the user's own Dropbox
+  // connection keeps running at the default level for reads and writes. The
+  // managed connection itself is limited to MANAGED_DROPBOX_ACTIONS.
+  catalogId: 'dropbox', pieceName: DROPBOX_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['path', 'from_path', 'to_path', 'paths', 'entries', 'query', 'url', 'copy_reference', 'rev',
+    'async_job_id', 'recursive', 'limit', 'max_results', 'autorename', 'allow_ownership_transfer', 'mode', 'duration'],
+  categories: {
+    read_data: ['search_dropbox', 'downloadFile', 'list_dropbox_folder', 'get_dropbox_file_metadata',
+      'list_dropbox_file_revisions', 'get_dropbox_file_lock', 'download_dropbox_folder_as_zip',
+      'get_dropbox_file_preview', 'get_dropbox_file_thumbnail', 'get_dropbox_thumbnails_batch',
+      'get_dropbox_save_url_status', 'get_dropbox_copy_batch_status', 'get_dropbox_move_batch_status',
+      'get_dropbox_delete_batch_status', 'get_dropbox_create_folder_batch_status'],
+    // Each hands out access to whoever holds the result: a temporary download
+    // link, an upload link into the account, or a reference another account
+    // can copy the file with. Exposure, so gated like a send.
+    send_message: ['get_dropbox_file_link', 'create_dropbox_upload_link', 'create_dropbox_copy_reference'],
+    // Adds content or changes it with the earlier state kept (upload is add
+    // mode, restore writes a new revision). Nothing here removes an entry.
+    write_data: ['create_new_dropbox_text_file', 'upload_dropbox_file', 'create_new_dropbox_folder',
+      'copy_dropbox_file', 'copy_dropbox_folder', 'copy_dropbox_entry', 'start_dropbox_copy_batch',
+      'start_dropbox_create_folder_batch', 'save_url_to_dropbox', 'save_dropbox_copy_reference',
+      'lock_dropbox_file', 'unlock_dropbox_file', 'restore_dropbox_file'],
+    // Every delete, and every move: a move takes the entry away from where
+    // other people and workflows find it, and may transfer its ownership.
+    delete_data: ['delete_dropbox_file', 'delete_dropbox_folder', 'delete_dropbox_entry', 'start_dropbox_delete_batch',
+      'move_dropbox_file', 'move_dropbox_folder', 'move_dropbox_entry', 'start_dropbox_move_batch'],
+  },
 }, {
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace_id', 'space_id', 'folder_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id',
@@ -752,6 +984,26 @@ function mailchimpMemberStatusCategory(input: Record<string, unknown>): ActionCa
 
 /** Every adapter: the verified catalog pieces, the vendored core pieces, then the managed ones. */
 export const ALL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [...GOVERNED_PIECE_ADAPTERS, ...CORE_PIECE_ADAPTERS, ...MANAGED_PIECE_ADAPTERS];
+// Narrow audited action coverage; this does not promote the entire Sheets
+// package to the Library's VERIFIED set or claim coverage of its other actions.
+const HUBSPOT_CONTACT_ADAPTER: GovernedPieceAdapter = {
+  catalogId: 'hubspot', pieceName: HUBSPOT_PIECE, unknownActionCategory: 'delete_data',
+  targetProps: ['email','objectProperties'], categories: { write_data: [HUBSPOT_UPSERT] },
+};
+const SHEETS_APPEND_ADAPTER: GovernedPieceAdapter = {
+  catalogId: 'google-sheets', pieceName: '@activepieces/piece-google-sheets',
+  unknownActionCategory: 'delete_data',
+  targetProps: ['spreadsheet_id', 'spreadsheetId', 'worksheet_title', 'sheetId', 'sheet_id', 'range', 'values', 'value_input_option', 'as_string'],
+  categories: { write_data: ['insert_row', 'sheets_append_values', 'sheets_add_row'] },
+};
+
+/**
+ * Adapters that govern only some of a piece's actions, outside the verified
+ * set. Their other actions resolve to null and stay community steps. Exported
+ * for the job contract, which must judge a governed action the way the
+ * runtime does.
+ */
+export const PARTIAL_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [SHEETS_APPEND_ADAPTER, HUBSPOT_CONTACT_ADAPTER];
 
 const BY_PIECE_NAME = new Map<string, GovernedPieceAdapter>();
 const ACTION_CATEGORY = new Map<string, Map<string, ActionCategory>>();
@@ -777,7 +1029,7 @@ for (const adapter of ALL_PIECE_ADAPTERS) {
 /** True for a piece with a governed adapter. The engine-side guard asks this
  * first, so an ungoverned piece costs no round trip at all. */
 export function isGovernedPiece(pieceName: unknown): boolean {
-  return typeof pieceName === 'string' && BY_PIECE_NAME.has(pieceName);
+  return typeof pieceName === 'string' && (BY_PIECE_NAME.has(pieceName) || pieceName === SHEETS_APPEND_ADAPTER.pieceName || pieceName === HUBSPOT_PIECE);
 }
 
 /**
@@ -788,11 +1040,17 @@ export function isGovernedPiece(pieceName: unknown): boolean {
  */
 export function resolveGovernedPieceAction(pieceName: unknown, actionName: unknown, input?: unknown): ResolvedPieceAction | null {
   if (typeof pieceName !== 'string' || typeof actionName !== 'string') return null;
+  if (isHubspotContact(pieceName, actionName)) return { adapter: HUBSPOT_CONTACT_ADAPTER, action: actionName, category: 'write_data', known: true, byInput: false };
+  if (pieceName === SHEETS_APPEND_ADAPTER.pieceName) {
+    return tracksPieceCompletion(pieceName, actionName)
+      ? { adapter: SHEETS_APPEND_ADAPTER, action: actionName, category: 'write_data', known: true, byInput: false } : null;
+  }
   const adapter = BY_PIECE_NAME.get(pieceName);
   if (!adapter) return null;
   const mapped = ACTION_CATEGORY.get(pieceName)!.get(actionName);
   const rule = mapped !== undefined && Object.hasOwn(adapter.categoryFromInput ?? {}, actionName) ? adapter.categoryFromInput![actionName] : undefined;
-  const fields = inputObject(input);
+  // A cut projection takes the worst case (`ruleInput`), as no input does.
+  const fields = ruleInput(input);
   const category = rule && fields ? rule.category(fields) : mapped ?? adapter.unknownActionCategory;
   return { adapter, action: actionName, category, known: mapped !== undefined, byInput: rule !== undefined,
     ...(rule ? { categoryProps: rule.props } : {}) };
