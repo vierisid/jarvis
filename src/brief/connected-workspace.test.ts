@@ -168,3 +168,16 @@ test('managed Asana shows its stored grant and routes setup to its own hosted in
   sources.asana = () => ({configured:false,connected:false,account:null});
   expect(provider.read().rows.some(r=>r.sourceId==='native:asana')).toBe(false);
 });
+
+test('managed Todoist shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.todoist = () => ({configured:true, connected:true, account:{id:'9',label:'owner@example.test'}});
+  expect(row('native:todoist')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'9',setupActionId:'setup:todoist'});
+  expect(provider.read().setup.find(s => s.id === 'setup:todoist')?.target).toEqual({kind:'hosted_integration',provider:'todoist'});
+  sources.todoist = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:todoist')).toBe(false);
+});
+
+test('a Todoist grant that needs reconnecting reads as disconnected and still offers setup', () => {
+  sources.todoist = () => ({configured:true, connected:false, account:{id:'9',label:'owner@example.test'}});
+  expect(row('native:todoist')).toMatchObject({status:'disconnected',evidence:'none',setupActionId:'setup:todoist'});
+});
