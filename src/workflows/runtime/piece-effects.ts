@@ -448,17 +448,15 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
         'notion_get_block_children', 'notion_get_page_comments', 'notion_search', 'notion_list_users',
         'notion_get_user', 'notion_get_database', 'notion_query_database', 'notion_find_database_item'],
       write_data: ['create_database_item', 'update_database_item', 'createPage', 'append_to_page',
-        'restore_database_item', 'notion_create_page',
-        'notion_append_to_page', 'notion_update_block', 'notion_create_database',
+        'restore_database_item', 'add_comment', 'notion_create_page',
+        'notion_append_to_page', 'notion_add_comment', 'notion_update_block', 'notion_create_database',
         'notion_create_database_item', 'notion_update_database_item',
         'notion_restore_database_item'],
-      // A comment notifies the page's participants, like an Asana or Trello comment.
-      send_message: ['add_comment', 'notion_add_comment'],
       // A Notion archive moves the page to the trash, where it ages out --
       // unlike a Gmail archive, which only takes a label off. A move takes the
       // page out of its old parent and gives it the new parent's sharing, and a
       // schema update can drop a property with its values (upstream labels it
-      // DESTRUCTIVE). Every action of the pinned 0.8.1 bundle is named
+      // DESTRUCTIVE). Every action of the pinned 0.8.3 bundle is named
       // (`managed-notion.test.ts` pins the list, the engine test checks it
       // against the installed package).
       delete_data: ['archive_database_item', 'notion_archive_page', 'notion_delete_block',

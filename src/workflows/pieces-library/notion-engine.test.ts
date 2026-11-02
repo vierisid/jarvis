@@ -1,7 +1,7 @@
 /** Actual npm piece in the real engine. Only fetch to its provider host is redirected
  * in a disposable engine copy; no live Notion calls or account credentials are used.
  * Gated on JARVIS_TEST_ENGINE_BUILD=1 like the other engine tests; CI runs it
- * in the engine step of the required `test` job. It installs the pinned 0.8.1 from npm. */
+ * in the engine step of the required `test` job. It installs the pinned 0.8.3 from npm. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {
   mkdtempSync,
@@ -59,7 +59,7 @@ beforeAll(async () => {
   initWorkflowDb(join(dir, "db.sqlite"));
   writeFileSync(
     join(dir, "package.json"),
-    JSON.stringify({ private: true, dependencies: { [piece]: "0.8.1" } }),
+    JSON.stringify({ private: true, dependencies: { [piece]: "0.8.3" } }),
   );
   const install = spawnSync(
     "bun",
@@ -268,7 +268,7 @@ test.skipIf(!gate)(
       type: "PIECE" as const,
       settings: {
         pieceName: piece,
-        pieceVersion: "0.8.1",
+        pieceVersion: "0.8.3",
         actionName,
         input: { auth: "{{connections.jarvis:notion}}", ...input },
       },

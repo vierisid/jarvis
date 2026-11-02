@@ -232,10 +232,10 @@ test("multiple auth methods retain a connection picker and ordinary single-metho
 });
 
 const NOTION = "@activepieces/piece-notion";
-/** Every action of the pinned @activepieces/piece-notion 0.8.1 bundle, keyed by
+/** Every action of the pinned @activepieces/piece-notion 0.8.3 bundle (0.8.1 has the same set), keyed by
  * the `classification` upstream gives it. The engine test checks the installed
  * package against the adapter too. */
-const NOTION_081_BY_UPSTREAM: Record<string, string[]> = {
+const NOTION_083_BY_UPSTREAM: Record<string, string[]> = {
   SEARCH: ["list_databases", "notion-find-database-item", "list_database_pages", "find_page", "notion_search",
     "notion_list_users", "notion_query_database", "notion_find_database_item"],
   READ: ["getPageOrBlockChildren", "retrieve_database", "get_page_comments", "notion_get_page",
@@ -247,18 +247,17 @@ const NOTION_081_BY_UPSTREAM: Record<string, string[]> = {
   DESTRUCTIVE: ["archive_database_item", "notion_archive_page", "notion_delete_block",
     "notion_update_database_schema", "notion_archive_database_item"],
 };
-/** Where Jarvis departs from upstream's label: comments notify people, and a move changes the page's sharing. */
-const SENDS = ["add_comment", "notion_add_comment"];
+/** Where Jarvis departs from upstream's label: a move takes the page out of its parent and changes its sharing. */
 const MOVES = ["notion_move_page"];
 const expectedCategory = (upstream: string, name: string) =>
-  SENDS.includes(name) ? "send_message" : MOVES.includes(name) ? "delete_data"
+  MOVES.includes(name) ? "delete_data"
     : upstream === "READ" || upstream === "SEARCH" ? "read_data" : upstream === "DESTRUCTIVE" ? "delete_data" : "write_data";
 test("the Notion adapter names every action of the pinned bundle, each in the category it should have", () => {
-  const all = Object.values(NOTION_081_BY_UPSTREAM).flat();
+  const all = Object.values(NOTION_083_BY_UPSTREAM).flat();
   expect(all).toHaveLength(36);
   const adapter = GOVERNED_PIECE_ADAPTERS.find((a) => a.pieceName === NOTION)!;
   expect((Object.values(adapter.categories).flat() as string[]).filter((n) => n !== "custom_api_call").sort()).toEqual([...all].sort());
-  const table = Object.fromEntries(Object.entries(NOTION_081_BY_UPSTREAM).flatMap(([upstream, names]) =>
+  const table = Object.fromEntries(Object.entries(NOTION_083_BY_UPSTREAM).flatMap(([upstream, names]) =>
     names.map((name) => [name, expectedCategory(upstream, name)])));
   expect(Object.fromEntries(all.map((name) => [name, resolveGovernedPieceAction(NOTION, name)!.category as string]))).toEqual(table);
   expect(all.filter((name) => !resolveGovernedPieceAction(NOTION, name)!.known)).toEqual([]);
