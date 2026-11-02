@@ -25,6 +25,31 @@ export const DEFAULT_IDS = {
 } as const;
 
 const STATEMENTS: string[] = [
+  `CREATE TABLE IF NOT EXISTS workflow_refund (
+    identity TEXT PRIMARY KEY, config TEXT NOT NULL, owner TEXT NOT NULL,
+    lease_until INTEGER NOT NULL, state TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_refund_payment (payment TEXT PRIMARY KEY, request TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS workflow_contact_import (
+    identity TEXT PRIMARY KEY, config TEXT NOT NULL, owner TEXT NOT NULL,
+    lease_until INTEGER NOT NULL, progress TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_import_cursor (
+    identity TEXT NOT NULL, cursor TEXT NOT NULL, PRIMARY KEY(identity,cursor)
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_import_contact (
+    identity TEXT NOT NULL, source_id TEXT NOT NULL, hash TEXT NOT NULL,
+    contact_id TEXT NOT NULL, source TEXT NOT NULL DEFAULT '', PRIMARY KEY(identity,source_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_weekly_report (
+    identity TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL,
+    document_id TEXT, result TEXT, created INTEGER NOT NULL
+  )`,
+  // Daily contact claims and draft receipts survive restarts and run-history cleanup.
+  `CREATE TABLE IF NOT EXISTS workflow_sales_followup (
+    identity TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL,
+    result TEXT, created INTEGER NOT NULL
+  )`,
   // Cross-run contact/notification fences survive run-history cleanup. Keys are
   // scoped hashes, not credentials or personal data. No lease can expire an uncertain write.
   `CREATE TABLE IF NOT EXISTS workflow_effect_identity (

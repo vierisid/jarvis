@@ -41,6 +41,8 @@ export const notifyAction = createAction({
     unknown: [],
   },
   props: {
+    meetingGuard: Property.Json({ displayName: 'Meeting freshness guard', required: false,
+      description: 'For meeting briefs, pass {{loop.item.guard}} from Context: Prepare upcoming external meeting briefs. Rechecks the current event after approval, suppresses changed/cancelled/past meetings, and derives the persistent event/start key in the daemon. Requires dashboard-only delivery.' }),
     idempotencyKey: Property.ShortText({ displayName: 'Notification identity', required: false,
       description: 'Optional stable identity, e.g. qualified-contact:{{upsert.id}}. Consumed once per workflow across runs, versions and branches. Repeated keys suppress delivery; uncertain delivery requires review. Use a different explicit key only for a genuinely new notification.' }),
     message: Property.LongText({
@@ -88,6 +90,7 @@ export const notifyAction = createAction({
       throw new Error("jarvis-notify: message is required and must be a non-empty string");
     }
     const body: Record<string, unknown> = { message };
+    if (context.propsValue.meetingGuard != null) body.meetingGuard = context.propsValue.meetingGuard;
     const identity = context.propsValue['idempotencyKey'];
     if (identity !== undefined && identity !== null) body.idempotencyKey = identity;
     const channels = context.propsValue["channels"];

@@ -82,7 +82,8 @@ export function isGmailTrackedSend(action: unknown): boolean {
  * returns the labeled (incoming) message, which is not a send receipt.
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
+  return (piece === '@activepieces/piece-intercom' && ['add_note_to_contact', 'add_note_to_conversation_by_id', 'add-or-remove-tag-on-contact'].includes(String(action)))
+    || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
     || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE) && managedPieceChanges(piece, action))
@@ -757,6 +758,10 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  catalogId: 'intercom', pieceName: '@activepieces/piece-intercom', unknownActionCategory: 'modify_settings',
+  targetProps: ['lookupBy', 'value', 'conversationId', 'plainText', 'contactId', 'body', 'adminId', 'tagId', 'untag'],
+  categories: {read_data: ['get_contact', 'get_conversation_by_id', 'list-all-tags'], write_data: ['add-or-remove-tag-on-contact'], send_message: ['add_note_to_contact', 'add_note_to_conversation_by_id']},
+}, {
   // Asana: every action of the pinned 0.7.2 bundle (`asana-connection.test.ts`
   // pins the list and the engine test checks it against the installed
   // package), so a workflow on the user's own Asana connection keeps running

@@ -21,6 +21,7 @@ const VALID_CHANNELS: ReadonlySet<string> = new Set(PIECE_NOTIFY_CHANNELS);
 const VALID_PRIORITIES = new Set(["low", "normal", "high"]);
 
 export interface NotifyRequest {
+  meetingGuard?: unknown;
   message: string;
   idempotencyKey?: string;
   channels: string[];
@@ -97,7 +98,7 @@ export function createJarvisNotifyRoute(
     let reply: NotifyResponse;
     try {
       reply = await cancellableWorkflowService(deps.notify)(
-        { message: raw.message, channels, priority, ...(typeof raw.idempotencyKey === 'string' ? {idempotencyKey:raw.idempotencyKey} : {}) },
+        { message: raw.message, channels, priority, ...(raw.meetingGuard == null ? {} : { meetingGuard: raw.meetingGuard }), ...(typeof raw.idempotencyKey === 'string' ? {idempotencyKey:raw.idempotencyKey} : {}) },
         workflowEffectContext(ctx),
       );
     } catch (error) {
