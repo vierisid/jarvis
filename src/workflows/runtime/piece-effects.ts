@@ -82,10 +82,12 @@ export function isGmailTrackedSend(action: unknown): boolean {
  * returns the labeled (incoming) message, which is not a send receipt.
  */
 export function tracksPieceCompletion(piece: unknown, action: unknown, input?: unknown): boolean {
-  return isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
+  return (piece === '@activepieces/piece-airtable' && ['create_record_ai','update_record_ai'].includes(String(action)))
+    || (piece === NOTION_PIECE && notionTracked(action))
+    || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === LINEAR_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE) && managedPieceChanges(piece, action))
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
     || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
@@ -99,8 +101,11 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
 const CLICKUP_PIECE = '@activepieces/piece-clickup';
 const MAILCHIMP_PIECE = '@activepieces/piece-mailchimp';
 const ASANA_PIECE = '@activepieces/piece-asana';
+const CALENDLY_PIECE = '@activepieces/piece-calendly';
+const INTERCOM_PIECE = '@activepieces/piece-intercom';
+const TYPEFORM_PIECE = '@activepieces/piece-typeform';
 const LINEAR_PIECE = '@activepieces/piece-linear';
-/** Every ClickUp, Mailchimp, Asana or Linear action that changes the account (write,
+/** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform or Linear action that changes the account (write,
  * send, email, delete or an access change). None parks its flow, so each one
  * can be tracked; a read never is. A category the adapter does not map tracks
  * nothing, so ClickUp (no send_email or modify_settings names) and Mailchimp
@@ -185,6 +190,21 @@ export function asanaDuplicateProjectCategory(input: Record<string, unknown>): A
   if (!present(input.include)) return 'write_data';
   return Array.isArray(input.include) && input.include.every(part => ASANA_DUPLICATE_CONTENT_PARTS.has(part))
     ? 'write_data' : 'modify_settings';
+}
+
+const NOTION_PIECE = '@activepieces/piece-notion';
+/** Every Notion action that changes the workspace (write, send or delete),
+ * on the managed connection or the user's own. None parks its flow, so each
+ * one can be tracked. `custom_api_call` is left out: it may be a read. */
+function notionTracked(action: unknown): boolean {
+  const categories = GOVERNED_PIECE_ADAPTERS.find(a => a.pieceName === NOTION_PIECE)!.categories;
+  return typeof action === 'string' && action !== 'custom_api_call' && (['write_data', 'send_message', 'delete_data'] as const)
+    .some(category => categories[category]?.includes(action));
+}
+/** Notion `notion_archive_page` sets `archived`: false restores the page (a
+ * write); true, or anything not literally false, trashes it. */
+function notionArchivePageCategory(input: Record<string, unknown>): ActionCategory {
+  return input.archived === false ? 'write_data' : 'delete_data';
 }
 
 const DROPBOX_PIECE = '@activepieces/piece-dropbox';
@@ -435,22 +455,29 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
     pieceName: '@activepieces/piece-notion',
     unknownActionCategory: 'delete_data',
     targetProps: ['database_id', 'page_id', 'pageId', 'block_id', 'item_id', 'database_item_id',
-      'archived_item_id', 'parent_page_id', 'new_parent_page_id', 'title', 'comment_text', 'url', 'method'],
+      'archived_item_id', 'parent_page_id', 'new_parent_page_id', 'archived', 'title', 'content', 'comment_text', 'url', 'method'],
     categories: {
       read_data: ['list_databases', 'notion-find-database-item', 'list_database_pages',
         'getPageOrBlockChildren', 'retrieve_database', 'get_page_comments', 'find_page', 'notion_get_page',
         'notion_get_block_children', 'notion_get_page_comments', 'notion_search', 'notion_list_users',
         'notion_get_user', 'notion_get_database', 'notion_query_database', 'notion_find_database_item'],
       write_data: ['create_database_item', 'update_database_item', 'createPage', 'append_to_page',
-        'restore_database_item', 'add_comment', 'notion_create_page', 'notion_move_page',
-        'notion_append_to_page', 'notion_update_block', 'notion_add_comment', 'notion_create_database',
-        'notion_update_database_schema', 'notion_create_database_item', 'notion_update_database_item',
+        'restore_database_item', 'add_comment', 'notion_create_page',
+        'notion_append_to_page', 'notion_add_comment', 'notion_update_block', 'notion_create_database',
+        'notion_create_database_item', 'notion_update_database_item',
         'notion_restore_database_item'],
       // A Notion archive moves the page to the trash, where it ages out --
-      // unlike a Gmail archive, which only takes a label off.
+      // unlike a Gmail archive, which only takes a label off. A move takes the
+      // page out of its old parent and gives it the new parent's sharing, and a
+      // schema update can drop a property with its values (upstream labels it
+      // DESTRUCTIVE). Every action of the pinned 0.8.3 bundle is named
+      // (`managed-notion.test.ts` pins the list, the engine test checks it
+      // against the installed package).
       delete_data: ['archive_database_item', 'notion_archive_page', 'notion_delete_block',
-        'notion_archive_database_item', 'custom_api_call'],
+        'notion_archive_database_item', 'notion_move_page', 'notion_update_database_schema', 'custom_api_call'],
     },
+    // `archived: false` restores instead of trashing (`notionArchivePageCategory`).
+    categoryFromInput: { notion_archive_page: { props: ['archived'], category: notionArchivePageCategory } },
   },
   {
     catalogId: 'openai',
@@ -811,6 +838,75 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
     linear_project_update: { props: ['team_ids'], category: linearProjectUpdateCategory },
   },
 }, {
+  // Calendly: every action of the pinned 0.7.1 bundle (`managed-calendly.test.ts`
+  // pins the list and the engine test checks it against the installed
+  // package), so a workflow on the user's own Calendly token keeps running at
+  // the default level. The managed `jarvis:calendly` connection is narrower
+  // still: `managed-calendly.ts` runs only MANAGED_CALENDLY_ACTIONS. Only
+  // `custom_api_call` and an action added upstream fall back to `modify_settings`.
+  catalogId: 'calendly', pieceName: CALENDLY_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['scheduledEvent', 'eventType', 'invitee', 'user', 'organization', 'membership', 'schedule', 'owner',
+    'host', 'inviteeEmail', 'email', 'status', 'active', 'name', 'duration', 'startDate', 'endDate', 'startTime',
+    'endTime', 'minStartTime', 'maxStartTime', 'timezone', 'role', 'reason', 'sort', 'count', 'pageToken'],
+  categories: {
+    read_data: ['find_invitee_bookings', 'find_user', 'get_event_invitee', 'get_event_type',
+      'get_event_type_availability', 'get_organization', 'get_organization_membership', 'get_scheduled_event',
+      'get_user', 'get_user_availability_schedule', 'list_available_times', 'list_event_invitees',
+      'list_event_type_hosts', 'list_event_types', 'list_organization_memberships', 'list_scheduled_events',
+      'list_user_availability_schedules', 'list_user_busy_times', 'list_user_locations'],
+    // The user's own scheduling content: event types, their availability and
+    // booking links into them. None grants anyone access to the account; a
+    // link only lets its holder book a meeting the user already offers.
+    write_data: ['create_event_type', 'create_one_off_event_type', 'create_scheduling_link', 'create_share',
+      'update_event_type', 'update_event_type_availability'],
+    // Cancelling takes a booked meeting away from both sides (Calendly also
+    // emails the invitee), so it is gated as a deletion.
+    delete_data: ['cancel_scheduled_event'],
+  },
+}, {
+  // Intercom, a community piece whose managed `jarvis:intercom` connection made
+  // it governed. Every action of the pinned 0.9.2 bundle is named
+  // (`intercom-connection.test.ts` pins the list and the engine test checks it
+  // against the installed package), so a workflow on the user's own Intercom
+  // connection keeps running at the default level for reads, writes and
+  // messages. The managed connection itself is limited to
+  // MANAGED_INTERCOM_ACTIONS. Only `custom_api_call` and an action added
+  // upstream fall back to `modify_settings`. The piece has no delete action.
+  catalogId: 'intercom', pieceName: INTERCOM_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['target', 'recordId', 'contactId', 'conversationId', 'ticketId', 'companyId', 'leadId', 'userId',
+    'lookupBy', 'value', 'searchField', 'searchValue', 'email', 'to', 'from', 'tagId', 'tagName', 'untag', 'remove',
+    'assigneeId', 'adminId', 'ticketTypeId', 'state', 'isShared', 'messageType', 'message_type', 'subject', 'title',
+    'name', 'eventName', 'body', 'closingMessage'],
+  categories: {
+    read_data: ['find-company', 'find-conversation', 'find-lead', 'find-user', 'get-conversation',
+      'get_conversation_by_id', 'get_contact', 'get_ticket', 'get_company', 'list-all-tags', 'search_contacts',
+      'list_contact_notes', 'search_conversations', 'search_tickets', 'list_ticket_types', 'list_admins',
+      'list_teams', 'list_data_attributes', 'list_companies', 'search_articles', 'list_segments'],
+    // Content that lands in front of other people: a reply or a message reaches
+    // the customer, a note (contact, conversation or ticket) the team, a new
+    // conversation the inbox. A state change can carry a closing message the
+    // customer sees, an assignment an assignment note, an article create can
+    // publish to the Help Center and a ticket update can share the ticket with
+    // its customer, so these sit here whatever their input (send_message and
+    // write_data need the same level; no input rule is needed to narrow them).
+    send_message: ['add-note-to-user', 'addNoteToConversation', 'add_note_to_contact', 'add_note_to_conversation_by_id',
+      'replyToConversation', 'reply_to_conversation_by_id', 'reply_to_ticket', 'create-conversation',
+      'create_conversation_from_contact', 'assignConversationAction', 'set_conversation_state', 'create-article',
+      'create_help_center_article', 'update_ticket_by_id'],
+    // An admin message to a contact, email by default. An in-app message is
+    // gated as email too: a rule could only narrow from the piece's worst
+    // case (modify_settings), which would over-gate the email default instead.
+    send_email: ['send_message', 'send_message_to_contact'],
+    // Workspace records under the caller's own access: contacts, companies,
+    // tickets, tags and events. None changes who can see or do what. A data
+    // event can start a series the owner built, as Mailchimp's custom event does.
+    write_data: ['add-or-remove-tag-on-contact', 'add-or-remove-tag-on-company', 'add-or-remove-tag-on-conversation',
+      'tag_or_untag_record', 'create_tag', 'create-data-event', 'create-ticket', 'create_ticket_by_type_id',
+      'update-ticket', 'convert_conversation_to_ticket', 'create-user', 'create-or-update-company',
+      'create-or-update-lead', 'create-or-update-user', 'find-or-create-company', 'find-or-create-lead',
+      'update_contact', 'attach_contact_to_company', 'assign_conversation_by_id'],
+  },
+}, {
   // Asana: every action of the pinned 0.7.2 bundle (`asana-connection.test.ts`
   // pins the list and the engine test checks it against the installed
   // package), so a workflow on the user's own Asana connection keeps running
@@ -909,6 +1005,34 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       'move_dropbox_file', 'move_dropbox_folder', 'move_dropbox_entry', 'start_dropbox_move_batch'],
   },
 }, {
+  // Typeform, a community piece made governed by the managed `jarvis:typeform`
+  // connection. Every action of the pinned 0.7.1 bundle is named
+  // (`typeform-connection.test.ts` pins the list and the engine test checks it
+  // against the installed package), so a workflow on the user's own Typeform
+  // connection keeps its reads and writes at the default level. The managed
+  // connection itself runs only MANAGED_TYPEFORM_ACTIONS (four reads).
+  catalogId: 'typeform', pieceName: TYPEFORM_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['form_id', 'workspace', 'accountId', 'themeId', 'imageId', 'field', 'responseIds', 'title', 'name',
+    'isPublic', 'search', 'query', 'page', 'pageSize', 'sortBy', 'orderBy', 'since', 'until', 'responseType',
+    'includedResponseIds', 'sort', 'before', 'after'],
+  categories: {
+    read_data: ['get_me', 'list_forms', 'get_form', 'get_form_messages', 'list_responses', 'list_workspaces',
+      'get_workspace', 'list_themes', 'get_theme', 'list_images', 'get_image'],
+    // Account content under the caller's own access: new forms, workspaces,
+    // themes and images, copies, renames and text or option edits.
+    write_data: ['create_form', 'duplicate_form', 'update_choice_options', 'update_form_messages', 'create_workspace',
+      'update_workspace', 'create_theme', 'update_theme', 'upload_image'],
+    // Every delete, and replace_form: a field left out of the definition is
+    // deleted together with its answers (upstream labels it DESTRUCTIVE).
+    // update_form can move the form to another workspace, so blind it is the
+    // move; its input narrows it (`categoryFromInput`).
+    delete_data: ['delete_form', 'delete_responses', 'delete_workspace', 'delete_theme', 'delete_image',
+      'replace_form', 'update_form'],
+  },
+  categoryFromInput: {
+    update_form: { props: ['workspace', 'isPublic'], category: typeformUpdateFormCategory },
+  },
+}, {
   catalogId: 'clickup', pieceName: '@activepieces/piece-clickup', unknownActionCategory: 'modify_settings',
   targetProps: ['workspace_id', 'space_id', 'folder_id', 'list_id', 'task_id', 'task_name', 'name', 'status_id',
     'add_assignee', 'rem_assignee', 'destination_list_id', 'channel_id', 'message_id', 'comment_id',
@@ -943,6 +1067,17 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       'clickup_delete_checklist', 'clickup_delete_comment', 'clickup_delete_folder', 'clickup_delete_list',
       'clickup_delete_space', 'clickup_delete_space_tag', 'clickup_delete_task_dependency', 'clickup_delete_task',
       'clickup_delete_time_entry'],
+  },
+}, {
+  // All actions in Airtable 0.9.2. The managed connection permits only four record actions.
+  catalogId:'airtable', pieceName:'@activepieces/piece-airtable', unknownActionCategory:'modify_settings',
+  targetProps:['base','tableId','recordId','searchField','searchValue','limitToView','fields','base_id','table_id_or_name','record_id'],
+  categories:{
+    read_data:['airtable_find_record','airtable_get_record_by_id','airtable_find_base','airtable_find_table_by_id','airtable_find_table','airtable_get_base_schema','get_record','list_records','list_bases','get_base_schema_ai','get_current_user','search_records','list_record_comments'],
+    write_data:['airtable_create_record','airtable_update_record','airtable_upload_file_to_column','create_record_ai','update_record_ai','upload_attachment_ai','upsert_records'],
+    delete_data:['airtable_clean_record','airtable_delete_record','delete_record_ai','delete_records_batch'],
+    send_message:['airtable_add_comment_to_record','add_comment_to_record_ai'],
+    modify_settings:['airtable_create_base','airtable_create_table','create_table_ai','create_base_ai','update_table','create_field','update_field'],
   },
 }, {
   // Trello: every action of the installed 0.8.1 bundle (0.7.1 has the same
@@ -1024,6 +1159,19 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
 function trelloUpdateCardCategory(input: Record<string, unknown>): ActionCategory {
   const closed = input.closed;
   return closed === undefined || closed === false ? 'write_data' : 'delete_data';
+}
+
+/**
+ * A Typeform form update. A `workspace` moves the form to another workspace
+ * (out of where its current members find it), and `isPublic` opens or closes
+ * it to responses (a form setting). Upstream skips a prop that is null,
+ * missing or blank (`isProvided`); only then is it an ordinary write. Any
+ * other value, including a non-string, takes the stricter case.
+ */
+function typeformUpdateFormCategory(input: Record<string, unknown>): ActionCategory {
+  const unset = (v: unknown) => v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+  if (!unset(input.workspace)) return 'delete_data';
+  return unset(input.isPublic) ? 'write_data' : 'modify_settings';
 }
 
 /**

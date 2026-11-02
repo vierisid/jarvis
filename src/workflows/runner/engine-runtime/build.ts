@@ -301,7 +301,12 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/managed-github.ts',
   '../../runtime/managed-dropbox.ts',
   '../../runtime/managed-trello.ts',
+  '../../runtime/managed-typeform.ts',
+  '../../runtime/managed-airtable.ts',
   '../../runtime/managed-slack.ts',
+  '../../runtime/managed-intercom.ts',
+  '../../runtime/managed-calendly.ts',
+  '../../runtime/managed-notion.ts',
   '../../runtime/managed-linear.ts',
   // The egress guard the engine's file-property download goes through (#961).
   '../../runtime/http-egress.ts',

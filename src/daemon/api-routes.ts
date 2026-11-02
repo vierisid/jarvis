@@ -2498,6 +2498,31 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json(linearStatus(ctx.config));
       },
     },
+    '/api/integrations/typeform': {
+      GET: async () => {
+        const {typeformStatus} = await import('../integrations/typeform-connection');
+        return json(typeformStatus(ctx.config));
+      },
+    },
+    '/api/integrations/airtable/options': {
+      GET: async (req: Request) => {
+        const {airtableOptions,AirtableOptionsError}=await import('../integrations/airtable-options');
+        try {return json(await airtableOptions(ctx.config,new URL(req.url).searchParams));}
+        catch(error){return json({error:error instanceof AirtableOptionsError?error.message:'Could not load Airtable choices.'},error instanceof AirtableOptionsError?error.status:502);}
+      },
+    },
+    '/api/integrations/airtable': {
+      GET: async () => {
+        const {airtableStatus} = await import('../integrations/airtable-connection');
+        return json(airtableStatus(ctx.config));
+      },
+    },
+    '/api/integrations/calendly': {
+      GET: async () => {
+        const {calendlyStatus} = await import('../integrations/calendly-connection');
+        return json(calendlyStatus(ctx.config));
+      },
+    },
     '/api/integrations/asana/options': {
       GET: async (req: Request) => {
         const {asanaOptions, AsanaOptionsInputError} = await import('../integrations/asana-options');
@@ -2521,6 +2546,25 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const status = dropboxStatus(ctx.config), c = readDropboxConnection(ctx.config.daemon.data_dir);
         const reconnect = !!c && dropboxNeedsReconnect(ctx.config, c);
         return json({...status, connected: status.connected && !reconnect, reconnect});
+      },
+    },
+    '/api/integrations/intercom': {
+      GET: async () => {
+        const {intercomStatus} = await import('../integrations/intercom-connection');
+        return json(intercomStatus(ctx.config));
+      },
+    },
+    '/api/integrations/notion/options': {
+      GET: async (req: Request) => {
+        const {notionOptions,NotionOptionsError}=await import('../integrations/notion-options');
+        try {return json(await notionOptions(ctx.config,new URL(req.url).searchParams));}
+        catch(error){return json({error:error instanceof NotionOptionsError?error.message:'Could not load Notion choices.'},error instanceof NotionOptionsError?error.status:502);}
+      },
+    },
+    '/api/integrations/notion': {
+      GET: async () => {
+        const {notionStatus} = await import('../integrations/notion-connection');
+        return json(notionStatus(ctx.config));
       },
     },
     '/api/integrations/clickup': {

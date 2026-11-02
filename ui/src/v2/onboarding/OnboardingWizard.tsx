@@ -6,7 +6,12 @@ import { GitHubConnection } from "../integrations/GitHubConnection";
 import { DropboxConnection } from "../integrations/DropboxConnection";
 import { TrelloConnection } from "../integrations/TrelloConnection";
 import { LinearConnection } from "../integrations/LinearConnection";
+import { TypeformConnection } from "../integrations/TypeformConnection";
+import { AirtableConnection } from "../integrations/AirtableConnection";
 import { SlackConnection } from "../integrations/SlackConnection";
+import { IntercomConnection } from "../integrations/IntercomConnection";
+import { CalendlyConnection } from "../integrations/CalendlyConnection";
+import { NotionConnection } from "../integrations/NotionConnection";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openExternal, openedOrHandedOff } from "./external-open";
 import { useInterviewSession } from "./useInterviewSession";
@@ -1351,7 +1356,7 @@ export function OnboardingWizard({
         return (
           <div className="obw-body"><div className="obw-wrap wide">
             <h2>Connect your everyday tools.</h2>
-            <ClickUpConnection optional /><GitHubConnection optional /><TrelloConnection optional /><MailchimpConnection optional /><SlackConnection optional /><DropboxConnection optional /><AsanaConnection optional /><LinearConnection optional />
+            <ClickUpConnection optional /><GitHubConnection optional /><TrelloConnection optional /><MailchimpConnection optional /><SlackConnection optional /><DropboxConnection optional /><AsanaConnection optional /><IntercomConnection optional /><CalendlyConnection optional /><AirtableConnection optional /><TypeformConnection optional /><NotionConnection optional /><LinearConnection optional />
             <div className="obw-sub">Start with the tools involved in your daily work. All optional, all revocable from Settings.</div>
             <div className="obw-rows" style={{ marginTop: 14 }}>
               {rows.map(([id, ic, nm, bd]) => {

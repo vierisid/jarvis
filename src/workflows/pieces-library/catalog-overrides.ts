@@ -158,10 +158,15 @@ export const VERSION_PIN: Record<
   { versionRange: string; vettedVersion: string; reason: string }
 > = {
   linear: {versionRange:"0.9.1",vettedVersion:"0.9.1",reason:"Governed action table (MANAGED_PIECE_ADAPTERS) and five managed issue and comment actions qualified against 0.9.1; review before upgrading"},
+  typeform: {versionRange:"0.7.1",vettedVersion:"0.7.1",reason:"Managed Typeform actions and outputs qualified against this published bundle; review upgrades"},
+  airtable: {versionRange:"0.9.2",vettedVersion:"0.9.2",reason:"Managed Airtable actions and outputs qualified against this published bundle; review upgrades"},
   asana: {versionRange: "0.7.2", vettedVersion: "0.7.2", reason: "Managed OAuth and five governed task actions qualified against the real engine; review before upgrading"},
   dropbox: {versionRange: "0.9.2", vettedVersion: "0.9.2", reason: "Governed action table (MANAGED_PIECE_ADAPTERS), managed action contracts and outputs mapped against 0.9.2; review before upgrading"},
+  calendly: {versionRange:"0.7.1",vettedVersion:"0.7.1",reason:"Managed Calendly actions and outputs qualified against this published bundle; review upgrades"},
+  notion: {versionRange:"0.8.3",vettedVersion:"0.8.3",reason:"Governed action table and managed page search, creation, append and block reads qualified against 0.8.3 (same actions, props and classifications as 0.8.1); review before upgrading"},
   mailchimp: {versionRange: "0.5.10", vettedVersion: "0.5.10", reason: "Five managed subscriber, tag and reporting actions qualified against 0.5.10; review before upgrading"},
   slack: {versionRange: "0.23.1", vettedVersion: "0.23.1", reason: "Managed bot connection actions qualified against 0.23.1; review before upgrading"},
+  intercom: {versionRange:"0.9.2",vettedVersion:"0.9.2",reason:"Managed Intercom actions and outputs qualified against this published bundle; review upgrades"},
   clickup: {versionRange: "0.9.1", vettedVersion: "0.9.1", reason: "Governed action table (MANAGED_PIECE_ADAPTERS) and task outputs mapped against 0.9.1; review before upgrading"},
   // github 0.6 line never made it to npm even though it was in the
   // monorepo's package.json; npm tops out at 0.6.7. Force the working 0.7.
