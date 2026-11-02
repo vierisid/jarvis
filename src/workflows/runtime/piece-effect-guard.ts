@@ -1,3 +1,4 @@
+import {managedAirtableInput, managedAirtableIssue, runManagedAirtableAction} from './managed-airtable';
 import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
 /**
  * Engine-side half of the governed-piece adapter.
@@ -106,6 +107,8 @@ export interface AuthorizePieceDispatchParams {
 }
 
 export async function authorizePieceDispatch(params: AuthorizePieceDispatchParams): Promise<PieceAuthorizeResponse> {
+  const airtable = params.piece === '@activepieces/piece-airtable' && managedAirtableInput(params.input);
+  if (airtable) {const issue=managedAirtableIssue(params.action,airtable);if(issue)throw new Error(issue);}
   const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
   if (mailchimp) {
     const issue = managedMailchimpIssue(params.action, mailchimp);
@@ -153,9 +156,9 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   // must then take the same worst case.
   const tracked = tracksPieceCompletion(params.piece, params.action, governed ? body.input : params.input);
   if (tracked) {
-    const auth = (params.input as { auth?: { access_token?: unknown; type?: unknown } } | null)?.auth;
+    const auth = (params.input as { auth?: { access_token?: unknown; secret_text?: unknown; type?: unknown } } | null)?.auth;
     const token = trello ? JSON.stringify((trello.auth as {username:string;password:string}))
-      : mailchimp ? JSON.stringify((mailchimp.auth as {access_token:string;server_prefix:string})) : auth?.access_token;
+      : mailchimp ? JSON.stringify((mailchimp.auth as {access_token:string;server_prefix:string})) : airtable ? auth?.secret_text : auth?.access_token;
     if (auth?.type !== 'CUSTOM_AUTH' && typeof token === 'string') {
       const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical(token))));
       body.credentialDigest = Array.from(hash).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -216,6 +219,8 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
 export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParams, governance: PieceAuthorizeResponse, execute: () => Promise<unknown>): Promise<unknown> {
   if ('dispatch' in governance && governance.dispatch === 'completed') return governance.result;
   if ('dispatch' in governance && (governance.dispatch === 'held' || governance.dispatch === 'approval_required')) throw new Error('Piece is waiting for authorization');
+  const airtable = params.piece === '@activepieces/piece-airtable' && managedAirtableInput(params.input);
+  if (airtable) {const issue=managedAirtableIssue(params.action,airtable);if(issue)throw new Error(issue);}
   const calendly = params.piece === "@activepieces/piece-calendly" ? managedCalendlyInput(params.input) : null;
   const mailchimp = params.piece === '@activepieces/piece-mailchimp' && managedMailchimpInput(params.input);
   if (mailchimp) {
@@ -245,7 +250,10 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     if (issue) throw new Error(issue);
   }
   let raw: unknown;
-  if (trello) {
+  if (airtable) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Airtable dispatch was not authorized');
+    raw = await runManagedAirtableAction(String(params.action), airtable);
+  } else if (trello) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Trello dispatch was not authorized');
     raw = await runManagedTrelloAction(String(params.action), trello);
   } else if (mailchimp) {

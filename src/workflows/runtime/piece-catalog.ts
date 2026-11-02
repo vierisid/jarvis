@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "18"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts
+export const CATALOG_SCHEMA_VERSION = "19"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -895,6 +895,19 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if(entry.name==='@activepieces/piece-airtable') {
+    const record={id:'recAAAAAAAAAAAAAA',createdTime:'2026-10-28T10:00:00.000Z',fields:{Name:'Example record'}};
+    for(const name of ['create_record_ai','update_record_ai','get_record','search_records']) {
+      const action=entry.actions[name];if(!action)continue;
+      action.displayName=({create_record_ai:'Create Record',update_record_ai:'Update Record',get_record:'Get Record',search_records:'Find Records'} as Record<string,string>)[name]!;
+      action.outputSample=name==='search_records'?{records:[record],count:1}:record;
+      for(const field of action.inputSchema?.fields ?? []) {
+        if(field.sourceType==='DROPDOWN'){field.type='string';field.placeholder='ID or workflow variable';delete field.options;}
+        if(field.name==='record_id')field.description='Record ID, or the id output from an earlier Create Record or Find Records step.';
+        if(field.name==='fields'){field.type='json';field.description='Existing field IDs or names and values as a JSON object. Managed connections support text, numbers, checkboxes, dates and existing select choices.';field.placeholder='{"Name":"Example record"}';}
+      }
+    }
+  }
   if (entry.name === '@activepieces/piece-calendly') {
     const event={uri:'https://api.calendly.com/scheduled_events/event_1',name:'Introduction',status:'active',start_time:'2026-10-28T10:00:00Z',end_time:'2026-10-28T10:30:00Z',event_type:'https://api.calendly.com/event_types/type_1'};
     const samples:Record<string,unknown>={

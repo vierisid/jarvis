@@ -1,3 +1,4 @@
+import { AirtableLocation } from "../../integrations/AirtableLocation";
 import { TrelloCardLocation } from "../../integrations/TrelloCardLocation";
 import { MailchimpLocation } from "../../integrations/MailchimpLocation";
 import { MailchimpConnection } from "../../integrations/MailchimpConnection";
@@ -22,6 +23,7 @@ import { TrelloConnection } from "../../integrations/TrelloConnection";
 import { SlackConnection, useSlackStatus } from "../../integrations/SlackConnection";
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
+import { AirtableConnection, useAirtableStatus } from "../../integrations/AirtableConnection";
 import { IntercomConnection, useIntercomStatus } from "../../integrations/IntercomConnection";
 import { CalendlyConnection, useCalendlyStatus } from "../../integrations/CalendlyConnection";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
@@ -3400,10 +3402,11 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const mailchimpLocation = managedMailchimp && ['find_subscriber','add_subscriber_to_tag','remove_subscriber_from_tag','get_campaign_report'].includes(subName ?? '');
   const managedGitHub = piece?.name === "@activepieces/piece-github" && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(step.settings?.input?.auth));
   const githubRepository = managedGitHub && ['github_create_issue','getIssueInformation','update_issue','find_issue','createCommentOnAIssue'].includes(subName ?? '');
+  const airtableLocation = piece?.name === "@activepieces/piece-airtable" && ["{{connections.jarvis:airtable}}", "{{connections['jarvis:airtable']}}"].includes(String(step.settings?.input?.auth)) && ['create_record_ai','update_record_ai','get_record','search_records'].includes(subName ?? '');
   const managedSlack = piece?.name === "@activepieces/piece-slack" && ["{{connections.jarvis:slack}}", "{{connections['jarvis:slack']}}"].includes(String(step.settings?.input?.auth));
   const slackChannel = managedSlack && ['send_channel_message', 'slack_post_message', 'slack_get_channel_info'].includes(subName ?? '');
   const baseSchema = asanaSchema;
-  const selectedSchema = managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : managedMailchimp && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['fields','include_fields','exclude_fields', ...(mailchimpLocation ? ['list_id','campaign_id'] : [])].includes(f.name))}
+  const selectedSchema = airtableLocation && baseSchema ? {...baseSchema,fields:baseSchema.fields.filter(f=>!['base_id','table_id_or_name','search_field','view'].includes(f.name))} : managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : managedMailchimp && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['fields','include_fields','exclude_fields', ...(mailchimpLocation ? ['list_id','campaign_id'] : [])].includes(f.name))}
     : managedGitHub && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['labels','assignees','milestone','state_reason', ...(githubRepository ? ['repository'] : [])].includes(f.name))}
     : managedSlack && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["sendAsUser","sendAsBot","file","username","profilePicture","iconEmoji","mentionOriginFlow","onlyBotChannels","info"].includes(f.name))} : baseSchema;
   const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : trelloLocation && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>!['board_id','list_id'].includes(f.name))} : slackChannel && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>f.name !== "channel")} : selectedSchema;
@@ -3540,6 +3543,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {airtableLocation && <AirtableLocation input={step.settings?.input ?? {}} onChange={onSetInput} search={subName === "search_records"} />}
       {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {trelloLocation && <TrelloCardLocation input={step.settings?.input ?? {}} onChange={onSetInput} boardOnly={subName === "list_lists"} />}
       {asanaLocation && <AsanaTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
@@ -3805,6 +3809,8 @@ function ConnectionPicker({
   const managedCalendly = useCalendlyStatus(isCalendly)?.connected === true;
   // ClickUp and GitHub may also offer the hosted connection; without it
   // (self-hosted, or not connected) the picker reads exactly as for any other piece.
+  const isAirtable = pieceName === "@activepieces/piece-airtable";
+  const managedAirtable = useAirtableStatus(isAirtable)?.connected === true;
   const isIntercom = pieceName === "@activepieces/piece-intercom";
   const managedIntercom = useIntercomStatus(isIntercom)?.connected === true;
   const isClickUp = pieceName === "@activepieces/piece-clickup";
@@ -3820,6 +3826,8 @@ function ConnectionPicker({
   return (
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isAirtable && <><AirtableConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedAirtable && <p className="wf-props__hint">Find, get, create and update records in existing tables. Deleting records, schema changes and triggers are not enabled.</p>}</>}
       {isCalendly && <><CalendlyConnection optional onPick={onPick} currentValue={currentValue} />
         {managedCalendly && <p className="wf-props__hint">Read your meetings, invitees and event types, or create a single-use booking link. Leave User and Organization empty to use your account. Use an event URI, ID or workflow variable. Cancellation and instant booking triggers are not supported yet.</p>}</>}
       {pieceName === "@activepieces/piece-mailchimp" && <MailchimpConnection onPick={onPick} currentValue={currentValue} />}
@@ -3836,7 +3844,7 @@ function ConnectionPicker({
         {managedCalendly ? "Calendly account" : authDisplayName}
         {!managedCalendly && <span className="wf-props__connection-type">({authType})</span>}
       </label>
-      {matching.length === 0 && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom ? (
+      {matching.length === 0 && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable ? (
         <p className="wf-props__hint wf-props__connection-empty">
           No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
           then come back and select it here.

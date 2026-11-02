@@ -10,6 +10,7 @@ import { asanaStatus } from '../integrations/asana-connection';
 import { intercomStatus } from '../integrations/intercom-connection';
 import { calendlyStatus } from '../integrations/calendly-connection';
 import { slackStatus } from "../integrations/slack-connection";
+import { airtableStatus } from "../integrations/airtable-connection";
 import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
@@ -4771,6 +4772,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       intercom: () => intercomStatus(jarvisConfig),
       calendly: () => calendlyStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
+      airtable: () => airtableStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
         return Object.fromEntries((['telegram', 'discord'] as const).map(name => [name, {
@@ -5023,6 +5025,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisDropboxConnectionSource(jarvisConfig));
       const { JarvisTrelloConnectionSource } = await import("../workflows/credentials/trello-source");
       credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisAirtableConnectionSource } = await import("../workflows/credentials/airtable-source");
+      credentialResolver.register(new JarvisAirtableConnectionSource(jarvisConfig));
       const { JarvisSlackConnectionSource } = await import("../workflows/credentials/slack-source");
       credentialResolver.register(new JarvisSlackConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisIntercomConnectionSource } = await import("../workflows/credentials/intercom-source");

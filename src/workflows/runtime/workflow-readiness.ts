@@ -1,3 +1,4 @@
+import {managedAirtableIssue} from './managed-airtable';
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
 import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
 import { REFUND_REQUIRED, refundSetup } from './refund';
@@ -259,6 +260,11 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(input.auth))) {
       const reason = managedGitHubIssue(root ? settings.triggerName : settings.actionName, input, false);
       if (reason) issue(node, 'settings.input', 'MANAGED_GITHUB', reason);
+    }
+    if (pieceName === '@activepieces/piece-airtable' && object(input)
+      && ["{{connections.jarvis:airtable}}", "{{connections['jarvis:airtable']}}"].includes(String(input.auth))) {
+      const reason = managedAirtableIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_AIRTABLE', reason);
     }
     if (pieceName === '@activepieces/piece-trello' && object(input)
       && ["{{connections.jarvis:trello}}", "{{connections['jarvis:trello']}}"].includes(String(input.auth))) {

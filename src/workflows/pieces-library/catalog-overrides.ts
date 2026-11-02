@@ -157,6 +157,7 @@ export const VERSION_PIN: Record<
   string,
   { versionRange: string; vettedVersion: string; reason: string }
 > = {
+  airtable: {versionRange:"0.9.2",vettedVersion:"0.9.2",reason:"Managed Airtable actions and outputs qualified against this published bundle; review upgrades"},
   asana: {versionRange: "0.7.2", vettedVersion: "0.7.2", reason: "Managed OAuth and five governed task actions qualified against the real engine; review before upgrading"},
   dropbox: {versionRange: "0.9.2", vettedVersion: "0.9.2", reason: "Governed action table (MANAGED_PIECE_ADAPTERS), managed action contracts and outputs mapped against 0.9.2; review before upgrading"},
   calendly: {versionRange:"0.7.1",vettedVersion:"0.7.1",reason:"Managed Calendly actions and outputs qualified against this published bundle; review upgrades"},
