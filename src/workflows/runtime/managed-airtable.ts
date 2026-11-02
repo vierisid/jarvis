@@ -135,9 +135,9 @@ export async function airtableJson(
         "Airtable is rate limiting requests. Wait before trying again.",
         429,
       );
+    // Any other provider failure is upstream, never the caller's input: 502.
     throw new AirtableRequestError(
       "Airtable did not confirm the request. Check the table and field values before trying again.",
-      response.status,
     );
   }
   try {

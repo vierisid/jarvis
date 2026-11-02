@@ -195,6 +195,7 @@ test("only the four reviewed actions may resolve the managed credential", async 
     ),
   ).toBeNull();
   for (const settings of [
+    {},
     { actionName: "airtable_create_base" },
     { triggerName: "new_record" },
     { actionName: "get_record", triggerName: "new_record" },
@@ -233,13 +234,16 @@ test("expired delivery receipt asks for reconnect instead of repeating acknowled
   });
 });
 
+// A token no random generation UUID can contain, so the leak checks below are deterministic.
+const PRIVATE_ACCESS = "airtable-private-access-token";
 test("base choices paginate with encoded cursors, fresh credentials and generation fences", async () => {
   grant.expires_at = new Date(Date.now() + 3600000).toISOString();
+  grant.access_token = PRIVATE_ACCESS;
   writeFileSync(join(dir, "connections/airtable.json"), JSON.stringify(grant));
   const calls: string[] = [];
   const request = (async (url, init) => {
     calls.push(String(url));
-    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer a1");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer " + PRIVATE_ACCESS);
     return Response.json({
       bases: [{ id: "appAAAAAAAAAAAAAA", name: "Sandbox" }],
       ...(calls.length === 1 ? { offset: "cursor/next" } : {}),
@@ -250,7 +254,7 @@ test("base choices paginate with encoded cursors, fresh credentials and generati
   expect(calls[1]).toBe(
     "https://api.airtable.com/v0/meta/bases?offset=cursor%2Fnext",
   );
-  expect(JSON.stringify(result)).not.toContain("a1");
+  expect(JSON.stringify(result)).not.toContain(PRIVATE_ACCESS);
   await expect(
     airtableOptions(config, new URLSearchParams({ base: "../evil" }), request),
   ).rejects.toMatchObject({ status: 400 });
@@ -273,6 +277,7 @@ test("base choices paginate with encoded cursors, fresh credentials and generati
 });
 test("schema choices return fields and views without leaking credentials; rate limits are actionable", async () => {
   grant.expires_at = new Date(Date.now() + 3600000).toISOString();
+  grant.access_token = PRIVATE_ACCESS;
   writeFileSync(join(dir, "connections/airtable.json"), JSON.stringify(grant));
   const result = await airtableOptions(
     config,
@@ -296,7 +301,7 @@ test("schema choices return fields and views without leaking credentials; rate l
     }) as typeof fetch,
   );
   expect(result.tables).toHaveLength(1);
-  expect(JSON.stringify(result)).not.toContain("a1");
+  expect(JSON.stringify(result)).not.toContain(PRIVATE_ACCESS);
   await expect(
     airtableOptions(config, new URLSearchParams(), (async () =>
       Response.json(
@@ -304,4 +309,10 @@ test("schema choices return fields and views without leaking credentials; rate l
         { status: 429 },
       )) as unknown as typeof fetch),
   ).rejects.toMatchObject({ status: 429 });
+  // A provider failure is upstream (502), never relayed as the caller's own 4xx or 5xx.
+  for (const status of [400, 404, 422, 500])
+    await expect(
+      airtableOptions(config, new URLSearchParams({ base: "appAAAAAAAAAAAAAA" }), (async () =>
+        Response.json({ error: "PRIVATE" }, { status })) as unknown as typeof fetch),
+    ).rejects.toMatchObject({ status: 502 });
 });
