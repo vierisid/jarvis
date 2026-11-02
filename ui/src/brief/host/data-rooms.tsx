@@ -147,8 +147,8 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   function NeedsYou({ shell }: { shell: BriefShellPort }) {
     const all = useBriefProjection(decisionRead);
     const onlyOther = all.state === 'ready' && !!all.data?.length && !all.data.some(row => row.actions.length > 0);
-    return <>{onlyOther ? <h1>Needs you</h1> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
-      <PendingDecisions http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
+    return <>{onlyOther ? <header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
+      <PendingDecisions selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
   }
   const rooms: BriefRoomRegistry = {
     today: { ...BRIEF_ROOMS.today, Body: Today }, goals: { ...BRIEF_ROOMS.goals, Body: Goal }, 'completed-goals': { ...BRIEF_ROOMS['completed-goals'], Body: Goal },

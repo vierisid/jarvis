@@ -110,7 +110,7 @@ import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
-import { ApprovalManager, approvalNeedsClick, executionState, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
+import { ApprovalManager, approvalNeedsClick, executionState, onApprovalDeadlineExpired, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
 import { applyEmergencyState } from "./emergency-state.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
@@ -4312,6 +4312,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     };
     expireUnanswered();
     setInterval(expireUnanswered, 10 * 60_000).unref?.();
+    // A workflow card past its explicit deadline leaves the dashboard the same way.
+    onApprovalDeadlineExpired(request => wsService.broadcastApprovalUpdate(request));
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
     wsService.setApprovalManager(approvalManager);
     wsService.setDeferredExecutor(deferredExecutor);
@@ -5357,8 +5359,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const llmManager = agentService.getLLMManager();
       const composeLlm = createComposerLlmClient(llmManager);
       // Compact community-library index for the composer's search_library
-      // tool: lets it suggest "install piece X first" when the user asks for
-      // a service that isn't installed, instead of forcing a wrong fit.
+      // tool: interactive chat can install a matching entry with the software-install
+      // gate; background callers can only suggest the missing dependency.
       //
       // Withheld on a HOST-MANAGED install, where that suggestion is a
       // dead end. The host installed the whole catalog, so every piece the
@@ -5399,6 +5401,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               })),
           }
         : undefined;
+      const { installPiece, withLibraryLock } = await import('../workflows/pieces-library/installer.ts');
+      const installComposerLibraryPiece = composerLibrary.length && onPieceLibraryChanged
+        ? async (id: string, signal?: AbortSignal) => withLibraryLock(async () => {
+            signal?.throwIfAborted();
+            if (piecesManagedByHost(sharedRuntime.piecesDir)) throw new Error('This Library is managed by the host.');
+            if (!composerLibrary.some(entry => entry.id === id)) throw new Error('Unknown Library entry.');
+            // The signal bounds the install (composePersistedFlow aborts it on
+            // timeout): it kills the bun install child, and a call still
+            // queued on the lock when it fires never starts.
+            const result = await installPiece(id, { signal });
+            // Finished anyway: the Library changed, so say so even if the
+            // composition that asked has stopped waiting.
+            await onPieceLibraryChanged({ kind: 'installed', piece: result.piece });
+          })
+        : undefined;
       const manageWorkflowTool = createManageWorkflowTool({
         triggerManager: triggerManager ?? undefined,
         llm: composeLlm,
@@ -5416,8 +5433,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             id: r.id,
             name: r.name,
             description: r.description,
+            tools: r.tools,
           })),
         library: composerLibrary,
+        installLibraryPiece: installComposerLibraryPiece,
         // Give the composer the machine inventory (sidecars + this host, each
         // with its OS and arch) so it writes commands for the machine the step
         // actually lands on. Without it the model guesses -- "open notepad"
@@ -5436,7 +5455,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           llm: composeLlm, pieceRegistry,
           tools: composerToolRegistry?.listDetailed(),
           specialistRoles: Array.from(agentService.getSpecialists().values()).map(r => ({
-            id: r.id, name: r.name, description: r.description,
+            id: r.id, name: r.name, description: r.description, tools: r.tools,
           })),
           library: composerLibrary, executionTargets: collectExecutionTargets(),
         });

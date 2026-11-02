@@ -35,7 +35,7 @@ import { digest } from './effect-context';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, wrapUntrusted } from '../../roles/untrusted';
 import { authorizePieceDispatch, CODE_STEP_PIECE, PIECE_RECEIPT_MAX_BYTES, pieceInputDigest, receiptBody } from './piece-effect-guard';
 import { getWaitpoint } from '../db/repos/waitpoint';
-import { isCommunityPiece } from './step-admission';
+import { isCommunityAction, isCommunityPiece } from './step-admission';
 import { WebSocketService } from '../../daemon/ws-service';
 import { SandboxApi } from '../sandbox-api/server';
 import { EngineTokenSigner } from '../sandbox-api/engine-token';
@@ -80,6 +80,29 @@ const SEND_INPUT = {
   receiver: ['finance@example.test'], cc: [], subject: 'Q3 invoice',
   body: 'The invoice is attached.', sender_name: 'Jarvis',
 };
+
+test('Sheets append blocks uncertain replay and returns a persisted completion without another dispatch', async () => {
+  for (const action of ['insert_row', 'sheets_append_values', 'sheets_add_row']) {
+    const f = fixture('@activepieces/piece-google-sheets', action);
+    const input = { spreadsheet_id: 'fixture-sheet', worksheet_title: 'Submissions', values: [['one', 'me@example.test']] };
+    const authorized = await f.authorize(input) as { effectId: string };
+    expect(authorized).toMatchObject({ dispatch: 'authorized' });
+    await expect(f.authorize(input)).rejects.toThrow(/uncertain|replay is blocked/);
+    f.backends.pieceReceipt!(f.context, authorized.effectId, { updatedRange: 'Submissions!A2:B2', updatedRows: 1 });
+    expect(await f.authorize(input)).toMatchObject({ dispatch: 'completed', result: { updatedRows: 1 } });
+    await expect(f.authorize({ ...input, values: [['changed']] })).rejects.toThrow(/changed/);
+    expect(listWorkflowEffects(f.run.id)).toHaveLength(1);
+  }
+});
+
+test('other Sheets actions stay ungoverned community steps: audited and badged', async () => {
+  const sheets = '@activepieces/piece-google-sheets';
+  expect(isCommunityAction(sheets, 'clear_sheet')).toBe(true);
+  const f = fixture(COMMUNITY_PIECE, 'create_contact');
+  expect(await f.backends.pieceAuthorize!({ piece: sheets, action: 'clear_sheet', input: {} }, f.context)).toEqual({ governed: false });
+  expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([
+    expect.objectContaining({ tool_name: `community piece ${sheets}/clear_sheet`, authority_decision: 'allowed' })]);
+});
 
 describe('governed piece adapters: the catalogue stays open', () => {
   test('a community piece is reported ungoverned and leaves no effect record', async () => {
@@ -1468,6 +1491,31 @@ describe('#955: the editor badge and the admission agree on which steps skip app
     // is Jarvis's own ingress), so it has no in-run exemption: were it ever to
     // run, it would be treated, audited and badged as any community piece.
     expect(pieces.filter(isCommunityPiece)).toEqual([COMMUNITY_PIECE, '@activepieces/piece-mcp', '@activepieces/piece-webhook']);
+  });
+});
+
+describe('#955: a partly governed piece badges and audits its ungoverned actions', () => {
+  test('a HubSpot action other than the contact upsert is admitted, audited and badged as community', async () => {
+    const HUBSPOT = '@activepieces/piece-hubspot';
+    expect(isCommunityPiece(HUBSPOT)).toBe(false);
+    expect(isCommunityAction(HUBSPOT, 'create-or-update-contact')).toBe(false);
+    expect(isCommunityAction(HUBSPOT, 'create-deal')).toBe(true);
+    expect(isCommunityAction(GMAIL, 'not_a_gmail_action')).toBe(false);
+    const f = fixture(COMMUNITY_PIECE, 'create-deal');
+    const reply = await f.backends.pieceAuthorize!({ piece: HUBSPOT, action: 'create-deal', input: {}, inputDigest: await pieceInputDigest({}) }, f.context);
+    expect(reply).toEqual({ governed: false });
+    expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([expect.objectContaining({ tool_name: `community piece ${HUBSPOT}/create-deal`, executed: 1 })]);
+  });
+  test('a Sheets action other than append is admitted, audited and badged as community', async () => {
+    const SHEETS = '@activepieces/piece-google-sheets';
+    expect(isCommunityPiece(SHEETS)).toBe(false);
+    for (const append of ['insert_row', 'sheets_append_values', 'sheets_add_row']) expect(isCommunityAction(SHEETS, append)).toBe(false);
+    expect(isCommunityAction(SHEETS, 'update_row')).toBe(true);
+    const f = fixture(SHEETS, 'update_row');
+    const reply = await f.backends.pieceAuthorize!({ piece: SHEETS, action: 'update_row', input: {}, inputDigest: await pieceInputDigest({}) }, f.context);
+    expect(reply).toEqual({ governed: false });
+    expect(listWorkflowEffects(f.run.id)).toHaveLength(0);
+    expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([expect.objectContaining({ tool_name: `community piece ${SHEETS}/update_row`, executed: 1 })]);
   });
 });
 

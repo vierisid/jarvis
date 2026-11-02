@@ -92,6 +92,28 @@ describe("PieceCatalog (unit)", () => {
     expect(entry.triggers?.["on_event"]?.displayName).toBe("On");
   });
 
+  test("Google Sheets style auth alternatives retain the default connection requirement", () => {
+    const entry = metadataToCatalogEntry({ name: "sheets", auth: [
+      { type: "OAUTH2", displayName: "Google connection" },
+      { type: "CUSTOM_AUTH", displayName: "Service account" },
+    ] });
+    expect(entry.auth).toEqual({ type: "OAUTH2", displayName: "Google connection" });
+  });
+
+  test("retains bounded connector reliability metadata without treating absence as idempotency", () => {
+    const entry = metadataToCatalogEntry({ name: "sheets", actions: {
+      append: { aiMetadata: { description: "Retries append another row", idempotent: false } },
+      read: { aiMetadata: { description: "Read only", idempotent: true } },
+      unknown: {},
+      invalid: { aiMetadata: { description: "x".repeat(6000), idempotent: "yes" } },
+    } });
+    expect(entry.actions.append?.aiMetadata).toEqual({ description: "Retries append another row", idempotent: false });
+    expect(entry.actions.read?.aiMetadata?.idempotent).toBe(true);
+    expect(entry.actions.unknown?.aiMetadata).toBeUndefined();
+    expect(entry.actions.invalid?.aiMetadata?.idempotent).toBeUndefined();
+    expect(entry.actions.invalid?.aiMetadata?.description).toHaveLength(4000);
+  });
+
   test("metadataToCatalogEntry attaches dynamicSampleData to jarvis-trigger:on_event", () => {
     // jarvis-trigger's on_event surfaces an envelope whose payload shape
     // varies with the configured eventType. The projection injects a

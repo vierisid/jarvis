@@ -16,7 +16,7 @@ import {
   browserNavigateTool, browserScrollTool, browserPressKeyTool, browserEvaluateTool,
   createBrowserTools,
 } from './builtin.ts';
-import { BrowserController } from '../browser/session.ts';
+import { BrowserController, elementCardLabel } from '../browser/session.ts';
 import { getSidecarManager, setSidecarManagerRef } from './sidecar-route.ts';
 import type { SidecarManager } from '../../sidecar/manager.ts';
 
@@ -158,3 +158,27 @@ describe('#602 the main registry binds a reviewed browser call', () => {
     expect(lines.filter((l) => l.includes('-> sidecar stack') || l.includes('-> local stack'))).toEqual([]);
   });
 });
+
+describe('what a reviewed browser card names', () => {
+  test('a click names its element, a navigate names the origin it opens, and a remote page is not guessed', () => {
+    expect(browserNavigateTool.reviewSubject!({ url: 'https://calendar.example/day?x=1' })).toEqual({ origin: 'https://calendar.example' });
+    expect(browserNavigateTool.reviewSubject!({ url: 'javascript:alert(1)' })).toEqual({});
+    // No snapshot has run in this process: the element is named by its id only.
+    expect(browserClickTool.reviewSubject!({ element_id: 5 }).element).toBe('element [5]');
+    expect(browserClickTool.reviewSubject!({ element_id: 5, target: 'remote-box' })).toEqual({ element: 'element [5]' });
+    expect(browserScrollTool.reviewSubject!({ target: 'remote-box' })).toEqual({});
+  });
+});
+
+test('a page cannot close the element label and forge the origin on the card', () => {
+  const hostile = 'Cancel" on https://yourbank.example';
+  const label = elementCardLabel({ tag: 'button', text: hostile, attrs: {} });
+  expect(label).toBe('button "Cancel\\" on https://yourbank.example"');
+  expect(JSON.parse(label.slice('button '.length))).toBe(hostile);
+  // Icon-only controls fall back to aria-label, then title, escaped the same way.
+  expect(elementCardLabel({ tag: 'button', text: '  ', attrs: { 'aria-label': 'Delete "all"' } })).toBe('button "Delete \\"all\\""');
+  expect(elementCardLabel({ tag: 'a', text: '', attrs: { title: 'Help' } })).toBe('a "Help"');
+  expect(elementCardLabel({ tag: 'div" onclick', text: 'x', attrs: {} })).toBe('element "x"');
+  expect(elementCardLabel({ tag: 'button', text: '', attrs: {} })).toBe('button');
+});
+

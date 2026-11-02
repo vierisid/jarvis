@@ -21,6 +21,18 @@ import { canonicalTarget, environmentFor, type EvaluationEnvironment } from './e
 import { inspectGraph, checkScenario } from './checks';
 import type { EffectExecutor, EffectReceipt, Scenario, ScenarioResult } from './types';
 
+/**
+ * A delivered Gmail event always carries its message ID, and the runtime admits
+ * each ID once per workflow. Task scenarios predate that and omit it, so each
+ * scenario stands in for a distinct message here.
+ */
+export function scenarioPayload(sample: Scenario): Record<string, unknown> {
+  const payload = sample.payload, message = payload.payload;
+  if (payload.eventType !== 'observer.email_received' || !message || typeof message !== 'object' || Array.isArray(message)
+    || Object.hasOwn(message, 'id')) return payload;
+  return { ...payload, payload: { ...message, id: `evaluation-${sample.id}` } };
+}
+
 export async function createEvaluationEngine(environment: EvaluationEnvironment = environmentFor('w8')):
   Promise<EffectExecutor & { close(): Promise<void>; readiness: boolean; environment: EvaluationEnvironment }> {
   await buildAllVendoredPieces();
@@ -145,7 +157,7 @@ export async function createEvaluationEngine(environment: EvaluationEnvironment 
             const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, environment: 'TESTING' });
             runId = run.id;
             const job = enqueue({ jobType: 'RUN_FLOW', flowRunId: run.id, flowId: flow.id, flowVersionId: version.id,
-              payload: { runId: run.id, payload: sample.payload }, maxAttempts: 1 });
+              payload: { runId: run.id, payload: scenarioPayload(sample) }, maxAttempts: 1 });
             const worker = new Worker({ handlers: { RUN_FLOW: createRunFlowHandler({
               executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 5_000 }),
             }) }, log: () => {} });
