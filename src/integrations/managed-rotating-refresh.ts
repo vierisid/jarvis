@@ -15,14 +15,15 @@ interface ManagedRefreshConnection {
   account: { id: string };
   access_token: string;
   refresh_token: string;
-  expires_at: string;
+  /** null only for a provider that opts in with `allowUnknownExpiry`. */
+  expires_at: string | null;
   refresh: { url: string; instance_id: string; secret: string };
 }
 interface Cached {
   key: string;
   access_token?: string;
   refresh_token?: string;
-  expires_at?: string;
+  expires_at?: string | null;
   receipt?: string;
   reconnect?: boolean;
 }
@@ -49,7 +50,19 @@ export function createManagedRotatingRefresher<
   provider: string,
   name: string,
   read: (dir: string) => T | null,
-  options: { lockWaitMs?: number } = {},
+  options: {
+    lockWaitMs?: number;
+    /** The provider issues rotating pairs without an expiry (hosting delivers
+     * `expires_at: null` for a refreshable grant). A null expiry then counts
+     * as unexpired, so pair it with `validateAccess`. Off by default. */
+    allowUnknownExpiry?: boolean;
+    /** Ask the provider whether an access token still works: true when it
+     * does, false when the provider refused it (a 401), and throw for anything
+     * else (throttling, an outage, a changed account), which never rotates.
+     * When set, a token is used only after it passes, a refusal renews once,
+     * and a renewed token that is refused needs reconnect. Off by default. */
+    validateAccess?: (connection: T, request: typeof fetch) => Promise<boolean>;
+  } = {},
 ) {
   const lockWaitMs = options.lockWaitMs ?? LOCK_WAIT_MS;
   const flights = new Map<string, Promise<T>>();
@@ -142,8 +155,16 @@ export function createManagedRotatingRefresher<
     typeof v.access_token === "string" &&
     v.access_token.length > 0 &&
     v.access_token.length <= 16384 &&
-    typeof v.expires_at === "string" &&
-    Date.parse(v.expires_at) > Date.now() + 60000;
+    ((options.allowUnknownExpiry === true && v.expires_at === null) ||
+      (typeof v.expires_at === "string" &&
+        Date.parse(v.expires_at) > Date.now() + 60000));
+  /** The stored pair as a connection, to check or hand out. */
+  const withToken = (c: T, v: Cached): T => ({
+    ...c,
+    access_token: v.access_token!,
+    refresh_token: v.refresh_token!,
+    expires_at: v.expires_at as T["expires_at"],
+  });
   /** A status read: never creates the renewal file, and never writes. */
   function needsReconnect(config: JarvisConfig, c: T): boolean {
     let db: Database | undefined;
@@ -166,8 +187,13 @@ export function createManagedRotatingRefresher<
     request: typeof fetch,
     receipt?: string,
   ): Promise<{ response: Response; value: any }> {
-    const origin = new URL(config.usejarvis_integrations?.page_url ?? "");
-    const endpoint = new URL(c.refresh.url);
+    let origin: URL, endpoint: URL;
+    try {
+      origin = new URL(config.usejarvis_integrations?.page_url ?? "");
+      endpoint = new URL(c.refresh.url);
+    } catch {
+      throw new Error(`${name} renewal is not configured. Reconnect ${name}.`);
+    }
     if (
       origin.protocol !== "https:" ||
       endpoint.origin !== origin.origin ||
@@ -278,13 +304,19 @@ export function createManagedRotatingRefresher<
               // here, but a stored access token that is still valid for this
               // exact grant is safe to use meanwhile.
               const latest = get(db, key);
-              if (latest && !latest.reconnect && usable(latest) && same(config, c))
-                return {
-                  ...c,
-                  access_token: latest.access_token!,
-                  refresh_token: latest.refresh_token!,
-                  expires_at: latest.expires_at!,
-                };
+              // A token of unknown expiry is served only once the provider
+              // confirms it still works; without a check it is never served.
+              if (
+                latest &&
+                !latest.reconnect &&
+                usable(latest) &&
+                same(config, c) &&
+                (latest.expires_at !== null ||
+                  (!!options.validateAccess &&
+                    (await options.validateAccess(withToken(c, latest), request)) &&
+                    same(config, c)))
+              )
+                return withToken(c, latest);
               throw new Error(
                 `Could not confirm ${name} renewal. Try again shortly.`,
               );
@@ -316,7 +348,13 @@ export function createManagedRotatingRefresher<
             save(db, current);
           } else if (latest) current = latest;
         }
-        if (!usable(current)) {
+        const accepted =
+          usable(current) &&
+          (!options.validateAccess ||
+            (await options.validateAccess(withToken(c, current), request)));
+        if (!same(config, c))
+          throw new Error(`${name} connection changed. Try again.`);
+        if (!accepted) {
           const { response, value } = await post(
             config,
             c,
@@ -389,12 +427,23 @@ export function createManagedRotatingRefresher<
         }
         if (!same(config, c))
           throw new Error(`${name} connection changed. Try again.`);
-        return {
-          ...c,
-          access_token: current.access_token!,
-          refresh_token: current.refresh_token!,
-          expires_at: current.expires_at!,
-        };
+        // A token the provider refused was renewed above; if the renewed one is
+        // refused as well, renewing again cannot help.
+        if (
+          !accepted &&
+          options.validateAccess &&
+          !(await options.validateAccess(withToken(c, current), request))
+        ) {
+          await lock(db);
+          transaction = true;
+          if (same(config, c)) save(db, { key, reconnect: true });
+          db.exec("COMMIT");
+          transaction = false;
+          throw new Error(`Reconnect ${name} in your account page.`);
+        }
+        if (!same(config, c))
+          throw new Error(`${name} connection changed. Try again.`);
+        return withToken(c, current);
       } finally {
         if (transaction) db?.exec("ROLLBACK");
         db?.close();

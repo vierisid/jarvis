@@ -2538,6 +2538,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json(intercomStatus(ctx.config));
       },
     },
+    '/api/integrations/notion/options': {
+      GET: async (req: Request) => {
+        const {notionOptions,NotionOptionsError}=await import('../integrations/notion-options');
+        try {return json(await notionOptions(ctx.config,new URL(req.url).searchParams));}
+        catch(error){return json({error:error instanceof NotionOptionsError?error.message:'Could not load Notion choices.'},error instanceof NotionOptionsError?error.status:502);}
+      },
+    },
+    '/api/integrations/notion': {
+      GET: async () => {
+        const {notionStatus} = await import('../integrations/notion-connection');
+        return json(notionStatus(ctx.config));
+      },
+    },
     '/api/integrations/clickup': {
       GET: async () => {
         const { clickUpStatus } = await import('../integrations/clickup-connection');

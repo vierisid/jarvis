@@ -12,6 +12,7 @@ import { REPORT_ACCOUNTS, REPORT_PIECE, isReportStep, managedReportRefusal, type
 import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_PIECE, isSalesStep, salesSetup } from './sales-followups';
 import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
+import {managedNotionIssue} from './managed-notion';
 import {managedMailchimpIssue} from './managed-mailchimp';
 import {managedGitHubIssue} from './managed-github';
 import {managedTrelloIssue} from './managed-trello';
@@ -265,6 +266,11 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       && ["{{connections.jarvis:airtable}}", "{{connections['jarvis:airtable']}}"].includes(String(input.auth))) {
       const reason = managedAirtableIssue(root ? settings.triggerName : settings.actionName, input, false);
       if (reason) issue(node, 'settings.input', 'MANAGED_AIRTABLE', reason);
+    }
+    if (pieceName === '@activepieces/piece-notion' && object(input)
+      && ["{{connections.jarvis:notion}}", "{{connections['jarvis:notion']}}"].includes(String(input.auth))) {
+      const reason = managedNotionIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_NOTION', reason);
     }
     if (pieceName === '@activepieces/piece-trello' && object(input)
       && ["{{connections.jarvis:trello}}", "{{connections['jarvis:trello']}}"].includes(String(input.auth))) {

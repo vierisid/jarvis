@@ -19,6 +19,7 @@ import { JarvisTrelloConnectionSource } from "../credentials/trello-source";
 import { JarvisDropboxConnectionSource } from "../credentials/dropbox-source";
 import { JarvisSlackConnectionSource } from "../credentials/slack-source";
 import { JarvisAirtableConnectionSource } from "../credentials/airtable-source";
+import { JarvisNotionConnectionSource } from "../credentials/notion-source";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,6 +47,7 @@ const GITHUB = "@activepieces/piece-github";
 const TRELLO = "@activepieces/piece-trello";
 const DROPBOX = "@activepieces/piece-dropbox";
 const AIRTABLE = "@activepieces/piece-airtable";
+const NOTION = "@activepieces/piece-notion";
 
 const pieces = new PieceCatalog([
   { name: GMAIL, displayName: "Gmail", description: "", auth: { type: "OAUTH2" }, actions: {
@@ -169,6 +171,20 @@ const pieces = new PieceCatalog([
     create_branch: { name: "create_branch", displayName: "", description: "" },
   }, triggers: {
     new_issue: { name: "new_issue", displayName: "", description: "" },
+  } },
+  { name: NOTION, displayName: "Notion", description: "", auth: { type: "OAUTH2" }, actions: {
+    find_page: { name: "find_page", displayName: "", description: "", inputSchema: { fields: [
+      { name: "title", label: "", type: "string", required: false },
+    ] } },
+    notion_delete_block: { name: "notion_delete_block", displayName: "", description: "", inputSchema: { fields: [
+      { name: "block_id", label: "", type: "string", required: false },
+    ] } },
+    custom_api_call: { name: "custom_api_call", displayName: "", description: "", inputSchema: { fields: [
+      { name: "url", label: "", type: "json", required: false },
+      { name: "method", label: "", type: "string", required: false },
+    ] } },
+  }, triggers: {
+    updated_page: { name: "updated_page", displayName: "", description: "" },
   } },
 ] as any);
 
@@ -584,6 +600,55 @@ describe("managed Airtable is scoped to its four qualified record actions", () =
     const response = await fetchFor(runOf(trigger), "jarvis:airtable");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ type: "SECRET_TEXT", pieceName: AIRTABLE, value: { secret_text: AIRTABLE_TOKEN, jarvis_managed: "airtable" } });
+  });
+});
+
+describe("managed Notion is scoped to its four qualified Notion actions", () => {
+  const NOTION_TOKEN = "synthetic-managed-notion-access-token";
+  const ref = "{{connections.jarvis:notion}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "notion-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "notion.json"), JSON.stringify({ version: 1, provider: "notion", status: "connected",
+      generation: crypto.randomUUID(), access_token: NOTION_TOKEN, refresh_token: "synthetic-refresh",
+      expires_at: null, account: { id: "bot-1", label: "Workspace" }, workspaces: [], connected_at: new Date().toISOString(),
+      refresh: { url: "https://app.usejarvis.dev/api/integrations/notion/refresh", instance_id: crypto.randomUUID(), secret: "a".repeat(64) } }));
+    // The source checks an access token of unknown expiry against /users/me before handing it out.
+    const notionApi = (async () => Response.json({ object: "user", id: "bot-1", type: "bot" })) as unknown as typeof fetch;
+    credentials.register(new JarvisNotionConnectionSource({ daemon: { data_dir: dataDir },
+      usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig, notionApi));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (actionName: string, input: Record<string, unknown> = { auth: ref, title: "Notes" }): any => ({
+    name: "notion", type: "PIECE", settings: { pieceName: NOTION, actionName, input },
+  });
+  const notionCall = (url: string): any => step("custom_api_call", { auth: ref, method: "GET", url: { url } });
+  // A trigger whose settings also carry a stray actionName of a qualified action.
+  const notionTrigger = (): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: NOTION, triggerName: "updated_page", actionName: "find_page", input: { auth: ref } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Notion action outside the qualified four", empty(step("notion_delete_block", { auth: ref, block_id: "1" }))],
+    ["a Notion custom API call, even on api.notion.com", empty(notionCall("https://api.notion.com/v1/users/me"))],
+    ["a Notion custom API call with a relative path", empty(notionCall("/users/me"))],
+    ["a Notion trigger that carries a stray actionName", notionTrigger()],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:notion");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(NOTION_TOKEN);
+    });
+  }
+  test("a qualified Notion step auth is ready and resolves", async () => {
+    const trigger = empty(step("find_page"));
+    expect(bindingIssues(trigger)).toEqual([]);
+    const response = await fetchFor(runOf(trigger), "jarvis:notion");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: NOTION, value: { access_token: NOTION_TOKEN, jarvis_managed: "notion" } });
   });
 });
 

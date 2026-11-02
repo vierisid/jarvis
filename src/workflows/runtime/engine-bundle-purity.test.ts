@@ -39,11 +39,11 @@ import ts from 'typescript';
 import { PATCHED_VENDOR_SOURCES } from '../runner/engine-runtime/build';
 
 /** Relative to this directory. All must also be cache-invalidation inputs.
- * managed-github, managed-trello, managed-mailchimp, managed-slack, managed-dropbox, managed-asana, managed-intercom, managed-calendly, managed-airtable and managed-typeform are the
+ * managed-github, managed-trello, managed-mailchimp, managed-slack, managed-dropbox, managed-asana, managed-intercom, managed-calendly, managed-airtable, managed-typeform and managed-notion are the
  * engine's fetch-only send adapters, and hubspot-contact is the HubSpot
  * contact input validation the adapter table uses; checking them here
  * prevents a future dependency from silently escaping the bundle hash. */
-const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'hubspot-contact.ts', 'managed-github.ts', 'managed-trello.ts', 'managed-mailchimp.ts', 'managed-slack.ts', 'managed-dropbox.ts', 'managed-asana.ts', 'managed-intercom.ts', 'managed-calendly.ts', 'managed-airtable.ts', 'managed-typeform.ts'];
+const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'hubspot-contact.ts', 'managed-github.ts', 'managed-trello.ts', 'managed-mailchimp.ts', 'managed-slack.ts', 'managed-dropbox.ts', 'managed-asana.ts', 'managed-intercom.ts', 'managed-calendly.ts', 'managed-airtable.ts', 'managed-typeform.ts', 'managed-notion.ts'];
 
 /**
  * A value import of ANOTHER registered source is fine, and is the one shape

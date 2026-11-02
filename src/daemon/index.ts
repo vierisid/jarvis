@@ -12,6 +12,7 @@ import { intercomStatus } from '../integrations/intercom-connection';
 import { calendlyStatus } from '../integrations/calendly-connection';
 import { slackStatus } from "../integrations/slack-connection";
 import { airtableStatus } from "../integrations/airtable-connection";
+import { notionStatus } from "../integrations/notion-connection";
 import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
@@ -4775,6 +4776,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       calendly: () => calendlyStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
       airtable: () => airtableStatus(jarvisConfig),
+      notion: () => notionStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
         return Object.fromEntries((['telegram', 'discord'] as const).map(name => [name, {
@@ -5037,6 +5039,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisIntercomConnectionSource(jarvisConfig));
       const { JarvisCalendlyConnectionSource } = await import("../workflows/credentials/calendly-source");
       credentialResolver.register(new JarvisCalendlyConnectionSource(jarvisConfig));
+      const { JarvisNotionConnectionSource } = await import("../workflows/credentials/notion-source");
+      credentialResolver.register(new JarvisNotionConnectionSource(jarvisConfig));
       logWithTimestamp(
         "Workflow credential resolver: registered jarvis:google source",
       );
