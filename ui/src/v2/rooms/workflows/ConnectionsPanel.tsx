@@ -12,6 +12,8 @@ import { ManagedConnectionRow } from '../../integrations/ManagedConnectionRow';
 import React, { useEffect, useState } from "react";
 import { CONNECTION_SETUP_EVENT, takePieceSetup, type PieceSetupRequest } from './connection-setup-request';
 import { confirmDialog } from "../../ui/ConfirmDialog";
+import { requestSettingsTab } from "../../shell/settings-tab-request";
+import { openRoom } from "../../router";
 import { Button, Chip, Icon } from "../../ui";
 import { RefreshCw, Trash2, Plus, KeyRound } from "lucide-react";
 import {
@@ -325,6 +327,7 @@ function AddConnectionForm({
   const [manualProvider, setManualProvider] = useState<string | null>(null);
   const provider = connectionProviderForPiece(pieceName.trim());
   const useManaged = provider && manualProvider !== provider;
+  const [administratorSetup, setAdministratorSetup] = useState(false);
 
 
   const handleSubmit = async (): Promise<void> => {
@@ -358,9 +361,14 @@ function AddConnectionForm({
 
   if (setup && useManaged) return <ManagedConnectionRow key={provider} provider={provider}
     onManualSetup={() => setManualProvider(provider)} />;
+  // An OAuth piece with no browser connection of its own: explain before offering a raw credential form.
+  if (setup && !provider && !administratorSetup && ["OAUTH2", "PLATFORM_OAUTH2", "CLOUD_OAUTH2"].includes(setup.authType)) {
+    return <OAuthSetupGuide pieceName={setup.pieceName} onAdministratorSetup={() => setAdministratorSetup(true)} />;
+  }
 
   return (
     <div className="wf-conn__form">
+      {setup && administratorSetup ? <p role="note">Administrator credential setup. Use a provider-authorized token with the permissions required by this connector. Saving credentials does not verify account access. Never paste credentials in chat.</p> : null}
       <div className="wf-conn__form-row">
         <label>
           External id
@@ -432,3 +440,42 @@ function AddConnectionForm({
     </div>
   );
 }
+
+/** Google pieces whose actions the Settings Google grant (read-only Gmail and Calendar) can serve. */
+const GOOGLE_READ_PIECES: Record<string, string> = {
+  '@activepieces/piece-gmail': 'Gmail',
+  '@activepieces/piece-google-calendar': 'Google Calendar',
+};
+/** Google pieces that grant cannot authorize at all. */
+const GOOGLE_WRITE_PIECES: Record<string, string> = {
+  '@activepieces/piece-google-sheets': 'Google Sheets',
+  '@activepieces/piece-google-drive': 'Google Drive',
+};
+
+/**
+ * An OAuth piece reached from a setup action that has no browser connection in
+ * Jarvis (hosted providers get ManagedConnectionRow instead). This form only
+ * stores pasted credentials; there is no universal piece OAuth broker. Only
+ * Google is connected from Settings > Integrations, and that grant is
+ * read-only Gmail and Calendar on hosted and self-hosted alike.
+ */
+export function OAuthSetupGuide({ pieceName, onAdministratorSetup, onOpenIntegrations = openIntegrations }: { pieceName: string; onAdministratorSetup(): void; onOpenIntegrations?(): void }) {
+  const googleRead = GOOGLE_READ_PIECES[pieceName], googleWrite = GOOGLE_WRITE_PIECES[pieceName];
+  const sheets = pieceName === '@activepieces/piece-google-sheets';
+  return <section className="wf-conn__form" aria-labelledby="oauth-setup-heading">
+    <h4 id="oauth-setup-heading">{googleRead || googleWrite ? `Connect ${googleRead ?? googleWrite}` : 'Connect an account'}</h4>
+    {googleRead
+      ? <p>Connect Google in Settings, under Integrations. That connection grants read-only Gmail and Calendar access, so {googleRead} steps that send, change or delete need an administrator credential instead.</p>
+      : googleWrite
+        ? <p>The Google connection in Settings grants read-only Gmail and Calendar access. It cannot authorize {sheets ? 'writing to Google Sheets' : 'Google Drive'}.</p>
+        : <p>This connector has no browser sign-in in Jarvis. Installing a connector does not connect an account.</p>}
+    {googleRead ? null : <p>Keep your workflow as a draft. Whoever administers this Jarvis can save an authorized credential for this connector here; then refresh and select it.</p>}
+    {sheets ? <p>For spreadsheet writes, that credential needs a Google OAuth grant with Sheets write access and access to the destination spreadsheet. A Gmail or Calendar grant is not sufficient.</p> : null}
+    <div className="wf-conn__form-actions">
+      {googleRead ? <Button variant="primary" size="sm" onClick={onOpenIntegrations}>Open Integrations</Button> : null}
+      <Button variant="ghost" size="sm" onClick={onAdministratorSetup}>Administrator credential setup</Button>
+    </div>
+  </section>;
+}
+
+function openIntegrations(): void { requestSettingsTab('integrations'); openRoom('settings'); }

@@ -146,6 +146,10 @@ test('Google workflow pieces keep the manual credential form: the Google grant i
     serveOAuth('google', { managed: true, is_authenticated: true });
     open(action({ kind: 'piece_credentials', pieceName: `@activepieces/piece-${name}`, pieceVersion: '0.9.1', authType: 'OAUTH2' }), null);
     await mount();
+    // No managed row: the setup guide states the read-only grant, then opens the manual form.
+    expect(host.textContent).toContain('read-only Gmail and Calendar');
+    expect(host.textContent).not.toContain('Enter credentials manually');
+    await act(async () => { Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('Administrator credential setup'))!.click(); });
     expect(host.querySelector('textarea')).not.toBeNull();
     expect(host.querySelector('.wf-conn__form')?.textContent).not.toContain('Enter credentials manually');
     await act(async () => root!.unmount()); root = undefined; host.remove();
