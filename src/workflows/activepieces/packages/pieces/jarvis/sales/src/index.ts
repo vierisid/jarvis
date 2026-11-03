@@ -14,7 +14,7 @@ const draftFollowups=createAction({
     inactivityProperty:Property.ShortText({displayName:'Last activity property',required:true,description:'Actual HubSpot deal datetime property defining inactivity, selected by you. Missing dates need review.'}),
     replyLookbackDays:Property.Number({displayName:'Recent reply window (days)',required:true,description:'1-365 days. Any exact-contact inbound message in this window vetoes a follow-up, across all mailbox threads.'}),
     inactivityDays:Property.Number({displayName:'Inactive for (days)',required:true,defaultValue:7}),
-    timezone:Property.ShortText({displayName:'Timezone',required:true,defaultValue:'Europe/Rome'}),
+    timezone:Property.ShortText({displayName:'Timezone',required:false,description:'IANA timezone that defines each processing day. Empty uses the timezone configured for Jarvis.'}),
   },
   outputSample:{complete:true,day:'2026-10-23',results:[{dealId:'example',status:'drafted',draftId:'example',detail:'Unsent draft saved'}],counts:{drafted:1,replied:0,already_processed:0,ineligible:0,review:0,unknown:0},summary:'One batch summary with drafts, skips and failures. Nothing sent.',notificationKey:'sales-summary:run-id'},
   async run(context){return postContext(context,'/v1/jarvis/sales/followups',context.propsValue,{complete:false,results:[],summary:''});},

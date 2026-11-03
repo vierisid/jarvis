@@ -98,6 +98,130 @@ const doc = Bun.YAML.parse(await Bun.file(process.env.WORKFLOW).text());
 const jobs = doc.jobs ?? {};
 const needsOf = (j) => [jobs[j]?.needs ?? []].flat();
 const findStep = (job, pred) => (jobs[job]?.steps ?? []).find(pred);
+// The release gates (v0.17.2). publish-docker, github-release and
+// discord-notify spell out their gate instead of taking the default
+// success(), which counts every skipped job above as a failure, the
+// publish-sidecar call skipped by design (no sidecar release due) included.
+// A skipped publish-sidecar passes only with sidecar-build saying nothing
+// was due (released false, no digests). release-complete fails a run that
+// published brain without the rest. Each if is pinned byte for byte here
+// (the structure check) and evaluated case by case (the gates mode).
+const SIDECAR_DONE = "(needs.publish-sidecar.result == \x27success\x27 || (needs.publish-sidecar.result == \x27skipped\x27 && needs.sidecar-build.outputs.released == \x27false\x27 && needs.sidecar-build.outputs.digests == \x27\x27))";
+const GATES = {
+  "publish-docker": "${{ !cancelled() && needs.validate-tag.result == \x27success\x27 && needs.build-image.result == \x27success\x27 && needs.smoke-image.result == \x27success\x27 && needs.sidecar-build.result == \x27success\x27 && needs.publish-brain.result == \x27success\x27 && " + SIDECAR_DONE + " }}",
+  "github-release": "${{ !cancelled() && needs.validate-tag.result == \x27success\x27 && needs.sidecar-build.result == \x27success\x27 && needs.publish-docker.result == \x27success\x27 && " + SIDECAR_DONE + " }}",
+  "discord-notify": "${{ !cancelled() && inputs.dry_run != true && needs.validate-tag.result == \x27success\x27 && needs.github-release.result == \x27success\x27 }}",
+  "release-complete": "${{ !cancelled() && needs.publish-brain.result == \x27success\x27 && (needs.publish-docker.result != \x27success\x27 || needs.github-release.result != \x27success\x27) }}",
+};
+
+// A small evaluator for the GitHub expression subset these use: literals,
+// inputs.dry_run, ! == != && || and parentheses, with GitHub loose
+// equality (different types compare as numbers, so null == false is true)
+// and its truthiness. Anything else is reported, never guessed at.
+// With a ctx (the release gates, v0.17.2) it also knows needs.<job>.result,
+// needs.<job>.outputs.<name> (ctx.needs; a missing one is null) and the
+// status functions (ctx.status).
+const evaluate = (src, value, ctx) => {
+  const m = /^\$\{\{([\s\S]*)\}\}$/.exec(String(src).trim());
+  if (!m) throw new Error("not a single ${{ }} expression");
+  const toks = m[1].match(/\s+|\x27(?:[^\x27]|\x27\x27)*\x27|&&|\|\||==|!=|!|\(|\)|[A-Za-z_][\w.-]*|\S/g).filter((t) => !/^\s+$/.test(t));
+  let i = 0;
+  const peek = () => toks[i];
+  const num = (v) => v === null ? 0 : typeof v === "boolean" ? Number(v) : typeof v === "string" ? (v.trim() === "" ? 0 : Number(v)) : v;
+  const eq = (a, b) => typeof a === typeof b && a !== null && b !== null
+    ? (typeof a === "string" ? a.toLowerCase() === b.toLowerCase() : a === b)
+    : (a === null && b === null) || num(a) === num(b);
+  const truthy = (v) => !(v === false || v === null || v === "" || v === 0 || Number.isNaN(v));
+  const primary = () => {
+    const t = toks[i++];
+    if (t === "(") { const v = or(); if (toks[i++] !== ")") throw new Error("unbalanced parentheses"); return v; }
+    if (t === "true") return true;
+    if (t === "false") return false;
+    if (t === "null") return null;
+    if (/^\x27/.test(t ?? "")) return t.slice(1, -1).replace(/\x27\x27/g, "\x27");
+    // EVAL_INPUTS (a JSON object) evaluates any inputs.<name> against it,
+    // an undeclared one as null, as GitHub does (#952 uses it for the
+    // publish_only gates). Without it only inputs.dry_run is known.
+    if (EVAL_INPUTS && /^inputs\.[A-Za-z_][\w-]*$/.test(t ?? "")) { const k = t.slice(7).toLowerCase(); return k in EVAL_INPUTS ? EVAL_INPUTS[k] : null; }
+    if (/^inputs\.dry_run$/i.test(t ?? "")) return value;
+    if (ctx && /^(?:always|success|failure|cancelled)$/.test(t ?? "") && toks[i] === "(" && toks[i + 1] === ")") { i += 2; return t === "always" ? true : Boolean(ctx.status[t]); }
+    const nm = /^needs\.([A-Za-z_][\w-]*)\.(result|outputs\.([A-Za-z_][\w-]*))$/.exec(t ?? "");
+    if (ctx && nm) { const j = ctx.needs[nm[1]]; if (!j) return null; const r = nm[3] === undefined ? j.result : j.outputs?.[nm[3]]; return r === undefined ? null : r; }
+    throw new Error("cannot evaluate " + JSON.stringify(t));
+  };
+  // GitHub precedence: ! binds tighter than == and !=, which bind tighter
+  // than &&, then ||. So !a == b is (!a) == b.
+  const not = () => { if (peek() === "!") { i++; return !truthy(not()); } return primary(); };
+  const cmp = () => {
+    const a = not();
+    if (peek() === "==" || peek() === "!=") { const op = toks[i++]; const b = not(); return op === "==" ? eq(a, b) : !eq(a, b); }
+    return a;
+  };
+  const and = () => { let v = cmp(); while (peek() === "&&") { i++; const r = cmp(); v = truthy(v) ? r : v; } return v; };
+  const or = () => { let v = and(); while (peek() === "||") { i++; const r = and(); v = truthy(v) ? v : r; } return v; };
+  const v = or();
+  if (i !== toks.length) throw new Error("trailing " + JSON.stringify(toks.slice(i).join(" ")));
+  return { v, truthy };
+};
+const EVAL_INPUTS = process.env.EVAL_INPUTS === undefined ? null : JSON.parse(process.env.EVAL_INPUTS);
+if (mode === "gates") {
+  // v0.17.2: what the jobs after the npm publishes do, in each case. The
+  // jobs above them take the results a case gives (success otherwise); the
+  // four gated jobs are decided in order from their if, verbatim, as GitHub
+  // does: with no status function in it, an if is success() && (if), and
+  // success() is false when any job above, all the way up, did not succeed.
+  // A job that runs succeeds, unless the case fails it; release-complete
+  // fails whenever it runs, which is its job. One line per wrong answer.
+  const SIM = ["publish-docker", "github-release", "discord-notify", "release-complete"];
+  const NEW_SIDECAR = { "sidecar-build": { released: "true", digests: "linux-x64=a" }, "publish-sidecar": { released: "true" } };
+  const SAME_SIDECAR = { "sidecar-build": { released: "false", digests: "" } };
+  const CASES = [
+    ["a release with a new sidecar", {}, NEW_SIDECAR, false, false, {}, "success success success skipped"],
+    ["a brain-only release, sidecar/VERSION already on npm (v0.17.2)", { "publish-sidecar": "skipped" }, SAME_SIDECAR, false, false, {}, "success success success skipped"],
+    ["the sidecar publish failed", { "publish-sidecar": "failure" }, NEW_SIDECAR, false, false, {}, "skipped skipped skipped failure"],
+    ["publish-sidecar skipped while a sidecar release was due", { "publish-sidecar": "skipped" }, NEW_SIDECAR, false, false, {}, "skipped skipped skipped failure"],
+    ["publish-sidecar skipped with digests but released false", { "publish-sidecar": "skipped" }, { "sidecar-build": { released: "false", digests: "linux-x64=a" } }, false, false, {}, "skipped skipped skipped failure"],
+    ["publish-sidecar cancelled", { "publish-sidecar": "cancelled" }, NEW_SIDECAR, false, false, {}, "skipped skipped skipped failure"],
+    ["the sidecar build failed", { "sidecar-build": "failure", "publish-sidecar": "skipped", "publish-brain": "skipped" }, {}, false, false, {}, "skipped skipped skipped skipped"],
+    ["the brain publish failed, sidecar unchanged", { "publish-brain": "failure", "publish-sidecar": "skipped" }, SAME_SIDECAR, false, false, {}, "skipped skipped skipped skipped"],
+    ["the brain publish failed, sidecar published", { "publish-brain": "failure" }, NEW_SIDECAR, false, false, {}, "skipped skipped skipped skipped"],
+    ["the run cancelled at the approval", { "publish-brain": "cancelled", "publish-sidecar": "cancelled" }, NEW_SIDECAR, false, true, {}, "skipped skipped skipped skipped"],
+    ["the run cancelled after brain published", { "publish-sidecar": "skipped" }, SAME_SIDECAR, false, true, {}, "skipped skipped skipped skipped"],
+    ["the smoke test failed", { "smoke-image": "failure", "sidecar-build": "skipped", "pack-brain": "skipped", "publish-sidecar": "skipped", "publish-brain": "skipped" }, {}, false, false, {}, "skipped skipped skipped skipped"],
+    ["publish-docker failed", {}, NEW_SIDECAR, false, false, { "publish-docker": "failure" }, "failure skipped skipped failure"],
+    ["github-release failed, sidecar unchanged", { "publish-sidecar": "skipped" }, SAME_SIDECAR, false, false, { "github-release": "failure" }, "success failure skipped failure"],
+    ["a dry run (the sidecar is always rehearsed)", {}, NEW_SIDECAR, true, false, {}, "success success skipped skipped"],
+    ["a dry run whose sidecar rehearsal failed", { "publish-sidecar": "failure" }, NEW_SIDECAR, true, false, {}, "skipped skipped skipped failure"],
+  ];
+  if (process.env.GATES_LABELS) { console.log(CASES.map((c) => c[0]).join("\n")); process.exit(0); }
+  const out = [];
+  const above = (j, seen = new Set()) => { for (const n of needsOf(j)) if (!seen.has(n)) { seen.add(n); above(n, seen); } return seen; };
+  for (const [label, given, outputs, dry, cancelled, fails, want] of CASES) {
+    const res = {};
+    for (const j of Object.keys(jobs)) if (!SIM.includes(j)) res[j] = given[j] ?? "success";
+    const got = [];
+    for (const j of SIM) {
+      if (!jobs[j]) { got.push("missing"); continue; }
+      const up = [...above(j)];
+      const undecided = up.filter((a) => !(a in res));
+      if (undecided.length) { out.push(label + ": " + j + " needs " + undecided.join(", ") + ", decided after it"); got.push("?"); continue; }
+      const src = String(jobs[j].if ?? "success()").trim();
+      const status = { cancelled, success: !cancelled && up.every((a) => res[a] === "success"), failure: up.some((a) => res[a] === "failure") };
+      const ctx = { needs: Object.fromEntries(needsOf(j).map((n) => [n, { result: res[n], outputs: outputs[n] ?? {} }])), status };
+      let r;
+      try { r = evaluate(src.startsWith("${{") ? src : "${{ " + src + " }}", dry, ctx); }
+      catch (e) { out.push(label + ": " + j + " if: " + e.message); got.push("?"); continue; }
+      let run = r.truthy(r.v);
+      if (!/\b(?:always|failure|cancelled|success)\s*\(/.test(src)) run = run && status.success;
+      res[j] = !run ? "skipped" : j === "release-complete" ? "failure" : fails[j] ?? "success";
+      got.push(res[j]);
+    }
+    if (got.join(" ") !== want)
+      out.push(label + ": " + SIM.map((j, k) => j + " " + got[k]).join(", ") + "; want " + SIM.map((j, k) => j + " " + want.split(" ")[k]).join(", "));
+  }
+  if (out.length) console.log(out.join("\n"));
+  process.exit(0);
+}
 if (mode === "validator" || mode === "step") {
   const step = mode === "validator"
     ? findStep("validate-tag", (s) => s.id === "validate")
@@ -138,7 +262,9 @@ if (mode === "dry-run") {
     // publish, and each call is told the decision on its own.
     ["jobs.sidecar-build.with.dry_run", (d) => d.jobs?.["sidecar-build"]?.with?.dry_run, FLAG, "flag"],
     ["jobs.publish-sidecar.with.dry_run", (d) => d.jobs?.["publish-sidecar"]?.with?.dry_run, FLAG, "flag"],
-    ["jobs.discord-notify.if", (d) => d.jobs?.["discord-notify"]?.if, "${{ inputs.dry_run != true }}", "notify"],
+    // discord-notify also names its gate (v0.17.2), pinned in GATES; here
+    // it is evaluated with everything above it successful.
+    ["jobs.discord-notify.if", (d) => d.jobs?.["discord-notify"]?.if, GATES["discord-notify"], "notify"],
     ["jobs.publish-brain.environment.name", (d) => d.jobs?.["publish-brain"]?.environment?.name, ENV_NAME, "environment"]);
   else if (file === "sidecar-release.yml") sites.push(
     ["jobs.publish-sidecar.environment.name", (d) => d.jobs?.["publish-sidecar"]?.environment?.name, ENV_NAME, "environment"]);
@@ -150,50 +276,6 @@ if (mode === "dry-run") {
   else if (file === "installer-release.yml") sites.push(
     ["jobs.publish.environment.name", (d) => d.jobs?.publish?.environment?.name, ENV_NAME, "environment"]);
   else out.push("no dry-run sites are known for " + file);
-  // A small evaluator for the GitHub expression subset these use: literals,
-  // inputs.dry_run, ! == != && || and parentheses, with GitHub loose
-  // equality (different types compare as numbers, so null == false is true)
-  // and its truthiness. Anything else is reported, never guessed at.
-  const evaluate = (src, value) => {
-    const m = /^\$\{\{([\s\S]*)\}\}$/.exec(String(src).trim());
-    if (!m) throw new Error("not a single ${{ }} expression");
-    const toks = m[1].match(/\s+|\x27(?:[^\x27]|\x27\x27)*\x27|&&|\|\||==|!=|!|\(|\)|[A-Za-z_][\w.-]*|\S/g).filter((t) => !/^\s+$/.test(t));
-    let i = 0;
-    const peek = () => toks[i];
-    const num = (v) => v === null ? 0 : typeof v === "boolean" ? Number(v) : typeof v === "string" ? (v.trim() === "" ? 0 : Number(v)) : v;
-    const eq = (a, b) => typeof a === typeof b && a !== null && b !== null
-      ? (typeof a === "string" ? a.toLowerCase() === b.toLowerCase() : a === b)
-      : (a === null && b === null) || num(a) === num(b);
-    const truthy = (v) => !(v === false || v === null || v === "" || v === 0 || Number.isNaN(v));
-    const primary = () => {
-      const t = toks[i++];
-      if (t === "(") { const v = or(); if (toks[i++] !== ")") throw new Error("unbalanced parentheses"); return v; }
-      if (t === "true") return true;
-      if (t === "false") return false;
-      if (t === "null") return null;
-      if (/^\x27/.test(t ?? "")) return t.slice(1, -1).replace(/\x27\x27/g, "\x27");
-      // EVAL_INPUTS (a JSON object) evaluates any inputs.<name> against it,
-      // an undeclared one as null, as GitHub does (#952 uses it for the
-      // publish_only gates). Without it only inputs.dry_run is known.
-      if (EVAL_INPUTS && /^inputs\.[A-Za-z_][\w-]*$/.test(t ?? "")) { const k = t.slice(7).toLowerCase(); return k in EVAL_INPUTS ? EVAL_INPUTS[k] : null; }
-      if (/^inputs\.dry_run$/i.test(t ?? "")) return value;
-      throw new Error("cannot evaluate " + JSON.stringify(t));
-    };
-    // GitHub precedence: ! binds tighter than == and !=, which bind tighter
-    // than &&, then ||. So !a == b is (!a) == b.
-    const not = () => { if (peek() === "!") { i++; return !truthy(not()); } return primary(); };
-    const cmp = () => {
-      const a = not();
-      if (peek() === "==" || peek() === "!=") { const op = toks[i++]; const b = not(); return op === "==" ? eq(a, b) : !eq(a, b); }
-      return a;
-    };
-    const and = () => { let v = cmp(); while (peek() === "&&") { i++; const r = cmp(); v = truthy(v) ? r : v; } return v; };
-    const or = () => { let v = and(); while (peek() === "||") { i++; const r = and(); v = truthy(v) ? v : r; } return v; };
-    const v = or();
-    if (i !== toks.length) throw new Error("trailing " + JSON.stringify(toks.slice(i).join(" ")));
-    return { v, truthy };
-  };
-  const EVAL_INPUTS = process.env.EVAL_INPUTS === undefined ? null : JSON.parse(process.env.EVAL_INPUTS);
   // EVAL_EXPR set: evaluate it for EVAL_VALUE (JSON) and print the result,
   // so the evaluator itself can be checked against known GitHub answers.
   if (process.env.EVAL_EXPR !== undefined) {
@@ -209,7 +291,8 @@ if (mode === "dry-run") {
     if (src !== canon) out.push(what + " is " + JSON.stringify(src) + ", not the one spelling " + JSON.stringify(canon));
     for (const [how, value, dry] of starts) {
       let r;
-      try { r = evaluate(src, value); } catch (e) { out.push(what + ": " + e.message); break; }
+      const ctx = kind === "notify" ? { needs: { "validate-tag": { result: "success" }, "github-release": { result: "success" } }, status: { cancelled: false, success: true, failure: false } } : undefined;
+      try { r = evaluate(src, value, ctx); } catch (e) { out.push(what + ": " + e.message); break; }
       const { v, truthy } = r;
       // An env value is the expression result as a string; null becomes "".
       const ok = kind === "env" ? (v === null ? "" : String(v)) === String(dry)
@@ -799,7 +882,7 @@ if (mode === "image") {
       if (new RegExp("needs\\s*(?:\\.\\s*" + c + "|\\[\\s*\\\\?[\\x27\\x22]" + c + "\\\\?[\\x27\\x22]\\s*\\])\\s*\\.\\s*outputs\\b").test(JSON.stringify(job)) && !needsOf(name).includes(c))
         out.push(name + ": reads needs." + c + ".outputs but does not list " + c + " in needs");
   for (const j of ["build-image", "smoke-image", "publish-docker"])
-    if (/\b(always|failure|cancelled)\s*\(|\bsuccess\s*\(\s*\)\s*\|\|/.test(String(jobs[j]?.if ?? ""))) out.push(j + ": can run after a failed gate (if: " + jobs[j].if + ")");
+    if (/\b(always|failure|cancelled)\s*\(|\bsuccess\s*\(\s*\)\s*\|\|/.test(String(jobs[j]?.if ?? "")) && jobs[j]?.if !== GATES[j]) out.push(j + ": can run after a failed gate (if: " + jobs[j].if + ")");
   if (out.length) console.log(out.join("\n"));
   process.exit(0);
 }
@@ -1196,6 +1279,14 @@ const rel = (jobs["github-release"]?.steps ?? []).find((s) => String(s.uses ?? "
 if (!rel) out.push("github-release has no action-gh-release step");
 else if (rel.with?.target_commitish !== "${{ github.sha }}")
   out.push("action-gh-release must set target_commitish: ${{ github.sha }} (got " + JSON.stringify(rel.with?.target_commitish) + ")");
+// v0.17.2: the release gates, byte for byte (GATES above), and the needs
+// they read. Their behaviour case by case is the gates mode.
+for (const [name, want] of Object.entries(GATES)) {
+  if (!jobs[name]) { out.push("no " + name + " job"); continue; }
+  if (jobs[name].if !== want) out.push(name + ": if is " + JSON.stringify(jobs[name].if) + ", not exactly the release gate " + JSON.stringify(want));
+  for (const m of want.matchAll(/needs\.([A-Za-z_][\w-]*)\./g))
+    if (!needsOf(name).includes(m[1])) out.push(name + ": its if reads needs." + m[1] + " but does not list " + m[1] + " in needs");
+}
 const reads = /needs\s*(\.\s*validate-tag|\[\s*["\x27]validate-tag["\x27]\s*\])/;
 const readKeys = /needs\s*(?:\.\s*validate-tag|\[\s*["\x27]validate-tag["\x27]\s*\])\s*\.\s*outputs\s*\.\s*([A-Za-z0-9_-]+)/g;
 for (const [name, job] of Object.entries(jobs)) {
@@ -1215,7 +1306,7 @@ for (const [name, job] of Object.entries(jobs)) {
   for (const m of text.matchAll(readKeys))
     if (!gate?.outputs || !(m[1] in gate.outputs))
       out.push(name + ": reads needs.validate-tag.outputs." + m[1] + ", which validate-tag does not output");
-  if (/\b(always|failure|cancelled)\s*\(/.test(String(job.if ?? "")))
+  if (/\b(always|failure|cancelled)\s*\(/.test(String(job.if ?? "")) && job.if !== GATES[name])
     out.push(name + ": reads validate-tag outputs but can run after a failed gate (if: " + job.if + ")");
 }
 // #645: one publish at a time, queued rather than cancelled. The group must be
@@ -1606,8 +1697,8 @@ ${found}"
 		'      - name: Validate the release tag' '      - uses: actions/checkout@v5
       - name: Validate the release tag'
 	mutant 'a consumer that runs after a failed gate' \
-		'    needs: [validate-tag, publish-docker, publish-sidecar]' '    needs: [validate-tag, publish-docker, publish-sidecar]
-    if: always()'
+		$'  discord-notify:\n    needs: [validate-tag, github-release]\n    if: ${{ !cancelled() && ' $'  discord-notify:\n    needs: [validate-tag, github-release]\n    if: ${{ always() && ' \
+		'discord-notify: reads validate-tag outputs but can run after a failed gate'
 	mutant 'a misspelt output name' \
 		'enable=${{ needs.validate-tag.outputs.prerelease' 'enable=${{ needs.validate-tag.outputs.prerelaese'
 	mutant 'a per-ref concurrency group (#645)' \
@@ -1689,7 +1780,7 @@ fi
 		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: write\n' \
 		'build-image: holds packages: write'
 	mutant 'the build job logging in to GHCR again (#868)' \
-		'      - name: Generate Docker metadata' $'      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0\n        with:\n          registry: ghcr.io\n      - name: Generate Docker metadata' \
+		'      - name: Generate Docker metadata' $'      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0\n        with:\n          registry: ghcr.io\n      - name: Generate Docker metadata' \
 		'build-image: logs in to a registry'
 	mutant 'the build pushing by digest again, as #680 did (#868)' \
 		'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar' '          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true' \
@@ -1720,7 +1811,7 @@ fi
           path: \${{ runner.temp }}/release-image
 
       # The amd64"
-	DL_TO_LOGIN="      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+	DL_TO_LOGIN="      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
       - name: Download the archive
@@ -1742,8 +1833,8 @@ fi
 		"$DL_FROM" "$DL_TO_LOGIN" \
 		'smoke-image: logs in to a registry'
 	mutant 'a third job holding packages: write (#680)' \
-		$'  github-release:\n    needs: [validate-tag, publish-docker, publish-sidecar]\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write' \
-		$'  github-release:\n    needs: [validate-tag, publish-docker, publish-sidecar]\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write\n      packages: write' \
+		$'  github-release:\n    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]\n    if: ${{ !cancelled() && needs.validate-tag.result == \'success\' && needs.sidecar-build.result == \'success\' && needs.publish-docker.result == \'success\' && (needs.publish-sidecar.result == \'success\' || (needs.publish-sidecar.result == \'skipped\' && needs.sidecar-build.outputs.released == \'false\' && needs.sidecar-build.outputs.digests == \'\')) }}\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write' \
+		$'  github-release:\n    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]\n    if: ${{ !cancelled() && needs.validate-tag.result == \'success\' && needs.sidecar-build.result == \'success\' && needs.publish-docker.result == \'success\' && (needs.publish-sidecar.result == \'success\' || (needs.publish-sidecar.result == \'skipped\' && needs.sidecar-build.outputs.released == \'false\' && needs.sidecar-build.outputs.digests == \'\')) }}\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write\n      packages: write' \
 		'github-release: holds packages: write'
 	mutant 'a docker push from a run: step in the build job (#680)' \
 		'      - name: Upload the archive' $'      - run: docker push ghcr.io/vierisid/jarvis:latest\n      - name: Upload the archive' \
@@ -1864,13 +1955,13 @@ fi
 		'REHEARSAL_REGISTRY_IMAGE is not pinned by tag and digest'
 	# publish-docker: after the approval chain, by digest, the rehearsed script.
 	mutant 'publish-docker pushing before the approval chain (#680)' \
-		'    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]' '    needs: [validate-tag, build-image, smoke-image]' \
+		'    needs: [validate-tag, build-image, smoke-image, sidecar-build, publish-sidecar, publish-brain]' '    needs: [validate-tag, build-image, smoke-image, sidecar-build, publish-sidecar]' \
 		'publish-docker: does not list publish-brain in needs'
 	mutant 'publish-docker not waiting for the smoke test (#680)' \
-		'    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]' '    needs: [validate-tag, build-image, publish-sidecar, publish-brain]' \
+		'    needs: [validate-tag, build-image, smoke-image, sidecar-build, publish-sidecar, publish-brain]' '    needs: [validate-tag, build-image, sidecar-build, publish-sidecar, publish-brain]' \
 		'publish-docker: does not list smoke-image in needs'
 	mutant 'the push job allowed to run after a failed smoke test (#680)' \
-		$'  publish-docker:\n    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]\n' $'  publish-docker:\n    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]\n    if: ${{ !cancelled() && needs.build-image.result == \'success\' }}\n' \
+		$'  publish-docker:\n    needs: [validate-tag, build-image, smoke-image, sidecar-build, publish-sidecar, publish-brain]\n    if: ${{ !cancelled() && needs.validate-tag.result == \'success\' && needs.build-image.result == \'success\' && needs.smoke-image.result == \'success\' && ' $'  publish-docker:\n    needs: [validate-tag, build-image, smoke-image, sidecar-build, publish-sidecar, publish-brain]\n    if: ${{ !cancelled() && needs.validate-tag.result == \'success\' && needs.build-image.result == \'success\' && ' \
 		'publish-docker: can run after a failed gate'
 	mutant 'publish-docker given contents: write as well (#680)' \
 		$'    permissions:\n      packages: write\n' $'    permissions:\n      contents: write\n      packages: write\n' \
@@ -1942,19 +2033,19 @@ fi
 		$'      - name: Dry-run summary\n        if: env.DRY_RUN == \'true\'\n        env:\n          DIGEST:' $'      - run: skopeo --debug copy oci-archive:x docker://ghcr.io/o/r:latest\n      - name: Dry-run summary\n        if: env.DRY_RUN == \'true\'\n        env:\n          DIGEST:' \
 		'publish-docker: steps must be exactly'
 	mutant 'the credential written before the artifact is unpacked again (#868 review)' \
-		$'      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Log in again\n        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0\n      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' \
+		$'      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Log in again\n        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0\n      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' \
 		'publish-docker: steps must be exactly'
 	mutant 'the archive check before the login switched off (#868 review)' \
 		$'      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Verify the archive\n        if: false\n' \
 		'publish-docker: steps must be exactly'
 	mutant 'the GitHub Release no longer after the image push (#680)' \
-		'    needs: [validate-tag, publish-docker, publish-sidecar]' '    needs: [validate-tag, publish-brain, publish-sidecar]' \
+		'    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]' '    needs: [validate-tag, sidecar-build, publish-brain, publish-sidecar]' \
 		'github-release: does not run after publish-docker'
 	mutant 'the sidecar build no longer gated on the smoke test (#680)' \
 		'    needs: [test, smoke-image]' '    needs: [test, build-image]' \
 		'sidecar-build: does not run after smoke-image'
 	mutant 'publish-docker no longer after the sidecar publish (#952)' \
-		'    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]' '    needs: [validate-tag, build-image, smoke-image, sidecar-build, publish-brain]' \
+		'    needs: [validate-tag, build-image, smoke-image, sidecar-build, publish-sidecar, publish-brain]' '    needs: [validate-tag, build-image, smoke-image, sidecar-build, publish-brain]' \
 		'publish-docker: does not run after publish-sidecar'
 	# #952: one approval for both publishes. Each mutant puts back one way
 	# the two gates came apart, or one way the split could lose atomicity.
@@ -1992,7 +2083,7 @@ fi
 		$'      version: ${{ needs.sidecar-build.outputs.version }}\n' '' \
 		'publish-sidecar: must call ./.github/workflows/sidecar-release.yml with publish_only: true, digests'
 	mutant 'github-release reading the sidecar publish outputs without waiting for it (#952)' \
-		'    needs: [validate-tag, publish-docker, publish-sidecar]' '    needs: [validate-tag, publish-docker]' \
+		'    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]' '    needs: [validate-tag, sidecar-build, publish-docker]' \
 		'github-release: reads needs.publish-sidecar.outputs but does not list publish-sidecar in needs'
 	unset MUTANT_MODE
 }
@@ -2305,7 +2396,7 @@ done
 {
 	MUTANT_MODE=dry-run
 	mutant 'discord-notify inverted, announcing only dry runs (#685)' \
-		'    if: ${{ inputs.dry_run != true }}' '    if: ${{ inputs.dry_run }}'
+		'    if: ${{ !cancelled() && inputs.dry_run != true && ' '    if: ${{ !cancelled() && inputs.dry_run && '
 	mutant 'DRY_RUN compared with the string, so a dry dispatch publishes (#685)' \
 		'  DRY_RUN: ${{ inputs.dry_run == true }}' "  DRY_RUN: \${{ inputs.dry_run == 'true' }}"
 	mutant 'the sidecar build told a constant instead of the input (#685)' \
@@ -2323,7 +2414,7 @@ done
 	mutant 'a real-run environment on a dry dispatch (#685)' \
 		"      name: \${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}" "      name: \${{ inputs.dry_run == false && 'release-dry-run' || 'release' }}"
 	mutant 'an equivalent but second spelling of the decision (#685)' \
-		'    if: ${{ inputs.dry_run != true }}' '    if: ${{ !inputs.dry_run }}'
+		'    if: ${{ !cancelled() && inputs.dry_run != true && ' '    if: ${{ !cancelled() && !inputs.dry_run && '
 	mutant 'a step deciding dry run from the event payload (#685)' \
 		$'      - name: Dry-run summary\n        if: env.DRY_RUN == \'true\'\n        env:\n          VERSION:' \
 		$'      - name: Dry-run summary\n        if: github.event.inputs.dry_run == \'true\'\n        env:\n          VERSION:'
@@ -2351,6 +2442,67 @@ done
 	mutant 'installer-release.yml: the publish gate dropped altogether (#920)' \
 		$'    environment:\n      name: ${{ inputs.dry_run == true && \'release-dry-run\' || \'release\' }}\n' ''
 	unset MUTANT_MODE MUTANT_FROM
+}
+
+echo
+echo "a brain-only release still pushes the image, creates the GitHub Release and posts to Discord, and a run that published brain alone fails (v0.17.2)"
+# Run 40357636306 (v0.17.2): sidecar/VERSION was already on npm, so the
+# publish-sidecar call skipped every job and ended skipped, and the default
+# success() of publish-docker counted that as a failure: brain published,
+# then publish-docker, github-release and discord-notify skipped and the
+# run reported success. Each case gives the jobs above the four gated ones
+# a result and the outputs they read, and their ifs decide, verbatim.
+found="$(yq gates)" || found="the bun helper failed"
+if [ -z "$found" ]; then
+	while IFS= read -r label; do ok "gates: ${label}"; done < <(GATES_LABELS=1 yq gates)
+else
+	no "gates: every case" "$found"
+fi
+# shellcheck disable=SC2016 # every mutant is literal workflow text.
+{
+	MUTANT_MODE=gates
+	mutant 'publish-docker back on the default success(), the v0.17.2 bug' \
+		"    if: \${{ !cancelled() && needs.validate-tag.result == 'success' && needs.build-image.result == 'success' && needs.smoke-image.result == 'success' && needs.sidecar-build.result == 'success' && needs.publish-brain.result == 'success' && (needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}"$'\n' '' \
+		'a brain-only release, sidecar/VERSION already on npm (v0.17.2)'
+	mutant 'publish-docker taking any skipped sidecar publish as done' \
+		"(needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}"$'\n    runs-on: ubuntu-latest\n    # No checkout' \
+		"(needs.publish-sidecar.result == 'success' || needs.publish-sidecar.result == 'skipped') }}"$'\n    runs-on: ubuntu-latest\n    # No checkout' \
+		'publish-sidecar skipped while a sidecar release was due'
+	mutant 'publish-docker no longer checking the brain publish' \
+		"needs.sidecar-build.result == 'success' && needs.publish-brain.result == 'success' && " "needs.sidecar-build.result == 'success' && " \
+		'the brain publish failed, sidecar unchanged'
+	mutant 'publish-docker no longer checking the sidecar build outputs, only that it ran' \
+		"needs.smoke-image.result == 'success' && needs.sidecar-build.result == 'success' && needs.publish-brain.result == 'success' && (needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}" \
+		"needs.smoke-image.result == 'success' && needs.sidecar-build.result == 'success' && needs.publish-brain.result == 'success' && (needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false')) }}" \
+		'publish-sidecar skipped with digests but released false'
+	mutant 'github-release back on the default success()' \
+		"    if: \${{ !cancelled() && needs.validate-tag.result == 'success' && needs.sidecar-build.result == 'success' && needs.publish-docker.result == 'success' && (needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}"$'\n' '' \
+		'a brain-only release, sidecar/VERSION already on npm (v0.17.2)'
+	mutant 'discord-notify back on the dry-run test alone' \
+		"    if: \${{ !cancelled() && inputs.dry_run != true && needs.validate-tag.result == 'success' && needs.github-release.result == 'success' }}"$'\n' '    if: ${{ inputs.dry_run != true }}'$'\n' \
+		'a brain-only release, sidecar/VERSION already on npm (v0.17.2)'
+	mutant 'release-complete on the default success(), failing every good run' \
+		"    if: \${{ !cancelled() && needs.publish-brain.result == 'success' && (needs.publish-docker.result != 'success' || needs.github-release.result != 'success') }}"$'\n' '' \
+		'a release with a new sidecar'
+	mutant 'release-complete gone, so a run that published brain alone reports success' \
+		"    if: \${{ !cancelled() && needs.publish-brain.result == 'success' && (needs.publish-docker.result != 'success' || needs.github-release.result != 'success') }}"$'\n' '    if: ${{ false }}'$'\n' \
+		'publish-sidecar skipped while a sidecar release was due'
+	mutant 'release-complete no longer checking github-release' \
+		"(needs.publish-docker.result != 'success' || needs.github-release.result != 'success') }}" "needs.publish-docker.result != 'success' }}" \
+		'github-release failed, sidecar unchanged'
+	unset MUTANT_MODE
+	# The pin: a gate that still passes every case above, but is not the one
+	# reviewed, is reported too.
+	mutant 'github-release taking any skipped sidecar publish as done' \
+		"needs.publish-docker.result == 'success' && (needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}" \
+		"needs.publish-docker.result == 'success' && (needs.publish-sidecar.result == 'success' || needs.publish-sidecar.result == 'skipped') }}" \
+		'github-release: if is'
+	mutant 'publish-docker no longer listing sidecar-build, so its outputs read empty' \
+		'    needs: [validate-tag, build-image, smoke-image, sidecar-build, publish-sidecar, publish-brain]' '    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]' \
+		'publish-docker: its if reads needs.sidecar-build but does not list sidecar-build in needs'
+	mutant 'release-complete renamed away' \
+		$'  release-complete:\n    needs:' $'  release-check:\n    needs:' \
+		'no release-complete job'
 }
 
 echo
@@ -2457,7 +2609,7 @@ fi
 	mutant 'the darwin signer uploading a file its digest step never hashed (#870)' \
 		'          path: ${{ runner.temp }}/out/darwin-x64/jarvis-app.tar.gz' '          path: ${{ runner.temp }}/work/darwin-x64/jarvis-app.tar.gz'
 	mutant 'the darwin signer downloading a third artifact (#870)' \
-		$'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/unsigned/darwin-x64\n' $'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/unsigned/darwin-x64\n\n      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: extra\n          path: ${{ runner.temp }}/unsigned/extra\n'
+		$'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/unsigned/darwin-x64\n' $'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/unsigned/darwin-x64\n\n      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: extra\n          path: ${{ runner.temp }}/unsigned/extra\n'
 	mutant 'the darwin signer digest check allowed to fail (#870)' \
 		$'      - name: Verify the bundles\n' $'      - name: Verify the bundles\n        continue-on-error: true\n'
 	mutant 'the darwin signer output not its digest step (#870)' \
@@ -3559,7 +3711,7 @@ done
 		$'      - name: Verify the signed DMG digest\n' $'      - run: ../.github/scripts/verify-macos-signature.sh dmg x\n        if: needs.sign-macos.outputs.signed == \'true\'\n        env:\n          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n      - name: Verify the signed DMG digest\n' \
 		'is not a shasum -a 256 -c'
 	mutant 'the installer team check after an action that can export env (#921)' \
-		$'      - name: Verify the signed DMG digest\n' $'      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0\n      - name: Verify the signed DMG digest\n' \
+		$'      - name: Verify the signed DMG digest\n' $'      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0\n      - name: Verify the signed DMG digest\n' \
 		'before the signature check (only checkout and download-artifact)'
 	mutant 'publish not waiting for the macOS check (#921)' \
 		'    needs: [resolve, sign-windows, verify-windows, sign-macos, verify-macos]' '    needs: [resolve, sign-windows, verify-windows, sign-macos]' \

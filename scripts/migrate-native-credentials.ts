@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-/** See docs/superpowers/specs/2026-09-16-native-credential-encryption.md before live use. */
+/** Operator procedure: "Workflow credential encryption" in docs/SELF_HOSTING.md. Read it before live use. */
 import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
