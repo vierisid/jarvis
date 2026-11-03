@@ -75,6 +75,7 @@ export function toolDefToLLMTool(tool: ToolDefinition): LLMTool {
     // itself, not a prose list it can ignore. `ToolRegistry` enforces the
     // same set on execution, so what is advertised is what is accepted.
     if (param.enum && param.enum.length > 0) schema.enum = param.enum;
+    if (param.type === 'array' && param.items) schema.items = param.items;
     properties[name] = schema;
     if (param.required) {
       required.push(name);
