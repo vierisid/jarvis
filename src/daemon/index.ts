@@ -3,6 +3,20 @@ import { registerReconciliation } from '../brief/registrations/reconciliation';
 import { registerOnboarding } from '../brief/registrations/onboarding';
 import { ConnectedWorkspace } from '../brief/connected-workspace';
 import { MIN_BUN_VERSION, versionAtLeast } from '../util/bun-minimum.ts';
+import { mailchimpStatus } from "../integrations/mailchimp-connection";
+import { githubStatus } from '../integrations/github-connection';
+import { trelloStatus } from "../integrations/trello-connection";
+import { asanaStatus } from '../integrations/asana-connection';
+import { todoistStatus } from '../integrations/todoist-connection';
+import { linearStatus } from '../integrations/linear-connection';
+import { typeformStatus } from '../integrations/typeform-connection';
+import { intercomStatus } from '../integrations/intercom-connection';
+import { mondayStatus } from '../integrations/monday-connection';
+import { calendlyStatus } from '../integrations/calendly-connection';
+import { slackStatus } from "../integrations/slack-connection";
+import { airtableStatus } from "../integrations/airtable-connection";
+import { notionStatus } from "../integrations/notion-connection";
+import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
 import { WorkflowContext } from '../brief/workflow-context';
@@ -78,6 +92,7 @@ import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts'
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } from "../config/pebble-hotkeys.ts";
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
+import { configureHostedDashboard } from './hosted-dashboard';
 import { REALTIME_NAV_TOOLS } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
@@ -103,7 +118,7 @@ import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
-import { ApprovalManager, approvalNeedsClick, executionState, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
+import { ApprovalManager, approvalNeedsClick, executionState, onApprovalDeadlineExpired, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
 import { applyEmergencyState } from "./emergency-state.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
@@ -610,6 +625,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   }
 
   const localIntegration = localIntegrationEnabled(jarvisConfig);
+  configureHostedDashboard(jarvisConfig);
   if (localIntegration) console.log("[Daemon] Local development: connected dashboard, real providers, persistent local data");
 
   // Resolve the bench debug gate once, before any service starts: it refuses a
@@ -858,15 +874,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // voice intent, pebble toggle — schedule the section's appliers.
     const { SettingsReloadCoordinator } = await import('./settings-reload.ts');
     const { setSectionSavedListener } = await import('./user-settings.ts');
-    const { reloadUsejarvisAiBlock, reloadUsejarvisBillingBlock } = await import('../config/loader.ts');
+    const { reloadUsejarvisAiBlock, reloadUsejarvisBillingBlock, reloadUsejarvisIntegrationsBlock } = await import('../config/loader.ts');
     settingsReload = new SettingsReloadCoordinator(jarvisConfig, {
       // File-authoritative SYSTEM sections are re-read on every reloadAll so
       // a provisioner rotation of the usejarvis_ai key (or un-hosting) takes
       // effect on SIGHUP / POST /api/config/reload without a restart. Same
-      // for the billing read's block.
+      // for the billing read's block and the hosted integrations link.
       reloadSystemSections: async (cfg) => {
         await reloadUsejarvisAiBlock(cfg);
         await reloadUsejarvisBillingBlock(cfg);
+        await reloadUsejarvisIntegrationsBlock(cfg);
       },
     });
     setSectionSavedListener((section) => settingsReload?.sectionChanged(section));
@@ -4303,6 +4320,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     };
     expireUnanswered();
     setInterval(expireUnanswered, 10 * 60_000).unref?.();
+    // A workflow card past its explicit deadline leaves the dashboard the same way.
+    onApprovalDeadlineExpired(request => wsService.broadcastApprovalUpdate(request));
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
     wsService.setApprovalManager(approvalManager);
     wsService.setDeferredExecutor(deferredExecutor);
@@ -4750,6 +4769,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const briefConnections = new ConnectedWorkspace(getDb(), {
       devices: () => sidecarManager.listSidecars(),
       google: () => connectedGoogle(jarvisConfig),
+      clickup: () => clickUpStatus(jarvisConfig),
+      mailchimp: () => mailchimpStatus(jarvisConfig),
+      github: () => githubStatus(jarvisConfig),
+      trello: () => trelloStatus(jarvisConfig),
+      asana: () => asanaStatus(jarvisConfig),
+      todoist: () => todoistStatus(jarvisConfig),
+      typeform: () => typeformStatus(jarvisConfig),
+      intercom: () => intercomStatus(jarvisConfig),
+      monday: () => mondayStatus(jarvisConfig),
+      calendly: () => calendlyStatus(jarvisConfig),
+      slack: () => slackStatus(jarvisConfig),
+      linear: () => linearStatus(jarvisConfig),
+      airtable: () => airtableStatus(jarvisConfig),
+      notion: () => notionStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
         return Object.fromEntries((['telegram', 'discord'] as const).map(name => [name, {
@@ -4990,6 +5023,36 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         "../workflows/credentials/google-source.ts"
       );
       credentialResolver.register(new JarvisGoogleConnectionSource(() => googleAuth));
+      const { JarvisClickUpConnectionSource } = await import("../workflows/credentials/clickup-source");
+      credentialResolver.register(new JarvisClickUpConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisMailchimpConnectionSource } = await import("../workflows/credentials/mailchimp-source");
+      credentialResolver.register(new JarvisMailchimpConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisMondayConnectionSource } = await import("../workflows/credentials/monday-source");
+      credentialResolver.register(new JarvisMondayConnectionSource(jarvisConfig));
+      const { JarvisTodoistConnectionSource } = await import("../workflows/credentials/todoist-source");
+      credentialResolver.register(new JarvisTodoistConnectionSource(jarvisConfig));
+      const { JarvisAsanaConnectionSource } = await import("../workflows/credentials/asana-source");
+      credentialResolver.register(new JarvisAsanaConnectionSource(jarvisConfig));
+      const { JarvisGitHubConnectionSource } = await import("../workflows/credentials/github-source");
+      credentialResolver.register(new JarvisGitHubConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisDropboxConnectionSource } = await import("../workflows/credentials/dropbox-source");
+      credentialResolver.register(new JarvisDropboxConnectionSource(jarvisConfig));
+      const { JarvisTrelloConnectionSource } = await import("../workflows/credentials/trello-source");
+      credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisLinearConnectionSource } = await import("../workflows/credentials/linear-source");
+      credentialResolver.register(new JarvisLinearConnectionSource(jarvisConfig));
+      const { JarvisTypeformConnectionSource } = await import("../workflows/credentials/typeform-source");
+      credentialResolver.register(new JarvisTypeformConnectionSource(jarvisConfig));
+      const { JarvisAirtableConnectionSource } = await import("../workflows/credentials/airtable-source");
+      credentialResolver.register(new JarvisAirtableConnectionSource(jarvisConfig));
+      const { JarvisSlackConnectionSource } = await import("../workflows/credentials/slack-source");
+      credentialResolver.register(new JarvisSlackConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisIntercomConnectionSource } = await import("../workflows/credentials/intercom-source");
+      credentialResolver.register(new JarvisIntercomConnectionSource(jarvisConfig));
+      const { JarvisCalendlyConnectionSource } = await import("../workflows/credentials/calendly-source");
+      credentialResolver.register(new JarvisCalendlyConnectionSource(jarvisConfig));
+      const { JarvisNotionConnectionSource } = await import("../workflows/credentials/notion-source");
+      credentialResolver.register(new JarvisNotionConnectionSource(jarvisConfig));
       logWithTimestamp(
         "Workflow credential resolver: registered jarvis:google source",
       );
@@ -5374,7 +5437,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             signal?.throwIfAborted();
             if (piecesManagedByHost(sharedRuntime.piecesDir)) throw new Error('This Library is managed by the host.');
             if (!composerLibrary.some(entry => entry.id === id)) throw new Error('Unknown Library entry.');
-            const result = await installPiece(id);
+            // The signal bounds the install (composePersistedFlow aborts it on
+            // timeout): it kills the bun install child, and a call still
+            // queued on the lock when it fires never starts.
+            const result = await installPiece(id, { signal });
+            // Finished anyway: the Library changed, so say so even if the
+            // composition that asked has stopped waiting.
             await onPieceLibraryChanged({ kind: 'installed', piece: result.piece });
           })
         : undefined;
