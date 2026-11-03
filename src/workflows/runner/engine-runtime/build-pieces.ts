@@ -122,9 +122,9 @@ function pieceHash(pieceDir: string): string {
   for (const rel of PIECE_JARVIS_SOURCES) {
     hasher.update(rel).update('\0').update(readFileSync(resolve(SRC_ROOT, rel))).update('\0');
   }
-  // The batch contract imports this helper transitively, outside the vendored tree.
+  // The batch contract imports these helpers transitively, outside the vendored tree.
   if (basename(pieceDir) === 'batch') {
-    hasher.update(readFileSync(resolve(SRC_ROOT, 'workflows/runtime/hubspot-contact.ts'))).update('\0');
+    for (const rel of ['workflows/runtime/hubspot-contact.ts', 'workflows/batch-accounts.ts']) hasher.update(readFileSync(resolve(SRC_ROOT, rel))).update('\0');
   }
   const pkgPath = resolve(pieceDir, "package.json");
   if (existsSync(pkgPath)) {

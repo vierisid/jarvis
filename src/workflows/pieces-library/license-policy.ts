@@ -25,7 +25,8 @@
  *
  * Enforced where we distribute: scripts/build-shared-runtime.ts refuses to
  * build the hosted shared tree on any violation, and the weekly catalog sync
- * runs the same scan first (scripts/check-piece-licenses.ts).
+ * and every PR that changes the tree (test.yml) run the same scan first
+ * (scripts/check-piece-licenses.ts).
  */
 
 /** Permissive licenses, by canonical SPDX id. */
@@ -116,6 +117,15 @@ export const REVIEWED_LICENSES: Readonly<Record<string, ReviewedLicense>> = {
       "\"Software License Agreement (BSD License)\", one condition (retain the copyright notice) and " +
       "the BSD disclaimer, which is BSD-1-Clause. Bundled inside protobufjs@6.11.6 at cli/node_modules " +
       "(reviewed 2026-10-21).",
+  },
+  "browser-request@0.3.3": {
+    declared: null,
+    license: "Apache-2.0",
+    reason:
+      "package.json has no license field; the tarball ships the full Apache License 2.0 text as LICENSE, " +
+      "index.js opens with the Apache-2.0 header and README.md says \"licensed under the Apache 2.0 license\". " +
+      "No NOTICE file. 0.3.3 is the latest release. Pulled in by snowflake-sdk@2.3.4 (Apache-2.0) via " +
+      "@activepieces/piece-snowflake@0.4.1 (reviewed 2026-10-27).",
   },
   // absurd-sql@0.0.54 would need one too, as MIT (no license field, ships
   // the MIT text in LICENSE), but only @actual-app/core pulls it and

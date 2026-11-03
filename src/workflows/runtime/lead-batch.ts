@@ -1,9 +1,7 @@
 /** Bounded update-only lead batches. No provider SDK retries or contact creation. */
 import { hubspotContactInput } from './hubspot-contact';
-export const BATCH_PIECE = '@jarvispieces/piece-jarvis-batch';
-export const BATCH_ACTION = 'update_leads';
-export const BATCH_FINALIZE = 'finalize_batch';
-export const BATCH_ACCOUNTS = { hubspotConnection: '@activepieces/piece-hubspot' };
+import { BATCH_PIECE, BATCH_FINALIZE } from '../batch-accounts';
+export { BATCH_PIECE, BATCH_ACTION, BATCH_FINALIZE, BATCH_ACCOUNTS, isBatchStep } from '../batch-accounts';
 export const BATCH_REQUIRED = ['hubspotConnection','hubspotPortalId','submissionIdPath','leadsPath','contactKeyType','contactKeyPath','propertyMapping'] as const;
 export interface BatchSetup extends Record<string,unknown> {
   hubspotConnection:string; hubspotPortalId:string; submissionIdPath:string; leadsPath:string;

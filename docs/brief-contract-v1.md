@@ -1,10 +1,11 @@
-# Brief feature contracts, F-01
+# Brief feature contracts (v1)
 
-F-01 gives independently delivered Brief modules a shared wire vocabulary and an
-authenticated way to discover usable capabilities. It does not deliver the features
-represented by those contracts. All 26 capabilities are unsupported and disabled in
-the production registration shipped here. The existing dashboard and domain writers
-keep their behavior.
+Brief modules share one wire vocabulary and discover usable capabilities through an
+authenticated endpoint. Every capability is default off; hosted installs turn a set
+of them on (see [hosted dashboard](hosted-dashboard.md)). Self-hosters turn a
+feature on with `JARVIS_BRIEF_<FEATURE>=1` in the daemon environment: the feature
+names are `HOSTED_BRIEF_FEATURES` in `src/daemon/hosted-dashboard.ts`, and the
+features each one depends on are `BRIEF_CAPABILITIES` in `src/brief/capabilities.ts`.
 
 Source of truth: `src/brief/contracts.ts`, `capabilities.ts`, `providers.ts` and
 `registrations/index.ts`. The checked synthetic examples are in
@@ -46,7 +47,7 @@ Source of truth: `src/brief/contracts.ts`, `capabilities.ts`, `providers.ts` and
   Connections retain their store kind, source/account IDs and permissions. An
   installed library piece does not imply an authenticated account.
 - These types are compile-time contracts, not validators for untrusted input. Each
-  provider PR owns bounded inputs, permission checks, runtime output validation and
+  provider owns bounded inputs, permission checks, runtime output validation and
   its domain-specific persistence/recovery acceptance checks.
 
 ## Capabilities endpoint
@@ -72,33 +73,18 @@ unavailable or ready. `reason` is a fixed code or null. Ready but unselected is
 serializing their exception. Readiness callbacks must be synchronous, bounded,
 side-effect-free checks of initialized services; they must not call models or do I/O.
 
-Capability keys follow F-02 through F-27 in the declaration order. F-24 maps to
-`hostedAccount`, whose provider will wrap the existing read-only hosted bridge.
-F-01 does not alter hosting, credentials, billing or deployment configuration.
-
-## Independent modules and integration ownership
+## Adding a module
 
 Use optional `BriefReadProviders` interfaces and the gated `readBriefProvider`
 adapter. If a provider is absent, unregistered, loading, disabled, blocked or fails,
 the adapter produces an explicit non-success state without invoking a disabled read.
 Readers require the same provider instance that was registered for that capability.
 
-Each feature PR should add its own `src/brief/registrations/<feature>.ts` factory,
+Each feature adds its own `src/brief/registrations/<feature>.ts` factory,
 importing only already-merged code. It returns a `BriefRegistration`; it must not
 mutate a global registry. `registrations/index.ts` is the single composition point.
 There are deliberately no placeholder success providers. The fixed registry has no
 plugin discovery, arbitrary feature names or dynamic loading.
-
-F-01 supplies separate typed `conversations.ts` and `decisions.ts` registration
-factories to exercise that independent-module contract. Neither contains a provider
-implementation or is activated by daemon startup.
-
-| Integration area | Owner / boundary |
-| --- | --- |
-| Brief contracts, registration composition, API/bootstrap | F implementer, coordinated by Lapo; central API/bootstrap changes are 8 additive lines in F-01. |
-| Vault/schema and WebSocket transport | Reserved shared integration areas for later F tasks; F-01 changes neither. |
-| Shell/router/layout and view adapters | D implementer; import the contract/optional interfaces without hard imports of future providers. |
-| Runtime/composer/goal quality | Q implementer; coordinate overlapping canonical services. |
 
 The workflow trust-boundary inventory in
 `src/workflows/adapters/untrusted-reach.test.ts` includes both Brief consumers.
@@ -108,44 +94,14 @@ status fields, verifies version ownership, and never reads or forwards captured
 step payloads. Regression tests enforce both properties. A later provider that
 returns workflow payloads must review and protect its model boundary separately.
 
-Merge prerequisites: none. Activation prerequisites for F-01: none, because no
-feature is activated. Later activation dependencies are the fixed table in
-`capabilities.ts`. F-09 must also satisfy Q-13; F-13 must also satisfy Q-18. Those
-quality gates are obligations of their provider's readiness check, not fulfilled by
-registering an object or switching on the dashboard shell. Lapo owns shared-file
-integration slots. F-28 and D-33 still own the final activation/release records.
+Activation dependencies between capabilities are the fixed table in
+`capabilities.ts`. Quality gates a provider depends on (for example prepared
+opportunities on `src/awareness/prepared-qualification.ts`, recommendations on
+`src/goals/next-action.ts`) are obligations of that provider's readiness check, not
+fulfilled by registering an object.
 
-## Quick verification
-
-From the repository root:
+## Tests
 
 ```bash
 bun test src/brief src/daemon/api-brief.test.ts src/workflows/adapters/untrusted-reach.test.ts src/roles/untrusted-import-guard.test.ts
 ```
-
-This exercises a real HTTP server on a unique temporary Unix socket, bootstrap and
-session authentication, expiry, default-off behavior, explicitly enabled fixture
-providers, dependency failure, safe errors, old conversation clients and version
-compatibility. Its SQLite fixture is in memory. It makes no paid model calls or real
-account/workflow changes and opens no shared dev-server port.
-
-Once running this branch in an authenticated development dashboard, the console can
-read the same endpoint:
-
-```js
-const response = await fetch('/api/brief/capabilities', { credentials: 'same-origin' });
-console.log(response.status, await response.json());
-```
-
-Expected: 200, contractVersion 1, 26 entries, each unsupported with all three flags
-false. A request without the dashboard session gets 401 under the default access
-policy. There is no visible UI change to screenshot in F-01.
-
-## Rollback and limits
-
-Disable activation selections to fall back to existing behavior. Rolling back the
-additive route makes new consumers treat it as unsupported. There is no migration,
-down-migration, data rewrite or background worker. Preserve later additive records.
-Tests establish the seam and fixture behavior, not multi-chat isolation, prepared
-opportunity quality or any later feature's readiness. Full CI, live hosted model
-quality and deployment are separate gates.
