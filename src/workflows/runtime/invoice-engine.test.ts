@@ -7,12 +7,14 @@ import { tmpdir } from 'node:os';
 import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS, getWorkflowDb } from '../db';
 import { setEncryptionKey } from '../db/encryption';
 import { createFlow, getFlow, listFlows, setPublishedVersion, updateFlowStatus } from '../db/repos/flow';
-import { createDraftVersion, getLatestDraft, lockVersion } from '../db/repos/flow-version';
+import { createDraftVersion, getFlowVersion, getLatestDraft, lockVersion } from '../db/repos/flow-version';
 import { createFlowRun, getFlowRun, listRuns } from '../db/repos/flow-run';
 import { enqueue } from '../db/repos/job-queue';
-import { upsertConnection } from '../db/repos/app-connection';
+import { deleteConnection, upsertConnection } from '../db/repos/app-connection';
+import { pinFlowBindings } from '../db/repos/binding-pins';
+import { cancelFlowRun } from '../db/repos/run-cancellation';
 import { configureWorkflowReadiness, versionReadiness } from '../db/repos/flow-readiness';
-import { pruneFires, FIRE_RETENTION_MS } from '../db/repos/trigger-fire';
+import { listFlowFires, pruneFires, FIRE_RETENTION_MS } from '../db/repos/trigger-fire';
 import { listWorkflowEffects } from '../db/repos/workflow-effect';
 import { AuthorityEngine } from '../../authority/engine';
 import { AuditTrail } from '../../authority/audit';
@@ -36,7 +38,7 @@ import { createManageWorkflowTool } from '../../actions/tools/manage-workflow';
 
 import { createWorkflowFile } from '../db/repos/workflow-file';
 import { gmailAttachmentKey } from './gmail-attachment';
-import { claimAttachmentRun } from '../db/repos/trigger-fire';
+import { claimAttachmentRun, releaseAttachmentClaim, releaseRefusedEmailRun } from '../db/repos/trigger-fire';
 import { checkJobContract } from '../../actions/tools/job-contract';
 import { digest } from './effect-context';
 import { updateRun } from '../db/repos/flow-run';
@@ -45,7 +47,7 @@ const GMAIL = '@activepieces/piece-gmail', DRIVE = '@activepieces/piece-google-d
 const ASK = '@jarvispieces/piece-jarvis-ask';
 let dir: string, api: SandboxApi, runtime: EngineRuntime, manager: TriggerManager, worker: Worker, catalog: PieceCatalog;
 let services: ReturnType<typeof buildSandboxServiceBackends>, provider: ReturnType<typeof Bun.serve>;
-let reply = '', loseDrive = false, loseSheets = false;
+let reply = '', loseDrive = false, loseSheets = false, onPoll: (() => void) | null = null;
 const files: any[] = [], rows: any[] = [], prompts: string[] = [], labels: any[] = [], runIds: string[] = [];
 let incoming: Array<{ id: string; fileName: string; data: string; mimeType: string }> = [];
 const versions: Record<string, string> = { [GMAIL]: '0.18.1', [DRIVE]: '0.12.2', [SHEETS]: '0.18.2' };
@@ -69,7 +71,7 @@ beforeAll(async () => {
   const bundle = await buildEngineBundle();
   provider = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
     const path = new URL(req.url).pathname;
-    if (path === '/poll') return Response.json(incoming);
+    if (path === '/poll') { onPoll?.(); onPoll = null; return Response.json(incoming); }
     const body = await req.json();
     if (path === '/drive') { files.push(body); return loseDrive ? new Response('Lost reply', { status: 500 }) : Response.json({ id: 'file-' + files.length, name: body.fileName }); }
     if (path === '/sheets') { rows.push(body); return loseSheets ? new Response('Lost reply', { status: 500 }) : Response.json({ updatedRange: 'Invoices!A2:I2' }); }
@@ -167,6 +169,8 @@ const item=(text='Invoice INV-1 EUR 120.00',id='message-1',name='invoice.pdf')=>
 
 test('two PDFs from one email create two files and rows; duplicate/renamed/resent PDFs do not',async()=>{
   const f=await fixture(),before=stats();incoming=[item(),item('Invoice INV-2 EUR 99.00'),item(),item('Invoice INV-1 EUR 120.00','another-email','renamed.pdf')];
+  // A community poller that never sets a schedule polls every 5 minutes, in Jarvis's timezone.
+  const schedule=getFlowVersion(f.version.id)!.engineSchedule;expect(schedule?.cronExpression).toBe('*/5 * * * *');expect(schedule?.timezone).toBeUndefined();
   const runs=await f.poll();expect(runs).toHaveLength(2);for(const run of runs)expect(run.status).toBe('SUCCEEDED');
   expect(stats().map((n,i)=>n-before[i]!)).toEqual([2,2,0,2]);expect(prompts.at(-1)).toContain('Invoice INV-2 EUR 99.00');
   expect(Buffer.from(files.at(-1).file.bytes,'base64').toString()).toContain('%PDF-');
@@ -255,6 +259,150 @@ test('non-PDF attachments have no writes and zero invoice totals remain valid', 
   incoming = [item('Invoice zero balance')]; reply = extracted({ total: 0 });
   const runs = await f.poll(); expect(runs.every(r => r.status === 'SUCCEEDED')).toBe(true);
   expect(rows.at(-1).values.values).toContain(0); expect(rows.at(-1).values.values.at(-1)).toBe('Ready'); await f.stop();
+}, 60000);
+
+test('a polled attachment without a usable identity fails visibly instead of vanishing', async () => {
+  const f = await fixture(), before = stats();
+  incoming = [item('Invoice INV-9 EUR 9.00', '')];
+  const runs = await f.poll();
+  expect(runs).toHaveLength(1); expect(runs[0]!.status).toBe('FAILED');
+  expect(runs[0]!.failedStep?.displayName).toBe('Check attachment identity'); expect(stats()).toEqual(before); await f.stop();
+}, 60000);
+
+test('an attachment run refused at admission before any step does not block a later identical attachment', async () => {
+  const f = await fixture(), before = stats();
+  incoming = [item('Invoice INV-11 EUR 11.00')];
+  // The poll admits the item and queues its run; its stored file is gone before the run starts.
+  await (manager as any).pollEngineTrigger(f.flow.id, f.version.id, 'fixture', undefined, false);
+  getWorkflowDb().run('DELETE FROM workflow_file WHERE flow_id = ?', [f.flow.id]);
+  await worker.drain();
+  const refused = listRuns({ flowId: f.flow.id });
+  for (const run of refused) runIds.push(run.id);
+  expect(refused).toHaveLength(1); expect(refused[0]!.status).toBe('FAILED');
+  expect(refused[0]!.failedStep?.displayName).toBe('Check attachment identity'); expect(stats()).toEqual(before);
+  // The same content arrives again: it runs once, and only once.
+  const runs = await f.poll();
+  expect(runs).toHaveLength(2); expect(runs.filter(r => r.status === 'SUCCEEDED')).toHaveLength(1);
+  expect(stats().map((n, i) => n - before[i]!)).toEqual([1, 1, 0, 1]);
+  const after = stats(); expect(await f.poll()).toHaveLength(2); expect(stats()).toEqual(after); await f.stop();
+}, 60000);
+
+for (const retry of ['redelivery', 'manual run'] as const) test(`a polled attachment refused at readiness is processed once by a ${retry} after setup is fixed`, async () => {
+  const f = await fixture(), before = stats();
+  const drive = () => upsertConnection({ externalId: 'fixture-drive', displayName: 'Fixture', type: 'OAUTH2', pieceName: DRIVE, pieceVersion: versions[DRIVE]!, value: { access_token: 'synthetic-only' } });
+  incoming = [item('Invoice INV-12 EUR 12.00')];
+  // Setup breaks while the poll is in flight: the item is taken from the source, then refused at readiness.
+  const connection = getWorkflowDb().query<{ id: string }, []>("SELECT id FROM app_connection WHERE external_id = 'fixture-drive'").get()!;
+  onPoll = () => deleteConnection(connection.id);
+  await f.poll();
+  expect(stats()).toEqual(before);
+  const refused = listFlowFires(f.flow.id).filter(fire => fire.source === 'poll');
+  expect(refused).toEqual([expect.objectContaining({ outcome: 'blocked', dedupeKey: null, detail: expect.objectContaining({ deliveryKey: expect.stringMatching(/^attachment:v1:/) }) })]);
+  drive(); pinFlowBindings(f.flow.id);
+  if (retry === 'redelivery') await f.poll();
+  else {
+    const bytes = pdf('Invoice INV-12 EUR 12.00'); const file = createWorkflowFile({ projectId: DEFAULT_IDS.project, flowId: f.flow.id, type: 'FLOW_STEP_FILE', fileName: 'invoice.pdf', size: bytes.length, data: bytes });
+    expect((await f.manual({ message: { id: 'message-1' }, attachment: { fileName: 'invoice.pdf', mimeType: 'application/pdf', data: '/v1/step-files/' + file.id } })).status).toBe('SUCCEEDED');
+  }
+  expect(stats().map((n, i) => n - before[i]!)).toEqual([1, 1, 0, 1]);
+  // The content is now held by the run that processed it.
+  const after = stats(); await f.poll(); expect(stats()).toEqual(after); await f.stop();
+}, 60000);
+
+test('the same attachment refused the same way at readiness is recorded once, not run and failed again', async () => {
+  const f = await fixture(), before = stats();
+  const drive = () => upsertConnection({ externalId: 'fixture-drive', displayName: 'Fixture', type: 'OAUTH2', pieceName: DRIVE, pieceVersion: versions[DRIVE]!, value: { access_token: 'synthetic-only' } });
+  const connectionId = () => getWorkflowDb().query<{ id: string }, []>("SELECT id FROM app_connection WHERE external_id = 'fixture-drive'").get()!.id;
+  incoming = [item('Invoice INV-15 EUR 15.00')];
+  // Setup breaks while each poll is in flight, so the same content is refused twice.
+  for (let i = 0; i < 2; i++) {
+    if (i > 0) { drive(); pinFlowBindings(f.flow.id); }
+    const id = connectionId(); onPoll = () => deleteConnection(id);
+    await f.poll();
+  }
+  expect(stats()).toEqual(before);
+  const refused = listFlowFires(f.flow.id).filter(fire => fire.source === 'poll');
+  expect(refused).toEqual([expect.objectContaining({ outcome: 'blocked', dedupeKey: null, repeats: 1,
+    detail: expect.objectContaining({ deliveryKey: expect.stringMatching(/^attachment:v1:/), signature: expect.any(String) }) })]);
+  expect(listRuns({ flowId: f.flow.id })).toHaveLength(1);
+  // Once setup is fixed, the content is still processed once.
+  drive(); pinFlowBindings(f.flow.id); await f.poll();
+  expect(stats().map((n, i) => n - before[i]!)).toEqual([1, 1, 0, 1]);
+  const after = stats(); await f.poll(); expect(stats()).toEqual(after); await f.stop();
+}, 60000);
+
+test('an attachment step preview is judged on the preview scope frozen on the run, not only the job payload', async () => {
+  const f = await fixture(), before = stats();
+  const run = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id, triggeredBy: 'dashboard', stepNameToTest: 'upload' }); runIds.push(run.id);
+  enqueue({ jobType: RUN_FLOW, payload: { runId: run.id, payload: {} }, flowRunId: run.id, flowId: f.flow.id, flowVersionId: f.version.id, maxAttempts: 1 });
+  await worker.drain();
+  expect(getFlowRun(run.id)?.status).toBe('FAILED');
+  expect(getFlowRun(run.id)?.failedStep?.errorMessage).toContain('isolated step previews');
+  expect(stats()).toEqual(before); await f.stop();
+}, 60000);
+
+for (const evidence of ['none', 'a step', 'an effect row'] as const)
+  test(`an attachment run refused at dispatch readiness with ${evidence} ${evidence === 'none' ? 'gives up' : 'keeps'} its content key`, async () => {
+    const f = await fixture(); const bytes = pdf('Dispatch ' + evidence); const file = createWorkflowFile({ projectId: DEFAULT_IDS.project, flowId: f.flow.id, type: 'FLOW_STEP_FILE', fileName: 'd.pdf', size: bytes.length, data: bytes });
+    const key = gmailAttachmentKey({ message: { id: 'd' }, attachment: { data: '/v1/step-files/' + file.id } }, f.flow.id, DEFAULT_IDS.project);
+    const run = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id }); runIds.push(run.id);
+    claimAttachmentRun(f.flow.id, f.version.id, key, run.id);
+    updateRun(run.id, { status: 'FAILED', finishTime: Date.now(),
+      ...(evidence === 'a step' ? { steps: { only_pdf: { status: 'SUCCEEDED', output: {} } }, stepsCount: 1 } : {}) });
+    if (evidence === 'an effect row') getWorkflowDb().run("INSERT INTO workflow_effect (id, run_id, status, record) VALUES (?, ?, 'unknown', '{}')", ['effect-' + run.id, run.id]);
+    releaseRefusedEmailRun(run.id);
+    expect(listFlowFires(f.flow.id).filter(fire => fire.runId === run.id).map(fire => fire.dedupeKey)).toEqual([evidence === 'none' ? null : key]);
+    await f.stop();
+  }, 60000);
+
+test('a polled attachment whose queued run was canceled before it began is processed once by the next delivery', async () => {
+  const f = await fixture(), before = stats();
+  incoming = [item('Invoice INV-13 EUR 13.00')];
+  await (manager as any).pollEngineTrigger(f.flow.id, f.version.id, 'fixture', undefined, false);
+  const queued = listRuns({ flowId: f.flow.id }); for (const run of queued) runIds.push(run.id);
+  expect(queued).toHaveLength(1); cancelFlowRun(queued[0]!.id); await worker.drain();
+  expect(getFlowRun(queued[0]!.id)?.status).toBe('STOPPED'); expect(stats()).toEqual(before);
+  const runs = await f.poll();
+  expect(runs.filter(r => r.status === 'SUCCEEDED')).toHaveLength(1);
+  expect(stats().map((n, i) => n - before[i]!)).toEqual([1, 1, 0, 1]);
+  const after = stats(); await f.poll(); expect(stats()).toEqual(after); await f.stop();
+}, 60000);
+
+test('an attachment claim is never released from a run that recorded an effect', async () => {
+  const f = await fixture(); const bytes = pdf('Effect recorded'); const file = createWorkflowFile({ projectId: DEFAULT_IDS.project, flowId: f.flow.id, type: 'FLOW_STEP_FILE', fileName: 'e.pdf', size: bytes.length, data: bytes });
+  const key = gmailAttachmentKey({ message: { id: 'e' }, attachment: { data: '/v1/step-files/' + file.id } }, f.flow.id, DEFAULT_IDS.project);
+  const run = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id }); runIds.push(run.id);
+  claimAttachmentRun(f.flow.id, f.version.id, key, run.id);
+  getWorkflowDb().run("INSERT INTO workflow_effect (id, run_id, status, record) VALUES (?, ?, 'dispatching', '{}')", ['effect-' + run.id, run.id]);
+  expect(releaseAttachmentClaim(f.flow.id, run.id)).toBe(0);
+  expect(() => claimAttachmentRun(f.flow.id, f.version.id, key, 'another-run')).toThrow('already accepted');
+  getWorkflowDb().run('DELETE FROM workflow_effect WHERE run_id = ?', [run.id]);
+  expect(releaseAttachmentClaim(f.flow.id, run.id)).toBe(1);
+  // Released like a refused delivery: the hash stays in the record, off the key.
+  expect(listFlowFires(f.flow.id)).toEqual([expect.objectContaining({ runId: run.id, dedupeKey: null, detail: expect.objectContaining({ deliveryKey: key }) })]);
+  await f.stop();
+}, 60000);
+
+test('an attachment run that fails after a step ran keeps its content even with no recorded effect', async () => {
+  // The PDF router (an untracked step) runs, then the upload fails on its own
+  // input before any send: no workflow_effect row exists for the run.
+  const g = graph(); g.nextAction.children[0].settings.input.fileName = '{{trigger.attachment.missing}}';
+  const f = await fixture(g), before = stats();
+  incoming = [item('Invoice INV-14 EUR 14.00')];
+  const runs = await f.poll();
+  expect(runs).toHaveLength(1); expect(runs[0]!.status).toBe('FAILED'); expect(runs[0]!.failedStep?.name).toBe('upload');
+  expect(Object.keys(runs[0]!.steps ?? {})).toContain('only_pdf');
+  expect(getWorkflowDb().query('SELECT 1 FROM workflow_effect WHERE run_id = ?').all(runs[0]!.id)).toEqual([]);
+  expect(stats()).toEqual(before); const after = stats();
+  // The failed run still holds the content's key.
+  expect(listFlowFires(f.flow.id).filter(fire => fire.runId === runs[0]!.id)).toEqual([expect.objectContaining({ dedupeKey: expect.stringMatching(/^attachment:v1:/) })]);
+  // Redelivery of the same content starts nothing.
+  expect(await f.poll()).toHaveLength(1); expect(stats()).toEqual(after);
+  // A manual run with the same bytes is refused as already accepted.
+  const bytes = pdf('Invoice INV-14 EUR 14.00'); const file = createWorkflowFile({ projectId: DEFAULT_IDS.project, flowId: f.flow.id, type: 'FLOW_STEP_FILE', fileName: 'invoice.pdf', size: bytes.length, data: bytes });
+  const manual = await f.manual({ message: { id: 'message-1' }, attachment: { fileName: 'invoice.pdf', mimeType: 'application/pdf', data: '/v1/step-files/' + file.id } });
+  expect(manual.status).toBe('FAILED'); expect(manual.failedStep?.displayName).toBe('Check attachment identity');
+  expect(manual.failedStep?.errorMessage).toContain('already accepted'); expect(stats()).toEqual(after); await f.stop();
 }, 60000);
 
 test('explicit pending label/folder stay setup-required after account bindings are supplied', () => {

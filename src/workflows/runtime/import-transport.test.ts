@@ -1,6 +1,7 @@
 import {expect,test} from 'bun:test';
 import {EventEmitter} from 'node:events';
-import {importTransport} from './import-transport';
+import {importTransport,publicImportAddress} from './import-transport';
+import {ImportRefusal} from './contact-import';
 import {importFixtureSetup as setup} from './import-fixtures';
 
 function harness(address='8.8.8.8',status=200,payload='{"items":[],"next_cursor":null}'){
@@ -31,4 +32,14 @@ test('transport refuses private destinations, source mutations and non-contact H
 test('transport neither follows redirects nor silently truncates oversized pages',async()=>{
  const redirect=harness('8.8.8.8',302);expect((await redirect.request('source',setup.sourceUrl,'GET')).status).toBe(302);expect(redirect.calls).toHaveLength(1);
  const large=harness('8.8.8.8',200,'x'.repeat(2*1024*1024+1));await expect(large.request('source',setup.sourceUrl,'GET')).rejects.toThrow();expect(large.calls).toHaveLength(1);
+});
+
+test('refusals are typed: unsent before dispatch, read-refused for an oversized reply',async()=>{
+ const local=harness('10.0.0.5');const e1=await local.request('source',setup.sourceUrl,'GET').then(()=>null,e=>e);expect(e1).toBeInstanceOf(ImportRefusal);expect(e1.unsent).toBe(true);expect(local.calls).toHaveLength(0);
+ const h=harness();const e2=await h.request('hubspot','https://api.hubapi.com/email/public/v1/singleEmail/send','POST').then(()=>null,e=>e);expect(e2).toBeInstanceOf(ImportRefusal);expect(e2.unsent).toBe(true);
+ const large=harness('8.8.8.8',200,'x'.repeat(2*1024*1024+1));const e3=await large.request('source',setup.sourceUrl,'GET').then(()=>null,e=>e);expect(e3).toBeInstanceOf(ImportRefusal);expect(e3.unsent).toBe(false);
+});
+test('IPv6 6to4 and Teredo addresses, which embed an IPv4 address, are not public',()=>{
+ for(const address of ['2002:c0a8:101::1','2002::1','2001:0:4136:e378:8000:63bf:3fff:fdd2','2001::1','2001:0000:1::1','2001:db8::1','::ffff:127.0.0.1','fc00::1'])expect(publicImportAddress(address)).toBe(false);
+ for(const address of ['2001:4860:4860::8888','2a00:1450:4001::1','2001:470::1'])expect(publicImportAddress(address)).toBe(true);
 });

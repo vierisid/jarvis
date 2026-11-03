@@ -23,6 +23,8 @@ test('fixtures detect duplicate writes, per-tab mistakes and absent admission se
   const c=orderCases()[0];
   await expect(validateJsonMappingFixtures(repairedOrderGraph(),{setup:orderSetup(),cases:[{...c,expectedRowsByStep:{step_2:c.expectedRows}}]})).rejects.toThrow('rows differ for step_2');
   await expect(validateJsonMappingFixtures(repairedOrderGraph(),{setup:orderSetup(),cases:[{...c,deliveries:3,expectedDuplicateDeliveries:0}]})).rejects.toThrow('duplicate delivery');
+  for(const key of ['expectedRowsByStep','expectedRequestsByStep'])
+    await expect(validateJsonMappingFixtures(repairedOrderGraph(),{setup:orderSetup(),cases:[{...c,[key]:{step_9:key==='expectedRowsByStep'?[]:0}}]})).rejects.toThrow('unknown Sheets step step_9');
   const setup=orderSetup();delete (setup as any).trigger;
   await expect(validateJsonMappingFixtures(repairedOrderGraph(),{setup,cases:[c]})).rejects.toThrow('Request ID requires');
   const graph=repairedOrderGraph();graph.settings.input.secret='unsupported';
