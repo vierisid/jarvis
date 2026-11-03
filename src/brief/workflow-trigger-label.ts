@@ -1,5 +1,6 @@
-import { validateCronExpression, validateCronTimezone } from '../lib/cron-scheduler';
+import { validateCronDstPolicy, validateCronExpression, validateCronTimezone } from '../lib/cron-scheduler';
 import type { FlowTriggerNode } from '../workflows/db/repos/flow-version';
+import { chosenScheduleZone } from '../workflows/runner/triggers/schedule-zone';
 
 export function workflowTriggerLabel(trigger?: FlowTriggerNode): string {
   if (!trigger) return 'Trigger unavailable';
@@ -8,11 +9,14 @@ export function workflowTriggerLabel(trigger?: FlowTriggerNode): string {
   const piece = settings?.pieceName;
   if (piece === 'webhook' || piece === '@activepieces/piece-webhook') return 'Incoming webhook';
   if (piece === 'schedule' || piece === '@activepieces/piece-schedule') {
-    const cron = input.cron_expression ?? input.cronExpression ?? input.expression;
-    // Omitted timezone means Jarvis's configured one (readiness accepts it); a present one must be valid.
-    const hasZone = Object.hasOwn(input, 'timezone'), zone = hasZone ? input.timezone : undefined;
-    if (typeof cron !== 'string' || !cron.trim() || (piece !== 'schedule' && !hasZone)) return 'Schedule: setup required';
-    try { validateCronExpression(cron); if (hasZone) validateCronTimezone(zone); } catch { return 'Schedule: setup required'; }
+    // As readiness: the built-in schedule fires in a zone a person chose, else in
+    // Jarvis's (shown without a zone); the bundled piece needs its own valid zone.
+    const builtIn = piece === 'schedule';
+    const cron = builtIn ? input.cron_expression || input.cronExpression || input.expression : input.cronExpression;
+    const zone = builtIn ? chosenScheduleZone(settings) : input.timezone;
+    if (typeof cron !== 'string' || !cron.trim()) return 'Schedule: setup required';
+    try { validateCronExpression(cron); if (builtIn) validateCronDstPolicy(input.dst_policy); if (zone !== undefined || !builtIn) validateCronTimezone(zone); } catch { return 'Schedule: setup required'; }
+    const hasZone = zone !== undefined;
     const at = (time: string) => hasZone ? `${time} ${zone}` : time;
     const [minute, hour, day, month, weekday] = cron.trim().split(/\s+/);
     const time = /^\d+$/.test(hour ?? '') && /^\d+$/.test(minute ?? '') ? `${hour!.padStart(2, '0')}:${minute!.padStart(2, '0')}` : null;

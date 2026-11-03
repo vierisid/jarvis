@@ -15,6 +15,7 @@ import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../../../../src/lib/cron-scheduler';
+import { chosenScheduleZone } from '../../../../../src/workflows/runner/triggers/schedule-zone';
 import type { ConnectionMeta } from "./useConnections";
 import {
   detectTriggerKind,
@@ -1570,16 +1571,17 @@ export function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEn
       continue;
     }
     if (isTrigger && step.settings?.pieceName === 'schedule') {
-      const cron = input.cron_expression ?? input.cronExpression ?? input.expression;
+      // Mirrors the server's readiness for the built-in schedule (workflow-readiness.ts).
+      const cron = input.cron_expression || input.cronExpression || input.expression;
       if (empty(cron)) add('cron_expression', 'Schedule: choose an execution time');
       else { try { if (typeof cron !== 'string') throw Error('Use a cron expression'); validateCronExpression(cron); }
         catch (error) { add('cron_expression', `Schedule: ${(error as Error).message}`); } }
-      // Omitted means Jarvis's configured timezone, as the server's readiness
-      // check and the composer treat it; a present value must be a real zone.
-      if (Object.hasOwn(input, 'timezone')) {
-        if (empty(input.timezone)) add('timezone', 'Timezone: choose an IANA timezone');
-        else { try { validateCronTimezone(input.timezone); }
-          catch (error) { add('timezone', `Timezone: ${(error as Error).message}`); } }
+      // No zone means Jarvis's, and a zone nobody chose is not used, so neither
+      // blocks; a zone a person chose must be real.
+      const chosen = chosenScheduleZone(step.settings);
+      if (chosen !== undefined) {
+        try { validateCronTimezone(chosen); }
+        catch (error) { add('timezone', `Timezone: ${(error as Error).message}`); }
       }
       try { validateCronDstPolicy(input.dst_policy); }
       catch (error) { add('dst_policy', (error as Error).message); }
