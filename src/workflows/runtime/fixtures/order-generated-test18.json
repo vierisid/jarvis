@@ -1,0 +1,118 @@
+{
+  "name": "trigger",
+  "type": "PIECE_TRIGGER",
+  "displayName": "Receive each stable order ID once",
+  "settings": {
+    "pieceName": "webhook",
+    "input": {
+      "request_id_field": ""
+    }
+  },
+  "nextAction": {
+    "name": "step_1",
+    "type": "PIECE",
+    "displayName": "Validate order and prepare linked rows",
+    "settings": {
+      "pieceName": "@activepieces/piece-json",
+      "actionName": "run_jsonata_query",
+      "input": {
+        "json": {
+          "payload": "{{trigger}}",
+          "mapping": null
+        },
+        "query": "(\n  $p := payload;\n  $m := mapping;\n  $get := function($o,$path){ $reduce($split($path,\".\"),function($v,$k){$lookup($v,$k)},$o) };\n  $configured := $type($m) = \"object\" and $type($m.idPath) = \"string\" and $length($m.idPath) > 0 and $type($m.lineItemsPath) = \"string\" and $length($m.lineItemsPath) > 0 and $type($m.orderColumns) = \"array\" and $count($m.orderColumns) > 0 and $type($m.lineColumns) = \"array\" and $count($m.lineColumns) > 0;\n  $id := $configured ? $get($p,$m.idPath) : null;\n  $items := $configured ? $get($p,$m.lineItemsPath) : null;\n  $validId := $type($id) = \"string\" ? $length($trim($id)) > 0 : ($type($id) = \"number\" ? ($floor($id) = $id and $abs($id) <= 9007199254740991) : false);\n  $valid := $configured and $validId and $type($items) = \"array\" and $count($items) > 0;\n  $orderId := $validId ? ($type($id) = \"string\" ? $trim($id) : $string($id)) : \"\";\n  $cell := function($column,$item){(\n    $value := $column.source = \"order_id\" ? $orderId : ($column.source = \"order\" ? $get($p,$column.path) : ($column.source = \"item\" ? $get($item,$column.path) : null));\n    $exists($value) and $value != null ? $value : \"\"\n  )};\n  $orderRows := $valid ? [$map($m.orderColumns,function($c){$cell($c,null)})] : [];\n  $lineRows := $valid ? $reduce($items,function($rows,$item){$append($rows,[$map($m.lineColumns,function($c){$cell($c,$item)})])},[]) : [];\n  {\"valid\":$valid,\"status\":$configured ? ($valid ? \"ready\" : \"rejected\") : \"setup_required\",\"orderId\":$orderId,\"orderRows\":$orderRows,\"lineRows\":$lineRows,\"issues\":$configured ? ($valid ? [] : [\"Order must have a nonempty stable ID and a nonempty line-item array; no rows were dispatched.\"]) : [\"Setup required: mapping.idPath, mapping.lineItemsPath, mapping.orderColumns and mapping.lineColumns. Column descriptors use source order_id, order or item and a dot-separated path. Include order_id in both tabs; map customer and shipping fields as order paths. Missing optional fields become empty cells. Configure the webhook request_id_field to the same ID path.\"]}\n)"
+      }
+    },
+    "nextAction": {
+      "name": "router_1",
+      "type": "ROUTER",
+      "displayName": "Reject invalid orders before any writes",
+      "settings": {
+        "executionType": "EXECUTE_FIRST_MATCH",
+        "branches": [
+          {
+            "branchName": "valid_order",
+            "branchType": "CONDITION",
+            "conditions": [
+              [
+                {
+                  "firstValue": "{{step_1.valid}}",
+                  "operator": "BOOLEAN_IS_TRUE"
+                }
+              ]
+            ]
+          },
+          {
+            "branchName": "rejected_or_setup_required",
+            "branchType": "FALLBACK"
+          }
+        ]
+      },
+      "children": [
+        {
+          "name": "step_2",
+          "type": "PIECE",
+          "displayName": "Append one order row with durable receipt",
+          "settings": {
+            "pieceName": "@activepieces/piece-google-sheets",
+            "actionName": "sheets_append_values",
+            "input": {
+              "spreadsheet_id": "",
+              "worksheet_title": "",
+              "range": "",
+              "values": null,
+              "value_input_option": "RAW"
+            }
+          },
+          "nextAction": {
+            "name": "step_3",
+            "type": "PIECE",
+            "displayName": "Append all linked line rows with durable receipt",
+            "settings": {
+              "pieceName": "@activepieces/piece-google-sheets",
+              "actionName": "sheets_append_values",
+              "input": {
+                "spreadsheet_id": "",
+                "worksheet_title": "",
+                "range": "",
+                "values": null,
+                "value_input_option": "RAW"
+              }
+            },
+            "nextAction": {
+              "name": "step_4",
+              "type": "PIECE",
+              "displayName": "Record successful order and line dispatch",
+              "settings": {
+                "pieceName": "@jarvispieces/piece-jarvis-subflow",
+                "actionName": "return_result",
+                "input": {
+                  "result": {
+                    "status": "completed",
+                    "orderId": "{{step_1.orderId}}",
+                    "deliverySemantics": "Persistent atomic order-ID admission prevents concurrent or repeated deliveries from creating another run. Completed append steps reuse receipts. Uncertain appends stop for review without resending. Partial writes require review of the original run, not redelivery with another ID. No cross-tab atomic transaction or eventual-completion guarantee."
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "step_5",
+          "type": "PIECE",
+          "displayName": "Return rejection without writing rows",
+          "settings": {
+            "pieceName": "@jarvispieces/piece-jarvis-subflow",
+            "actionName": "return_result",
+            "input": {
+              "result": {
+                "status": "{{step_1.status}}",
+                "issues": "{{step_1.issues}}"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
