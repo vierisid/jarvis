@@ -49,8 +49,11 @@ export function onboardingCustomer(setup: OnboardingSetup, payload: unknown): { 
 }
 
 /** No fail-fast Promise.all: each provider failure becomes a recorded outcome.
- * Store/ownership failures propagate only after both branches have settled. */
-export async function onboardCustomer(store: OnboardingStore, create: ResourceCreate, identity: string) {
+ * Store/ownership failures propagate only after both branches have settled.
+ * `gate` is the run's own dispatch check (cancellation, Authority, version, lease). A branch
+ * that failed before dispatch rechecks it: if the run itself is now refused, that refusal
+ * propagates instead of being recorded as a retryable account failure in a green run. */
+export async function onboardCustomer(store: OnboardingStore, create: ResourceCreate, identity: string, gate: () => void = () => store.check()) {
   const branches = ['clickup', 'drive'] as const;
   const settled = await Promise.allSettled(branches.map(async branch => {
     store.check();
@@ -67,6 +70,7 @@ export async function onboardCustomer(store: OnboardingStore, create: ResourceCr
       outcome = await create(branch, () => { store.check(); store.save(branch, { status: 'dispatching' }); started = true; });
       if (!['succeeded', 'failed', 'unknown'].includes(outcome.status)) throw Error('Invalid provider outcome');
     } catch {
+      if (!started) gate();
       outcome = { status: started ? 'unknown' : 'failed', detail: started ? 'Unconfirmed write requires review; creation will not be repeated.' : 'Account or pre-dispatch check failed; no write was attempted.' };
     }
     store.save(branch, outcome);

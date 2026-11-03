@@ -34,7 +34,7 @@ export function createOnboardingService(deps: { effects: WorkflowEffectBoundary;
             check();
             return resolved.value.access_token;
           }, check, deps.fetchImpl);
-          return await onboardCustomer(lease.store,create,identity);
+          return await onboardCustomer(lease.store,create,identity,check);
         } finally { lease.release(); }
       } });
     return reply.approval ? { approval: reply.approval } : reply.result;

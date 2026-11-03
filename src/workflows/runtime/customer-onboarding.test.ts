@@ -71,3 +71,13 @@ test('fixture suite refuses unsupported graph semantics',async()=>{
   const graph=onboardingTestGraph();graph.settings.input={request_id_field:'id'};
   await expect(validateOnboardingFixtures(graph)).rejects.toThrow('exactly webhook');
 });
+test('a run refused before dispatch propagates instead of recording a retryable account failure',async()=>{
+  const f=onboardingFixtureProvider(),store=memoryOnboardingStore();let refused=false,refuseOnce=true;
+  const gate=()=>{if(refused)throw Error('Workflow Authority now requires approval; effect was not dispatched');};
+  // Authority changes after the Drive branch dispatched but before ClickUp passed its checkpoint.
+  const create=onboardingTransport(setup,customer,async b=>{if(b==='clickup'&&refuseOnce){await Promise.resolve();await Promise.resolve();refused=true;refuseOnce=false;}return 'synthetic';},()=>gate(),f.fetchImpl);
+  await expect(onboardCustomer(store,create,'gate',gate)).rejects.toThrow('requires approval');
+  expect(f.calls).toEqual(['drive']);expect(store.read('clickup')).toBeUndefined();expect(store.read('drive')?.status).toBe('succeeded');
+  refused=false;const retry=await onboardCustomer(store,create,'gate',gate);
+  expect(retry.outcomes.clickup.status).toBe('succeeded');expect(f.calls).toEqual(['drive','clickup']);
+});
