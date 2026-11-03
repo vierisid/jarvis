@@ -13,6 +13,8 @@ import { REPORT_ACCOUNTS, REPORT_PIECE, isReportStep, managedReportRefusal, type
 import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_PIECE, isSalesStep, salesSetup } from './sales-followups';
 import { ONBOARDING_REQUIRED, onboardingSetup } from './customer-onboarding';
 import { ONBOARDING_ACCOUNTS, ONBOARDING_PIECE, isOnboardingStep } from '../onboarding-accounts';
+import { BATCH_REQUIRED, batchSetup, batchGraphError } from './lead-batch';
+import { BATCH_ACCOUNTS, BATCH_PIECE, isBatchStep } from '../batch-accounts';
 import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
 import {managedNotionIssue} from './managed-notion';
@@ -350,6 +352,26 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         }
       }
       if (REPORT_REQUIRED.every(k=>!emptyInput(input[k]))) try { reportSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
+    if (!root && isBatchStep(settings) && pieceName !== BATCH_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${BATCH_PIECE}`);
+    if (!root && isBatchStep(settings) && object(input)) {
+      const graphError=batchGraphError(raw); if(graphError) issue(node,'nextAction','INPUT_TYPE',graphError);
+      if (object(trigger) && trigger.settings?.pieceName === 'webhook' && Object.values(trigger.settings.input ?? {}).some(v=>!emptyInput(v))) issue(node,'trigger.settings.input','INPUT_TYPE','Lead batch owns submission admission; do not add webhook admission that prevents incomplete batch resumption');
+      for (const [field, provider] of Object.entries(BATCH_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
+          else if (context.phase !== 'composition') {
+            // Checked against the provider piece this field reads with, at its own path:
+            // managedConnectionMisuse refuses a managed connection here (no exemption covers lead batches).
+            const refusal=context.connection?.(id,provider,`settings.input.${field}`,settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck pinned batch account before each provider call');
+          }
+        }
+      }
+      if (BATCH_REQUIRED.every(k=>!emptyInput(input[k]))) try { batchSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
     }
     if (!root && isOnboardingStep(settings) && pieceName !== ONBOARDING_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${ONBOARDING_PIECE}`);
     if (!root && isOnboardingStep(settings) && object(input)) {

@@ -39,6 +39,7 @@ import { createMeetingBriefsRoute, type MeetingBriefsFn } from './routes/jarvis-
 import { createWeeklyReportRoute, type WeeklyReportFn } from './routes/jarvis-report';
 import { createApprovalRefundRoute, type ApprovalRefundFn } from './routes/jarvis-refund';
 import { createContactImportRoute, type ContactImportFn } from './routes/jarvis-import';
+import { createLeadBatchRoute, type LeadBatchFn } from './routes/jarvis-batch';
 import { createOnboardingRoute, type OnboardingFn } from './routes/jarvis-onboarding';
 import { createSalesFollowupsRoute, type SalesFollowupsFn } from './routes/jarvis-sales';
 import {
@@ -98,6 +99,7 @@ export interface SandboxApiServices {
   weeklyReport?: WeeklyReportFn;
   approvalRefund?: ApprovalRefundFn;
   contactImport?: ContactImportFn;
+  leadBatch?: LeadBatchFn;
   customerOnboarding?: OnboardingFn;
   salesFollowups?: SalesFollowupsFn;
   credentialResolver: CredentialResolver;
@@ -298,6 +300,7 @@ export class SandboxApi {
       { path: '/v1/jarvis/reports/weekly', method: 'POST', handler: createWeeklyReportRoute(this.services) },
       { path: '/v1/jarvis/refunds/approval', method: 'POST', handler: createApprovalRefundRoute(this.services) },
       { path: '/v1/jarvis/imports/contacts', method: 'POST', handler: createContactImportRoute(this.services) },
+      { path: '/v1/jarvis/batches/leads', method: 'POST', handler: createLeadBatchRoute(this.services) },
       { path: '/v1/jarvis/onboarding/resources', method: 'POST', handler: createOnboardingRoute(this.services) },
       { path: '/v1/jarvis/sales/followups', method: 'POST', handler: createSalesFollowupsRoute(this.services) },
       {

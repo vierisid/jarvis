@@ -460,6 +460,10 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           if (!draft) throw new Error("No saved draft to validate");
           const validation = compileWorkflow(draft.trigger, { pieces: workflowReadinessServices()?.pieces ?? deps.pieceRegistry, phase: 'composition' });
           if (!validation.ready) throw new Error('Saved draft has structural errors; fix them before fixture validation');
+          if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-batch') {
+            const {validateBatchFixtures}=await import('../../workflows/runtime/batch-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateBatchFixtures(draft.trigger)},params),'local synthetic lead batch fixture results');
+          }
           if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-onboarding') {
             const {validateOnboardingFixtures}=await import('../../workflows/runtime/onboarding-fixtures');
             return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateOnboardingFixtures(draft.trigger)},params),'local synthetic onboarding fixture results');
