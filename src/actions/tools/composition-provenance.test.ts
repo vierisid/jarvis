@@ -20,6 +20,14 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-21: reusable child workflows (jarvis-subflow piece guidance and flow_ref field text).
+  // Shown only when a piece with that action or field is in the catalog, so these shapes match w8-20.
+  'w8-21': {
+    bare: 'f415a518873f568a15544b9ab79fd2d722aad3f3ffc9ed7f0ff163f7cc53849c',
+    production: 'b4376d4ab0b46128e840b91103db1ace160de1849501811c1395695b077638ca',
+    'hosted production': '6916679ba9a12f82e94615acdff3b2bfe629efa0dd78f65c2ec6c0c2b048ba62',
+    'tool names only': 'bd5c619c808a738814630544e24b1d4a20a970cf31f47d669253d030264a274b',
+  },
   // w8-20: durable webhook lead batches (jarvis-batch piece guidance).
   // Shown only when that piece is in the catalog, so these shapes match w8-19.
   'w8-20': {

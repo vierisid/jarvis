@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "24"; // v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts; v20: Typeform form and response output contracts; v21: Notion page output contracts; v22: Linear issue and comment output contracts; v23: Todoist task and completion output contracts; v24: managed monday.com item output contracts
+export const CATALOG_SCHEMA_VERSION = "25"; // v25: reusable child call flow_ref; v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts; v20: Typeform form and response output contracts; v21: Notion page output contracts; v22: Linear issue and comment output contracts; v23: Todoist task and completion output contracts; v24: managed monday.com item output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -895,6 +895,7 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  * on-disk caches re-project.
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
+  if (entry.name === "@jarvispieces/piece-jarvis-subflow" && entry.actions.call) upgradeRunWorkflowFlowFieldToFlowRef(entry.actions.call);
   if (entry.name === '@activepieces/piece-monday') {
     const samples: Record<string,unknown> = {
       monday_create_item: {data:{create_item:{id:'1234567890'}}},

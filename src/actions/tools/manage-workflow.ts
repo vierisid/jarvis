@@ -460,6 +460,14 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           if (!draft) throw new Error("No saved draft to validate");
           const validation = compileWorkflow(draft.trigger, { pieces: workflowReadinessServices()?.pieces ?? deps.pieceRegistry, phase: 'composition' });
           if (!validation.ready) throw new Error('Saved draft has structural errors; fix them before fixture validation');
+          if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-subflow') {
+            const {validateSubflowFixtures}=await import('../../workflows/runtime/subflow-fixtures');
+            const childId=draft.trigger.nextAction?.settings?.input?.flow;
+            const child=typeof childId==='string'?getFlowInProject(project,childId):null;
+            const childDraft=child?getLatestDraft(child.id):null;
+            if(!childDraft)throw new Error('Select a real saved child workflow in this project before testing the pair');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,childFlowId:child!.id,childVersionId:childDraft.id,...await validateSubflowFixtures(draft.trigger,childDraft.trigger)},params),'local synthetic parent/child fixture results');
+          }
           if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-batch') {
             const {validateBatchFixtures}=await import('../../workflows/runtime/batch-fixtures');
             return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateBatchFixtures(draft.trigger)},params),'local synthetic lead batch fixture results');
