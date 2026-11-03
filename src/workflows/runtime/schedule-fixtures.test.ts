@@ -9,6 +9,8 @@ import {createDraftVersion,getFlowVersion} from '../db/repos/flow-version';
 import {createManageWorkflowTool} from '../../actions/tools/manage-workflow';
 import {PieceCatalog} from './piece-catalog';
 afterEach(()=>{closeWorkflowDb();setCronTimezone(null);});
+// These spawn the isolated fixture child, which may compile cold on a busy runner.
+const CHILD_TIMEOUT=30_000;
 const sample=(date:string,match=true,extra:any={})=>({name:date,scheduledFor:date,executedAt:date,expectedMatch:match,...extra});
 const cases=[
  sample('2023-02-28T16:00:00Z',true,{expectedKey:'month-close:Europe/Rome:2023-02'}),
@@ -26,7 +28,7 @@ test('saved graph calendar, delayed evaluation and failed/uncertain transport fi
  expect(result.passed).toBe(true);expect(result.cases).toHaveLength(12);expect(result.externalActions).toBe(0);
  expect(result.cases.slice(-2).map((c:any)=>c.status)).toEqual(['FAILED','UNCERTAIN']);
  expect(JSON.stringify(graph)).toBe(before);
-});
+},CHILD_TIMEOUT);
 test('public tool tests the saved definition and leaves IDs, status and graph unchanged',async()=>{
  initWorkflowDb(':memory:');const flow=createFlow();const version=createDraftVersion({flowId:flow.id,displayName:'Month end',trigger:graph as any});
  const catalog=new PieceCatalog([{name:'@jarvispieces/piece-jarvis-notify',displayName:'Notify',description:'',actions:{notify:{name:'notify',displayName:'Notify',description:''}}}]);
@@ -34,7 +36,7 @@ test('public tool tests the saved definition and leaves IDs, status and graph un
  const raw=String(await tool.execute({action:'validate_fixtures',flow:flow.id,fixture_input:{cases:[cases[1]]}}));
  expect(raw).toContain('"passed":true');expect(raw).toContain(version.id);
  expect(getFlow(flow.id)).toMatchObject({status:'DISABLED',published_version_id:null});expect(getFlowVersion(version.id)?.trigger).toEqual(graph);
-});
+},CHILD_TIMEOUT);
 test('occurrence metadata uses calendar timezone even when UTC is another month',()=>{
  setCronTimezone('UTC');
  const at=Date.parse('2026-12-31T23:30:00Z');
@@ -42,9 +44,27 @@ test('occurrence metadata uses calendar timezone even when UTC is another month'
  const shifted={at:Date.parse('2026-03-08T07:00:00Z'),key:'2026-03-08T02:30',lateMs:0,shifted:true as const};
  expect(scheduleTriggerPayload({timezone:'America/New_York'},shifted)).toMatchObject({occurrenceKey:'2026-03-08T02:30',scheduledDate:'2026-03-08'});
 });
+test('the occurrence key keeps the local minute when a chosen zone prefixes the dedupe key',()=>{
+ const occurrence={at:Date.parse('2027-02-26T16:00:00Z'),key:'Europe/Rome@2027-02-26T17:00',lateMs:0};
+ expect(scheduleTriggerPayload({timezone:'Europe/Rome'},occurrence)).toMatchObject({occurrenceKey:'2027-02-26T17:00',scheduledDate:'2027-02-26',scheduledMonth:'2027-02'});
+});
+test('a zone nobody chose is not used: fixtures run in the configured Jarvis zone, like the trigger manager',async()=>{
+ setCronTimezone('UTC');
+ const unchosen=structuredClone(graph) as any;delete unchosen.settings.chosenTimezone;
+ const result=await validateScheduleFixtures(unchosen,{cases:[sample('2027-02-26T16:00:00Z',false),sample('2027-02-26T17:00:00Z',true,{expectedKey:'month-close:Europe/Rome:2027-02'})]});
+ expect(result.cases.map((c:any)=>c.trigger?.occurrenceKey)).toEqual([undefined,'2027-02-26T17:00']);
+},CHILD_TIMEOUT);
 test('uncovered shapes, invalid times and real channels are refused',async()=>{
  await expect(validateScheduleFixtures({...graph,nextAction:{...graph.nextAction,nextAction:graph.nextAction}},{cases})).rejects.toThrow('only schedule');
  await expect(validateScheduleFixtures(graph,{cases:[sample('2027-02-26T16:00:01Z')]})).rejects.toThrow('whole minute');
  const other=structuredClone(graph);other.nextAction.settings.input.channels=['telegram'];
  await expect(validateScheduleFixtures(other,{cases:[cases[0]]})).rejects.toThrow('dashboard');
 });
+test('custom cases follow the saved DST policy in the chosen zone',async()=>{
+ const daily=(await import('./fixtures/daily-dst-generated.json')).default;
+ const result=await validateScheduleFixtures(daily,{cases:[
+  sample('2026-10-25T00:30:00Z',true,{expectedKey:'daily-operations:Europe/Rome:2026-10-25'}),
+  sample('2026-10-25T01:30:00Z',false),
+ ]});
+ expect(result.cases.map((c:any)=>c.matches)).toEqual([true,false]);
+},CHILD_TIMEOUT);

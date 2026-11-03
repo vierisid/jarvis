@@ -1,10 +1,41 @@
-import { comparison, decimal, parts, midnight, pages, currency, add, unavailable, reportTransport, type Dataset, type ReportRequest } from './weekly-report';
+import { comparison, decimal, formatAmount, localMidnight, retryAfterMs, HUBSPOT_429_RETRIES, type Coverage, type Dataset, type ReportRequest } from './weekly-report';
+import { QUARTERLY_ACTION, QUARTERLY_ACCOUNTS, QUARTERLY_MANAGED_REFUSAL } from '../report-accounts';
+export { QUARTERLY_ACTION, QUARTERLY_ACCOUNTS, QUARTERLY_MANAGED_REFUSAL };
 
-export const QUARTERLY_ACTION = 'quarterly_hubspot_report';
-export const QUARTERLY_ACCOUNTS = { hubspotConnection: '@activepieces/piece-hubspot' } as const;
 export const QUARTERLY_REQUIRED = ['hubspotConnection', 'hubspotPortalId', 'dealDateProperty', 'dealStageIds'] as const;
+/** Quarters are calendar quarters in this zone; the schedule must fire in it too. */
+export const QUARTERLY_ZONE = 'Europe/Rome';
+/** Bounds on the one complete deal enumeration; reaching either is Unavailable, never partial totals. */
+export const QUARTERLY_PAGE_LIMIT = 200, QUARTERLY_ROW_LIMIT = 20000;
 type Obj = Record<string, any>;
 export interface QuarterlySetup { hubspotConnection: string; hubspotPortalId: string; dealDateProperty: string; dealStageIds: string[]; timezone: 'Europe/Rome' }
+const errText = (e: unknown) => String((e as Error).message).replace(/[\x00-\x1f]/g, ' ').slice(0, 250);
+function parts(t: number) {
+  return Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: QUARTERLY_ZONE, year: 'numeric', month: '2-digit', day: '2-digit', hourCycle: 'h23' }).formatToParts(t).map(p => [p.type, p.value]));
+}
+function currency(v: unknown): string { if (typeof v !== 'string' || !/^[a-zA-Z]{3}$/.test(v)) throw Error('Missing currency'); return v.toUpperCase(); }
+function add(t: Dataset['totals'], c: string, amount: bigint) { const old = t[c] ?? { count: 0, amount: '0' }; t[c] = { count: old.count + 1, amount: formatAmount(decimal(old.amount) + amount) }; }
+function unavailable(d: Dataset, e: unknown) { d.coverage.status = 'Unavailable'; d.coverage.reason = errText(e); d.coverage.terminal = false; d.totals = {}; delete d.noAmount; }
+/** Every page of a HubSpot list endpoint by its opaque paging.next.after cursor, bounded; any doubt about completeness throws. */
+async function pages(request: ReportRequest, path: string, coverage: Coverage): Promise<Obj[]> {
+  const rows = new Map<string, Obj>(), cursors = new Set<string>(); let cursor: string | undefined;
+  for (let page = 0; page < QUARTERLY_PAGE_LIMIT; page++) {
+    const data = await request('hubspot', path + (cursor ? '&' + new URLSearchParams({ after: cursor }) : '')); coverage.pages++;
+    const batch = data.results; if (!Array.isArray(batch)) throw Error('Malformed result page');
+    for (const r of batch) {
+      if (!r || typeof r.id !== 'string' || !r.id) throw Error('Missing stable record ID');
+      const old = rows.get(r.id); if (old && JSON.stringify(old) !== JSON.stringify(r)) throw Error('Record changed during pagination');
+      rows.set(r.id, r);
+    }
+    coverage.unique = rows.size; if (rows.size > QUARTERLY_ROW_LIMIT) throw Error('Row limit reached; partial totals discarded');
+    const next = data.paging?.next?.after;
+    if (data.paging?.next != null && next == null) throw Error('HubSpot continuation cursor missing');
+    if (next == null) { coverage.terminal = true; return [...rows.values()]; }
+    if (!['string', 'number'].includes(typeof next) || !String(next) || cursors.has(String(next))) throw Error('Repeated or invalid cursor');
+    cursor = String(next); cursors.add(cursor);
+  }
+  throw Error('Page limit reached; partial totals discarded');
+}
 export function quarterlySetup(input: Obj): QuarterlySetup {
   const text = (key: string, pattern: RegExp) => {
     const v = input[key];
@@ -23,16 +54,34 @@ export function reportQuarters(scheduledFor: string) {
   return [1, 2].map(n => {
     const start = Date.UTC(year, month - n * 3, 1), end = Date.UTC(year, month - (n - 1) * 3, 1), date = new Date(start);
     return { name: n === 1 ? 'current' : 'prior', label: `${date.getUTCFullYear()}-Q${Math.floor(date.getUTCMonth() / 3) + 1}`,
-      start: midnight(start), end: midnight(end), localStart: date.toISOString().slice(0, 10), localEnd: new Date(end).toISOString().slice(0, 10) };
+      start: localMidnight(start, QUARTERLY_ZONE), end: localMidnight(end, QUARTERLY_ZONE), localStart: date.toISOString().slice(0, 10), localEnd: new Date(end).toISOString().slice(0, 10) };
   });
 }
 
-/** Fixed HubSpot GET endpoints only, with existing bounded response/redirect checks. */
-export function quarterlyTransport(token: string, checkpoint: () => void, fetchImpl: typeof fetch = fetch): ReportRequest {
-  const request = reportTransport({ hubspot: token, stripe: '', google: '' }, checkpoint, fetchImpl);
-  return (provider, path, body) => {
+const QUARTERLY_PATHS = [/^\/account-info\/v3\/details$/, /^\/crm\/v3\/pipelines\/deals$/, /^\/crm\/v3\/properties\/deals\/[a-zA-Z][a-zA-Z0-9_]*$/, /^\/crm\/v3\/objects\/deals$/];
+const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+/** Fixed HubSpot GET endpoints only: no body, no redirects, bounded responses, short 429 retries as the weekly report's reads. */
+export function quarterlyTransport(token: string, checkpoint: () => void, fetchImpl: typeof fetch = fetch, sleep: (ms: number) => Promise<void> = delay): ReportRequest {
+  return async (provider, path, body) => {
     if (provider !== 'hubspot' || body !== undefined) throw Error('Quarterly reports allow HubSpot reads only');
-    return request(provider, path);
+    const u = new URL('https://placeholder.invalid' + path);
+    if (!path.startsWith('/') || path.startsWith('//') || u.hash || !QUARTERLY_PATHS.some(p => p.test(u.pathname))) throw Error('Quarterly report endpoint is outside the HubSpot read scope');
+    checkpoint();
+    let response: Response;
+    for (let attempt = 0; ; attempt++) {
+      response = await fetchImpl('https://api.hubapi.com' + path, { method: 'GET', headers: { Authorization: `Bearer ${token}` }, redirect: 'error', signal: AbortSignal.timeout(20000) });
+      // A read changes nothing, so a rate-limited one is safe to repeat after a short wait.
+      const wait = response.status === 429 && attempt < HUBSPOT_429_RETRIES ? retryAfterMs(response.headers.get('retry-after')) : null;
+      if (wait === null) break;
+      await response.body?.cancel(); await sleep(wait); checkpoint();
+    }
+    if (!response.ok) { await response.body?.cancel(); throw Error(`hubspot request failed (HTTP ${response.status})`); }
+    const reader = response.body?.getReader(); if (!reader) throw Error('Empty source response');
+    let size = 0; const chunks: Uint8Array[] = [];
+    for (;;) { const n = await reader.read(); if (n.done) break; size += n.value.length; if (size > 4_000_000) { await reader.cancel(); throw Error('Source response exceeds completeness limit'); } chunks.push(n.value); }
+    checkpoint(); const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!data || typeof data !== 'object' || Array.isArray(data) || data.error) throw Error('Malformed provider response');
+    return data;
   };
 }
 
@@ -44,6 +93,8 @@ export async function collectQuarterlyReport(setup: QuarterlySetup, request: Rep
   try {
     const account = await read('hubspot', '/account-info/v3/details');
     if (String(account.portalId) !== setup.hubspotPortalId) throw Error('HubSpot portal mismatch');
+    // A single-currency portal often leaves deal_currency_code empty: its deals are in the company currency.
+    const companyCurrency = typeof account.companyCurrency === 'string' && /^[a-zA-Z]{3}$/.test(account.companyCurrency) ? account.companyCurrency.toUpperCase() : undefined;
     const property = await read('hubspot', `/crm/v3/properties/deals/${setup.dealDateProperty}`);
     if (property.name !== setup.dealDateProperty || property.type !== 'datetime') throw Error('Select a HubSpot datetime date property');
     const pipelines = await read('hubspot', '/crm/v3/pipelines/deals');
@@ -52,7 +103,7 @@ export async function collectQuarterlyReport(setup: QuarterlySetup, request: Rep
     // HubSpot BasicApi.getPage documents paging.next.after, not a fixed page count.
     // https://github.hubspot.com/hubspot-api-nodejs/classes/crm_deals.BasicApi.html
     const query = new URLSearchParams({ limit: '100', archived: 'false', properties: ['dealstage', 'amount', 'deal_currency_code', setup.dealDateProperty].join(',') });
-    const rows = await pages(read, 'hubspot', '/crm/v3/objects/deals?' + query, datasets[0]!.coverage);
+    const rows = await pages(read, '/crm/v3/objects/deals?' + query, datasets[0]!.coverage);
     Object.assign(datasets[1]!.coverage, { pages: datasets[0]!.coverage.pages, unique: datasets[0]!.coverage.unique, terminal: true });
     for (const row of rows) {
       if (row.archived === true) continue;
@@ -66,7 +117,14 @@ export async function collectQuarterlyReport(setup: QuarterlySetup, request: Rep
       if (index < 0) continue;
       const dataset = datasets[index]!;
       if (dataset.coverage.status === 'Unavailable') continue;
-      try { add(dataset.totals, currency(p.deal_currency_code), decimal(p.amount)); }
+      try {
+        const code = p.deal_currency_code;
+        // Never assumed: with neither a deal currency nor a known portal company currency the quarter is Unavailable.
+        const c = code == null || code === '' ? companyCurrency ?? (() => { throw Error('Deal currency missing and the HubSpot company currency is unknown'); })() : currency(code);
+        // A deal with no amount is not zero: it is kept out of totals and disclosed by count, as the weekly report does.
+        if (p.amount == null || p.amount === '') { dataset.noAmount = (dataset.noAmount ?? 0) + 1; continue; }
+        add(dataset.totals, c, decimal(p.amount));
+      }
       catch (e) { unavailable(dataset, e); }
     }
   } catch (e) {
@@ -91,6 +149,7 @@ export async function collectQuarterlyReport(setup: QuarterlySetup, request: Rep
     `Selected closed stages: ${setup.dealStageIds.join(', ')}; date property: ${setup.dealDateProperty}. Current nonarchived records, not historical stage snapshots.`,
     'Amounts in original deal currencies; no FX or combined-currency total. Counts and amounts compared separately.',
     ...datasets.flatMap(d => d.coverage.status === 'Unavailable' ? [`${d.coverage.period}: Unavailable: ${d.coverage.reason}`] : Object.keys(d.totals).length ? Object.entries(d.totals).map(([c,t]) => `${d.coverage.period} ${c}: ${t.count} deals, ${t.amount}`) : [`${d.coverage.period}: 0 deals; no currency inferred`]),
+    ...datasets.flatMap(d => d.coverage.status !== 'Unavailable' && d.noAmount ? [`${d.coverage.period}: excluded from totals: ${d.noAmount} deal${d.noAmount === 1 ? '' : 's'} with no amount not included`] : []),
     ...comparisons.map(c => c.reason ?? c.note ?? `${c.currency}: amount delta ${c.amountChange.delta}, ${c.amountChange.percentage === null ? c.amountChange.label : c.amountChange.percentage + '%'}; count delta ${c.countChange.delta}, ${c.countChange.percentage === null ? c.countChange.label : c.countChange.percentage + '%'}`),
     ...datasets.map(d => `${d.coverage.period} coverage: ${d.coverage.status}, ${d.coverage.pages} pages, ${d.coverage.unique} unique records, terminal page ${d.coverage.terminal}`), `Source: ${sourceUrl}`].join('\n');
   if (summary.length > 100000) throw Error('Quarterly summary exceeds output limit');

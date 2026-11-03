@@ -143,5 +143,58 @@ one, and the badge opens that run.
 `GET /api/workflows/readiness?limit=100&offset=0` audits enabled workflows using
 the live inventory. It returns `items` with `flowId`, `versionId`, and `readiness`,
 plus `nextOffset` (null on the last page). Inspect both issues and runtime checks.
-This is read-only; it does not execute workflows or resolve secrets. See
-[upgrade guidance](workflow-readiness-upgrade.md) before deploying stricter runtime checks.
+This is read-only; it does not execute workflows or resolve secrets. It needs the
+real catalog and connection inventory configured by daemon startup and reads
+connection metadata only. A ready report does not prove optional data will exist
+on a future trigger; review its runtime checks and test representative
+missing-data payloads.
+
+## Missing values and repairing a refused workflow
+
+An expression that evaluates to undefined fails the step before dispatch; it
+does not silently become an empty string, including inside larger text.
+
+Graphs refused include invalid schedules, unknown/forward/sibling references,
+missing required inputs, missing/ambiguous/wrong-piece connections, invalid child
+workflow bindings and supplied/required DYNAMIC inputs without a saved supported
+property schema. The Jarvis editor exposes those fields as JSON inputs but does
+not resolve or save their property schemas, so reopening the field will not
+repair this refusal. Leave the workflow disabled until its piece schema is
+available. A maintainer can save a verified schema in the draft graph at
+`settings.propertySettings.<field>.schema` through
+`PATCH /api/workflows/:id/versions/:versionId` with the complete updated `trigger`,
+then inspect that version's readiness report before publishing. Preserve the
+piece's required fields and types; an invented empty schema or a `valid` flag is
+not a repair.
+
+Sunday accepts both 0 and 7, including ranges and steps. Native schedule hooks
+use the same parser as preflight and the daemon scheduler, including bounded
+`@every` intervals. Loop-body outputs remain local to the loop. Router branch
+outputs can be merged in the continuation with `{{a.out ?? b.out}}`.
+
+For optional text, replace `{{trigger.body.note}}` with an explicit fallback such
+as `{{trigger.body.note ?? "No note"}}`. `?? ""` still fails a required input.
+Never default a missing recipient, connection, destination or business decision
+to invented data; route to an explicit missing-data outcome or collect the input
+instead. Presence predicates EXISTS/DOES_NOT_EXIST and router short-circuiting
+support intentional absence checks. Both composer paths and every repair receive
+this guidance.
+
+A live trigger refusal is a FAILED run with a readiness report and no dispatched
+actions; the next fire rechecks. Readiness is checked before polling; if it
+changes while a poll is in flight, each returned event is retained in its failed
+run under `steps["<readiness>"].output.recovery`, with its `payload`,
+`executeTrigger` mode and `requiresDecision: true`. Read it through
+`GET /api/workflow-runs/:runId`; no automatic retry is created. After repairing
+the binding, inspect the payload and the failed run's version before starting new
+work. The manual run API selects the current executable version, so verify that
+version before resubmitting a polled payload. A raw webhook payload
+(`executeTrigger: true`) must still pass through its trigger; do not substitute
+it for an already transformed trigger output.
+
+An enabled graph refused at startup/refresh records a FAILED registration run and
+sends a desktop notification when a sidecar is connected. Identical registration
+refusals are suppressed within that manager lifetime, and registration retries use
+bounded backoff. After repairing bindings or publishing a corrected draft,
+refresh/re-enable the flow or restart the daemon. Failure history remains
+available even if no desktop was connected.
