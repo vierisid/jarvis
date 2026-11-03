@@ -1,13 +1,14 @@
 import {randomUUID} from 'node:crypto';
 import {BATCH_PIECE,BATCH_ACTION,BATCH_ACCOUNTS,batchSetup,batchInput,batchSlice,batchTransport} from './lead-batch';
 import {acquireBatch} from '../db/repos/lead-batch';
-import {connectionBindings,currentConnectionIdentity,enforceRunConnectionBinding} from '../db/repos/binding-pins';
+import {connectionBindings,currentConnectionIdentity,enforceRunConnectionBinding,recordRunCredentialOutcome} from '../db/repos/binding-pins';
 import {createWaitpoint} from '../db/repos/waitpoint';
 import {walkFlowNodes} from '../db/flow-graph';
 import {digest,resolveEffectContext,type WorkflowEffectContext} from './effect-context';
 import {workflowEffectId,type WorkflowEffectBoundary} from './effect-boundary';
 import {getWorkflowEffect,saveWorkflowEffect} from '../db/repos/workflow-effect';
 import type {CredentialResolver} from '../credentials/adapter';
+import {ConnectionCredentialError,OAUTH2_TYPES} from '../credentials/pasted-oauth2';
 export function createLeadBatchService(deps:{effects:WorkflowEffectBoundary;credentials:CredentialResolver;fetchImpl?:typeof fetch;now?:()=>number}) {
  return async(input:Record<string,unknown>,ctx:WorkflowEffectContext)=>{
   const setup=batchSetup(input),batch=batchInput(setup,input.submission),{run,version,stepName,executionPath}=resolveEffectContext(ctx,BATCH_PIECE,BATCH_ACTION);
@@ -28,8 +29,20 @@ export function createLeadBatchService(deps:{effects:WorkflowEffectBoundary;cred
      const check=()=>{checkpoint();lease.store.check();const refusal=enforceRunConnectionBinding(ctx.runId,ctx.projectId,setup.hubspotConnection,deps.credentials);if(refusal)throw Error(refusal);};
      check();const externalId=setup.hubspotConnection,pieceName=BATCH_ACCOUNTS.hubspotConnection;
      if(externalId.startsWith('jarvis:')||!connectionBindings(version.trigger).has(externalId))throw Error('Select a saved HubSpot account');
-     const resolved=await deps.credentials.resolve({projectId:ctx.projectId,pieceName,externalId});
-     if(!resolved||resolved.pieceName!==pieceName||resolved.status&&resolved.status!=='ACTIVE'||resolved.type!=='OAUTH2'||typeof resolved.value.access_token!=='string'||!resolved.value.access_token)throw Error('Connect the selected HubSpot OAuth2 account securely');
+     let resolved=await deps.credentials.resolve({projectId:ctx.projectId,pieceName,externalId});
+     if(!resolved||resolved.pieceName!==pieceName||resolved.status&&resolved.status!=='ACTIVE'||resolved.type!=='OAUTH2')throw Error('Connect the selected HubSpot OAuth2 account securely');
+     // Refresh a stored token that is about to expire, after the binding check passed
+     // (as the engine's connection route does). An expired token would otherwise turn
+     // every remaining record into a terminal HTTP 401 failure.
+     try{resolved=await deps.credentials.fresh(resolved);}
+     catch(error){
+      if(!(error instanceof ConnectionCredentialError))throw error;
+      recordRunCredentialOutcome(ctx.runId,externalId,{code:error.code,message:error.message});
+      throw Error(error.code==='CONNECTION_EXPIRED'?`Reconnect the selected HubSpot account (${externalId}): ${error.message}`
+       :`No lead was updated in this step: Jarvis could not refresh the selected HubSpot account (${externalId}). Deliver the same submission again later to resume unfinished records. ${error.message}`);
+     }
+     if(resolved.stored&&OAUTH2_TYPES.has(resolved.type))recordRunCredentialOutcome(ctx.runId,externalId,null);
+     if(typeof resolved.value.access_token!=='string'||!resolved.value.access_token)throw Error('Connect the selected HubSpot OAuth2 account securely');
      check();return batchSlice(setup,lease.store,batchTransport(setup,resolved.value.access_token,check,deps.fetchImpl),identity,clock);
     }});
    return reply.approval?{approval:reply.approval}:park(reply.result);

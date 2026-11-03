@@ -19,6 +19,7 @@ import {AuditTrail} from '../../authority/audit';
 import {EmergencyController} from '../../authority/emergency';
 import {ApprovalManager} from '../../authority/approval';
 import {CredentialResolver} from '../credentials/adapter';
+import {ConnectionCredentialError} from '../credentials/pasted-oauth2';
 import {SandboxApi} from '../sandbox-api/server';
 import {workflowLogsBase} from '../sandbox-api/config';
 import {EngineRuntime} from '../runner/engine-runtime/engine-runtime';
@@ -39,7 +40,8 @@ import {batchTestGraph} from './batch-test-data';
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog,authority:AuthorityEngine,approvals:ApprovalManager;
 let services:ReturnType<typeof buildSandboxServiceBackends>;
 const versions:Record<string,string>={},notifications:string[]=[],runIds:string[]=[];
-let now=Date.now(),expireAfterKey:string|null=null;
+let now=Date.now(),expireAfterKey:string|null=null,expectedToken='synthetic-hubspot';
+const resolver=new CredentialResolver();
 let provider=batchFixtureProvider();
 beforeAll(async()=>{
   dir=mkdtempSync(join(tmpdir(),'jarvis-batch-engine-'));initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,78));
@@ -52,9 +54,9 @@ beforeAll(async()=>{
   for(const name of ['hubspot'])upsertConnection({externalId:'fixture-'+name,displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-'+name,pieceVersion:'0.0.1',value:{access_token:'synthetic-'+name}});
   authority=new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'});
   approvals=new ApprovalManager();
-  services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver(),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
+  services=buildSandboxServiceBackends({credentialResolver:resolver,authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
     batchNow:()=>now,batchFetch:(async(url:any,init:any)=>{
-      expect(init.headers.Authorization).toBe('Bearer synthetic-hubspot');const result=await provider.fetchImpl(url,init);if(expireAfterKey&&String(url).endsWith('/'+expireAfterKey)){expireAfterKey=null;now+=46_000;}return result;
+      expect(init.headers.Authorization).toBe('Bearer '+expectedToken);const result=await provider.fetchImpl(url,init);if(expireAfterKey&&String(url).endsWith('/'+expireAfterKey)){expireAfterKey=null;now+=46_000;}return result;
     }) as typeof fetch,llmManager:{chat:async()=>{throw Error('No model tools or delegate may execute');}} as any,
     channelService:{sendWorkflowNotification:async()=>{throw Error('No external notifications');}} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{notifications.push(text);return 1;}} as any});
   api=new SandboxApi({services});await api.start({port:0});runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
@@ -167,3 +169,13 @@ test('actual generated saved draft executes mixed, empty, failed, interrupted an
   const calls=provider.calls.length;expect((await f.run(payload)).status).toBe(final.status);expect(provider.calls.length).toBe(calls);expect(notifications.length).toBe(n+1);
  }
 },120_000);
+
+test('a stored HubSpot token is refreshed before writes; an expired one stops before any write',async()=>{
+ const original=resolver.fresh.bind(resolver);
+ try {
+  resolver.fresh=async r=>({...r,value:{...r.value,access_token:'refreshed-hubspot'}});expectedToken='refreshed-hubspot';
+  const f=await fixture();expect((await finish((await f.run()).id)).status).toBe('SUCCEEDED');expect(provider.calls).toEqual(['1','2','3','4','5']);
+  resolver.fresh=async()=>{throw new ConnectionCredentialError('CONNECTION_EXPIRED','Token expired');};
+  const g=await fixture(),n=notifications.length;expect((await g.run()).status).toBe('FAILED');expect(provider.calls).toHaveLength(0);expect(notifications.length).toBe(n);
+ } finally {resolver.fresh=original;expectedToken='synthetic-hubspot';}
+},60_000);
