@@ -483,9 +483,16 @@ export function buildSandboxServiceBackends(
         const owner = workflowEffectId(ctx.runId,ctx.stepName!,ctx.executionPath ?? [],'notify');
         checkpoint();
         if (identity && claimIdentity(identity,owner,true) === 'duplicate') return { delivered: [], failed: [], unknown: [], deduplicated: true };
+        // The notifier reports a thrown dashboard, voice or desktop send as
+        // failed, but it may have reached someone: such a key stays consumed.
+        let mayHaveArrived = false;
+        const sent = <T>(send: () => T): T => {
+          try { const result = send(); if (result instanceof Promise) result.catch(() => { mayHaveArrived = true; }); return result; }
+          catch (error) { mayHaveArrived = true; throw error; }
+        };
         const recipients = args.recipients as Record<string, string | null>;
         const guardedNotifier = new JarvisNotifierAdapter({ ...notifierDeps,
-          broadcastToDashboard: (text, priority) => { checkpoint(); return opts.wsService.broadcastNotificationToDashboard(text, priority); },
+          broadcastToDashboard: (text, priority) => { checkpoint(); return sent(() => opts.wsService.broadcastNotificationToDashboard(text, priority)); },
           broadcastToChannels: async (channels, text) => {
             const report: ChannelDeliveryReport = { delivered: [], failed: [], unknown: [] };
             for (const channel of channels) {
@@ -500,8 +507,8 @@ export function buildSandboxServiceBackends(
             }
             return report;
           },
-          sendVoice: async text => { checkpoint(); return (await opts.wsService.broadcastProactiveVoice(text)) > 0; },
-          ...(opts.sendDesktop ? { sendDesktop: async (title: string, body: string) => { checkpoint(); return opts.sendDesktop!(title, body); } } : {}),
+          sendVoice: async text => { checkpoint(); return (await sent(() => opts.wsService.broadcastProactiveVoice(text))) > 0; },
+          ...(opts.sendDesktop ? { sendDesktop: async (title: string, body: string) => { checkpoint(); return sent(() => opts.sendDesktop!(title, body)); } } : {}),
         });
         const report = await guardedNotifier.notify({ message: args.message as string, channels: args.channels as any, priority: args.priority as any,
           ...(args.autoDashboard === true ? { autoDashboard: true } : {}) });
@@ -509,15 +516,13 @@ export function buildSandboxServiceBackends(
         // when nothing was sent anywhere. A channel that may have taken it
         // counts as sent: failing would invite a resend that could repeat it.
         if (report.delivered.length === 0 && report.unknown.length === 0) {
-          throw new DeliveryFailedError({ status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started',
-            message: `Not sent on any channel: ${report.failed.map(f => `${f.channel} (${f.error})`).join('; ')}` }, report);
-        }
-        // A keyed notification cannot turn an unconfirmed send into a completed
-        // identity. Persist an unknown effect for Needs you; keep the identity
-        // reserved across restarts and refuse any automatic repeat.
-        if (identity && report.unknown.length > 0) {
-          throw new DeliveryFailedError({status:'unknown',code:'NOTIFICATION_UNCONFIRMED',effect:'may_have_occurred',
-            message:'Notification delivery is unconfirmed. Review the original outcome in Needs you; automatic resend is blocked.'},report);
+          const failures = report.failed.map(f => `${f.channel} (${f.error})`).join('; ');
+          // A thrown dashboard, voice or desktop send may have reached
+          // someone: its key stays claimed (never completed, never resent) and
+          // the outcome stays unknown in Needs you rather than saying nothing was sent.
+          throw new DeliveryFailedError(mayHaveArrived
+            ? { status: 'unknown', code: 'DELIVERY_UNCERTAIN', effect: 'may_have_occurred', message: `Not confirmed on any channel; it may have arrived: ${failures}` }
+            : { status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started', message: `Not sent on any channel: ${failures}` }, report);
         }
         if (identity) completeIdentity(identity,owner);
         return report;

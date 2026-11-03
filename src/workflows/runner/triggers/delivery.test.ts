@@ -18,7 +18,7 @@ import { createFlowRun, getFlowRun, listRuns, updateRun } from "../../db/repos/f
 import { claimNextJob, queueStats } from "../../db/repos/job-queue";
 import { configureWorkflowReadiness } from "../../db/repos/flow-readiness";
 import { deleteConnection, upsertConnection } from "../../db/repos/app-connection";
-import { claimFire, listFlowFires, pageFlowFires, pruneFires, recordFire, FIRE_RETENTION_MS } from "../../db/repos/trigger-fire";
+import { claimFire, listFlowFires, pageFlowFires, pruneFires, recordFire, setScheduleWatch, FIRE_RETENTION_MS } from "../../db/repos/trigger-fire";
 import { PieceCatalog } from "../../runtime/piece-catalog";
 import { WorkflowEventBus } from "../../runtime/event-bus";
 import { WorkflowEventBuffer } from "../../runtime/event-buffer";
@@ -193,6 +193,16 @@ describe("schedules, in Jarvis's configured time zone", () => {
     d.tick(flowId, "2026-10-07T09:00:40Z");
     expect(runsOf(flowId)).toHaveLength(1);
     expect(listFlowFires(flowId)[0]).toMatchObject({ repeats: 1 });
+    await d.stop();
+  });
+
+  test("spelling out the default DST policy keeps catching up times owed under the old watch", async () => {
+    setCronTimezone("UTC");
+    const { flowId } = schedule("0 9 * * *", { dst_policy: "shift_missing_once" });
+    // Watched before the policy was spelled out: the legacy watch key.
+    setScheduleWatch(flowId, "0 9 * * *", at("2026-10-07T08:00:00Z"));
+    const d = await daemon(at("2026-10-07T10:30:00Z"));
+    expect(listFlowFires(flowId)).toEqual([expect.objectContaining({ label: "missed", scheduledFor: at("2026-10-07T09:00:00Z") })]);
     await d.stop();
   });
 

@@ -469,7 +469,9 @@ export class TriggerManager {
     try {
       const timezone = input.timezone as string | undefined;
       validateCronDstPolicy(input.dst_policy);
-      const dstPolicy = input.dst_policy;
+      // The default policy is the legacy behaviour: keep its watch key, so
+      // spelling it out does not drop catch-up for times already owed.
+      const dstPolicy = input.dst_policy === 'shift_missing_once' ? undefined : input.dst_policy;
       const dueAfter = this.catchUpMissed(flowId, versionId, expression, timezone, dstPolicy);
       this.cron.schedule(
         `flow:${flowId}`,

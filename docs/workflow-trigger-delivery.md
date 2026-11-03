@@ -69,28 +69,11 @@ workflow was turned off before its subscription was torn down.
 
 ### Explicit daylight-saving policy
 
-The built-in `schedule` trigger accepts `dst_policy` alongside
-`cron_expression` and `timezone`. The default `shift_missing_once` preserves
-existing behavior. `skip_missing_first_repeated` skips a missing spring time
-and permits only the first instant of a repeated autumn time, including when
-Jarvis starts between the two instants. This input is not a community schedule
-piece property.
-
-For a daily 02:30 Rome reminder, use `30 2 * * *`, `Europe/Rome`, and
-`skip_missing_first_repeated`. A notification key based on
-`{{trigger.scheduledDate}}` keeps the original local date when its worker runs
-late. Keyed unconfirmed deliveries remain unknown in Needs you and cannot be
-blindly resent; a confirmed receipt is reused on replay.
-
-`manage_workflow validate_fixtures` with `fixture_input: {"suite":"dst_daily"}`
-exercises this saved schedule-to-dashboard shape through the production
-scheduler and isolated SQLite admission, queued payloads, notification receipts,
-and Needs you projection. Eleven cases cover both DST changes, restarts,
-delayed execution, repeats, failure and uncertain delivery. The fixture tool
-uses mocked transport and database/service reopen, not a live worker or process
-crash. `schedule-dst-engine.test.ts` separately exercises the real engine,
-trigger manager and recreated worker against isolated SQLite. Neither suite
-contacts real services or changes the retained draft.
+The built-in `schedule` trigger accepts an optional `dst_policy`. Omitted (or
+`shift_missing_once`) keeps the rules above. `skip_missing_first_repeated`
+never runs a time the spring jump skips, and runs only the first of a repeated
+autumn time, also when Jarvis starts between the two. Setting it starts a new
+watch, like changing the timezone.
 
 ## Webhooks
 

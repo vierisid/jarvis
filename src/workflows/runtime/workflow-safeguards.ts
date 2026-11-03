@@ -59,7 +59,7 @@ export function workflowSafeguards(trigger: unknown) {
     if (String(s.pieceName).endsWith('jarvis-notify') && input.meetingGuard)
       add('meeting-freshness','Calendar recheck after approval and before persistent dashboard dispatch claim; changed/cancelled/past events skipped without consuming the key. Key derived in code from account/calendar/event/current-start.', 'Provider edits after the final read cannot be transactional with dashboard delivery. Uncertain delivery stays fenced; no eventual-delivery guarantee.');
     if (String(s.pieceName).endsWith('jarvis-notify') && s.actionName === 'notify')
-      add('notification-identity', input.idempotencyKey ? 'Persistent once-per-workflow idempotencyKey claim across runs, versions and branches; completed duplicates suppressed.' : 'Run/step receipts only; no cross-submission notification identity is configured.', 'Key must identify the business event, e.g. qualified-contact:{{upsert.id}}. Unconfirmed keyed delivery retains an unknown effect in Needs you and blocks identity reuse after restart; no eventual delivery guarantee.');
+      add('notification-identity', input.idempotencyKey ? 'Persistent once-per-workflow idempotencyKey claim across runs, versions and branches; completed duplicates suppressed.' : 'Run/step receipts only; no cross-submission notification identity is configured.', 'Key must identify the business event, e.g. qualified-contact:{{upsert.id}}. Unknown delivery is never automatically repeated; no eventual delivery guarantee.');
   }
   return { basis:'Installed runtime contracts; not a functional test of this draft', safeguards };
 }
