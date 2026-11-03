@@ -31,3 +31,14 @@ export const repairedProductCases=()=>[...productCases(),
  {name:'fractional stock allowed without an integer rule',payload:{price:0,stock:1.5,active:false},expectedRows:[[0,1.5,false]],expectedStatus:'SUCCEEDED',expectedRequests:1},
  {name:'negative stock allowed without a configured minimum',payload:{price:0,stock:-1,active:false},expectedRows:[[0,-1,false]],expectedStatus:'SUCCEEDED',expectedRequests:1},
 ];
+
+// Engine property processors run before an action: JSON props parse strings
+// and must end as an object or array, text props must be strings.
+export const typedInputGraph=(action:'run_jsonata_query'|'convert_json_to_text',result:unknown={out:'{{step_1}}'}):any=>({name:'trigger',type:'PIECE_TRIGGER',displayName:'Webhook',settings:{pieceName:'webhook',input:{}},
+ nextAction:{name:'step_1',type:'PIECE',displayName:'Transform',settings:{pieceName:'@activepieces/piece-json',actionName:action,input:action==='run_jsonata_query'?{json:'{{trigger.data}}',query:'$'}:{json:'{{trigger.data}}'}},
+  nextAction:{name:'step_2',type:'PIECE',displayName:'Return',settings:{pieceName:'@jarvispieces/piece-jarvis-subflow',actionName:'return_result',input:{result}}}}});
+export const typedInputCases=()=>[
+ {name:'object passes',payload:{data:{a:1}},expectedRows:[],expectedStatus:'SUCCEEDED',assertions:[{step:'step_2',path:['out'],equals:{a:1}}]},
+ {name:'JSON string is parsed',payload:{data:'{"a":1}'},expectedRows:[],expectedStatus:'SUCCEEDED',assertions:[{step:'step_2',path:['out'],equals:{a:1}}]},
+ ...[5,true,null,'abc'].map(data=>({name:'scalar '+JSON.stringify(data)+' is not JSON',payload:{data},expectedRows:[],expectedStatus:'FAILED',expectedError:'expected JSON object or array'})),
+];

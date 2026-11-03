@@ -265,4 +265,17 @@ describe("the reviewed list as committed", () => {
       expect(evaluateLicenseExpression(entry.license).category).not.toBeNull();
     }
   });
+
+  test("browser-request@0.3.3 (no license field, Apache-2.0 LICENSE) passes as the copy bun installs, and only that copy", () => {
+    const pkg = { name: "browser-request", version: "0.3.3" };
+    expect(evaluatePackage("browser-request", "0.3.3", pkg)).toMatchObject({
+      allowed: true,
+      license: "Apache-2.0",
+      category: "permissive",
+      basis: "reviewed",
+    });
+    expect(evaluatePackage("browser-request", "0.3.4", { ...pkg, version: "0.3.4" }).allowed).toBe(false);
+    expect(evaluatePackage("browser-request", "0.3.3", { ...pkg, license: "GPL-3.0-only" }).allowed).toBe(false);
+    expect(evaluatePackage("browser-request", "0.3.3", pkg, { bundledAt: "x@1.0.0:node_modules/browser-request" }).allowed).toBe(false);
+  });
 });

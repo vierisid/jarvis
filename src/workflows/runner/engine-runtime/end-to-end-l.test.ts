@@ -25,7 +25,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { closeWorkflowDb, initWorkflowDb } from "../../db";
+import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../../db";
+import { graphDigest } from "../../runtime/continuation";
 import { createFlow } from "../../db/repos/flow";
 import {
   createDraftVersion,
@@ -75,6 +76,7 @@ describe("Phase L: plumbing smoke (connection resolver + store + run-progress)",
 
   const validateSource: JarvisConnectionSource = {
     id: "validate",
+    pieceNames: [PIECE_VALIDATE_NAME],
     canResolve: (externalId) => externalId === CONNECTION_EXTERNAL_ID,
     resolve: async () => ({
       type: "OAUTH2",
@@ -154,6 +156,8 @@ describe("Phase L: plumbing smoke (connection resolver + store + run-progress)",
         flowVersionId: v.id,
         environment: "TESTING",
       });
+      // The graph the RUN_FLOW handler records before the engine starts.
+      getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(trigger), run.id]);
 
       // Drive through the production EngineFlowExecutor (not the raw handle)
       // so the K-review's race-tolerant terminal-status wait is exercised.

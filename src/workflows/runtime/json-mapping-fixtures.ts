@@ -15,6 +15,36 @@ function check(ok: unknown, message: string): asserts ok { if (!ok) throw Error(
 const object = (value: any): value is Record<string, any> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const empty = (value: unknown) => value === undefined || value === null || value === '';
 
+// Declared property types of the allowlisted actions (all required). The
+// engine runs its property processors and validators on resolved inputs before
+// an action runs, so fixtures apply the same rules instead of handing raw
+// resolved values to the connector.
+const propTypes: Record<string, Record<string, 'text' | 'json'>> = {
+  convert_text_to_json: {text: 'text'},
+  convert_json_to_text: {json: 'json'},
+  run_jsonata_query: {json: 'json', query: 'text'},
+  sheets_append_values: {spreadsheet_id: 'text', worksheet_title: 'text', range: 'text', values: 'json'},
+  return_result: {result: 'json'},
+};
+/** Mirrors the engine's text/JSON processors and required-property validation. */
+function processProps(actionName: string, input: Record<string, any>) {
+  for (const [key, type] of Object.entries(propTypes[actionName] ?? {})) {
+    const original = input[key];
+    let value = original;
+    if (type === 'text') {
+      if (value !== undefined && value !== null) value = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      check(typeof value === 'string', key + ': expected string, received ' + String(original));
+    } else {
+      if (value !== undefined && value !== null && typeof value !== 'object') {
+        try { value = JSON.parse(value); } catch { value = undefined; }
+      }
+      check(object(value) || Array.isArray(value), key + ': expected JSON object or array, received ' + JSON.stringify(original));
+    }
+    input[key] = value;
+  }
+  return input;
+}
+
 // Match the engine's typed whole-token resolution and text interpolation.
 export function resolveFixtureValue(value: any, scope: Record<string, unknown>): any {
   if (typeof value === 'string') {
@@ -107,8 +137,9 @@ async function runCases(saved: any, fixture: any) {
     const visit = async (node: any): Promise<void> => {
       if (!node) return;
       if (node.type === 'ROUTER') {
-        const index = node.settings.branches.findIndex((b: any) => b.branchType === 'FALLBACK' || b.conditions.some((group: any[]) => group.every(condition => {
-          const a = resolveFixtureValue(condition.firstValue, scope);
+        const index = node.settings.branches.findIndex((branch: any) => branch.branchType === 'FALLBACK' || branch.conditions.some((group: any[]) => group.every(condition => {
+          // The engine resolves both operands of a condition before evaluating it.
+          const a = resolveFixtureValue(condition.firstValue, scope), b = resolveFixtureValue(condition.secondValue, scope);
           if (condition.operator === 'BOOLEAN_IS_TRUE') return !!a;
           if (condition.operator === 'BOOLEAN_IS_FALSE') return !a;
           if (condition.operator.startsWith('NUMBER_')) {
@@ -116,12 +147,12 @@ async function runCases(saved: any, fixture: any) {
             // numeric strings are parsed; nonnumeric strings remain strings.
             // This compares route operands, never coerces product fields.
             const parse = (value: any) => Number.isNaN(Number(value)) ? value : Number(value);
-            const left = parse(a), right = parse(resolveFixtureValue(condition.secondValue, scope));
+            const left = parse(a), right = parse(b);
             if (condition.operator === 'NUMBER_IS_GREATER_THAN') return left > right;
             if (condition.operator === 'NUMBER_IS_LESS_THAN') return left < right;
             return left == right;
           }
-          const first = workflowInterpolationText(a), second = workflowInterpolationText(resolveFixtureValue(condition.secondValue, scope));
+          const first = workflowInterpolationText(a), second = workflowInterpolationText(b);
           return condition.caseSensitive ? first === second : first.toLowerCase() === second.toLowerCase();
         })));
         check(index >= 0, 'no matching branch');
@@ -130,10 +161,8 @@ async function runCases(saved: any, fixture: any) {
         steps.push(node.name);
         const {pieceName, actionName} = node.settings;
         // Never resolve saved connection references, even when already bound.
-        const input = resolveFixtureValue({...node.settings.input, ...(pieceName === SHEETS ? {auth: 'fixture-only'} : {})}, scope);
+        const input = processProps(actionName, resolveFixtureValue({...node.settings.input, ...(pieceName === SHEETS ? {auth: 'fixture-only'} : {})}, scope));
         if (pieceName === JSON_PIECE) {
-          if (actionName === 'convert_text_to_json') input.text = workflowInterpolationText(input.text);
-          if (actionName === 'run_jsonata_query') input.query = workflowInterpolationText(input.query);
           scope[node.name] = await json.actions()[actionName].run({propsValue: input});
         } else if (pieceName === SHEETS) {
           for (const key of ['spreadsheet_id','worksheet_title','range']) check(!empty(input[key]), 'fixture setup missing ' + key);

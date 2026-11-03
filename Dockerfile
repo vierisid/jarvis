@@ -26,7 +26,9 @@
 # Build:   docker build --build-arg VERSION=0.3.1 -t jarvis .
 #          VERSION is REQUIRED and has no default; see the stamp step below for
 #          why. For a throwaway local image, any semver will do: 0.0.0-dev.
-# Run:     docker run -p 3142:3142 -v jarvis-data:/data -e JARVIS_API_KEY=sk-... jarvis
+# Run:     docker run -p 127.0.0.1:3142:3142 -v jarvis-data:/data jarvis
+#          then: docker exec <container> jarvis enroll "my-desktop"; LLM keys are
+#          set in the dashboard (Settings > LLM), not via env vars.
 #
 # ─────────────────────────────────────────────────────────────────────
 

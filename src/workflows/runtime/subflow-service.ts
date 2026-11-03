@@ -10,7 +10,8 @@ import {workflowEffectId,type WorkflowEffectBoundary} from './effect-boundary';
 import {SUBFLOW_PIECE,boundedJson,childCallInput} from './subflow-contract';
 import {assertRunNotCanceled} from './cancellation';
 
-export function createSubflowService(effects:WorkflowEffectBoundary,now=Date.now){
+/** `intentOf` names the child on the approval card (#1040): the flow ID and its pinned version's name. */
+export function createSubflowService(effects:WorkflowEffectBoundary,now=Date.now,intentOf?:(flowId:string,versionId:string)=>string){
  return async(input:Record<string,unknown>,ctx:WorkflowEffectContext)=>{
   const call=childCallInput(input),{run,stepName,executionPath}=resolveEffectContext(ctx,SUBFLOW_PIECE,'call');
   const id=digest(['subflow-v1',ctx.projectId,run.flowId,stepName,call.invocationKey]);
@@ -25,7 +26,7 @@ export function createSubflowService(effects:WorkflowEffectBoundary,now=Date.now
     const flow=getFlowInProject(ctx.projectId,call.flow);if(!flow)throw Error('Reusable child workflow not found in this project');
     const versionId=old?.version_id??flow.published_version_id??getLatestDraft(flow.id)?.id;
     const version=versionId?getFlowVersion(versionId):null;if(!version&&!old?.result_json)throw Error('Reusable child version unavailable');
-    return {arguments:{...call,versionId,versionDigest:old?.version_digest??digest(version!.trigger)},target:{flowId:call.flow,versionId,invocationKey:call.invocationKey}};
+    return {arguments:{...call,versionId,versionDigest:old?.version_digest??digest(version!.trigger)},target:{flowId:call.flow,versionId,invocationKey:call.invocationKey,...(intentOf&&versionId?{intent:intentOf(call.flow,versionId)}:{})}};
    },
    execute:async(args,checkpoint)=>db.transaction(()=>{
     checkpoint();const old=getSubflowCall(id);

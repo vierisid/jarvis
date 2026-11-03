@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {initWorkflowDb,closeWorkflowDb} from '../db';
 import {acquireBatch} from '../db/repos/lead-batch';
-import {batchSetup,batchInput,batchSlice,batchTransport,leadUpdate,finalizeBatch} from './lead-batch';
+import {batchSetup,batchInput,batchSlice,batchTransport,leadUpdate,finalizeBatch,BatchNotDispatched} from './lead-batch';
 import {batchFixturePayload,batchFixtureSetup,batchFixtureProvider,memoryBatchStore,validateBatchFixtures} from './batch-fixtures';
 import {batchTestGraph} from './batch-test-data';
 const setup=batchSetup(batchFixtureSetup);let dir:string|undefined;
@@ -33,7 +33,16 @@ test('provider status and invalid successful receipts cannot produce false updat
 });
 test('governance check fails outside network uncertainty catch',async()=>{
  let calls=0;const fetchImpl=(async()=>{calls++;return Response.json({});}) as unknown as typeof fetch;
- await expect(batchTransport(setup,'synthetic',()=>{throw Error('Revoked');},fetchImpl)({key:'1',properties:{firstname:'A'}})).rejects.toThrow('Revoked');expect(calls).toBe(0);
+ const stopped=await batchTransport(setup,'synthetic',()=>{throw Error('Revoked');},fetchImpl)({key:'1',properties:{firstname:'A'}}).catch(e=>e);
+ expect(stopped).toBeInstanceOf(BatchNotDispatched);expect(String((stopped as BatchNotDispatched).cause)).toContain('Revoked');expect(calls).toBe(0);
+});
+test('a stop before dispatch leaves the record unfinished, not uncertain, and a resume sends it once',async()=>{
+ const input=batchInput(setup,batchFixturePayload(setup,3)),store=memoryBatchStore({input,outcomes:{}}),provider=batchFixtureProvider();let revoked=false;
+ const write=batchTransport(setup,'synthetic',()=>{if(revoked)throw Error('Revoked');},provider.fetchImpl);
+ await expect(batchSlice(setup,store,async lead=>{if(lead.key==='2')revoked=true;return write(lead);},'stop')).rejects.toThrow('Revoked');
+ expect(provider.calls).toEqual(['1']);expect(store.load().outcomes[1]).toBeUndefined();
+ revoked=false;const result=await batchSlice(setup,store,write,'stop');if(!result.complete)throw Error();
+ expect(result.counts).toEqual({updated:3,rejected:0,failed:0,uncertain:0});expect(provider.calls).toEqual(['1','2','3']);
 });
 test('SQLite lease, completed receipts and interrupted dispatch survive reopen',async()=>{
  dir=mkdtempSync(join(tmpdir(),'lead-batch-store-'));const db=join(dir,'fixture.db');initWorkflowDb(db);let now=1000;
