@@ -36,6 +36,8 @@ import {createManageWorkflowTool} from '../../actions/tools/manage-workflow';
 import {batchFixturePayload,batchFixtureProvider,batchFixtureSetup,validateBatchFixtures} from './batch-fixtures';
 import {BATCH_PIECE,BATCH_ACTION,BATCH_REQUIRED,batchSetup} from './lead-batch';
 import {batchTestGraph} from './batch-test-data';
+import {workflowEffectId} from './effect-boundary';
+import {getWorkflowEffect,saveWorkflowEffect} from '../db/repos/workflow-effect';
 
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog,authority:AuthorityEngine,approvals:ApprovalManager;
 let services:ReturnType<typeof buildSandboxServiceBackends>;
@@ -178,4 +180,25 @@ test('a stored HubSpot token is refreshed before writes; an expired one stops be
   resolver.fresh=async()=>{throw new ConnectionCredentialError('CONNECTION_EXPIRED','Token expired');};
   const g=await fixture(),n=notifications.length;expect((await g.run()).status).toBe('FAILED');expect(provider.calls).toHaveLength(0);expect(notifications.length).toBe(n);
  } finally {resolver.fresh=original;expectedToken='synthetic-hubspot';}
+},60_000);
+
+test('a managed HubSpot id is refused with the managed-connection rule before any write',async()=>{
+ provider=batchFixtureProvider();authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});
+ resolver.register({id:'google',pieceNames:['@activepieces/piece-gmail'],canResolve:(id:string)=>id==='jarvis:google',resolve:async()=>({type:'OAUTH2',value:{access_token:'managed'},pieceName:'@activepieces/piece-gmail'})} as any);
+ try {
+  const graph=configuredGraph();graph.nextAction.settings.input.hubspotConnection='jarvis:google';
+  const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Managed account',trigger:graph});lockVersion(version.id);
+  const r=createFlowRun({flowId:flow.id,flowVersionId:version.id,status:'RUNNING'});runIds.push(r.id);
+  const ctx={runId:r.id,projectId:DEFAULT_IDS.project,stepName:'batch',executionPath:[] as Array<[string,number]>};
+  await expect(services.leadBatch!({...graph.nextAction.settings.input,submission:batchFixturePayload(batchSetup(setup))},ctx)).rejects.toThrow(/Managed connection jarvis:google can only be used by/);
+  expect(provider.calls).toHaveLength(0);
+ } finally {resolver.unregister('google');}
+},60_000);
+test('recovering an abandoned dispatch marks the effect as having run',async()=>{
+ const f=await fixture(),r=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(r.id);
+ const ctx={runId:r.id,projectId:DEFAULT_IDS.project,stepName:'batch',executionPath:[] as Array<[string,number]>},input={...setup,submission:batchFixturePayload(batchSetup(setup))};
+ expect((await services.leadBatch!(input,ctx) as any).complete).toBe(false);
+ const id=workflowEffectId(r.id,'batch',[],'lead-batch'),effect=getWorkflowEffect(id)!,before=effect.partial?.slices??0;
+ effect.status='dispatching';delete effect.partial;saveWorkflowEffect(effect);
+ await services.leadBatch!(input,ctx);expect(getWorkflowEffect(id)!.partial?.slices).toBeGreaterThanOrEqual(1);void before;expect(provider.calls).toEqual(['1','2','3','4','5']);
 },60_000);
