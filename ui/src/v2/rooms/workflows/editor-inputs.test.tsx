@@ -24,3 +24,22 @@ test('selected replacement preserves multiple template segments, multiline text 
   expect(field.getAttribute('aria-required')).toBe('true');
   expect(window.getSelection()!.getRangeAt(0).collapsed).toBe(true);
 });
+test('Escape dismisses the variable picker, keeps the settings open and returns focus to the field', async () => {
+  const { NodeSettingsPopover } = await import('./WorkflowEditor');
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  let closed = 0;
+  await act(async () => root.render(<NodeSettingsPopover inline anchor={{ x: 0, y: 0 }} onClose={() => { closed++; }} predecessors={[]} sampleData={{}} catalog={[]} allSteps={[]}>
+    <Field value="" onChange={() => {}} label="Message" invalid descriptionId="message-help" />
+  </NodeSettingsPopover>));
+  const field = host.querySelector('[role=textbox]') as HTMLElement;
+  expect(field.getAttribute('aria-invalid')).toBe('true');
+  expect(field.getAttribute('aria-describedby')).toBe('message-help');
+  await act(async () => { field.focus(); field.dispatchEvent(new FocusEvent('focus')); });
+  expect(document.querySelector('.wf-var-picker')).not.toBeNull();
+  const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+  await act(async () => { field.dispatchEvent(escape); });
+  expect(document.querySelector('.wf-var-picker')).toBeNull();
+  expect(escape.defaultPrevented).toBe(true);
+  expect(closed).toBe(0);
+  expect(document.activeElement).toBe(field);
+});

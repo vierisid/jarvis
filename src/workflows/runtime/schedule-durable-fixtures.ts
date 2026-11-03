@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CronScheduler, type CronOccurrence } from '../../lib/cron-scheduler';
+import { chosenScheduleZone } from '../runner/triggers/schedule-zone';
 import { scheduleTriggerPayload } from './schedule-payload';
 import { resolveFixtureValue } from './json-mapping-fixtures';
 import { digest } from './effect-context';
@@ -27,6 +28,8 @@ import { EmergencyController } from '../../authority/emergency';
 import { DecisionQueue } from '../../brief/decisions';
 import { sendNotification } from '../activepieces/packages/pieces/jarvis/notify/src/lib/actions/send-notification';
 
+/** The chosen zone the suite requires; admission keys carry it as the trigger manager does. */
+const ZONE = 'Europe/Rome';
 const check = (value: unknown, message: string): void => { if (!value) throw Error('Durable schedule fixture: '+message); };
 type Scenario = {name:string; start:string; end:string; occurrences:number; restart?:string; deliveries?:number; replay?:boolean; delayed?:boolean; outcome?:'failure'|'uncertain'|'lost_reply'};
 export const dailyDstCases: Scenario[] = [
@@ -38,7 +41,7 @@ export const dailyDstCases: Scenario[] = [
   {name:'Start after first autumn occurrence',start:'2026-10-25T01:29:00Z',end:'2026-10-25T01:32:00Z',occurrences:0},
   {name:'Concurrent duplicate admission and completed replay after restart',start:'2026-10-24T00:29:00Z',end:'2026-10-24T00:31:00Z',occurrences:1,deliveries:5,replay:true},
   {name:'Delayed execution crosses local midnight after database reopen',start:'2026-10-24T00:29:00Z',end:'2026-10-24T00:31:00Z',occurrences:1,delayed:true,replay:true},
-  {name:'Notification failure remains explicit on replay',start:'2026-10-24T00:29:00Z',end:'2026-10-24T00:31:00Z',occurrences:1,outcome:'failure',replay:true},
+  {name:'Notification failure stays failed on replay; a later run may alert again',start:'2026-10-24T00:29:00Z',end:'2026-10-24T00:31:00Z',occurrences:1,outcome:'failure',replay:true},
   {name:'Uncertain send stays in Needs you after restart without resending',start:'2026-10-24T00:29:00Z',end:'2026-10-24T00:31:00Z',occurrences:1,outcome:'uncertain',replay:true},
   {name:'Lost action response reuses confirmed durable receipt',start:'2026-10-24T00:29:00Z',end:'2026-10-24T00:31:00Z',occurrences:1,outcome:'lost_reply',replay:true},
 ];
@@ -47,7 +50,8 @@ function validate(saved:any) {
   const t=saved?.settings, n=saved?.nextAction;
   check(JSON.stringify(saved).length<=100_000,'definition exceeds 100 KB');
   check(saved?.type==='PIECE_TRIGGER'&&t?.pieceName==='schedule'&&t.input?.cron_expression==='30 2 * * *'
-    &&t.input?.timezone==='Europe/Rome'&&t.input?.dst_policy==='skip_missing_first_repeated','suite requires daily 02:30 Rome and explicit skip_missing_first_repeated policy');
+    &&chosenScheduleZone(t)==='Europe/Rome'&&t.input?.dst_policy==='skip_missing_first_repeated',
+    'the dst_daily suite covers only a daily 02:30 schedule in a chosen Europe/Rome zone with explicit dst_policy skip_missing_first_repeated; test other schedules with fixture_input.cases');
   check(n?.type==='PIECE'&&['@jarvispieces/piece-jarvis-notify','jarvis-notify'].includes(n.settings?.pieceName)&&n.settings?.actionName==='notify','requires notification action');
   for(const node of [saved,n]) {
     check(!node.children?.length&&!node.firstLoopAction&&!node.onFailureAction,'branches not covered');
@@ -97,7 +101,7 @@ async function execute(saved:any) {
       const scheduler=()=>{
         const cron=new CronScheduler(()=>now);
         cron.schedule('fixture',saved.settings.input.cron_expression,o=>{scheduled++;occurrences.push(o);},
-          {timezone:'Europe/Rome',dstPolicy:saved.settings.input.dst_policy});return cron;
+          {timezone:ZONE,dstPolicy:saved.settings.input.dst_policy});return cron;
       };
       let cron=scheduler();
       try {
@@ -108,9 +112,9 @@ async function execute(saved:any) {
       } finally {cron.cancelAll();}
       check(scheduled===c.occurrences,c.name+': wrong occurrence count');
       for(const o of occurrences) {
-        const admissions=await Promise.all(Array.from({length:c.deliveries??1},async()=>claimFire({flowId:flow.id,flowVersionId:version.id,source:'schedule',dedupeKey:o.key,scheduledFor:o.at,observedAt:o.at},()=>{
+        const admissions=await Promise.all(Array.from({length:c.deliveries??1},async()=>claimFire({flowId:flow.id,flowVersionId:version.id,source:'schedule',dedupeKey:ZONE+'@'+o.key,scheduledFor:o.at,observedAt:o.at},()=>{
           const run=createFlowRun({flowId:flow.id,flowVersionId:version.id,status:'RUNNING'});
-          enqueue({jobType:'RUN_FLOW',flowId:flow.id,flowRunId:run.id,flowVersionId:version.id,payload:{runId:run.id,triggerPayload:scheduleTriggerPayload({timezone:'Europe/Rome'},o)}});
+          enqueue({jobType:'RUN_FLOW',flowId:flow.id,flowRunId:run.id,flowVersionId:version.id,payload:{runId:run.id,triggerPayload:scheduleTriggerPayload({cronExpression:saved.settings.input.cron_expression,timezone:ZONE},{...o,key:ZONE+'@'+o.key},o.at)}});
           return {runId:run.id};
         })));
         for(const a of admissions)if(a.outcome==='started')runIds.push(a.runId);else if(a.outcome==='duplicate')duplicates++;
@@ -149,7 +153,10 @@ async function execute(saved:any) {
         enqueue({jobType:'RUN_FLOW',flowRunId:replay.id,payload:JSON.parse(row.payload)});await dispatch(replay.id);
       }
       const reviews=(await queue!.read()).data.items.filter(item=>item.state==='unknown');
-      check(attempts===c.occurrences,c.name+': duplicate notification attempt');
+      // A definite failure sent nothing, so its key is released: the same run's replay
+      // reuses its failed receipt, while a later run with the same key may alert once more.
+      // Uncertain and confirmed sends hold the key, so nothing is ever sent twice.
+      check(attempts===c.occurrences+(c.outcome==='failure'&&c.replay?1:0),c.name+': wrong notification attempt count');
       check(confirmations===(c.outcome==='failure'||c.outcome==='uncertain'?0:c.occurrences),c.name+': wrong confirmation count');
       if(c.outcome==='uncertain')check(reviews.some(item=>item.decisionId==='effect:'+firstEffects[0]!.id),'review lost on reopen');
       if(c.outcome==='failure')check(!statuses.includes('SUCCEEDED'),'rejected send reported success');

@@ -1,5 +1,5 @@
 /** Real builder/storage/worker/engine with local Gmail and model fixtures. No Google calls. */
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test';
 import { dirname, join } from 'node:path';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,9 +7,10 @@ import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS, getWorkflowDb } from '../
 import { setEncryptionKey } from '../db/encryption';
 import { createFlow, getFlow, listFlows, setPublishedVersion, updateFlowStatus } from '../db/repos/flow';
 import { createDraftVersion, getLatestDraft, lockVersion, updateDraftVersion } from '../db/repos/flow-version';
-import { createFlowRun, getFlowRun, listRuns } from '../db/repos/flow-run';
+import { createFlowRun, getFlowRun, listRuns, updateRun } from '../db/repos/flow-run';
 import { enqueue } from '../db/repos/job-queue';
-import { upsertConnection } from '../db/repos/app-connection';
+import * as appConnections from '../db/repos/app-connection';
+import { getConnectionByExternalId, replaceRefreshedConnectionValue, updateConnectionById, upsertConnection } from '../db/repos/app-connection';
 import { configureWorkflowReadiness, versionReadiness } from '../db/repos/flow-readiness';
 import { pruneFires, FIRE_RETENTION_MS } from '../db/repos/trigger-fire';
 import { listWorkflowEffects } from '../db/repos/workflow-effect';
@@ -32,13 +33,20 @@ import { WorkflowEventBus } from './event-bus';
 import { PieceCatalog, metadataToCatalogEntry } from './piece-catalog';
 import { compileWorkflow } from './workflow-readiness';
 import { createManageWorkflowTool } from '../../actions/tools/manage-workflow';
+import { decideRunRecovery, getRunRecovery } from './recovery';
 
 
 const HUBSPOT = '@activepieces/piece-hubspot';
 const native = (name:string) => '@jarvispieces/piece-jarvis-'+name;
 let dir:string, api:SandboxApi, runtime:EngineRuntime, manager:TriggerManager, worker:Worker, catalog:PieceCatalog;
 let provider:ReturnType<typeof Bun.serve>;
-let reply='', loseReply=false, unconfirmed=false, loseNotification=false;
+let reply='', loseReply=false, unconfirmed=false, loseNotification=false, refuse=0, dashboardClosed=false;
+// stopOnMissing: a PATCH that finds no contact stops its run first. hold: the first PATCH for holdEmail waits on it.
+let stopOnMissing=false, hold:Promise<void>|null=null, holdEmail='';
+// skew: how far the credential resolver's clock runs ahead. beforeAuthorize runs after the engine fetched its credential.
+let skew=0, beforeAuthorize:(()=>void)|null=null;
+let tokenAnswer:{status:number;body:unknown}={status:200,body:{access_token:'refreshed-token',expires_in:3600}};
+const bearers:string[]=[];
 const contacts = new Map<string,{id:string;properties:Record<string,any>}>();
 const calls:Array<{method:string;email:string}> = [], notifications:string[] = [], runIds:string[]=[];
 const versions:Record<string,string>={};
@@ -50,7 +58,10 @@ beforeAll(async()=>{
     const url=new URL(req.url), body=req.method==='GET'?null:await req.json();
     const email=req.method==='POST'?body.properties.email:decodeURIComponent(url.pathname.split('/').at(-1)!);
     calls.push({method:req.method,email});
+    if(hold && req.method==='PATCH' && email===holdEmail) { const gate=hold; hold=null; await gate; }
     const existing=contacts.get(email);
+    if(stopOnMissing && req.method==='PATCH' && !existing) for(const run of listRuns({status:'RUNNING'})) updateRun(run.id,{status:'STOPPED'});
+    if(refuse && req.method!=='GET') return Response.json({}, {status:refuse});
     if(req.method==='GET') return existing && !unconfirmed ? Response.json(existing) : Response.json({}, {status:404});
     if(req.method==='PATCH') {
       if(!existing) return Response.json({}, {status:404});
@@ -76,17 +87,20 @@ beforeAll(async()=>{
     const installed=join(dir,'node_modules',meta.name); mkdirSync(dirname(installed),{recursive:true}); symlinkSync(join(path,'dist'),installed,'dir');
   }
   upsertConnection({externalId:'fixture-hubspot',displayName:'Fixture',type:'OAUTH2',pieceName:HUBSPOT,pieceVersion:'0.12.1',value:{access_token:'synthetic-only'}});
-  const services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver(),
+  const services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver({now:()=>Date.now()+skew,
+      tokenTransport:async()=>tokenAnswer}),
     authorityEngine:new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'}),
     emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
     hubspotFetch: (async(url:any,init:any)=>{
       expect(new URL(String(url)).origin).toBe('https://api.hubapi.com');
-      expect(init.headers.Authorization).toBe('Bearer synthetic-only');
+      bearers.push(init.headers.Authorization);
       const fixtureUrl=new URL(String(url)); fixtureUrl.protocol='http:';fixtureUrl.host='127.0.0.1:'+provider.port;
       return fetch(fixtureUrl,init);
     }) as typeof fetch,
     llmManager:{chat:async()=>({content:reply,finish_reason:'end_turn',tool_calls:[],usage:{input_tokens:1,output_tokens:1}})} as any,
-    channelService:{} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{notifications.push(text);if(loseNotification)throw Error('Lost notification reply');return 1;}} as any});
+    channelService:{} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{if(dashboardClosed)return 0;notifications.push(text);if(loseNotification)throw Error('Lost notification reply');return 1;}} as any});
+  const authorize=services.pieceAuthorize!;
+  services.pieceAuthorize=(async(...args:Parameters<typeof authorize>)=>{beforeAuthorize?.();return authorize(...args);}) as typeof authorize;
   api=new SandboxApi({services}); await api.start({port:0});
   runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
   const handle=await runtime.acquire({runId:'lead-fixture-metadata',projectId:DEFAULT_IDS.project});
@@ -97,9 +111,9 @@ beforeAll(async()=>{
 },120_000);
 afterAll(async()=>{await manager?.stop();await runtime?.shutdown();await api?.stop();provider?.stop(true);closeWorkflowDb();setEncryptionKey(null);
   for(const id of runIds)rmSync(join(workflowLogsBase(),id+'.bin'),{force:true}); if(dir)rmSync(dir,{recursive:true,force:true});});
-function graph(configured=true):any {
+function graph(configured=true,connection='fixture-hubspot'):any {
   const action=(name:string,pieceName:string,actionName:string,input:object)=>({name,type:'PIECE',settings:{pieceName,pieceVersion:versions[pieceName],actionName,input}});
-  const upsert=(name:string,properties:object)=>action(name,HUBSPOT,'create-or-update-contact',{...(configured?{auth:'{{connections.fixture-hubspot}}'}:{}),email:configured?'{{trigger.email}}':'',objectProperties:configured?properties:null});
+  const upsert=(name:string,properties:object)=>action(name,HUBSPOT,'create-or-update-contact',{...(configured?{auth:'{{connections.'+connection+'}}'}:{}),email:configured?'{{trigger.email}}':'',objectProperties:configured?properties:null});
   const condition=(firstValue:string,operator:string,secondValue?:string)=>({firstValue,operator,...(secondValue===undefined?{}:{secondValue})});
   const route=(name:string,conditions:any[][],yes:any,no:any=null)=>({name,type:'ROUTER',settings:{executionType:'EXECUTE_FIRST_MATCH',branches:[{branchName:'Match',branchType:'CONDITION',conditions},{branchName:'Otherwise',branchType:'FALLBACK'}]},children:[yes,no]});
   const review=upsert('review',{qualification_status:'Needs review'});
@@ -112,9 +126,9 @@ function graph(configured=true):any {
   const first:any=upsert('upsert',{firstname:'{{trigger.name}}'});first.nextAction=classify;
   return {name:'trigger',type:'PIECE_TRIGGER',settings:{pieceName:'webhook',input:{submission_id_field:configured?'id':'',submission_email_field:configured?'email':''}},nextAction:first};
 }
-async function fixture(){
-  loseReply=unconfirmed=loseNotification=false;
-  const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Lead fixture',trigger:graph()});
+async function fixture(connection?:string){
+  loseReply=unconfirmed=loseNotification=dashboardClosed=stopOnMissing=false;refuse=0;hold=null;skew=0;beforeAuthorize=null;
+  const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Lead fixture',trigger:graph(true,connection)});
   expect(versionReadiness(flow.id,version.id).issues).toEqual([]);
   lockVersion(version.id);setPublishedVersion(flow.id,version.id);updateFlowStatus(flow.id,'ENABLED');await manager.refresh(flow.id);
   const submit=async(id:string,email=flow.id.toLowerCase()+'@example.com',name='Alice')=>{
@@ -159,11 +173,182 @@ test('unconfirmed contact write fences future submissions and sends nothing',asy
   loseReply=unconfirmed=false;expect((await f.send('two')).status).toBe('FAILED');
   expect(calls.length).toBe(count);expect(notifications.length).toBe(before);
 },45_000);
+// The person checked the provider and resolves the uncertain effect that holds the identity.
+const resolve=(runId:string,piece:string,action:'mark_done'|'release')=>decideRunRecovery(runId,{requestId:action+'_'+runId,
+  revision:getRunRecovery(runId)!.revision,action,effectId:listWorkflowEffects(runId).find(e=>e.provenance.piece===piece)!.id});
+for(const resolution of ['release','mark_done'] as const)
+  test('an unconfirmed contact write blocks the next submission until '+resolution+', then the next writes once',async()=>{
+    const f=await fixture();loseReply=unconfirmed=true;reply=answer(10);const before=notifications.length;
+    const email=f.flow.id.toLowerCase()+'@example.com';
+    const first=await f.send('one');expect(first.status).toBe('FAILED');
+    loseReply=unconfirmed=false;const blocked=await f.send('two');expect(blocked.status).toBe('FAILED');
+    const fence=listWorkflowEffects(blocked.id).find(e=>e.provenance.piece===HUBSPOT)!;
+    expect(fence.outcome).toMatchObject({code:'IDENTITY_UNRESOLVED',effect:'not_started'});
+    // The refusal names the real action and the run that holds the identity.
+    expect(fence.outcome!.status!=='succeeded' && fence.outcome!.message).toContain('in run '+first.id);
+    expect(getRunRecovery(first.id)!.effects.find(e=>e.stepName==='upsert')).toMatchObject({identityUnresolved:true});
+    const count=calls.length;
+    await resolve(first.id,HUBSPOT,resolution);
+    expect((await f.send('three')).status).toBe('SUCCEEDED');
+    expect(calls.slice(count).filter(c=>c.email===email && c.method!=='GET').map(c=>c.method)).toEqual(['PATCH']);
+    expect(notifications.length-before).toBe(1);
+  },45_000);
+for(const [resolution,alerts] of [['mark_done',1],['release',2]] as const)
+  test('an uncertain notification after '+resolution+': the next submission '+(alerts===1?'dedupes':'alerts once'),async()=>{
+    const f=await fixture();loseNotification=true;reply=answer(10);const before=notifications.length;
+    const first=await f.send('one');loseNotification=false;expect(first.status).toBe('FAILED');
+    expect((await f.send('two')).status).toBe('FAILED');expect(notifications.length-before).toBe(1);
+    await resolve(first.id,native('notify'),resolution);
+    const third=await f.send('three');expect(third.status).toBe('SUCCEEDED');
+    expect(notifications.length-before).toBe(alerts);
+    if(alerts===1) expect(JSON.stringify(third.steps)).toContain('"deduplicated":true');
+  },45_000);
 test('uncertain notification never repeats on a later submission',async()=>{
   const f=await fixture();loseNotification=true;reply=answer(10);const before=notifications.length;
-  await f.send('one');loseNotification=false;await f.send('two');expect(notifications.length-before).toBe(1);
+  const first=await f.send('one');loseNotification=false;await f.send('two');expect(notifications.length-before).toBe(1);
+  // The key stays consumed, and the record says why: the send may have arrived.
+  expect(listWorkflowEffects(first.id).find(e=>e.provenance.piece===native('notify'))?.outcome).toMatchObject({status:'unknown',code:'DELIVERY_UNCERTAIN',effect:'may_have_occurred'});
 },45_000);
 
+// #954: the stored HubSpot row the engine resolved may be refreshed, expire or be replaced before dispatch.
+const hubspotRow=(externalId:string,value:Record<string,unknown>)=>upsertConnection({externalId,displayName:externalId,type:'OAUTH2',pieceName:HUBSPOT,pieceVersion:'0.12.1',
+  value:{claimed_at:Math.round(Date.now()/1000),expires_in:3600,...value}});
+const refreshDetails={refresh_token:'refresh-1',client_id:'client',client_secret:'secret',token_url:'https://token.example.test/oauth'};
+const contactEffect=(runId:string)=>listWorkflowEffects(runId).find(e=>e.provenance.piece===HUBSPOT)!;
+// Rewrites the row the first time the dispatch reads it: after the engine resolved its token, before the upsert.
+function onDispatchRead(externalId:string,change:(row:appConnections.AppConnection)=>void){
+  const read=appConnections.getConnection;let seen=0;
+  const spy=spyOn(appConnections,'getConnection').mockImplementation(id=>{
+    const row=read(id);if(row?.externalId===externalId && seen++===0)change(row);return read(id);});
+  return {spy,seen:()=>seen};
+}
+test('a stored HubSpot token that nears expiry before dispatch is refreshed and the upsert sends the fresh one',async()=>{
+  hubspotRow('hubspot-near-expiry',{access_token:'near-expiry',...refreshDetails});
+  const f=await fixture('hubspot-near-expiry');reply=answer(10);const start=bearers.length;
+  // The engine fetched the token with an hour left; by dispatch it is inside the refresh window.
+  beforeAuthorize=()=>{skew=50*60_000;};
+  try {
+    const run=await f.send('one');expect(run.status).toBe('SUCCEEDED');
+    expect(bearers.slice(start).length).toBeGreaterThan(0);
+    expect(new Set(bearers.slice(start))).toEqual(new Set(['Bearer refreshed-token']));
+    expect(getConnectionByExternalId(DEFAULT_IDS.project,HUBSPOT,'hubspot-near-expiry')!.value.access_token).toBe('refreshed-token');
+    expect(contactEffect(run.id).status).toBe('succeeded');
+  } finally { skew=0;beforeAuthorize=null; }
+},45_000);
+test('an expired stored HubSpot token without refresh details asks to reconnect before any write and leaves the contact unclaimed',async()=>{
+  hubspotRow('hubspot-no-refresh',{access_token:'pasted-only'});
+  const f=await fixture('hubspot-no-refresh');reply=answer(10);const before=notifications.length;
+  const email=f.flow.id.toLowerCase()+'@example.com';
+  beforeAuthorize=()=>{skew=61*60_000;};
+  try {
+    const run=await f.send('one');expect(run.status).toBe('FAILED');
+    const effect=contactEffect(run.id);
+    expect(effect.outcome).toMatchObject({status:'blocked',code:'CONNECTION_EXPIRED',effect:'not_started'});
+    expect(effect.outcome!.status!=='succeeded' && effect.outcome!.message).toContain('Reconnect the selected HubSpot account (hubspot-no-refresh)');
+    expect(calls.filter(c=>c.email===email)).toEqual([]);
+    expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_effect_identity WHERE owner=?').get(effect.id)).toEqual({n:0});
+    expect(notifications.length).toBe(before);
+  } finally { skew=0;beforeAuthorize=null; }
+},45_000);
+test('a token another run refreshed after the step was authorized, as the dispatch reads the row, is the same account and is sent',async()=>{
+  hubspotRow('hubspot-refreshed-meanwhile',{access_token:'before-refresh',...refreshDetails});
+  const f=await fixture('hubspot-refreshed-meanwhile');reply=answer(10);const start=bearers.length;
+  const hook=onDispatchRead('hubspot-refreshed-meanwhile',row=>expect(replaceRefreshedConnectionValue(row.projectId,row.id,row.value,
+    {...row.value,access_token:'refreshed-meanwhile',claimed_at:Math.round(Date.now()/1000)})).toBe('stored'));
+  try {
+    const run=await f.send('one');expect(hook.seen()).toBeGreaterThan(0);expect(run.status).toBe('SUCCEEDED');
+    expect(new Set(bearers.slice(start))).toEqual(new Set(['Bearer refreshed-meanwhile']));
+  } finally { hook.spy.mockRestore(); }
+},45_000);
+// Rewrites the row once the engine fetched it and before the step is authorized (the binding capture).
+const beforeCapture=(externalId:string,change:(row:appConnections.AppConnection)=>void)=>{
+  beforeAuthorize=()=>{beforeAuthorize=null;change(getConnectionByExternalId(DEFAULT_IDS.project,HUBSPOT,externalId)!);};
+};
+test('a token another run refreshed before the step was authorized is the same account and is sent',async()=>{
+  hubspotRow('hubspot-refreshed-before-capture',{access_token:'engine-token',...refreshDetails});
+  const f=await fixture('hubspot-refreshed-before-capture');reply=answer(10);const start=bearers.length;
+  beforeCapture('hubspot-refreshed-before-capture',row=>expect(replaceRefreshedConnectionValue(row.projectId,row.id,row.value,
+    {...row.value,access_token:'refreshed-before-capture',claimed_at:Math.round(Date.now()/1000)})).toBe('stored'));
+  const run=await f.send('one');expect(run.status).toBe('SUCCEEDED');
+  expect(new Set(bearers.slice(start))).toEqual(new Set(['Bearer refreshed-before-capture']));
+},45_000);
+test('a HubSpot credential a person replaced before the step was authorized is refused before any write',async()=>{
+  hubspotRow('hubspot-switched-before-capture',{access_token:'first-account'});
+  const f=await fixture('hubspot-switched-before-capture');reply=answer(10);const before=notifications.length;
+  const email=f.flow.id.toLowerCase()+'@example.com';
+  beforeCapture('hubspot-switched-before-capture',row=>{updateConnectionById(row.projectId,row.id,{value:{access_token:'second-account'}});});
+  const run=await f.send('one');expect(run.status).toBe('FAILED');
+  expect(calls.filter(c=>c.email===email)).toEqual([]);expect(notifications.length).toBe(before);
+},45_000);
+test('a HubSpot token endpoint that cannot be reached for an expired token says the failure is temporary, not to reconnect',async()=>{
+  hubspotRow('hubspot-unreachable',{access_token:'expiring',...refreshDetails});
+  const f=await fixture('hubspot-unreachable');reply=answer(10);
+  const email=f.flow.id.toLowerCase()+'@example.com';
+  beforeAuthorize=()=>{skew=61*60_000;tokenAnswer={status:503,body:{}};};
+  try {
+    const run=await f.send('one');expect(run.status).toBe('FAILED');
+    const effect=contactEffect(run.id);
+    expect(effect.outcome).toMatchObject({status:'blocked',code:'CONNECTION_REFRESH_UNREACHABLE',effect:'not_started'});
+    const message=effect.outcome!.status!=='succeeded' ? effect.outcome!.message : '';
+    expect(message).toContain('usually temporary');expect(message).not.toContain('Reconnect');
+    expect(calls.filter(c=>c.email===email)).toEqual([]);
+    expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_effect_identity WHERE owner=?').get(effect.id)).toEqual({n:0});
+  } finally { skew=0;beforeAuthorize=null;tokenAnswer={status:200,body:{access_token:'refreshed-token',expires_in:3600}}; }
+},45_000);
+test('a HubSpot credential a person replaced between the engine fetch and dispatch is refused before any write',async()=>{
+  hubspotRow('hubspot-switched',{access_token:'first-account'});
+  const f=await fixture('hubspot-switched');reply=answer(10);const before=notifications.length;
+  const email=f.flow.id.toLowerCase()+'@example.com';
+  const hook=onDispatchRead('hubspot-switched',row=>{updateConnectionById(row.projectId,row.id,{value:{access_token:'second-account'}});});
+  try {
+    const run=await f.send('one');expect(hook.seen()).toBeGreaterThan(0);expect(run.status).toBe('FAILED');
+    expect(JSON.stringify(contactEffect(run.id))).toContain('HubSpot connection changed before dispatch');
+    expect(calls.filter(c=>c.email===email)).toEqual([]);expect(notifications.length).toBe(before);
+  } finally { hook.spy.mockRestore(); }
+},45_000);
+
+test('a definite provider refusal records not started and releases the contact for a later submission',async()=>{
+  const f=await fixture();refuse=429;reply=answer(10);const before=notifications.length;
+  const first=await f.send('one');expect(first.status).toBe('FAILED');
+  expect(listWorkflowEffects(first.id).find(e=>e.provenance.piece===HUBSPOT)?.outcome).toMatchObject({code:'PROVIDER_REFUSED',effect:'not_started'});
+  refuse=0;expect((await f.send('two')).status).toBe('SUCCEEDED');
+  expect(contacts.get(f.flow.id.toLowerCase()+'@example.com')?.properties.firstname).toBe('Alice');
+  expect(notifications.length-before).toBe(1);
+},45_000);
+test('a notification sent on no channel leaves its identity for a later submission',async()=>{
+  const f=await fixture();dashboardClosed=true;reply=answer(10);const before=notifications.length;
+  expect((await f.send('one')).status).toBe('FAILED');expect(notifications.length).toBe(before);
+  dashboardClosed=false;expect((await f.send('two')).status).toBe('SUCCEEDED');
+  expect(notifications.length-before).toBe(1);
+},45_000);
+
+test('a run stopped between a missing-contact PATCH and its POST records not started and releases the contact',async()=>{
+  const f=await fixture();stopOnMissing=true;reply=answer(10);const before=notifications.length;
+  const email=f.flow.id.toLowerCase()+'@example.com';
+  const first=await f.send('one');expect(first.status).not.toBe('SUCCEEDED');
+  const effect=listWorkflowEffects(first.id).find(e=>e.provenance.piece===HUBSPOT)!;
+  expect(effect.outcome).toMatchObject({status:'blocked',code:'RUN_NOT_RUNNING',effect:'not_started'});
+  expect(calls.filter(c=>c.email===email).map(c=>c.method)).toEqual(['PATCH']);
+  expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_effect_identity WHERE owner=?').get(effect.id)).toEqual({n:0});
+  stopOnMissing=false;expect((await f.send('two')).status).toBe('SUCCEEDED');
+  expect(contacts.get(email)?.properties.firstname).toBe('Alice');expect(notifications.length-before).toBe(1);
+},45_000);
+test('a second submission for the same contact waits out a write slower than two seconds and then updates it',async()=>{
+  const f=await fixture();reply=answer(10);const before=notifications.length;
+  const email=f.flow.id.toLowerCase()+'@example.com';let release!:()=>void;
+  holdEmail=email;hold=new Promise<void>(resolve=>{release=resolve;});
+  const deliveries=[await f.submit('one',email,'First'),await f.submit('two',email,'Second')];
+  const drained=Promise.all([worker.drain(),worker.drain()]);
+  // Both upserts are in flight at once: one holds the contact inside the provider, the other waits on its claim.
+  const dispatching=()=>deliveries.every(d=>listWorkflowEffects(d.runId).some(e=>e.provenance.piece===HUBSPOT && e.status==='dispatching'));
+  for(const deadline=Date.now()+30_000;!dispatching();) { if(Date.now()>deadline) throw Error('upserts never overlapped'); await Bun.sleep(25); }
+  expect(hold).toBeNull();
+  await Bun.sleep(2_500);release();await drained;
+  for(const delivery of deliveries) expect(getFlowRun(delivery.runId)?.status).toBe('SUCCEEDED');
+  expect(calls.filter(c=>c.email===email).map(c=>c.method)).toEqual(['PATCH','POST','PATCH']);
+  expect(['First','Second']).toContain(contacts.get(email)!.properties.firstname);
+  expect(notifications.length-before).toBe(1);
+},60_000);
 test('concurrent distinct submissions share one contact and alert',async()=>{
   const f=await fixture();reply=answer(10);const before=notifications.length;
   const deliveries=await Promise.all([f.submit('one'),f.submit('two')]);

@@ -1,16 +1,20 @@
+import { HOSTED_CONNECTION_PROVIDERS, connectionProviderForPiece, type HostedConnectionProvider } from '../integrations/connection-providers';
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_IDS } from '../workflows/db';
 import type { PieceLookup } from '../workflows/runtime/piece-catalog';
 import type { SidecarInfo } from '../sidecar/types';
 import type { ConnectedRow, ConnectedWorkspaceSnapshot, ConnectionSetupAction } from './connected-workspace-contracts';
 
-export interface ConnectedWorkspaceSources {
+interface HostedConnectionObservation {
+  configured: boolean; connected: boolean; reconnect?: boolean; account: { id: string; label: string } | null;
+}
+export type ConnectedWorkspaceSources = Partial<Record<HostedConnectionProvider, () => HostedConnectionObservation>> & {
   devices?: () => Pick<SidecarInfo, 'id' | 'name' | 'status' | 'connected'>[];
   google?: () => { mode: 'self' | 'managed' | 'none' | 'unavailable'; authenticated: boolean; reconnect: boolean; canSetup: boolean };
   channels?: () => Partial<Record<'telegram' | 'discord', { enabled: boolean; connected: boolean; authentication?: 'verified' | 'rejected' | 'unknown' }>>;
   pieces?: () => PieceLookup | null;
   hosted: () => boolean;
-}
+};
 export const CONNECTED_LIMIT = 1000;
 const safeId = (s: string) => typeof s === 'string' && /^[\w@./:-]{1,256}$/.test(s);
 const safeVersion = (s: string) => typeof s === 'string' && /^[a-zA-Z0-9.+_-]{1,256}$/.test(s);
@@ -77,6 +81,26 @@ export class ConnectedWorkspace {
         states.google = 'ready';
       } catch { google.status = 'unavailable'; }
       rows.push(google);
+      for (const id of Object.keys(HOSTED_CONNECTION_PROVIDERS) as HostedConnectionProvider[]) {
+        const observe = this.sources[id];
+        if (!observe) continue;
+        const name = HOSTED_CONNECTION_PROVIDERS[id];
+        const row = base(`native:${id}`, 'native_service', id, name);
+        try {
+          const c = observe();
+          if (c.configured || c.connected || c.reconnect) {
+            row.authenticated = c.connected && !c.reconnect;
+            row.status = c.reconnect ? 'reconnect_required' : row.authenticated ? 'connected' : 'disconnected';
+            row.availability = row.authenticated ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label(`${name}: ${c.account.label}`) : name;
+            row.evidence = row.authenticated ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, { id: `setup:${id}`, label: name,
+              target: { kind: 'hosted_integration', provider: id }, verifies: { kind: 'native_service', serviceId: id } });
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
       try {
         if (!this.sources.channels) throw new Error('absent');
         const channels = this.sources.channels();
@@ -104,13 +128,17 @@ export class ConnectedWorkspace {
       for (const p of pieces) {
         const row = base(`piece:${p.name}`, 'library_piece', p.name, p.displayName);
         row.status = 'installed'; row.availability = 'ready'; row.evidence = 'loaded_piece'; row.pieceVersion = p.version ?? null;
-        // The current connection form accepts credentials manually, even for OAuth-shaped values.
-        // There is no universal piece OAuth broker. Only loaded, versioned auth declarations are offered.
-        if (instanceScope && p.version && p.auth && authTypes.has(p.auth.type)) offer(row, {
-          id: `setup:piece:${p.name}`, label: p.displayName.slice(0,160),
-          target: { kind: 'piece_credentials', pieceName: p.name, pieceVersion: p.version, authType: p.auth.type },
-          verifies: { kind: 'workflow_connection', serviceId: p.name },
-        });
+        const managed = connectionProviderForPiece(p.name);
+        const nativeSetup = managed && setup.find(a => a.id === `setup:${managed}`);
+        if (instanceScope && nativeSetup) {
+          // The library entry keeps its installed state; setup verifies the provider's actual account.
+          offer(row, nativeSetup);
+        } else if (instanceScope && p.version && p.auth && authTypes.has(p.auth.type)
+          && !(managed && (this.sources.hosted() || rows.some(r => r.sourceId === `native:${managed}` && r.status === 'unavailable')))) {
+          offer(row, { id: `setup:piece:${p.name}`, label: p.displayName.slice(0,160),
+            target: { kind: 'piece_credentials', pieceName: p.name, pieceVersion: p.version, authType: p.auth.type },
+            verifies: { kind: 'workflow_connection', serviceId: p.name } });
+        }
         rows.push(row);
       }
       states.pieces = 'ready';
@@ -134,6 +162,11 @@ export class ConnectedWorkspace {
         row.permissions.canRevoke = instanceScope;
         const action = setup.find(s => s.id === `setup:piece:${a.piece_name}`);
         if (action && compatible) offer(row, action);
+        else if (instanceScope && compatible && piece?.version && piece.auth && authTypes.has(piece.auth.type)) {
+          offer(row, { id: `setup:account:${a.piece_name}`, label: piece.displayName.slice(0,160), existingOnly: true,
+            target: { kind: 'piece_credentials', pieceName: a.piece_name, pieceVersion: piece.version, authType: piece.auth.type },
+            verifies: { kind: 'workflow_connection', serviceId: a.piece_name } });
+        }
         rows.push(row);
       }
       states.accounts = 'ready';

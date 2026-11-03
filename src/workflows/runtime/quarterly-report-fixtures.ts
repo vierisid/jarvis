@@ -5,7 +5,8 @@ import { scheduleTriggerPayload } from './schedule-payload';
 import { resolveFixtureValue } from './json-mapping-fixtures';
 import { digest } from './effect-context';
 import { REPORT_PIECE, type ReportRequest } from './weekly-report';
-import { collectQuarterlyReport, quarterlySetup, quarterlyTransport, reportQuarters, QUARTERLY_ACTION, QUARTERLY_REQUIRED, type QuarterlySetup } from './quarterly-report';
+import { canonicalZone, effectiveScheduleZone } from '../runner/triggers/schedule-zone';
+import { QUARTERLY_ZONE, collectQuarterlyReport, quarterlySetup, quarterlyTransport, reportQuarters, QUARTERLY_ACTION, QUARTERLY_REQUIRED, type QuarterlySetup } from './quarterly-report';
 
 const ensure = (ok: unknown, message: string) => { if (!ok) throw Error('Quarterly fixture: ' + message); };
 const scenarios = ['complete', 'empty', 'source_failure', 'page_failure', 'cursor_cycle', 'page_limit', 'missing_amount', 'missing_currency', 'missing_date', 'account_mismatch', 'open_stage', 'notification_failure', 'notification_uncertain'] as const;
@@ -52,7 +53,7 @@ export function quarterlyFixtureRequest(setup: QuarterlySetup, at: string, scena
 function prepare(saved:any, fixture:any) {
   ensure(JSON.stringify({saved,fixture}).length<200000,'input limit 200 KB');
   const report=saved?.nextAction, notify=report?.nextAction, expression=saved?.settings?.input?.cron_expression;
-  ensure(saved?.type==='PIECE_TRIGGER'&&saved.settings?.pieceName==='schedule'&&saved.settings.input.timezone==='Europe/Rome','requires a Rome schedule');
+  ensure(saved?.type==='PIECE_TRIGGER'&&saved.settings?.pieceName==='schedule'&&canonicalZone(effectiveScheduleZone(saved.settings))===QUARTERLY_ZONE,'requires a schedule that fires in Europe/Rome (choose that time zone)');
   ensure(typeof expression==='string','configured cron required');validateCronExpression(expression);
   ensure(report?.type==='PIECE'&&report.settings?.pieceName===REPORT_PIECE&&report.settings.actionName===QUARTERLY_ACTION,'requires quarterly HubSpot action');
   ensure(notify?.type==='PIECE'&&String(notify.settings?.pieceName).endsWith('jarvis-notify')&&notify.settings.actionName==='notify'&&!notify.nextAction,'requires final dashboard summary');
@@ -94,10 +95,12 @@ export async function runQuarterlyFixtures(saved:any,fixture:any={}) {
     const output=await collectQuarterlyReport(setup,quarterlyTransport('synthetic-fixture',()=>{},providerFetch),props.scheduledFor);
     if(c.expectedQuarter)ensure(output.quarters[0]!.label===c.expectedQuarter,c.name+': quarter differs');
     if(c.expectedPrior)ensure(output.quarters[1]!.label===c.expectedPrior,c.name+': prior quarter differs');
-    const unavailable=!['complete','empty','notification_failure','notification_uncertain'].includes(c.scenario);
+    const unavailable=!['complete','empty','missing_amount','notification_failure','notification_uncertain'].includes(c.scenario);
     ensure(output.partial===unavailable,c.name+': completeness differs');
     if(unavailable)ensure(output.comparisons[0]?.status==='Unavailable',c.name+': partial comparison leaked');
     if(['page_failure','cursor_cycle','page_limit','missing_date'].includes(c.scenario))ensure(output.datasets.every(d=>Object.keys(d.totals).length===0),'partial aggregates leaked');
+    // A deal with no amount is left out of totals and disclosed by count; the quarter stays complete.
+    if(c.scenario==='missing_amount')ensure(output.datasets[0]!.noAmount===1&&!output.datasets[0]!.totals.EUR&&output.datasets[1]!.totals.EUR?.amount==='150'&&output.summary.includes('1 deal with no amount not included'),'missing amount must be disclosed, not counted');
     if(c.scenario==='complete') {
       ensure(output.datasets[0]!.totals.EUR?.amount==='150'&&output.datasets[1]!.totals.EUR?.amount==='150','page coverage or boundaries differ');
       ensure(output.comparisons.find(x=>x.currency==='USD')?.amountChange.percentage===null,'zero baseline divided');

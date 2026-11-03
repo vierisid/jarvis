@@ -19,6 +19,7 @@ import {AuditTrail} from '../../authority/audit';
 import {EmergencyController} from '../../authority/emergency';
 import {ApprovalManager} from '../../authority/approval';
 import {CredentialResolver} from '../credentials/adapter';
+import {ConnectionCredentialError} from '../credentials/pasted-oauth2';
 import {SandboxApi} from '../sandbox-api/server';
 import {workflowLogsBase} from '../sandbox-api/config';
 import {EngineRuntime} from '../runner/engine-runtime/engine-runtime';
@@ -35,11 +36,14 @@ import {createManageWorkflowTool} from '../../actions/tools/manage-workflow';
 import {batchFixturePayload,batchFixtureProvider,batchFixtureSetup,validateBatchFixtures} from './batch-fixtures';
 import {BATCH_PIECE,BATCH_ACTION,BATCH_REQUIRED,batchSetup} from './lead-batch';
 import {batchTestGraph} from './batch-test-data';
+import {workflowEffectId} from './effect-boundary';
+import {getWorkflowEffect,saveWorkflowEffect} from '../db/repos/workflow-effect';
 
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog,authority:AuthorityEngine,approvals:ApprovalManager;
 let services:ReturnType<typeof buildSandboxServiceBackends>;
 const versions:Record<string,string>={},notifications:string[]=[],runIds:string[]=[];
-let now=Date.now(),expireAfterKey:string|null=null;
+let now=Date.now(),expireAfterKey:string|null=null,expectedToken='synthetic-hubspot';
+const resolver=new CredentialResolver();
 let provider=batchFixtureProvider();
 beforeAll(async()=>{
   dir=mkdtempSync(join(tmpdir(),'jarvis-batch-engine-'));initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,78));
@@ -52,9 +56,9 @@ beforeAll(async()=>{
   for(const name of ['hubspot'])upsertConnection({externalId:'fixture-'+name,displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-'+name,pieceVersion:'0.0.1',value:{access_token:'synthetic-'+name}});
   authority=new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'});
   approvals=new ApprovalManager();
-  services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver(),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
+  services=buildSandboxServiceBackends({credentialResolver:resolver,authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
     batchNow:()=>now,batchFetch:(async(url:any,init:any)=>{
-      expect(init.headers.Authorization).toBe('Bearer synthetic-hubspot');const result=await provider.fetchImpl(url,init);if(expireAfterKey&&String(url).endsWith('/'+expireAfterKey)){expireAfterKey=null;now+=46_000;}return result;
+      expect(init.headers.Authorization).toBe('Bearer '+expectedToken);const result=await provider.fetchImpl(url,init);if(expireAfterKey&&String(url).endsWith('/'+expireAfterKey)){expireAfterKey=null;now+=46_000;}return result;
     }) as typeof fetch,llmManager:{chat:async()=>{throw Error('No model tools or delegate may execute');}} as any,
     channelService:{sendWorkflowNotification:async()=>{throw Error('No external notifications');}} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{notifications.push(text);return 1;}} as any});
   api=new SandboxApi({services});await api.start({port:0});runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
@@ -167,3 +171,34 @@ test('actual generated saved draft executes mixed, empty, failed, interrupted an
   const calls=provider.calls.length;expect((await f.run(payload)).status).toBe(final.status);expect(provider.calls.length).toBe(calls);expect(notifications.length).toBe(n+1);
  }
 },120_000);
+
+test('a stored HubSpot token is refreshed before writes; an expired one stops before any write',async()=>{
+ const original=resolver.fresh.bind(resolver);
+ try {
+  resolver.fresh=async r=>({...r,value:{...r.value,access_token:'refreshed-hubspot'}});expectedToken='refreshed-hubspot';
+  const f=await fixture();expect((await finish((await f.run()).id)).status).toBe('SUCCEEDED');expect(provider.calls).toEqual(['1','2','3','4','5']);
+  resolver.fresh=async()=>{throw new ConnectionCredentialError('CONNECTION_EXPIRED','Token expired');};
+  const g=await fixture(),n=notifications.length;expect((await g.run()).status).toBe('FAILED');expect(provider.calls).toHaveLength(0);expect(notifications.length).toBe(n);
+ } finally {resolver.fresh=original;expectedToken='synthetic-hubspot';}
+},60_000);
+
+test('a managed HubSpot id is refused with the managed-connection rule before any write',async()=>{
+ provider=batchFixtureProvider();authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});
+ resolver.register({id:'google',pieceNames:['@activepieces/piece-gmail'],canResolve:(id:string)=>id==='jarvis:google',resolve:async()=>({type:'OAUTH2',value:{access_token:'managed'},pieceName:'@activepieces/piece-gmail'})} as any);
+ try {
+  const graph=configuredGraph();graph.nextAction.settings.input.hubspotConnection='jarvis:google';
+  const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Managed account',trigger:graph});lockVersion(version.id);
+  const r=createFlowRun({flowId:flow.id,flowVersionId:version.id,status:'RUNNING'});runIds.push(r.id);
+  const ctx={runId:r.id,projectId:DEFAULT_IDS.project,stepName:'batch',executionPath:[] as Array<[string,number]>};
+  await expect(services.leadBatch!({...graph.nextAction.settings.input,submission:batchFixturePayload(batchSetup(setup))},ctx)).rejects.toThrow(/Managed connection jarvis:google can only be used by/);
+  expect(provider.calls).toHaveLength(0);
+ } finally {resolver.unregister('google');}
+},60_000);
+test('recovering an abandoned dispatch marks the effect as having run',async()=>{
+ const f=await fixture(),r=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(r.id);
+ const ctx={runId:r.id,projectId:DEFAULT_IDS.project,stepName:'batch',executionPath:[] as Array<[string,number]>},input={...setup,submission:batchFixturePayload(batchSetup(setup))};
+ expect((await services.leadBatch!(input,ctx) as any).complete).toBe(false);
+ const id=workflowEffectId(r.id,'batch',[],'lead-batch'),effect=getWorkflowEffect(id)!,before=effect.partial?.slices??0;
+ effect.status='dispatching';delete effect.partial;saveWorkflowEffect(effect);
+ await services.leadBatch!(input,ctx);expect(getWorkflowEffect(id)!.partial?.slices).toBeGreaterThanOrEqual(1);void before;expect(provider.calls).toEqual(['1','2','3','4','5']);
+},60_000);

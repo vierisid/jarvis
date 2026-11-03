@@ -41,7 +41,7 @@ import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { freezeToolArguments, getActionForTool, resolveToolGate, substituteAboveLevel } from '../authority/tool-action-map.ts';
 import { desktopRefusal, withoutDisabledDesktopTools } from '../actions/tools/desktop-guard.ts';
-import { workflowBrowserRead, workflowBrowserReview } from '../authority/ui-intent';
+import { workflowBrowserRead, workflowBrowserReview } from '../authority/ui-intent.ts';
 import { combineDecisions } from '../authority/engine.ts';
 import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';

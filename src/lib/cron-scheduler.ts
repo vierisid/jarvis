@@ -184,6 +184,10 @@ function parseExpression(expression: string): {
   if (!parsed.months.some(month => parsed.daysOfMonth.some(day => day <= maxDays[month - 1]!))) {
     throw new Error('Invalid cron expression: selected days do not exist in the selected months');
   }
+  // LW is always Monday-Friday, so a weekend-only day-of-week never fires.
+  if (parsed.lastWeekday && !parsed.daysOfWeek.some(day => day >= 1 && day <= 5)) {
+    throw new Error('Invalid cron expression: LW never falls on the selected days of the week');
+  }
   return parsed;
 }
 

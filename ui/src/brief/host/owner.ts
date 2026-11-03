@@ -19,7 +19,7 @@ import { requestGoalCreation } from '../../v2/rooms/goals/create-request';
 import { DESTINATIONS } from '../navigation/destinations';
 import type { SidecarInfo } from '../../v2/rooms/settings/useSettingsData';
 
-export interface HostDescriptor { schemaVersion: 1; scopeId: string; generation: string; installMode: 'self' | 'hosted'; capabilities: unknown }
+export interface HostDescriptor { schemaVersion: 1; scopeId: string; generation: string; installMode: 'self' | 'hosted'; dashboard?: 'brief' | 'legacy'; capabilities: unknown }
 export function readHost(value: unknown): HostDescriptor {
   const v = value as HostDescriptor;
   if (!v || v.schemaVersion !== 1 || typeof v.scopeId !== 'string' || !v.scopeId || typeof v.generation !== 'string' || !v.generation

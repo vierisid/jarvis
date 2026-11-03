@@ -17,7 +17,8 @@
  * indefinitely today; pruning is a follow-up (tie to flow_run retention).
  *
  * `GET /v1/step-files/:id` is hosted here too so that other steps in the same
- * sandbox can fetch the file with the same engineToken.
+ * sandbox can fetch the file with the same engineToken. It serves only files
+ * of the flow the token's run belongs to.
  *
  * `flowId` and `stepName` arrive as form fields from the sandbox, which runs
  * user and community code holding the engine token. Neither is trusted: the
@@ -119,6 +120,11 @@ export const stepFilesDownloadRoute: RouteHandler = async (ctx: RouteContext) =>
   const row = getWorkflowFile(id);
   if (!row) return err("file not found", 404);
   if (row.projectId !== ctx.claims.projectId) return err("forbidden", 403);
+  // Bound like the upload: a file prop resolves any /v1/step-files/<id> a
+  // flow names, so another flow's file id must not be readable (or uploaded,
+  // emailed) from this sandbox. No path passes step files between flows.
+  const runFlowId = flowOfClaims(ctx.claims);
+  if (runFlowId === null || row.flowId !== runFlowId) return err("file belongs to another flow", 403);
   return new Response(new Blob([new Uint8Array(row.data)]), {
     status: 200,
     headers: {
