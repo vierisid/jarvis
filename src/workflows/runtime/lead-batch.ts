@@ -74,16 +74,26 @@ export async function batchSlice(setup:BatchSetup,store:BatchStore,write:BatchWr
     try { lead=leadUpdate(setup,progress.input.leads[index]); }
     catch { progress.outcomes[index]={...base,status:'rejected',reason:'Invalid contact identifier or required mapped property value'};store.save(progress);continue; }
     progress.outcomes[index]={...base,status:'dispatching'};store.save(progress);
-    const result=await write(lead); // Governance/lease failures propagate, leaving a conservative uncertain receipt.
+    let result:Awaited<ReturnType<BatchWrite>>;
+    try { result=await write(lead); }
+    catch(error) {
+      // A stop before the request left (Authority, cancellation, binding) sent nothing:
+      // drop the receipt so the record stays unfinished, not falsely uncertain. Any
+      // other failure keeps the conservative dispatching receipt.
+      if(!(error instanceof BatchNotDispatched))throw error;
+      delete progress.outcomes[index];store.save(progress);throw error.cause;
+    }
     store.check();progress.outcomes[index]={...base,...result};store.save(progress);
   }
   return batchResult(progress,identity);
 }
+/** A write stopped before its request was sent; `cause` is the original stop. */
+export class BatchNotDispatched extends Error { constructor(override readonly cause:unknown){super('Lead batch write stopped before dispatch');} }
 /** Official update endpoint, never create/upsert:
  * https://developers.hubspot.com/docs/api-reference/legacy/crm/objects/contacts/guide */
 export function batchTransport(setup:BatchSetup,token:string,check:()=>void,fetchImpl:typeof fetch=fetch):BatchWrite {
   return async lead=>{
-    check(); // Outside catch: Authority/cancellation stops the batch.
+    try { check(); } catch(error) { throw new BatchNotDispatched(error); } // Outside the network catch: Authority/cancellation stops the batch.
     let response:Response;
     try { response=await fetchImpl('https://api.hubapi.com/crm/v3/objects/contacts/'+encodeURIComponent(lead.key)+(setup.contactKeyType==='email'?'?idProperty=email':''),{
       method:'PATCH',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({properties:lead.properties}),redirect:'error',signal:AbortSignal.timeout(10_000)}); }
