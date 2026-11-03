@@ -20,6 +20,13 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-18: request-ID webhook admission and exclusive ClickUp support routing.
+  'w8-18': {
+    bare: 'd299f7ebff0f7640f660f581b6ebd81716f6e7b02bab96f4ef8d4463ebee67e1',
+    production: '49a5a618d78d2584acfc6624e60a450439390af650c817d867ac8049035f30f7',
+    'hosted production': 'de96e8ed94d3321c4835305eb77cd9c4d1d6cd8deb4037ba6908330d49476ada',
+    'tool names only': 'a0a0dd7c7aa461630fa31498a8da7789fa0e980a0731784eb682ba522012ed30',
+  },
   // w8-17: approval-controlled Stripe ticket refunds with exact-amount approval.
   // Tool-result text (jarvis-refund details), so these shapes match w8-16.
   'w8-17': {
