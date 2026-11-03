@@ -14,6 +14,8 @@ import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../../../../src/lib/cron-scheduler';
+import { chosenScheduleZone } from '../../../../../src/workflows/runner/triggers/schedule-zone';
 import type { ConnectionMeta } from "./useConnections";
 import {
   detectTriggerKind,
@@ -110,6 +112,7 @@ export interface FlowStepNode {
 
 export interface FlowVersion {
   id: string;
+  editorRevision?: string;
   flowId: string;
   displayName: string;
   trigger: FlowStepNode;
@@ -1206,9 +1209,12 @@ export function useWorkflowEditor(flowId: string | null) {
         res = await fetch(`/api/workflows/${flowId}/versions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ displayName: version.displayName, trigger: draftTrigger, uiMeta }),
+          // The published base's revision: the server refuses the clone if a draft
+          // appeared or the publication changed since this editor loaded it.
+          body: JSON.stringify({ ...(version.editorRevision ? { expectedRevision: version.editorRevision } : {}), displayName: version.displayName, trigger: draftTrigger, uiMeta }),
         });
       } else {
+        if (!version.editorRevision) return { ok: false, message: 'Reload this draft before saving so changes from other tabs can be checked. Your edits have not been saved.' };
         // Send the current `displayName` alongside the trigger so renames
         // from the editor's header reach the server in the same round-trip.
         // The API treats `displayName` as a partial update -- omitting it
@@ -1218,6 +1224,7 @@ export function useWorkflowEditor(flowId: string | null) {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            expectedRevision: version.editorRevision,
             displayName: version.displayName,
             trigger: draftTrigger,
             uiMeta,
@@ -1563,7 +1570,24 @@ export function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEn
       }
       continue;
     }
-    if ((isTrigger && step.settings?.pieceName === 'schedule') || step.type === 'LOOP_ON_ITEMS' || step.type === 'ROUTER') continue;
+    if (isTrigger && step.settings?.pieceName === 'schedule') {
+      // Mirrors the server's readiness for the built-in schedule (workflow-readiness.ts).
+      const cron = input.cron_expression || input.cronExpression || input.expression;
+      if (empty(cron)) add('cron_expression', 'Schedule: choose an execution time');
+      else { try { if (typeof cron !== 'string') throw Error('Use a cron expression'); validateCronExpression(cron); }
+        catch (error) { add('cron_expression', `Schedule: ${(error as Error).message}`); } }
+      // No zone means Jarvis's, and a zone nobody chose is not used, so neither
+      // blocks; a zone a person chose must be real.
+      const chosen = chosenScheduleZone(step.settings);
+      if (chosen !== undefined) {
+        try { validateCronTimezone(chosen); }
+        catch (error) { add('timezone', `Timezone: ${(error as Error).message}`); }
+      }
+      try { validateCronDstPolicy(input.dst_policy); }
+      catch (error) { add('dst_policy', (error as Error).message); }
+      continue;
+    }
+    if (step.type === 'LOOP_ON_ITEMS' || step.type === 'ROUTER') continue;
     const subName = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
     if (!step.settings?.pieceName || !subName) {
       gaps.push({

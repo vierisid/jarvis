@@ -1,4 +1,5 @@
 import type { WorkflowContext } from '../../brief/workflow-context';
+import { editorVersion } from './editor-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
 import { requireWorkflowContext } from '../../brief/workflow-context-routes';
 import { WorkflowInspectionError } from '../../brief/inspection-values';
@@ -1621,8 +1622,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const uiMeta = editableId ? getFlowVersionUiMeta(editableId) : null;
           return ok({
             flow: serializeFlow(flow),
-            latestDraft: draft,
-            published,
+            latestDraft: draft ? editorVersion(draft) : null,
+            published: published ? editorVersion(published) : null,
             uiMeta,
           });
         }),
@@ -1698,6 +1699,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             displayName?: string;
             trigger?: Record<string, unknown>;
             uiMeta?: FlowVersionUiMeta;
+            expectedRevision?: unknown;
           };
           if (!scopedFlow(req, id)) return err("flow not found", 404);
           // Used to be a bare truthiness check, so a non-string of any length
@@ -1715,16 +1717,31 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             const refusal = uiMetaRefusal(body.uiMeta);
             if (refusal) return err(refusal.message, refusal.status);
           }
-          const version = createDraftVersion({
-            flowId: id,
-            displayName: named.name,
-            trigger: body.trigger,
-          });
-          if (body.uiMeta) upsertFlowVersionUiMeta(version.id, body.uiMeta);
+          const version = getWorkflowDb().transaction(() => {
+            // The editor's first save from a published version creates the draft. Its
+            // revision names that published base, so a draft another tab or the
+            // assistant created meanwhile (or a newer publication) is never
+            // silently superseded. Optional for older API clients, as on PATCH.
+            if (body.expectedRevision !== undefined) {
+              const flow = getFlow(id);
+              const base = flow?.published_version_id ? getFlowVersion(flow.published_version_id) : null;
+              if (typeof body.expectedRevision !== "string" || getLatestDraft(id) || !base ||
+                  editorVersion(base).editorRevision !== body.expectedRevision) {
+                throw new FlowVersionRequestError("This workflow changed in another tab or conversation. Your edits are still here. Copy anything you want to keep, then discard and reload the latest draft before saving.", 409);
+              }
+            }
+            const created = createDraftVersion({
+              flowId: id,
+              displayName: named.name,
+              trigger: body.trigger,
+            });
+            if (body.uiMeta) upsertFlowVersionUiMeta(created.id, body.uiMeta);
+            return created;
+          }).immediate();
           // An enabled flow with nothing published runs its latest draft: its
           // trigger follows the new one (Q-06).
           refreshTrigger(id);
-          return ok(version, 201);
+          return ok(editorVersion(version), 201);
         }),
     },
 
@@ -1733,9 +1750,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(() => {
           const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
           if (!scopedFlow(req, id)) return versionNotInScope();
-          return ok(withOwnedFlowVersion(id, versionId, () => ({
-            ...getFlowVersion(versionId)!, uiMeta: getFlowVersionUiMeta(versionId),
-          })));
+          return ok(withOwnedFlowVersion(id, versionId, () => editorVersion(getFlowVersion(versionId)!)));
         }),
       PATCH: (req) =>
         trapErrors(async () => {
@@ -1752,6 +1767,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             connectionIds?: unknown;
             agentIds?: unknown;
             uiMeta?: FlowVersionUiMeta;
+            expectedRevision?: unknown;
           };
           // PICKED, never spread (#632). This used to be
           // `const { uiMeta, ...versionPatch } = body` on a body that is a CAST
@@ -1818,10 +1834,16 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             versionPatch.displayName = named.name;
           }
           const v = withOwnedFlowVersion(id, versionId, () => {
+            // Compare and write while holding the same SQLite transaction, including layout.
+            // Optional for older API clients; the shipped editor always supplies this token.
+            if (body.expectedRevision !== undefined &&
+                (typeof body.expectedRevision !== 'string' || editorVersion(getFlowVersion(versionId)!).editorRevision !== body.expectedRevision)) {
+              throw new FlowVersionRequestError('This draft changed in another tab or conversation. Your edits are still here. Copy anything you want to keep, then discard and reload the latest draft before saving.', 409);
+            }
             const updated = updateDraftVersion(versionId, versionPatch);
             // The content and its editor layout must commit together.
             if (uiMeta) upsertFlowVersionUiMeta(versionId, uiMeta);
-            return updated;
+            return editorVersion(updated);
           });
           // An edited live draft's schedule replaces the old one (Q-06).
           if (versionPatch.trigger !== undefined) refreshTrigger(id);

@@ -23,7 +23,7 @@ import { SlackChannelPicker } from "../../integrations/SlackChannelPicker";
 
 import { TrelloConnection } from "../../integrations/TrelloConnection";
 import { SlackConnection, useSlackStatus } from "../../integrations/SlackConnection";
-import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useId } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
 import { TypeformConnection, useTypeformStatus } from "../../integrations/TypeformConnection";
 import { AirtableConnection, useAirtableStatus } from "../../integrations/AirtableConnection";
@@ -335,13 +335,13 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
     // still gates every run, publish and enable operation.
     const result = await editor.save();
     setActionMessage({ tone: result.ok ? "ok" : "warn", text: result.message });
-    window.setTimeout(() => setActionMessage(null), 2500);
+    if (result.ok) window.setTimeout(() => setActionMessage(null), 2500);
   };
 
   const onDiscard = (): void => {
     editor.reset();
-    setActionMessage({ tone: "ok", text: "Reverted to saved version" });
-    window.setTimeout(() => setActionMessage(null), 2000);
+    setActionMessage(null);
+    void editor.reload();
   };
 
   // Single lookup for the selected step. We check the connected tree first
@@ -1472,7 +1472,7 @@ function insertAtCursor(
  * itself on focus. A floating panel listing predecessor outputs then
  * opens beside the popover.
  */
-function NodeSettingsPopover({
+export function NodeSettingsPopover({
   anchor,
   onClose,
   predecessors,
@@ -1503,6 +1503,18 @@ function NodeSettingsPopover({
   const [pos, setPos] = useState<{ left: number; top: number }>(() => clampToViewport(anchor, undefined));
   const [pickerActive, setPickerActive] = useState<VariablePickerActive | null>(null);
   const closeTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!pickerActive) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault(); event.stopPropagation();
+      if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+      pickerActive.anchorEl.focus();
+      setPickerActive(null);
+    };
+    window.addEventListener('keydown', dismiss, true);
+    return () => window.removeEventListener('keydown', dismiss, true);
+  }, [pickerActive]);
 
   const pickerHandle = useMemo<VariablePickerHandle>(
     () => ({
@@ -1998,12 +2010,17 @@ export function VariableChipField({
   placeholder,
   multiline = false,
   className = "",
+  label, descriptionId, required, invalid,
 }: {
   value: string;
   onChange: (next: string) => void;
   placeholder?: string;
   multiline?: boolean;
   className?: string;
+  label?: string;
+  descriptionId?: string;
+  required?: boolean;
+  invalid?: boolean;
 }): React.ReactElement {
   const ref = useRef<HTMLDivElement>(null);
   const lastEmittedRef = useRef<string>(value);
@@ -2132,7 +2149,9 @@ export function VariableChipField({
           if (seg.kind === "var") fragments.push(createChipElement(seg.template));
           else if (seg.text) fragments.push(document.createTextNode(seg.text));
         }
-        for (const f of fragments) range.insertNode(f);
+        const fragment = document.createDocumentFragment();
+        for (const f of fragments) fragment.appendChild(f);
+        range.insertNode(fragment);
         // Move caret after the last inserted fragment.
         const last = fragments[fragments.length - 1];
         if (last) placeCursorAfter(last);
@@ -2148,6 +2167,10 @@ export function VariableChipField({
       contentEditable={!readOnly}
       suppressContentEditableWarning
       role="textbox"
+      aria-label={label}
+      aria-describedby={descriptionId}
+      aria-required={required || undefined}
+      aria-invalid={invalid || undefined}
       aria-readonly={readOnly}
       tabIndex={readOnly ? 0 : undefined}
       aria-multiline={multiline}
@@ -4533,6 +4556,7 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
                 key={o.value}
                 type="button"
                 className={`wf-props__chip ${on ? "wf-props__chip--on" : ""}`}
+                aria-pressed={on}
                 onClick={() => {
                   const next = new Set(selected);
                   if (on) next.delete(o.value); else next.add(o.value);
@@ -4606,15 +4630,20 @@ function StringField({
   isMissing: boolean;
 }): React.ReactElement {
   const text = typeof value === "string" ? value : "";
+  const helpId = useId();
   return (
     <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
       {labelEl}
       <VariableChipField
         value={text}
+        label={field.label}
+        required={field.required}
+        invalid={isMissing}
+        descriptionId={field.description ? helpId : undefined}
         onChange={(next) => onChange(next)}
         placeholder={field.placeholder}
       />
-      {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
+      {field.description ? <span id={helpId} className="wf-props__field-help">{field.description}</span> : null}
     </label>
   );
 }
@@ -4951,6 +4980,7 @@ function LongTextField({
   isMissing: boolean;
 }): React.ReactElement {
   const text = typeof value === "string" ? value : "";
+  const helpId = useId();
   return (
     <label className={`wf-props__field ${isMissing ? "wf-props__field--missing" : ""}`}>
       {labelEl}
@@ -4959,8 +4989,12 @@ function LongTextField({
         onChange={(next) => onChange(next)}
         placeholder={field.placeholder}
         multiline
+        label={field.label}
+        required={field.required}
+        invalid={isMissing}
+        descriptionId={field.description ? helpId : undefined}
       />
-      {field.description ? <span className="wf-props__field-help">{field.description}</span> : null}
+      {field.description ? <span id={helpId} className="wf-props__field-help">{field.description}</span> : null}
     </label>
   );
 }
@@ -5256,6 +5290,7 @@ function FreeformInputRow({
         <VariableChipField
           value={text}
           onChange={(next) => onSetInput(inputKey, next)}
+          label={inputKey}
           multiline
         />
       </label>
@@ -5300,6 +5335,7 @@ function LoopEditor({
       <Field label="Items expression">
         <VariableChipField
           value={items}
+          label="Items to loop over"
           onChange={onSetLoopItems}
           placeholder="{{trigger.list}}"
         />
@@ -5696,6 +5732,7 @@ function ConditionRow({
       <VariableChipField
         className="wf-props__condition-field"
         value={condition.firstValue}
+        label="Condition value"
         onChange={(next) => onUpdate({ firstValue: next })}
         placeholder="{{step.field}}"
       />
@@ -5718,6 +5755,7 @@ function ConditionRow({
         <VariableChipField
           className="wf-props__condition-field"
           value={condition.secondValue ?? ""}
+          label="Compare with"
           onChange={(next) => onUpdate({ secondValue: next })}
           placeholder="value"
         />

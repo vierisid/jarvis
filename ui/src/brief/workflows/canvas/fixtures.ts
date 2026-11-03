@@ -119,6 +119,7 @@ export function makeCanvasFixture(advanced = false) {
     };
   if (advanced)
     trigger.nextAction!.nextAction!.nextAction!.nextAction!.settings = {};
+  let revision = 0;
   let version: FlowVersion = {
     id: advanced ? "advanced-v1" : "meeting-v3",
     flowId: "meeting",
@@ -127,6 +128,7 @@ export function makeCanvasFixture(advanced = false) {
       : "Meeting follow-ups",
     trigger,
     state: "DRAFT",
+    editorRevision: "fixture-revision-0",
     valid: true,
     schemaVersion: "1",
     agentIds: [],
@@ -193,10 +195,13 @@ export function makeCanvasFixture(advanced = false) {
       method === "PATCH" &&
       path === `/api/workflows/meeting/versions/${version.id}`
     ) {
+      if (body.expectedRevision !== undefined && body.expectedRevision !== version.editorRevision)
+        return response({ error: 'This draft changed. Your edits are still here; discard and reload the latest draft.' }, 409);
       version = {
         ...version,
         displayName: body.displayName,
         trigger: body.trigger,
+        editorRevision: `fixture-revision-${++revision}`,
       };
       uiMeta = body.uiMeta;
       return response(version);
