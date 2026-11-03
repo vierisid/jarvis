@@ -287,7 +287,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         description: "Display name for compose/create.",
         required: false,
       },
-      fixture_input: { type: "object", description: "validate_fixtures: ClickUp routing setup/cases (tool guide).", required: false },
+      fixture_input: { type: "object", description: "validate_fixtures: routing/JSON setup/cases (tool guide).", required: false },
       payload: {
         type: "object",
         description: "run: trigger input.",
@@ -460,6 +460,10 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           if (!draft) throw new Error("No saved draft to validate");
           const validation = compileWorkflow(draft.trigger, { pieces: workflowReadinessServices()?.pieces ?? deps.pieceRegistry, phase: 'composition' });
           if (!validation.ready) throw new Error('Saved draft has structural errors; fix them before fixture validation');
+          if (draft.trigger.nextAction?.settings?.pieceName === '@activepieces/piece-json') {
+            const {validateJsonMappingFixtures}=await import('../../workflows/runtime/json-mapping-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateJsonMappingFixtures(draft.trigger,params.fixture_input)},params),'local synthetic JSON mapping fixture results');
+          }
           if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-subflow') {
             const {validateSubflowFixtures}=await import('../../workflows/runtime/subflow-fixtures');
             const childId=draft.trigger.nextAction?.settings?.input?.flow;
