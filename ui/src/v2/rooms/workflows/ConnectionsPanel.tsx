@@ -10,6 +10,8 @@
 import React, { useEffect, useState } from "react";
 import { CONNECTION_SETUP_EVENT, takePieceSetup, type PieceSetupRequest } from './connection-setup-request';
 import { confirmDialog } from "../../ui/ConfirmDialog";
+import { requestSettingsTab } from "../../shell/settings-tab-request";
+import { openRoom } from "../../router";
 import { Button, Chip, Icon } from "../../ui";
 import { RefreshCw, Trash2, Plus, KeyRound } from "lucide-react";
 import {
@@ -427,14 +429,27 @@ function AddConnectionForm({
   );
 }
 
-export function OAuthSetupGuide({ pieceName, onAdministratorSetup }: { pieceName: string; onAdministratorSetup(): void }) {
+/**
+ * An OAuth piece reached from a setup action. This form only stores pasted
+ * credentials; there is no universal piece OAuth broker. Apps Jarvis connects
+ * itself (hosted or self-hosted) are connected from Settings > Integrations and
+ * reach workflows as managed `jarvis:` connections, so point there first.
+ */
+export function OAuthSetupGuide({ pieceName, onAdministratorSetup, onOpenIntegrations = openIntegrations }: { pieceName: string; onAdministratorSetup(): void; onOpenIntegrations?(): void }) {
   const sheets = pieceName === '@activepieces/piece-google-sheets';
   return <section className="wf-conn__form" aria-labelledby="oauth-setup-heading">
     <h4 id="oauth-setup-heading">{sheets ? 'Connect Google Sheets' : 'Connect an account'}</h4>
-    <p>Browser sign-in for this connector is not available on this self-hosted instance yet. Installing a connector does not connect an account.</p>
-    {sheets ? <p>The Google sign-in in Settings grants read-only Gmail and Calendar access. It cannot authorize writing to Google Sheets.</p> : null}
-    <p>Keep your workflow as a draft. Ask your instance administrator to configure an authorized connection for this connector, then return here and refresh to select it.</p>
-    {sheets ? <p>For spreadsheet writes, the administrator needs a Google OAuth grant with Sheets write access and access to the destination spreadsheet. A Gmail or Calendar grant is not sufficient.</p> : null}
-    <Button variant="ghost" size="sm" onClick={onAdministratorSetup}>Administrator credential setup</Button>
+    <p>This form cannot sign in to an account in the browser. Installing a connector does not connect an account.</p>
+    {sheets
+      ? <p>The Google connection in Settings grants read-only Gmail and Calendar access. It cannot authorize writing to Google Sheets.</p>
+      : <p>If this app is listed in Settings, under Integrations, connect it there. Workflows can then use that connection for the actions Jarvis supports.</p>}
+    <p>Otherwise keep your workflow as a draft. Whoever administers this Jarvis can save an authorized credential for this connector here; then refresh and select it.</p>
+    {sheets ? <p>For spreadsheet writes, that credential needs a Google OAuth grant with Sheets write access and access to the destination spreadsheet. A Gmail or Calendar grant is not sufficient.</p> : null}
+    <div className="wf-conn__form-actions">
+      {sheets ? null : <Button variant="primary" size="sm" onClick={onOpenIntegrations}>Open Integrations</Button>}
+      <Button variant="ghost" size="sm" onClick={onAdministratorSetup}>Administrator credential setup</Button>
+    </div>
   </section>;
 }
+
+function openIntegrations(): void { requestSettingsTab('integrations'); openRoom('settings'); }
