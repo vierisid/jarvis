@@ -1,3 +1,5 @@
+import { connectionProviderForPiece, isConnectionProvider } from '../../../../../src/integrations/connection-providers';
+import { ManagedConnectionRow } from '../../integrations/ManagedConnectionRow';
 /**
  * Connections panel: list `app_connection` rows + registered Jarvis sources,
  * add / delete connections. Renders inline below the workflows list when the
@@ -21,13 +23,15 @@ import { OAUTH2_VALUE_HELP, OAUTH2_VALUE_PLACEHOLDER, isOAuth2Type, oauth2RowLab
 
 export function ConnectionsPanel(): React.ReactElement {
   const conn = useConnections();
-  const [setup, setSetup] = useState<PieceSetupRequest | null>(() => takePieceSetup());
-  const [showForm, setShowForm] = useState(() => !!setup && !setup.rowId);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [setup, setSetup] = useState(() => takePieceSetup());
+  const [showForm, setShowForm] = useState(() => setup?.kind === 'piece_credentials' && !setup.rowId);
   useEffect(() => {
-    const apply = () => { const request = takePieceSetup(); if (request) { setSetup(request); setShowForm(!request.rowId); } };
+    const apply = () => { const request = takePieceSetup(); if (request) { setSetup(request); setShowForm(request.kind === 'piece_credentials' && !request.rowId); } };
     window.addEventListener(CONNECTION_SETUP_EVENT, apply);
     return () => window.removeEventListener(CONNECTION_SETUP_EVENT, apply);
   }, []);
+  const selectedProvider = setup?.kind === 'hosted_integration' ? setup.provider : null;
   const [toast, setToast] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 
   const flash = (tone: "ok" | "warn", text: string): void => {
@@ -39,44 +43,42 @@ export function ConnectionsPanel(): React.ReactElement {
     <div className="wf-conn">
       <header className="wf-conn__header">
         <div>
-          <h3 className="wf-conn__title">Piece connections</h3>
+          <h3 className="wf-conn__title">App connections</h3>
           <p className="wf-conn__subtitle">
             {conn.loading
               ? "loading…"
-              : `${conn.connections.length} stored · ${conn.jarvisSources.length} Jarvis source${conn.jarvisSources.length === 1 ? "" : "s"} registered`}
+              : `${conn.connections.length} manually added account${conn.connections.length === 1 ? "" : "s"}`}
             {conn.error ? ` · ${conn.error}` : null}
           </p>
         </div>
         <div className="wf-conn__actions">
-          <Button variant="ghost" size="sm" onClick={() => void conn.refresh()} title="Refresh">
+          <Button variant="ghost" size="sm" onClick={() => { void conn.refresh(); setRefreshKey(n => n + 1); }} title="Refresh">
             <Icon icon={RefreshCw} size={14} /> Refresh
           </Button>
-          <Button variant="primary" size="sm" onClick={() => setShowForm((s) => !s)}>
-            <Icon icon={Plus} size={14} /> {showForm ? "Cancel" : "Add"}
+          <Button variant="ghost" size="sm" onClick={() => setShowForm((s) => !s)}>
+            <Icon icon={Plus} size={14} /> {showForm ? "Cancel" : "Add manual connection"}
           </Button>
         </div>
       </header>
 
       {toast ? <div className={`wf-toast wf-toast--${toast.tone}`}>{toast.text}</div> : null}
 
-      {conn.jarvisSources.length > 0 ? (
-        <div className="wf-conn__sources">
-          <span className="wf-conn__sources-label">Reusable Jarvis credentials:</span>
-          {conn.jarvisSources.map((s) => (
-            <Chip key={s.id} tone="ok">
-              <code>jarvis:{s.id}</code>
-            </Chip>
-          ))}
-          <span className="wf-conn__sources-help">
-            -- pieces can use these external ids in their auth field without a stored row.
-          </span>
-        </div>
-      ) : null}
+      {selectedProvider && <ManagedConnectionRow key={setup?.requestId} provider={selectedProvider} refreshKey={refreshKey} />}
+      {conn.jarvisSources.some(s => isConnectionProvider(s.id)) && <div className="wf-conn__managed">
+        <p className="wf-conn__subtitle">Connect your apps securely in your browser. Your connected accounts are available to workflow steps.</p>
+        {conn.jarvisSources.filter(s => isConnectionProvider(s.id) && s.id !== selectedProvider).map(s => isConnectionProvider(s.id)
+          ? <ManagedConnectionRow key={s.id} provider={s.id} refreshKey={refreshKey} /> : null)}
+      </div>}
+      {conn.jarvisSources.some(s => !isConnectionProvider(s.id)) && <div className="wf-conn__sources">
+        <span className="wf-conn__sources-label">Other registered sources:</span>
+        {conn.jarvisSources.filter(s => !isConnectionProvider(s.id)).map(s => <Chip key={s.id} tone="neutral">{s.id}</Chip>)}
+        <span className="wf-conn__sources-help">Registration does not confirm an account is connected.</span>
+      </div>}
 
       {showForm ? (
         <AddConnectionForm
           key={setup?.requestId}
-          setup={setup}
+          setup={setup?.kind === 'piece_credentials' ? setup : null}
           onSubmit={async (input) => {
             const r = await conn.create(input);
             flash(r.ok ? "ok" : "warn", r.ok ? `Connection "${input.displayName}" added` : `Add failed: ${r.message}`);
@@ -87,7 +89,7 @@ export function ConnectionsPanel(): React.ReactElement {
 
       {conn.connections.length === 0 && !conn.loading ? (
         <div className="wf-conn__empty">
-          No connections stored. Use Add to wire OAuth tokens / API keys for pieces.
+          No manually added accounts. Apps connected above do not need a separate token.
         </div>
       ) : (
         <ul className="wf-conn__list">
@@ -320,8 +322,13 @@ function AddConnectionForm({
   const [valueText, setValueText] = useState(setup && !["OAUTH2", "PLATFORM_OAUTH2", "CLOUD_OAUTH2"].includes(setup.authType) ? '{}' : '{"access_token": ""}');
   const [submitting, setSubmitting] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [manualProvider, setManualProvider] = useState<string | null>(null);
+  const provider = connectionProviderForPiece(pieceName.trim());
+  const useManaged = provider && manualProvider !== provider;
+
 
   const handleSubmit = async (): Promise<void> => {
+    if (useManaged) return;
     let value: Record<string, unknown>;
     try {
       const parsed = JSON.parse(valueText);
@@ -348,6 +355,9 @@ function AddConnectionForm({
       setSubmitting(false);
     }
   };
+
+  if (setup && useManaged) return <ManagedConnectionRow key={provider} provider={provider}
+    onManualSetup={() => setManualProvider(provider)} />;
 
   return (
     <div className="wf-conn__form">
@@ -395,6 +405,7 @@ function AddConnectionForm({
           />
         </label>
       </div>
+      {useManaged ? <ManagedConnectionRow key={provider} provider={provider} onManualSetup={() => setManualProvider(provider)} /> : <>
       <label className="wf-conn__form-value">
         Value (JSON)
         <textarea
@@ -417,6 +428,7 @@ function AddConnectionForm({
           {submitting ? "Adding…" : "Add connection"}
         </Button>
       </div>
+      </>}
     </div>
   );
 }

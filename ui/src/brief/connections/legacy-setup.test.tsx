@@ -68,3 +68,76 @@ test('piece handoff works on a plain HTTP LAN browser without randomUUID', () =>
   try { open(piece, null); expect(takePiece()?.requestId).toMatch(/^[a-f0-9-]{36}$/); }
   finally { if (old) Object.defineProperty(crypto, 'randomUUID', old); else delete (crypto as any).randomUUID; }
 });
+
+const oauthProviders = ['clickup','slack','trello','mailchimp','github','dropbox','asana','intercom','typeform','airtable','notion','calendly','linear','todoist','monday'] as const;
+function serveOAuth(id: string, status: Record<string, unknown> = {}) {
+  const requests: string[] = [], writes: string[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    requests.push(url); if (init?.method && init.method !== 'GET') writes.push(url);
+    return NativeResponse.json(url === '/api/workflows/connections' ? { connections: [], jarvisSources: [{ id }] } : {
+      configured: true, connected: false, connect_url: `https://app.usejarvis.dev/account?integration=${id}`, ...status,
+    });
+  }) as typeof fetch;
+  return { requests, writes };
+}
+for (const id of oauthProviders) test(`${id}: library OAuth setup opens Connect without a token form or writes`, async () => {
+  const { writes, requests } = serveOAuth(id);
+  open(action({ kind: 'hosted_integration', provider: id }), null);
+  expect(window.location.hash).toBe('#/_room_workflows');
+  await mount();
+  expect(host.querySelector('textarea')).toBeNull();
+  expect(host.querySelector('a')?.href).toBe(`https://app.usejarvis.dev/account?integration=${id}`);
+  expect(host.querySelector('a')?.textContent).toContain('Connect');
+  expect(host.textContent).toContain('Not connected');
+  expect(host.textContent).not.toContain('Reusable Jarvis credentials');
+  expect(requests).toContain(`/api/integrations/${id}`);
+  expect(writes).toEqual([]);
+});
+test('an older ClickUp piece handoff also avoids the manual token form', async () => {
+  serveOAuth('clickup');
+  open(action({ kind: 'piece_credentials', pieceName: '@activepieces/piece-clickup', pieceVersion: '0.9.1', authType: 'OAUTH2' }), null);
+  await mount(); expect(host.querySelector('textarea')).toBeNull(); expect(host.textContent).toContain('Connect ClickUp');
+});
+test('registered is not connected; a delivered grant, reconnect and failed check update the real status', async () => {
+  let body: Record<string, unknown> = { configured: true, connected: false, connect_url: 'https://app.usejarvis.dev/account?integration=clickup' };
+  let fail = false;
+  globalThis.fetch = (async (url: string) => url === '/api/workflows/connections'
+    ? NativeResponse.json({ connections: [], jarvisSources: [{ id: 'clickup' }, { id: 'unknown-source' }] })
+    : fail ? new NativeResponse('unavailable', { status: 503 }) : NativeResponse.json(body)) as typeof fetch;
+  await mount(); expect(host.textContent).toContain('Not connected');
+  expect(host.textContent).toContain('Registration does not confirm');
+  body = { ...body, connected: true, account: { label: 'owner@example.test' } };
+  await act(async () => { window.dispatchEvent(new Event('focus')); });
+  expect(host.textContent).toContain('owner@example.test'); expect(host.textContent).toContain('Manage ClickUp');
+  body = { ...body, reconnect: true };
+  await act(async () => { window.dispatchEvent(new Event('focus')); });
+  expect(host.textContent).toContain('Reconnect required'); expect(host.textContent).toContain('Reconnect ClickUp');
+  fail = true;
+  await act(async () => { window.dispatchEvent(new Event('focus')); });
+  expect(host.textContent).toContain('Could not check connection'); expect(host.querySelector('a')).toBeNull();
+  expect(host.querySelector('textarea')).toBeNull();
+  fail = false; body = { ...body, reconnect: false };
+  await act(async () => { Array.from(host.querySelectorAll('button')).find(b => b.textContent === 'Try again')!.click(); });
+  expect(host.textContent).toContain('Manage ClickUp');
+});
+test('Google uses its existing status and hosted account link', async () => {
+  const { requests } = serveOAuth('google', { managed: true, is_authenticated: true });
+  await mount(); expect(requests).toContain('/api/auth/google/status');
+  expect(host.textContent).toContain('Manage Google'); expect(host.querySelector('textarea')).toBeNull();
+});
+test('unsafe setup links fail closed without credential fallback', async () => {
+  serveOAuth('clickup', { connect_url: 'javascript:alert(1)' }); await mount();
+  expect(host.querySelector('a')).toBeNull(); expect(host.textContent).toContain('Could not check connection');
+});
+test('existing manually configured ClickUp accounts still open their own credential editor', async () => {
+  serve([{ id: 'manual', externalId: 'manual', displayName: 'Manual ClickUp', type: 'OAUTH2', status: 'ACTIVE', pieceName: '@activepieces/piece-clickup', pieceVersion: '0.9.1', updated: 1 }]);
+  open(action({ kind: 'piece_credentials', pieceName: '@activepieces/piece-clickup', pieceVersion: '0.9.1', authType: 'OAUTH2' }), 'account:manual');
+  await mount(); expect(host.querySelector('textarea')?.value).toBe(''); expect(inputs()).toEqual(['Manual ClickUp']);
+});
+test('self-hosted manual fallback is explicit and only offered after configuration is known unavailable', async () => {
+  serveOAuth('clickup', { configured: false, connected: false, connect_url: null });
+  open(action({ kind: 'piece_credentials', pieceName: '@activepieces/piece-clickup', pieceVersion: '0.9.1', authType: 'OAUTH2' }), null);
+  await mount(); expect(host.querySelector('textarea')).toBeNull();
+  await act(async () => { Array.from(host.querySelectorAll('button')).find(b => b.textContent === 'Enter credentials manually')!.click(); });
+  expect(host.querySelector('textarea')).not.toBeNull();
+});

@@ -181,6 +181,7 @@ export class ConnectionsController {
     );
     if (
       !service ||
+      (service.existingOnly && !reconnectKey) ||
       (reconnectKey &&
         (!row ||
           row.setupServiceId !== serviceId ||

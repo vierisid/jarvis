@@ -1,3 +1,4 @@
+import { connectionProviderForPiece } from '../../../../../src/integrations/connection-providers';
 import { mondayInputSchema } from "../../../../../src/workflows/runtime/managed-monday-inputs";
 import { AirtableLocation } from "../../integrations/AirtableLocation";
 import { NotionLocation } from "../../integrations/NotionLocation";
@@ -3904,8 +3905,9 @@ function ConnectionPicker({
       </label>
       {matching.length === 0 && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable ? (
         <p className="wf-props__hint wf-props__connection-empty">
-          No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
-          then come back and select it here.
+          {connectionProviderForPiece(pieceName)
+            ? `Connect ${pieceDisplayName} using the connection controls above, then choose Use this account. You can also manage app connections in the Connections panel.`
+            : `No connection saved for ${pieceDisplayName} yet. Add one in the Connections panel, then come back and select it here.`}
         </p>
       ) : matching.length > 0 ? (
         <select

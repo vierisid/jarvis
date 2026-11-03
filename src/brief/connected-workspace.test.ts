@@ -246,3 +246,40 @@ test('managed monday.com shows its stored grant, a pending reconnect as disconne
   sources.monday = () => ({configured:false,connected:false,account:null});
   expect(provider.read().rows.some(r=>r.sourceId==='native:monday')).toBe(false);
 });
+
+const oauthPieces = [
+  ['clickup', 'ClickUp'], ['github', 'GitHub'], ['trello', 'Trello'], ['mailchimp', 'Mailchimp'],
+  ['slack', 'Slack'], ['dropbox', 'Dropbox'], ['asana', 'Asana'], ['intercom', 'Intercom'],
+  ['typeform', 'Typeform'], ['airtable', 'Airtable'], ['notion', 'Notion'], ['calendly', 'Calendly'],
+  ['linear', 'Linear'], ['todoist', 'Todoist'], ['monday', 'monday.com'],
+] as const;
+for (const [id] of oauthPieces) test(`${id} library setup uses the hosted connection, while saved manual accounts keep their own edit path`, () => {
+  (sources as any)[id] = () => ({ configured: true, connected: false, reconnect: false, account: null });
+  const name = `@activepieces/piece-${id}`;
+  sources.pieces = () => new PieceCatalog([piece(name)]);
+  account('manual', { piece_name: name });
+  const snapshot = provider.read();
+  const library = snapshot.rows.find(r => r.sourceId === `piece:${name}`)!;
+  expect(snapshot.setup.find(a => a.id === library.setupActionId)?.target).toEqual({ kind: 'hosted_integration', provider: id });
+  expect(library).toMatchObject({ status: 'installed', authenticated: null });
+  const manual = snapshot.rows.find(r => r.sourceId === 'account:manual')!;
+  expect(snapshot.setup.find(a => a.id === manual.setupActionId)).toMatchObject({ existingOnly: true, target: { kind: 'piece_credentials', pieceName: name } });
+  expect(snapshot.setup.filter(a => !a.existingOnly && a.target.kind === 'piece_credentials')).toEqual([]);
+});
+for (const name of ['gmail', 'google-calendar', 'google-drive', 'google-sheets']) test(`${name} library uses Google's existing setup`, () => {
+  sources.pieces = () => new PieceCatalog([piece(`@activepieces/piece-${name}`)]);
+  const snapshot = provider.read(), library = snapshot.rows.find(r => r.kind === 'library_piece')!;
+  expect(snapshot.setup.find(a => a.id === library.setupActionId)?.target).toEqual({ kind: 'google', flow: 'oauth' });
+});
+test('an unavailable hosted provider never falls back to manual token setup', () => {
+  sources.hosted = () => true;
+  sources.clickup = () => { throw new Error('secret'); };
+  sources.pieces = () => new PieceCatalog([piece('@activepieces/piece-clickup')]);
+  expect(row('piece:@activepieces/piece-clickup').permissions.canConnect).toBe(false);
+  expect(provider.read().setup.some(a => a.target.kind === 'piece_credentials')).toBe(false);
+});
+test('self-hosted apps without managed configuration retain manual setup', () => {
+  sources.clickup = () => ({ configured: false, connected: false, account: null });
+  sources.pieces = () => new PieceCatalog([piece('@activepieces/piece-clickup')]);
+  expect(provider.read().setup.find(a => a.id === row('piece:@activepieces/piece-clickup').setupActionId)?.target.kind).toBe('piece_credentials');
+});
