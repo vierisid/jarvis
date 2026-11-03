@@ -266,10 +266,12 @@ for (const [id] of oauthPieces) test(`${id} library setup uses the hosted connec
   expect(snapshot.setup.find(a => a.id === manual.setupActionId)).toMatchObject({ existingOnly: true, target: { kind: 'piece_credentials', pieceName: name } });
   expect(snapshot.setup.filter(a => !a.existingOnly && a.target.kind === 'piece_credentials')).toEqual([]);
 });
-for (const name of ['gmail', 'google-calendar', 'google-drive', 'google-sheets']) test(`${name} library uses Google's existing setup`, () => {
+// The Jarvis Google grant is read-only Gmail and Calendar, so it cannot replace a Drive, Sheets or send credential.
+for (const name of ['gmail', 'google-calendar', 'google-drive', 'google-sheets']) test(`${name} library keeps its own credential setup while Google is set up`, () => {
   sources.pieces = () => new PieceCatalog([piece(`@activepieces/piece-${name}`)]);
   const snapshot = provider.read(), library = snapshot.rows.find(r => r.kind === 'library_piece')!;
-  expect(snapshot.setup.find(a => a.id === library.setupActionId)?.target).toEqual({ kind: 'google', flow: 'oauth' });
+  expect(snapshot.setup.some(a => a.id === 'setup:google')).toBe(true);
+  expect(snapshot.setup.find(a => a.id === library.setupActionId)?.target).toMatchObject({ kind: 'piece_credentials', pieceName: `@activepieces/piece-${name}` });
 });
 test('an unavailable hosted provider never falls back to manual token setup', () => {
   sources.hosted = () => true;

@@ -13,8 +13,12 @@ export function isHostedConnectionProvider(value: string): value is HostedConnec
 export function isConnectionProvider(value: string): value is ConnectionProvider {
   return Object.hasOwn(CONNECTION_PROVIDER_NAMES, value);
 }
-export function connectionProviderForPiece(pieceName: string): ConnectionProvider | null {
-  if (['gmail', 'google-calendar', 'google-drive', 'google-sheets'].some(name => pieceName === `@activepieces/piece-${name}`)) return 'google';
+/**
+ * The hosted connection that replaces manual setup for a workflow piece. Google pieces are
+ * deliberately absent: the Jarvis Google grant is read-only Gmail and Calendar, so it cannot
+ * stand in for a Drive, Sheets or write-capable credential and manual setup must stay reachable.
+ */
+export function connectionProviderForPiece(pieceName: string): HostedConnectionProvider | null {
   for (const id of Object.keys(HOSTED_CONNECTION_PROVIDERS) as HostedConnectionProvider[]) {
     if (pieceName === `@activepieces/piece-${id}`) return id;
   }

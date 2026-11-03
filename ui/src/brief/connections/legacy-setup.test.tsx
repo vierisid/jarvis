@@ -141,3 +141,13 @@ test('self-hosted manual fallback is explicit and only offered after configurati
   await act(async () => { Array.from(host.querySelectorAll('button')).find(b => b.textContent === 'Enter credentials manually')!.click(); });
   expect(host.querySelector('textarea')).not.toBeNull();
 });
+test('Google workflow pieces keep the manual credential form: the Google grant is read-only Gmail and Calendar', async () => {
+  for (const name of ['gmail', 'google-sheets']) {
+    serveOAuth('google', { managed: true, is_authenticated: true });
+    open(action({ kind: 'piece_credentials', pieceName: `@activepieces/piece-${name}`, pieceVersion: '0.9.1', authType: 'OAUTH2' }), null);
+    await mount();
+    expect(host.querySelector('textarea')).not.toBeNull();
+    expect(host.querySelector('.wf-conn__form')?.textContent).not.toContain('Enter credentials manually');
+    await act(async () => root!.unmount()); root = undefined; host.remove();
+  }
+});
