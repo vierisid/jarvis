@@ -22,10 +22,10 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
   // w8-18: request-ID webhook admission and exclusive ClickUp support routing.
   'w8-18': {
-    bare: 'd299f7ebff0f7640f660f581b6ebd81716f6e7b02bab96f4ef8d4463ebee67e1',
-    production: '49a5a618d78d2584acfc6624e60a450439390af650c817d867ac8049035f30f7',
-    'hosted production': 'de96e8ed94d3321c4835305eb77cd9c4d1d6cd8deb4037ba6908330d49476ada',
-    'tool names only': 'a0a0dd7c7aa461630fa31498a8da7789fa0e980a0731784eb682ba522012ed30',
+    bare: 'f415a518873f568a15544b9ab79fd2d722aad3f3ffc9ed7f0ff163f7cc53849c',
+    production: 'b4376d4ab0b46128e840b91103db1ace160de1849501811c1395695b077638ca',
+    'hosted production': '6916679ba9a12f82e94615acdff3b2bfe629efa0dd78f65c2ec6c0c2b048ba62',
+    'tool names only': 'bd5c619c808a738814630544e24b1d4a20a970cf31f47d669253d030264a274b',
   },
   // w8-17: approval-controlled Stripe ticket refunds with exact-amount approval.
   // Tool-result text (jarvis-refund details), so these shapes match w8-16.

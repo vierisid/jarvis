@@ -221,6 +221,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "Composed flows are DISABLED; publish enables them and requires user confirmation. Draft-only limits do not ban future actions.",
       "create requires empty: true for an explicitly blank canvas; otherwise compose.",
       "CODE steps: publish/enable/run are REFUSED without user permission for that flow; no tool action grants it. Never bypass.",
+      "validate_fixtures: local synthetic tests of the saved draft; mock auth, no network or installs. Page to nextCursor:null.",
       ...(hasLibrary ? [deps.installLibraryPiece ? "A missing Library connector returns setup.continueWith with install; call it so the user approves that install under software-install Authority. install_missing:false opts out. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
     category: "automation",
@@ -270,7 +271,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       action: {
         type: "string",
         description: "What to do.",
-        enum: ["compose", "continue_setup", "create", "list", "get", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run", "resolve_effect"],
+        enum: ["compose", "continue_setup", "create", "list", "get", "validate_fixtures", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run", "resolve_effect"],
         required: true,
       },
       flow: {
@@ -280,12 +281,13 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       },
       view: { type: "string", enum: ["definition", "validation"], description: "get: paged JSON; join all page content to nextCursor:null.", required: false },
       version_id: { type: "string", description: "get: version", required: false },
-      cursor: { type: "string", description: "get: prior nextCursor", required: false },
+      cursor: { type: "string", description: "get/validate_fixtures: prior nextCursor", required: false },
       name: {
         type: "string",
         description: "Display name for compose/create.",
         required: false,
       },
+      fixture_input: { type: "object", description: "validate_fixtures: ClickUp routing setup/cases (tool guide).", required: false },
       payload: {
         type: "object",
         description: "run: trigger input.",
@@ -450,6 +452,21 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       const project = deps.callerProjectId?.() ?? DEFAULT_IDS.project;
       const requireFlowParam = (p: Record<string, unknown>) => requireFlowIn(project, p);
       switch (action) {
+        case "validate_fixtures": {
+          // Local synthetic component checks of the saved draft. Read-only:
+          // setup is substituted into an in-memory copy, auth is mocked, and
+          // nothing installs, connects, resolves credentials or uses the network.
+          const flow = requireFlowParam(params), draft = getLatestDraft(flow.id);
+          if (!draft) throw new Error("No saved draft to validate");
+          const validation = compileWorkflow(draft.trigger, { pieces: workflowReadinessServices()?.pieces ?? deps.pieceRegistry, phase: 'composition' });
+          if (!validation.ready) throw new Error('Saved draft has structural errors; fix them before fixture validation');
+          if (params.fixture_input !== undefined) {
+            const { validateSupportRoutingFixtures } = await import('../../workflows/runtime/support-routing-fixtures');
+            return framedForModel(fixtureReportPage({ flowId: flow.id, versionId: draft.id, ...await validateSupportRoutingFixtures(draft.trigger, params.fixture_input) }, params), 'local synthetic routing fixture results');
+          }
+          const { validateRefundFixtures } = await import('../../workflows/runtime/refund-fixtures');
+          return framedForModel(fixtureReportPage({ flowId: flow.id, versionId: draft.id, ...await validateRefundFixtures(draft.trigger) }, params), 'local synthetic fixture results');
+        }
         case "list":
           return framedForModel(actList(project), "the workflow list and its stored metadata");
         case "get":
@@ -638,6 +655,27 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
  * `governed-pieces.test.ts` pins against a fixed digest.
  */
 const FRAMED_PAYLOAD_MAX_CHARS = 4000;
+
+/** Preserve complete fixture evidence instead of slicing JSON mid-assertion. */
+function fixtureReportPage(report: Record<string, unknown>, params: Record<string, unknown>): Record<string, unknown> {
+  const text = JSON.stringify(report);
+  if (text.length <= FRAMED_PAYLOAD_MAX_CHARS && params.cursor === undefined) return report;
+  const hash = createHash('sha256').update(text).update(JSON.stringify(params.fixture_input ?? null)).digest('hex');
+  let offset = 0;
+  if (params.cursor !== undefined) {
+    const match = typeof params.cursor === 'string' && /^([a-f0-9]{64}):(\d+)$/.exec(params.cursor);
+    if (!match || match[1] !== hash) throw new Error('Fixture report changed or cursor is invalid; restart without a cursor');
+    offset = Number(match[2]);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset >= text.length) throw new Error('Fixture cursor offset is out of range');
+  }
+  let end = Math.min(offset + 2000, text.length);
+  for (;;) {
+    const page = {flowId:report.flowId,versionId:report.versionId,view:'fixture_results',passed:report.passed,externalActions:0,
+      totalChars:text.length,offset,nextCursor:end < text.length ? hash + ':' + end : null,content:text.slice(offset,end)};
+    if (JSON.stringify(page).length <= FRAMED_PAYLOAD_MAX_CHARS) return page;
+    if (--end <= offset) throw new Error('Fixture result envelope exceeds its size budget');
+  }
+}
 
 /**
  * Render an action's result for the chat model, framed as data.

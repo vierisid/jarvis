@@ -116,8 +116,21 @@ for(const fixture of [
  expect(draft.trigger).toEqual(source);
  expect(compileWorkflow(draft.trigger,{pieces:catalog,phase:'composition'}).ready).toBe(true);
  expect(compileWorkflow(draft.trigger,{pieces:catalog,phase:'activation'}).ready).toBe(false);
- const report=await validateSupportRoutingFixtures(draft.trigger,{setup,cases:[...cases,...rejectedSupportRoutingCases()]});
- expect(report.passed).toBe(true);expect(report.cases).toHaveLength(cases.length+5);expect(report.externalActions).toBe(0);
+ const direct=await validateSupportRoutingFixtures(draft.trigger,{setup,cases:[...cases,...rejectedSupportRoutingCases()]});
+ expect(direct.passed).toBe(true);expect(direct.cases).toHaveLength(cases.length+5);expect(direct.externalActions).toBe(0);
+ const fixtureParams={action:'validate_fixtures',flow:saved.id,fixture_input:{setup,cases:[...cases,...rejectedSupportRoutingCases()]}};
+ let page=unwrap(await tool.execute(fixtureParams)),content='';const firstCursor=page.nextCursor;
+ expect(page.view).toBe('fixture_results');expect(firstCursor).toBeString();
+ for(;;){
+   expect(JSON.stringify(page).length).toBeLessThanOrEqual(4000);content+=page.content;
+   if(!page.nextCursor)break;
+   page=unwrap(await tool.execute({...fixtureParams,cursor:page.nextCursor}));
+ }
+ const report=JSON.parse(content);
+ await expect(tool.execute({...fixtureParams,cursor:firstCursor,fixture_input:{...fixtureParams.fixture_input,cases:fixtureParams.fixture_input.cases.slice(0,1)}})).rejects.toThrow('changed');
+ await expect(tool.execute({...fixtureParams,cursor:'invalid'})).rejects.toThrow('cursor');
+ expect(report.flowId).toBe(saved.id);expect(report.versionId).toBe(draft.id);expect(report.cases).toHaveLength(cases.length+5);expect(report.externalActions).toBe(0);
+ expect({...report,flowId:undefined,versionId:undefined}).toEqual({...direct,flowId:undefined,versionId:undefined});
  expect(getLatestDraft(saved.id)?.trigger).toEqual(draft.trigger);
  expect(listRuns({flowId:saved.id})).toHaveLength(0);expect(rows).toHaveLength(startingRows);
  // Configure only this isolated fixture copy, then exercise the exact saved graph.
