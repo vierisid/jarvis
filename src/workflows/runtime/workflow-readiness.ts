@@ -1,7 +1,7 @@
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
 import { REFUND_REQUIRED, REFUND_ACTION, refundSetup } from './refund';
 import { IMPORT_ACCOUNTS, IMPORT_REQUIRED, IMPORT_ACTION, importSetup } from './contact-import';
-import { QUARTERLY_ACCOUNTS, QUARTERLY_REQUIRED, QUARTERLY_ACTION, quarterlySetup } from './quarterly-report';
+import { QUARTERLY_ACCOUNTS, QUARTERLY_REQUIRED, QUARTERLY_ACTION, QUARTERLY_MANAGED_REFUSAL, quarterlySetup } from './quarterly-report';
 import { REPORT_ACCOUNTS, REPORT_REQUIRED, REPORT_ACTION, reportSetup } from './weekly-report';
 import { BATCH_ACCOUNTS, BATCH_REQUIRED, BATCH_ACTION, batchSetup, batchGraphError } from './lead-batch';
 import { ONBOARDING_ACCOUNTS, ONBOARDING_REQUIRED, ONBOARDING_ACTION, onboardingSetup } from './customer-onboarding';
@@ -256,6 +256,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         const id = input[field];
         if (!emptyInput(id)) {
           if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
+          // No managed-connection exemption covers the quarterly report; its backend refuses a jarvis: id at run time too.
+          else if (settings.actionName === QUARTERLY_ACTION && id.startsWith('jarvis:')) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',QUARTERLY_MANAGED_REFUSAL);
           else if (context.phase !== 'composition') {
             const reason=context.connection?.(id,provider) ?? (context.connection ? null : 'Connection inventory unavailable');
             if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
@@ -265,6 +267,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       }
       const quarterly = settings.actionName === QUARTERLY_ACTION;
       if (quarterly && (!object(trigger) || trigger.settings?.pieceName !== 'schedule' || input.scheduledFor !== `{{${trigger.name}.scheduledFor}}`)) issue(node,'settings.input.scheduledFor','INPUT_TYPE','Map the persisted schedule trigger scheduledFor; execution-time dates are not supported');
+      const zone = object(trigger) ? trigger.settings?.input?.timezone : undefined;
+      if (quarterly && typeof zone === 'string' && zone.trim() && zone !== 'Europe/Rome') issue(node,'settings.input.timezone','INPUT_TYPE','Quarterly reporting uses Europe/Rome calendar quarters; set the schedule timezone to Europe/Rome');
       if ((quarterly ? QUARTERLY_REQUIRED : REPORT_REQUIRED).every(k=>!emptyInput(input[k]))) try { (quarterly ? quarterlySetup : reportSetup)(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
     }
     if (!root && isPiece('jarvis-subflow') && settings.actionName === 'call' && object(input)) {

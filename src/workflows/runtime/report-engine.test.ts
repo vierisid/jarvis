@@ -18,7 +18,8 @@ import {createFlowRun,getFlowRun,listRuns} from '../db/repos/flow-run';
 import {enqueue} from '../db/repos/job-queue';
 import {upsertConnection} from '../db/repos/app-connection';
 import {configureWorkflowReadiness,versionReadiness} from '../db/repos/flow-readiness';
-import {pinFlowBindings} from '../db/repos/binding-pins';
+import {pinFlowBindings,listRunConnectionBindings} from '../db/repos/binding-pins';
+import {ConnectionCredentialError} from '../credentials/pasted-oauth2';
 import {AuthorityEngine} from '../../authority/engine';
 import {AuditTrail} from '../../authority/audit';
 import {EmergencyController} from '../../authority/emergency';
@@ -39,7 +40,7 @@ import {compileWorkflow} from './workflow-readiness';
 import {createManageWorkflowTool} from '../../actions/tools/manage-workflow';
 
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog,authority:AuthorityEngine,approvals:ApprovalManager;
-let services:ReturnType<typeof buildSandboxServiceBackends>;
+let services:ReturnType<typeof buildSandboxServiceBackends>,credentials:CredentialResolver;
 const versions:Record<string,string>={},runIds:string[]=[];
 let now=reportFixtureNow;
 beforeAll(async()=>{
@@ -53,7 +54,8 @@ beforeAll(async()=>{
   for(const name of ['stripe','hubspot','google'])upsertConnection({externalId:'fixture-'+name,displayName:'Fixture',type:name==='stripe'?'SECRET_TEXT':'OAUTH2',pieceName:'@activepieces/piece-'+(name==='google'?'google-docs':name),pieceVersion:'0.0.1',value:name==='stripe'?{secret_text:'synthetic-'+name}:{access_token:'synthetic-'+name}});
   authority=new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'});
   approvals=new ApprovalManager();
-  services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver(),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
+  credentials=new CredentialResolver();
+  services=buildSandboxServiceBackends({credentialResolver:credentials,authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
     reportNow:()=>now,reportFetch:(async(url:any,init:any)=>{
       const u=new URL(String(url)),provider=u.hostname==='api.stripe.com'?'stripe':u.hostname==='api.hubapi.com'?'hubspot':'google';
       expect(['api.stripe.com','api.hubapi.com','www.googleapis.com','docs.googleapis.com']).toContain(u.hostname);expect(init.headers.Authorization).toBe('Bearer synthetic-'+provider);expect(init.redirect).toBe('error');
@@ -173,4 +175,28 @@ test('quarterly account binding changes and required approval stop before provid
  const input={...quarterlyFixtureSetup,dealStageIds:'won',scheduledFor:at};const ctx={runId:claim.runId,projectId:DEFAULT_IDS.project,stepName:'report',executionPath:[] as Array<[string,number]>};
  const approval=await services.quarterlyReport!(input,ctx) as any;expect(approval.approval).toBeDefined();expect(calls).toHaveLength(0);
  approvals.approve(approval.approval.approvalId,'fixture');const result=await services.quarterlyReport!(input,ctx) as any;expect(result.complete).toBe(true);expect(calls.length).toBeGreaterThan(0);
+},60000);
+
+test('quarterly report refreshes the HubSpot token after the binding check and records a refused refresh',async()=>{
+ const at='2026-10-05T07:00:00Z',original=credentials.fresh.bind(credentials);
+ const direct=()=>{const f=quarterFlow(),claim=claimFire({flowId:f.flow.id,flowVersionId:f.version.id,source:'schedule',scheduledFor:Date.parse(at)},()=>{
+  const run=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(run.id);return {runId:run.id};
+ });if(claim.outcome!=='started')throw Error('No run');return {runId:claim.runId,projectId:DEFAULT_IDS.project,stepName:'report',executionPath:[] as Array<[string,number]>};};
+ const input={...quarterlyFixtureSetup,dealStageIds:'won',scheduledFor:at};
+ try{
+  // The stored token is stale; only the refreshed one is accepted by the provider mock.
+  upsertConnection({externalId:'fixture-hubspot',displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-hubspot',pieceVersion:'0.0.1',value:{access_token:'stale-hubspot'}});
+  let calls:string[]=[],refreshed=0;reset();request=quarterlyFixtureRequest(quarterlyFixtureSetup,at,'complete',calls);
+  credentials.fresh=async r=>{refreshed++;return {...r,value:{...r.value,access_token:'synthetic-hubspot'}};};
+  let ctx=direct();const result=await services.quarterlyReport!(input,ctx) as any;
+  expect(refreshed).toBe(1);expect(result.complete).toBe(true);expect(calls.length).toBeGreaterThan(0);
+  expect(listRunConnectionBindings(ctx.runId)[0]).toMatchObject({externalId:'fixture-hubspot',handedOut:true});
+  calls=[];request=quarterlyFixtureRequest(quarterlyFixtureSetup,at,'complete',calls);
+  credentials.fresh=async()=>{throw new ConnectionCredentialError('CONNECTION_EXPIRED','refresh refused');};
+  ctx=direct();await expect(services.quarterlyReport!(input,ctx)).rejects.toThrow('Reconnect the selected HubSpot account (fixture-hubspot): refresh refused');
+  expect(calls).toHaveLength(0);expect(listRunConnectionBindings(ctx.runId)[0]?.credentialFailure).toMatchObject({code:'CONNECTION_EXPIRED'});
+ }finally{
+  credentials.fresh=original;
+  upsertConnection({externalId:'fixture-hubspot',displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-hubspot',pieceVersion:'0.0.1',value:{access_token:'synthetic-hubspot'}});
+ }
 },60000);

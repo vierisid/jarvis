@@ -89,3 +89,16 @@ test('clock substitution, unsupported graph edges and real notification channels
   await expect(validateQuarterlyFixtures(invalid)).rejects.toThrow('scheduledFor');
   const other=structuredClone(graph);other.nextAction.nextAction.settings.input.channels=['telegram'];await expect(validateQuarterlyFixtures(other)).rejects.toThrow('dashboard');
 });
+test('a blank deal currency falls back to the portal company currency, and only that',async()=>{
+  const base=quarterlyFixtureRequest(setup,at,'missing_currency');
+  const withCompany=await collectQuarterlyReport(setup,async(p,path,b)=>{const r=await base(p,path,b);return path.startsWith('/account-info')?{...r,companyCurrency:'eur'}:r;},at);
+  expect(withCompany.complete).toBe(true);expect(withCompany.datasets[0]!.totals.EUR).toEqual({count:1,amount:'150'});
+  const unknown=await collectQuarterlyReport(setup,base,at);
+  expect(unknown.complete).toBe(false);expect(unknown.datasets[0]!.coverage.reason).toContain('company currency is unknown');
+});
+test('readiness refuses a managed HubSpot connection and a non-Rome schedule',()=>{
+  const managed=structuredClone(graph) as any;Object.assign(managed.nextAction.settings.input,{...setup,dealStageIds:'won',hubspotConnection:'jarvis:hubspot'});
+  expect(compileWorkflow(managed,{pieces:catalog,phase:'composition'}).issues.map((i:any)=>i.message)).toContain('Select a saved HubSpot account; a Jarvis-managed connection cannot be used by the quarterly report');
+  const zone=structuredClone(graph) as any;zone.settings.input.timezone='Asia/Tokyo';
+  expect(compileWorkflow(zone,{pieces:catalog,phase:'composition'}).issues.map((i:any)=>i.path)).toContain('settings.input.timezone');
+});

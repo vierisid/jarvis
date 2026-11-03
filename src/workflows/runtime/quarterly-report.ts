@@ -2,6 +2,7 @@ import { comparison, decimal, parts, midnight, pages, currency, add, unavailable
 
 export const QUARTERLY_ACTION = 'quarterly_hubspot_report';
 export const QUARTERLY_ACCOUNTS = { hubspotConnection: '@activepieces/piece-hubspot' } as const;
+export const QUARTERLY_MANAGED_REFUSAL = 'Select a saved HubSpot account; a Jarvis-managed connection cannot be used by the quarterly report';
 export const QUARTERLY_REQUIRED = ['hubspotConnection', 'hubspotPortalId', 'dealDateProperty', 'dealStageIds'] as const;
 type Obj = Record<string, any>;
 export interface QuarterlySetup { hubspotConnection: string; hubspotPortalId: string; dealDateProperty: string; dealStageIds: string[]; timezone: 'Europe/Rome' }
@@ -44,6 +45,8 @@ export async function collectQuarterlyReport(setup: QuarterlySetup, request: Rep
   try {
     const account = await read('hubspot', '/account-info/v3/details');
     if (String(account.portalId) !== setup.hubspotPortalId) throw Error('HubSpot portal mismatch');
+    // A single-currency portal often leaves deal_currency_code empty: its deals are in the company currency.
+    const companyCurrency = typeof account.companyCurrency === 'string' && /^[a-zA-Z]{3}$/.test(account.companyCurrency) ? account.companyCurrency.toUpperCase() : undefined;
     const property = await read('hubspot', `/crm/v3/properties/deals/${setup.dealDateProperty}`);
     if (property.name !== setup.dealDateProperty || property.type !== 'datetime') throw Error('Select a HubSpot datetime date property');
     const pipelines = await read('hubspot', '/crm/v3/pipelines/deals');
@@ -66,7 +69,12 @@ export async function collectQuarterlyReport(setup: QuarterlySetup, request: Rep
       if (index < 0) continue;
       const dataset = datasets[index]!;
       if (dataset.coverage.status === 'Unavailable') continue;
-      try { add(dataset.totals, currency(p.deal_currency_code), decimal(p.amount)); }
+      try {
+        const code = p.deal_currency_code;
+        // Never assumed: with neither a deal currency nor a known portal company currency the quarter is Unavailable.
+        const c = code == null || code === '' ? companyCurrency ?? (() => { throw Error('Deal currency missing and the HubSpot company currency is unknown'); })() : currency(code);
+        add(dataset.totals, c, decimal(p.amount));
+      }
       catch (e) { unavailable(dataset, e); }
     }
   } catch (e) {
