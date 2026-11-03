@@ -2,6 +2,7 @@
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { dropboxNeedsReconnect } from "./dropbox-refresh";
 
 export const DROPBOX_PIECE = "@activepieces/piece-dropbox";
 export const DROPBOX_CONNECTION = "jarvis:dropbox";
@@ -102,10 +103,12 @@ export function dropboxConnectUrl(config: JarvisConfig): string | null {
 }
 export function dropboxStatus(config: JarvisConfig) {
   const connection = readDropboxConnection(config.daemon.data_dir);
+  const reconnect = connection ? dropboxNeedsReconnect(config, connection) : false;
   return {
     configured: !!dropboxConnectUrl(config),
     connect_url: dropboxConnectUrl(config),
-    connected: !!connection,
+    connected: !!connection && !reconnect,
+    reconnect,
     external_id: DROPBOX_CONNECTION,
     account: connection?.account ?? null,
     workspaces: connection?.workspaces ?? [],
