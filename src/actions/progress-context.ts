@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { workflowProgressOperation } from '../brief/workflow-progress-labels';
 
 /** Internal observations only. Arguments, results, error text and agent prose never cross this port. */
 export interface ExecutionActivity {
@@ -6,6 +7,7 @@ export interface ExecutionActivity {
   executionId: string;
   phase: 'started' | 'completed' | 'failed';
   toolName?: string;
+  operation?: string;
   refs?: Array<{ kind: 'goal' | 'fact' | 'run'; id: string }>;
 }
 const observer = new AsyncLocalStorage<((event: ExecutionActivity) => void) | undefined>();
@@ -19,14 +21,14 @@ export function reportExecutionActivity(event: ExecutionActivity): boolean {
   try { observe(event); } catch { /* Progress cannot alter a tool's result or trigger a retry. */ }
   return true;
 }
-export function beginExecutionActivity(kind: ExecutionActivity['kind'], toolName?: string) {
+export function beginExecutionActivity(kind: ExecutionActivity['kind'], toolName?: string, operation?: string) {
   if (!observer.getStore()) return (_phase: 'completed' | 'failed') => {};
   const executionId = crypto.randomUUID();
-  reportExecutionActivity({ kind, executionId, phase: 'started', toolName });
+  reportExecutionActivity({ kind, executionId, phase: 'started', toolName, operation });
   let settled = false;
   return (phase: 'completed' | 'failed') => {
     if (settled) return;
-    settled = true; reportExecutionActivity({ kind, executionId, phase, toolName });
+    settled = true; reportExecutionActivity({ kind, executionId, phase, toolName, operation });
   };
 }
 
@@ -40,9 +42,9 @@ export function failedToolResult<T>(result: T): T {
   if (observer.getStore() && outcome && !outcome.settled) outcome.failed = true;
   return result;
 }
-export async function observeToolExecution<T>(name: string, run: () => Promise<T>): Promise<T> {
+export async function observeToolExecution<T>(name: string, run: () => Promise<T>, action?: unknown): Promise<T> {
   if (!observer.getStore()) return run();
-  const finish = beginExecutionActivity('tool', name);
+  const finish = beginExecutionActivity('tool', name, workflowProgressOperation(name, action));
   const outcome = { failed: false, settled: false };
   return toolOutcome.run(outcome, async () => {
     try {
