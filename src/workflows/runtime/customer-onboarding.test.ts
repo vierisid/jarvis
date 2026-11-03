@@ -56,7 +56,7 @@ test('credential failure is isolated without a false dispatched claim',async()=>
   expect(r.outcomes.clickup.status).toBe('failed');expect(r.outcomes.drive.status).toBe('succeeded');expect(JSON.stringify(r)).not.toContain('secret');expect(f.calls).toEqual(['drive']);
 });
 test('HTTP ambiguous failures and malformed successes never invite automatic retries',async()=>{
-  for(const status of [408,409,429,500,502,503,302]){
+  for(const status of [408,409,500,502,503,302]){
     let calls=0;const fetchImpl=(async()=>{calls++;return new Response('',{status});}) as unknown as typeof fetch;
     const store=memoryOnboardingStore(),create=onboardingTransport(setup,customer,async()=>'synthetic',()=>{},fetchImpl);
     expect((await onboardCustomer(store,create,'http')).outcomes.drive.status).toBe('unknown');await onboardCustomer(store,create,'http');expect(calls).toBe(2);
@@ -80,4 +80,10 @@ test('a run refused before dispatch propagates instead of recording a retryable 
   expect(f.calls).toEqual(['drive']);expect(store.read('clickup')).toBeUndefined();expect(store.read('drive')?.status).toBe('succeeded');
   refused=false;const retry=await onboardCustomer(store,create,'gate',gate);
   expect(retry.outcomes.clickup.status).toBe('succeeded');expect(f.calls).toEqual(['drive','clickup']);
+});
+test('a rate-limited create is an explicit rejection: the branch fails and a later run retries it once',async()=>{
+  let calls=0,status=429;const fetchImpl=(async(url:any,init:any)=>{calls++;if(status===429)return new Response('',{status});const body=JSON.parse(init.body);return Response.json(String(url).includes('clickup')?{id:'task-1'}:{id:'folder-1',mimeType:body.mimeType,parents:body.parents});}) as unknown as typeof fetch;
+  const store=memoryOnboardingStore(),create=onboardingTransport(setup,customer,async()=>'synthetic',()=>{},fetchImpl);
+  const first=await onboardCustomer(store,create,'rate');expect(first.outcomes.clickup.status).toBe('failed');expect(first.outcomes.drive.status).toBe('failed');expect(calls).toBe(2);
+  status=200;const second=await onboardCustomer(store,create,'rate');expect(second.outcomes.clickup.status).toBe('succeeded');expect(second.outcomes.drive.status).toBe('succeeded');expect(calls).toBe(4);
 });
