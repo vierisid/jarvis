@@ -1,5 +1,5 @@
 import { REPORT_PIECE } from './weekly-report';
-import { QUARTERLY_ACTION, QUARTERLY_MANAGED_REFUSAL, quarterlySetup, quarterlyTransport, collectQuarterlyReport } from './quarterly-report';
+import { QUARTERLY_ACTION, QUARTERLY_MANAGED_REFUSAL, QUARTERLY_ZONE, quarterlySetup, quarterlyTransport, collectQuarterlyReport } from './quarterly-report';
 import { fireForRun } from '../db/repos/trigger-fire';
 import { connectionBindings, enforceRunConnectionBinding, recordRunCredentialOutcome } from '../db/repos/binding-pins';
 import { walkFlowNodes } from '../db/flow-graph';
@@ -7,7 +7,7 @@ import { digest, resolveEffectContext, type WorkflowEffectContext } from './effe
 import type { WorkflowEffectBoundary } from './effect-boundary';
 import type { CredentialResolver } from '../credentials/adapter';
 import { ConnectionCredentialError, OAUTH2_TYPES } from '../credentials/pasted-oauth2';
-import { getCronTimezone } from '../../lib/cron-scheduler';
+import { canonicalZone, effectiveScheduleZone } from '../runner/triggers/schedule-zone';
 
 export function createQuarterlyReportService(deps: { effects: WorkflowEffectBoundary; credentials: CredentialResolver; fetchImpl?: typeof fetch }) {
   return async (input: Record<string, unknown>, ctx: WorkflowEffectContext) => {
@@ -17,8 +17,7 @@ export function createQuarterlyReportService(deps: { effects: WorkflowEffectBoun
     if (digest(quarterlySetup(saved.settings?.input ?? {})) !== digest(setup)) throw Error('Quarterly setup must match saved workflow');
     if (version.trigger.settings?.pieceName !== 'schedule' || saved.settings?.input?.scheduledFor !== `{{${version.trigger.name}.scheduledFor}}`) throw Error('Quarterly report must use the persisted schedule occurrence');
     // Quarters are Rome calendar quarters; a schedule in another zone could start on a different Rome date.
-    const tz = version.trigger.settings?.input?.timezone;
-    if ((typeof tz === 'string' && tz.trim() ? tz : getCronTimezone() ?? Intl.DateTimeFormat().resolvedOptions().timeZone) !== setup.timezone) throw Error(`Quarterly report requires the schedule timezone ${setup.timezone}`);
+    if (canonicalZone(effectiveScheduleZone(version.trigger.settings)) !== QUARTERLY_ZONE) throw Error(`Quarterly report requires a schedule that fires in ${QUARTERLY_ZONE}`);
     const fire = fireForRun(ctx.runId);
     if (!fire || fire.source !== 'schedule' || !Number.isFinite(fire.scheduledFor) || fire.scheduledFor === null) throw Error('Scheduled occurrence unavailable; no execution-time fallback');
     const scheduledFor = new Date(fire.scheduledFor).toISOString();

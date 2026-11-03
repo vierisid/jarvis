@@ -352,9 +352,21 @@ export async function reloadUsejarvisBillingBlock(
   await reloadSystemBlock(config, 'usejarvis_billing', configPath);
 }
 
+/**
+ * Re-read ONLY the SYSTEM-owned `usejarvis_integrations` block, same
+ * semantics: a converge that adds, moves or removes the hosted account page
+ * lands on SIGHUP without a restart.
+ */
+export async function reloadUsejarvisIntegrationsBlock(
+  config: JarvisConfig,
+  configPath?: string,
+): Promise<void> {
+  await reloadSystemBlock(config, 'usejarvis_integrations', configPath);
+}
+
 async function reloadSystemBlock(
   config: JarvisConfig,
-  key: 'usejarvis_ai' | 'usejarvis_billing',
+  key: 'usejarvis_ai' | 'usejarvis_billing' | 'usejarvis_integrations',
   configPath?: string,
 ): Promise<void> {
   try {

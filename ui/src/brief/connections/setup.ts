@@ -1,3 +1,4 @@
+import { connectionProviderForPiece } from '../../../../src/integrations/connection-providers';
 import { uuid } from '../../lib/uuid';
 import type { ConnectedWorkspaceSnapshot, ConnectionSetupAction, ConnectedRow } from '../../../../src/brief/connected-workspace-contracts';
 
@@ -59,11 +60,17 @@ export class ConnectionSetup {
     const generation = ++this.generation, snapshot = await this.snapshot();
     if (generation !== this.generation) return null;
     const action = snapshot.setup.find(a => a.id === actionId);
-    if (!action) throw new Error('Setup unavailable');
+    if (!action || action.existingOnly && !rowId) throw new Error('Setup unavailable');
     const row = rowId ? snapshot.rows.find(r => r.sourceId === rowId) : null;
-    if (rowId && (!row || row.setupActionId !== action.id || row.kind !== action.verifies.kind || row.serviceId !== action.verifies.serviceId)) throw new Error('Setup target changed');
+    const libraryAlias = row?.kind === 'library_piece' && action.verifies.kind === 'native_service'
+      && connectionProviderForPiece(row.serviceId) === action.verifies.serviceId;
+    if (rowId && (!row || row.setupActionId !== action.id || !libraryAlias && (row.kind !== action.verifies.kind || row.serviceId !== action.verifies.serviceId))) throw new Error('Setup target changed');
+    const verificationRowId = libraryAlias
+      ? snapshot.rows.find(r => r.kind === action.verifies.kind && r.serviceId === action.verifies.serviceId)?.sourceId
+      : rowId;
+    if (libraryAlias && !verificationRowId) throw new Error('Setup target changed');
     const attempt: SetupAttempt = { version: 1, scopeId: this.scopeId, nonce: this.ports.nonce?.() ?? uuid(),
-      actionId, rowId, position: structuredClone(position), expiresAt: this.now() + TTL, phase: 'pending' };
+      actionId, rowId: verificationRowId ?? null, position: structuredClone(position), expiresAt: this.now() + TTL, phase: 'pending' };
     this.save(attempt);
     try { this.ports.open(action, rowId); } catch { this.save({ ...attempt, phase: 'returned' }); throw new Error('Setup could not open'); }
     return this.current();

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test, spyOn } from 'bun:test';
 import { createRequire } from 'node:module';
 import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from '../../workflows/db';
-import { createFlow, getFlow, listFlows, setPublishedVersion, updateFlowMetadata, updateFlowStatus } from '../../workflows/db/repos/flow';
+import { createFlow, getFlow, listFlows, setFlowCodeStepsEnabled, setPublishedVersion, updateFlowMetadata, updateFlowStatus } from '../../workflows/db/repos/flow';
 import { createDraftVersion, getFlowVersion, getLatestDraft, listVersions, lockVersion, setSampleDataEntry, updateDraftVersion } from '../../workflows/db/repos/flow-version';
 import { configureWorkflowReadiness } from '../../workflows/db/repos/flow-readiness';
 import { createFlowRun, getFlowRun, listRuns } from '../../workflows/db/repos/flow-run';
@@ -117,6 +117,20 @@ test('locked versions and live unpublished drafts are refused; a separate draft 
   const published=getFlowVersion(version.id),draft=createDraftVersion({flowId:flow.id,displayName:'Editable draft',trigger:version.trigger});
   const current=await read(flow.id);await call({...args(flow.id,current,[]),name:'Repaired draft'});
   expect(getFlowVersion(version.id)).toEqual(published);expect(getFlow(flow.id)).toMatchObject({status:'ENABLED',published_version_id:version.id});expect(getLatestDraft(flow.id)!.id).toBe(draft.id);
+});
+
+test('the assistant cannot add or change CODE steps, even in a flow the user allowed to run code',async()=>{
+  const code=(source:string)=>({name:'compute',type:'CODE',settings:{sourceCode:{packageJson:'{}',code:source},input:{}}});
+  const {flow,version}=fixture();setFlowCodeStepsEnabled(flow.id,true);let v=await read(flow.id);
+  await expect(call(args(flow.id,v,[{op:'add',path:'/nextAction/nextAction',value:code('export const code = async () => ({});')}]))).rejects.toThrow('CODE steps cannot be added or changed');
+  expect(getFlowVersion(version.id)!.trigger).toEqual(version.trigger);
+  // A CODE step the user wrote survives unrelated repairs and may be removed, but never rewritten.
+  updateDraftVersion(version.id,{trigger:{...version.trigger,nextAction:{...version.trigger.nextAction!,nextAction:code('export const code = async () => ({ ok: true });') as any}}});
+  v=await read(flow.id);
+  await expect(call(args(flow.id,v,[{op:'replace',path:'/nextAction/nextAction/settings/sourceCode/code',value:'export const code = async () => ({ ok: false });'}]))).rejects.toThrow('CODE steps cannot be added or changed');
+  await expect(call(args(flow.id,v,[{op:'replace',path:'/nextAction/nextAction/name',value:'renamed'}]))).rejects.toThrow('CODE steps cannot be added or changed');
+  expect((await call(args(flow.id,v,[{op:'replace',path:'/nextAction/settings/input/prompt',value:'fixed'}]))).changed).toBe(true);
+  v=await read(flow.id);expect((await call(args(flow.id,v,[{op:'remove',path:'/nextAction/nextAction'}]))).changed).toBe(true);
 });
 
 test('removed workflows cannot be edited or restored implicitly',async()=>{

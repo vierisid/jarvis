@@ -608,3 +608,13 @@ describe("real F22 headless adapter integration", () => {
     }
   }
 });
+
+test('hosted OAuth actions are accepted and manual repair stays out of the new-app catalog', () => {
+  const s = snapshot();
+  s.setup.push({ id: 'setup:dropbox', label: 'Dropbox', target: { kind: 'hosted_integration', provider: 'dropbox' }, verifies: { kind: 'native_service', serviceId: 'dropbox' } });
+  s.setup[0]!.existingOnly = true;
+  const projected = projectF22(s, 'fixture')!;
+  expect(projected).not.toBeNull(); expect(projected.catalog.filter(a => !a.existingOnly).map(a => a.id)).toEqual(['setup:dropbox']);
+  expect(projected.catalog.find(a => a.id === 'setup:notes')?.existingOnly).toBe(true);
+  expect(projected.connections.some(r => r.identity.sourceId === 'account:one')).toBe(true);
+});

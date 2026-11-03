@@ -4,6 +4,7 @@ import { getFlowInProject } from '../../workflows/db/repos/flow';
 import { getFlowVersion, getLatestDraft, updateDraftVersion, type FlowVersion, type FlowTriggerNode } from '../../workflows/db/repos/flow-version';
 import { workflowRemovalState } from '../../workflows/db/repos/workflow-removal-state';
 import { compileWorkflow, type ReadinessContext } from '../../workflows/runtime/workflow-readiness';
+import { CODE_STEP_TYPE, walkFlowNodes } from '../../workflows/db/flow-graph';
 
 /** Covers the persisted authoring snapshot, not a recomputed readiness report. */
 export function draftRevision(version: FlowVersion): string {
@@ -56,6 +57,20 @@ export function patchDraftGraph(saved: FlowTriggerNode, patches: unknown): FlowT
   return graph;
 }
 
+/** A CODE step's own content (type, name, settings), without its subgraph links. */
+function codeSteps(graph: FlowTriggerNode): string[] {
+  return walkFlowNodes(graph).filter(node => node.type === CODE_STEP_TYPE)
+    .map(({ nextAction: _n, children: _c, firstLoopAction: _l, ...node }) => JSON.stringify(node));
+}
+
+/** The assistant never authors code: compose cannot emit CODE, and a person's
+ * per-flow code permission covers the code a person wrote. Removing or moving
+ * an existing CODE step is allowed; adding, renaming or changing one is not. */
+function assertNoAssistantCode(saved: FlowTriggerNode, graph: FlowTriggerNode): void {
+  const existing = new Set(codeSteps(saved));
+  if (codeSteps(graph).some(step => !existing.has(step))) fail('CODE steps cannot be added or changed by the assistant; the user edits code in the workflow editor');
+}
+
 /** Synchronous check + validation + write in one SQLite transaction. No LLM,
  * network, installation, activation, run, or workflow/version creation. */
 export function updateSavedDraft(input: {
@@ -75,6 +90,7 @@ export function updateSavedDraft(input: {
     if (!input.context.pieces) fail('installed action schemas are unavailable');
     if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200)) fail('name must be a nonempty string of at most 200 characters');
     const graph = patchDraftGraph(version.trigger, input.patches);
+    assertNoAssistantCode(version.trigger, graph);
     const validation = compileWorkflow(graph, { ...input.context, phase: 'composition' });
     if (!validation.ready) fail('edited graph is invalid: ' + validation.issues.slice(0, 5).map(i => `${i.node} (${i.path}): ${i.message}`).join('; '));
     input.validateContract?.(graph);

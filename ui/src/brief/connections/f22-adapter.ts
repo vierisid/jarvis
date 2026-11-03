@@ -1,3 +1,4 @@
+import { isHostedConnectionProvider, type HostedConnectionProvider } from "../../../../src/integrations/connection-providers";
 import type { BriefConnection } from "../../../../src/brief/contracts";
 import {
   connectionKey,
@@ -34,6 +35,7 @@ export interface F22Action {
   label: string;
   target:
     | { kind: "google"; flow: "oauth" | "manual_client" | "hosted_browser" }
+    | { kind: "hosted_integration"; provider: HostedConnectionProvider }
     | { kind: "channel"; channel: "telegram" | "discord" }
     | { kind: "device"; flow: "enrollment" | "hosted_sign_in" }
     | {
@@ -43,6 +45,7 @@ export interface F22Action {
         authType: string;
       };
   verifies: { kind: BriefConnection["kind"]; serviceId: string };
+  existingOnly?: boolean;
 }
 export interface F22Snapshot {
   contractVersion: 1;
@@ -140,7 +143,9 @@ export function projectF22(
     snapshot.setup.some(
       (a) =>
         !a.verifies?.serviceId ||
-        !["google", "channel", "device", "piece_credentials"].includes(
+        (a.existingOnly !== undefined && typeof a.existingOnly !== 'boolean') ||
+        (a.target?.kind === 'hosted_integration' && !isHostedConnectionProvider(a.target.provider)) ||
+        !["google", "hosted_integration", "channel", "device", "piece_credentials"].includes(
           a.target?.kind,
         ),
     )
@@ -178,6 +183,7 @@ export function projectF22(
       .filter((a) => a.verifies.kind !== "device")
       .map((a) => ({
         id: a.id,
+        ...(a.existingOnly ? { existingOnly: true } : {}),
         name: a.label,
         icon: icon(a.verifies.kind),
         kind: a.verifies.kind,
@@ -189,7 +195,9 @@ export function projectF22(
             ? "Configure credentials in the existing service form. Saved credentials still need authentication verification."
             : a.target.kind === "google"
               ? "Open Google settings to configure access or continue in your browser."
-              : "Configure this service in its existing settings.",
+              : a.target.kind === "hosted_integration"
+                ? "Connect your account securely in your browser."
+                : "Configure this service in its existing settings.",
       })),
     unavailableSources: sourceNames.filter(
       (s) => snapshot.sources[s] !== "ready",

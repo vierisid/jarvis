@@ -13,7 +13,7 @@ export const meetingBriefsAction = createAction({
     internalDomains: Property.ShortText({ displayName: 'Internal email domains', required: true, description: 'Comma-separated exact domains belonging to your team. Subdomains must be listed explicitly.' }),
     hubspotPortalId: Property.ShortText({ displayName: 'HubSpot portal ID', required: true, description: 'The numeric account ID from your HubSpot URL, used for source links.' }),
     recentDays: Property.Number({ displayName: 'Recent conversation window (days)', required: true, defaultValue: 30 }),
-    timezone: Property.ShortText({ displayName: 'Timezone', required: true, defaultValue: 'Europe/Rome' }),
+    timezone: Property.ShortText({ displayName: 'Timezone', required: false, description: 'IANA timezone for meeting times in the brief. Leave empty to use the timezone configured for Jarvis.' }),
   },
   outputSample: { complete: true, meetings: [{ eventId: 'event-occurrence-id', start: '2026-10-23T09:15:00.000Z', title: 'Meeting', brief: 'Sourced contact context and recent conversation excerpts', notificationKey: 'meeting-brief:sha256', guard: { setup: {}, eventId: 'event-occurrence-id', start: '2026-10-23T09:15:00.000Z', fingerprint: 'sha256' } }] },
   async run(context) {

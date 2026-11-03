@@ -39,7 +39,7 @@ test('explicit zone wins over process default and respects month restrictions',(
  expect(CronScheduler.nextRun('0 17 LW 2 *',new Date('2026-12-31T16:00:00Z'),undefined,'Europe/Rome')?.toISOString()).toBe('2027-02-26T16:00:00.000Z');
  expect(CronScheduler.matchesIn(expression,new Date('2027-02-26T16:00:00Z'),'America/Los_Angeles')).toBe(false);
 });
-for(const invalid of ['0 LW * * *','LW 17 * * *','0 17 LW/2 * *','0 17 LW,15 * *','0 17 L * *','0 17 31W * *','0 17 * LW *','0 17 * * LW'])test('reject unsupported syntax '+invalid,()=>{
+for(const invalid of ['0 LW * * *','LW 17 * * *','0 17 LW/2 * *','0 17 LW,15 * *','0 17 L * *','0 17 31W * *','0 17 * LW *','0 17 * * LW','0 17 LW * 0,6','0 17 LW * 6'])test('reject unsupported syntax '+invalid,()=>{
  expect(()=>validateCronExpression(invalid)).toThrow();
 });
 test('repeated ticks and a clock correction start only the actual last weekday',()=>{
@@ -49,4 +49,8 @@ test('repeated ticks and a clock correction start only the actual last weekday',
   for(const at of ['2027-02-25T16:00:10Z','2027-02-26T16:00:10Z','2027-02-26T16:01:10Z','2027-02-26T15:50:00Z','2027-02-26T16:00:20Z','2027-02-27T16:00:00Z','2027-02-28T16:00:00Z'])scheduler.runDue('monthly',Date.parse(at));
   expect(keys).toEqual(['2027-02-26T17:00']);
  }finally{scheduler.cancelAll();}
+});
+test('LW still accepts a weekday restriction',()=>{
+ expect(()=>validateCronExpression('0 17 LW * 5')).not.toThrow();
+ expect(CronScheduler.nextRun('0 17 LW * 5',new Date('2026-01-01T00:00:00Z'),undefined,'Europe/Rome')?.toISOString()).toBe('2026-01-30T16:00:00.000Z');
 });

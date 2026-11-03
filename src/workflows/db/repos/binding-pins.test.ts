@@ -24,7 +24,7 @@ const machine = (id: string, connected: boolean, capabilities = ['filesystem', '
 let machines: SidecarInfo[] = [];
 let localTools = true;
 let grant: string | null = 'grant-a';
-const managed: JarvisConnectionSource = { id: 'google', canResolve: id => id.startsWith('jarvis:google'),
+const managed: JarvisConnectionSource = { id: 'google', pieceNames: ['private-piece'], canResolve: id => id.startsWith('jarvis:google'),
   resolve: async () => null, identity: () => grant };
 
 /** Readiness services belong to one database handle. */

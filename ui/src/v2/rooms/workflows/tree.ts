@@ -189,6 +189,43 @@ export function nextStepName(root: FlowStepNode): string {
   return `step_${max + 1}`;
 }
 
+/**
+ * A step's settings with one input key set. Picking a schedule trigger's
+ * `timezone` here is a person choosing it, so it is recorded in
+ * `settings.chosenTimezone`: the brain uses a schedule's own zone only when
+ * that record matches it, and a pre-filled default otherwise means Jarvis's
+ * zone (src/workflows/runner/triggers/schedule-zone.ts).
+ */
+export function withStepInput(
+  step: FlowStepNode,
+  key: string,
+  value: unknown,
+): NonNullable<FlowStepNode["settings"]> {
+  const settings: NonNullable<FlowStepNode["settings"]> = step.settings ? { ...step.settings } : {};
+  settings.input = { ...(settings.input ?? {}), [key]: value };
+  if (!isScheduleTrigger(step)) delete settings.chosenTimezone;
+  else if (key === "timezone") {
+    if (typeof value === "string" && value) settings.chosenTimezone = value;
+    else delete settings.chosenTimezone;
+  }
+  return settings;
+}
+
+function isScheduleTrigger(step: FlowStepNode): boolean {
+  const pieceName = step.settings?.pieceName ?? "";
+  return step.type === "PIECE_TRIGGER" && (pieceName === "schedule" || /(^|\/)piece-schedule$/.test(pieceName));
+}
+
+/**
+ * Settings for a step whose piece, trigger or inputs were replaced: a zone
+ * chosen for the old ones is not a choice for the new ones, so the record goes.
+ */
+export function withoutChosenZone(settings: FlowStepNode["settings"]): NonNullable<FlowStepNode["settings"]> {
+  const next: NonNullable<FlowStepNode["settings"]> = { ...(settings ?? {}) };
+  delete next.chosenTimezone;
+  return next;
+}
+
 /** Seed step input from schema defaults. Existing keys win. */
 export function applySchemaDefaults(
   current: Record<string, unknown>,

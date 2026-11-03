@@ -53,7 +53,7 @@ beforeAll(async()=>{
     onboardingFetch:(async(url:any,init:any)=>{
       const u=new URL(String(url));
       expect(['api.clickup.com','www.googleapis.com']).toContain(u.hostname);
-      expect(init.headers.Authorization).toBe(u.hostname==='api.clickup.com'?'synthetic-clickup':'Bearer synthetic-google-drive');
+      expect(init.headers.Authorization).toBe(u.hostname==='api.clickup.com'?'Bearer synthetic-clickup':'Bearer synthetic-google-drive');
       return provider.fetchImpl(url,init);
     }) as typeof fetch,llmManager:{chat:async()=>{throw Error('No model tools or delegate may execute');}} as any,
     channelService:{sendWorkflowNotification:async()=>{throw Error('No external notifications');}} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{notifications.push(text);return 1;}} as any});
@@ -119,6 +119,17 @@ test('authority denial prevents both operations; approved work uses bound argume
  const r=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(r.id);const ctx={runId:r.id,projectId:DEFAULT_IDS.project,stepName:'resources',executionPath:[] as Array<[string,number]>};
  const pending=await services.customerOnboarding!({...setup,customer:onboardingFixturePayload},ctx) as any;expect(pending.approval).toBeDefined();expect(provider.calls).toHaveLength(0);
  approvals.approve(pending.approval.approvalId,'fixture');const result=await services.customerOnboarding!({...setup,customer:onboardingFixturePayload},ctx) as any;expect(result.outcomes.clickup.status).toBe('succeeded');expect(provider.calls).toHaveLength(2);
+},60_000);
+test('a managed connection is refused for the whole step before any branch writes',async()=>{
+ for(const [field,id] of [['driveConnection','jarvis:google'],['clickupConnection','jarvis:clickup']] as const){
+  provider=onboardingFixtureProvider();authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});
+  const graph=configuredGraph();graph.nextAction.settings.input[field]=id;
+  const flow=createFlow(),version=createDraftVersion({flowId:flow.id,displayName:'Managed account',trigger:graph});lockVersion(version.id);
+  const r=createFlowRun({flowId:flow.id,flowVersionId:version.id,status:'RUNNING'});runIds.push(r.id);
+  const ctx={runId:r.id,projectId:DEFAULT_IDS.project,stepName:'resources',executionPath:[] as Array<[string,number]>};
+  await expect(services.customerOnboarding!({...graph.nextAction.settings.input,customer:onboardingFixturePayload},ctx)).rejects.toThrow(/[Mm]anaged connection/);
+  expect(provider.calls).toHaveLength(0);
+ }
 },60_000);
 test('changed account is isolated to its branch; changed destination cannot recreate resources',async()=>{
  const f=await fixture();pinFlowBindings(f.flow.id);upsertConnection({externalId:'fixture-clickup',displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-clickup',pieceVersion:'0.0.1',value:{access_token:'changed'}});

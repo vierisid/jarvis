@@ -1,5 +1,5 @@
 import {afterEach,expect,test} from 'bun:test';
-import {CronScheduler} from '../../lib/cron-scheduler';
+import {CronScheduler,setCronTimezone} from '../../lib/cron-scheduler';
 import {collectQuarterlyReport,quarterlySetup,quarterlyTransport,reportQuarters} from './quarterly-report';
 import {quarterlyFixtureSetup as setup,quarterlyFixtureRequest,validateQuarterlyFixtures,quarterlyFixtureCases} from './quarterly-report-fixtures';
 import graph from './fixtures/quarterly-report-generated.json';
@@ -99,6 +99,21 @@ test('a blank deal currency falls back to the portal company currency, and only 
 test('readiness refuses a managed HubSpot connection and a non-Rome schedule',()=>{
   const managed=structuredClone(graph) as any;Object.assign(managed.nextAction.settings.input,{...setup,dealStageIds:'won',hubspotConnection:'jarvis:hubspot'});
   expect(compileWorkflow(managed,{pieces:catalog,phase:'composition'}).issues.map((i:any)=>i.message)).toContain('Select a saved HubSpot account; a Jarvis-managed connection cannot be used by the quarterly report');
-  const zone=structuredClone(graph) as any;zone.settings.input.timezone='Asia/Tokyo';
-  expect(compileWorkflow(zone,{pieces:catalog,phase:'composition'}).issues.map((i:any)=>i.path)).toContain('settings.input.timezone');
+  const zone=structuredClone(graph) as any;zone.settings.input.timezone='Asia/Tokyo';zone.settings.chosenTimezone='Asia/Tokyo';
+  expect(compileWorkflow(zone,{pieces:catalog,phase:'composition'}).issues).toContainEqual(expect.objectContaining({node:'trigger',path:'settings.input.timezone'}));
+  // No chosen zone: the schedule fires in Jarvis's configured zone, so that is what is checked.
+  const unchosen=structuredClone(graph) as any;delete unchosen.settings.chosenTimezone;
+  setCronTimezone('America/New_York');
+  try{expect(compileWorkflow(unchosen,{pieces:catalog,phase:'composition'}).issues.map((i:any)=>i.path)).toContain('settings.input.timezone');}
+  finally{setCronTimezone(null);}
+  setCronTimezone('Europe/Rome');
+  try{expect(compileWorkflow(unchosen,{pieces:catalog,phase:'composition'}).issues.map((i:any)=>i.path)).not.toContain('settings.input.timezone');}
+  finally{setCronTimezone(null);}
+});
+test('the quarterly transport reads only its fixed HubSpot endpoints and retries a short 429 once more',async()=>{
+  const seen:string[]=[];let limited=1;
+  const request=quarterlyTransport('fixture',()=>{},(async(url:any)=>{seen.push(String(url));if(limited-->0)return new Response('',{status:429,headers:{'retry-after':'0'}});return Response.json({results:[]});}) as typeof fetch,async()=>{});
+  expect(await request('hubspot','/crm/v3/objects/deals?limit=100')).toEqual({results:[]});expect(seen).toEqual(['https://api.hubapi.com/crm/v3/objects/deals?limit=100','https://api.hubapi.com/crm/v3/objects/deals?limit=100']);
+  for(const path of ['/crm/v3/objects/contacts','/crm/v3/objects/deals/search','/crm/v3/objects/deals/123'])await expect(request('hubspot',path)).rejects.toThrow('outside the HubSpot read scope');
+  expect(seen).toHaveLength(2);
 });

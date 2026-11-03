@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { assessBriefRelease, BRIEF_RELEASE, RELEASE_GATES } from "./release";
 import { releaseExample } from "./release.test-support";
 
-test("the shipped release has no activation or fabricated evidence", () => {
+test("the historical audit manifest contains no fabricated activation evidence", () => {
   expect(assessBriefRelease(BRIEF_RELEASE, undefined)).toEqual({ rollout: "off", blockers: [
     "release_disabled", "candidate_missing", "D-32_evidence_required", "F-28_evidence_required",
     "Q-22_evidence_required", "deployment_approval_required", "runtime_unverified",

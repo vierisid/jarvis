@@ -1,9 +1,7 @@
 import {createHash} from 'node:crypto';
 import {hubspotContactInput} from './hubspot-contact';
 
-export const IMPORT_PIECE='@jarvispieces/piece-jarvis-import';
-export const IMPORT_ACTION='resumable_contact_import';
-export const IMPORT_ACCOUNTS={hubspotConnection:'@activepieces/piece-hubspot',sourceConnection:'@activepieces/piece-http-oauth2'} as const;
+export {IMPORT_PIECE,IMPORT_ACTION,IMPORT_ACCOUNTS,isImportStep} from '../import-accounts';
 export const IMPORT_REQUIRED=['importId','sourceUrl','sourceAuth','hubspotConnection','hubspotPortalId','itemsPath','nextCursorPath','cursorParameter','idPath','emailPath','propertyMapping'] as const;
 export interface ImportSetup extends Record<string,unknown> {
   importId:string;sourceUrl:string;sourceAuth:'none'|'oauth2';sourceConnection:string;hubspotConnection:string;hubspotPortalId:string;
@@ -38,23 +36,70 @@ export const importDigest=(v:unknown)=>createHash('sha256').update(JSON.stringif
 export interface ImportContact {id:string;email:string;properties:Record<string,string>;hash:string}
 export interface ImportProgress {
   cursor:string|null;page:ImportContact[]|null;next:string|null;index:number;pages:number;contacts:number;complete:boolean;
-  phase:'account'|'page'|'lookup'|'write'|'reconcile';method:'POST'|'PATCH';retries:number;notBefore:number;inFlight:boolean;error?:string;
+  phase:'account'|'page'|'lookup'|'write'|'reconcile';method:'POST'|'PATCH';retries:number;notBefore:number;inFlight:boolean;error?:string;stoppedRun?:string;
+  /** The run that owns this import, and the pages it has completed. Saved with
+   * the page cursor. Another run may take over only once the owner has stopped
+   * or its flow run has ended. */
+  runPages?:number;pageRun?:string;
+  /** A provider deadline beyond MAX_RETRY_AFTER_MS that stopped a run. A new
+   * run refuses to start before it. */
+  retryAt?:number;
+  /** Digest of the HubSpot account identity (credential generation included)
+   * the portal was last verified with. A reconnect changes it, and the portal is
+   * verified again before the import continues where it was. */
+  hubspotAccount?:string;
+  /** Digest of the source account identity the cursor belongs to. A different
+   * source account (another tenant, say) restarts the walk from the first page;
+   * contacts already confirmed with the same content are skipped. */
+  sourceAccount?:string;
+  /** Where the import was, and its retry count, when a HubSpot reconnect sent
+   * it back to verify the portal: restored once the portal is verified. */
+  resume?:{phase:ImportProgress['phase'];retries:number};
+  /** The HubSpot contact ID a lookup found for the current contact, which an
+   * update must confirm. */
+  contactId?:string;
 }
 export const initialImportProgress=():ImportProgress=>({cursor:null,page:null,next:null,index:0,pages:0,contacts:0,complete:false,phase:'account',method:'POST',retries:0,notBefore:0,inFlight:false});
 export interface ImportStore {
   load():ImportProgress;save(state:ImportProgress):void;check():void;
   seenCursor(cursor:string|null):boolean;savePage(state:ImportProgress):void;
-  record(id:string):{hash:string;contactId:string}|null;
+  /** Whether the flow run with this ID is queued, running or paused. */
+  runLive(run:string):boolean;
+  record(id:string):{hash:string;contactId:string;source:string}|null;
+  /** Saves a restarted walk and forgets the cursors seen, in one transaction. */
+  resetPages(state:ImportProgress):void;
   finishContact(state:ImportProgress,contact:ImportContact,contactId:string):void;
 }
 export interface ImportResponse {status:number;retryAfter?:string|null;body:unknown}
 export type ImportRequest=(provider:'source'|'hubspot',url:string,method:'GET'|'POST'|'PATCH',body?:unknown)=>Promise<ImportResponse>;
 export class ImportTransportError extends Error {constructor(){super('Provider transport interrupted');}}
+/** A request the transport refused to send (unsent), or a response it refused
+ * to read (an oversized body). Final for the run, and a new run resumes. */
+export class ImportRefusal extends Error {
+  constructor(message:string,readonly unsent:boolean){super(message);this.name='ImportRefusal';}
+}
+/** A provider may ask for a delay up to this long; a longer one stops the run
+ * instead of parking it (and any open approval) for days. */
+export const MAX_RETRY_AFTER_MS=24*60*60*1000;
+/** Pages one run may complete. The budget is per run: a new run resumes from
+ * the checkpoint with a fresh budget. (The weekly report caps a report at 200
+ * pages; an import is resumable, so its cap bounds a run, not the import.) */
+export const MAX_IMPORT_PAGES_PER_RUN=1000;
+/** A resumable stop: final for this run, and a new run resumes from the
+ * checkpoint. unexecuted means the stopping request itself had no effect. */
+export class ImportStop extends Error {
+  constructor(message:string,readonly code:'IMPORT_RETRY_AFTER_TOO_LONG'|'IMPORT_RETRY_AFTER_PENDING'|'IMPORT_PAGE_LIMIT'|'IMPORT_RUN_ACTIVE'|'IMPORT_REFUSED',readonly unexecuted:boolean){super(message);this.name='ImportStop';}
+}
 export function retryDeadline(value:string|null|undefined,now:number,retries:number):number {
   const fallback=now+1000*2**Math.min(retries,3);
   if(!value)return fallback;
   if(/^\d+$/.test(value.trim())){const seconds=Number(value);if(Number.isSafeInteger(seconds)&&seconds>=0&&now+seconds*1000<8.64e15)return Math.max(fallback,now+seconds*1000);throw Error('Invalid Retry-After delay');}
-  const date=Date.parse(value);if(!Number.isFinite(date))throw Error('Invalid Retry-After date');return Math.max(fallback,date);
+  // HTTP-date is always GMT (RFC 9110 5.6.7). Date.parse reads a zone-less
+  // string in the machine zone, so accept only IMF-fixdate/RFC 850 (explicit
+  // GMT) and asctime (implicitly GMT, so pinned to it here).
+  const v=value.trim(),asctime=/^[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} \d{4}$/.test(v);
+  const date=asctime?Date.parse(v+' GMT'):/^[A-Z][a-z]+, [\d -]+[A-Z][a-z]{2}[\d -]+ \d{2}:\d{2}:\d{2} GMT$/.test(v)?Date.parse(v):NaN;
+  if(!Number.isFinite(date))throw Error('Invalid Retry-After date');return Math.max(fallback,date);
 }
 function pageData(body:unknown,s:ImportSetup){
   const items=atPath(body,s.itemsPath),next=atPath(body,s.nextCursorPath);
@@ -69,23 +114,81 @@ function pageData(body:unknown,s:ImportSetup){
   const identities=new Map<string,string>();for(const r of page){if(identities.has(r.id)&&identities.get(r.id)!==r.hash)throw Error('Conflicting source identity in page');identities.set(r.id,r.hash);}
   return {page,next:next===''?null:next as string|null};
 }
+/** Whether HubSpot already holds the value we would send, exactly but for
+ * surrounding space. A lookup that finds any other value updates the contact:
+ * a dropped leading zero, a missing plus sign or a case correction is a change
+ * to apply, not a match. (A write is confirmed by its contact ID instead.) */
+export function sameImportValue(stored:unknown,sent:string):boolean {
+  return stored!==undefined&&stored!==null&&String(stored).trim()===sent.trim();
+}
+/** The two account identities the slice compares with the ones it last ran with. */
+export interface ImportAccounts {hubspot:string;source:string}
 /** One bounded provider operation per slice. Progress, retry reservation and page
  * snapshot live in SQLite; timer waitpoints release the engine between slices. */
-export async function importSlice(s:ImportSetup,store:ImportStore,request:ImportRequest,now:number,clock:()=>number=()=>now):Promise<{complete:boolean;pages:number;contacts:number;resumeAt?:number}> {
+export async function importSlice(s:ImportSetup,store:ImportStore,request:ImportRequest,now:number,clock:()=>number=()=>now,run?:string,accounts?:ImportAccounts):Promise<{complete:boolean;pages:number;contacts:number;resumeAt?:number}> {
   const p=store.load();store.check();
   const result=(resumeAt?:number)=>({complete:p.complete,pages:p.pages,contacts:p.contacts,...(!p.complete?{resumeAt:resumeAt??now+1}: {})});
-  const fail=(message:string):never=>{p.error=message;p.inFlight=false;store.save(p);throw Error(message);};
-  if(p.error)throw Error(p.error);if(p.complete)return result();
+  const fail=(message:string,stop?:ImportStop):never=>{p.error=message;p.stoppedRun=run;p.inFlight=false;store.save(p);throw stop??Error(message);};
+  // A stop is final for the run that hit it. A new run (a fresh start, and
+  // fresh approval when governed) resumes from the checkpoint with a fresh
+  // budget, reconciling a possibly committed write by lookup before any repeat.
+  // Deterministic stops (cycles, changed identities) are detected again.
+  if(p.error&&(run===undefined||p.stoppedRun===run))throw Error(p.error);
+  if(p.complete)return result();
+  // One run owns the import at a time, so the per-run page budget cannot be
+  // reset by two runs taking turns. A refusal saves nothing: it is not a stop
+  // of the import, and the owner continues where it was.
+  if(run!==undefined&&p.pageRun!==undefined&&p.pageRun!==run&&!(p.error&&p.stoppedRun===p.pageRun)&&store.runLive(p.pageRun)){
+    throw new ImportStop('Import '+s.importId+' is in use by another run ('+p.pageRun+'); this run did not start it. Wait for that run to finish or stop it, then start a new run','IMPORT_RUN_ACTIVE',true);
+  }
+  // A far provider deadline outlives the run it stopped. A new run before it
+  // would only be refused again, so it does not start (or spend a retry).
+  if(p.retryAt!==undefined&&p.retryAt>clock()){
+    throw new ImportStop('Provider asked to retry at '+new Date(p.retryAt).toISOString()+'; this run did not start the import. Start a new run after then to resume from the checkpoint','IMPORT_RETRY_AFTER_PENDING',true);
+  }
+  if(p.error){delete p.error;delete p.stoppedRun;delete p.retryAt;p.retries=0;p.notBefore=0;if(p.phase==='write')p.phase='reconcile';store.save(p);}
+  if(p.pageRun!==run){p.pageRun=run;p.runPages=0;}
   if(p.notBefore>now)return result(p.notBefore);
   // A process died after reserving a request. Count that attempt, and reconcile
   // a potentially committed write before any repeat. Do not reset the budget.
   if(p.inFlight){p.inFlight=false;p.retries++;if(p.phase==='write')p.phase='reconcile';else if(p.retries>3)return fail('Import retry budget exhausted after interruption');store.save(p);}
-  if(p.page&&p.index>=p.page.length){p.cursor=p.next;p.page=null;p.index=0;p.pages++;p.complete=p.next===null;p.phase='page';p.retries=0;p.notBefore=0;store.save(p);return result();}
+  if(accounts){
+    // A different source account means a different source: its cursor and
+    // page mean nothing for it, so the walk restarts at the first page. A write
+    // of the old page's contact that may have happened is settled first (by
+    // lookup, HubSpot only). Contacts confirmed with the same content are then
+    // skipped by their receipts, without a HubSpot call.
+    const unsettled=!!p.page&&(p.phase==='write'||p.phase==='reconcile'||p.resume?.phase==='write'||p.resume?.phase==='reconcile');
+    if(p.sourceAccount===undefined){p.sourceAccount=accounts.source;store.save(p);}
+    else if(p.sourceAccount!==accounts.source&&!unsettled){
+      p.sourceAccount=accounts.source;p.cursor=null;p.page=null;p.next=null;p.index=0;p.pages=0;p.retries=0;delete p.contactId;
+      if(p.phase!=='account')p.phase='page';if(p.resume)p.resume={phase:'page',retries:0};store.resetPages(p);
+    }
+    // A reconnected HubSpot account keeps the import where it was, but the
+    // portal is verified again before anything else: a different portal stops
+    // the import. The phase and retry budget return once it is verified.
+    if(p.hubspotAccount===undefined){p.hubspotAccount=accounts.hubspot;store.save(p);}
+    else if(p.hubspotAccount!==accounts.hubspot){
+      p.hubspotAccount=accounts.hubspot;
+      if(p.phase!=='account'){p.resume={phase:p.phase,retries:p.retries};p.phase='account';p.retries=0;}
+      store.save(p);
+    }
+  }
+  // The portal check comes first, even before settling a finished page.
+  if(p.phase!=='account'&&p.page&&p.index>=p.page.length){p.cursor=p.next;p.page=null;p.index=0;p.pages++;p.runPages=(p.runPages??0)+1;p.complete=p.next===null;p.phase='page';p.retries=0;p.notBefore=0;store.save(p);return result();}
   let contact=p.page?.[p.index];
-  if(contact){const receipt=store.record(contact.id);if(receipt){if(receipt.hash!==contact.hash)return fail('Source identity changed since its confirmed import');p.index++;p.phase='lookup';p.retries=0;store.save(p);return result();}}
+  // A receipt with this content skips the contact. Other content under the same
+  // source account means the source changed a confirmed record; under another
+  // source account it is a different record that happens to share the ID.
+  if(contact&&p.phase!=='account'){const receipt=store.record(contact.id);if(receipt&&receipt.hash===contact.hash){p.index++;p.phase='lookup';p.retries=0;store.save(p);return result();}
+    if(receipt&&receipt.source===(p.sourceAccount??''))return fail('Source identity changed since its confirmed import');}
   let url:string,method:'GET'|'POST'|'PATCH'='GET',body:unknown,provider:'source'|'hubspot';
   if(p.phase==='account'){provider='hubspot';url='https://api.hubapi.com/account-info/v3/details';}
   else if(!p.page){
+    if((p.runPages??0)>=MAX_IMPORT_PAGES_PER_RUN){
+      const message='Import stopped after '+MAX_IMPORT_PAGES_PER_RUN+' pages in this run; start a new run to resume from the checkpoint';
+      return fail(message,new ImportStop(message,'IMPORT_PAGE_LIMIT',true));
+    }
     if(store.seenCursor(p.cursor))return fail('Source cursor cycle detected');
     const u=new URL(s.sourceUrl);if(p.cursor!==null)u.searchParams.set(s.cursorParameter,p.cursor);url=u.toString();provider='source';
   }else{
@@ -102,21 +205,42 @@ export async function importSlice(s:ImportSetup,store:ImportStore,request:Import
   p.inFlight=true;p.notBefore=now+30_000;store.save(p);store.check();
   let r:ImportResponse;
   try{r=await request(provider,url,method,body);}catch(e){
-    store.check();if(!(e instanceof ImportTransportError))throw e;
+    store.check();
+    if(e instanceof ImportRefusal){
+      // Typed and persisted like any stop. Unsent, or a refused read, had no
+      // effect; a refused write response may have (a new run reconciles first).
+      if(method!=='GET'&&!e.unsent)p.phase='reconcile';
+      return fail(e.message,new ImportStop(e.message,'IMPORT_REFUSED',e.unsent||method==='GET'));
+    }
+    if(!(e instanceof ImportTransportError))throw e;
     p.inFlight=false;p.retries++;if(method!=='GET')p.phase='reconcile';
     if(p.retries>3&&(method==='GET'||p.phase!=='reconcile'))return fail('Import retry budget exhausted');
     p.notBefore=retryDeadline(undefined,clock(),p.retries);store.save(p);return result(p.notBefore);
   }
   store.check();p.inFlight=false;p.notBefore=0;
   if([408,425,429,500,502,503,504].includes(r.status)){
-    p.retries++;if(method!=='GET'&&r.status!==429)p.phase='reconcile';
+    if(method!=='GET'&&r.status!==429)p.phase='reconcile';
+    let deadline:number;
+    try{deadline=retryDeadline(r.retryAfter,clock(),p.retries+1);}catch{p.retries++;return fail('Invalid Retry-After; import stopped without ignoring the provider delay');}
+    if(deadline-clock()>MAX_RETRY_AFTER_MS){
+      // Too far to park. Checked before the retry budget so it is always this
+      // typed stop. It spends no retry; a new run after the deadline resumes
+      // from the checkpoint (reconciling first if this was an uncertain write).
+      p.retryAt=deadline;const at=new Date(deadline).toISOString();
+      const message='Provider asked to retry at '+at+', more than 24 hours away; import stopped without using a retry. Start a new run after then to resume from the checkpoint';
+      return fail(message,new ImportStop(message,'IMPORT_RETRY_AFTER_TOO_LONG',method==='GET'||r.status===429));
+    }
+    p.retries++;
     if(p.retries>3&&(method==='GET'||p.phase!=='reconcile'))return fail('Import retry budget exhausted');
-    try{p.notBefore=retryDeadline(r.retryAfter,clock(),p.retries);}catch{return fail('Invalid Retry-After; import stopped without ignoring the provider delay');}
-    store.save(p);return result(p.notBefore);
+    p.notBefore=deadline;store.save(p);return result(p.notBefore);
   }
   if(p.phase==='account'){
     if(r.status!==200||!object(r.body)||String(r.body.portalId)!==s.hubspotPortalId)return fail('HubSpot portal verification failed');
-    p.phase='page';p.retries=0;store.save(p);return result();
+    // Back to where a reconnect interrupted it, with the retries it had spent; a
+    // write not yet confirmed is looked up first.
+    if(p.resume){p.phase=p.resume.phase==='write'?'reconcile':p.resume.phase==='account'?'page':p.resume.phase;p.retries=p.resume.retries;delete p.resume;}
+    else{p.phase='page';p.retries=0;}
+    store.save(p);return result();
   }
   if(provider==='source'){
     if(r.status!==200)return fail('Source refused page: HTTP '+r.status);
@@ -124,13 +248,22 @@ export async function importSlice(s:ImportSetup,store:ImportStore,request:Import
   }
   contact=contact!;
   const receipt=object(r.body)?r.body:null;
-  const matches=receipt&&typeof receipt.id==='string'&&/^\d+$/.test(receipt.id)&&object(receipt.properties)&&String(receipt.properties.email??'').toLowerCase()===contact.email&&Object.entries(contact.properties).every(([k,v])=>String((receipt.properties as Record<string,unknown>)[k])===v);
+  const id=receipt&&typeof receipt.id==='string'&&/^\d+$/.test(receipt.id)?receipt.id:null;
+  const props=receipt&&object(receipt.properties)?receipt.properties:null;
+  const email=props?String(props.email??'').trim().toLowerCase():'';
+  // A write is confirmed by the contact it reached, not by HubSpot echoing our
+  // values byte for byte (it normalizes numbers, dates, enums and phones): a
+  // create by its new ID and the email it was created with, an update by the
+  // ID the lookup found (the update URL names the email; the reply need not).
+  // A lookup that finds the contact already holding every value finishes it.
+  const matches=!!id&&!!props&&(method==='GET'?email===contact.email&&Object.entries(contact.properties).every(([k,v])=>sameImportValue(props[k],v))
+    :method==='POST'?email===contact.email:id===p.contactId&&(email===''||email===contact.email));
   if(r.status>=200&&r.status<300){
-    if(matches){const id=String(receipt!.id);p.index++;p.contacts++;p.phase='lookup';p.retries=0;store.finishContact(p,contact,id);return result();}
-    if(method==='GET'&&receipt&&typeof receipt.id==='string'&&/^\d+$/.test(receipt.id)&&object(receipt.properties)&&String(receipt.properties.email??'').toLowerCase()===contact.email){p.phase='write';p.method='PATCH';}
+    if(matches){p.index++;p.contacts++;p.phase='lookup';p.retries=0;delete p.contactId;store.finishContact(p,contact,id!);return result();}
+    if(method==='GET'&&id&&props&&email===contact.email){p.phase='write';p.method='PATCH';p.contactId=id;}
     else if(method!=='GET'){p.phase='reconcile';p.retries++;}
     else return fail('HubSpot returned an invalid or mismatched contact');
-  }else if(method==='GET'&&r.status===404){p.phase='write';p.method='POST';}
+  }else if(method==='GET'&&r.status===404){p.phase='write';p.method='POST';delete p.contactId;}
   else if(method==='POST'&&r.status===409){p.phase='lookup';p.retries++;}
   else return fail('HubSpot refused contact: HTTP '+r.status);
   if(p.retries>3)return fail('Import retry budget exhausted; contact not confirmed');
