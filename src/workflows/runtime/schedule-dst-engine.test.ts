@@ -86,7 +86,7 @@ test('real queued payload keeps its scheduled date when worker starts after midn
 test('uncertain dashboard send is a Needs you recovery item and cannot resend after worker restart',async()=>{
  const f=fixture(),before=attempts;outcome='uncertain';await start('2026-10-24T00:29:00Z');tick(f.flow.id,'2026-10-24T00:30:00Z');await drain();
  const first=listRuns({flowId:f.flow.id})[0]!;runIds.push(first.id);expect(first.status).toBe('FAILED');
- const effect=listWorkflowEffects(first.id)[0]!;expect(effect).toMatchObject({status:'unknown',outcome:{code:'NOTIFICATION_UNCONFIRMED'}});
+ const effect=listWorkflowEffects(first.id)[0]!;expect(effect).toMatchObject({status:'unknown',outcome:{code:'DELIVERY_UNCERTAIN'}});
  expect(queue.get('effect:'+effect.id)).toMatchObject({state:'unknown',supportedActions:['inspect']});
  await manager.stop();reopen();outcome='success';expect((await replay(f,first.id)).status).toBe('FAILED');expect(attempts-before).toBe(1);
  const approvals=new ApprovalManager();queue=new DecisionQueue(getWorkflowDb(),{approvalManager:approvals,deferredExecutor:new DeferredExecutor(approvals,new AuditTrail())});

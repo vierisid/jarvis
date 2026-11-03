@@ -68,12 +68,12 @@ test('invalid-ID fixtures must declare expected rejection and cannot hide action
   const g=supportRoutingGraph();g.nextAction.children[1].settings.input.list_id=null;
   await expect(validateSupportRoutingFixtures(g,{cases:[{...supportRoutingCases()[0],expectedRejection:true}]})).rejects.toThrow('fixture setup missing');
 });
-test('only inspected ClickUp task actions acquire completion receipts',()=>{
+test('ClickUp task creation acquires completion receipts and reads do not',()=>{
   for(const action of ['create_task','clickup_create_task']){
     expect(tracksPieceCompletion('@activepieces/piece-clickup',action)).toBe(true);
     expect(resolveGovernedPieceAction('@activepieces/piece-clickup',action)?.category).toBe('write_data');
   }
-  expect(tracksPieceCompletion('@activepieces/piece-clickup','delete_task')).toBe(false);
+  expect(tracksPieceCompletion('@activepieces/piece-clickup','get_list_task')).toBe(false);
 });
 
 test('second actual saved draft serializes entire webhook objects and accepts the declared priority choice',async()=>{

@@ -239,7 +239,7 @@ test('connection bindings are project-scoped, unique, active and matched to the 
   updateDraftVersion(version.id, { trigger: graph(action) });
   const credentials = new CredentialResolver();
   let resolutions = 0;
-  credentials.register({ id: 'fake', canResolve: id => id === 'jarvis:fake', resolve: async () => { resolutions++; return null; } });
+  credentials.register({ id: 'fake', pieceNames: ['auth'], canResolve: id => id === 'jarvis:fake', resolve: async () => { resolutions++; return null; } });
   configureWorkflowReadiness({ pieces, credentials });
   const result = versionReadiness(flow.id, version.id);
   expect(result.ready).toBe(true);
@@ -294,7 +294,7 @@ test('one-shot and tool-loop composition both feed readiness errors back for rep
 
 test('R2: UI connection IDs are opaque bindings, never expression roots', () => {
   const credentials = new CredentialResolver();
-  credentials.register({ id: 'managed', canResolve: id => id === 'jarvis:fake', resolve: async () => null });
+  credentials.register({ id: 'managed', pieceNames: ['auth'], canResolve: id => id === 'jarvis:fake', resolve: async () => null });
   configureWorkflowReadiness({ pieces, credentials });
   for (const externalId of ['my-gmail', '123', 'account:work', 'jarvis:fake']) {
     if (!externalId.startsWith('jarvis:')) upsertConnection({ externalId, pieceName: 'auth', displayName: 'Fake', pieceVersion: '1', type: 'SECRET_TEXT', value: { secret_text: 'synthetic' } });
@@ -586,15 +586,30 @@ test('#633: a nested workflow binding cannot amplify a stored node name', () => 
 });
 
 
-test('built-in schedule validates an explicit timezone without requiring one on legacy drafts', () => {
-  for (const timezone of ['Mars/Olympus', '', 42, '{{trigger.timezone}}', null]) {
+test('built-in schedule validates a chosen or composed timezone without requiring one on legacy drafts', () => {
+  const composing = (g: unknown) => compileWorkflow(g, { pieces, phase: 'composition' });
+  for (const timezone of ['Mars/Olympus', 42, '{{trigger.timezone}}', ' Europe/Rome ']) {
     const g = cron();
     g.settings.input.timezone = timezone;
+    expect(composing(g).issues).toContainEqual(expect.objectContaining({ node: 'trigger', path: 'settings.input.timezone', code: 'TIMEZONE' }));
+    // Saved without a choice, the zone is not used (the trigger list warns), so the schedule is not refused.
+    if (timezone !== '{{trigger.timezone}}') expect(compile(g).ready).toBe(true);
+    if (typeof timezone !== 'string') continue;
+    g.settings.chosenTimezone = timezone;
     expect(compile(g).issues).toContainEqual(expect.objectContaining({ node: 'trigger', path: 'settings.input.timezone', code: 'TIMEZONE' }));
+  }
+  // An empty zone means Jarvis's.
+  for (const timezone of ['', null]) {
+    const g = cron();
+    g.settings.input.timezone = timezone;
+    expect(composing(g).ready).toBe(true);
+    expect(compile(g).ready).toBe(true);
   }
   const g = cron();
   g.settings.input.timezone = 'Europe/Rome';
+  g.settings.chosenTimezone = 'Europe/Rome';
   expect(compile(g).ready).toBe(true);
+  expect(composing(g).ready).toBe(true);
   delete g.settings.input.timezone;
   expect(compile(g).ready).toBe(true);
 });
@@ -609,6 +624,17 @@ test('form webhook mapping can be incomplete in drafts but must be safe and comp
   }
 });
 
+test('monday managed readiness uses the same static contract as its engine without weakening manual accounts',()=>{
+  const schema=propsToInputSchema({workspace_id:{type:'SHORT_TEXT',displayName:'Workspace',required:true},column_values:{type:'DYNAMIC',displayName:'Columns',required:true}} as any);
+  const pieces=new PieceCatalog([{name:'@activepieces/piece-monday',displayName:'monday.com',description:'',actions:{monday_create_item:{name:'monday_create_item',displayName:'Create item',description:'',inputSchema:schema}}}]);
+  const node:any={name:'item',type:'PIECE',settings:{pieceName:'@activepieces/piece-monday',actionName:'monday_create_item',input:{auth:'{{connections.jarvis:monday}}',board_id:'100',item_name:'New item',column_values:{text:'Hello'}}}};
+  const check=()=>compileWorkflow(graph(node),{pieces});
+  expect(check().issues.filter(i=>i.path.includes('workspace_id')||i.path.includes('column_values'))).toEqual([]);
+  delete node.settings.input.board_id;
+  expect(check().issues.some(i=>i.path.endsWith('board_id'))).toBe(true);
+  node.settings.input.auth='{{connections.manual}}';
+  expect(check().issues.some(i=>i.path.endsWith('workspace_id'))).toBe(true);
+});
 
 test('Ask embedded contracts are validated before composition, publish and run', () => {
   const ask = new PieceCatalog([{ name: 'jarvis-ask', displayName: 'Ask', description: '', actions: { ask: { name: 'ask', displayName: 'Ask', description: '' } } }]);

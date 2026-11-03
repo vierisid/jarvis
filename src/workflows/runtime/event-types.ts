@@ -40,7 +40,7 @@ export const WORKFLOW_EVENT_TYPES: ReadonlyArray<WorkflowEventTypeMeta> = [
   {
     type: "observer.email_received",
     description:
-      "New Gmail message arrived (requires Google auth). Runtime deduplication atomically admits each message ID once per workflow, including manual runs, across restart and history cleanup. Failed accepted messages require review of their original run. The available content is `payload.snippet` ({{trigger.payload.snippet}}, a short preview) -- there is NO full email body, so feed `payload.snippet` into any classification/summary prompt. Other fields: `payload.from`, `payload.to`, `payload.subject`, `payload.date`, `payload.labels`, `payload.id`, `payload.threadId`.",
+      "New Gmail message arrived (requires Google auth). Runtime deduplication atomically admits each message ID once per workflow, including manual runs that carry one, across restart and history cleanup. A manual run without `payload.id` runs unclaimed and steps that reference the message fail. Failed accepted messages require review of their original run. The available content is `payload.snippet` ({{trigger.payload.snippet}}, a short preview) -- there is NO full email body, so feed `payload.snippet` into any classification/summary prompt. Other fields: `payload.from`, `payload.to`, `payload.subject`, `payload.date`, `payload.labels`, `payload.id`, `payload.threadId`.",
     payloadExample: {
       id: "msg_abc",
       from: "alice@example.com",
@@ -214,4 +214,27 @@ export function prepareEmailEvent(input: Record<string, unknown>): { key: string
   return { key: `event:${eventKey}`, data: {
     ...(wrapped ? input : {}), eventType: 'observer.email_received', payload: { ...message, _eventKey: eventKey },
   } };
+}
+
+/**
+ * A manual Gmail run with no message ID: absent, null or empty. It names no
+ * message, so it cannot repeat one and is run without a claim. A malformed ID
+ * (padded, too long, not a string) is not this case and is still refused.
+ */
+export function lacksEmailMessageId(input: Record<string, unknown>): boolean {
+  if (input.eventType !== undefined && input.eventType !== 'observer.email_received') return false;
+  const payload = Object.hasOwn(input, 'payload') ? input.payload : input;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+  const id = (payload as Record<string, unknown>).id;
+  return id === undefined || id === null || id === '';
+}
+
+/** The payload of an unclaimed Gmail run: no ledger key survives into it, so nothing downstream can mistake it for a message. */
+export function unclaimedEmailEvent(input: Record<string, unknown>): Record<string, unknown> {
+  const wrapped = Object.hasOwn(input, 'payload');
+  const { _eventKey: _ignored, id: _none, ...message } = (wrapped ? input.payload : input) as Record<string, unknown>;
+  const { _eventKey: _outer, ...envelope } = wrapped ? input : {};
+  // With no ID at all, a step that addresses the message ({{trigger.payload.id}})
+  // fails as an absent reference before it acts, instead of sending an empty ID.
+  return { ...envelope, eventType: 'observer.email_received', payload: message };
 }

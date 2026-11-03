@@ -25,3 +25,4 @@
 @media (max-width: 640px) { .brief-host-toast { right: 20px; bottom: 80px; } }
 
 .brief-root .brief-host-pending .brief-decision-document p { margin: 0 0 18px; max-width: 70ch; }
+.brief-root .brief-host-pending .brief-decision-subtitle { margin: 4px 0 0; color: var(--brief-secondary); font-size: 14px; }

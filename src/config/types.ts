@@ -491,8 +491,6 @@ export type TelemetryConfig = {
  * (user-owned section) so the dashboard knows which phase (setup / profile
  * interview / tutorial) to show on next load. Each `*_completed_at` is a `Date.now()` stamp;
  * `null` means not yet done. Reset endpoint clears subsets per scope.
- *
- * See `docs/ONBOARDING_PLAN.md` for the gate logic and reset semantics.
  */
 export type OnboardingConfig = {
   /** Phase A — LLM provider + key + model + TTS choice all saved. */
@@ -713,6 +711,13 @@ export type JarvisConfig = {
     /** The account billing page a person opens. */
     page_url?: string;
   };
+  /**
+   * Hosted integrations (SYSTEM-owned, file-authoritative): written by the
+   * hosting control plane, re-read on SIGHUP, never written by the brain.
+   * `page_url` is the public account page where a person connects a hosted
+   * integration (ClickUp: `integrations/clickup-connection.ts`); not a secret.
+   */
+  usejarvis_integrations?: { page_url?: string };
   user?: UserConfig;
   onboarding?: OnboardingConfig;
   telemetry?: TelemetryConfig;

@@ -642,3 +642,17 @@
 
 /* #1080: why an enabled workflow is blocked; opens the refused run. */
 .wf-list__blocked { cursor: pointer; }
+
+/* Managed apps use observed account status, separate from manual credential rows. */
+.wf-conn__managed { margin-block: var(--s-4); }
+.wf-conn__managed-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-4); padding-block: var(--s-4); border-bottom: 1px solid var(--rule-soft); }
+.wf-conn__managed-details { min-width: 0; overflow-wrap: anywhere; }
+.wf-conn__managed-details > div { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin-top: var(--s-2); }
+.wf-conn__managed-details p { margin-block: var(--s-2) 0; }
+.wf-conn__managed-actions { display: flex; flex-wrap: wrap; gap: var(--s-2); flex-shrink: 0; }
+.wf-conn__connect { min-height: 40px; text-decoration: none; }
+@media (max-width: 540px) {
+  .wf-conn__header { flex-wrap: wrap; }
+  .wf-conn__managed-row { align-items: flex-start; flex-direction: column; }
+  .wf-conn__managed-actions { flex-shrink: 1; }
+}

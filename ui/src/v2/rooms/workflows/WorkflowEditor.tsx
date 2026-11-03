@@ -1,3 +1,10 @@
+import { mondayInputSchema } from "../../../../../src/workflows/runtime/managed-monday-inputs";
+import { AirtableLocation } from "../../integrations/AirtableLocation";
+import { NotionLocation } from "../../integrations/NotionLocation";
+import { TrelloCardLocation } from "../../integrations/TrelloCardLocation";
+import { MailchimpLocation } from "../../integrations/MailchimpLocation";
+import { MailchimpConnection } from "../../integrations/MailchimpConnection";
+import { SlackChannelPicker } from "../../integrations/SlackChannelPicker";
 /**
  * WorkflowEditor (Phase 4 stage 2).
  *
@@ -14,8 +21,35 @@
  * Stage 3 lights all of those up.
  */
 
+import { TrelloConnection } from "../../integrations/TrelloConnection";
+import { SlackConnection, useSlackStatus } from "../../integrations/SlackConnection";
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useId } from "react";
 import { useSampleDraftText } from "./useSampleDraftText";
+import { TypeformConnection, useTypeformStatus } from "../../integrations/TypeformConnection";
+import { AirtableConnection, useAirtableStatus } from "../../integrations/AirtableConnection";
+import { IntercomConnection, useIntercomStatus } from "../../integrations/IntercomConnection";
+import { CalendlyConnection, useCalendlyStatus } from "../../integrations/CalendlyConnection";
+import { NotionConnection, useNotionStatus } from "../../integrations/NotionConnection";
+import { LinearTeam } from "../../integrations/LinearTeam";
+import { LinearConnection, useLinearStatus } from "../../integrations/LinearConnection";
+import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
+import { AsanaConnection, useAsanaStatus } from "../../integrations/AsanaConnection";
+import { MondayConnection, useMondayStatus } from "../../integrations/MondayConnection";
+import { MondayBoardLocation } from "../../integrations/MondayBoardLocation";
+import { TodoistConnection, useTodoistStatus } from "../../integrations/TodoistConnection";
+import { TodoistTaskLocation } from "../../integrations/TodoistTaskLocation";
+import { AsanaTaskLocation } from "../../integrations/AsanaTaskLocation";
+import { DropboxConnection, useDropboxStatus } from "../../integrations/DropboxConnection";
+import { ClickUpTaskLocation } from "../../integrations/ClickUpTaskLocation";
+import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConnection";
+import { GitHubRepository } from "../../integrations/GitHubRepository";
+import { MEETING_ACCOUNT_FIELDS } from "../../../../../src/workflows/meeting-accounts";
+import { SALES_ACCOUNT_FIELDS } from "../../../../../src/workflows/sales-accounts";
+import { ONBOARDING_ACCOUNT_FIELDS, ONBOARDING_ACTION, ONBOARDING_PIECE } from "../../../../../src/workflows/onboarding-accounts";
+import { BATCH_ACCOUNT_FIELDS, BATCH_ACTION, BATCH_PIECE } from "../../../../../src/workflows/batch-accounts";
+import { REPORT_ACCOUNT_FIELDS, QUARTERLY_ACCOUNT_FIELDS } from "../../../../../src/workflows/report-accounts";
+import { REFUND_ACCOUNT_FIELDS, REFUND_ACTION, REFUND_PIECE } from "../../../../../src/workflows/refund-accounts";
+import { IMPORT_ACCOUNT_FIELDS, IMPORT_ACTION, IMPORT_PIECE, importAccountFields } from "../../../../../src/workflows/import-accounts";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { BriefTabs } from "../../../brief/components/controls/Choices";
@@ -49,7 +83,7 @@ import {
   type PieceCatalogEntry,
   type PieceInputField,
 } from "./useWorkflowEditor";
-import { flattenSteps, pathToStep } from "./tree";
+import { flattenSteps, pathToStep, withoutChosenZone } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
 import { fetchFlowsForPicker, type FlowPickerEntry } from "./flow-picker-data";
@@ -958,9 +992,14 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             onSetTriggerKind={(kind) => editor.setTriggerKind(kind)}
             onSetErrorHandling={(patch) => editor.setStepErrorHandling(selectedStep.name, patch)}
             onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
+            onUseStandardClickUpFields={() => editor.updateStep(selectedStep.name, {settings: {
+              ...selectedStep.settings,
+              input: {...selectedStep.settings?.input, custom_fields: {}, check_required_custom_fields: true},
+              propertySettings: {...selectedStep.settings?.propertySettings, custom_fields: {schema: {}}},
+            }})}
             onAddInputKey={(key) => editor.updateStepInput(selectedStep.name, key, "")}
             onRemoveInputKey={(key) => {
-              const settings = selectedStep.settings ?? {};
+              const settings = key === "timezone" ? withoutChosenZone(selectedStep.settings) : (selectedStep.settings ?? {});
               const input = { ...(settings.input ?? {}) };
               delete input[key];
               editor.updateStep(selectedStep.name, { settings: { ...settings, input } });
@@ -3319,6 +3358,7 @@ interface PropertiesPanelProps {
   onSetTriggerKind: (kind: "manual" | "schedule" | "webhook" | "event") => void;
   onSetErrorHandling: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
   onSetInput: (key: string, value: unknown) => void;
+  onUseStandardClickUpFields: () => void;
   onAddInputKey: (key: string) => void;
   onRemoveInputKey: (key: string) => void;
   /** Commit a new display name for this step. Called by EditableStepName in the panel header. */
@@ -3380,27 +3420,71 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const subName = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
   const subList = isTrigger ? piece?.triggers ?? [] : piece?.actions ?? [];
   const selectedSubAction: PieceCatalogActionOrTrigger | undefined = subList.find((s) => s.name === subName);
+  // The workspace/Space/List chooser reads through the managed connection, so
+  // it replaces the piece's own id fields only for a step that uses that
+  // connection while it exists. Every other ClickUp step keeps the id fields.
+  const clickUpStatus = useClickUpStatus(piece?.name === "@activepieces/piece-clickup");
+  const clickUpLocation = piece?.name === "@activepieces/piece-clickup" && ["create_task", "update_task", "get_task_by_name"].includes(subName ?? "")
+    && !!clickUpStatus?.connected && step.settings?.input?.auth === "{{connections." + clickUpStatus.external_id + "}}";
+  const asanaStatus = useAsanaStatus(piece?.name === "@activepieces/piece-asana");
+  const asanaLocation = piece?.name === "@activepieces/piece-asana" && ["create_task", "list_project_tasks"].includes(subName ?? "")
+    && !!asanaStatus?.connected && step.settings?.input?.auth === "{{connections." + asanaStatus.external_id + "}}";
+  const subSchema = selectedSubAction?.inputSchema ?? null;
+  const asanaSchema = asanaLocation && subSchema ? {...subSchema, fields:subSchema.fields.filter(f=>!["workspace","project"].includes(f.name))} : subSchema;
+  const managedTrello = piece?.name === "@activepieces/piece-trello" && step.settings?.input?.auth === "{{connections.jarvis:trello}}";
+  const trelloLocation = managedTrello && ['create_card','move_card','list_lists'].includes(subName ?? '');
+  const managedMailchimp = piece?.name === "@activepieces/piece-mailchimp" && ["{{connections.jarvis:mailchimp}}", "{{connections['jarvis:mailchimp']}}"].includes(String(step.settings?.input?.auth));
+  const mailchimpLocation = managedMailchimp && ['find_subscriber','add_subscriber_to_tag','remove_subscriber_from_tag','get_campaign_report'].includes(subName ?? '');
+  const managedGitHub = piece?.name === "@activepieces/piece-github" && ["{{connections.jarvis:github}}", "{{connections['jarvis:github']}}"].includes(String(step.settings?.input?.auth));
+  const githubRepository = managedGitHub && ['github_create_issue','getIssueInformation','update_issue','find_issue','createCommentOnAIssue'].includes(subName ?? '');
+  const managedLinear = piece?.name === "@activepieces/piece-linear" && ["{{connections.jarvis:linear}}", "{{connections['jarvis:linear']}}"].includes(String(step.settings?.input?.auth));
+  const linearTeam = managedLinear && ['linear_create_issue','linear_update_issue','linear_create_comment','linear_search_issues'].includes(subName ?? '');
+  const notionLocation = piece?.name === "@activepieces/piece-notion" && ["{{connections.jarvis:notion}}", "{{connections['jarvis:notion']}}"].includes(String(step.settings?.input?.auth)) && ['createPage','append_to_page','notion_get_block_children'].includes(subName ?? '');
+  const airtableLocation = piece?.name === "@activepieces/piece-airtable" && ["{{connections.jarvis:airtable}}", "{{connections['jarvis:airtable']}}"].includes(String(step.settings?.input?.auth)) && ['create_record_ai','update_record_ai','get_record','search_records'].includes(subName ?? '');
+  const managedSlack = piece?.name === "@activepieces/piece-slack" && ["{{connections.jarvis:slack}}", "{{connections['jarvis:slack']}}"].includes(String(step.settings?.input?.auth));
+  const slackChannel = managedSlack && ['send_channel_message', 'slack_post_message', 'slack_get_channel_info'].includes(subName ?? '');
+  const managedMonday = piece?.name === "@activepieces/piece-monday" && ["{{connections.jarvis:monday}}", "{{connections['jarvis:monday']}}"].includes(String(step.settings?.input?.auth));
+  const mondayLocation = managedMonday;
+  const managedTodoist = piece?.name === "@activepieces/piece-todoist" && ["{{connections.jarvis:todoist}}", "{{connections['jarvis:todoist']}}"].includes(String(step.settings?.input?.auth));
+  const todoistLocation = managedTodoist && ['create_task','find_task'].includes(subName ?? '');
+  const baseSchema = asanaSchema;
+  const selectedSchema = managedMonday && mondayInputSchema(subName ?? "") ? {...mondayInputSchema(subName ?? "")!, fields:mondayInputSchema(subName ?? "")!.fields.filter(f=>!["board_id","group_id"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))} : managedTodoist && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['changes_info', ...(todoistLocation ? ['project_id','section_id'] : [])].includes(f.name)).map((f): PieceInputField => f.name === 'labels' ? {...f,type:'json',placeholder:'["work"]',description:'Label names as a JSON array. Empty arrays preserve current labels.'} : f)} : linearTeam && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['team_id','user_id'].includes(f.name)).map((f): PieceInputField => {
+    if (f.name === 'priority_id') return {...f,type:'number',description:'0: no priority, 1: urgent, 2: high, 3: normal, 4: low.'};
+    if (f.name === 'issue_id') return {...f,type:'string',placeholder:'ENG-123',description:'Issue key, model UUID or workflow variable.'};
+    if (f.name === 'parent_id') return {...f,type:'string',placeholder:'Parent issue UUID',description:'Use the parent issue model UUID or a workflow variable.'};
+    if (f.type === 'enum') return {...f,type:'string',placeholder:f.label+' UUID',description:'Copy the model UUID from Linear, or insert a workflow variable.'};
+    if (f.name === 'labels') return {...f,type:'json',description:'An array of label UUIDs. Replaces existing labels; an empty array keeps them.'};
+    return f;
+  })} : notionLocation && baseSchema ? {...baseSchema,fields:baseSchema.fields.filter(f=>!['pageId','block_id'].includes(f.name))} : airtableLocation && baseSchema ? {...baseSchema,fields:baseSchema.fields.filter(f=>!['base_id','table_id_or_name','search_field','view'].includes(f.name))} : managedTrello && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["labels","member_id"].includes(f.name))} : managedMailchimp && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['fields','include_fields','exclude_fields', ...(mailchimpLocation ? ['list_id','campaign_id'] : [])].includes(f.name))}
+    : managedGitHub && baseSchema ? {...baseSchema, fields: baseSchema.fields.filter(f => !['labels','assignees','milestone','state_reason', ...(githubRepository ? ['repository'] : [])].includes(f.name))}
+    : managedSlack && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!["sendAsUser","sendAsBot","file","username","profilePicture","iconEmoji","mentionOriginFlow","onlyBotChannels","info"].includes(f.name))} : baseSchema;
+  const rawSchema = clickUpLocation && selectedSchema ? {...selectedSchema,fields:selectedSchema.fields.filter(f=>!['workspace_id','space_id','list_id'].includes(f.name))} : trelloLocation && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>!['board_id','list_id'].includes(f.name))} : slackChannel && selectedSchema ? {...selectedSchema, fields:selectedSchema.fields.filter(f=>f.name !== "channel")} : selectedSchema;
+  // ClickUp 0.9.1 declares `custom_fields` on Create Task as a required
+  // dynamic prop even when a list has none. "Use standard task fields" saves
+  // an empty schema and value with check_required_custom_fields, so ClickUp
+  // itself rejects the task if the list does require custom fields.
+  const clickUpCreate = piece?.name === "@activepieces/piece-clickup" && subName === "create_task";
+  const standardFields = clickUpCreate && JSON.stringify(step.settings?.propertySettings?.custom_fields?.schema) === "{}"
+    && JSON.stringify(step.settings?.input?.custom_fields) === "{}" && step.settings?.input?.check_required_custom_fields === true;
+  const managedSchema = standardFields && rawSchema ? {...rawSchema, fields: rawSchema.fields.filter(f => !["custom_fields", "check_required_custom_fields"].includes(f.name))} : rawSchema;
   const formInput = step.settings?.input ?? {};
   const meetingAccounts = piece?.name === '@jarvispieces/piece-jarvis-context' && subName === 'meeting_briefs'
-    ? [['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']] as const
-    : piece?.name === '@jarvispieces/piece-jarvis-batch' && subName === 'update_leads'
-      ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot']] as const
-    : piece?.name === '@jarvispieces/piece-jarvis-onboarding' && subName === 'create_resources'
-      ? [['clickupConnection','@activepieces/piece-clickup','ClickUp'],['driveConnection','@activepieces/piece-google-drive','Google Drive']] as const
-    : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups'
-      ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['gmailConnection','@activepieces/piece-gmail','Gmail']] as const
-      : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report'
-        ? [['stripeConnection','@activepieces/piece-stripe','Stripe'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot'],['googleConnection','@activepieces/piece-google-docs','Google Docs']] as const
-        : piece?.name === '@jarvispieces/piece-jarvis-refund' && subName === 'approval_refund'
-          ? [['stripeConnection','@activepieces/piece-stripe','Stripe']] as const
-        : piece?.name === '@jarvispieces/piece-jarvis-import' && subName === 'resumable_contact_import'
-          ? [['hubspotConnection','@activepieces/piece-hubspot','HubSpot'], ...(formInput.sourceAuth === 'oauth2' ? [['sourceConnection','@activepieces/piece-http-oauth2','Source API'] as const] : [])] as const : [];
+    ? MEETING_ACCOUNT_FIELDS
+    : piece?.name === BATCH_PIECE && subName === BATCH_ACTION ? BATCH_ACCOUNT_FIELDS
+    : piece?.name === ONBOARDING_PIECE && subName === ONBOARDING_ACTION ? ONBOARDING_ACCOUNT_FIELDS
+    : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups' ? SALES_ACCOUNT_FIELDS
+      : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report' ? REPORT_ACCOUNT_FIELDS
+      : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'quarterly_hubspot_report' ? QUARTERLY_ACCOUNT_FIELDS
+        : piece?.name === REFUND_PIECE && subName === REFUND_ACTION ? REFUND_ACCOUNT_FIELDS
+        : piece?.name === IMPORT_PIECE && subName === IMPORT_ACTION
+          // The source account is asked for only when the source uses OAuth2.
+          ? IMPORT_ACCOUNT_FIELDS.filter(([field]) => importAccountFields(formInput).includes(field)) : [];
 
   const requestWebhook = detectedTriggerKind === 'webhook' && 'request_id_field' in formInput;
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
   const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
     {name:'cron_expression',label:'Schedule (cron)',type:'string' as const,required:true,description:'Choose the execution time before running. For weekdays, use minute hour * * 1-5. For the last weekday of each month at 17:00, use 0 17 LW * *.'},
-    {name:'timezone',label:'Timezone',type:'string' as const,required:true},
+    {name:'timezone',label:'Timezone',type:'string' as const,required:false,description:'IANA timezone. Empty uses the timezone configured for Jarvis.'},
     {name:'dst_policy',label:'Daylight-saving policy',type:'string' as const,required:false,description:'skip_missing_first_repeated skips nonexistent local times and uses only the first repeated time, including after restart. Omitted or shift_missing_once retains legacy spring shifting.'},
   ]} : requestWebhook ? { fields: [
     { name: 'request_id_field', label: 'Request ID field', type: 'string' as const, required: true, description: 'Stable request ID path. Repeated requests are accepted once; no email is required.' },
@@ -3409,7 +3493,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     { name: 'submission_id_field', label: 'Submission ID field', type: 'string' as const, required: true, description: 'The field path containing the unique submission ID, for example form.id.' },
     { name: 'submission_email_field', label: 'Email field', type: 'string' as const, required: true, description: 'The field path containing the email address, for example form.email.' },
     ...Object.keys(formInput).filter(key => !['submission_id_field', 'submission_email_field', 'secret'].includes(key)).map(key => ({ name: key, label: key, type: 'string' as const, required: false })),
-  ] } : selectedSubAction?.inputSchema ?? null;
+  ] } : managedSchema;
 
   const [newKey, setNewKey] = useState("");
   const [tab, setTab] = useState("Configure");
@@ -3516,6 +3600,23 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         />
       ) : null}
 
+      {airtableLocation && <AirtableLocation input={step.settings?.input ?? {}} onChange={onSetInput} search={subName === "search_records"} />}
+      {notionLocation && <NotionLocation input={step.settings?.input ?? {}} onChange={onSetInput} field={subName === "notion_get_block_children" ? "block_id" : "pageId"} />}
+      {linearTeam && <LinearTeam input={step.settings?.input ?? {}} onChange={onSetInput} required={subName !== "linear_search_issues"} />}
+      {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
+      {trelloLocation && <TrelloCardLocation input={step.settings?.input ?? {}} onChange={onSetInput} boardOnly={subName === "list_lists"} />}
+      {mondayLocation && <MondayBoardLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} creating={subName === "monday_create_item"} columns={["monday_create_item","monday_update_column_values_of_item"].includes(subName ?? "")} />}
+      {todoistLocation && <TodoistTaskLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} creating={subName === "create_task"} />}
+      {asanaLocation && <AsanaTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
+      {mailchimpLocation && <MailchimpLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} campaign={subName === "get_campaign_report"} />}
+      {slackChannel && <SlackChannelPicker value={String(step.settings?.input?.channel ?? "")} onChange={value => onSetInput("channel", value)} />}
+      {clickUpLocation && <ClickUpTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
+      {clickUpCreate && <div className="wf-props__hint" role="note">
+        {standardFields ? <p>Using standard task fields. ClickUp will reject the task if this list requires custom fields.</p>
+          : <><p>Start with standard task fields. Lists with required custom fields need a separately configured field schema.</p>
+            <Button variant="ghost" size="sm" disabled={!!step.settings?.input?.custom_fields && JSON.stringify(step.settings.input.custom_fields) !== "{}"}
+              onClick={props.onUseStandardClickUpFields}>Use standard task fields</Button></>}
+      </div>}
       {meetingAccounts.length ? <MeetingAccountPickers fields={meetingAccounts} connections={connections} input={formInput} onSetInput={onSetInput} /> : null}
 
       {!isLoop && !isRouter ? (
@@ -3724,9 +3825,13 @@ function AdvancedSettings(props: {
  * here would duplicate the OAuth redirect handling already in that
  * panel and isn't worth the complexity.
  */
-export function MeetingAccountPickers({connections,input,onSetInput,fields=[['calendarConnection','@activepieces/piece-google-calendar','Google Calendar'],['gmailConnection','@activepieces/piece-gmail','Gmail'],['hubspotConnection','@activepieces/piece-hubspot','HubSpot']]}: {connections:ConnectionMeta[];input:Record<string,unknown>;onSetInput:(field:string,value:string)=>void;fields?:ReadonlyArray<readonly [string,string,string]>}) {
+/** The credential kind a saved-account picker offers: a Stripe account is a secret key, the others are OAuth. */
+export function accountPickerAuthType(provider: string): PieceCatalogAuth["type"] {
+  return provider === '@activepieces/piece-stripe' ? 'SECRET_TEXT' : 'OAUTH2';
+}
+export function MeetingAccountPickers({connections,input,onSetInput,fields=MEETING_ACCOUNT_FIELDS}: {connections:ConnectionMeta[];input:Record<string,unknown>;onSetInput:(field:string,value:string)=>void;fields?:ReadonlyArray<readonly [string,string,string]>}) {
   return <>{fields.map(([field,provider,label]) =>
-    <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType={provider === '@activepieces/piece-stripe' ? 'SECRET_TEXT' : 'OAUTH2'}
+    <ConnectionPicker key={field} pieceName={provider} pieceDisplayName={label} authDisplayName={`${label} account`} authType={accountPickerAuthType(provider)}
       connections={connections} currentValue={input[field] ? `{{connections.${input[field]}}}` : ''}
       onPick={template=>onSetInput(field,template ? template.slice(14,-2) : '')} />)}</>;
 }
@@ -3759,18 +3864,78 @@ function ConnectionPicker({
   // the dropdown reflect the user's choice on re-open.
   const m = /^\{\{connections\.([^}]+)\}\}$/.exec(currentValue.trim());
   const currentExternalId = m ? m[1]! : "";
+  // ClickUp may also offer the hosted connection; without it (self-hosted, or
+  // not connected) the picker reads exactly as for any other piece.
+  const isTypeform = pieceName === "@activepieces/piece-typeform";
+  const typeformStatus = useTypeformStatus(isTypeform), managedTypeform = typeformStatus?.connected === true;
+  const isCalendly = pieceName === "@activepieces/piece-calendly";
+  const calendlyStatus = useCalendlyStatus(isCalendly), managedCalendly = calendlyStatus?.connected === true;
+  // ClickUp and GitHub may also offer the hosted connection; without it
+  // (self-hosted, or not connected) the picker reads exactly as for any other piece.
+  const isAirtable = pieceName === "@activepieces/piece-airtable";
+  const airtableStatus = useAirtableStatus(isAirtable), managedAirtable = airtableStatus?.connected === true;
+  const isIntercom = pieceName === "@activepieces/piece-intercom";
+  const intercomStatus = useIntercomStatus(isIntercom), managedIntercom = intercomStatus?.connected === true;
+  // Managed providers may also offer a hosted connection; saved manual
+  // connections remain available.
+  const isNotion = pieceName === "@activepieces/piece-notion";
+  const notionStatus = useNotionStatus(isNotion), managedNotion = notionStatus?.connected === true;
+  const isLinear = pieceName === "@activepieces/piece-linear";
+  const linearStatus = useLinearStatus(isLinear), managedLinear = linearStatus?.connected === true;
+  const isClickUp = pieceName === "@activepieces/piece-clickup";
+  const isMonday = pieceName === "@activepieces/piece-monday";
+  const mondayStatus = useMondayStatus(isMonday), managedMonday = mondayStatus?.connected === true;
+  const isTodoist = pieceName === "@activepieces/piece-todoist";
+  const todoistStatus = useTodoistStatus(isTodoist), managedTodoist = todoistStatus?.connected === true;
+  const isAsana = pieceName === "@activepieces/piece-asana";
+  const asanaStatus = useAsanaStatus(isAsana), managedAsana = asanaStatus?.connected === true;
+  const isDropbox = pieceName === "@activepieces/piece-dropbox";
+  const dropboxStatus = useDropboxStatus(isDropbox), managedDropbox = dropboxStatus?.connected === true;
+  const clickUpStatus = useClickUpStatus(isClickUp), managedClickUp = clickUpStatus?.connected === true;
+  const isGitHub = pieceName === "@activepieces/piece-github";
+  const gitHubStatus = useGitHubStatus(isGitHub), managedGitHub = gitHubStatus?.connected === true;
+  const isSlack = pieceName === "@activepieces/piece-slack";
+  const slackStatus = useSlackStatus(isSlack), managedSlack = slackStatus?.connected === true;
+  // Only point at the controls above when they actually offer hosted setup on this instance.
+  const hostedSetup = [typeformStatus, calendlyStatus, airtableStatus, intercomStatus, notionStatus, linearStatus, mondayStatus, todoistStatus, asanaStatus, dropboxStatus, clickUpStatus, gitHubStatus, slackStatus].some(status => status?.configured === true);
   return (
     <div className="wf-props__connection">
+      {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isLinear && <><LinearConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedLinear && <p className="wf-props__hint">Find, create and update issues, or add comments as your connected user. Use issue keys such as ENG-123 or model UUIDs copied from Linear. Deletion, project actions and instant triggers are not enabled.</p>}</>}
+      {isTypeform && <><TypeformConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedTypeform && <p className="wf-props__hint">Read workspaces, forms and responses. Use a form ID or workflow variable. Recent responses may take up to 30 minutes to appear. Form editing and instant submission triggers are not supported yet.</p>}</>}
+      {isAirtable && <><AirtableConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedAirtable && <p className="wf-props__hint">Find, get, create and update records in existing tables. Deleting records, schema changes and triggers are not enabled.</p>}</>}
+      {isCalendly && <><CalendlyConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedCalendly && <p className="wf-props__hint">Read your meetings, invitees and event types, or create a single-use booking link. Leave User and Organization empty to use your account. Use an event URI, ID or workflow variable. Cancellation and instant booking triggers are not supported yet.</p>}</>}
+      {isNotion && <><NotionConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedNotion && <p className="wf-props__hint">Plain text only. Database changes, deletion, comments and triggers are not enabled.</p>}</>}
+      {pieceName === "@activepieces/piece-mailchimp" && <MailchimpConnection onPick={onPick} currentValue={currentValue} />}
+      {isIntercom && <><IntercomConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedIntercom && <p className="wf-props__hint">Supports contact lookup, conversation reading, internal notes and contact tags. Use record IDs or workflow variables. Customer replies and triggers are not supported yet.</p>}</>}
+      {isClickUp && <ClickUpConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isDropbox && <><DropboxConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedDropbox && <p className="wf-props__hint">This account supports file-name search, folder listings, basic metadata and creating folders in Dropbox home. Use / for the home folder. Advanced search filters and metadata options are unavailable.</p>}</>}
+      {pieceName === "@activepieces/piece-trello" && <TrelloConnection onPick={onPick} currentValue={currentValue} />}
+      {isMonday && <><MondayConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedMonday && <p className="wf-props__hint">This account supports creating, reading and renaming items, updating supported columns and posting plain text updates. Choose a board for every action. Board changes, files, deletion and triggers are not enabled.</p>}</>}
+      {isTodoist && <><TodoistConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedTodoist && <p className="wf-props__hint">Use Find Task, Create Task, Update Task or Mark Task as Completed. Find uses an exact title and refuses duplicate matches. Completing a recurring task advances its next date; do not repeat it for the same occurrence.</p>}</>}
+      {isAsana && <><AsanaConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
+      {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
-        {authDisplayName}
-        <span className="wf-props__connection-type">({authType})</span>
+        {managedMonday ? "monday.com account" : managedCalendly ? "Calendly account" : managedLinear ? "Linear account" : authDisplayName}
+        {!managedMonday && !managedCalendly && !managedLinear && <span className="wf-props__connection-type">({authType})</span>}
       </label>
-      {matching.length === 0 ? (
+      {matching.length === 0 && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable ? (
         <p className="wf-props__hint wf-props__connection-empty">
-          No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
-          then come back and select it here.
+          {hostedSetup
+            ? `Connect ${pieceDisplayName} using the connection controls above, then choose Use this account. You can also manage app connections in the Connections panel.`
+            : `No connection saved for ${pieceDisplayName} yet. Add one in the Connections panel, then come back and select it here.`}
         </p>
-      ) : (
+      ) : matching.length > 0 ? (
         <select
           value={currentExternalId}
           onChange={(e) => {
@@ -3785,7 +3950,7 @@ function ConnectionPicker({
             </option>
           ))}
         </select>
-      )}
+      ) : null}
     </div>
   );
 }

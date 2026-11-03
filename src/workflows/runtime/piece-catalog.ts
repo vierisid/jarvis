@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "10"; // v9: retain reliability metadata and auth alternatives
+export const CATALOG_SCHEMA_VERSION = "25"; // v25: reusable child call flow_ref; v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts; v20: Typeform form and response output contracts; v21: Notion page output contracts; v22: Linear issue and comment output contracts; v23: Todoist task and completion output contracts; v24: managed monday.com item output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -802,11 +802,7 @@ export interface RawPieceMetadata {
   auth?: RawPieceAuth | RawPieceAuth[] | null;
 }
 
-export interface RawPieceAuth {
-  type?: string;
-  displayName?: string;
-  description?: string;
-}
+interface RawPieceAuth { type?: string; displayName?: string; description?: string }
 
 export interface RawActionOrTrigger {
   aiMetadata?: { description?: unknown; idempotent?: unknown };
@@ -858,20 +854,25 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
   // projection above piece-agnostic and gives the next "Jarvis tweak"
   // a single named home.
   enrichJarvisCatalogEntry(out);
-  // Newer community pieces declare alternative authentication methods as an
-  // array. Keep the first supported method as the connection picker's default;
-  // an array must never erase the requirement for a real account binding.
-  const authChoices = Array.isArray(m.auth) ? m.auth : [m.auth];
-  for (const auth of authChoices) {
-    if (!auth || typeof auth !== 'object' || typeof auth.type !== 'string') continue;
+  // Project piece.auth into the catalog's auth shape. We only forward
+  // it when the upstream type is one of AppConnectionType's variants;
+  // anything else (NO_AUTH, malformed) is treated as "no auth needed."
+  // The piece's auth.type comes from upstream's PropertyType -- map it
+  // to our AppConnectionType vocabulary so the editor + connection
+  // listing share one name space.
+  // Newer community pieces (including Slack 0.23.1) declare several auth
+  // methods. The picker lists accounts across methods; use the first supported
+  // method for its setup label instead of hiding authentication entirely.
+  const auth = Array.isArray(m.auth) ? m.auth.find(a => a && typeof a.type === 'string' && projectAuthType(a.type)) : m.auth;
+  if (auth && typeof auth === "object" && typeof auth.type === "string") {
     const projected = projectAuthType(auth.type);
-    if (!projected) continue;
-    out.auth = {
-      type: projected,
-      ...(typeof auth.displayName === 'string' ? { displayName: auth.displayName } : {}),
-      ...(typeof auth.description === 'string' ? { description: auth.description } : {}),
-    };
-    break;
+    if (projected) {
+      out.auth = {
+        type: projected,
+        ...(typeof auth.displayName === "string" ? { displayName: auth.displayName } : {}),
+        ...(typeof auth.description === "string" ? { description: auth.description } : {}),
+      };
+    }
   }
   return out;
 }
@@ -895,6 +896,286 @@ export function metadataToCatalogEntry(meta: RawPieceMetadata | unknown): PieceC
  */
 export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
   if (entry.name === "@jarvispieces/piece-jarvis-subflow" && entry.actions.call) upgradeRunWorkflowFlowFieldToFlowRef(entry.actions.call);
+  if (entry.name === '@activepieces/piece-monday') {
+    const samples: Record<string,unknown> = {
+      monday_create_item: {data:{create_item:{id:'1234567890'}}},
+      monday_get_item_column_values: {id:'1234567890',name:'Example item'},
+      monday_update_item_name: {data:{change_multiple_column_values:{id:'1234567890',name:'Updated item'}}},
+      monday_update_column_values_of_item: {data:{change_multiple_column_values:{id:'1234567890',name:'Example item'}}},
+      monday_create_update: {data:{create_update:{id:'9876543210'}}},
+    };
+    for (const [name,sample] of Object.entries(samples)) if(entry.actions[name]) entry.actions[name]!.outputSample=sample;
+  }
+  if (entry.name === '@activepieces/piece-todoist') {
+    const task = {id:'6X7rM8997g3RQmvh', content:'Example task', description:'Task details', project_id:'6X7rM8997g3RQmvp', section_id:null, parent_id:null, labels:['work'], priority:1, checked:false, due:{date:'2026-10-30',string:'tomorrow',is_recurring:false,timezone:null}};
+    for (const name of ['create_task','update_task','find_task']) if (entry.actions[name]) entry.actions[name]!.outputSample = task;
+    if (entry.actions.mark_task_completed) {
+      entry.actions.mark_task_completed.outputSample = {success:true,task_id:task.id,completed:true,recurrence_advanced:false};
+      entry.actions.mark_task_completed.description += ' With the hosted Jarvis connection, completed is false and recurrence_advanced is true for a recurring task. Do not repeat completion for the same occurrence.';
+    }
+  }
+  if (entry.name === '@activepieces/piece-linear') {
+    const issue = {id:'11111111-1111-4111-8111-111111111111',identifier:'ENG-123',title:'Fix login timeout',url:'https://linear.app/example/issue/ENG-123',priority:2};
+    const samples:Record<string,unknown> = {
+      linear_get_issue: {...issue,team_id:'22222222-2222-4222-8222-222222222222',team_name:'Engineering',team_key:'ENG'},
+      linear_search_issues:{items:[issue],count:1,total_count:1,has_next_page:false,end_cursor:'cursor'},
+      linear_create_issue:{success:true,lastSyncId:1,issue},
+      linear_update_issue:{success:true,lastSyncId:1,issue},
+      linear_create_comment:{success:true,lastSyncId:1,comment:{id:'33333333-3333-4333-8333-333333333333',body:'Ready for review',url:'https://linear.app/example/issue/ENG-123#comment'}},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
+  if (entry.name === "@activepieces/piece-notion") {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const page = {
+      object: "page",
+      id,
+      url: "https://www.notion.so/" + id.replaceAll("-", ""),
+      created_time: "2026-10-28T10:00:00.000Z",
+      last_edited_time: "2026-10-28T10:00:00.000Z",
+      archived: false,
+      parent: { type: "page_id", page_id: id },
+      properties: {
+        title: {
+          type: "title",
+          title: [
+            {
+              type: "text",
+              plain_text: "Meeting notes",
+              text: { content: "Meeting notes" },
+            },
+          ],
+        },
+      },
+    };
+    const block = {
+      object: "block",
+      id,
+      type: "paragraph",
+      has_children: false,
+      paragraph: {
+        rich_text: [
+          { type: "text", plain_text: "Notes", text: { content: "Notes" } },
+        ],
+      },
+    };
+    const samples: Record<string, unknown> = {
+      createPage: page,
+      append_to_page: {
+        object: "list",
+        results: [block],
+        has_more: false,
+        next_cursor: null,
+      },
+      notion_get_block_children: [block],
+      find_page: {
+        success: true,
+        searchTerm: "Meeting",
+        exactMatch: false,
+        totalFound: 1,
+        returned: 1,
+        pages: [
+          {
+            id: page.id,
+            title: "Meeting notes",
+            url: page.url,
+            created_time: page.created_time,
+            last_edited_time: page.last_edited_time,
+            archived: page.archived,
+            parent: page.parent,
+            properties: page.properties,
+          },
+        ],
+        summary: {
+          searchTerm: "Meeting",
+          matchType: "partial match",
+          totalFound: 1,
+          returned: 1,
+          hasMore: false,
+        },
+        message: "Returned 1 matching pages.",
+      },
+    };
+    for (const [name, sample] of Object.entries(samples)) {
+      const action = entry.actions[name];
+      if (!action) continue;
+      action.outputSample = sample;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.name === "pageId") {
+          field.type = "string";
+          field.placeholder = "Shared page ID or workflow variable";
+          delete field.options;
+        }
+        if (field.name === "content")
+          field.description =
+            "Managed Jarvis connections write plain text (up to 20,000 characters). Markdown syntax is stored literally.";
+        if (field.name === "markdown")
+          field.description =
+            "Managed Jarvis connections return block JSON. Leave Markdown off.";
+        if (field.name === "depth")
+          field.description =
+            "Managed Jarvis connections support depth 1 to 3, with bounded content reads.";
+      }
+    }
+  }
+  if (entry.name === '@activepieces/piece-typeform') {
+    // Accept IDs/expressions without upstream dropdown calls or an editor credential leak.
+    for (const field of entry.actions.list_responses?.inputSchema?.fields ?? []) {
+      if (field.name === 'form_id') {field.type='string';field.placeholder='Form ID or workflow variable';delete field.options;}
+    }
+    const form={id:'form_1',title:'Customer feedback',type:'form',fields:[{id:'field_1',ref:'feedback',title:'Your feedback',type:'short_text'}]};
+    const samples:Record<string,unknown>={
+      get_form:form,
+      list_forms:{total_items:1,page_count:1,items:[{id:form.id,title:form.title,type:'form'}]},
+      list_workspaces:{total_items:1,page_count:1,items:[{id:'workspace_1',name:'Team workspace'}]},
+      list_responses:{total_items:1,page_count:1,items:[{response_id:'response_1',token:'response_1',response_type:'completed',submitted_at:'2026-10-28T10:00:00Z',answers:[{field:{id:'field_1',ref:'feedback',type:'short_text'},type:'text',text:'Useful service'}]}]},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
+  if(entry.name==='@activepieces/piece-airtable') {
+    const record={id:'recAAAAAAAAAAAAAA',createdTime:'2026-10-28T10:00:00.000Z',fields:{Name:'Example record'}};
+    for(const name of ['create_record_ai','update_record_ai','get_record','search_records']) {
+      const action=entry.actions[name];if(!action)continue;
+      action.displayName=({create_record_ai:'Create Record',update_record_ai:'Update Record',get_record:'Get Record',search_records:'Find Records'} as Record<string,string>)[name]!;
+      action.outputSample=name==='search_records'?{records:[record],count:1}:record;
+      for(const field of action.inputSchema?.fields ?? []) {
+        if(field.sourceType==='DROPDOWN'){field.type='string';field.placeholder='ID or workflow variable';delete field.options;}
+        if(field.name==='record_id')field.description='Record ID, or the id output from an earlier Create Record or Find Records step.';
+        if(field.name==='fields'){field.type='json';field.description='Existing field IDs or names and values as a JSON object. Managed connections support text, numbers, checkboxes, dates and existing select choices.';field.placeholder='{"Name":"Example record"}';}
+      }
+    }
+  }
+  if (entry.name === '@activepieces/piece-calendly') {
+    const event={uri:'https://api.calendly.com/scheduled_events/event_1',name:'Introduction',status:'active',start_time:'2026-10-28T10:00:00Z',end_time:'2026-10-28T10:30:00Z',event_type:'https://api.calendly.com/event_types/type_1'};
+    const samples:Record<string,unknown>={
+      get_scheduled_event:event,
+      list_scheduled_events:{items:[event],count:1,next_page_token:'next-page-token'},
+      list_event_invitees:{items:[{uri:'https://api.calendly.com/scheduled_events/event_1/invitees/invitee_1',name:'Alex',email:'alex@example.test',status:'active',event:event.uri}],count:1,next_page_token:'next-page-token'},
+      list_event_types:{items:[{uri:event.event_type,name:'Introduction',active:true,duration:30,scheduling_url:'https://calendly.com/example/introduction'}],count:1,next_page_token:'next-page-token'},
+      create_scheduling_link:{booking_url:'https://calendly.com/d/example/introduction',owner:event.event_type,owner_type:'EventType'},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
+  if (entry.name === '@activepieces/piece-asana') {
+    for (const action of Object.values(entry.actions)) {
+      if (action.name !== 'create_task') continue;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.sourceType === 'DROPDOWN') {field.type='string';field.placeholder='Asana ID or workflow variable';delete field.options;}
+        if (field.name === 'due_on') {field.placeholder='YYYY-MM-DD';field.description='The hosted Jarvis Asana connection requires the date as YYYY-MM-DD.';}
+        if (field.name === 'tags') {field.type='json';field.sourceType='ARRAY';field.placeholder='[]';field.description='Tag IDs or exact tag names. The hosted Jarvis Asana connection does not support tags yet: leave this empty when using it.';delete field.options;}
+      }
+    }
+    const task = {gid:'123456', resource_type:'task', name:'Example task', notes:'Task description', completed:false, due_on:'2026-10-30', due_at:null, start_on:null, assignee:{gid:'123', name:'Owner'}, projects:[{gid:'456',name:'Project'}], workspace:{gid:'789',name:'Workspace'}, permalink_url:'https://app.asana.com/0/456/123456'};
+    const samples: Record<string,unknown> = {
+      create_task:task, get_task:task, update_task:task,
+      list_project_tasks:{data:[task],next_offset:null},
+      add_task_comment:{gid:'654321',resource_type:'story',resource_subtype:'comment_added',type:'comment',text:'Task comment',created_at:'2026-10-27T12:00:00Z',created_by:{gid:'123',name:'Owner'},target:{gid:'123456',name:'Example task'},is_pinned:false},
+    };
+    for (const [name,sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample=sample;
+  }
+  if (entry.name === '@activepieces/piece-dropbox') {
+    const listPath = entry.actions.list_dropbox_folder?.inputSchema?.fields.find(field => field.name === 'path');
+    if (listPath) listPath.placeholder = '/ for Dropbox home, /folder or a workflow variable';
+    const filenameOnly = entry.actions.search_dropbox?.inputSchema?.fields.find(field => field.name === 'filename_only');
+    if (filenameOnly) filenameOnly.description = (filenameOnly.description ? filenameOnly.description + ' ' : '') + 'The hosted Jarvis Dropbox connection always matches file names only.';
+    const item = {'.tag': 'folder', id: 'id:example', name: 'Example', path_lower: '/example', path_display: '/Example'};
+    const samples: Record<string, unknown> = {
+      create_new_dropbox_folder: {metadata: item}, get_dropbox_file_metadata: item,
+      list_dropbox_folder: {entries: [item], cursor: 'example', has_more: false},
+      search_dropbox: {matches: [{metadata: {'.tag': 'metadata', metadata: item}}], has_more: false},
+    };
+    for (const [name, sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample = sample;
+  }
+  if (entry.name === '@activepieces/piece-intercom') {
+    // Legacy tag dropdowns enumerate contacts. Accept IDs/expressions without loading customer data into the editor.
+    for (const field of entry.actions['add-or-remove-tag-on-contact']?.inputSchema?.fields ?? []) {
+      if (field.sourceType === 'DROPDOWN') {field.type='string';field.placeholder='Intercom ID or workflow variable';delete field.options;}
+    }
+    const contact={type:'contact',id:'contact_1',role:'user',email:'contact@example.test',name:'Example contact',external_id:'customer_1'};
+    const note={type:'note',id:'note_1',body:'Internal note',created_at:1793188800,contact:{type:'contact',id:'contact_1'},author:{type:'admin',id:'admin_1',name:'Owner'}};
+    const tag={type:'tag',id:'tag_1',name:'Follow up'};
+    const conversation={type:'conversation',id:'conversation_1',title:'Support request',state:'open',source:{body:'How can I update my account?'},contacts:{contacts:[{type:'contact',id:'contact_1'}]}};
+    const part={id:'part_1',part_type:'note',body:'Internal note',created_at:1793188800,author:{type:'admin',id:'admin_1',name:'Owner'}};
+    const samples:Record<string,unknown>={
+      get_contact:contact,
+      get_conversation_by_id:{...conversation,parts:[{id:part.id,part_type:part.part_type,body:part.body,created_at:part.created_at,author_type:'admin',author_id:'admin_1',author_name:'Owner'}]},
+      add_note_to_contact:note,
+      add_note_to_conversation_by_id:{...conversation,conversation_parts:{type:'conversation_part.list',conversation_parts:[part],total_count:1}},
+      'list-all-tags':{type:'list',data:[tag]},'add-or-remove-tag-on-contact':tag,
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
+  }
+
+  // ClickUp 0.9.1 returns a task directly for these actions, not an HTTP envelope.
+  // These stable fields let the picker wire task outputs into downstream steps.
+  if (entry.name === '@activepieces/piece-clickup') {
+    for (const name of ['create_task', 'get_list_task', 'get_task_by_name', 'update_task']) {
+      const action = entry.actions[name];
+      for (const field of action?.inputSchema?.fields ?? []) {
+        if (field.sourceType === 'DROPDOWN') {field.type = 'string'; field.placeholder = 'Value, ID or workflow variable'; delete field.options;}
+        if (field.sourceType === 'MULTI_SELECT_DROPDOWN') {field.type = 'json'; field.sourceType = 'ARRAY'; field.placeholder = '[]'; field.description = (field.description ?? '') + ' Enter an array of ClickUp user IDs.'; delete field.options;}
+      }
+      if (action && action.outputSample === undefined) action.outputSample = {
+        id: 'task_example', name: 'Example task', url: 'https://app.clickup.com/t/task_example',
+        status: {status: 'to do', type: 'open'}, list: {id: 'list_example', name: 'Sandbox'},
+      };
+    }
+  }
+  if (entry.name === '@activepieces/piece-mailchimp') {
+    const subscriber = {id: 'b58996c504c5638798eb6b511e6f49af', list_id: 'audience1', email_address: 'user@example.com', status: 'subscribed'};
+    const campaign = {id: 'campaign1', status: 'sent', settings: {title: 'Newsletter', subject_line: 'Latest news'}};
+    const samples: Record<string, unknown> = {
+      find_subscriber: {success: true, found: true, total_matches: 1, subscribers: [subscriber], primary_subscriber: subscriber},
+      add_subscriber_to_tag: {success: true, data: {list_id: 'audience1', email_address: 'user@example.com', tag_name: 'Customer', status: 'active', automations_suppressed: true}},
+      remove_subscriber_from_tag: {success: true, data: {list_id: 'audience1', email_address: 'user@example.com', tag_name: 'Customer', status: 'inactive', automations_suppressed: true}},
+      find_campaign: {success: true, query: 'Newsletter', results: [{campaign}], total_items: 1, has_more: false},
+      get_campaign_report: {success: true, report: {id: 'campaign1', campaign_title: 'Newsletter', emails_sent: 100, opens: {unique_opens: 30, open_rate: 0.3}, clicks: {unique_clicks: 5, click_rate: 0.05}, bounces: {hard_bounces: 0, soft_bounces: 0}}, summary: {campaign_title: 'Newsletter', emails_sent: 100, unique_opens: 30, unique_clicks: 5, open_rate: 0.3, click_rate: 0.05}},
+    };
+    for (const [name, sample] of Object.entries(samples)) {
+      const action = entry.actions[name];
+      if (!action) continue;
+      if (action.outputSample === undefined) action.outputSample = sample;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.sourceType === 'DROPDOWN') {field.type = 'string'; field.placeholder = 'ID or workflow variable'; delete field.options;}
+      }
+    }
+  }
+  if (entry.name === '@activepieces/piece-github') {
+    const issue = {id: 1, number: 42, title: 'Example issue', body: 'Description', state: 'open', html_url: 'https://github.com/owner/repo/issues/42', url: 'https://api.github.com/repos/owner/repo/issues/42'};
+    const samples: Record<string, unknown> = {
+      github_create_issue: {status: 201, body: issue}, getIssueInformation: {status: 200, body: issue}, update_issue: {status: 200, body: issue},
+      createCommentOnAIssue: {status: 201, body: {id: 2, body: 'Comment', issue_url: issue.url, html_url: issue.html_url + '#issuecomment-2'}},
+      find_issue: {found: true, result: [issue], total_count: 1, has_more: false},
+    };
+    for (const [name, sample] of Object.entries(samples)) {
+      const action = entry.actions[name]; if (!action) continue;
+      if (action.outputSample === undefined) action.outputSample = sample;
+      for (const field of action.inputSchema?.fields ?? []) {
+        if (field.name === 'repository') {field.type = 'json'; field.placeholder = '{"owner":"owner","repo":"repo"}'; delete field.options;}
+        if (field.name === 'issue_number') {field.type = 'number'; delete field.options;}
+      }
+    }
+  }
+  if (entry.name === '@activepieces/piece-trello') {
+    const board = {id:'aaaaaaaaaaaaaaaaaaaaaaaa',name:'Jarvis sandbox',closed:false};
+    const list = {id:'bbbbbbbbbbbbbbbbbbbbbbbb',name:'To do',idBoard:board.id,closed:false};
+    const card = {id:'cccccccccccccccccccccccc',name:'Example task',desc:'',idBoard:board.id,idList:list.id,closed:false,url:'https://trello.com/c/abcd1234'};
+    for (const [name,sample] of Object.entries({list_boards:{boards:[board],count:1},list_lists:{lists:[list],count:1},get_card:card,create_card:card,move_card:card})) {
+      const action=entry.actions[name];if(action && action.outputSample===undefined)action.outputSample=sample;
+    }
+  }
+  if (entry.name === '@activepieces/piece-slack') {
+    const channel = {id: 'C0123456789', name: 'jarvis-sandbox', is_member: true, is_archived: false};
+    const find = entry.actions.slack_find_channel, info = entry.actions.slack_get_channel_info;
+    if (find && find.outputSample === undefined) find.outputSample = channel;
+    if (info && info.outputSample === undefined) info.outputSample = {ok: true, channel};
+    for (const name of ['send_channel_message', 'slack_post_message']) {
+      const action = entry.actions[name];
+      if (action && action.outputSample === undefined) action.outputSample = {
+        ok: true, channel: 'C0123456789', ts: '1710304378.475129', message: {text: 'Example message', ts: '1710304378.475129'},
+      };
+    }
+  }
   if (entry.name !== JARVIS_ON_EVENT_TRIGGER.piece) return;
   const onEvent = entry.triggers?.[JARVIS_ON_EVENT_TRIGGER.trigger];
   if (onEvent) {

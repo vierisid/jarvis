@@ -21,6 +21,7 @@
 
 import type {
   JarvisConnectionSource,
+  ManagedPieceDetails,
   ResolvedConnection,
 } from "./adapter";
 import { credentialFingerprint } from "./adapter";
@@ -29,6 +30,11 @@ export const JARVIS_TELEGRAM_PREFIX = "jarvis:telegram";
 
 export class JarvisTelegramConnectionSource implements JarvisConnectionSource {
   readonly id = "telegram";
+  readonly pieceNames: readonly string[] = ["@activepieces/piece-telegram-bot"];
+  /** The piece's custom API call base URL is https://api.telegram.org/bot<token>/. */
+  readonly pieceDetails: Readonly<Record<string, ManagedPieceDetails>> = {
+    "@activepieces/piece-telegram-bot": { displayName: "Telegram", apiHosts: ["api.telegram.org"] },
+  };
 
   /**
    * Token supplier. Closes over the daemon's config so changes (e.g., user

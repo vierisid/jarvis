@@ -12,7 +12,9 @@
  *
  * Failures map to HTTP:
  *   - 404 when the connection doesn't exist or its source returns null.
- *   - 403 when the requested project differs from the verified engine token.
+ *   - 403 when the requested project differs from the verified engine token,
+ *     or for a `jarvis:` id when the run's own graph names it anywhere but as
+ *     the auth of a step of the source's pieces (managed-connection-scope.ts).
  *   - 409 when an external ID without a piece name matches multiple rows, or
  *     when the connection no longer resolves to the identity the run started
  *     with or its workflow was enabled against (Q-05, repos/binding-pins.ts).
@@ -31,7 +33,8 @@
  * fresh access token must call back into this endpoint to request one.
  */
 
-import type { CredentialResolver, ResolvedConnection } from "../../credentials/adapter";
+import { JARVIS_PREFIX, managedSourceFor, type CredentialResolver, type ResolvedConnection } from "../../credentials/adapter";
+import { managedConnectionScopeRefusal } from "../../db/repos/managed-connection-scope";
 import { AmbiguousConnectionError } from "../../db/repos/app-connection";
 import { enforceRunConnectionBinding, recordRunCredentialOutcome } from "../../db/repos/binding-pins";
 import { ConnectionCredentialError, OAUTH2_TYPES } from "../../credentials/pasted-oauth2";
@@ -71,6 +74,15 @@ export function createConnectionsRoute(deps: ConnectionsRouteDeps): RouteHandler
     // project; explicit piece names retain exact matching, never wildcards.
     const pieceName = url.searchParams.get("pieceName") ?? undefined;
     if (pieceName !== undefined && !pieceName.trim()) return err("pieceName must not be empty", 400);
+
+    // A managed credential goes only to a run whose own graph names it as the
+    // auth of a step of the source's pieces. Checked before anything is
+    // resolved, so a refused run never causes a token refresh either.
+    if (externalId.startsWith(JARVIS_PREFIX)) {
+      const source = managedSourceFor(deps.credentialResolver.list(), externalId);
+      const refusal = source ? managedConnectionScopeRefusal(ctx.claims.runId, projectId, externalId, source) : null;
+      if (refusal) return err(refusal, 403);
+    }
 
     let resolved: ResolvedConnection | null;
     try {
