@@ -21,7 +21,8 @@ function Canvas({ draft, onDirtyChange, onUnavailable }: ResultCanvasProps) {
   const samples = useRef(new Map<string, string>());
   const invalid = useRef(onUnavailable); invalid.current = onUnavailable;
   const environment = useMemo(() => {
-    let version = { id: draft.versionId, flowId: draft.flowId, state: 'DRAFT', displayName: draft.title, trigger: draft.graph,
+    let revision = 0;
+    let version = { id: draft.versionId, flowId: draft.flowId, state: 'DRAFT', editorRevision: 'preview-revision-0', displayName: draft.title, trigger: draft.graph,
       valid: true, schemaVersion: '1', agentIds: [], connectionIds: [], notes: [], backupFiles: {}, sampleData: {}, sampleInput: null, created: 1791363600000, updated: 1791363600000 };
     let uiMeta: unknown = { schema: 1, positions: {}, orphans: [] };
     const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
@@ -36,7 +37,7 @@ function Canvas({ draft, onDirtyChange, onUnavailable }: ResultCanvasProps) {
         if (path.includes('/runs?')) return response([]);
       }
       if (method === 'PATCH' && path === `/api/workflows/${draft.flowId}/versions/${draft.versionId}`) {
-        const body = JSON.parse(String(init?.body)); version = { ...version, trigger: body.trigger, displayName: body.displayName }; uiMeta = body.uiMeta; return response(version);
+        const body = JSON.parse(String(init?.body)); version = { ...version, trigger: body.trigger, displayName: body.displayName, editorRevision: `preview-revision-${++revision}` }; uiMeta = body.uiMeta; return response(version);
       }
       return response({ error: 'This isolated preview cannot run, connect, install, or publish anything.' }, 403);
     }, { preconnect: fetch.preconnect });

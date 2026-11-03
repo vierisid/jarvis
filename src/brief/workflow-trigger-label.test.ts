@@ -8,6 +8,11 @@ test('workflow list distinguishes trigger timing and missing setup', () => {
   expect(schedule('')).toBe('Schedule: setup required');
   expect(schedule('no cron')).toBe('Schedule: setup required');
   expect(schedule('0 9 * * *', 'bad')).toBe('Schedule: setup required');
+  // Omitted timezone is Jarvis's configured one, which readiness accepts; an empty one is not.
+  const noZone = (pieceName: string) => label({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName, input: { cron_expression: '0 9 * * *' } } });
+  expect(noZone('schedule')).toBe('Daily at 09:00');
+  expect(noZone('@activepieces/piece-schedule')).toBe('Schedule: setup required');
+  expect(schedule('0 9 * * *', '')).toBe('Schedule: setup required');
   expect(label({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook' } })).toBe('Incoming webhook');
   expect(label({ name: 'trigger', type: 'EMPTY' })).toBe('Manual');
 });

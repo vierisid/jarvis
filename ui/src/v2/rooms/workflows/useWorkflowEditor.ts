@@ -1197,7 +1197,9 @@ export function useWorkflowEditor(flowId: string | null) {
         res = await fetch(`/api/workflows/${flowId}/versions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ displayName: version.displayName, trigger: draftTrigger, uiMeta }),
+          // The published base's revision: the server refuses the clone if a draft
+          // appeared or the publication changed since this editor loaded it.
+          body: JSON.stringify({ ...(version.editorRevision ? { expectedRevision: version.editorRevision } : {}), displayName: version.displayName, trigger: draftTrigger, uiMeta }),
         });
       } else {
         if (!version.editorRevision) return { ok: false, message: 'Reload this draft before saving so changes from other tabs can be checked. Your edits have not been saved.' };
@@ -1561,9 +1563,13 @@ export function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEn
       if (empty(cron)) add('cron_expression', 'Schedule: choose an execution time');
       else { try { if (typeof cron !== 'string') throw Error('Use a cron expression'); validateCronExpression(cron); }
         catch (error) { add('cron_expression', `Schedule: ${(error as Error).message}`); } }
-      if (empty(input.timezone)) add('timezone', 'Timezone: choose an IANA timezone');
-      else { try { validateCronTimezone(input.timezone); }
-        catch (error) { add('timezone', `Timezone: ${(error as Error).message}`); } }
+      // Omitted means Jarvis's configured timezone, as the server's readiness
+      // check and the composer treat it; a present value must be a real zone.
+      if (Object.hasOwn(input, 'timezone')) {
+        if (empty(input.timezone)) add('timezone', 'Timezone: choose an IANA timezone');
+        else { try { validateCronTimezone(input.timezone); }
+          catch (error) { add('timezone', `Timezone: ${(error as Error).message}`); } }
+      }
       try { validateCronDstPolicy(input.dst_policy); }
       catch (error) { add('dst_policy', (error as Error).message); }
       continue;

@@ -121,6 +121,25 @@ test('a stale save retains local edits, and reload takes the latest authoring re
   expect(editor.version?.displayName).toBe('Changed elsewhere'); expect(editor.dirty).toBe(false);
 });
 
+test('the first save from a published version names its base revision and keeps edits when refused', async () => {
+  const published = { ...fixture.snapshot().version, state: 'LOCKED' as const, editorRevision: 'published-revision' };
+  const posts: any[] = [];
+  await mount(async (input, init) => {
+    const path = String(input), method = init?.method ?? 'GET';
+    if (method === 'GET' && path === '/api/workflows/meeting')
+      return Response.json({ flow: { id: 'meeting' }, latestDraft: null, published, uiMeta: fixture.snapshot().uiMeta });
+    if (method === 'POST' && path === '/api/workflows/meeting/versions') {
+      posts.push(JSON.parse(String(init!.body)));
+      return Response.json({ error: 'This workflow changed in another tab or conversation.' }, { status: 409 });
+    }
+    return fixture.request(input, init);
+  });
+  await React.act(async () => editor.setVersionDisplayName('My unsaved name'));
+  await React.act(async () => { expect((await editor.save()).ok).toBe(false); });
+  expect(posts.map(p => p.expectedRevision)).toEqual(['published-revision']);
+  expect(editor.dirty).toBe(true); expect(editor.version?.displayName).toBe('My unsaved name');
+});
+
 test("real graph edits serialize branch, loop, nested orphan settings and positions", async () => {
   await mount();
   expect(editor.allSteps.map((s) => s.step.type)).toContain("LOOP_ON_ITEMS");

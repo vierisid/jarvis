@@ -1433,7 +1433,7 @@ function insertAtCursor(
  * itself on focus. A floating panel listing predecessor outputs then
  * opens beside the popover.
  */
-function NodeSettingsPopover({
+export function NodeSettingsPopover({
   anchor,
   onClose,
   predecessors,
