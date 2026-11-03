@@ -144,7 +144,8 @@ function cadence(cron: string): ContractCadence | null {
   if (!one(hour)) return null;
   if (dom === '*' && dow === '*') return 'day';
   if (dom === '*' && one(dow)) return 'week';
-  return one(dom) && dow === '*' ? 'month' : null;
+  // LW (last weekday) is one day each month.
+  return (one(dom) || dom === 'LW') && dow === '*' ? 'month' : null;
 }
 /** The canonical IANA name (every alias of UTC is UTC), or null for an unknown zone. */
 const zoneName = (zone: string): string | null => canonicalZone(zone);
