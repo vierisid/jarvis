@@ -4,6 +4,7 @@
   "displayName": "Last weekday of each month at 17:00 Rome",
   "settings": {
     "pieceName": "schedule",
+    "chosenTimezone": "Europe/Rome",
     "input": {
       "cron_expression": "0 17 LW * *",
       "timezone": "Europe/Rome"

@@ -37,8 +37,9 @@ export interface BriefReleaseRuntime extends BriefDeployment {
   candidate: string;
 }
 
-/** No release is authorized in this stack. Fill this only after integration,
- * D32/F28/Q22 evidence review and team deployment approval. */
+/** Historical evidence-driven entry, with no fabricated release attestations.
+ * The hosted product default is selected separately by the authenticated host
+ * descriptor (host/hosted-entry.ts); this record is not its activation switch. */
 export const BRIEF_RELEASE: BriefReleaseConfig = {
   schemaVersion: 1, rollout: "off", candidate: "", gates: {}, combinations: [], approval: null,
 };

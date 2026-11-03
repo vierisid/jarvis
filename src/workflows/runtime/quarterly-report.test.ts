@@ -1,5 +1,5 @@
 import {afterEach,expect,test} from 'bun:test';
-import {CronScheduler} from '../../lib/cron-scheduler';
+import {CronScheduler,setCronTimezone} from '../../lib/cron-scheduler';
 import {collectQuarterlyReport,quarterlySetup,quarterlyTransport,reportQuarters} from './quarterly-report';
 import {quarterlyFixtureSetup as setup,quarterlyFixtureRequest,validateQuarterlyFixtures,quarterlyFixtureCases} from './quarterly-report-fixtures';
 import graph from './fixtures/quarterly-report-generated.json';
@@ -40,11 +40,17 @@ test('all pages, boundary inclusion, duplicate IDs, separate currencies and empt
   const empty=await collectQuarterlyReport(setup,quarterlyFixtureRequest(setup,at,'empty'),at);expect(empty.complete).toBe(true);expect(empty.comparisons[0]!.countCurrent).toBe(0);
 });
 test('invalid dates/cursors/amounts/currencies never become complete zero totals',async()=>{
-  for(const scenario of ['missing_amount','missing_currency','missing_date','cursor_cycle','page_limit','page_failure'] as const){
+  for(const scenario of ['missing_currency','missing_date','cursor_cycle','page_limit','page_failure'] as const){
     const report=await collectQuarterlyReport(setup,quarterlyFixtureRequest(setup,at,scenario),at);
     expect(report.complete).toBe(false);expect(report.datasets[0]!.totals).toEqual({});expect(report.summary).toContain('Unavailable');
-    if(['missing_amount','missing_currency'].includes(scenario))expect(report.datasets[1]!.totals.EUR?.amount).toBe('150');
+    if(scenario==='missing_currency')expect(report.datasets[1]!.totals.EUR?.amount).toBe('150');
   }
+});
+test('a deal with no amount is left out of totals and disclosed by count, not zero and not Unavailable',async()=>{
+  const report=await collectQuarterlyReport(setup,quarterlyFixtureRequest(setup,at,'missing_amount'),at);
+  expect(report.complete).toBe(true);expect(report.datasets[0]!.noAmount).toBe(1);expect(report.datasets[0]!.totals.EUR).toBeUndefined();
+  expect(report.datasets[1]!.totals.EUR).toEqual({count:2,amount:'150'});expect(report.datasets[1]!.noAmount).toBeUndefined();
+  expect(report.summary).toContain('current: excluded from totals: 1 deal with no amount not included');
 });
 test('unknown dates invalidate both periods; selected stages and date property remain strict',async()=>{
   expect(()=>quarterlySetup({...setup,dealStageIds:[]})).toThrow();expect(()=>quarterlySetup({...setup,dealDateProperty:''})).toThrow();
@@ -88,4 +94,32 @@ test('clock substitution, unsupported graph edges and real notification channels
   const invalid=structuredClone(graph);invalid.nextAction.settings.input.scheduledFor='2026-10-05T07:00:00Z';expect(compileWorkflow(invalid as any,{pieces:catalog,phase:'composition'}).ready).toBe(false);
   await expect(validateQuarterlyFixtures(invalid)).rejects.toThrow('scheduledFor');
   const other=structuredClone(graph);other.nextAction.nextAction.settings.input.channels=['telegram'];await expect(validateQuarterlyFixtures(other)).rejects.toThrow('dashboard');
+});
+test('a blank deal currency falls back to the portal company currency, and only that',async()=>{
+  const base=quarterlyFixtureRequest(setup,at,'missing_currency');
+  const withCompany=await collectQuarterlyReport(setup,async(p,path,b)=>{const r=await base(p,path,b);return path.startsWith('/account-info')?{...r,companyCurrency:'eur'}:r;},at);
+  expect(withCompany.complete).toBe(true);expect(withCompany.datasets[0]!.totals.EUR).toEqual({count:1,amount:'150'});
+  const unknown=await collectQuarterlyReport(setup,base,at);
+  expect(unknown.complete).toBe(false);expect(unknown.datasets[0]!.coverage.reason).toContain('company currency is unknown');
+});
+test('readiness refuses a managed HubSpot connection and a non-Rome schedule',()=>{
+  const managed=structuredClone(graph) as any;Object.assign(managed.nextAction.settings.input,{...setup,dealStageIds:'won',hubspotConnection:'jarvis:hubspot'});
+  expect(compileWorkflow(managed,{pieces:catalog,phase:'composition'}).issues.map((i:any)=>i.message)).toContain('Select a saved HubSpot account; a Jarvis-managed connection cannot be used by the quarterly report');
+  const zone=structuredClone(graph) as any;zone.settings.input.timezone='Asia/Tokyo';zone.settings.chosenTimezone='Asia/Tokyo';
+  expect(compileWorkflow(zone,{pieces:catalog,phase:'composition'}).issues).toContainEqual(expect.objectContaining({node:'trigger',path:'settings.input.timezone'}));
+  // No chosen zone: the schedule fires in Jarvis's configured zone, so that is what is checked.
+  const unchosen=structuredClone(graph) as any;delete unchosen.settings.chosenTimezone;
+  setCronTimezone('America/New_York');
+  try{expect(compileWorkflow(unchosen,{pieces:catalog,phase:'composition'}).issues.map((i:any)=>i.path)).toContain('settings.input.timezone');}
+  finally{setCronTimezone(null);}
+  setCronTimezone('Europe/Rome');
+  try{expect(compileWorkflow(unchosen,{pieces:catalog,phase:'composition'}).issues.map((i:any)=>i.path)).not.toContain('settings.input.timezone');}
+  finally{setCronTimezone(null);}
+});
+test('the quarterly transport reads only its fixed HubSpot endpoints and retries a short 429 once more',async()=>{
+  const seen:string[]=[];let limited=1;
+  const request=quarterlyTransport('fixture',()=>{},(async(url:any)=>{seen.push(String(url));if(limited-->0)return new Response('',{status:429,headers:{'retry-after':'0'}});return Response.json({results:[]});}) as typeof fetch,async()=>{});
+  expect(await request('hubspot','/crm/v3/objects/deals?limit=100')).toEqual({results:[]});expect(seen).toEqual(['https://api.hubapi.com/crm/v3/objects/deals?limit=100','https://api.hubapi.com/crm/v3/objects/deals?limit=100']);
+  for(const path of ['/crm/v3/objects/contacts','/crm/v3/objects/deals/search','/crm/v3/objects/deals/123'])await expect(request('hubspot',path)).rejects.toThrow('outside the HubSpot read scope');
+  expect(seen).toHaveLength(2);
 });

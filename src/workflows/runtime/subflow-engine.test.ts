@@ -16,7 +16,8 @@ import {configureWorkflowReadiness,versionReadiness} from '../db/repos/flow-read
 import {pinFlowBindings} from '../db/repos/binding-pins';
 import {AuthorityEngine} from '../../authority/engine';
 import {AuditTrail} from '../../authority/audit';
-import {EmergencyController} from '../../authority/emergency';
+import {EmergencyController,setActiveEmergencyController} from '../../authority/emergency';
+import {saveWorkflowEffect} from '../db/repos/workflow-effect';
 import {ApprovalManager} from '../../authority/approval';
 import {CredentialResolver} from '../credentials/adapter';
 import {SandboxApi} from '../sandbox-api/server';
@@ -133,4 +134,35 @@ test('Authority approval pins the child version before dispatch',async()=>{
  const node:any=f.pv.trigger.nextAction,ctx={runId:r.id,projectId:DEFAULT_IDS.project,stepName:node.name,executionPath:[] as Array<[string,number]>},input={...node.settings.input,invocationKey:'fixture-request',payload};
  const pending=await services.subflowCall!(input,ctx) as any;expect(pending.approval).toBeDefined();expect(f.children()).toHaveLength(0);
  approvals.approve(pending.approval.approvalId,'fixture');const result=await services.subflowCall!(input,ctx) as any;expect(result.waitpointId).toBeDefined();expect(f.children()).toHaveLength(1);
+});
+
+test('a settled child continues its parent through the continuation claim, and not while Jarvis is paused',async()=>{
+ const f=await fixture(),first=await f.run();expect(first.status).toBe('PAUSED');expect(f.children()[0]!.status).toBe('SUCCEEDED');
+ const controller=new EmergencyController();controller.pause();setActiveEmergencyController(controller);
+ try{expect(resumeSubflowCalls(now)).toBe(0);expect(getWorkflowDb().query("SELECT id FROM workflow_job WHERE flow_run_id=? AND status='QUEUED'").all(first.id)).toHaveLength(0);}
+ finally{setActiveEmergencyController(null);}
+ expect(resumeSubflowCalls(now)).toBe(1);
+ const job=getWorkflowDb().query("SELECT payload FROM workflow_job WHERE flow_run_id=? AND status='QUEUED'").get(first.id) as {payload:string};
+ const [wait]=listWaitpointsByFlowRun(first.id);expect(JSON.parse(job.payload).waitpointId).toBe(wait!.id);
+ await worker.drain();expect(getFlowRun(first.id)!.status).toBe('SUCCEEDED');
+});
+test('a child stopped at the deadline reports the approval cards the stop closed',async()=>{
+ const f=await fixture();mode='timeout';const first=await f.run(),child=f.children()[0]!;expect(child.status).toBe('PAUSED');
+ const card=approvals.createRequest({agentId:'workflow:'+child.id,agentName:'Fixture child',toolName:'workflow_start',toolArguments:{},actionCategory:'spawn_agent',urgency:'normal',reason:'fixture',context:'{}',executionMode:'workflow'});
+ saveWorkflowEffect({id:'fixture-child-card-'+child.id,runId:child.id,projectId:DEFAULT_IDS.project,flowId:f.child.id,versionId:f.cv.id,versionDigest:'',stepName:'returned',executionPath:[],route:'fixture',toolName:'workflow_start',actionCategory:'spawn_agent',requestDigest:'',arguments:{},target:{},provenance:{},decision:'approval_required',reason:'fixture',status:'pending',approvalId:card.id,waitpointId:null,createdAt:now});
+ const heard:string[]=[];now+=60_000;resumeSubflowCalls(now,id=>heard.push(id));
+ expect(getFlowRun(child.id)!.status).toBe('STOPPED');expect(approvals.getRequest(card.id)!.status).toBe('denied');expect(heard).toEqual([card.id]);
+ await worker.drain();await finish(first.id);
+});
+test('a parent cannot call itself as a reusable child',async()=>{
+ const p=createFlow(),graph=parentTestGraph('');graph.nextAction.settings.input.flow=p.id;graph.nextAction.settings.input.invocationKey='{{trigger.request_id}}';
+ const pv=createDraftVersion({flowId:p.id,displayName:'Self caller',trigger:graph});lockVersion(pv.id);expect(()=>setPublishedVersion(p.id,pv.id)).toThrow('recursive cycle');
+ mode='success';authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});
+ expect((await run(p.id,pv.id)).status).toBe('FAILED');expect(listRuns({flowId:p.id})).toHaveLength(1);
+});
+test('the approval card names the child workflow it starts',async()=>{
+ const f=await fixture();authority.setGovernedCategories(['spawn_agent']);const r=createFlowRun({flowId:f.parent.id,flowVersionId:f.pv.id,status:'RUNNING'});runIds.push(r.id);
+ const node:any=f.pv.trigger.nextAction,ctx={runId:r.id,projectId:DEFAULT_IDS.project,stepName:node.name,executionPath:[] as Array<[string,number]>};
+ const pending=await services.subflowCall!({...node.settings.input,invocationKey:'card-request',payload},ctx) as any;
+ expect(JSON.parse(approvals.getRequest(pending.approval.approvalId)!.context).intent).toBe('Start and wait for the workflow '+f.child.id+' named "Fixture child"');
 });

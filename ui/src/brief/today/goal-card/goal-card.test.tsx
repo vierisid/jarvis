@@ -41,6 +41,18 @@ test('an empty recommendation explains the empty state without asking to refresh
   expect(host.querySelector('.brief-goal-accept')).toBeNull();
 });
 
+test('an unavailable recommendation read still offers a refresh, without an add action', async () => {
+  let refreshed = 0;
+  binding = { ...binding, recommendation: { status: 'unavailable', reason: 'Recommendations could not be read.' }, refresh: () => { refreshed++; } };
+  await render(); await open();
+  expect(host.textContent).toContain('Recommendations could not be read.');
+  expect(host.querySelector('.brief-goal-accept')).toBeNull();
+  const refresh = [...host.querySelectorAll('button')].find(b => b.textContent?.includes('Refresh recommendation'));
+  expect(refresh).toBeDefined();
+  await React.act(async () => refresh!.click());
+  expect(refreshed).toBe(1);
+});
+
 test("measurement and recommendation gates are independent and never mix fixtures into live",()=>{
   const provider={readiness:()=>"ready" as const};
   expect(goalView("live",binding).state.status).toBe("unavailable");

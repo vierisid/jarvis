@@ -1,5 +1,6 @@
 import { configureWorkflowReadiness } from '../db/repos/flow-readiness';
 import { PieceCatalog } from '../runtime/piece-catalog';
+import { setCronTimezone } from '../../lib/cron-scheduler';
 /**
  * Tests for the workflow API route handlers. Invokes handlers directly with
  * synthesized Request objects so we don't need to bring up Bun.serve.
@@ -339,6 +340,31 @@ describe("#598: flow metadata is validated and bounded on the way in", () => {
 });
 
 describe("workflow API: piece catalog", () => {
+  test("the schedule piece pre-fills Jarvis's time zone, not UTC, for a new step", async () => {
+    const zoneField = { name: "timezone", label: "Timezone", type: "enum" as const, required: true, default: "UTC",
+      options: [{ value: "UTC", label: "(GMT) UTC" }, { value: "Europe/Rome", label: "(GMT+01:00) Europe, Rome" }] };
+    const reg = new PieceCatalog([{ name: "@activepieces/piece-schedule", displayName: "Schedule", description: "", actions: {}, triggers: {
+      every_day: { name: "every_day", displayName: "Every Day", description: "", inputSchema: { fields: [zoneField] } },
+    } }]);
+    const r = createWorkflowRoutes({ pieceRegistry: reg });
+    const read = async () => {
+      const { body } = await callJson(r["/api/workflows/pieces"]?.GET, plainReq("GET", "http://x/api/workflows/pieces"));
+      return (body as Array<{ triggers: Array<{ inputSchema: { fields: Array<{ name: string; default?: unknown; options?: Array<{ value: string }> }> } }> }>)[0]!
+        .triggers[0]!.inputSchema.fields.find(f => f.name === "timezone")!;
+    };
+    setCronTimezone("Europe/Rome");
+    try {
+      expect((await read()).default).toBe("Europe/Rome");
+      // A configured zone the piece does not list is offered rather than left unselectable.
+      setCronTimezone("America/Argentina/Ushuaia");
+      const field = await read();
+      expect(field.default).toBe("America/Argentina/Ushuaia");
+      expect(field.options?.[0]?.value).toBe("America/Argentina/Ushuaia");
+    } finally { setCronTimezone(null); }
+    // The catalog itself is not rewritten.
+    expect(reg.get("@activepieces/piece-schedule")?.triggers?.every_day?.inputSchema?.fields[0]?.default).toBe("UTC");
+  });
+
   test("returns [] when no registry is wired", async () => {
     const r = createWorkflowRoutes();
     const get = r["/api/workflows/pieces"]?.GET;
@@ -441,6 +467,31 @@ describe("workflow API: piece catalog says which pieces skip approval (#955)", (
       "@activepieces/piece-activecampaign": true, "@activepieces/piece-gmail": false,
       "@jarvispieces/piece-jarvis-notify": false, "@activepieces/piece-http": false, "@activepieces/piece-delay": false,
     });
+  });
+});
+
+describe("workflow API: a partly governed piece badges only its ungoverned actions (#955)", () => {
+  test("the HubSpot contact upsert is gated; its other actions are marked", async () => {
+    const action = (name: string) => ({ name, displayName: name, description: "", props: {} });
+    const reg = new (await import("../runtime/piece-catalog")).PieceCatalog([{ name: "@activepieces/piece-hubspot", displayName: "HubSpot", description: "",
+      actions: { "create-or-update-contact": action("create-or-update-contact"), "create-deal": action("create-deal") }, triggers: {} } as any]);
+    const get = createWorkflowRoutes({ pieceRegistry: reg })["/api/workflows/pieces"]?.GET;
+    const { body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces"));
+    const piece = (body as Array<{ notApprovalGated?: boolean; actions: Array<{ name: string; notApprovalGated?: boolean }> }>)[0]!;
+    expect(piece.notApprovalGated).toBeUndefined();
+    expect(Object.fromEntries(piece.actions.map((a) => [a.name, a.notApprovalGated ?? false]))).toEqual({ "create-or-update-contact": false, "create-deal": true });
+  });
+  test("Sheets append actions are gated; its other actions are marked", async () => {
+    const action = (name: string) => ({ name, displayName: name, description: "", props: {} });
+    const names = ["insert_row", "sheets_append_values", "sheets_add_row", "update_row", "delete_row"];
+    const reg = new (await import("../runtime/piece-catalog")).PieceCatalog([{ name: "@activepieces/piece-google-sheets", displayName: "Google Sheets", description: "",
+      actions: Object.fromEntries(names.map((n) => [n, action(n)])), triggers: {} } as any]);
+    const get = createWorkflowRoutes({ pieceRegistry: reg })["/api/workflows/pieces"]?.GET;
+    const { body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces"));
+    const piece = (body as Array<{ notApprovalGated?: boolean; actions: Array<{ name: string; notApprovalGated?: boolean }> }>)[0]!;
+    expect(piece.notApprovalGated).toBeUndefined();
+    expect(Object.fromEntries(piece.actions.map((a) => [a.name, a.notApprovalGated ?? false]))).toEqual({
+      insert_row: false, sheets_append_values: false, sheets_add_row: false, update_row: true, delete_row: true });
   });
 });
 
@@ -1633,6 +1684,8 @@ describe("#729: the flow, version and run routes share one project scope", () =>
     { name: "run GET", route: "/api/workflow-runs/:runId", method: "GET", kind: "run" },
     { name: "run effects", route: "/api/workflow-runs/:runId/effects", method: "GET", kind: "run" },
     { name: "run cancel", route: "/api/workflow-runs/:runId/cancel", method: "POST", kind: "run" },
+    { name: "run recovery POST", route: "/api/workflow-runs/:runId/recovery", method: "POST", body: {}, kind: "run" },
+    { name: "effect identity POST", route: "/api/workflow-runs/:runId/effects/:effectId/identity", method: "POST", body: { resolution: "release" }, kind: "run" },
     { name: "run waitpoints", route: "/api/workflow-runs/:runId/waitpoints", method: "GET", kind: "run" },
   ];
 
@@ -1664,11 +1717,13 @@ describe("#729: the flow, version and run routes share one project scope", () =>
       runs: db.query("SELECT * FROM flow_run WHERE flow_id = ? ORDER BY id").all(flowId),
       cancellations: db.query("SELECT * FROM workflow_run_cancellation").all(),
       jobs: db.query("SELECT COUNT(*) AS n FROM workflow_job").get(),
+      identities: db.query("SELECT * FROM workflow_effect_identity").all(),
+      receipts: db.query("SELECT * FROM workflow_recovery_receipt").all(),
     };
   }
 
   function paramsFor(call: Call, ids: { flowId: string; versionId: string; runId: string }): Record<string, string> {
-    if (call.kind === "run") return { runId: ids.runId };
+    if (call.kind === "run") return { runId: ids.runId, effectId: "wfe_" + "0".repeat(64) };
     if (call.kind === "version") return { id: ids.flowId, versionId: ids.versionId, stepName: "trigger" };
     return { id: ids.flowId };
   }

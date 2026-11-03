@@ -4,7 +4,9 @@ import { cronWallTimeKey, getCronTimezone, type CronOccurrence } from '../../lib
 export function scheduleTriggerPayload(input: Record<string, unknown>, occurrence?: CronOccurrence, firedAt = Date.now()) {
   const at = occurrence?.at ?? firedAt;
   const timezone = typeof input.timezone === 'string' ? input.timezone : getCronTimezone();
-  const occurrenceKey = occurrence?.key ?? cronWallTimeKey(new Date(at), timezone);
+  // A chosen zone prefixes the dedupe key ("Europe/Rome@2027-02-26T17:00"); the payload keeps the local minute.
+  const scheduledKey = occurrence?.key.slice(occurrence.key.lastIndexOf('@') + 1);
+  const occurrenceKey = scheduledKey ?? cronWallTimeKey(new Date(at), timezone);
   const calendarKey = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(occurrenceKey)
     ? occurrenceKey : cronWallTimeKey(new Date(at), timezone);
   return { ...input, firedAt, scheduledFor: new Date(at).toISOString(), occurrenceKey,

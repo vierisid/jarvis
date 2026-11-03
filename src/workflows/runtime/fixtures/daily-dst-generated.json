@@ -8,7 +8,8 @@
       "cron_expression": "30 2 * * *",
       "timezone": "Europe/Rome",
       "dst_policy": "skip_missing_first_repeated"
-    }
+    },
+    "chosenTimezone": "Europe/Rome"
   },
   "nextAction": {
     "name": "step_1",

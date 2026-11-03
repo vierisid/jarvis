@@ -15,6 +15,7 @@ import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../../../../src/lib/cron-scheduler';
+import { chosenScheduleZone } from '../../../../../src/workflows/runner/triggers/schedule-zone';
 import type { ConnectionMeta } from "./useConnections";
 import {
   detectTriggerKind,
@@ -38,6 +39,8 @@ import {
   parseSourceHandle,
   removeStep,
   reorderChain as treeReorderChain,
+  withStepInput,
+  withoutChosenZone,
   type ConnectionHandle,
 } from "./tree";
 
@@ -57,6 +60,7 @@ export interface FlowStepNode {
   displayName?: string;
   settings?: {
     pieceName?: string;
+    propertySettings?: Record<string, {schema?: unknown}>;
     triggerName?: string;
     actionName?: string;
     input?: Record<string, unknown>;
@@ -74,6 +78,12 @@ export interface FlowStepNode {
      * this flag, so the editor treats it as the more flexible Router.
      */
     routerKind?: "if" | "router";
+    /**
+     * Schedule triggers: the zone a person picked for this step. The brain
+     * uses `input.timezone` only while it equals this; otherwise the schedule
+     * runs in Jarvis's zone. Written by `withStepInput` (tree.ts).
+     */
+    chosenTimezone?: string;
     /**
      * PIECE / CODE: per-step error-handling toggles consumed by the engine
      * at `src/workflows/activepieces/.../helper/error-handling.ts`.
@@ -168,6 +178,8 @@ export interface PieceCatalogActionOrTrigger {
   description: string;
   inputSchema: PieceInputSchema | null;
   requireAuth?: boolean;
+  /** Set by the daemon on an ungoverned action of a partly governed piece (#955). */
+  notApprovalGated?: boolean;
   /**
    * Optional declared output for the action or trigger. Used by the
    * variable picker to surface field-level rows even before the step has
@@ -471,9 +483,7 @@ export function useWorkflowEditor(flowId: string | null) {
   const updateStepInput = useCallback(
     (stepName: string, key: string, value: unknown): void => {
       mutateAnyStep(stepName, (target) => {
-        const settings = target.settings ? { ...target.settings } : {};
-        settings.input = { ...(settings.input ?? {}), [key]: value };
-        target.settings = settings;
+        target.settings = withStepInput(target, key, value);
       });
     },
     [mutateAnyStep],
@@ -1019,8 +1029,10 @@ export function useWorkflowEditor(flowId: string | null) {
           }
         }
 
+        const changed = target.settings?.pieceName !== pieceName
+          || (isTrigger ? target.settings?.triggerName : target.settings?.actionName) !== actionName;
         const settings: NonNullable<FlowStepNode["settings"]> = {
-          ...(target.settings ?? {}),
+          ...(changed ? withoutChosenZone(target.settings) : (target.settings ?? {})),
           pieceName,
           input: seed,
         };
@@ -1197,7 +1209,9 @@ export function useWorkflowEditor(flowId: string | null) {
         res = await fetch(`/api/workflows/${flowId}/versions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ displayName: version.displayName, trigger: draftTrigger, uiMeta }),
+          // The published base's revision: the server refuses the clone if a draft
+          // appeared or the publication changed since this editor loaded it.
+          body: JSON.stringify({ ...(version.editorRevision ? { expectedRevision: version.editorRevision } : {}), displayName: version.displayName, trigger: draftTrigger, uiMeta }),
         });
       } else {
         if (!version.editorRevision) return { ok: false, message: 'Reload this draft before saving so changes from other tabs can be checked. Your edits have not been saved.' };
@@ -1557,13 +1571,18 @@ export function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEn
       continue;
     }
     if (isTrigger && step.settings?.pieceName === 'schedule') {
-      const cron = input.cron_expression ?? input.cronExpression ?? input.expression;
+      // Mirrors the server's readiness for the built-in schedule (workflow-readiness.ts).
+      const cron = input.cron_expression || input.cronExpression || input.expression;
       if (empty(cron)) add('cron_expression', 'Schedule: choose an execution time');
       else { try { if (typeof cron !== 'string') throw Error('Use a cron expression'); validateCronExpression(cron); }
         catch (error) { add('cron_expression', `Schedule: ${(error as Error).message}`); } }
-      if (empty(input.timezone)) add('timezone', 'Timezone: choose an IANA timezone');
-      else { try { validateCronTimezone(input.timezone); }
-        catch (error) { add('timezone', `Timezone: ${(error as Error).message}`); } }
+      // No zone means Jarvis's, and a zone nobody chose is not used, so neither
+      // blocks; a zone a person chose must be real.
+      const chosen = chosenScheduleZone(step.settings);
+      if (chosen !== undefined) {
+        try { validateCronTimezone(chosen); }
+        catch (error) { add('timezone', `Timezone: ${(error as Error).message}`); }
+      }
       try { validateCronDstPolicy(input.dst_policy); }
       catch (error) { add('dst_policy', (error as Error).message); }
       continue;

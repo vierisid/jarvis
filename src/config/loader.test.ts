@@ -94,6 +94,27 @@ describe('Config Loader', () => {
     expect(config.usejarvis_billing).toBeUndefined();
   });
 
+  test('reloadUsejarvisIntegrationsBlock: a moved page lands, removal clears, corruption keeps the current value', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    const { reloadUsejarvisIntegrationsBlock } = await import('./loader.ts');
+    const block = (url: string) => `usejarvis_integrations:\n  page_url: ${url}\n`;
+    await writeFile(TEST_CONFIG_PATH, 'daemon:\n  port: 3142\n');
+    const config = await loadConfig(TEST_CONFIG_PATH);
+    expect(config.usejarvis_integrations).toBeUndefined();
+
+    await writeFile(TEST_CONFIG_PATH, block('https://app.example/account'));
+    await reloadUsejarvisIntegrationsBlock(config, TEST_CONFIG_PATH);
+    expect(config.usejarvis_integrations).toEqual({ page_url: 'https://app.example/account' });
+
+    await writeFile(TEST_CONFIG_PATH, 'usejarvis_integrations: [unclosed');
+    await reloadUsejarvisIntegrationsBlock(config, TEST_CONFIG_PATH);
+    expect(config.usejarvis_integrations?.page_url).toBe('https://app.example/account');
+
+    await writeFile(TEST_CONFIG_PATH, 'daemon:\n  port: 3142\n');
+    await reloadUsejarvisIntegrationsBlock(config, TEST_CONFIG_PATH);
+    expect(config.usejarvis_integrations).toBeUndefined();
+  });
+
   test('reloadUsejarvisAiBlock: rotation lands, removal un-hosts, corruption keeps the current value', async () => {
     const { writeFile } = await import('node:fs/promises');
     const { reloadUsejarvisAiBlock } = await import('./loader.ts');

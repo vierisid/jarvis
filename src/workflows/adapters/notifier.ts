@@ -97,17 +97,15 @@ export class JarvisNotifierAdapter implements PieceNotifier {
 
     // Dashboard
     if (expanded.has("dashboard")) {
-      let started = false;
       try {
         checkpointExecution();
-        started = true;
         if (this.deps.broadcastToDashboard(input.message, priority) > 0) delivered.push("dashboard");
         else if (autoDashboard) {
           skipped.push({ channel: "dashboard", error: "no dashboard was open" });
           if (this.deps.sendDesktop) expanded.add("desktop");
         } else failed.push({ channel: "dashboard", error: "no dashboard was open" });
       } catch (e) {
-        (started ? unknown : failed).push({ channel: "dashboard", error: errorMessage(e) });
+        failed.push({ channel: "dashboard", error: errorMessage(e) });
       }
     }
 
