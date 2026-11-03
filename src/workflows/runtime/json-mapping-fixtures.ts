@@ -93,6 +93,11 @@ async function runCases(saved: any, fixture: any) {
     for (const [name,outcome] of Object.entries(c.sheetsOutcomes ?? {})) {
       check(nodes.get(name)?.settings?.pieceName === SHEETS && ['success','failure','uncertain'].includes(String(outcome)), 'invalid Sheets step outcome');
     }
+    for (const key of ['expectedRowsByStep','expectedRequestsByStep']) {
+      check(c[key] === undefined || object(c[key]), key + ' must map Sheets step names');
+      // An unknown step name would otherwise match an empty expectation vacuously.
+      for (const name of Object.keys(c[key] ?? {})) check(nodes.get(name)?.settings?.pieceName === SHEETS, key + ' names unknown Sheets step ' + name);
+    }
     const deliveries = c.deliveries ?? 1;
     check(Number.isInteger(deliveries) && deliveries >= 1 && deliveries <= 20, 'deliveries must be 1-20');
     const scope: Record<string, any> = {trigger: c.payload}, steps: string[] = [], rows: any[] = [], requests: any[] = [];
