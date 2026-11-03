@@ -1157,7 +1157,7 @@ export function buildSandboxServiceBackends(
   };
 
   const services: SandboxApiServices = {
-    subflowCall: cancellableWorkflowService(createSubflowService(effects,opts.subflowNow)),
+    subflowCall: cancellableWorkflowService(createSubflowService(effects,opts.subflowNow,(flowId,versionId)=>workflowStartIntentOf({flowId,pinned:{versionId},waitForCompletion:true}))),
     subflowResult: cancellableWorkflowService(returnSubflowResult),
     credentialResolver: opts.credentialResolver,
     meetingBriefs: cancellableWorkflowService(meetingBriefs),

@@ -13,7 +13,6 @@ import { emergencyHold } from './emergency-hold';
  * `onCardClosed` hears each card this sweep closed, so the dashboard stops
  * offering it (#1039). A throw from it is logged and the sweep goes on. */
 export function resumeCompletedChildRuns(onCardClosed?: (approvalId: string) => void): number {
-  const structured = resumeSubflowCalls();
   const db = getWorkflowDb();
   // A parent can fail after child dispatch but before its PAUSED upload, or
   // disappear through flow deletion. The child row retains this ownership
@@ -25,6 +24,7 @@ export function resumeCompletedChildRuns(onCardClosed?: (approvalId: string) => 
   const report = (approvalId: string) => {
     try { onCardClosed?.(approvalId); } catch (error) { console.error('[Workflow Authority] closed card update failed:', error); }
   };
+  const structured = resumeSubflowCalls(Date.now(), report);
   for (const child of abandoned) cancelFlowRun(child.id).closedApprovalIds.forEach(report);
   // A run can create an approval and then fail before publishing PAUSED.
   // Cancel refuses already-terminal runs, so retire their undispatched waits
