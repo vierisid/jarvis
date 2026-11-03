@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { sanitizedEnv } from '../../util/subprocess-env';
-import { CronScheduler, cronWallTimeKey, validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
+import { CronScheduler, cronWallTimeKey, setCronTimezone, validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
+import { chosenScheduleZone, effectiveScheduleZone } from '../runner/triggers/schedule-zone';
 import { scheduleTriggerPayload } from './schedule-payload';
 import { resolveFixtureValue } from './json-mapping-fixtures';
 import { digest } from './effect-context';
@@ -11,12 +12,14 @@ function instant(value: unknown): number {
   check(typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value), 'use ISO timestamps with explicit offsets');
   const ms = Date.parse(value); check(Number.isFinite(ms), 'invalid timestamp'); return ms;
 }
-function prepare(saved: any, fixture: any) {
+function prepare(saved: any, fixture: any, zone: unknown) {
   check(JSON.stringify({saved, fixture}).length <= 200_000, 'input exceeds 200 KB');
   check(saved?.type === 'PIECE_TRIGGER' && saved.settings?.pieceName === 'schedule', 'requires built-in schedule');
   const input = saved.settings.input ?? {}, expression = input.cron_expression || input.cronExpression || input.expression;
   check(typeof expression === 'string' && !expression.startsWith('@'), 'requires a configured five-field cron');
-  validateCronExpression(expression); validateCronTimezone(input.timezone);
+  validateCronExpression(expression); validateCronTimezone(zone);
+  // The zone the trigger manager uses: a chosen step zone, else Jarvis's configured zone.
+  const chosen = chosenScheduleZone(saved.settings);
   const node = saved.nextAction;
   check(node?.type === 'PIECE' && ['@jarvispieces/piece-jarvis-notify','jarvis-notify'].includes(node.settings?.pieceName)
     && node.settings.actionName === 'notify' && !node.nextAction && !node.firstLoopAction && !node.children?.length
@@ -32,11 +35,12 @@ function prepare(saved: any, fixture: any) {
     check(c.notificationOutcome === undefined || ['success','failure','uncertain'].includes(c.notificationOutcome), 'invalid notificationOutcome');
     check(c.expectedKey === undefined || typeof c.expectedKey === 'string', 'expectedKey must be a string');
   }
-  return {node, expression, timezone: input.timezone};
+  return {node, expression, timezone: zone, chosen};
 }
 
-async function runCases(saved: any, fixture: any) {
-  const {node,expression,timezone} = prepare(saved,fixture);
+async function runCases(saved: any, fixture: any, zone: unknown) {
+  const {node,expression,timezone,chosen} = prepare(saved,fixture,zone);
+  setCronTimezone(timezone);
   // Fixed local implementation only. No account binding or daemon URL is used.
   const { sendNotification } = await import('../activepieces/packages/pieces/jarvis/notify/src/lib/actions/send-notification');
   const cases = [];
@@ -48,7 +52,7 @@ async function runCases(saved: any, fixture: any) {
     let trigger: ReturnType<typeof scheduleTriggerPayload> | undefined;
     if (matches) {
       // Serialization simulates the stored payload boundary; real SQLite/worker recovery is tested separately.
-      trigger = JSON.parse(JSON.stringify(scheduleTriggerPayload({cronExpression:expression,timezone}, {at,key:cronWallTimeKey(new Date(at),timezone),lateMs:0}, at)));
+      trigger = JSON.parse(JSON.stringify(scheduleTriggerPayload({cronExpression:expression,...(chosen?{timezone:chosen}:{})}, {at,key:(chosen?chosen+'@':'')+cronWallTimeKey(new Date(at),timezone),lateMs:0}, at)));
       const input = resolveFixtureValue(node.settings.input, {[saved.name]:trigger});
       check(Array.isArray(input.channels) && input.channels.length === 1 && input.channels[0] === 'dashboard', 'only dashboard transport can be mocked');
       check(!input.meetingGuard, 'meeting guards require their own fixture suite');
@@ -82,9 +86,10 @@ async function runCases(saved: any, fixture: any) {
 
 /** Isolated, bounded runner: no credentials or real network. */
 export async function validateScheduleFixtures(saved: any, fixture: any) {
-  prepare(saved, fixture);
+  const zone = effectiveScheduleZone(saved?.settings);
+  prepare(saved, fixture, zone);
   const child = Bun.spawn([process.execPath,'--no-env-file',fileURLToPath(import.meta.url)], {
-    env:sanitizedEnv(),stdin:new Blob([JSON.stringify({saved,fixture})]),stdout:'pipe',stderr:'ignore',
+    env:sanitizedEnv(),stdin:new Blob([JSON.stringify({saved,fixture,zone})]),stdout:'pipe',stderr:'ignore',
   });
   let timedOut = false;
   const timer = setTimeout(()=>{timedOut=true;child.kill();},10_000);
@@ -98,6 +103,6 @@ export async function validateScheduleFixtures(saved: any, fixture: any) {
 }
 if(import.meta.main){
   globalThis.fetch=(()=>{throw Error('Real network disabled in schedule fixtures');}) as unknown as typeof fetch;
-  try { const {saved,fixture}=await Bun.stdin.json();console.log(JSON.stringify({ok:true,report:await runCases(saved,fixture)})); }
+  try { const {saved,fixture,zone}=await Bun.stdin.json();console.log(JSON.stringify({ok:true,report:await runCases(saved,fixture,zone)})); }
   catch(e){console.log(JSON.stringify({ok:false,error:e instanceof Error?e.message:String(e)}));process.exitCode=1;}
 }
