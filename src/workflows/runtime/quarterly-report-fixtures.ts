@@ -95,10 +95,12 @@ export async function runQuarterlyFixtures(saved:any,fixture:any={}) {
     const output=await collectQuarterlyReport(setup,quarterlyTransport('synthetic-fixture',()=>{},providerFetch),props.scheduledFor);
     if(c.expectedQuarter)ensure(output.quarters[0]!.label===c.expectedQuarter,c.name+': quarter differs');
     if(c.expectedPrior)ensure(output.quarters[1]!.label===c.expectedPrior,c.name+': prior quarter differs');
-    const unavailable=!['complete','empty','notification_failure','notification_uncertain'].includes(c.scenario);
+    const unavailable=!['complete','empty','missing_amount','notification_failure','notification_uncertain'].includes(c.scenario);
     ensure(output.partial===unavailable,c.name+': completeness differs');
     if(unavailable)ensure(output.comparisons[0]?.status==='Unavailable',c.name+': partial comparison leaked');
     if(['page_failure','cursor_cycle','page_limit','missing_date'].includes(c.scenario))ensure(output.datasets.every(d=>Object.keys(d.totals).length===0),'partial aggregates leaked');
+    // A deal with no amount is left out of totals and disclosed by count; the quarter stays complete.
+    if(c.scenario==='missing_amount')ensure(output.datasets[0]!.noAmount===1&&!output.datasets[0]!.totals.EUR&&output.datasets[1]!.totals.EUR?.amount==='150'&&output.summary.includes('1 deal with no amount not included'),'missing amount must be disclosed, not counted');
     if(c.scenario==='complete') {
       ensure(output.datasets[0]!.totals.EUR?.amount==='150'&&output.datasets[1]!.totals.EUR?.amount==='150','page coverage or boundaries differ');
       ensure(output.comparisons.find(x=>x.currency==='USD')?.amountChange.percentage===null,'zero baseline divided');

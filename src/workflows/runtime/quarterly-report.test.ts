@@ -40,11 +40,17 @@ test('all pages, boundary inclusion, duplicate IDs, separate currencies and empt
   const empty=await collectQuarterlyReport(setup,quarterlyFixtureRequest(setup,at,'empty'),at);expect(empty.complete).toBe(true);expect(empty.comparisons[0]!.countCurrent).toBe(0);
 });
 test('invalid dates/cursors/amounts/currencies never become complete zero totals',async()=>{
-  for(const scenario of ['missing_amount','missing_currency','missing_date','cursor_cycle','page_limit','page_failure'] as const){
+  for(const scenario of ['missing_currency','missing_date','cursor_cycle','page_limit','page_failure'] as const){
     const report=await collectQuarterlyReport(setup,quarterlyFixtureRequest(setup,at,scenario),at);
     expect(report.complete).toBe(false);expect(report.datasets[0]!.totals).toEqual({});expect(report.summary).toContain('Unavailable');
-    if(['missing_amount','missing_currency'].includes(scenario))expect(report.datasets[1]!.totals.EUR?.amount).toBe('150');
+    if(scenario==='missing_currency')expect(report.datasets[1]!.totals.EUR?.amount).toBe('150');
   }
+});
+test('a deal with no amount is left out of totals and disclosed by count, not zero and not Unavailable',async()=>{
+  const report=await collectQuarterlyReport(setup,quarterlyFixtureRequest(setup,at,'missing_amount'),at);
+  expect(report.complete).toBe(true);expect(report.datasets[0]!.noAmount).toBe(1);expect(report.datasets[0]!.totals.EUR).toBeUndefined();
+  expect(report.datasets[1]!.totals.EUR).toEqual({count:2,amount:'150'});expect(report.datasets[1]!.noAmount).toBeUndefined();
+  expect(report.summary).toContain('current: excluded from totals: 1 deal with no amount not included');
 });
 test('unknown dates invalidate both periods; selected stages and date property remain strict',async()=>{
   expect(()=>quarterlySetup({...setup,dealStageIds:[]})).toThrow();expect(()=>quarterlySetup({...setup,dealDateProperty:''})).toThrow();

@@ -121,6 +121,8 @@ export async function collectQuarterlyReport(setup: QuarterlySetup, request: Rep
         const code = p.deal_currency_code;
         // Never assumed: with neither a deal currency nor a known portal company currency the quarter is Unavailable.
         const c = code == null || code === '' ? companyCurrency ?? (() => { throw Error('Deal currency missing and the HubSpot company currency is unknown'); })() : currency(code);
+        // A deal with no amount is not zero: it is kept out of totals and disclosed by count, as the weekly report does.
+        if (p.amount == null || p.amount === '') { dataset.noAmount = (dataset.noAmount ?? 0) + 1; continue; }
         add(dataset.totals, c, decimal(p.amount));
       }
       catch (e) { unavailable(dataset, e); }
@@ -147,6 +149,7 @@ export async function collectQuarterlyReport(setup: QuarterlySetup, request: Rep
     `Selected closed stages: ${setup.dealStageIds.join(', ')}; date property: ${setup.dealDateProperty}. Current nonarchived records, not historical stage snapshots.`,
     'Amounts in original deal currencies; no FX or combined-currency total. Counts and amounts compared separately.',
     ...datasets.flatMap(d => d.coverage.status === 'Unavailable' ? [`${d.coverage.period}: Unavailable: ${d.coverage.reason}`] : Object.keys(d.totals).length ? Object.entries(d.totals).map(([c,t]) => `${d.coverage.period} ${c}: ${t.count} deals, ${t.amount}`) : [`${d.coverage.period}: 0 deals; no currency inferred`]),
+    ...datasets.flatMap(d => d.coverage.status !== 'Unavailable' && d.noAmount ? [`${d.coverage.period}: excluded from totals: ${d.noAmount} deal${d.noAmount === 1 ? '' : 's'} with no amount not included`] : []),
     ...comparisons.map(c => c.reason ?? c.note ?? `${c.currency}: amount delta ${c.amountChange.delta}, ${c.amountChange.percentage === null ? c.amountChange.label : c.amountChange.percentage + '%'}; count delta ${c.countChange.delta}, ${c.countChange.percentage === null ? c.countChange.label : c.countChange.percentage + '%'}`),
     ...datasets.map(d => `${d.coverage.period} coverage: ${d.coverage.status}, ${d.coverage.pages} pages, ${d.coverage.unique} unique records, terminal page ${d.coverage.terminal}`), `Source: ${sourceUrl}`].join('\n');
   if (summary.length > 100000) throw Error('Quarterly summary exceeds output limit');
