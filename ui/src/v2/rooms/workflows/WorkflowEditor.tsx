@@ -45,6 +45,7 @@ import { GitHubConnection, useGitHubStatus } from "../../integrations/GitHubConn
 import { GitHubRepository } from "../../integrations/GitHubRepository";
 import { MEETING_ACCOUNT_FIELDS } from "../../../../../src/workflows/meeting-accounts";
 import { SALES_ACCOUNT_FIELDS } from "../../../../../src/workflows/sales-accounts";
+import { ONBOARDING_ACCOUNT_FIELDS, ONBOARDING_ACTION, ONBOARDING_PIECE } from "../../../../../src/workflows/onboarding-accounts";
 import { REPORT_ACCOUNT_FIELDS } from "../../../../../src/workflows/report-accounts";
 import { REFUND_ACCOUNT_FIELDS, REFUND_ACTION, REFUND_PIECE } from "../../../../../src/workflows/refund-accounts";
 import { IMPORT_ACCOUNT_FIELDS, IMPORT_ACTION, IMPORT_PIECE, importAccountFields } from "../../../../../src/workflows/import-accounts";
@@ -3445,6 +3446,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const formInput = step.settings?.input ?? {};
   const meetingAccounts = piece?.name === '@jarvispieces/piece-jarvis-context' && subName === 'meeting_briefs'
     ? MEETING_ACCOUNT_FIELDS
+    : piece?.name === ONBOARDING_PIECE && subName === ONBOARDING_ACTION ? ONBOARDING_ACCOUNT_FIELDS
     : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups' ? SALES_ACCOUNT_FIELDS
       : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report' ? REPORT_ACCOUNT_FIELDS
         : piece?.name === REFUND_PIECE && subName === REFUND_ACTION ? REFUND_ACCOUNT_FIELDS

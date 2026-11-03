@@ -4,6 +4,7 @@ import { isHubspotContact } from './hubspot-contact';
 import { isSalesStep } from './sales-followups';
 import { isImportStep } from '../import-accounts';
 import { isRefundAction } from '../refund-accounts';
+import { isOnboardingStep } from '../onboarding-accounts';
 import { isReportStep, SOURCE_READ_BUDGET_MS, HUBSPOT_429_RETRIES, HUBSPOT_RETRY_MAX_WAIT_MS } from './weekly-report';
 /** Evidence of the installed runtime contract, not a claim a saved graph has run. */
 export function workflowSafeguards(trigger: unknown) {
@@ -12,6 +13,9 @@ export function workflowSafeguards(trigger: unknown) {
     const s = node.settings ?? {};
     const input = s.input && typeof s.input === 'object' && !Array.isArray(s.input) ? s.input : {};
     const add=(kind:string,coverage:string,limits:string)=>safeguards.push({node:node.name,kind,coverage,limits});
+    if (isOnboardingStep(s)) {
+      add('customer-resource-outcomes','Independent ClickUp task and Drive folder creation with all-settled collection. Durable per-workflow/customer receipts across runs, versions and restarts. Retry explicit rejections only; reuse completed resources, fence uncertain writes. Return both outcomes and one deduplicated dashboard summary key.', 'OAuth2 accounts only; customer mapping/list/parent remain setup. No automatic reconciliation or eventual-delivery guarantee for uncertain writes. Concurrent processing waits for the owner or needs retry after its lease. Changed configuration requires review. Summary updates once when outcomes change.');
+    }
     if (isRefundAction(s)) {
       add('refund-approval','Mandatory human click on an immutable ticket/account/mode/charge/currency/integer-minor-unit amount. Durable workflow waitpoint and explicit 48-hour deadline; late approvals refused, rejection/expiry terminates without refund. Rejecting does not clear the refund flag on the ticket, so a later event for the same ticket proposes again (one live card per ticket). Changed ticket data supersedes an unattempted request and withdraws its card; a request that ended before dispatch frees its ticket and charge for a later delivery.', 'Ticket source, exact payment mapping, refund filter and Stripe account remain setup. A PaymentIntent must resolve to one captured charge. No fuzzy payment search.');
       add('refund-identity','Persistent request identity across runs, flows, versions and restart; actual charge reservation across ticket IDs. Pre-dispatch ledger claim, stable Stripe idempotency/metadata key, full bounded refund-list reconciliation of lost responses. No automatic second POST.', 'At most one attempted or active Jarvis refund request per charge; additional or uncertain refunds require review. External changes after the final read are not atomic with Stripe. A request that needs review fails its run with a typed outcome saying whether Stripe may have refunded; it is never resent and a redelivery reports the same outcome. A refund Stripe reports as pending also fails the run, so it is seen: Jarvis does not poll it, so it needs manual follow-up in Stripe. Rejected and expired requests end green with their status. No eventual delivery guarantee.');

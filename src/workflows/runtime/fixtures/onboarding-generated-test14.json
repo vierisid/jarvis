@@ -1,0 +1,43 @@
+{
+  "name": "trigger",
+  "type": "PIECE_TRIGGER",
+  "displayName": "New customer submission",
+  "settings": {
+    "pieceName": "webhook",
+    "input": {}
+  },
+  "nextAction": {
+    "name": "step_1",
+    "type": "PIECE",
+    "displayName": "Create independent task and folder; wait for both outcomes",
+    "settings": {
+      "pieceName": "@jarvispieces/piece-jarvis-onboarding",
+      "actionName": "create_resources",
+      "input": {
+        "customer": "{{trigger}}",
+        "customerIdPath": "",
+        "customerNamePath": "",
+        "clickupConnection": "",
+        "clickupListId": "",
+        "driveConnection": "",
+        "driveParentId": ""
+      }
+    },
+    "nextAction": {
+      "name": "step_2",
+      "type": "PIECE",
+      "displayName": "Summarize both outcomes on dashboard",
+      "settings": {
+        "pieceName": "@jarvispieces/piece-jarvis-notify",
+        "actionName": "notify",
+        "input": {
+          "message": "{{step_1.summary}}",
+          "idempotencyKey": "{{step_1.notificationKey}}",
+          "channels": [
+            "dashboard"
+          ]
+        }
+      }
+    }
+  }
+}

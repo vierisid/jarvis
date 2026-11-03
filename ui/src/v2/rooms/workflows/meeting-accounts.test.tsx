@@ -4,6 +4,7 @@ let React: typeof import('react'), createRoot: typeof import('react-dom/client')
 let Pickers: typeof import('./WorkflowEditor').MeetingAccountPickers, authType: typeof import('./WorkflowEditor').accountPickerAuthType;
 import { REPORT_ACCOUNT_FIELDS } from '../../../../../src/workflows/report-accounts';
 import { IMPORT_ACCOUNT_FIELDS, importAccountFields } from '../../../../../src/workflows/import-accounts';
+import { ONBOARDING_ACCOUNT_FIELDS } from '../../../../../src/workflows/onboarding-accounts';
 beforeAll(async()=>{GlobalRegistrator.register();(globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;React=await import('react');({createRoot}=await import('react-dom/client'));({MeetingAccountPickers:Pickers,accountPickerAuthType:authType}=await import('./WorkflowEditor'));});
 afterAll(()=>GlobalRegistrator.unregister());
 test('meeting setup selects saved accounts by provider, stores only reference and restores selection',async()=>{
@@ -56,4 +57,13 @@ test('contact import asks for the source account only for an OAuth2 source',()=>
  expect(importAccountFields({sourceAuth:'none'})).toEqual(['hubspotConnection']);
  expect(importAccountFields({sourceAuth:'oauth2'})).toEqual(['hubspotConnection','sourceConnection']);
  expect(importAccountFields(undefined)).toEqual(['hubspotConnection']);
+});
+
+test('customer onboarding uses separate saved ClickUp and Drive account references',async()=>{
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host),writes:Array<[string,string]>=[];
+ const connections=['clickup','google-drive','gmail'].map((name,i)=>({id:String(i),externalId:'saved-'+i,pieceName:'@activepieces/piece-'+name,displayName:'Account '+i,status:'ACTIVE'})) as any;
+ await React.act(async()=>root.render(<Pickers fields={ONBOARDING_ACCOUNT_FIELDS} connections={connections} input={{clickupConnection:'saved-0'}} onSetInput={(k,v)=>writes.push([k,v])}/>));
+ try{const selects=host.querySelectorAll('select');expect(selects.length).toBe(2);expect(selects[0]!.value).toBe('saved-0');expect(host.textContent).not.toContain('Account 2');
+  await React.act(async()=>{selects[1]!.value='saved-1';selects[1]!.dispatchEvent(new Event('change',{bubbles:true}));});expect(writes).toEqual([['driveConnection','saved-1']]);
+ }finally{await React.act(async()=>root.unmount());host.remove();}
 });

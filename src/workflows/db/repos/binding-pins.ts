@@ -3,6 +3,7 @@ import { importAccountFields, isImportStep } from '../../import-accounts';
 import { REPORT_ACCOUNTS, isReportStep } from '../../report-accounts';
 import { SALES_ACCOUNTS, isSalesStep } from '../../sales-accounts';
 import { REFUND_ACCOUNTS, isRefundAction } from '../../refund-accounts';
+import { ONBOARDING_ACCOUNTS, isOnboardingStep } from '../../onboarding-accounts';
 /**
  * Q-05: the bindings a workflow was enabled against, and the checks that stop
  * work when one of them changes.
@@ -129,6 +130,12 @@ export function nodeConnectionReferences(node: FlowTriggerNode): Array<[external
   }
   if (isReportStep(node.settings)) {
     for (const field of Object.keys(REPORT_ACCOUNTS)) {
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
+  if (isOnboardingStep(node.settings)) {
+    for (const field of Object.keys(ONBOARDING_ACCOUNTS)) {
       const id = node.settings?.input?.[field];
       if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
     }

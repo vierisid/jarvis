@@ -1,4 +1,5 @@
 import { MEETING_ACCOUNTS, meetingSetup, meetingSetupMatches, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
+import { createOnboardingService } from './onboarding-service';
 import { createSalesFollowupsService } from './sales-service';
 import { createWeeklyReportService } from './report-service';
 import { createRefundService } from './refund-service';
@@ -143,6 +144,7 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
   importRequest?: ImportRequest;
   importNow?: () => number;
   importBudget?: () => import('./import-service').ImportCallBudget;
+  onboardingFetch?: typeof fetch;
   salesFetch?: typeof fetch;
   salesNow?: () => number;
   /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
@@ -1274,6 +1276,7 @@ export function buildSandboxServiceBackends(
     weeklyReport: cancellableWorkflowService(createWeeklyReportService({effects,credentials:opts.credentialResolver,fetchImpl:opts.reportFetch,now:opts.reportNow})),
     approvalRefund: cancellableWorkflowService(createRefundService({effects,credentials:opts.credentialResolver,fetchImpl:opts.refundFetch,now:opts.refundNow})),
     contactImport: cancellableWorkflowService(createContactImportService({effects,credentials:opts.credentialResolver,request:opts.importRequest,now:opts.importNow,budget:opts.importBudget})),
+    customerOnboarding: cancellableWorkflowService(createOnboardingService({effects,credentials:opts.credentialResolver,fetchImpl:opts.onboardingFetch})),
     salesFollowups: cancellableWorkflowService(createSalesFollowupsService({effects,credentials:opts.credentialResolver,fetchImpl:opts.salesFetch,now:opts.salesNow})),
     pieceAuthorize: cancellableWorkflowService(pieceAuthorize),
     pieceReceipt: (ctx, id, result) => recordPieceCompletion(ctx, id, result, opts),

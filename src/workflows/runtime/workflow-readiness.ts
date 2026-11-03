@@ -11,6 +11,8 @@ import { IMPORT_ACCOUNTS, IMPORT_PIECE, importAccountFields, isImportStep, manag
 import { REPORT_REQUIRED, reportSetup } from './weekly-report';
 import { REPORT_ACCOUNTS, REPORT_PIECE, isReportStep, managedReportRefusal, type ReportAccountField } from '../report-accounts';
 import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_PIECE, isSalesStep, salesSetup } from './sales-followups';
+import { ONBOARDING_REQUIRED, onboardingSetup } from './customer-onboarding';
+import { ONBOARDING_ACCOUNTS, ONBOARDING_PIECE, isOnboardingStep } from '../onboarding-accounts';
 import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
 import {managedNotionIssue} from './managed-notion';
@@ -348,6 +350,24 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         }
       }
       if (REPORT_REQUIRED.every(k=>!emptyInput(input[k]))) try { reportSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
+    if (!root && isOnboardingStep(settings) && pieceName !== ONBOARDING_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${ONBOARDING_PIECE}`);
+    if (!root && isOnboardingStep(settings) && object(input)) {
+      for (const [field, provider] of Object.entries(ONBOARDING_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
+          else if (context.phase !== 'composition') {
+            // Checked against the provider piece this field reads with, at its own path:
+            // managedConnectionMisuse refuses a managed connection here (no exemption covers onboarding).
+            const refusal=context.connection?.(id,provider,`settings.input.${field}`,settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck pinned onboarding account before each provider call');
+          }
+        }
+      }
+      if (ONBOARDING_REQUIRED.every(k=>!emptyInput(input[k]))) try { onboardingSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
     }
     if (!root && isSalesStep(settings) && pieceName !== SALES_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${SALES_PIECE}`);
     if (!root && isSalesStep(settings) && object(input)) {
