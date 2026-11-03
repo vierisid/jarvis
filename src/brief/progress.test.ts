@@ -2,6 +2,13 @@ import { expect, test } from 'bun:test';
 import { BriefProgressProjector, MAX_TURN_ACTIVITIES } from './progress';
 import type { ExecutionActivity } from '../actions/progress-context';
 import { observeToolExecution, withExecutionProgress } from '../actions/progress-context';
+import { createManageWorkflowTool } from '../actions/tools/manage-workflow';
+import { workflowProgressLabels } from './workflow-progress-labels';
+
+test('every manage_workflow action has a static progress label', () => {
+  const actions = (createManageWorkflowTool().parameters.action as { enum: string[] }).enum;
+  expect(actions.filter(action => !Object.hasOwn(workflowProgressLabels, action))).toEqual([]);
+});
 
 test('workflow operations keep useful static labels through the observer and reject unknown operation text', async () => {
   const projector = new BriefProgressProjector(), rows: string[] = [];

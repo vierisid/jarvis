@@ -14,6 +14,7 @@ export const workflowProgressLabels = {
   disable: ['Disabling a workflow.', 'Disable request returned.', 'Disable request could not finish.'],
   publish: ['Publishing a workflow version.', 'Publish request returned.', 'Publish request could not finish.'],
   delete: ['Removing a workflow.', 'Removal request returned.', 'Removal request could not finish.'],
+  resolve_effect: ['Resolving an uncertain workflow step.', 'Step resolution returned.', 'Step resolution could not finish.'],
 } as const;
 export const workflowProgressSummaries = new Set<string>(Object.values(workflowProgressLabels).flat());
 export function workflowProgressOperation(name: string, action: unknown): keyof typeof workflowProgressLabels | undefined {
