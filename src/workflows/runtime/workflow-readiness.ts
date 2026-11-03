@@ -9,7 +9,8 @@ import { REFUND_ACCOUNTS, REFUND_LOOP_REFUSAL, REFUND_PIECE, isRefundAction, man
 import { IMPORT_REQUIRED, importSetup } from './contact-import';
 import { IMPORT_ACCOUNTS, IMPORT_PIECE, importAccountFields, isImportStep, managedImportRefusal } from '../import-accounts';
 import { REPORT_REQUIRED, reportSetup } from './weekly-report';
-import { REPORT_ACCOUNTS, REPORT_PIECE, isReportStep, managedReportRefusal, type ReportAccountField } from '../report-accounts';
+import { REPORT_ACCOUNTS, REPORT_PIECE, isReportStep, managedReportRefusal, type ReportAccountField, QUARTERLY_ACCOUNTS, QUARTERLY_MANAGED_REFUSAL, isQuarterlyReportStep } from '../report-accounts';
+import { QUARTERLY_REQUIRED, QUARTERLY_ZONE, quarterlySetup } from './quarterly-report';
 import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_PIECE, isSalesStep, salesSetup } from './sales-followups';
 import { ONBOARDING_REQUIRED, onboardingSetup } from './customer-onboarding';
 import { ONBOARDING_ACCOUNTS, ONBOARDING_PIECE, isOnboardingStep } from '../onboarding-accounts';
@@ -27,7 +28,7 @@ import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from '.
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
 import { emptyInput, inputIssue } from './input-validation';
 import { declaredDependencies } from './code-step-manifest';
-import { chosenScheduleZone, statedScheduleZone } from '../runner/triggers/schedule-zone';
+import { canonicalZone, chosenScheduleZone, effectiveScheduleZone, statedScheduleZone } from '../runner/triggers/schedule-zone';
 
 export interface ReadinessIssue {
   node: string;
@@ -335,14 +336,15 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       }
       if (IMPORT_REQUIRED.every(k=>!emptyInput(input[k])) && (input.sourceAuth !== 'oauth2' || !emptyInput(input.sourceConnection))) try { importSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
     }
-    if (!root && isReportStep(settings) && pieceName !== REPORT_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${REPORT_PIECE}`);
-    if (!root && isReportStep(settings) && object(input)) {
-      for (const [field, provider] of Object.entries(REPORT_ACCOUNTS)) {
+    const quarterly = isQuarterlyReportStep(settings);
+    if (!root && (isReportStep(settings) || quarterly) && pieceName !== REPORT_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${REPORT_PIECE}`);
+    if (!root && (isReportStep(settings) || quarterly) && object(input)) {
+      for (const [field, provider] of Object.entries(quarterly ? QUARTERLY_ACCOUNTS : REPORT_ACCOUNTS)) {
         const id = input[field];
         if (!emptyInput(id)) {
           if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
-          // No managed-connection exemption covers the report; the report backend refuses a jarvis: id at run time too.
-          else if (id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', managedReportRefusal(field as ReportAccountField));
+          // No managed-connection exemption covers either report; the report backends refuse a jarvis: id at run time too.
+          else if (id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', quarterly ? QUARTERLY_MANAGED_REFUSAL : managedReportRefusal(field as ReportAccountField));
           else if (context.phase !== 'composition') {
             const refusal=context.connection?.(id,provider,`settings.input.${field}`,settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
             const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
@@ -351,7 +353,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           }
         }
       }
-      if (REPORT_REQUIRED.every(k=>!emptyInput(input[k]))) try { reportSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+      if (quarterly && (!object(trigger) || trigger.settings?.pieceName !== 'schedule' || input.scheduledFor !== `{{${trigger.name}.scheduledFor}}`)) issue(node,'settings.input.scheduledFor','INPUT_TYPE','Map the persisted schedule trigger scheduledFor; execution-time dates are not supported');
+      // Quarters are Rome calendar quarters: a schedule firing in another zone (its chosen one, else Jarvis's) could start on another Rome date.
+      if (quarterly && object(trigger) && trigger.settings?.pieceName === 'schedule' && canonicalZone(effectiveScheduleZone(trigger.settings)) !== QUARTERLY_ZONE) issue(String(trigger.name),'settings.input.timezone','INPUT_TYPE',`Quarterly reporting uses ${QUARTERLY_ZONE} calendar quarters; choose ${QUARTERLY_ZONE} as the schedule time zone`);
+      if ((quarterly ? QUARTERLY_REQUIRED : REPORT_REQUIRED).every(k=>!emptyInput(input[k]))) try { (quarterly ? quarterlySetup : reportSetup)(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
     }
     if (!root && isPiece('jarvis-subflow') && settings.actionName === 'call' && object(input)) {
       if (!emptyInput(input.outputSchema)) try {parseOutputSchema(input.outputSchema);} catch(e) {issue(node,'settings.input.outputSchema','INPUT_TYPE',(e as Error).message);}

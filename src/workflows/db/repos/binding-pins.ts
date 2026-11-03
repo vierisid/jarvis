@@ -1,6 +1,6 @@
 import { MEETING_ACCOUNTS } from '../../meeting-accounts';
 import { importAccountFields, isImportStep } from '../../import-accounts';
-import { REPORT_ACCOUNTS, isReportStep } from '../../report-accounts';
+import { REPORT_ACCOUNTS, QUARTERLY_ACCOUNTS, isReportStep, isQuarterlyReportStep } from '../../report-accounts';
 import { SALES_ACCOUNTS, isSalesStep } from '../../sales-accounts';
 import { REFUND_ACCOUNTS, isRefundAction } from '../../refund-accounts';
 import { ONBOARDING_ACCOUNTS, isOnboardingStep } from '../../onboarding-accounts';
@@ -129,8 +129,8 @@ export function nodeConnectionReferences(node: FlowTriggerNode): Array<[external
       if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
     }
   }
-  if (isReportStep(node.settings)) {
-    for (const field of Object.keys(REPORT_ACCOUNTS)) {
+  if (isReportStep(node.settings) || isQuarterlyReportStep(node.settings)) {
+    for (const field of Object.keys(isQuarterlyReportStep(node.settings) ? QUARTERLY_ACCOUNTS : REPORT_ACCOUNTS)) {
       const id = node.settings?.input?.[field];
       if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
     }

@@ -40,3 +40,14 @@ export function isWeeklyReportStep(nodeType: unknown, settings: unknown): boolea
   const s = settings as Record<string, unknown>;
   return isReportStep(s) && s.triggerName === undefined;
 }
+
+/** The native read-only quarterly HubSpot report step on the same piece: one saved HubSpot account. */
+export const QUARTERLY_ACTION = 'quarterly_hubspot_report';
+export const QUARTERLY_ACCOUNTS = { hubspotConnection: '@activepieces/piece-hubspot' } as const;
+export const QUARTERLY_ACCOUNT_FIELDS = [['hubspotConnection', QUARTERLY_ACCOUNTS.hubspotConnection, 'HubSpot']] as const;
+/** No managed-connection exemption covers the quarterly report either. */
+export const QUARTERLY_MANAGED_REFUSAL = 'Select a saved HubSpot account; a Jarvis-managed connection cannot be used by the quarterly report';
+/** Any spelling of the report piece running the quarterly action, as `isReportStep` does for the weekly one. */
+export function isQuarterlyReportStep(settings: {pieceName?: unknown; actionName?: unknown} | undefined): boolean {
+  return typeof settings?.pieceName === 'string' && REPORT_STEP_PIECES.includes(settings.pieceName) && settings?.actionName === QUARTERLY_ACTION;
+}

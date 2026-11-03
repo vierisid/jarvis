@@ -47,7 +47,7 @@ import { MEETING_ACCOUNT_FIELDS } from "../../../../../src/workflows/meeting-acc
 import { SALES_ACCOUNT_FIELDS } from "../../../../../src/workflows/sales-accounts";
 import { ONBOARDING_ACCOUNT_FIELDS, ONBOARDING_ACTION, ONBOARDING_PIECE } from "../../../../../src/workflows/onboarding-accounts";
 import { BATCH_ACCOUNT_FIELDS, BATCH_ACTION, BATCH_PIECE } from "../../../../../src/workflows/batch-accounts";
-import { REPORT_ACCOUNT_FIELDS } from "../../../../../src/workflows/report-accounts";
+import { REPORT_ACCOUNT_FIELDS, QUARTERLY_ACCOUNT_FIELDS } from "../../../../../src/workflows/report-accounts";
 import { REFUND_ACCOUNT_FIELDS, REFUND_ACTION, REFUND_PIECE } from "../../../../../src/workflows/refund-accounts";
 import { IMPORT_ACCOUNT_FIELDS, IMPORT_ACTION, IMPORT_PIECE, importAccountFields } from "../../../../../src/workflows/import-accounts";
 import { confirmDialog } from "../../ui/ConfirmDialog";
@@ -3451,6 +3451,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
     : piece?.name === ONBOARDING_PIECE && subName === ONBOARDING_ACTION ? ONBOARDING_ACCOUNT_FIELDS
     : piece?.name === '@jarvispieces/piece-jarvis-sales' && subName === 'draft_followups' ? SALES_ACCOUNT_FIELDS
       : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'weekly_operating_report' ? REPORT_ACCOUNT_FIELDS
+      : piece?.name === '@jarvispieces/piece-jarvis-report' && subName === 'quarterly_hubspot_report' ? QUARTERLY_ACCOUNT_FIELDS
         : piece?.name === REFUND_PIECE && subName === REFUND_ACTION ? REFUND_ACCOUNT_FIELDS
         : piece?.name === IMPORT_PIECE && subName === IMPORT_ACTION
           // The source account is asked for only when the source uses OAuth2.
