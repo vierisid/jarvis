@@ -245,6 +245,9 @@ describe('checking a graph against the contract', () => {
     const weekly: JobContract = { trigger: { kind: 'schedule', every: 'week' } };
     expect(check(schedule('30 7 * * 5'), weekly).report.verified).toEqual(['starts with a schedule, once every week']);
     expect(check(schedule('0 9 * * *'), weekly).violations).toEqual(['job contract: the schedule "0 9 * * *" runs once every day; the job asks for once every week']);
+    // The last weekday of the month runs once a month.
+    expect(check(schedule('0 17 LW * *'), { trigger: { kind: 'schedule', every: 'month' } }).violations).toEqual([]);
+    expect(check(schedule('0 17 LW * *'), weekly).violations).toEqual(['job contract: the schedule "0 17 LW * *" runs once every month; the job asks for once every week']);
     expect(check(schedule('*/15 * * * *'), { trigger: { kind: 'schedule', every: 'hour' } }).violations)
       .toEqual(['job contract: the schedule "*/15 * * * *" is not an hourly, daily, weekly or monthly schedule; the job asks for once every hour']);
     const event: FlowTriggerNode = { name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: WORKFLOW, triggerName: 'on_event', input: { eventType: 'goal.completed' } } };

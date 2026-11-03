@@ -143,7 +143,8 @@ function cadence(cron: string): ContractCadence | null {
   if (!one(hour)) return null;
   if (dom === '*' && dow === '*') return 'day';
   if (dom === '*' && one(dow)) return 'week';
-  return one(dom) && dow === '*' ? 'month' : null;
+  // LW (last weekday) is one day each month.
+  return (one(dom) || dom === 'LW') && dow === '*' ? 'month' : null;
 }
 /** The canonical IANA name, or null for an unknown zone. */
 function zoneName(zone: string): string | null {
