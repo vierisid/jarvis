@@ -1,3 +1,4 @@
+import { dropboxStatus } from "../integrations/dropbox-connection";
 import { registerNavigationCompatibility } from '../brief/registrations/navigation-compatibility';
 import { registerReconciliation } from '../brief/registrations/reconciliation';
 import { registerOnboarding } from '../brief/registrations/onboarding';
@@ -4770,6 +4771,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       devices: () => sidecarManager.listSidecars(),
       google: () => connectedGoogle(jarvisConfig),
       clickup: () => clickUpStatus(jarvisConfig),
+      dropbox: () => dropboxStatus(jarvisConfig),
       mailchimp: () => mailchimpStatus(jarvisConfig),
       github: () => githubStatus(jarvisConfig),
       trello: () => trelloStatus(jarvisConfig),

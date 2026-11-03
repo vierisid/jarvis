@@ -91,3 +91,20 @@ test('plain HTTP browser without randomUUID still persists a random setup identi
     expect(opened).toHaveLength(1);
   } finally { if (old) Object.defineProperty(crypto, 'randomUUID', old); else delete (crypto as any).randomUUID; }
 });
+
+test('library OAuth setup verifies the native account rather than the installed piece', async () => {
+  const managed: ConnectionSetupAction = { id: 'setup:clickup', label: 'ClickUp', target: { kind: 'hosted_integration', provider: 'clickup' }, verifies: { kind: 'native_service', serviceId: 'clickup' } };
+  const native: ConnectedRow = { ...account('native:clickup'), kind: 'native_service', serviceId: 'clickup', setupActionId: managed.id, authenticated: false, status: 'disconnected' };
+  data.setup = [managed];
+  data.rows = [native, { ...account('piece:clickup'), kind: 'library_piece', serviceId: '@activepieces/piece-clickup', setupActionId: managed.id, status: 'installed' }];
+  const attempt = await controller.begin(managed.id, position, 'piece:clickup');
+  expect(attempt?.rowId).toBe('native:clickup');
+  expect((await controller.verify('nonce-unique'))?.result).toBe('not_connected');
+  native.authenticated = true; native.status = 'connected';
+  expect((await controller.verify('nonce-unique'))?.result).toBe('connected');
+});
+test('manual repair cannot be launched without selecting its existing account', async () => {
+  data.setup[0]!.existingOnly = true;
+  await expect(controller.begin(action.id, position)).rejects.toThrow('Setup unavailable');
+  await controller.begin(action.id, position, 'account:a'); expect(opened).toHaveLength(1);
+});

@@ -67,3 +67,18 @@ test('customer onboarding uses separate saved ClickUp and Drive account referenc
   await React.act(async()=>{selects[1]!.value='saved-1';selects[1]!.dispatchEvent(new Event('change',{bubbles:true}));});expect(writes).toEqual([['driveConnection','saved-1']]);
  }finally{await React.act(async()=>root.unmount());host.remove();}
 });
+
+test('an empty managed-app picker points at Connect controls only when this instance offers hosted setup',async()=>{
+ const originalFetch=globalThis.fetch;
+ for(const configured of [false,true]){
+  globalThis.fetch=(async()=>Response.json({configured,connected:false,connect_url:configured?'https://app.usejarvis.dev/account?integration=clickup':null,external_id:'jarvis:clickup',account:null,workspaces:[],generation:null})) as unknown as typeof fetch;
+  const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
+  try{
+   await React.act(async()=>root.render(<Pickers fields={[["clickupConnection","@activepieces/piece-clickup","ClickUp"]]} connections={[]} input={{}} onSetInput={()=>{}}/>));
+   await React.act(async()=>{await new Promise(r=>setTimeout(r,0));});
+   const hint=host.querySelector('.wf-props__connection-empty')?.textContent??'';
+   if(configured){expect(hint).toContain('Connect ClickUp using the connection controls above');expect(host.textContent).toContain('Connect ClickUp');}
+   else{expect(hint).toContain('No connection saved for ClickUp yet');expect(hint).not.toContain('controls above');}
+  }finally{await React.act(async()=>root.unmount());host.remove();globalThis.fetch=originalFetch;}
+ }
+});

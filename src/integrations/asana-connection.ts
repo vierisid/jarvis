@@ -1,4 +1,5 @@
 /** Read the hosting-owned grant on every use. Refreshed access tokens are cached separately. */
+import { asanaNeedsReconnect } from "./asana-refresh";
 import {readManagedConnectionFile} from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
@@ -74,10 +75,12 @@ export function asanaConnectUrl(config: JarvisConfig): string | null {
 }
 export function asanaStatus(config: JarvisConfig) {
   const connection = readAsanaConnection(config.daemon.data_dir);
+  const reconnect = connection ? asanaNeedsReconnect(config, connection) : false;
   return {
     configured: !!asanaConnectUrl(config),
     connect_url: asanaConnectUrl(config),
-    connected: !!connection,
+    connected: !!connection && !reconnect,
+    reconnect,
     external_id: ASANA_CONNECTION,
     account: connection?.account ?? null,
     workspaces: connection?.workspaces ?? [],

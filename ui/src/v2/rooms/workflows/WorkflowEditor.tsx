@@ -3842,35 +3842,37 @@ function ConnectionPicker({
   // ClickUp may also offer the hosted connection; without it (self-hosted, or
   // not connected) the picker reads exactly as for any other piece.
   const isTypeform = pieceName === "@activepieces/piece-typeform";
-  const managedTypeform = useTypeformStatus(isTypeform)?.connected === true;
+  const typeformStatus = useTypeformStatus(isTypeform), managedTypeform = typeformStatus?.connected === true;
   const isCalendly = pieceName === "@activepieces/piece-calendly";
-  const managedCalendly = useCalendlyStatus(isCalendly)?.connected === true;
+  const calendlyStatus = useCalendlyStatus(isCalendly), managedCalendly = calendlyStatus?.connected === true;
   // ClickUp and GitHub may also offer the hosted connection; without it
   // (self-hosted, or not connected) the picker reads exactly as for any other piece.
   const isAirtable = pieceName === "@activepieces/piece-airtable";
-  const managedAirtable = useAirtableStatus(isAirtable)?.connected === true;
+  const airtableStatus = useAirtableStatus(isAirtable), managedAirtable = airtableStatus?.connected === true;
   const isIntercom = pieceName === "@activepieces/piece-intercom";
-  const managedIntercom = useIntercomStatus(isIntercom)?.connected === true;
+  const intercomStatus = useIntercomStatus(isIntercom), managedIntercom = intercomStatus?.connected === true;
   // Managed providers may also offer a hosted connection; saved manual
   // connections remain available.
   const isNotion = pieceName === "@activepieces/piece-notion";
-  const managedNotion = useNotionStatus(isNotion)?.connected === true;
+  const notionStatus = useNotionStatus(isNotion), managedNotion = notionStatus?.connected === true;
   const isLinear = pieceName === "@activepieces/piece-linear";
-  const managedLinear = useLinearStatus(isLinear)?.connected === true;
+  const linearStatus = useLinearStatus(isLinear), managedLinear = linearStatus?.connected === true;
   const isClickUp = pieceName === "@activepieces/piece-clickup";
   const isMonday = pieceName === "@activepieces/piece-monday";
-  const managedMonday = useMondayStatus(isMonday)?.connected === true;
+  const mondayStatus = useMondayStatus(isMonday), managedMonday = mondayStatus?.connected === true;
   const isTodoist = pieceName === "@activepieces/piece-todoist";
-  const managedTodoist = useTodoistStatus(isTodoist)?.connected === true;
+  const todoistStatus = useTodoistStatus(isTodoist), managedTodoist = todoistStatus?.connected === true;
   const isAsana = pieceName === "@activepieces/piece-asana";
-  const managedAsana = useAsanaStatus(isAsana)?.connected === true;
+  const asanaStatus = useAsanaStatus(isAsana), managedAsana = asanaStatus?.connected === true;
   const isDropbox = pieceName === "@activepieces/piece-dropbox";
-  const managedDropbox = useDropboxStatus(isDropbox)?.connected === true;
-  const managedClickUp = useClickUpStatus(isClickUp)?.connected === true;
+  const dropboxStatus = useDropboxStatus(isDropbox), managedDropbox = dropboxStatus?.connected === true;
+  const clickUpStatus = useClickUpStatus(isClickUp), managedClickUp = clickUpStatus?.connected === true;
   const isGitHub = pieceName === "@activepieces/piece-github";
-  const managedGitHub = useGitHubStatus(isGitHub)?.connected === true;
+  const gitHubStatus = useGitHubStatus(isGitHub), managedGitHub = gitHubStatus?.connected === true;
   const isSlack = pieceName === "@activepieces/piece-slack";
-  const managedSlack = useSlackStatus(isSlack)?.connected === true;
+  const slackStatus = useSlackStatus(isSlack), managedSlack = slackStatus?.connected === true;
+  // Only point at the controls above when they actually offer hosted setup on this instance.
+  const hostedSetup = [typeformStatus, calendlyStatus, airtableStatus, intercomStatus, notionStatus, linearStatus, mondayStatus, todoistStatus, asanaStatus, dropboxStatus, clickUpStatus, gitHubStatus, slackStatus].some(status => status?.configured === true);
   return (
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
@@ -3904,8 +3906,9 @@ function ConnectionPicker({
       </label>
       {matching.length === 0 && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable ? (
         <p className="wf-props__hint wf-props__connection-empty">
-          No connection saved for {pieceDisplayName} yet. Add one in the Connections panel,
-          then come back and select it here.
+          {hostedSetup
+            ? `Connect ${pieceDisplayName} using the connection controls above, then choose Use this account. You can also manage app connections in the Connections panel.`
+            : `No connection saved for ${pieceDisplayName} yet. Add one in the Connections panel, then come back and select it here.`}
         </p>
       ) : matching.length > 0 ? (
         <select
