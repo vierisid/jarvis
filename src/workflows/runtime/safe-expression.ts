@@ -126,6 +126,8 @@ class Parser {
       const name = checkKey(token.value);
       if (name === 'true' || name === 'false' || name === 'null' || name === 'undefined') {
         node = { kind: 'literal', value: name === 'true' ? true : name === 'false' ? false : name === 'null' ? null : undefined };
+      } else if (name === 'typeof') {
+        node = { kind: 'unary', operator: 'typeof', value: this.expression(8) };
       } else if (name === 'flattenNestedKeys' && this.take('(')) {
         const data = this.expression(); this.require(',');
         const path = this.expression(); this.require(')');
@@ -275,6 +277,13 @@ export function evaluateWorkflowExpression(script: string, context: Record<strin
   }
 }
 
+/** Embed evaluated JSON data in text without coercing null-prototype objects.
+ * Shared with the engine resolver so local fixtures serialize the same values. */
+export function workflowInterpolationText(value: unknown): string {
+  if (value === undefined) throw new Error('Workflow reference resolved to an absent value; supply a value or an explicit fallback');
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
 function evaluateParsed(script: string, context: Record<string, unknown>): unknown {
   const tree = new Parser(tokenize(script)).parse();
   const budget = new Budget();
@@ -288,6 +297,9 @@ function evaluateParsed(script: string, context: Record<string, unknown>): unkno
       case 'object': return Object.fromEntries(node.entries.map(([key, value]) => [key, child(value)]));
       case 'member': return ownData(child(node.object), child(node.key));
       case 'unary': {
+        // Type inspection never coerces or invokes untrusted data. It lets
+        // workflows route malformed scalar input to review without throwing.
+        if (node.operator === 'typeof') return typeof child(node.value);
         const value = primitive(child(node.value));
         return node.operator === '!' ? !value : primitive(node.operator === '-' ? -Number(value) : Number(value));
       }
