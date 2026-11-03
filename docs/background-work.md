@@ -1,4 +1,4 @@
-# Background work bounds (Q-20)
+# Background work bounds
 
 The daemon reserves background model work before each provider invocation, including
 manager retries and fallbacks. The reservation is local resource admission, not the
@@ -72,7 +72,7 @@ or shown as an answer.
 The existing `background` origin marks awareness, background agents and memory
 extraction. Suggestion composition now explicitly uses that origin. The composer
 adapter treats a detached call with no origin as background too, including the
-F-09 timer-driven prepared composer when integrated. Explicit `user` and
+timer-driven prepared-opportunities composer. Explicit `user` and
 `workflow` origins retain their meanings. Workflow execution, voice transports,
 image-generation endpoints and arbitrary direct provider clients are outside this
 model-manager bound. A continuous user conversation can defer background work.
@@ -91,7 +91,7 @@ expiry; recovery itself consumes no model allowance.
 
 ## Inspecting the state
 
-Open Workflows → Routine requests. The page shows queued/running counts and
+Open Workflows > Routine requests. The page shows queued/running counts and
 explains unavailable preparation, foreground work, provider backoff, concurrency
 and daily allowance pauses. Existing clients can ignore the additive `background`
 field on routines/compositions responses. `GET /api/awareness/background` returns
@@ -123,15 +123,6 @@ provider measurement, complete capture pipeline benchmark or production capacity
 certificate. The recorded 250 ms responsiveness thresholds apply only to this
 fixture and hardware. No paid calls or external effects are used.
 
-Q-20 is based on main `5024ea7455a5613be0514475be32c0dee6de0edd`, not on Q-19 or
-the unmerged F stack. There is no new activation flag: these bounds apply when
-this daemon revision starts. F-09 retains its own prepared queue, ownership and
-attempt limits; its merge must preserve these legacy queue bounds and use the
-shared composer adapter/manager. Q-19's typed failure projection should map the
-new `background_throttled` code to a resource pause when the stacks are assembled.
-Neither stacked integration nor Q-22 certification is claimed here.
-
-Rollback: revert Q-20 and rebuild the daemon/UI together. Keep the additive
-`background_model_reservations`, `background_model_backoff` and
-`suggestion_composition_attempts` tables; old binaries ignore them. Preserve jobs,
-composition journals and authority/effect history. Rollback does not replay work.
+There is no activation flag: these bounds apply whenever the daemon runs. Prepared
+opportunities keep their own queue, ownership and attempt limits on top
+of these bounds.

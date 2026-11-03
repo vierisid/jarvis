@@ -6,9 +6,23 @@ import type { ConnectedRow, ConnectedWorkspaceSnapshot, ConnectionSetupAction } 
 
 export interface ConnectedWorkspaceSources {
   devices?: () => Pick<SidecarInfo, 'id' | 'name' | 'status' | 'connected'>[];
+  clickup?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  github?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  trello?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  mailchimp?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  asana?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  todoist?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  typeform?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  calendly?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  intercom?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  monday?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  slack?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  airtable?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
+  notion?: () => { configured: boolean; connected: boolean; reconnect: boolean; account: {id: string; label: string} | null };
   google?: () => { mode: 'self' | 'managed' | 'none' | 'unavailable'; authenticated: boolean; reconnect: boolean; canSetup: boolean };
   channels?: () => Partial<Record<'telegram' | 'discord', { enabled: boolean; connected: boolean; authentication?: 'verified' | 'rejected' | 'unknown' }>>;
   pieces?: () => PieceLookup | null;
+  linear?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   hosted: () => boolean;
 }
 export const CONNECTED_LIMIT = 1000;
@@ -77,6 +91,231 @@ export class ConnectedWorkspace {
         states.google = 'ready';
       } catch { google.status = 'unavailable'; }
       rows.push(google);
+      if (this.sources.clickup) {
+        const row = base('native:clickup', 'native_service', 'clickup', 'ClickUp');
+        try {
+          const c = this.sources.clickup();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('ClickUp: ' + c.account.label) : 'ClickUp';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:clickup', label: 'ClickUp',
+              target: {kind: 'hosted_integration', provider: 'clickup'}, verifies: {kind: 'native_service', serviceId: 'clickup'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.github) {
+        const row = base('native:github', 'native_service', 'github', 'GitHub');
+        try {
+          const c = this.sources.github();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('GitHub: ' + c.account.label) : 'GitHub';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:github', label: 'GitHub',
+              target: {kind: 'hosted_integration', provider: 'github'}, verifies: {kind: 'native_service', serviceId: 'github'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.trello) {
+        const row = base('native:trello', 'native_service', 'trello', 'Trello');
+        try {
+          const c = this.sources.trello();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Trello: ' + c.account.label) : 'Trello';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:trello', label: 'Trello',
+              target: {kind: 'hosted_integration', provider: 'trello'}, verifies: {kind: 'native_service', serviceId: 'trello'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.mailchimp) {
+        const row = base('native:mailchimp', 'native_service', 'mailchimp', 'Mailchimp');
+        try {
+          const c = this.sources.mailchimp();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Mailchimp: ' + c.account.label) : 'Mailchimp';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:mailchimp', label: 'Mailchimp',
+              target: {kind: 'hosted_integration', provider: 'mailchimp'}, verifies: {kind: 'native_service', serviceId: 'mailchimp'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.asana) {
+        const row = base('native:asana', 'native_service', 'asana', 'Asana');
+        try {
+          const c = this.sources.asana();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Asana: ' + c.account.label) : 'Asana';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:asana', label: 'Asana',
+              target: {kind: 'hosted_integration', provider: 'asana'}, verifies: {kind: 'native_service', serviceId: 'asana'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.todoist) {
+        const row = base('native:todoist', 'native_service', 'todoist', 'Todoist');
+        try {
+          const c = this.sources.todoist();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Todoist: ' + c.account.label) : 'Todoist';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:todoist', label: 'Todoist',
+              target: {kind: 'hosted_integration', provider: 'todoist'}, verifies: {kind: 'native_service', serviceId: 'todoist'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.typeform) {
+        const row = base('native:typeform', 'native_service', 'typeform', 'Typeform');
+        try {
+          const c = this.sources.typeform();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Typeform: ' + c.account.label) : 'Typeform';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:typeform', label: 'Typeform',
+              target: {kind: 'hosted_integration', provider: 'typeform'}, verifies: {kind: 'native_service', serviceId: 'typeform'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.calendly) {
+        const row = base('native:calendly', 'native_service', 'calendly', 'Calendly');
+        try {
+          const c = this.sources.calendly();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Calendly: ' + c.account.label) : 'Calendly';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:calendly', label: 'Calendly',
+              target: {kind: 'hosted_integration', provider: 'calendly'}, verifies: {kind: 'native_service', serviceId: 'calendly'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.intercom) {
+        const row = base('native:intercom', 'native_service', 'intercom', 'Intercom');
+        try {
+          const c = this.sources.intercom();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Intercom: ' + c.account.label) : 'Intercom';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:intercom', label: 'Intercom',
+              target: {kind: 'hosted_integration', provider: 'intercom'}, verifies: {kind: 'native_service', serviceId: 'intercom'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.monday) {
+        const row = base('native:monday', 'native_service', 'monday', 'monday.com');
+        try {
+          const c = this.sources.monday();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('monday.com: ' + c.account.label) : 'monday.com';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:monday', label: 'monday.com',
+              target: {kind: 'hosted_integration', provider: 'monday'}, verifies: {kind: 'native_service', serviceId: 'monday'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.slack) {
+        const row = base('native:slack', 'native_service', 'slack', 'Slack');
+        try {
+          const c = this.sources.slack();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Slack: ' + c.account.label) : 'Slack';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:slack', label: 'Slack',
+              target: {kind: 'hosted_integration', provider: 'slack'}, verifies: {kind: 'native_service', serviceId: 'slack'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.airtable) {
+        const row = base('native:airtable', 'native_service', 'airtable', 'Airtable');
+        try {
+          const c = this.sources.airtable();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Airtable: ' + c.account.label) : 'Airtable';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:airtable', label: 'Airtable',
+              target: {kind: 'hosted_integration', provider: 'airtable'}, verifies: {kind: 'native_service', serviceId: 'airtable'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.notion) {
+        const row = base('native:notion', 'native_service', 'notion', 'Notion');
+        try {
+          const c = this.sources.notion();
+          if (c.configured || c.connected || c.reconnect) {
+            row.authenticated = c.connected;
+            row.status = c.connected ? 'connected' : c.reconnect ? 'reconnect_required' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Notion: ' + c.account.label) : 'Notion';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:notion', label: 'Notion',
+              target: {kind: 'hosted_integration', provider: 'notion'}, verifies: {kind: 'native_service', serviceId: 'notion'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
+      if (this.sources.linear) {
+        const row = base('native:linear', 'native_service', 'linear', 'Linear');
+        try {
+          const c = this.sources.linear();
+          if (c.configured || c.connected) {
+            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
+            row.availability = c.connected ? 'ready' : 'unavailable';
+            row.accountId = c.account?.id ?? null;
+            row.label = c.account ? label('Linear: ' + c.account.label) : 'Linear';
+            row.evidence = c.connected ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, {id: 'setup:linear', label: 'Linear',
+              target: {kind: 'hosted_integration', provider: 'linear'}, verifies: {kind: 'native_service', serviceId: 'linear'}});
+            rows.push(row);
+          }
+        } catch { row.status = 'unavailable'; rows.push(row); }
+      }
       try {
         if (!this.sources.channels) throw new Error('absent');
         const channels = this.sources.channels();

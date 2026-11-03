@@ -1,1 +1,5 @@
-{"name":"@jarvispieces/piece-jarvis-report","version":"0.0.1","main":"./dist/src/index.js"}
+{
+  "name": "@jarvispieces/piece-jarvis-report",
+  "version": "0.0.1",
+  "main": "./dist/src/index.js"
+}

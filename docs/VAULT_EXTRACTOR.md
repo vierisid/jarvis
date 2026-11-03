@@ -13,8 +13,7 @@ The Vault Extractor is an LLM-powered knowledge extraction system that automatic
 - **Deduplication**: Reuses existing entities to maintain graph integrity
 - **Provenance**: Every extracted claim is stored as inferred or reported evidence.
   Extraction can never confirm a fact or supersede a confirmed correction -- only
-  an explicit decision in the Memory room can. See
-  `docs/superpowers/specs/2026-09-14-memory-provenance-design.md`.
+  an explicit decision in the Memory room can.
 
 ## Architecture
 

@@ -1,0 +1,20 @@
+.slack-connection { padding: var(--s-4, 16px) 0; border-bottom: 1px solid var(--rule, #E2E7EC); color: var(--ink, #13161A); }
+.slack-connection h3 { margin: 0 0 6px; font: inherit; font-weight: 600; }
+.slack-connection p { margin: 6px 0; color: var(--ink2, #535B63); overflow-wrap: anywhere; }
+.slack-connection__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.slack-connection__button, .slack-connection button { font: inherit; padding: 8px 12px; border: 1px solid var(--rule, #E2E7EC); border-radius: var(--corner-sm, 9px 2px 9px 9px); color: var(--ink, #13161A); background: var(--raise, white); text-decoration: none; cursor: pointer; }
+.slack-connection__button:hover, .slack-connection button:hover { background: var(--panel, #EFF2F5); }
+.slack-connection button:disabled { opacity: .65; cursor: default; }
+.slack-connection :is(a, button):focus-visible { outline: 2px solid var(--ink2, #535B63); outline-offset: 3px; }
+
+.slack-location { display: grid; gap: 12px; margin: 16px 0; }
+.slack-location label { display: grid; gap: 6px; color: var(--ink2); }
+.slack-location :is(input,select) { width: 100%; box-sizing: border-box; font: inherit; color: var(--ink); background: var(--raise); border: 1px solid var(--rule); padding: 8px; }
+.slack-location button { justify-self: start; font: inherit; color: var(--ink2); background: none; border: 0; text-decoration: underline; cursor: pointer; }
+.slack-location :is(input,select,button):focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
+
+/* Onboarding deliberately shares Google's service-card layout and theme. */
+.slack-onboarding .on-google__service { margin-block-start: 0; }
+.slack-onboarding__link { text-decoration: none; }
+.slack-onboarding__link:hover { background: var(--og-panel); }
+.slack-onboarding__feedback .on-google__control { padding-inline: 0; }
