@@ -1,7 +1,7 @@
-import { saveDelegation } from '../db/repos/delegation';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { delegationId, saveDelegation, type DelegationCheckpoint } from '../db/repos/delegation';
 import { digest } from './effect-context';
 import { getFlowVersion } from '../db/repos/flow-version';
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeWorkflowDb, initWorkflowDb } from '../db';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion } from '../db/repos/flow-version';
@@ -84,6 +84,19 @@ describe('runFailure (Q-19)', () => {
     effect('code', { status: 'unknown', outcome: { status: 'unknown', code: 'DISPATCH_UNCERTAIN', message: 'lost', effect: 'may_have_occurred' } });
     expect(runFailure(fail({ name: 'code', displayName: 'Post to the ledger' }))).toMatchObject({ category: 'uncertain_effect', effect: 'unknown',
       outcome: 'It may already have taken effect. Steps before it had already run.' });
+  });
+
+  test('a step blocked partway, saying it may have acted, counts as having run for a later step', () => {
+    // A blocked outcome that may have occurred (a skill stopped by the desktop switch midway,
+    // or a resumable import stopped between slices) is not "never dispatched".
+    for (const effect of ['may_have_occurred', 'not_started'] as const) {
+      const { effect: save, fail } = setup('RUNNING', 'jarvisOnly');
+      save('notify', { route: 'tool', status: 'blocked', outcome: { status: 'blocked', code: 'DESKTOP_DISABLED', message: 'desktop off', effect } });
+      save('notify_again', { status: 'blocked', outcome: { status: 'blocked', code: 'AUTHORITY_DENIED', message: 'denied', effect: 'not_started' } });
+      const outcome = runFailure(fail({ name: 'notify_again', displayName: 'Tell me' }))!.outcome;
+      if (effect === 'may_have_occurred') expect(outcome).toBe('This step did nothing. Steps before it had already run.');
+      else expect(outcome).not.toContain('had already run');
+    }
   });
 
   test('a refused step after completed steps did nothing itself', () => {
@@ -183,7 +196,7 @@ describe('runFailure (Q-19)', () => {
 test('delegated task failure is not hidden by successful spawn authorization', () => {
   const { run, effect, fail } = setup();
   effect('notify', { route: 'agent', status: 'succeeded', result: { dispatch: 'authorized' } });
-  saveDelegation({ id: 'wfd_' + digest([run.id, 'notify', []]), runId: run.id, stepName: 'notify', executionPath: [],
+  saveDelegation({ id: delegationId(run.id, 'notify', []), runId: run.id, stepName: 'notify', executionPath: [],
     versionDigest: digest(getFlowVersion(run.flowVersionId)!.trigger), roleId: 'test', goal: 'PRIVATE_GOAL',
     messages: [], toolsUsed: [], tokensUsed: { input: 0, output: 0 }, sequence: 1, iteration: 0, taint: [], failedToolCalls: [],
     status: 'completed', updatedAt: Date.now(), result: { status: 'completed', finalMessage: 'PRIVATE_ANSWER', toolCalls: [],
@@ -194,4 +207,17 @@ test('delegated task failure is not hidden by successful spawn authorization', (
   expect(JSON.stringify(result)).not.toContain('PRIVATE_');
   expect(result.next).toContainEqual(expect.objectContaining({ step: 'review_authority' }));
   expect(result.effect).toBe('unknown');
+});
+
+test('a delegate step inside a loop reads the failing iteration checkpoint', () => {
+  const { run, effect, fail } = setup();
+  effect('notify', { route: 'agent', status: 'succeeded', result: { dispatch: 'authorized' } });
+  const at = (iteration: number, outcome: NonNullable<DelegationCheckpoint['result']>['outcome'], updatedAt: number): DelegationCheckpoint => ({
+    id: delegationId(run.id, 'notify', [['loop', iteration]]), runId: run.id, stepName: 'notify', executionPath: [['loop', iteration]],
+    versionDigest: digest(getFlowVersion(run.flowVersionId)!.trigger), roleId: 'test', goal: 'g', messages: [], toolsUsed: [],
+    tokensUsed: { input: 0, output: 0 }, sequence: 1, iteration: 0, taint: [], failedToolCalls: [], status: 'completed', updatedAt,
+    result: { status: 'completed', finalMessage: '', toolCalls: [], ...(outcome ? { outcome } : {}) } });
+  saveDelegation(at(0, { status: 'succeeded' }, 1000));
+  saveDelegation(at(1, { status: 'blocked', code: 'BROWSER_SIGN_IN_REQUIRED', effect: 'may_have_occurred', message: 'Sign in' }, 2000));
+  expect(runFailure(fail({ name: 'notify', displayName: 'Read Calendar' }))!.code).toBe('BROWSER_SIGN_IN_REQUIRED');
 });

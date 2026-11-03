@@ -197,6 +197,12 @@ export function guardedApprovalWrite<T>(assertCurrent: (() => void) | undefined,
   return assertCurrent ? getDb().transaction(() => { assertCurrent(); return write(); }).immediate() : write();
 }
 
+let deadlineExpiredListener: ((request: ApprovalRequest) => void) | null = null;
+/** Told of each card an explicit deadline expired, so a surface still offering it can drop it. */
+export function onApprovalDeadlineExpired(listener: ((request: ApprovalRequest) => void) | null): void {
+  deadlineExpiredListener = listener;
+}
+
 export class ApprovalManager {
   /** Identity of this process. A claim carrying another boot id never got its receipt from us. */
   readonly bootId: string;
@@ -372,16 +378,23 @@ export class ApprovalManager {
   }
 
   /** Explicit deadlines belong to trusted workflow effects, never model-authored approval text. */
-  expireDeadlines(now = Date.now()): number {
-    const db = getDb(); let count = 0;
+  expireDeadlines(now = Date.now()): ApprovalRequest[] {
+    const db = getDb(); const expired: ApprovalRequest[] = [];
     const rows = db.query("SELECT id, context FROM approval_requests WHERE status='pending' AND execution_mode='workflow'").all() as Array<{id:string;context:string}>;
     for (const row of rows) {
       let deadline: unknown;
       try { deadline = JSON.parse(row.context).expiresAt; } catch { continue; }
       if (typeof deadline !== 'number' || !Number.isSafeInteger(deadline) || deadline > now) continue;
-      count += db.run("UPDATE approval_requests SET status='expired',decided_at=?,decided_by='deadline' WHERE id=? AND status='pending'",[now,row.id]).changes;
+      if (db.run("UPDATE approval_requests SET status='expired',decided_at=?,decided_by='deadline' WHERE id=? AND status='pending'",[now,row.id]).changes === 0) continue;
+      this.uiExecutions.delete(row.id);
+      const request = this.getRequest(row.id);
+      if (request) expired.push(request);
     }
-    return count;
+    // Every caller's expiry reaches the listener: the scheduler, a late click and the refund step use their own managers.
+    for (const request of expired) {
+      try { deadlineExpiredListener?.(request); } catch (error) { console.error('[Approvals] deadline listener failed:', error); }
+    }
+    return expired;
   }
 
   /**

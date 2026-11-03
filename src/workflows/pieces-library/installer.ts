@@ -159,7 +159,9 @@ export interface InstallOptions {
    * Optional override for the `bun install` invocation. Tests inject a stub
    * to avoid the real network call. Production omits this.
    */
-  runBunInstall?: (cwd: string) => Promise<void>;
+  runBunInstall?: (cwd: string, signal?: AbortSignal) => Promise<void>;
+  /** Aborting stops the install: the bun install child is killed. */
+  signal?: AbortSignal;
 }
 
 export interface InstallResult {
@@ -212,8 +214,9 @@ export async function installPiece(
   await writeSynthesizedPackageJson(nextManifest, base);
 
   // 2. bun install (idempotent; resolves the full manifest each call).
+  opts.signal?.throwIfAborted();
   const installer = opts.runBunInstall ?? runBunInstall;
-  await installer(base);
+  await installer(base, opts.signal);
 
   // 3. Read back the resolved version from node_modules.
   const resolved = await readResolvedVersion(base, entry);
@@ -267,8 +270,8 @@ async function readResolvedVersion(
   }
 }
 
-function runBunInstall(cwd: string): Promise<void> {
-  return runPiecesBunInstall(cwd, "pieces");
+function runBunInstall(cwd: string, signal?: AbortSignal): Promise<void> {
+  return runPiecesBunInstall(cwd, "pieces", signal);
 }
 
 /**
@@ -281,18 +284,24 @@ function runBunInstall(cwd: string): Promise<void> {
  * the caller in the error. Run by process.execPath, the Bun running the
  * daemon, never a `bun` found on PATH (#864).
  */
-export function runPiecesBunInstall(cwd: string, label: string): Promise<void> {
+export function runPiecesBunInstall(cwd: string, label: string, signal?: AbortSignal): Promise<void> {
   return new Promise((res, rej) => {
+    if (signal?.aborted) { rej(signal.reason); return; }
     const child = spawn(process.execPath, [...BUN_INSTALL_ARGS], {
       cwd,
       stdio: "inherit",
       env: sanitizedEnv(),
     });
+    // Aborting kills the child and rejects at once, so a stalled install
+    // cannot hold the Library lock or a composition indefinitely.
+    const onAbort = () => { child.kill("SIGKILL"); rej(signal!.reason); };
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.on("close", (code) => {
+      signal?.removeEventListener("abort", onAbort);
       if (code === 0) res();
       else rej(new Error(`bun install (${label}) exited with code ${code}. ${SANITIZED_INSTALL_HINT}`));
     });
-    child.on("error", rej);
+    child.on("error", (error) => { signal?.removeEventListener("abort", onAbort); rej(error); });
   });
 }
 

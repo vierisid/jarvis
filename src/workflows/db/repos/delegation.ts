@@ -2,6 +2,7 @@ import { getWorkflowDb } from '../index';
 import type { LLMMessage } from '../../../llm/provider';
 import type { SubAgentPause } from '../../../agents/sub-agent-runner';
 import type { PieceAgentDelegateResult } from '../../jarvis-pieces/types';
+import { digest } from '../../runtime/effect-context';
 
 /**
  * What a delegated sub-agent needs to continue in a later process, bound to
@@ -35,6 +36,11 @@ export interface DelegationCheckpoint {
   updatedAt: number;
 }
 
+/** The checkpoint id of one step instance: the run, the step and its loop position. */
+export function delegationId(runId: string, stepName: string, executionPath: Array<[string, number]>): string {
+  return 'wfd_' + digest([runId, stepName, executionPath]);
+}
+
 export function getDelegation(id: string): DelegationCheckpoint | null {
   const row = getWorkflowDb().query('SELECT record FROM workflow_delegation WHERE id = ?').get(id) as { record: string } | null;
   return row ? JSON.parse(row.record) : null;
@@ -44,6 +50,16 @@ export function saveDelegation(checkpoint: DelegationCheckpoint): void {
   getWorkflowDb().run(`INSERT INTO workflow_delegation (id, run_id, status, record, updated_at)
     VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET status=excluded.status, record=excluded.record, updated_at=excluded.updated_at`,
   [checkpoint.id, checkpoint.runId, checkpoint.status, JSON.stringify(checkpoint), checkpoint.updatedAt]);
+}
+
+/**
+ * The most recently written checkpoint of a step in a run, at any loop
+ * position: inside a loop the failing iteration is the last one to have run.
+ */
+export function latestDelegation(runId: string, stepName: string): DelegationCheckpoint | null {
+  const row = getWorkflowDb().query(`SELECT record FROM workflow_delegation WHERE run_id = ? AND json_extract(record, '$.stepName') = ?
+    ORDER BY updated_at DESC, rowid DESC LIMIT 1`).get(runId, stepName) as { record: string } | null;
+  return row ? JSON.parse(row.record) as DelegationCheckpoint : null;
 }
 
 /** A run that will never resume has no use for its conversations. */
