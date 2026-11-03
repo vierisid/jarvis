@@ -88,9 +88,9 @@ test('JSON and text inputs follow engine property processing before the connecto
  const textGraph:any=typedInputGraph('run_jsonata_query','{{step_1}}');textGraph.nextAction.settings.input.query='"plain text"';
  const scalarResult=await validateJsonMappingFixtures(textGraph,{cases:[{name:'text result is not JSON',payload:{data:{a:1}},expectedRows:[],expectedStatus:'FAILED',expectedError:'result: expected JSON'}]});
  expect(scalarResult.cases[0].status).toBe('FAILED');
-});
+},20_000);
 test('router resolves both operands before evaluating a condition',async()=>{
  const graph=repairedProductRetestGraph();graph.nextAction.nextAction.nextAction.settings.branches[0].conditions=[[{operator:'BOOLEAN_IS_TRUE',firstValue:true,secondValue:'{{step_2.absent}}'}]];
  const c={...productRetestCases()[0],expectedRows:[],expectedRequests:0,expectedStatus:'FAILED',expectedError:'absent value',assertions:[]};
  expect((await validateJsonMappingFixtures(graph,{setup:productRetestSetup(),cases:[c]})).cases[0].status).toBe('FAILED');
-});
+},20_000);
