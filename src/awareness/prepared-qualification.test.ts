@@ -261,7 +261,7 @@ describe('prepared proposal qualification', () => {
     expect(binding("{{connections['shared']}}")).toEqual(['shared unavailable: Connection external ID is ambiguous in this project']);
     expect(binding('{{connections.jarvis:google}}')).toEqual(['jarvis:google unavailable: Managed connection source is unavailable']);
     credentials = new CredentialResolver();
-    credentials.register({ id: 'google', canResolve: id => id === 'jarvis:google', resolve: async () => null });
+    credentials.register({ id: 'google', pieceNames: [GMAIL], canResolve: id => id === 'jarvis:google', resolve: async () => null });
     expect(binding('{{connections.jarvis:google}}')).toEqual(['jarvis:google ready']);
   });
 

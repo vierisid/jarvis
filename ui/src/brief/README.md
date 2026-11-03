@@ -463,7 +463,7 @@ port (ready, blocked, failed, lost-response, unavailable) and fixture recent row
 
 - `workflows/ingredient-picker/` is the D-17 connection and library picker in the creation composer's
   `+` slot. It only drives F-08 (`JARVIS_BRIEF_COMPOSITION_INGREDIENTS`, which also needs
-  `JARVIS_BRIEF_WORKFLOW_COMPOSITION`); see `docs/brief-composition-ingredients.md`. A selection is the
+  `JARVIS_BRIEF_WORKFLOW_COMPOSITION`); see `src/brief/composition-contracts.ts`. A selection is the
   exact `{selection}` object from discovery (ids and versions only, typed as F-08's
   `CompositionIngredient`), sent with the prompt and echoed by the receipt. Display names are never
   identities. No credential, connection metadata or catalog internals are read or stored.
@@ -703,7 +703,7 @@ actions only change local fixture state.
   live mode, the `goalMeasurements` capability.
 - Wiring (not done here): an adapter over F-15's `GET /api/brief/goals/:id` must supply the complete
   authorized roots with their owner-ordered paths and titles, pass `measurement` and `progress`
-  through unchanged (see `docs/brief-goal-measurements.md`), and share Today's decision identity so a
+  through unchanged (see `src/brief/goal-measurements.ts`), and share Today's decision identity so a
   decision resolved in another room reconciles here.
 - `?brief=preview&specimen=goals#/_brief_preview` opens it over in-memory fixtures (ready, mixed
   status, score only, decreasing, unknown, long, many, loading, empty, stale, unavailable,

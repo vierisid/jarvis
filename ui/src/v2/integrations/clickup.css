@@ -1,0 +1,20 @@
+.clickup-connection { padding: var(--s-4, 16px) 0; border-bottom: 1px solid var(--rule, #E2E7EC); color: var(--ink, #13161A); }
+.clickup-connection h3 { margin: 0 0 6px; font: inherit; font-weight: 600; }
+.clickup-connection p { margin: 6px 0; color: var(--ink2, #535B63); overflow-wrap: anywhere; }
+.clickup-connection__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.clickup-connection__button, .clickup-connection button { font: inherit; padding: 8px 12px; border: 1px solid var(--rule, #E2E7EC); border-radius: var(--corner-sm, 9px 2px 9px 9px); color: var(--ink, #13161A); background: var(--raise, white); text-decoration: none; cursor: pointer; }
+.clickup-connection__button:hover, .clickup-connection button:hover { background: var(--panel, #EFF2F5); }
+.clickup-connection button:disabled { opacity: .65; cursor: default; }
+.clickup-connection :is(a, button):focus-visible { outline: 2px solid var(--ink2, #535B63); outline-offset: 3px; }
+
+.clickup-location { display: grid; gap: 12px; margin: 16px 0; }
+.clickup-location label { display: grid; gap: 6px; color: var(--ink2); }
+.clickup-location :is(input,select) { width: 100%; box-sizing: border-box; font: inherit; color: var(--ink); background: var(--raise); border: 1px solid var(--rule); padding: 8px; }
+.clickup-location button { justify-self: start; font: inherit; color: var(--ink2); background: none; border: 0; text-decoration: underline; cursor: pointer; }
+.clickup-location :is(input,select,button):focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
+
+/* Onboarding deliberately shares Google's service-card layout and theme. */
+.clickup-onboarding .on-google__service { margin-block-start: 0; }
+.clickup-onboarding__link { text-decoration: none; }
+.clickup-onboarding__link:hover { background: var(--og-panel); }
+.clickup-onboarding__feedback .on-google__control { padding-inline: 0; }

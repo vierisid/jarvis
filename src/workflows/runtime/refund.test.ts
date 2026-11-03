@@ -82,3 +82,60 @@ test('a 4xx with several refunds carrying the key on readback stays uncertain, n
  expect(out.state).toBe('needs_review');expect(out.reason).toBe('Refund delivery uncertain (HTTP 400, code amount_too_large); no automatic second dispatch');
  expect(f.calls.filter(c=>c.method==='POST')).toHaveLength(1);
 });
+test('every Stripe request refuses redirects',async()=>{
+ const f=refundFixtureProvider(),seen:string[]=[];
+ const fetchImpl=(async(url:any,init:any)=>{seen.push(String(init?.redirect));return f.fetchImpl(url,init);}) as typeof fetch;
+ const provider=refundTransport(setup,'synthetic',()=>{},fetchImpl);
+ let state:RefundState={originRun:'run',state:'approval',proposal:await proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,provider,1)};
+ expect((await dispatchApprovedRefund({check(){},load:()=>structuredClone(state),save:s=>{state=structuredClone(s);}},provider,'key',2,()=>{})).state).toBe('refunded');
+ expect(seen.length).toBeGreaterThan(4);expect(new Set(seen)).toEqual(new Set(['error']));
+});
+test('the account is checked before the claim: a token revoked after the claim cannot strand the ticket, and nothing but the POST follows the claim',async()=>{
+ // Revoked before the claim: the request ends unattempted, so a later event can propose it again.
+ let f=refundFixtureProvider(),revoked=false;
+ const fetchImpl=(async(url:any,init:any)=>revoked&&String(url).endsWith('/v1/account')?new Response('{}',{status:401}):f.fetchImpl(url,init)) as typeof fetch;
+ let provider=refundTransport(setup,'synthetic',()=>{},fetchImpl);
+ let state:RefundState={originRun:'run',state:'approval',proposal:await proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,provider,1)};
+ revoked=true;
+ await expect(dispatchApprovedRefund({check(){},load:()=>structuredClone(state),save:s=>{state=structuredClone(s);}},provider,'key',2,()=>{})).rejects.toThrow('401');
+ expect(state.attemptedAt).toBeUndefined();expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+ // Revoked right after the claim is saved: the single POST still goes out and its receipt is recorded.
+ f=refundFixtureProvider();revoked=false;provider=refundTransport(setup,'synthetic',()=>{},fetchImpl);
+ state={originRun:'run',state:'approval',proposal:await proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,provider,1)};
+ let claimedAt=-1;
+ const out=await dispatchApprovedRefund({check(){},load:()=>structuredClone(state),save:s=>{state=structuredClone(s);if(s.attemptedAt!==undefined&&claimedAt<0){claimedAt=f.calls.length;revoked=true;}}},provider,'key',2,()=>{});
+ expect(out.state).toBe('refunded');expect(f.calls.slice(claimedAt).map(c=>c.method+' '+c.path)).toEqual(['POST /v1/refunds']);
+});
+test('oversized Stripe bodies are cut off while streaming, not buffered whole',async()=>{
+ let pulled=0;const chunk=new Uint8Array(256*1024).fill(32);
+ const body=()=>new ReadableStream<Uint8Array>({pull(c){pulled++;if(pulled>64)c.close();else c.enqueue(chunk);}});
+ const provider=refundTransport(setup,'synthetic',()=>{},(async()=>new Response(body())) as unknown as typeof fetch);
+ await expect(provider.payment('ch_fixture')).rejects.toThrow('2 MiB');
+ // 2 MiB is 8 chunks: the reader stops at the 9th, far short of the 64 on offer.
+ expect(pulled).toBeLessThan(12);
+});
+const stagedDispatch=async()=>{
+ const f=refundFixtureProvider(),provider=refundTransport(setup,'synthetic',()=>{},f.fetchImpl);
+ const state={current:{originRun:'run',state:'approval',proposal:await proposeRefund(setup,refundTicket(setup,refundFixtureTicket)!,provider,1)} as RefundState};
+ const store:RefundStore={check(){},load:()=>structuredClone(state.current),save:s=>{state.current=structuredClone(s);}};
+ return {f,provider,state,store};
+};
+test('several refunds carrying the key on a restart readback go to review, not to a receipt',async()=>{
+ const {f,provider,state,store}=await stagedDispatch();state.current={...state.current,state:'dispatching',attemptedAt:2};
+ for(const id of ['re_dup1','re_dup2'])f.refunds.push({id,charge:'ch_fixture',amount:1200,currency:'eur',status:'succeeded',metadata:{jarvis_refund_key:'key'}});
+ const out=await dispatchApprovedRefund(store,provider,'key',3,()=>{});
+ expect(out.state).toBe('needs_review');expect(out.receipt).toBeUndefined();expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+});
+test('currency drift after approval sends no POST',async()=>{
+ const {f,provider,store}=await stagedDispatch();f.payment.currency='usd';
+ expect((await dispatchApprovedRefund(store,provider,'key',2,()=>{})).state).toBe('needs_review');expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+});
+test('a new unresolved refund after approval sends no POST',async()=>{
+ const {f,provider,store}=await stagedDispatch();f.refunds.push({id:'re_other',charge:'ch_fixture',amount:1,currency:'eur',status:'pending',metadata:{}});
+ expect((await dispatchApprovedRefund(store,provider,'key',2,()=>{})).state).toBe('needs_review');expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+});
+test('a dispute after approval sends no POST and records no attempt',async()=>{
+ const {f,provider,state,store}=await stagedDispatch();f.payment.disputed=true;
+ await expect(dispatchApprovedRefund(store,provider,'key',2,()=>{})).rejects.toThrow('undisputed');
+ expect(state.current.attemptedAt).toBeUndefined();expect(f.calls.some(c=>c.method==='POST')).toBe(false);
+});
