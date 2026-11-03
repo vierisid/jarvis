@@ -81,6 +81,14 @@ engine) follows the same rules. A time it cannot run leaves a row: skipped
 while its previous check is still running, blocked when the engine fails or the
 workflow was turned off before its subscription was torn down.
 
+### Explicit daylight-saving policy
+
+The built-in `schedule` trigger accepts an optional `dst_policy`. Omitted (or
+`shift_missing_once`) keeps the rules above. `skip_missing_first_repeated`
+never runs a time the spring jump skips, and runs only the first of a repeated
+autumn time, also when Jarvis starts between the two. Setting it starts a new
+watch, like choosing a timezone.
+
 ## Webhooks
 
 A delivery's identity, in order:

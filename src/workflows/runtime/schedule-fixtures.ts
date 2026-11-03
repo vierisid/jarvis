@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { sanitizedEnv } from '../../util/subprocess-env';
-import { CronScheduler, cronWallTimeKey, setCronTimezone, validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
+import { CronScheduler, cronWallTimeKey, setCronTimezone, validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../lib/cron-scheduler';
 import { chosenScheduleZone, effectiveScheduleZone } from '../runner/triggers/schedule-zone';
 import { scheduleTriggerPayload } from './schedule-payload';
 import { resolveFixtureValue } from './json-mapping-fixtures';
@@ -17,7 +17,7 @@ function prepare(saved: any, fixture: any, zone: unknown) {
   check(saved?.type === 'PIECE_TRIGGER' && saved.settings?.pieceName === 'schedule', 'requires built-in schedule');
   const input = saved.settings.input ?? {}, expression = input.cron_expression || input.cronExpression || input.expression;
   check(typeof expression === 'string' && !expression.startsWith('@'), 'requires a configured five-field cron');
-  validateCronExpression(expression); validateCronTimezone(zone);
+  validateCronExpression(expression); validateCronTimezone(zone); validateCronDstPolicy(input.dst_policy);
   // The zone the trigger manager uses: a chosen step zone, else Jarvis's configured zone.
   const chosen = chosenScheduleZone(saved.settings);
   const node = saved.nextAction;
@@ -35,18 +35,20 @@ function prepare(saved: any, fixture: any, zone: unknown) {
     check(c.notificationOutcome === undefined || ['success','failure','uncertain'].includes(c.notificationOutcome), 'invalid notificationOutcome');
     check(c.expectedKey === undefined || typeof c.expectedKey === 'string', 'expectedKey must be a string');
   }
-  return {node, expression, timezone: zone, chosen};
+  // The trigger manager treats an explicit default policy as omitted.
+  const dstPolicy = input.dst_policy === 'skip_missing_first_repeated' ? input.dst_policy : undefined;
+  return {node, expression, timezone: zone, chosen, dstPolicy};
 }
 
 async function runCases(saved: any, fixture: any, zone: unknown) {
-  const {node,expression,timezone,chosen} = prepare(saved,fixture,zone);
+  const {node,expression,timezone,chosen,dstPolicy} = prepare(saved,fixture,zone);
   setCronTimezone(timezone);
   // Fixed local implementation only. No account binding or daemon URL is used.
   const { sendNotification } = await import('../activepieces/packages/pieces/jarvis/notify/src/lib/actions/send-notification');
   const cases = [];
   for (const c of fixture.cases) {
     const at = instant(c.scheduledFor), executedAt = instant(c.executedAt ?? c.scheduledFor);
-    const matches = CronScheduler.matchesIn(expression, new Date(at), timezone);
+    const matches = CronScheduler.matchesIn(expression, new Date(at), timezone, dstPolicy);
     check(matches === c.expectedMatch, c.name + ': schedule match differs');
     let request: any, status = 'NOT_SCHEDULED', error: string | undefined;
     let trigger: ReturnType<typeof scheduleTriggerPayload> | undefined;
@@ -86,6 +88,10 @@ async function runCases(saved: any, fixture: any, zone: unknown) {
 
 /** Isolated, bounded runner: no credentials or real network. */
 export async function validateScheduleFixtures(saved: any, fixture: any) {
+  if (fixture?.suite === 'dst_daily') {
+    const {validateDurableScheduleFixtures} = await import('./schedule-durable-fixtures');
+    return validateDurableScheduleFixtures(saved);
+  }
   const zone = effectiveScheduleZone(saved?.settings);
   prepare(saved, fixture, zone);
   const child = Bun.spawn([process.execPath,'--no-env-file',fileURLToPath(import.meta.url)], {

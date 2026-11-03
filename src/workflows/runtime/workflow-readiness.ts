@@ -23,7 +23,7 @@ import {managedMailchimpIssue} from './managed-mailchimp';
 import {managedGitHubIssue} from './managed-github';
 import {managedTrelloIssue} from './managed-trello';
 import {managedSlackIssue} from './managed-slack';
-import { validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
+import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
 import { emptyInput, inputIssue } from './input-validation';
@@ -503,6 +503,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     }
     if (type === 'PIECE' || type === 'PIECE_TRIGGER') {
       if (root && pieceName === 'schedule') {
+        try { validateCronDstPolicy(input?.dst_policy); }
+        catch (error) { issue(node, 'settings.input.dst_policy', 'DST_POLICY', (error as Error).message); }
         const cron = input?.cron_expression || input?.cronExpression || input?.expression;
         if (emptyInput(cron)) needsSetup(node,'settings.input.cron_expression','Choose the schedule execution time before publishing or running');
         else try {

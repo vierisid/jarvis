@@ -314,6 +314,16 @@ describe("schedules, in Jarvis's configured time zone", () => {
     await d.stop();
   });
 
+  test("spelling out the default DST policy keeps catching up times owed under the old watch", async () => {
+    setCronTimezone("UTC");
+    const { flowId } = schedule("0 9 * * *", { dst_policy: "shift_missing_once" });
+    // Watched before the policy was spelled out: the legacy watch key.
+    setScheduleWatch(flowId, "0 9 * * *", at("2026-10-07T08:00:00Z"));
+    const d = await daemon(at("2026-10-07T10:30:00Z"));
+    expect(listFlowFires(flowId)).toEqual([expect.objectContaining({ label: "missed", scheduledFor: at("2026-10-07T09:00:00Z") })]);
+    await d.stop();
+  });
+
   test("times owed while Jarvis was off are recorded as missed and never run late", async () => {
     setCronTimezone("UTC");
     const { flowId } = schedule("0 9 * * *");

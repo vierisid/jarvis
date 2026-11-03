@@ -60,3 +60,11 @@ test('uncovered shapes, invalid times and real channels are refused',async()=>{
  const other=structuredClone(graph);other.nextAction.settings.input.channels=['telegram'];
  await expect(validateScheduleFixtures(other,{cases:[cases[0]]})).rejects.toThrow('dashboard');
 });
+test('custom cases follow the saved DST policy in the chosen zone',async()=>{
+ const daily=(await import('./fixtures/daily-dst-generated.json')).default;
+ const result=await validateScheduleFixtures(daily,{cases:[
+  sample('2026-10-25T00:30:00Z',true,{expectedKey:'daily-operations:Europe/Rome:2026-10-25'}),
+  sample('2026-10-25T01:30:00Z',false),
+ ]});
+ expect(result.cases.map((c:any)=>c.matches)).toEqual([true,false]);
+},CHILD_TIMEOUT);
