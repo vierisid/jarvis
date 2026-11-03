@@ -140,3 +140,23 @@ for (const scenario of [
     if(c.expectedRequests===0)expect(listWorkflowEffects(accepted.runId).filter(e=>e.stepName==='step_3')).toHaveLength(0);
   }
 },120_000);
+
+import {typedInputGraph,typedInputCases} from './product-fixture-data';
+test('fixture JSON input processing matches the real worker',async()=>{
+  const cases=typedInputCases(),flow=createFlow();
+  createDraftVersion({flowId:flow.id,displayName:'Typed JSON input',trigger:typedInputGraph('run_jsonata_query')});
+  const raw=await createManageWorkflowTool({pieceRegistry:catalog}).execute({action:'validate_fixtures',flow:flow.id,fixture_input:{cases}}),report=unwrap(raw);
+  expect((report.content===undefined?report:JSON.parse(report.content)).cases.map((c:any)=>c.status)).toEqual(cases.map(c=>c.expectedStatus));
+  const version=createDraftVersion({flowId:flow.id,displayName:'Typed JSON input run',trigger:typedInputGraph('run_jsonata_query')});
+  lockVersion(version.id);setPublishedVersion(flow.id,version.id);updateFlowStatus(flow.id,'ENABLED');await manager.refresh(flow.id);
+  for(const c of cases){
+    const response=await manager.webhookManager().handleRequest(flow.id,new Request('http://localhost/typed',{method:'POST',body:JSON.stringify(c.payload)}));
+    const accepted=await response.json();expect(accepted.outcome).toBe('started');runIds.push(accepted.runId);
+    await worker.drain();
+    expect(getFlowRun(accepted.runId)!.status as string,c.name).toBe(c.expectedStatus);
+    if(c.expectedStatus==='SUCCEEDED'){
+      const stored=getWorkflowDb().query('SELECT value FROM workflow_subflow_result WHERE run_id=?').get(accepted.runId) as {value:string};
+      expect(JSON.parse(stored.value),c.name).toEqual({out:{a:1}});
+    }
+  }
+},120_000);

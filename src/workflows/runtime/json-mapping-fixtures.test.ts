@@ -1,6 +1,7 @@
 import {expect,test} from 'bun:test';
 import {validateJsonMappingFixtures} from './json-mapping-fixtures';
 import {productGraph,productSetup,productCases,repairedProductGraph,repairedProductCases} from './product-fixture-data';
+import {typedInputGraph,typedInputCases} from './product-fixture-data';
 import {productRetestGraph,repairedProductRetestGraph,productRetestSetup,productRetestCases} from './product-retest-data';
 
 test('actual saved product graph preserves types and distinguishes field states', async () => {
@@ -78,4 +79,18 @@ test('numeric comparisons and lazy guarded operands follow production routing',a
  expect((await validateJsonMappingFixtures(graph,{setup:productRetestSetup(),cases:[{...productRetestCases()[0],expectedRows:[],expectedRequests:0}]})).cases[0].requests).toHaveLength(0);
  graph.nextAction.nextAction.nextAction.settings.branches[0].conditions[0][0].operator='UNKNOWN';
  await expect(validateJsonMappingFixtures(graph,{setup:productRetestSetup(),cases:[productRetestCases()[0]]})).rejects.toThrow('unsupported condition UNKNOWN');
+});
+
+test('JSON and text inputs follow engine property processing before the connector runs',async()=>{
+ expect((await validateJsonMappingFixtures(typedInputGraph('run_jsonata_query'),{cases:typedInputCases()})).cases).toHaveLength(6);
+ const text=await validateJsonMappingFixtures(typedInputGraph('convert_json_to_text'),{cases:[{name:'string JSON is not double encoded',payload:{data:'{"a":1}'},expectedRows:[],expectedStatus:'SUCCEEDED',assertions:[{step:'step_1',path:[],equals:'{"a":1}'}]}]});
+ expect(text.cases[0].status).toBe('SUCCEEDED');
+ const textGraph:any=typedInputGraph('run_jsonata_query','{{step_1}}');textGraph.nextAction.settings.input.query='"plain text"';
+ const scalarResult=await validateJsonMappingFixtures(textGraph,{cases:[{name:'text result is not JSON',payload:{data:{a:1}},expectedRows:[],expectedStatus:'FAILED',expectedError:'result: expected JSON'}]});
+ expect(scalarResult.cases[0].status).toBe('FAILED');
+});
+test('router resolves both operands before evaluating a condition',async()=>{
+ const graph=repairedProductRetestGraph();graph.nextAction.nextAction.nextAction.settings.branches[0].conditions=[[{operator:'BOOLEAN_IS_TRUE',firstValue:true,secondValue:'{{step_2.absent}}'}]];
+ const c={...productRetestCases()[0],expectedRows:[],expectedRequests:0,expectedStatus:'FAILED',expectedError:'absent value',assertions:[]};
+ expect((await validateJsonMappingFixtures(graph,{setup:productRetestSetup(),cases:[c]})).cases[0].status).toBe('FAILED');
 });
