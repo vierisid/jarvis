@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { ONBOARDING_ACCOUNTS, ONBOARDING_ACTION, ONBOARDING_PIECE, onboardingSetup, onboardingCustomer, onboardingTransport, onboardCustomer } from './customer-onboarding';
-import { acquireOnboarding } from '../db/repos/customer-onboarding';
+import { ONBOARDING_ACCOUNTS, ONBOARDING_ACTION, ONBOARDING_PIECE, onboardingResource, onboardingSetup, onboardingCustomer, onboardingTransport, onboardCustomer, type OnboardingResolutionRecord, type ResourceBranch, type ResourceOutcome } from './customer-onboarding';
+import { acquireOnboarding, OnboardingRecordError, recordedCustomerNames, resolveOnboardingBranch } from '../db/repos/customer-onboarding';
+import { getFlowRunInProject } from '../db/repos/flow-run';
+import { listWorkflowEffects } from '../db/repos/workflow-effect';
+import { boundedReceiptText } from '../../roles/untrusted';
 import { connectionBindings, enforceRunConnectionBinding, recordRunCredentialOutcome } from '../db/repos/binding-pins';
 import { walkFlowNodes } from '../db/flow-graph';
 import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
@@ -8,6 +11,50 @@ import type { WorkflowEffectBoundary } from './effect-boundary';
 import { managedConnectionMisuse, managedSourceFor, type CredentialResolver } from '../credentials/adapter';
 import { ConnectionCredentialError, OAUTH2_TYPES } from '../credentials/pasted-oauth2';
 import { isCustomerOnboardingStep, ONBOARDING_ACCOUNT_LABELS, type OnboardingAccountField } from '../onboarding-accounts';
+
+/** The durable record of one customer's onboarding by one workflow. */
+export function onboardingIdentity(projectId: string, flowId: string, customerId: string): string {
+  return digest(['customer-onboarding', projectId, flowId, customerId]);
+}
+
+/**
+ * A person's decision about an unknown onboarding branch of a run (#1243),
+ * after checking ClickUp or Drive: `mark_done` (it was created, with the
+ * resource's ID or link) or `release` (it was not; the next run for this
+ * customer creates it).
+ * Nothing is created or run here.
+ */
+export class OnboardingResolutionError extends Error {
+  constructor(message: string, readonly status: 400 | 404 | 409) { super(message); this.name = 'OnboardingResolutionError'; }
+}
+export function resolveOnboardingOutcome(projectId: string, runId: string, input: { effectId?: unknown; branch: unknown; resolution: unknown; resource?: unknown; note?: unknown },
+  via: OnboardingResolutionRecord['via']): { customerId: string; branch: ResourceBranch; outcome: ResourceOutcome } {
+  const bad = (message: string) => new OnboardingResolutionError(message, 400);
+  const run = getFlowRunInProject(projectId, runId);
+  if (!run) throw new OnboardingResolutionError(`run not found: ${runId}`, 404);
+  if (input.branch !== 'clickup' && input.branch !== 'drive') throw bad('branch must be clickup or drive');
+  if (input.resolution !== 'mark_done' && input.resolution !== 'release') throw bad('resolution must be mark_done (it was created) or release (it was not)');
+  if (input.note !== undefined && (typeof input.note !== 'string' || !input.note.trim() || input.note.length > 2000)) throw bad('A note must be 1-2000 characters');
+  if (input.resolution === 'release' && input.resource !== undefined) throw bad('release takes no resource: it was not created');
+  const effects = listWorkflowEffects(run.id).filter(e => e.route === 'customer-onboarding' && e.provenance.piece === ONBOARDING_PIECE);
+  const chosen = input.effectId === undefined ? effects : effects.filter(e => e.id === input.effectId);
+  if (chosen.length !== 1) throw chosen.length ? bad('This run onboarded several customers; name the effect_id to resolve')
+    : new OnboardingResolutionError('No customer onboarding in this run', 404);
+  const customer = (chosen[0]!.arguments as { customer?: { id?: unknown } }).customer;
+  if (typeof customer?.id !== 'string' || !customer.id) throw new OnboardingResolutionError('The onboarding record names no customer', 409);
+  const branch = input.branch;
+  let decision: { created: { id: string; url: string } } | { created: false };
+  try { decision = input.resolution === 'mark_done' ? { created: onboardingResource(branch, input.resource) } : { created: false }; }
+  catch (e) { throw bad((e as Error).message); }
+  try {
+    const outcome = resolveOnboardingBranch(onboardingIdentity(chosen[0]!.projectId, run.flowId, customer.id), branch, decision,
+      { at: Date.now(), via, ...(typeof input.note === 'string' ? { note: boundedReceiptText(input.note.trim(), 2000) } : {}) });
+    return { customerId: customer.id, branch, outcome };
+  } catch (e) {
+    if (e instanceof OnboardingRecordError) throw new OnboardingResolutionError(e.message, e.status);
+    throw e;
+  }
+}
 
 export function createOnboardingService(deps: { effects: WorkflowEffectBoundary; credentials: CredentialResolver; fetchImpl?: typeof fetch }) {
   return async (input: Record<string, unknown>, ctx: WorkflowEffectContext) => {
@@ -34,8 +81,14 @@ export function createOnboardingService(deps: { effects: WorkflowEffectBoundary;
             if (misuse) throw Error(misuse);
           }
         }
-        const identity = digest(['customer-onboarding', ctx.projectId, run.flowId, c.id]);
-        const lease = acquireOnboarding(identity, digest([s,c]), randomUUID());
+        const identity = onboardingIdentity(ctx.projectId, run.flowId, c.id);
+        // Keyed on the setup and the customer ID only (#1243): a corrected name does not block the customer.
+        // A record an earlier release made is moved over when it still matches.
+        // Its configuration then included the customer's name: any name this workflow recorded for this ID
+        // (a record blocked by a rename before the fix included) still matches when the setup is the same.
+        // Read only for a row that does not already match.
+        const lease = acquireOnboarding(identity, digest(['customer-onboarding-config-v2', s, c.id]), randomUUID(), Date.now,
+          () => [...new Set([c.name, ...recordedCustomerNames(ctx.projectId, run.flowId, c.id)])].map(name => digest([s, { id: c.id, name }])));
         const check = () => { checkpoint(); lease.store.check(); };
         try {
           // An account problem fails only its own branch, before dispatch, so a later run may retry it.

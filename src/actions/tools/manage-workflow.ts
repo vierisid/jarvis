@@ -1,6 +1,8 @@
 import { draftRevision, updateSavedDraft } from './workflow-draft-update';
 import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards';
 import { decideRunRecovery, getRunRecovery } from '../../workflows/runtime/recovery';
+import { resolveOnboardingOutcome } from '../../workflows/runtime/onboarding-service';
+import { onboardingResource } from '../../workflows/runtime/customer-onboarding';
 import { randomUUID } from 'node:crypto';
 /**
  * Manage Workflow Tool — chat-driven workflow CRUD + run management.
@@ -274,7 +276,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       action: {
         type: "string",
         description: "What to do.",
-        enum: ["compose", "continue_setup", "create", "update", "list", "get", "validate_fixtures", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run", "resolve_effect"],
+        enum: ["compose", "continue_setup", "create", "update", "list", "get", "validate_fixtures", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run", "resolve_effect", "resolve_onboarding"],
         required: true,
       },
       flow: {
@@ -309,6 +311,8 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       effect_id: { type: "string", description: "resolve_effect: wfe_ ID", required: false },
       resolution: { type: "string", enum: ["mark_done", "release"], description: "resolve_effect: happened or not", required: false },
       note: { type: "string", description: "resolve_effect: what the user checked", required: false },
+      branch: { type: "string", enum: ["clickup", "drive"], description: "resolve_onboarding", required: false },
+      resource: { type: "string", description: "resolve_onboarding mark_done: ID or link", required: false },
       description: {
         type: "string",
         description:
@@ -433,6 +437,12 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           // stops duplicates, so the model never takes it on its own.
           return { actionCategory: "write_data", confirm: "always",
             intent: `${params.resolution === "mark_done" ? "Mark done (it happened)" : params.resolution === "release" ? "Release (it did not happen)" : "Resolve"} the uncertain write ${forCard(params.effect_id)} of workflow run ${forCard(params.run_id)}` };
+        case "resolve_onboarding":
+          // A person's finding about an onboarding write the runtime cannot
+          // confirm (#1243): it settles (mark_done) or reopens (release) a
+          // branch later runs would otherwise never retry or always reuse.
+          return { actionCategory: "write_data", confirm: "always",
+            intent: `${params.resolution === "mark_done" ? `Record that it was created (${forCard(onboardingResourceText(params.branch, params.resource))})` : params.resolution === "release" ? "Record that it was not created, so the next run for this customer creates it" : "Resolve"}: the ${params.branch === "drive" ? "Drive folder" : params.branch === "clickup" ? "ClickUp task" : forCard(params.branch)} of customer onboarding in workflow run ${forCard(params.run_id)}${params.effect_id !== undefined ? ` (${forCard(params.effect_id)})` : ""}` };
         default:
           // list / get / list_runs / get_run are reads; compose / create /
           // enable / disable / publish are writes the floor already covers.
@@ -607,6 +617,14 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           return framedForModel(
             await actResolveEffect(project, params),
             "a workflow recovery receipt",
+          );
+        case "resolve_onboarding":
+          return framedForModel(
+            resolveOnboardingOutcome(project, requireString(params, "run_id"), { branch: params.branch, resolution: params.resolution,
+              ...(params.effect_id !== undefined ? { effectId: params.effect_id } : {}),
+              ...(params.resource !== undefined ? { resource: params.resource } : {}),
+              ...(typeof params.note === "string" && params.note.trim() ? { note: params.note } : {}) }, "manage_workflow"),
+            "a customer onboarding resolution",
           );
         case "continue_setup":
           return framedForModel(
@@ -1660,6 +1678,11 @@ function actGetRun(project: string, runId: string): Record<string, unknown> {
   if (!run) throw new Error(`run not found: ${runId}`);
   const recovery = getRunRecovery(run.id);
   return { ...summarizeRun(run, true), ...(recovery ? { recovery } : {}) };
+}
+
+/** The link a resolution would store, as the card shows it; the raw text when it would be refused. */
+function onboardingResourceText(branch: unknown, resource: unknown): unknown {
+  try { return branch === 'clickup' || branch === 'drive' ? onboardingResource(branch, resource).url : resource; } catch { return resource; }
 }
 
 /** The same audited recovery decision as the dashboard's, made after the
