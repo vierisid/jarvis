@@ -103,3 +103,12 @@ test('cancel and save return focus to the edit button',async()=>{
   await click('Edit title and deadline');await fill(host.querySelector('form input')!,'Focused save');await click('Save details');
   expect(host.querySelector('form')).toBeNull();expect(document.activeElement).toBe(button('Edit title and deadline'));
 });
+test('at phone width the create dialog overlay stacks above the fixed detail panel',async()=>{
+  const css=await Bun.file(new URL('./GoalsRoom.css',import.meta.url)).text();
+  const phone=[...css.matchAll(/@media \(max-width: 600px\) \{([\s\S]*?)\n\}/g)];
+  const z=(selector:RegExp)=>{for(const m of [...phone].reverse()){const r=m[1]!.match(new RegExp(selector.source+'[^{]*\\{[^}]*z-index:\\s*(\\d+)'));if(r)return {z:Number(r[1]),at:m.index!};}return null;};
+  const panel=z(/\.v2-goals__side/),overlay=z(/\.v2-goals__overlay/);
+  expect(panel&&overlay).toBeTruthy();expect(overlay!.z).toBeGreaterThan(panel!.z);
+  // Equal specificity: the override must come after the base overlay rule.
+  expect(overlay!.at).toBeGreaterThan(css.indexOf('.v2-goals__overlay {'));
+});
