@@ -204,6 +204,17 @@ test("shared schema, governance and managed dispatch preserve manual accounts", 
   expect(tracksPieceCompletion(piece, "create_issue")).toBe(true);
 });
 
+test("a templated description narrows to a write only on the managed connection reference",()=>{
+ const templated="Reported: {{trigger.description}}";
+ for(const auth of ["{{connections.jarvis:gitlab}}","{{connections['jarvis:gitlab']}}"]){
+  expect(resolveGovernedPieceAction(piece,"create_issue",{auth,description:templated})?.category).toBe("write_data");
+  // A literal quick action stays a settings change; the managed runtime refuses it anyway.
+  expect(resolveGovernedPieceAction(piece,"create_issue",{auth,description:templated+"\n/confidential"})?.category).toBe("modify_settings");
+ }
+ for(const auth of [undefined,"{{connections.my-gitlab}}","{{connections.jarvis:gitlab}} ","{{connections.jarvis:wrike}}",{access_token:"manual"},"{{trigger.auth}}"])
+  expect(resolveGovernedPieceAction(piece,"create_issue",{auth,description:templated})?.category).toBe("modify_settings");
+});
+
 test("manual issue descriptions cannot use quick actions at the plain-write authority level",()=>{
  for(const description of ["/move private/project","hello\n/confidential","{{trigger.description}}",{}]) expect(resolveGovernedPieceAction(piece,"create_issue",{description})?.category).toBe("modify_settings");
  expect(resolveGovernedPieceAction(piece,"create_issue")?.category).toBe("modify_settings");

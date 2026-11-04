@@ -224,10 +224,24 @@ export function webflowFulfillOrderCategory(input: Record<string, unknown>): Act
   return !present(input.send_order_fulfilled_email) || input.send_order_fulfilled_email === false ? 'write_data' : 'send_email';
 }
 
-/** GitLab quick actions run in issue descriptions, including through manually configured accounts. */
+const GITLAB_MANAGED_AUTH: readonly string[] = ['{{connections.jarvis:gitlab}}', "{{connections['jarvis:gitlab']}}"];
+/**
+ * GitLab quick actions (slash-command lines) in an issue description can move,
+ * close or change permissions on the issue, so such a description is a
+ * settings change, including through manually configured accounts. A templated
+ * description is only known at run time: on a manual account it takes that
+ * worst case, but on the managed `jarvis:gitlab` connection it stays a write,
+ * because `runManagedGitLabAction` refuses a resolved description with a slash
+ * command before anything is sent (owner decision, #1268). `auth` is read only
+ * as that exact reference (the configured step input; the run-time projection
+ * strips it, where the description is already resolved), so it is not one of
+ * the rule's `props`: a templated `auth` never narrows.
+ */
 export function gitlabIssueCategory(input:Record<string,unknown>):ActionCategory {
  const d=input.description;
- return d==null || d==='' || (typeof d==='string' && !d.includes('{{') && !/(?:^|[\r\n])\s*\//.test(d)) ? 'write_data' : 'modify_settings';
+ if (d==null || d==='') return 'write_data';
+ if (typeof d!=='string' || /(?:^|[\r\n])\s*\//.test(d)) return 'modify_settings';
+ return !d.includes('{{') || GITLAB_MANAGED_AUTH.includes(String(input.auth)) ? 'write_data' : 'modify_settings';
 }
 
 /** Assignment can share a task with another person. Unresolved assignments use the safer category. */
