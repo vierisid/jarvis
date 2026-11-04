@@ -86,6 +86,10 @@ async function requestApi(
     await response.body?.cancel().catch(() => {});
     if (response.status === 401)
       throw Error("Pipedrive refused access. Reconnect Pipedrive.");
+    if (response.status === 404 && method === "GET")
+      throw Error(
+        "Pipedrive could not find that record. It does not exist or was deleted.",
+      );
     if (response.status === 429)
       throw Error(
         "Pipedrive is rate limiting requests. Wait before trying again.",

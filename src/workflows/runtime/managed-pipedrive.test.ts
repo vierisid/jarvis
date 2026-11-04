@@ -225,3 +225,15 @@ test("malformed responses are bounded, sanitized and never cause an automatic se
   ).rejects.toThrow("may already have changed");
   expect(attempts).toBe(1);
 });
+test("a GET 404 says the record was not found or deleted, not to retry", async () => {
+  const { request, calls } = fake({ success: false }, 404);
+  const error = (await run(
+    "get-deal",
+    { auth, dealId: 9 },
+    request,
+  ).catch((e) => e)) as Error;
+  expect(error.message).toContain("could not find that record");
+  expect(error.message).toContain("deleted");
+  expect(error.message).not.toContain("Try again");
+  expect(calls).toHaveLength(1);
+});
