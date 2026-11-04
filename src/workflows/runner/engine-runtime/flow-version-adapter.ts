@@ -134,7 +134,9 @@ function adaptTrigger(
     displayName: nodeDisplayName(trigger),
     lastUpdatedDate: fallbackTimestamp,
   };
-  if (trigger.type === "EMPTY") {
+  // The built-in schedule is admitted by Jarvis, not an installed engine piece.
+  // Execute its persisted occurrence payload exactly like a manual trigger.
+  if (trigger.type === "EMPTY" || (trigger.type === "PIECE_TRIGGER" && trigger.settings?.pieceName === "schedule")) {
     return {
       ...common,
       type: "EMPTY",
