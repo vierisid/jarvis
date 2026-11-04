@@ -28,7 +28,7 @@ import { WorkflowEventBuffer } from './event-buffer';
 import { PieceCatalog, metadataToCatalogEntry } from './piece-catalog';
 import { cancelFlowRun } from '../db/repos/run-cancellation';
 import { HUMAN_INPUT_PIECE, type HumanRequest } from './human-input-contract';
-import { listHumanInputs, requestHumanInput, resolveHumanInput, resumeHumanInputs } from './human-input';
+import { dismissHumanInput, listHumanInputs, requestHumanInput, resolveHumanInput, resumeHumanInputs } from './human-input';
 import { createWorkflowRoutes } from '../api/routes';
 import { listWaitpointsByFlowRun } from '../db/repos/waitpoint';
 let dir: string, api: SandboxApi, runtime: EngineRuntime, worker: Worker, catalog: PieceCatalog;
@@ -219,5 +219,43 @@ test('shared response receipts include each waiting run without hiding a stopped
   expect(request.status).toBe('pending'); expect(respond(request).status).toBe(200); await finish();
   const receipt = listHumanInputs(DEFAULT_IDS.project).find(r => r.id === request.id)!;
   expect(receipt.runs).toContainEqual({ runId: first.id, versionId: f.version.id, status: 'STOPPED' });
-  expect(receipt.runs).toContainEqual({ runId: second.id, versionId: f.version.id, status: 'SUCCEEDED' });
+  expect(receipt.runs).toContainEqual({ runId: second.id, versionId: f.version.id, status: 'SUCCEEDED' });  // The user stopped that run: nothing about it needs attention.
+  const { humanRequestNeedsAttention } = await import('./human-input-contract'); expect(humanRequestNeedsAttention(receipt)).toBe(false);
+});
+test('a shared form reopened after expiry reports only the runs that asked it again', async () => {
+  const f = fixture('input', false, false, true), first = await f.run('reopened');
+  const expired = requestFor(first.id); listHumanInputs(DEFAULT_IDS.project, expired.deadline);
+  await finish(); expect(getFlowRun(first.id)?.status).toBe('FAILED');
+  const second = await f.run('reopened'); expect(second.status).toBe('PAUSED');
+  const reopened = requestFor(second.id); expect(reopened.id).toBe(expired.id); expect(reopened.status).toBe('pending');
+  expect(respond(reopened).status).toBe(200); await finish(); expect(getFlowRun(second.id)?.status).toBe('SUCCEEDED');
+  const receipt = listHumanInputs(DEFAULT_IDS.project).find(r => r.id === reopened.id)!;
+  expect(receipt.runs).toEqual([{ runId: second.id, versionId: f.version.id, status: 'SUCCEEDED' }]);
+  const { humanRequestNeedsAttention } = await import('./human-input-contract'); expect(humanRequestNeedsAttention(receipt)).toBe(false);
+});
+test('a failed continuation stays until dismissed in its own project, and dismissal survives a reread', async () => {
+  const f = fixture();
+  const graph = structuredClone(f.version.trigger);
+  graph.nextAction!.nextAction = step('failed', '@jarvispieces/piece-jarvis-subflow', 'require_success', { result: { status: 'failed', code: 'FIXTURE_FAILURE' } });
+  updateDraftVersion(f.version.id, { trigger: graph });
+  const run = await f.run(), request = requestFor(run.id), routes = createWorkflowRoutes();
+  const dismiss = (id: string) => routes['/api/workflow-inputs/:id/dismiss']!.POST!(Object.assign(
+    new Request(`http://localhost/api/workflow-inputs/${id}/dismiss`, { method: 'POST' }), { params: { id } }));
+  expect((await dismiss(request.id)).status).toBe(409);
+  expect(respond(request).status).toBe(200); await finish(); expect(getFlowRun(run.id)?.status).toBe('FAILED');
+  const { humanRequestNeedsAttention } = await import('./human-input-contract'); expect(humanRequestNeedsAttention(requestFor(run.id))).toBe(true);
+  expect(dismissHumanInput('wrong-project', request.id).status).toBe(404);
+  expect(humanRequestNeedsAttention(requestFor(run.id))).toBe(true);
+  expect((await dismiss(request.id)).status).toBe(200);
+  const after = requestFor(run.id); expect(after.dismissedAt).toBeNumber(); expect(after.runs?.[0]?.status).toBe('FAILED'); expect(humanRequestNeedsAttention(after)).toBe(false);
+  expect((await dismiss('missing')).status).toBe(404);
+});
+test('editing a waiting draft and reverting it before answering lets the run continue', async () => {
+  const f = fixture(), run = await f.run('reverted'), request = requestFor(run.id), original = structuredClone(f.version.trigger);
+  const graph = structuredClone(original); graph.nextAction!.settings!.input!.prompt = 'Changed question';
+  updateDraftVersion(f.version.id, { trigger: graph });
+  // Polling and the scheduler tick never withdraw on a draft edit.
+  listHumanInputs(DEFAULT_IDS.project); resumeHumanInputs(); expect(requestFor(run.id).status).toBe('pending');
+  updateDraftVersion(f.version.id, { trigger: original });
+  expect(respond(request).status).toBe(200); await finish(); expect(getFlowRun(run.id)?.status).toBe('SUCCEEDED');
 });

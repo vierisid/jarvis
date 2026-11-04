@@ -1,4 +1,4 @@
-import { listHumanInputs, resolveHumanInput } from '../runtime/human-input';
+import { dismissHumanInput, listHumanInputs, resolveHumanInput } from '../runtime/human-input';
 import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion } from './editor-version';
@@ -2388,6 +2388,15 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         let body: unknown; try { body = JSON.parse(raw); } catch { return err('Invalid JSON', 400); }
         if (!body || typeof body !== 'object' || Array.isArray(body)) return err('Response object required', 400);
         const { status, ...result } = resolveHumanInput(callerProject(req), id, body as Record<string, unknown>);
+        return Response.json(result, { status });
+      }),
+    },
+    // Acknowledges a failed or withdrawn outcome so it leaves Needs you. Same
+    // signed-in, project-scoped route family as the response above; no body.
+    "/api/workflow-inputs/:id/dismiss": {
+      POST: req => trapErrors(() => {
+        const { id } = (req as RequestWithParams<{ id: string }>).params;
+        const { status, ...result } = dismissHumanInput(callerProject(req), id);
         return Response.json(result, { status });
       }),
     },

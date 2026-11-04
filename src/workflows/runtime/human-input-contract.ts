@@ -9,6 +9,8 @@ export type HumanRequest = {
   /** Read-only continuation receipts. Shared forms can belong to several runs. */
   runs?: Array<{ runId: string; versionId: string; status: string }>;
   closureReason?: 'workflow_changed';
+  /** Set when the user acknowledged an outcome that needed attention. */
+  dismissedAt?: number;
 };
 export function formFields(value: unknown): InputField[] {
   if (!Array.isArray(value) || !value.length || value.length > 20) throw Error('Provide 1–20 input fields');
@@ -50,9 +52,21 @@ export function answerErrors(fields: InputField[], value: unknown): Record<strin
   return errors;
 }
 
-/** An accepted response is not evidence that its workflow completed. */
+const LIVE_RUN_STATUSES = ['QUEUED', 'RUNNING', 'PAUSED'];
+/**
+ * An accepted response is not evidence that its workflow completed. A failed or
+ * unknown continuation, or a form withdrawn because the workflow changed, stays
+ * until the user dismisses it. A run the user stopped needs nothing more.
+ */
 export function humanRequestNeedsAttention(request: HumanRequest): boolean {
-  return request.status === 'pending' || request.closureReason === 'workflow_changed'
+  if (request.status === 'pending') return true;
+  if (request.dismissedAt) return false;
+  return request.closureReason === 'workflow_changed'
     || (['submitted', 'approved'].includes(request.status) && !!request.runs?.some(run =>
-      !['QUEUED', 'RUNNING', 'PAUSED', 'SUCCEEDED'].includes(run.status)));
+      ![...LIVE_RUN_STATUSES, 'SUCCEEDED', 'STOPPED'].includes(run.status)));
+}
+/** Only a settled outcome can be dismissed: no run of the request may still change it. */
+export function humanRequestDismissable(request: HumanRequest): boolean {
+  return request.status !== 'pending' && humanRequestNeedsAttention(request)
+    && !request.runs?.some(run => LIVE_RUN_STATUSES.includes(run.status));
 }

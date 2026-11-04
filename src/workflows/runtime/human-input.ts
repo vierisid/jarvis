@@ -8,7 +8,7 @@ import { digest, resolveEffectContext, type WorkflowEffectContext } from './effe
 import { assertRunNotCanceled } from './cancellation';
 import { claimContinuation } from './continuation';
 import { emergencyHold } from './emergency-hold';
-import { HUMAN_INPUT_PIECE, answerErrors, formFields, type HumanRequest } from './human-input-contract';
+import { HUMAN_INPUT_PIECE, answerErrors, formFields, humanRequestDismissable, type HumanRequest } from './human-input-contract';
 
 type Row = { id: string; project_id: string; flow_id: string; fingerprint: string; record: string; status: HumanRequest['status']; deadline: number };
 const row = (id: string) => getWorkflowDb().query<Row, [string]>('SELECT * FROM workflow_human_request WHERE id=?').get(id);
@@ -77,10 +77,15 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
     const reopen = !!existing && config.shared && ['expired', 'cancelled'].includes(existing.status)
       && !db.query('SELECT 1 FROM workflow_human_wait WHERE request_id=? AND run_id=?').get(id, ctx.runId);
     if (!existing || reopen) {
+      // Outcomes belong to this instance: waits are listed from `created` on. A
+      // reopened form starts after every earlier wait, even if the clock is coarse.
+      const before = reopen ? db.query<{ at: number | null }, [string]>(`SELECT MAX(p.created) AS at FROM workflow_human_wait w
+        JOIN waitpoint p ON p.id=w.waitpoint_id WHERE w.request_id=?`).get(id)?.at ?? null : null;
+      const created = before === null ? now : Math.max(now, before + 1);
       const pending = db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM workflow_human_request WHERE flow_id=? AND status='pending'").get(run!.flowId)!.count;
       if (pending >= 20) throw Error('This workflow already has 20 unanswered requests. Respond or cancel them before creating more.');
       const request: HumanRequest = { id, ...config, kind, workflowName: resolved.version.displayName, flowId: run!.flowId,
-        runId: ctx.runId, created: now, deadline: now + timeoutHours * 3600000, status: 'pending', answers: null };
+        runId: ctx.runId, created, deadline: now + timeoutHours * 3600000, status: 'pending', answers: null };
       db.run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status) VALUES (?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint,record=excluded.record,deadline=excluded.deadline,status=excluded.status`,
         [id, ctx.projectId, run!.flowId, fingerprint, JSON.stringify({ ...request, graphDigest: resolved.versionDigest, pathKey }), request.deadline, request.status]);
@@ -117,9 +122,11 @@ export function resolveHumanInput(projectId: string, id: string, input: Record<s
   const result = db.transaction(() => {
     const record = row(id);
     if (!record || record.project_id !== projectId) return { status: 404, error: 'Request not found' };
-    withdrawChangedRequest(record);
-    const request = unpack(row(id)!);
     const decision = input.decision;
+    // Only an answer checks the draft: an edit that is reverted before anyone
+    // answers lets the run continue, and a cancel needs no graph check.
+    if (decision !== 'cancel') withdrawChangedRequest(record);
+    const request = unpack(row(id)!);
     const status = decision === 'submit' && request.kind === 'input' ? 'submitted'
       : decision === 'approve' && request.kind === 'approval' ? 'approved'
       : decision === 'reject' && request.kind === 'approval' ? 'rejected' : decision === 'cancel' ? 'cancelled' : null;
@@ -142,7 +149,8 @@ const LIVE_RUN = `SELECT 1 FROM flow_run r JOIN flow f ON f.id=r.flow_id WHERE r
   AND NOT (f.disabled_at IS NOT NULL AND r.created <= f.disabled_at)`;
 /**
  * Close what can no longer be answered. Reads only through the pending index and
- * writes only rows that change, so the dashboard's polling stays cheap. A request
+ * writes only rows that change, so the dashboard's polling stays cheap. Draft
+ * edits are not checked here: that happens only when an answer arrives. A request
  * is cancelled only when no run that asked it (its own run, or any run waiting on
  * a shared form) can still continue: stopping one run never closes another's.
  */
@@ -153,7 +161,6 @@ function expireHumanInputs(now: number) {
     THEN 'cancelled' WHEN h.deadline <= ?1 THEN 'expired' END AS next
     FROM workflow_human_request h WHERE h.status='pending' AND next IS NOT NULL`).all(now);
   for (const record of closing) save({ ...unpack(record), status: record.next });
-  for (const record of db.query<Row, []>("SELECT * FROM workflow_human_request WHERE status='pending'").all()) withdrawChangedRequest(record);
 }
 /** Durable polling also covers a response received before the worker parks. */
 export function resumeHumanInputs(now = Date.now()): number {
@@ -175,14 +182,36 @@ export function resumeHumanInputs(now = Date.now()): number {
   return count;
 }
 
-/** Derive current run state without exposing step outputs or error arguments. */
+/**
+ * Derive current run state without exposing step outputs or error arguments.
+ * Only runs that asked this instance count: a shared form reopened after it
+ * expired or was cancelled does not report the earlier runs' outcomes.
+ */
 function withRunOutcomes(request: HumanRequest): HumanRequest {
-  const rows = getWorkflowDb().query<{ id: string; flow_version_id: string; status: string }, [string, string]>(`
+  const rows = getWorkflowDb().query<{ id: string; flow_version_id: string; status: string }, [string, string, number]>(`
     SELECT DISTINCT r.id,r.flow_version_id,r.status FROM flow_run r
-    WHERE r.id=? OR r.id IN (SELECT run_id FROM workflow_human_wait WHERE request_id=?)
-    ORDER BY r.created,r.id`).all(request.runId, request.id);
+    WHERE r.id=?1 OR r.id IN (SELECT w.run_id FROM workflow_human_wait w JOIN waitpoint p ON p.id=w.waitpoint_id
+      WHERE w.request_id=?2 AND p.created>=?3)
+    ORDER BY r.created,r.id`).all(request.runId, request.id, request.created);
   return { ...request, runs: rows.length ? rows.map(r => ({ runId: r.id, versionId: r.flow_version_id, status: r.status }))
     : [{ runId: request.runId, versionId: '', status: 'UNAVAILABLE' }] };
+}
+/**
+ * Acknowledge a closed request whose outcome needed attention (a failed run, a
+ * withdrawn form). It then stops counting in Needs you; the record is kept.
+ */
+export function dismissHumanInput(projectId: string, id: string, now = Date.now()) {
+  const db = getWorkflowDb();
+  return db.transaction(() => {
+    const record = row(id);
+    if (!record || record.project_id !== projectId) return { status: 404, error: 'Request not found' };
+    const request = withRunOutcomes(unpack(record));
+    if (request.dismissedAt) return { status: 200, request };
+    if (!humanRequestDismissable(request)) return { status: 409, error: request.status === 'pending' ? 'This request is still waiting for a response' : 'This request has nothing to dismiss yet', request };
+    const { runs: _runs, ...stored } = request;
+    const dismissed = { ...stored, dismissedAt: now }; save(dismissed);
+    return { status: 200, request: { ...dismissed, runs: request.runs } };
+  }).immediate();
 }
 /** A stale draft cannot consume an answer the worker will refuse to resume. */
 function withdrawChangedRequest(record: Row): void {
