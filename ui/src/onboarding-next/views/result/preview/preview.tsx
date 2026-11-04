@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { WorkflowEditor } from '../../../../v2/rooms/workflows/WorkflowEditor';
 import { WorkflowEditorEnvironment } from '../../../../v2/rooms/workflows/WorkflowEditorEnvironment';
-import { versionBoundRequest } from '../../../../brief/workflows/canvas/request';
+import { isInterruptedRequest, versionBoundRequest } from '../../../../brief/workflows/canvas/request';
 import { CANVAS_CATALOG } from '../../../../brief/workflows/canvas/fixtures';
 import { NavigationShell } from '../../../../brief/shell/navigation/NavigationShell';
 import { UNKNOWN_NAVIGATION } from '../../../../brief/shell/navigation/model';
@@ -21,7 +21,8 @@ function Canvas({ draft, onDirtyChange, onUnavailable }: ResultCanvasProps) {
   const samples = useRef(new Map<string, string>());
   const invalid = useRef(onUnavailable); invalid.current = onUnavailable;
   const environment = useMemo(() => {
-    let version = { id: draft.versionId, flowId: draft.flowId, state: 'DRAFT', displayName: draft.title, trigger: draft.graph,
+    let revision = 0;
+    let version = { id: draft.versionId, flowId: draft.flowId, state: 'DRAFT', editorRevision: 'preview-revision-0', displayName: draft.title, trigger: draft.graph,
       valid: true, schemaVersion: '1', agentIds: [], connectionIds: [], notes: [], backupFiles: {}, sampleData: {}, sampleInput: null, created: 1791363600000, updated: 1791363600000 };
     let uiMeta: unknown = { schema: 1, positions: {}, orphans: [] };
     const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
@@ -36,12 +37,12 @@ function Canvas({ draft, onDirtyChange, onUnavailable }: ResultCanvasProps) {
         if (path.includes('/runs?')) return response([]);
       }
       if (method === 'PATCH' && path === `/api/workflows/${draft.flowId}/versions/${draft.versionId}`) {
-        const body = JSON.parse(String(init?.body)); version = { ...version, trigger: body.trigger, displayName: body.displayName }; uiMeta = body.uiMeta; return response(version);
+        const body = JSON.parse(String(init?.body)); version = { ...version, trigger: body.trigger, displayName: body.displayName, editorRevision: `preview-revision-${++revision}` }; uiMeta = body.uiMeta; return response(version);
       }
       return response({ error: 'This isolated preview cannot run, connect, install, or publish anything.' }, 403);
     }, { preconnect: fetch.preconnect });
     const bound = versionBoundRequest(request, draft.flowId, draft.versionId);
-    return { request: async (input: RequestInfo | URL, init?: RequestInit) => { try { return await bound(input, init); } catch (e) { invalid.current(); throw e; } }, workspace: true, sampleDrafts: samples.current };
+    return { request: async (input: RequestInfo | URL, init?: RequestInit) => { try { return await bound(input, init); } catch (e) { if (!isInterruptedRequest(e, init)) invalid.current(); throw e; } }, workspace: true, sampleDrafts: samples.current };
     // The fixture edit buffer belongs to the exact version, not theme, chat or host reads.
   }, [draft.scopeId, draft.flowId, draft.versionId]);
   return <div className="brief-workflow-canvas result-preview-canvas"><WorkflowEditorEnvironment.Provider value={{ ...environment, portalHost }}>

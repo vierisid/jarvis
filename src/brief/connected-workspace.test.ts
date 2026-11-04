@@ -161,6 +161,36 @@ test('managed ClickUp shows its stored grant and routes setup without exposing c
   expect(new ConnectedWorkspace(db,sources,'other','other',()=>true).read().rows.some(r=>r.sourceId==='native:clickup')).toBe(false);
 });
 
+test('managed Notion shows its stored grant, a renewal that needs reconnect, and routes setup to its own hosted integration', () => {
+  sources.notion = () => ({configured:true, connected:true, reconnect:false, account:{id:'9',label:'Workspace'}});
+  expect(row('native:notion')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'9',label:'Notion: Workspace',setupActionId:'setup:notion'});
+  expect(provider.read().setup.find(s => s.id === 'setup:notion')?.target).toEqual({kind:'hosted_integration',provider:'notion'});
+  sources.notion = () => ({configured:true, connected:false, reconnect:true, account:{id:'9',label:'Workspace'}});
+  expect(row('native:notion')).toMatchObject({status:'reconnect_required',authenticated:false,availability:'unavailable',evidence:'none'});
+  sources.notion = () => ({configured:false,connected:false,reconnect:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:notion')).toBe(false);
+});
+
+test('managed Airtable shows its stored grant, reads a reconnect as disconnected and routes setup to its own hosted integration', () => {
+  sources.airtable = () => ({configured:true, connected:true, account:{id:'usr1',label:'owner@example.test'}});
+  expect(row('native:airtable')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'usr1',setupActionId:'setup:airtable'});
+  expect(provider.read().setup.find(s => s.id === 'setup:airtable')?.target).toEqual({kind:'hosted_integration',provider:'airtable'});
+  sources.airtable = () => ({configured:true, connected:false, account:{id:'usr1',label:'owner@example.test'}});
+  expect(row('native:airtable')).toMatchObject({status:'disconnected',availability:'unavailable',evidence:'none'});
+  sources.airtable = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:airtable')).toBe(false);
+});
+
+test('managed Calendly shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.calendly = () => ({configured:true, connected:true, account:{id:'cal-1',label:'owner@example.test'}});
+  expect(row('native:calendly')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'cal-1',setupActionId:'setup:calendly'});
+  expect(provider.read().setup.find(s => s.id === 'setup:calendly')?.target).toEqual({kind:'hosted_integration',provider:'calendly'});
+  sources.calendly = () => ({configured:true,connected:false,account:null});
+  expect(row('native:calendly').status).toBe('disconnected');
+  sources.calendly = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:calendly')).toBe(false);
+});
+
 test('managed Asana shows its stored grant and routes setup to its own hosted integration', () => {
   sources.asana = () => ({configured:true, connected:true, account:{id:'8',label:'owner@example.test'}});
   expect(row('native:asana')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'8',setupActionId:'setup:asana'});
@@ -168,11 +198,100 @@ test('managed Asana shows its stored grant and routes setup to its own hosted in
   sources.asana = () => ({configured:false,connected:false,account:null});
   expect(provider.read().rows.some(r=>r.sourceId==='native:asana')).toBe(false);
 });
+test('managed Linear shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.linear = () => ({configured:true, connected:true, account:{id:'8',label:'owner@example.test'}});
+  expect(row('native:linear')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'8',setupActionId:'setup:linear'});
+  expect(provider.read().setup.find(s => s.id === 'setup:linear')?.target).toEqual({kind:'hosted_integration',provider:'linear'});
+  sources.linear = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:linear')).toBe(false);
+});
 
-test('managed Webflow shows its stored grant and routes setup to its own hosted integration', () => {
-  sources.webflow = () => ({configured:true, connected:true, account:{id:'8',label:'owner@example.test'}});
-  expect(row('native:webflow')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'8',setupActionId:'setup:webflow'});
+test('managed Typeform shows its stored grant, a reconnect as disconnected, and routes setup to its own hosted integration', () => {
+  sources.typeform = () => ({configured:true, connected:true, account:{id:'01TF',label:'owner@example.test'}});
+  expect(row('native:typeform')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'01TF',setupActionId:'setup:typeform'});
+  expect(provider.read().setup.find(s => s.id === 'setup:typeform')?.target).toEqual({kind:'hosted_integration',provider:'typeform'});
+  sources.typeform = () => ({configured:true, connected:false, account:{id:'01TF',label:'owner@example.test'}});
+  expect(row('native:typeform')).toMatchObject({status:'disconnected',evidence:'none'});
+  sources.typeform = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:typeform')).toBe(false);
+});
+
+test('managed Todoist shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.todoist = () => ({configured:true, connected:true, account:{id:'9',label:'owner@example.test'}});
+  expect(row('native:todoist')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'9',setupActionId:'setup:todoist'});
+  expect(provider.read().setup.find(s => s.id === 'setup:todoist')?.target).toEqual({kind:'hosted_integration',provider:'todoist'});
+  sources.todoist = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:todoist')).toBe(false);
+});
+
+test('a Todoist grant that needs reconnecting reads as disconnected and still offers setup', () => {
+  sources.todoist = () => ({configured:true, connected:false, account:{id:'9',label:'owner@example.test'}});
+  expect(row('native:todoist')).toMatchObject({status:'disconnected',evidence:'none',setupActionId:'setup:todoist'});
+});
+
+test('managed Intercom shows its stored grant and routes setup to its own hosted integration', () => {
+  sources.intercom = () => ({configured:true, connected:true, account:{id:'workspace:admin',label:'owner@example.test'}});
+  expect(row('native:intercom')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'workspace:admin',setupActionId:'setup:intercom'});
+  expect(provider.read().setup.find(s => s.id === 'setup:intercom')?.target).toEqual({kind:'hosted_integration',provider:'intercom'});
+  sources.intercom = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:intercom')).toBe(false);
+});
+
+test('managed monday.com shows its stored grant, a pending reconnect as disconnected, and routes setup to its own hosted integration', () => {
+  sources.monday = () => ({configured:true, connected:true, account:{id:'12:34',label:'owner@example.test'}});
+  expect(row('native:monday')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'12:34',label:'monday.com: owner@example.test',setupActionId:'setup:monday'});
+  expect(provider.read().setup.find(s => s.id === 'setup:monday')?.target).toEqual({kind:'hosted_integration',provider:'monday'});
+  sources.monday = () => ({configured:true, connected:false, account:{id:'12:34',label:'owner@example.test'}});
+  expect(row('native:monday')).toMatchObject({status:'disconnected',availability:'unavailable',evidence:'none'});
+  sources.monday = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:monday')).toBe(false);
+});
+
+test('managed Webflow shows its stored grant, a revoked grant as disconnected, and routes setup to its own hosted integration', () => {
+  sources.webflow = () => ({configured:true, connected:true, account:{id:'b'.repeat(24),label:'owner@example.test'}});
+  expect(row('native:webflow')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'b'.repeat(24),setupActionId:'setup:webflow'});
   expect(provider.read().setup.find(s => s.id === 'setup:webflow')?.target).toEqual({kind:'hosted_integration',provider:'webflow'});
+  sources.webflow = () => ({configured:true, connected:false, account:{id:'b'.repeat(24),label:'owner@example.test'}});
+  expect(row('native:webflow')).toMatchObject({status:'disconnected',evidence:'none',setupActionId:'setup:webflow'});
   sources.webflow = () => ({configured:false,connected:false,account:null});
   expect(provider.read().rows.some(r=>r.sourceId==='native:webflow')).toBe(false);
+});
+
+const oauthPieces = [
+  ['clickup', 'ClickUp'], ['github', 'GitHub'], ['trello', 'Trello'], ['mailchimp', 'Mailchimp'],
+  ['slack', 'Slack'], ['dropbox', 'Dropbox'], ['asana', 'Asana'], ['intercom', 'Intercom'],
+  ['typeform', 'Typeform'], ['airtable', 'Airtable'], ['notion', 'Notion'], ['calendly', 'Calendly'],
+  ['linear', 'Linear'], ['todoist', 'Todoist'], ['monday', 'monday.com'], ['webflow', 'Webflow'],
+] as const;
+for (const [id] of oauthPieces) test(`${id} library setup uses the hosted connection, while saved manual accounts keep their own edit path`, () => {
+  (sources as any)[id] = () => ({ configured: true, connected: false, reconnect: false, account: null });
+  const name = `@activepieces/piece-${id}`;
+  sources.pieces = () => new PieceCatalog([piece(name)]);
+  account('manual', { piece_name: name });
+  const snapshot = provider.read();
+  const library = snapshot.rows.find(r => r.sourceId === `piece:${name}`)!;
+  expect(snapshot.setup.find(a => a.id === library.setupActionId)?.target).toEqual({ kind: 'hosted_integration', provider: id });
+  expect(library).toMatchObject({ status: 'installed', authenticated: null });
+  const manual = snapshot.rows.find(r => r.sourceId === 'account:manual')!;
+  expect(snapshot.setup.find(a => a.id === manual.setupActionId)).toMatchObject({ existingOnly: true, target: { kind: 'piece_credentials', pieceName: name } });
+  expect(snapshot.setup.filter(a => !a.existingOnly && a.target.kind === 'piece_credentials')).toEqual([]);
+});
+// The Jarvis Google grant is read-only Gmail and Calendar, so it cannot replace a Drive, Sheets or send credential.
+for (const name of ['gmail', 'google-calendar', 'google-drive', 'google-sheets']) test(`${name} library keeps its own credential setup while Google is set up`, () => {
+  sources.pieces = () => new PieceCatalog([piece(`@activepieces/piece-${name}`)]);
+  const snapshot = provider.read(), library = snapshot.rows.find(r => r.kind === 'library_piece')!;
+  expect(snapshot.setup.some(a => a.id === 'setup:google')).toBe(true);
+  expect(snapshot.setup.find(a => a.id === library.setupActionId)?.target).toMatchObject({ kind: 'piece_credentials', pieceName: `@activepieces/piece-${name}` });
+});
+test('an unavailable hosted provider never falls back to manual token setup', () => {
+  sources.hosted = () => true;
+  sources.clickup = () => { throw new Error('secret'); };
+  sources.pieces = () => new PieceCatalog([piece('@activepieces/piece-clickup')]);
+  expect(row('piece:@activepieces/piece-clickup').permissions.canConnect).toBe(false);
+  expect(provider.read().setup.some(a => a.target.kind === 'piece_credentials')).toBe(false);
+});
+test('self-hosted apps without managed configuration retain manual setup', () => {
+  sources.clickup = () => ({ configured: false, connected: false, account: null });
+  sources.pieces = () => new PieceCatalog([piece('@activepieces/piece-clickup')]);
+  expect(provider.read().setup.find(a => a.id === row('piece:@activepieces/piece-clickup').setupActionId)?.target.kind).toBe('piece_credentials');
 });

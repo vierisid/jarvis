@@ -25,6 +25,7 @@ import { getConnectionByExternalId, getUniqueConnectionByExternalId } from "../d
 import type { EgressPolicy } from "../runtime/http-egress";
 import { guardedTokenTransport, PastedOAuth2Refresher, type TokenTransport } from "./pasted-oauth2";
 import { isMeetingBriefsStep, MEETING_ACCOUNTS } from "../meeting-accounts";
+import { isSalesFollowupsStep, SALES_ACCOUNTS } from "../sales-accounts";
 
 /** Prefix that marks a connection as "managed by Jarvis itself". */
 export const JARVIS_PREFIX = "jarvis:";
@@ -149,14 +150,29 @@ function meetingAccountExempt(source: JarvisConnectionSource, pieceName: string,
 }
 
 /**
+ * Owner-approved exemption (#1187), the same narrow rule as the meeting one:
+ * the native jarvis-sales draft_followups step names its Gmail account as a
+ * literal id at `settings.input.gmailConnection` and the brain reads it
+ * itself, so `jarvis:google` may be named at exactly that path of that
+ * action, read as the Gmail piece, which the source must serve, on a PIECE
+ * node. The HubSpot account, any other path, piece, action, node type or a
+ * trigger stays refused by the rule below.
+ */
+function salesAccountExempt(source: JarvisConnectionSource, pieceName: string, path: string, settings: unknown, nodeType: unknown): boolean {
+  const provider = SALES_ACCOUNTS.gmailConnection;
+  return path === 'settings.input.gmailConnection' && provider === pieceName && source.id === 'google' && source.pieceNames.includes(provider)
+    && isSalesFollowupsStep(nodeType, settings);
+}
+
+/**
  * Why a step may not name a managed connection, or null when it may: it must
  * be a step of one of the source's pieces, naming it as that step's `auth`,
  * and a custom API call step must stay on the piece's own API hosts.
  * `settings` is the step's settings, when the caller has them, and `nodeType`
- * the step's node type (only the meeting exemption reads it).
+ * the step's node type (only the meeting and sales exemptions read it).
  */
 export function managedConnectionMisuse(source: JarvisConnectionSource, pieceName: string, path: string, settings?: unknown, nodeType?: unknown): string | null {
-  if (meetingAccountExempt(source, pieceName, path, settings, nodeType)) return null;
+  if (meetingAccountExempt(source, pieceName, path, settings, nodeType) || salesAccountExempt(source, pieceName, path, settings, nodeType)) return null;
   if (!source.pieceNames.includes(pieceName)) {
     return `Managed connection jarvis:${source.id} can only be used by ${pieceList(source)} steps`;
   }

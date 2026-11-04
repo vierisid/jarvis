@@ -1,3 +1,4 @@
+import { draftRevision, updateSavedDraft } from './workflow-draft-update';
 import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards';
 import { decideRunRecovery, getRunRecovery } from '../../workflows/runtime/recovery';
 import { randomUUID } from 'node:crypto';
@@ -11,6 +12,7 @@ import { randomUUID } from 'node:crypto';
  * Actions:
  *   list                   flows, newest first, bounded by a character budget
  *                          ({ returned, total, truncated, flows })
+ *   update                 validate and patch an existing selected draft in place
  *   get                    detail view of a flow + its latest version
  *   run                    queue a flow run, optionally with a payload
  *   create                 create an empty flow with a manual trigger
@@ -220,7 +222,9 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "Use real schemas; never invent IDs or credentials. Notifications use dashboard. If needed, verify browser tools, computer, permissions and login for an authorized alternative.",
       "Composed flows are DISABLED; publish enables them and requires user confirmation. Draft-only limits do not ban future actions.",
       "create requires empty: true for an explicitly blank canvas; otherwise compose.",
+      "update repairs the saved draft in place (get revision first); never compose a replacement.",
       "CODE steps: publish/enable/run are REFUSED without user permission for that flow; no tool action grants it. Never bypass.",
+      "validate_fixtures: local synthetic tests of the saved draft; mock auth, no network or installs. Page to nextCursor:null.",
       ...(hasLibrary ? [deps.installLibraryPiece ? "A missing Library connector returns setup.continueWith with install; call it so the user approves that install under software-install Authority. install_missing:false opts out. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
     category: "automation",
@@ -270,7 +274,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       action: {
         type: "string",
         description: "What to do.",
-        enum: ["compose", "continue_setup", "create", "list", "get", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run", "resolve_effect"],
+        enum: ["compose", "continue_setup", "create", "update", "list", "get", "validate_fixtures", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run", "resolve_effect"],
         required: true,
       },
       flow: {
@@ -279,13 +283,16 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         required: false,
       },
       view: { type: "string", enum: ["definition", "validation"], description: "get: paged JSON; join all page content to nextCursor:null.", required: false },
-      version_id: { type: "string", description: "get: version", required: false },
-      cursor: { type: "string", description: "get: prior nextCursor", required: false },
+      version_id: { type: "string", description: "get/update: version", required: false },
+      cursor: { type: "string", description: "get/validate_fixtures: prior nextCursor", required: false },
+      expected_revision: { type: "string", description: "update: from get", required: false },
+      patches: { type: "array", items: { type: "object", properties: { op: { type: "string", enum: ["add", "replace", "remove"] }, path: { type: "string" }, value: {} }, required: ["op", "path"] }, description: "update: JSON Patch on trigger", required: false },
       name: {
         type: "string",
-        description: "Display name for compose/create.",
+        description: "Display name: compose/create/update.",
         required: false,
       },
+      fixture_input: { type: "object", description: "validate_fixtures: routing/JSON setup/cases (tool guide).", required: false },
       payload: {
         type: "object",
         description: "run: trigger input.",
@@ -450,6 +457,68 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       const project = deps.callerProjectId?.() ?? DEFAULT_IDS.project;
       const requireFlowParam = (p: Record<string, unknown>) => requireFlowIn(project, p);
       switch (action) {
+        case "update": {
+          const flow = requireFlowParam(params);
+          const result = updateSavedDraft({
+            projectId: project, flowId: flow.id, versionId: requireString(params, 'version_id'),
+            expectedRevision: requireString(params, 'expected_revision'), patches: params.patches, name: params.name,
+            context: { ...workflowReadinessServices(), pieces: deps.pieceRegistry ?? workflowReadinessServices()?.pieces },
+            validateContract(graph) {
+              const report = contractRecheck(flow, graph);
+              if (report?.violations.length) throw new Error('update: saved job contract would be violated: ' + report.violations.slice(0, 5).join('; '));
+            },
+          });
+          return framedForModel({ ok: true, changed: result.changed, flowId: flow.id, versionId: result.version.id,
+            revision: draftRevision(result.version), status: flow.status, publishedVersionId: flow.published_version_id,
+            ...validationSummary(flow.id, result.version.id),
+            definition: { action: 'get', flow: flow.id, version_id: result.version.id, view: 'definition' },
+            validationReport: { action: 'get', flow: flow.id, version_id: result.version.id, view: 'validation' },
+            note: 'Updated the existing draft only. Missing setup stays unconfigured; no new workflow/version, publication, activation or execution. Functional testing is separate: validate_fixtures on this saved draft.',
+          }, 'an updated workflow draft');
+        }
+        case "validate_fixtures": {
+          // Local synthetic component checks of the saved draft. Read-only:
+          // setup is substituted into an in-memory copy, auth is mocked, and
+          // nothing installs, connects, resolves credentials or uses the network.
+          const flow = requireFlowParam(params), draft = getLatestDraft(flow.id);
+          if (!draft) throw new Error("No saved draft to validate");
+          const validation = compileWorkflow(draft.trigger, { pieces: workflowReadinessServices()?.pieces ?? deps.pieceRegistry, phase: 'composition' });
+          if (!validation.ready) throw new Error('Saved draft has structural errors; fix them before fixture validation');
+          if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-report' && draft.trigger.nextAction.settings.actionName === 'quarterly_hubspot_report') {
+            const {validateQuarterlyFixtures}=await import('../../workflows/runtime/quarterly-report-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateQuarterlyFixtures(draft.trigger,params.fixture_input)},params),'local synthetic quarterly fixture results');
+          }
+          if (draft.trigger.settings?.pieceName === 'schedule') {
+            const {validateScheduleFixtures}=await import('../../workflows/runtime/schedule-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateScheduleFixtures(draft.trigger,params.fixture_input)},params),'local synthetic schedule fixture results');
+          }
+          if (draft.trigger.nextAction?.settings?.pieceName === '@activepieces/piece-json') {
+            const {validateJsonMappingFixtures}=await import('../../workflows/runtime/json-mapping-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateJsonMappingFixtures(draft.trigger,params.fixture_input)},params),'local synthetic JSON mapping fixture results');
+          }
+          if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-subflow') {
+            const {validateSubflowFixtures}=await import('../../workflows/runtime/subflow-fixtures');
+            const childId=draft.trigger.nextAction?.settings?.input?.flow;
+            const child=typeof childId==='string'?getFlowInProject(project,childId):null;
+            const childDraft=child?getLatestDraft(child.id):null;
+            if(!childDraft)throw new Error('Select a real saved child workflow in this project before testing the pair');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,childFlowId:child!.id,childVersionId:childDraft.id,...await validateSubflowFixtures(draft.trigger,childDraft.trigger)},params),'local synthetic parent/child fixture results');
+          }
+          if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-batch') {
+            const {validateBatchFixtures}=await import('../../workflows/runtime/batch-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateBatchFixtures(draft.trigger)},params),'local synthetic lead batch fixture results');
+          }
+          if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-onboarding') {
+            const {validateOnboardingFixtures}=await import('../../workflows/runtime/onboarding-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateOnboardingFixtures(draft.trigger)},params),'local synthetic onboarding fixture results');
+          }
+          if (params.fixture_input !== undefined) {
+            const { validateSupportRoutingFixtures } = await import('../../workflows/runtime/support-routing-fixtures');
+            return framedForModel(fixtureReportPage({ flowId: flow.id, versionId: draft.id, ...await validateSupportRoutingFixtures(draft.trigger, params.fixture_input) }, params), 'local synthetic routing fixture results');
+          }
+          const { validateRefundFixtures } = await import('../../workflows/runtime/refund-fixtures');
+          return framedForModel(fixtureReportPage({ flowId: flow.id, versionId: draft.id, ...await validateRefundFixtures(draft.trigger) }, params), 'local synthetic fixture results');
+        }
         case "list":
           return framedForModel(actList(project), "the workflow list and its stored metadata");
         case "get":
@@ -638,6 +707,27 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
  * `governed-pieces.test.ts` pins against a fixed digest.
  */
 const FRAMED_PAYLOAD_MAX_CHARS = 4000;
+
+/** Preserve complete fixture evidence instead of slicing JSON mid-assertion. */
+function fixtureReportPage(report: Record<string, unknown>, params: Record<string, unknown>): Record<string, unknown> {
+  const text = JSON.stringify(report);
+  if (text.length <= FRAMED_PAYLOAD_MAX_CHARS && params.cursor === undefined) return report;
+  const hash = createHash('sha256').update(text).update(JSON.stringify(params.fixture_input ?? null)).digest('hex');
+  let offset = 0;
+  if (params.cursor !== undefined) {
+    const match = typeof params.cursor === 'string' && /^([a-f0-9]{64}):(\d+)$/.exec(params.cursor);
+    if (!match || match[1] !== hash) throw new Error('Fixture report changed or cursor is invalid; restart without a cursor');
+    offset = Number(match[2]);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset >= text.length) throw new Error('Fixture cursor offset is out of range');
+  }
+  let end = Math.min(offset + 2000, text.length);
+  for (;;) {
+    const page = {flowId:report.flowId,versionId:report.versionId,view:'fixture_results',passed:report.passed,externalActions:0,
+      totalChars:text.length,offset,nextCursor:end < text.length ? hash + ':' + end : null,content:text.slice(offset,end)};
+    if (JSON.stringify(page).length <= FRAMED_PAYLOAD_MAX_CHARS) return page;
+    if (--end <= offset) throw new Error('Fixture result envelope exceeds its size budget');
+  }
+}
 
 /**
  * Render an action's result for the chat model, framed as data.
@@ -1050,7 +1140,7 @@ export function versionForModel<V extends { trigger?: unknown } | null | undefin
 function checkedVersion(flowId: string, version: ReturnType<typeof getFlowVersion>) {
   if (!version) return null;
   const readiness = versionReadiness(flowId, version.id);
-  return { ...version, valid: readiness.ready, readiness };
+  return { ...version, revision: draftRevision(version), valid: readiness.ready, readiness };
 }
 
 function actGet(flow: FlowRow, params: Record<string, unknown> = {}): Record<string, unknown> {
@@ -1080,7 +1170,7 @@ function actGet(flow: FlowRow, params: Record<string, unknown> = {}): Record<str
   const version = draft ?? published;
   return {
     ...summary, detailPaged: true,
-    latestDraft: draft ? { id: draft.id, state: draft.state } : null,
+    latestDraft: draft ? { id: draft.id, state: draft.state, revision: draftRevision(draft) } : null,
     published: published ? { id: published.id, state: published.state } : null,
     ...(version ? { ...validationSummary(flow.id, version.id),
       definition: { action: "get", flow: flow.id, version_id: version.id, view: "definition" },
@@ -1095,7 +1185,7 @@ function workflowDocumentPage(flow: FlowRow, params: Record<string, unknown>): R
   if (params.view !== 'definition' && params.view !== 'validation') throw new Error('get: unknown view');
   const version = typeof params.version_id === 'string' ? getFlowVersion(params.version_id) : getLatestDraft(flow.id) ?? (flow.published_version_id ? getFlowVersion(flow.published_version_id) : null);
   if (!version || version.flowId !== flow.id) throw new Error('Version not found in this workflow');
-  const document = params.view === 'definition' ? versionForModel(version) : {
+  const document = params.view === 'definition' ? { ...versionForModel(version), revision: draftRevision(version) } : {
     ...validationSummary(flow.id, version.id),
     structure: compileWorkflow(version.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' }),
     readiness: versionReadiness(flow.id, version.id),
@@ -1112,7 +1202,7 @@ function workflowDocumentPage(flow: FlowRow, params: Record<string, unknown>): R
   }
   let end = Math.min(offset + 2000, text.length);
   for (;;) {
-    const result = { flowId: flow.id, versionId: version.id, view: params.view, totalChars: text.length,
+    const result = { flowId: flow.id, versionId: version.id, revision: draftRevision(version), view: params.view, totalChars: text.length,
       offset, nextCursor: end < text.length ? hash + ':' + end : null, content: text.slice(offset, end) };
     if (JSON.stringify(result).length <= FRAMED_PAYLOAD_MAX_CHARS) return result;
     if (--end <= offset) throw new Error('Readback envelope exceeds its size budget');

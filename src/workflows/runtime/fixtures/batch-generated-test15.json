@@ -1,0 +1,56 @@
+{
+  "name": "trigger",
+  "type": "PIECE_TRIGGER",
+  "displayName": "Receive lead batch webhook",
+  "settings": {
+    "pieceName": "webhook",
+    "input": {}
+  },
+  "nextAction": {
+    "name": "step_1",
+    "type": "PIECE",
+    "displayName": "Validate and update existing HubSpot contacts",
+    "settings": {
+      "pieceName": "@jarvispieces/piece-jarvis-batch",
+      "actionName": "update_leads",
+      "input": {
+        "submission": "{{trigger}}",
+        "hubspotConnection": "",
+        "hubspotPortalId": "",
+        "submissionIdPath": "",
+        "leadsPath": "",
+        "contactKeyType": null,
+        "contactKeyPath": "",
+        "propertyMapping": null
+      }
+    },
+    "nextAction": {
+      "name": "step_2",
+      "type": "PIECE",
+      "displayName": "Report all batch outcomes on dashboard",
+      "settings": {
+        "pieceName": "@jarvispieces/piece-jarvis-notify",
+        "actionName": "notify",
+        "input": {
+          "message": "{{step_1.summary}}",
+          "idempotencyKey": "{{step_1.notificationKey}}",
+          "channels": [
+            "dashboard"
+          ]
+        }
+      },
+      "nextAction": {
+        "name": "step_3",
+        "type": "PIECE",
+        "displayName": "Finalize batch with truthful success status",
+        "settings": {
+          "pieceName": "@jarvispieces/piece-jarvis-batch",
+          "actionName": "finalize_batch",
+          "input": {
+            "result": "{{step_1}}"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,10 @@
 import { MEETING_ACCOUNTS } from '../../meeting-accounts';
+import { importAccountFields, isImportStep } from '../../import-accounts';
+import { REPORT_ACCOUNTS, QUARTERLY_ACCOUNTS, isReportStep, isQuarterlyReportStep } from '../../report-accounts';
+import { SALES_ACCOUNTS, isSalesStep } from '../../sales-accounts';
+import { REFUND_ACCOUNTS, isRefundAction } from '../../refund-accounts';
+import { ONBOARDING_ACCOUNTS, isOnboardingStep } from '../../onboarding-accounts';
+import { BATCH_ACCOUNTS, isBatchStep } from '../../batch-accounts';
 /**
  * Q-05: the bindings a workflow was enabled against, and the checks that stop
  * work when one of them changes.
@@ -110,6 +116,43 @@ export function connectionBindings(trigger: unknown): Map<string, ConnectionRefe
 /** Each connection one step names, with where it names it, by the same rule as `connectionBindings`. */
 export function nodeConnectionReferences(node: FlowTriggerNode): Array<[externalId: string, path: string]> {
   const out: Array<[string, string]> = [];
+  if (isRefundAction(node.settings)) {
+    for (const field of Object.keys(REFUND_ACCOUNTS)) {
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
+  if (isImportStep(node.settings)) {
+    // The source account is named only by an OAuth2 source.
+    for (const field of importAccountFields(node.settings?.input)) {
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
+  if (isReportStep(node.settings) || isQuarterlyReportStep(node.settings)) {
+    for (const field of Object.keys(isQuarterlyReportStep(node.settings) ? QUARTERLY_ACCOUNTS : REPORT_ACCOUNTS)) {
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
+  if (isBatchStep(node.settings)) {
+    for (const field of Object.keys(BATCH_ACCOUNTS)) {
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
+  if (isOnboardingStep(node.settings)) {
+    for (const field of Object.keys(ONBOARDING_ACCOUNTS)) {
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
+  if (isSalesStep(node.settings)) {
+    for (const field of Object.keys(SALES_ACCOUNTS)) {
+      const id = node.settings?.input?.[field];
+      if (typeof id === 'string' && id.trim()) out.push([id, `settings.input.${field}`]);
+    }
+  }
   if (String(node.settings?.pieceName).endsWith('jarvis-context') && node.settings?.actionName === 'meeting_briefs') {
     for (const field of Object.keys(MEETING_ACCOUNTS)) {
       const id = node.settings?.input?.[field];

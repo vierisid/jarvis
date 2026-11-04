@@ -25,6 +25,36 @@ export const DEFAULT_IDS = {
 } as const;
 
 const STATEMENTS: string[] = [
+  `CREATE TABLE IF NOT EXISTS workflow_lead_batch (identity TEXT PRIMARY KEY, config TEXT NOT NULL, owner TEXT NOT NULL, lease_until INTEGER NOT NULL, progress TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS workflow_customer_onboarding (
+    identity TEXT PRIMARY KEY, config TEXT NOT NULL, owner TEXT NOT NULL,
+    lease_until INTEGER NOT NULL, results TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_refund (
+    identity TEXT PRIMARY KEY, config TEXT NOT NULL, owner TEXT NOT NULL,
+    lease_until INTEGER NOT NULL, state TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_refund_payment (payment TEXT PRIMARY KEY, request TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS workflow_contact_import (
+    identity TEXT PRIMARY KEY, config TEXT NOT NULL, owner TEXT NOT NULL,
+    lease_until INTEGER NOT NULL, progress TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_import_cursor (
+    identity TEXT NOT NULL, cursor TEXT NOT NULL, PRIMARY KEY(identity,cursor)
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_import_contact (
+    identity TEXT NOT NULL, source_id TEXT NOT NULL, hash TEXT NOT NULL,
+    contact_id TEXT NOT NULL, source TEXT NOT NULL DEFAULT '', PRIMARY KEY(identity,source_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_weekly_report (
+    identity TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL,
+    document_id TEXT, result TEXT, created INTEGER NOT NULL
+  )`,
+  // Daily contact claims and draft receipts survive restarts and run-history cleanup.
+  `CREATE TABLE IF NOT EXISTS workflow_sales_followup (
+    identity TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL,
+    result TEXT, created INTEGER NOT NULL
+  )`,
   // Cross-run contact/notification fences survive run-history cleanup. Keys are
   // scoped hashes, not credentials or personal data. No lease can expire an uncertain write.
   `CREATE TABLE IF NOT EXISTS workflow_effect_identity (
@@ -200,6 +230,21 @@ const STATEMENTS: string[] = [
     effect_id TEXT PRIMARY KEY REFERENCES workflow_effect(id) ON DELETE CASCADE,
     child_run_id TEXT NOT NULL UNIQUE,
     waitpoint_id TEXT UNIQUE
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_subflow_call (
+    id TEXT PRIMARY KEY, parent_flow_id TEXT NOT NULL REFERENCES flow(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL, child_run_id TEXT NOT NULL, effect_id TEXT NOT NULL,
+    version_id TEXT NOT NULL, version_digest TEXT NOT NULL, deadline INTEGER NOT NULL,
+    schema_json TEXT NOT NULL, result_json TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_subflow_pending ON workflow_subflow_call(result_json)`,
+  `CREATE TABLE IF NOT EXISTS workflow_subflow_result (
+    run_id TEXT PRIMARY KEY REFERENCES flow_run(id) ON DELETE CASCADE, value TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS workflow_subflow_wait (
+    call_id TEXT NOT NULL REFERENCES workflow_subflow_call(id) ON DELETE CASCADE,
+    parent_run_id TEXT NOT NULL REFERENCES flow_run(id) ON DELETE CASCADE,
+    waitpoint_id TEXT PRIMARY KEY REFERENCES waitpoint(id) ON DELETE CASCADE
   )`,
   // Q-19: failures the person dismissed from Today. Keyed by the failure's
   // stable key, so a dismissal outlives the run it came from.

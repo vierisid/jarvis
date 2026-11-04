@@ -1,6 +1,6 @@
 {
   "name": "@usejarvis/brain",
-  "version": "0.17.3",
+  "version": "0.17.5",
   "description": "J.A.R.V.I.S. — Just A Rather Very Intelligent System. An always-on autonomous AI daemon.",
   "module": "src/daemon/index.ts",
   "type": "module",
@@ -63,6 +63,7 @@
     "dev:local": "bun --no-env-file run scripts/integration/dev.ts"
   },
   "dependencies": {
+    "@activepieces/piece-json": "0.1.14",
     "@codemirror/autocomplete": "^6.20.1",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-css": "^6.3.1",

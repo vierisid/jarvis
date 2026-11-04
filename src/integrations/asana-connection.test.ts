@@ -190,6 +190,8 @@ test("revocation requests reconnect, transient failures preserve the binding, re
       )) as unknown as typeof fetch),
   ).rejects.toThrow("Reconnect");
   expect(asanaNeedsReconnect(config, c)).toBe(true);
+  // The Brief reads this status directly, so a revoked grant must not show as connected there.
+  expect(asanaStatus(config)).toMatchObject({ connected: false, reconnect: true });
   write({
     ...doc(),
     refresh: { ...c.refresh, url: "https://attacker.test/refresh" },

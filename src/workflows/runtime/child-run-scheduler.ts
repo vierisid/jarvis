@@ -1,3 +1,4 @@
+import {resumeSubflowCalls} from '../db/repos/subflow';
 import { getWorkflowDb } from '../db';
 import { getChildRun } from '../db/repos/child-run';
 import { cancelFlowRun, retireTerminalRunWaits } from '../db/repos/run-cancellation';
@@ -23,6 +24,7 @@ export function resumeCompletedChildRuns(onCardClosed?: (approvalId: string) => 
   const report = (approvalId: string) => {
     try { onCardClosed?.(approvalId); } catch (error) { console.error('[Workflow Authority] closed card update failed:', error); }
   };
+  const structured = resumeSubflowCalls(Date.now(), report);
   for (const child of abandoned) cancelFlowRun(child.id).closedApprovalIds.forEach(report);
   // A run can create an approval and then fail before publishing PAUSED.
   // Cancel refuses already-terminal runs, so retire their undispatched waits
@@ -69,5 +71,5 @@ export function resumeCompletedChildRuns(onCardClosed?: (approvalId: string) => 
     // this run's, was consumed, and is still the paused step's.
     if (claimContinuation({ runId: parent.id, waitpoint, kind: 'child', resumePayload: { childRunId: child.childRunId } }) === 'resumed') count++;
   }
-  return count;
+  return count + structured;
 }

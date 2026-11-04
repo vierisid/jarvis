@@ -1,3 +1,4 @@
+import { dropboxStatus } from "../integrations/dropbox-connection";
 import { registerNavigationCompatibility } from '../brief/registrations/navigation-compatibility';
 import { registerReconciliation } from '../brief/registrations/reconciliation';
 import { registerOnboarding } from '../brief/registrations/onboarding';
@@ -8,7 +9,15 @@ import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
 import { webflowStatus } from '../integrations/webflow-connection';
 import { asanaStatus } from '../integrations/asana-connection';
+import { todoistStatus } from '../integrations/todoist-connection';
+import { linearStatus } from '../integrations/linear-connection';
+import { typeformStatus } from '../integrations/typeform-connection';
+import { intercomStatus } from '../integrations/intercom-connection';
+import { mondayStatus } from '../integrations/monday-connection';
+import { calendlyStatus } from '../integrations/calendly-connection';
 import { slackStatus } from "../integrations/slack-connection";
+import { airtableStatus } from "../integrations/airtable-connection";
+import { notionStatus } from "../integrations/notion-connection";
 import { clickUpStatus } from '../integrations/clickup-connection';
 import { connectedGoogle } from '../brief/connected-workspace-runtime';
 import { registerConnections } from '../brief/registrations/connections';
@@ -111,7 +120,7 @@ import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
-import { ApprovalManager, approvalNeedsClick, executionState, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
+import { ApprovalManager, approvalNeedsClick, executionState, onApprovalDeadlineExpired, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
 import { applyEmergencyState } from "./emergency-state.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
@@ -4313,6 +4322,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     };
     expireUnanswered();
     setInterval(expireUnanswered, 10 * 60_000).unref?.();
+    // A workflow card past its explicit deadline leaves the dashboard the same way.
+    onApprovalDeadlineExpired(request => wsService.broadcastApprovalUpdate(request));
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
     wsService.setApprovalManager(approvalManager);
     wsService.setDeferredExecutor(deferredExecutor);
@@ -4761,12 +4772,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       devices: () => sidecarManager.listSidecars(),
       google: () => connectedGoogle(jarvisConfig),
       clickup: () => clickUpStatus(jarvisConfig),
+      dropbox: () => dropboxStatus(jarvisConfig),
       mailchimp: () => mailchimpStatus(jarvisConfig),
       github: () => githubStatus(jarvisConfig),
       trello: () => trelloStatus(jarvisConfig),
       asana: () => asanaStatus(jarvisConfig),
+      todoist: () => todoistStatus(jarvisConfig),
+      typeform: () => typeformStatus(jarvisConfig),
+      intercom: () => intercomStatus(jarvisConfig),
+      monday: () => mondayStatus(jarvisConfig),
+      calendly: () => calendlyStatus(jarvisConfig),
       webflow: () => webflowStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
+      linear: () => linearStatus(jarvisConfig),
+      airtable: () => airtableStatus(jarvisConfig),
+      notion: () => notionStatus(jarvisConfig),
       channels: () => {
         const status = channelService.getChannelStatus();
         return Object.fromEntries((['telegram', 'discord'] as const).map(name => [name, {
@@ -5011,6 +5031,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisClickUpConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisMailchimpConnectionSource } = await import("../workflows/credentials/mailchimp-source");
       credentialResolver.register(new JarvisMailchimpConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisMondayConnectionSource } = await import("../workflows/credentials/monday-source");
+      credentialResolver.register(new JarvisMondayConnectionSource(jarvisConfig));
+      const { JarvisTodoistConnectionSource } = await import("../workflows/credentials/todoist-source");
+      credentialResolver.register(new JarvisTodoistConnectionSource(jarvisConfig));
       const { JarvisAsanaConnectionSource } = await import("../workflows/credentials/asana-source");
       credentialResolver.register(new JarvisAsanaConnectionSource(jarvisConfig));
       const { JarvisWebflowConnectionSource } = await import("../workflows/credentials/webflow-source");
@@ -5021,8 +5045,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisDropboxConnectionSource(jarvisConfig));
       const { JarvisTrelloConnectionSource } = await import("../workflows/credentials/trello-source");
       credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisLinearConnectionSource } = await import("../workflows/credentials/linear-source");
+      credentialResolver.register(new JarvisLinearConnectionSource(jarvisConfig));
+      const { JarvisTypeformConnectionSource } = await import("../workflows/credentials/typeform-source");
+      credentialResolver.register(new JarvisTypeformConnectionSource(jarvisConfig));
+      const { JarvisAirtableConnectionSource } = await import("../workflows/credentials/airtable-source");
+      credentialResolver.register(new JarvisAirtableConnectionSource(jarvisConfig));
       const { JarvisSlackConnectionSource } = await import("../workflows/credentials/slack-source");
       credentialResolver.register(new JarvisSlackConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisIntercomConnectionSource } = await import("../workflows/credentials/intercom-source");
+      credentialResolver.register(new JarvisIntercomConnectionSource(jarvisConfig));
+      const { JarvisCalendlyConnectionSource } = await import("../workflows/credentials/calendly-source");
+      credentialResolver.register(new JarvisCalendlyConnectionSource(jarvisConfig));
+      const { JarvisNotionConnectionSource } = await import("../workflows/credentials/notion-source");
+      credentialResolver.register(new JarvisNotionConnectionSource(jarvisConfig));
       logWithTimestamp(
         "Workflow credential resolver: registered jarvis:google source",
       );

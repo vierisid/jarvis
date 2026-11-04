@@ -46,11 +46,11 @@ export const flowExecutor = {
             // "Manual" trigger AND for a non-manual trigger (e.g. SCHEDULE)
             // invoked MANUALLY from the Run button. Both must run: skip straight
             // into the action chain after the same bookkeeping (backup +
-            // sendUpdate). A real trigger firing carries a triggerName and still
-            // runs executeOnStart below, unchanged.
+            // sendUpdate). EMPTY triggers ignore leftover piece settings.
+            // A real piece trigger still runs executeOnStart below, unchanged.
             const jarvisTriggerName = (trigger as { settings?: { triggerName?: unknown } }).settings
                 ?.triggerName
-            if (isNil(jarvisTriggerName)) {
+            if (trigger.type === 'EMPTY' || isNil(jarvisTriggerName)) {
                 void runProgressService.backup({
                     engineConstants: constants,
                     flowExecutorContext: executionState,

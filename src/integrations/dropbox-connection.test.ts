@@ -206,6 +206,8 @@ test("revocation requests reconnect, transient failures preserve the binding, re
       )) as unknown as typeof fetch),
   ).rejects.toThrow("Reconnect");
   expect(dropboxNeedsReconnect(config, c)).toBe(true);
+  // The Brief reads this status directly, so a revoked grant must not show as connected there.
+  expect(dropboxStatus(config)).toMatchObject({ connected: false, reconnect: true });
   // The origin and the path are each checked on their own: each URL below
   // passes every other rule and fails exactly one of them.
   for (const url of [

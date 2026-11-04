@@ -1,4 +1,13 @@
+import {createSubflowService,returnSubflowResult} from './subflow-service';
 import { MEETING_ACCOUNTS, meetingSetup, meetingSetupMatches, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
+import { createLeadBatchService } from './batch-service';
+import { createOnboardingService } from './onboarding-service';
+import { createSalesFollowupsService } from './sales-service';
+import { createWeeklyReportService } from './report-service';
+import { createQuarterlyReportService } from './quarterly-report-service';
+import { createRefundService } from './refund-service';
+import { createContactImportService } from './import-service';
+import type { ImportRequest } from './contact-import';
 import { connectionBindings, enforceRunConnectionBinding, recordRunCredentialOutcome } from '../db/repos/binding-pins';
 import { walkFlowNodes } from '../db/flow-graph';
 import { isMeetingBriefsStep, MANAGED_HUBSPOT_REFUSAL, MEETING_ACCOUNT_LABELS } from '../meeting-accounts';
@@ -131,6 +140,19 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
   hubspotFetch?: typeof fetch;
   meetingFetch?: typeof fetch;
   meetingNow?: () => number;
+  reportFetch?: typeof fetch;
+  reportNow?: () => number;
+  refundFetch?: typeof fetch;
+  refundNow?: () => number;
+  importRequest?: ImportRequest;
+  importNow?: () => number;
+  importBudget?: () => import('./import-service').ImportCallBudget;
+  batchFetch?: typeof fetch;
+  subflowNow?: () => number;
+  batchNow?: () => number;
+  onboardingFetch?: typeof fetch;
+  salesFetch?: typeof fetch;
+  salesNow?: () => number;
   /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
   decisionDocumentsEnabled?: boolean;
   credentialResolver: CredentialResolver;
@@ -1255,8 +1277,17 @@ export function buildSandboxServiceBackends(
   };
 
   const services: SandboxApiServices = {
+    subflowCall: cancellableWorkflowService(createSubflowService(effects,opts.subflowNow,(flowId,versionId)=>workflowStartIntentOf({flowId,pinned:{versionId},waitForCompletion:true}))),
+    subflowResult: cancellableWorkflowService(returnSubflowResult),
     credentialResolver: opts.credentialResolver,
     meetingBriefs: cancellableWorkflowService(meetingBriefs),
+    quarterlyReport: cancellableWorkflowService(createQuarterlyReportService({effects,credentials:opts.credentialResolver,fetchImpl:opts.reportFetch})),
+    weeklyReport: cancellableWorkflowService(createWeeklyReportService({effects,credentials:opts.credentialResolver,fetchImpl:opts.reportFetch,now:opts.reportNow})),
+    approvalRefund: cancellableWorkflowService(createRefundService({effects,credentials:opts.credentialResolver,fetchImpl:opts.refundFetch,now:opts.refundNow})),
+    contactImport: cancellableWorkflowService(createContactImportService({effects,credentials:opts.credentialResolver,request:opts.importRequest,now:opts.importNow,budget:opts.importBudget})),
+    leadBatch: cancellableWorkflowService(createLeadBatchService({effects,credentials:opts.credentialResolver,fetchImpl:opts.batchFetch,now:opts.batchNow})),
+    customerOnboarding: cancellableWorkflowService(createOnboardingService({effects,credentials:opts.credentialResolver,fetchImpl:opts.onboardingFetch})),
+    salesFollowups: cancellableWorkflowService(createSalesFollowupsService({effects,credentials:opts.credentialResolver,fetchImpl:opts.salesFetch,now:opts.salesNow})),
     pieceAuthorize: cancellableWorkflowService(pieceAuthorize),
     pieceReceipt: (ctx, id, result) => recordPieceCompletion(ctx, id, result, opts),
     llmChat: cancellableWorkflowService(llmChat),

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { versionBoundRequest } from './request';
+import { isInterruptedRequest, versionBoundRequest } from './request';
 
 test('published canvas reads the selected locked version even when a newer draft exists', async () => {
   const calls: string[] = [];
@@ -27,4 +27,13 @@ test('read-only canvas rejects writes before transport and rejects substituted o
   expect((await request('/api/workflows/flow/operations', { method: 'POST' })).status).toBe(403);
   expect(calls).toBe(0);
   await expect(request('/api/workflows/flow')).rejects.toThrow('Selected version changed');
+});
+
+test('cancelled and interrupted reads are told apart from real failures', () => {
+  const controller = new AbortController(); controller.abort();
+  expect(isInterruptedRequest(new Error('x'), { signal: controller.signal })).toBe(true);
+  expect(isInterruptedRequest(new DOMException('Fetch is aborted', 'AbortError'))).toBe(true);
+  expect(isInterruptedRequest(new DOMException('slow', 'TimeoutError'))).toBe(true);
+  expect(isInterruptedRequest(new TypeError('Failed to fetch'))).toBe(false);
+  expect(isInterruptedRequest(new Error('The selected version changed. Reopen this workflow to continue.'))).toBe(false);
 });

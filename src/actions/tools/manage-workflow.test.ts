@@ -61,8 +61,8 @@ const tool = createManageWorkflowTool();
  * schema drifting apart silently.
  */
 const FRAMED_ACTIONS = new Set([
-  "get", "list_runs", "get_run",
-  "list", "create", "enable", "disable", "publish", "compose", "continue_setup", "resolve_effect",
+  "get", "list_runs", "get_run", "validate_fixtures",
+  "list", "create", "update", "enable", "disable", "publish", "compose", "continue_setup", "resolve_effect",
 ]);
 
 /**
@@ -1436,7 +1436,7 @@ test('large workflow readback is complete, bounded, paged and version scoped', a
       expect(pages).toBeLessThan(100);
     } while(cursor);
     const document = JSON.parse(text);
-    if (view==='definition') expect(document).toEqual(getFlowVersion(version.id));
+    if (view==='definition') { const { revision, ...saved } = document; expect(revision).toMatch(/^[a-f0-9]{64}$/); expect(saved).toEqual(getFlowVersion(version.id)); }
     else { expect(document.readiness.issues.length).toBe(20); expect(document.validation.functionalTesting).toBe('not_performed'); }
   }
   const first: any = await call('get', { flow: flow.id, version_id: version.id, view: 'definition' });

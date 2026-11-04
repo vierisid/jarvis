@@ -32,6 +32,8 @@ export interface ConnectionItem {
   } | null;
 }
 export interface CatalogService {
+  /** Retained for account repair, hidden from the new-app picker. */
+  existingOnly?: boolean;
   id: string;
   name: string;
   icon: ServiceIcon;
@@ -236,6 +238,7 @@ export function readWorkspace(value: unknown): WorkspaceData | null {
         row.kind,
       ) ||
       !["browser", "settings"].includes(row.setup) ||
+      (row.existingOnly !== undefined && typeof row.existingOnly !== "boolean") ||
       seen.has(row.id)
     )
       return null;
@@ -247,6 +250,7 @@ export function readWorkspace(value: unknown): WorkspaceData | null {
       description: row.description,
       kind: row.kind,
       setup: row.setup,
+      ...(row.existingOnly ? { existingOnly: true } : {}),
     });
   }
   if (

@@ -109,6 +109,37 @@ test("version pin rejects another latest draft before the hook can edit it", asy
   expect(editor.draftTrigger).toBeNull();
   expect(fixture.requests.every((r) => r.method === "GET")).toBe(true);
 });
+test('a stale save retains local edits, and reload takes the latest authoring revision', async () => {
+  await mount();
+  const newer = fixture.snapshot(); newer.version.displayName = 'Changed elsewhere';
+  await fixture.request(`/api/workflows/meeting/versions/${fixture.versionId}`, { method: 'PATCH', body: JSON.stringify({ ...newer.version, uiMeta: newer.uiMeta }) });
+  await React.act(async () => editor.setVersionDisplayName('My unsaved name'));
+  await React.act(async () => { expect((await editor.save()).ok).toBe(false); });
+  expect(editor.dirty).toBe(true); expect(editor.version?.displayName).toBe('My unsaved name');
+  expect(fixture.snapshot().version.displayName).toBe('Changed elsewhere');
+  await React.act(async () => editor.reload());
+  expect(editor.version?.displayName).toBe('Changed elsewhere'); expect(editor.dirty).toBe(false);
+});
+
+test('the first save from a published version names its base revision and keeps edits when refused', async () => {
+  const published = { ...fixture.snapshot().version, state: 'LOCKED' as const, editorRevision: 'published-revision' };
+  const posts: any[] = [];
+  await mount(async (input, init) => {
+    const path = String(input), method = init?.method ?? 'GET';
+    if (method === 'GET' && path === '/api/workflows/meeting')
+      return Response.json({ flow: { id: 'meeting' }, latestDraft: null, published, uiMeta: fixture.snapshot().uiMeta });
+    if (method === 'POST' && path === '/api/workflows/meeting/versions') {
+      posts.push(JSON.parse(String(init!.body)));
+      return Response.json({ error: 'This workflow changed in another tab or conversation.' }, { status: 409 });
+    }
+    return fixture.request(input, init);
+  });
+  await React.act(async () => editor.setVersionDisplayName('My unsaved name'));
+  await React.act(async () => { expect((await editor.save()).ok).toBe(false); });
+  expect(posts.map(p => p.expectedRevision)).toEqual(['published-revision']);
+  expect(editor.dirty).toBe(true); expect(editor.version?.displayName).toBe('My unsaved name');
+});
+
 test("real graph edits serialize branch, loop, nested orphan settings and positions", async () => {
   await mount();
   expect(editor.allSteps.map((s) => s.step.type)).toContain("LOOP_ON_ITEMS");
@@ -409,4 +440,87 @@ test('setup notice opens mapped fields and partial saves remain editable without
   expect(host.querySelector('.brief-canvas-setup')?.textContent).toContain('Email field');
   expect(fixture.requests.filter(r => r.method !== 'GET').map(r => r.method)).toEqual(['PATCH']);
   expect(runs).toBe(0); expect(publishes).toBe(0);
+});
+
+
+test('request-ID-only setup is editable and does not ask for email',async()=>{
+ const {WorkflowCanvasRoom}=await import('./WorkflowCanvasRoom');
+ const saved=fixture.snapshot().version;
+ saved.trigger={name:'trigger',displayName:'Receive request',type:'PIECE_TRIGGER',settings:{pieceName:'webhook',input:{request_id_field:''}}};
+ await fixture.request(`/api/workflows/meeting/versions/${fixture.versionId}`,{method:'PATCH',body:JSON.stringify({...saved,uiMeta:fixture.snapshot().uiMeta})});
+ const shell={mode:'preview',route:{room:'workflow',selection:{flowId:'meeting'}},navigate(){}} as unknown as BriefShellPort;
+ await React.act(async()=>root.render(<div className="brief-root"><WorkflowCanvasRoom shell={shell} binding={{source:'fixture',scopeId:'request-setup',flowId:'meeting',versionId:fixture.versionId,capabilities:caps,request:fixture.request}}/></div>));
+ expect(host.querySelector('.brief-canvas-setup')?.textContent).toContain('Request ID field');
+ expect(host.querySelector('.brief-canvas-setup')?.textContent).not.toContain('Email field');
+ const button=[...host.querySelectorAll('button')].find(b=>b.querySelector('.brief-button__label')?.textContent==='Receive request')!;
+ await React.act(async()=>button.click());
+ const field = [...host.querySelectorAll('label')].find(e=>e.textContent?.startsWith('Request ID field'))!.querySelector('[contenteditable]')!;
+ await React.act(async()=>{ field.textContent='request.id'; field.dispatchEvent(new Event('input',{bubbles:true})); });
+ const save=[...host.querySelectorAll('button')].find(b=>b.querySelector('.brief-button__label')?.textContent==='Save changes')!;
+ await React.act(async()=>save.click());
+ expect(fixture.snapshot().version.trigger.settings?.input).toEqual({request_id_field:'request.id'});
+});
+
+
+test('AppSumo: an aborted draft load recovers, then AI instructions survive save and reopen', async () => {
+  let attempts = 0;
+  const request: WorkflowCanvasBinding['request'] = async (input, init) => {
+    if (String(input) === '/api/workflows/meeting' && ++attempts === 1)
+      throw new DOMException('Fetch is aborted', 'AbortError');
+    return fixture.request(input, init);
+  };
+  await mount(request);
+  expect(editor.error).toBeNull();
+  expect(editor.version?.state).toBe('DRAFT');
+  expect(attempts).toBe(2);
+  const instructions = 'Return two action items: Maya sends a proposal Tuesday; Lee reviews it Wednesday.';
+  await React.act(async () => editor.updateStepInput('draft', 'instructions', instructions));
+  await React.act(async () => { expect((await editor.save()).ok).toBe(true); });
+  await React.act(async () => root.unmount());
+  root = createRoot(host);
+  await mount(request);
+  expect(editor.error).toBeNull();
+  expect(editor.allSteps.find(item => item.step.name === 'draft')?.step.settings?.input?.instructions).toBe(instructions);
+});
+
+test('AppSumo: an obsolete failed load cannot replace a newer successful draft', async () => {
+  let rejectOld!: (error: Error) => void;
+  const oldRequest: WorkflowCanvasBinding['request'] = async (input, init) => String(input) === '/api/workflows/meeting'
+    ? new Promise<Response>((_, reject) => { rejectOld = reject; }) : fixture.request(input, init);
+  await mount(oldRequest);
+  await mount(fixture.request);
+  expect(editor.version?.id).toBe(fixture.versionId);
+  await React.act(async () => rejectOld(new DOMException('Fetch is aborted', 'AbortError')));
+  expect(editor.error).toBeNull();
+  expect(editor.loading).toBe(false);
+});
+
+test('AppSumo: repeated interruption stops retrying and offers recovery in the editor', async () => {
+  const { WorkflowCanvasRoom } = await import('./WorkflowCanvasRoom');
+  let attempts = 0;
+  const request: WorkflowCanvasBinding['request'] = async (input, init) => {
+    if (String(input) === '/api/workflows/meeting' && ++attempts <= 2)
+      throw new DOMException('Fetch is aborted', 'AbortError');
+    return fixture.request(input, init);
+  };
+  const shell = { mode: 'preview', route: { room: 'workflow', selection: { flowId: 'meeting' } }, navigate() {} } as unknown as BriefShellPort;
+  await React.act(async () => root.render(<div className="brief-root"><WorkflowCanvasRoom shell={shell} binding={{
+    source: 'fixture', scopeId: 'retry-test', flowId: 'meeting', versionId: fixture.versionId, capabilities: caps, request,
+  }} /></div>));
+  expect(attempts).toBe(2);
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('Workflow loading was interrupted');
+  const retry = [...host.querySelectorAll('button')].find(button => button.textContent?.includes('Retry loading workflow'))!;
+  expect(retry.disabled).toBe(false);
+  await React.act(async () => retry.click());
+  expect(attempts).toBe(3);
+  expect(host.textContent).toContain('Saved draft');
+  expect(host.textContent).not.toContain('Workflow unavailable');
+});
+
+test('AppSumo: unavailable optional connections do not block draft editing', async () => {
+  await mount(async (input, init) => String(input) === '/api/workflows/connections'
+    ? new Response('{', { status: 200 }) : fixture.request(input, init));
+  expect(editor.error).toBeNull();
+  expect(editor.version?.state).toBe('DRAFT');
+  expect(editor.connections).toEqual([]);
 });

@@ -2,11 +2,19 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
 import { MailchimpConnection } from "../../../integrations/MailchimpConnection";
 import { AsanaConnection } from "../../../integrations/AsanaConnection";
+import { MondayConnection } from "../../../integrations/MondayConnection";
+import { TodoistConnection } from "../../../integrations/TodoistConnection";
 import { WebflowConnection } from "../../../integrations/WebflowConnection";
 import { GitHubConnection } from "../../../integrations/GitHubConnection";
 import { DropboxConnection } from "../../../integrations/DropboxConnection";
 import { TrelloConnection } from "../../../integrations/TrelloConnection";
+import { LinearConnection } from "../../../integrations/LinearConnection";
+import { TypeformConnection } from "../../../integrations/TypeformConnection";
+import { AirtableConnection } from "../../../integrations/AirtableConnection";
 import { SlackConnection } from "../../../integrations/SlackConnection";
+import { IntercomConnection } from "../../../integrations/IntercomConnection";
+import { CalendlyConnection } from "../../../integrations/CalendlyConnection";
+import { NotionConnection } from "../../../integrations/NotionConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 
@@ -339,9 +347,16 @@ export function IntegrationsTab({
       <GitHubConnection optional />
       <DropboxConnection optional />
       <TrelloConnection optional />
-      <AsanaConnection optional />
+      <LinearConnection optional />
+      <MondayConnection optional />
+      <TypeformConnection optional />
+      <AirtableConnection optional />
+      <TodoistConnection optional /><AsanaConnection optional />
       <WebflowConnection optional />
       <SlackConnection optional />
+      <IntercomConnection optional />
+      <CalendlyConnection optional />
+      <NotionConnection optional />
     </div>
   );
 }

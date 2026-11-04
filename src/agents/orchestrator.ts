@@ -1436,6 +1436,7 @@ export class AgentOrchestrator {
     let finalText = '';
     let responseModel = 'unknown';
     let acknowledgedWork = false;
+    let separateNextText = false;
     // Once a tier has proved it cannot handle this conversation, stay off it.
     // The tool loop re-enters the stream per iteration with the SAME messages
     // (image included), so without this a blind conv model would be re-asked —
@@ -1461,6 +1462,17 @@ export class AgentOrchestrator {
         conversation?.signal.throwIfAborted();
         if (event.type === 'text') {
           accumulatedText += event.text;
+          // Prose written after a tool round is a new paragraph for every chat
+          // surface (Brief, dashboard, pebble). The separator is display-only:
+          // it goes to clients and the turn's text, never back to the model.
+          if (separateNextText && event.text) {
+            separateNextText = false;
+            if (finalText && !/\n\s*\n$/.test(finalText) && !/^\s*\n\s*\n/.test(event.text)) {
+              finalText += '\n\n';
+              yield { ...event, text: '\n\n' + event.text };
+              continue;
+            }
+          }
           yield event; // Forward text chunks to client
         } else if (event.type === 'tool_call') {
           toolCalls.push(event.tool_call);
@@ -1529,6 +1541,7 @@ export class AgentOrchestrator {
       }
       if (accumulatedText.trim()) acknowledgedWork = true;
       finalText += accumulatedText;
+      separateNextText = true;
 
       // Add assistant message with tool calls to local messages
       messages.push({

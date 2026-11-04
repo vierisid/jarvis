@@ -145,10 +145,35 @@ describe('AgentOrchestrator.streamMessage progress narration', () => {
     const orch = makeOrchestrator(new ScriptedProvider([chatty, textResponse('All set.')]));
 
     let final = '';
+    let streamed = '';
     for await (const event of orch.streamMessage('system', 'read it')) {
+      if (event.type === 'text') streamed += event.text;
       if (event.type === 'done') final = event.response.content;
     }
     expect(final).not.toContain('I’m checking');
-    expect(final).toBe('Let me open that file.All set.');
+    // Prose after a tool round is a new paragraph, live and in the final text.
+    expect(final).toBe('Let me open that file.\n\nAll set.');
+    expect(streamed).toBe(final);
+    // Display-only: the model's own message keeps its original prose.
+    expect(seenAssistantContent).toContain('Let me open that file.');
+  });
+
+  test('separates once per tool round, keeps model context clean, and does not double a blank line', async () => {
+    const call = (id: string, content: string): LLMResponse => ({
+      content, tool_calls: [{ id, name: 'read_file', arguments: { path: '/tmp/example' } }],
+      usage: { input_tokens: 0, output_tokens: 0 }, model: 'scripted', finish_reason: 'tool_use',
+    });
+    const orch = makeOrchestrator(new ScriptedProvider([
+      call('c1', 'First.'), call('c2', ''), call('c3', 'Second.\n\n'), textResponse('Third.'),
+    ]));
+    let final = '';
+    let streamed = '';
+    for await (const event of orch.streamMessage('system', 'read it')) {
+      if (event.type === 'text') streamed += event.text;
+      if (event.type === 'done') final = event.response.content;
+    }
+    expect(final).toBe('First.\n\nSecond.\n\nThird.');
+    expect(streamed).toBe(final);
+    for (const content of seenAssistantContent) expect(content.startsWith('\n')).toBe(false);
   });
 });
