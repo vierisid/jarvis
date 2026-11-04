@@ -1024,7 +1024,7 @@ function DetailPanel({
   allGoals: Goal[];
   childrenByParent: Map<string, Goal[]>;
   onClose: () => void;
-  onDetails: (input: { title: string; deadline: number | null }) => Promise<{ ok: boolean; message: string }>;
+  onDetails: (input: GoalDetailsUpdate) => Promise<{ ok: boolean; message: string }>;
   onScore: (score: number, reason: string) => void;
   onStatus: (status: GoalStatus) => void;
   onHealth: (health: GoalHealth) => void;
@@ -1037,16 +1037,33 @@ function DetailPanel({
   const [deadline, setDeadline] = useState(dateInputValue(goal.deadline));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // The edit button unmounts while the form is open; closing the form puts
+  // focus back on it instead of dropping it to the document body.
+  const editButtonRef = useRef<HTMLButtonElement>(null);
+  const [returnFocus, setReturnFocus] = useState(false);
+  useEffect(() => {
+    if (editing || !returnFocus) return;
+    editButtonRef.current?.focus();
+    setReturnFocus(false);
+  }, [editing, returnFocus]);
+  const closeEditor = () => { setEditing(false); setReturnFocus(true); };
   const edit = () => { setTitle(goal.title); setDeadline(dateInputValue(goal.deadline)); setSaveError(null); setEditing(true); };
   const saveDetails = async (event: React.FormEvent) => {
     event.preventDefault();
     if (saving || !title.trim()) return;
     const parsed = deadline ? parseDeadlineInput(deadline) : null;
     if (parsed === undefined) { setSaveError("Enter a valid deadline."); return; }
+    // Send only what changed. The server re-runs health whenever a deadline is
+    // present, and a date input can only express 23:59 on a day, so resending
+    // an untouched deadline would move one set at another time and reset health.
+    const input: GoalDetailsUpdate = {};
+    if (title.trim() !== goal.title) input.title = title.trim();
+    if (deadline !== dateInputValue(goal.deadline)) input.deadline = parsed;
+    if (!Object.keys(input).length) { closeEditor(); return; }
     setSaving(true); setSaveError(null);
     try {
-      const result = await onDetails({ title: title.trim(), deadline: parsed });
-      if (result.ok) setEditing(false); else setSaveError(result.message);
+      const result = await onDetails(input);
+      if (result.ok) closeEditor(); else setSaveError(result.message);
     } catch { setSaveError("Could not save goal. Try again."); }
     finally { setSaving(false); }
   };
@@ -1094,10 +1111,10 @@ function DetailPanel({
           {deadline && <button type="button" className="v2-goals__btn v2-goals__btn--secondary" disabled={saving} onClick={() => setDeadline("")}>Clear deadline</button>}
           {saveError && <p role="alert">{saveError}</p>}
           <div className="v2-goals__chip-row">
-            <button type="button" className="v2-goals__btn v2-goals__btn--secondary" disabled={saving} onClick={() => setEditing(false)}>Cancel</button>
+            <button type="button" className="v2-goals__btn v2-goals__btn--secondary" disabled={saving} onClick={closeEditor}>Cancel</button>
             <button type="submit" className="v2-goals__btn v2-goals__btn--primary" disabled={saving || !title.trim()}>{saving ? "Saving…" : "Save details"}</button>
           </div>
-        </form> : <button type="button" className="v2-goals__btn v2-goals__btn--secondary" onClick={edit}>Edit title and deadline</button>}
+        </form> : <button ref={editButtonRef} type="button" className="v2-goals__btn v2-goals__btn--secondary" onClick={edit}>Edit title and deadline</button>}
 
         {goal.description && (
           <p className="v2-goals__side-desc">{goal.description}</p>
@@ -1397,13 +1414,17 @@ function monthShort(ts: number): string {
   return d.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
 }
 
-/** Parse an `<input type="date">` value (YYYY-MM-DD) to local-time epoch ms.
- *  Returns undefined if the input is empty or malformed. */
+/** Fields of a goal detail edit; absent fields are left untouched by the server. */
+type GoalDetailsUpdate = { title?: string; deadline?: number | null };
+
+/** Local calendar day of an epoch-ms deadline, as an `<input type="date">` value. */
 function dateInputValue(value: number | null): string {
   if (value === null) return "";
   const date = new Date(value);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
+/** Parse an `<input type="date">` value (YYYY-MM-DD) to local-time epoch ms.
+ *  Returns undefined if the input is empty or malformed. */
 function parseDeadlineInput(s: string): number | undefined {
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return undefined;

@@ -150,7 +150,7 @@ export function useGoalsData() {
   );
 
   const updateDetails = useCallback(
-    async (id: string, input: { title: string; deadline: number | null }): Promise<ActionResult> => {
+    async (id: string, input: { title?: string; deadline?: number | null }): Promise<ActionResult> => {
       try {
         const resp = await fetch(`/api/goals/${encodeURIComponent(id)}`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },

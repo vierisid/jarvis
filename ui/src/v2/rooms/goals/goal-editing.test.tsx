@@ -24,7 +24,8 @@ beforeEach(() => {
     if(method !== 'GET') {
       const body=JSON.parse(String(init?.body)); writes.push({method,body});
       if(fail) return Response.json({error:'Unavailable'}, {status:503});
-      if(method === 'PATCH') goal={...goal,...body};
+      // Like the server, a present deadline re-runs health even when unchanged.
+      if(method === 'PATCH') goal={...goal,...body,...('deadline' in body?{health:'on_track' as const}:{})};
       else if(path.endsWith('/status')) goal={...goal,status:body.status};
       else if(path.endsWith('/health')) goal={...goal,health:body.health};
       else if(method === 'POST') goal={...goal,...body};
@@ -82,4 +83,23 @@ test('cancel and blank titles never write; failed saves preserve user edits for 
   await click('Edit title and deadline');await fill(host.querySelector('form input')!,'Retry this');fail=true;await click('Save details');
   expect(host.querySelector('[role="alert"]')?.textContent).toContain('503');expect(host.querySelector<HTMLInputElement>('form input')?.value).toBe('Retry this');expect(goal.title).toBe('Original goal');
   fail=false;await click('Save details');expect(goal.title).toBe('Retry this');expect(host.querySelector('form')).toBeNull();
+});
+test('a title-only edit sends no deadline, keeping a hand-set health and the exact deadline',async()=>{
+  const deadline=new Date(2026,10,20,10,30).getTime();goal={...goal,deadline,health:'behind'};
+  await render();await select();await click('Edit title and deadline');
+  await fill(host.querySelector('form input')!,'Renamed only');await click('Save details');
+  expect(writes).toEqual([{method:'PATCH',body:{title:'Renamed only'}}]);
+  expect(goal.deadline).toBe(deadline);expect(goal.health).toBe('behind');
+});
+test('a deadline-only edit sends no title, and an unchanged form saves nothing',async()=>{
+  await render();await select();await click('Edit title and deadline');await click('Save details');
+  expect(writes).toHaveLength(0);expect(host.querySelector('form')).toBeNull();
+  await click('Edit title and deadline');await fill(host.querySelector<HTMLInputElement>('form input[type="date"]')!,'2027-03-01');await click('Save details');
+  expect(writes).toEqual([{method:'PATCH',body:{deadline:new Date(2027,2,1,23,59).getTime()}}]);
+});
+test('cancel and save return focus to the edit button',async()=>{
+  await render();await select();await click('Edit title and deadline');
+  await click('Cancel');expect(document.activeElement).toBe(button('Edit title and deadline'));
+  await click('Edit title and deadline');await fill(host.querySelector('form input')!,'Focused save');await click('Save details');
+  expect(host.querySelector('form')).toBeNull();expect(document.activeElement).toBe(button('Edit title and deadline'));
 });
