@@ -160,3 +160,15 @@ test('a hostile element label cannot put another origin where the card names the
   expect(heading.startsWith('On https://evil.example: click button "Cancel\\"')).toBe(true);
   transport.stop();
 });
+
+
+test('notification permission renders the reviewed message, destination and occurrence context', async () => {
+  const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const row = { decisionId: 'approval:notice', revision: 'r', kind: 'permission', state: 'pending', title: 'Send daily check-in',
+    review: { toolName: 'workflow_notify', reason: 'Permission required', workflowName: 'Daily priorities', requestedAt: Date.UTC(2026, 10, 4, 8),
+      message: 'What are your priorities?\nWhat is blocking you?', channels: ['dashboard'] }, supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
+  expect(host.textContent).toContain('Daily priorities'); expect(host.textContent).toContain('What is blocking you?');
+  expect(host.textContent).toContain('dashboard'); expect(host.querySelector('time')?.dateTime).toBe('2026-11-04T08:00:00.000Z');
+  transport.stop();
+});

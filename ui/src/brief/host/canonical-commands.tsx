@@ -88,9 +88,12 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
         <header className="brief-decision-title"><h2 className="brief-type-hero-heading">{title(row)}</h2>
           {browserCardTitle(row) && <p className="brief-decision-subtitle">{browserCardTitle(row)!.kind}</p>}
           <span className="brief-decision-badge">{actions.length ? 'Needs your review' : row.state.replaceAll('_', ' ')}</span></header>
-        <div className="brief-decision-context"><span>{row.workflow ? 'Workflow request' : 'Jarvis request'}</span>
+        <div className="brief-decision-context"><span>{row.review?.workflowName ?? (row.workflow ? 'Workflow request' : 'Jarvis request')}</span>
           {row.run && navigate && <BriefButton size="sm" onClick={() => navigate({ room: 'workflow-runs', selection: { flowId: row.run!.flowId, versionId: row.run!.versionId, runId: row.run!.runId } })}>Open workflow</BriefButton>}</div>
         <div className="brief-decision-document">
+          {row.review?.requestedAt && <p><strong>Run started</strong><br /><time dateTime={new Date(row.review.requestedAt).toISOString()}>{new Date(row.review.requestedAt).toLocaleString()}</time></p>}
+          {row.review?.message !== undefined && <><p><strong>Message</strong></p><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.review.message}</p>
+            <p><strong>Destination</strong><br />{row.review.channels?.join(', ')}</p></>}
           {row.review?.origin && <p><strong>Website</strong><br />{row.review.origin}</p>}
           {row.review?.element && <p><strong>Element</strong><br />{row.review.element}</p>}
           {row.review?.target && <p><strong>Computer</strong><br />{row.review.target}</p>}
