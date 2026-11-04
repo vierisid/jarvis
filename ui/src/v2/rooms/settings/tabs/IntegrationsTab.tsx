@@ -5,6 +5,7 @@ import { AsanaConnection } from "../../../integrations/AsanaConnection";
 import { MondayConnection } from "../../../integrations/MondayConnection";
 import { TodoistConnection } from "../../../integrations/TodoistConnection";
 import { FigmaConnection } from "../../../integrations/FigmaConnection";
+import { WebflowConnection } from "../../../integrations/WebflowConnection";
 import { GitHubConnection } from "../../../integrations/GitHubConnection";
 import { DropboxConnection } from "../../../integrations/DropboxConnection";
 import { TrelloConnection } from "../../../integrations/TrelloConnection";
@@ -353,6 +354,7 @@ export function IntegrationsTab({
       <AirtableConnection optional />
       <TodoistConnection optional /><AsanaConnection optional />
       <FigmaConnection optional />
+      <WebflowConnection optional />
       <SlackConnection optional />
       <IntercomConnection optional />
       <CalendlyConnection optional />
