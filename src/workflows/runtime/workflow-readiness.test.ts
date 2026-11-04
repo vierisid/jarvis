@@ -636,6 +636,21 @@ test('monday managed readiness uses the same static contract as its engine witho
   expect(check().issues.some(i=>i.path.endsWith('workspace_id'))).toBe(true);
 });
 
+test('Webflow managed readiness replaces the dynamic v1 form with its static contract; manual accounts keep their own required fields',()=>{
+  // The published 0.3.0 form: a dynamic field set read through the legacy v1 API.
+  const schema=propsToInputSchema({site:{type:'DROPDOWN',displayName:'Site',required:true},collection:{type:'DROPDOWN',displayName:'Collection',required:true},collection_fields:{type:'DYNAMIC',displayName:'Collection Fields',required:true}} as any);
+  const pieces=new PieceCatalog([{name:'@activepieces/piece-webflow',displayName:'Webflow',description:'',actions:{create_collection_item:{name:'create_collection_item',displayName:'Create Collection Item',description:'',inputSchema:schema}}}]);
+  const node:any={name:'item',type:'PIECE',settings:{pieceName:'@activepieces/piece-webflow',actionName:'create_collection_item',input:{auth:'{{connections.jarvis:webflow}}',site_id:'a'.repeat(24),collection_id:'b'.repeat(24),collection_fields:{name:'Draft',slug:'draft'}}}};
+  const check=()=>compileWorkflow(graph(node),{pieces});
+  expect(check().issues.filter(i=>i.path.includes('input.site')||i.path.includes('input.collection'))).toEqual([]);
+  delete node.settings.input.collection_id;
+  expect(check().issues.some(i=>i.path.endsWith('collection_id'))).toBe(true);
+  node.settings.input.auth='{{connections.manual}}';
+  const manual=check().issues;
+  expect(manual.some(i=>i.path.endsWith('input.site'))).toBe(true);
+  expect(manual.some(i=>i.path.endsWith('collection_id'))).toBe(false);
+});
+
 test('Ask embedded contracts are validated before composition, publish and run', () => {
   const ask = new PieceCatalog([{ name: 'jarvis-ask', displayName: 'Ask', description: '', actions: { ask: { name: 'ask', displayName: 'Ask', description: '' } } }]);
   const g = (outputSchema: unknown) => ({ name: 'trigger', type: 'EMPTY', nextAction: { name: 'extract', type: 'PIECE', settings: { pieceName: 'jarvis-ask', actionName: 'ask', input: { prompt: 'Extract', outputSchema } } } });

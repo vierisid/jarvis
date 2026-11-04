@@ -16,6 +16,7 @@ import { JarvisTodoistConnectionSource } from "../credentials/todoist-source";
 import { JarvisIntercomConnectionSource } from "../credentials/intercom-source";
 import { JarvisMondayConnectionSource } from "../credentials/monday-source";
 import { JarvisFigmaConnectionSource } from "../credentials/figma-source";
+import { JarvisWebflowConnectionSource } from "../credentials/webflow-source";
 import type { JarvisConfig } from "../../config/types";
 import { JarvisGitHubConnectionSource } from "../credentials/github-source";
 import { JarvisTrelloConnectionSource } from "../credentials/trello-source";
@@ -49,6 +50,7 @@ const TODOIST = "@activepieces/piece-todoist";
 const INTERCOM = "@activepieces/piece-intercom";
 const MONDAY = "@activepieces/piece-monday";
 const FIGMA = "@activepieces/piece-figma";
+const WEBFLOW = "@activepieces/piece-webflow";
 const MAILCHIMP = "@activepieces/piece-mailchimp";
 const GITHUB = "@activepieces/piece-github";
 const TRELLO = "@activepieces/piece-trello";
@@ -148,6 +150,18 @@ const pieces = new PieceCatalog([
     ] } },
   }, triggers: {
     monday_new_item_in_board: { name: "monday_new_item_in_board", displayName: "", description: "" },
+  } },
+  { name: WEBFLOW, displayName: "Webflow", description: "", auth: { type: "OAUTH2" }, actions: {
+    get_collection_item: { name: "get_collection_item", displayName: "", description: "", inputSchema: { fields: [
+      { name: "site_id", label: "", type: "string", required: false },
+      { name: "collection_id", label: "", type: "string", required: false },
+      { name: "collection_item_id", label: "", type: "string", required: false },
+    ] } },
+    publish_collection_item: { name: "publish_collection_item", displayName: "", description: "", inputSchema: { fields: [
+      { name: "collection_item_id", label: "", type: "string", required: false },
+    ] } },
+  }, triggers: {
+    new_submission: { name: "new_submission", displayName: "", description: "" },
   } },
   { name: AIRTABLE, displayName: "Airtable", description: "", auth: { type: "SECRET_TEXT" }, actions: {
     get_record: { name: "get_record", displayName: "", description: "", inputSchema: { fields: [
@@ -647,6 +661,53 @@ describe("managed monday.com is scoped to its five qualified item actions", () =
     // The refresh token and the renewal secret never reach the sandbox.
     expect(JSON.stringify(body)).not.toContain("synthetic-monday-refresh-token");
     expect(JSON.stringify(body)).not.toContain("a".repeat(64));
+  });
+});
+
+describe("managed Webflow is scoped to its four qualified CMS actions", () => {
+  const WEBFLOW_TOKEN = "synthetic-managed-webflow-access-token";
+  const ref = "{{connections.jarvis:webflow}}";
+  const location = { site_id: "a".repeat(24), collection_id: "b".repeat(24), collection_item_id: "c".repeat(24) };
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "webflow-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "webflow.json"), JSON.stringify({ version: 1, provider: "webflow", status: "connected",
+      generation: crypto.randomUUID(), access_token: WEBFLOW_TOKEN, account: { id: "d".repeat(24), label: "owner@example.test" },
+      workspaces: [{ id: location.site_id, name: "Sandbox" }], connected_at: new Date().toISOString() }));
+    // Webflow still accepts the grant (the check before a token is handed out).
+    credentials.register(new JarvisWebflowConnectionSource({ daemon: { data_dir: dataDir },
+      usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig,
+      (async () => Response.json({ id: "d".repeat(24), email: "owner@example.test" })) as unknown as typeof fetch));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (actionName: string | undefined, input: Record<string, unknown> = { auth: ref, ...location }): any => ({
+    name: "webflow", type: "PIECE", settings: { pieceName: WEBFLOW, ...(actionName ? { actionName } : {}), input },
+  });
+  // A trigger whose settings also carry a stray actionName of a qualified action.
+  const webflowTrigger = (): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: WEBFLOW, triggerName: "new_submission", actionName: "get_collection_item", input: { auth: ref } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Webflow publish, outside the qualified four", empty(step("publish_collection_item", { auth: ref, collection_item_id: location.collection_item_id }))],
+    ["a Webflow step without an action name", empty(step(undefined))],
+    ["a Webflow trigger that carries a stray actionName", webflowTrigger()],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is refused by the route`, async () => {
+      const response = await fetchFor(runOf(trigger), "jarvis:webflow");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(WEBFLOW_TOKEN);
+    });
+  }
+  test("a qualified Webflow step auth is ready and resolves", async () => {
+    const trigger = empty(step("get_collection_item"));
+    expect(bindingIssues(trigger)).toEqual([]);
+    const response = await fetchFor(runOf(trigger), "jarvis:webflow");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: WEBFLOW,
+      value: { access_token: WEBFLOW_TOKEN, jarvis_managed: "webflow", webflow_site_ids: [location.site_id] } });
   });
 });
 

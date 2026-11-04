@@ -7,3 +7,5 @@ export function requestGoalCreation() {
 export function takeGoalCreation() {
   const requested = pending; pending = false; return requested;
 }
+/** Drop an unconsumed request, so a later visit to Goals does not act on it. */
+export function clearGoalCreation() { pending = false; }
