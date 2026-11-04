@@ -101,3 +101,40 @@ test('cancelled stale requests retain unsent text and explain why the answer was
   expect(host.textContent).toContain('Your answer was not accepted');expect(host.querySelector('button[type="submit"]')).toBeNull();
   expect((host.querySelector('textarea') as HTMLTextAreaElement).value).toBe('Do not lose this');
 });
+test('an emptied draft is no unsent answer, and an explicit cancel clears the draft', async () => {
+  sessionStorage.setItem('jarvis:workflow-input:test-request', JSON.stringify({ progress: '  ', count: '' }));
+  expect(Forms.hasLocalDraft(request)).toBe(false);
+  sessionStorage.setItem('jarvis:workflow-input:test-request', JSON.stringify({ progress: 'Half written' }));
+  expect(Forms.hasLocalDraft(request)).toBe(true);
+  const writes: unknown[] = [];
+  const http = createHostTransport((async (_url, init) => { writes.push(JSON.parse(String(init?.body))); return Response.json({ request: { ...request, status: 'cancelled' } }); }) as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputForm request={request} http={http} changed={async () => {}} />));
+  await click('Cancel this request'); expect(writes).toEqual([{ decision: 'cancel' }]);
+  expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toBeNull();
+  await React.act(async () => root.render(<Forms.HumanInputForm request={{ ...request, status: 'cancelled' }} http={http} changed={async () => {}} />));
+  expect(host.textContent).not.toContain('unsent answers');
+});
+test('a request answered in another tab does not show this tab\'s draft as unsent', async () => {
+  sessionStorage.setItem('jarvis:workflow-input:test-request', JSON.stringify({ progress: 'Typed here, answered elsewhere' }));
+  const answered = { ...request, status: 'submitted' as const, answers: { progress: 'Sent elsewhere' }, runs: [{ runId: 'run', versionId: 'v', status: 'SUCCEEDED' }] };
+  expect(Forms.hasLocalDraft(answered)).toBe(false);
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputInbox queue={{ requests: [answered], error: '', refresh: async () => {} }} http={http} />));
+  expect(host.textContent).not.toContain('unsent answers'); expect(host.querySelector('textarea')).toBeNull();
+});
+test('a stopped run needs nothing; a failed one stays until dismissed on the server', async () => {
+  const { humanRequestNeedsAttention } = await import('../../../../src/workflows/runtime/human-input-contract');
+  const stopped = { ...request, status: 'submitted' as const, runs: [{ runId: 'run', versionId: 'v', status: 'STOPPED' }] };
+  const failed = { ...stopped, runs: [{ runId: 'run', versionId: 'v', status: 'FAILED' }] };
+  expect(humanRequestNeedsAttention(stopped)).toBe(false); expect(humanRequestNeedsAttention(failed)).toBe(true);
+  expect(humanRequestNeedsAttention({ ...failed, dismissedAt: 1 })).toBe(false);
+  const urls: string[] = []; let refreshes = 0;
+  const http = createHostTransport((async (url) => { urls.push(String(url)); return Response.json({ request: { ...failed, dismissedAt: 1 } }); }) as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputForm request={stopped} http={http} changed={async () => {}} />));
+  expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Dismiss')).toBe(false);
+  await React.act(async () => root.render(<Forms.HumanInputForm request={failed} http={http} changed={async () => { refreshes++; }} />));
+  await click('Dismiss'); expect(urls.at(-1)).toContain('/api/workflow-inputs/test-request/dismiss'); expect(refreshes).toBe(1);
+  expect(host.textContent).toContain('no longer needs you');
+  await React.act(async () => root.render(<Forms.HumanInputForm request={{ ...failed, runs: [{ runId: 'run-2', versionId: 'v', status: 'RUNNING' }, ...failed.runs] }} http={http} changed={async () => {}} />));
+  expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Dismiss')).toBe(false);
+});

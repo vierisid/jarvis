@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { answerErrors, humanRequestNeedsAttention, type HumanRequest } from '../../../../src/workflows/runtime/human-input-contract';
+import { answerErrors, humanRequestDismissable, humanRequestNeedsAttention, type HumanRequest } from '../../../../src/workflows/runtime/human-input-contract';
 import type { HostTransport } from './http';
 import { post } from './http';
 import { briefHash } from '../entry/route';
@@ -53,20 +53,32 @@ export function HumanInputForm({ request, http, changed, focused = false }: { re
       const response = await http.request(`/api/workflow-inputs/${encodeURIComponent(request.id)}`, post({ decision, ...(decision === 'submit' ? { answers } : {}) }));
       const result = await response.json();
       if (!response.ok) { setErrors(result.errors ?? {}); setMessage(result.error ?? 'Response could not be saved.'); await changed(); return; }
-      if (decision === 'submit' || decision === 'approve') { try { sessionStorage.removeItem(storageKey); } catch { /* Optional browser storage. */ } setAnswers({}); }
+      // Any accepted decision, including an explicit cancel, ends this draft.
+      try { sessionStorage.removeItem(storageKey); } catch { /* Optional browser storage. */ } setAnswers({});
       setMessage(`Response saved: ${result.request.status}.`);
       await changed();
     } catch { setMessage('Your response could not be confirmed. Your answers are kept here. Check the request status before retrying.'); await changed(); }
     finally { lock.current = false; setBusy(false); }
   };
   const pending = request.status === 'pending';
-  const unsent = Object.keys(answers).length > 0;
-  const draftText = request.fields.filter(field => Object.hasOwn(answers, field.key)).map(field => `${field.label}: ${String(answers[field.key])}`).join('\n');
+  // Answered elsewhere (another tab): the local draft is no longer "unsent".
+  const unsent = !answered(request) && filled(answers).length > 0;
+  const draftText = request.fields.filter(field => filled(answers).includes(field.key)).map(field => `${field.label}: ${String(answers[field.key])}`).join('\n');
   const copy = async () => {
     try { await navigator.clipboard.writeText(draftText); setMessage('Unsent answers copied.'); }
     catch { setMessage('Copy was unavailable. Select the text in the fields and copy it.'); }
   };
   const discard = () => { try { sessionStorage.removeItem(storageKey); } catch { /* Optional browser storage. */ } setAnswers({}); setMessage('Unsent answers discarded.'); };
+  const dismiss = async () => {
+    if (lock.current) return;
+    lock.current = true; setBusy(true); setMessage('');
+    try {
+      const response = await http.request(`/api/workflow-inputs/${encodeURIComponent(request.id)}/dismiss`, post({}));
+      const result = await response.json().catch(() => ({}));
+      setMessage(response.ok ? 'Dismissed. This request no longer needs you.' : result.error ?? 'This request could not be dismissed.');
+    } catch { setMessage('Dismiss could not be confirmed. Check again before retrying.'); }
+    finally { lock.current = false; setBusy(false); await changed(); }
+  };
   return <article ref={card} tabIndex={-1} className="brief-human-card" aria-current={focused || undefined} aria-labelledby={`human-title-${request.id}`}>
     <header><span className="brief-human-kind">{pending ? request.kind === 'approval' ? 'Approval requested' : 'Your update is needed' : `Request ${request.status}`}</span>
       <h2 id={`human-title-${request.id}`}>{request.title}</h2>
@@ -99,6 +111,7 @@ export function HumanInputForm({ request, http, changed, focused = false }: { re
       </fieldset>
     </form>}
     {!pending && unsent && <div className="brief-human-actions"><button type="button" onClick={() => void copy()}>Copy unsent answers</button><button type="button" onClick={discard}>Discard unsent answers</button></div>}
+    {humanRequestDismissable(request) && <div className="brief-human-actions"><button type="button" disabled={busy} onClick={() => void dismiss()}>Dismiss</button></div>}
     {message && <p role="status">{message}</p>}
     <RunOutcomes request={request} />
   </article>;
@@ -116,14 +129,25 @@ function RunOutcomes({ request }: { request: HumanRequest }) {
     return <li key={run.runId}><p>{status}</p><a href={href}>View workflow run</a></li>;
   })}</ul>;
 }
+const answered = (request: HumanRequest) => request.status === 'submitted' || request.status === 'approved';
+/** Keys with a real value: an emptied field or whitespace is not an unsent answer. */
+function filled(answers: unknown): string[] {
+  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return [];
+  return Object.entries(answers).filter(([, v]) => v !== undefined && v !== null && !(typeof v === 'string' && !v.trim())).map(([k]) => k);
+}
 export function hasLocalDraft(request: HumanRequest): boolean {
-  try { return Object.keys(JSON.parse(sessionStorage.getItem(`jarvis:workflow-input:${request.id}`) ?? '{}')).length > 0; } catch { return false; }
+  if (answered(request)) return false;
+  try { return filled(JSON.parse(sessionStorage.getItem(`jarvis:workflow-input:${request.id}`) ?? '{}')).length > 0; } catch { return false; }
 }
 export function HumanInputInbox({ queue, http, focusId }: { queue: ReturnType<typeof useHumanInputQueue>; http: HostTransport; focusId?: string }) {
   // Retain mounted cards across terminal transitions, so expiry does not remove
   // the focused textarea or its in-memory draft when browser storage is full.
   const retained = useRef(new Set<string>());
-  for (const request of queue.requests) if (request.status === 'pending' || humanRequestNeedsAttention(request) || hasLocalDraft(request) || request.id === focusId) retained.current.add(request.id);
+  for (const request of queue.requests) {
+    if (humanRequestNeedsAttention(request) || hasLocalDraft(request) || request.id === focusId) retained.current.add(request.id);
+    // A dismissed outcome moves to the history once nothing local is left on it.
+    else if (request.dismissedAt) retained.current.delete(request.id);
+  }
   const visible = queue.requests.filter(r => retained.current.has(r.id));
   const recent = queue.requests.filter(r => !retained.current.has(r.id)).sort((a, b) => b.created - a.created);
   if (!visible.length && !recent.length && !queue.error) return null;
