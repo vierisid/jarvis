@@ -308,6 +308,8 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/managed-zoom-inputs.ts',
   '../../runtime/managed-pipedrive.ts',
   '../../runtime/managed-pipedrive-inputs.ts',
+  '../../runtime/managed-help-scout.ts',
+  '../../runtime/managed-help-scout-inputs.ts',
   '../../runtime/managed-webflow.ts',
   '../../runtime/managed-webflow-inputs.ts',
   '../../runtime/managed-github.ts',
