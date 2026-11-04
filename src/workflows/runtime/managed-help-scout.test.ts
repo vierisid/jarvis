@@ -396,3 +396,26 @@ test("manual-account sends show recipients and draft state on the approval card"
     customerId: "11",
   });
 });
+test("transport and rate-limit errors name the record the action used", async () => {
+  const unreachable = fake(() => {
+    throw new TypeError("network");
+  });
+  const customer = run(
+    "find_customer",
+    { auth, email: "customer@example.test" },
+    unreachable.request,
+  );
+  await expect(customer).rejects.toThrow(/could not be reached/);
+  await expect(customer).rejects.not.toThrow(/conversation/i);
+  await expect(
+    run("find_conversation", { auth, conversationId: "22" }, unreachable.request),
+  ).rejects.toThrow(/conversation ID if it was merged/);
+  const limited = fake(() => new Response(null, { status: 429 }));
+  const search = run(
+    "find_customer",
+    { auth, email: "customer@example.test" },
+    limited.request,
+  );
+  await expect(search).rejects.toThrow(/rate limiting/);
+  await expect(search).rejects.not.toThrow(/conversation/i);
+});

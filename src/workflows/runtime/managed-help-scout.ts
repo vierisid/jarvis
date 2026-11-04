@@ -98,10 +98,14 @@ async function api(
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
   } catch {
+    // redirect: "error" also lands here: Help Scout answers a merged
+    // conversation's old ID with a redirect, which only a lookup by ID meets.
     throw new Error(
       body
         ? "Help Scout did not confirm the note. Check the conversation before trying again."
-        : "Help Scout could not be reached. Check the conversation ID if it was merged, or try again later.",
+        : /^\/conversations\/[0-9]+$/.test(path)
+          ? "Help Scout could not be reached. Check the conversation ID if it was merged, or try again later."
+          : "Help Scout could not be reached. Try again later.",
     );
   }
   if (!response.ok) {
@@ -110,7 +114,9 @@ async function api(
       response.status === 401
         ? "Help Scout refused access. Reconnect Help Scout."
         : response.status === 429
-          ? "Help Scout is rate limiting requests. Check the conversation before trying again later."
+          ? body
+            ? "Help Scout is rate limiting requests. Check the conversation before trying again later."
+            : "Help Scout is rate limiting requests. Try again later."
           : "Help Scout could not complete the request. Check the record, inbox access and account permissions before trying again.",
     );
   }
