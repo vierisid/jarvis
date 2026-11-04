@@ -1,3 +1,4 @@
+import { useHumanInputCount } from './HumanInputs';
 import React, { useState } from 'react';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import { PendingDecisions, ForgetMemory } from './canonical-commands';
@@ -146,8 +147,9 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   }
   function NeedsYou({ shell }: { shell: BriefShellPort }) {
     const all = useBriefProjection(decisionRead);
+    const humanPending = useHumanInputCount();
     const onlyOther = all.state === 'ready' && !!all.data?.length && !all.data.some(row => row.actions.length > 0);
-    return <>{onlyOther ? <header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
+    return <>{onlyOther || (humanPending > 0 && !all.data?.length) ? <header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
       <PendingDecisions selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
   }
   const rooms: BriefRoomRegistry = {

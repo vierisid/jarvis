@@ -25,6 +25,17 @@ export const DEFAULT_IDS = {
 } as const;
 
 const STATEMENTS: string[] = [
+  `CREATE TABLE IF NOT EXISTS workflow_human_request (
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL, flow_id TEXT NOT NULL REFERENCES flow(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL, record TEXT NOT NULL, deadline INTEGER NOT NULL, status TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_human_pending ON workflow_human_request(status,deadline)`,
+  `CREATE TABLE IF NOT EXISTS workflow_human_wait (
+    request_id TEXT NOT NULL REFERENCES workflow_human_request(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES flow_run(id) ON DELETE CASCADE,
+    waitpoint_id TEXT NOT NULL REFERENCES waitpoint(id) ON DELETE CASCADE,
+    PRIMARY KEY(request_id,run_id,waitpoint_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS workflow_lead_batch (identity TEXT PRIMARY KEY, config TEXT NOT NULL, owner TEXT NOT NULL, lease_until INTEGER NOT NULL, progress TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS workflow_customer_onboarding (
     identity TEXT PRIMARY KEY, config TEXT NOT NULL, owner TEXT NOT NULL,

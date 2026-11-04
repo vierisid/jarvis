@@ -1,3 +1,4 @@
+import { resumeHumanInputs } from './human-input';
 import { getWorkflowDb } from '../db';
 import { getFlowRun } from '../db/repos/flow-run';
 import { getWaitpoint } from '../db/repos/waitpoint';
@@ -19,7 +20,7 @@ export function resumeResolvedWorkflowEffects(): number {
     WHERE e.status='pending' AND a.execution_mode='workflow'
       AND a.status IN ('approved','denied','expired') AND w.resumed_at IS NULL
       AND NOT (a.status='expired' AND EXISTS (SELECT 1 FROM brief_decision_document d WHERE d.approval_id=a.id))`).all() as Array<{ id: string; run_id: string; waitpoint_id: string }>;
-  let count = 0;
+  let count = resumeHumanInputs();
   for (const row of rows) {
     const run = getFlowRun(row.run_id);
     if (run?.status !== 'PAUSED') continue;
