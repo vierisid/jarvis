@@ -73,7 +73,7 @@ export function pipedriveInputSchema(action: string): PieceInputSchema | null {
           "Results per page",
           false,
           "number",
-          "1–100; defaults to 50.",
+          "1-100; defaults to 50.",
         ),
         field(
           "cursor",
@@ -152,7 +152,7 @@ export function pipedriveInputSchema(action: string): PieceInputSchema | null {
               "Probability (%)",
               false,
               "number",
-              "0–100. Requires deal probability to be enabled in Pipedrive.",
+              "0-100. Requires deal probability to be enabled in Pipedrive.",
             ),
           ]),
     ],

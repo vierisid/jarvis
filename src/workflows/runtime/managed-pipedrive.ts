@@ -214,7 +214,7 @@ export async function runManagedPipedriveAction(
       limit < 1 ||
       limit > 100
     )
-      throw Error("Choose 1–100 results per page.");
+      throw Error("Choose 1-100 results per page.");
     const params = new URLSearchParams({
       term,
       fields: (fields.length ? fields : validFields).join(","),
