@@ -908,12 +908,14 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
 }, {
   // Every action in published Help Scout 0.2.1; managed credentials enable three
   // (MANAGED_HELP_SCOUT_ACTIONS). The rest run only on a manual account. The
-  // target carries the recipients (customerEmail, cc, bcc), the message (text,
-  // body), the thread type and whether a reply is only a draft, so the approval
-  // card for a manual send_reply or create_conversation shows who it reaches.
+  // target carries the recipients (customerEmail, cc, bcc), the sender
+  // (fromUser), the message (text, body), the thread type and whether a reply
+  // is only a draft, so the approval card for a manual send_reply or
+  // create_conversation shows who it reaches; `fields` shows which customer
+  // properties an update overwrites.
   catalogId:'help-scout',pieceName:HELP_SCOUT_PIECE,unknownActionCategory:'modify_settings',
-  targetProps:['conversationId','mailboxId','number','customerId','email','customerEmail','cc','bcc','draft','threadType',
-    'subject','text','body','userId','status','assignTo','query'],
+  targetProps:['conversationId','mailboxId','number','customerId','email','customerEmail','cc','bcc','fromUser','draft',
+    'threadType','subject','text','body','fields','userId','status','assignTo','query'],
   categories:{read_data:['find_customer','find_conversation','find_user'],
     // A note reaches teammates only. Customer records, and the values of a
     // customer's properties (PATCH /customers/{id}/properties, as Intercom's
