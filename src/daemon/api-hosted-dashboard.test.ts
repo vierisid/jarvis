@@ -27,4 +27,6 @@ test('the host descriptor carries the persisted workspace id across boots and a 
   const [first, second] = [await boot(), await boot()];
   expect(first.workspaceId).toBe('workspace-one'); expect(second.workspaceId).toBe('workspace-one');
   expect(first.generation).not.toBe(second.generation);
+  const unwired = await (createApiRoutes({ config: structuredClone(DEFAULT_CONFIG), daemonStartedAt: Date.now(), healthMonitor: {} } as ApiContext)['/api/brief/host'] as { GET(): Response }).GET().json();
+  expect(unwired.workspaceId).toBe(unwired.generation);
 });

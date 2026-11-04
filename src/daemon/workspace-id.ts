@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 /** File under the data directory that holds this workspace's identity. */
@@ -19,14 +19,23 @@ export function loadWorkspaceId(dataDir: string, create: () => string = randomUU
   const file = path.join(dataDir, WORKSPACE_ID_FILE);
   try {
     const existing = readId(file);
-    if (existing) return existing;
+    if (existing.id) return existing.id;
     mkdirSync(dataDir, { recursive: true });
     const id = create();
-    // Write then rename, so a crash never leaves a partial id behind.
-    const temp = `${file}.${process.pid}.tmp`;
+    // Write a temp file first, so a crash never leaves a partial id behind.
+    const temp = `${file}.${process.pid}.${id}.tmp`;
     try {
       writeFileSync(temp, `${id}\n`, { mode: 0o600 });
-      renameSync(temp, file);
+      if (existing.present) renameSync(temp, file); // replace a corrupt id
+      else {
+        // link() fails if another process created the id first; use theirs.
+        try { linkSync(temp, file); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+          const winner = readId(file).id;
+          if (winner) return winner;
+          renameSync(temp, file);
+        }
+      }
     } finally {
       rmSync(temp, { force: true });
     }
@@ -37,14 +46,14 @@ export function loadWorkspaceId(dataDir: string, create: () => string = randomUU
   }
 }
 
-function readId(file: string): string | null {
+function readId(file: string): { present: boolean; id: string | null } {
   let raw: string;
   try {
     raw = readFileSync(file, 'utf-8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { present: false, id: null };
     throw error;
   }
   const id = raw.trim();
-  return VALID.test(id) ? id : null;
+  return { present: true, id: VALID.test(id) ? id : null };
 }

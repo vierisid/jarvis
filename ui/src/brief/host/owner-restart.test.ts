@@ -32,11 +32,16 @@ test('a restart serving another workspace id retires all old controllers', async
   expect(owner!.active()).toBe(false); expect(mock.revoked()).toBe(1); expect(owner!.transport.signal.aborted).toBe(true);
   expect(owner!.hasUnsaved()).toBe(false);
 });
-test('a descriptor without a workspace id is refused rather than trusted', async () => {
+test('a daemon without workspace ids is identified per boot, so its restart retires the owner', async () => {
   const mock = setup(); await owner!.reconciliation.refresh();
   const { workspaceId: _omitted, ...legacy } = initial;
   mock.set({ ...legacy, generation: 'boot-two' } as HostDescriptor); await owner!.reconciliation.refresh();
-  expect(owner!.descriptor()).toEqual(initial); expect(owner!.hasUnsaved()).toBe(true);
+  expect(owner!.active()).toBe(false); expect(mock.revoked()).toBe(1);
+});
+test('a daemon without workspace ids keeps the owner within one boot', async () => {
+  const { readHost } = await import('./owner');
+  const { workspaceId: _omitted, ...legacy } = initial;
+  expect(readHost(legacy).workspaceId).toBe('boot-one');
 });
 for (const [label, change] of [
   ['install mode', { installMode: 'hosted' }],

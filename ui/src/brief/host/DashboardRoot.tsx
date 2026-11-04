@@ -150,7 +150,7 @@ function OwnedDashboard({ descriptor, route, retained, integration, legacy, inst
   });
   useEffect(() => { session.current = onboarding; if (onboarding) void onboarding.start(); return () => { session.current = null; onboarding?.dispose(); }; }, [onboarding]);
   useEffect(() => { explain(''); }, [route.room, route.selection.factId, route.selection.flowId]);
-  if (revoked) return <main className="brief-root brief-foundation"><h1>Reconnect to your workspace</h1><p>Your session or workspace changed. Reload after signing in.</p><button onClick={() => window.location.reload()}>Reload</button></main>;
+  if (revoked) return <main className="brief-root brief-foundation"><h1>Reconnect to your workspace</h1><p>Your session, workspace or dashboard setting changed. Reload to continue, signing in again if asked.</p><button onClick={() => window.location.reload()}>Reload</button></main>;
   const content = (result: ReactNode | null = null) => <BriefConversationProvider enabled chatVisible={open} client={host.chat} reconciliation={host.reconciliation}>
     <Workspace host={host} route={result && onboarding?.state().journey?.draft ? { room: 'workflow-draft', selection: onboarding.state().journey!.draft! } : route}
       retained={retained} open={open} setOpen={setOpen} reveal={reveal} shellRef={shell} message={message}

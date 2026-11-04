@@ -23,9 +23,11 @@ import type { SidecarInfo } from '../../v2/rooms/settings/useSettingsData';
 export interface HostDescriptor { schemaVersion: 1; scopeId: string; workspaceId: string; generation: string; installMode: 'self' | 'hosted'; dashboard?: 'brief' | 'legacy'; capabilities: unknown }
 export function readHost(value: unknown): HostDescriptor {
   const v = value as HostDescriptor;
-  if (!v || v.schemaVersion !== 1 || typeof v.scopeId !== 'string' || !v.scopeId || typeof v.workspaceId !== 'string' || !v.workspaceId || typeof v.generation !== 'string' || !v.generation
+  if (!v || v.schemaVersion !== 1 || typeof v.scopeId !== 'string' || !v.scopeId || typeof v.generation !== 'string' || !v.generation
     || !['self', 'hosted'].includes(v.installMode) || (v.capabilities as any)?.contractVersion !== 1) throw Error('Dashboard host unavailable');
-  return v;
+  // A daemon that predates workspace ids (a rollback) is identified per boot,
+  // so its restart retires the owner and offers a reload, as it always did.
+  return typeof v.workspaceId === 'string' && v.workspaceId ? v : { ...v, workspaceId: v.generation };
 }
 /** Whether a refreshed descriptor still belongs to the owner mounted for `initial`. */
 export function sameOwner(initial: HostDescriptor, next: HostDescriptor): boolean {

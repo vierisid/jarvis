@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadWorkspaceId, WORKSPACE_ID_FILE } from './workspace-id';
@@ -27,6 +27,14 @@ test('a missing data directory is created and a corrupt id is replaced', () => {
   writeFileSync(path.join(home, WORKSPACE_ID_FILE), 'x');
   const replaced = loadWorkspaceId(home);
   expect(replaced).not.toBe(id); expect(loadWorkspaceId(home)).toBe(replaced);
+});
+
+test('a concurrent first start keeps the id another process created first', () => {
+  const home = dir();
+  // The other process wins between our read and our create.
+  const id = loadWorkspaceId(home, () => { writeFileSync(path.join(home, WORKSPACE_ID_FILE), 'winner-0123456789abcdef\n'); return 'loser-0123456789abcdef'; });
+  expect(id).toBe('winner-0123456789abcdef'); expect(loadWorkspaceId(home)).toBe(id);
+  expect(readdirSync(home)).toEqual([WORKSPACE_ID_FILE]);
 });
 
 test('an unusable data directory degrades to a per-boot id instead of failing startup', () => {
