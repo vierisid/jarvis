@@ -11,6 +11,8 @@ export type HumanRequest = {
   closureReason?: 'workflow_changed';
   /** Set when the user acknowledged an outcome that needed attention. */
   dismissedAt?: number;
+  /** A shared form reopened after it closed is a new instance; earlier waits keep `reopenedFrom`. */
+  generation?: number; reopenedFrom?: HumanRequest['status'];
 };
 export function formFields(value: unknown): InputField[] {
   if (!Array.isArray(value) || !value.length || value.length > 20) throw Error('Provide 1–20 input fields');
@@ -56,7 +58,8 @@ const LIVE_RUN_STATUSES = ['QUEUED', 'RUNNING', 'PAUSED'];
 /**
  * An accepted response is not evidence that its workflow completed. A failed or
  * unknown continuation, or a form withdrawn because the workflow changed, stays
- * until the user dismisses it. A run the user stopped needs nothing more.
+ * until the user dismisses it. A stopped run (cancelled, turned off or deleted)
+ * needs nothing more.
  */
 export function humanRequestNeedsAttention(request: HumanRequest): boolean {
   if (request.status === 'pending') return true;

@@ -209,9 +209,13 @@ test('editing a waiting draft withdraws the stale form before accepting an answe
   const f = fixture(), run = await f.run(), request = requestFor(run.id);
   const graph = structuredClone(f.version.trigger); graph.nextAction!.settings!.input!.prompt = 'Changed question';
   updateDraftVersion(f.version.id, { trigger: graph });
-  expect(respond(request).status).toBe(409); await finish();
+  // A malformed response is refused before anything is withdrawn.
+  expect(respond(request, 'approve').status).toBe(400); expect(requestFor(run.id).status).toBe('pending');
+  const refused = respond(request); expect(refused.status).toBe(409); expect(refused.error).toContain('workflow changed'); await finish();
   const closed = requestFor(run.id); expect(closed).toMatchObject({ status: 'cancelled', closureReason: 'workflow_changed', answers: null });
   expect(getFlowRun(run.id)?.status).toBe('FAILED'); expect(getFlowRun(run.id)?.steps?.returned).toBeUndefined();
+  const { humanRequestNeedsAttention } = await import('./human-input-contract'); expect(humanRequestNeedsAttention(closed)).toBe(true);
+  expect(dismissHumanInput(DEFAULT_IDS.project, closed.id).status).toBe(200); expect(humanRequestNeedsAttention(requestFor(run.id))).toBe(false);
 });
 test('shared response receipts include each waiting run without hiding a stopped sibling', async () => {
   const f = fixture('input', false, false, true), first = await f.run('shared-outcomes'), second = await f.run('shared-outcomes');
@@ -225,10 +229,14 @@ test('shared response receipts include each waiting run without hiding a stopped
 test('a shared form reopened after expiry reports only the runs that asked it again', async () => {
   const f = fixture('input', false, false, true), first = await f.run('reopened');
   const expired = requestFor(first.id); listHumanInputs(DEFAULT_IDS.project, expired.deadline);
-  await finish(); expect(getFlowRun(first.id)?.status).toBe('FAILED');
+  // The first run has not been resumed yet when the second run reopens the form.
+  expect(getFlowRun(first.id)?.status).toBe('PAUSED');
   const second = await f.run('reopened'); expect(second.status).toBe('PAUSED');
   const reopened = requestFor(second.id); expect(reopened.id).toBe(expired.id); expect(reopened.status).toBe('pending');
+  // It keeps the outcome it waited for and never takes the reopened form's answer.
+  await finish(); expect(getFlowRun(first.id)?.status).toBe('FAILED'); expect(requestFor(second.id).status).toBe('pending');
   expect(respond(reopened).status).toBe(200); await finish(); expect(getFlowRun(second.id)?.status).toBe('SUCCEEDED');
+  expect((getFlowRun(first.id)?.steps as any)?.returned).toBeUndefined();
   const receipt = listHumanInputs(DEFAULT_IDS.project).find(r => r.id === reopened.id)!;
   expect(receipt.runs).toEqual([{ runId: second.id, versionId: f.version.id, status: 'SUCCEEDED' }]);
   const { humanRequestNeedsAttention } = await import('./human-input-contract'); expect(humanRequestNeedsAttention(receipt)).toBe(false);
@@ -258,4 +266,20 @@ test('editing a waiting draft and reverting it before answering lets the run con
   listHumanInputs(DEFAULT_IDS.project); resumeHumanInputs(); expect(requestFor(run.id).status).toBe('pending');
   updateDraftVersion(f.version.id, { trigger: original });
   expect(respond(request).status).toBe(200); await finish(); expect(getFlowRun(run.id)?.status).toBe('SUCCEEDED');
+});
+test('an undismissed failure stays listed however many requests close after it', async () => {
+  const f = fixture();
+  const graph = structuredClone(f.version.trigger);
+  graph.nextAction!.nextAction = step('failed', '@jarvispieces/piece-jarvis-subflow', 'require_success', { result: { status: 'failed', code: 'FIXTURE_FAILURE' } });
+  updateDraftVersion(f.version.id, { trigger: graph });
+  const run = await f.run('crowded'), request = requestFor(run.id);
+  expect(respond(request).status).toBe(200); await finish(); expect(getFlowRun(run.id)?.status).toBe('FAILED');
+  const later = Date.now() + 10 * 86400000;
+  for (let i = 0; i < 21; i++) getWorkflowDb().run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status) VALUES (?,?,?,?,?,?,'expired')`,
+    [`crowd-${i}`, DEFAULT_IDS.project, f.flow.id, 'x', JSON.stringify({ ...request, id: `crowd-${i}`, runId: `crowd-run-${i}`, runs: undefined, created: later + i, deadline: later + i }), later + i]);
+  const { humanRequestNeedsAttention } = await import('./human-input-contract');
+  expect(humanRequestNeedsAttention(requestFor(run.id))).toBe(true);
+  expect(dismissHumanInput(DEFAULT_IDS.project, request.id).status).toBe(200);
+  expect(requestFor(run.id)).toBeUndefined();
+  getWorkflowDb().run("DELETE FROM workflow_human_request WHERE id LIKE 'crowd-%'");
 });

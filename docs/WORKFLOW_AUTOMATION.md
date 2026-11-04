@@ -1381,8 +1381,9 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | GET | `/api/workflows/events/buffer-stats` | Event buffer health (dropped count, capacity) |
 | GET, POST | `/api/webhooks/:flowId` | Engine-managed webhook trigger fan-in (503 when webhooks are not enabled in the build) |
 | POST | `/api/webhooks/waitpoints/:id` | Resume a paused flow (idempotent: 410 on second hit). 403 for a workflow input or approval request |
-| GET | `/api/workflow-inputs` | The signed-in workspace's workflow input and approval requests: every pending one plus the 20 most recent answered, expired or cancelled |
-| POST | `/api/workflow-inputs/:id` | Answer one request: `{ decision: "submit", answers }` for a form, `"approve"` or `"reject"` for an approval, or `"cancel"`. Body at most 64,000 bytes; 409 once it is answered differently, 422 for invalid answers |
+| GET | `/api/workflow-inputs` | The signed-in workspace's workflow input and approval requests: every pending one, the 20 most recent answered, expired or cancelled, and every undismissed one whose outcome needs attention. Each carries `runs` (the run status of each run that asked this instance of the request, no step outputs), `closureReason: "workflow_changed"` when it was withdrawn, and `dismissedAt` once dismissed |
+| POST | `/api/workflow-inputs/:id` | Answer one request: `{ decision: "submit", answers }` for a form, `"approve"` or `"reject"` for an approval, or `"cancel"`. Body at most 64,000 bytes; 409 once it is answered differently, or when the run's draft workflow was edited since the request was asked (the request is then withdrawn); 422 for invalid answers |
+| POST | `/api/workflow-inputs/:id/dismiss` | Acknowledge a closed request whose run failed, whose run status is unavailable, or that was withdrawn because the workflow changed, so it stops counting in Needs you. 200 (also when already dismissed), 404 outside the signed-in workspace, 409 while it is pending or a run of it is still running |
 
 ### Pagination
 

@@ -13,6 +13,10 @@ import { HUMAN_INPUT_PIECE, answerErrors, formFields, humanRequestDismissable, t
 type Row = { id: string; project_id: string; flow_id: string; fingerprint: string; record: string; status: HumanRequest['status']; deadline: number };
 const row = (id: string) => getWorkflowDb().query<Row, [string]>('SELECT * FROM workflow_human_request WHERE id=?').get(id);
 const unpack = (r: Row): HumanRequest => ({ ...JSON.parse(r.record), status: r.status });
+/** Instance of a request: a shared form reopened after it closed counts up. */
+const generationOf = (request: { generation?: number }) => request.generation ?? 0;
+/** SQL: the current instance of request row `h` (records from before generations are 0). */
+const CURRENT_GENERATION = `COALESCE(json_extract(h.record,'$.generation'),0)`;
 function save(request: HumanRequest) {
   getWorkflowDb().run('UPDATE workflow_human_request SET status=?,record=? WHERE id=?', [request.status, JSON.stringify(request), request.id]);
 }
@@ -77,21 +81,24 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
     const reopen = !!existing && config.shared && ['expired', 'cancelled'].includes(existing.status)
       && !db.query('SELECT 1 FROM workflow_human_wait WHERE request_id=? AND run_id=?').get(id, ctx.runId);
     if (!existing || reopen) {
-      // Outcomes belong to this instance: waits are listed from `created` on. A
-      // reopened form starts after every earlier wait, even if the clock is coarse.
-      const before = reopen ? db.query<{ at: number | null }, [string]>(`SELECT MAX(p.created) AS at FROM workflow_human_wait w
-        JOIN waitpoint p ON p.id=w.waitpoint_id WHERE w.request_id=?`).get(id)?.at ?? null : null;
-      const created = before === null ? now : Math.max(now, before + 1);
+      // A reopened form is a new instance: earlier waits keep the outcome they had.
+      const previous = existing ? unpack(existing) : null;
+      const instance = previous ? { generation: generationOf(previous) + 1, reopenedFrom: previous.status } : {};
       const pending = db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM workflow_human_request WHERE flow_id=? AND status='pending'").get(run!.flowId)!.count;
       if (pending >= 20) throw Error('This workflow already has 20 unanswered requests. Respond or cancel them before creating more.');
       const request: HumanRequest = { id, ...config, kind, workflowName: resolved.version.displayName, flowId: run!.flowId,
-        runId: ctx.runId, created, deadline: now + timeoutHours * 3600000, status: 'pending', answers: null };
+        runId: ctx.runId, created: now, deadline: now + timeoutHours * 3600000, status: 'pending', answers: null, ...instance };
       db.run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status) VALUES (?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint,record=excluded.record,deadline=excluded.deadline,status=excluded.status`,
         [id, ctx.projectId, run!.flowId, fingerprint, JSON.stringify({ ...request, graphDigest: resolved.versionDigest, pathKey }), request.deadline, request.status]);
       existing = row(id)!;
     }
     const request = unpack(existing);
+    // This run waited on an earlier instance that closed before it resumed (for
+    // example under an emergency hold): it keeps that outcome, never the new answer.
+    const earlier = db.query('SELECT 1 FROM workflow_human_wait WHERE request_id=? AND run_id=? AND generation<?').get(id, ctx.runId, generationOf(request));
+    if (earlier && !db.query('SELECT 1 FROM workflow_human_wait WHERE request_id=? AND run_id=? AND generation=?').get(id, ctx.runId, generationOf(request)))
+      throw Error(`Human request ${request.reopenedFrom ?? 'expired'}`);
     if (request.status === 'pending' && now >= request.deadline) { request.status = 'expired'; save(request); }
     if (linksOnly) return { requestId: id, approvalLink: `/?brief=1#/brief/needs-you?inputId=${id}`, disapprovalLink: `/?brief=1#/brief/needs-you?inputId=${id}` };
     // The legacy Wait for Approval kept its old contract: it never failed the
@@ -102,19 +109,31 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
       if (request.status !== 'submitted' && request.status !== 'approved') throw Error(`Human request ${request.status}`);
       return { requestId: id, status: request.status, approved: request.status === 'approved', answers: request.answers ?? {} };
     }
-    const prior = db.query<{ waitpoint_id: string }, [string, string, string]>(`SELECT w.waitpoint_id FROM workflow_human_wait w JOIN waitpoint p ON p.id=w.waitpoint_id
-      WHERE w.request_id=? AND w.run_id=? AND p.step_name=? AND p.resumed_at IS NULL`).get(id, ctx.runId, ctx.stepName!);
+    const prior = db.query<{ waitpoint_id: string }, [string, string, string, number]>(`SELECT w.waitpoint_id FROM workflow_human_wait w JOIN waitpoint p ON p.id=w.waitpoint_id
+      WHERE w.request_id=? AND w.run_id=? AND p.step_name=? AND p.resumed_at IS NULL AND w.generation=?`).get(id, ctx.runId, ctx.stepName!, generationOf(request));
     const waitpointId = prior?.waitpoint_id ?? createWaitpoint({ flowRunId: ctx.runId, projectId: ctx.projectId, stepName: ctx.stepName!, type: 'MANUAL' }).id;
-    db.run('INSERT OR IGNORE INTO workflow_human_wait (request_id,run_id,waitpoint_id) VALUES (?,?,?)', [id, ctx.runId, waitpointId]);
+    db.run('INSERT OR IGNORE INTO workflow_human_wait (request_id,run_id,waitpoint_id,generation) VALUES (?,?,?,?)', [id, ctx.runId, waitpointId, generationOf(request)]);
     return { requestId: id, waitpointId };
   }).immediate();
 }
 
+/** Runs of the current instance of request row `h`: the one that created it and any that waited on it. */
+const INSTANCE_RUN = `(r.id=json_extract(h.record,'$.runId') OR r.id IN (SELECT w.run_id FROM workflow_human_wait w
+  WHERE w.request_id=h.id AND w.generation=${CURRENT_GENERATION}))`;
+/**
+ * Closed requests whose outcome still needs the user until dismissed (see
+ * humanRequestNeedsAttention): they stay listed however many requests close later.
+ */
+const UNDISMISSED_OUTCOME = `h.status IN ('submitted','approved','cancelled') AND json_extract(h.record,'$.dismissedAt') IS NULL
+  AND (json_extract(h.record,'$.closureReason')='workflow_changed' OR (h.status!='cancelled' AND (
+    NOT EXISTS (SELECT 1 FROM flow_run r WHERE ${INSTANCE_RUN})
+    OR EXISTS (SELECT 1 FROM flow_run r WHERE ${INSTANCE_RUN} AND r.status NOT IN ('QUEUED','RUNNING','PAUSED','SUCCEEDED','STOPPED')))))`;
 /** Persistent terminal results and pending requests are scoped to the signed-in workspace. */
 export function listHumanInputs(projectId: string, now = Date.now()): HumanRequest[] {
   expireHumanInputs(now);
-  return getWorkflowDb().query<Row, [string, string]>(`SELECT * FROM workflow_human_request WHERE project_id=? AND (status='pending' OR id IN
-    (SELECT id FROM workflow_human_request WHERE project_id=? AND status!='pending' ORDER BY deadline DESC LIMIT 20)) ORDER BY deadline,id`).all(projectId, projectId).map(record => withRunOutcomes(unpack(record)));
+  return getWorkflowDb().query<Row, [string]>(`SELECT * FROM workflow_human_request h WHERE h.project_id=?1 AND (h.status='pending' OR h.id IN
+    (SELECT id FROM workflow_human_request WHERE project_id=?1 AND status!='pending' ORDER BY deadline DESC LIMIT 20)
+    OR (${UNDISMISSED_OUTCOME})) ORDER BY h.deadline,h.id`).all(projectId).map(record => withRunOutcomes(unpack(record)));
 }
 export function resolveHumanInput(projectId: string, id: string, input: Record<string, unknown>, now = Date.now()) {
   expireHumanInputs(now);
@@ -122,19 +141,20 @@ export function resolveHumanInput(projectId: string, id: string, input: Record<s
   const result = db.transaction(() => {
     const record = row(id);
     if (!record || record.project_id !== projectId) return { status: 404, error: 'Request not found' };
-    const decision = input.decision;
-    // Only an answer checks the draft: an edit that is reverted before anyone
-    // answers lets the run continue, and a cancel needs no graph check.
-    if (decision !== 'cancel') withdrawChangedRequest(record);
-    const request = unpack(row(id)!);
-    const status = decision === 'submit' && request.kind === 'input' ? 'submitted'
-      : decision === 'approve' && request.kind === 'approval' ? 'approved'
-      : decision === 'reject' && request.kind === 'approval' ? 'rejected' : decision === 'cancel' ? 'cancelled' : null;
+    const decision = input.decision, kind = unpack(record).kind;
+    const status = decision === 'submit' && kind === 'input' ? 'submitted'
+      : decision === 'approve' && kind === 'approval' ? 'approved'
+      : decision === 'reject' && kind === 'approval' ? 'rejected' : decision === 'cancel' ? 'cancelled' : null;
     if (!status) return { status: 400, error: 'Invalid response for this request' };
+    // Only a valid answer checks the draft: an edit that is reverted before
+    // anyone answers lets the run continue, and a cancel needs no graph check.
+    if (status !== 'cancelled') withdrawChangedRequest(record);
+    const request = unpack(row(id)!);
     const answers = status === 'submitted' ? input.answers : null;
     if (request.status !== 'pending') {
       if (request.status === status && digest(request.answers) === digest(answers)) return { status: 200, request };
-      return { status: 409, error: `This request is ${request.status}`, request };
+      return { status: 409, error: request.closureReason === 'workflow_changed'
+        ? 'The workflow changed while this request was waiting. Your answer was not accepted.' : `This request is ${request.status}`, request };
     }
     const errors = status === 'submitted' ? answerErrors(request.fields, answers) : {};
     if (Object.keys(errors).length) return { status: 422, error: 'Check the highlighted answers', errors };
@@ -157,8 +177,7 @@ const LIVE_RUN = `SELECT 1 FROM flow_run r JOIN flow f ON f.id=r.flow_id WHERE r
 function expireHumanInputs(now: number) {
   const db = getWorkflowDb();
   const closing = db.query<Row & { next: 'expired' | 'cancelled' }, [number]>(`SELECT h.*, CASE WHEN NOT EXISTS (${LIVE_RUN}
-      AND (r.id=json_extract(h.record,'$.runId') OR r.id IN (SELECT w.run_id FROM workflow_human_wait w WHERE w.request_id=h.id)))
-    THEN 'cancelled' WHEN h.deadline <= ?1 THEN 'expired' END AS next
+      AND ${INSTANCE_RUN}) THEN 'cancelled' WHEN h.deadline <= ?1 THEN 'expired' END AS next
     FROM workflow_human_request h WHERE h.status='pending' AND next IS NOT NULL`).all(now);
   for (const record of closing) save({ ...unpack(record), status: record.next });
 }
@@ -170,7 +189,7 @@ export function resumeHumanInputs(now = Date.now()): number {
   const db = getWorkflowDb();
   const waits = db.query<{ run_id: string; waitpoint_id: string }, []>(`SELECT w.run_id,w.waitpoint_id FROM workflow_human_wait w
     JOIN workflow_human_request h ON h.id=w.request_id JOIN waitpoint p ON p.id=w.waitpoint_id
-    WHERE h.status!='pending' AND p.resumed_at IS NULL`).all();
+    WHERE (h.status!='pending' OR w.generation<${CURRENT_GENERATION}) AND p.resumed_at IS NULL`).all();
   for (const w of waits) {
     const run = getFlowRun(w.run_id);
     if (run?.status !== 'PAUSED') continue;
@@ -190,9 +209,8 @@ export function resumeHumanInputs(now = Date.now()): number {
 function withRunOutcomes(request: HumanRequest): HumanRequest {
   const rows = getWorkflowDb().query<{ id: string; flow_version_id: string; status: string }, [string, string, number]>(`
     SELECT DISTINCT r.id,r.flow_version_id,r.status FROM flow_run r
-    WHERE r.id=?1 OR r.id IN (SELECT w.run_id FROM workflow_human_wait w JOIN waitpoint p ON p.id=w.waitpoint_id
-      WHERE w.request_id=?2 AND p.created>=?3)
-    ORDER BY r.created,r.id`).all(request.runId, request.id, request.created);
+    WHERE r.id=?1 OR r.id IN (SELECT run_id FROM workflow_human_wait WHERE request_id=?2 AND generation=?3)
+    ORDER BY r.created,r.id`).all(request.runId, request.id, generationOf(request));
   return { ...request, runs: rows.length ? rows.map(r => ({ runId: r.id, versionId: r.flow_version_id, status: r.status }))
     : [{ runId: request.runId, versionId: '', status: 'UNAVAILABLE' }] };
 }
@@ -217,11 +235,11 @@ export function dismissHumanInput(projectId: string, id: string, now = Date.now(
 function withdrawChangedRequest(record: Row): void {
   if (record.status !== 'pending') return;
   const request = unpack(record), graph = JSON.parse(record.record).graphDigest;
-  const live = getWorkflowDb().query<{ flow_version_id: string }, [string, string]>(`
+  const live = getWorkflowDb().query<{ flow_version_id: string }, [string, string, number]>(`
     SELECT r.flow_version_id FROM flow_run r JOIN flow f ON f.id=r.flow_id
     WHERE r.status IN ('RUNNING','PAUSED','QUEUED')
     AND NOT (f.disabled_at IS NOT NULL AND r.created <= f.disabled_at)
-    AND (r.id=? OR r.id IN (SELECT run_id FROM workflow_human_wait WHERE request_id=?))`).all(request.runId, request.id);
+    AND (r.id=? OR r.id IN (SELECT run_id FROM workflow_human_wait WHERE request_id=? AND generation=?))`).all(request.runId, request.id, generationOf(request));
   if (live.length && live.every(r => {
     const version = getFlowVersion(r.flow_version_id);
     return !version || digest(version.trigger) !== graph;
