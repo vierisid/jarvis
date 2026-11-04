@@ -52,6 +52,11 @@ test("creates once on the fixed GitLab.com host with only reviewed fields and bo
     description: input.description,
   });
 });
+test("accepts a work item link for the created issue", async () => {
+  const web_url = "https://gitlab.com/example/sandbox/-/work_items/7";
+  const f = fixture({ ...issue, web_url });
+  expect(await runManagedGitLabAction("create_issue", input, f.request)).toEqual({ ...issue, web_url });
+});
 test("optional description and numeric project IDs", async () => {
   const f = fixture({ ...issue, description: null });
   const { description: _, ...without } = input;
@@ -132,6 +137,9 @@ for (const patch of [
   { web_url: "https://attacker.test/-/issues/7" },
   { web_url: "https://gitlab.com/evil/-/issues/8" },
   { web_url: "https://gitlab.com/x/-/issues/7?token=secret" },
+  { web_url: "https://gitlab.com/x/-/work_items/8" },
+  { web_url: "https://attacker.test/x/-/work_items/7" },
+  { web_url: "https://gitlab.com/x/-/work_items/7#note" },
   { state: "unknown" },
   { description: {} },
   { title: null },

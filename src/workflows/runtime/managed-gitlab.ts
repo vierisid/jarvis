@@ -139,7 +139,11 @@ export async function runManagedGitLabAction(
       url.password ||
       url.search ||
       url.hash ||
-      !url.pathname.endsWith("/-/issues/" + iid)
+      // GitLab.com may link a new issue as a work item.
+      !(
+        url.pathname.endsWith("/-/issues/" + iid) ||
+        url.pathname.endsWith("/-/work_items/" + iid)
+      )
     )
       throw new Error();
     return {
