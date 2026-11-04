@@ -1508,7 +1508,7 @@ describe("managed Zoom is scoped to five meeting actions",()=>{
  });
  afterEach(()=>rmSync(dataDir,{recursive:true,force:true}));
  const step=(actionName:string):any=>({name:"zoom",type:"PIECE",settings:{pieceName:PIECE,actionName,input:{auth:ref}}});
- const trigger:any={name:"trigger",type:"PIECE_TRIGGER",settings:{pieceName:PIECE,triggerName:"new_person",actionName:"zoom_find_meeting",input:{auth:ref}}};
+ const trigger:any={name:"trigger",type:"PIECE_TRIGGER",settings:{pieceName:PIECE,triggerName:"new_recording",actionName:"zoom_find_meeting",input:{auth:ref}}};
  for(const [name,tree] of [["CODE",empty(code({conn:ref}))],["cross-piece",empty(gmail({auth:ref}))],...['zoom_delete_meeting','custom_api_call','zoom_list_recordings'].map(n=>[n,empty(step(n))]),["trigger",trigger]]){
   test(String(name)+" cannot resolve Zoom",async()=>{
    expect(bindingIssues(tree).length).toBeGreaterThan(0);const r=await fetchFor(runOf(tree),"jarvis:zoom");expect(r.status).toBe(403);expect(await r.text()).not.toContain(TOKEN);
