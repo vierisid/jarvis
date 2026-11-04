@@ -1,3 +1,4 @@
+import { JarvisGitLabConnectionSource } from "../credentials/gitlab-source";
 /**
  * A managed `jarvis:` connection belongs to the pieces of its source. Only a
  * step of one of those pieces may name it, and only as that step's `auth`.
@@ -1454,4 +1455,37 @@ describe("the sales follow-up step may name managed Google only as its Gmail acc
     const other = { id: "other", pieceNames: [GMAIL], canResolve: (id: string) => id === "jarvis:other", resolve: async () => null };
     expect(managedConnectionMisuse(other, GMAIL, "settings.input.gmailConnection", sales({}).settings, "PIECE")).not.toBeNull();
   });
+});
+// Real credential route: a valid OAuth document must never expose its token to
+// CODE, a different piece, unqualified actions, or trigger hooks.
+describe("managed GitLab is scoped to issue creation",()=>{
+ const PIECE="@activepieces/piece-gitlab",TOKEN="synthetic-gitlab-token",ref="{{connections.jarvis:gitlab}}";
+ let dataDir:string;
+ beforeEach(()=>{
+  dataDir=mkdtempSync(join(tmpdir(),"gitlab-scope-"));mkdirSync(join(dataDir,"connections"));
+  writeFileSync(join(dataDir,"connections/gitlab.json"),JSON.stringify({version:1,provider:"gitlab",status:"connected",generation:crypto.randomUUID(),
+   access_token:TOKEN,refresh_token:"private-refresh",expires_at:new Date(Date.now()+3600000).toISOString(),
+   refresh:{url:"https://app.usejarvis.dev/api/integrations/gitlab/refresh",instance_id:crypto.randomUUID(),secret:"a".repeat(64)},
+   account:{id:"123",label:"Owner"},workspaces:[{id:"34",name:"Sandbox"}],connected_at:new Date().toISOString()}));
+  credentials.register(new JarvisGitLabConnectionSource({daemon:{data_dir:dataDir},usejarvis_integrations:{page_url:"https://app.usejarvis.dev/account"}} as JarvisConfig));
+ });
+ afterEach(()=>rmSync(dataDir,{recursive:true,force:true}));
+ const step=(actionName:string):any=>({name:"gitlab",type:"PIECE",settings:{pieceName:PIECE,actionName,input:{auth:ref}}});
+ const trigger:any={name:"trigger",type:"PIECE_TRIGGER",settings:{pieceName:PIECE,triggerName:"project_issue_event",actionName:"create_issue",input:{auth:ref}}};
+ for(const [name,tree] of [["CODE",empty(code({conn:ref}))],["cross-piece",empty(gmail({auth:ref}))],...['create_project_issue','custom_api_call','delete_project','get_current_user'].map(n=>[n,empty(step(n))]),["trigger",trigger]]){
+  test(String(name)+" cannot resolve GitLab",async()=>{
+   expect(bindingIssues(tree).length).toBeGreaterThan(0);const r=await fetchFor(runOf(tree),"jarvis:gitlab");expect(r.status).toBe(403);expect(await r.text()).not.toContain(TOKEN);
+  });
+ }
+ test("every qualified action resolves only the access token and connected user",async()=>{
+  for(const action of ['create_issue']){
+   const tree=empty(step(action));expect(bindingIssues(tree)).toEqual([]);const r=await fetchFor(runOf(tree),"jarvis:gitlab");expect(r.status).toBe(200);
+   const result=await r.json();expect(result).toMatchObject({type:"OAUTH2",pieceName:PIECE,value:{access_token:TOKEN,jarvis_user:"123",jarvis_managed:"gitlab",refresh_token:""}});
+   expect(JSON.stringify(result)).not.toContain("private-refresh");
+  }
+ });
+ test("trigger hook with a spoofed action name cannot resolve the credential",async()=>{
+  const flow=createFlow({}),version=createDraftVersion({flowId:flow.id,displayName:"Hook",trigger});
+  expect((await fetchFor(triggerHookRunId("poll",flow.id,version),"jarvis:gitlab")).status).toBe(403);
+ });
 });

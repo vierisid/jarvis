@@ -1,4 +1,5 @@
 import { isWrikeReference, wrikeInputSchema } from "./managed-wrike-inputs";
+import { isGitLabReference, gitlabInputSchema } from "./managed-gitlab-inputs";
 import { isMondayReference, mondayInputSchema } from "./managed-monday-inputs";
 import {managedAirtableIssue} from './managed-airtable';
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
@@ -541,6 +542,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           else if (object(input)) {
             const schema = root ? sub.inputSchema
               : isWrikeReference(pieceName, input.auth) ? wrikeInputSchema(settings.actionName) ?? sub.inputSchema
+              : isGitLabReference(pieceName, input.auth) ? gitlabInputSchema(settings.actionName) ?? sub.inputSchema
               : isWebflowReference(pieceName, input.auth) ? webflowInputSchema(settings.actionName) ?? sub.inputSchema
               : isMondayReference(pieceName, input.auth) ? mondayInputSchema(settings.actionName) ?? sub.inputSchema
               : sub.inputSchema;

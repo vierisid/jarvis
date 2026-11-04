@@ -87,7 +87,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === WRIKE_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === GITLAB_PIECE || piece === WRIKE_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE) && managedPieceChanges(piece, action))
     // A Webflow refund moves money and is not idempotent: never repeat one whose outcome is unknown.
     || (piece === WEBFLOW_PIECE && action === 'refund_order')
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
@@ -110,6 +110,7 @@ const TYPEFORM_PIECE = '@activepieces/piece-typeform';
 const LINEAR_PIECE = '@activepieces/piece-linear';
 const WRIKE_PIECE = '@activepieces/piece-wrike';
 const MONDAY_PIECE = '@activepieces/piece-monday';
+const GITLAB_PIECE = "@activepieces/piece-gitlab";
 const FIGMA_PIECE = '@activepieces/piece-figma';
 const WEBFLOW_PIECE = '@activepieces/piece-webflow';
 /** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist, monday.com, Wrike, Figma or Webflow action that changes the account (write,
@@ -206,6 +207,12 @@ export function asanaDuplicateProjectCategory(input: Record<string, unknown>): A
  */
 export function webflowFulfillOrderCategory(input: Record<string, unknown>): ActionCategory {
   return !present(input.send_order_fulfilled_email) || input.send_order_fulfilled_email === false ? 'write_data' : 'send_email';
+}
+
+/** GitLab quick actions run in issue descriptions, including through manually configured accounts. */
+export function gitlabIssueCategory(input:Record<string,unknown>):ActionCategory {
+ const d=input.description;
+ return d==null || d==='' || (typeof d==='string' && !d.includes('{{') && !/(?:^|[\r\n])\s*\//.test(d)) ? 'write_data' : 'modify_settings';
 }
 
 /** Assignment can share a task with another person. Unresolved assignments use the safer category. */
@@ -868,6 +875,57 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
     create_task: {props:['assignees'],category:wrikeTaskCategory},
     update_task: {props:['assignees'],category:wrikeTaskCategory},
   },
+}, {
+  // Published GitLab 0.4.2 inventory. The managed grant enables only create_issue.
+  // Quick actions can change access; only a resolved description without commands narrows to a write.
+  catalogId:'gitlab',pieceName:GITLAB_PIECE,unknownActionCategory:'modify_settings',
+  targetProps:['projectId','title','description'],
+  categories:{read_data:[
+      "get_branch", "get_commit", "get_commit_refs",
+      "get_commit_sequence", "get_current_user", "get_file",
+      "get_group", "get_group_member", "get_issue",
+      "get_issue_note", "get_issue_time_stats", "get_job",
+      "get_job_log", "get_label", "get_merge_request",
+      "get_merge_request_approval_state", "get_merge_request_approvals", "get_milestone",
+      "get_pipeline", "get_project", "get_project_languages",
+      "get_project_member", "get_project_webhook", "get_user",
+      "get_user_status", "list_branches", "list_commit_comments",
+      "list_commits", "list_group_billable_members", "list_group_members",
+      "list_group_pending_members", "list_group_projects", "list_groups",
+      "list_issue_notes", "list_issues", "list_labels",
+      "list_merge_request_commits", "list_merge_request_diff_versions", "list_merge_request_diffs",
+      "list_merge_request_discussions", "list_merge_request_notes", "list_merge_requests",
+      "list_milestones", "list_pipeline_jobs", "list_pipelines",
+      "list_project_groups", "list_project_invited_groups", "list_project_members",
+      "list_project_share_locations", "list_project_transfer_locations", "list_project_users",
+      "list_project_webhooks", "list_projects", "list_repository_tree",
+      "list_tags", "list_user_projects", "list_users",
+    ],
+    delete_data:[
+      "delete_branch", "delete_file", "delete_group",
+      "delete_issue_note", "delete_label", "delete_merge_request",
+      "delete_milestone", "delete_pipeline", "delete_project",
+      "delete_project_webhook", "erase_job",
+    ],
+    modify_settings:[
+      "add_issue_spent_time", "approve_merge_request", "archive_project",
+      "cancel_job", "cancel_pipeline", "create_branch",
+      "create_commit", "create_commit_comment", "create_file",
+      "create_group", "create_issue", "create_issue_note",
+      "create_label", "create_merge_request", "create_merge_request_draft_note",
+      "create_milestone", "create_pipeline", "create_project",
+      "create_project_issue", "create_project_webhook", "custom_api_call",
+      "fork_project", "import_project_members", "merge_merge_request",
+      "move_issue", "play_manual_job", "protect_branch",
+      "reset_issue_spent_time", "reset_issue_time_estimate", "retry_pipeline",
+      "set_issue_time_estimate", "set_user_status", "share_project_with_group",
+      "star_project", "unapprove_merge_request", "unarchive_project",
+      "unprotect_branch", "unstar_project", "update_file",
+      "update_group", "update_issue", "update_issue_note",
+      "update_label", "update_merge_request", "update_milestone",
+      "update_project_webhook",
+    ]},
+  categoryFromInput:{create_issue:{props:['description'],category:gitlabIssueCategory}},
 }, {
   // Figma: every action of the pinned 0.6.3 bundle (`figma-engine.test.ts`
   // checks the list against the installed package). A comment is shown to

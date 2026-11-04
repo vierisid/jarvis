@@ -2585,6 +2585,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/integrations/figma': {
       GET: async () => { const {figmaStatus} = await import('../integrations/figma-connection'); return json(figmaStatus(ctx.config)); },
     },
+    '/api/integrations/gitlab': {
+      GET: async () => {
+        const {gitlabStatus} = await import('../integrations/gitlab-connection');
+        return json(gitlabStatus(ctx.config));
+      },
+    },
     '/api/integrations/webflow': {
       GET: async () => {
         const {webflowStatus} = await import('../integrations/webflow-connection');

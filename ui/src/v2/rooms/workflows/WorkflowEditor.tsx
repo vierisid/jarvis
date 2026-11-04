@@ -1,4 +1,6 @@
 import { JsonInputDraftContext, jsonInputBase, jsonInputScope, jsonInputKey } from './json-input-drafts';
+import { gitlabInputSchema, isGitLabReference } from "../../../../../src/workflows/runtime/managed-gitlab-inputs";
+import { GitLabConnection, useGitLabStatus } from "../../integrations/GitLabConnection";
 import { mondayInputSchema } from "../../../../../src/workflows/runtime/managed-monday-inputs";
 import { isWrikeReference, wrikeInputSchema } from "../../../../../src/workflows/runtime/managed-wrike-inputs";
 import { AirtableLocation } from "../../integrations/AirtableLocation";
@@ -3469,8 +3471,9 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const webflowSchema = webflowLocation ? webflowInputSchema(subName ?? "") : null;
   const baseSchema = webflowSchema ? {...webflowSchema,fields:webflowSchema.fields.filter(f=>!["site_id","collection_id","collection_fields"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))}
     : figmaLocation && asanaSchema ? {...asanaSchema,fields:asanaSchema.fields.filter(f=>f.name!=="file_key")} : asanaSchema;
+  const gitlabSchema = isGitLabReference(piece?.name, step.settings?.input?.auth) ? gitlabInputSchema(subName ?? "") : null;
   const wrikeSchema = isWrikeReference(piece?.name, step.settings?.input?.auth) ? wrikeInputSchema(subName ?? "") : null;
-  const selectedSchema = wrikeSchema ? {...wrikeSchema, fields:wrikeSchema.fields.filter(f=>f.name !== "folderId").map(f=>({...f, options:f.options ? [...f.options] : undefined}))} : managedMonday && mondayInputSchema(subName ?? "") ? {...mondayInputSchema(subName ?? "")!, fields:mondayInputSchema(subName ?? "")!.fields.filter(f=>!["board_id","group_id"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))} : managedTodoist && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['changes_info', ...(todoistLocation ? ['project_id','section_id'] : [])].includes(f.name)).map((f): PieceInputField => f.name === 'labels' ? {...f,type:'json',placeholder:'["work"]',description:'Label names as a JSON array. Empty arrays preserve current labels.'} : f)} : linearTeam && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['team_id','user_id'].includes(f.name)).map((f): PieceInputField => {
+  const selectedSchema = gitlabSchema ? {...gitlabSchema,fields:gitlabSchema.fields.map(f=>({...f,options:f.options ? [...f.options] : undefined}))} : wrikeSchema ? {...wrikeSchema, fields:wrikeSchema.fields.filter(f=>f.name !== "folderId").map(f=>({...f, options:f.options ? [...f.options] : undefined}))} : managedMonday && mondayInputSchema(subName ?? "") ? {...mondayInputSchema(subName ?? "")!, fields:mondayInputSchema(subName ?? "")!.fields.filter(f=>!["board_id","group_id"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))} : managedTodoist && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['changes_info', ...(todoistLocation ? ['project_id','section_id'] : [])].includes(f.name)).map((f): PieceInputField => f.name === 'labels' ? {...f,type:'json',placeholder:'["work"]',description:'Label names as a JSON array. Empty arrays preserve current labels.'} : f)} : linearTeam && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['team_id','user_id'].includes(f.name)).map((f): PieceInputField => {
     if (f.name === 'priority_id') return {...f,type:'number',description:'0: no priority, 1: urgent, 2: high, 3: normal, 4: low.'};
     if (f.name === 'issue_id') return {...f,type:'string',placeholder:'ENG-123',description:'Issue key, model UUID or workflow variable.'};
     if (f.name === 'parent_id') return {...f,type:'string',placeholder:'Parent issue UUID',description:'Use the parent issue model UUID or a workflow variable.'};
@@ -3918,6 +3921,8 @@ function ConnectionPicker({
   const figmaStatus = useFigmaStatus(isFigma), managedFigma = figmaStatus?.connected === true;
   const isWebflow = pieceName === "@activepieces/piece-webflow";
   const managedWebflow = useWebflowStatus(isWebflow)?.connected === true;
+  const isGitLab = pieceName === "@activepieces/piece-gitlab";
+  const gitlabStatus = useGitLabStatus(isGitLab), managedGitLab = gitlabStatus?.connected === true;
   const isAsana = pieceName === "@activepieces/piece-asana";
   const asanaStatus = useAsanaStatus(isAsana), managedAsana = asanaStatus?.connected === true;
   const isDropbox = pieceName === "@activepieces/piece-dropbox";
@@ -3928,7 +3933,7 @@ function ConnectionPicker({
   const isSlack = pieceName === "@activepieces/piece-slack";
   const slackStatus = useSlackStatus(isSlack), managedSlack = slackStatus?.connected === true;
   // Only point at the controls above when they actually offer hosted setup on this instance.
-  const hostedSetup = [wrikeStatus, typeformStatus, calendlyStatus, airtableStatus, intercomStatus, notionStatus, linearStatus, mondayStatus, todoistStatus, figmaStatus, asanaStatus, dropboxStatus, clickUpStatus, gitHubStatus, slackStatus].some(status => status?.configured === true);
+  const hostedSetup = [gitlabStatus, wrikeStatus, typeformStatus, calendlyStatus, airtableStatus, intercomStatus, notionStatus, linearStatus, mondayStatus, todoistStatus, figmaStatus, asanaStatus, dropboxStatus, clickUpStatus, gitHubStatus, slackStatus].some(status => status?.configured === true);
   return (
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
@@ -3958,14 +3963,16 @@ function ConnectionPicker({
         {managedFigma && <p className="wf-props__hint">Read files and comments, or post feedback as the connected user. Use a Figma file link, key or workflow variable. API limits depend on your Figma plan.</p>}</>}
       {isWebflow && <><WebflowConnection optional onPick={onPick} currentValue={currentValue} />
         {managedWebflow && <p className="wf-props__hint">Find and read CMS items, and create or update drafts in the primary language. Publishing, archiving, media uploads and reference fields are not available.</p>}</>}
+      {isGitLab && <><GitLabConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedGitLab && <p className="wf-props__hint">Use the Create Issue action with a numeric Project ID, title and optional description. Other GitLab actions are not enabled for this account.</p>}</>}
       {isAsana && <><AsanaConnection optional onPick={onPick} currentValue={currentValue} />
         {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
       {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
-      <label className="wf-props__field-label">
-        {managedWrike ? "Wrike account" : managedMonday ? "monday.com account" : managedCalendly ? "Calendly account" : managedLinear ? "Linear account" : authDisplayName}
-        {!managedWrike && !managedMonday && !managedCalendly && !managedLinear && <span className="wf-props__connection-type">({authType})</span>}
-      </label>
-      {matching.length === 0 && !managedWrike && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable && !managedFigma && !managedWebflow ? (
+      {(!managedGitLab || matching.length > 0) && <label className="wf-props__field-label">
+        {managedGitLab ? "GitLab account" : managedWrike ? "Wrike account" : managedMonday ? "monday.com account" : managedCalendly ? "Calendly account" : managedLinear ? "Linear account" : authDisplayName}
+        {!managedGitLab && !managedWrike && !managedMonday && !managedCalendly && !managedLinear && <span className="wf-props__connection-type">({authType})</span>}
+      </label>}
+      {matching.length === 0 && !managedGitLab && !managedWrike && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable && !managedFigma && !managedWebflow ? (
         <p className="wf-props__hint wf-props__connection-empty">
           {hostedSetup
             ? `Connect ${pieceDisplayName} using the connection controls above, then choose Use this account. You can also manage app connections in the Connections panel.`

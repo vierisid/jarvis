@@ -158,6 +158,7 @@ export const VERSION_PIN: Record<
   { versionRange: string; vettedVersion: string; reason: string }
 > = {
   wrike: {versionRange:"0.2.0", vettedVersion:"0.2.0", reason:"Four managed task/comment actions qualified against the published engine bundle; review upgrades"},
+  "gitlab": { vettedVersion: "0.4.2", versionRange: "0.4.2", reason: "Qualified GitLab.com issue creation; other actions remain unavailable to the managed account." },
   monday: {versionRange: "0.4.0", vettedVersion: "0.4.0", reason: "Five managed item actions qualified against the published bundle; review upgrades"},
   todoist: {versionRange: "0.6.1", vettedVersion: "0.6.1", reason: "Governed action table (MANAGED_PIECE_ADAPTERS) names all 46 actions of 0.6.1; four managed task actions qualified against the real engine; review before upgrading"},
   linear: {versionRange:"0.9.1",vettedVersion:"0.9.1",reason:"Governed action table (MANAGED_PIECE_ADAPTERS) and five managed issue and comment actions qualified against 0.9.1; review before upgrading"},
