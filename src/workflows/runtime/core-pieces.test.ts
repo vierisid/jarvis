@@ -39,8 +39,8 @@ const vendored = readdirSync(CORE).filter((name) => statSync(resolve(CORE, name)
  */
 const IN_RUN_ACTIONS: Record<string, Record<string, string>> = {
   '@activepieces/piece-approval': {
-    create_approval_links: 'makes resume links for this run; sends them nowhere',
-    wait_for_approval: 'parks the run until a resume link is opened',
+    create_approval_links: 'creates a signed-in Needs you request for this run; its links only open that page; sends nothing',
+    wait_for_approval: 'parks the run until the signed-in user decides that request in Needs you',
   },
   '@activepieces/piece-delay': {
     delayFor: 'waits', delay_until: 'waits',

@@ -2,7 +2,7 @@ import { BRIEF_ROOM_IDS, type BriefRoute, type BriefSelection } from "../contrac
 
 export type BriefEntryRoute = { kind: "legacy" } | { kind: "preview" } | { kind: "moved" } | { kind: "brief"; route: BriefRoute };
 const IDS: ReadonlySet<string> = new Set(BRIEF_ROOM_IDS);
-const SELECTION_KEYS = ["flowId", "versionId", "runId", "goalId", "factId", "approvalId", "workItemId", "opportunityId"] as const;
+const SELECTION_KEYS = ["flowId", "versionId", "runId", "goalId", "factId", "approvalId", "workItemId", "opportunityId", "inputId"] as const;
 
 export function resolveBriefEntry(href: string): BriefEntryRoute {
   const url = new URL(href, "http://localhost");

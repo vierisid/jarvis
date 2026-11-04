@@ -21,6 +21,8 @@ export interface BriefSelection {
   approvalId?: string;
   workItemId?: string;
   opportunityId?: string;
+  /** A workflow input or approval request to bring into view in Needs you. */
+  inputId?: string;
 }
 export interface BriefRoute { room: BriefRoomId; selection: Readonly<BriefSelection> }
 

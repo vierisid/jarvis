@@ -1,0 +1,23 @@
+.brief-human-inbox { display: grid; gap: 24px; margin: 24px 0; min-width: 0; }
+.brief-human-card { box-sizing: border-box; width: 100%; max-width: 760px; padding: 28px; color: var(--brief-ink); background: var(--brief-paper); border: 1px solid var(--brief-paper-edge); border-radius: var(--brief-corner-paper); overflow-wrap: anywhere; }
+.brief-human-card h2 { margin: 10px 0; font-size: 22px; line-height: 1.35; }
+.brief-human-kind { font-size: 13px; color: var(--brief-secondary); }
+.brief-human-card header p, .brief-human-deadline { font-size: 13px; line-height: 1.6; color: var(--brief-secondary); }
+.brief-human-prompt { white-space: pre-wrap; line-height: 1.7; }
+.brief-human-card fieldset { margin: 24px 0 16px; padding: 0; border: 0; min-width: 0; }
+.brief-human-field { display: grid; gap: 8px; margin-bottom: 20px; }
+.brief-human-field label { font-size: 14px; }
+.brief-human-field :is(input,textarea,select) { box-sizing: border-box; width: 100%; min-height: 44px; padding: 10px 12px; background: var(--brief-card); color: var(--brief-ink); border: 1px solid var(--brief-card-edge); border-radius: var(--brief-corner-control); font: inherit; }
+.brief-human-field textarea { resize: vertical; }
+.brief-human-card :is(input,textarea,select,button,a):focus-visible { outline: 2px solid var(--brief-focus); outline-offset: 3px; }
+.brief-human-field [aria-invalid="true"] { border-color: var(--brief-danger, #c04a42); }
+.brief-human-error { color: var(--brief-danger, #c04a42); margin: 0; font-size: 13px; }
+.brief-human-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.brief-human-actions button { min-height: 44px; padding: 10px 16px; font: inherit; border-radius: var(--brief-corner-control); border: 1px solid var(--brief-card-edge); background: var(--brief-card); color: var(--brief-ink); cursor: pointer; }
+.brief-human-actions button[type="submit"] { background: var(--brief-ink); color: var(--brief-paper); }
+.brief-human-actions button:disabled { opacity: .6; cursor: wait; }
+.brief-human-card > a { font-size: 13px; color: var(--brief-secondary); }
+.brief-human-banner { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 12px 24px; padding: 12px 16px; border: 1px solid var(--brief-card-edge); background: var(--brief-attention-surface); color: var(--brief-attention-text); border-radius: var(--brief-corner-control); }
+.brief-human-history { color: var(--brief-secondary); line-height: 1.7; }
+.brief-human-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 600px) { .brief-human-card { padding: 20px; } .brief-human-actions { flex-direction: column; } }

@@ -1,39 +1,7 @@
 import { createAction, PieceAuth, Property } from '@activepieces/pieces-framework';
-import { ExecutionType, MarkdownVariant } from '@activepieces/shared';
-
-export const waitForApprovalLink = createAction({
-  auth: PieceAuth.None(),
-  name: 'wait_for_approval',
-  displayName: 'Wait for Approval',
-  description: 'Pauses the flow and wait for the approval from the user',
-  props: {
-    markdown: Property.MarkDown({
-      variant: MarkdownVariant.WARNING,
-      value: 'Please use Manual Task feature instead from 0.48.0 and above',
-    }),
-  },
-  errorHandlingOptions: {
-    continueOnFailure: {
-      hide: true,
-    },
-    retryOnFailure: {
-      hide: true,
-    },
-  },
-  async run(ctx) {
-    if (ctx.executionType === ExecutionType.BEGIN) {
-      const waitpoint = await ctx.run.createWaitpoint({
-        type: 'WEBHOOK',
-      });
-      ctx.run.waitForWaitpoint(waitpoint.id);
-
-      return {
-        approved: true,
-      };
-    } else {
-      return {
-        approved: ctx.resumePayload.queryParams['action'] === 'approve',
-      };
-    }
-  },
-});
+import { request } from './jarvis-request';
+export const waitForApprovalLink = createAction({ auth: PieceAuth.None(), name: 'wait_for_approval', displayName: 'Wait for Approval',
+  description: 'Wait for an authenticated decision in Jarvis Needs you. Returns approved: false on rejection, cancellation or expiry and the flow continues, so branch on it. Reuses a previous Create Approval Links request in this run, or creates a standalone approval.',
+  props: { requestId: Property.ShortText({ displayName: 'Approval request ID', description: 'Optional result of Create Approval Links; required if this run has multiple link requests.', required: false }),
+    prompt: Property.LongText({ displayName: 'Proposal to review', required: false }) },
+  errorHandlingOptions: { continueOnFailure: { hide: true }, retryOnFailure: { hide: true } }, run: request });

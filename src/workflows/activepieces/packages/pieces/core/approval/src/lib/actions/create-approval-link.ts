@@ -1,37 +1,6 @@
 import { createAction, PieceAuth, Property } from '@activepieces/pieces-framework';
-import { MarkdownVariant } from '@activepieces/shared';
-
-export const createApprovalLink = createAction({
-  auth: PieceAuth.None(),
-  name: 'create_approval_links',
-  displayName: 'Create Approval Links',
-  description:
-    'Create links only without pausing the flow, use wait for approval to pause',
-  props: {
-    markdown: Property.MarkDown({
-      variant: MarkdownVariant.WARNING,
-      value: 'Please use Manual Task feature instead from 0.48.0 and above',
-    }),
-  },
-  errorHandlingOptions: {
-    continueOnFailure: {
-      hide: true,
-    },
-    retryOnFailure: {
-      hide: true,
-    },
-  },
-  async run(ctx) {
-    const waitpoint = await ctx.run.createWaitpoint({
-      type: 'WEBHOOK',
-    });
-    return {
-      approvalLink: waitpoint.buildResumeUrl({
-        queryParams: { action: 'approve' },
-      }),
-      disapprovalLink: waitpoint.buildResumeUrl({
-        queryParams: { action: 'disapprove' },
-      }),
-    };
-  },
-});
+import { request } from './jarvis-request';
+export const createApprovalLink = createAction({ auth: PieceAuth.None(), name: 'create_approval_links', displayName: 'Create Approval Links',
+  description: 'Create an authenticated Needs you request without pausing. Both links open the review form; opening a link never approves or rejects. Follow with Wait for Approval and map requestId when there is more than one request.',
+  props: { prompt: Property.LongText({ displayName: 'Proposal to review', required: false }) },
+  errorHandlingOptions: { continueOnFailure: { hide: true }, retryOnFailure: { hide: true } }, run: request });

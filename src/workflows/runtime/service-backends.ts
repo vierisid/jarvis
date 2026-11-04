@@ -1,3 +1,4 @@
+import { requestHumanInput } from './human-input';
 import {createSubflowService,returnSubflowResult} from './subflow-service';
 import { MEETING_ACCOUNTS, meetingSetup, meetingSetupMatches, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
 import { createLeadBatchService } from './batch-service';
@@ -1290,6 +1291,7 @@ export function buildSandboxServiceBackends(
   };
 
   const services: SandboxApiServices = {
+    humanInput: cancellableWorkflowService(requestHumanInput),
     subflowCall: cancellableWorkflowService(createSubflowService(effects,opts.subflowNow,(flowId,versionId)=>workflowStartIntentOf({flowId,pinned:{versionId},waitForCompletion:true}))),
     subflowResult: cancellableWorkflowService(returnSubflowResult),
     credentialResolver: opts.credentialResolver,

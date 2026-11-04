@@ -1,3 +1,5 @@
+import { listHumanInputs, resolveHumanInput } from '../runtime/human-input';
+import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion } from './editor-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
@@ -1440,6 +1442,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (Number.isFinite(declared) && declared > WAITPOINT_RESUME_MAX_BODY_BYTES) {
             return err("resume payload too large", 413);
           }
+          if (getWorkflowDb().query('SELECT request_id FROM workflow_human_wait WHERE waitpoint_id=?').get(id)) return err('Respond to this request in Needs you', 403);
           const ownedEffect = getWorkflowDb().query('SELECT id FROM workflow_effect WHERE waitpoint_id=?').get(id);
           if (ownedEffect) return err('This waitpoint is owned by Authority; resolve its approval request', 403);
           if (getWorkflowDb().query('SELECT effect_id FROM workflow_child_run WHERE waitpoint_id=?').get(id)) {
@@ -2373,6 +2376,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    "/api/workflow-inputs": {
+      GET: req => trapErrors(() => ok({ requests: listHumanInputs(callerProject(req)) })),
+    },
+    "/api/workflow-inputs/:id": {
+      POST: req => trapErrors(async () => {
+        const { id } = (req as RequestWithParams<{ id: string }>).params;
+        // This authenticated route is intentionally outside the public webhook prefix.
+        if (Number(req.headers.get('content-length') ?? 0) > HUMAN_INPUT_MAX_BODY_BYTES) return err('Response too large', 413);
+        const raw = await req.text(); if (new TextEncoder().encode(raw).length > HUMAN_INPUT_MAX_BODY_BYTES) return err('Response too large', 413);
+        let body: unknown; try { body = JSON.parse(raw); } catch { return err('Invalid JSON', 400); }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return err('Response object required', 400);
+        const { status, ...result } = resolveHumanInput(callerProject(req), id, body as Record<string, unknown>);
+        return Response.json(result, { status });
+      }),
+    },
     "/api/workflow-runs/:runId/cancel": {
       POST: (req) =>
         trapErrors(() => {
@@ -2407,7 +2425,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               ? { child: children.find(child => child.waitpointId === wp.id) }
               // A HOLD is released by Jarvis on Resume, a DEFER when its flow
               // has room for its card; never by a URL (Q-08, #1039).
-              : { resumeUrl: wp.type === "HOLD" || wp.type === "DEFER" ? null : `/api/webhooks/waitpoints/${wp.id}` }),
+              : { resumeUrl: wp.type === "HOLD" || wp.type === "DEFER" || getWorkflowDb().query('SELECT request_id FROM workflow_human_wait WHERE waitpoint_id=?').get(wp.id) ? null : `/api/webhooks/waitpoints/${wp.id}` }),
           }));
           return ok({ runId, waitpoints });
         }),

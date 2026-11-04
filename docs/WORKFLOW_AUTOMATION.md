@@ -88,7 +88,7 @@ Practical consequences:
   Authority room, and with a "Not approval-gated" badge on each community
   action step in the flow editor. Since #961 the HTTP request step is governed
   (see `Core pieces` below). The built-in steps that act only inside the run
-  (delay, approval links, schedule; store and file helper once loaded) run
+  (delay, signed-in approval requests, schedule; store and file helper once loaded) run
   without approval and leave no row of their own; the Authority room note
   says so. Which pieces count is `src/workflows/runtime/step-admission.ts`,
   which both the admission and `/api/workflows/pieces` (`notApprovalGated`)
@@ -1272,7 +1272,8 @@ Two things produce that resume job, both server-side:
   - a run that is not PAUSED (409);
   - a run whose workflow was turned off since it began (409; the run is stopped);
   - a run with another continuation already queued or running (409; retry once it has run);
-  - a MANUAL waitpoint whose step already finished (410). A WEBHOOK waitpoint is exempt: the approval piece's Create Approval Links step makes its URL in one step and the run waits for it at a later one;
+  - a waitpoint that belongs to a workflow input or approval request (403). Those are answered only by the signed-in user in Needs you, through `POST /api/workflow-inputs/:id`, and the run's waitpoint list shows them with no resume URL;
+  - a MANUAL waitpoint whose step already finished (410). A WEBHOOK waitpoint is exempt: a step may make its resume URL and the run wait for it at a later one;
   - an already-resumed waitpoint (410);
   - anything while Jarvis is paused (503 with `Retry-After`; the waitpoint is kept for Resume, Q-08). After Kill the run is already stopped, so the answer is the 409 for a run that is not PAUSED;
   - a HOLD waitpoint, which parks a step reached while Jarvis is paused (403: Jarvis releases it on Resume). The run's waitpoint list shows a HOLD with no resume URL.
@@ -1379,7 +1380,9 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | GET | `/api/workflows/triggers` | Active trigger registrations |
 | GET | `/api/workflows/events/buffer-stats` | Event buffer health (dropped count, capacity) |
 | GET, POST | `/api/webhooks/:flowId` | Engine-managed webhook trigger fan-in (503 when webhooks are not enabled in the build) |
-| POST | `/api/webhooks/waitpoints/:id` | Resume a paused flow (idempotent: 410 on second hit) |
+| POST | `/api/webhooks/waitpoints/:id` | Resume a paused flow (idempotent: 410 on second hit). 403 for a workflow input or approval request |
+| GET | `/api/workflow-inputs` | The signed-in workspace's workflow input and approval requests: every pending one plus the 20 most recent answered, expired or cancelled |
+| POST | `/api/workflow-inputs/:id` | Answer one request: `{ decision: "submit", answers }` for a form, `"approve"` or `"reject"` for an approval, or `"cancel"`. Body at most 64,000 bytes; 409 once it is answered differently, 422 for invalid answers |
 
 ### Pagination
 

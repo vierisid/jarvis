@@ -2,7 +2,7 @@
  * Pause against the real engine (Q-08). A step reached while Jarvis is paused
  * parks on a HOLD waitpoint; Resume releases it. The step must then run the
  * way it was about to: a Delay held before its first run still waits its full
- * time, a Wait for Approval still waits for its link, and a CODE step runs
+ * time, a Wait for Approval still waits for a decision, and a CODE step runs
  * once. Only the real engine shows that: the daemon side cannot see which way
  * the engine re-runs a parked step.
  *
@@ -13,7 +13,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { closeWorkflowDb, initWorkflowDb } from "../../db";
+import { closeWorkflowDb, DEFAULT_IDS, initWorkflowDb } from "../../db";
+import { createWorkflowRoutes } from "../../api/routes";
+import { listHumanInputs } from "../../runtime/human-input";
 import { createFlow, setFlowCodeStepsEnabled } from "../../db/repos/flow";
 import { createFlowRun, getFlowRun } from "../../db/repos/flow-run";
 import { createDraftVersion, lockVersion, updateDraftVersion, type FlowTriggerNode } from "../../db/repos/flow-version";
@@ -24,7 +26,7 @@ import { SandboxApi } from "../../sandbox-api/server";
 import { workflowLogsBase } from "../../sandbox-api/config";
 import { TimerWaitpointScheduler } from "../../timer-scheduler";
 import { Worker } from "../../queue/worker";
-import { claimContinuation, releaseEmergencyHolds } from "../../runtime/continuation";
+import { releaseEmergencyHolds } from "../../runtime/continuation";
 import { CODE_STEP_PIECE } from "../../runtime/piece-effect-guard";
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from "../../runtime/service-backends";
 import { WorkflowEventBuffer } from "../../runtime/event-buffer";
@@ -177,7 +179,8 @@ describe("Pause against the real engine: a held step runs as it was about to (Q-
     expect(executions).toEqual(["BEGIN", "RESUME", "RESUME"]);
   }, 90_000);
 
-  test.skipIf(skip)("a Wait for Approval held before its first run waits for its link after Resume, and reads it", async () => {
+  test.skipIf(skip)("a Wait for Approval held before its first run waits for an authenticated decision after Resume", async () => {
+    executions.length = 0;
     const { flowId, versionId } = lockedFlow({
       name: "trigger", type: "PIECE_TRIGGER", displayName: "Manual",
       settings: { ...TEST_PIECE, triggerName: "manual", input: {} },
@@ -195,18 +198,36 @@ describe("Pause against the real engine: a held step runs as it was about to (Q-
     await drain();
     expect(open(runId)).toEqual([["HOLD", "approve"]]);
 
+    expect(listHumanInputs(DEFAULT_IDS.project).filter(request => request.runId === runId)).toEqual([]);
     await resume();
-    // It made its link and is waiting on it, instead of reading a payload it never got.
+    // Releasing Pause creates the approval, but cannot count as the user's decision.
     expect(getFlowRun(runId)?.status).toBe("PAUSED");
-    const [link] = listWaitpointsByFlowRun(runId, false);
-    expect([link?.type, link?.stepName]).toEqual(["WEBHOOK", "approve"]);
+    expect(getFlowRun(runId)?.steps?.result).toBeUndefined();
+    const [waitpoint] = listWaitpointsByFlowRun(runId, false);
+    expect([waitpoint?.type, waitpoint?.stepName]).toEqual(["MANUAL", "approve"]);
+    const requests = listHumanInputs(DEFAULT_IDS.project).filter(request => request.runId === runId);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ kind: "approval", status: "pending" });
 
-    expect(claimContinuation({ runId, waitpoint: link!, kind: "webhook",
-      resumePayload: { queryParams: { action: "approve" }, body: {}, headers: {} } })).toBe("resumed");
+    const routes = createWorkflowRoutes();
+    const publicCallback = Object.assign(new Request(`http://localhost/api/webhooks/waitpoints/${waitpoint!.id}?action=approve`, {
+      method: "POST", body: JSON.stringify({ decision: "approve" }),
+    }), { params: { id: waitpoint!.id } });
+    expect((await routes["/api/webhooks/waitpoints/:id"]!.POST!(publicCallback)).status).toBe(403);
+    expect(getFlowRun(runId)?.status).toBe("PAUSED");
+
+    // The dashboard gate authenticates this route before dispatching its handler.
+    const decision = () => Object.assign(new Request(`http://localhost/api/workflow-inputs/${requests[0]!.id}`, {
+      method: "POST", body: JSON.stringify({ decision: "approve" }),
+    }), { params: { id: requests[0]!.id } });
+    expect((await routes["/api/workflow-inputs/:id"]!.POST!(decision())).status).toBe(200);
+    expect((await routes["/api/workflow-inputs/:id"]!.POST!(decision())).status).toBe(200);
     await drain();
     const final = getFlowRun(runId)!;
     expect(final.status).toBe("SUCCEEDED");
     expect(final.steps?.result).toMatchObject({ output: { output: { echo: { approved: true } } } });
+    expect(executions).toEqual(["BEGIN", "RESUME", "RESUME"]);
+    expect(open(runId)).toEqual([]);
   }, 90_000);
 
   test.skipIf(skip)("a CODE step held while paused runs once, after Resume", async () => {
