@@ -1,5 +1,4 @@
 import { wrikeNeedsReconnect } from "./wrike-refresh";
-/** Read the hosting-owned grant on every use. Refreshed access tokens are cached separately. */
 import { readManagedConnectionFile } from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
@@ -22,6 +21,7 @@ export interface WrikeConnection {
   expires_at: string;
   refresh: { url: string; instance_id: string; secret: string };
 }
+/** Read the hosting-owned grant on every use. Refreshed access tokens are cached separately. */
 export function readWrikeConnection(dataDir: string): WrikeConnection | null {
   try {
     const v = JSON.parse(

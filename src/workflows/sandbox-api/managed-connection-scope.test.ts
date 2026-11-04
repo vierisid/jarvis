@@ -643,12 +643,14 @@ describe("managed Wrike is scoped to its four qualified task actions", () => {
   const refused: Array<[string, any]> = [
     ["a CODE step input", empty(code({ conn: ref }))],
     ["a Gmail step auth", empty(gmail({ auth: ref }))],
-    ["a Wrike delete, outside the qualified four", empty(step("custom_api_call", { auth: ref, item_id: "200" }))],
+    ["a Wrike custom API call, outside the qualified four", empty(step("custom_api_call", { auth: ref, url: "https://www.wrike.com/api/v4/tasks", method: "GET" }))],
+    ["a Wrike folder creation, outside the qualified four", empty(step("create_folder", { auth: ref, parentFolderId: "IEAAAAAA", title: "New" }))],
     ["a Wrike step without an action name", empty(step(undefined))],
     ["a Wrike trigger that carries a stray actionName", wrikeTrigger()],
   ];
   for (const [label, trigger] of refused) {
-    test(`${label} is refused by the route`, async () => {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
       const response = await fetchFor(runOf(trigger), "jarvis:wrike");
       expect(response.status).toBe(403);
       expect(await response.text()).not.toContain(WRIKE_TOKEN);
