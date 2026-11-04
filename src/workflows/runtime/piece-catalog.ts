@@ -1081,7 +1081,7 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
   }
   if (entry.name === '@activepieces/piece-help-scout') {
     const samples = {
-      find_customer:{found:true,data:{id:123,firstName:'Example',lastName:'Customer'}},
+      find_customer:{found:true,data:{id:123,firstName:'Example',lastName:'Customer',email:'customer@example.test'}},
       find_conversation:{found:true,data:{id:456,number:12,mailboxId:34,subject:'Example request',status:'active',preview:'Example message',primaryCustomer:{id:123,email:'customer@example.test'}}},
       add_note:{id:'789'},
     };
