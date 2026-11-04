@@ -1,7 +1,7 @@
 import { describe, expect, it, afterEach } from 'bun:test';
 import { AnthropicProvider, anthropicMessagesUrl } from './anthropic.ts';
 import { CHAT_MODEL_SUGGESTIONS } from './model-catalog.ts';
-import type { LLMMessage, LLMStreamEvent } from './provider.ts';
+import { LLMProviderError, type LLMMessage, type LLMStreamEvent } from './provider.ts';
 
 const originalFetch = globalThis.fetch;
 
@@ -434,6 +434,8 @@ describe('AnthropicProvider SSE chat responses', () => {
       { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"city"' } },
       { type: 'content_block_stop', index: 1 },
       { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 4 } },
+      // A whole message ends in message_stop; without it the body was cut off (#1097).
+      { type: 'message_stop' },
     ])) as unknown as typeof fetch;
 
     const result = await new AnthropicProvider('k', undefined, { baseUrl: 'https://gw.example' })
@@ -452,6 +454,8 @@ describe('AnthropicProvider SSE chat responses', () => {
       { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"city":"Rome"}' } },
       { type: 'content_block_stop', index: 0 },
       { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 2 } },
+      // A whole message ends in message_stop; without it the body was cut off (#1097).
+      { type: 'message_stop' },
     ])) as unknown as typeof fetch;
 
     const result = await new AnthropicProvider('k', undefined, { baseUrl: 'https://gw.example' })
@@ -476,4 +480,148 @@ describe('Current Claude request parameters', () => {
       expect(body.temperature).toBeUndefined();
     });
   }
+});
+
+describe('AnthropicProvider stream completion (#1097)', () => {
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  const toolTurn = [
+    { type: 'message_start', message: { model: 'claude-test', usage: { input_tokens: 5, output_tokens: 0 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 't1', name: 'echo', input: {} } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"message":"hello"}' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'tool_use', usage: { output_tokens: 9 } } },
+    { type: 'message_stop' },
+  ];
+  const textTurn = [
+    { type: 'message_start', message: { model: 'claude-test', usage: { input_tokens: 5, output_tokens: 0 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'The answer is' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn', usage: { output_tokens: 3 } } },
+    { type: 'message_stop' },
+  ];
+
+  /** The SSE body in 11-byte chunks, so events straddle reads as on the wire. */
+  function chunked(events: unknown[], tail = '\n\n') {
+    const bytes = new TextEncoder().encode(
+      events.map((e, i) => `event: ${(e as { type: string }).type}\ndata: ${JSON.stringify(e)}${i === events.length - 1 ? tail : '\n\n'}`).join(''),
+    );
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < bytes.length; i += 11) controller.enqueue(bytes.slice(i, i + 11));
+        controller.close();
+      },
+    });
+  }
+
+  async function run(events: unknown[], tail?: string): Promise<LLMStreamEvent[]> {
+    globalThis.fetch = (async () => new Response(chunked(events, tail), {
+      status: 200, headers: { 'content-type': 'text/event-stream' },
+    })) as unknown as typeof fetch;
+    const out: LLMStreamEvent[] = [];
+    for await (const e of new AnthropicProvider('key').stream([{ role: 'user', content: 'hi' }])) out.push(e);
+    return out;
+  }
+
+  it('a complete tool turn ends in done with the call', async () => {
+    const events = await run(toolTurn);
+    const done = events.find((e) => e.type === 'done');
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+    expect(done?.type === 'done' && done.response.finish_reason).toBe('tool_use');
+    expect(done?.type === 'done' && done.response.tool_calls).toEqual([{ id: 't1', name: 'echo', arguments: { message: 'hello' } }]);
+  });
+
+  it('a final message_stop without a trailing newline still completes', async () => {
+    const events = await run(textTurn, '');
+    expect(events.map((e) => e.type)).toEqual(['text', 'done']);
+  });
+
+  for (const [label, events] of [
+    ['EOF after message_delta, before message_stop', toolTurn.slice(0, -1)],
+    ['EOF before message_delta and message_stop', toolTurn.slice(0, -2)],
+    ['EOF mid-text, before any terminal event', textTurn.slice(0, 3)],
+    ['EOF after message_delta of a text turn', textTurn.slice(0, -1)],
+  ] as const) {
+    it(`${label} is a retryable network error, never done`, async () => {
+      const out = await run(events as unknown[]);
+      expect(out.some((e) => e.type === 'done')).toBe(false);
+      const last = out[out.length - 1];
+      expect(last).toEqual({ type: 'error', error: 'Anthropic stream ended before completion', code: 'network' });
+    });
+  }
+
+  /** A raw body in 7-byte chunks. */
+  async function runRaw(body: string) {
+    const bytes = new TextEncoder().encode(body);
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < bytes.length; i += 7) controller.enqueue(bytes.slice(i, i + 7));
+        controller.close();
+      },
+    }), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as unknown as typeof fetch;
+    const out: LLMStreamEvent[] = [];
+    for await (const e of new AnthropicProvider('key').stream([{ role: 'user', content: 'hi' }])) out.push(e);
+    return out;
+  }
+  const sse = (events: unknown[], eol = '\n') => events.map((e) => `data: ${JSON.stringify(e)}${eol}${eol}`).join('');
+
+  it('CRLF line endings complete normally', async () => {
+    const out = await runRaw(sse(textTurn, '\r\n'));
+    expect(out.map((e) => e.type)).toEqual(['text', 'done']);
+  });
+
+  it('data: without the space after the colon is still read', async () => {
+    const out = await runRaw(textTurn.map((e) => `data:${JSON.stringify(e)}\n\n`).join(''));
+    expect(out.map((e) => e.type)).toEqual(['text', 'done']);
+  });
+
+  it('a body cut inside the message_stop line is a network error', async () => {
+    const body = sse(toolTurn);
+    const out = await runRaw(body.slice(0, body.lastIndexOf('message_stop') + 4));
+    expect(out.some((e) => e.type === 'done')).toBe(false);
+    expect(out[out.length - 1]).toEqual({ type: 'error', error: 'Anthropic stream ended before completion', code: 'network' });
+  });
+
+  it('text and a complete tool call before the cut still end in an error, not done', async () => {
+    const mixed = [...textTurn.slice(0, 4), ...toolTurn.slice(1, 4).map((e) => ({ ...e, index: 1 })), toolTurn[4]];
+    const out = await runRaw(sse(mixed));
+    expect(out.map((e) => e.type)).toEqual(['text', 'tool_call', 'error']);
+  });
+
+  it('the response body is released when the provider stops reading early', async () => {
+    // An error event ends the turn while the connection is still open.
+    let cancelled = false;
+    const head = new TextEncoder().encode(sse([textTurn[0], { type: 'error', error: { type: 'overloaded_error', message: 'busy' } }]));
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(head); },
+      cancel() { cancelled = true; },
+    }), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as unknown as typeof fetch;
+    const out: LLMStreamEvent[] = [];
+    for await (const e of new AnthropicProvider('key').stream([{ role: 'user', content: 'hi' }])) out.push(e);
+    expect(out.map((e) => e.type)).toEqual(['error']);
+    expect(cancelled).toBe(true);
+  });
+
+  it('a body cut mid-line on the SSE chat path throws a network error, not invalid JSON', async () => {
+    const body = sse(toolTurn);
+    globalThis.fetch = (async () => new Response(body.slice(0, body.lastIndexOf('message_stop') + 4), {
+      status: 200, headers: { 'content-type': 'text/event-stream' },
+    })) as unknown as typeof fetch;
+    const err = await new AnthropicProvider('k', undefined, { baseUrl: 'https://gw.example' })
+      .chat([{ role: 'user', content: 'hi' }]).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(LLMProviderError);
+    expect((err as LLMProviderError).code).toBe('network');
+  });
+
+  it('an EOF before message_stop on the SSE chat path throws a network error', async () => {
+    globalThis.fetch = (async () => new Response(chunked(toolTurn.slice(0, -1)), {
+      status: 200, headers: { 'content-type': 'text/event-stream' },
+    })) as unknown as typeof fetch;
+    const err = await new AnthropicProvider('k', undefined, { baseUrl: 'https://gw.example' })
+      .chat([{ role: 'user', content: 'hi' }]).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(LLMProviderError);
+    expect((err as LLMProviderError).code).toBe('network');
+    expect((err as LLMProviderError).message).toBe('Anthropic stream ended before completion');
+  });
 });

@@ -35,7 +35,7 @@ describe('BrowserController autoLaunch: false', () => {
     } finally {
       for (const [k, v] of Object.entries(saved)) if (v !== undefined) process.env[k] = v;
     }
-  });
+  }, 30_000);
 });
 
 const falseExe = process.platform === 'win32' ? null : Bun.which('false');
@@ -77,8 +77,14 @@ printf 'synthetic browser startup diagnostic\\n' >&2
 exec sleep 60
 `, { mode: 0o755 });
     try {
+      const started = Date.now();
       const err = await launchTestChromium({ profilePrefix: prefix, startupMs: 1_000, executable })
         .then(() => null, (e: Error) => e);
+      // The cleanup's TERM reaches a browser that has no TERM handler of its
+      // own (this one is `sleep`): the watchdog ignores TERM (#1241), and
+      // without resetting it for the browser the KILL after the 5s grace is
+      // what stopped it (measured: ~1.1s with the reset, ~6.1s without).
+      expect(Date.now() - started).toBeLessThan(4_000);
       expect(err?.message).toContain('Chromium CDP did not come up');
       expect(err?.message).toContain('HTTP 503');
       expect(err?.message).toContain('synthetic browser startup diagnostic');
@@ -151,6 +157,32 @@ describe.skipIf(!chromiumExe)('launchTestChromium', () => {
     expect(await gone(chromium.pid, 2_000)).toBe(true);
     expect(existsSync(chromium.profileDir)).toBe(false);
     await chromium.close(); // idempotent
+  }, 60_000);
+
+  test.skipIf(!existsSync("/proc/self/stat"))("a SIGTERM to the watchdog, as bun test sends on any timeout, leaves the shared browser up (#1241)", async () => {
+    const chromium = await launchTestChromium({ profilePrefix: 'jarvis-fixture-test-' });
+    try {
+      // Chromium's parent is the watchdog shell. A test or hook timing out
+      // makes bun SIGTERM it ("killed 1 dangling process"); that used to stop
+      // the browser every later test in the file shares.
+      const stat = readFileSync(`/proc/${chromium.pid}/stat`, 'utf8');
+      const watchdog = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+      expect(watchdog).toBeGreaterThan(1);
+      process.kill(watchdog, 'SIGTERM');
+      await Bun.sleep(1_000);
+      expect(alive(watchdog)).toBe(true);
+      expect(alive(chromium.pid)).toBe(true);
+      const res = await fetch(`http://127.0.0.1:${chromium.port}/json/version`);
+      expect(res.ok).toBe(true);
+    } finally {
+      const started = Date.now();
+      await chromium.close();
+      // The cleanup's TERM still stops Chromium, rather than close() waiting
+      // out the 5s grace for the KILL.
+      expect(Date.now() - started).toBeLessThan(4_000);
+    }
+    expect(await gone(chromium.pid, 2_000)).toBe(true);
+    expect(existsSync(chromium.profileDir)).toBe(false);
   }, 60_000);
 
   test('the browser dies with its owner even when the owner is SIGKILLed', async () => {
