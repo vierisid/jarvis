@@ -2,9 +2,9 @@
 export const HOSTED_CONNECTION_PROVIDERS = {
   clickup: 'ClickUp', slack: 'Slack', trello: 'Trello', mailchimp: 'Mailchimp', github: 'GitHub',
   dropbox: 'Dropbox', asana: 'Asana', intercom: 'Intercom', typeform: 'Typeform', airtable: 'Airtable',
-  notion: 'Notion', calendly: 'Calendly', linear: 'Linear', todoist: 'Todoist', monday: 'monday.com',
+  notion: 'Notion', calendly: 'Calendly', linear: 'Linear', todoist: 'Todoist', monday: 'monday.com', wrike: 'Wrike',
   figma: 'Figma',
-  webflow: 'Webflow', 'help-scout': 'Help Scout',
+  webflow: 'Webflow', pipedrive: 'Pipedrive', 'help-scout': 'Help Scout',
 } as const;
 export type HostedConnectionProvider = keyof typeof HOSTED_CONNECTION_PROVIDERS;
 export type ConnectionProvider = HostedConnectionProvider | 'google';

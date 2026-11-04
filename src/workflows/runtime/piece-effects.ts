@@ -87,7 +87,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE || piece === HELP_SCOUT_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === WRIKE_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE || piece === PIPEDRIVE_PIECE || piece === HELP_SCOUT_PIECE) && managedPieceChanges(piece, action))
     // A Webflow refund moves money and is not idempotent: never repeat one whose outcome is unknown.
     || (piece === WEBFLOW_PIECE && action === 'refund_order')
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
@@ -108,11 +108,27 @@ const CALENDLY_PIECE = '@activepieces/piece-calendly';
 const INTERCOM_PIECE = '@activepieces/piece-intercom';
 const TYPEFORM_PIECE = '@activepieces/piece-typeform';
 const LINEAR_PIECE = '@activepieces/piece-linear';
+const WRIKE_PIECE = '@activepieces/piece-wrike';
 const MONDAY_PIECE = '@activepieces/piece-monday';
 const HELP_SCOUT_PIECE = "@activepieces/piece-help-scout";
 const FIGMA_PIECE = '@activepieces/piece-figma';
+const PIPEDRIVE_PIECE = '@activepieces/piece-pipedrive';
+/** Owner/visibility changes and marketing consent require access-level authority. */
+export function pipedrivePersonCategory(input: Record<string, unknown>): ActionCategory {
+  if (present(input.ownerId) || present(input.visibleTo) || present(input.marketing_status)) return 'modify_settings';
+  return 'write_data';
+}
+/** A deal: upstream 0.10.3 `status` includes `deleted`, the worst case, so it is
+ * checked first (and any value outside open/won/lost counts as it); otherwise
+ * as a person. Managed connections offer only
+ * open/won/lost (`managed-pipedrive-inputs.ts`). */
+export function pipedriveRecordCategory(input: Record<string, unknown>): ActionCategory {
+  // Fail closed: any status other than open/won/lost is taken as the delete.
+  if (present(input.status) && !['open', 'won', 'lost'].includes(input.status as string)) return 'delete_data';
+  return pipedrivePersonCategory(input);
+}
 const WEBFLOW_PIECE = '@activepieces/piece-webflow';
-/** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist, monday.com, Figma or Webflow action that changes the account (write,
+/** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist, monday.com, Wrike, Figma or Webflow action that changes the account (write,
  * send, email, delete or an access change). None parks its flow, so each one
  * can be tracked; a read never is. A category the adapter does not map tracks
  * nothing, so ClickUp (no send_email or modify_settings names) and Mailchimp
@@ -206,6 +222,11 @@ export function asanaDuplicateProjectCategory(input: Record<string, unknown>): A
  */
 export function webflowFulfillOrderCategory(input: Record<string, unknown>): ActionCategory {
   return !present(input.send_order_fulfilled_email) || input.send_order_fulfilled_email === false ? 'write_data' : 'send_email';
+}
+
+/** Assignment can share a task with another person. Unresolved assignments use the safer category. */
+export function wrikeTaskCategory(input: Record<string, unknown>): ActionCategory {
+  return present(input.assignees) && !(Array.isArray(input.assignees) && input.assignees.length === 0) ? 'modify_settings' : 'write_data';
 }
 
 /**
@@ -848,6 +869,43 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  // Exact npm Pipedrive 0.10.3 action names; managed credentials run only eight contact/deal operations.
+  catalogId: 'pipedrive', pieceName: PIPEDRIVE_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['personId','dealId','name','title','term','fields','exactMatch','email','phone','organizationId','pipelineId','stageId','status','dealValue','dealValueCurrency','probability','expectedCloseDate','ownerId','visibleTo','marketing_status','productId','activityId','noteId','leadId','mergeWithId','productAttachmentId','id'],
+  categories: {
+    read_data: ['get-note', 'find-deals-associated-with-person', 'find-products', 'find-notes', 'get-product', 'find-user', 'get-deal', 'list-deals', 'search-deals', 'list-deal-products', 'get-person', 'list-persons', 'search-persons', 'get-organization', 'list-organizations', 'search-organizations', 'get-activity', 'list-activities', 'get-lead', 'get-lead-conversion-status', 'list-pipelines', 'list-stages', 'list-activity-types', 'list-users', 'get-current-user'],
+    write_data: ['create-note', 'update-note', 'add-labels-to-person', 'add-product-to-deal', 'attach-file'],
+    // Every action upstream labels DESTRUCTIVE. A deal create/update can set
+    // `status: 'deleted'`, so blind it is a delete; its input narrows it. A
+    // product create/update sends `is_deleted: !isActive`, so an inactive (or
+    // unset) product is soft-deleted.
+    delete_data: ['delete-deal', 'delete-person', 'delete-organization', 'delete-activity', 'delete-lead', 'delete-note', 'delete-product', 'merge-deals', 'merge-persons', 'merge-organizations', 'remove-product-from-deal', 'create-deal', 'update-deal', 'create-product', 'update-product'],
+    // Upstream legacy Find operations create/delete filters. Managed connections use Search instead.
+    modify_settings: ['add-follower', 'create-activity', 'update-activity', 'create-lead', 'update-lead', 'create-organization', 'update-organization', 'create-person', 'update-person', 'find-product', 'find-organization', 'find-person', 'find-deal', 'find-activity', 'find-lead', 'convert-lead-to-deal', 'custom_api_call'],
+  },
+  categoryFromInput: {
+    ...Object.fromEntries(['create-person', 'update-person'].map(action =>
+      [action, { props: ['ownerId', 'visibleTo', 'marketing_status'], category: pipedrivePersonCategory }])),
+    ...Object.fromEntries(['create-deal', 'update-deal'].map(action =>
+      [action, { props: ['ownerId', 'visibleTo', 'marketing_status', 'status'], category: pipedriveRecordCategory }])),
+  },
+}, {
+  // Published Wrike 0.2.0. The managed credential enables only four task/comment actions.
+  catalogId: 'wrike', pieceName: WRIKE_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['taskId', 'folderId', 'title', 'description', 'status', 'importance', 'entityType', 'entityId', 'text', 'assignees', 'authors', 'start_date', 'due_date', 'duration', 'customFields', 'plainText', 'fileName', 'file', 'parentFolderId', 'shareds', 'ownerIds', 'projectOwnerId', 'project', 'projectStartDate', 'projectEndDate', 'end_date', 'sortField', 'sortOrder', 'owners', 'parentIds'],
+  categories: {
+    read_data: ['find_task', 'find_folder'],
+    write_data: ['upload_attachment'],
+    send_message: ['add_comment'],
+    // Task actions take their worst case without inputs; the rule narrows plain edits.
+    // Folder/project creation can assign owners and share access.
+    modify_settings: ['create_task', 'update_task', 'create_folder', 'create_project', 'custom_api_call'],
+  },
+  categoryFromInput: {
+    create_task: {props:['assignees'],category:wrikeTaskCategory},
+    update_task: {props:['assignees'],category:wrikeTaskCategory},
+  },
+}, {
   // Every action in published Help Scout 0.2.1; managed credentials enable three.
   catalogId:'help-scout',pieceName:HELP_SCOUT_PIECE,unknownActionCategory:'modify_settings',
   targetProps:['conversationId','mailboxId','number','email','text','userId','subject','status','assignTo','query'],
@@ -1139,18 +1197,20 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       'update_allocation', 'update_custom_field', 'update_custom_field_enum_option', 'update_project_brief',
       'update_section', 'update_tag', 'update_task', 'update_user', 'upload_attachment'],
     // Every delete, and the removals upstream labels DESTRUCTIVE.
+    // `update_project` sits here at its worst case, an archive, and narrows by input.
     delete_data: ['delete_allocation', 'delete_attachment', 'delete_comment', 'delete_custom_field',
       'delete_membership', 'delete_project', 'delete_project_brief', 'delete_section', 'delete_status_update',
-      'delete_tag', 'delete_task', 'remove_project_members', 'remove_user_from_team', 'remove_user_from_workspace'],
+      'delete_tag', 'delete_task', 'remove_project_members', 'remove_user_from_team', 'remove_user_from_workspace',
+      'update_project'],
     // Who can see or do what: granting a person access to a project, team or
     // workspace. `add_project_followers` makes a follower who is not yet a
     // member a member (upstream's own description). The project and team
-    // creates, `duplicate_project`, `update_project` and `update_team` sit
-    // here at their worst case (team, privacy, owner, visibility, copied
-    // members or permissions) and narrow by input.
+    // creates, `duplicate_project` and `update_team` sit here at their worst
+    // case (team, privacy, visibility, copied members or permissions) and
+    // narrow by input.
     modify_settings: ['add_project_followers', 'add_project_members', 'add_user_to_team', 'add_user_to_workspace',
       'approve_access_request', 'create_membership', 'create_project', 'create_team', 'duplicate_project',
-      'instantiate_project_template', 'update_project', 'update_team'],
+      'instantiate_project_template', 'update_team'],
   },
   categoryFromInput: {
     create_project: { props: ['team', 'privacy_setting'], category: asanaCreateProjectCategory },

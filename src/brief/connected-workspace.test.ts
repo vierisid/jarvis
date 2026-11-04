@@ -271,7 +271,7 @@ const oauthPieces = [
   ['clickup', 'ClickUp'], ['github', 'GitHub'], ['trello', 'Trello'], ['mailchimp', 'Mailchimp'],
   ['slack', 'Slack'], ['dropbox', 'Dropbox'], ['asana', 'Asana'], ['intercom', 'Intercom'],
   ['typeform', 'Typeform'], ['airtable', 'Airtable'], ['notion', 'Notion'], ['calendly', 'Calendly'],
-  ['linear', 'Linear'], ['todoist', 'Todoist'], ['monday', 'monday.com'], ['figma', 'Figma'], ['webflow', 'Webflow'], ['help-scout', 'HelpScout'],
+  ['linear', 'Linear'], ['todoist', 'Todoist'], ['monday', 'monday.com'], ['figma', 'Figma'], ['webflow', 'Webflow'], ['pipedrive', 'Pipedrive'], ['help-scout', 'Help Scout'],
 ] as const;
 for (const [id] of oauthPieces) test(`${id} library setup uses the hosted connection, while saved manual accounts keep their own edit path`, () => {
   (sources as any)[id] = () => ({ configured: true, connected: false, reconnect: false, account: null });
@@ -304,4 +304,14 @@ test('self-hosted apps without managed configuration retain manual setup', () =>
   sources.clickup = () => ({ configured: false, connected: false, account: null });
   sources.pieces = () => new PieceCatalog([piece('@activepieces/piece-clickup')]);
   expect(provider.read().setup.find(a => a.id === row('piece:@activepieces/piece-clickup').setupActionId)?.target.kind).toBe('piece_credentials');
+});
+
+test('managed Wrike shows its stored grant, a pending reconnect as disconnected, and routes setup to its own hosted integration', () => {
+  sources.wrike = () => ({configured:true, connected:true, account:{id:'KUAAAAAA',label:'owner@example.test'}});
+  expect(row('native:wrike')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'KUAAAAAA',label:'Wrike: owner@example.test',setupActionId:'setup:wrike'});
+  expect(provider.read().setup.find(s => s.id === 'setup:wrike')?.target).toEqual({kind:'hosted_integration',provider:'wrike'});
+  sources.wrike = () => ({configured:true, connected:false, account:{id:'KUAAAAAA',label:'owner@example.test'}});
+  expect(row('native:wrike')).toMatchObject({status:'disconnected',availability:'unavailable',evidence:'none'});
+  sources.wrike = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:wrike')).toBe(false);
 });

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
 import { MailchimpConnection } from "../../../integrations/MailchimpConnection";
 import { AsanaConnection } from "../../../integrations/AsanaConnection";
+import { PipedriveConnection } from "../../../integrations/PipedriveConnection";
 import { HelpScoutConnection } from "../../../integrations/HelpScoutConnection";
 import { MondayConnection } from "../../../integrations/MondayConnection";
 import { TodoistConnection } from "../../../integrations/TodoistConnection";
@@ -11,6 +12,7 @@ import { GitHubConnection } from "../../../integrations/GitHubConnection";
 import { DropboxConnection } from "../../../integrations/DropboxConnection";
 import { TrelloConnection } from "../../../integrations/TrelloConnection";
 import { LinearConnection } from "../../../integrations/LinearConnection";
+import { WrikeConnection } from "../../../integrations/WrikeConnection";
 import { TypeformConnection } from "../../../integrations/TypeformConnection";
 import { AirtableConnection } from "../../../integrations/AirtableConnection";
 import { SlackConnection } from "../../../integrations/SlackConnection";
@@ -353,10 +355,11 @@ export function IntegrationsTab({
       <DropboxConnection optional />
       <TrelloConnection optional />
       <LinearConnection optional />
+      <WrikeConnection optional />
       <MondayConnection optional />
       <TypeformConnection optional />
       <AirtableConnection optional />
-      <TodoistConnection optional /><AsanaConnection optional /><HelpScoutConnection optional />
+      <TodoistConnection optional /><AsanaConnection optional /><PipedriveConnection optional /><HelpScoutConnection optional />
       <FigmaConnection optional />
       <WebflowConnection optional />
       <SlackConnection optional />

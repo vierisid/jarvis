@@ -36,6 +36,10 @@ listens on a `unix:` socket (for example behind a reverse proxy) or whose
 default and these features. Set `JARVIS_HOSTED_DASHBOARD=legacy` to opt out.
 
 The authenticated, uncached `/api/brief/host` descriptor supplies `dashboard: brief`.
+It also carries a `workspaceId`, created once and stored as `workspace-id` in the
+data directory. An open dashboard keeps unsaved edits across a daemon restart while
+that id, the install mode and the dashboard choice stay the same; if any of them
+changes, it asks for a reload.
 The ordinary production UI uses that descriptor to select the connected host, with
 one conversation/socket owner. It does not use `JARVIS_LOCAL_INTEGRATION`, developer
 tools, browser storage or a URL as release authorization. Its choice is made once,

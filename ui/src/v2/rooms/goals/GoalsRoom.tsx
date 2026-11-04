@@ -76,6 +76,7 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
   const [healthFilter, setHealthFilter] = useState<GoalHealth | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const newButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const open = () => { if (takeGoalCreation()) setCreateOpen(true); };
     open(); window.addEventListener(GOAL_CREATE_EVENT, open);
@@ -267,6 +268,7 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
           <Icon icon={RefreshCw} size="sm" />
         </button>
         <button
+          ref={newButtonRef}
           type="button"
           className="v2-goals__new-btn"
           onClick={() => setCreateOpen(true)}
@@ -312,10 +314,12 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
       {/* Detail panel — expanded mode only */}
       {mode === "expanded" && selectedGoal && (
         <DetailPanel
+          key={selectedGoal.id}
           goal={selectedGoal}
           allGoals={data.goals}
           childrenByParent={data.childrenByParent}
           onClose={() => setSelectedId(null)}
+          onDetails={(input) => data.updateDetails(selectedGoal.id, input)}
           onScore={async (score, reason) => {
             const r = await data.updateScore(selectedGoal.id, score, reason);
             setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
@@ -334,6 +338,7 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
       {createOpen && (
         <CreateDialog
           onClose={() => setCreateOpen(false)}
+          fallbackFocus={newButtonRef}
           onCreate={async (input) => {
             const r = await data.createQuick(input);
             if (r.ok) {
@@ -1014,6 +1019,7 @@ function DetailPanel({
   childrenByParent,
   onClose,
   onScore,
+  onDetails,
   onStatus,
   onHealth,
 }: {
@@ -1021,6 +1027,7 @@ function DetailPanel({
   allGoals: Goal[];
   childrenByParent: Map<string, Goal[]>;
   onClose: () => void;
+  onDetails: (input: GoalDetailsUpdate) => Promise<{ ok: boolean; message: string }>;
   onScore: (score: number, reason: string) => void;
   onStatus: (status: GoalStatus) => void;
   onHealth: (health: GoalHealth) => void;
@@ -1028,17 +1035,53 @@ function DetailPanel({
   const parent = goal.parent_id ? allGoals.find((g) => g.id === goal.parent_id) : null;
   const children = childrenByParent.get(goal.id) ?? [];
 
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(goal.title);
+  const [deadline, setDeadline] = useState(dateInputValue(goal.deadline));
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // The edit button unmounts while the form is open; closing the form puts
+  // focus back on it instead of dropping it to the document body.
+  const editButtonRef = useRef<HTMLButtonElement>(null);
+  const [returnFocus, setReturnFocus] = useState(false);
+  useEffect(() => {
+    if (editing || !returnFocus) return;
+    editButtonRef.current?.focus();
+    setReturnFocus(false);
+  }, [editing, returnFocus]);
+  const closeEditor = () => { setEditing(false); setReturnFocus(true); };
+  // What the form opened with. Save diffs against this, not the polled goal, so
+  // a deadline another writer changed meanwhile is not reverted by a title edit.
+  const [opened, setOpened] = useState({ title: goal.title, deadline: dateInputValue(goal.deadline) });
+  const [deadlineIncomplete, setDeadlineIncomplete] = useState(false);
+  const edit = () => {
+    const start = { title: goal.title, deadline: dateInputValue(goal.deadline) };
+    setOpened(start); setTitle(start.title); setDeadline(start.deadline); setDeadlineIncomplete(false); setSaveError(null); setEditing(true);
+  };
+  const saveDetails = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (saving || !title.trim()) return;
+    // A partly cleared date reads as "" but is not a request to remove the deadline.
+    const parsed = deadlineIncomplete ? undefined : deadline ? parseDeadlineInput(deadline) : null;
+    if (parsed === undefined) { setSaveError("Enter a valid deadline, or use Clear deadline."); return; }
+    // Send only what changed. The server re-runs health whenever a deadline is
+    // present, and a date input can only express 23:59 on a day, so resending
+    // an untouched deadline would move one set at another time and reset health.
+    const input: GoalDetailsUpdate = {};
+    if (title.trim() !== opened.title) input.title = title.trim();
+    if (deadline !== opened.deadline) input.deadline = parsed;
+    if (!Object.keys(input).length) { closeEditor(); return; }
+    setSaving(true); setSaveError(null);
+    try {
+      const result = await onDetails(input);
+      if (result.ok) closeEditor(); else setSaveError(result.message);
+    } catch { setSaveError("Could not save goal. Try again."); }
+    finally { setSaving(false); }
+  };
+
   // Local score draft so the slider feels responsive without spamming the API.
   const [scoreDraft, setScoreDraft] = useState(goal.score);
   const [scoreReason, setScoreReason] = useState("");
-  const lastIdRef = useRef(goal.id);
-  useEffect(() => {
-    if (lastIdRef.current !== goal.id) {
-      setScoreDraft(goal.score);
-      setScoreReason("");
-      lastIdRef.current = goal.id;
-    }
-  }, [goal.id, goal.score]);
 
   return (
     <aside className="v2-goals__side">
@@ -1061,6 +1104,22 @@ function DetailPanel({
       </header>
 
       <div className="v2-goals__side-body">
+        {editing ? <form className="v2-goals__side-section" aria-label="Edit goal details" onSubmit={saveDetails}
+          onKeyDown={e => { if (e.key === "Escape" && !saving) { e.preventDefault(); e.stopPropagation(); closeEditor(); } }}>
+          <label className="v2-goals__field"><span className="v2-goals__field-label">Title</span>
+            <input className="v2-goals__input" value={title} onChange={e => setTitle(e.target.value)} required disabled={saving} autoFocus />
+          </label>
+          <label className="v2-goals__field"><span className="v2-goals__field-label">Deadline (optional)</span>
+            <input className="v2-goals__input" type="date" value={deadline} onChange={e => { setDeadline(e.target.value); setDeadlineIncomplete(!!e.target.validity?.badInput); }} disabled={saving} />
+          </label>
+          {(deadline || deadlineIncomplete) && <button type="button" className="v2-goals__btn v2-goals__btn--secondary" disabled={saving} onClick={() => { setDeadline(""); setDeadlineIncomplete(false); }}>Clear deadline</button>}
+          {saveError && <p role="alert">{saveError}</p>}
+          <div className="v2-goals__chip-row">
+            <button type="button" className="v2-goals__btn v2-goals__btn--secondary" disabled={saving} onClick={closeEditor}>Cancel</button>
+            <button type="submit" className="v2-goals__btn v2-goals__btn--primary" disabled={saving || !title.trim()}>{saving ? "Saving…" : "Save details"}</button>
+          </div>
+        </form> : <button ref={editButtonRef} type="button" className="v2-goals__btn v2-goals__btn--secondary" onClick={edit}>Edit title and deadline</button>}
+
         {goal.description && (
           <p className="v2-goals__side-desc">{goal.description}</p>
         )}
@@ -1102,13 +1161,14 @@ function DetailPanel({
 
         <section className="v2-goals__side-section">
           <div className="v2-goals__side-label">Status</div>
-          <div className="v2-goals__chip-row">
+          <div className="v2-goals__chip-row" role="group" aria-label="Status">
             {GOAL_STATUSES.map((s) => (
               <button
                 key={s}
                 type="button"
                 className="v2-goals__chip"
                 data-active={goal.status === s}
+                aria-pressed={goal.status === s}
                 onClick={() => onStatus(s)}
               >
                 {s}
@@ -1119,13 +1179,14 @@ function DetailPanel({
 
         <section className="v2-goals__side-section">
           <div className="v2-goals__side-label">Health</div>
-          <div className="v2-goals__chip-row">
+          <div className="v2-goals__chip-row" role="group" aria-label="Health">
             {GOAL_HEALTHS.map((h) => (
               <button
                 key={h}
                 type="button"
                 className="v2-goals__chip"
                 data-active={goal.health === h}
+                aria-pressed={goal.health === h}
                 onClick={() => onHealth(h)}
               >
                 {h.replace(/_/g, " ")}
@@ -1166,17 +1227,46 @@ function DetailPanel({
 function CreateDialog({
   onClose,
   onCreate,
+  fallbackFocus,
 }: {
   onClose: () => void;
   onCreate: (input: { title: string; level: GoalLevel; deadline?: number }) => Promise<boolean>;
+  /** Where focus returns when the opener is gone, e.g. a Brief "Add goal" button that navigated here. */
+  fallbackFocus?: React.RefObject<HTMLElement | null>;
 }) {
   const [title, setTitle] = useState("");
   const [level, setLevel] = useState<GoalLevel>("task");
   const [deadlineStr, setDeadlineStr] = useState("");
   const [busy, setBusy] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [opener] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  const closeRef = useRef(onClose), busyRef = useRef(busy), fallbackRef = useRef(fallbackFocus);
+  closeRef.current = onClose; busyRef.current = busy; fallbackRef.current = fallbackFocus;
+  useEffect(() => {
+    const box = dialogRef.current!;
+    box.querySelector<HTMLInputElement>('input')?.focus();
+    const focusables = () => [...box.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')];
+    const contain = () => { if (!box.contains(document.activeElement)) (focusables()[0] ?? box).focus(); };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopPropagation();
+        if (!busyRef.current) closeRef.current();
+      } else if (event.key === 'Tab') {
+        const items = focusables(), first = items[0], last = items.at(-1);
+        if (!first) { event.preventDefault(); box.focus(); return; }
+        if (event.shiftKey && (document.activeElement === first || !box.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && (document.activeElement === last || !box.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener('focusin', contain);
+    window.addEventListener('keydown', key, true);
+    return () => { document.removeEventListener('focusin', contain); window.removeEventListener('keydown', key, true); (opener?.isConnected && opener !== document.body ? opener : fallbackRef.current?.current)?.focus(); };
+  }, [opener]);
 
   const submit = async () => {
     if (!title.trim()) return;
+    // Disabling the focused control would drop focus to the page; hold it on the dialog.
+    dialogRef.current?.focus();
     setBusy(true);
     const deadlineMs = deadlineStr ? parseDeadlineInput(deadlineStr) : undefined;
     const ok = await onCreate({
@@ -1186,12 +1276,15 @@ function CreateDialog({
     });
     setBusy(false);
     if (ok) onClose();
+    else window.setTimeout(() => dialogRef.current?.querySelector<HTMLInputElement>('input')?.focus());
   };
 
   return (
     <div className="v2-goals__overlay" onClick={() => !busy && onClose()}>
       <div
         className="v2-goals__dialog"
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="v2-goals-create-title"
@@ -1203,7 +1296,7 @@ function CreateDialog({
               New goal
             </div>
             <div className="v2-goals__dialog-subtitle">
-              Quick create — full detail editable in the side panel after.
+              You can edit the title and deadline after creating the goal.
             </div>
           </div>
           <button
@@ -1226,12 +1319,12 @@ function CreateDialog({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="What do you want to achieve?"
-              autoFocus
+              disabled={busy}
             />
           </label>
 
-          <label className="v2-goals__field">
-            <span className="v2-goals__field-label">Level</span>
+          <fieldset className="v2-goals__field v2-goals__level-field">
+            <legend className="v2-goals__field-label">Level</legend>
             <div className="v2-goals__chip-row">
               {GOAL_LEVELS.map((l) => (
                 <button
@@ -1239,13 +1332,15 @@ function CreateDialog({
                   type="button"
                   className="v2-goals__chip"
                   data-active={level === l}
+                  aria-pressed={level === l}
+                  disabled={busy}
                   onClick={() => setLevel(l)}
                 >
                   {l.replace(/_/g, " ")}
                 </button>
               ))}
             </div>
-          </label>
+          </fieldset>
 
           <label className="v2-goals__field">
             <span className="v2-goals__field-label">Deadline (optional)</span>
@@ -1253,6 +1348,7 @@ function CreateDialog({
               type="date"
               className="v2-goals__input"
               value={deadlineStr}
+              disabled={busy}
               onChange={(e) => setDeadlineStr(e.target.value)}
             />
           </label>
@@ -1328,12 +1424,21 @@ function monthShort(ts: number): string {
   return d.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
 }
 
+/** Fields of a goal detail edit; absent fields are left untouched by the server. */
+type GoalDetailsUpdate = { title?: string; deadline?: number | null };
+
+/** Local calendar day of an epoch-ms deadline, as an `<input type="date">` value. */
+function dateInputValue(value: number | null): string {
+  if (value === null) return "";
+  const date = new Date(value);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
 /** Parse an `<input type="date">` value (YYYY-MM-DD) to local-time epoch ms.
  *  Returns undefined if the input is empty or malformed. */
 function parseDeadlineInput(s: string): number | undefined {
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return undefined;
   const d = new Date(parseInt(m[1]!, 10), parseInt(m[2]!, 10) - 1, parseInt(m[3]!, 10), 23, 59, 0, 0);
-  if (isNaN(d.getTime())) return undefined;
+  if (isNaN(d.getTime()) || dateInputValue(d.getTime()) !== s) return undefined;
   return d.getTime();
 }

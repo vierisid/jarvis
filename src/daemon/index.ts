@@ -8,10 +8,12 @@ import { mailchimpStatus } from "../integrations/mailchimp-connection";
 import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
 import { figmaStatus } from '../integrations/figma-connection';
+import { pipedriveStatus } from '../integrations/pipedrive-connection';
 import { helpScoutStatus } from '../integrations/help-scout-connection';
 import { webflowStatus } from '../integrations/webflow-connection';
 import { asanaStatus } from '../integrations/asana-connection';
 import { todoistStatus } from '../integrations/todoist-connection';
+import { wrikeStatus } from '../integrations/wrike-connection';
 import { linearStatus } from '../integrations/linear-connection';
 import { typeformStatus } from '../integrations/typeform-connection';
 import { intercomStatus } from '../integrations/intercom-connection';
@@ -103,6 +105,7 @@ import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
 import { classifyEvent } from "./event-classifier.ts";
 import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
+import { loadWorkspaceId } from "./workspace-id.ts";
 import { createPostSetupServices } from "./post-setup-services.ts";
 import { createDaemonOnboardingAssembly } from "../onboarding-next/runtime/daemon-assembly.ts";
 import { runtimeModules } from "../onboarding-next/runtime/generated/catalog.ts";
@@ -4786,8 +4789,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       calendly: () => calendlyStatus(jarvisConfig),
       figma: () => figmaStatus(jarvisConfig),
       webflow: () => webflowStatus(jarvisConfig),
+      pipedrive: () => pipedriveStatus(jarvisConfig),
       "help-scout": () => helpScoutStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
+      wrike: () => wrikeStatus(jarvisConfig),
       linear: () => linearStatus(jarvisConfig),
       airtable: () => airtableStatus(jarvisConfig),
       notion: () => notionStatus(jarvisConfig),
@@ -4904,6 +4909,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       briefOpportunityActivation,
       briefCapabilities,
       daemonStartedAt: Date.now(),
+      workspaceId: loadWorkspaceId(config.dataDir),
       healthMonitor,
       agentService,
       config: jarvisConfig,
@@ -5045,6 +5051,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisFigmaConnectionSource(jarvisConfig));
       const { JarvisWebflowConnectionSource } = await import("../workflows/credentials/webflow-source");
       credentialResolver.register(new JarvisWebflowConnectionSource(jarvisConfig));
+      const { JarvisPipedriveConnectionSource } = await import("../workflows/credentials/pipedrive-source");
+      credentialResolver.register(new JarvisPipedriveConnectionSource(jarvisConfig));
       const { JarvisHelpScoutConnectionSource } = await import("../workflows/credentials/help-scout-source");
       credentialResolver.register(new JarvisHelpScoutConnectionSource(jarvisConfig));
       const { JarvisGitHubConnectionSource } = await import("../workflows/credentials/github-source");
@@ -5053,6 +5061,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisDropboxConnectionSource(jarvisConfig));
       const { JarvisTrelloConnectionSource } = await import("../workflows/credentials/trello-source");
       credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisWrikeConnectionSource } = await import("../workflows/credentials/wrike-source");
+      credentialResolver.register(new JarvisWrikeConnectionSource(jarvisConfig));
       const { JarvisLinearConnectionSource } = await import("../workflows/credentials/linear-source");
       credentialResolver.register(new JarvisLinearConnectionSource(jarvisConfig));
       const { JarvisTypeformConnectionSource } = await import("../workflows/credentials/typeform-source");
