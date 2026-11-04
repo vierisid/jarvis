@@ -1,5 +1,7 @@
-/** Published Zoom package through Worker and EngineRuntime. Ungated in the normal suite.
- * Provider HTTP alone is redirected in a disposable engine bundle. No live credentials. */
+/** Published Zoom package through Worker and EngineRuntime. Provider HTTP alone
+ * is redirected in a disposable engine bundle; no live credentials.
+ * Gated on JARVIS_TEST_ENGINE_BUILD=1 like the other engine tests; CI runs it
+ * in test.yml's engine step. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {
   mkdtempSync,
@@ -35,6 +37,7 @@ import { EngineFlowExecutor } from "../runner/engine-runtime/engine-flow-executo
 import { createRunFlowHandler } from "../runner/handler";
 import { Worker } from "../queue/worker";
 
+const gate = process.env.JARVIS_TEST_ENGINE_BUILD === "1";
 const piece = "@activepieces/piece-zoom";
 let dir: string,
   api: SandboxApi,
@@ -49,6 +52,7 @@ const requests: Array<{
 }> = [];
 
 beforeAll(async () => {
+  if (!gate) return;
   dir = mkdtempSync(join(tmpdir(), "jarvis-zoom-engine-"));
   initWorkflowDb(join(dir, "db.sqlite"));
   writeFileSync(
@@ -201,6 +205,7 @@ beforeAll(async () => {
   });
 }, 120000);
 afterAll(async () => {
+  if (!gate) return;
   await runtime?.shutdown();
   await api?.stop();
   provider?.stop(true);
@@ -208,7 +213,7 @@ afterAll(async () => {
   if (runId) rmSync(join(workflowLogsBase(), runId + ".bin"), { force: true });
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
-test("published Zoom metadata, all five managed actions, refresh acknowledgement and downstream references", async () => {
+test.skipIf(!gate)("published Zoom metadata, all five managed actions, refresh acknowledgement and downstream references", async () => {
   const { catalog, failures } = await buildPieceCatalog({
     runtime,
     pieceRoots: [join(dir, "node_modules/@activepieces")],
