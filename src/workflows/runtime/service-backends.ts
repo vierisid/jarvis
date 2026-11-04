@@ -1229,6 +1229,8 @@ export function buildSandboxServiceBackends(
               stored: { id: connection.id, projectId: connection.projectId, externalId: connection.externalId, generation: connection.credentialGeneration } })).value.access_token;
           } catch (error) {
             if (!(error instanceof ConnectionCredentialError)) throw error;
+            // Typed on the run's binding as well, as every other service records it (#1233).
+            recordRunCredentialOutcome(ctx.runId, connection.externalId, { code: error.code, message: error.message });
             // Only an expired or refused credential needs a person to reconnect; the others pass.
             const account = `the selected HubSpot account (${connection.externalId})`;
             const message = error.code === 'CONNECTION_EXPIRED' ? `Reconnect ${account}: ${error.message}`
@@ -1239,6 +1241,8 @@ export function buildSandboxServiceBackends(
           if (typeof token !== 'string' || !token)
             throw new ActionOutcomeError({ status: 'blocked', code: 'CONNECTION_EXPIRED',
               message: `Reconnect the selected HubSpot account (${connection.externalId}): it holds no access token`, effect: 'not_started' });
+          // A stored OAuth2 credential was handed out: clear any failure an earlier fetch recorded.
+          recordRunCredentialOutcome(ctx.runId, connection.externalId, null);
           checkpoint();
           const values = hubspotContactInput(args);
           const identity = digest(['hubspot-contact-v1',ctx.projectId,connection.id,values.email]);
