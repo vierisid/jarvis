@@ -2,6 +2,7 @@ import {managedAirtableInput, managedAirtableIssue, runManagedAirtableAction} fr
 import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
 import { managedNotionInput, managedNotionIssue, runManagedNotionAction } from './managed-notion';
 import { managedZoomInput, runManagedZoomAction } from "./managed-zoom";
+import { managedGitLabInput, runManagedGitLabAction } from "./managed-gitlab";
 import { managedPipedriveInput, runManagedPipedriveAction } from "./managed-pipedrive";
 import { managedHelpScoutInput, runManagedHelpScoutAction } from "./managed-help-scout";
 import { managedWebflowInput, runManagedWebflowAction } from './managed-webflow';
@@ -271,6 +272,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   const dropbox = params.piece === '@activepieces/piece-dropbox' ? managedDropboxInput(params.input) : null;
   const intercom = params.piece === '@activepieces/piece-intercom' ? managedIntercomInput(params.input) : null;
   const zoom = managedZoomInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
+  const gitlab = managedGitLabInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
   const pipedrive = managedPipedriveInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
   const helpScout = managedHelpScoutInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
   const webflow = managedWebflowInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
@@ -290,6 +292,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (zoom) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Zoom dispatch was not authorized');
     raw = await runManagedZoomAction(String(params.action), zoom);
+  } else if (gitlab) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitLab dispatch was not authorized');
+    raw = await runManagedGitLabAction(String(params.action), gitlab);
   } else if (pipedrive) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Pipedrive dispatch was not authorized');
     raw = await runManagedPipedriveAction(String(params.action), pipedrive);

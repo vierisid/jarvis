@@ -87,7 +87,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === WRIKE_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE || piece === PIPEDRIVE_PIECE || piece === ZOOM_PIECE || piece === HELP_SCOUT_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === WRIKE_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE || piece === PIPEDRIVE_PIECE || piece === ZOOM_PIECE || piece === HELP_SCOUT_PIECE || piece === GITLAB_PIECE) && managedPieceChanges(piece, action))
     // A Webflow refund moves money and is not idempotent: never repeat one whose outcome is unknown.
     || (piece === WEBFLOW_PIECE && action === 'refund_order')
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
@@ -112,6 +112,7 @@ const WRIKE_PIECE = '@activepieces/piece-wrike';
 const MONDAY_PIECE = '@activepieces/piece-monday';
 const ZOOM_PIECE = "@activepieces/piece-zoom";
 const HELP_SCOUT_PIECE = "@activepieces/piece-help-scout";
+const GITLAB_PIECE = "@activepieces/piece-gitlab";
 const FIGMA_PIECE = '@activepieces/piece-figma';
 const PIPEDRIVE_PIECE = '@activepieces/piece-pipedrive';
 /** Owner/visibility changes and marketing consent require access-level authority. */
@@ -223,6 +224,52 @@ export function asanaDuplicateProjectCategory(input: Record<string, unknown>): A
  */
 export function webflowFulfillOrderCategory(input: Record<string, unknown>): ActionCategory {
   return !present(input.send_order_fulfilled_email) || input.send_order_fulfilled_email === false ? 'write_data' : 'send_email';
+}
+
+const GITLAB_MANAGED_AUTH: readonly string[] = ['{{connections.jarvis:gitlab}}', "{{connections['jarvis:gitlab']}}"];
+/** The non-secret projection marker of a step that runs on the managed GitLab connection. */
+export const GITLAB_MANAGED_MARKER = 'jarvis_managed';
+/**
+ * The engine pass (`sanitizePieceInput`) sees the resolved credential: it drops
+ * any `jarvis_managed` the workflow input carries and sets it only when the
+ * credential is the managed one, the same test (`jarvis_managed: "gitlab"` on
+ * the auth object) piece-effect-guard uses to send the step to
+ * `runManagedGitLabAction`. The daemon's pass (`projected`) keeps what the
+ * engine set, since `bound()` has already stripped the credential.
+ */
+export function redactGitLabInput(input: Record<string, unknown>, projected: boolean): Record<string, unknown> {
+  if (projected) return input;
+  const { [GITLAB_MANAGED_MARKER]: _forged, ...out } = input;
+  const auth = inputObject(input.auth);
+  return auth?.jarvis_managed === 'gitlab' ? { ...out, [GITLAB_MANAGED_MARKER]: 'gitlab' } : out;
+}
+/**
+ * GitLab quick actions (slash-command lines) in an issue description can move,
+ * close or change permissions on the issue, so such a description is a
+ * settings change, including through manually configured accounts.
+ *
+ * On the managed `jarvis:gitlab` connection any other description is a write,
+ * templated or long, because `runManagedGitLabAction` refuses a resolved
+ * description with a slash command before anything is sent (owner decisions,
+ * #1268). Managed means: in the configured step input (design time, `auth`
+ * present) the exact managed reference; in the run-time projection (`auth`
+ * stripped) the marker `redactGitLabInput` derived from the resolved
+ * credential. Neither is one of the rule's `props`: a templated `auth` never
+ * narrows, and workflow input cannot set the marker.
+ *
+ * On a manual account a templated description (only known at run time) and a
+ * description the projection cut at 512 characters (which may hide a quick
+ * action past the cut) take the worst case.
+ */
+export function gitlabIssueCategory(input:Record<string,unknown>):ActionCategory {
+ const d=input.description;
+ if (d==null || d==='') return 'write_data';
+ if (typeof d!=='string' || /(?:^|[\r\n])\s*\//.test(d)) return 'modify_settings';
+ const managed = Object.hasOwn(input,'auth')
+   ? typeof input.auth==='string' && GITLAB_MANAGED_AUTH.includes(input.auth)
+   : input[GITLAB_MANAGED_MARKER]==='gitlab';
+ if (managed) return 'write_data';
+ return d.includes('{{') || CUT_NOTE.test(d) ? 'modify_settings' : 'write_data';
 }
 
 /** Assignment can share a task with another person. Unresolved assignments use the safer category. */
@@ -434,9 +481,10 @@ export interface GovernedPieceAdapter {
   /**
    * Hide inline credentials a piece takes as ordinary props before the input
    * is bounded for the card and the effect record. Must be deterministic and
-   * idempotent: the daemon applies it again to what the engine sent.
+   * idempotent: the daemon applies it again to what the engine sent
+   * (`projected` true on that pass).
    */
-  redactInput?: (input: Record<string, unknown>) => Record<string, unknown>;
+  redactInput?: (input: Record<string, unknown>, projected: boolean) => Record<string, unknown>;
 }
 
 /**
@@ -935,6 +983,58 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
     // Email to the customer, also when a reply is saved as a draft: the piece
     // sends whatever `draft` holds, so the worst case gates it.
     send_email:['create_conversation','send_reply'],modify_settings:['custom_api_call']},
+}, {
+  // Published GitLab 0.4.2 inventory. The managed grant enables only create_issue.
+  // Quick actions can change access; only a resolved description without commands narrows to a write.
+  catalogId:'gitlab',pieceName:GITLAB_PIECE,unknownActionCategory:'modify_settings',
+  targetProps:['projectId','title','description'],
+  categories:{read_data:[
+      "get_branch", "get_commit", "get_commit_refs",
+      "get_commit_sequence", "get_current_user", "get_file",
+      "get_group", "get_group_member", "get_issue",
+      "get_issue_note", "get_issue_time_stats", "get_job",
+      "get_job_log", "get_label", "get_merge_request",
+      "get_merge_request_approval_state", "get_merge_request_approvals", "get_milestone",
+      "get_pipeline", "get_project", "get_project_languages",
+      "get_project_member", "get_project_webhook", "get_user",
+      "get_user_status", "list_branches", "list_commit_comments",
+      "list_commits", "list_group_billable_members", "list_group_members",
+      "list_group_pending_members", "list_group_projects", "list_groups",
+      "list_issue_notes", "list_issues", "list_labels",
+      "list_merge_request_commits", "list_merge_request_diff_versions", "list_merge_request_diffs",
+      "list_merge_request_discussions", "list_merge_request_notes", "list_merge_requests",
+      "list_milestones", "list_pipeline_jobs", "list_pipelines",
+      "list_project_groups", "list_project_invited_groups", "list_project_members",
+      "list_project_share_locations", "list_project_transfer_locations", "list_project_users",
+      "list_project_webhooks", "list_projects", "list_repository_tree",
+      "list_tags", "list_user_projects", "list_users",
+    ],
+    delete_data:[
+      "delete_branch", "delete_file", "delete_group",
+      "delete_issue_note", "delete_label", "delete_merge_request",
+      "delete_milestone", "delete_pipeline", "delete_project",
+      "delete_project_webhook", "erase_job",
+    ],
+    modify_settings:[
+      "add_issue_spent_time", "approve_merge_request", "archive_project",
+      "cancel_job", "cancel_pipeline", "create_branch",
+      "create_commit", "create_commit_comment", "create_file",
+      "create_group", "create_issue", "create_issue_note",
+      "create_label", "create_merge_request", "create_merge_request_draft_note",
+      "create_milestone", "create_pipeline", "create_project",
+      "create_project_issue", "create_project_webhook", "custom_api_call",
+      "fork_project", "import_project_members", "merge_merge_request",
+      "move_issue", "play_manual_job", "protect_branch",
+      "reset_issue_spent_time", "reset_issue_time_estimate", "retry_pipeline",
+      "set_issue_time_estimate", "set_user_status", "share_project_with_group",
+      "star_project", "unapprove_merge_request", "unarchive_project",
+      "unprotect_branch", "unstar_project", "update_file",
+      "update_group", "update_issue", "update_issue_note",
+      "update_label", "update_merge_request", "update_milestone",
+      "update_project_webhook",
+    ]},
+  categoryFromInput:{create_issue:{props:['description'],category:gitlabIssueCategory}},
+  redactInput:redactGitLabInput,
 }, {
   // Figma: every action of the pinned 0.6.3 bundle (`figma-engine.test.ts`
   // checks the list against the installed package). A comment is shown to
@@ -1747,9 +1847,9 @@ export function sanitizePieceInput(input: unknown, piece?: unknown): Record<stri
 }
 
 /** The piece's own credential redaction (`redactInput`), or the input as it is. */
-function redactFor(piece: unknown, input: Record<string, unknown>): Record<string, unknown> {
+function redactFor(piece: unknown, input: Record<string, unknown>, projected = false): Record<string, unknown> {
   const redact = governedPieceAdapter(piece)?.redactInput;
-  return redact ? redact(input) : input;
+  return redact ? redact(input, projected) : input;
 }
 
 /**
@@ -1782,7 +1882,7 @@ function redactFor(piece: unknown, input: Record<string, unknown>): Record<strin
  */
 export function reprojectPieceInput(input: unknown, piece?: unknown): Record<string, unknown> {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return {};
-  return bound(redactFor(piece, input as Record<string, unknown>), 0, true) as Record<string, unknown>;
+  return bound(redactFor(piece, input as Record<string, unknown>, true), 0, true) as Record<string, unknown>;
 }
 
 /**

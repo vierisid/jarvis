@@ -9,6 +9,7 @@ import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
 import { figmaStatus } from '../integrations/figma-connection';
 import { zoomStatus } from '../integrations/zoom-connection';
+import { gitlabStatus } from '../integrations/gitlab-connection';
 import { pipedriveStatus } from '../integrations/pipedrive-connection';
 import { helpScoutStatus } from '../integrations/help-scout-connection';
 import { webflowStatus } from '../integrations/webflow-connection';
@@ -4791,6 +4792,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       figma: () => figmaStatus(jarvisConfig),
       webflow: () => webflowStatus(jarvisConfig),
       zoom: () => zoomStatus(jarvisConfig),
+      gitlab: () => gitlabStatus(jarvisConfig),
       pipedrive: () => pipedriveStatus(jarvisConfig),
       "help-scout": () => helpScoutStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
@@ -5055,6 +5057,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisWebflowConnectionSource(jarvisConfig));
       const { JarvisZoomConnectionSource } = await import("../workflows/credentials/zoom-source");
       credentialResolver.register(new JarvisZoomConnectionSource(jarvisConfig));
+      const { JarvisGitLabConnectionSource } = await import("../workflows/credentials/gitlab-source");
+      credentialResolver.register(new JarvisGitLabConnectionSource(jarvisConfig));
       const { JarvisPipedriveConnectionSource } = await import("../workflows/credentials/pipedrive-source");
       credentialResolver.register(new JarvisPipedriveConnectionSource(jarvisConfig));
       const { JarvisHelpScoutConnectionSource } = await import("../workflows/credentials/help-scout-source");

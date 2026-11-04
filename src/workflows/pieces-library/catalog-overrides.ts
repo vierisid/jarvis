@@ -158,6 +158,7 @@ export const VERSION_PIN: Record<
   { versionRange: string; vettedVersion: string; reason: string }
 > = {
   wrike: {versionRange:"0.2.0", vettedVersion:"0.2.0", reason:"Four managed task/comment actions qualified against the published engine bundle; review upgrades"},
+  gitlab: { vettedVersion: "0.4.2", versionRange: "0.4.2", reason: "Qualified GitLab.com issue creation; other actions remain unavailable to the managed account." },
   pipedrive: {versionRange: "0.10.3", vettedVersion: "0.10.3", reason: "Eight managed person/deal actions and all published action classifications qualified against this bundle; review before upgrading"},
   zoom: {versionRange: "0.9.2", vettedVersion: "0.9.2", reason: "Managed meeting actions, props and safe outputs qualified against the published bundle; review upgrades"},
   "help-scout": { vettedVersion: "0.2.1", versionRange: "0.2.1", reason: "Qualified Help Scout customer and conversation lookup and internal notes." },

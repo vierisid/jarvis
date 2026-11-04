@@ -3,6 +3,7 @@ import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
 import { MailchimpConnection } from "../../../integrations/MailchimpConnection";
 import { AsanaConnection } from "../../../integrations/AsanaConnection";
 import { ZoomConnection } from "../../../integrations/ZoomConnection";
+import { GitLabConnection } from "../../../integrations/GitLabConnection";
 import { PipedriveConnection } from "../../../integrations/PipedriveConnection";
 import { HelpScoutConnection } from "../../../integrations/HelpScoutConnection";
 import { MondayConnection } from "../../../integrations/MondayConnection";
@@ -360,7 +361,7 @@ export function IntegrationsTab({
       <MondayConnection optional />
       <TypeformConnection optional />
       <AirtableConnection optional />
-      <TodoistConnection optional /><AsanaConnection optional /><PipedriveConnection optional /><ZoomConnection optional /><HelpScoutConnection optional />
+      <TodoistConnection optional /><AsanaConnection optional /><PipedriveConnection optional /><ZoomConnection optional /><HelpScoutConnection optional /><GitLabConnection optional />
       <FigmaConnection optional />
       <WebflowConnection optional />
       <SlackConnection optional />
