@@ -24,6 +24,10 @@ export function formFields(value: unknown): InputField[] {
       ...(field.type === 'select' ? { options: field.options } : {}) };
   });
 }
+/** The response route's body cap. All answers together must fit in it, not just each field. */
+export const HUMAN_INPUT_MAX_BODY_BYTES = 64_000;
+/** Room left under the body cap for the decision and JSON framing. */
+export const HUMAN_INPUT_MAX_ANSWER_BYTES = 60_000;
 export function answerErrors(fields: InputField[], value: unknown): Record<string, string> {
   const errors: Record<string, string> = {};
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { _form: 'Provide an answer object' };
@@ -31,11 +35,14 @@ export function answerErrors(fields: InputField[], value: unknown): Record<strin
   if (Object.keys(answers).some(key => !fields.some(f => f.key === key))) errors._form = 'Unknown answer field';
   for (const field of fields) {
     const v = answers[field.key];
-    if (v === undefined || v === '') { if (field.required) errors[field.key] = 'This answer is required'; continue; }
+    // Whitespace alone is no answer: a required text field needs real text.
+    if (v === undefined || (typeof v === 'string' && !v.trim())) { if (field.required) errors[field.key] = 'This answer is required'; continue; }
     const valid = field.type === 'number' ? typeof v === 'number' && Number.isFinite(v)
       : field.type === 'boolean' ? typeof v === 'boolean'
       : typeof v === 'string' && v.length <= 10000 && (field.type !== 'select' || field.options!.includes(v));
     if (!valid) errors[field.key] = `Enter a valid ${field.type === 'long_text' ? 'text' : field.type} answer`;
   }
+  if (!errors._form && new TextEncoder().encode(JSON.stringify(answers)).length > HUMAN_INPUT_MAX_ANSWER_BYTES)
+    errors._form = 'These answers are too long together. Shorten the longest answers and submit again.';
   return errors;
 }

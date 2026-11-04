@@ -39,12 +39,16 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
     fields: kind === 'input' ? formFields(input.fields) : [],
     requestKey: text(input.requestKey ?? (legacy ? `${ctx.runId}:${ctx.stepName}` : undefined), 'Stable occurrence key', 500),
     timeoutHours: input.timeoutHours ?? 48,
+    // A request belongs to one run: its own retries reuse it, a later run asks
+    // again. Only a form step that opts in shares one answer across runs with
+    // the same key (a duplicate trigger for the same occurrence). Approvals never do.
+    shared: kind === 'input' && input.shareAcrossRuns === true,
   };
   if (typeof config.timeoutHours !== 'number' || !Number.isFinite(config.timeoutHours) || config.timeoutHours <= 0 || config.timeoutHours > 720) throw Error('Response deadline must be between 0 and 720 hours');
   const timeoutHours = config.timeoutHours;
   const db = getWorkflowDb();
   return db.transaction(() => {
-    let id = digest(['human-input-v1', ctx.projectId, run!.flowId, ctx.stepName, ctx.executionPath, config.requestKey]);
+    let id = digest(['human-input-v1', ctx.projectId, run!.flowId, ctx.stepName, ctx.executionPath, config.requestKey, config.shared ? 'shared' : ctx.runId]);
     let existing = row(id);
     let linkedApproval = false;
     // Legacy links may be created before the waiting action. They only open the
@@ -65,18 +69,26 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
     const fingerprint = digest({ config, graph: resolved.versionDigest });
     if (existing && JSON.parse(existing.record).graphDigest !== resolved.versionDigest) throw Error('Workflow graph changed since this request was created');
     if (existing && existing.fingerprint !== fingerprint && !linkedApproval) throw Error('Occurrence key already used with different input configuration');
-    if (!existing) {
+    // A shared form that expired or was cancelled before this run asked is asked
+    // again for this run; a run that already waited on it keeps that outcome.
+    const reopen = !!existing && config.shared && ['expired', 'cancelled'].includes(existing.status)
+      && !db.query('SELECT 1 FROM workflow_human_wait WHERE request_id=? AND run_id=?').get(id, ctx.runId);
+    if (!existing || reopen) {
       const pending = db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM workflow_human_request WHERE flow_id=? AND status='pending'").get(run!.flowId)!.count;
       if (pending >= 20) throw Error('This workflow already has 20 unanswered requests. Respond or cancel them before creating more.');
       const request: HumanRequest = { id, ...config, kind, workflowName: resolved.version.displayName, flowId: run!.flowId,
         runId: ctx.runId, created: now, deadline: now + timeoutHours * 3600000, status: 'pending', answers: null };
-      db.run('INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status) VALUES (?,?,?,?,?,?,?)',
+      db.run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status) VALUES (?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint,record=excluded.record,deadline=excluded.deadline,status=excluded.status`,
         [id, ctx.projectId, run!.flowId, fingerprint, JSON.stringify({ ...request, graphDigest: resolved.versionDigest }), request.deadline, request.status]);
       existing = row(id)!;
     }
     const request = unpack(existing);
     if (request.status === 'pending' && now >= request.deadline) { request.status = 'expired'; save(request); }
     if (linksOnly) return { requestId: id, approvalLink: `/?brief=1#/brief/needs-you?inputId=${id}`, disapprovalLink: `/?brief=1#/brief/needs-you?inputId=${id}` };
+    // The legacy Wait for Approval kept its old contract: it never failed the
+    // run, it returned `{ approved }` and let the flow branch on it.
+    if (request.status !== 'pending' && legacy) return { approved: request.status === 'approved' };
     if (request.status !== 'pending') {
       // No denied/expired request can accidentally fall through into a write.
       if (request.status !== 'submitted' && request.status !== 'approved') throw Error(`Human request ${request.status}`);
@@ -121,14 +133,22 @@ export function resolveHumanInput(projectId: string, id: string, input: Record<s
   resumeHumanInputs(now);
   return result;
 }
+/** A run that can still be continued: not finished and not stopped by turning its workflow off. */
+const LIVE_RUN = `SELECT 1 FROM flow_run r JOIN flow f ON f.id=r.flow_id WHERE r.status IN ('RUNNING','PAUSED','QUEUED')
+  AND NOT (f.disabled_at IS NOT NULL AND r.created <= f.disabled_at)`;
+/**
+ * Close what can no longer be answered. Reads only through the pending index and
+ * writes only rows that change, so the dashboard's polling stays cheap. A request
+ * is cancelled only when no run that asked it (its own run, or any run waiting on
+ * a shared form) can still continue: stopping one run never closes another's.
+ */
 function expireHumanInputs(now: number) {
   const db = getWorkflowDb();
-  for (const record of db.query<Row, []>("SELECT * FROM workflow_human_request WHERE status='pending'").all()) {
-    const request = unpack(record), run = getFlowRun(request.runId);
-    if (!run || !['RUNNING', 'PAUSED', 'QUEUED'].includes(run.status) || turnedOffReason(run.id)) request.status = 'cancelled';
-    else if (now >= request.deadline) request.status = 'expired';
-    if (request.status !== 'pending') save(request);
-  }
+  const closing = db.query<Row & { next: 'expired' | 'cancelled' }, [number]>(`SELECT h.*, CASE WHEN NOT EXISTS (${LIVE_RUN}
+      AND (r.id=json_extract(h.record,'$.runId') OR r.id IN (SELECT w.run_id FROM workflow_human_wait w WHERE w.request_id=h.id)))
+    THEN 'cancelled' WHEN h.deadline <= ?1 THEN 'expired' END AS next
+    FROM workflow_human_request h WHERE h.status='pending' AND next IS NOT NULL`).all(now);
+  for (const record of closing) save({ ...unpack(record), status: record.next });
 }
 /** Durable polling also covers a response received before the worker parks. */
 export function resumeHumanInputs(now = Date.now()): number {

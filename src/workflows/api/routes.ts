@@ -1,4 +1,5 @@
 import { listHumanInputs, resolveHumanInput } from '../runtime/human-input';
+import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion } from './editor-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
@@ -2382,8 +2383,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       POST: req => trapErrors(async () => {
         const { id } = (req as RequestWithParams<{ id: string }>).params;
         // This authenticated route is intentionally outside the public webhook prefix.
-        if (Number(req.headers.get('content-length') ?? 0) > 64000) return err('Response too large', 413);
-        const raw = await req.text(); if (new TextEncoder().encode(raw).length > 64000) return err('Response too large', 413);
+        if (Number(req.headers.get('content-length') ?? 0) > HUMAN_INPUT_MAX_BODY_BYTES) return err('Response too large', 413);
+        const raw = await req.text(); if (new TextEncoder().encode(raw).length > HUMAN_INPUT_MAX_BODY_BYTES) return err('Response too large', 413);
         let body: unknown; try { body = JSON.parse(raw); } catch { return err('Invalid JSON', 400); }
         if (!body || typeof body !== 'object' || Array.isArray(body)) return err('Response object required', 400);
         const { status, ...result } = resolveHumanInput(callerProject(req), id, body as Record<string, unknown>);
