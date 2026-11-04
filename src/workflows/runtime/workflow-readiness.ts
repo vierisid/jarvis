@@ -1,3 +1,4 @@
+import { isZoomReference, zoomInputSchema } from "./managed-zoom-inputs";
 import { isMondayReference, mondayInputSchema } from "./managed-monday-inputs";
 import {managedAirtableIssue} from './managed-airtable';
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
@@ -539,6 +540,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           if (!sub) issue(node, `settings.${key}`, 'ACTION', `Unknown ${key} for ${pieceName}`);
           else if (object(input)) {
             const schema = root ? sub.inputSchema
+              : isZoomReference(pieceName, input.auth) ? zoomInputSchema(settings.actionName) ?? sub.inputSchema
               : isWebflowReference(pieceName, input.auth) ? webflowInputSchema(settings.actionName) ?? sub.inputSchema
               : isMondayReference(pieceName, input.auth) ? mondayInputSchema(settings.actionName) ?? sub.inputSchema
               : sub.inputSchema;
