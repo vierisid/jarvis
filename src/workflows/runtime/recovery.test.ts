@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +8,8 @@ import { createDraftVersion, updateDraftVersion } from '../db/repos/flow-version
 import { createFlowRun, getFlowRun, updateRun } from '../db/repos/flow-run';
 import { getWorkflowEffect, listWorkflowEffects, saveWorkflowEffect } from '../db/repos/workflow-effect';
 import { setEncryptionKey } from '../db/encryption';
-import { upsertConnection } from '../db/repos/app-connection';
+import { getConnection, replaceRefreshedConnectionValue, upsertConnection } from '../db/repos/app-connection';
+import { ConnectionCredentialError } from '../credentials/pasted-oauth2';
 import { enqueue, claimNextJob, recoverOrphanedJobs, getJob } from '../db/repos/job-queue';
 import { AuthorityEngine } from '../../authority/engine';
 import { AuditTrail } from '../../authority/audit';
@@ -213,6 +214,81 @@ test('connection rotation and revoked read authority block lookup without exposi
   expect(r.evidence.outcome).toBe('blocked'); expect(JSON.stringify(r)).not.toContain('token');
   f.authority.addOverride({ action: 'read_data', allowed: false });
   expect((await decideRunRecovery(f.run.id, f.choice('reconcile', 'request_0002'), { authority: f.authority })).evidence.outcome).toBe('blocked');
+});
+
+test('#1232: a token refreshed since the send still looks the receipt up, with the refreshed token', async () => {
+  const f = fixture(); await f.invoke(); f.fail();
+  // A refresh keeps the row and its credential generation; only the token changes.
+  expect(replaceRefreshedConnectionValue(f.connection.projectId, f.connection.id, f.connection.value, { access_token: 'refreshed-token' })).toBe('stored');
+  const seen: string[] = [];
+  const r = await decideRunRecovery(f.run.id, f.choice('reconcile'), { authority: f.authority,
+    fetchImpl: (async (_url: string, init: RequestInit) => { seen.push(new Headers(init.headers).get('authorization')!); return Response.json({ id: 'a123', labelIds: ['SENT'] }); }) as any });
+  expect(r.evidence.outcome).toBe('confirmed');
+  expect(seen).toEqual(['Bearer refreshed-token']);
+});
+
+test('#1232: the lookup refreshes an expiring token first and reports a failed refresh without fetching', async () => {
+  const f = fixture(); await f.invoke(); f.fail();
+  const handed: unknown[] = [];
+  const credentials = { fresh: async (resolved: any) => { handed.push(resolved.stored); return { ...resolved, value: { access_token: 'fresh-token' } }; } };
+  const seen: string[] = [];
+  const fetchImpl = (async (_url: string, init: RequestInit) => { seen.push(new Headers(init.headers).get('authorization')!); return Response.json({ id: 'a123', labelIds: ['SENT'] }); }) as any;
+  const r = await decideRunRecovery(f.run.id, f.choice('reconcile'), { authority: f.authority, fetchImpl, credentials });
+  expect(r.evidence.outcome).toBe('confirmed'); expect(seen).toEqual(['Bearer fresh-token']);
+  expect(handed).toEqual([{ id: f.connection.id, projectId: f.connection.projectId, externalId: f.connection.externalId, generation: f.connection.credentialGeneration }]);
+  const expired = { fresh: async () => { throw new ConnectionCredentialError('CONNECTION_EXPIRED', 'expired'); } };
+  const again = await decideRunRecovery(f.run.id, f.choice('reconcile', 'request_0002'), { authority: f.authority, fetchImpl, credentials: expired });
+  expect(again.evidence).toMatchObject({ outcome: 'blocked' }); expect(again.evidence.reason).toContain('CONNECTION_EXPIRED');
+  expect(seen).toHaveLength(1);
+});
+
+test('#1232: an expired stored token is refreshed by the real resolver, keeping its generation, before the lookup', async () => {
+  const f = fixture(); await f.invoke(); f.fail();
+  const expired = { access_token: 'expired-token', expiry_date: Date.now() - 60_000, refresh_token: 'refresh-1', client_id: 'client', client_secret: 'secret', token_url: 'https://token.example.test/oauth' };
+  expect(replaceRefreshedConnectionValue(f.connection.projectId, f.connection.id, f.connection.value, expired)).toBe('stored');
+  let exchanges = 0;
+  const credentials = new CredentialResolver({ tokenTransport: async () => { exchanges++; return { status: 200, body: { access_token: 'refreshed-real', expires_in: 3600 } }; } });
+  const seen: string[] = [];
+  const r = await decideRunRecovery(f.run.id, f.choice('reconcile'), { authority: f.authority, credentials,
+    fetchImpl: (async (_url: string, init: RequestInit) => { seen.push(new Headers(init.headers).get('authorization')!); return Response.json({ id: 'a123', labelIds: ['SENT'] }); }) as any });
+  expect(r.evidence.outcome).toBe('confirmed'); expect(exchanges).toBe(1); expect(seen).toEqual(['Bearer refreshed-real']);
+  const row = getConnection(f.connection.id)!;
+  expect(row.value.access_token).toBe('refreshed-real'); expect(row.credentialGeneration).toBe(f.connection.credentialGeneration);
+});
+
+test('#1232: the dashboard reconcile route refreshes through the daemon credential resolver', async () => {
+  const f = fixture(); await f.invoke(); f.fail();
+  const credentials = { fresh: async (resolved: any) => ({ ...resolved, value: { access_token: 'route-fresh' } }) } as any;
+  const routes = createWorkflowRoutes({ recoveryAuthority: f.authority, credentialResolver: credentials });
+  const seen: string[] = [];
+  const spy = spyOn(globalThis, 'fetch').mockImplementation((async (_url: string, init: RequestInit) => {
+    seen.push(new Headers(init.headers).get('authorization')!); return Response.json({ id: 'a123', labelIds: ['SENT'] }); }) as any);
+  try {
+    const request = Object.assign(new Request(`http://fixture.test/api/workflow-runs/${f.run.id}/recovery`, { method: 'POST', body: JSON.stringify(f.choice('reconcile')) }), { params: { runId: f.run.id } });
+    const response = await routes['/api/workflow-runs/:runId/recovery']!.POST!(request as any);
+    expect(response.status).toBe(200); expect((await response.json() as any).receipt.evidence.outcome).toBe('confirmed');
+    expect(seen).toEqual(['Bearer route-fresh']);
+  } finally { spy.mockRestore(); }
+});
+
+test('#1232: a pin recorded without a credential generation still compares the token, so a refresh since then blocks', async () => {
+  const f = fixture(); await f.invoke(); f.fail();
+  const effect = listWorkflowEffects(f.run.id)[0]!; const { credentialGeneration: _g, ...legacy } = effect.providerBinding!;
+  saveWorkflowEffect({ ...effect, providerBinding: legacy });
+  const fetchImpl = (async () => Response.json({ id: 'a123', labelIds: ['SENT'] })) as any;
+  expect((await decideRunRecovery(f.run.id, f.choice('reconcile'), { authority: f.authority, fetchImpl })).evidence.outcome).toBe('confirmed');
+  replaceRefreshedConnectionValue(f.connection.projectId, f.connection.id, f.connection.value, { access_token: 'refreshed-token' });
+  expect((await decideRunRecovery(f.run.id, f.choice('reconcile', 'request_0002'), { authority: f.authority, fetchImpl })).evidence.outcome).toBe('blocked');
+});
+
+test('#1232: a credential a person replaced is refused even when its refresh would succeed', async () => {
+  const f = fixture(); await f.invoke(); f.fail();
+  upsertConnection({ externalId: f.connection.externalId, displayName: 'Other account', type: 'OAUTH2', pieceName: GMAIL, pieceVersion: '0.17.0', value: { access_token: 'another-account' } });
+  let refreshed = 0;
+  const r = await decideRunRecovery(f.run.id, f.choice('reconcile'), { authority: f.authority,
+    credentials: { fresh: async (resolved: any) => { refreshed++; return resolved; } },
+    fetchImpl: (async () => { throw new Error('must not fetch'); }) as any });
+  expect(r.evidence.outcome).toBe('blocked'); expect(refreshed).toBe(0);
 });
 
 test('public run/effects/recovery/inbox projections agree and reject unbounded or execution choices', async () => {

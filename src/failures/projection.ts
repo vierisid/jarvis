@@ -120,6 +120,8 @@ const BROWSER_TASK_FAILURES: Record<string, { category: FailureCategory; why: st
   BROWSER_TASK_INCOMPLETE: { category: 'missing_binding', why: 'the browser task could not complete the requested work. Inspect the run details before trying again', step: 'open_details' },
 };
 const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; step: RecoveryStep }> = {
+  // #1242: the child or run_workflow target was turned off; nothing was started.
+  FLOW_TURNED_OFF: { category: 'missing_binding', why: 'the workflow it calls is turned off. Turn that workflow on again, or choose another one', step: 'edit_and_run_again' },
   WORKFLOW_BROWSER_REVIEW_STALE: { category: 'missing_binding', why: 'the reviewed browser session changed or Jarvis restarted', step: 'ask_again' },
   WORKFLOW_MACHINE_REPLACED: { category: 'missing_binding', why: 'the computer it was enabled for is no longer enrolled', step: 'accept_binding_change' },
   WORKFLOW_FACT_STALE: { category: 'missing_binding', why: 'a recipient it sends to is no longer current in memory', step: 'update_recipient' },

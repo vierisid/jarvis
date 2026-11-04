@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ClickUpConnection } from "../../../integrations/ClickUpConnection";
 import { MailchimpConnection } from "../../../integrations/MailchimpConnection";
 import { AsanaConnection } from "../../../integrations/AsanaConnection";
@@ -28,6 +28,7 @@ export function IntegrationsTab({
   onToast: (text: string, tone?: "ok" | "warn") => void;
 }) {
   const g = data.google;
+  const clientIdInput = useId(), clientSecretInput = useId();
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [phase, setPhase] = useState<"idle" | "saving" | "authenticating">("idle");
@@ -245,17 +246,19 @@ export function IntegrationsTab({
               <p className="v2-set__hint v2-set__hint--warn" key={warning}>{warning}</p>
             ))}
             <div className="v2-set__field">
-              <label className="v2-set__field-label">Client ID</label>
+              <label className="v2-set__field-label" htmlFor={clientIdInput}>Client ID</label>
               <input
                 className="v2-set__input"
+                id={clientIdInput}
                 value={clientId}
                 onChange={(e) => setClientId(e.target.value)}
               />
             </div>
             <div className="v2-set__field">
-              <label className="v2-set__field-label">Client secret</label>
+              <label className="v2-set__field-label" htmlFor={clientSecretInput}>Client secret</label>
               <input
                 className="v2-set__input"
+                id={clientSecretInput}
                 type="password"
                 value={clientSecret}
                 onChange={(e) => setClientSecret(e.target.value)}

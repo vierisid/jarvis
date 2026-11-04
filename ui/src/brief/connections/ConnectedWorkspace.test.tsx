@@ -374,3 +374,36 @@ test("manual repair stays available on its account but is absent from the new-se
   await React.act(async () => { fixture.controller.select(service.id, connectionKey(row.identity)); });
   expect(fixture.controller.snapshot().panel).toBe('setup');
 });
+
+
+test("Library discovery keeps the service query and returns to newly installed setup without connecting automatically", async () => {
+  const { LibraryPanel } = await import('../../v2/rooms/workflows/LibraryPanel');
+  const { WorkflowEditorEnvironment: Env } = await import('../../v2/rooms/workflows/WorkflowEditorEnvironment');
+  let installed=false, refuse=true;
+  const writes: string[]=[];
+  const request=(async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === 'POST') {
+      writes.push(String(url));
+      if(refuse) return Response.json({error:'Installation is not permitted by Authority'}, {status:403});
+      installed=true;
+      fixture.data.catalog.push({id:'hubspot', name:'HubSpot', icon:'service', description:'Connect HubSpot', kind:'workflow_connection', setup:'settings'});
+      return Response.json({installed:true});
+    }
+    return Response.json({managed:false,entries:[{id:'hubspot', npmPackage:'@activepieces/piece-hubspot',displayName:'HubSpot',description:'CRM',tier:'community',versionRange:'1.0.0',vettedVersion:'1.0.0',installed:installed?{resolvedVersion:'1.0.0',installedAt:1,source:'user'}:null}]});
+  }) as typeof fetch;
+  await render({}, {...binding(), renderLibrary: (query,onReturn) => <Env.Provider value={{request,portalHost:null,workspace:true}}>
+    <button onClick={onReturn}>Back to service setup</button><LibraryPanel initialQuery={query}/>
+  </Env.Provider>});
+  await click('Connect a service');await search('HubSpot');
+  expect(visibleText()).toContain('No services match');
+  await click('Find more services in Library');
+  expect(host.querySelector<HTMLInputElement>('input[aria-label="Search pieces"]')?.value).toBe('HubSpot');
+  expect(host.textContent).toContain('HubSpot');expect(writes).toHaveLength(0);
+  await click('Install');expect(host.textContent).toContain('Installation is not permitted by Authority');expect(installed).toBe(false);
+  refuse=false;await click('Install');expect(installed).toBe(true);
+  await click('Back to service setup');
+  expect(host.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe('HubSpot');
+  expect(visibleText()).toContain('HubSpot');expect(fixture.starts()).toBe(0);expect(fixture.handoffs).toHaveLength(0);
+  await choose('HubSpot');expect(fixture.starts()).toBe(0);
+  expect(writes).toEqual(['/api/workflows/pieces/library/hubspot/install','/api/workflows/pieces/library/hubspot/install']);
+});

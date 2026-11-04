@@ -32,10 +32,10 @@ import { ChevronRight, RefreshCw, Download, Trash2, ExternalLink, ShieldCheck } 
 import { useLibrary, type LibraryEntry, type LibraryActionState } from "./useLibrary";
 import { COMMUNITY_APPROVAL_NOTE } from "./approval-gate";
 
-export function LibraryPanel(): React.ReactElement {
+export function LibraryPanel({ initialQuery = "" }: { initialQuery?: string } = {}): React.ReactElement {
   const lib = useLibrary();
   const [toast, setToast] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [communityOpen, setCommunityOpen] = useState(false);
 
   const flash = (tone: "ok" | "warn", text: string): void => {
