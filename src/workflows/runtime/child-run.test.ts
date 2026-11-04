@@ -25,6 +25,7 @@ import { listFlowFires } from '../db/repos/trigger-fire';
 import { enqueue } from '../db/repos/job-queue';
 import { continuationRefusal } from './continuation';
 import { setActiveEmergencyController } from '../../authority/emergency';
+import { projectFailure } from '../../failures/projection';
 
 beforeEach(() => initWorkflowDb(':memory:'));
 afterEach(() => { setActiveEmergencyController(null); closeWorkflowDb(); });
@@ -44,7 +45,7 @@ function fixture(governed = false, childTrigger: FlowTriggerNode = { name: 'trig
     llmManager: {} as any, channelService: {} as any, wsService: {} as any });
   const start = () => services.workflowsStart!({ flowId: target.id, waitForCompletion: true },
     { runId: run.id, projectId: run.projectId, stepName: 'child', executionPath: [] });
-  return { run, start, approvals, services, authority };
+  return { run, start, approvals, services, authority, target };
 }
 
 test('completion before the parent parks is retained, and resume claim plus job is atomic', async () => {
@@ -339,4 +340,41 @@ test('terminal child cleanup rolls back on failure and preserves dispatched effe
   expect(getFlowRun(f.failed.id)).toEqual(f.failed);
   expect(listChildRuns(f.run.id)[0]!.outcome).toMatchObject({ status: 'unknown' });
   expect(resumeCompletedChildRuns()).toBe(0);
+});
+
+// #1242: run_workflow refuses a target a person turned off, as a definite refusal before anything started.
+const turnOff = (id: string) => getWorkflowDb().run("UPDATE flow SET status='DISABLED', disabled_at=? WHERE id=?", [Date.now(), id]);
+const turnOn = (id: string) => getWorkflowDb().run("UPDATE flow SET status='ENABLED' WHERE id=?", [id]);
+test('#1242: run_workflow refuses a turned-off target before any approval card', async () => {
+  const f = fixture(true); turnOff(f.target.id);
+  await expect(f.start()).rejects.toThrow('Child workflow is turned off');
+  expect(f.approvals.getPending()).toHaveLength(0); expect(listChildRuns(f.run.id)).toHaveLength(0);
+});
+test('#1242: a target turned off after approval is recorded as not started, and runs once turned on again', async () => {
+  const f = fixture(true);
+  const pending = await f.start(); expect(pending.approval).toBeDefined();
+  f.approvals.approve(pending.approval!.approvalId, 'fixture'); turnOff(f.target.id);
+  await expect(f.start()).rejects.toThrow('Child workflow is turned off');
+  const effect = listWorkflowEffects(f.run.id)[0]!;
+  expect(effect.outcome).toMatchObject({ status: 'blocked', code: 'FLOW_TURNED_OFF', effect: 'not_started' });
+  expect(projectFailure({ source: 'action', outcome: effect.outcome! as any }, { label: 'The step "child"', sideEffects: false }))
+    .toMatchObject({ code: 'FLOW_TURNED_OFF', effect: 'none', next: [{ step: 'edit_and_run_again' }, { step: 'open_details' }] });
+  expect(listChildRuns(f.run.id)).toHaveLength(0);
+  // Turned on again: this run's step keeps its refusal, never "may have occurred"; a later run starts the target.
+  turnOn(f.target.id);
+  await expect(f.start()).rejects.toThrow('Child workflow is turned off');
+  const later = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.run.flowVersionId, status: 'RUNNING' });
+  const startLater = () => f.services.workflowsStart!({ flowId: f.target.id, waitForCompletion: true }, { runId: later.id, projectId: later.projectId, stepName: 'child', executionPath: [] });
+  const retried = await startLater();
+  if (retried.approval) f.approvals.approve(retried.approval.approvalId, 'fixture');
+  const started = retried.approval ? await startLater() : retried;
+  expect(started.runId).toEqual(expect.any(String)); expect(listChildRuns(later.id)).toHaveLength(1);
+});
+test('#1242: the start route answers a turned-off target with 409', async () => {
+  const f = fixture(); turnOff(f.target.id);
+  const route = createJarvisWorkflowsStartRoute({ workflowsStart: f.services.workflowsStart });
+  const response = await route({ req: new Request('http://localhost/v1/jarvis/workflows/start', { method: 'POST',
+    headers: { 'X-Jarvis-Step-Name': 'child', 'X-Jarvis-Execution-Path': '[]' }, body: JSON.stringify({ flowId: f.target.id, waitForCompletion: true }) }),
+    claims: { runId: f.run.id, projectId: f.run.projectId, sandboxId: 'fixture' } as any, params: {} });
+  expect(response.status).toBe(409); expect(await response.text()).toContain('Child workflow is turned off');
 });

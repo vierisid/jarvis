@@ -235,7 +235,9 @@ test('quarterly saved graph uses real engine and retains occurrence through SQLi
  closeWorkflowDb();initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,78));configureWorkflowReadiness({pieces:catalog});now=Date.parse('2027-01-05T08:00:00Z');pruneFires(now);if(claim.outcome==='started')expect(fireForRun(claim.runId)?.scheduledFor).toBe(Date.parse(at));
  await worker.drain();if(claim.outcome!=='started')throw Error('No run');const run=getFlowRun(claim.runId)!;
  if(run.status!=='SUCCEEDED')throw Error(JSON.stringify({failed:run.failedStep,steps:run.steps}));expect(run.status).toBe('SUCCEEDED');expect(JSON.stringify(run.steps)).toContain('2026-Q3');expect(JSON.stringify(run.steps)).not.toContain('2026-Q4');expect(quarterlyNotifications).toHaveLength(1);
- expect(admitQuarter(f).outcome).toBe('duplicate');await worker.drain();expect(quarterlyNotifications).toHaveLength(1);expect(calls.filter(p=>p.includes('/objects/deals'))).toHaveLength(3);quarterlyNotifications=undefined;
+ expect(admitQuarter(f).outcome).toBe('duplicate');await worker.drain();expect(quarterlyNotifications).toHaveLength(1);// #1244: one missing-date count, then each quarter searched twice (a read and its confirmation), one deal a page:
+ // 1 + 2 quarters x 2 reads x 3 pages. The duplicate occurrence read nothing.
+ expect(calls.filter(p=>p.includes('/objects/deals'))).toHaveLength(13);quarterlyNotifications=undefined;
 },60000);
 test('quarterly missing coverage sends explicit unavailable summary, never a false successful data report',async()=>{
  reset();quarterlyNotifications=[];request=quarterlyFixtureRequest(quarterlyFixtureSetup,'2026-10-05T07:00:00Z','page_failure');const f=quarterFlow(),claim=admitQuarter(f);await worker.drain();if(claim.outcome!=='started')throw Error('No run');

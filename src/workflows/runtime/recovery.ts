@@ -10,6 +10,7 @@ import { digest } from './effect-context';
 import { lookupProviderReceipt, pieceCompletionReceipt, providerReceipt, type ProviderEvidence } from './provider-reconciliation';
 import { activeEmergencyState } from '../../authority/emergency';
 import type { AuthorityEngine } from '../../authority/engine';
+import type { CredentialResolver } from '../credentials/adapter';
 import { boundedReceiptText } from '../../roles/untrusted';
 import { ownsUnresolvedIdentity, resolveIdentity } from '../db/repos/effect-identity';
 
@@ -189,7 +190,7 @@ function identityRefusal(effect: WorkflowEffect): string | null {
   return ownsUnresolvedIdentity(effect.id) ? null : 'This effect holds no unresolved identity; it was already resolved';
 }
 
-export async function decideRunRecovery(runId: string, raw: Record<string, unknown>, deps: { authority?: AuthorityEngine; fetchImpl?: typeof fetch; via?: RecoveryReceipt['via'] } = {}): Promise<RecoveryReceipt> {
+export async function decideRunRecovery(runId: string, raw: Record<string, unknown>, deps: { authority?: AuthorityEngine; fetchImpl?: typeof fetch; via?: RecoveryReceipt['via']; credentials?: Pick<CredentialResolver, 'fresh'> } = {}): Promise<RecoveryReceipt> {
   const choice = validateRecoveryChoice(raw);
   const choiceDigest = digest(choice);
   const duplicate = () => {
@@ -223,7 +224,7 @@ export async function decideRunRecovery(runId: string, raw: Record<string, unkno
         toolName: 'workflow_recovery_lookup', toolCategory: 'workflow-piece', actionCategory: 'read_data', temporaryGrants: new Map(), profile: null });
       if (!decision?.allowed || decision.requiresApproval) throw new RecoveryError('Authority does not allow this provider lookup', 403);
     };
-    try { checkpoint(); evidence = await lookupProviderReceipt(lookupCandidate(effect, run), checkpoint, deps.fetchImpl); }
+    try { checkpoint(); evidence = await lookupProviderReceipt(lookupCandidate(effect, run), checkpoint, deps.fetchImpl, deps.credentials); }
     catch { evidence = { outcome: 'blocked', reason: 'Provider lookup held by current Authority or emergency policy. No action was replayed.' }; }
   }
   // Immediate: an identity resolution and a competing claim of that identity

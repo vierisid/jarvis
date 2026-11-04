@@ -109,17 +109,19 @@ export const HUBSPOT_SEARCH_CAP=10000,HUBSPOT_SEARCH_PAGE=200;
 /** Per week and read: at most this many matching deals and search requests; reaching either is Unavailable. */
 export const HUBSPOT_DEAL_LIMIT=50000,HUBSPOT_SEARCH_REQUESTS=1000;
 export const HUBSPOT_SEARCH_PATH='/crm/v3/objects/deals/search';
-const HUBSPOT_SORTS=[{propertyName:'hs_object_id',direction:'ASCENDING'}];
-export function hubspotSearchBody(s:ReportSetup,start:number,end:number,after?:string):Obj {
+export const HUBSPOT_SORTS=[{propertyName:'hs_object_id',direction:'ASCENDING'}];
+/** What a deal search needs from a report's setup: the weekly and the quarterly report share it. */
+export type DealSearchSetup=Pick<ReportSetup,'dealDateProperty'|'dealStageIds'>;
+export function hubspotSearchBody(s:DealSearchSetup,start:number,end:number,after?:string):Obj {
   return {filterGroups:[{filters:[{propertyName:'dealstage',operator:'IN',values:s.dealStageIds},{propertyName:s.dealDateProperty,operator:'GTE',value:String(start)},{propertyName:s.dealDateProperty,operator:'LT',value:String(end)}]}],
     properties:['dealstage','amount','deal_currency_code',s.dealDateProperty],sorts:HUBSPOT_SORTS,limit:HUBSPOT_SEARCH_PAGE,...(after===undefined?{}:{after})};
 }
-function dealTime(r:Obj,s:ReportSetup):number {
+function dealTime(r:Obj,s:DealSearchSetup):number {
   const raw=r.properties?.[s.dealDateProperty],t=typeof raw==='string'&&/^\d{13}$/.test(raw)?Number(raw):typeof raw==='string'&&/T.*(?:Z|[+-]\d\d:\d\d)$/.test(raw)?Date.parse(raw):NaN;
   if(!Number.isFinite(t))throw Error('Selected deal date missing or ambiguous');return t;
 }
 /** One search window, every page. Null means the window may exceed the search cap and must be split. */
-async function searchWindow(request:ReportRequest,s:ReportSetup,start:number,end:number,coverage:Coverage,budget:{requests:number}):Promise<Map<string,Obj>|null> {
+async function searchWindow(request:ReportRequest,s:DealSearchSetup,start:number,end:number,coverage:Coverage,budget:{requests:number}):Promise<Map<string,Obj>|null> {
   const rows=new Map<string,Obj>();let after:string|undefined,total:number|undefined;
   for(;;){
     if(++budget.requests>HUBSPOT_SEARCH_REQUESTS)throw Error('HubSpot search request limit reached; partial totals discarded');
@@ -145,8 +147,9 @@ async function searchWindow(request:ReportRequest,s:ReportSetup,start:number,end
     after=String(next);
   }
 }
-/** Every matching deal in [start,end), splitting any window that may exceed the search cap; never truncates. */
-async function searchDeals(request:ReportRequest,s:ReportSetup,start:number,end:number,coverage:Coverage):Promise<Map<string,Obj>> {
+/** Every matching deal in [start,end), splitting any window that may exceed the search cap; never truncates.
+ * `period` names the span in the limit message ("week", "quarter"). */
+export async function searchDeals(request:ReportRequest,s:DealSearchSetup,start:number,end:number,coverage:Coverage,period='week'):Promise<Map<string,Obj>> {
   const out=new Map<string,Obj>(),budget={requests:0};
   const range=async(a:number,b:number):Promise<void>=>{
     const rows=await searchWindow(request,s,a,b,coverage,budget);
@@ -155,7 +158,7 @@ async function searchDeals(request:ReportRequest,s:ReportSetup,start:number,end:
       const mid=a+Math.floor((b-a)/2);await range(a,mid);await range(mid,b);return;
     }
     for(const [id,r] of rows){if(out.has(id))throw Error('Deal changed date during the search');out.set(id,r);}
-    if(out.size>HUBSPOT_DEAL_LIMIT)throw Error(`More than ${HUBSPOT_DEAL_LIMIT} matching deals in one week; partial totals discarded`);
+    if(out.size>HUBSPOT_DEAL_LIMIT)throw Error(`More than ${HUBSPOT_DEAL_LIMIT} matching deals in one ${period}; partial totals discarded`);
   };
   await range(start,end);return out;
 }
@@ -340,14 +343,15 @@ export async function saveWeeklyReport(s:ReportSetup,report:Report,request:Repor
 /** The report can read only declared sources, create a Doc, then insert text into that newly created ID. */
 const keys=(o:unknown)=>o&&typeof o==='object'&&!Array.isArray(o)?Object.keys(o).sort().join():'';
 const dateFilter=(f:Obj,operator:string)=>keys(f)==='operator,propertyName,value'&&f.operator===operator&&typeof f.value==='string'&&/^\d{1,15}$/.test(f.value);
-/** Exactly the deal search the report builds: stage IN, a half-open date window, fixed sort, page size and offset. */
-export function validSearchBody(b:unknown):boolean {
+/** Exactly the deal search the report builds: stage IN, a half-open date window, fixed sort, page size and offset.
+ * `stage` is the stage ID shape the report's own setup accepts. */
+export function validSearchBody(b:unknown,stagePattern:RegExp=/^\w+$/):boolean {
   if(!b||typeof b!=='object')return false;const o=b as Obj;
   if(!['filterGroups,limit,properties,sorts','after,filterGroups,limit,properties,sorts'].includes(keys(o)))return false;
   if(!Array.isArray(o.filterGroups)||o.filterGroups.length!==1||keys(o.filterGroups[0])!=='filters')return false;
   const f=o.filterGroups[0].filters;if(!Array.isArray(f)||f.length!==3)return false;
   const [stage,from,to]=f;
-  if(keys(stage)!=='operator,propertyName,values'||stage.propertyName!=='dealstage'||stage.operator!=='IN'||!Array.isArray(stage.values)||!stage.values.length||stage.values.length>100||!stage.values.every((v:unknown)=>typeof v==='string'&&/^\w+$/.test(v)))return false;
+  if(keys(stage)!=='operator,propertyName,values'||stage.propertyName!=='dealstage'||stage.operator!=='IN'||!Array.isArray(stage.values)||!stage.values.length||stage.values.length>100||!stage.values.every((v:unknown)=>typeof v==='string'&&stagePattern.test(v)))return false;
   if(!dateFilter(from,'GTE')||!dateFilter(to,'LT')||from.propertyName!==to.propertyName||typeof from.propertyName!=='string'||!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(from.propertyName)||Number(from.value)>=Number(to.value))return false;
   if(!Array.isArray(o.properties)||!o.properties.length||o.properties.length>10||!o.properties.every((v:unknown)=>typeof v==='string'&&/^[a-zA-Z][a-zA-Z0-9_]*$/.test(v)))return false;
   if(JSON.stringify(o.sorts)!==JSON.stringify(HUBSPOT_SORTS)||!Number.isSafeInteger(o.limit)||o.limit<1||o.limit>HUBSPOT_SEARCH_PAGE)return false;
