@@ -62,3 +62,87 @@ test('the queue does not poll while the decisions capability is off', async () =
   await React.act(async () => root.render(<Probe enabled={false} />)); expect(reads).toBe(0);
   await React.act(async () => root.render(<Probe enabled />)); expect(reads).toBe(1);
 });
+
+test('request links resolve to the actual Brief run route with the selected run and version', async () => {
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputForm request={{...request, runs:[{runId:'run / one', versionId:'version', status:'PAUSED'}]}} http={http} changed={async()=>{}} />));
+  const { resolveBriefEntry } = await import('../entry/route');
+  const link = host.querySelector('a')!;
+  expect(resolveBriefEntry(link.href)).toEqual({kind:'brief',route:{room:'workflow-runs',selection:{flowId:'flow',versionId:'version',runId:'run / one'}}});
+});
+test('failed continuation stays visible outside collapsed history after submission and refresh', async () => {
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const failed = {...request,status:'submitted' as const,answers:{progress:'Saved'},runs:[{runId:'run',versionId:'v',status:'FAILED'}]};
+  await React.act(async () => root.render(<Forms.HumanInputInbox queue={{requests:[failed],error:'',refresh:async()=>{}}} http={http} />));
+  expect(host.textContent).toContain('Workflow failed. Review the run before retrying.');
+  expect(host.querySelector('article')?.closest('details')).toBeNull();
+  expect(host.querySelector('button[type="submit"]')).toBeNull();
+  expect(host.querySelector('a')?.href).toContain('runId=run');
+});
+test('expiry keeps the focused unsent form readable, copyable and recoverable after remount without another POST', async () => {
+  let writes=0, copied='';
+  Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>{copied=text;}}});
+  const http = createHostTransport((async () => {writes++; return Response.json({});}) as unknown as typeof fetch);
+  const render=(status:HumanRequest['status'])=>root.render(<Forms.HumanInputInbox queue={{requests:[{...request,status}],error:'',refresh:async()=>{}}} http={http} />);
+  await React.act(async()=>render('pending')); await change('textarea','Keep my detailed update'); await change('input[type="number"]','0'); await change('select','false');
+  const textarea=host.querySelector('textarea') as HTMLTextAreaElement; textarea.focus();
+  await React.act(async()=>render('expired'));
+  expect(document.activeElement).toBe(textarea); expect(textarea.readOnly).toBe(true); expect(textarea.value).toBe('Keep my detailed update');
+  expect(host.textContent).toContain('deadline passed'); expect(host.querySelector('button[type="submit"]')).toBeNull();
+  await click('Copy unsent answers'); expect(copied).toContain('Count: 0'); expect(copied).toContain('Blocked: false'); expect(writes).toBe(0);
+  await React.act(async()=>root.render(null)); await React.act(async()=>render('expired'));
+  expect((host.querySelector('textarea') as HTMLTextAreaElement).value).toBe('Keep my detailed update');
+  await click('Discard unsent answers'); expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toBeNull(); expect(host.querySelector('textarea')).toBeNull();
+});
+test('cancelled stale requests retain unsent text and explain why the answer was not accepted', async()=>{
+  sessionStorage.setItem('jarvis:workflow-input:test-request',JSON.stringify({progress:'Do not lose this'}));
+  const http=createHostTransport((async()=>Response.json({})) as unknown as typeof fetch);
+  await React.act(async()=>root.render(<Forms.HumanInputInbox queue={{requests:[{...request,status:'cancelled',closureReason:'workflow_changed'}],error:'',refresh:async()=>{}}} http={http}/>));
+  expect(host.textContent).toContain('Your answer was not accepted');expect(host.querySelector('button[type="submit"]')).toBeNull();
+  expect((host.querySelector('textarea') as HTMLTextAreaElement).value).toBe('Do not lose this');
+});
+test('an emptied draft is no unsent answer, and an explicit cancel clears the draft', async () => {
+  sessionStorage.setItem('jarvis:workflow-input:test-request', JSON.stringify({ progress: '  ', count: '' }));
+  expect(Forms.hasLocalDraft(request)).toBe(false);
+  sessionStorage.setItem('jarvis:workflow-input:test-request', JSON.stringify({ progress: 'Half written' }));
+  expect(Forms.hasLocalDraft(request)).toBe(true);
+  const writes: unknown[] = [];
+  const http = createHostTransport((async (_url, init) => { writes.push(JSON.parse(String(init?.body))); return Response.json({ request: { ...request, status: 'cancelled' } }); }) as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputForm request={request} http={http} changed={async () => {}} />));
+  await click('Cancel this request'); expect(writes).toEqual([{ decision: 'cancel' }]);
+  expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toBeNull();
+  await React.act(async () => root.render(<Forms.HumanInputForm request={{ ...request, status: 'cancelled' }} http={http} changed={async () => {}} />));
+  expect(host.textContent).not.toContain('unsent answers');
+});
+test('a request answered in another tab does not show this tab\'s draft as unsent', async () => {
+  sessionStorage.setItem('jarvis:workflow-input:test-request', JSON.stringify({ progress: 'Typed here, answered elsewhere' }));
+  const answered = { ...request, status: 'submitted' as const, answers: { progress: 'Sent elsewhere' }, runs: [{ runId: 'run', versionId: 'v', status: 'SUCCEEDED' }] };
+  expect(Forms.hasLocalDraft(answered)).toBe(false);
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputInbox queue={{ requests: [answered], error: '', refresh: async () => {} }} http={http} />));
+  expect(host.textContent).not.toContain('unsent answers'); expect(host.querySelector('textarea')).toBeNull();
+});
+test('a stopped run needs nothing; a failed one stays until dismissed on the server', async () => {
+  const { humanRequestNeedsAttention } = await import('../../../../src/workflows/runtime/human-input-contract');
+  const stopped = { ...request, status: 'submitted' as const, runs: [{ runId: 'run', versionId: 'v', status: 'STOPPED' }] };
+  const failed = { ...stopped, runs: [{ runId: 'run', versionId: 'v', status: 'FAILED' }] };
+  expect(humanRequestNeedsAttention(stopped)).toBe(false); expect(humanRequestNeedsAttention(failed)).toBe(true);
+  expect(humanRequestNeedsAttention({ ...failed, dismissedAt: 1 })).toBe(false);
+  const urls: string[] = []; let refreshes = 0;
+  const http = createHostTransport((async (url) => { urls.push(String(url)); return Response.json({ request: { ...failed, dismissedAt: 1 } }); }) as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputForm request={stopped} http={http} changed={async () => {}} />));
+  expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Dismiss')).toBe(false);
+  await React.act(async () => root.render(<Forms.HumanInputForm request={failed} http={http} changed={async () => { refreshes++; }} />));
+  await click('Dismiss'); expect(urls.at(-1)).toContain('/api/workflow-inputs/test-request/dismiss'); expect(refreshes).toBe(1);
+  expect(host.textContent).toContain('no longer needs you');
+  await React.act(async () => root.render(<Forms.HumanInputForm request={{ ...failed, runs: [{ runId: 'run-2', versionId: 'v', status: 'RUNNING' }, ...failed.runs] }} http={http} changed={async () => {}} />));
+  expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Dismiss')).toBe(false);
+});
+test('a dismissed request with a kept draft no longer counts, and an answered one drops its stale draft', async () => {
+  sessionStorage.setItem('jarvis:workflow-input:test-request', JSON.stringify({ progress: 'Kept after withdrawal' }));
+  const withdrawn = { ...request, status: 'cancelled' as const, closureReason: 'workflow_changed' as const };
+  expect(Forms.hasLocalDraft(withdrawn)).toBe(true); expect(Forms.hasLocalDraft({ ...withdrawn, dismissedAt: 1 })).toBe(false);
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputForm request={{ ...request, status: 'submitted', runs: [{ runId: 'run', versionId: 'v', status: 'SUCCEEDED' }] }} http={http} changed={async () => {}} />));
+  expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toBeNull();
+});

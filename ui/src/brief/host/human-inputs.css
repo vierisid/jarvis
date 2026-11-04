@@ -21,3 +21,10 @@
 .brief-human-history { color: var(--brief-secondary); line-height: 1.7; }
 .brief-human-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 @media (max-width: 600px) { .brief-human-card { padding: 20px; } .brief-human-actions { flex-direction: column; } }
+
+.brief-human-runs { list-style: none; padding: 0; margin: 20px 0 0; }
+.brief-human-runs li + li { margin-top: 16px; }
+.brief-human-runs p { margin: 0 0 8px; line-height: 1.6; }
+.brief-human-runs a { color: var(--brief-ink); text-underline-offset: 3px; }
+.brief-human-history > article { margin-top: 20px; }
+.brief-human-field [readonly] { background: var(--brief-paper); }

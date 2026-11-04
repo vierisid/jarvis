@@ -34,6 +34,7 @@ const STATEMENTS: string[] = [
     request_id TEXT NOT NULL REFERENCES workflow_human_request(id) ON DELETE CASCADE,
     run_id TEXT NOT NULL REFERENCES flow_run(id) ON DELETE CASCADE,
     waitpoint_id TEXT NOT NULL REFERENCES waitpoint(id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY(request_id,run_id,waitpoint_id)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_human_wait_waitpoint ON workflow_human_wait(waitpoint_id)`,
@@ -533,6 +534,9 @@ function applyAdditiveColumnMigrations(db: Database): void {
     // Q-05: binding pins and the credential generation they compare against.
     // NULL pins mean "not pinned yet"; the daemon pins enabled flows at boot.
     { table: "flow", column: "binding_pins", ddl: "ALTER TABLE flow ADD COLUMN binding_pins TEXT" },
+    // Which instance of a request a run waited on: a shared form reopened after
+    // it expired or was cancelled counts up, so earlier waits keep their outcome.
+    { table: "workflow_human_wait", column: "generation", ddl: "ALTER TABLE workflow_human_wait ADD COLUMN generation INTEGER NOT NULL DEFAULT 0" },
     {
       table: "app_connection",
       column: "credential_generation",

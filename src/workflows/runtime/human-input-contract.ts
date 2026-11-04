@@ -6,6 +6,13 @@ export type HumanRequest = {
   requestKey: string; workflowName: string; flowId: string; runId: string; created: number; deadline: number;
   status: 'pending' | 'submitted' | 'approved' | 'rejected' | 'expired' | 'cancelled';
   answers: Record<string, unknown> | null;
+  /** Read-only continuation receipts. Shared forms can belong to several runs. */
+  runs?: Array<{ runId: string; versionId: string; status: string }>;
+  closureReason?: 'workflow_changed';
+  /** Set when the user acknowledged an outcome that needed attention. */
+  dismissedAt?: number;
+  /** A shared form reopened after it closed is a new instance; earlier waits keep `reopenedFrom`. */
+  generation?: number; reopenedFrom?: HumanRequest['status'];
 };
 export function formFields(value: unknown): InputField[] {
   if (!Array.isArray(value) || !value.length || value.length > 20) throw Error('Provide 1–20 input fields');
@@ -45,4 +52,24 @@ export function answerErrors(fields: InputField[], value: unknown): Record<strin
   if (!errors._form && new TextEncoder().encode(JSON.stringify(answers)).length > HUMAN_INPUT_MAX_ANSWER_BYTES)
     errors._form = 'These answers are too long together. Shorten the longest answers and submit again.';
   return errors;
+}
+
+const LIVE_RUN_STATUSES = ['QUEUED', 'RUNNING', 'PAUSED'];
+/**
+ * An accepted response is not evidence that its workflow completed. A failed or
+ * unknown continuation, or a form withdrawn because the workflow changed, stays
+ * until the user dismisses it. A stopped run (cancelled, turned off or deleted)
+ * needs nothing more.
+ */
+export function humanRequestNeedsAttention(request: HumanRequest): boolean {
+  if (request.status === 'pending') return true;
+  if (request.dismissedAt) return false;
+  return request.closureReason === 'workflow_changed'
+    || (['submitted', 'approved'].includes(request.status) && !!request.runs?.some(run =>
+      ![...LIVE_RUN_STATUSES, 'SUCCEEDED', 'STOPPED'].includes(run.status)));
+}
+/** Only a settled outcome can be dismissed: no run of the request may still change it. */
+export function humanRequestDismissable(request: HumanRequest): boolean {
+  return request.status !== 'pending' && humanRequestNeedsAttention(request)
+    && !request.runs?.some(run => LIVE_RUN_STATUSES.includes(run.status));
 }
