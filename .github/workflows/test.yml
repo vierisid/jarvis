@@ -238,7 +238,8 @@ jobs:
   daemon-cli-darwin:
     needs: changes
     if: needs.changes.outputs.daemon-cli == 'true'
-    runs-on: macos-latest
+    # The launchd checks need macOS, not a particular CPU architecture.
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -739,7 +740,8 @@ jobs:
     needs: changes
     # macOS minutes bill at 10x — skip on docs/TypeScript-only changes.
     if: needs.changes.outputs.sidecar == 'true'
-    runs-on: macos-latest
+    # Cross-build and vet both targets below without relying on ARM runner capacity.
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -766,6 +768,8 @@ jobs:
               amd64) target=x86_64-apple-macos11 ;;
             esac
             echo "== darwin/$arch =="
+            CC="clang -target $target" CXX="clang++ -target $target" \
+              GOOS=darwin GOARCH="$arch" go vet ./...
             CC="clang -target $target" CXX="clang++ -target $target" \
               GOOS=darwin GOARCH="$arch" go build ./...
           done
