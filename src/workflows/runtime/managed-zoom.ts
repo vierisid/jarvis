@@ -17,12 +17,17 @@ export function managedZoomInput(piece: string, input: unknown): boolean {
     input.auth.jarvis_managed === "zoom"
   );
 }
-function text(v: unknown, name: string, max: number): string {
+function text(
+  v: unknown,
+  name: string,
+  max: number,
+  multiline = false,
+): string {
   if (
     typeof v !== "string" ||
     !v.trim() ||
     v.length > max ||
-    /[\x00-\x1f\x7f]/.test(v)
+    (multiline ? /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/ : /[\x00-\x1f\x7f]/).test(v)
   )
     throw new Error("Enter a valid " + name + ".");
   return v.trim();
@@ -107,6 +112,15 @@ function meeting(raw: unknown, user: string, expectedId?: string) {
  * effect stays unconfirmed (no completion receipt), which blocks a replay. */
 const CREATED_UNVERIFIED =
   "Zoom created the meeting but returned details Jarvis could not verify. Check Zoom before retrying.";
+/** Published 0.9.2 defaults the editor writes into every new step. The managed
+ * form hides these fields, so their exact default value means "not chosen";
+ * any other value is still refused. */
+const SEEDED_DEFAULTS: Record<string, Record<string, unknown>> = {
+  zoom_create_meeting: { require_authentication: true },
+  zoom_find_meeting: { show_previous_occurrences: false },
+  zoom_get_meeting: { show_previous_occurrences: false },
+  zoom_update_meeting_by_id: { clear_agenda: false },
+};
 async function api(
   token: string,
   path: string,
@@ -213,8 +227,13 @@ export async function runManagedZoomAction(
     ...(!create ? ["meeting_id"] : []),
     ...(create || update ? ["topic", "start_time", "duration", "agenda"] : []),
   ]);
+  const seeded = SEEDED_DEFAULTS[action] ?? {};
   for (const [key, value] of Object.entries(input))
-    if (!allowed.has(key) && present(value))
+    if (
+      !allowed.has(key) &&
+      present(value) &&
+      !(Object.hasOwn(seeded, key) && seeded[key] === value)
+    )
       throw new Error(
         "The Zoom field " +
           key.replace(/[^a-z_]/g, "").slice(0, 48) +
@@ -230,7 +249,7 @@ export async function runManagedZoomAction(
     if (create) body.timezone = "UTC";
   }
   if (present(input.agenda))
-    body.agenda = text(input.agenda, "meeting agenda", 2000);
+    body.agenda = text(input.agenda, "meeting agenda", 2000, true);
   if (present(input.duration)) {
     if (
       typeof input.duration !== "number" ||

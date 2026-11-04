@@ -317,3 +317,34 @@ test("a create that fails validation after dispatch posts no receipt, so a re-ru
   expect(receipts).toEqual([]);
   expect(tracksPieceCompletion(params.piece, params.action, params.input)).toBe(true);
 });
+// The editor seeds every new step with the published 0.9.2 defaults, which the
+// managed form then hides. Those exact values must not block a run.
+for (const [action, seeded, input] of [
+  ["zoom_create_meeting", { require_authentication: true }, createInput],
+  ["zoom_find_meeting", { show_previous_occurrences: false }, { auth, meeting_id: meeting.id }],
+  ["zoom_get_meeting", { show_previous_occurrences: false }, { auth, meeting_id: meeting.id }],
+  ["zoom_update_meeting_by_id", { clear_agenda: false }, { auth, meeting_id: meeting.id, topic: "Changed" }],
+] as const)
+  test(action + " ignores its seeded upstream default and refuses any other value", async () => {
+    const f = fake();
+    await runManagedZoomAction(action, { ...input, ...seeded }, f.request);
+    const sent = f.calls.map((c) => String(c.init.body ?? ""));
+    for (const key of Object.keys(seeded)) expect(sent.join()).not.toContain(key);
+    const [key, value] = Object.entries(seeded)[0]!;
+    const g = fake();
+    await expect(
+      runManagedZoomAction(action, { ...input, [key]: !value }, g.request),
+    ).rejects.toThrow("is not enabled for this connection");
+    expect(g.calls).toHaveLength(0);
+  });
+test("an agenda may span lines; a topic may not", async () => {
+  const f = fake();
+  await runManagedZoomAction("zoom_create_meeting", { ...createInput, agenda: "Line one\r\n\tLine two" }, f.request);
+  expect(JSON.parse(String(f.calls[0]!.init.body)).agenda).toBe("Line one\r\n\tLine two");
+  await expect(
+    runManagedZoomAction("zoom_create_meeting", { ...createInput, topic: "Two\nlines" }, fake().request),
+  ).rejects.toThrow("meeting topic");
+  await expect(
+    runManagedZoomAction("zoom_create_meeting", { ...createInput, agenda: "bell\x07" }, fake().request),
+  ).rejects.toThrow("meeting agenda");
+});
