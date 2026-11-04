@@ -138,3 +138,11 @@ test('a stopped run needs nothing; a failed one stays until dismissed on the ser
   await React.act(async () => root.render(<Forms.HumanInputForm request={{ ...failed, runs: [{ runId: 'run-2', versionId: 'v', status: 'RUNNING' }, ...failed.runs] }} http={http} changed={async () => {}} />));
   expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Dismiss')).toBe(false);
 });
+test('a dismissed request with a kept draft no longer counts, and an answered one drops its stale draft', async () => {
+  sessionStorage.setItem('jarvis:workflow-input:test-request', JSON.stringify({ progress: 'Kept after withdrawal' }));
+  const withdrawn = { ...request, status: 'cancelled' as const, closureReason: 'workflow_changed' as const };
+  expect(Forms.hasLocalDraft(withdrawn)).toBe(true); expect(Forms.hasLocalDraft({ ...withdrawn, dismissedAt: 1 })).toBe(false);
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputForm request={{ ...request, status: 'submitted', runs: [{ runId: 'run', versionId: 'v', status: 'SUCCEEDED' }] }} http={http} changed={async () => {}} />));
+  expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toBeNull();
+});

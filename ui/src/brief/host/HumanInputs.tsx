@@ -60,6 +60,8 @@ export function HumanInputForm({ request, http, changed, focused = false }: { re
     } catch { setMessage('Your response could not be confirmed. Your answers are kept here. Check the request status before retrying.'); await changed(); }
     finally { lock.current = false; setBusy(false); }
   };
+  // Answered in another tab: this tab's copy is no longer a draft of anything.
+  useEffect(() => { if (answered(request)) { try { sessionStorage.removeItem(storageKey); } catch { /* Optional browser storage. */ } } }, [request.status, storageKey]);
   const pending = request.status === 'pending';
   // Answered elsewhere (another tab): the local draft is no longer "unsent".
   const unsent = !answered(request) && filled(answers).length > 0;
@@ -135,8 +137,9 @@ function filled(answers: unknown): string[] {
   if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return [];
   return Object.entries(answers).filter(([, v]) => v !== undefined && v !== null && !(typeof v === 'string' && !v.trim())).map(([k]) => k);
 }
+/** A draft that should keep the request in Needs you: not once it was answered or dismissed. */
 export function hasLocalDraft(request: HumanRequest): boolean {
-  if (answered(request)) return false;
+  if (answered(request) || request.dismissedAt) return false;
   try { return filled(JSON.parse(sessionStorage.getItem(`jarvis:workflow-input:${request.id}`) ?? '{}')).length > 0; } catch { return false; }
 }
 export function HumanInputInbox({ queue, http, focusId }: { queue: ReturnType<typeof useHumanInputQueue>; http: HostTransport; focusId?: string }) {
