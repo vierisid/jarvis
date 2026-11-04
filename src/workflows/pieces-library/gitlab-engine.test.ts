@@ -1,4 +1,4 @@
-/** Published GitLab package through Worker and EngineRuntime. Ungated in the normal suite.
+/** Published GitLab package through Worker and EngineRuntime. Gated on JARVIS_TEST_ENGINE_BUILD=1 (CI engine step).
  * Provider HTTP alone is redirected in a disposable engine bundle. No live credentials. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {
@@ -39,6 +39,7 @@ import { EngineFlowExecutor } from "../runner/engine-runtime/engine-flow-executo
 import { createRunFlowHandler } from "../runner/handler";
 import { Worker } from "../queue/worker";
 
+const gate = process.env.JARVIS_TEST_ENGINE_BUILD === "1";
 const piece = "@activepieces/piece-gitlab";
 let dir: string,
   api: SandboxApi,
@@ -53,6 +54,7 @@ const requests: Array<{
 }> = [];
 
 beforeAll(async () => {
+  if (!gate) return;
   dir = mkdtempSync(join(tmpdir(), "jarvis-gitlab-engine-"));
   initWorkflowDb(join(dir, "db.sqlite"));
   writeFileSync(
@@ -190,6 +192,7 @@ beforeAll(async () => {
   });
 }, 120000);
 afterAll(async () => {
+  if (!gate) return;
   await runtime?.shutdown();
   await api?.stop();
   provider?.stop(true);
@@ -197,7 +200,7 @@ afterAll(async () => {
   if (runId) rmSync(join(workflowLogsBase(), runId + ".bin"), { force: true });
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
-test("published GitLab metadata, issue creation, refresh acknowledgement and downstream references", async () => {
+test.skipIf(!gate)("published GitLab metadata, issue creation, refresh acknowledgement and downstream references", async () => {
   const { catalog, failures } = await buildPieceCatalog({
     runtime,
     pieceRoots: [join(dir, "node_modules/@activepieces")],
@@ -207,8 +210,6 @@ test("published GitLab metadata, issue creation, refresh acknowledgement and dow
   });
   expect(failures).toEqual([]);
   const metadata = catalog.get(piece)!;
-  if (process.env.GITLAB_CATALOG_FIXTURE)
-    writeFileSync(process.env.GITLAB_CATALOG_FIXTURE, JSON.stringify(metadata));
   expect(metadata.auth?.type).toBe("OAUTH2");
   expect(Object.keys(metadata.actions).sort()).toEqual([
     "add_issue_spent_time",
@@ -345,8 +346,6 @@ test("published GitLab metadata, issue creation, refresh acknowledgement and dow
     if (name === "create_issue") expect(denied).toBeNull();
     else expect(denied).not.toBeNull();
   }
-  if (process.env.GITLAB_CATALOG_FIXTURE)
-    writeFileSync(process.env.GITLAB_CATALOG_FIXTURE, JSON.stringify(metadata));
   for (const name of ["create_issue"]) {
     expect(metadata.actions[name]?.requireAuth).toBe(true);
     expect(metadata.actions[name]?.outputSample).toBeDefined();

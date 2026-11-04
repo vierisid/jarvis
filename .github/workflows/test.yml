@@ -180,6 +180,7 @@ jobs:
           src/workflows/pieces-library/webflow-engine.test.ts
           src/workflows/pieces-library/wrike-engine.test.ts
           src/workflows/pieces-library/pipedrive-engine.test.ts
+          src/workflows/pieces-library/gitlab-engine.test.ts
           src/workflows/pieces-library/mailchimp-engine.test.ts
           src/workflows/pieces-library/dropbox-engine.test.ts
           src/workflows/pieces-library/slack-engine.test.ts
