@@ -65,7 +65,7 @@ beforeAll(async () => {
     { cwd: dir, encoding: "utf8" },
   );
   if (install.status !== 0)
-    throw new Error("npm install failed: " + install.stderr);
+    throw new Error("bun install failed: " + install.stderr);
   provider = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",

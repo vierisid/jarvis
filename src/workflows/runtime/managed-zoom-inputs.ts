@@ -48,7 +48,7 @@ export function zoomInputSchema(action: string): PieceInputSchema | null {
               "Duration (minutes)",
               false,
               "number",
-              "1–1440. New meetings default to 30 minutes. Empty fields preserve existing values when updating.",
+              "1-1440. New meetings default to 30 minutes. Empty fields preserve existing values when updating.",
             ),
             field(
               "agenda",
