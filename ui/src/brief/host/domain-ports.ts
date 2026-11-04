@@ -115,8 +115,9 @@ export function createDomainPorts(scopeId: string, http: HostTransport, storage:
       for (const row of rows) {
         const doc = await get(`/api/brief/decisions/${encodeURIComponent(row.decisionId)}/document`);
         if (doc.decision?.revision !== row.revision || !Array.isArray(doc.actions)) throw Error('Decision changed');
-        // Permission cards show here even once inspect-only; other inspect-only receipts stay out (they are not requests).
-        if (!doc.actions.length && (row.kind === 'permission' || row.supportedActions?.some((action: string) => action !== 'inspect'))) result.push(row);
+        // Exactly the rows DecisionsRoom leaves out (it keeps only rows with document actions), so nothing is
+        // listed twice and every queued row, inspect-only receipts included, is shown in one of the two lists.
+        if (!doc.actions.length) result.push(row);
       }
       return result;
     },

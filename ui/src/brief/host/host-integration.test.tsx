@@ -191,20 +191,29 @@ test('permission list reports an unknown count while it cannot read, and zero wh
   expect(counts.at(-1)).toBe(0);
 });
 
-test('the permission list takes inspect-only permission cards but not inspect-only receipts the document room may also show', async () => {
+test('the permission list takes exactly the rows without document actions, so it and DecisionsRoom never overlap', async () => {
   const { createDomainPorts } = await import('./domain-ports');
   const rows = [
     { decisionId: 'approval:a', revision: 'r', kind: 'permission', supportedActions: ['inspect'] },
-    { decisionId: 'effect:e', revision: 'r', kind: 'recovery', supportedActions: ['inspect'] },
-    { decisionId: 'approval:b', revision: 'r', kind: 'recovery', supportedActions: ['close_without_running', 'inspect'] },
+    { decisionId: 'work:w', revision: 'r', kind: 'intent', supportedActions: ['inspect'] },
     { decisionId: 'approval:c', revision: 'r', kind: 'permission', supportedActions: ['approve_permission', 'inspect'] },
+    { decisionId: 'decision:d', revision: 'r', kind: 'permission', supportedActions: ['approve_permission', 'inspect'] },
   ];
   const http = createHostTransport((async (path: string) => {
     if (path.startsWith('/api/brief/decisions?')) return Response.json({ state: 'ready', data: { items: rows, nextCursor: null } });
     const id = decodeURIComponent(path.split('/')[4]!);
-    return Response.json({ decision: { decisionId: id, revision: 'r' }, actions: id === 'approval:c' ? ['approve'] : [] });
+    return Response.json({ decision: { decisionId: id, revision: 'r' }, actions: id === 'decision:d' ? ['approve'] : [] });
   }) as unknown as typeof fetch);
   const ports = createDomainPorts('scope', http, { setItem() {} });
-  expect((await ports.otherDecisions()).map(row => row.decisionId)).toEqual(['approval:a', 'approval:b']);
+  expect((await ports.otherDecisions()).map(row => row.decisionId)).toEqual(['approval:a', 'work:w', 'approval:c']);
+  http.stop();
+});
+
+test('an allowed permission card whose outcome is unknown shows its state, not a request for permission', async () => {
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const row = { decisionId: 'approval:done', revision: 'r', kind: 'permission', state: 'unknown', title: 'Send report', supportedActions: ['inspect'] };
+  await React.act(async () => root.render(<Commands.PendingDecisions http={http} read={async () => [row as any]} enabled changed={() => {}} />));
+  expect(host.textContent).not.toContain('permission is needed'); expect(host.textContent).not.toContain('needs your permission');
+  expect(host.textContent).not.toContain('Allowing this request'); expect(host.textContent).toContain('unknown');
   http.stop();
 });

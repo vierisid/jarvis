@@ -429,3 +429,19 @@ test('an accepted commitment whose run had its only effect denied keeps its work
   saveWorkflowEffect({ ...e.record, decision: 'approval_required' });
   expect((await read()).items.map(item => item.decisionId)).toEqual([`approval:${a.id}`]);
 });
+
+test('an effect marked denied stays queued while its approval is still pending', async () => {
+  const a = approval('workflow'), e = effect('blocked', a.id);
+  saveWorkflowEffect({ ...e.record, decision: 'denied' });
+  expect((await read()).items.map(item => item.decisionId)).toEqual([`approval:${a.id}`]);
+});
+
+test('malformed frozen notification arguments are not projected', () => {
+  const a = approval('workflow'), e = effect('pending', a.id);
+  for (const args of [{ message: 42, channels: ['dashboard'] }, { message: 'Hi', channels: 'dashboard' }]) {
+    saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify', arguments: args as Record<string, unknown> });
+    expect(queue.get(`approval:${a.id}`).review?.message).toBeUndefined();
+  }
+  saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify', arguments: { message: 'Hi', channels: ['dashboard', 7, null] } });
+  expect(queue.get(`approval:${a.id}`).review?.channels).toEqual(['dashboard']);
+});
