@@ -188,6 +188,12 @@ export type ApiContext = {
    * `setup_completed_at > daemon_started_at`. (See also issue F2.)
    */
   daemonStartedAt: number;
+  /**
+   * Persisted identity of the data directory this daemon serves (see
+   * ./workspace-id.ts). The dashboard keeps edit buffers across a restart
+   * only while it stays the same. Tests may omit it; the id is then per-boot.
+   */
+  workspaceId?: string;
   healthMonitor: HealthMonitor;
   agentService: AgentService;
   config: JarvisConfig;
@@ -400,6 +406,8 @@ const API_FACT_SOURCES: ReadonlySet<string> = new Set(['dashboard', 'user', 'api
  */
 export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
   const googleOAuthFlows = new GoogleOAuthFlowStore();
+  // Identifies this daemon boot; the workspace id identifies the data it serves.
+  const generation = crypto.randomUUID();
 
   /**
    * POST /api/sidecars/:id/{update-prompt,update}: forward to the sidecar's
@@ -441,7 +449,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
-    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings, { generation: crypto.randomUUID(), installMode: () => isHostedInstall(ctx.config) ? 'hosted' : 'self', dashboard: () => hostedDashboardDefault(ctx.config) }),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings, { generation, workspaceId: ctx.workspaceId ?? generation, installMode: () => isHostedInstall(ctx.config) ? 'hosted' : 'self', dashboard: () => hostedDashboardDefault(ctx.config) }),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),
