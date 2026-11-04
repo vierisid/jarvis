@@ -17,7 +17,7 @@ import {pinFlowBindings} from '../db/repos/binding-pins';
 import {AuthorityEngine} from '../../authority/engine';
 import {AuditTrail} from '../../authority/audit';
 import {EmergencyController,setActiveEmergencyController} from '../../authority/emergency';
-import {saveWorkflowEffect} from '../db/repos/workflow-effect';
+import {listWorkflowEffects,saveWorkflowEffect} from '../db/repos/workflow-effect';
 import {ApprovalManager} from '../../authority/approval';
 import {CredentialResolver} from '../credentials/adapter';
 import {SandboxApi} from '../sandbox-api/server';
@@ -40,6 +40,7 @@ import {resumeSubflowCalls} from '../db/repos/subflow';
 import {parentTestGraph,childTestGraph} from './subflow-test-data';
 import {configuredSubflowGraphs,validateSubflowFixtures} from './subflow-fixtures';
 import {SUBFLOW_PIECE} from './subflow-contract';
+import {JarvisWorkflowRunnerAdapter} from '../adapters/workflow-runner';
 
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog,authority:AuthorityEngine,approvals:ApprovalManager;
 let services:ReturnType<typeof buildSandboxServiceBackends>;
@@ -165,4 +166,46 @@ test('the approval card names the child workflow it starts',async()=>{
  const node:any=f.pv.trigger.nextAction,ctx={runId:r.id,projectId:DEFAULT_IDS.project,stepName:node.name,executionPath:[] as Array<[string,number]>};
  const pending=await services.subflowCall!({...node.settings.input,invocationKey:'card-request',payload},ctx) as any;
  expect(JSON.parse(approvals.getRequest(pending.approval.approvalId)!.context).intent).toBe('Start and wait for the workflow '+f.child.id+' named "Fixture child"');
+});
+// #1242: a child a person turned off is not started by a parent; one saved off and never turned on still is.
+test('a turned-off child fails the parent step with a clear message before any approval card and starts nothing',async()=>{
+ const f=await fixture();updateFlowStatus(f.child.id,'DISABLED');authority.setGovernedCategories(['spawn_agent']);const cards=approvals.getPending().length;
+ expect(versionReadiness(f.parent.id,f.pv.id).issues.map(i=>i.message)).toContainEqual(expect.stringContaining('Target workflow is turned off'));
+ const r=createFlowRun({flowId:f.parent.id,flowVersionId:f.pv.id,status:'RUNNING'});runIds.push(r.id);
+ const node:any=f.pv.trigger.nextAction,ctx={runId:r.id,projectId:DEFAULT_IDS.project,stepName:node.name,executionPath:[] as Array<[string,number]>};
+ await expect(services.subflowCall!({...node.settings.input,invocationKey:'off-request',payload},ctx)).rejects.toThrow('Child workflow is turned off');
+ expect(approvals.getPending()).toHaveLength(cards);expect(f.children()).toHaveLength(0);
+ updateFlowStatus(f.child.id,'ENABLED');expect(versionReadiness(f.parent.id,f.pv.id).issues).toEqual([]);
+});
+test('a child turned off after its call was approved is refused at dispatch',async()=>{
+ const f=await fixture();authority.setGovernedCategories(['spawn_agent']);const r=createFlowRun({flowId:f.parent.id,flowVersionId:f.pv.id,status:'RUNNING'});runIds.push(r.id);
+ const node:any=f.pv.trigger.nextAction,ctx={runId:r.id,projectId:DEFAULT_IDS.project,stepName:node.name,executionPath:[] as Array<[string,number]>};
+ const pending=await services.subflowCall!({...node.settings.input,invocationKey:'approved-request',payload},ctx) as any;expect(pending.approval).toBeDefined();
+ updateFlowStatus(f.child.id,'DISABLED');approvals.approve(pending.approval.approvalId,'fixture');
+ await expect(services.subflowCall!({...node.settings.input,invocationKey:'approved-request',payload},ctx)).rejects.toThrow('Child workflow is turned off');
+ expect(f.children()).toHaveLength(0);
+ // Recorded as a definite refusal before anything started, not as an uncertain dispatch.
+ expect(listWorkflowEffects(r.id)[0]!.outcome).toMatchObject({status:'blocked',code:'FLOW_TURNED_OFF',effect:'not_started'});
+ // Turned on again: this run's step keeps its refusal, never "may have occurred"; a later run calls the child.
+ updateFlowStatus(f.child.id,'ENABLED');
+ await expect(services.subflowCall!({...node.settings.input,invocationKey:'approved-request',payload},ctx)).rejects.toThrow('Child workflow is turned off');
+ const later=createFlowRun({flowId:f.parent.id,flowVersionId:f.pv.id,status:'RUNNING'});runIds.push(later.id);const laterCtx={...ctx,runId:later.id};
+ let again:any=await services.subflowCall!({...node.settings.input,invocationKey:'approved-request',payload},laterCtx);
+ if(again.approval){approvals.approve(again.approval.approvalId,'fixture');again=await services.subflowCall!({...node.settings.input,invocationKey:'approved-request',payload},laterCtx);}
+ expect(again.approval).toBeUndefined();expect(f.children()).toHaveLength(1);
+});
+test('a published child saved off and never turned on is still called',async()=>{
+ const g=configuredSubflowGraphs(parentTestGraph('placeholder-only-in-fixture'),childTestGraph());mode='success';authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});
+ const child=createFlow(),cv=createDraftVersion({flowId:child.id,displayName:'Never on',trigger:g.child});lockVersion(cv.id);setPublishedVersion(child.id,cv.id);
+ expect(getFlow(child.id)).toMatchObject({status:'DISABLED',disabled_at:null});
+ g.parent.nextAction.settings.input.flow=child.id;const parent=createFlow(),pv=createDraftVersion({flowId:parent.id,displayName:'Calls never-on child',trigger:g.parent});
+ expect(versionReadiness(parent.id,pv.id).issues).toEqual([]);lockVersion(pv.id);setPublishedVersion(parent.id,pv.id);
+ const first=await run(parent.id,pv.id);expect(listRuns({flowId:child.id})).toHaveLength(1);expect((await finish(first.id)).status).toBe('SUCCEEDED');
+});
+test('run_workflow, through the same dispatch, refuses a turned-off target',async()=>{
+ const g=configuredSubflowGraphs(parentTestGraph('placeholder-only-in-fixture'),childTestGraph());
+ const off=createFlow(),ov=createDraftVersion({flowId:off.id,displayName:'Off target',trigger:g.child});lockVersion(ov.id);setPublishedVersion(off.id,ov.id);
+ getWorkflowDb().run("UPDATE flow SET status='DISABLED', disabled_at=? WHERE id=?",[Date.now(),off.id]);
+ expect(()=>new JarvisWorkflowRunnerAdapter().startNow({flowId:off.id},undefined,DEFAULT_IDS.project)).toThrow(expect.objectContaining({code:'FLOW_TURNED_OFF'}));
+ expect(listRuns({flowId:off.id})).toHaveLength(0);
 });

@@ -48,7 +48,8 @@ import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
 import { DEFAULT_MAX_ITERATIONS, M7AgentDelegator, type DelegationContinuation } from "../adapters/m7-agent-delegator";
 import { getChildRun } from '../db/repos/child-run';
 import { delegationId, getDelegation, saveDelegation } from "../db/repos/delegation";
-import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
+import { JarvisWorkflowRunnerAdapter, WorkflowRunnerError } from "../adapters/workflow-runner";
+import { childTurnedOffOutcome, isTurnedOff } from "../db/repos/flow-turn-off";
 import type { LlmChatFn, LlmChatRequest, LlmChatResponse } from "../sandbox-api/routes/jarvis-llm";
 import type { SystemPromptParts } from "../../roles/prompt-builder";
 import type { ToolsInvokeFn } from "../sandbox-api/routes/jarvis-tools";
@@ -1001,6 +1002,8 @@ export function buildSandboxServiceBackends(
   // input it chose. A foreign id gets what a missing one gets.
   const childVersion = (flowId: string, projectId: string) => {
     const flow = getFlowInProject(projectId, flowId);
+    // #1242: refused before any approval card, and again at dispatch.
+    if (flow && isTurnedOff(flow)) throw childTurnedOffOutcome();
     const versionId = flow?.published_version_id ?? (flow ? getLatestDraft(flow.id)?.id : null);
     const version = versionId ? getFlowVersion(versionId) : null;
     if (!version) throw new Error('Target workflow version is unavailable');
@@ -1022,8 +1025,14 @@ export function buildSandboxServiceBackends(
       execute: async (args, checkpoint) => {
         checkpoint();
         if (digest(childVersion(args.flowId as string, ctx.projectId)) !== digest(args.pinned)) throw new Error('Target workflow changed after approval; start a new run');
-        return runnerAdapter.start(args as unknown as Parameters<typeof runnerAdapter.start>[0], ctx.runId, ctx.projectId,
-          { effectId, stepName: resolved.stepName });
+        try {
+          return await runnerAdapter.start(args as unknown as Parameters<typeof runnerAdapter.start>[0], ctx.runId, ctx.projectId,
+            { effectId, stepName: resolved.stepName });
+        } catch (error) {
+          // Turned off after review: refused before anything started, not an uncertain dispatch.
+          if (error instanceof WorkflowRunnerError && error.code === 'FLOW_TURNED_OFF') throw childTurnedOffOutcome();
+          throw error;
+        }
       },
     });
     if (reply.approval) return { runId: null, approval: reply.approval };

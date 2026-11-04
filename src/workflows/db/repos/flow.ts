@@ -23,6 +23,8 @@ export interface FlowRow {
   status: FlowStatus;
   operation_status: string;
   published_version_id: string | null;
+  /** When this ENABLED flow was last turned off, or null if it never was (#1242). */
+  disabled_at?: number | null;
   schema_version: string | null;
   template_id: string | null;
   time_saved_per_run: number | null;
