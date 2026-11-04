@@ -1,3 +1,4 @@
+import { isZoomReference, zoomInputSchema } from "./managed-zoom-inputs";
 import { isPipedriveReference, pipedriveInputSchema } from "./managed-pipedrive-inputs";
 import { isWrikeReference, wrikeInputSchema } from "./managed-wrike-inputs";
 import { isMondayReference, mondayInputSchema } from "./managed-monday-inputs";
@@ -543,6 +544,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
             const schema = root ? sub.inputSchema
               : isPipedriveReference(pieceName, input.auth) ? pipedriveInputSchema(settings.actionName) ?? sub.inputSchema
               : isWrikeReference(pieceName, input.auth) ? wrikeInputSchema(settings.actionName) ?? sub.inputSchema
+              : isZoomReference(pieceName, input.auth) ? zoomInputSchema(settings.actionName) ?? sub.inputSchema
               : isWebflowReference(pieceName, input.auth) ? webflowInputSchema(settings.actionName) ?? sub.inputSchema
               : isMondayReference(pieceName, input.auth) ? mondayInputSchema(settings.actionName) ?? sub.inputSchema
               : sub.inputSchema;
