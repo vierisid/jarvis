@@ -87,7 +87,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === WEBFLOW_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE) && managedPieceChanges(piece, action))
     // A Webflow refund moves money and is not idempotent: never repeat one whose outcome is unknown.
     || (piece === WEBFLOW_PIECE && action === 'refund_order')
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
@@ -109,8 +109,9 @@ const INTERCOM_PIECE = '@activepieces/piece-intercom';
 const TYPEFORM_PIECE = '@activepieces/piece-typeform';
 const LINEAR_PIECE = '@activepieces/piece-linear';
 const MONDAY_PIECE = '@activepieces/piece-monday';
+const FIGMA_PIECE = '@activepieces/piece-figma';
 const WEBFLOW_PIECE = '@activepieces/piece-webflow';
-/** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist, monday.com or Webflow action that changes the account (write,
+/** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist, monday.com, Figma or Webflow action that changes the account (write,
  * send, email, delete or an access change). None parks its flow, so each one
  * can be tracked; a read never is. A category the adapter does not map tracks
  * nothing, so ClickUp (no send_email or modify_settings names) and Mailchimp
@@ -846,6 +847,15 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  // Figma: every action of the pinned 0.6.3 bundle (`figma-engine.test.ts`
+  // checks the list against the installed package). A comment is shown to
+  // everyone with access to the file. The managed `jarvis:figma` connection runs
+  // only MANAGED_FIGMA_ACTIONS; `custom_api_call` and an action added upstream
+  // fall back to `modify_settings`.
+  catalogId: 'figma', pieceName: FIGMA_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['file_key', 'message'],
+  categories: { read_data: ['get_file', 'get_comments'], send_message: ['post_comment'] },
+}, {
   // monday.com, a community piece whose managed `jarvis:monday` connection
   // made it governed. Every action of the pinned 0.4.0 bundle is named
   // (`managed-monday.test.ts` pins the list and the engine test checks it

@@ -247,6 +247,16 @@ test('managed monday.com shows its stored grant, a pending reconnect as disconne
   expect(provider.read().rows.some(r=>r.sourceId==='native:monday')).toBe(false);
 });
 
+test('managed Figma shows its stored grant, a pending reconnect as disconnected, and routes setup to its own hosted integration', () => {
+  sources.figma = () => ({configured:true, connected:true, account:{id:'1234567890',label:'owner@example.test'}});
+  expect(row('native:figma')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'1234567890',setupActionId:'setup:figma'});
+  expect(provider.read().setup.find(s => s.id === 'setup:figma')?.target).toEqual({kind:'hosted_integration',provider:'figma'});
+  sources.figma = () => ({configured:true, connected:false, account:{id:'1234567890',label:'owner@example.test'}});
+  expect(row('native:figma')).toMatchObject({status:'disconnected',evidence:'none'});
+  sources.figma = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:figma')).toBe(false);
+});
+
 test('managed Webflow shows its stored grant, a revoked grant as disconnected, and routes setup to its own hosted integration', () => {
   sources.webflow = () => ({configured:true, connected:true, account:{id:'b'.repeat(24),label:'owner@example.test'}});
   expect(row('native:webflow')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'b'.repeat(24),setupActionId:'setup:webflow'});
@@ -261,7 +271,7 @@ const oauthPieces = [
   ['clickup', 'ClickUp'], ['github', 'GitHub'], ['trello', 'Trello'], ['mailchimp', 'Mailchimp'],
   ['slack', 'Slack'], ['dropbox', 'Dropbox'], ['asana', 'Asana'], ['intercom', 'Intercom'],
   ['typeform', 'Typeform'], ['airtable', 'Airtable'], ['notion', 'Notion'], ['calendly', 'Calendly'],
-  ['linear', 'Linear'], ['todoist', 'Todoist'], ['monday', 'monday.com'], ['webflow', 'Webflow'],
+  ['linear', 'Linear'], ['todoist', 'Todoist'], ['monday', 'monday.com'], ['figma', 'Figma'], ['webflow', 'Webflow'],
 ] as const;
 for (const [id] of oauthPieces) test(`${id} library setup uses the hosted connection, while saved manual accounts keep their own edit path`, () => {
   (sources as any)[id] = () => ({ configured: true, connected: false, reconnect: false, account: null });

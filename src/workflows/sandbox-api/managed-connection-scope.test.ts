@@ -15,6 +15,7 @@ import { JarvisAsanaConnectionSource } from "../credentials/asana-source";
 import { JarvisTodoistConnectionSource } from "../credentials/todoist-source";
 import { JarvisIntercomConnectionSource } from "../credentials/intercom-source";
 import { JarvisMondayConnectionSource } from "../credentials/monday-source";
+import { JarvisFigmaConnectionSource } from "../credentials/figma-source";
 import { JarvisWebflowConnectionSource } from "../credentials/webflow-source";
 import type { JarvisConfig } from "../../config/types";
 import { JarvisGitHubConnectionSource } from "../credentials/github-source";
@@ -48,6 +49,7 @@ const ASANA = "@activepieces/piece-asana";
 const TODOIST = "@activepieces/piece-todoist";
 const INTERCOM = "@activepieces/piece-intercom";
 const MONDAY = "@activepieces/piece-monday";
+const FIGMA = "@activepieces/piece-figma";
 const WEBFLOW = "@activepieces/piece-webflow";
 const MAILCHIMP = "@activepieces/piece-mailchimp";
 const GITHUB = "@activepieces/piece-github";
@@ -897,6 +899,55 @@ describe("managed Todoist is scoped to its four qualified Todoist actions", () =
     const response = await fetchFor(runOf(trigger), "jarvis:todoist");
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: TODOIST, value: { access_token: TODOIST_TOKEN, jarvis_managed: "todoist" } });
+  });
+});
+
+describe("managed Figma is scoped to its three qualified file and comment actions", () => {
+  const FIGMA_TOKEN = "synthetic-managed-figma-access-token";
+  const ref = "{{connections.jarvis:figma}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "figma-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    writeFileSync(join(dataDir, "connections", "figma.json"), JSON.stringify({ version: 1, provider: "figma", status: "connected",
+      generation: crypto.randomUUID(), access_token: FIGMA_TOKEN, refresh_token: "synthetic-refresh",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(), account: { id: "1234567890", label: "owner" },
+      workspaces: [], connected_at: new Date().toISOString(),
+      refresh: { url: "https://app.usejarvis.dev/api/integrations/figma/refresh", instance_id: crypto.randomUUID(), secret: "a".repeat(64) } }));
+    credentials.register(new JarvisFigmaConnectionSource({ daemon: { data_dir: dataDir },
+      usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (actionName: string, input: Record<string, unknown> = { auth: ref, file_key: "abc123" }): any => ({
+    name: "figma", type: "PIECE", settings: { pieceName: FIGMA, actionName, input },
+  });
+  const figmaCall = (url: string): any => step("custom_api_call", { auth: ref, method: "GET", url: { url } });
+  const figmaTrigger = (): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: FIGMA, triggerName: "new_comment", actionName: "get_comments", input: { auth: ref, file_key: "abc123" } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Figma action outside the qualified three", empty(step("delete_comment"))],
+    ["a Figma custom API call, even on api.figma.com", empty(figmaCall("https://api.figma.com/v1/me"))],
+    ["a Figma custom API call with a relative path", empty(figmaCall("/v1/me"))],
+    ["a Figma trigger that carries a stray actionName", figmaTrigger()],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:figma");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(FIGMA_TOKEN);
+    });
+  }
+  test("a qualified Figma step auth is ready and resolves", async () => {
+    for (const action of ["get_file", "get_comments", "post_comment"]) {
+      const trigger = empty(step(action));
+      expect(bindingIssues(trigger)).toEqual([]);
+      const response = await fetchFor(runOf(trigger), "jarvis:figma");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: FIGMA, value: { access_token: FIGMA_TOKEN, jarvis_managed: "figma" } });
+    }
   });
 });
 

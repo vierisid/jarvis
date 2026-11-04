@@ -2560,6 +2560,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         catch(error) { return json({error:error instanceof Error ? error.message : 'Could not load Asana projects.'}, error instanceof AsanaOptionsInputError ? 400 : 502); }
       },
     },
+    '/api/integrations/figma': {
+      GET: async () => { const {figmaStatus} = await import('../integrations/figma-connection'); return json(figmaStatus(ctx.config)); },
+    },
     '/api/integrations/webflow': {
       GET: async () => {
         const {webflowStatus} = await import('../integrations/webflow-connection');
