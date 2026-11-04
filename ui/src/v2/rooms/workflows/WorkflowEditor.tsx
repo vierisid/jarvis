@@ -1,4 +1,5 @@
 import { mondayInputSchema } from "../../../../../src/workflows/runtime/managed-monday-inputs";
+import { isWrikeReference, wrikeInputSchema } from "../../../../../src/workflows/runtime/managed-wrike-inputs";
 import { AirtableLocation } from "../../integrations/AirtableLocation";
 import { NotionLocation } from "../../integrations/NotionLocation";
 import { TrelloCardLocation } from "../../integrations/TrelloCardLocation";
@@ -30,8 +31,10 @@ import { AirtableConnection, useAirtableStatus } from "../../integrations/Airtab
 import { IntercomConnection, useIntercomStatus } from "../../integrations/IntercomConnection";
 import { CalendlyConnection, useCalendlyStatus } from "../../integrations/CalendlyConnection";
 import { NotionConnection, useNotionStatus } from "../../integrations/NotionConnection";
+import { WrikeFolder } from "../../integrations/WrikeFolder";
 import { LinearTeam } from "../../integrations/LinearTeam";
 import { LinearConnection, useLinearStatus } from "../../integrations/LinearConnection";
+import { WrikeConnection, useWrikeStatus } from "../../integrations/WrikeConnection";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { AsanaConnection, useAsanaStatus } from "../../integrations/AsanaConnection";
 import { MondayConnection, useMondayStatus } from "../../integrations/MondayConnection";
@@ -3448,7 +3451,8 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const managedTodoist = piece?.name === "@activepieces/piece-todoist" && ["{{connections.jarvis:todoist}}", "{{connections['jarvis:todoist']}}"].includes(String(step.settings?.input?.auth));
   const todoistLocation = managedTodoist && ['create_task','find_task'].includes(subName ?? '');
   const baseSchema = asanaSchema;
-  const selectedSchema = managedMonday && mondayInputSchema(subName ?? "") ? {...mondayInputSchema(subName ?? "")!, fields:mondayInputSchema(subName ?? "")!.fields.filter(f=>!["board_id","group_id"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))} : managedTodoist && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['changes_info', ...(todoistLocation ? ['project_id','section_id'] : [])].includes(f.name)).map((f): PieceInputField => f.name === 'labels' ? {...f,type:'json',placeholder:'["work"]',description:'Label names as a JSON array. Empty arrays preserve current labels.'} : f)} : linearTeam && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['team_id','user_id'].includes(f.name)).map((f): PieceInputField => {
+  const wrikeSchema = isWrikeReference(piece?.name, step.settings?.input?.auth) ? wrikeInputSchema(subName ?? "") : null;
+  const selectedSchema = wrikeSchema ? {...wrikeSchema, fields:wrikeSchema.fields.filter(f=>f.name !== "folderId").map(f=>({...f, options:f.options ? [...f.options] : undefined}))} : managedMonday && mondayInputSchema(subName ?? "") ? {...mondayInputSchema(subName ?? "")!, fields:mondayInputSchema(subName ?? "")!.fields.filter(f=>!["board_id","group_id"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))} : managedTodoist && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['changes_info', ...(todoistLocation ? ['project_id','section_id'] : [])].includes(f.name)).map((f): PieceInputField => f.name === 'labels' ? {...f,type:'json',placeholder:'["work"]',description:'Label names as a JSON array. Empty arrays preserve current labels.'} : f)} : linearTeam && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['team_id','user_id'].includes(f.name)).map((f): PieceInputField => {
     if (f.name === 'priority_id') return {...f,type:'number',description:'0: no priority, 1: urgent, 2: high, 3: normal, 4: low.'};
     if (f.name === 'issue_id') return {...f,type:'string',placeholder:'ENG-123',description:'Issue key, model UUID or workflow variable.'};
     if (f.name === 'parent_id') return {...f,type:'string',placeholder:'Parent issue UUID',description:'Use the parent issue model UUID or a workflow variable.'};
@@ -3602,6 +3606,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
 
       {airtableLocation && <AirtableLocation input={step.settings?.input ?? {}} onChange={onSetInput} search={subName === "search_records"} />}
       {notionLocation && <NotionLocation input={step.settings?.input ?? {}} onChange={onSetInput} field={subName === "notion_get_block_children" ? "block_id" : "pageId"} />}
+      {wrikeSchema?.fields.some(f=>f.name === "folderId") && <WrikeFolder input={step.settings?.input ?? {}} onChange={onSetInput} required={subName === "create_task"} />}
       {linearTeam && <LinearTeam input={step.settings?.input ?? {}} onChange={onSetInput} required={subName !== "linear_search_issues"} />}
       {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {trelloLocation && <TrelloCardLocation input={step.settings?.input ?? {}} onChange={onSetInput} boardOnly={subName === "list_lists"} />}
@@ -3880,6 +3885,8 @@ function ConnectionPicker({
   // connections remain available.
   const isNotion = pieceName === "@activepieces/piece-notion";
   const notionStatus = useNotionStatus(isNotion), managedNotion = notionStatus?.connected === true;
+  const isWrike = pieceName === "@activepieces/piece-wrike";
+  const wrikeStatus = useWrikeStatus(isWrike), managedWrike = wrikeStatus?.connected === true;
   const isLinear = pieceName === "@activepieces/piece-linear";
   const linearStatus = useLinearStatus(isLinear), managedLinear = linearStatus?.connected === true;
   const isClickUp = pieceName === "@activepieces/piece-clickup";
@@ -3897,10 +3904,11 @@ function ConnectionPicker({
   const isSlack = pieceName === "@activepieces/piece-slack";
   const slackStatus = useSlackStatus(isSlack), managedSlack = slackStatus?.connected === true;
   // Only point at the controls above when they actually offer hosted setup on this instance.
-  const hostedSetup = [typeformStatus, calendlyStatus, airtableStatus, intercomStatus, notionStatus, linearStatus, mondayStatus, todoistStatus, asanaStatus, dropboxStatus, clickUpStatus, gitHubStatus, slackStatus].some(status => status?.configured === true);
+  const hostedSetup = [wrikeStatus, typeformStatus, calendlyStatus, airtableStatus, intercomStatus, notionStatus, linearStatus, mondayStatus, todoistStatus, asanaStatus, dropboxStatus, clickUpStatus, gitHubStatus, slackStatus].some(status => status?.configured === true);
   return (
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isWrike && <><WrikeConnection optional onPick={onPick} currentValue={currentValue} />{managedWrike && <p className="wf-props__hint">Find, create and update tasks, or add comments. Use Wrike API IDs or workflow variables. Assignees, scheduling, custom fields, files and instant triggers are not supported yet.</p>}</>}
       {isLinear && <><LinearConnection optional onPick={onPick} currentValue={currentValue} />
         {managedLinear && <p className="wf-props__hint">Find, create and update issues, or add comments as your connected user. Use issue keys such as ENG-123 or model UUIDs copied from Linear. Deletion, project actions and instant triggers are not enabled.</p>}</>}
       {isTypeform && <><TypeformConnection optional onPick={onPick} currentValue={currentValue} />
@@ -3926,10 +3934,10 @@ function ConnectionPicker({
         {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
       {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
-        {managedMonday ? "monday.com account" : managedCalendly ? "Calendly account" : managedLinear ? "Linear account" : authDisplayName}
-        {!managedMonday && !managedCalendly && !managedLinear && <span className="wf-props__connection-type">({authType})</span>}
+        {managedWrike ? "Wrike account" : managedMonday ? "monday.com account" : managedCalendly ? "Calendly account" : managedLinear ? "Linear account" : authDisplayName}
+        {!managedWrike && !managedMonday && !managedCalendly && !managedLinear && <span className="wf-props__connection-type">({authType})</span>}
       </label>
-      {matching.length === 0 && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable ? (
+      {matching.length === 0 && !managedWrike && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable ? (
         <p className="wf-props__hint wf-props__connection-empty">
           {hostedSetup
             ? `Connect ${pieceDisplayName} using the connection controls above, then choose Use this account. You can also manage app connections in the Connections panel.`

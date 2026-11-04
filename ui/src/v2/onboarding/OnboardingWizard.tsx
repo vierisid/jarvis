@@ -8,6 +8,7 @@ import { GitHubConnection } from "../integrations/GitHubConnection";
 import { DropboxConnection } from "../integrations/DropboxConnection";
 import { TrelloConnection } from "../integrations/TrelloConnection";
 import { LinearConnection } from "../integrations/LinearConnection";
+import { WrikeConnection } from "../integrations/WrikeConnection";
 import { TypeformConnection } from "../integrations/TypeformConnection";
 import { AirtableConnection } from "../integrations/AirtableConnection";
 import { SlackConnection } from "../integrations/SlackConnection";
@@ -1358,7 +1359,7 @@ export function OnboardingWizard({
         return (
           <div className="obw-body"><div className="obw-wrap wide">
             <h2>Connect your everyday tools.</h2>
-            <ClickUpConnection optional /><GitHubConnection optional /><TrelloConnection optional /><MailchimpConnection optional /><SlackConnection optional /><DropboxConnection optional /><TodoistConnection optional /><AsanaConnection optional /><IntercomConnection optional /><CalendlyConnection optional /><AirtableConnection optional /><TypeformConnection optional /><NotionConnection optional /><LinearConnection optional /><MondayConnection optional />
+            <ClickUpConnection optional /><GitHubConnection optional /><TrelloConnection optional /><MailchimpConnection optional /><SlackConnection optional /><DropboxConnection optional /><TodoistConnection optional /><AsanaConnection optional /><IntercomConnection optional /><CalendlyConnection optional /><AirtableConnection optional /><TypeformConnection optional /><NotionConnection optional /><LinearConnection optional /><WrikeConnection optional appearance="onboarding" /><MondayConnection optional />
             <div className="obw-sub">Start with the tools involved in your daily work. All optional, all revocable from Settings.</div>
             <div className="obw-rows" style={{ marginTop: 14 }}>
               {rows.map(([id, ic, nm, bd]) => {

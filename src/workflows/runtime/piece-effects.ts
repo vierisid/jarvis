@@ -87,7 +87,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === WRIKE_PIECE) && managedPieceChanges(piece, action))
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
     || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
@@ -106,6 +106,11 @@ const CALENDLY_PIECE = '@activepieces/piece-calendly';
 const INTERCOM_PIECE = '@activepieces/piece-intercom';
 const TYPEFORM_PIECE = '@activepieces/piece-typeform';
 const LINEAR_PIECE = '@activepieces/piece-linear';
+/** Assignment can share a task with another person. Unresolved assignments use the safer category. */
+export function wrikeTaskCategory(input: Record<string, unknown>): ActionCategory {
+  return present(input.assignees) && !(Array.isArray(input.assignees) && input.assignees.length === 0) ? 'modify_settings' : 'write_data';
+}
+const WRIKE_PIECE = '@activepieces/piece-wrike';
 const MONDAY_PIECE = '@activepieces/piece-monday';
 /** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist or monday.com action that changes the account (write,
  * send, email, delete or an access change). None parks its flow, so each one
@@ -834,6 +839,21 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  // Published Wrike 0.2.0. The managed credential enables only four task/comment actions.
+  catalogId: 'wrike', pieceName: WRIKE_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['taskId', 'folderId', 'title', 'description', 'status', 'importance', 'entityType', 'entityId', 'text', 'assignees', 'authors', 'start_date', 'due_date', 'duration', 'customFields', 'plainText', 'fileName', 'file', 'parentFolderId', 'shareds', 'ownerIds', 'projectOwnerId'],
+  categories: {
+    read_data: ['find_task', 'find_folder'],
+    write_data: ['create_task', 'update_task', 'upload_attachment'],
+    send_message: ['add_comment'],
+    // Folder/project creation can assign owners and share access.
+    modify_settings: ['create_folder', 'create_project', 'custom_api_call'],
+  },
+  categoryFromInput: {
+    create_task: {props:['assignees'],category:wrikeTaskCategory},
+    update_task: {props:['assignees'],category:wrikeTaskCategory},
+  },
+}, {
   // monday.com, a community piece whose managed `jarvis:monday` connection
   // made it governed. Every action of the pinned 0.4.0 bundle is named
   // (`managed-monday.test.ts` pins the list and the engine test checks it
