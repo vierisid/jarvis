@@ -269,3 +269,5 @@
   gap: 8px;
   margin: 16px 0;
 }
+
+.brief-connections-library { margin-top: var(--s-5); padding-top: var(--s-4); border-top: 1px solid var(--rule); }

@@ -2,6 +2,7 @@ import React, {
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
   useSyncExternalStore,
 } from "react";
 import {
@@ -38,6 +39,7 @@ export interface ConnectionsBinding {
   scopeId: string;
   source: "live" | "fixture";
   capabilities?: unknown;
+  renderLibrary?: (query: string, onReturn: () => void) => React.ReactNode;
 }
 export function connectionsAvailable(
   shell: BriefShellPort,
@@ -95,10 +97,15 @@ export function ConnectedWorkspace({
     <ConnectedBody
       key={`${binding.source}:${binding.scopeId}`}
       controller={binding.controller}
+      renderLibrary={binding.renderLibrary}
     />
   );
 }
-function ConnectedBody({ controller }: { controller: ConnectionsController }) {
+function ConnectedBody({ controller, renderLibrary }: {
+  controller: ConnectionsController;
+  renderLibrary?: ConnectionsBinding["renderLibrary"];
+}) {
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const state = useSyncExternalStore(
     controller.subscribe,
     controller.snapshot,
@@ -137,7 +144,7 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
         void controller.check();
     };
     window.addEventListener("focus", returned);
-    return () => window.removeEventListener("focus", returned);
+  return () => window.removeEventListener("focus", returned);
   }, [controller]);
   useLayoutEffect(() => {
     if (
@@ -225,6 +232,9 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
       </li>
     );
   };
+  if (libraryOpen && renderLibrary) return <section className="brief-connections">
+    {renderLibrary(state.search, () => { setLibraryOpen(false); void controller.refresh(); })}
+  </section>;
   return (
     <section
       className="brief-connections"
@@ -409,6 +419,12 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
                 </p>
               )
             )}
+            {renderLibrary && <div className="brief-connections-library">
+              <p>Looking for another service? Find its connector in Library, then return here to connect an account.</p>
+              <BriefButton variant="secondary" disabled={!usable || active} onClick={() => setLibraryOpen(true)}>
+                Find more services in Library
+              </BriefButton>
+            </div>}
           </div>
           {state.panel === "setup" && (state.service || state.attemptId) && (
             <div className="brief-connections-setup">
