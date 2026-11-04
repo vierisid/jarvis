@@ -3971,7 +3971,7 @@ function ConnectionPicker({
       {isPipedrive && <><PipedriveConnection optional onPick={onPick} currentValue={currentValue} />
         {managedPipedrive && <p className="wf-props__hint">Use Get, Search, Create or Update for people and deals. Legacy Find actions, custom fields, ownership, visibility, deletion and triggers are not enabled for this connection.</p>}</>}
       {isHelpScout && <><HelpScoutConnection optional onPick={onPick} currentValue={currentValue} />
-        {managedHelpScout && <p className="wf-props__hint">Find customers by exact email and conversations by ID or inbox and number. Add internal notes as the connected user. Customer replies and attachments are not enabled.</p>}</>}
+        {managedHelpScout && <p className="wf-props__hint">This connection reaches every mailbox the connected Help Scout user can see; Help Scout has no per-mailbox limit. Find customers by exact email and conversations by ID or inbox and number. Add internal notes as the connected user. Customer replies and attachments are not enabled.</p>}</>}
       {isAsana && <><AsanaConnection optional onPick={onPick} currentValue={currentValue} />
         {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
       {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
