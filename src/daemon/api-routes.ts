@@ -2577,6 +2577,22 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/integrations/figma': {
       GET: async () => { const {figmaStatus} = await import('../integrations/figma-connection'); return json(figmaStatus(ctx.config)); },
     },
+    '/api/integrations/webflow': {
+      GET: async () => {
+        const {webflowStatus} = await import('../integrations/webflow-connection');
+        return json(webflowStatus(ctx.config));
+      },
+    },
+    '/api/integrations/webflow/options': {
+      GET: async (req: Request) => {
+        const {webflowOptions, WebflowOptionsInputError} = await import('../integrations/webflow-options');
+        try { return json(await webflowOptions(ctx.config, new URL(req.url).searchParams)); }
+        catch (error) {
+          if (error instanceof WebflowOptionsInputError) return json({error: error.message}, 400);
+          return json({error: 'Could not load Webflow choices. Check your connection or enter an ID.'}, 502);
+        }
+      },
+    },
     '/api/integrations/asana': {
       GET: async () => {
         const {asanaStatus, readAsanaConnection} = await import('../integrations/asana-connection');

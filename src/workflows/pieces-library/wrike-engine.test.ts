@@ -1,6 +1,7 @@
 /** Actual npm piece in the real engine. Only fetch to its provider host is redirected
  * in a disposable engine copy; no live Wrike calls or account credentials are used.
- * Runs in the normal suite and installs the pinned 0.2.0 from npm. */
+ * Gated on JARVIS_TEST_ENGINE_BUILD=1 like the other engine tests; CI runs it
+ * in test.yml's engine step. It installs the pinned 0.2.0 from npm. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {
   mkdtempSync,
@@ -35,6 +36,7 @@ import { EngineRuntime } from "../runner/engine-runtime/engine-runtime";
 import { EngineFlowExecutor } from "../runner/engine-runtime/engine-flow-executor";
 import { createRunFlowHandler } from "../runner/handler";
 import { Worker } from "../queue/worker";
+const gate = process.env.JARVIS_TEST_ENGINE_BUILD === "1";
 const piece = "@activepieces/piece-wrike";
 let dir: string,
   api: SandboxApi,
@@ -49,6 +51,7 @@ const requests: Array<{
 }> = [];
 
 beforeAll(async () => {
+  if (!gate) return;
   dir = mkdtempSync(join(tmpdir(), "jarvis-wrike-engine-"));
   initWorkflowDb(join(dir, "db.sqlite"));
   writeFileSync(
@@ -189,6 +192,7 @@ beforeAll(async () => {
   });
 }, 120000);
 afterAll(async () => {
+  if (!gate) return;
   await runtime?.shutdown();
   await api?.stop();
   provider?.stop(true);
@@ -196,7 +200,7 @@ afterAll(async () => {
   if (runId) rmSync(join(workflowLogsBase(), runId + ".bin"), { force: true });
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
-test(
+test.skipIf(!gate)(
   "actual published Wrike metadata, four managed actions and downstream references",
   async () => {
     const { catalog, failures } = await buildPieceCatalog({

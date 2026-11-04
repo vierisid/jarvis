@@ -63,6 +63,11 @@ const workflowWithLibrary = createManageWorkflowTool(
  * HubSpot contact write or keyed notification after the user checked the
  * provider. Its guidance lives in the system prompt's tool guide, not here.
  *
+ * And by `resolve_onboarding` (196 B measured, 3990 -> 4186: the action and its
+ * branch and resource; it reuses run_id, effect_id, resolution and note): the
+ * only way the chat model can record what the user found about a customer
+ * onboarding branch whose outcome is unknown (#1243). Each ceiling moved by 200.
+ *
  * And by `validate_fixtures` (~270 B: the action, one line and `fixture_input`):
  * the only way the chat model can run local synthetic fixtures against a saved
  * draft before publishing. The case shape lives in the tool guide, not here.
@@ -74,7 +79,7 @@ const workflowWithLibrary = createManageWorkflowTool(
  * tool guide, not here.
  */
 const TOOLS: { tool: ToolDefinition; ceiling: number }[] = [
-  { tool: workflowNoLibrary, ceiling: 4020 },
+  { tool: workflowNoLibrary, ceiling: 4220 },
   { tool: contentPipelineTool, ceiling: 1750 },
   { tool: createRequestApprovalTool(stub({})), ceiling: 1650 },
   { tool: createManageGoalsTool(stub({})), ceiling: 1500 },
@@ -114,7 +119,7 @@ describe('#504 tool description budget', () => {
   it('manage_workflow stays bounded in its library variant too', () => {
     // The suggest-install paragraph is the difference; it must not become a
     // licence to regrow the rest.
-    expect(bytes(workflowWithLibrary)).toBeLessThanOrEqual(4110);
+    expect(bytes(workflowWithLibrary)).toBeLessThanOrEqual(4310);
     expect(bytes(workflowWithLibrary)).toBeGreaterThan(bytes(workflowNoLibrary));
   });
 
@@ -124,7 +129,7 @@ describe('#504 tool description budget', () => {
       library: [{ id: 'x', displayName: 'X', description: 'x' }],
       installLibraryPiece: async () => ({}),
     }));
-    expect(bytes(tool)).toBeLessThanOrEqual(4230);
+    expect(bytes(tool)).toBeLessThanOrEqual(4430);
     expect(tool.description).toContain('software-install Authority');
     expect(tool.description).toContain('Account connection is separate');
   });
@@ -132,8 +137,8 @@ describe('#504 tool description budget', () => {
   it('the six together stay well under a third of the budget', () => {
     const total = TOOLS.reduce((s, { tool }) => s + bytes(tool), 0);
     // 14,072 B before #504. The point of the ceiling is that the trim holds;
-    // Q-04's contract parameter, resolve_effect, validate_fixtures and update are the additions since.
-    expect(total).toBeLessThanOrEqual(11_320);
+    // Q-04's contract parameter, resolve_effect, validate_fixtures, update and resolve_onboarding are the additions since.
+    expect(total).toBeLessThanOrEqual(11_520);
   });
 });
 

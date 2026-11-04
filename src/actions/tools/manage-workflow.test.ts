@@ -62,7 +62,7 @@ const tool = createManageWorkflowTool();
  */
 const FRAMED_ACTIONS = new Set([
   "get", "list_runs", "get_run", "validate_fixtures",
-  "list", "create", "update", "enable", "disable", "publish", "compose", "continue_setup", "resolve_effect",
+  "list", "create", "update", "enable", "disable", "publish", "compose", "continue_setup", "resolve_effect", "resolve_onboarding",
 ]);
 
 /**

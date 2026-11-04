@@ -17,6 +17,7 @@ import { ONBOARDING_REQUIRED, onboardingSetup } from './customer-onboarding';
 import { ONBOARDING_ACCOUNTS, ONBOARDING_PIECE, isOnboardingStep } from '../onboarding-accounts';
 import { BATCH_REQUIRED, batchSetup, batchGraphError } from './lead-batch';
 import { BATCH_ACCOUNTS, BATCH_PIECE, isBatchStep } from '../batch-accounts';
+import { isWebflowReference, webflowInputSchema } from './managed-webflow-inputs';
 import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
 import {managedNotionIssue} from './managed-notion';
@@ -538,7 +539,11 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           const sub: PieceCatalogAction | undefined = entries && typeof settings[key] === 'string' && Object.hasOwn(entries, settings[key]) ? entries[settings[key]] : undefined;
           if (!sub) issue(node, `settings.${key}`, 'ACTION', `Unknown ${key} for ${pieceName}`);
           else if (object(input)) {
-            const schema = !root && isWrikeReference(pieceName, input.auth) ? wrikeInputSchema(settings.actionName) ?? sub.inputSchema : !root && isMondayReference(pieceName, input.auth) ? mondayInputSchema(settings.actionName) ?? sub.inputSchema : sub.inputSchema;
+            const schema = root ? sub.inputSchema
+              : isWrikeReference(pieceName, input.auth) ? wrikeInputSchema(settings.actionName) ?? sub.inputSchema
+              : isWebflowReference(pieceName, input.auth) ? webflowInputSchema(settings.actionName) ?? sub.inputSchema
+              : isMondayReference(pieceName, input.auth) ? mondayInputSchema(settings.actionName) ?? sub.inputSchema
+              : sub.inputSchema;
             for (const field of schema?.fields ?? []) {
               const value = input[field.name];
               const path = `settings.input.${field.name}`;
