@@ -112,10 +112,16 @@ const MONDAY_PIECE = '@activepieces/piece-monday';
 const FIGMA_PIECE = '@activepieces/piece-figma';
 const PIPEDRIVE_PIECE = '@activepieces/piece-pipedrive';
 /** Owner/visibility changes and marketing consent require access-level authority. */
-export function pipedriveRecordCategory(input: Record<string, unknown>): ActionCategory {
+export function pipedrivePersonCategory(input: Record<string, unknown>): ActionCategory {
   if (present(input.ownerId) || present(input.visibleTo) || present(input.marketing_status)) return 'modify_settings';
-  if (input.status === 'deleted') return 'delete_data';
   return 'write_data';
+}
+/** A deal: upstream 0.10.3 `status` includes `deleted`, the worst case, so it is
+ * checked first; otherwise as a person. Managed connections offer only
+ * open/won/lost (`managed-pipedrive-inputs.ts`). */
+export function pipedriveRecordCategory(input: Record<string, unknown>): ActionCategory {
+  if (input.status === 'deleted') return 'delete_data';
+  return pipedrivePersonCategory(input);
 }
 const WEBFLOW_PIECE = '@activepieces/piece-webflow';
 /** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist, monday.com, Figma or Webflow action that changes the account (write,
@@ -860,12 +866,17 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
   categories: {
     read_data: ['get-note', 'find-deals-associated-with-person', 'find-products', 'find-notes', 'get-product', 'find-user', 'get-deal', 'list-deals', 'search-deals', 'list-deal-products', 'get-person', 'list-persons', 'search-persons', 'get-organization', 'list-organizations', 'search-organizations', 'get-activity', 'list-activities', 'get-lead', 'get-lead-conversion-status', 'list-pipelines', 'list-stages', 'list-activity-types', 'list-users', 'get-current-user'],
     write_data: ['create-note', 'update-note', 'add-labels-to-person', 'add-product-to-deal', 'remove-product-from-deal', 'attach-file'],
-    delete_data: ['delete-deal', 'delete-person', 'delete-organization', 'delete-activity', 'delete-lead', 'delete-note', 'delete-product', 'merge-deals', 'merge-persons', 'merge-organizations'],
+    // A deal create/update can set `status: 'deleted'`, so blind it is a delete; its input narrows it.
+    delete_data: ['delete-deal', 'delete-person', 'delete-organization', 'delete-activity', 'delete-lead', 'delete-note', 'delete-product', 'merge-deals', 'merge-persons', 'merge-organizations', 'create-deal', 'update-deal'],
     // Upstream legacy Find operations create/delete filters. Managed connections use Search instead.
-    modify_settings: ['add-follower', 'create-activity', 'update-activity', 'create-deal', 'update-deal', 'create-lead', 'update-lead', 'create-organization', 'update-organization', 'create-person', 'update-person', 'create-product', 'update-product', 'find-product', 'find-organization', 'find-person', 'find-deal', 'find-activity', 'find-lead', 'convert-lead-to-deal', 'custom_api_call'],
+    modify_settings: ['add-follower', 'create-activity', 'update-activity', 'create-lead', 'update-lead', 'create-organization', 'update-organization', 'create-person', 'update-person', 'create-product', 'update-product', 'find-product', 'find-organization', 'find-person', 'find-deal', 'find-activity', 'find-lead', 'convert-lead-to-deal', 'custom_api_call'],
   },
-  categoryFromInput: Object.fromEntries(['create-person','update-person','create-deal','update-deal'].map(action =>
-    [action, {props:['ownerId','visibleTo','marketing_status','status'], category:pipedriveRecordCategory}])),
+  categoryFromInput: {
+    ...Object.fromEntries(['create-person', 'update-person'].map(action =>
+      [action, { props: ['ownerId', 'visibleTo', 'marketing_status'], category: pipedrivePersonCategory }])),
+    ...Object.fromEntries(['create-deal', 'update-deal'].map(action =>
+      [action, { props: ['ownerId', 'visibleTo', 'marketing_status', 'status'], category: pipedriveRecordCategory }])),
+  },
 }, {
   // Figma: every action of the pinned 0.6.3 bundle (`figma-engine.test.ts`
   // checks the list against the installed package). A comment is shown to

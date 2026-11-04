@@ -57,6 +57,24 @@ test("all eight qualified actions share engine/editor schemas and truthful autho
     resolveGovernedPieceAction(piece, "update-deal", { status: "deleted" })
       ?.category,
   ).toBe("delete_data");
+  // `deleted` wins over an owner change, and is the deal's blind worst case.
+  expect(
+    resolveGovernedPieceAction(piece, "create-deal", {
+      status: "deleted",
+      ownerId: 2,
+    })?.category,
+  ).toBe("delete_data");
+  expect(resolveGovernedPieceAction(piece, "create-deal")?.category).toBe(
+    "delete_data",
+  );
+  // A person has no status: the deal rule does not apply to it.
+  expect(
+    resolveGovernedPieceAction(piece, "update-person", { status: "deleted" })
+      ?.category,
+  ).toBe("write_data");
+  expect(resolveGovernedPieceAction(piece, "update-person")?.category).toBe(
+    "modify_settings",
+  );
 });
 test("search is read-only, encodes terms, flattens output and preserves cursor", async () => {
   const { request, calls } = fake({
