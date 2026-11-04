@@ -1,6 +1,5 @@
-import { helpScoutNeedsReconnect } from "./help-scout-refresh";
-/** Read the hosting-owned grant on every use. Refreshed access tokens are cached separately. */
 import { readConnectionFile } from "./connection-file";
+import { createManagedRotatingRefresher } from "./managed-rotating-refresh";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
 
@@ -20,6 +19,7 @@ export interface HelpScoutConnection {
   expires_at: string;
   refresh: { url: string; instance_id: string; secret: string };
 }
+/** Read the hosting-owned grant on every use. Refreshed access tokens are cached separately. */
 export function readHelpScoutConnection(
   dataDir: string,
 ): HelpScoutConnection | null {
@@ -64,6 +64,16 @@ export function readHelpScoutConnection(
     return null;
   }
 }
+// The refresher lives here, not in help-scout-refresh.ts, so the two modules do
+// not import each other; help-scout-refresh.ts re-exports it.
+const refresh = createManagedRotatingRefresher(
+  "help-scout",
+  "Help Scout",
+  readHelpScoutConnection,
+);
+export const freshHelpScoutConnection = refresh.fresh;
+export const helpScoutNeedsReconnect = refresh.needsReconnect;
+export const helpScoutGrantKey = refresh.grantKey;
 /** This block is system-owned; UI settings cannot redirect account setup. */
 export function helpScoutConnectUrl(config: JarvisConfig): string | null {
   const value = config.usejarvis_integrations?.page_url;

@@ -1,10 +1,7 @@
-import { createManagedRotatingRefresher } from "./managed-rotating-refresh";
-import { readHelpScoutConnection } from "./help-scout-connection";
-const refresh = createManagedRotatingRefresher(
-  "help-scout",
-  "Help Scout",
-  readHelpScoutConnection,
-);
-export const freshHelpScoutConnection = refresh.fresh;
-export const helpScoutNeedsReconnect = refresh.needsReconnect;
-export const helpScoutGrantKey = refresh.grantKey;
+/** Help Scout's managed refresher. It is created in help-scout-connection.ts, next to
+ * the file reader it needs, so neither module imports the other. */
+export {
+  freshHelpScoutConnection,
+  helpScoutNeedsReconnect,
+  helpScoutGrantKey,
+} from "./help-scout-connection";
