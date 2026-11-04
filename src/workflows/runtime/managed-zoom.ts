@@ -216,8 +216,10 @@ export async function runManagedZoomAction(
   if (create || present(input.topic))
     body.topic = text(input.topic, "meeting topic", 200);
   if (create || present(input.start_time)) {
+    // The Z suffix fixes the instant in UTC. Only a new meeting is given a
+    // timezone; an update keeps the meeting's own display timezone.
     body.start_time = startTime(input.start_time);
-    body.timezone = "UTC";
+    if (create) body.timezone = "UTC";
   }
   if (present(input.agenda))
     body.agenda = text(input.agenda, "meeting agenda", 2000);

@@ -241,3 +241,16 @@ test("managed-only schema stays aligned and mutations have completion receipts",
   ).toBeNull();
   expect(zoomInputSchema("zoom_list_recordings")).toBeNull();
 });
+test("an update that moves the start time keeps the meeting's own timezone", async () => {
+  const f = fake({ ...meeting, timezone: "America/New_York" });
+  await runManagedZoomAction(
+    "zoom_update_meeting",
+    { auth, meeting_id: meeting.id, start_time: "2030-07-01T15:00:00Z" },
+    f.request,
+  );
+  // The Z suffix fixes the instant; sending timezone would also change how
+  // Zoom shows the meeting to everyone invited.
+  expect(JSON.parse(String(f.calls[1]!.init.body))).toEqual({
+    start_time: "2030-07-01T15:00:00Z",
+  });
+});
