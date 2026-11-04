@@ -1,6 +1,7 @@
 import {managedAirtableInput, managedAirtableIssue, runManagedAirtableAction} from './managed-airtable';
 import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
 import { managedNotionInput, managedNotionIssue, runManagedNotionAction } from './managed-notion';
+import { managedWebflowInput, runManagedWebflowAction } from './managed-webflow';
 /**
  * Engine-side half of the governed-piece adapter.
  *
@@ -264,6 +265,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   const asana = params.piece === "@activepieces/piece-asana" ? managedAsanaInput(params.input) : null;
   const dropbox = params.piece === '@activepieces/piece-dropbox' ? managedDropboxInput(params.input) : null;
   const intercom = params.piece === '@activepieces/piece-intercom' ? managedIntercomInput(params.input) : null;
+  const webflow = managedWebflowInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
   const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
   if (slack) {
     // Recheck after an approval document has applied edits.
@@ -277,6 +279,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (airtable) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Airtable dispatch was not authorized');
     raw = await runManagedAirtableAction(String(params.action), airtable);
+  } else if (webflow) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Webflow dispatch was not authorized');
+    raw = await runManagedWebflowAction(String(params.action), webflow);
   } else if (trello) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Trello dispatch was not authorized');
     raw = await runManagedTrelloAction(String(params.action), trello);

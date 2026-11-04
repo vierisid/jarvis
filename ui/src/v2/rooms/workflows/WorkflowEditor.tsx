@@ -1,6 +1,9 @@
 import { mondayInputSchema } from "../../../../../src/workflows/runtime/managed-monday-inputs";
 import { AirtableLocation } from "../../integrations/AirtableLocation";
 import { NotionLocation } from "../../integrations/NotionLocation";
+import { webflowInputSchema } from "../../../../../src/workflows/runtime/managed-webflow-inputs";
+import { WebflowConnection, useWebflowStatus } from "../../integrations/WebflowConnection";
+import { WebflowCollectionLocation } from "../../integrations/WebflowCollectionLocation";
 import { TrelloCardLocation } from "../../integrations/TrelloCardLocation";
 import { MailchimpLocation } from "../../integrations/MailchimpLocation";
 import { MailchimpConnection } from "../../integrations/MailchimpConnection";
@@ -3454,7 +3457,12 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const todoistLocation = managedTodoist && ['create_task','find_task'].includes(subName ?? '');
   const managedFigma = piece?.name === "@activepieces/piece-figma" && ["{{connections.jarvis:figma}}", "{{connections['jarvis:figma']}}"].includes(String(step.settings?.input?.auth));
   const figmaLocation = managedFigma && ["get_file","get_comments","post_comment"].includes(subName ?? "");
-  const baseSchema = figmaLocation && asanaSchema ? {...asanaSchema,fields:asanaSchema.fields.filter(f=>f.name!=="file_key")} : asanaSchema;
+  const webflowStatus = useWebflowStatus(piece?.name === "@activepieces/piece-webflow");
+  const webflowLocation = piece?.name === "@activepieces/piece-webflow" && ["create_collection_item","update_collection_item","get_collection_item","find_collection_item"].includes(subName ?? "")
+    && ["{{connections.jarvis:webflow}}", "{{connections['jarvis:webflow']}}"].includes(String(step.settings?.input?.auth));
+  const webflowSchema = webflowLocation ? webflowInputSchema(subName ?? "") : null;
+  const baseSchema = webflowSchema ? {...webflowSchema,fields:webflowSchema.fields.filter(f=>!["site_id","collection_id","collection_fields"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))}
+    : figmaLocation && asanaSchema ? {...asanaSchema,fields:asanaSchema.fields.filter(f=>f.name!=="file_key")} : asanaSchema;
   const selectedSchema = managedMonday && mondayInputSchema(subName ?? "") ? {...mondayInputSchema(subName ?? "")!, fields:mondayInputSchema(subName ?? "")!.fields.filter(f=>!["board_id","group_id"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))} : managedTodoist && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['changes_info', ...(todoistLocation ? ['project_id','section_id'] : [])].includes(f.name)).map((f): PieceInputField => f.name === 'labels' ? {...f,type:'json',placeholder:'["work"]',description:'Label names as a JSON array. Empty arrays preserve current labels.'} : f)} : linearTeam && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['team_id','user_id'].includes(f.name)).map((f): PieceInputField => {
     if (f.name === 'priority_id') return {...f,type:'number',description:'0: no priority, 1: urgent, 2: high, 3: normal, 4: low.'};
     if (f.name === 'issue_id') return {...f,type:'string',placeholder:'ENG-123',description:'Issue key, model UUID or workflow variable.'};
@@ -3615,6 +3623,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
       {mondayLocation && <MondayBoardLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} creating={subName === "monday_create_item"} columns={["monday_create_item","monday_update_column_values_of_item"].includes(subName ?? "")} />}
       {todoistLocation && <TodoistTaskLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} creating={subName === "create_task"} />}
       {figmaLocation && <FigmaFileLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
+      {webflowLocation && <WebflowCollectionLocation key={step.name} action={subName ?? ""} status={webflowStatus} input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {asanaLocation && <AsanaTaskLocation input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {mailchimpLocation && <MailchimpLocation key={subName} input={step.settings?.input ?? {}} onChange={onSetInput} campaign={subName === "get_campaign_report"} />}
       {slackChannel && <SlackChannelPicker value={String(step.settings?.input?.channel ?? "")} onChange={value => onSetInput("channel", value)} />}
@@ -3897,6 +3906,8 @@ function ConnectionPicker({
   const todoistStatus = useTodoistStatus(isTodoist), managedTodoist = todoistStatus?.connected === true;
   const isFigma = pieceName === "@activepieces/piece-figma";
   const figmaStatus = useFigmaStatus(isFigma), managedFigma = figmaStatus?.connected === true;
+  const isWebflow = pieceName === "@activepieces/piece-webflow";
+  const managedWebflow = useWebflowStatus(isWebflow)?.connected === true;
   const isAsana = pieceName === "@activepieces/piece-asana";
   const asanaStatus = useAsanaStatus(isAsana), managedAsana = asanaStatus?.connected === true;
   const isDropbox = pieceName === "@activepieces/piece-dropbox";
@@ -3934,6 +3945,8 @@ function ConnectionPicker({
         {managedTodoist && <p className="wf-props__hint">Use Find Task, Create Task, Update Task or Mark Task as Completed. Find uses an exact title and refuses duplicate matches. Completing a recurring task advances its next date; do not repeat it for the same occurrence.</p>}</>}
       {isFigma && <><FigmaConnection optional onPick={onPick} currentValue={currentValue} />
         {managedFigma && <p className="wf-props__hint">Read files and comments, or post feedback as the connected user. Use a Figma file link, key or workflow variable. API limits depend on your Figma plan.</p>}</>}
+      {isWebflow && <><WebflowConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedWebflow && <p className="wf-props__hint">Find and read CMS items, and create or update drafts in the primary language. Publishing, archiving, media uploads and reference fields are not available.</p>}</>}
       {isAsana && <><AsanaConnection optional onPick={onPick} currentValue={currentValue} />
         {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
       {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
@@ -3941,7 +3954,7 @@ function ConnectionPicker({
         {managedMonday ? "monday.com account" : managedCalendly ? "Calendly account" : managedLinear ? "Linear account" : authDisplayName}
         {!managedMonday && !managedCalendly && !managedLinear && <span className="wf-props__connection-type">({authType})</span>}
       </label>
-      {matching.length === 0 && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable && !managedFigma ? (
+      {matching.length === 0 && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable && !managedFigma && !managedWebflow ? (
         <p className="wf-props__hint wf-props__connection-empty">
           {hostedSetup
             ? `Connect ${pieceDisplayName} using the connection controls above, then choose Use this account. You can also manage app connections in the Connections panel.`

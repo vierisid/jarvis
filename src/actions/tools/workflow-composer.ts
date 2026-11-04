@@ -331,15 +331,6 @@ export interface ComposeDeps {
    * reports the missing dependency as suggestedInstalls.
    */
   library?: ComposerLibraryEntry[];
-  /** Installs a catalog entry and refreshes pieceRegistry. composePersistedFlow
-   * uses it only for approved preinstalls and removes it before the tool loop
-   * runs, so in production the loop never offers install_library_piece; only
-   * tests hand it to composeFlow directly. Never grants credentials. */
-  installLibraryPiece?: (id: string, signal?: AbortSignal) => Promise<void>;
-  /** Per-install bound for composePersistedFlow's preinstalls (default five
-   * minutes). On expiry the signal passed to installLibraryPiece is aborted
-   * and the install is reported as failed, so the journal always finishes. */
-  installTimeoutMs?: number;
   /**
    * Optional inventory of the machines a step can execute on: the enrolled
    * sidecars plus the brain's own host. When present the composer (a) renders
@@ -612,11 +603,9 @@ async function composeWithTools(
   const osCheck = osCheckContextFor(deps.executionTargets ?? []);
   const rolesText = renderSpecialistRoles(deps.specialistRoles);
   const hasLibrary = (deps.library?.length ?? 0) > 0;
-  const canInstall = hasLibrary && !!deps.installLibraryPiece;
-  const installAttempts = new Set<string>();
-  const toolDefs = buildComposerToolDefs(toolSpecs !== null, hasLibrary, canInstall);
+  const toolDefs = buildComposerToolDefs(toolSpecs !== null, hasLibrary);
   const envText = composerExecutionEnvironment(deps.executionTargets ?? []);
-  const system = planningPrompt(buildToolLoopSystemPrompt(rolesText, hasLibrary, envText, canInstall), deps.planningPolicy);
+  const system = planningPrompt(buildToolLoopSystemPrompt(rolesText, hasLibrary, envText), deps.planningPolicy);
 
   const messages: ComposerChatMessage[] = [
     { role: "system", content: system },
@@ -720,12 +709,6 @@ async function composeWithTools(
     messages.push({ role: "assistant", content: reply.content ?? "", tool_calls: calls });
     for (const call of calls) {
       req.signal?.throwIfAborted();
-      if (call.name === "install_library_piece") {
-        const result = await installComposerPiece(call.arguments, deps, installAttempts, req.signal);
-        req.signal?.throwIfAborted();
-        messages.push(toolResult(call, wrapUntrusted(result, "workflow library installation")));
-        continue;
-      }
       if (call.name === "submit_flow") {
         submits++;
         const flowArg = unwrapSubmittedFlow(call.arguments);
@@ -846,7 +829,7 @@ function blockedResult(
 }
 
 /** Tool definitions surfaced to the tool-loop model. */
-function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean, canInstall = false): ComposerToolDef[] {
+function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean): ComposerToolDef[] {
   const defs: ComposerToolDef[] = [
     {
       name: "list_pieces",
@@ -954,7 +937,7 @@ function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean, canIn
       description:
         "Search the community piece library (installable, NOT yet usable) by keyword. " +
         "Use when no installed piece or Jarvis tool covers a service the user asked for, " +
-        (canInstall ? "then install the matching entry with install_library_piece and inspect its actual schema. " : "then suggest the best match via report_blocked. ") +
+        "then suggest the best match via report_blocked. " +
         "Never put a library-only piece in a flow.",
       parameters: {
         type: "object",
@@ -965,33 +948,7 @@ function buildComposerToolDefs(hasToolSpecs: boolean, hasLibrary: boolean, canIn
       },
     });
   }
-  if (canInstall) defs.push({
-    name: "install_library_piece",
-    description: "Install a matching catalog entry needed for the user's workflow and refresh its available action schemas. " +
-      "Only exact Library IDs are accepted, at most three per composition. Does not connect accounts, authorize OAuth, run actions, or enable workflows. " +
-      "Respect requests not to install anything. After success call get_piece_details; do not guess the schema.",
-    parameters: { type: "object", properties: { id: { type: "string", description: "Exact ID from search_library." } }, required: ["id"] },
-  });
   return defs;
-}
-
-async function installComposerPiece(args: Record<string, unknown>, deps: ComposeDeps, attempts: Set<string>, signal?: AbortSignal): Promise<string> {
-  if (!deps.installLibraryPiece) return "Error: Library installation is not available in this context.";
-  const id = typeof args.id === "string" ? args.id.trim() : "";
-  const entry = deps.library?.find(e => e.id === id);
-  if (!entry) return "Error: Unknown Library ID. Only entries from search_library can be installed.";
-  if (deps.pieceRegistry.get(entry.npmPackage)) return `Already available: ${entry.npmPackage}. Call get_piece_details.`;
-  if (attempts.has(id)) return `Error: Installation already attempted for ${id}; report the previous failure rather than retrying.`;
-  if (attempts.size >= 3) return "Error: Library installation limit reached (3 entries per composition).";
-  attempts.add(id);
-  try {
-    signal?.throwIfAborted();
-    await deps.installLibraryPiece(id, signal);
-    if (!deps.pieceRegistry.get(entry.npmPackage)) return `Error: ${id} installation returned but its action schemas are unavailable. Do not use it in a flow.`;
-    return `Installed and schemas refreshed: ${entry.npmPackage}. Call get_piece_details before using it. Account connection is separate; no credentials were created and no workflow actions ran.`;
-  } catch (e) {
-    return `Error: Could not make ${id} available: ${(e as Error).message}. Do not assume it is usable; report this blocker or inspect a supported browser alternative.`;
-  }
 }
 
 /**
@@ -1156,7 +1113,7 @@ function renderLibrarySearch(deps: ComposeDeps, query: string): string {
   }
   const lines = [
     "Community library matches. These are NOT installed (unless flagged) and CANNOT be used in the flow --",
-    deps.installLibraryPiece ? "Install a matching entry with install_library_piece, then inspect get_piece_details before composing." : "suggest the best fit via report_blocked so the user can install it first.",
+    "suggest the best fit via report_blocked so the user can install it first.",
   ];
   for (const { e } of scored) {
     const flag = installed.has(e.npmPackage) ? " [already installed -- see list_pieces]" : " [not installed]";
@@ -1397,7 +1354,6 @@ function buildToolLoopSystemPrompt(
   rolesText: string,
   hasLibrary: boolean,
   envText: string,
-  canInstall = false,
 ): string {
   return [
     "You are the Jarvis workflow composer. Convert the user's description into a workflow definition.",
@@ -1410,9 +1366,7 @@ function buildToolLoopSystemPrompt(
     "  3. Build the flow and call submit_flow with { displayName, trigger }. If validation errors come back,",
     "     fix ALL of them and call submit_flow again, keeping the parts that were correct.",
     hasLibrary
-      ? (canInstall
-        ? "  4. If no installed piece or Jarvis tool covers the request, search_library, install the matching entry with install_library_piece, then inspect its actual schema and continue building. Respect any user restriction against installation. If installation fails, explain the exact failure; do not claim the connector is available."
-        : "  4. If no installed piece or Jarvis tool covers the request, call search_library for an installable piece,\n     then evaluate the permitted browser fallback described below. If neither route covers the request, call report_blocked suggesting the best match. Never force a wrong piece to fit.")
+      ? "  4. If no installed piece or Jarvis tool covers the request, call search_library for an installable piece,\n     then evaluate the permitted browser fallback described below. If neither route covers the request, call report_blocked suggesting the best match. Never force a wrong piece to fit."
       : "  4. If no native piece or tool covers the request, evaluate the permitted browser fallback described below before report_blocked.\n     Never force a wrong piece to fit.",
     "  5. For missing payload mappings or destinations, submit the full supported processing graph NOW with empty/null input values. The saved disabled draft exposes Setup required in the editor. Never call report_blocked solely for missing payload, destination, column mapping or account. For form webhooks keep BOTH submission_id_field and submission_email_field keys with empty strings when unknown so validation/deduplication stay configured as required setup. Leave Sheets values null until the column mapping is known, never fabricate trigger field references. Do not ask for secrets; account binding uses secure Connected workspace setup. Before report_blocked, distinguish connector setup from platform capability. Missing account/calendar selection stays as deferred setup. If an installed connector lacks required functionality (for example complete pagination), inspect a permitted browser-agent route; do not stop at native setup alone. If it can cover the job, save that disabled draft with explicit runtime access/completeness checks. Otherwise explain why that alternative is unavailable or prohibited too. Never relax the user's constraints or a supplied job contract to make a graph pass.",
     "  Keep detail lookups targeted -- fetch the pieces you shortlisted, not the whole catalog.",
