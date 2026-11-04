@@ -11,6 +11,7 @@ import { figmaStatus } from '../integrations/figma-connection';
 import { webflowStatus } from '../integrations/webflow-connection';
 import { asanaStatus } from '../integrations/asana-connection';
 import { todoistStatus } from '../integrations/todoist-connection';
+import { wrikeStatus } from '../integrations/wrike-connection';
 import { linearStatus } from '../integrations/linear-connection';
 import { typeformStatus } from '../integrations/typeform-connection';
 import { intercomStatus } from '../integrations/intercom-connection';
@@ -4786,6 +4787,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       figma: () => figmaStatus(jarvisConfig),
       webflow: () => webflowStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
+      wrike: () => wrikeStatus(jarvisConfig),
       linear: () => linearStatus(jarvisConfig),
       airtable: () => airtableStatus(jarvisConfig),
       notion: () => notionStatus(jarvisConfig),
@@ -5049,6 +5051,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisDropboxConnectionSource(jarvisConfig));
       const { JarvisTrelloConnectionSource } = await import("../workflows/credentials/trello-source");
       credentialResolver.register(new JarvisTrelloConnectionSource(jarvisConfig.daemon.data_dir));
+      const { JarvisWrikeConnectionSource } = await import("../workflows/credentials/wrike-source");
+      credentialResolver.register(new JarvisWrikeConnectionSource(jarvisConfig));
       const { JarvisLinearConnectionSource } = await import("../workflows/credentials/linear-source");
       credentialResolver.register(new JarvisLinearConnectionSource(jarvisConfig));
       const { JarvisTypeformConnectionSource } = await import("../workflows/credentials/typeform-source");

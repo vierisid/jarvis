@@ -305,3 +305,13 @@ test('self-hosted apps without managed configuration retain manual setup', () =>
   sources.pieces = () => new PieceCatalog([piece('@activepieces/piece-clickup')]);
   expect(provider.read().setup.find(a => a.id === row('piece:@activepieces/piece-clickup').setupActionId)?.target.kind).toBe('piece_credentials');
 });
+
+test('managed Wrike shows its stored grant, a pending reconnect as disconnected, and routes setup to its own hosted integration', () => {
+  sources.wrike = () => ({configured:true, connected:true, account:{id:'KUAAAAAA',label:'owner@example.test'}});
+  expect(row('native:wrike')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'KUAAAAAA',label:'Wrike: owner@example.test',setupActionId:'setup:wrike'});
+  expect(provider.read().setup.find(s => s.id === 'setup:wrike')?.target).toEqual({kind:'hosted_integration',provider:'wrike'});
+  sources.wrike = () => ({configured:true, connected:false, account:{id:'KUAAAAAA',label:'owner@example.test'}});
+  expect(row('native:wrike')).toMatchObject({status:'disconnected',availability:'unavailable',evidence:'none'});
+  sources.wrike = () => ({configured:false,connected:false,account:null});
+  expect(provider.read().rows.some(r=>r.sourceId==='native:wrike')).toBe(false);
+});
