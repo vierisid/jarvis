@@ -34,10 +34,11 @@ export function browserCardTitle(r: Pick<QueuedDecision, 'review'>): { heading: 
 }
 
 /** Non-document F12 decisions retain their own action and result contract. */
-export function PendingDecisions({ http, read, enabled, changed, selection, navigate, onCount }: { onCount?(count: number): void; selection?: string; navigate?(route: BriefRoute): void; http: HostTransport; read(): Promise<QueuedDecision[]>; enabled: boolean; changed(): void }) {
+export function PendingDecisions({ http, read, enabled, changed, selection, navigate, onCount }: { onCount?(count: number | null): void; selection?: string; navigate?(route: BriefRoute): void; http: HostTransport; read(): Promise<QueuedDecision[]>; enabled: boolean; changed(): void }) {
   const [rows, setRows] = useState<QueuedDecision[] | null>(null), [message, setMessage] = useState(''), [pending, setPending] = useState(false), [epoch, refresh] = useState(0);
   const [selected, select] = useState<string | null>(null);
-  useEffect(() => { onCount?.(rows?.length ?? 0); }, [rows, onCount]);
+  // null while loading or failed: an unknown permission list is not an empty one.
+  useEffect(() => { onCount?.(enabled ? rows?.length ?? null : 0); }, [rows, enabled, onCount]);
   const list = React.useRef<HTMLElement>(null), restoreFocus = React.useRef(false);
   useEffect(() => {
     if (restoreFocus.current && rows) {
@@ -94,7 +95,8 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
         <div className="brief-decision-document">
           {row.review?.requestedAt && <p><strong>Run started</strong><br /><time dateTime={new Date(row.review.requestedAt).toISOString()}>{new Date(row.review.requestedAt).toLocaleString()}</time></p>}
           {row.review?.message !== undefined && <><p><strong>Message</strong></p><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.review.message}</p>
-            <p><strong>Destination</strong><br />{row.review.channels?.join(', ')}</p></>}
+            <p><strong>Destination</strong><br />{row.review.channels?.join(', ')}
+              {row.review.fallback === 'desktop' && <><br />If no dashboard is open: desktop notification</>}</p></>}
           {row.review?.origin && <p><strong>Website</strong><br />{row.review.origin}</p>}
           {row.review?.element && <p><strong>Element</strong><br />{row.review.element}</p>}
           {row.review?.target && <p><strong>Computer</strong><br />{row.review.target}</p>}

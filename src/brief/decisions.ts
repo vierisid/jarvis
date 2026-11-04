@@ -205,6 +205,8 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
         if (frozen && typeof frozen.arguments.message === 'string' && Array.isArray(frozen.arguments.channels)) {
           item.review.message = frozen.arguments.message.slice(0, 20_000);
           item.review.channels = frozen.arguments.channels.filter((channel): channel is string => typeof channel === 'string').slice(0, 20);
+          // Q-19: the frozen desktop fallback is part of what the user reviews.
+          if (frozen.arguments.fallback === 'desktop') item.review.fallback = 'desktop';
           item.title = `Send notification: ${frozen.arguments.message.slice(0, 120)}`;
         }
       }

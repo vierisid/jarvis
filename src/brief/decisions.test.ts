@@ -410,6 +410,10 @@ test('notification review shows frozen message, channels and run context without
   expect(item.review?.requestedAt).toBe(e.run.created);
   expect(item.title).toContain('Daily check-in');
   expect(JSON.stringify(item)).not.toContain('never serialize me');
+  expect(item.review?.fallback).toBeUndefined();
+  saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify',
+    arguments: { message: 'Daily check-in', channels: ['dashboard'], autoDashboard: true, fallback: 'desktop' } });
+  expect(queue.get(`approval:${a.id}`).review?.fallback).toBe('desktop');
 });
 
 test('an accepted commitment whose run had its only effect denied keeps its work card', async () => {

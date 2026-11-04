@@ -115,7 +115,8 @@ export function createDomainPorts(scopeId: string, http: HostTransport, storage:
       for (const row of rows) {
         const doc = await get(`/api/brief/decisions/${encodeURIComponent(row.decisionId)}/document`);
         if (doc.decision?.revision !== row.revision || !Array.isArray(doc.actions)) throw Error('Decision changed');
-        if (!doc.actions.length) result.push(row);
+        // Permission cards show here even once inspect-only; other inspect-only receipts stay out (they are not requests).
+        if (!doc.actions.length && (row.kind === 'permission' || row.supportedActions?.some((action: string) => action !== 'inspect'))) result.push(row);
       }
       return result;
     },

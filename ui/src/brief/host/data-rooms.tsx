@@ -55,8 +55,16 @@ function source<T>(domains: Source<T>['domains'], capability: Source<T>['capabil
     return { data: value.data, empty: false, asOf: Date.now() };
   } };
 }
-export function onlyOtherDecisions(data: readonly DecisionView[] | null, otherCount: number): boolean {
-  return (otherCount > 0 || !!data?.length) && !data?.some(row => row.actions.length > 0);
+/**
+ * True when Needs you should drop the document room (and its all-clear) for a
+ * plain heading over the permission list. Only a settled document read may be
+ * replaced: loading or failed reads keep the room so its own status shows. A
+ * permission count of null means unknown (loading or failed) and is never clear.
+ */
+export function onlyOtherDecisions(all: Pick<Snapshot<readonly DecisionView[]>, 'state' | 'data' | 'refreshing' | 'reason'>, otherCount: number | null): boolean {
+  const settled = all.state === 'ready' || all.state === 'empty' || (all.state === 'stale' && all.refreshing && all.reason === null);
+  if (!settled || all.data?.some(row => row.actions.length > 0)) return false;
+  return otherCount === null || otherCount > 0 || !!all.data?.length;
 }
 export function createDataRooms(host: { scopeId: string; transport: HostTransport; capabilities(): unknown;
   storage: Storage; reconciliation: BriefReconciliationClient; createGoal(): void }) {
@@ -149,8 +157,8 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   }
   function NeedsYou({ shell }: { shell: BriefShellPort }) {
     const all = useBriefProjection(decisionRead);
-    const [otherCount, setOtherCount] = useState(0);
-    const onlyOther = onlyOtherDecisions(all.data, otherCount);
+    const [otherCount, setOtherCount] = useState<number | null>(null);
+    const onlyOther = onlyOtherDecisions(all, otherCount);
     return <>{onlyOther ? <header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
       <PendingDecisions onCount={setOtherCount} selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
   }
