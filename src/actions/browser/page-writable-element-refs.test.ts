@@ -57,6 +57,9 @@ const SECOND = `<!doctype html><html><head><title>Second</title></head><body sty
   <input id="other" data-testid="other" style="width:200px;height:30px">
 </body></html>`;
 
+// Explicit timeouts on every hook and test (#1241): Bun's 5s default is below
+// the browser's startup bound and navigate()'s 30s load wait. A healthy test
+// here takes 1-2s in CI. shared-browser-timeouts.test.ts enforces this.
 describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', () => {
   let chromium: TestChromium | null = null;
   let browser: BrowserController;
@@ -77,13 +80,13 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
       },
     });
     base = `http://127.0.0.1:${server.port}/`;
-  });
+  }, 90_000); // the launch alone may take its full 45s startup bound
 
   afterAll(async () => {
     await browser?.disconnect();
     server?.stop(true);
     await chromium?.close();
-  });
+  }, 15_000); // close() may wait out the watchdog's 5s TERM grace
 
   /** Snapshot, and return the snapshot id of the element with this data-testid. */
   const idOf = async (testid: string): Promise<number> => {
@@ -125,7 +128,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
     expect(result).not.toContain('Error');
     expect(await valueOf('reviewed')).toBe('approved text');
     expect(await valueOf('attacker')).toBe('');
-  });
+  }, 60_000);
 
   test('a page that steals focus on the reviewed element gets nothing typed', async () => {
     await fresh();
@@ -147,7 +150,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
     // BEFORE the value is touched, so a refused focus cannot empty the field
     // the user reviewed. This is why the fixture gives it a value to lose.
     expect(await valueOf('reviewed')).toBe('original');
-  });
+  }, 60_000);
 
   test('a page that steals focus on a TIMER, after the focus check, still gets nothing', async () => {
     await fresh();
@@ -168,7 +171,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
     // leak and merely reporting it.
     expect(result).toContain('lost focus before anything was typed');
     expect(await valueOf('attacker')).toBe('');
-  });
+  }, 60_000);
 
   test('approved typing that clears a field before focus loss retains uncertainty', async () => {
     await fresh();
@@ -182,7 +185,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
     expect(thrown).toMatchObject({ outcome: { status: 'unknown', code: 'BROWSER_ACTION_UNCERTAIN', effect: 'may_have_occurred' } });
     expect(await valueOf('reviewed')).toBe('');
     expect(await valueOf('attacker')).toBe('');
-  });
+  }, 60_000);
 
   test('a page cannot redirect the text into a descendant it appended', async () => {
     await fresh();
@@ -207,7 +210,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
     const result = await browser.type(editor, 'approved text');
     expect(result).toContain('Error');
     expect(await valueOf('evil')).toBe('');
-  });
+  }, 60_000);
 
   test('a page cannot redirect the text into a shadow root it attached', async () => {
     await fresh();
@@ -232,7 +235,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
       `(() => { const r = document.getElementById('host').shadowRoot;`
       + ` const i = r && r.getElementById('shadowinput'); return i ? i.value : '(none)'; })()`);
     expect(shadowValue).toBe('');
-  });
+  }, 60_000);
 
   test('typing "into" a frame is refused outright', async () => {
     await fresh();
@@ -245,7 +248,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
     expect(result).toContain('is a frame, not a field');
     expect(await browser.evaluate(
       `document.getElementById('framed').contentDocument.getElementById('inframe').value`)).toBe('');
-  });
+  }, 60_000);
 
   test('an element inside a same-origin frame still types normally', async () => {
     // The Google Docs shape, and the case the frame refusal must not catch: the
@@ -257,7 +260,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
     expect(await browser.evaluate(
       `document.getElementById('framed').contentDocument.getElementById('inframe').value`))
       .toBe('typed in frame');
-  });
+  }, 60_000);
 
   test('a reviewed element the page has detached gets nothing typed anywhere', async () => {
     await fresh();
@@ -273,7 +276,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
     expect(result).toContain('Error');
     expect(result).toContain('removed from the page');
     expect(await valueOf('attacker')).toBe('');
-  });
+  }, 60_000);
 
   test('the element refs are invisible in the page, and the page cannot see the world', async () => {
     await fresh();
@@ -281,7 +284,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
     // The array exists (typing works, proved above) but has no name in the page.
     expect(await browser.evaluate('typeof window.__jarvis_elements')).toBe('undefined');
     expect(await browser.evaluate('typeof globalThis.__jarvis_elements')).toBe('undefined');
-  });
+  }, 60_000);
 
   test('the snapshot is not fooled by a main-world prototype override', async () => {
     // Not required by #592, but it falls out of the isolated world and is worth
@@ -294,7 +297,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
     const ids = snap.elements.map((e) => e.attrs['data-testid']);
     expect(ids).toContain('reviewed');
     expect(ids).not.toContain('LIES');
-  });
+  }, 60_000);
 
   describe('coordinates across a page-initiated navigation (#592 sibling)', () => {
     test('a click is refused after the page navigates itself', async () => {
@@ -312,7 +315,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
       // And the new document was not touched: the second page's input is
       // where the old coordinates would have landed.
       expect(await valueOf('other')).toBe('');
-    });
+    }, 60_000);
 
     test('typing is refused after the page navigates itself', async () => {
       await fresh();
@@ -324,7 +327,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
       expect(result).toContain('Error');
       expect(result).toContain('navigated to a new document');
       expect(await valueOf('other')).toBe('');
-    });
+    }, 60_000);
 
     test('a hover is refused after the page navigates itself', async () => {
       await fresh();
@@ -333,7 +336,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
       await Bun.sleep(1200);
 
       expect(await browser.hover(reviewed)).toContain('navigated to a new document');
-    });
+    }, 60_000);
 
     test('a same-document pushState does NOT refuse a click', async () => {
       // The guard compares the loaderId alone, on purpose. pushState rewrites
@@ -348,7 +351,7 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
       const result = await browser.type(reviewed, 'still works');
       expect(result).not.toContain('Error');
       expect(await valueOf('reviewed')).toBe('still works');
-    });
+    }, 60_000);
 
     test('a fragment change does NOT refuse a click', async () => {
       await fresh();
@@ -358,6 +361,6 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
       const result = await browser.type(reviewed, 'also works');
       expect(result).not.toContain('Error');
       expect(await valueOf('reviewed')).toBe('also works');
-    });
+    }, 60_000);
   });
 });
