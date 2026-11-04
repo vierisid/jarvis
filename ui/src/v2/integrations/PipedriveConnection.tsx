@@ -124,7 +124,7 @@ export function PipedriveConnection({
                   {status.workspaces.map((w) => w.name).join(", ")}
                 </>
               ) : status?.reconnect ? (
-                "Access has expired. Reconnect Pipedrive."
+                "Pipedrive refused this connection. Reconnect Pipedrive."
               ) : !status && !error ? (
                 "Checking connection…"
               ) : (

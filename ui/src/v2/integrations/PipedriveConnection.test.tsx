@@ -103,3 +103,12 @@ test("reconnect and unavailable states remain actionable", async () => {
   expect(host.textContent).toContain("needs reconnecting");
   expect(host.querySelector("a")?.textContent).toBe("Connect Pipedrive");
 });
+test("onboarding reconnect wording covers revocation as well as expiry", async () => {
+  globalThis.fetch = (async () =>
+    NativeResponse.json({ ...status, reconnect: true })) as any;
+  await mount(<Connection appearance="onboarding" />);
+  expect(host.textContent).toContain(
+    "Pipedrive refused this connection. Reconnect Pipedrive.",
+  );
+  expect(host.textContent).not.toContain("expired");
+});
