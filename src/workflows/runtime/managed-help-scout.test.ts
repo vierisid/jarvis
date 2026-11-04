@@ -9,6 +9,7 @@ import {
   isHelpScoutReference,
 } from "./managed-help-scout-inputs";
 import {
+  governedPieceTarget,
   resolveGovernedPieceAction,
   tracksPieceCompletion,
 } from "./piece-effects";
@@ -338,4 +339,60 @@ test("notes use completion receipts while lookups remain repeatable reads", () =
   expect(tracksPieceCompletion(piece, "add_note")).toBe(true);
   expect(tracksPieceCompletion(piece, "find_customer")).toBe(false);
   expect(tracksPieceCompletion(piece, "find_conversation")).toBe(false);
+});
+test("manual-account sends show recipients and draft state on the approval card", () => {
+  const reply = resolveGovernedPieceAction(piece, "send_reply")!;
+  expect(reply.category).toBe("send_email");
+  expect(
+    governedPieceTarget(reply, {
+      auth: "{{connections.manual}}",
+      conversationId: "456",
+      text: "Thanks for writing in.",
+      customerEmail: "customer@example.test",
+      cc: ["team@example.test"],
+      bcc: ["audit@example.test"],
+      draft: true,
+      status: "pending",
+    }),
+  ).toEqual({
+    piece: "help-scout",
+    action: "send_reply",
+    conversationId: "456",
+    text: "Thanks for writing in.",
+    customerEmail: "customer@example.test",
+    cc: ["team@example.test"],
+    bcc: ["audit@example.test"],
+    draft: true,
+    status: "pending",
+  });
+  const create = resolveGovernedPieceAction(piece, "create_conversation")!;
+  expect(create.category).toBe("send_email");
+  expect(
+    governedPieceTarget(create, {
+      mailboxId: "34",
+      subject: "Your order",
+      customerEmail: "customer@example.test",
+      threadType: "reply",
+      status: "active",
+      body: "Your order shipped.",
+      cc: ["team@example.test"],
+    }),
+  ).toMatchObject({
+    customerEmail: "customer@example.test",
+    threadType: "reply",
+    body: "Your order shipped.",
+    cc: ["team@example.test"],
+  });
+  const properties = resolveGovernedPieceAction(
+    piece,
+    "update_customer_properties",
+  )!;
+  expect(properties.category).toBe("write_data");
+  expect(
+    governedPieceTarget(properties, { customerId: "11", fields: { plan: "pro" } }),
+  ).toEqual({
+    piece: "help-scout",
+    action: "update_customer_properties",
+    customerId: "11",
+  });
 });

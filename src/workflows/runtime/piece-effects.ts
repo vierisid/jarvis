@@ -906,11 +906,23 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
     update_task: {props:['assignees'],category:wrikeTaskCategory},
   },
 }, {
-  // Every action in published Help Scout 0.2.1; managed credentials enable three.
+  // Every action in published Help Scout 0.2.1; managed credentials enable three
+  // (MANAGED_HELP_SCOUT_ACTIONS). The rest run only on a manual account. The
+  // target carries the recipients (customerEmail, cc, bcc), the message (text,
+  // body), the thread type and whether a reply is only a draft, so the approval
+  // card for a manual send_reply or create_conversation shows who it reaches.
   catalogId:'help-scout',pieceName:HELP_SCOUT_PIECE,unknownActionCategory:'modify_settings',
-  targetProps:['conversationId','mailboxId','number','email','text','userId','subject','status','assignTo','query'],
-  categories:{read_data:['find_customer','find_conversation','find_user'],write_data:['add_note','create_customer'],
-    send_email:['create_conversation','send_reply'],modify_settings:['update_customer_properties','custom_api_call']},
+  targetProps:['conversationId','mailboxId','number','customerId','email','customerEmail','cc','bcc','draft','threadType',
+    'subject','text','body','userId','status','assignTo','query'],
+  categories:{read_data:['find_customer','find_conversation','find_user'],
+    // A note reaches teammates only. Customer records, and the values of a
+    // customer's properties (PATCH /customers/{id}/properties, as Intercom's
+    // update_contact edits contact attributes), are records under the
+    // caller's own access: none changes who can see or do what.
+    write_data:['add_note','create_customer','update_customer_properties'],
+    // Email to the customer, also when a reply is saved as a draft: the piece
+    // sends whatever `draft` holds, so the worst case gates it.
+    send_email:['create_conversation','send_reply'],modify_settings:['custom_api_call']},
 }, {
   // Figma: every action of the pinned 0.6.3 bundle (`figma-engine.test.ts`
   // checks the list against the installed package). A comment is shown to
