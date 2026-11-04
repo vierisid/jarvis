@@ -3,7 +3,8 @@ import { answerErrors, type HumanRequest } from '../../../../src/workflows/runti
 import type { HostTransport } from './http';
 import { post } from './http';
 import './human-inputs.css';
-export function useHumanInputQueue(http: HostTransport) {
+/** Polls only while the decisions capability is on, like the other Needs you lists. */
+export function useHumanInputQueue(http: HostTransport, enabled = true) {
   const [requests, setRequests] = useState<HumanRequest[]>([]), [error, setError] = useState('');
   const active = useRef(true), reading = useRef(false);
   const refresh = async () => {
@@ -17,22 +18,25 @@ export function useHumanInputQueue(http: HostTransport) {
     finally { reading.current = false; }
   };
   useEffect(() => {
+    if (!enabled) { setRequests([]); setError(''); return; }
     active.current = true; void refresh();
     const timer = setInterval(() => void refresh(), 5000);
     const focus = () => void refresh(); window.addEventListener('focus', focus);
     return () => { active.current = false; clearInterval(timer); window.removeEventListener('focus', focus); };
-  }, [http]);
+  }, [http, enabled]);
   return { requests, error, refresh };
 }
 export const HumanInputsContext = createContext({ pending: 0 });
 export const useHumanInputCount = () => useContext(HumanInputsContext).pending;
-export function HumanInputForm({ request, http, changed }: { request: HumanRequest; http: HostTransport; changed(): Promise<void> }) {
+export function HumanInputForm({ request, http, changed, focused = false }: { request: HumanRequest; http: HostTransport; changed(): Promise<void>; focused?: boolean }) {
   const storageKey = `jarvis:workflow-input:${request.id}`;
   const [answers, setAnswers] = useState<Record<string, unknown>>(() => {
     try { return JSON.parse(sessionStorage.getItem(storageKey) ?? '{}'); } catch { return {}; }
   });
   const [errors, setErrors] = useState<Record<string, string>>({}), [message, setMessage] = useState(''), [busy, setBusy] = useState(false);
-  const lock = useRef(false);
+  const lock = useRef(false), card = useRef<HTMLElement>(null);
+  // A link from Create Approval Links names its request: bring that card into view and focus.
+  useEffect(() => { if (focused) { card.current?.scrollIntoView?.({ block: 'start' }); card.current?.focus(); } }, [focused]);
   const update = (key: string, value: unknown) => {
     const next = { ...answers, [key]: value }; setAnswers(next);
     try { sessionStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* Form remains usable without browser storage. */ }
@@ -54,7 +58,7 @@ export function HumanInputForm({ request, http, changed }: { request: HumanReque
     } catch { setMessage('Your response could not be confirmed. Your answers are kept here. Check the request status before retrying.'); await changed(); }
     finally { lock.current = false; setBusy(false); }
   };
-  return <article className="brief-human-card" aria-labelledby={`human-title-${request.id}`}>
+  return <article ref={card} tabIndex={-1} className="brief-human-card" aria-current={focused || undefined} aria-labelledby={`human-title-${request.id}`}>
     <header><span className="brief-human-kind">{request.kind === 'approval' ? 'Approval requested' : 'Your update is needed'}</span>
       <h2 id={`human-title-${request.id}`}>{request.title}</h2>
       <p>{request.workflowName} · {request.requestKey}</p></header>
@@ -83,13 +87,13 @@ export function HumanInputForm({ request, http, changed }: { request: HumanReque
     <a href={`/?brief=1#/brief/workflows/${encodeURIComponent(request.flowId)}/runs`}>View workflow run</a>
   </article>;
 }
-export function HumanInputInbox({ queue, http }: { queue: ReturnType<typeof useHumanInputQueue>; http: HostTransport }) {
+export function HumanInputInbox({ queue, http, focusId }: { queue: ReturnType<typeof useHumanInputQueue>; http: HostTransport; focusId?: string }) {
   const pending = queue.requests.filter(r => r.status === 'pending');
   const recent = queue.requests.filter(r => r.status !== 'pending').sort((a, b) => b.created - a.created).slice(0, 10);
   if (!pending.length && !recent.length && !queue.error) return null;
   return <section className="brief-human-inbox" aria-label="Workflow requests">
     {queue.error && <p role="status">{queue.error} <button onClick={() => void queue.refresh()}>Check again</button></p>}
-    {pending.map(request => <HumanInputForm key={request.id} request={request} http={http} changed={queue.refresh} />)}
+    {pending.map(request => <HumanInputForm key={request.id} request={request} http={http} changed={queue.refresh} focused={request.id === focusId} />)}
     {!!recent.length && <details className="brief-human-history"><summary>Recent responses ({recent.length})</summary>
       <ul>{recent.map(r => <li key={r.id}><strong>{r.title}</strong> · {r.requestKey} · {r.status}</li>)}</ul></details>}
   </section>;

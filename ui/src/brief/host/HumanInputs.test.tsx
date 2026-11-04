@@ -41,3 +41,24 @@ test('approval exposes exact proposal, occurrence and explicit reject rather tha
   expect(host.textContent).toContain('Approve the local plan for Wednesday'); expect(host.textContent).toContain('2026-11-04');
   await click('Reject request'); expect(writes).toEqual([{ decision: 'reject' }]); expect(host.textContent).toContain('Response saved: rejected');
 });
+test('a required text answer of only whitespace is refused before anything is sent', async () => {
+  const writes: unknown[] = [];
+  const http = createHostTransport((async (_url, init) => { writes.push(init?.body); return Response.json({}); }) as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputForm request={request} http={http} changed={async () => {}} />));
+  await change('textarea', '   \n  '); await change('input[type="number"]', '1'); await change('select', 'true'); await click('Submit update');
+  expect(writes).toHaveLength(0); expect(host.querySelector('textarea')?.getAttribute('aria-invalid')).toBe('true');
+});
+test('the request a Needs you link names is focused', async () => {
+  const other = { ...request, id: 'other-request', title: 'Other update' };
+  const queue = { requests: [other, request], error: '', refresh: async () => {} };
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputInbox queue={queue} http={http} focusId="test-request" />));
+  expect(document.activeElement?.getAttribute('aria-labelledby')).toBe('human-title-test-request');
+});
+test('the queue does not poll while the decisions capability is off', async () => {
+  let reads = 0;
+  const http = createHostTransport((async () => { reads++; return Response.json({ requests: [] }); }) as unknown as typeof fetch);
+  function Probe({ enabled }: { enabled: boolean }) { const queue = Forms.useHumanInputQueue(http, enabled); return <p>{queue.requests.length}</p>; }
+  await React.act(async () => root.render(<Probe enabled={false} />)); expect(reads).toBe(0);
+  await React.act(async () => root.render(<Probe enabled />)); expect(reads).toBe(1);
+});
