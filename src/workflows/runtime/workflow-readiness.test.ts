@@ -666,6 +666,20 @@ test('Pipedrive managed readiness uses the same static contract as its engine; m
   expect(manual.some(i=>i.path.endsWith('dealId'))).toBe(false);
 });
 
+test('GitLab managed readiness uses the static issue contract',()=>{
+  // Upstream create_issue picks the project from a dropdown; the managed contract takes a numeric ID.
+  const schema=propsToInputSchema({projectId:{type:'DROPDOWN',displayName:'Project',required:true},title:{type:'SHORT_TEXT',displayName:'Title',required:true},description:{type:'LONG_TEXT',displayName:'Description',required:false}} as any);
+  const pieces=new PieceCatalog([{name:'@activepieces/piece-gitlab',displayName:'GitLab',description:'',actions:{create_issue:{name:'create_issue',displayName:'Create Issue',description:'',inputSchema:schema}}}]);
+  const node:any={name:'issue',type:'PIECE',settings:{pieceName:'@activepieces/piece-gitlab',actionName:'create_issue',input:{auth:"{{connections['jarvis:gitlab']}}",projectId:'123',title:'Bug'}}};
+  const check=()=>compileWorkflow(graph(node),{pieces});
+  expect(check().issues.filter(i=>i.path.startsWith('settings.input.')&&!i.path.endsWith('.auth'))).toEqual([]);
+  delete node.settings.input.projectId;
+  expect(check().issues.some(i=>i.path.endsWith('projectId'))).toBe(true);
+  node.settings.input.projectId='123';
+  delete node.settings.input.title;
+  expect(check().issues.some(i=>i.path.endsWith('title'))).toBe(true);
+});
+
 test('Ask embedded contracts are validated before composition, publish and run', () => {
   const ask = new PieceCatalog([{ name: 'jarvis-ask', displayName: 'Ask', description: '', actions: { ask: { name: 'ask', displayName: 'Ask', description: '' } } }]);
   const g = (outputSchema: unknown) => ({ name: 'trigger', type: 'EMPTY', nextAction: { name: 'extract', type: 'PIECE', settings: { pieceName: 'jarvis-ask', actionName: 'ask', input: { prompt: 'Extract', outputSchema } } } });
