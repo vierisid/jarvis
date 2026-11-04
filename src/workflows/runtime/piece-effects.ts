@@ -117,10 +117,12 @@ export function pipedrivePersonCategory(input: Record<string, unknown>): ActionC
   return 'write_data';
 }
 /** A deal: upstream 0.10.3 `status` includes `deleted`, the worst case, so it is
- * checked first; otherwise as a person. Managed connections offer only
+ * checked first (and any value outside open/won/lost counts as it); otherwise
+ * as a person. Managed connections offer only
  * open/won/lost (`managed-pipedrive-inputs.ts`). */
 export function pipedriveRecordCategory(input: Record<string, unknown>): ActionCategory {
-  if (input.status === 'deleted') return 'delete_data';
+  // Fail closed: any status other than open/won/lost is taken as the delete.
+  if (present(input.status) && !['open', 'won', 'lost'].includes(input.status as string)) return 'delete_data';
   return pipedrivePersonCategory(input);
 }
 const WEBFLOW_PIECE = '@activepieces/piece-webflow';
@@ -862,14 +864,17 @@ interface ResolvedPieceAction {
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
   // Exact npm Pipedrive 0.10.3 action names; managed credentials run only eight contact/deal operations.
   catalogId: 'pipedrive', pieceName: PIPEDRIVE_PIECE, unknownActionCategory: 'modify_settings',
-  targetProps: ['personId','dealId','name','title','term','fields','exactMatch','email','phone','organizationId','pipelineId','stageId','status','dealValue','dealValueCurrency','probability','expectedCloseDate','ownerId','visibleTo','marketing_status'],
+  targetProps: ['personId','dealId','name','title','term','fields','exactMatch','email','phone','organizationId','pipelineId','stageId','status','dealValue','dealValueCurrency','probability','expectedCloseDate','ownerId','visibleTo','marketing_status','productId','activityId','noteId','leadId','mergeWithId','productAttachmentId','id'],
   categories: {
     read_data: ['get-note', 'find-deals-associated-with-person', 'find-products', 'find-notes', 'get-product', 'find-user', 'get-deal', 'list-deals', 'search-deals', 'list-deal-products', 'get-person', 'list-persons', 'search-persons', 'get-organization', 'list-organizations', 'search-organizations', 'get-activity', 'list-activities', 'get-lead', 'get-lead-conversion-status', 'list-pipelines', 'list-stages', 'list-activity-types', 'list-users', 'get-current-user'],
-    write_data: ['create-note', 'update-note', 'add-labels-to-person', 'add-product-to-deal', 'remove-product-from-deal', 'attach-file'],
-    // A deal create/update can set `status: 'deleted'`, so blind it is a delete; its input narrows it.
-    delete_data: ['delete-deal', 'delete-person', 'delete-organization', 'delete-activity', 'delete-lead', 'delete-note', 'delete-product', 'merge-deals', 'merge-persons', 'merge-organizations', 'create-deal', 'update-deal'],
+    write_data: ['create-note', 'update-note', 'add-labels-to-person', 'add-product-to-deal', 'attach-file'],
+    // Every action upstream labels DESTRUCTIVE. A deal create/update can set
+    // `status: 'deleted'`, so blind it is a delete; its input narrows it. A
+    // product create/update sends `is_deleted: !isActive`, so an inactive (or
+    // unset) product is soft-deleted.
+    delete_data: ['delete-deal', 'delete-person', 'delete-organization', 'delete-activity', 'delete-lead', 'delete-note', 'delete-product', 'merge-deals', 'merge-persons', 'merge-organizations', 'remove-product-from-deal', 'create-deal', 'update-deal', 'create-product', 'update-product'],
     // Upstream legacy Find operations create/delete filters. Managed connections use Search instead.
-    modify_settings: ['add-follower', 'create-activity', 'update-activity', 'create-lead', 'update-lead', 'create-organization', 'update-organization', 'create-person', 'update-person', 'create-product', 'update-product', 'find-product', 'find-organization', 'find-person', 'find-deal', 'find-activity', 'find-lead', 'convert-lead-to-deal', 'custom_api_call'],
+    modify_settings: ['add-follower', 'create-activity', 'update-activity', 'create-lead', 'update-lead', 'create-organization', 'update-organization', 'create-person', 'update-person', 'find-product', 'find-organization', 'find-person', 'find-deal', 'find-activity', 'find-lead', 'convert-lead-to-deal', 'custom_api_call'],
   },
   categoryFromInput: {
     ...Object.fromEntries(['create-person', 'update-person'].map(action =>

@@ -237,3 +237,32 @@ test("a GET 404 says the record was not found or deleted, not to retry", async (
   expect(error.message).not.toContain("Try again");
   expect(calls).toHaveLength(1);
 });
+test("every action upstream 0.10.3 labels DESTRUCTIVE, and each product soft-delete, is a delete", () => {
+  // From the pinned bundle's `classification: "DESTRUCTIVE"` actions.
+  const destructive = [
+    "delete-activity", "delete-deal", "delete-lead", "delete-note",
+    "delete-organization", "delete-person", "delete-product",
+    "merge-deals", "merge-organizations", "merge-persons",
+    "remove-product-from-deal",
+  ];
+  // Upstream WRITE, but each sends `is_deleted: !isActive`.
+  const softDelete = ["create-product", "update-product"];
+  for (const action of [...destructive, ...softDelete]) {
+    expect(`${action}: ${resolveGovernedPieceAction(piece, action)?.category}`).toBe(
+      `${action}: delete_data`,
+    );
+    expect(resolveGovernedPieceAction(piece, action)?.known).toBe(true);
+  }
+});
+test("a deal status outside open/won/lost fails closed to a delete", () => {
+  for (const status of ["deleted", "Deleted", " deleted", "x", 1, true, ["open"]])
+    expect(
+      resolveGovernedPieceAction(piece, "update-deal", { dealId: 1, status })
+        ?.category,
+    ).toBe("delete_data");
+  for (const status of ["open", "won", "lost", "", null, undefined])
+    expect(
+      resolveGovernedPieceAction(piece, "update-deal", { dealId: 1, status })
+        ?.category,
+    ).toBe("write_data");
+});
