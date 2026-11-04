@@ -83,7 +83,7 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
     server?.stop(true);
     await chromium?.close();
     if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
-  });
+  }, 15_000); // close() may wait out the watchdog's 5s TERM grace
 
   /** Everything the model could read from the current tab, as one string. */
   async function visible(): Promise<string> {

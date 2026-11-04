@@ -1,7 +1,8 @@
 /** Published piece metadata/read actions plus the managed send adapter in the
  * real engine. Provider URLs in disposable package/engine copies target a
  * local fixture; no live Trello calls or account credentials are used.
- * Run JARVIS_TEST_TRELLO_ENGINE=1 bun test this-file (installs 0.8.1, the version the catalog installs). */
+ * Gated on JARVIS_TEST_ENGINE_BUILD=1 (or JARVIS_TEST_TRELLO_ENGINE=1); CI runs it
+ * in test.yml's engine step. It installs 0.8.1, the version the catalog installs. */
 import {afterAll, beforeAll, expect, test} from 'bun:test';
 import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
@@ -30,7 +31,7 @@ import {EngineRuntime} from '../runner/engine-runtime/engine-runtime';
 import {EngineFlowExecutor} from '../runner/engine-runtime/engine-flow-executor';
 import {createRunFlowHandler} from '../runner/handler';
 import {Worker} from '../queue/worker';
-const gate=process.env.JARVIS_TEST_TRELLO_ENGINE==='1';
+const gate = process.env.JARVIS_TEST_TRELLO_ENGINE === '1' || process.env.JARVIS_TEST_ENGINE_BUILD === '1';
 const piece='@activepieces/piece-trello';
 let dir:string, api:SandboxApi, runtime:EngineRuntime, provider:ReturnType<typeof Bun.serve>;
 let runId:string|undefined;

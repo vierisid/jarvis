@@ -1,4 +1,5 @@
-/** Published 0.7.3 metadata and all managed actions qualified in the real engine against local provider fixtures. */
+/** Published 0.7.3 metadata and all managed actions qualified in the real engine against local provider fixtures.
+ * Gated on JARVIS_TEST_ENGINE_BUILD=1 (or JARVIS_TEST_GITHUB_ENGINE=1); CI runs it in test.yml's engine step. */
 import {afterAll, beforeAll, expect, test} from 'bun:test';
 import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
@@ -26,7 +27,7 @@ import {EngineRuntime} from '../runner/engine-runtime/engine-runtime';
 import {EngineFlowExecutor} from '../runner/engine-runtime/engine-flow-executor';
 import {createRunFlowHandler} from '../runner/handler';
 import {Worker} from '../queue/worker';
-const gate = process.env.JARVIS_TEST_GITHUB_ENGINE === '1';
+const gate = process.env.JARVIS_TEST_GITHUB_ENGINE === '1' || process.env.JARVIS_TEST_ENGINE_BUILD === '1';
 const piece = '@activepieces/piece-github';
 let dir: string, api: SandboxApi, runtime: EngineRuntime, provider: ReturnType<typeof Bun.serve>;
 let runId: string | undefined;

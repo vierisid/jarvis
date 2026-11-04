@@ -9,8 +9,11 @@ import type {
   LLMToolCall,
   LLMErrorCode,
 } from './provider.ts';
-import { classifyErrorString } from './provider.ts';
+import { classifyErrorString, LLMProviderError } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
+
+/** A streamed body that ended before message_stop (#1097). */
+const STREAM_ENDED_EARLY = 'Anthropic stream ended before completion';
 
 /** Map Anthropic's SSE-level error.type to our canonical code. */
 function classifyAnthropicErrorType(type: string): LLMErrorCode {
@@ -238,11 +241,13 @@ export class AnthropicProvider implements LLMProvider {
     let content = '';
     let model = fallbackModel;
     let stopReason: string | null = null;
+    let sawMessageStop = false;
     const usage: LLMResponse['usage'] = { input_tokens: 0, output_tokens: 0 };
     const toolCalls: LLMToolCall[] = [];
     const pendingTools = new Map<number, { id: string; name: string; input: string }>();
 
-    for (const line of raw.split(/\r?\n/)) {
+    const lines = raw.split(/\r?\n/);
+    for (const [i, line] of lines.entries()) {
       if (!line.startsWith('data:')) continue;
       const payload = line.slice(5).trim();
       if (!payload || payload === '[DONE]') continue;
@@ -251,6 +256,9 @@ export class AnthropicProvider implements LLMProvider {
       try {
         event = JSON.parse(payload) as AnthropicStreamEvent;
       } catch (err) {
+        // An unterminated last line that does not parse is a body cut off
+        // mid-event, the same as one cut between events (#1097).
+        if (i === lines.length - 1) throw new LLMProviderError(STREAM_ENDED_EARLY, 'network');
         throw new Error(`Anthropic gateway returned invalid SSE JSON: ${err instanceof Error ? err.message : String(err)}`);
       }
 
@@ -318,8 +326,13 @@ export class AnthropicProvider implements LLMProvider {
             usage.cache_creation_input_tokens = event.delta.usage.cache_creation_input_tokens;
           }
         }
+      } else if (event.type === 'message_stop') {
+        sawMessageStop = true;
       }
     }
+
+    // As in stream(): without message_stop the body was cut off (#1097).
+    if (!sawMessageStop) throw new LLMProviderError(STREAM_ENDED_EARLY, 'network');
 
     return {
       content,
@@ -373,27 +386,33 @@ export class AnthropicProvider implements LLMProvider {
     const toolCalls: LLMToolCall[] = [];
     let currentToolCall: { id: string; name: string; input_json: string } | null = null;
     let stopReason: string | null = null;
+    // Only message_stop says the message is whole (#1097). A body that ends
+    // before it was cut off, even after a complete tool block or a
+    // message_delta, and must not read as a normal completion.
+    let sawMessageStop = false;
     const usage: LLMResponse['usage'] = { input_tokens: 0, output_tokens: 0 };
     let responseModel = model;
 
+    const reader = response.body.getReader();
     try {
-      const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
+        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
+        // A last line without its newline is still read, so a final
+        // message_stop is not lost to a missing terminator.
+        if (done && buffer) { lines.push(buffer); buffer = ''; }
 
         for (const line of lines) {
-          if (!line.trim() || !line.startsWith('data: ')) continue;
+          // `data:` with or without the space, as SSE allows and the chat path accepts.
+          if (!line.startsWith('data:')) continue;
 
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
+          const data = line.slice(5).trim();
+          if (!data || data === '[DONE]') continue;
 
           try {
             const event = JSON.parse(data) as AnthropicStreamEvent;
@@ -453,6 +472,8 @@ export class AnthropicProvider implements LLMProvider {
                   usage.cache_creation_input_tokens = event.delta.usage.cache_creation_input_tokens;
                 }
               }
+            } else if (event.type === 'message_stop') {
+              sawMessageStop = true;
             } else if (event.type === 'error') {
               yield {
                 type: 'error',
@@ -462,10 +483,17 @@ export class AnthropicProvider implements LLMProvider {
               return;
             }
           } catch (err) {
-            // Skip invalid JSON lines
-            console.error('Failed to parse SSE event:', err);
+            // Skip invalid JSON lines. A fragment left at EOF is a cut body,
+            // which the missing message_stop below reports; no parser noise.
+            if (!(done && line === lines[lines.length - 1])) console.error('Failed to parse SSE event:', err);
           }
         }
+        if (done) break;
+      }
+
+      if (!sawMessageStop) {
+        yield { type: 'error', error: STREAM_ENDED_EARLY, code: 'network' };
+        return;
       }
 
       const finishReason = this.mapStopReason(stopReason);
@@ -481,6 +509,10 @@ export class AnthropicProvider implements LLMProvider {
       };
     } catch (err) {
       yield { type: 'error', error: `Stream error: ${err}`, code: 'network' };
+    } finally {
+      // Every early return (an error event, a cut body, a consumer that
+      // stops iterating) releases the connection instead of leaving it open.
+      reader.cancel().catch(() => {});
     }
   }
 
