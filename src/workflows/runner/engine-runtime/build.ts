@@ -304,6 +304,8 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/managed-wrike-inputs.ts',
   '../../runtime/managed-todoist.ts',
   '../../runtime/managed-figma.ts',
+  '../../runtime/managed-zoom.ts',
+  '../../runtime/managed-zoom-inputs.ts',
   '../../runtime/managed-pipedrive.ts',
   '../../runtime/managed-pipedrive-inputs.ts',
   '../../runtime/managed-webflow.ts',
