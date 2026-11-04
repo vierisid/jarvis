@@ -55,28 +55,35 @@ function note(v: unknown): string {
 }
 const label = (v: unknown) => (typeof v === "string" ? v : "");
 function conversation(raw: unknown, expected?: string) {
-  if (
-    !record(raw) ||
-    (expected && id(raw.id) !== expected) ||
-    typeof raw.subject !== "string" ||
-    typeof raw.status !== "string"
-  )
+  // A malformed provider answer is Help Scout's fault, not an input to fix, so
+  // id()'s "Enter a ..." message never reaches the user from here. A chat or
+  // phone conversation may have no subject.
+  try {
+    if (
+      !record(raw) ||
+      (expected && id(raw.id) !== expected) ||
+      (raw.subject != null && typeof raw.subject !== "string") ||
+      typeof raw.status !== "string"
+    )
+      throw new Error();
+    return {
+      id: Number(id(raw.id)),
+      number: Number(id(raw.number)),
+      mailboxId: Number(id(raw.mailboxId)),
+      subject: label(raw.subject),
+      status: raw.status,
+      preview: label(raw.preview),
+      primaryCustomer: {
+        id:
+          raw.primaryCustomer?.id == null
+            ? null
+            : Number(id(raw.primaryCustomer.id)),
+        email: label(raw.primaryCustomer?.email),
+      },
+    };
+  } catch {
     throw new Error("Help Scout returned invalid conversation details.");
-  return {
-    id: Number(id(raw.id)),
-    number: Number(id(raw.number)),
-    mailboxId: Number(id(raw.mailboxId)),
-    subject: raw.subject,
-    status: raw.status,
-    preview: label(raw.preview),
-    primaryCustomer: {
-      id:
-        raw.primaryCustomer?.id == null
-          ? null
-          : Number(id(raw.primaryCustomer.id)),
-      email: label(raw.primaryCustomer?.email),
-    },
-  };
+  }
 }
 async function api(
   token: string,

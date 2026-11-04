@@ -376,8 +376,10 @@ test("manual-account sends show recipients and draft state on the approval card"
       status: "active",
       body: "Your order shipped.",
       cc: ["team@example.test"],
+      fromUser: "7",
     }),
   ).toMatchObject({
+    fromUser: "7",
     customerEmail: "customer@example.test",
     threadType: "reply",
     body: "Your order shipped.",
@@ -394,6 +396,7 @@ test("manual-account sends show recipients and draft state on the approval card"
     piece: "help-scout",
     action: "update_customer_properties",
     customerId: "11",
+    fields: { plan: "pro" },
   });
 });
 test("transport and rate-limit errors name the record the action used", async () => {
@@ -418,4 +421,17 @@ test("transport and rate-limit errors name the record the action used", async ()
   );
   await expect(search).rejects.toThrow(/rate limiting/);
   await expect(search).rejects.not.toThrow(/conversation/i);
+});
+test("a malformed provider conversation is reported as Help Scout's, not the user's", async () => {
+  const f = fake(() => Response.json({ ...conversation, number: "x" }));
+  await expect(
+    run("find_conversation", { auth, conversationId: "22" }, f.request),
+  ).rejects.toThrow("Help Scout returned invalid conversation details.");
+});
+test("a conversation without a subject still resolves", async () => {
+  const { subject: _subject, ...noSubject } = conversation;
+  const f = fake(() => Response.json(noSubject));
+  expect(
+    await run("find_conversation", { auth, conversationId: "22" }, f.request),
+  ).toEqual({ found: true, data: { ...conversation, subject: "" } });
 });
