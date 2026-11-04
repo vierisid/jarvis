@@ -301,6 +301,7 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/managed-monday.ts',
   '../../runtime/managed-monday-inputs.ts',
   '../../runtime/managed-todoist.ts',
+  '../../runtime/managed-figma.ts',
   '../../runtime/managed-github.ts',
   '../../runtime/managed-dropbox.ts',
   '../../runtime/managed-trello.ts',

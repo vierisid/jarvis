@@ -4,6 +4,7 @@ import { MailchimpConnection } from "../../../integrations/MailchimpConnection";
 import { AsanaConnection } from "../../../integrations/AsanaConnection";
 import { MondayConnection } from "../../../integrations/MondayConnection";
 import { TodoistConnection } from "../../../integrations/TodoistConnection";
+import { FigmaConnection } from "../../../integrations/FigmaConnection";
 import { GitHubConnection } from "../../../integrations/GitHubConnection";
 import { DropboxConnection } from "../../../integrations/DropboxConnection";
 import { TrelloConnection } from "../../../integrations/TrelloConnection";
@@ -351,6 +352,7 @@ export function IntegrationsTab({
       <TypeformConnection optional />
       <AirtableConnection optional />
       <TodoistConnection optional /><AsanaConnection optional />
+      <FigmaConnection optional />
       <SlackConnection optional />
       <IntercomConnection optional />
       <CalendlyConnection optional />
