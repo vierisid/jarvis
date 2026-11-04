@@ -763,6 +763,13 @@
   z-index: 65;
 }
 
+/* At phone width the detail panel is fixed at z-index 110. The create dialog
+   is modal, so it sits above the panel: what is visible then matches where its
+   focus trap keeps focus. Placed after the base rule so it wins. */
+@media (max-width: 600px) {
+  .v2-goals__overlay { z-index: 111; }
+}
+
 .v2-goals__dialog {
   background: var(--paper);
   border: 1px solid var(--rule);
