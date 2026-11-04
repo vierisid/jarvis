@@ -87,7 +87,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === WRIKE_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE || piece === PIPEDRIVE_PIECE || piece === ZOOM_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === WRIKE_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE || piece === PIPEDRIVE_PIECE || piece === ZOOM_PIECE || piece === HELP_SCOUT_PIECE) && managedPieceChanges(piece, action))
     // A Webflow refund moves money and is not idempotent: never repeat one whose outcome is unknown.
     || (piece === WEBFLOW_PIECE && action === 'refund_order')
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
@@ -111,6 +111,7 @@ const LINEAR_PIECE = '@activepieces/piece-linear';
 const WRIKE_PIECE = '@activepieces/piece-wrike';
 const MONDAY_PIECE = '@activepieces/piece-monday';
 const ZOOM_PIECE = "@activepieces/piece-zoom";
+const HELP_SCOUT_PIECE = "@activepieces/piece-help-scout";
 const FIGMA_PIECE = '@activepieces/piece-figma';
 const PIPEDRIVE_PIECE = '@activepieces/piece-pipedrive';
 /** Owner/visibility changes and marketing consent require access-level authority. */
@@ -914,6 +915,26 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
     create_task: {props:['assignees'],category:wrikeTaskCategory},
     update_task: {props:['assignees'],category:wrikeTaskCategory},
   },
+}, {
+  // Every action in published Help Scout 0.2.1; managed credentials enable three
+  // (MANAGED_HELP_SCOUT_ACTIONS). The rest run only on a manual account. The
+  // target carries the recipients (customerEmail, cc, bcc), the sender
+  // (fromUser), the message (text, body), the thread type and whether a reply
+  // is only a draft, so the approval card for a manual send_reply or
+  // create_conversation shows who it reaches; `fields` shows which customer
+  // properties an update overwrites.
+  catalogId:'help-scout',pieceName:HELP_SCOUT_PIECE,unknownActionCategory:'modify_settings',
+  targetProps:['conversationId','mailboxId','number','customerId','email','customerEmail','cc','bcc','fromUser','draft',
+    'threadType','subject','text','body','fields','userId','status','assignTo','query'],
+  categories:{read_data:['find_customer','find_conversation','find_user'],
+    // A note reaches teammates only. Customer records, and the values of a
+    // customer's properties (PATCH /customers/{id}/properties, as Intercom's
+    // update_contact edits contact attributes), are records under the
+    // caller's own access: none changes who can see or do what.
+    write_data:['add_note','create_customer','update_customer_properties'],
+    // Email to the customer, also when a reply is saved as a draft: the piece
+    // sends whatever `draft` holds, so the worst case gates it.
+    send_email:['create_conversation','send_reply'],modify_settings:['custom_api_call']},
 }, {
   // Figma: every action of the pinned 0.6.3 bundle (`figma-engine.test.ts`
   // checks the list against the installed package). A comment is shown to
