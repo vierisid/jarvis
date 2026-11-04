@@ -560,10 +560,40 @@ test('invalid JSON stays dirty across node changes, blocks commands and can be d
 test('invalid raw JSON cannot be saved programmatically and deleted steps release their buffer', async () => {
   const { jsonInputScope, jsonInputKey } = await import('../../../v2/rooms/workflows/json-input-drafts');
   await mount(); const step = editor.allSteps.find(s => s.step.name === 'draft')!.step;
-  await React.act(async () => editor.setJsonInputDraft(jsonInputKey(jsonInputScope(step), 'payload'), { text: '{bad', error: 'invalid JSON' }));
+  await React.act(async () => editor.setJsonInputDraft(jsonInputKey(jsonInputScope(step), 'payload'), { text: '{bad', error: 'invalid JSON', base: JSON.stringify(step.settings!.input!.payload) }));
   expect(editor.dirty).toBe(true);
   await React.act(async () => expect((await editor.save()).ok).toBe(false));
   expect(fixture.requests.every(r => r.method === 'GET')).toBe(true);
   await React.act(async () => editor.deleteStep('draft'));
   expect(editor.hasInvalidJson).toBe(false);
+});
+
+test('undo of an unrelated delete keeps invalid JSON typed in another step', async () => {
+  fixture = makeCanvasFixture(false);
+  const { WorkflowCanvasRoom } = await import('./WorkflowCanvasRoom');
+  const shell = { mode: 'preview', route: { room: 'workflow', selection: { flowId: 'meeting' } }, navigate() {} } as unknown as BriefShellPort;
+  await React.act(async () => root.render(<div className="brief-root"><WorkflowCanvasRoom shell={shell} binding={{
+    source: 'fixture', scopeId: 'json-undo', flowId: 'meeting', versionId: fixture.versionId, capabilities: caps, request: fixture.request,
+    onDirtyChange() {}, publish: async () => {}, run: async () => ({ ok: true, message: '' }),
+  }} /></div>));
+  const button = (name: string) => [...host.querySelectorAll('button')].find(b => b.querySelector('.brief-button__label')?.textContent === name)!;
+  const node = (id: string) => host.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
+  const select = async (id: string) => { await React.act(async () => node(id)!.click()); };
+  const field = () => [...host.querySelectorAll('label')].find(l => l.textContent?.startsWith('Payload'))!.querySelector('textarea')!;
+  await select('draft');
+  await React.act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field(), '{bad json');
+    field().dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await select('send');
+  const confirm = window.confirm; window.confirm = () => true;
+  try { await React.act(async () => host.querySelector<HTMLButtonElement>('button[title="Remove this step from the chain"]')!.click()); }
+  finally { window.confirm = confirm; }
+  expect(node('send')).toBeNull();
+  await React.act(async () => button('Undo').click());
+  expect(node('send')).not.toBeNull();
+  await select('draft');
+  expect(field().value).toBe('{bad json');
+  expect(field().getAttribute('aria-invalid')).toBe('true');
+  expect(button('Save changes').disabled).toBe(true);
 });

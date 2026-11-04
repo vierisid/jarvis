@@ -1,4 +1,4 @@
-import { JsonInputDraftContext, jsonInputScope, jsonInputKey } from './json-input-drafts';
+import { JsonInputDraftContext, jsonInputBase, jsonInputScope, jsonInputKey } from './json-input-drafts';
 import { mondayInputSchema } from "../../../../../src/workflows/runtime/managed-monday-inputs";
 import { AirtableLocation } from "../../integrations/AirtableLocation";
 import { NotionLocation } from "../../integrations/NotionLocation";
@@ -986,7 +986,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
           // (piece, action). Map at the boundary.
           allSteps={editor.allSteps.map((fs) => fs.step)}
         >
-          <JsonInputDraftContext.Provider value={{ scope: jsonInputScope(selectedStep), drafts: editor.jsonInputDrafts, set: editor.setJsonInputDraft }}>
+          <JsonInputDraftContext.Provider value={{ scope: jsonInputScope(selectedStep), drafts: editor.jsonInputDrafts, set: editor.setJsonInputDraft, clear: editor.clearJsonInputDraft }}>
           <PropertiesPanel
             key={selectedStep.name}
             workspace={workspace}
@@ -5148,10 +5148,17 @@ function JsonField({
   const key = jsonInputKey(drafts?.scope ?? '', field.name);
   const [local, setLocal] = useState({ text: jsonValueToText(value), error: null as string | null });
   const lastPropagatedRef = useRef<unknown>(value);
-  const stored = drafts?.drafts[key];
+  // A stored draft typed against a value that has since changed elsewhere
+  // (undo, a mapped field) is stale: show the graph value and release it.
+  const base = jsonInputBase(value);
+  const held = drafts?.drafts[key];
+  const stored = held && held.base === base ? held : undefined;
   const text = drafts ? stored?.text ?? jsonValueToText(value) : local.text;
   const parseError = drafts ? stored?.error ?? null : local.error;
   const errorId = useId();
+  useEffect(() => {
+    if (held && !stored) drafts?.clear(key);
+  }, [held, stored, drafts, key]);
   useEffect(() => {
     if (value === lastPropagatedRef.current) return;
     setLocal({ text: jsonValueToText(value), error: null });
@@ -5161,7 +5168,7 @@ function JsonField({
     let parsed: unknown, error: string | null = null;
     try { parsed = next.trim() === '' ? undefined : JSON.parse(next); }
     catch (cause) { error = (cause as Error).message; }
-    const draft = { text: next, error };
+    const draft = { text: next, error, base: error ? base : jsonInputBase(parsed) };
     setLocal(draft); drafts?.set(key, draft);
     if (!error) { lastPropagatedRef.current = parsed; onChange(parsed); }
   };

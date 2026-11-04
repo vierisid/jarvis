@@ -249,6 +249,13 @@ export function useWorkflowEditor(flowId: string | null) {
   const setJsonInputDraft = useCallback((key: string, draft: JsonInputDraft) => {
     setJsonInputDrafts(current => ({ ...current, [key]: draft }));
   }, []);
+  const clearJsonInputDraft = useCallback((key: string) => {
+    setJsonInputDrafts(current => {
+      if (!(key in current)) return current;
+      const { [key]: _released, ...rest } = current;
+      return rest;
+    });
+  }, []);
 
   // Local edit buffer: a copy of `version.trigger` the editor mutates until save.
   const [draftTrigger, setDraftTrigger] = useState<FlowStepNode | null>(null);
@@ -321,16 +328,30 @@ export function useWorkflowEditor(flowId: string | null) {
     [draftTrigger, draftOrphans, stepPositions],
   );
 
+  // Undo reads the live graph to keep raw JSON for steps it does not touch.
+  const liveGraph = useRef({ trigger: draftTrigger, orphans: draftOrphans });
+  liveGraph.current = { trigger: draftTrigger, orphans: draftOrphans };
+
   /** Pop the most recent snapshot and restore the editor to it. */
   const undo = useCallback((): boolean => {
     let restored = false;
     setUndoStack((prev) => {
       if (prev.length === 0) return prev;
       const last = prev[prev.length - 1]!;
+      const before = stepSettingsByScope(liveGraph.current.trigger, liveGraph.current.orphans);
+      const after = stepSettingsByScope(last.trigger, last.orphans);
       setDraftTrigger(last.trigger);
       setDraftOrphans(last.orphans);
       setStepPositions(last.positions);
-      setJsonInputDrafts({});
+      // Drop only buffers whose step settings the undo rewrote; the pruning
+      // effect below releases buffers for steps that no longer exist.
+      setJsonInputDrafts(current => {
+        const kept = Object.entries(current).filter(([key]) => {
+          const scope = JSON.parse(key)[0] as string;
+          return !after.has(scope) || before.get(scope) === after.get(scope);
+        });
+        return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
+      });
       setDirty(true);
       restored = true;
       return prev.slice(0, -1);
@@ -1472,6 +1493,7 @@ export function useWorkflowEditor(flowId: string | null) {
     dirty: dirty || Object.keys(jsonInputDrafts).length > 0,
     jsonInputDrafts,
     setJsonInputDraft,
+    clearJsonInputDraft,
     hasInvalidJson: Object.values(jsonInputDrafts).some(draft => draft.error),
     validationGaps,
     reload,
@@ -1665,6 +1687,12 @@ export function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEn
  * Dates / Maps / Sets / `undefined` fields — none of which the trigger format
  * permits — so the loss is intentional.
  */
+/** Serialized settings of every step in the tree and detached chains, by JSON draft scope. */
+function stepSettingsByScope(trigger: FlowStepNode | null, orphans: OrphanStep[]): Map<string, string> {
+  const steps = [...(trigger ? flattenSteps(trigger) : []), ...orphans.flatMap(o => flattenSteps(o.node))];
+  return new Map(steps.map(({ step }) => [jsonInputScope(step), JSON.stringify(step.settings ?? null)]));
+}
+
 // Pure tree-manipulation helpers (cloneTrigger, findStep, flattenSteps,
 // applySchemaDefaults, nextStepName, etc.) live in `./tree.ts` so they can
 // be unit-tested without React. The hook delegates each mutator into that
