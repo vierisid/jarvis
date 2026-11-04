@@ -21,3 +21,12 @@ test('the real API advertises the hosted default, rollback and self-hosted compa
     expect(rollback.dashboard).toBe('legacy'); expect(rollback.generation).toBe(descriptor.generation);
   }
 });
+
+test('the host descriptor carries the persisted workspace id across boots and a per-boot generation', async () => {
+  const boot = () => (createApiRoutes({ config: structuredClone(DEFAULT_CONFIG), workspaceId: 'workspace-one', daemonStartedAt: Date.now(), healthMonitor: {} } as ApiContext)['/api/brief/host'] as { GET(): Response }).GET().json();
+  const [first, second] = [await boot(), await boot()];
+  expect(first.workspaceId).toBe('workspace-one'); expect(second.workspaceId).toBe('workspace-one');
+  expect(first.generation).not.toBe(second.generation);
+  const unwired = await (createApiRoutes({ config: structuredClone(DEFAULT_CONFIG), daemonStartedAt: Date.now(), healthMonitor: {} } as ApiContext)['/api/brief/host'] as { GET(): Response }).GET().json();
+  expect(unwired.workspaceId).toBe(unwired.generation);
+});

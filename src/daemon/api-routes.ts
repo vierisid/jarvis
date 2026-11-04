@@ -188,6 +188,12 @@ export type ApiContext = {
    * `setup_completed_at > daemon_started_at`. (See also issue F2.)
    */
   daemonStartedAt: number;
+  /**
+   * Persisted identity of the data directory this daemon serves (see
+   * ./workspace-id.ts). The dashboard keeps edit buffers across a restart
+   * only while it stays the same. Tests may omit it; the id is then per-boot.
+   */
+  workspaceId?: string;
   healthMonitor: HealthMonitor;
   agentService: AgentService;
   config: JarvisConfig;
@@ -400,6 +406,8 @@ const API_FACT_SOURCES: ReadonlySet<string> = new Set(['dashboard', 'user', 'api
  */
 export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
   const googleOAuthFlows = new GoogleOAuthFlowStore();
+  // Identifies this daemon boot; the workspace id identifies the data it serves.
+  const generation = crypto.randomUUID();
 
   /**
    * POST /api/sidecars/:id/{update-prompt,update}: forward to the sidecar's
@@ -441,7 +449,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
-    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings, { generation: crypto.randomUUID(), installMode: () => isHostedInstall(ctx.config) ? 'hosted' : 'self', dashboard: () => hostedDashboardDefault(ctx.config) }),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings, { generation, workspaceId: ctx.workspaceId ?? generation, installMode: () => isHostedInstall(ctx.config) ? 'hosted' : 'self', dashboard: () => hostedDashboardDefault(ctx.config) }),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),
@@ -2507,6 +2515,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         }
       },
     },
+    '/api/integrations/wrike/folders': {
+      GET: async (req: Request) => {
+        const {wrikeFolderOptions, WrikeOptionsInputError} = await import('../integrations/wrike-options');
+        const query = new URL(req.url).searchParams;
+        try { return json(await wrikeFolderOptions(ctx.config, query.get('title'), query.get('cursor'))); }
+        catch(error) { return json({error:error instanceof WrikeOptionsInputError ? error.message : 'Could not load Wrike folders. Check your connection or enter an API ID.'}, error instanceof WrikeOptionsInputError ? 400 : 502); }
+      },
+    },
+    '/api/integrations/wrike': {
+      GET: async () => {
+        const {wrikeStatus} = await import('../integrations/wrike-connection');
+        return json(wrikeStatus(ctx.config));
+      },
+    },
     '/api/integrations/linear': {
       GET: async () => {
         const {linearStatus} = await import('../integrations/linear-connection');
@@ -2562,6 +2584,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
     '/api/integrations/figma': {
       GET: async () => { const {figmaStatus} = await import('../integrations/figma-connection'); return json(figmaStatus(ctx.config)); },
+    },
+    '/api/integrations/pipedrive': {
+      GET: async () => {
+        const {pipedriveStatus} = await import('../integrations/pipedrive-connection');
+        return json(pipedriveStatus(ctx.config));
+      },
     },
     '/api/integrations/webflow': {
       GET: async () => {
