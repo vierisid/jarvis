@@ -271,7 +271,7 @@ const oauthPieces = [
   ['clickup', 'ClickUp'], ['github', 'GitHub'], ['trello', 'Trello'], ['mailchimp', 'Mailchimp'],
   ['slack', 'Slack'], ['dropbox', 'Dropbox'], ['asana', 'Asana'], ['intercom', 'Intercom'],
   ['typeform', 'Typeform'], ['airtable', 'Airtable'], ['notion', 'Notion'], ['calendly', 'Calendly'],
-  ['linear', 'Linear'], ['todoist', 'Todoist'], ['monday', 'monday.com'], ['figma', 'Figma'], ['webflow', 'Webflow'], ['pipedrive', 'Pipedrive'], ['gitlab', 'GitLab'],
+  ['linear', 'Linear'], ['todoist', 'Todoist'], ['monday', 'monday.com'], ['figma', 'Figma'], ['webflow', 'Webflow'], ['pipedrive', 'Pipedrive'], ['zoom', 'Zoom'], ['help-scout', 'Help Scout'], ['gitlab', 'GitLab'],
 ] as const;
 for (const [id] of oauthPieces) test(`${id} library setup uses the hosted connection, while saved manual accounts keep their own edit path`, () => {
   (sources as any)[id] = () => ({ configured: true, connected: false, reconnect: false, account: null });

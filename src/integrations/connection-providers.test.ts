@@ -30,7 +30,7 @@ test('the mapping matches the managed credential sources and their pieces', () =
 test('the daemon registers every provider status for the connected workspace', () => {
   const daemon = readFileSync(join(import.meta.dir, '../daemon/index.ts'), 'utf8');
   const block = /new ConnectedWorkspace\(getDb\(\), \{([\s\S]*?)\n    \}\);/.exec(daemon)?.[1] ?? '';
-  const registered = [...block.matchAll(/^\s+(\w+): \(\) => \w+Status\(jarvisConfig\),$/gm)].map(m => m[1]).sort();
+  const registered = [...block.matchAll(/^\s+(?:(\w+)|"([\w-]+)"|'([\w-]+)'): \(\) => \w+Status\(jarvisConfig\),$/gm)].map(m => m[1] ?? m[2] ?? m[3]).sort();
   expect(registered).toEqual(hosted);
 });
 test('Google workflow pieces keep manual setup: the Jarvis Google grant is read-only Gmail and Calendar', () => {

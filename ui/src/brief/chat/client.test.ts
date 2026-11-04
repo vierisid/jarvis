@@ -381,3 +381,14 @@ test('accepted first-message titles update the tab without changing its draft or
   await f.client.start(); await f.open();
   expect(f.client.store.getSnapshot().conversations[id]?.conversation.title).toBe('Question launch');
 });
+
+
+test('proactive dashboard notices reach their owner while legacy chat stays out of conversation tabs', async () => {
+  const f = fixture(); await f.client.start(); const id = await f.client.add();
+  f.client.store.setDraft(id, 'My unsent answer');
+  expect(f.receive('chat', { source: 'proactive', text: 'Please answer today’s check-in.' })).toBe(false);
+  expect(f.receive('chat', { text: 'Unscoped assistant reply' })).toBe(true);
+  expect(f.receive('stream', { text: 'Unscoped stream' })).toBe(true);
+  expect(f.client.store.getSnapshot().conversations[id]?.messages).toEqual([]);
+  expect(f.client.store.getSnapshot().conversations[id]?.draft).toBe('My unsent answer');
+});

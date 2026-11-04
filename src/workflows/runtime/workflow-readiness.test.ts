@@ -666,6 +666,28 @@ test('Pipedrive managed readiness uses the same static contract as its engine; m
   expect(manual.some(i=>i.path.endsWith('dealId'))).toBe(false);
 });
 
+test('Zoom managed readiness uses the same static contract as its engine; manual accounts keep the upstream form',()=>{
+  // The published 0.9.2 form shape: update picks the meeting from a live dropdown;
+  // create leaves start_time optional and reads it in a separate timezone.
+  const upstream=propsToInputSchema({meeting_id:{type:'DROPDOWN',displayName:'Meeting',required:true},topic:{type:'SHORT_TEXT',displayName:"Meeting's topic",required:false},timezone:{type:'SHORT_TEXT',displayName:'Timezone',required:false}} as any);
+  const create=propsToInputSchema({topic:{type:'SHORT_TEXT',displayName:"Meeting's topic",required:true},start_time:{type:'SHORT_TEXT',displayName:'Start Time',required:false},timezone:{type:'SHORT_TEXT',displayName:'Timezone',required:false}} as any);
+  const pieces=new PieceCatalog([{name:'@activepieces/piece-zoom',displayName:'Zoom',description:'',actions:{
+    zoom_update_meeting:{name:'zoom_update_meeting',displayName:'Update Zoom Meeting',description:'',inputSchema:upstream},
+    zoom_create_meeting:{name:'zoom_create_meeting',displayName:'Create Zoom Meeting',description:'',inputSchema:create}}}]);
+  const node:any={name:'meeting',type:'PIECE',settings:{pieceName:'@activepieces/piece-zoom',actionName:'zoom_update_meeting',input:{auth:'{{connections.jarvis:zoom}}',meeting_id:'{{trigger.meeting_id}}',topic:'Renamed'}}};
+  const check=()=>compileWorkflow(graph(node),{pieces}).issues.filter(i=>i.path!=='settings.input.auth');
+  expect(check()).toEqual([]);
+  delete node.settings.input.meeting_id;
+  // The managed contract asks for a typed Meeting ID, never the upstream dropdown.
+  expect(check()).toEqual([expect.objectContaining({path:'settings.input.meeting_id',code:'SETUP_REQUIRED',message:expect.stringMatching(/^Meeting ID:/)})]);
+  node.settings.input.auth='{{connections.manual}}';
+  expect(check()).toEqual([expect.objectContaining({path:'settings.input.meeting_id',message:expect.stringMatching(/^Meeting:/)})]);
+  // Managed create requires a UTC start time; the upstream form does not.
+  Object.assign(node.settings,{actionName:'zoom_create_meeting',input:{auth:'{{connections.jarvis:zoom}}',topic:'Kickoff'}});
+  expect(check().some(i=>i.path.endsWith('start_time'))).toBe(true);
+  node.settings.input.auth='{{connections.manual}}';
+  expect(check()).toEqual([]);
+});
 test('GitLab managed readiness uses the static issue contract',()=>{
   // Upstream create_issue picks the project from a dropdown; the managed contract takes a numeric ID.
   const schema=propsToInputSchema({projectId:{type:'DROPDOWN',displayName:'Project',required:true},title:{type:'SHORT_TEXT',displayName:'Title',required:true},description:{type:'LONG_TEXT',displayName:'Description',required:false}} as any);

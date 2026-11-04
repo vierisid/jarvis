@@ -125,6 +125,8 @@ export class BriefConversationClient {
   }
   private receive(frame: WSMessage): boolean {
     if (!frame.type.startsWith('brief_chat_')) {
+      // Proactive notices belong to the dashboard notification owner, not a conversation.
+      if (frame.type === 'chat' && frame.payload?.source === 'proactive') return false;
       // Scoped sockets must never adopt the old global chat/voice stream as a tab's content.
       return ['chat', 'stream', 'status', 'thinking_start', 'thinking_end', 'realtime_transcript', 'tts_start', 'tts_text', 'tts_end'].includes(frame.type);
     }

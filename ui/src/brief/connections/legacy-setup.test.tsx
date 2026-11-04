@@ -69,7 +69,7 @@ test('piece handoff works on a plain HTTP LAN browser without randomUUID', () =>
   finally { if (old) Object.defineProperty(crypto, 'randomUUID', old); else delete (crypto as any).randomUUID; }
 });
 
-const oauthProviders = ['clickup','slack','trello','mailchimp','github','dropbox','asana','intercom','typeform','airtable','notion','calendly','linear','todoist','monday','wrike','pipedrive','gitlab'] as const;
+const oauthProviders = ['clickup','slack','trello','mailchimp','github','dropbox','asana','intercom','typeform','airtable','notion','calendly','linear','todoist','monday','wrike','pipedrive','zoom','help-scout','gitlab'] as const;
 function serveOAuth(id: string, status: Record<string, unknown> = {}) {
   const requests: string[] = [], writes: string[] = [];
   globalThis.fetch = (async (url: string, init?: RequestInit) => {

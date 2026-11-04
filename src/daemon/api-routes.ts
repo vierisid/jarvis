@@ -2585,6 +2585,18 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/integrations/figma': {
       GET: async () => { const {figmaStatus} = await import('../integrations/figma-connection'); return json(figmaStatus(ctx.config)); },
     },
+    '/api/integrations/zoom': {
+      GET: async () => {
+        const {zoomStatus} = await import('../integrations/zoom-connection');
+        return json(zoomStatus(ctx.config));
+      },
+    },
+    '/api/integrations/help-scout': {
+      GET: async () => {
+        const {helpScoutStatus} = await import('../integrations/help-scout-connection');
+        return json(helpScoutStatus(ctx.config));
+      },
+    },
     '/api/integrations/gitlab': {
       GET: async () => {
         const {gitlabStatus} = await import('../integrations/gitlab-connection');

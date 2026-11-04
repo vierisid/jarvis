@@ -55,6 +55,17 @@ function source<T>(domains: Source<T>['domains'], capability: Source<T>['capabil
     return { data: value.data, empty: false, asOf: Date.now() };
   } };
 }
+/**
+ * True when Needs you should drop the document room (and its all-clear) for a
+ * plain heading over the permission list. Only a settled document read may be
+ * replaced: loading or failed reads keep the room so its own status shows. A
+ * permission count of null means unknown (loading or failed) and is never clear.
+ */
+export function onlyOtherDecisions(all: Pick<Snapshot<readonly DecisionView[]>, 'state' | 'data' | 'refreshing' | 'reason'>, otherCount: number | null): boolean {
+  const settled = all.state === 'ready' || all.state === 'empty' || (all.state === 'stale' && all.refreshing && all.reason === null);
+  if (!settled || all.data?.some(row => row.actions.length > 0)) return false;
+  return otherCount === null || otherCount > 0 || !!all.data?.length;
+}
 export function createDataRooms(host: { scopeId: string; transport: HostTransport; capabilities(): unknown;
   storage: Storage; reconciliation: BriefReconciliationClient; createGoal(): void }) {
   const { scopeId, transport, reconciliation } = host;
@@ -122,7 +133,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
         gettingStarted: isBriefCapabilityEnabled(caps, 'profileSettings') ? <GettingStarted journey={setup} navigate={shell.navigate} goalId={goal?.goal.goalId} compact={decisionSnapshot.state !== 'empty'} /> : undefined,
         goal: <GoalCard handoff={handoff} onReviewDraft={goal?.goal.status === 'draft' ? () => shell.navigate({ room: 'goals', selection: { goalId: goal.goal.goalId } }) : undefined}
           onPlanUnplanned={initialGoal.data === true ? () => shell.navigate({ room: 'goals', selection: {} }) : undefined} />,
-        queueNotice: d.data?.length ? <button onClick={() => shell.navigate({ room: 'needs-you', selection: {} })}>Review {d.data.length} pending {d.data.length === 1 ? 'decision' : 'decisions'}</button> : null,
+        queueNotice: d.data?.length ? <button onClick={() => shell.navigate({ room: 'needs-you', selection: {} })}>Review {d.data.length} {d.data.length === 1 ? 'request' : 'requests'}</button> : null,
         outcomes: <Outcomes mode="live" binding={{ source: 'live', capabilities: caps, state: view(outcome, data => ({ window: data.window,
           today: data.today, week: data.week, days: data.days.map(day => ({ ...day, label: day.id })),
           chartMaxMinutes: Math.max(60, ...data.days.map(day => day.time?.value ?? 0)), goal: null,
@@ -146,9 +157,10 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   }
   function NeedsYou({ shell }: { shell: BriefShellPort }) {
     const all = useBriefProjection(decisionRead);
-    const onlyOther = all.state === 'ready' && !!all.data?.length && !all.data.some(row => row.actions.length > 0);
+    const [otherCount, setOtherCount] = useState<number | null>(null);
+    const onlyOther = onlyOtherDecisions(all, otherCount);
     return <>{onlyOther ? <header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
-      <PendingDecisions selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
+      <PendingDecisions onCount={setOtherCount} selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
   }
   const rooms: BriefRoomRegistry = {
     today: { ...BRIEF_ROOMS.today, Body: Today }, goals: { ...BRIEF_ROOMS.goals, Body: Goal }, 'completed-goals': { ...BRIEF_ROOMS['completed-goals'], Body: Goal },

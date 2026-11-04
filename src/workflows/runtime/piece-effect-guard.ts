@@ -1,8 +1,10 @@
 import {managedAirtableInput, managedAirtableIssue, runManagedAirtableAction} from './managed-airtable';
 import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
 import { managedNotionInput, managedNotionIssue, runManagedNotionAction } from './managed-notion';
+import { managedZoomInput, runManagedZoomAction } from "./managed-zoom";
 import { managedGitLabInput, runManagedGitLabAction } from "./managed-gitlab";
 import { managedPipedriveInput, runManagedPipedriveAction } from "./managed-pipedrive";
+import { managedHelpScoutInput, runManagedHelpScoutAction } from "./managed-help-scout";
 import { managedWebflowInput, runManagedWebflowAction } from './managed-webflow';
 /**
  * Engine-side half of the governed-piece adapter.
@@ -269,8 +271,10 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   const asana = params.piece === "@activepieces/piece-asana" ? managedAsanaInput(params.input) : null;
   const dropbox = params.piece === '@activepieces/piece-dropbox' ? managedDropboxInput(params.input) : null;
   const intercom = params.piece === '@activepieces/piece-intercom' ? managedIntercomInput(params.input) : null;
+  const zoom = managedZoomInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
   const gitlab = managedGitLabInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
   const pipedrive = managedPipedriveInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
+  const helpScout = managedHelpScoutInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
   const webflow = managedWebflowInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
   const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
   if (slack) {
@@ -285,12 +289,18 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (airtable) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Airtable dispatch was not authorized');
     raw = await runManagedAirtableAction(String(params.action), airtable);
+  } else if (zoom) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Zoom dispatch was not authorized');
+    raw = await runManagedZoomAction(String(params.action), zoom);
   } else if (gitlab) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitLab dispatch was not authorized');
     raw = await runManagedGitLabAction(String(params.action), gitlab);
   } else if (pipedrive) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Pipedrive dispatch was not authorized');
     raw = await runManagedPipedriveAction(String(params.action), pipedrive);
+  } else if (helpScout) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Help Scout dispatch was not authorized');
+    raw = await runManagedHelpScoutAction(String(params.action), helpScout);
   } else if (webflow) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Webflow dispatch was not authorized');
     raw = await runManagedWebflowAction(String(params.action), webflow);
