@@ -531,7 +531,10 @@
 }
 
 @media (max-width: 900px) {
-  .v2-goals__side { display: none; }
+  .v2-goals__side {
+    left: var(--s-4);
+    width: auto;
+  }
 }
 
 .v2-goals__side-head {
