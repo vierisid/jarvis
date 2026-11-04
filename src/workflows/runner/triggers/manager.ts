@@ -1212,7 +1212,11 @@ export class TriggerManager {
           : this.deliveryKey(flowId, versionId, "poll", payload, eventTypeOf(version.trigger as unknown as TriggerNode | null));
         if (itemKey === null) continue;
         const result = this.startRun({
-          flowId, versionId, generation, kind: "engine", source: fireSource, payload, executeTrigger: false,
+          flowId, versionId, generation, kind: "engine", source: fireSource,
+          payload: pureSchedule ? scheduleTriggerPayload({ ...payload, timezone:
+            chosenScheduleZone(version.trigger.settings) === version.engineSchedule?.timezone
+              ? version.engineSchedule?.timezone ?? getCronTimezone() : getCronTimezone(),
+          }, occurrence) : payload, executeTrigger: false,
           dedupeKey: pureSchedule ? occurrence?.key : itemKey,
           // The poll moved the source's cursor past it (Pause may have come mid-poll).
           ...(pureSchedule ? {} : { takenFromSource: true }),
