@@ -2280,7 +2280,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         if (!scopedRun(req, runId)) return err('run not found', 404);
         const read = await readWriteBody(req, 8192);
         if ('error' in read) return read.error;
-        const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority, via: 'dashboard' });
+        const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority, via: 'dashboard', ...(opts.credentialResolver ? { credentials: opts.credentialResolver } : {}) });
         return ok({ receipt, recovery: getRunRecovery(runId) });
       }),
     },

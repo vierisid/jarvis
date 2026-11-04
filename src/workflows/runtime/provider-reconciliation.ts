@@ -6,6 +6,8 @@ import { walkFlowNodes } from '../db/flow-graph';
 import { runBinding } from '../db/repos/binding-pins';
 import { digest } from './effect-context';
 import { isGmailTrackedSend, tracksPieceCompletion } from './piece-effects';
+import type { CredentialResolver } from '../credentials/adapter';
+import { ConnectionCredentialError } from '../credentials/pasted-oauth2';
 
 export type ProviderEvidence = { outcome: 'confirmed' | 'inconclusive' | 'unsupported' | 'blocked'; reason: string; reference?: string };
 
@@ -95,18 +97,42 @@ export function providerReceipt(effect: WorkflowEffect): ReturnType<typeof piece
   return receipt;
 }
 
-/** Only fixed provider hosts and GETs. Never accept a URL or credential from a recovery choice. */
-export async function lookupProviderReceipt(effect: WorkflowEffect, checkpoint: () => void, fetchImpl: typeof fetch = fetch): Promise<ProviderEvidence> {
+/**
+ * Only fixed provider hosts and GETs. Never accept a URL or credential from a recovery choice.
+ *
+ * `credentials` refreshes the stored OAuth2 token before the lookup (#1232),
+ * as the engine's connection route and the HubSpot upsert do, and only once
+ * the row is shown to still hold the dispatch account: same row and the
+ * credential generation the send was bound to, which a refresh keeps and a
+ * person replacing the credential advances. Without it the stored token is
+ * used as it is.
+ */
+export async function lookupProviderReceipt(effect: WorkflowEffect, checkpoint: () => void, fetchImpl: typeof fetch = fetch,
+  credentials?: Pick<CredentialResolver, 'fresh'>): Promise<ProviderEvidence> {
   const receipt = providerReceipt(effect);
   if (!receipt || !effect.providerBinding) return { outcome: 'unsupported', reason: 'No supported, durably bound provider receipt. Inspect the provider before a new intentional run.' };
   try {
     const connection = getConnection(effect.providerBinding.connectionId);
-    const token = connection?.value.access_token;
-    if (!connection || connection.projectId !== effect.projectId || connection.pieceName !== effect.provenance.piece
-      || connection.type !== 'OAUTH2' || connection.status !== 'ACTIVE' || typeof token !== 'string' || digest(token) !== effect.providerBinding.credentialDigest) {
+    const piece = effect.provenance.piece;
+    if (typeof piece !== 'string' || !providerBindingHolds(effect.providerBinding, connection, effect.projectId, piece)) {
       return { outcome: 'blocked', reason: 'The dispatch connection is unavailable or changed. Inspect the original account.' };
     }
     checkpoint();
+    let token: unknown = connection.value.access_token;
+    if (credentials) {
+      try {
+        token = (await credentials.fresh({ type: connection.type, value: connection.value, pieceName: connection.pieceName, status: connection.status,
+          stored: { id: connection.id, projectId: connection.projectId, externalId: connection.externalId, generation: connection.credentialGeneration } })).value.access_token;
+      } catch (error) {
+        if (!(error instanceof ConnectionCredentialError)) throw error;
+        const next = error.code === 'CONNECTION_REFRESH_UNREACHABLE' ? 'This is usually temporary; look it up again later.'
+          : error.code === 'CONNECTION_CHANGED' ? 'The connection was replaced while Jarvis refreshed it; inspect the original account.'
+          : 'Reconnect the account, or inspect the original account.';
+        return { outcome: 'blocked', reason: `The dispatch connection could not be refreshed (${error.code}). ${next} This does not establish that nothing happened.` };
+      }
+      checkpoint();
+    }
+    if (typeof token !== 'string' || !token) return { outcome: 'blocked', reason: 'The dispatch connection holds no access token. Inspect the original account.' };
     const url = receipt.provider === 'gmail'
       ? `https://gmail.googleapis.com/gmail/v1/users/me/messages/${receipt.id}?format=minimal`
       : `https://slack.com/api/conversations.history?${new URLSearchParams({ channel: receipt.channel!, latest: receipt.id, oldest: receipt.id, inclusive: 'true', limit: '1' })}`;
