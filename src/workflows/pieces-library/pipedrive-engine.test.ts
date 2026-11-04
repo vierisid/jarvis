@@ -1,7 +1,9 @@
-/** Runs in the ordinary required bun-test suite, without an environment gate.
- * Installs the real pinned npm piece, extracts metadata, then executes all eight
- * qualified actions through Worker + EngineRuntime with downstream references.
- * Only provider/refresh network boundaries are local fixtures. */
+/** Actual npm piece in the real engine. Installs the pinned npm piece, extracts
+ * metadata, then executes all eight qualified actions through Worker +
+ * EngineRuntime with downstream references. Only provider/refresh network
+ * boundaries are local fixtures; no live Pipedrive calls or account credentials.
+ * Gated on JARVIS_TEST_ENGINE_BUILD=1 like the other engine tests; CI runs it
+ * in test.yml's engine step. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {
   mkdtempSync,
@@ -36,6 +38,7 @@ import { EngineRuntime } from "../runner/engine-runtime/engine-runtime";
 import { EngineFlowExecutor } from "../runner/engine-runtime/engine-flow-executor";
 import { createRunFlowHandler } from "../runner/handler";
 import { Worker } from "../queue/worker";
+const gate = process.env.JARVIS_TEST_ENGINE_BUILD === "1";
 const piece = "@activepieces/piece-pipedrive";
 let dir: string,
   api: SandboxApi,
@@ -50,6 +53,7 @@ const requests: Array<{
 }> = [];
 
 beforeAll(async () => {
+  if (!gate) return;
   dir = mkdtempSync(join(tmpdir(), "jarvis-pipedrive-engine-"));
   initWorkflowDb(join(dir, "db.sqlite"));
   writeFileSync(
@@ -221,6 +225,7 @@ beforeAll(async () => {
   });
 }, 120000);
 afterAll(async () => {
+  if (!gate) return;
   await runtime?.shutdown();
   await api?.stop();
   provider?.stop(true);
@@ -228,7 +233,7 @@ afterAll(async () => {
   if (runId) rmSync(join(workflowLogsBase(), runId + ".bin"), { force: true });
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
-test("actual published Pipedrive metadata, eight managed actions and downstream output references", async () => {
+test.skipIf(!gate)("actual published Pipedrive metadata, eight managed actions and downstream output references", async () => {
   const { catalog, failures } = await buildPieceCatalog({
     runtime,
     pieceRoots: [join(dir, "node_modules/@activepieces")],
