@@ -411,3 +411,17 @@ test('notification review shows frozen message, channels and run context without
   expect(item.title).toContain('Daily check-in');
   expect(JSON.stringify(item)).not.toContain('never serialize me');
 });
+
+test('an accepted commitment whose run had its only effect denied keeps its work card', async () => {
+  const a = approval('workflow'), e = effect('blocked', a.id);
+  saveWorkflowEffect({ ...e.record, decision: 'denied' });
+  getDb().run("UPDATE approval_requests SET status = 'denied' WHERE id = ?", [a.id]);
+  const work = createWorkItem({ title: 'Denied step', mode: 'workflow', workflowId: e.flow.id, workflowVersionId: e.version.id });
+  decideWorkItem(work.id, { outcome: 'accepted', reason: 'Do it' });
+  getDb().run('UPDATE commitment_work SET run_id = ? WHERE work_id = ?', [e.run.id, work.id]);
+  updateRun(e.run.id, { status: 'FAILED' });
+  expect((await read()).items.map(item => item.decisionId)).toEqual([`work:${work.id}`]);
+  // An effect that is blocked but not denied still stands in for the work card.
+  saveWorkflowEffect({ ...e.record, decision: 'approval_required' });
+  expect((await read()).items.map(item => item.decisionId)).toEqual([`approval:${a.id}`]);
+});

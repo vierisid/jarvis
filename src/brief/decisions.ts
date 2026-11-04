@@ -29,6 +29,12 @@ const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(valu
 const text = (value: unknown, max = 256): value is string => typeof value === 'string' && !!value.trim() && value.length <= max;
 
 /**
+ * An effect whose permission the user denied. It is settled: it closes its
+ * approval card and must not keep an accepted commitment's work card hidden.
+ */
+const DENIED_EFFECT = `(e.status = 'blocked' AND json_extract(e.record, '$.decision') = 'denied'
+  AND EXISTS (SELECT 1 FROM approval_requests da WHERE da.id = e.approval_id AND da.status = 'denied'))`;
+/**
  * Every unresolved queue source, in sort-key order. Binds `?1` (run filter or
  * null) and `?6` (the queue's project); effects outside that project never appear.
  */
@@ -38,8 +44,7 @@ const DECISION_CANDIDATES = `
           LEFT JOIN brief_decision_document d ON d.approval_id = a.id
           WHERE (d.decision_id IS NOT NULL AND d.disposition != 'rejected' AND a.status IN ('pending','expired') OR a.status = 'pending' OR (a.status = 'approved' AND a.execution_outcome IN ('unknown','not_started'))
             OR (a.status = 'executed' AND (a.execution_outcome IS NULL OR a.execution_outcome IN ('failed','blocked','unknown')))
-            OR EXISTS (SELECT 1 FROM workflow_effect e WHERE e.approval_id = a.id AND e.status != 'succeeded'
-              AND NOT (a.status = 'denied' AND e.status = 'blocked' AND json_extract(e.record, '$.decision') = 'denied')))
+            OR EXISTS (SELECT 1 FROM workflow_effect e WHERE e.approval_id = a.id AND e.status != 'succeeded' AND NOT ${DENIED_EFFECT}))
             AND (?1 IS NULL OR EXISTS (SELECT 1 FROM workflow_effect e JOIN flow_run sr ON sr.id = e.run_id
               JOIN flow sf ON sf.id = sr.flow_id AND sf.project_id = ?6 WHERE e.approval_id = a.id AND e.run_id = ?1))
           UNION ALL
@@ -47,7 +52,7 @@ const DECISION_CANDIDATES = `
           LEFT JOIN flow_run r ON r.id = w.run_id
           WHERE (w.decision IS NULL OR (json_extract(w.decision, '$.outcome') = 'accepted' AND w.result_check IS NULL
             AND (r.status IS NULL OR r.status NOT IN ('RUNNING','QUEUED'))))
-            AND NOT EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = w.run_id AND e.status != 'succeeded')
+            AND NOT EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = w.run_id AND e.status != 'succeeded' AND NOT ${DENIED_EFFECT})
             AND (?1 IS NULL OR w.run_id = ?1)
           UNION ALL
           SELECT 'effect:' || e.id, json_extract(e.record, '$.createdAt') FROM workflow_effect e
@@ -195,7 +200,8 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
         item.review.workflowName = getFlowVersion(run.flowVersionId)?.displayName;
         item.review.requestedAt = run.startTime ?? run.created;
         // Project only reviewed notification fields from its immutable effect, never generic tool arguments.
-        const frozen = linked.rows.map(row => getWorkflowEffect(row.id)).find(effect => effect?.route === 'notify' && effect.toolName === 'workflow_notify');
+        // `title` is the effect's toolName, so only notification rows load their full record.
+        const frozen = linked.rows.filter(row => row.title === 'workflow_notify').map(row => getWorkflowEffect(row.id)).find(effect => effect?.route === 'notify' && effect.toolName === 'workflow_notify');
         if (frozen && typeof frozen.arguments.message === 'string' && Array.isArray(frozen.arguments.channels)) {
           item.review.message = frozen.arguments.message.slice(0, 20_000);
           item.review.channels = frozen.arguments.channels.filter((channel): channel is string => typeof channel === 'string').slice(0, 20);
