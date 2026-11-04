@@ -8,6 +8,8 @@ import {
 import {
   resolveGovernedPieceAction,
   tracksPieceCompletion,
+  reprojectPieceInput,
+  sanitizePieceInput,
 } from "./piece-effects";
 const piece = "@activepieces/piece-gitlab";
 const input = {
@@ -210,6 +212,17 @@ test("shared schema, governance and managed dispatch preserve manual accounts", 
     "modify_settings",
   );
   expect(tracksPieceCompletion(piece, "create_issue")).toBe(true);
+});
+
+test("a quick action hidden past the projection cut is not a plain write",()=>{
+ const long="a".repeat(600)+"\n/move other/project";
+ for(const auth of [undefined,"{{connections.jarvis:gitlab}}"]){
+  const projected=reprojectPieceInput(sanitizePieceInput({auth,projectId:"1",title:"t",description:long},piece),piece);
+  expect(resolveGovernedPieceAction(piece,"create_issue",projected)?.category).toBe("modify_settings");
+ }
+ expect(resolveGovernedPieceAction(piece,"create_issue",{description:long})?.category).toBe("modify_settings");
+ // An array is not the managed reference, even when it stringifies to it.
+ expect(resolveGovernedPieceAction(piece,"create_issue",{auth:["{{connections.jarvis:gitlab}}"],description:"{{x}}"})?.category).toBe("modify_settings");
 });
 
 test("a templated description narrows to a write only on the managed connection reference",()=>{

@@ -235,13 +235,17 @@ const GITLAB_MANAGED_AUTH: readonly string[] = ['{{connections.jarvis:gitlab}}',
  * command before anything is sent (owner decision, #1268). `auth` is read only
  * as that exact reference (the configured step input; the run-time projection
  * strips it, where the description is already resolved), so it is not one of
- * the rule's `props`: a templated `auth` never narrows.
+ * the rule's `props`: a templated `auth` never narrows. A description longer
+ * than the projection's 512 characters is judged as a settings change on
+ * either account, since the run-time rule sees only its start.
  */
 export function gitlabIssueCategory(input:Record<string,unknown>):ActionCategory {
  const d=input.description;
  if (d==null || d==='') return 'write_data';
- if (typeof d!=='string' || /(?:^|[\r\n])\s*\//.test(d)) return 'modify_settings';
- return !d.includes('{{') || GITLAB_MANAGED_AUTH.includes(String(input.auth)) ? 'write_data' : 'modify_settings';
+ // A description the projection cut (`bound()`, 512 characters) may hide a
+ // quick action past the cut, so it is judged as one.
+ if (typeof d!=='string' || /(?:^|[\r\n])\s*\//.test(d) || CUT_NOTE.test(d)) return 'modify_settings';
+ return !d.includes('{{') || (typeof input.auth==='string' && GITLAB_MANAGED_AUTH.includes(input.auth)) ? 'write_data' : 'modify_settings';
 }
 
 /** Assignment can share a task with another person. Unresolved assignments use the safer category. */
