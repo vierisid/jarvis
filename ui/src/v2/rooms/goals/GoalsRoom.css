@@ -537,6 +537,13 @@
   }
 }
 
+@media (max-width: 600px) {
+  .v2-goals--expanded .v2-goals__side {
+    position: fixed;
+    z-index: 110;
+  }
+}
+
 .v2-goals__side-head {
   display: flex;
   justify-content: space-between;
