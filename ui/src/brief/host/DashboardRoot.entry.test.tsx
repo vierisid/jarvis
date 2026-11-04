@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, afterEach, afterAll, expect, mock, test } from '
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import type { HostDescriptor } from './owner';
 
-const self: HostDescriptor = { schemaVersion: 1, scopeId: 'project', generation: 'boot', installMode: 'self',
+const self: HostDescriptor = { schemaVersion: 1, scopeId: 'project', workspaceId: 'workspace', generation: 'boot', installMode: 'self',
   dashboard: 'legacy', capabilities: { contractVersion: 1, capabilities: {} } };
 
 let React: typeof import('react'), createRoot: typeof import('react-dom/client').createRoot;

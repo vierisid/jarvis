@@ -1,3 +1,4 @@
+import { jsonInputBase, jsonInputScope, type JsonInputDraft } from './json-input-drafts';
 import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
 /**
  * Hook for the workflow visual editor.
@@ -243,6 +244,14 @@ export function useWorkflowEditor(flowId: string | null) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
+  // Raw JSON is part of the edit buffer even while it cannot enter the typed graph.
+  const [jsonInputDrafts, setJsonInputDrafts] = useState<Record<string, JsonInputDraft>>({});
+  const setJsonInputDraft = useCallback((key: string, draft: JsonInputDraft) => {
+    setJsonInputDrafts(current => ({ ...current, [key]: draft }));
+  }, []);
+  const invalidJson = useMemo(() => Object.entries(jsonInputDrafts).filter(([, draft]) => draft.error)
+    .map(([key]) => { const [scope, field] = JSON.parse(key) as [string, string]; return { step: (JSON.parse(scope) as [string])[0], field }; }),
+  [jsonInputDrafts]);
 
   // Local edit buffer: a copy of `version.trigger` the editor mutates until save.
   const [draftTrigger, setDraftTrigger] = useState<FlowStepNode | null>(null);
@@ -324,6 +333,8 @@ export function useWorkflowEditor(flowId: string | null) {
       setDraftTrigger(last.trigger);
       setDraftOrphans(last.orphans);
       setStepPositions(last.positions);
+      // Raw JSON drafts are not reset here: the pruning effect below keeps
+      // each one only while its field still holds the value it was typed against.
       setDirty(true);
       restored = true;
       return prev.slice(0, -1);
@@ -393,6 +404,7 @@ export function useWorkflowEditor(flowId: string | null) {
       );
       setStepPositions(meta?.positions && typeof meta.positions === "object" ? { ...meta.positions } : {});
       setDirty(false);
+      setJsonInputDrafts({});
       // Reload replaces the entire edit buffer with server state; any
       // in-flight undo history would be against a tree that no longer
       // exists. Drop it.
@@ -1186,6 +1198,9 @@ export function useWorkflowEditor(flowId: string | null) {
 
   /** Save the draft trigger back to the server. Returns the new version on success. */
   const save = useCallback(async (): Promise<ActionResult> => {
+    if (invalidJson.length) {
+      return { ok: false, message: invalidJsonMessage(invalidJson) };
+    }
     if (!flowId || !version || !draftTrigger) {
       return { ok: false, message: "nothing to save" };
     }
@@ -1255,6 +1270,7 @@ export function useWorkflowEditor(flowId: string | null) {
       // Orphans persist across save -- they're part of the user's editing
       // state and the server now stores them too.
       setDirty(false);
+      setJsonInputDrafts({});
       // The undo stack is a within-session aid; once the user commits a
       // save the prior states no longer round-trip cleanly with the
       // server (versionId may roll, sample data may have diverged).
@@ -1265,7 +1281,7 @@ export function useWorkflowEditor(flowId: string | null) {
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : String(e) };
     }
-  }, [flowId, version, draftTrigger, draftOrphans, stepPositions, fetch]);
+  }, [flowId, version, draftTrigger, draftOrphans, stepPositions, fetch, invalidJson]);
 
   const reset = useCallback((): void => {
     if (version) {
@@ -1276,7 +1292,8 @@ export function useWorkflowEditor(flowId: string | null) {
       setDraftOrphans([]);
       setStepPositions({});
       if (savedDisplayName.current !== null) setVersion(prev => prev ? {...prev,displayName:savedDisplayName.current!} : prev);
-    setDirty(false);
+      setDirty(false);
+      setJsonInputDrafts({});
       setUndoStack([]);
     }
   }, [version]);
@@ -1435,6 +1452,22 @@ export function useWorkflowEditor(flowId: string | null) {
     [allSteps, catalog],
   );
 
+  // A raw draft lives only while its step exists and its field still holds the
+  // value the text was typed against. Deleted or replaced steps, undo, and any
+  // other change to that field release it, so no unseen buffer blocks Save.
+  useEffect(() => {
+    const steps = new Map([...allSteps.map(s => s.step), ...draftOrphans.flatMap(o => flattenSteps(o.node).map(s => s.step))]
+      .map(step => [jsonInputScope(step), step] as const));
+    setJsonInputDrafts(current => {
+      const entries = Object.entries(current).filter(([key, draft]) => {
+        const [scope, field] = JSON.parse(key) as [string, string];
+        const step = steps.get(scope);
+        return !!step && jsonInputBase(step.settings?.input?.[field]) === draft.base;
+      });
+      return entries.length === Object.keys(current).length ? current : Object.fromEntries(entries);
+    });
+  }, [allSteps, draftOrphans]);
+
   return {
     catalog,
     /** Connections cached at editor load. Used to populate the connection picker + auto-fill new steps. */
@@ -1447,7 +1480,13 @@ export function useWorkflowEditor(flowId: string | null) {
     isHandleAvailable,
     error,
     loading,
-    dirty,
+    dirty: dirty || Object.keys(jsonInputDrafts).length > 0,
+    jsonInputDrafts,
+    setJsonInputDraft,
+    /** Steps and fields holding invalid raw JSON, for naming them where Save is blocked. */
+    invalidJson,
+    invalidJsonMessage: invalidJson.length ? invalidJsonMessage(invalidJson) : null,
+    hasInvalidJson: invalidJson.length > 0,
     validationGaps,
     reload,
     setVersionDisplayName,
@@ -1640,6 +1679,12 @@ export function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEn
  * Dates / Maps / Sets / `undefined` fields — none of which the trigger format
  * permits — so the loss is intentional.
  */
+/** Names the steps and fields whose raw JSON blocks a save. */
+function invalidJsonMessage(fields: { step: string; field: string }[]): string {
+  const list = fields.map(f => `${f.field} in step ${f.step}`).join(', ');
+  return `Fix the invalid JSON (${list}) before saving, or discard your edits.`;
+}
+
 // Pure tree-manipulation helpers (cloneTrigger, findStep, flattenSteps,
 // applySchemaDefaults, nextStepName, etc.) live in `./tree.ts` so they can
 // be unit-tested without React. The hook delegates each mutator into that

@@ -1,4 +1,5 @@
 import { JarvisZoomConnectionSource } from "../credentials/zoom-source";
+import { JarvisPipedriveConnectionSource } from "../credentials/pipedrive-source";
 /**
  * A managed `jarvis:` connection belongs to the pieces of its source. Only a
  * step of one of those pieces may name it, and only as that step's `auth`.
@@ -15,6 +16,7 @@ import { JarvisMailchimpConnectionSource } from "../credentials/mailchimp-source
 import { JarvisAsanaConnectionSource } from "../credentials/asana-source";
 import { JarvisTodoistConnectionSource } from "../credentials/todoist-source";
 import { JarvisIntercomConnectionSource } from "../credentials/intercom-source";
+import { JarvisWrikeConnectionSource } from "../credentials/wrike-source";
 import { JarvisMondayConnectionSource } from "../credentials/monday-source";
 import { JarvisFigmaConnectionSource } from "../credentials/figma-source";
 import { JarvisWebflowConnectionSource } from "../credentials/webflow-source";
@@ -49,6 +51,7 @@ const CLICKUP = "@activepieces/piece-clickup";
 const ASANA = "@activepieces/piece-asana";
 const TODOIST = "@activepieces/piece-todoist";
 const INTERCOM = "@activepieces/piece-intercom";
+const WRIKE = "@activepieces/piece-wrike";
 const MONDAY = "@activepieces/piece-monday";
 const FIGMA = "@activepieces/piece-figma";
 const WEBFLOW = "@activepieces/piece-webflow";
@@ -141,6 +144,7 @@ const pieces = new PieceCatalog([
   }, triggers: {
     newConversationFromUser: { name: "newConversationFromUser", displayName: "", description: "" },
   } },
+  { name: WRIKE, displayName:"Wrike",description:"",auth:{type:"OAUTH2"},actions:{find_task:{name:"find_task",displayName:"Find task",description:""},custom_api_call:{name:"custom_api_call",displayName:"Custom",description:""}},triggers:{new_task:{name:"new_task",displayName:"New task",description:""}}},
   { name: MONDAY, displayName: "monday.com", description: "", auth: { type: "SECRET_TEXT" }, actions: {
     monday_get_item_column_values: { name: "monday_get_item_column_values", displayName: "", description: "", inputSchema: { fields: [
       { name: "board_id", label: "", type: "string", required: false },
@@ -612,6 +616,58 @@ describe("managed Intercom is scoped to its six qualified Intercom actions", () 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ type: "OAUTH2", pieceName: INTERCOM,
       value: { access_token: INTERCOM_TOKEN, jarvis_managed: "intercom", api_host: "api.intercom.io", admin_id: "admin1" } });
+  });
+});
+
+describe("managed Wrike is scoped to its four qualified task actions", () => {
+  const WRIKE_TOKEN = "synthetic-managed-wrike-access-token";
+  const ref = "{{connections.jarvis:wrike}}";
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "wrike-scope-"));
+    mkdirSync(join(dataDir, "connections"));
+    // A still-valid access token, so resolving it needs no renewal request.
+    writeFileSync(join(dataDir, "connections", "wrike.json"), JSON.stringify({ version: 1, provider: "wrike", status: "connected",
+      generation: crypto.randomUUID(), access_token: WRIKE_TOKEN, account: { id: "KUAAAAAA", label: "owner@example.test" },
+      settings:{api_host:"app-eu.wrike.com"}, definition:{allowedApiHosts:["app-eu.wrike.com"]}, workspaces: [{ id: "12", name: "Sandbox" }], connected_at: new Date().toISOString(),
+      refresh_token: "synthetic-wrike-refresh-token", expires_at: new Date(Date.now() + 3600000).toISOString(),
+      refresh: { url: "https://app.usejarvis.dev/api/integrations/wrike/refresh", instance_id: "instance", secret: "a".repeat(64) } }));
+    credentials.register(new JarvisWrikeConnectionSource({ daemon: { data_dir: dataDir },
+      usejarvis_integrations: { page_url: "https://app.usejarvis.dev/account" } } as JarvisConfig));
+  });
+  afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
+  const step = (actionName: string | undefined, input: Record<string, unknown> = { auth: ref, taskId: "TASK1" }): any => ({
+    name: "wrike", type: "PIECE", settings: { pieceName: WRIKE, ...(actionName ? { actionName } : {}), input },
+  });
+  // A trigger whose settings also carry a stray actionName of a qualified action.
+  const wrikeTrigger = (): any => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: WRIKE, triggerName: "new_task", actionName: "find_task", input: { auth: ref } } });
+  const refused: Array<[string, any]> = [
+    ["a CODE step input", empty(code({ conn: ref }))],
+    ["a Gmail step auth", empty(gmail({ auth: ref }))],
+    ["a Wrike custom API call, outside the qualified four", empty(step("custom_api_call", { auth: ref, url: "https://www.wrike.com/api/v4/tasks", method: "GET" }))],
+    ["a Wrike folder creation, outside the qualified four", empty(step("create_folder", { auth: ref, parentFolderId: "IEAAAAAA", title: "New" }))],
+    ["a Wrike step without an action name", empty(step(undefined))],
+    ["a Wrike trigger that carries a stray actionName", wrikeTrigger()],
+  ];
+  for (const [label, trigger] of refused) {
+    test(`${label} is not ready and the route refuses it`, async () => {
+      expect(bindingIssues(trigger).length).toBeGreaterThan(0);
+      const response = await fetchFor(runOf(trigger), "jarvis:wrike");
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain(WRIKE_TOKEN);
+    });
+  }
+  test("a qualified Wrike step auth is ready and resolves", async () => {
+    const trigger = empty(step("find_task"));
+    expect(bindingIssues(trigger)).toEqual([]);
+    const response = await fetchFor(runOf(trigger), "jarvis:wrike");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ type: "OAUTH2", pieceName: WRIKE, value: { access_token: WRIKE_TOKEN, jarvis_managed: "wrike" } });
+    // The refresh token and the renewal secret never reach the sandbox.
+    expect(JSON.stringify(body)).not.toContain("synthetic-wrike-refresh-token");
+    expect(JSON.stringify(body)).not.toContain("a".repeat(64));
   });
 });
 
@@ -1401,6 +1457,42 @@ describe("the sales follow-up step may name managed Google only as its Gmail acc
     expect(managedConnectionMisuse(other, GMAIL, "settings.input.gmailConnection", sales({}).settings, "PIECE")).not.toBeNull();
   });
 });
+
+// Real credential route: a valid OAuth document must never expose its token to
+// CODE, a different piece, unqualified actions, or trigger hooks.
+describe("managed Pipedrive is scoped to eight person/deal actions",()=>{
+ const PIECE="@activepieces/piece-pipedrive",TOKEN="synthetic-pipedrive-token",ref="{{connections.jarvis:pipedrive}}";
+ let dataDir:string;
+ beforeEach(()=>{
+  dataDir=mkdtempSync(join(tmpdir(),"pipedrive-scope-"));mkdirSync(join(dataDir,"connections"));
+  writeFileSync(join(dataDir,"connections/pipedrive.json"),JSON.stringify({version:1,provider:"pipedrive",status:"connected",generation:crypto.randomUUID(),
+   access_token:TOKEN,refresh_token:"private-refresh",expires_at:new Date(Date.now()+3600000).toISOString(),
+   refresh:{url:"https://app.usejarvis.dev/api/integrations/pipedrive/refresh",instance_id:crypto.randomUUID(),secret:"a".repeat(64)},
+   settings:{api_host:"sandbox.pipedrive.com",company_id:"34"},definition:{allowedApiHosts:["sandbox.pipedrive.com"]},
+   account:{id:"34:12",label:"Owner"},workspaces:[{id:"34",name:"Sandbox"}],connected_at:new Date().toISOString()}));
+  credentials.register(new JarvisPipedriveConnectionSource({daemon:{data_dir:dataDir},usejarvis_integrations:{page_url:"https://app.usejarvis.dev/account"}} as JarvisConfig));
+ });
+ afterEach(()=>rmSync(dataDir,{recursive:true,force:true}));
+ const step=(actionName:string):any=>({name:"pipedrive",type:"PIECE",settings:{pieceName:PIECE,actionName,input:{auth:ref}}});
+ const trigger:any={name:"trigger",type:"PIECE_TRIGGER",settings:{pieceName:PIECE,triggerName:"new_person",actionName:"get-person",input:{auth:ref}}};
+ for(const [name,tree] of [["CODE",empty(code({conn:ref}))],["cross-piece",empty(gmail({auth:ref}))],...['delete-person','custom_api_call','find-person'].map(n=>[n,empty(step(n))]),["trigger",trigger]]){
+  test(String(name)+" cannot resolve Pipedrive",async()=>{
+   expect(bindingIssues(tree).length).toBeGreaterThan(0);const r=await fetchFor(runOf(tree),"jarvis:pipedrive");expect(r.status).toBe(403);expect(await r.text()).not.toContain(TOKEN);
+  });
+ }
+ test("every qualified action resolves only the access token and exact company host",async()=>{
+  for(const action of ['get-person','search-persons','create-person','update-person','get-deal','search-deals','create-deal','update-deal']){
+   const tree=empty(step(action));expect(bindingIssues(tree)).toEqual([]);const r=await fetchFor(runOf(tree),"jarvis:pipedrive");expect(r.status).toBe(200);
+   const result=await r.json();expect(result).toMatchObject({type:"OAUTH2",pieceName:PIECE,value:{access_token:TOKEN,api_host:"sandbox.pipedrive.com",jarvis_managed:"pipedrive",refresh_token:""}});
+   expect(JSON.stringify(result)).not.toContain("private-refresh");
+  }
+ });
+ test("trigger hook with a spoofed action name cannot resolve the credential",async()=>{
+  const flow=createFlow({}),version=createDraftVersion({flowId:flow.id,displayName:"Hook",trigger});
+  expect((await fetchFor(triggerHookRunId("poll",flow.id,version),"jarvis:pipedrive")).status).toBe(403);
+ });
+});
+
 // Real credential route: a valid OAuth document must never expose its token to
 // CODE, a different piece, unqualified actions, or trigger hooks.
 describe("managed Zoom is scoped to five meeting actions",()=>{

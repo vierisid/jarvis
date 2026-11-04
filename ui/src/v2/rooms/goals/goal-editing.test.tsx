@@ -1,0 +1,156 @@
+import { beforeAll, beforeEach, afterEach, afterAll, test, expect } from 'bun:test';
+import { GlobalRegistrator } from '@happy-dom/global-registrator';
+import type { Root } from 'react-dom/client';
+import type { Goal } from './useGoalsData';
+let React: typeof import('react'), createRoot: typeof import('react-dom/client').createRoot,
+  Room: typeof import('./GoalsRoom').GoalsRoomBody, root: Root, host: HTMLDivElement;
+let originalFetch: typeof fetch, goal: Goal, writes: Array<{method: string; body: any}>, fail: boolean;
+const wait = () => new Promise(r => setTimeout(r, 10));
+beforeAll(async () => {
+  GlobalRegistrator.register();
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+  React = await import('react'); ({createRoot} = await import('react-dom/client'));
+  ({GoalsRoomBody: Room} = await import('./GoalsRoom'));
+  originalFetch = globalThis.fetch;
+});
+beforeEach(() => {
+  goal = {id:'goal-1', parent_id:null, title:'Original goal', level:'task', description:'', success_criteria:'',
+    time_horizon:'monthly', score:0, score_reason:null, status:'active', health:'on_track', deadline:new Date(2026,10,20,23,59).getTime(),
+    started_at:null, estimated_hours:null, actual_hours:0, authority_level:0, tags:[], dependencies:[], sort_order:0,
+    created_at:1, updated_at:1, completed_at:null};
+  writes=[]; fail=false;
+  globalThis.fetch = (async (url: any, init?: RequestInit) => {
+    const path=String(url), method=init?.method ?? 'GET';
+    if(method !== 'GET') {
+      const body=JSON.parse(String(init?.body)); writes.push({method,body});
+      if(fail) return Response.json({error:'Unavailable'}, {status:503});
+      // Like the server, a present deadline re-runs health even when unchanged.
+      if(method === 'PATCH') goal={...goal,...body,...('deadline' in body?{health:'on_track' as const}:{})};
+      else if(path.endsWith('/status')) goal={...goal,status:body.status};
+      else if(path.endsWith('/health')) goal={...goal,health:body.health};
+      else if(method === 'POST') goal={...goal,...body};
+      return Response.json(goal);
+    }
+    if(path.endsWith('/metrics')) return Response.json({total:1,active:1,completed:0,failed:0,killed:0,avg_score:0,on_track:1,at_risk:0,behind:0,critical:0,overdue:0});
+    return Response.json(path.endsWith('/overdue')?[]:[goal]);
+  }) as typeof fetch;
+  host=document.createElement('div');document.body.append(host);root=createRoot(host);
+});
+afterEach(async()=>{await React.act(async()=>root.unmount());host.remove();globalThis.fetch=originalFetch;});
+afterAll(()=>GlobalRegistrator.unregister());
+async function render(){await React.act(async()=>{root.render(<Room mode="expanded"/>);await wait();});}
+function button(label:string, within:ParentNode=host){const b=[...within.querySelectorAll<HTMLButtonElement>('button')].find(x=>(x.getAttribute('aria-label')||x.textContent)?.trim()===label);expect(b).toBeTruthy();return b!;}
+async function click(label:string, within:ParentNode=host){await React.act(async()=>{const b=button(label,within);b.focus();b.click();await wait();});}
+async function fill(input:HTMLInputElement,value:string){await React.act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));await wait();});}
+async function select(){await React.act(async()=>{host.querySelector<HTMLElement>('.v2-goals__gnode')!.click();await wait();});}
+async function key(key:string,shiftKey=false){await React.act(async()=>{window.dispatchEvent(new KeyboardEvent('keydown',{key,shiftKey,bubbles:true,cancelable:true}));await wait();});}
+
+test('goal modal contains focus, supports Escape and restores its opener',async()=>{
+  await render();const opener=button('New');await click('New');
+  const dialog=host.querySelector<HTMLElement>('[role="dialog"]')!;
+  expect(document.activeElement).toBe(dialog.querySelector('input'));
+  const first=button('Close',dialog),last=button('Cancel',dialog);
+  first.focus();await key('Tab',true);expect(document.activeElement).toBe(last);
+  await key('Tab');expect(document.activeElement).toBe(first);
+  opener.focus();expect(dialog.contains(document.activeElement)).toBe(true);
+  await key('Escape');expect(host.querySelector('[role="dialog"]')).toBeNull();expect(document.activeElement).toBe(opener);expect(writes).toHaveLength(0);
+});
+test('goal choices expose separate accessible names and selected states',async()=>{
+  await render();await click('New');
+  expect(button('task').getAttribute('aria-pressed')).toBe('true');
+  expect(button('objective').closest('label')).toBeNull();
+  expect(button('objective').closest('fieldset')?.querySelector('legend')?.textContent).toBe('Level');
+  await click('objective');expect(button('objective').getAttribute('aria-pressed')).toBe('true');expect(button('task').getAttribute('aria-pressed')).toBe('false');
+  await key('Escape');await select();
+  const side=host.querySelector('.v2-goals__side')!;
+  expect(button('active',side).getAttribute('aria-pressed')).toBe('true');await click('paused',side);expect(button('paused',side).getAttribute('aria-pressed')).toBe('true');
+  expect(button('on track',side).getAttribute('aria-pressed')).toBe('true');await click('at risk',side);expect(button('at risk',side).getAttribute('aria-pressed')).toBe('true');
+});
+test('goal title and deadline persist, survive reopen, and deadline can be cleared',async()=>{
+  await render();await select();await click('Edit title and deadline');
+  let form=host.querySelector<HTMLFormElement>('form[aria-label="Edit goal details"]')!;
+  await fill(form.querySelector('input')!,'  Revised goal  ');await fill(form.querySelector('input[type="date"]')!,'2027-02-28');await click('Save details');
+  expect(writes).toEqual([{method:'PATCH',body:{title:'Revised goal',deadline:new Date(2027,1,28,23,59).getTime()}}]);
+  expect(host.querySelector('.v2-goals__side-title')?.textContent).toBe('Revised goal');
+  await click('Close detail');await select();await click('Edit title and deadline');
+  expect(host.querySelector<HTMLInputElement>('form input[type="date"]')?.value).toBe('2027-02-28');
+  await click('Clear deadline');await click('Save details');expect(goal.deadline).toBeNull();
+});
+test('cancel and blank titles never write; failed saves preserve user edits for retry',async()=>{
+  await render();await select();await click('Edit title and deadline');
+  await fill(host.querySelector('form input')!,'');expect(button('Save details').disabled).toBe(true);
+  await fill(host.querySelector('form input')!,'Not saved');await click('Cancel');expect(writes).toHaveLength(0);expect(goal.title).toBe('Original goal');
+  await click('Edit title and deadline');await fill(host.querySelector('form input')!,'Retry this');fail=true;await click('Save details');
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('503');expect(host.querySelector<HTMLInputElement>('form input')?.value).toBe('Retry this');expect(goal.title).toBe('Original goal');
+  fail=false;await click('Save details');expect(goal.title).toBe('Retry this');expect(host.querySelector('form')).toBeNull();
+});
+test('a title-only edit sends no deadline, keeping a hand-set health and the exact deadline',async()=>{
+  const deadline=new Date(2026,10,20,10,30).getTime();goal={...goal,deadline,health:'behind'};
+  await render();await select();await click('Edit title and deadline');
+  await fill(host.querySelector('form input')!,'Renamed only');await click('Save details');
+  expect(writes).toEqual([{method:'PATCH',body:{title:'Renamed only'}}]);
+  expect(goal.deadline).toBe(deadline);expect(goal.health).toBe('behind');
+});
+test('a deadline-only edit sends no title, and an unchanged form saves nothing',async()=>{
+  await render();await select();await click('Edit title and deadline');await click('Save details');
+  expect(writes).toHaveLength(0);expect(host.querySelector('form')).toBeNull();
+  await click('Edit title and deadline');await fill(host.querySelector<HTMLInputElement>('form input[type="date"]')!,'2027-03-01');await click('Save details');
+  expect(writes).toEqual([{method:'PATCH',body:{deadline:new Date(2027,2,1,23,59).getTime()}}]);
+});
+test('cancel and save return focus to the edit button',async()=>{
+  await render();await select();await click('Edit title and deadline');
+  await click('Cancel');expect(document.activeElement).toBe(button('Edit title and deadline'));
+  await click('Edit title and deadline');await fill(host.querySelector('form input')!,'Focused save');await click('Save details');
+  expect(host.querySelector('form')).toBeNull();expect(document.activeElement).toBe(button('Edit title and deadline'));
+});
+test('at phone width the create dialog overlay stacks above the fixed detail panel',async()=>{
+  const css=await Bun.file(new URL('./GoalsRoom.css',import.meta.url)).text();
+  const phone=[...css.matchAll(/@media \(max-width: 600px\) \{([\s\S]*?)\n\}/g)];
+  const z=(selector:RegExp)=>{for(const m of [...phone].reverse()){const r=m[1]!.match(new RegExp(selector.source+'[^{]*\\{[^}]*z-index:\\s*(\\d+)'));if(r)return {z:Number(r[1]),at:m.index!};}return null;};
+  const panel=z(/\.v2-goals__side/),overlay=z(/\.v2-goals__overlay/);
+  expect(panel&&overlay).toBeTruthy();expect(overlay!.z).toBeGreaterThan(panel!.z);
+  // Equal specificity: the override must come after the base overlay rule.
+  expect(overlay!.at).toBeGreaterThan(css.indexOf('.v2-goals__overlay {'));
+});
+test('a refused deadline shows the server reason in plain words',async()=>{
+  await render();await select();await click('Edit title and deadline');
+  const real=globalThis.fetch;
+  globalThis.fetch=(async(url:any,init?:RequestInit)=>init?.method==='PATCH'?Response.json({error:'goal.deadline: cannot be after its ancestor deadline'},{status:400}):real(url,init)) as typeof fetch;
+  await fill(host.querySelector<HTMLInputElement>('form input[type="date"]')!,'2026-11-21');await click('Save details');
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe("The deadline cannot be later than its parent goal's deadline. Pick an earlier date.");
+  expect(host.querySelector<HTMLInputElement>('form input[type="date"]')?.value).toBe('2026-11-21');
+});
+test('a partly cleared date is not saved as removing the deadline',async()=>{
+  await render();await select();await click('Edit title and deadline');
+  const input=host.querySelector<HTMLInputElement>('form input[type="date"]')!;
+  Object.defineProperty(input,'validity',{configurable:true,get:()=>({badInput:true})});
+  await fill(input,'');await click('Save details');
+  expect(writes).toHaveLength(0);expect(host.querySelector('[role="alert"]')?.textContent).toContain('Enter a valid deadline');
+  await click('Clear deadline');await click('Save details');expect(writes).toEqual([{method:'PATCH',body:{deadline:null}}]);
+});
+test('a deadline changed elsewhere while editing is not reverted by a title edit',async()=>{
+  await render();await select();await click('Edit title and deadline');
+  const moved=new Date(2026,11,5,9,0).getTime();goal={...goal,deadline:moved};
+  await React.act(async()=>{(host.querySelector('button[title="Refresh"]') as HTMLButtonElement).click();await wait();});
+  expect(goal.deadline).toBe(moved);
+  await fill(host.querySelector('form input')!,'Only the title');await click('Save details');
+  expect(writes).toEqual([{method:'PATCH',body:{title:'Only the title'}}]);expect(goal.deadline).toBe(moved);
+});
+test('Escape cancels the inline editor and returns focus to its button',async()=>{
+  await render();await select();await click('Edit title and deadline');
+  const input=host.querySelector<HTMLInputElement>('form input')!;
+  await React.act(async()=>{input.focus();input.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await wait();});
+  expect(host.querySelector('form')).toBeNull();expect(document.activeElement).toBe(button('Edit title and deadline'));expect(writes).toHaveLength(0);
+});
+test('a dialog opened by a Brief request returns focus to New when its opener is gone',async()=>{
+  const { requestGoalCreation } = await import('./create-request');
+  await render();(document.activeElement as HTMLElement|null)?.blur?.();
+  await React.act(async()=>{requestGoalCreation();await wait();});
+  expect(host.querySelector('[role="dialog"]')).toBeTruthy();
+  await key('Escape');expect(host.querySelector('[role="dialog"]')).toBeNull();expect(document.activeElement).toBe(button('New'));
+});
+test('at phone width room toasts stay above the fixed detail panel',async()=>{
+  const css=await Bun.file(new URL('./GoalsRoom.css',import.meta.url)).text();
+  const rule=[...css.matchAll(/@media \(max-width: 600px\) \{([\s\S]*?)\n\}/g)].map(m=>m[1]!.match(/\.v2-goals__toast\s*\{[^}]*z-index:\s*(\d+)/)).find(Boolean);
+  expect(Number(rule?.[1])).toBeGreaterThan(111);
+});

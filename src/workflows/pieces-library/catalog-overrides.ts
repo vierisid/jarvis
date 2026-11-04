@@ -157,6 +157,8 @@ export const VERSION_PIN: Record<
   string,
   { versionRange: string; vettedVersion: string; reason: string }
 > = {
+  wrike: {versionRange:"0.2.0", vettedVersion:"0.2.0", reason:"Four managed task/comment actions qualified against the published engine bundle; review upgrades"},
+  pipedrive: {versionRange: "0.10.3", vettedVersion: "0.10.3", reason: "Eight managed person/deal actions and all published action classifications qualified against this bundle; review before upgrading"},
   zoom: {versionRange: "0.9.2", vettedVersion: "0.9.2", reason: "Managed meeting actions, props and safe outputs qualified against the published bundle; review upgrades"},
   monday: {versionRange: "0.4.0", vettedVersion: "0.4.0", reason: "Five managed item actions qualified against the published bundle; review upgrades"},
   todoist: {versionRange: "0.6.1", vettedVersion: "0.6.1", reason: "Governed action table (MANAGED_PIECE_ADAPTERS) names all 46 actions of 0.6.1; four managed task actions qualified against the real engine; review before upgrading"},
