@@ -144,7 +144,8 @@ function cadence(cron: string): ContractCadence | null {
   if (!one(hour)) return null;
   if (dom === '*' && dow === '*') return 'day';
   if (dom === '*' && one(dow)) return 'week';
-  return one(dom) && dow === '*' ? 'month' : null;
+  // LW (last weekday) is one day each month.
+  return (one(dom) || dom === 'LW') && dow === '*' ? 'month' : null;
 }
 /** The canonical IANA name (every alias of UTC is UTC), or null for an unknown zone. */
 const zoneName = (zone: string): string | null => canonicalZone(zone);
@@ -163,6 +164,14 @@ interface Kind {
   agent?: true;
 }
 function pieceKind(pieceName: string, actionName: string | undefined): Kind | null {
+  if (samePiece('jarvis-report', pieceName) && actionName === 'weekly_operating_report') return { effect: 'write_data' };
+  if (samePiece('jarvis-refund', pieceName) && actionName === 'approval_refund') return { effect: 'make_payment' };
+  if (samePiece('jarvis-import', pieceName) && actionName === 'resumable_contact_import') return { effect: 'write_data' };
+  if (samePiece('jarvis-subflow',pieceName)) return {effect:actionName==='call'?'spawn_agent':null};
+  if (samePiece('jarvis-batch', pieceName) && actionName === 'update_leads') return { effect: 'write_data' };
+  if (samePiece('jarvis-batch', pieceName) && actionName === 'finalize_batch') return { effect: null };
+  if (samePiece('jarvis-onboarding', pieceName) && actionName === 'create_resources') return { effect: 'write_data' };
+  if (samePiece('jarvis-sales', pieceName) && actionName === 'draft_followups') return { effect: 'write_data' };
   if (samePiece(pieceName, AGENT)) return { effect: 'spawn_agent', open: 'delegates to an agent, which chooses its own tools when it runs', agent: true };
   if (samePiece(pieceName, WORKFLOW)) return { effect: 'spawn_agent', open: 'starts another workflow, whose steps this check does not see' };
   const ungoverned: Kind = { effect: null, open: `uses ${pieceName}${actionName ? ' ' + actionName : ''}, which Jarvis does not govern`, serviceOnly: true };

@@ -1,3 +1,4 @@
+import type { HostedConnectionProvider } from '../integrations/connection-providers';
 import type { BriefConnection } from './contracts';
 
 /** F-22 adds detail without changing the F-01 identity/permission contract. */
@@ -12,7 +13,7 @@ export interface ConnectedRow extends BriefConnection {
 }
 export type ConnectionSetupTarget =
   | { kind: 'google'; flow: 'oauth' | 'manual_client' | 'hosted_browser' }
-  | { kind: 'hosted_integration'; provider: 'clickup' | 'github' | 'trello' | 'mailchimp' | 'slack' | 'asana' | 'figma' }
+  | { kind: 'hosted_integration'; provider: HostedConnectionProvider }
   | { kind: 'channel'; channel: 'telegram' | 'discord' }
   | { kind: 'device'; flow: 'enrollment' | 'hosted_sign_in' }
   | { kind: 'piece_credentials'; pieceName: string; pieceVersion: string; authType: string };
@@ -20,6 +21,8 @@ export interface ConnectionSetupAction {
   id: string;
   label: string;
   target: ConnectionSetupTarget;
+  /** Repair an existing manual account; never advertise this as new app setup. */
+  existingOnly?: boolean;
   /** Canonical row kind/service to read after returning; callback messages cannot supply status. */
   verifies: { kind: ConnectedRow['kind']; serviceId: string };
 }

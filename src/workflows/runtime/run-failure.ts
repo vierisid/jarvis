@@ -34,7 +34,10 @@ const ENDED_BADLY = new Set(['FAILED', 'TIMEOUT', 'INTERNAL_ERROR', 'QUOTA_EXCEE
 const JARVIS_PIECE_PREFIX = '@jarvispieces/';
 
 function dispatched(effect: WorkflowEffect): boolean {
-  if (effect.status === 'pending' || effect.status === 'blocked') return false;
+  // Resumable work that ran slices did dispatch, pending or stopped: a stop
+  // after them is blocked with an outcome that says effects may have occurred.
+  if (effect.status === 'pending') return !!effect.partial;
+  if (effect.status === 'blocked') return !!effect.outcome && effect.outcome.status !== 'succeeded' && effect.outcome.effect === 'may_have_occurred';
   return !(effect.outcome && effect.outcome.status !== 'succeeded' && effect.outcome.effect === 'not_started');
 }
 

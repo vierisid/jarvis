@@ -10,7 +10,7 @@ import { PieceCatalog, metadataToCatalogEntry } from '../../runtime/piece-catalo
  */
 
 import { test, expect, describe, beforeAll, afterAll } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { closeWorkflowDb, initWorkflowDb } from "../../db";
@@ -330,6 +330,47 @@ describe("Engine end-to-end (F gate)", () => {
     } finally { await handle.release(); }
     expect(llmCalls.slice(before)).toEqual([]);
   }, 45_000);
+
+  test.skipIf(skipE2eTests)('AppSumo: EMPTY manual triggers ignore stale piece metadata before the AI step', async () => {
+    const before = llmCalls.length;
+    const shared = mkdtempSync(join(tmpdir(), 'appsumo-shared-'));
+    mkdirSync(join(shared, 'node_modules'));
+    const bundle = findCachedBundle()!;
+    const hosted = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, customPiecesPaths: [shared] });
+    const prompt = 'Return exactly two action items: Maya sends a proposal Tuesday. Lee reviews it Wednesday.';
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: 'AppSumo QA Report', trigger: {
+      name: 'trigger', type: 'EMPTY', displayName: 'Manual',
+      settings: { pieceName: '', pieceVersion: '0.0.0', triggerName: 'manual', input: {} },
+      nextAction: { name: 'action_items', type: 'PIECE', settings: {
+        pieceName: PIECE_ASK_NAME, actionName: 'ask', input: { prompt },
+      } },
+    } });
+    try {
+      publishFlowVersion(flow.id, version.id);
+      // Exercise Run workflow twice, including output hydration and persistence.
+      // The model is stubbed; this verifies execution, not live generation.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const request = Object.assign(new Request('http://local/run', {
+          method: 'POST', body: JSON.stringify({ environment: 'PRODUCTION', payload: {} }),
+        }), { params: { id: flow.id } });
+        const response = await createWorkflowRoutes()['/api/workflows/:id/run']!.POST!(request);
+        expect(response.status).toBe(202);
+        const { id } = await response.json() as { id: string };
+        const worker = new Worker({ log: () => {}, handlers: {
+          RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(hosted) }),
+        } });
+        await worker.drain();
+        const run = getFlowRun(id)!;
+        expect(run.status).toBe('SUCCEEDED');
+        expect(run.flowVersionId).toBe(version.id);
+        expect(run.steps?.action_items).toMatchObject({
+          output: { output: { text: `(stubbed reply to: ${prompt})` } },
+        });
+      }
+      expect(llmCalls.slice(before).map(call => call.prompt)).toEqual([prompt, prompt]);
+    } finally { await hosted.shutdown(); rmSync(shared, { recursive: true, force: true }); }
+  }, 30_000);
 
   test.skipIf(skipE2eTests)(
     "manual trigger + echo action runs to SUCCEEDED",

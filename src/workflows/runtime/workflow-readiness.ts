@@ -1,14 +1,34 @@
+import { isMondayReference, mondayInputSchema } from "./managed-monday-inputs";
+import {managedAirtableIssue} from './managed-airtable';
+import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
+import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
+import { REFUND_REQUIRED, refundSetup } from './refund';
+import { walkFlowNodes } from '../db/flow-graph';
+import type { FlowTriggerNode } from '../db/repos/flow-version';
+import { REFUND_ACCOUNTS, REFUND_LOOP_REFUSAL, REFUND_PIECE, isRefundAction, managedRefundRefusal, type RefundAccountField } from '../refund-accounts';
+import { IMPORT_REQUIRED, importSetup } from './contact-import';
+import { IMPORT_ACCOUNTS, IMPORT_PIECE, importAccountFields, isImportStep, managedImportRefusal } from '../import-accounts';
+import { REPORT_REQUIRED, reportSetup } from './weekly-report';
+import { REPORT_ACCOUNTS, REPORT_PIECE, isReportStep, managedReportRefusal, type ReportAccountField, QUARTERLY_ACCOUNTS, QUARTERLY_MANAGED_REFUSAL, isQuarterlyReportStep } from '../report-accounts';
+import { QUARTERLY_REQUIRED, QUARTERLY_ZONE, quarterlySetup } from './quarterly-report';
+import { SALES_ACCOUNTS, SALES_REQUIRED, SALES_PIECE, isSalesStep, salesSetup } from './sales-followups';
+import { ONBOARDING_REQUIRED, onboardingSetup } from './customer-onboarding';
+import { ONBOARDING_ACCOUNTS, ONBOARDING_PIECE, isOnboardingStep } from '../onboarding-accounts';
+import { BATCH_REQUIRED, batchSetup, batchGraphError } from './lead-batch';
+import { BATCH_ACCOUNTS, BATCH_PIECE, isBatchStep } from '../batch-accounts';
+import { parseOutputSchema } from './llm-output-contract';
 import { submissionConfig } from './form-submission';
+import {managedNotionIssue} from './managed-notion';
 import {managedMailchimpIssue} from './managed-mailchimp';
 import {managedGitHubIssue} from './managed-github';
 import {managedTrelloIssue} from './managed-trello';
 import {managedSlackIssue} from './managed-slack';
-import { validateCronExpression, validateCronTimezone } from '../../lib/cron-scheduler';
+import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
 import { emptyInput, inputIssue } from './input-validation';
 import { declaredDependencies } from './code-step-manifest';
-import { chosenScheduleZone, statedScheduleZone } from '../runner/triggers/schedule-zone';
+import { canonicalZone, chosenScheduleZone, effectiveScheduleZone, statedScheduleZone } from '../runner/triggers/schedule-zone';
 
 export interface ReadinessIssue {
   node: string;
@@ -45,7 +65,7 @@ export interface ReadinessContext {
    * the step names the connection; `settings` are the step's settings (with a
    * preview's input override applied).
    */
-  connection?: (externalId: string, pieceName: string, path: string, settings: Record<string, unknown>) => string | ConnectionRefusal | null;
+  connection?: (externalId: string, pieceName: string, path: string, settings: Record<string, unknown>, nodeType?: unknown) => string | ConnectionRefusal | null;
   workflow?: (id: string) => string | null;
   tool?: (name: string) => { params: Array<{ name: string; type: string; required: boolean; enum?: string[] }> } | null;
   roles?: () => ReadonlySet<string>;
@@ -90,6 +110,11 @@ function staticInput(value: unknown): { known: boolean; value: unknown } {
 export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}): WorkflowReadiness {
   const issues: ReadinessIssue[] = [], runtimeChecks: RuntimeCheck[] = [], setupIssues: ReadinessIssue[] = [];
   const seen = new Set<unknown>(), names = new Set<string>();
+  // Every node inside a loop body: a refund step there would propose once per iteration for one ticket.
+  const refundLoopBodies = new Set<unknown>();
+  for (const n of walkFlowNodes(object(trigger) ? trigger as FlowTriggerNode : null)) {
+    if (n.type === 'LOOP_ON_ITEMS' && n.firstLoopAction) for (const inner of walkFlowNodes(n.firstLoopAction)) refundLoopBodies.add(inner);
+  }
   let count = 0, inputVisits = 0, schemaVisits = 0, runtimeCount = 0, previewFound = false;
   const issue = (node: string, path: string, code: string, message: string, allowedPieces?: readonly string[]) => {
     if (issues.length < 100) issues.push({ node, path, code, message, ...(allowedPieces ? { allowedPieces: [...allowedPieces] } : {}) });
@@ -243,6 +268,16 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       const reason = managedGitHubIssue(root ? settings.triggerName : settings.actionName, input, false);
       if (reason) issue(node, 'settings.input', 'MANAGED_GITHUB', reason);
     }
+    if (pieceName === '@activepieces/piece-airtable' && object(input)
+      && ["{{connections.jarvis:airtable}}", "{{connections['jarvis:airtable']}}"].includes(String(input.auth))) {
+      const reason = managedAirtableIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_AIRTABLE', reason);
+    }
+    if (pieceName === '@activepieces/piece-notion' && object(input)
+      && ["{{connections.jarvis:notion}}", "{{connections['jarvis:notion']}}"].includes(String(input.auth))) {
+      const reason = managedNotionIssue(root ? settings.triggerName : settings.actionName, input, false);
+      if (reason) issue(node, 'settings.input', 'MANAGED_NOTION', reason);
+    }
     if (pieceName === '@activepieces/piece-trello' && object(input)
       && ["{{connections.jarvis:trello}}", "{{connections['jarvis:trello']}}"].includes(String(input.auth))) {
       const reason = managedTrelloIssue(root ? settings.triggerName : settings.actionName, input, false);
@@ -261,6 +296,162 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     expressions(input, node, 'settings.input', scope, type === 'PIECE' || type === 'PIECE_TRIGGER' ? pieceName : '');
     stepSettings = {};
     const isPiece = (short: string) => pieceName === short || pieceName === `@jarvispieces/piece-${short}`;
+    if (!root && isRefundAction(settings) && pieceName !== REFUND_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${REFUND_PIECE}`);
+    if (!root && isRefundAction(settings) && refundLoopBodies.has(raw)) issue(node, 'type', 'GRAPH', REFUND_LOOP_REFUSAL);
+    if (!root && isRefundAction(settings) && object(input)) {
+      for (const [field, provider] of Object.entries(REFUND_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved Stripe account');
+          // No managed-connection exemption covers the refund; the refund backend refuses a jarvis: id at run time too.
+          else if (id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', managedRefundRefusal(field as RefundAccountField));
+          else if (context.phase !== 'composition') {
+            const refusal=context.connection?.(id,provider,`settings.input.${field}`,settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+          }
+        }
+      }
+      // The event supplies only the ticket; the runtime refuses any setup field that differs from the saved literal.
+      for (const k of [...REFUND_REQUIRED.filter(k=>k!=='ticket'),'amountMinorPath']) if (typeof input[k] === 'string' && input[k].includes('{{')) issue(node,`settings.input.${k}`,'INPUT_TYPE','Refund setup fields are fixed values; only the ticket maps the event');
+      if(REFUND_REQUIRED.filter(k=>k!=='ticket').every(k=>!emptyInput(input[k]))) try {refundSetup(input);} catch(e){issue(node,'settings.input','INPUT_TYPE',(e as Error).message);}
+      runtime(node,'settings.input','connection','Recheck pinned Stripe account and mode; exact amount approval expires after 48 hours. Refund dispatch requires durable approval and fresh payment state.');
+    }
+    if (!root && isImportStep(settings) && pieceName !== IMPORT_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${IMPORT_PIECE}`);
+    if (!root && isImportStep(settings) && object(input)) {
+      for (const field of importAccountFields(input)) {
+        const provider = IMPORT_ACCOUNTS[field], id = input[field];
+        if (field === 'sourceConnection' && emptyInput(id)) needsSetup(node,`settings.input.${field}`,'Select the source OAuth2 account');
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
+          // No managed-connection exemption covers the import; the import backend refuses a jarvis: id at run time too.
+          else if (id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', managedImportRefusal(field));
+          else if (context.phase !== 'composition') {
+            const refusal=context.connection?.(id,provider,`settings.input.${field}`,settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck pinned import account before each operation');
+          }
+        }
+      }
+      if (IMPORT_REQUIRED.every(k=>!emptyInput(input[k])) && (input.sourceAuth !== 'oauth2' || !emptyInput(input.sourceConnection))) try { importSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
+    const quarterly = isQuarterlyReportStep(settings);
+    if (!root && (isReportStep(settings) || quarterly) && pieceName !== REPORT_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${REPORT_PIECE}`);
+    if (!root && (isReportStep(settings) || quarterly) && object(input)) {
+      for (const [field, provider] of Object.entries(quarterly ? QUARTERLY_ACCOUNTS : REPORT_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
+          // No managed-connection exemption covers either report; the report backends refuse a jarvis: id at run time too.
+          else if (id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', quarterly ? QUARTERLY_MANAGED_REFUSAL : managedReportRefusal(field as ReportAccountField));
+          else if (context.phase !== 'composition') {
+            const refusal=context.connection?.(id,provider,`settings.input.${field}`,settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck pinned report account before each provider call');
+          }
+        }
+      }
+      if (quarterly && (!object(trigger) || trigger.settings?.pieceName !== 'schedule' || input.scheduledFor !== `{{${trigger.name}.scheduledFor}}`)) issue(node,'settings.input.scheduledFor','INPUT_TYPE','Map the persisted schedule trigger scheduledFor; execution-time dates are not supported');
+      // Quarters are Rome calendar quarters: a schedule firing in another zone (its chosen one, else Jarvis's) could start on another Rome date.
+      if (quarterly && object(trigger) && trigger.settings?.pieceName === 'schedule' && canonicalZone(effectiveScheduleZone(trigger.settings)) !== QUARTERLY_ZONE) issue(String(trigger.name),'settings.input.timezone','INPUT_TYPE',`Quarterly reporting uses ${QUARTERLY_ZONE} calendar quarters; choose ${QUARTERLY_ZONE} as the schedule time zone`);
+      if ((quarterly ? QUARTERLY_REQUIRED : REPORT_REQUIRED).every(k=>!emptyInput(input[k]))) try { (quarterly ? quarterlySetup : reportSetup)(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
+    if (!root && isPiece('jarvis-subflow') && settings.actionName === 'call' && object(input)) {
+      if (!emptyInput(input.outputSchema)) try {parseOutputSchema(input.outputSchema);} catch(e) {issue(node,'settings.input.outputSchema','INPUT_TYPE',(e as Error).message);}
+      if (!emptyInput(input.timeoutSeconds) && (!Number.isInteger(input.timeoutSeconds)||Number(input.timeoutSeconds)<1||Number(input.timeoutSeconds)>86400)) issue(node,'settings.input.timeoutSeconds','INPUT_TYPE','Child timeout must be 1-86400 seconds');
+      runtime(node,'settings.input.invocationKey','piece-input','Persist child invocation and validated output across parent retries; refuse changed payload/configuration under the same key');
+      runtime(node,'settings.input.flow','workflow-binding','Pin child version, apply Authority, validate returned JSON, preserve absolute deadline and expose failure/timeout explicitly');
+    }
+    if (!root && isBatchStep(settings) && pieceName !== BATCH_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${BATCH_PIECE}`);
+    if (!root && isBatchStep(settings) && object(input)) {
+      const graphError=batchGraphError(raw); if(graphError) issue(node,'nextAction','INPUT_TYPE',graphError);
+      if (object(trigger) && trigger.settings?.pieceName === 'webhook' && Object.values(trigger.settings.input ?? {}).some(v=>!emptyInput(v))) issue(node,'trigger.settings.input','INPUT_TYPE','Lead batch owns submission admission; do not add webhook admission that prevents incomplete batch resumption');
+      for (const [field, provider] of Object.entries(BATCH_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
+          else if (context.phase !== 'composition') {
+            // Checked against the provider piece this field reads with, at its own path:
+            // managedConnectionMisuse refuses a managed connection here (no exemption covers lead batches).
+            const refusal=context.connection?.(id,provider,`settings.input.${field}`,settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck pinned batch account before each provider call');
+          }
+        }
+      }
+      if (BATCH_REQUIRED.every(k=>!emptyInput(input[k]))) try { batchSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
+    if (!root && isOnboardingStep(settings) && pieceName !== ONBOARDING_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${ONBOARDING_PIECE}`);
+    if (!root && isOnboardingStep(settings) && object(input)) {
+      for (const [field, provider] of Object.entries(ONBOARDING_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
+          else if (context.phase !== 'composition') {
+            // Checked against the provider piece this field reads with, at its own path:
+            // managedConnectionMisuse refuses a managed connection here (no exemption covers onboarding).
+            const refusal=context.connection?.(id,provider,`settings.input.${field}`,settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck pinned onboarding account before each provider call');
+          }
+        }
+      }
+      if (ONBOARDING_REQUIRED.every(k=>!emptyInput(input[k]))) try { onboardingSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
+    if (!root && isSalesStep(settings) && pieceName !== SALES_PIECE) issue(node, 'settings.pieceName', 'PIECE', `Use the full piece name ${SALES_PIECE}`);
+    if (!root && isSalesStep(settings) && object(input)) {
+      for (const [field, provider] of Object.entries(SALES_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node,`settings.input.${field}`,'CONNECTION_BINDING','Select a saved account reference');
+          // Jarvis manages no HubSpot account; the sales backend refuses a jarvis: id here at run time.
+          else if (field === 'hubspotConnection' && id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', MANAGED_HUBSPOT_REFUSAL);
+          else if (context.phase !== 'composition') {
+            // Checked against the provider piece this field reads with, at its own
+            // path: a managed connection is accepted here only by the narrow
+            // sales exemption in managedConnectionMisuse (jarvis:google as Gmail).
+            const refusal=context.connection?.(id,provider,`settings.input.${field}`,settings,type) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck pinned sales account before each provider call');
+          }
+        }
+      }
+      if (SALES_REQUIRED.every(k=>!emptyInput(input[k]))) try { salesSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
+    if (!root && isPiece('jarvis-context') && settings.actionName === 'meeting_briefs' && object(input)) {
+      for (const [field, provider] of Object.entries(MEETING_ACCOUNTS)) {
+        const id = input[field];
+        if (!emptyInput(id)) {
+          if (typeof id !== 'string' || !/^[\w:-]+$/.test(id)) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', 'Select a saved account reference');
+          // Jarvis manages no HubSpot account; the meeting backend refuses a jarvis: id here at run time.
+          else if (field === 'hubspotConnection' && id.startsWith('jarvis:')) issue(node, `settings.input.${field}`, 'CONNECTION_BINDING', MANAGED_HUBSPOT_REFUSAL);
+          else if (context.phase !== 'composition') {
+            // Checked against the provider piece this field reads with, at its own
+            // path: a managed connection is accepted here only by the narrow
+            // meeting exemption in managedConnectionMisuse.
+            const refusal = context.connection?.(id, provider, `settings.input.${field}`, settings, type) ?? (context.connection ? null : 'Connection inventory unavailable');
+            const reason = typeof refusal === 'string' || refusal === null ? refusal : refusal.message;
+            if (reason) issue(node,`settings.input.${field}`,'CONNECTION_BINDING',reason);
+            else runtime(node,`settings.input.${field}`,'connection','Recheck the pinned provider account before every read');
+          }
+        }
+      }
+      const complete = ['calendarConnection','gmailConnection','hubspotConnection','calendarId','ownerEmail','internalDomains','hubspotPortalId'].every(k=>!emptyInput(input[k]));
+      if (complete) try { meetingSetup(input); } catch (e) { issue(node,'settings.input','INPUT_TYPE',(e as Error).message); }
+    }
+    if (!root && isPiece('jarvis-ask') && settings.actionName === 'ask' && !emptyInput(input?.outputSchema)) {
+      const declared = staticInput(input.outputSchema);
+      if (!declared.known) runtime(node, 'settings.input.outputSchema', 'piece-input', 'Validate the resolved output schema before model dispatch');
+      else {
+        try { parseOutputSchema(typeof declared.value === 'string' ? JSON.parse(declared.value) : declared.value); }
+        catch (error) { issue(node, 'settings.input.outputSchema', 'OUTPUT_SCHEMA', (error as Error).message); }
+      }
+    }
     if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input) && context.phase !== 'composition') {
       const name = staticInput(input.toolName);
       if (!name.known && context.tool) runtime(node, 'settings.input', 'tool-input', 'Resolve the tool identity and validate its parameters at governed tool dispatch');
@@ -293,16 +484,30 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       if (!role.known || typeof role.value !== 'string' || !context.roles?.().has(role.value)) issue(node, 'settings.input.role', 'ROLE_BINDING', 'Select an existing specialist role before activation');
     }
     if (root && pieceName === '@activepieces/piece-schedule' && settings.triggerName === 'cron_expression') {
-      try {
+      if (emptyInput(input?.cronExpression)) needsSetup(node,'settings.input.cronExpression','Choose the schedule execution time before publishing or running');
+      else try {
         if (typeof input?.cronExpression !== 'string') throw new Error('Schedule requires a static cron expression');
         validateCronExpression(input.cronExpression);
         validateCronTimezone(input.timezone);
       } catch (error) { issue(node, 'settings.input.cronExpression', 'CRON', (error as Error).message); }
     }
+    // Explicit null keeps an intentionally deferred scope visible. Omission still
+    // means the connector's documented default (all labels / root folder).
+    if (input?.label === null && root && pieceName === '@activepieces/piece-gmail' && settings.triggerName === 'new_attachment')
+      needsSetup(node, 'settings.input.label', 'Select the Gmail label before processing attachments');
+    if (pieceName === '@activepieces/piece-hubspot' && settings.actionName === 'create-or-update-contact' && input?.objectProperties === null)
+      needsSetup(node, 'settings.input.objectProperties', 'Select HubSpot contact property mappings, including the intended qualification/review field');
+    if (pieceName === '@activepieces/piece-google-drive') {
+      const folder = settings.actionName === 'upload_gdrive_file' ? 'parentFolder' : settings.actionName === 'drive_upload_file' ? 'parent_folder_id' : null;
+      if (folder && input?.[folder] === null) needsSetup(node, `settings.input.${folder}`, 'Select the destination Drive folder');
+    }
     if (type === 'PIECE' || type === 'PIECE_TRIGGER') {
       if (root && pieceName === 'schedule') {
+        try { validateCronDstPolicy(input?.dst_policy); }
+        catch (error) { issue(node, 'settings.input.dst_policy', 'DST_POLICY', (error as Error).message); }
         const cron = input?.cron_expression || input?.cronExpression || input?.expression;
-        try {
+        if (emptyInput(cron)) needsSetup(node,'settings.input.cron_expression','Choose the schedule execution time before publishing or running');
+        else try {
           if (typeof cron !== 'string') throw new Error('Schedule requires a static cron expression');
           validateCronExpression(cron);
         } catch (error) { issue(node, 'settings.input.cron_expression', 'CRON', (error as Error).message); }
@@ -320,6 +525,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
             if (emptyInput(input[key!])) needsSetup(node, `settings.input.${key}`, `${label}: choose the field path in your form payload`);
           }
         }
+        if (object(input) && 'request_id_field' in input && emptyInput(input.request_id_field)) needsSetup(node, 'settings.input.request_id_field', 'Request ID field: choose the stable ID path in your webhook payload');
         try { submissionConfig(input, true); }
         catch (error) { issue(node, 'settings.input.submission', 'INPUT', (error as Error).message); }
       } else {
@@ -331,7 +537,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           const sub: PieceCatalogAction | undefined = entries && typeof settings[key] === 'string' && Object.hasOwn(entries, settings[key]) ? entries[settings[key]] : undefined;
           if (!sub) issue(node, `settings.${key}`, 'ACTION', `Unknown ${key} for ${pieceName}`);
           else if (object(input)) {
-            for (const field of sub.inputSchema?.fields ?? []) {
+            const schema = !root && isMondayReference(pieceName, input.auth) ? mondayInputSchema(settings.actionName) ?? sub.inputSchema : sub.inputSchema;
+            for (const field of schema?.fields ?? []) {
               const value = input[field.name];
               const path = `settings.input.${field.name}`;
               if (field.required && emptyInput(value)) {

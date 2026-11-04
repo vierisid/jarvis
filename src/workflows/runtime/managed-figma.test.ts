@@ -115,14 +115,31 @@ test("invalid inputs, unknown operations and foreign comment responses are refus
     { ...comment, id: 1234 },
     { ...comment, message: "Changed" },
     { error: "PRIVATE_ACCESS" },
-  ])
-    await expect(
-      runManagedFigmaAction(
-        "post_comment",
-        { auth, file_key: "FileKey123", message: "Feedback" },
-        (async () => Response.json(result)) as unknown as typeof fetch,
-      ),
-    ).rejects.toThrow("invalid or oversized");
+  ]) {
+    const posted = runManagedFigmaAction(
+      "post_comment",
+      { auth, file_key: "FileKey123", message: "Feedback" },
+      (async () => Response.json(result)) as unknown as typeof fetch,
+    );
+    // A 2xx means Figma took the comment: say so, and never invite a re-run.
+    await expect(posted).rejects.toThrow("do not run this step again");
+    await expect(posted).rejects.not.toThrow("PRIVATE_ACCESS");
+  }
+});
+test("a posted comment whose text Figma only normalised, or does not echo, is a success", async () => {
+  const sent = "First line\r\nSecond  line\n";
+  for (const echoed of [
+    { ...comment, message: "First line\nSecond line" },
+    { ...comment, message: "  First line\n\nSecond line " },
+    (({ message: _message, ...rest }) => rest)(comment),
+  ]) {
+    const output = await runManagedFigmaAction(
+      "post_comment",
+      { auth, file_key: "FileKey123", message: sent },
+      (async () => Response.json(echoed)) as unknown as typeof fetch,
+    );
+    expect(output).toEqual({ success: true, request_body: { message: sent }, response_body: echoed });
+  }
 });
 test("failed/uncertain writes never retry or leak provider errors", async () => {
   for (const status of [400, 401, 403, 404, 429, 500]) {
@@ -159,7 +176,6 @@ test("large or malformed reads fail explicitly; empty comments remain valid", as
   for (const value of [
     { ...file, document: {} },
     { ...file, version: 1234 },
-    { ...file, padding: "x".repeat(FIGMA_RESPONSE_LIMIT) },
   ])
     await expect(
       runManagedFigmaAction(
@@ -167,7 +183,14 @@ test("large or malformed reads fail explicitly; empty comments remain valid", as
         { auth, file_key: "FileKey123" },
         (async () => Response.json(value)) as unknown as typeof fetch,
       ),
-    ).rejects.toThrow("invalid or oversized");
+    ).rejects.toThrow("unexpected file response");
+  const large = runManagedFigmaAction(
+    "get_file",
+    { auth, file_key: "FileKey123" },
+    (async () => Response.json({ ...file, padding: "x".repeat(FIGMA_RESPONSE_LIMIT) })) as unknown as typeof fetch,
+  );
+  await expect(large).rejects.toThrow("too large for this action");
+  await expect(large).rejects.not.toThrow("Try again");
   expect(
     await runManagedFigmaAction(
       "get_comments",

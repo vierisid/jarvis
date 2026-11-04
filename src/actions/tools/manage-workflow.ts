@@ -1,3 +1,7 @@
+import { draftRevision, updateSavedDraft } from './workflow-draft-update';
+import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards';
+import { decideRunRecovery, getRunRecovery } from '../../workflows/runtime/recovery';
+import { randomUUID } from 'node:crypto';
 /**
  * Manage Workflow Tool — chat-driven workflow CRUD + run management.
  *
@@ -8,6 +12,7 @@
  * Actions:
  *   list                   flows, newest first, bounded by a character budget
  *                          ({ returned, total, truncated, flows })
+ *   update                 validate and patch an existing selected draft in place
  *   get                    detail view of a flow + its latest version
  *   run                    queue a flow run, optionally with a payload
  *   create                 create an empty flow with a manual trigger
@@ -21,6 +26,7 @@
  * Runs are referenced strictly by id.
  */
 
+import { createHash } from "node:crypto";
 import type { ToolDefinition } from "./registry.ts";
 import type { TriggerManager } from "../../workflows/runner/triggers/manager.ts";
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
@@ -212,11 +218,13 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
     description: [
       "Create, run, and manage the user's Jarvis workflows (automations).",
       "compose { name, description } builds the requested graph. Preserve every requirement; never substitute a diagnostic-only scaffold.",
-      "Save supported graphs with missing settings as Setup required. Continue setup via composition_id and non-secret answers; accounts belong in Connected workspace.",
-      "Inspect real schemas; never invent credentials or IDs. Native notifications use dashboard. Check an authorized browser alternative when native actions cannot cover the job; verify tools, computer and permissions, never assume login.",
-      "Composed flows are DISABLED. Publish only with user confirmation; publish enables the flow. Draft-only restrictions are not bans on future workflow actions.",
+      "Save supported graphs as Setup required. Use continue_setup for answers; connect accounts securely in Connected workspace.",
+      "Use real schemas; never invent IDs or credentials. Notifications use dashboard. If needed, verify browser tools, computer, permissions and login for an authorized alternative.",
+      "Composed flows are DISABLED; publish enables them and requires user confirmation. Draft-only limits do not ban future actions.",
       "create requires empty: true for an explicitly blank canvas; otherwise compose.",
-      "CODE steps: publish, enable and run are REFUSED until the user permits code for that flow; no tool action grants permission. Never bypass this refusal.",
+      "update repairs the saved draft in place (get revision first); never compose a replacement.",
+      "CODE steps: publish/enable/run are REFUSED without user permission for that flow; no tool action grants it. Never bypass.",
+      "validate_fixtures: local synthetic tests of the saved draft; mock auth, no network or installs. Page to nextCursor:null.",
       ...(hasLibrary ? [deps.installLibraryPiece ? "A missing Library connector returns setup.continueWith with install; call it so the user approves that install under software-install Authority. install_missing:false opts out. Account connection is separate." : "Relay suggestedInstalls from the Library page; retry after installation, never unchanged."] : []),
     ].join("\n"),
     category: "automation",
@@ -266,7 +274,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       action: {
         type: "string",
         description: "What to do.",
-        enum: ["compose", "continue_setup", "create", "list", "get", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run"],
+        enum: ["compose", "continue_setup", "create", "update", "list", "get", "validate_fixtures", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run", "resolve_effect"],
         required: true,
       },
       flow: {
@@ -274,11 +282,17 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         description: "Name or ID; required for get/run/enable/disable/publish/delete; optional list_runs filter.",
         required: false,
       },
+      view: { type: "string", enum: ["definition", "validation"], description: "get: paged JSON; join all page content to nextCursor:null.", required: false },
+      version_id: { type: "string", description: "get/update: version", required: false },
+      cursor: { type: "string", description: "get/validate_fixtures: prior nextCursor", required: false },
+      expected_revision: { type: "string", description: "update: from get", required: false },
+      patches: { type: "array", items: { type: "object", properties: { op: { type: "string", enum: ["add", "replace", "remove"] }, path: { type: "string" }, value: {} }, required: ["op", "path"] }, description: "update: JSON Patch on trigger", required: false },
       name: {
         type: "string",
-        description: "Display name for compose/create.",
+        description: "Display name: compose/create/update.",
         required: false,
       },
+      fixture_input: { type: "object", description: "validate_fixtures: routing/JSON setup/cases (tool guide).", required: false },
       payload: {
         type: "object",
         description: "run: trigger input.",
@@ -289,6 +303,12 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         description: "get_run: ID from run/list_runs.",
         required: false,
       },
+      // resolve_effect: the system prompt's tool guide (roles/tool-guide.ts)
+      // explains these, and a blocked run's error names the effect, so the
+      // schema stays short (#504 budget).
+      effect_id: { type: "string", description: "resolve_effect: wfe_ ID", required: false },
+      resolution: { type: "string", enum: ["mark_done", "release"], description: "resolve_effect: happened or not", required: false },
+      note: { type: "string", description: "resolve_effect: what the user checked", required: false },
       description: {
         type: "string",
         description:
@@ -407,6 +427,12 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         case "delete":
           return { actionCategory: "delete_data", confirm: "above_level",
             intent: `Permanently delete workflow: ${forCard(params.flow)}` };
+        case "resolve_effect":
+          // A person's decision about an outside write the runtime cannot
+          // confirm: it reopens (release) or settles (mark_done) a fence that
+          // stops duplicates, so the model never takes it on its own.
+          return { actionCategory: "write_data", confirm: "always",
+            intent: `${params.resolution === "mark_done" ? "Mark done (it happened)" : params.resolution === "release" ? "Release (it did not happen)" : "Resolve"} the uncertain write ${forCard(params.effect_id)} of workflow run ${forCard(params.run_id)}` };
         default:
           // list / get / list_runs / get_run are reads; compose / create /
           // enable / disable / publish are writes the floor already covers.
@@ -431,11 +457,73 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       const project = deps.callerProjectId?.() ?? DEFAULT_IDS.project;
       const requireFlowParam = (p: Record<string, unknown>) => requireFlowIn(project, p);
       switch (action) {
+        case "update": {
+          const flow = requireFlowParam(params);
+          const result = updateSavedDraft({
+            projectId: project, flowId: flow.id, versionId: requireString(params, 'version_id'),
+            expectedRevision: requireString(params, 'expected_revision'), patches: params.patches, name: params.name,
+            context: { ...workflowReadinessServices(), pieces: deps.pieceRegistry ?? workflowReadinessServices()?.pieces },
+            validateContract(graph) {
+              const report = contractRecheck(flow, graph);
+              if (report?.violations.length) throw new Error('update: saved job contract would be violated: ' + report.violations.slice(0, 5).join('; '));
+            },
+          });
+          return framedForModel({ ok: true, changed: result.changed, flowId: flow.id, versionId: result.version.id,
+            revision: draftRevision(result.version), status: flow.status, publishedVersionId: flow.published_version_id,
+            ...validationSummary(flow.id, result.version.id),
+            definition: { action: 'get', flow: flow.id, version_id: result.version.id, view: 'definition' },
+            validationReport: { action: 'get', flow: flow.id, version_id: result.version.id, view: 'validation' },
+            note: 'Updated the existing draft only. Missing setup stays unconfigured; no new workflow/version, publication, activation or execution. Functional testing is separate: validate_fixtures on this saved draft.',
+          }, 'an updated workflow draft');
+        }
+        case "validate_fixtures": {
+          // Local synthetic component checks of the saved draft. Read-only:
+          // setup is substituted into an in-memory copy, auth is mocked, and
+          // nothing installs, connects, resolves credentials or uses the network.
+          const flow = requireFlowParam(params), draft = getLatestDraft(flow.id);
+          if (!draft) throw new Error("No saved draft to validate");
+          const validation = compileWorkflow(draft.trigger, { pieces: workflowReadinessServices()?.pieces ?? deps.pieceRegistry, phase: 'composition' });
+          if (!validation.ready) throw new Error('Saved draft has structural errors; fix them before fixture validation');
+          if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-report' && draft.trigger.nextAction.settings.actionName === 'quarterly_hubspot_report') {
+            const {validateQuarterlyFixtures}=await import('../../workflows/runtime/quarterly-report-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateQuarterlyFixtures(draft.trigger,params.fixture_input)},params),'local synthetic quarterly fixture results');
+          }
+          if (draft.trigger.settings?.pieceName === 'schedule') {
+            const {validateScheduleFixtures}=await import('../../workflows/runtime/schedule-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateScheduleFixtures(draft.trigger,params.fixture_input)},params),'local synthetic schedule fixture results');
+          }
+          if (draft.trigger.nextAction?.settings?.pieceName === '@activepieces/piece-json') {
+            const {validateJsonMappingFixtures}=await import('../../workflows/runtime/json-mapping-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateJsonMappingFixtures(draft.trigger,params.fixture_input)},params),'local synthetic JSON mapping fixture results');
+          }
+          if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-subflow') {
+            const {validateSubflowFixtures}=await import('../../workflows/runtime/subflow-fixtures');
+            const childId=draft.trigger.nextAction?.settings?.input?.flow;
+            const child=typeof childId==='string'?getFlowInProject(project,childId):null;
+            const childDraft=child?getLatestDraft(child.id):null;
+            if(!childDraft)throw new Error('Select a real saved child workflow in this project before testing the pair');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,childFlowId:child!.id,childVersionId:childDraft.id,...await validateSubflowFixtures(draft.trigger,childDraft.trigger)},params),'local synthetic parent/child fixture results');
+          }
+          if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-batch') {
+            const {validateBatchFixtures}=await import('../../workflows/runtime/batch-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateBatchFixtures(draft.trigger)},params),'local synthetic lead batch fixture results');
+          }
+          if (draft.trigger.nextAction?.settings?.pieceName === '@jarvispieces/piece-jarvis-onboarding') {
+            const {validateOnboardingFixtures}=await import('../../workflows/runtime/onboarding-fixtures');
+            return framedForModel(fixtureReportPage({flowId:flow.id,versionId:draft.id,...await validateOnboardingFixtures(draft.trigger)},params),'local synthetic onboarding fixture results');
+          }
+          if (params.fixture_input !== undefined) {
+            const { validateSupportRoutingFixtures } = await import('../../workflows/runtime/support-routing-fixtures');
+            return framedForModel(fixtureReportPage({ flowId: flow.id, versionId: draft.id, ...await validateSupportRoutingFixtures(draft.trigger, params.fixture_input) }, params), 'local synthetic routing fixture results');
+          }
+          const { validateRefundFixtures } = await import('../../workflows/runtime/refund-fixtures');
+          return framedForModel(fixtureReportPage({ flowId: flow.id, versionId: draft.id, ...await validateRefundFixtures(draft.trigger) }, params), 'local synthetic fixture results');
+        }
         case "list":
           return framedForModel(actList(project), "the workflow list and its stored metadata");
         case "get":
           return framedForModel(
-            actGet(requireFlowParam(params)),
+            actGet(requireFlowParam(params), params),
             "a workflow definition and its captured sample data",
           );
         case "run":
@@ -514,6 +602,11 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           return framedForModel(
             actGetRun(project, requireString(params, "run_id")),
             "a workflow run's captured step output",
+          );
+        case "resolve_effect":
+          return framedForModel(
+            await actResolveEffect(project, params),
+            "a workflow recovery receipt",
           );
         case "continue_setup":
           return framedForModel(
@@ -614,6 +707,27 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
  * `governed-pieces.test.ts` pins against a fixed digest.
  */
 const FRAMED_PAYLOAD_MAX_CHARS = 4000;
+
+/** Preserve complete fixture evidence instead of slicing JSON mid-assertion. */
+function fixtureReportPage(report: Record<string, unknown>, params: Record<string, unknown>): Record<string, unknown> {
+  const text = JSON.stringify(report);
+  if (text.length <= FRAMED_PAYLOAD_MAX_CHARS && params.cursor === undefined) return report;
+  const hash = createHash('sha256').update(text).update(JSON.stringify(params.fixture_input ?? null)).digest('hex');
+  let offset = 0;
+  if (params.cursor !== undefined) {
+    const match = typeof params.cursor === 'string' && /^([a-f0-9]{64}):(\d+)$/.exec(params.cursor);
+    if (!match || match[1] !== hash) throw new Error('Fixture report changed or cursor is invalid; restart without a cursor');
+    offset = Number(match[2]);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset >= text.length) throw new Error('Fixture cursor offset is out of range');
+  }
+  let end = Math.min(offset + 2000, text.length);
+  for (;;) {
+    const page = {flowId:report.flowId,versionId:report.versionId,view:'fixture_results',passed:report.passed,externalActions:0,
+      totalChars:text.length,offset,nextCursor:end < text.length ? hash + ':' + end : null,content:text.slice(offset,end)};
+    if (JSON.stringify(page).length <= FRAMED_PAYLOAD_MAX_CHARS) return page;
+    if (--end <= offset) throw new Error('Fixture result envelope exceeds its size budget');
+  }
+}
 
 /**
  * Render an action's result for the chat model, framed as data.
@@ -1026,14 +1140,16 @@ export function versionForModel<V extends { trigger?: unknown } | null | undefin
 function checkedVersion(flowId: string, version: ReturnType<typeof getFlowVersion>) {
   if (!version) return null;
   const readiness = versionReadiness(flowId, version.id);
-  return { ...version, valid: readiness.ready, readiness };
+  return { ...version, revision: draftRevision(version), valid: readiness.ready, readiness };
 }
 
-function actGet(flow: FlowRow): Record<string, unknown> {
+function actGet(flow: FlowRow, params: Record<string, unknown> = {}): Record<string, unknown> {
+  if (params.view !== undefined) return workflowDocumentPage(flow, params);
+  if (params.cursor !== undefined || params.version_id !== undefined) throw new Error("get: view is required when using cursor or version_id");
   const summary = summarizeFlow(flow);
   const draft = getLatestDraft(flow.id);
   const published = flow.published_version_id ? getFlowVersion(flow.published_version_id) : null;
-  return {
+  const result = {
     ...summary,
     latestDraft: versionForModel(checkedVersion(flow.id, draft)),
     published: versionForModel(checkedVersion(flow.id, published)),
@@ -1050,6 +1166,56 @@ function actGet(flow: FlowRow): Record<string, unknown> {
       ...(typeof fire.detail?.reason === "string" ? { reason: fire.detail.reason } : {}),
     })),
   };
+  if (JSON.stringify(result).length <= FRAMED_PAYLOAD_MAX_CHARS) return result;
+  const version = draft ?? published;
+  return {
+    ...summary, detailPaged: true,
+    latestDraft: draft ? { id: draft.id, state: draft.state, revision: draftRevision(draft) } : null,
+    published: published ? { id: published.id, state: published.state } : null,
+    ...(version ? { ...validationSummary(flow.id, version.id),
+      definition: { action: "get", flow: flow.id, version_id: version.id, view: "definition" },
+      validationReport: { action: "get", flow: flow.id, version_id: version.id, view: "validation" },
+    } : {}),
+    note: "Full definition and validation are paged. Read content pages until nextCursor is null; concatenate and parse JSON. No steps or checks are silently discarded.",
+  };
+}
+
+/** Pages measure the serialized envelope, including escaped text, before framing. */
+function workflowDocumentPage(flow: FlowRow, params: Record<string, unknown>): Record<string, unknown> {
+  if (params.view !== 'definition' && params.view !== 'validation') throw new Error('get: unknown view');
+  const version = typeof params.version_id === 'string' ? getFlowVersion(params.version_id) : getLatestDraft(flow.id) ?? (flow.published_version_id ? getFlowVersion(flow.published_version_id) : null);
+  if (!version || version.flowId !== flow.id) throw new Error('Version not found in this workflow');
+  const document = params.view === 'definition' ? { ...versionForModel(version), revision: draftRevision(version) } : {
+    ...validationSummary(flow.id, version.id),
+    structure: compileWorkflow(version.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' }),
+    readiness: versionReadiness(flow.id, version.id),
+    runtimeSafeguards: workflowSafeguards(version.trigger),
+  };
+  const text = JSON.stringify(document);
+  const hash = createHash('sha256').update(flow.id + version.id + params.view + text).digest('hex');
+  let offset = 0;
+  if (params.cursor !== undefined) {
+    const match = typeof params.cursor === 'string' && /^([a-f0-9]{64}):(\d+)$/.exec(params.cursor);
+    if (!match || match[1] !== hash) throw new Error('Readback changed or cursor is invalid; restart this view without a cursor');
+    offset = Number(match[2]);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset >= text.length) throw new Error('get: cursor offset is out of range');
+  }
+  let end = Math.min(offset + 2000, text.length);
+  for (;;) {
+    const result = { flowId: flow.id, versionId: version.id, revision: draftRevision(version), view: params.view, totalChars: text.length,
+      offset, nextCursor: end < text.length ? hash + ':' + end : null, content: text.slice(offset, end) };
+    if (JSON.stringify(result).length <= FRAMED_PAYLOAD_MAX_CHARS) return result;
+    if (--end <= offset) throw new Error('Readback envelope exceeds its size budget');
+  }
+}
+
+function validationSummary(flowId: string, versionId: string) {
+  const readiness = versionReadiness(flowId, versionId);
+  const structure = compileWorkflow(getFlowVersion(versionId)?.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' });
+  return { validation: { structureValid: structure.ready, readyToRun: readiness.ready,
+    structureIssueCount: structure.issues.length, setupIssueCount: structure.setupIssues?.length ?? 0,
+    readinessIssueCount: readiness.issues.length, runtimeCheckCount: readiness.runtimeChecks.length,
+    functionalTesting: "not_performed" } };
 }
 
 function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string, unknown> {
@@ -1378,15 +1544,29 @@ const ACCOUNT_SETUP_GUIDANCE = "Use Connected workspace for secure connector acc
 
 function setupReadiness(flowId: string, versionId: string, compositionId: string) {
   const readiness = versionReadiness(flowId, versionId);
-  const structureValid = compileWorkflow(getFlowVersion(versionId)?.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' }).ready;
-  return { validation: { structureValid, readyToRun: readiness.ready }, readiness, ...(!readiness.ready ? { setup: {
-    status: "needs_configuration", label: "Setup required", fields: readiness.issues,
+  const structure = compileWorkflow(getFlowVersion(versionId)?.trigger, { pieces: workflowReadinessServices()?.pieces, phase: 'composition' });
+  const structureValid = structure.ready;
+  // A missing (uninstalled) connector is a setup gap: install it from the
+  // Library page. Only a genuine structural error needs the graph repaired.
+  const state = structure.issues.some(i => i.code !== "PIECE")
+    ? { status: "needs_repair", label: "Validation failed" } : { status: "needs_configuration", label: "Setup required" };
+  const full = { validation: { structureValid, readyToRun: readiness.ready }, readiness, ...(!readiness.ready ? { setup: {
+    ...state, fields: readiness.issues,
     editor: { flowId, versionId }, nextQuestion: readiness.issues.some(i => i.code === "CONNECTION_BINDING")
       ? ACCOUNT_SETUP_GUIDANCE : readiness.issues[0]?.message,
     accountSetup: ACCOUNT_SETUP_GUIDANCE,
     nextStep: SAVED_DRAFT_GUIDANCE,
     recheckWith: { action: "continue_setup", composition_id: compositionId },
   } } : {}) };
+  if (JSON.stringify(full).length <= 1800) return full;
+  return { ...validationSummary(flowId, versionId),
+    validationReport: { action: "get", flow: flowId, version_id: versionId, view: "validation" },
+    definition: { action: "get", flow: flowId, version_id: versionId, view: "definition" },
+    ...(!readiness.ready ? { setup: { ...state,
+      issueCount: readiness.issues.length, editor: { flowId, versionId }, accountSetup: ACCOUNT_SETUP_GUIDANCE,
+      nextStep: SAVED_DRAFT_GUIDANCE,
+      recheckWith: { action: "continue_setup", composition_id: compositionId },
+    } } : {}) };
 }
 
 /**
@@ -1478,7 +1658,23 @@ function actGetRun(project: string, runId: string): Record<string, unknown> {
   // Through the run's FLOW's project, as the HTTP route does (#729).
   const run = getFlowRunInProject(project, runId);
   if (!run) throw new Error(`run not found: ${runId}`);
-  return summarizeRun(run, true);
+  const recovery = getRunRecovery(run.id);
+  return { ...summarizeRun(run, true), ...(recovery ? { recovery } : {}) };
+}
+
+/** The same audited recovery decision as the dashboard's, made after the
+ * person approved this call's card (see authorityGate). */
+async function actResolveEffect(project: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const runId = requireString(params, "run_id");
+  const run = getFlowRunInProject(project, runId);
+  if (!run) throw new Error(`run not found: ${runId}`);
+  const resolution = params.resolution;
+  if (resolution !== "mark_done" && resolution !== "release") throw new Error("resolve_effect: resolution must be mark_done or release");
+  const revision = getRunRecovery(run.id)?.revision;
+  if (!revision) throw new Error("resolve_effect: only a finished, incomplete run can be resolved");
+  const receipt = await decideRunRecovery(run.id, { requestId: "tool_" + randomUUID().replace(/-/g, ""), revision, action: resolution,
+    effectId: requireString(params, "effect_id"), ...(typeof params.note === "string" && params.note.trim() ? { note: params.note } : {}) }, { via: "manage_workflow" });
+  return { receipt };
 }
 
 function summarizeRun(run: FlowRun, includeSteps = false): Record<string, unknown> {

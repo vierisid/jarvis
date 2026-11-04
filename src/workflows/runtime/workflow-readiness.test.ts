@@ -623,3 +623,49 @@ test('form webhook mapping can be incomplete in drafts but must be safe and comp
     expect(compileWorkflow({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input: { submission_id_field: 'id', submission_email_field: 'email' } } }, { pieces, phase }).ready).toBe(true);
   }
 });
+
+test('monday managed readiness uses the same static contract as its engine without weakening manual accounts',()=>{
+  const schema=propsToInputSchema({workspace_id:{type:'SHORT_TEXT',displayName:'Workspace',required:true},column_values:{type:'DYNAMIC',displayName:'Columns',required:true}} as any);
+  const pieces=new PieceCatalog([{name:'@activepieces/piece-monday',displayName:'monday.com',description:'',actions:{monday_create_item:{name:'monday_create_item',displayName:'Create item',description:'',inputSchema:schema}}}]);
+  const node:any={name:'item',type:'PIECE',settings:{pieceName:'@activepieces/piece-monday',actionName:'monday_create_item',input:{auth:'{{connections.jarvis:monday}}',board_id:'100',item_name:'New item',column_values:{text:'Hello'}}}};
+  const check=()=>compileWorkflow(graph(node),{pieces});
+  expect(check().issues.filter(i=>i.path.includes('workspace_id')||i.path.includes('column_values'))).toEqual([]);
+  delete node.settings.input.board_id;
+  expect(check().issues.some(i=>i.path.endsWith('board_id'))).toBe(true);
+  node.settings.input.auth='{{connections.manual}}';
+  expect(check().issues.some(i=>i.path.endsWith('workspace_id'))).toBe(true);
+});
+
+test('Ask embedded contracts are validated before composition, publish and run', () => {
+  const ask = new PieceCatalog([{ name: 'jarvis-ask', displayName: 'Ask', description: '', actions: { ask: { name: 'ask', displayName: 'Ask', description: '' } } }]);
+  const g = (outputSchema: unknown) => ({ name: 'trigger', type: 'EMPTY', nextAction: { name: 'extract', type: 'PIECE', settings: { pieceName: 'jarvis-ask', actionName: 'ask', input: { prompt: 'Extract', outputSchema } } } });
+  for (const phase of ['composition', 'activation'] as const) {
+    for (const schema of ['{broken', JSON.stringify({ type: 'object', properties: { total: { type: 'number', unsupported: true } } })]) {
+      const result = compileWorkflow(g(schema), { pieces: ask, phase });
+      expect(result.ready).toBe(false);
+      expect(result.issues).toContainEqual(expect.objectContaining({ node: 'extract', path: 'settings.input.outputSchema', code: 'OUTPUT_SCHEMA' }));
+    }
+    expect(compileWorkflow(g(JSON.stringify({ type: 'number', minimum: 0 })), { pieces: ask, phase }).ready).toBe(true);
+    expect(compileWorkflow(g(''), { pieces: ask, phase }).ready).toBe(true);
+    const dynamic = compileWorkflow(g('{{trigger.schema}}'), { pieces: ask, phase });
+    expect(dynamic.runtimeChecks).toContainEqual(expect.objectContaining({ node: 'extract', path: 'settings.input.outputSchema', guard: 'piece-input' }));
+  }
+});
+
+
+test('a saved malformed extraction schema cannot publish or queue a manual run', async () => {
+  configureWorkflowReadiness({ pieces: new PieceCatalog([{name:'jarvis-ask',displayName:'Ask',description:'',actions:{ask:{name:'ask',displayName:'Ask',description:''}}}]) });
+  const { flow, version } = draft({name:'trigger',type:'EMPTY',nextAction:{name:'extract',type:'PIECE',settings:{pieceName:'jarvis-ask',actionName:'ask',input:{prompt:'Extract',outputSchema:'{broken'}}}});
+  expect(versionReadiness(flow.id,version.id).issues).toContainEqual(expect.objectContaining({code:'OUTPUT_SCHEMA'}));
+  for (const path of ['/api/workflows/:id/publish','/api/workflows/:id/run']) expect((await request(path,'POST',{id:flow.id},{versionId:version.id})).status).toBe(422);
+  const tool=createManageWorkflowTool();
+  for (const action of ['publish','run','enable']) await expect(tool.execute({action,flow:flow.id})).rejects.toThrow();
+  expect(getFlow(flow.id)?.status).toBe('DISABLED');expect(getFlow(flow.id)?.published_version_id).toBeNull();
+  expect(getWorkflowDb().query('SELECT count(*) AS n FROM flow_run').get()).toEqual({n:0});
+});
+
+test('built-in schedule validates explicit DST policy',()=>{
+ const g=cron();g.settings.input.dst_policy='skip_missing_first_repeated';
+ expect(compileWorkflow(g,{phase:'composition'}).issues.filter(x=>x.code==='DST_POLICY')).toEqual([]);
+ g.settings.input.dst_policy='guess';expect(compileWorkflow(g,{phase:'composition'}).issues.some(x=>x.code==='DST_POLICY')).toBe(true);
+});

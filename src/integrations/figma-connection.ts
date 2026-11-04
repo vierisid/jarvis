@@ -1,4 +1,5 @@
 /** Read the hosting-owned grant on every use. Refreshed access tokens are cached separately. */
+import { figmaNeedsReconnect } from "./figma-refresh";
 import { readManagedConnectionFile } from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
@@ -73,10 +74,12 @@ export function figmaConnectUrl(config: JarvisConfig): string | null {
 }
 export function figmaStatus(config: JarvisConfig) {
   const connection = readFigmaConnection(config.daemon.data_dir);
+  const reconnect = connection ? figmaNeedsReconnect(config, connection) : false;
   return {
     configured: !!figmaConnectUrl(config),
     connect_url: figmaConnectUrl(config),
-    connected: !!connection,
+    connected: !!connection && !reconnect,
+    reconnect,
     external_id: FIGMA_CONNECTION,
     account: connection?.account ?? null,
     workspaces: connection?.workspaces ?? [],

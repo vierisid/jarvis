@@ -371,7 +371,7 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
             </div>
             <ul className="brief-connections-catalog">
               {data.catalog
-                .filter((service) =>
+                .filter((service) => !service.existingOnly &&
                   `${service.name} ${service.description}`
                     .toLocaleLowerCase()
                     .includes(state.search.toLocaleLowerCase()),
@@ -394,12 +394,12 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
                   </li>
                 ))}
             </ul>
-            {!data.catalog.length ? (
+            {!data.catalog.some(service => !service.existingOnly) ? (
               <p className="brief-connections-empty">
                 No supported service setup is available here yet.
               </p>
             ) : (
-              !data.catalog.some((service) =>
+              !data.catalog.some((service) => !service.existingOnly &&
                 `${service.name} ${service.description}`
                   .toLocaleLowerCase()
                   .includes(state.search.toLocaleLowerCase()),

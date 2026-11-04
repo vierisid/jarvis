@@ -23,6 +23,8 @@ export type ToolParameter = {
    * Prefer this over listing the options in the description.
    */
   enum?: string[];
+  /** JSON Schema for array elements; execution still validates nested values. */
+  items?: Record<string, unknown>;
 };
 
 export type ToolResult = {
@@ -263,7 +265,7 @@ export class ToolRegistry {
       return await observeToolExecution(name, () => withExecutionScope(killFence, () => {
         assertCurrentMemoryContext();
         return tool.execute(params);
-      }));
+      }), params.action);
     } catch (error) {
       if (error instanceof ActionOutcomeError) throw error;
       // #630. The fence above is NOT the only place cancellation is raised, and

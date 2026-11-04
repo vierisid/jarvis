@@ -2,7 +2,8 @@
  * CronScheduler — lightweight cron expression parser and scheduler
  *
  * Standard cron (5-field, minute resolution):
- *   "minute hour dayOfMonth month dayOfWeek" with `*`, `/`, `-`, and CSVs
+ *   "minute hour dayOfMonth month dayOfWeek" with `*`, `/`, `-`, and CSVs.
+ *   Day-of-month also accepts `LW`: the last Monday-Friday date (no holidays).
  *
  * Sub-minute extension:
  *   "@every <duration>" where <duration> is `<n>(s|m|h)` -- e.g. `@every 10s`,
@@ -35,7 +36,15 @@ export type CronOccurrence = {
 /** Missed occurrences older than the newest `CRON_MISSED_LISTED`, counted rather than listed. */
 export type CronMissedSummary = { count: number; from: number; through: number };
 
+export type CronDstPolicy = 'shift_missing_once' | 'skip_missing_first_repeated';
+export function validateCronDstPolicy(value: unknown): asserts value is CronDstPolicy | undefined {
+  if (value !== undefined && value !== 'shift_missing_once' && value !== 'skip_missing_first_repeated')
+    throw new Error('Schedule DST policy must be shift_missing_once or skip_missing_first_repeated');
+}
+
 export type CronScheduleOptions = {
+  /** Default retains legacy spring shifting. Strict mode skips gaps and excludes the later fold even after restart. */
+  dstPolicy?: CronDstPolicy;
   /** Explicit IANA zone for this job; omitted uses the configured default. */
   timezone?: string;
   /**
@@ -148,6 +157,7 @@ function parseExpression(expression: string): {
   minutes: number[];
   hours: number[];
   daysOfMonth: number[];
+  lastWeekday: boolean;
   months: number[];
   daysOfWeek: number[];
 } {
@@ -161,7 +171,8 @@ function parseExpression(expression: string): {
   const parsed = {
     minutes: parseField(minField!, 0, 59),
     hours: parseField(hourField!, 0, 23),
-    daysOfMonth: parseField(domField!, 1, 31),
+    daysOfMonth: domField === 'LW' ? parseField('*', 1, 31) : parseField(domField!, 1, 31),
+    lastWeekday: domField === 'LW',
     months: parseField(monthField!, 1, 12),
     // Expand ranges/steps before folding the Sunday alias, so 1-7 and
     // 1-7/2 retain their ordinary cron meaning.
@@ -172,6 +183,10 @@ function parseExpression(expression: string): {
   const maxDays = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   if (!parsed.months.some(month => parsed.daysOfMonth.some(day => day <= maxDays[month - 1]!))) {
     throw new Error('Invalid cron expression: selected days do not exist in the selected months');
+  }
+  // LW is always Monday-Friday, so a weekend-only day-of-week never fires.
+  if (parsed.lastWeekday && !parsed.daysOfWeek.some(day => day >= 1 && day <= 5)) {
+    throw new Error('Invalid cron expression: LW never falls on the selected days of the week');
   }
   return parsed;
 }
@@ -276,9 +291,23 @@ function addWallMinute(wc: WallClock): WallClock {
 
 type ParsedCron = ReturnType<typeof parseExpression>;
 
+function matchesDay(parsed: ParsedCron, wc: WallClock): boolean {
+  if (!parsed.months.includes(wc.month) || !parsed.daysOfWeek.includes(wc.dow)) return false;
+  if (!parsed.lastWeekday) return parsed.daysOfMonth.includes(wc.dom);
+  // Compute using the calendar components, not the host timezone or +24h.
+  const end = new Date(Date.UTC(wc.year, wc.month, 0));
+  const dow = end.getUTCDay();
+  const last = end.getUTCDate() - (dow === 0 ? 2 : dow === 6 ? 1 : 0);
+  return wc.dom === last;
+}
+
 function matchesWall(parsed: ParsedCron, wc: WallClock): boolean {
-  return parsed.minutes.includes(wc.minute) && parsed.hours.includes(wc.hour) && parsed.daysOfMonth.includes(wc.dom)
-    && parsed.months.includes(wc.month) && parsed.daysOfWeek.includes(wc.dow);
+  return parsed.minutes.includes(wc.minute) && parsed.hours.includes(wc.hour) && matchesDay(parsed, wc);
+}
+
+/** Scheduled local minute, independent of when its worker eventually executes. */
+export function cronWallTimeKey(date: Date, zone: string | null = cronTimezone): string {
+  return wallKey(wallClockIn(date, zone));
 }
 
 /**
@@ -294,6 +323,25 @@ function skippedOccurrence(parsed: ParsedCron, atMs: number, zone: string | null
     if (matchesWall(parsed, step)) return { at: atMs, key: wallKey(step), shifted: true };
   }
   return null;
+}
+
+/** Reject the later instance of a repeated civil minute without relying on process memory.
+ * Derive candidate instants from offsets on the preceding two days, then verify
+ * them against ICU. Also handles half-hour folds and date-line changes. */
+function firstWallOccurrence(at: number, zone: string | null): boolean {
+  const current = wallClockIn(new Date(at), zone);
+  const civil = (w: WallClock) => Date.UTC(w.year, w.month - 1, w.dom, w.hour, w.minute);
+  const minute = Math.floor(at / 60_000) * 60_000;
+  const key = wallKey(current), offsets = new Set<number>();
+  for (let hours = 6; hours <= 48; hours += 6) {
+    const sample = minute - hours * 3_600_000;
+    const offset = civil(wallClockIn(new Date(sample), zone)) - sample;
+    if (offsets.has(offset)) continue;
+    offsets.add(offset);
+    const earlier = civil(current) - offset;
+    if (earlier < minute && wallKey(wallClockIn(new Date(earlier), zone)) === key) return false;
+  }
+  return true;
 }
 
 function zoneFormatter(zone: string): Intl.DateTimeFormat {
@@ -360,6 +408,7 @@ function startOfNextLocalDay(ts: number, zone: string | null): number {
 // ── CronScheduler ──
 
 export class CronScheduler {
+  constructor(private readonly now: () => number = () => Date.now()) {}
   private jobs: Map<string, CronJob> = new Map();
 
   /**
@@ -378,14 +427,14 @@ export class CronScheduler {
    * wall-clock minute: the autumn hour that happens twice yields its minutes
    * once. Bounded by `limit`.
    */
-  static occurrencesBetween(expression: string, afterMs: number, untilMs: number, limit = 1_000, zone: string | null = cronTimezone): Array<{ at: number; key: string }> {
+  static occurrencesBetween(expression: string, afterMs: number, untilMs: number, limit = 1_000, zone: string | null = cronTimezone, dstPolicy?: CronDstPolicy): Array<{ at: number; key: string }> {
     const out: Array<{ at: number; key: string }> = [];
     const seen = new Set<string>();
     let cursor = new Date(afterMs);
     for (let i = 0; i < limit; i++) {
       // Bounded at `untilMs`: a sparse expression (yearly) must not scan a
       // year ahead on every tick.
-      const next = CronScheduler.nextRun(expression, cursor, untilMs + 1, zone);
+      const next = CronScheduler.nextRun(expression, cursor, untilMs + 1, zone, dstPolicy);
       if (!next || next.getTime() > untilMs) break;
       const key = wallKey(wallClock(next, zone));
       if (!seen.has(key)) {
@@ -398,9 +447,11 @@ export class CronScheduler {
   }
 
   /** Whether the expression matches `date` read in `zone` rather than the configured zone. */
-  static matchesIn(expression: string, date: Date, zone: string): boolean {
+  static matchesIn(expression: string, date: Date, zone: string, dstPolicy?: CronDstPolicy): boolean {
     try {
-      return matchesWall(parseExpression(expression), wallClockIn(date, zone));
+      validateCronDstPolicy(dstPolicy);
+      return matchesWall(parseExpression(expression), wallClockIn(date, zone))
+        && (dstPolicy !== 'skip_missing_first_repeated' || firstWallOccurrence(date.getTime(), zone));
     } catch {
       return false;
     }
@@ -412,10 +463,12 @@ export class CronScheduler {
    * @param from - start searching from this date (default: now)
    * @returns Date of next execution, or null if none found within 1 year
    */
-  static nextRun(expression: string, from: Date = new Date(), limitMs?: number, zone: string | null = cronTimezone): Date | null {
-    if (zone !== null) return CronScheduler.nextRunInTimezone(expression, from, zone, limitMs);
+  static nextRun(expression: string, from: Date = new Date(), limitMs?: number, zone: string | null = cronTimezone, dstPolicy?: CronDstPolicy): Date | null {
+    validateCronDstPolicy(dstPolicy);
+    if (zone !== null || dstPolicy === 'skip_missing_first_repeated') return CronScheduler.nextRunInTimezone(expression, from, zone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, limitMs, dstPolicy);
     try {
-      const { minutes, hours, daysOfMonth, months, daysOfWeek } = parseExpression(expression);
+      const parsed = parseExpression(expression);
+      const { minutes, hours, months } = parsed;
 
       // Start from the next minute
       const start = new Date(from);
@@ -444,7 +497,7 @@ export class CronScheduler {
           continue;
         }
 
-        if (!daysOfMonth.includes(dom) || !daysOfWeek.includes(dow)) {
+        if (!matchesDay(parsed, { minute, hour, dom, month, dow, year: candidate.getFullYear() })) {
           // Advance to next day
           candidate.setDate(candidate.getDate() + 1);
           candidate.setHours(0, 0, 0, 0);
@@ -498,9 +551,10 @@ export class CronScheduler {
    * next hour boundary) keep it fast; hour offsets in :30/:45 zones are safe
    * because jumps are derived from the wall-clock minute.
    */
-  private static nextRunInTimezone(expression: string, from: Date, zone: string, limitMs?: number): Date | null {
+  private static nextRunInTimezone(expression: string, from: Date, zone: string, limitMs?: number, dstPolicy?: CronDstPolicy): Date | null {
     try {
-      const { minutes, hours, daysOfMonth, months, daysOfWeek } = parseExpression(expression);
+      const parsed = parseExpression(expression);
+      const { minutes, hours } = parsed;
 
       // Start from the next whole minute.
       let ts = Math.floor(from.getTime() / 60_000) * 60_000 + 60_000;
@@ -509,7 +563,7 @@ export class CronScheduler {
 
       while (ts < limit && ++guard < 600_000) {
         const wc = wallClock(new Date(ts), zone);
-        if (!months.includes(wc.month) || !daysOfMonth.includes(wc.dom) || !daysOfWeek.includes(wc.dow)) {
+        if (!matchesDay(parsed, wc)) {
           ts = startOfNextLocalDay(ts, zone);
           continue;
         }
@@ -522,6 +576,7 @@ export class CronScheduler {
           ts += nextMinute !== undefined ? (nextMinute - wc.minute) * 60_000 : (60 - wc.minute) * 60_000;
           continue;
         }
+        if (dstPolicy === 'skip_missing_first_repeated' && !firstWallOccurrence(ts, zone)) { ts += 60_000; continue; }
         return new Date(ts);
       }
 
@@ -538,19 +593,23 @@ export class CronScheduler {
    * Each occurrence fires once: a tick up to `CRON_GRACE_MS` late still fires
    * it (with its lateness); older ones are reported to `onMissed` and never
    * run late. The autumn hour that happens twice fires its minutes once, a
-   * minute skipped by a spring-forward jump fires once right after the jump,
-   * and a clock stepped back does not fire a minute again.
+   * minute skipped by a spring-forward jump fires once right after the jump
+   * under the legacy default. skip_missing_first_repeated skips the gap and
+   * rejects later autumn instances even in a newly started process. A clock
+   * stepped back does not fire a minute again.
    */
   schedule(id: string, expression: string, callback: (occurrence: CronOccurrence) => void, options: CronScheduleOptions = {}): void {
     // Validate before replacing an existing registration. Never mutate the global zone.
     if (options.timezone !== undefined) validateCronTimezone(options.timezone);
+    validateCronDstPolicy(options.dstPolicy);
+    const dstPolicy = options.dstPolicy;
     const zone = options.timezone ?? cronTimezone;
     if (this.jobs.has(id)) {
       this.cancel(id);
     }
     const run = (occurrence: CronOccurrence): void => {
       const job = this.jobs.get(id);
-      if (job) job.lastRun = Date.now();
+      if (job) job.lastRun = this.now();
       try {
         callback(occurrence);
       } catch (err) {
@@ -563,9 +622,9 @@ export class CronScheduler {
     // 1-minute granularity of the standard cron loop.
     const everyMs = parseEveryExpression(expression);
     if (everyMs !== null) {
-      const fireAt = Date.now() + everyMs;
+      const fireAt = this.now() + everyMs;
       const handle = setInterval(() => {
-        const now = Date.now();
+        const now = this.now();
         const job = this.jobs.get(id);
         if (job) job.nextRun = now + everyMs;
         const slot = Math.floor(now / everyMs);
@@ -588,7 +647,7 @@ export class CronScheduler {
     // Standard 5-field cron path.
     const parsed = parseExpression(expression);
 
-    const nextRun = CronScheduler.nextRun(expression, new Date(), undefined, zone);
+    const nextRun = CronScheduler.nextRun(expression, new Date(this.now()), undefined, zone, dstPolicy);
     if (!nextRun) {
       throw new Error(`Cron expression "${expression}" has no upcoming execution times`);
     }
@@ -597,7 +656,7 @@ export class CronScheduler {
     // due, so a job registered at 09:00:40 still fires its 09:00 occurrence.
     let evaluatedThrough = options.dueAfter !== undefined
       ? Math.floor(options.dueAfter / 60_000)
-      : Math.floor(Date.now() / 60_000) - 1;
+      : Math.floor(this.now() / 60_000) - 1;
     // Wall-clock keys already fired or reported missed, so the repeated autumn
     // hour fires once and nothing repeats after the clock is moved back.
     const handled = new Set<string>();
@@ -625,7 +684,7 @@ export class CronScheduler {
       const due: CronOccurrence[] = [];
       // After a long sleep only the last `CRON_MISSED_LOOKBACK_MS` is looked at.
       const windowStart = Math.max(from * 60_000, nowMs - CRON_MISSED_LOOKBACK_MS);
-      for (const occurrence of CronScheduler.occurrencesBetween(expression, windowStart, current * 60_000, 100_000, zone)) {
+      for (const occurrence of CronScheduler.occurrencesBetween(expression, windowStart, current * 60_000, 100_000, zone, dstPolicy)) {
         if (handled.has(occurrence.key)) continue;
         const lateMs = nowMs - occurrence.at;
         (lateMs > CRON_GRACE_MS ? missed : due).push({ ...occurrence, lateMs });
@@ -650,7 +709,7 @@ export class CronScheduler {
       // A minute that clocks skipped when they jumped forward fires once,
       // right after the jump. Only while ticking normally: a jump during a
       // long stall is part of what was missed.
-      if (current - from <= 2) {
+      if (dstPolicy !== 'skip_missing_first_repeated' && current - from <= 2) {
         for (let minute = from + 1; minute <= current; minute++) {
           const shifted = skippedOccurrence(parsed, minute * 60_000, zone);
           if (shifted && !handled.has(shifted.key)) {
@@ -661,10 +720,10 @@ export class CronScheduler {
       }
       // The next run is for display; work it out only when something fired.
       const job = this.jobs.get(id);
-      if (job && (due.length || job.nextRun <= nowMs)) job.nextRun = CronScheduler.nextRun(expression, new Date(nowMs), undefined, zone)?.getTime() ?? nowMs;
+      if (job && (due.length || job.nextRun <= nowMs)) job.nextRun = CronScheduler.nextRun(expression, new Date(nowMs), undefined, zone, dstPolicy)?.getTime() ?? nowMs;
     };
 
-    const handle = setInterval(() => tick(Date.now()), 30_000);
+    const handle = setInterval(() => tick(this.now()), 30_000);
 
     this.jobs.set(id, {
       id,
@@ -680,7 +739,7 @@ export class CronScheduler {
   }
 
   /** Evaluate a job as of `nowMs` without waiting for its interval. */
-  runDue(id: string, nowMs = Date.now()): void {
+  runDue(id: string, nowMs = this.now()): void {
     this.jobs.get(id)?.tick?.(nowMs);
   }
 

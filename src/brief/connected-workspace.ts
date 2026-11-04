@@ -1,23 +1,20 @@
+import { HOSTED_CONNECTION_PROVIDERS, connectionProviderForPiece, type HostedConnectionProvider } from '../integrations/connection-providers';
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_IDS } from '../workflows/db';
 import type { PieceLookup } from '../workflows/runtime/piece-catalog';
 import type { SidecarInfo } from '../sidecar/types';
 import type { ConnectedRow, ConnectedWorkspaceSnapshot, ConnectionSetupAction } from './connected-workspace-contracts';
 
-export interface ConnectedWorkspaceSources {
+interface HostedConnectionObservation {
+  configured: boolean; connected: boolean; reconnect?: boolean; account: { id: string; label: string } | null;
+}
+export type ConnectedWorkspaceSources = Partial<Record<HostedConnectionProvider, () => HostedConnectionObservation>> & {
   devices?: () => Pick<SidecarInfo, 'id' | 'name' | 'status' | 'connected'>[];
-  clickup?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
-  github?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
-  trello?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
-  mailchimp?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
-  asana?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
-  figma?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
-  slack?: () => { configured: boolean; connected: boolean; account: {id: string; label: string} | null };
   google?: () => { mode: 'self' | 'managed' | 'none' | 'unavailable'; authenticated: boolean; reconnect: boolean; canSetup: boolean };
   channels?: () => Partial<Record<'telegram' | 'discord', { enabled: boolean; connected: boolean; authentication?: 'verified' | 'rejected' | 'unknown' }>>;
   pieces?: () => PieceLookup | null;
   hosted: () => boolean;
-}
+};
 export const CONNECTED_LIMIT = 1000;
 const safeId = (s: string) => typeof s === 'string' && /^[\w@./:-]{1,256}$/.test(s);
 const safeVersion = (s: string) => typeof s === 'string' && /^[a-zA-Z0-9.+_-]{1,256}$/.test(s);
@@ -84,114 +81,22 @@ export class ConnectedWorkspace {
         states.google = 'ready';
       } catch { google.status = 'unavailable'; }
       rows.push(google);
-      if (this.sources.clickup) {
-        const row = base('native:clickup', 'native_service', 'clickup', 'ClickUp');
+      for (const id of Object.keys(HOSTED_CONNECTION_PROVIDERS) as HostedConnectionProvider[]) {
+        const observe = this.sources[id];
+        if (!observe) continue;
+        const name = HOSTED_CONNECTION_PROVIDERS[id];
+        const row = base(`native:${id}`, 'native_service', id, name);
         try {
-          const c = this.sources.clickup();
-          if (c.configured || c.connected) {
-            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
-            row.availability = c.connected ? 'ready' : 'unavailable';
+          const c = observe();
+          if (c.configured || c.connected || c.reconnect) {
+            row.authenticated = c.connected && !c.reconnect;
+            row.status = c.reconnect ? 'reconnect_required' : row.authenticated ? 'connected' : 'disconnected';
+            row.availability = row.authenticated ? 'ready' : 'unavailable';
             row.accountId = c.account?.id ?? null;
-            row.label = c.account ? label('ClickUp: ' + c.account.label) : 'ClickUp';
-            row.evidence = c.connected ? 'stored_grant' : 'none';
-            if (c.configured) offer(row, {id: 'setup:clickup', label: 'ClickUp',
-              target: {kind: 'hosted_integration', provider: 'clickup'}, verifies: {kind: 'native_service', serviceId: 'clickup'}});
-            rows.push(row);
-          }
-        } catch { row.status = 'unavailable'; rows.push(row); }
-      }
-      if (this.sources.github) {
-        const row = base('native:github', 'native_service', 'github', 'GitHub');
-        try {
-          const c = this.sources.github();
-          if (c.configured || c.connected) {
-            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
-            row.availability = c.connected ? 'ready' : 'unavailable';
-            row.accountId = c.account?.id ?? null;
-            row.label = c.account ? label('GitHub: ' + c.account.label) : 'GitHub';
-            row.evidence = c.connected ? 'stored_grant' : 'none';
-            if (c.configured) offer(row, {id: 'setup:github', label: 'GitHub',
-              target: {kind: 'hosted_integration', provider: 'github'}, verifies: {kind: 'native_service', serviceId: 'github'}});
-            rows.push(row);
-          }
-        } catch { row.status = 'unavailable'; rows.push(row); }
-      }
-      if (this.sources.trello) {
-        const row = base('native:trello', 'native_service', 'trello', 'Trello');
-        try {
-          const c = this.sources.trello();
-          if (c.configured || c.connected) {
-            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
-            row.availability = c.connected ? 'ready' : 'unavailable';
-            row.accountId = c.account?.id ?? null;
-            row.label = c.account ? label('Trello: ' + c.account.label) : 'Trello';
-            row.evidence = c.connected ? 'stored_grant' : 'none';
-            if (c.configured) offer(row, {id: 'setup:trello', label: 'Trello',
-              target: {kind: 'hosted_integration', provider: 'trello'}, verifies: {kind: 'native_service', serviceId: 'trello'}});
-            rows.push(row);
-          }
-        } catch { row.status = 'unavailable'; rows.push(row); }
-      }
-      if (this.sources.mailchimp) {
-        const row = base('native:mailchimp', 'native_service', 'mailchimp', 'Mailchimp');
-        try {
-          const c = this.sources.mailchimp();
-          if (c.configured || c.connected) {
-            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
-            row.availability = c.connected ? 'ready' : 'unavailable';
-            row.accountId = c.account?.id ?? null;
-            row.label = c.account ? label('Mailchimp: ' + c.account.label) : 'Mailchimp';
-            row.evidence = c.connected ? 'stored_grant' : 'none';
-            if (c.configured) offer(row, {id: 'setup:mailchimp', label: 'Mailchimp',
-              target: {kind: 'hosted_integration', provider: 'mailchimp'}, verifies: {kind: 'native_service', serviceId: 'mailchimp'}});
-            rows.push(row);
-          }
-        } catch { row.status = 'unavailable'; rows.push(row); }
-      }
-      if (this.sources.asana) {
-        const row = base('native:asana', 'native_service', 'asana', 'Asana');
-        try {
-          const c = this.sources.asana();
-          if (c.configured || c.connected) {
-            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
-            row.availability = c.connected ? 'ready' : 'unavailable';
-            row.accountId = c.account?.id ?? null;
-            row.label = c.account ? label('Asana: ' + c.account.label) : 'Asana';
-            row.evidence = c.connected ? 'stored_grant' : 'none';
-            if (c.configured) offer(row, {id: 'setup:asana', label: 'Asana',
-              target: {kind: 'hosted_integration', provider: 'asana'}, verifies: {kind: 'native_service', serviceId: 'asana'}});
-            rows.push(row);
-          }
-        } catch { row.status = 'unavailable'; rows.push(row); }
-      }
-      if (this.sources.figma) {
-        const row = base('native:figma', 'native_service', 'figma', 'Figma');
-        try {
-          const c = this.sources.figma();
-          if (c.configured || c.connected) {
-            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
-            row.availability = c.connected ? 'ready' : 'unavailable';
-            row.accountId = c.account?.id ?? null;
-            row.label = c.account ? label('Figma: ' + c.account.label) : 'Figma';
-            row.evidence = c.connected ? 'stored_grant' : 'none';
-            if (c.configured) offer(row, {id: 'setup:figma', label: 'Figma',
-              target: {kind: 'hosted_integration', provider: 'figma'}, verifies: {kind: 'native_service', serviceId: 'figma'}});
-            rows.push(row);
-          }
-        } catch { row.status = 'unavailable'; rows.push(row); }
-      }
-      if (this.sources.slack) {
-        const row = base('native:slack', 'native_service', 'slack', 'Slack');
-        try {
-          const c = this.sources.slack();
-          if (c.configured || c.connected) {
-            row.authenticated = c.connected; row.status = c.connected ? 'connected' : 'disconnected';
-            row.availability = c.connected ? 'ready' : 'unavailable';
-            row.accountId = c.account?.id ?? null;
-            row.label = c.account ? label('Slack: ' + c.account.label) : 'Slack';
-            row.evidence = c.connected ? 'stored_grant' : 'none';
-            if (c.configured) offer(row, {id: 'setup:slack', label: 'Slack',
-              target: {kind: 'hosted_integration', provider: 'slack'}, verifies: {kind: 'native_service', serviceId: 'slack'}});
+            row.label = c.account ? label(`${name}: ${c.account.label}`) : name;
+            row.evidence = row.authenticated ? 'stored_grant' : 'none';
+            if (c.configured) offer(row, { id: `setup:${id}`, label: name,
+              target: { kind: 'hosted_integration', provider: id }, verifies: { kind: 'native_service', serviceId: id } });
             rows.push(row);
           }
         } catch { row.status = 'unavailable'; rows.push(row); }
@@ -223,13 +128,17 @@ export class ConnectedWorkspace {
       for (const p of pieces) {
         const row = base(`piece:${p.name}`, 'library_piece', p.name, p.displayName);
         row.status = 'installed'; row.availability = 'ready'; row.evidence = 'loaded_piece'; row.pieceVersion = p.version ?? null;
-        // The current connection form accepts credentials manually, even for OAuth-shaped values.
-        // There is no universal piece OAuth broker. Only loaded, versioned auth declarations are offered.
-        if (instanceScope && p.version && p.auth && authTypes.has(p.auth.type)) offer(row, {
-          id: `setup:piece:${p.name}`, label: p.displayName.slice(0,160),
-          target: { kind: 'piece_credentials', pieceName: p.name, pieceVersion: p.version, authType: p.auth.type },
-          verifies: { kind: 'workflow_connection', serviceId: p.name },
-        });
+        const managed = connectionProviderForPiece(p.name);
+        const nativeSetup = managed && setup.find(a => a.id === `setup:${managed}`);
+        if (instanceScope && nativeSetup) {
+          // The library entry keeps its installed state; setup verifies the provider's actual account.
+          offer(row, nativeSetup);
+        } else if (instanceScope && p.version && p.auth && authTypes.has(p.auth.type)
+          && !(managed && (this.sources.hosted() || rows.some(r => r.sourceId === `native:${managed}` && r.status === 'unavailable')))) {
+          offer(row, { id: `setup:piece:${p.name}`, label: p.displayName.slice(0,160),
+            target: { kind: 'piece_credentials', pieceName: p.name, pieceVersion: p.version, authType: p.auth.type },
+            verifies: { kind: 'workflow_connection', serviceId: p.name } });
+        }
         rows.push(row);
       }
       states.pieces = 'ready';
@@ -253,6 +162,11 @@ export class ConnectedWorkspace {
         row.permissions.canRevoke = instanceScope;
         const action = setup.find(s => s.id === `setup:piece:${a.piece_name}`);
         if (action && compatible) offer(row, action);
+        else if (instanceScope && compatible && piece?.version && piece.auth && authTypes.has(piece.auth.type)) {
+          offer(row, { id: `setup:account:${a.piece_name}`, label: piece.displayName.slice(0,160), existingOnly: true,
+            target: { kind: 'piece_credentials', pieceName: a.piece_name, pieceVersion: piece.version, authType: piece.auth.type },
+            verifies: { kind: 'workflow_connection', serviceId: a.piece_name } });
+        }
         rows.push(row);
       }
       states.accounts = 'ready';

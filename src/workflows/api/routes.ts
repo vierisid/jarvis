@@ -1,4 +1,5 @@
 import type { WorkflowContext } from '../../brief/workflow-context';
+import { editorVersion } from './editor-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
 import { requireWorkflowContext } from '../../brief/workflow-context-routes';
 import { WorkflowInspectionError } from '../../brief/inspection-values';
@@ -108,7 +109,7 @@ import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oaut
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
-import { isCommunityPiece } from "../runtime/step-admission";
+import { isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import { withScheduleZoneDefault } from "../runner/triggers/schedule-zone";
@@ -908,6 +909,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               displayName: a.displayName,
               description: a.description,
               inputSchema: a.inputSchema ?? null,
+              // A partly governed piece badges only its ungoverned actions.
+              ...(!isCommunityPiece(p.name) && isCommunityAction(p.name, a.name) ? { notApprovalGated: true } : {}),
               // Optional declared output sample (Jarvis extension to AP).
               // Surfaced to the dashboard so the variable picker can show
               // field-level rows for actions that have never been run yet.
@@ -1619,8 +1622,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const uiMeta = editableId ? getFlowVersionUiMeta(editableId) : null;
           return ok({
             flow: serializeFlow(flow),
-            latestDraft: draft,
-            published,
+            latestDraft: draft ? editorVersion(draft) : null,
+            published: published ? editorVersion(published) : null,
             uiMeta,
           });
         }),
@@ -1696,6 +1699,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             displayName?: string;
             trigger?: Record<string, unknown>;
             uiMeta?: FlowVersionUiMeta;
+            expectedRevision?: unknown;
           };
           if (!scopedFlow(req, id)) return err("flow not found", 404);
           // Used to be a bare truthiness check, so a non-string of any length
@@ -1713,16 +1717,31 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             const refusal = uiMetaRefusal(body.uiMeta);
             if (refusal) return err(refusal.message, refusal.status);
           }
-          const version = createDraftVersion({
-            flowId: id,
-            displayName: named.name,
-            trigger: body.trigger,
-          });
-          if (body.uiMeta) upsertFlowVersionUiMeta(version.id, body.uiMeta);
+          const version = getWorkflowDb().transaction(() => {
+            // The editor's first save from a published version creates the draft. Its
+            // revision names that published base, so a draft another tab or the
+            // assistant created meanwhile (or a newer publication) is never
+            // silently superseded. Optional for older API clients, as on PATCH.
+            if (body.expectedRevision !== undefined) {
+              const flow = getFlow(id);
+              const base = flow?.published_version_id ? getFlowVersion(flow.published_version_id) : null;
+              if (typeof body.expectedRevision !== "string" || getLatestDraft(id) || !base ||
+                  editorVersion(base).editorRevision !== body.expectedRevision) {
+                throw new FlowVersionRequestError("This workflow changed in another tab or conversation. Your edits are still here. Copy anything you want to keep, then discard and reload the latest draft before saving.", 409);
+              }
+            }
+            const created = createDraftVersion({
+              flowId: id,
+              displayName: named.name,
+              trigger: body.trigger,
+            });
+            if (body.uiMeta) upsertFlowVersionUiMeta(created.id, body.uiMeta);
+            return created;
+          }).immediate();
           // An enabled flow with nothing published runs its latest draft: its
           // trigger follows the new one (Q-06).
           refreshTrigger(id);
-          return ok(version, 201);
+          return ok(editorVersion(version), 201);
         }),
     },
 
@@ -1731,9 +1750,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(() => {
           const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
           if (!scopedFlow(req, id)) return versionNotInScope();
-          return ok(withOwnedFlowVersion(id, versionId, () => ({
-            ...getFlowVersion(versionId)!, uiMeta: getFlowVersionUiMeta(versionId),
-          })));
+          return ok(withOwnedFlowVersion(id, versionId, () => editorVersion(getFlowVersion(versionId)!)));
         }),
       PATCH: (req) =>
         trapErrors(async () => {
@@ -1750,6 +1767,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             connectionIds?: unknown;
             agentIds?: unknown;
             uiMeta?: FlowVersionUiMeta;
+            expectedRevision?: unknown;
           };
           // PICKED, never spread (#632). This used to be
           // `const { uiMeta, ...versionPatch } = body` on a body that is a CAST
@@ -1816,10 +1834,16 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             versionPatch.displayName = named.name;
           }
           const v = withOwnedFlowVersion(id, versionId, () => {
+            // Compare and write while holding the same SQLite transaction, including layout.
+            // Optional for older API clients; the shipped editor always supplies this token.
+            if (body.expectedRevision !== undefined &&
+                (typeof body.expectedRevision !== 'string' || editorVersion(getFlowVersion(versionId)!).editorRevision !== body.expectedRevision)) {
+              throw new FlowVersionRequestError('This draft changed in another tab or conversation. Your edits are still here. Copy anything you want to keep, then discard and reload the latest draft before saving.', 409);
+            }
             const updated = updateDraftVersion(versionId, versionPatch);
             // The content and its editor layout must commit together.
             if (uiMeta) upsertFlowVersionUiMeta(versionId, uiMeta);
-            return updated;
+            return editorVersion(updated);
           });
           // An edited live draft's schedule replaces the old one (Q-06).
           if (versionPatch.trigger !== undefined) refreshTrigger(id);
@@ -2256,7 +2280,23 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         if (!scopedRun(req, runId)) return err('run not found', 404);
         const read = await readWriteBody(req, 8192);
         if ('error' in read) return read.error;
-        const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority });
+        const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority, via: 'dashboard' });
+        return ok({ receipt, recovery: getRunRecovery(runId) });
+      }),
+    },
+    // Resolve the cross-run identity (HubSpot contact, notification
+    // idempotencyKey) an uncertain effect still holds, after checking the
+    // provider: mark_done if the write happened, release if it did not. The
+    // same audited recovery receipt as the route above; never runs anything.
+    "/api/workflow-runs/:runId/effects/:effectId/identity": {
+      POST: req => trapErrors(async () => {
+        const { runId, effectId } = (req as RequestWithParams<{ runId: string; effectId: string }>).params;
+        if (!scopedRun(req, runId)) return err('run not found', 404);
+        const read = await readWriteBody(req, 8192);
+        if ('error' in read) return read.error;
+        const { resolution, ...rest } = read.body;
+        if (resolution !== 'mark_done' && resolution !== 'release') return err('resolution must be mark_done or release', 400);
+        const receipt = await decideRunRecovery(runId, { ...rest, action: resolution, effectId }, { via: 'dashboard' });
         return ok({ receipt, recovery: getRunRecovery(runId) });
       }),
     },

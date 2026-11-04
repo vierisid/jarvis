@@ -35,7 +35,7 @@ import { digest } from './effect-context';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, wrapUntrusted } from '../../roles/untrusted';
 import { authorizePieceDispatch, CODE_STEP_PIECE, PIECE_RECEIPT_MAX_BYTES, pieceInputDigest, receiptBody } from './piece-effect-guard';
 import { getWaitpoint } from '../db/repos/waitpoint';
-import { isCommunityPiece } from './step-admission';
+import { isCommunityAction, isCommunityPiece } from './step-admission';
 import { WebSocketService } from '../../daemon/ws-service';
 import { SandboxApi } from '../sandbox-api/server';
 import { EngineTokenSigner } from '../sandbox-api/engine-token';
@@ -97,7 +97,7 @@ test('Sheets append blocks uncertain replay and returns a persisted completion w
 
 test('other Sheets actions stay ungoverned community steps: audited and badged', async () => {
   const sheets = '@activepieces/piece-google-sheets';
-  expect(isCommunityPiece(sheets)).toBe(true);
+  expect(isCommunityAction(sheets, 'clear_sheet')).toBe(true);
   const f = fixture(COMMUNITY_PIECE, 'create_contact');
   expect(await f.backends.pieceAuthorize!({ piece: sheets, action: 'clear_sheet', input: {} }, f.context)).toEqual({ governed: false });
   expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([
@@ -1494,6 +1494,31 @@ describe('#955: the editor badge and the admission agree on which steps skip app
   });
 });
 
+describe('#955: a partly governed piece badges and audits its ungoverned actions', () => {
+  test('a HubSpot action other than the contact upsert is admitted, audited and badged as community', async () => {
+    const HUBSPOT = '@activepieces/piece-hubspot';
+    expect(isCommunityPiece(HUBSPOT)).toBe(false);
+    expect(isCommunityAction(HUBSPOT, 'create-or-update-contact')).toBe(false);
+    expect(isCommunityAction(HUBSPOT, 'create-deal')).toBe(true);
+    expect(isCommunityAction(GMAIL, 'not_a_gmail_action')).toBe(false);
+    const f = fixture(COMMUNITY_PIECE, 'create-deal');
+    const reply = await f.backends.pieceAuthorize!({ piece: HUBSPOT, action: 'create-deal', input: {}, inputDigest: await pieceInputDigest({}) }, f.context);
+    expect(reply).toEqual({ governed: false });
+    expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([expect.objectContaining({ tool_name: `community piece ${HUBSPOT}/create-deal`, executed: 1 })]);
+  });
+  test('a Sheets action other than append is admitted, audited and badged as community', async () => {
+    const SHEETS = '@activepieces/piece-google-sheets';
+    expect(isCommunityPiece(SHEETS)).toBe(false);
+    for (const append of ['insert_row', 'sheets_append_values', 'sheets_add_row']) expect(isCommunityAction(SHEETS, append)).toBe(false);
+    expect(isCommunityAction(SHEETS, 'update_row')).toBe(true);
+    const f = fixture(SHEETS, 'update_row');
+    const reply = await f.backends.pieceAuthorize!({ piece: SHEETS, action: 'update_row', input: {}, inputDigest: await pieceInputDigest({}) }, f.context);
+    expect(reply).toEqual({ governed: false });
+    expect(listWorkflowEffects(f.run.id)).toHaveLength(0);
+    expect((f.options.auditTrail as AuditTrail).query({ limit: 5 })).toEqual([expect.objectContaining({ tool_name: `community piece ${SHEETS}/update_row`, executed: 1 })]);
+  });
+});
+
 describe('#961: the core HTTP piece is governed by method', () => {
   const HTTP = '@activepieces/piece-http';
   const shipped = () => {
@@ -1705,7 +1730,7 @@ describe('#961: the core HTTP piece is governed by method', () => {
     // at 40 sorted keys, so the props the rule reads are gone from what it
     // sees while the piece still receives them.
     const padding = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`a${String(i).padStart(2, '0')}`, i]));
-    const samples: unknown[] = [undefined, false, true, null, '', 'GET', 'HEAD', 'get', 'subscribed', 'pending', 'transactional', 'private'];
+    const samples: unknown[] = [undefined, false, true, null, '', 'GET', 'HEAD', 'get', 'subscribed', 'pending', 'transactional', 'private', 'closed'];
     let rules = 0;
     const covered: string[] = [];
     for (const adapter of ALL_PIECE_ADAPTERS) {
@@ -1735,6 +1760,10 @@ describe('#961: the core HTTP piece is governed by method', () => {
     // Every input-narrowed Asana rule is among those checked.
     expect(covered).toEqual(expect.arrayContaining(['asana/create_project', 'asana/instantiate_project_template',
       'asana/create_team', 'asana/duplicate_project', 'asana/update_project', 'asana/update_team']));
+    // And every monday.com one.
+    expect(covered).toEqual(expect.arrayContaining(['monday/monday_create_board', 'monday/monday_duplicate_board',
+      'monday/monday_create_workspace', 'monday/monday_update_workspace', 'monday/monday_update_board_hierarchy',
+      'monday/monday_update_folder']));
   });
 
   test('padding inside the body cannot hide its data from the read rule', () => {
@@ -1873,4 +1902,59 @@ describe('Dropbox action permissions', () => {
     }
     expect(tracksPieceCompletion(adapter.pieceName, 'custom_api_call')).toBe(false);
   });
+});
+
+describe('Typeform action permissions', () => {
+  const TYPEFORM = '@activepieces/piece-typeform';
+  test('deletes and form replacement require delete_data; an unmapped action stays modify_settings', async () => {
+    for (const action of ['delete_form', 'delete_responses', 'delete_workspace', 'delete_theme', 'delete_image', 'replace_form']) {
+      expect(resolveGovernedPieceAction(TYPEFORM, action)).toMatchObject({category:'delete_data', known:true});
+    }
+    await expect(fixture(TYPEFORM, 'delete_responses', 3).authorize({form_id:'f1', responseIds:['r1']})).rejects.toThrow(/Authority denied/);
+    for (const action of ['custom_api_call', 'typeform_added_upstream_later']) {
+      expect(resolveGovernedPieceAction(TYPEFORM, action)).toMatchObject({category:'modify_settings', known:false});
+    }
+  });
+
+  test('update_form is a move with a workspace, a setting with isPublic, otherwise a write', () => {
+    expect(resolveGovernedPieceAction(TYPEFORM, 'update_form')!.category).toBe('delete_data');
+    expect(resolveGovernedPieceAction(TYPEFORM, 'update_form', {form_id:'f1', workspace:'w2'})!.category).toBe('delete_data');
+    expect(resolveGovernedPieceAction(TYPEFORM, 'update_form', {form_id:'f1', isPublic:'false'})!.category).toBe('modify_settings');
+    expect(resolveGovernedPieceAction(TYPEFORM, 'update_form', {form_id:'f1', isPublic:7})!.category).toBe('modify_settings');
+    expect(resolveGovernedPieceAction(TYPEFORM, 'update_form', {form_id:'f1', title:'New', workspace:'  ', isPublic:null})!.category).toBe('write_data');
+  });
+
+  test('reads and writes on the user\'s own connection run at the default level 3 without a card', async () => {
+    for (const [action, input] of [['list_responses', {form_id:'f1'}], ['get_form', {form_id:'f1'}],
+      ['create_form', {title:'New'}], ['update_form', {form_id:'f1', title:'Renamed'}]] as const) {
+      const f = fixture(TYPEFORM, action, 3);
+      expect({action, reply: await f.authorize(input)}).toMatchObject({action, reply: {governed:true, dispatch:'authorized'}});
+      expect(f.approvals.getPending()).toHaveLength(0);
+    }
+  });
+
+  test('every Typeform write and delete carries a completion receipt; no read does', () => {
+    const adapter = ALL_PIECE_ADAPTERS.find(a => a.catalogId === 'typeform')!;
+    for (const [category, names] of Object.entries(adapter.categories)) {
+      for (const action of names ?? []) {
+        expect(`${action}: ${tracksPieceCompletion(adapter.pieceName, action)}`).toBe(`${action}: ${category !== 'read_data'}`);
+      }
+    }
+    expect(tracksPieceCompletion(adapter.pieceName, 'custom_api_call')).toBe(false);
+  });
+});
+
+test('ClickUp create task obeys Authority and preserves completed or uncertain dispatch receipts',async()=>{
+ for(const action of ['create_task','clickup_create_task']){
+  const f=fixture('@activepieces/piece-clickup',action);
+  const input={workspace_id:'fixture-workspace',space_id:'fixture-space',list_id:'fixture-list',name:'Support request',priority_id:2};
+  const first=await f.authorize(input) as {effectId:string};
+  await expect(f.authorize(input)).rejects.toThrow(/uncertain|replay is blocked/);
+  f.backends.pieceReceipt!(f.context,first.effectId,{id:'fixture-task'});
+  expect(await f.authorize(input)).toMatchObject({dispatch:'completed',result:{id:'fixture-task'}});
+  await expect(f.authorize({...input,list_id:'different-list'})).rejects.toThrow(/changed/);
+  const denied=fixture('@activepieces/piece-clickup',action);
+  denied.authority.addOverride({action:'write_data',allowed:false});
+  await expect(denied.authorize(input)).rejects.toThrow(/Authority denied/);
+ }
 });

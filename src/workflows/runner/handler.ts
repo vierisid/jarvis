@@ -1,6 +1,7 @@
 import { prepareSubmission, submissionConfig } from '../runtime/form-submission';
 import { lacksEmailMessageId, prepareEmailEvent, unclaimedEmailEvent } from '../runtime/event-types';
-import { claimEmailRun, claimSubmissionRun, fireForRun, releaseRefusedEmailRun } from '../db/repos/trigger-fire';
+import { gmailAttachmentKey, isGmailAttachmentTrigger } from '../runtime/gmail-attachment';
+import { claimAttachmentRun, claimEmailRun, claimSubmissionRun, fireForRun, releaseAttachmentClaim, releaseRefusedEmailRun } from '../db/repos/trigger-fire';
 import { applyInputOverrides, walkFlowNodes } from '../db/flow-graph';
 import { tracksPieceCompletion } from '../runtime/piece-effects';
 /**
@@ -277,6 +278,8 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
     }
 
     const cancellation = watchRunCancellation(runId);
+    // Set just before the executor is called: until then no step ran.
+    let executing = false;
     try {
       assertRunIngredientsReady(run, version.trigger,
         typed.payload.executionType === 'RESUME' ? undefined : typed.payload);
@@ -319,6 +322,15 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
           }
         } catch (error) { throw new FlowExecutionError((error as Error).message, { name: 'trigger', displayName: 'Check Gmail message identity' }); }
       }
+      if (!resuming && isGmailAttachmentTrigger(triggerSettings)) {
+        try {
+          // The preview scope is the run's frozen one, as for email admission.
+          const config = ensureRunExecutionConfig(run.id, typed.payload);
+          if (config.stepNameToTest || typed.payload.executeTrigger) throw Error('Test the complete attachment workflow with an emitted attachment payload; isolated step previews and trigger reexecution bypass attachment admission.');
+          claimAttachmentRun(run.flowId, version.id, gmailAttachmentKey(payload, run.flowId, run.projectId), run.id);
+        } catch (error) { throw new FlowExecutionError((error as Error).message, { name: 'trigger', displayName: 'Check attachment identity' }); }
+      }
+      executing = true;
       const result = await withRunCancellation(runId, () => opts.executor.execute({
         run,
         version,
@@ -362,6 +374,12 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       // row left to mark FAILED, and retrying would only re-enter the stale-
       // job return above.
       if (!getFlowRun(runId)) return;
+      // A fresh run refused before any step held its attachment's content for
+      // nothing: release it so a later identical attachment runs once.
+      if (!resuming && !executing && isGmailAttachmentTrigger(version.trigger.settings)) {
+        try { releaseAttachmentClaim(run.flowId, runId); }
+        catch (releaseError) { console.warn(`[run-flow ${runId}] could not release the attachment claim: ${(releaseError as Error).message}`); }
+      }
       if (getRunCancellation(runId)) {
         if (e instanceof FlowExecutionError) updateRun(runId, { steps: e.steps });
         return;
@@ -387,8 +405,9 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
           finishTime: ts,
         });
         // Refused by a readiness recheck at dispatch (here or just before the
-        // engine call), so nothing ran: the email it was started for keeps no
-        // claim, and once setup is fixed a redelivery or manual run processes it.
+        // engine call), so nothing ran: the email or attachment it was started
+        // for keeps no claim, and once setup is fixed a redelivery or manual
+        // run processes it.
         if (e instanceof WorkflowReadinessError && !resuming) {
           try { releaseRefusedEmailRun(runId); }
           catch (releaseError) { console.warn(`[run-flow ${runId}] could not release the refused email: ${(releaseError as Error).message}`); }

@@ -1,12 +1,19 @@
 /** Deterministic form ingress. No model, credentials or external effects. */
 import { createHash } from 'node:crypto';
-export interface SubmissionConfig { idField: string; emailField: string }
+export interface SubmissionConfig { idField: string; emailField?: string }
 const reserved = new Set(['__proto__', 'prototype', 'constructor', '_webhook']);
 /** allowIncomplete is for draft structural checks only; ingress always uses the strict default. */
 export function submissionConfig(value: unknown, allowIncomplete = false): SubmissionConfig | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('Webhook input must be an object');
   const input = value as Record<string, unknown>;
+  if ('request_id_field' in input) {
+    if ('submission_id_field' in input || 'submission_email_field' in input) throw Error('Choose request-ID admission or form ID/email admission, not both');
+    const path = input.request_id_field;
+    if (allowIncomplete && (path == null || path === '')) return undefined;
+    if (typeof path !== 'string' || path.length > 200 || !path.split('.').every(p => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(p) && !reserved.has(p))) throw Error('Request ID requires an explicit safe payload field path');
+    return { idField: path };
+  }
   if (input.submission_id_field === undefined && input.submission_email_field === undefined) return undefined;
   const raw: Record<string, unknown> = { idField: input.submission_id_field, emailField: input.submission_email_field };
   for (const key of ['idField', 'emailField']) {
@@ -56,9 +63,11 @@ export function prepareSubmission(payload: unknown, config: SubmissionConfig) {
   if (typeof id.value === 'number' && Number.isSafeInteger(id.value)) id.value = String(id.value);
   if (typeof id.value !== 'string' || !id.value || id.value.length > 256) throw Error('Submission ID must be a nonempty string of at most 256 characters or a safe integer');
   id.parent[id.key] = id.value;
+  if (config.emailField) {
   const email = field(data, config.emailField);
   if (typeof email.value !== 'string' || !validSubmissionEmail(email.value.toLowerCase())) throw Error('Submission email is invalid');
   email.parent[email.key] = email.value.toLowerCase();
+  }
   // Hash the entire ID, never truncate it. IDs remain case-sensitive.
   const key = 'submission:v1:' + createHash('sha256').update(id.value).digest('hex');
   return { data, key };

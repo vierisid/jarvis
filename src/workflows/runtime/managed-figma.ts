@@ -53,6 +53,8 @@ export function figmaFileKey(value: unknown): string {
   }
 }
 export const FIGMA_RESPONSE_LIMIT = 8 * 1024 * 1024;
+/** Text as compared after Figma stores it: line endings and runs of whitespace do not count. */
+const sameText = (text: string) => text.replace(/\s+/g, " ").trim();
 const validComment = (v: unknown, key: string) =>
   record(v) &&
   typeof v.id === "string" &&
@@ -124,8 +126,15 @@ export async function runManagedFigmaAction(
         uncertain,
     );
   }
+  // Past this point a post_comment reached Figma and was accepted. A failure
+  // below is reported as posted-but-unconfirmed: the step is completion-tracked,
+  // so a re-run is refused instead of posting the comment twice.
+  const accepted = posting
+    ? " Figma accepted the comment, so it is probably posted. Check the file; do not run this step again for the same comment."
+    : "";
   const reader = response.body?.getReader();
   let result: any;
+  let oversize = false;
   try {
     if (!reader) throw Error();
     const chunks: Uint8Array[] = [];
@@ -134,7 +143,10 @@ export async function runManagedFigmaAction(
       const { done, value } = await reader.read();
       if (done) break;
       size += value.length;
-      if (size > FIGMA_RESPONSE_LIMIT) throw Error();
+      if (size > FIGMA_RESPONSE_LIMIT) {
+        oversize = true;
+        throw Error();
+      }
       chunks.push(value);
     }
     const bytes = new Uint8Array(size);
@@ -144,35 +156,45 @@ export async function runManagedFigmaAction(
       offset += chunk.length;
     }
     result = JSON.parse(new TextDecoder().decode(bytes));
-    if (!record(result) || result.err || result.error || result.status >= 400)
-      throw Error();
-    if (action === "get_file") {
-      if (
-        typeof result.name !== "string" ||
-        typeof result.version !== "string" ||
-        typeof result.lastModified !== "string" ||
-        !record(result.document) ||
-        result.document.type !== "DOCUMENT" ||
-        typeof result.document.id !== "string"
-      )
-        throw Error();
-    } else if (posting) {
-      if (!validComment(result, key) || result.message !== input.message)
-        throw Error();
-    } else if (
-      !Array.isArray(result.comments) ||
-      !result.comments.every((c: unknown) => validComment(c, key))
-    )
-      throw Error();
   } catch {
-    throw Error(
-      "Figma returned an invalid or oversized response (8 MiB limit)." +
-        uncertain,
-    );
+    if (oversize && !posting)
+      throw Error(
+        "This Figma file is too large for this action (the response is over 8 MiB).",
+      );
+    throw Error("Figma returned a response that could not be read." + (posting ? accepted : " Try again shortly."));
   } finally {
     await reader?.cancel().catch(() => {});
     reader?.releaseLock();
   }
+  if (!record(result) || result.err || result.error || result.status >= 400)
+    throw Error("Figma returned an unexpected response." + (posting ? accepted : " Try again shortly."));
+  if (action === "get_file") {
+    if (
+      typeof result.name !== "string" ||
+      typeof result.version !== "string" ||
+      typeof result.lastModified !== "string" ||
+      !record(result.document) ||
+      result.document.type !== "DOCUMENT" ||
+      typeof result.document.id !== "string"
+    )
+      throw Error("Figma returned an unexpected file response. Try again shortly.");
+  } else if (posting) {
+    // The comment id and file are the receipt. Figma may normalise
+    // whitespace or line endings in the stored text; only other changes fail.
+    if (
+      typeof result.id !== "string" ||
+      !result.id ||
+      result.file_key !== key ||
+      (result.message !== undefined &&
+        (typeof result.message !== "string" ||
+          sameText(result.message) !== sameText(String(input.message))))
+    )
+      throw Error("Figma did not confirm the posted comment." + accepted);
+  } else if (
+    !Array.isArray(result.comments) ||
+    !result.comments.every((c: unknown) => validComment(c, key))
+  )
+    throw Error("Figma returned an unexpected comments response. Try again shortly.");
   // Keep the published piece's wrapper so stored references work on either credential path.
   return {
     success: true,

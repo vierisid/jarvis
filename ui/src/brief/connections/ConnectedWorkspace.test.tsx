@@ -360,3 +360,17 @@ test("saved credentials, explicit account selection and partial-source warnings 
   await click("Done");
   expect(visibleText()).toContain("Configured · not verified");
 });
+
+test("manual repair stays available on its account but is absent from the new-service picker", async () => {
+  const service = fixture.data.catalog.find(s => s.kind === 'workflow_connection')!;
+  service.existingOnly = true;
+  await render();
+  fixture.controller.catalog(); await React.act(wait);
+  expect(host.querySelector(`[data-service-id="${service.id}"]`)).toBeNull();
+  await React.act(async () => { fixture.controller.select(service.id); });
+  expect(fixture.controller.snapshot().panel).toBe('catalog');
+  const row = fixture.data.connections.find(r => r.setupServiceId === service.id && r.identity.kind === service.kind)!;
+  const { connectionKey } = await import('./model');
+  await React.act(async () => { fixture.controller.select(service.id, connectionKey(row.identity)); });
+  expect(fixture.controller.snapshot().panel).toBe('setup');
+});

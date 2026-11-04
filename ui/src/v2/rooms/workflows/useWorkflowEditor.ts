@@ -14,6 +14,8 @@ import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../../../../src/lib/cron-scheduler';
+import { chosenScheduleZone } from '../../../../../src/workflows/runner/triggers/schedule-zone';
 import type { ConnectionMeta } from "./useConnections";
 import {
   detectTriggerKind,
@@ -110,6 +112,7 @@ export interface FlowStepNode {
 
 export interface FlowVersion {
   id: string;
+  editorRevision?: string;
   flowId: string;
   displayName: string;
   trigger: FlowStepNode;
@@ -175,6 +178,8 @@ export interface PieceCatalogActionOrTrigger {
   description: string;
   inputSchema: PieceInputSchema | null;
   requireAuth?: boolean;
+  /** Set by the daemon on an ungoverned action of a partly governed piece (#955). */
+  notApprovalGated?: boolean;
   /**
    * Optional declared output for the action or trigger. Used by the
    * variable picker to surface field-level rows even before the step has
@@ -326,39 +331,47 @@ export function useWorkflowEditor(flowId: string | null) {
     return restored;
   }, []);
 
-  /** Load (or reload) the catalog + version. */
+  const loadRequest = useRef<AbortController | null>(null);
+  /** Load one snapshot. Retired reads cannot replace the current edit buffer. */
   const reload = useCallback(async (): Promise<void> => {
     if (!flowId) return;
+    loadRequest.current?.abort();
+    const controller = new AbortController();
+    loadRequest.current = controller;
+    const current = () => loadRequest.current === controller && !controller.signal.aborted;
     setLoading(true);
     setError(null);
-    try {
-      const [catalogRes, detailRes, connRes] = await Promise.all([
-        fetch("/api/workflows/pieces"),
-        fetch(`/api/workflows/${flowId}`),
-        // Fetch connections in parallel so the editor can render the
-        // connection picker on first paint without a follow-up round
-        // trip. Failure is non-fatal -- the picker just renders empty
-        // and the user re-enters credentials, same as before this
-        // wiring landed.
-        fetch("/api/workflows/connections"),
-      ]);
-      if (!catalogRes.ok) throw new Error(`pieces -> ${catalogRes.status}`);
-      if (!detailRes.ok) throw new Error(`flow detail -> ${detailRes.status}`);
-      const catalogList = (await catalogRes.json()) as PieceCatalogEntry[];
-      setCatalog(catalogList);
-      if (connRes.ok) {
-        const connBody = (await connRes.json()) as { connections: ConnectionMeta[] };
-        setConnections(Array.isArray(connBody.connections) ? connBody.connections : []);
-      } else {
-        setConnections([]);
+    // Only retry interrupted reads, once. Saving and other writes never retry.
+    const read = async <T,>(path: string, label: string): Promise<T> => {
+      for (let attempt = 0; ; attempt++) {
+        controller.signal.throwIfAborted();
+        try {
+          const response = await fetch(path, { signal: controller.signal });
+          if (!response.ok) throw new Error(`${label} -> ${response.status}`);
+          return await response.json() as T;
+        } catch (error) {
+          const interrupted = error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name);
+          if (!current() || !interrupted || attempt > 0) throw error;
+        }
       }
-
-      const detail = (await detailRes.json()) as {
-        flow: { id: string };
-        latestDraft: FlowVersion | null;
-        published: FlowVersion | null;
-        uiMeta: FlowVersionUiMeta | null;
-      };
+    };
+    try {
+      const [catalogList, detail, connBody] = await Promise.all([
+        read<PieceCatalogEntry[]>("/api/workflows/pieces", "pieces"),
+        read<{
+          flow: { id: string };
+          latestDraft: FlowVersion | null;
+          published: FlowVersion | null;
+          uiMeta: FlowVersionUiMeta | null;
+        }>(`/api/workflows/${flowId}`, "flow detail"),
+        // Connections are optional for local AI steps. A failed picker read
+        // must not prevent opening and editing an otherwise available draft.
+        read<{ connections: ConnectionMeta[] }>("/api/workflows/connections", "connections")
+          .catch(() => ({ connections: [] })),
+      ]);
+      if (!current()) return;
+      setCatalog(catalogList);
+      setConnections(Array.isArray(connBody.connections) ? connBody.connections : []);
       let editable: FlowVersion | null = detail.latestDraft;
       if (!editable && detail.published) {
         // Clone the published version as a new draft so the editor has
@@ -385,18 +398,21 @@ export function useWorkflowEditor(flowId: string | null) {
       // exists. Drop it.
       setUndoStack([]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (current()) setError(e instanceof Error && ['AbortError', 'TimeoutError'].includes(e.name)
+        ? 'Workflow loading was interrupted. Retry loading to continue.'
+        : e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   }, [flowId, fetch]);
 
   useEffect(() => {
     if (ignoreNextLoadRef.current) {
       ignoreNextLoadRef.current = false;
-      return;
+    } else {
+      void reload();
     }
-    void reload();
+    return () => { loadRequest.current?.abort(); loadRequest.current = null; };
   }, [reload]);
 
   /**
@@ -1204,9 +1220,12 @@ export function useWorkflowEditor(flowId: string | null) {
         res = await fetch(`/api/workflows/${flowId}/versions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ displayName: version.displayName, trigger: draftTrigger, uiMeta }),
+          // The published base's revision: the server refuses the clone if a draft
+          // appeared or the publication changed since this editor loaded it.
+          body: JSON.stringify({ ...(version.editorRevision ? { expectedRevision: version.editorRevision } : {}), displayName: version.displayName, trigger: draftTrigger, uiMeta }),
         });
       } else {
+        if (!version.editorRevision) return { ok: false, message: 'Reload this draft before saving so changes from other tabs can be checked. Your edits have not been saved.' };
         // Send the current `displayName` alongside the trigger so renames
         // from the editor's header reach the server in the same round-trip.
         // The API treats `displayName` as a partial update -- omitting it
@@ -1216,6 +1235,7 @@ export function useWorkflowEditor(flowId: string | null) {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            expectedRevision: version.editorRevision,
             displayName: version.displayName,
             trigger: draftTrigger,
             uiMeta,
@@ -1554,13 +1574,31 @@ export function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEn
     const add = (fieldName: string, fieldLabel: string) => gaps.push({ stepName: step.name, stepDisplayName: step.displayName ?? step.name, fieldName, fieldLabel });
     const empty = (value: unknown) => value == null || (typeof value === 'string' && !value.trim());
     if (isTrigger && step.settings?.pieceName === 'webhook') {
+      if ('request_id_field' in input && empty(input.request_id_field)) add('request_id_field', 'Request ID field');
       if ('submission_id_field' in input || 'submission_email_field' in input) {
         if (empty(input.submission_id_field)) add('submission_id_field', 'Submission ID field');
         if (empty(input.submission_email_field)) add('submission_email_field', 'Email field');
       }
       continue;
     }
-    if ((isTrigger && step.settings?.pieceName === 'schedule') || step.type === 'LOOP_ON_ITEMS' || step.type === 'ROUTER') continue;
+    if (isTrigger && step.settings?.pieceName === 'schedule') {
+      // Mirrors the server's readiness for the built-in schedule (workflow-readiness.ts).
+      const cron = input.cron_expression || input.cronExpression || input.expression;
+      if (empty(cron)) add('cron_expression', 'Schedule: choose an execution time');
+      else { try { if (typeof cron !== 'string') throw Error('Use a cron expression'); validateCronExpression(cron); }
+        catch (error) { add('cron_expression', `Schedule: ${(error as Error).message}`); } }
+      // No zone means Jarvis's, and a zone nobody chose is not used, so neither
+      // blocks; a zone a person chose must be real.
+      const chosen = chosenScheduleZone(step.settings);
+      if (chosen !== undefined) {
+        try { validateCronTimezone(chosen); }
+        catch (error) { add('timezone', `Timezone: ${(error as Error).message}`); }
+      }
+      try { validateCronDstPolicy(input.dst_policy); }
+      catch (error) { add('dst_policy', (error as Error).message); }
+      continue;
+    }
+    if (step.type === 'LOOP_ON_ITEMS' || step.type === 'ROUTER') continue;
     const subName = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
     if (!step.settings?.pieceName || !subName) {
       gaps.push({
