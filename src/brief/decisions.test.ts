@@ -289,7 +289,7 @@ test.each(['approval', 'work', 'effect'] as const)('%s projection excludes hosti
   expect(calls).toBe(0);
 });
 
-test('workflow rejection stays denied, then becomes an inspect-only blocked receipt across restart', async () => {
+test('workflow rejection stays denied, leaves the pending queue and retains its inspectable receipt across restart', async () => {
   const flow = createFlow();
   const piece = '@jarvispieces/piece-jarvis-tool';
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Rejected workflow', trigger: {
@@ -323,12 +323,12 @@ test('workflow rejection stays denied, then becomes an inspect-only blocked rece
   expect(getWorkflowEffect(pending.effectId)).toMatchObject({ status: 'blocked', decision: 'denied' });
   const blocked = queue.get(id);
   expect(blocked).toMatchObject({ state: 'blocked', approval: { status: 'denied' }, supportedActions: ['inspect'] });
-  expect((await read()).items).toEqual([blocked]);
-  expect((await queue.read({ runId: run.id })).data.items).toEqual([blocked]);
+  expect((await read()).items).toEqual([]);
+  expect((await queue.read({ runId: run.id })).data.items).toEqual([]);
   expect(queue.get(`effect:${pending.effectId}`)).toEqual(blocked);
   expect(dispatches).toBe(0); expect(calls).toBe(0);
   closeDb(); initWorkflowDb(file); wire();
-  expect(queue.get(id)).toEqual(blocked); expect((await read()).items).toEqual([blocked]);
+  expect(queue.get(id)).toEqual(blocked); expect((await read()).items).toEqual([]);
   for (const action of ['approve_permission', 'reject_permission', 'execute_once', 'close_without_running'] as const) {
     await expect(queue.resolve(id, { revision: blocked.revision, action })).rejects.toMatchObject({ status: 409, code: 'unsupported_action' });
   }
@@ -398,4 +398,50 @@ test('a browser click card names the element and page captured when it was raise
     actionCategory: 'control_app', urgency: 'normal', reason: 'Review', executionMode: 'workflow',
     context: JSON.stringify({ confirm: 'always', reviewSubject: { origin: 'javascript:alert(1)' } }) });
   expect(queue.get(`approval:${bad.id}`).review).toEqual({ toolName: 'browser_click', reason: 'Review' });
+});
+
+
+test('notification review shows frozen message, channels and run context without serializing unrelated arguments', async () => {
+  const a = approval('workflow'), e = effect('pending', a.id);
+  saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify',
+    arguments: { message: 'Daily check-in for 2026-11-04', channels: ['dashboard'], token: 'never serialize me' } });
+  const item = queue.get(`approval:${a.id}`);
+  expect(item.review).toMatchObject({ workflowName: 'Fixture', message: 'Daily check-in for 2026-11-04', channels: ['dashboard'] });
+  expect(item.review?.requestedAt).toBe(e.run.created);
+  expect(item.title).toContain('Daily check-in');
+  expect(JSON.stringify(item)).not.toContain('never serialize me');
+  expect(item.review?.fallback).toBeUndefined();
+  saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify',
+    arguments: { message: 'Daily check-in', channels: ['dashboard'], autoDashboard: true, fallback: 'desktop' } });
+  expect(queue.get(`approval:${a.id}`).review?.fallback).toBe('desktop');
+});
+
+test('an accepted commitment whose run had its only effect denied keeps its work card', async () => {
+  const a = approval('workflow'), e = effect('blocked', a.id);
+  saveWorkflowEffect({ ...e.record, decision: 'denied' });
+  getDb().run("UPDATE approval_requests SET status = 'denied' WHERE id = ?", [a.id]);
+  const work = createWorkItem({ title: 'Denied step', mode: 'workflow', workflowId: e.flow.id, workflowVersionId: e.version.id });
+  decideWorkItem(work.id, { outcome: 'accepted', reason: 'Do it' });
+  getDb().run('UPDATE commitment_work SET run_id = ? WHERE work_id = ?', [e.run.id, work.id]);
+  updateRun(e.run.id, { status: 'FAILED' });
+  expect((await read()).items.map(item => item.decisionId)).toEqual([`work:${work.id}`]);
+  // An effect that is blocked but not denied still stands in for the work card.
+  saveWorkflowEffect({ ...e.record, decision: 'approval_required' });
+  expect((await read()).items.map(item => item.decisionId)).toEqual([`approval:${a.id}`]);
+});
+
+test('an effect marked denied stays queued while its approval is still pending', async () => {
+  const a = approval('workflow'), e = effect('blocked', a.id);
+  saveWorkflowEffect({ ...e.record, decision: 'denied' });
+  expect((await read()).items.map(item => item.decisionId)).toEqual([`approval:${a.id}`]);
+});
+
+test('malformed frozen notification arguments are not projected', () => {
+  const a = approval('workflow'), e = effect('pending', a.id);
+  for (const args of [{ message: 42, channels: ['dashboard'] }, { message: 'Hi', channels: 'dashboard' }]) {
+    saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify', arguments: args as Record<string, unknown> });
+    expect(queue.get(`approval:${a.id}`).review?.message).toBeUndefined();
+  }
+  saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify', arguments: { message: 'Hi', channels: ['dashboard', 7, null] } });
+  expect(queue.get(`approval:${a.id}`).review?.channels).toEqual(['dashboard']);
 });
