@@ -5,6 +5,8 @@ import { ZoomConnection, useZoomStatus } from "../../integrations/ZoomConnection
 import { pipedriveInputSchema, isPipedriveReference } from "../../../../../src/workflows/runtime/managed-pipedrive-inputs";
 import { PipedriveConnection, usePipedriveStatus } from "../../integrations/PipedriveConnection";
 import { JsonInputDraftContext, jsonInputBase, jsonInputScope, jsonInputKey } from './json-input-drafts';
+import { gitlabInputSchema, isGitLabReference } from "../../../../../src/workflows/runtime/managed-gitlab-inputs";
+import { GitLabConnection, useGitLabStatus } from "../../integrations/GitLabConnection";
 import { mondayInputSchema } from "../../../../../src/workflows/runtime/managed-monday-inputs";
 import { isWrikeReference, wrikeInputSchema } from "../../../../../src/workflows/runtime/managed-wrike-inputs";
 import { AirtableLocation } from "../../integrations/AirtableLocation";
@@ -3476,10 +3478,11 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const baseSchema = webflowSchema ? {...webflowSchema,fields:webflowSchema.fields.filter(f=>!["site_id","collection_id","collection_fields"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))}
     : figmaLocation && asanaSchema ? {...asanaSchema,fields:asanaSchema.fields.filter(f=>f.name!=="file_key")} : asanaSchema;
   const zoomSchema = isZoomReference(piece?.name, step.settings?.input?.auth) ? zoomInputSchema(subName ?? "") : null;
+  const gitlabSchema = isGitLabReference(piece?.name, step.settings?.input?.auth) ? gitlabInputSchema(subName ?? "") : null;
   const pipedriveSchema = isPipedriveReference(piece?.name, step.settings?.input?.auth) ? pipedriveInputSchema(subName ?? "") : null;
   const wrikeSchema = isWrikeReference(piece?.name, step.settings?.input?.auth) ? wrikeInputSchema(subName ?? "") : null;
   const helpScoutSchema = isHelpScoutReference(piece?.name, step.settings?.input?.auth) ? helpScoutInputSchema(subName ?? "") : null;
-  const selectedSchema = helpScoutSchema ? {...helpScoutSchema,fields:helpScoutSchema.fields.map(f=>({...f,options:f.options ? [...f.options] : undefined}))} : zoomSchema ? {...zoomSchema,fields:zoomSchema.fields.map(f=>({...f,options:f.options ? [...f.options] : undefined}))} : pipedriveSchema ? {...pipedriveSchema,fields:pipedriveSchema.fields.map(f=>({...f,options:f.options ? [...f.options] : undefined}))} : wrikeSchema ? {...wrikeSchema, fields:wrikeSchema.fields.filter(f=>f.name !== "folderId").map(f=>({...f, options:f.options ? [...f.options] : undefined}))} : managedMonday && mondayInputSchema(subName ?? "") ? {...mondayInputSchema(subName ?? "")!, fields:mondayInputSchema(subName ?? "")!.fields.filter(f=>!["board_id","group_id"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))} : managedTodoist && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['changes_info', ...(todoistLocation ? ['project_id','section_id'] : [])].includes(f.name)).map((f): PieceInputField => f.name === 'labels' ? {...f,type:'json',placeholder:'["work"]',description:'Label names as a JSON array. Empty arrays preserve current labels.'} : f)} : linearTeam && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['team_id','user_id'].includes(f.name)).map((f): PieceInputField => {
+  const selectedSchema = helpScoutSchema ? {...helpScoutSchema,fields:helpScoutSchema.fields.map(f=>({...f,options:f.options ? [...f.options] : undefined}))} : zoomSchema ? {...zoomSchema,fields:zoomSchema.fields.map(f=>({...f,options:f.options ? [...f.options] : undefined}))} : gitlabSchema ? {...gitlabSchema,fields:gitlabSchema.fields.map(f=>({...f,options:f.options ? [...f.options] : undefined}))} : pipedriveSchema ? {...pipedriveSchema,fields:pipedriveSchema.fields.map(f=>({...f,options:f.options ? [...f.options] : undefined}))} : wrikeSchema ? {...wrikeSchema, fields:wrikeSchema.fields.filter(f=>f.name !== "folderId").map(f=>({...f, options:f.options ? [...f.options] : undefined}))} : managedMonday && mondayInputSchema(subName ?? "") ? {...mondayInputSchema(subName ?? "")!, fields:mondayInputSchema(subName ?? "")!.fields.filter(f=>!["board_id","group_id"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))} : managedTodoist && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['changes_info', ...(todoistLocation ? ['project_id','section_id'] : [])].includes(f.name)).map((f): PieceInputField => f.name === 'labels' ? {...f,type:'json',placeholder:'["work"]',description:'Label names as a JSON array. Empty arrays preserve current labels.'} : f)} : linearTeam && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['team_id','user_id'].includes(f.name)).map((f): PieceInputField => {
     if (f.name === 'priority_id') return {...f,type:'number',description:'0: no priority, 1: urgent, 2: high, 3: normal, 4: low.'};
     if (f.name === 'issue_id') return {...f,type:'string',placeholder:'ENG-123',description:'Issue key, model UUID or workflow variable.'};
     if (f.name === 'parent_id') return {...f,type:'string',placeholder:'Parent issue UUID',description:'Use the parent issue model UUID or a workflow variable.'};
@@ -3929,6 +3932,8 @@ function ConnectionPicker({
   const managedWebflow = useWebflowStatus(isWebflow)?.connected === true;
   const isZoom = pieceName === "@activepieces/piece-zoom";
   const zoomStatus = useZoomStatus(isZoom), managedZoom = zoomStatus?.connected === true;
+  const isGitLab = pieceName === "@activepieces/piece-gitlab";
+  const gitlabStatus = useGitLabStatus(isGitLab), managedGitLab = gitlabStatus?.connected === true;
   const isPipedrive = pieceName === "@activepieces/piece-pipedrive";
   const pipedriveStatus = usePipedriveStatus(isPipedrive), managedPipedrive = pipedriveStatus?.connected === true;
   const isHelpScout = pieceName === "@activepieces/piece-help-scout";
@@ -3943,7 +3948,7 @@ function ConnectionPicker({
   const isSlack = pieceName === "@activepieces/piece-slack";
   const slackStatus = useSlackStatus(isSlack), managedSlack = slackStatus?.connected === true;
   // Only point at the controls above when they actually offer hosted setup on this instance.
-  const hostedSetup = [helpScoutStatus, zoomStatus, pipedriveStatus, wrikeStatus, typeformStatus, calendlyStatus, airtableStatus, intercomStatus, notionStatus, linearStatus, mondayStatus, todoistStatus, figmaStatus, asanaStatus, dropboxStatus, clickUpStatus, gitHubStatus, slackStatus].some(status => status?.configured === true);
+  const hostedSetup = [helpScoutStatus, zoomStatus, gitlabStatus, pipedriveStatus, wrikeStatus, typeformStatus, calendlyStatus, airtableStatus, intercomStatus, notionStatus, linearStatus, mondayStatus, todoistStatus, figmaStatus, asanaStatus, dropboxStatus, clickUpStatus, gitHubStatus, slackStatus].some(status => status?.configured === true);
   return (
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
@@ -3975,6 +3980,8 @@ function ConnectionPicker({
         {managedWebflow && <p className="wf-props__hint">Find and read CMS items, and create or update drafts in the primary language. Publishing, archiving, media uploads and reference fields are not available.</p>}</>}
       {isZoom && <><ZoomConnection optional onPick={onPick} currentValue={currentValue} />
         {managedZoom && <p className="wf-props__hint">Find, create or update your scheduled meetings. Use a meeting ID or workflow variable. Recording, registrants, recurring meetings and deletion are not enabled.</p>}</>}
+      {isGitLab && <><GitLabConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedGitLab && <p className="wf-props__hint">Use the Create Issue action with a numeric Project ID, title and optional description. Other GitLab actions are not enabled for this account.</p>}</>}
       {isPipedrive && <><PipedriveConnection optional onPick={onPick} currentValue={currentValue} />
         {managedPipedrive && <p className="wf-props__hint">Use Get, Search, Create or Update for people and deals. Legacy Find actions, custom fields, ownership, visibility, deletion and triggers are not enabled for this connection.</p>}</>}
       {isHelpScout && <><HelpScoutConnection optional onPick={onPick} currentValue={currentValue} />
@@ -3982,11 +3989,11 @@ function ConnectionPicker({
       {isAsana && <><AsanaConnection optional onPick={onPick} currentValue={currentValue} />
         {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
       {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
-      <label className="wf-props__field-label">
-        {managedHelpScout ? "Help Scout account" : managedZoom ? "Zoom account" : managedPipedrive ? "Pipedrive account" : managedWrike ? "Wrike account" : managedMonday ? "monday.com account" : managedCalendly ? "Calendly account" : managedLinear ? "Linear account" : authDisplayName}
-        {!managedHelpScout && !managedZoom && !managedPipedrive && !managedWrike && !managedMonday && !managedCalendly && !managedLinear && <span className="wf-props__connection-type">({authType})</span>}
-      </label>
-      {matching.length === 0 && !managedHelpScout && !managedZoom && !managedPipedrive && !managedWrike && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable && !managedFigma && !managedWebflow ? (
+      {(!managedGitLab || matching.length > 0) && <label className="wf-props__field-label">
+        {managedHelpScout ? "Help Scout account" : managedZoom ? "Zoom account" : managedGitLab ? "GitLab account" : managedPipedrive ? "Pipedrive account" : managedWrike ? "Wrike account" : managedMonday ? "monday.com account" : managedCalendly ? "Calendly account" : managedLinear ? "Linear account" : authDisplayName}
+        {!managedHelpScout && !managedZoom && !managedGitLab && !managedPipedrive && !managedWrike && !managedMonday && !managedCalendly && !managedLinear && <span className="wf-props__connection-type">({authType})</span>}
+      </label>}
+      {matching.length === 0 && !managedHelpScout && !managedZoom && !managedGitLab && !managedPipedrive && !managedWrike && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable && !managedFigma && !managedWebflow ? (
         <p className="wf-props__hint wf-props__connection-empty">
           {hostedSetup
             ? `Connect ${pieceDisplayName} using the connection controls above, then choose Use this account. You can also manage app connections in the Connections panel.`

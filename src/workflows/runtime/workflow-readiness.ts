@@ -2,6 +2,7 @@ import { isZoomReference, zoomInputSchema } from "./managed-zoom-inputs";
 import { isPipedriveReference, pipedriveInputSchema } from "./managed-pipedrive-inputs";
 import { isWrikeReference, wrikeInputSchema } from "./managed-wrike-inputs";
 import { isHelpScoutReference, helpScoutInputSchema } from "./managed-help-scout-inputs";
+import { isGitLabReference, gitlabInputSchema } from "./managed-gitlab-inputs";
 import { isMondayReference, mondayInputSchema } from "./managed-monday-inputs";
 import {managedAirtableIssue} from './managed-airtable';
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
@@ -547,6 +548,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
               : isWrikeReference(pieceName, input.auth) ? wrikeInputSchema(settings.actionName) ?? sub.inputSchema
               : isZoomReference(pieceName, input.auth) ? zoomInputSchema(settings.actionName) ?? sub.inputSchema
               : isHelpScoutReference(pieceName, input.auth) ? helpScoutInputSchema(settings.actionName) ?? sub.inputSchema
+              : isGitLabReference(pieceName, input.auth) ? gitlabInputSchema(settings.actionName) ?? sub.inputSchema
               : isWebflowReference(pieceName, input.auth) ? webflowInputSchema(settings.actionName) ?? sub.inputSchema
               : isMondayReference(pieceName, input.auth) ? mondayInputSchema(settings.actionName) ?? sub.inputSchema
               : sub.inputSchema;

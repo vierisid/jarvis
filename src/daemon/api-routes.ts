@@ -2597,6 +2597,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json(helpScoutStatus(ctx.config));
       },
     },
+    '/api/integrations/gitlab': {
+      GET: async () => {
+        const {gitlabStatus} = await import('../integrations/gitlab-connection');
+        return json(gitlabStatus(ctx.config));
+      },
+    },
     '/api/integrations/pipedrive': {
       GET: async () => {
         const {pipedriveStatus} = await import('../integrations/pipedrive-connection');
