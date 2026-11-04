@@ -1,3 +1,4 @@
+import { JsonInputDraftContext, jsonInputScope, jsonInputKey } from './json-input-drafts';
 import { mondayInputSchema } from "../../../../../src/workflows/runtime/managed-monday-inputs";
 import { AirtableLocation } from "../../integrations/AirtableLocation";
 import { NotionLocation } from "../../integrations/NotionLocation";
@@ -682,7 +683,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
    * the last-saved version if that's what they want.
    */
   const handleRun = useCallback(async (): Promise<void> => {
-    if (!flowId) return;
+    if (!flowId || editor.hasInvalidJson) return;
     if (editor.dirty) {
       const proceed = await confirmDialog(
         "You have unsaved changes. Running will use the last SAVED version, not your current edits. Continue?",
@@ -698,7 +699,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
       setActionMessage({ tone: "warn", text: `Run failed: ${result.message}` });
     }
     window.setTimeout(() => setActionMessage(null), 2500);
-  }, [flowId, editor.dirty, runs]);
+  }, [flowId, editor.dirty, editor.hasInvalidJson, runs]);
 
   // Count of non-terminal runs surfaced as a badge on the Runs button so
   // users see "something's still going" without having to open the panel.
@@ -784,14 +785,14 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
           <Button variant="ghost" size="sm" onClick={onDiscard} disabled={!editor.dirty}>
             <Icon icon={RotateCcw} size={14} /> Discard
           </Button>
-          <Button variant="primary" size="sm" onClick={() => void onSave()} disabled={!editor.dirty}>
+          <Button variant="primary" size="sm" onClick={() => void onSave()} disabled={!editor.dirty || editor.hasInvalidJson}>
             <Icon icon={Save} size={14} /> Save
           </Button>
           <Button
             variant="ghost"
             size="sm"
             onClick={() => void handleRun()}
-            disabled={runs.starting || !editor.version}
+            disabled={runs.starting || !editor.version || editor.hasInvalidJson}
             title={
               editor.dirty
                 ? "Run the LAST SAVED version (your unsaved edits won't apply)"
@@ -980,6 +981,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
           // (piece, action). Map at the boundary.
           allSteps={editor.allSteps.map((fs) => fs.step)}
         >
+          <JsonInputDraftContext.Provider value={{ scope: jsonInputScope(selectedStep), drafts: editor.jsonInputDrafts, set: editor.setJsonInputDraft }}>
           <PropertiesPanel
             key={selectedStep.name}
             workspace={workspace}
@@ -1053,6 +1055,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             }
             onTestFromHere={() => editor.testStepFromHere(selectedStep.name)}
           />
+          </JsonInputDraftContext.Provider>
         </NodeSettingsPopover>
       ) : null}
       {/* Side panel: this flow's run history. Toggled via the header Runs
@@ -5104,15 +5107,9 @@ function numberValueToText(value: unknown): string {
 }
 
 /**
- * JSON field: holds the raw text in local state so the user can type
- * intermediate (un-parseable) states. On valid JSON, propagates the parsed
- * object up. On invalid JSON, holds the text and shows an error chip.
- *
- * Critically, we track our last self-propagated value via a ref so that
- * round-trips like (user types `{"a":1}` → we propagate `{a:1}` → parent
- * re-renders with the new value → memoized `initial` becomes `{\n  "a": 1\n}`)
- * do NOT clobber the user's whitespace. We only re-sync `text` when `value`
- * differs from what we last sent up (i.e., an external change: load, reset).
+ * Preserve raw JSON in the editor buffer across node selections. Only parsed
+ * values enter the graph; invalid text still marks the editor dirty and blocks
+ * writes. Standalone fields use local state with the same parsing behavior.
  */
 function JsonField({
   field,
@@ -5125,39 +5122,28 @@ function JsonField({
   onChange: (next: unknown) => void;
   labelEl: React.ReactNode;
 }): React.ReactElement {
-  const [text, setText] = useState(() => jsonValueToText(value));
-  const [parseError, setParseError] = useState<string | null>(null);
+  const drafts = useContext(JsonInputDraftContext);
+  const key = jsonInputKey(drafts?.scope ?? '', field.name);
+  const [local, setLocal] = useState({ text: jsonValueToText(value), error: null as string | null });
   const lastPropagatedRef = useRef<unknown>(value);
-
+  const stored = drafts?.drafts[key];
+  const text = drafts ? stored?.text ?? jsonValueToText(value) : local.text;
+  const parseError = drafts ? stored?.error ?? null : local.error;
+  const errorId = useId();
   useEffect(() => {
-    if (value === lastPropagatedRef.current) return; // self-induced; keep local text/whitespace
-    setText(jsonValueToText(value));
-    setParseError(null);
+    if (value === lastPropagatedRef.current) return;
+    setLocal({ text: jsonValueToText(value), error: null });
     lastPropagatedRef.current = value;
   }, [value]);
-
-  // Variable-picker hookup: insertions arrive as raw template text. We
-  // splice them into the textarea contents and re-run the parse path so
-  // a snippet like `{ "to": {{step_3.email}} }` propagates as a parse
-  // error (until the user closes the template) which is the right
-  // signal -- the picker DOESN'T quote the template for the user.
-  const varProps = useVariableFieldProps(text, (next) => {
-    setText(next);
-    if (next.trim() === "") {
-      setParseError(null);
-      lastPropagatedRef.current = undefined;
-      onChange(undefined);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(next);
-      setParseError(null);
-      lastPropagatedRef.current = parsed;
-      onChange(parsed);
-    } catch (err) {
-      setParseError((err as Error).message);
-    }
-  });
+  const change = (next: string) => {
+    let parsed: unknown, error: string | null = null;
+    try { parsed = next.trim() === '' ? undefined : JSON.parse(next); }
+    catch (cause) { error = (cause as Error).message; }
+    const draft = { text: next, error };
+    setLocal(draft); drafts?.set(key, draft);
+    if (!error) { lastPropagatedRef.current = parsed; onChange(parsed); }
+  };
+  const varProps = useVariableFieldProps(text, change);
 
   return (
     <label className="wf-props__field">
@@ -5167,27 +5153,12 @@ function JsonField({
         value={text}
         placeholder={field.placeholder ?? "{}"}
         {...varProps}
-        onChange={(e) => {
-          const next = e.target.value;
-          setText(next);
-          if (next.trim() === "") {
-            setParseError(null);
-            lastPropagatedRef.current = undefined;
-            onChange(undefined);
-            return;
-          }
-          try {
-            const parsed = JSON.parse(next);
-            setParseError(null);
-            lastPropagatedRef.current = parsed;
-            onChange(parsed);
-          } catch (err) {
-            setParseError((err as Error).message);
-          }
-        }}
+        aria-invalid={!!parseError}
+        aria-describedby={parseError ? errorId : undefined}
+        onChange={(e) => change(e.target.value)}
       />
       {parseError ? (
-        <span className="wf-props__field-help wf-props__field-help--error">JSON parse: {parseError}</span>
+        <span id={errorId} role="alert" className="wf-props__field-help wf-props__field-help--error">JSON parse: {parseError}</span>
       ) : field.description ? (
         <span className="wf-props__field-help">{field.description}</span>
       ) : null}

@@ -1,3 +1,4 @@
+import { jsonInputScope, type JsonInputDraft } from './json-input-drafts';
 import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
 /**
  * Hook for the workflow visual editor.
@@ -243,6 +244,11 @@ export function useWorkflowEditor(flowId: string | null) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
+  // Raw JSON is part of the edit buffer even while it cannot enter the typed graph.
+  const [jsonInputDrafts, setJsonInputDrafts] = useState<Record<string, JsonInputDraft>>({});
+  const setJsonInputDraft = useCallback((key: string, draft: JsonInputDraft) => {
+    setJsonInputDrafts(current => ({ ...current, [key]: draft }));
+  }, []);
 
   // Local edit buffer: a copy of `version.trigger` the editor mutates until save.
   const [draftTrigger, setDraftTrigger] = useState<FlowStepNode | null>(null);
@@ -324,6 +330,7 @@ export function useWorkflowEditor(flowId: string | null) {
       setDraftTrigger(last.trigger);
       setDraftOrphans(last.orphans);
       setStepPositions(last.positions);
+      setJsonInputDrafts({});
       setDirty(true);
       restored = true;
       return prev.slice(0, -1);
@@ -393,6 +400,7 @@ export function useWorkflowEditor(flowId: string | null) {
       );
       setStepPositions(meta?.positions && typeof meta.positions === "object" ? { ...meta.positions } : {});
       setDirty(false);
+      setJsonInputDrafts({});
       // Reload replaces the entire edit buffer with server state; any
       // in-flight undo history would be against a tree that no longer
       // exists. Drop it.
@@ -1186,6 +1194,9 @@ export function useWorkflowEditor(flowId: string | null) {
 
   /** Save the draft trigger back to the server. Returns the new version on success. */
   const save = useCallback(async (): Promise<ActionResult> => {
+    if (Object.values(jsonInputDrafts).some(draft => draft.error)) {
+      return { ok: false, message: 'Fix the invalid JSON fields before saving, or discard your edits.' };
+    }
     if (!flowId || !version || !draftTrigger) {
       return { ok: false, message: "nothing to save" };
     }
@@ -1255,6 +1266,7 @@ export function useWorkflowEditor(flowId: string | null) {
       // Orphans persist across save -- they're part of the user's editing
       // state and the server now stores them too.
       setDirty(false);
+      setJsonInputDrafts({});
       // The undo stack is a within-session aid; once the user commits a
       // save the prior states no longer round-trip cleanly with the
       // server (versionId may roll, sample data may have diverged).
@@ -1265,7 +1277,7 @@ export function useWorkflowEditor(flowId: string | null) {
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : String(e) };
     }
-  }, [flowId, version, draftTrigger, draftOrphans, stepPositions, fetch]);
+  }, [flowId, version, draftTrigger, draftOrphans, stepPositions, fetch, jsonInputDrafts]);
 
   const reset = useCallback((): void => {
     if (version) {
@@ -1276,7 +1288,8 @@ export function useWorkflowEditor(flowId: string | null) {
       setDraftOrphans([]);
       setStepPositions({});
       if (savedDisplayName.current !== null) setVersion(prev => prev ? {...prev,displayName:savedDisplayName.current!} : prev);
-    setDirty(false);
+      setDirty(false);
+      setJsonInputDrafts({});
       setUndoStack([]);
     }
   }, [version]);
@@ -1435,6 +1448,15 @@ export function useWorkflowEditor(flowId: string | null) {
     [allSteps, catalog],
   );
 
+  // Deleted/replaced steps must not leave an invisible invalid field blocking Save.
+  useEffect(() => {
+    const scopes = new Set([...allSteps.map(s => s.step), ...draftOrphans.flatMap(o => flattenSteps(o.node).map(s => s.step))].map(jsonInputScope));
+    setJsonInputDrafts(current => {
+      const entries = Object.entries(current).filter(([key]) => scopes.has(JSON.parse(key)[0]));
+      return entries.length === Object.keys(current).length ? current : Object.fromEntries(entries);
+    });
+  }, [allSteps, draftOrphans]);
+
   return {
     catalog,
     /** Connections cached at editor load. Used to populate the connection picker + auto-fill new steps. */
@@ -1447,7 +1469,10 @@ export function useWorkflowEditor(flowId: string | null) {
     isHandleAvailable,
     error,
     loading,
-    dirty,
+    dirty: dirty || Object.keys(jsonInputDrafts).length > 0,
+    jsonInputDrafts,
+    setJsonInputDraft,
+    hasInvalidJson: Object.values(jsonInputDrafts).some(draft => draft.error),
     validationGaps,
     reload,
     setVersionDisplayName,

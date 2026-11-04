@@ -247,7 +247,7 @@ function CanvasHeader({
         <BriefButton
           size="sm"
           onClick={() => void save()}
-          disabled={!editor.dirty || saving || !versionMatches}
+          disabled={!editor.dirty || editor.hasInvalidJson || saving || !versionMatches}
         >
           {saving ? "Saving…" : "Save changes"}
         </BriefButton>

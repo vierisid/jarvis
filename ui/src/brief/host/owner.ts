@@ -51,7 +51,9 @@ export function createDashboardOwner(initial: HostDescriptor, ports: {
   const device = deviceNavigation(navigation, () => devices);
   const reconciliation = new BriefReconciliationClient({ capabilities: async signal => {
     const next = readHost(await transport.json('/api/brief/host', { signal }));
-    if (next.scopeId !== initial.scopeId || next.generation !== initial.generation) { retire(); ports.unauthorized(); throw Error('Dashboard ownership changed'); }
+    // A generation identifies a daemon boot, not an authenticated workspace.
+    // Keep mounted edit buffers on restart; scope changes and HTTP 401 still retire them.
+    if (next.scopeId !== initial.scopeId) { retire(); ports.unauthorized(); throw Error('Dashboard ownership changed'); }
     descriptor = next; navigation.setAccess(next.capabilities);
     account.profile.setAccess(isBriefCapabilityEnabled(next.capabilities, 'profileSettings')); ports.changed(); return next.capabilities;
   } });
