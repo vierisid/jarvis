@@ -93,6 +93,21 @@ current evidence; it does not turn an unknown outcome into success or no-effect.
 A late receipt invalidates that acknowledgement. Normal manual Run remains the
 only path to a new intentional run and all its readiness/approval guards apply.
 
+A customer onboarding branch (ClickUp task or Drive folder) whose outcome is
+unknown is not a failed run, so it is resolved separately (#1243), after a person
+checks ClickUp or Drive, with `POST /api/workflow-runs/:runId/effects/:effectId/onboarding`
+or the approved `manage_workflow resolve_onboarding` action:
+
+```json
+{"branch":"drive","resolution":"mark_done","resource":"https://drive.google.com/drive/folders/<id>","note":"Found it in Drive"}
+```
+
+`mark_done` records it as created, with the ID or link of exactly that kind of
+resource, which later runs reuse; `release` records that it was not, so the next
+run for that customer creates it. Only an unknown branch, never while a run holds
+the customer. The decision is kept on the onboarding record. There is no dashboard
+control for it yet.
+
 A successful typed completion receipt remains `completed` when its mode has no
 readback adapter, including Slack user-mode sends and threaded messages.
 `lookupSupported` describes only the ability to perform another provider lookup;
@@ -124,11 +139,16 @@ Provider read-back is intentionally narrower than completion tracking:
 | Slack 0.21.0 send aliases | Exact channel + timestamp from a successful post; GET conversations.history with identical oldest/latest timestamp; native OAuth bot mode, top-level messages, no file upload |
 
 Both require the listed exact connector version, a literal native `OAUTH2`
-connection binding pinned at dispatch and the same
-project, piece, connection row and credential digest at lookup. Managed Google,
-custom/dynamic credentials, rotated tokens, Slack user-token mode, threaded
-replies and file uploads have no read-back adapter in this card. A token refresh
-is conservatively a changed credential, not permission to search another account.
+connection binding pinned at dispatch and, at lookup, the same project, piece and
+connection row at the credential generation the send was bound to (#1232). A
+token refresh keeps the generation, so the lookup still answers after one, and
+Jarvis refreshes a stored token that is about to expire before it looks; a failed
+refresh blocks the lookup without reading anything. A person replacing the
+credential (perhaps another account) advances the generation and blocks the
+lookup. A binding recorded before generations were pinned still compares the
+token digest, so a refresh since then blocks it. Managed Google, custom/dynamic
+credentials, Slack user-token mode, threaded replies and file uploads have no
+read-back adapter in this card.
 
 A top-level succeeded run-step output can supply a missing direct receipt, but
 only exact provider read-back can reconcile that uncertain dispatch; the stored

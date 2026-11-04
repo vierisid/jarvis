@@ -33,6 +33,12 @@ import {createManageWorkflowTool} from '../../actions/tools/manage-workflow';
 import {onboardingFixturePayload,onboardingFixtureProvider,onboardingFixtureSetup,validateOnboardingFixtures} from './onboarding-fixtures';
 import {ONBOARDING_PIECE,ONBOARDING_ACTION,ONBOARDING_REQUIRED} from './customer-onboarding';
 import {onboardingTestGraph} from './onboarding-test-data';
+import {onboardingSetup} from './customer-onboarding';
+import {onboardingIdentity,resolveOnboardingOutcome} from './onboarding-service';
+import {digest} from './effect-context';
+import {getWorkflowDb} from '../db';
+import {listWorkflowEffects,saveWorkflowEffect} from '../db/repos/workflow-effect';
+import {createWorkflowRoutes} from '../api/routes';
 
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog,authority:AuthorityEngine,approvals:ApprovalManager;
 let services:ReturnType<typeof buildSandboxServiceBackends>;
@@ -164,3 +170,58 @@ test('concurrent customer deliveries create at most one task/folder pair',async(
  expect(provider.resources.filter(b=>b==='clickup')).toHaveLength(1);expect(provider.resources.filter(b=>b==='drive')).toHaveLength(1);
  expect(notifications.length).toBe(before+1);
 },60_000);
+
+// #1243: a corrected customer name does not block the customer, and an unknown branch can be resolved.
+test('#1243: the same customer ID with a corrected name runs and reuses its receipts',async()=>{
+ const f=await fixture();expect((await f.run()).status).toBe('SUCCEEDED');expect(provider.calls).toHaveLength(2);
+ const renamed=await run(f.flow.id,f.version.id,{customer:{id:'customer-1',name:'Example Customer Ltd'}});
+ if(renamed.status!=='SUCCEEDED')throw Error(JSON.stringify(renamed.failedStep));expect(provider.calls).toHaveLength(2);
+},60_000);
+test('#1243: a record made before the fix, keyed on the old name, accepts a corrected name on its first run after the upgrade',async()=>{
+ const f=await fixture();expect((await f.run()).status).toBe('SUCCEEDED');
+ const s=onboardingSetup(configuredGraph().nextAction.settings.input),c={id:'customer-1',name:'Example Customer'};
+ const legacy=()=>getWorkflowDb().run('UPDATE workflow_customer_onboarding SET config=? WHERE identity=?',[digest([s,c]),onboardingIdentity(DEFAULT_IDS.project,f.flow.id,'customer-1')]);
+ // Blocked by a rename before the upgrade: the renamed delivery is the first after it.
+ legacy();expect((await run(f.flow.id,f.version.id,{customer:{id:'customer-1',name:'Renamed'}})).status).toBe('SUCCEEDED');
+ legacy();expect((await f.run()).status).toBe('SUCCEEDED');expect(provider.calls).toHaveLength(2);
+ // A real setup change is still refused.
+ const changed=onboardingSetup({...configuredGraph().nextAction.settings.input,driveParentId:'other-parent'});
+ getWorkflowDb().run('UPDATE workflow_customer_onboarding SET config=? WHERE identity=?',[digest([changed,c]),onboardingIdentity(DEFAULT_IDS.project,f.flow.id,'customer-1')]);
+ expect((await f.run()).status).toBe('FAILED');expect(provider.calls).toHaveLength(2);
+},60_000);
+test('#1243: the onboarding resolution route refuses other projects, unexpected fields, unknown effects, bad resources and ambiguous runs',async()=>{
+ const f=await fixture();provider.modes.drive='unknown';const first=await f.run();provider.modes.drive='ok';
+ const effect=listWorkflowEffects(first.id)[0]!;
+ const post=(body:unknown,effectId=effect.id,routes=createWorkflowRoutes({}))=>routes['/api/workflow-runs/:runId/effects/:effectId/onboarding']!.POST!(Object.assign(new Request('http://fixture.test/x',{method:'POST',body:JSON.stringify(body)}),{params:{runId:first.id,effectId}}) as any);
+ expect((await post({branch:'drive',resolution:'release'},effect.id,createWorkflowRoutes({callerProjectId:()=>'another-project'}))).status).toBe(404);
+ expect((await post({branch:'drive',resolution:'release',customerId:'x'})).status).toBe(400);
+ expect((await post({branch:'drive',resolution:'release'},'wfe_'+'0'.repeat(64))).status).toBe(404);
+ expect((await post({branch:'drive',resolution:'mark_done',resource:'https://evil.example/drive/folders/x'})).status).toBe(400);
+ expect((await post({branch:'clickup',resolution:'release'})).status).toBe(409);
+ // A run that onboarded two customers needs the effect named.
+ saveWorkflowEffect({...effect,id:'wfe_'+'1'.repeat(64),arguments:{...effect.arguments,customer:{id:'customer-2',name:'Second'}}});
+ expect(()=>resolveOnboardingOutcome(DEFAULT_IDS.project,first.id,{branch:'drive',resolution:'release'},'manage_workflow')).toThrow('several customers');
+ const done=await post({branch:'drive',resolution:'mark_done',resource:'folder-x',note:'Found it in Drive'});expect(done.status).toBe(200);
+ expect(await done.json()).toMatchObject({customerId:'customer-1',outcome:{status:'succeeded',url:'https://drive.google.com/drive/folders/folder-x',resolution:{via:'dashboard',note:'Found it in Drive',previous:expect.any(String)}}});
+},60_000);
+test('#1243: an unknown Drive folder released from the dashboard is created by the next run; confirmed by the tool it is reused',async()=>{
+ for(const resolution of ['release','mark_done'] as const){
+  const f=await fixture();provider.modes.drive='unknown';const first=await f.run();expect(first.status).toBe('SUCCEEDED');provider.modes.drive='ok';
+  expect((await f.run()).status).toBe('SUCCEEDED');expect(provider.calls).toEqual(['clickup','drive']);
+  if(resolution==='release'){
+   const routes=createWorkflowRoutes({});const effectId=listWorkflowEffects(first.id)[0]!.id;
+   const post=(body:unknown)=>routes['/api/workflow-runs/:runId/effects/:effectId/onboarding']!.POST!(Object.assign(new Request('http://fixture.test/x',{method:'POST',body:JSON.stringify(body)}),{params:{runId:first.id,effectId}}) as any);
+   expect((await post({branch:'drive',resolution:'release',resource:'x'})).status).toBe(400);
+   expect((await post({branch:'drive',resolution:'release',note:'Not in Drive'})).status).toBe(200);
+   expect((await post({branch:'drive',resolution:'release'})).status).toBe(409);
+  } else {
+   const tool=createManageWorkflowTool({pieceRegistry:catalog});
+   expect(tool.authorityGate?.({action:'resolve_onboarding',run_id:first.id,branch:'drive',resolution:'mark_done',resource:'folder-found'})).toMatchObject({confirm:'always',actionCategory:'write_data'});
+   const out=String(await tool.execute({action:'resolve_onboarding',run_id:first.id,branch:'drive',resolution:'mark_done',resource:'https://drive.google.com/drive/folders/folder-found'}));
+   expect(out).toContain('folder-found');
+  }
+  const next=await f.run();expect(next.status).toBe('SUCCEEDED');
+  expect(provider.calls).toEqual(resolution==='release'?['clickup','drive','drive']:['clickup','drive']);
+  expect(notifications.at(-1)).toContain(resolution==='release'?'https://drive.google.com/drive/folders/fixture-folder':'https://drive.google.com/drive/folders/folder-found');
+ }
+},90_000);

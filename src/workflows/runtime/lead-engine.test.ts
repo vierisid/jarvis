@@ -14,6 +14,8 @@ import { getConnectionByExternalId, replaceRefreshedConnectionValue, updateConne
 import { configureWorkflowReadiness, versionReadiness } from '../db/repos/flow-readiness';
 import { pruneFires, FIRE_RETENTION_MS } from '../db/repos/trigger-fire';
 import { listWorkflowEffects } from '../db/repos/workflow-effect';
+import { recordRunCredentialOutcome, runBinding } from '../db/repos/binding-pins';
+import { runFailure } from './run-failure';
 import { AuthorityEngine } from '../../authority/engine';
 import { AuditTrail } from '../../authority/audit';
 import { EmergencyController } from '../../authority/emergency';
@@ -44,7 +46,7 @@ let reply='', loseReply=false, unconfirmed=false, loseNotification=false, refuse
 // stopOnMissing: a PATCH that finds no contact stops its run first. hold: the first PATCH for holdEmail waits on it.
 let stopOnMissing=false, hold:Promise<void>|null=null, holdEmail='';
 // skew: how far the credential resolver's clock runs ahead. beforeAuthorize runs after the engine fetched its credential.
-let skew=0, beforeAuthorize:(()=>void)|null=null;
+let skew=0, beforeAuthorize:((ctx:{runId:string})=>void)|null=null;
 let tokenAnswer:{status:number;body:unknown}={status:200,body:{access_token:'refreshed-token',expires_in:3600}};
 const bearers:string[]=[];
 const contacts = new Map<string,{id:string;properties:Record<string,any>}>();
@@ -100,7 +102,7 @@ beforeAll(async()=>{
     llmManager:{chat:async()=>({content:reply,finish_reason:'end_turn',tool_calls:[],usage:{input_tokens:1,output_tokens:1}})} as any,
     channelService:{} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{if(dashboardClosed)return 0;notifications.push(text);if(loseNotification)throw Error('Lost notification reply');return 1;}} as any});
   const authorize=services.pieceAuthorize!;
-  services.pieceAuthorize=(async(...args:Parameters<typeof authorize>)=>{beforeAuthorize?.();return authorize(...args);}) as typeof authorize;
+  services.pieceAuthorize=(async(...args:Parameters<typeof authorize>)=>{beforeAuthorize?.(args[1] as {runId:string});return authorize(...args);}) as typeof authorize;
   api=new SandboxApi({services}); await api.start({port:0});
   runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
   const handle=await runtime.acquire({runId:'lead-fixture-metadata',projectId:DEFAULT_IDS.project});
@@ -226,9 +228,13 @@ test('a stored HubSpot token that nears expiry before dispatch is refreshed and 
   hubspotRow('hubspot-near-expiry',{access_token:'near-expiry',...refreshDetails});
   const f=await fixture('hubspot-near-expiry');reply=answer(10);const start=bearers.length;
   // The engine fetched the token with an hour left; by dispatch it is inside the refresh window.
-  beforeAuthorize=()=>{skew=50*60_000;};
+  // #1233: a failure an earlier fetch of this run recorded is cleared once the upsert hands a token out.
+  beforeAuthorize=ctx=>{beforeAuthorize=null;skew=50*60_000;recordRunCredentialOutcome(ctx.runId,'hubspot-near-expiry',{code:'CONNECTION_REFRESH_UNREACHABLE',message:'earlier fetch'});
+    expect(runBinding(ctx.runId,'hubspot-near-expiry')!.credentialFailure).toMatchObject({code:'CONNECTION_REFRESH_UNREACHABLE'});};
   try {
     const run=await f.send('one');expect(run.status).toBe('SUCCEEDED');
+    expect(runBinding(run.id,'hubspot-near-expiry')).toMatchObject({handedOut:true});
+    expect(runBinding(run.id,'hubspot-near-expiry')!.credentialFailure).toBeUndefined();
     expect(bearers.slice(start).length).toBeGreaterThan(0);
     expect(new Set(bearers.slice(start))).toEqual(new Set(['Bearer refreshed-token']));
     expect(getConnectionByExternalId(DEFAULT_IDS.project,HUBSPOT,'hubspot-near-expiry')!.value.access_token).toBe('refreshed-token');
@@ -245,6 +251,10 @@ test('an expired stored HubSpot token without refresh details asks to reconnect 
     const effect=contactEffect(run.id);
     expect(effect.outcome).toMatchObject({status:'blocked',code:'CONNECTION_EXPIRED',effect:'not_started'});
     expect(effect.outcome!.status!=='succeeded' && effect.outcome!.message).toContain('Reconnect the selected HubSpot account (hubspot-no-refresh)');
+    // #1233: typed on the run's binding too, as every other service records it.
+    expect(runBinding(run.id,'hubspot-no-refresh')!.credentialFailure).toMatchObject({code:'CONNECTION_EXPIRED'});
+    // Guard, not the fix: the card was already typed from the effect's own outcome and must stay so.
+    expect(runFailure(getFlowRun(run.id)!)).toMatchObject({code:'CONNECTION_EXPIRED',next:[{step:'connect'},{step:'open_details'}]});
     expect(calls.filter(c=>c.email===email)).toEqual([]);
     expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_effect_identity WHERE owner=?').get(effect.id)).toEqual({n:0});
     expect(notifications.length).toBe(before);
@@ -289,6 +299,7 @@ test('a HubSpot token endpoint that cannot be reached for an expired token says 
     const run=await f.send('one');expect(run.status).toBe('FAILED');
     const effect=contactEffect(run.id);
     expect(effect.outcome).toMatchObject({status:'blocked',code:'CONNECTION_REFRESH_UNREACHABLE',effect:'not_started'});
+    expect(runBinding(run.id,'hubspot-unreachable')!.credentialFailure).toMatchObject({code:'CONNECTION_REFRESH_UNREACHABLE'});
     const message=effect.outcome!.status!=='succeeded' ? effect.outcome!.message : '';
     expect(message).toContain('usually temporary');expect(message).not.toContain('Reconnect');
     expect(calls.filter(c=>c.email===email)).toEqual([]);

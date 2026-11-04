@@ -2,6 +2,7 @@ import { getWorkflowDb } from '../index';
 import { compileWorkflow, type ReadinessContext, type WorkflowReadiness } from '../../runtime/workflow-readiness';
 import { assertFlowVersionOwnership } from './flow-version-ownership';
 import { workflowReadinessServices } from './readiness-services';
+import { isTurnedOff } from './flow-turn-off';
 import { bindingPinIssues } from './binding-pins';
 import { flowIngredientIssues, hasFlowIngredients } from './composition-ingredients';
 import { managedConnectionMisuse, managedSourceFor } from '../../credentials/adapter';
@@ -132,10 +133,12 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
       const cached = cache.get(id);
       if (cached) return cached.ready ? null : 'Target workflow is not ready';
       if (--budget.remaining < 0) return 'Nested workflow validation exceeds 100 targets';
-      const target = db.query<{ id: string }, [string, string]>(
-        'SELECT id FROM flow WHERE id = ? AND project_id = ?',
+      const target = db.query<{ id: string; status: string; disabled_at: number | null }, [string, string]>(
+        'SELECT id, status, disabled_at FROM flow WHERE id = ? AND project_id = ?',
       ).get(id, flow.project_id);
       if (!target) return 'Select an existing workflow ID in this project';
+      // #1242: the call itself is refused at dispatch, so a parent that makes it is not ready.
+      if (isTurnedOff(target)) return 'Target workflow is turned off; turn it on again or choose another workflow';
       const version = db.query<{ trigger: string }, [string]>(
         `SELECT v.trigger FROM flow f JOIN flow_version v ON v.flow_id = f.id AND v.id =
           COALESCE(f.published_version_id, (SELECT version_id FROM brief_workflow_draft_selection WHERE flow_id = f.id))

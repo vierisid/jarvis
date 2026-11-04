@@ -31,6 +31,7 @@ import { RUN_FLOW } from "../runner/handler";
 import { assertRunNotCanceled } from "../runtime/cancellation";
 import { assertVersionReady } from '../db/repos/flow-readiness';
 import { assertCodeStepsAllowed } from "../db/repos/flow-code-steps";
+import { CHILD_TURNED_OFF, isTurnedOff } from "../db/repos/flow-turn-off";
 
 /**
  * Upper bound on how far up the parent-run chain we walk when checking
@@ -44,7 +45,9 @@ export type WorkflowRunnerErrorCode =
   | "MISSING_REF"
   | "FLOW_NOT_FOUND"
   | "VERSION_MISSING"
-  | "SELF_RECURSION";
+  | "SELF_RECURSION"
+  /** #1242: the target was turned off by a person; another workflow may not start it. */
+  | "FLOW_TURNED_OFF";
 
 export class WorkflowRunnerError extends Error {
   readonly code: WorkflowRunnerErrorCode;
@@ -103,6 +106,10 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
     if (!flow) {
       throw new WorkflowRunnerError("FLOW_NOT_FOUND", `flow not found: ${input.flowId}`);
     }
+    // #1242: a workflow a person turned off is not started by another one,
+    // as a child or through run_workflow. One saved off and never turned on
+    // (a reusable child that is only ever called) still is.
+    if (isTurnedOff(flow)) throw new WorkflowRunnerError("FLOW_TURNED_OFF", CHILD_TURNED_OFF);
     // Recursion guard: walk the parent-run chain and refuse if ANY
     // ancestor is running the same flow we're about to start. Two
     // bounds protect against a pathological chain:

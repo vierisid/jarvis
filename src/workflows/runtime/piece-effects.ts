@@ -87,7 +87,9 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE) && managedPieceChanges(piece, action))
+    // A Webflow refund moves money and is not idempotent: never repeat one whose outcome is unknown.
+    || (piece === WEBFLOW_PIECE && action === 'refund_order')
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
     || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
@@ -107,7 +109,9 @@ const INTERCOM_PIECE = '@activepieces/piece-intercom';
 const TYPEFORM_PIECE = '@activepieces/piece-typeform';
 const LINEAR_PIECE = '@activepieces/piece-linear';
 const MONDAY_PIECE = '@activepieces/piece-monday';
-/** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist or monday.com action that changes the account (write,
+const FIGMA_PIECE = '@activepieces/piece-figma';
+const WEBFLOW_PIECE = '@activepieces/piece-webflow';
+/** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist, monday.com, Figma or Webflow action that changes the account (write,
  * send, email, delete or an access change). None parks its flow, so each one
  * can be tracked; a read never is. A category the adapter does not map tracks
  * nothing, so ClickUp (no send_email or modify_settings names) and Mailchimp
@@ -192,6 +196,15 @@ export function asanaDuplicateProjectCategory(input: Record<string, unknown>): A
   if (!present(input.include)) return 'write_data';
   return Array.isArray(input.include) && input.include.every(part => ASANA_DUPLICATE_CONTENT_PARTS.has(part))
     ? 'write_data' : 'modify_settings';
+}
+
+/**
+ * Webflow `fulfill_order`: with `send_order_fulfilled_email` on, Webflow emails
+ * the customer. Off or absent, it only marks the order fulfilled. Any other
+ * value, a templated one included, is the worst case.
+ */
+export function webflowFulfillOrderCategory(input: Record<string, unknown>): ActionCategory {
+  return !present(input.send_order_fulfilled_email) || input.send_order_fulfilled_email === false ? 'write_data' : 'send_email';
 }
 
 /**
@@ -834,6 +847,15 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  // Figma: every action of the pinned 0.6.3 bundle (`figma-engine.test.ts`
+  // checks the list against the installed package). A comment is shown to
+  // everyone with access to the file. The managed `jarvis:figma` connection runs
+  // only MANAGED_FIGMA_ACTIONS; `custom_api_call` and an action added upstream
+  // fall back to `modify_settings`.
+  catalogId: 'figma', pieceName: FIGMA_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['file_key', 'message'],
+  categories: { read_data: ['get_file', 'get_comments'], send_message: ['post_comment'] },
+}, {
   // monday.com, a community piece whose managed `jarvis:monday` connection
   // made it governed. Every action of the pinned 0.4.0 bundle is named
   // (`managed-monday.test.ts` pins the list and the engine test checks it
@@ -1037,6 +1059,32 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       'update-ticket', 'convert_conversation_to_ticket', 'create-user', 'create-or-update-company',
       'create-or-update-lead', 'create-or-update-user', 'find-or-create-company', 'find-or-create-lead',
       'update_contact', 'attach_contact_to_company', 'assign_conversation_by_id'],
+  },
+}, {
+  // Webflow, a community piece whose managed `jarvis:webflow` connection made
+  // it governed. Every action of the pinned 0.3.0 bundle is named (the engine
+  // test checks the list against the installed package), so a workflow on the
+  // user's own Webflow connection keeps its reads and draft writes at the
+  // default level. The managed connection itself is limited to
+  // MANAGED_WEBFLOW_ACTIONS, which only read items and create or update drafts.
+  catalogId: 'webflow', pieceName: WEBFLOW_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['site_id', 'collection_id', 'collection_item_id', 'order_id', 'send_order_fulfilled_email'],
+  categories: {
+    read_data: ['get_collection_item', 'find_collection_item', 'find_order', 'list_sites', 'list_collections'],
+    // Publishing puts the item on the live site, in front of its visitors.
+    send_message: ['publish_collection_item'],
+    // CMS items (managed writes stay drafts) and an order's fulfilment state.
+    write_data: ['create_collection_item', 'update_collection_item', 'unfulfill_order'],
+    delete_data: ['delete_collection_item'],
+    // Moves money back to the customer.
+    make_payment: ['refund_order'],
+    // Any request with the user's token, and fulfilling an order at its worst
+    // case (as every input rule starts): narrowed by input below to an email
+    // to the customer or a plain state change.
+    modify_settings: ['custom_api_call', 'fulfill_order'],
+  },
+  categoryFromInput: {
+    fulfill_order: { props: ['send_order_fulfilled_email'], category: webflowFulfillOrderCategory },
   },
 }, {
   // Asana: every action of the pinned 0.7.2 bundle (`asana-connection.test.ts`

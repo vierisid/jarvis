@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initWorkflowDb, closeWorkflowDb } from '../db';
-import { acquireOnboarding } from '../db/repos/customer-onboarding';
-import { onboardCustomer, onboardingCustomer, onboardingSetup, onboardingTransport } from './customer-onboarding';
+import { acquireOnboarding, resolveOnboardingBranch } from '../db/repos/customer-onboarding';
+import { getWorkflowDb } from '../db';
+import { onboardCustomer, onboardingCustomer, onboardingResource, onboardingSetup, onboardingTransport } from './customer-onboarding';
 import { memoryOnboardingStore, onboardingFixturePayload, onboardingFixtureProvider, onboardingFixtureSetup, validateOnboardingFixtures } from './onboarding-fixtures';
 import { onboardingTestGraph } from './onboarding-test-data';
 let dir: string;
@@ -86,4 +87,56 @@ test('a rate-limited create is an explicit rejection: the branch fails and a lat
   const store=memoryOnboardingStore(),create=onboardingTransport(setup,customer,async()=>'synthetic',()=>{},fetchImpl);
   const first=await onboardCustomer(store,create,'rate');expect(first.outcomes.clickup.status).toBe('failed');expect(first.outcomes.drive.status).toBe('failed');expect(calls).toBe(2);
   status=200;const second=await onboardCustomer(store,create,'rate');expect(second.outcomes.clickup.status).toBe('succeeded');expect(second.outcomes.drive.status).toBe('succeeded');expect(calls).toBe(4);
+});
+
+// #1243: an unknown branch can be resolved by a person, and nothing else.
+const record={at:1,via:'dashboard' as const,note:'Checked ClickUp'};
+async function unknownClickup(identity:string){
+  const f=onboardingFixtureProvider();f.modes.clickup='unknown';
+  const create=onboardingTransport(setup,customer,async()=>'synthetic',()=>{},f.fetchImpl);
+  const lease=acquireOnboarding(identity,'config','first');const first=await onboardCustomer(lease.store,create,identity);lease.release();
+  expect(first.outcomes.clickup.status).toBe('unknown');f.modes.clickup='ok';return {f,create};
+}
+test('#1243: an unknown branch confirmed created is reused with the resource the person found, and never created again',async()=>{
+  const {f,create}=await unknownClickup('confirmed');
+  const outcome=resolveOnboardingBranch('confirmed','clickup',{created:onboardingResource('clickup','https://app.clickup.com/t/86abc123')},record);
+  expect(outcome).toMatchObject({status:'succeeded',id:'86abc123',url:'https://app.clickup.com/t/86abc123',resolution:record});
+  const lease=acquireOnboarding('confirmed','config','second');const next=await onboardCustomer(lease.store,create,'confirmed');lease.release();
+  expect(next.outcomes.clickup).toMatchObject({status:'succeeded',id:'86abc123'});expect(f.calls).toEqual(['clickup','drive']);
+  expect(()=>resolveOnboardingBranch('confirmed','clickup',{created:false},record)).toThrow('no unresolved outcome');
+});
+test('#1243: an unknown branch released by a person is created once by the next run',async()=>{
+  const {f,create}=await unknownClickup('released');
+  expect(resolveOnboardingBranch('released','clickup',{created:false},record)).toMatchObject({status:'failed',resolution:record});
+  const lease=acquireOnboarding('released','config','second');const next=await onboardCustomer(lease.store,create,'released');lease.release();
+  expect(next.outcomes.clickup).toMatchObject({status:'succeeded',id:'fixture-task'});expect(f.calls).toEqual(['clickup','drive','clickup']);
+  // The next run replaced the branch outcome; the person's decision is still on record.
+  const stored=JSON.parse((getWorkflowDb().query('SELECT results FROM workflow_customer_onboarding WHERE identity=?').get('released') as {results:string}).results);
+  expect(stored.resolutions).toEqual([expect.objectContaining({branch:'clickup',status:'failed',via:'dashboard',note:'Checked ClickUp',previous:expect.any(String)})]);
+});
+test('#1243: nothing is resolved while a run holds the customer, for a branch that is not unknown, or for no record',async()=>{
+  let now=1000;const clock=()=>now;await unknownClickup('held');
+  const lease=acquireOnboarding('held','config','running',clock);
+  expect(()=>resolveOnboardingBranch('held','clickup',{created:false},record,clock)).toThrow('running');
+  lease.release();expect(resolveOnboardingBranch('held','clickup',{created:false},record,clock).status).toBe('failed');
+  expect(()=>resolveOnboardingBranch('held','drive',{created:false},record,clock)).toThrow('no unresolved outcome');
+  expect(()=>resolveOnboardingBranch('missing','drive',{created:false},record,clock)).toThrow('No onboarding record');
+  // An interrupted dispatch whose lease ran out reads as unknown, and may be resolved too.
+  const interrupted=acquireOnboarding('interrupted','config','crashed',clock);interrupted.store.save('drive',{status:'dispatching'});
+  now+=90_001;expect(resolveOnboardingBranch('interrupted','drive',{created:false},record,clock).status).toBe('failed');
+});
+test('#1243: a resource is the exact ID or link of what the step creates',()=>{
+  expect(onboardingResource('clickup','86abc123')).toEqual({id:'86abc123',url:'https://app.clickup.com/t/86abc123'});
+  expect(onboardingResource('drive','https://drive.google.com/drive/u/1/folders/1AbC-d_E?usp=sharing')).toEqual({id:'1AbC-d_E',url:'https://drive.google.com/drive/folders/1AbC-d_E'});
+  for(const [branch,bad] of [['clickup','https://evil.example/t/86abc123'],['clickup','http://app.clickup.com/t/86abc123'],['clickup','https://drive.google.com/drive/folders/x'],
+    ['drive','https://app.clickup.com/t/x'],['drive','https://drive.google.com/file/d/abc'],['drive','https://user@drive.google.com/drive/folders/abc'],['drive',''],['drive','a b'],['clickup',42]] as const)
+    expect(()=>onboardingResource(branch,bad)).toThrow();
+});
+test('#1243: a record an earlier release keyed on the old configuration form is moved over, not refused',()=>{
+  acquireOnboarding('legacy','legacy-form','old').release();
+  let asked=0;acquireOnboarding('legacy','new-form','next',Date.now,()=>{asked++;return ['earlier-form','legacy-form'];}).release();expect(asked).toBe(1);
+  expect(getWorkflowDb().query('SELECT config FROM workflow_customer_onboarding WHERE identity=?').get('legacy')).toEqual({config:'new-form'});
+  // A row already in the new form never reads the history.
+  acquireOnboarding('legacy','new-form','again',Date.now,()=>{asked++;return [];}).release();expect(asked).toBe(1);
+  expect(()=>acquireOnboarding('legacy','other-form','third',Date.now,()=>['legacy-form'])).toThrow('configuration changed');
 });
