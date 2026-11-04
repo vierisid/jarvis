@@ -1503,7 +1503,7 @@ describe("managed Help Scout is scoped to three support actions",()=>{
   writeFileSync(join(dataDir,"connections/help-scout.json"),JSON.stringify({version:1,provider:"help-scout",status:"connected",generation:crypto.randomUUID(),
    access_token:TOKEN,refresh_token:"private-refresh",expires_at:new Date(Date.now()+3600000).toISOString(),
    refresh:{url:"https://app.usejarvis.dev/api/integrations/help-scout/refresh",instance_id:crypto.randomUUID(),secret:"a".repeat(64)},
-   account:{id:"123",label:"Owner"},workspaces:[{id:"34",name:"Sandbox"}],connected_at:new Date().toISOString()}));
+   account:{id:"123",label:"owner@example.test"},workspaces:[],connected_at:new Date().toISOString()}));
   credentials.register(new JarvisHelpScoutConnectionSource({daemon:{data_dir:dataDir},usejarvis_integrations:{page_url:"https://app.usejarvis.dev/account"}} as JarvisConfig));
  });
  afterEach(()=>rmSync(dataDir,{recursive:true,force:true}));
