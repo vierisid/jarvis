@@ -2591,6 +2591,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json(gitlabStatus(ctx.config));
       },
     },
+    '/api/integrations/pipedrive': {
+      GET: async () => {
+        const {pipedriveStatus} = await import('../integrations/pipedrive-connection');
+        return json(pipedriveStatus(ctx.config));
+      },
+    },
     '/api/integrations/webflow': {
       GET: async () => {
         const {webflowStatus} = await import('../integrations/webflow-connection');

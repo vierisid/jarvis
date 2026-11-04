@@ -2,6 +2,7 @@ import {managedAirtableInput, managedAirtableIssue, runManagedAirtableAction} fr
 import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
 import { managedNotionInput, managedNotionIssue, runManagedNotionAction } from './managed-notion';
 import { managedGitLabInput, runManagedGitLabAction } from "./managed-gitlab";
+import { managedPipedriveInput, runManagedPipedriveAction } from "./managed-pipedrive";
 import { managedWebflowInput, runManagedWebflowAction } from './managed-webflow';
 /**
  * Engine-side half of the governed-piece adapter.
@@ -269,6 +270,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   const dropbox = params.piece === '@activepieces/piece-dropbox' ? managedDropboxInput(params.input) : null;
   const intercom = params.piece === '@activepieces/piece-intercom' ? managedIntercomInput(params.input) : null;
   const gitlab = managedGitLabInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
+  const pipedrive = managedPipedriveInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
   const webflow = managedWebflowInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
   const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
   if (slack) {
@@ -286,6 +288,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (gitlab) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitLab dispatch was not authorized');
     raw = await runManagedGitLabAction(String(params.action), gitlab);
+  } else if (pipedrive) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Pipedrive dispatch was not authorized');
+    raw = await runManagedPipedriveAction(String(params.action), pipedrive);
   } else if (webflow) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Webflow dispatch was not authorized');
     raw = await runManagedWebflowAction(String(params.action), webflow);

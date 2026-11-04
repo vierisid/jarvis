@@ -306,6 +306,8 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/managed-figma.ts',
   '../../runtime/managed-gitlab.ts',
   '../../runtime/managed-gitlab-inputs.ts',
+  '../../runtime/managed-pipedrive.ts',
+  '../../runtime/managed-pipedrive-inputs.ts',
   '../../runtime/managed-webflow.ts',
   '../../runtime/managed-webflow-inputs.ts',
   '../../runtime/managed-github.ts',

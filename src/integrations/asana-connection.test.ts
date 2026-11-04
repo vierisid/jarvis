@@ -248,13 +248,14 @@ const ASANA_072_BY_UPSTREAM: Record<string, string[]> = {
    'remove_project_members', 'remove_user_from_team', 'remove_user_from_workspace',
  ],
 };
-/** Where Jarvis departs from upstream's label: messages to people, and access grants. */
+/** Where Jarvis departs from upstream's label: messages to people, access grants, and a blind project update (an archive). */
 const SENDS = ["add_task_comment", "update_comment", "create_status_update", "create_access_request"];
+const ARCHIVES = ["update_project"];
 const ACCESS = ["add_project_followers", "add_project_members", "add_user_to_team", "add_user_to_workspace",
   "approve_access_request", "create_membership", "create_project", "create_team", "duplicate_project",
-  "instantiate_project_template", "update_project", "update_team"];
+  "instantiate_project_template", "update_team"];
 const expectedCategory = (upstream: string, name: string) =>
-  SENDS.includes(name) ? "send_message" : ACCESS.includes(name) ? "modify_settings"
+  SENDS.includes(name) ? "send_message" : ARCHIVES.includes(name) ? "delete_data" : ACCESS.includes(name) ? "modify_settings"
     : upstream === "READ" || upstream === "SEARCH" ? "read_data" : upstream === "DESTRUCTIVE" ? "delete_data" : "write_data";
 test("the Asana adapter names every action of the pinned bundle, each in the category it should have", () => {
   const all = Object.values(ASANA_072_BY_UPSTREAM).flat();
@@ -273,7 +274,8 @@ test("the Asana adapter names every action of the pinned bundle, each in the cat
 });
 test("a project or team update narrows from its worst case only when its input says it is a plain edit", () => {
   const category = (action: string, input?: Record<string, unknown>) => resolveGovernedPieceAction(ASANA, action, input)!.category;
-  expect(category("update_project")).toBe("modify_settings");
+  // Blind, it is the archive it can be: the rule never returns more than the table.
+  expect(category("update_project")).toBe("delete_data");
   expect(category("update_project", { project: "1", name: "Renamed", notes: "x" })).toBe("write_data");
   expect(category("update_project", { project: "1", archived: false })).toBe("write_data");
   expect(category("update_project", { project: "1", archived: true })).toBe("delete_data");
