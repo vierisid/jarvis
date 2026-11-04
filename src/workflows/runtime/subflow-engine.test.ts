@@ -49,29 +49,40 @@ let now=Date.now(),mode='success';
 beforeAll(async()=>{
  dir=mkdtempSync(join(tmpdir(),'jarvis-subflow-engine-'));initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,79));
  const bundle=await buildEngineBundle(),path=join(import.meta.dir,'../activepieces/packages/pieces/jarvis/subflow');await buildPiece(path);
+ const delayPath=join(import.meta.dir,'../activepieces/packages/pieces/core/delay');await buildPiece(delayPath);
+ const delayMeta=JSON.parse(readFileSync(join(delayPath,'package.json'),'utf8')),delayInstalled=join(dir,'node_modules',delayMeta.name);mkdirSync(dirname(delayInstalled),{recursive:true});symlinkSync(join(delayPath,'dist'),delayInstalled,'dir');
  const meta=JSON.parse(readFileSync(join(path,'package.json'),'utf8')),installed=join(dir,'node_modules',meta.name);mkdirSync(dirname(installed),{recursive:true});symlinkSync(join(path,'dist'),installed,'dir');
  authority=new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'});approvals=new ApprovalManager();
  services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver(),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),subflowNow:()=>now,llmManager:{chat:async()=>{throw Error('No model calls');}} as any,channelService:{} as any,wsService:{} as any});
  const returned=services.subflowResult!;
  services.subflowResult=async(input,ctx)=>{
   if(mode==='failure')throw Error('Synthetic child failure');
-  if(mode==='timeout'){const w=createWaitpoint({flowRunId:ctx.runId,projectId:ctx.projectId,stepName:ctx.stepName!,type:'TIMER',resumeDateTime:new Date(now+120_000).toISOString()});return {waitpointId:w.id};}
   return returned(mode==='invalid'?{result:{unexpected:true}}:input,ctx);
  };
  api=new SandboxApi({services});await api.start({port:0});runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
- const handle=await runtime.acquire({runId:'subflow-metadata',projectId:DEFAULT_IDS.project});try{const entries=[metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName:meta.name,pieceVersion:meta.version}))];catalog=new PieceCatalog(entries);configureWorkflowReadiness({pieces:catalog});if(process.env.JARVIS_SUBFLOW_CATALOG_EXPORT)writeFileSync(process.env.JARVIS_SUBFLOW_CATALOG_EXPORT,JSON.stringify(entries));}finally{await handle.release();}
+ const handle=await runtime.acquire({runId:'subflow-metadata',projectId:DEFAULT_IDS.project});try{const entries=[metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName:meta.name,pieceVersion:meta.version})),metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName:delayMeta.name,pieceVersion:delayMeta.version}))];catalog=new PieceCatalog(entries);configureWorkflowReadiness({pieces:catalog});if(process.env.JARVIS_SUBFLOW_CATALOG_EXPORT)writeFileSync(process.env.JARVIS_SUBFLOW_CATALOG_EXPORT,JSON.stringify(entries));}finally{await handle.release();}
  worker=new Worker({log:()=>{},handlers:{[RUN_FLOW]:createRunFlowHandler({executor:new EngineFlowExecutor(runtime),now:()=>now})}});
 },120_000);
 afterAll(async()=>{await runtime?.shutdown();await api?.stop();closeWorkflowDb();setEncryptionKey(null);for(const id of runIds)rmSync(join(workflowLogsBase(),id+'.bin'),{force:true});if(dir)rmSync(dir,{recursive:true,force:true});});
 const payload={request_id:'fixture-request',id:' customer-1 ',name:' Fixture Customer ',email:' CUSTOMER@EXAMPLE.INVALID '};
 async function run(flowId:string,flowVersionId:string,input:any=payload){const r=createFlowRun({flowId,flowVersionId});runIds.push(r.id);enqueue({jobType:RUN_FLOW,payload:{runId:r.id,payload:input},flowId,flowRunId:r.id});await worker.drain();for(const child of listRuns({limit:500}).filter(x=>x.parentRunId))if(!runIds.includes(child.id))runIds.push(child.id);return getFlowRun(r.id)!;}
-async function fixture(originalParent=parentTestGraph('placeholder-only-in-fixture'),originalChild=childTestGraph()){
+async function fixture(originalParent=parentTestGraph('placeholder-only-in-fixture'),originalChild=childTestGraph(),timeoutChild=false){
  mode='success';now=Date.now();authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});
- const g=configuredSubflowGraphs(originalParent,originalChild),child=createFlow(),cv=createDraftVersion({flowId:child.id,displayName:'Fixture child',trigger:g.child});lockVersion(cv.id);setPublishedVersion(child.id,cv.id);updateFlowStatus(child.id,'ENABLED');
+ const g=configuredSubflowGraphs(originalParent,originalChild);
+ if(timeoutChild)g.child.nextAction={name:'delay',type:'PIECE',settings:{pieceName:'@activepieces/piece-delay',pieceVersion:'0.3.27',actionName:'delayFor',input:{unit:'seconds',delayFor:120}},nextAction:g.child.nextAction};
+ const child=createFlow(),cv=createDraftVersion({flowId:child.id,displayName:'Fixture child',trigger:g.child});lockVersion(cv.id);setPublishedVersion(child.id,cv.id);updateFlowStatus(child.id,'ENABLED');
  g.parent.nextAction.settings.input.flow=child.id;const parent=createFlow(),pv=createDraftVersion({flowId:parent.id,displayName:'Fixture parent',trigger:g.parent});expect(versionReadiness(parent.id,pv.id).issues).toEqual([]);lockVersion(pv.id);setPublishedVersion(parent.id,pv.id);updateFlowStatus(parent.id,'ENABLED');
  return {parent,pv,child,cv,run:(input?:any)=>run(parent.id,pv.id,input),children:()=>listRuns({flowId:child.id})};
 }
-async function finish(id:string){resumeSubflowCalls(now);await worker.drain();return getFlowRun(id)!;}
+async function finish(id:string){
+ // Engine log completion and child continuation admission are separate durable writes.
+ for(let attempt=0;attempt<100;attempt++){
+  resumeSubflowCalls(now);await worker.drain();const run=getFlowRun(id)!;
+  if(!['PAUSED','QUEUED','RUNNING'].includes(run.status))return run;
+  await new Promise(resolve=>setTimeout(resolve,10));
+ }
+ return getFlowRun(id)!;
+}
 function consume(run:any,node='consume'){return run.steps?.[node]?.output?.output;}
 test('saves both disabled drafts with setup required and tests both via public tool',async()=>{
  const child=createFlow(),cv=createDraftVersion({flowId:child.id,displayName:'Saved child',trigger:childTestGraph()}),parent=createFlow(),pv=createDraftVersion({flowId:parent.id,displayName:'Saved parent',trigger:parentTestGraph(child.id)});
@@ -79,7 +90,7 @@ test('saves both disabled drafts with setup required and tests both via public t
  const tool=createManageWorkflowTool({pieceRegistry:catalog}),result=String(await tool.execute({action:'validate_fixtures',flow:parent.id}));expect(result).toContain('"passed":true');expect(result).toContain('"childFlowId":"'+child.id+'"');expect(result).toContain('"externalActions":0');
 });
 for(const scenario of ['success','invalid','failure','timeout'])test('real parent/child worker: '+scenario,async()=>{
- const f=await fixture();mode=scenario;const first=await f.run();expect(first.status).toBe('PAUSED');expect(f.children()).toHaveLength(1);
+ const f=await fixture(undefined,undefined,scenario==='timeout');mode=scenario;const first=await f.run();expect(first.status).toBe('PAUSED');expect(f.children()).toHaveLength(1);
  if(scenario==='timeout'){expect(f.children()[0]!.status).toBe('PAUSED');now+=60_000;new TimerWaitpointScheduler().tick(now);await worker.drain();}
  const final=await finish(first.id);expect(final.status).toBe(scenario==='success'?'SUCCEEDED':'FAILED');
  if(scenario==='success')expect(consume(final)).toEqual({valid:true,customer:{id:'customer-1',name:'Fixture Customer',email:'customer@example.invalid'},issues:[]});
@@ -99,7 +110,7 @@ test('changed payload under the same invocation key is rejected, new key starts 
  expect((await finish((await f.run({...payload,request_id:'new-request'})).id)).status).toBe('SUCCEEDED');expect(f.children()).toHaveLength(2);
 });
 test('Authority denial prevents child dispatch',async()=>{const f=await fixture();authority.addOverride({action:'spawn_agent',allowed:false});expect((await f.run()).status).toBe('FAILED');expect(f.children()).toHaveLength(0);});
-test('canceling parent also cancels its waiting child',async()=>{const f=await fixture();mode='timeout';const first=await f.run();expect(cancelFlowRun(first.id).accepted).toBe(true);expect(f.children()[0]!.status).toBe('STOPPED');expect(resumeSubflowCalls(now)).toBe(0);});
+test('canceling parent also cancels its waiting child',async()=>{const f=await fixture(undefined,undefined,true);mode='timeout';const first=await f.run();expect(cancelFlowRun(first.id).accepted).toBe(true);expect(f.children()[0]!.status).toBe('STOPPED');expect(resumeSubflowCalls(now)).toBe(0);});
 test('receipt and child creation are atomic on insert failure',async()=>{
  const f=await fixture();getWorkflowDb().run("CREATE TEMP TRIGGER reject_subflow BEFORE INSERT ON workflow_subflow_call BEGIN SELECT RAISE(ABORT, 'synthetic receipt failure'); END");
  try{expect((await f.run()).status).toBe('FAILED');expect(f.children()).toHaveLength(0);}finally{getWorkflowDb().run('DROP TRIGGER reject_subflow');}
@@ -111,7 +122,7 @@ test('actual model-generated saved pair exercises all five cases through the wor
  const saved=JSON.parse(readFileSync(join(import.meta.dir,'fixtures/subflow-generated-test16.json'),'utf8'));
  expect((await validateSubflowFixtures(saved.parent,saved.child)).cases.every(c=>c.passed)).toBe(true);
  for(const scenario of ['success','invalid','failure','timeout','restart']){
-  const f=await fixture(saved.parent,saved.child);mode=scenario==='restart'?'success':scenario;const first=await f.run();expect(first.status).toBe('PAUSED');
+  const f=await fixture(saved.parent,saved.child,scenario==='timeout');mode=scenario==='restart'?'success':scenario;const first=await f.run();expect(first.status).toBe('PAUSED');
   if(scenario==='restart'){expect(f.children()[0]!.status).toBe('SUCCEEDED');closeWorkflowDb();initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,79));configureWorkflowReadiness({pieces:catalog});}
   if(scenario==='timeout'){now+=60_000;new TimerWaitpointScheduler().tick(now);await worker.drain();}
   const final=await finish(first.id);expect(final.status).toBe(['success','restart'].includes(scenario)?'SUCCEEDED':'FAILED');
@@ -148,7 +159,7 @@ test('a settled child continues its parent through the continuation claim, and n
  await worker.drain();expect(getFlowRun(first.id)!.status).toBe('SUCCEEDED');
 });
 test('a child stopped at the deadline reports the approval cards the stop closed',async()=>{
- const f=await fixture();mode='timeout';const first=await f.run(),child=f.children()[0]!;expect(child.status).toBe('PAUSED');
+ const f=await fixture(undefined,undefined,true);mode='timeout';const first=await f.run(),child=f.children()[0]!;expect(child.status).toBe('PAUSED');
  const card=approvals.createRequest({agentId:'workflow:'+child.id,agentName:'Fixture child',toolName:'workflow_start',toolArguments:{},actionCategory:'spawn_agent',urgency:'normal',reason:'fixture',context:'{}',executionMode:'workflow'});
  saveWorkflowEffect({id:'fixture-child-card-'+child.id,runId:child.id,projectId:DEFAULT_IDS.project,flowId:f.child.id,versionId:f.cv.id,versionDigest:'',stepName:'returned',executionPath:[],route:'fixture',toolName:'workflow_start',actionCategory:'spawn_agent',requestDigest:'',arguments:{},target:{},provenance:{},decision:'approval_required',reason:'fixture',status:'pending',approvalId:card.id,waitpointId:null,createdAt:now});
  const heard:string[]=[];now+=60_000;resumeSubflowCalls(now,id=>heard.push(id));
@@ -208,4 +219,23 @@ test('run_workflow, through the same dispatch, refuses a turned-off target',asyn
  getWorkflowDb().run("UPDATE flow SET status='DISABLED', disabled_at=? WHERE id=?",[Date.now(),off.id]);
  expect(()=>new JarvisWorkflowRunnerAdapter().startNow({flowId:off.id},undefined,DEFAULT_IDS.project)).toThrow(expect.objectContaining({code:'FLOW_TURNED_OFF'}));
  expect(listRuns({flowId:off.id})).toHaveLength(0);
+});
+
+for (const value of [
+ {approval:true,amount:0},
+ {waitpointId:'business-reference-123',active:false},
+ {status:'pending',approval:{waitpointId:'business-approval'},result:{waitpointId:'nested'}},
+]) test('business result keys are data through real child completion and parent replay: '+JSON.stringify(value),async()=>{
+ const f=await fixture();
+ const childGraph=structuredClone(f.cv.trigger);
+ childGraph.nextAction!.nextAction!.settings!.input={result:value};
+ const cv=createDraftVersion({flowId:f.child.id,displayName:'Business result',trigger:childGraph});lockVersion(cv.id);setPublishedVersion(f.child.id,cv.id);
+ const parentGraph=structuredClone(f.pv.trigger);parentGraph.nextAction!.settings!.input!.outputSchema={type:'object'};
+ const pv=createDraftVersion({flowId:f.parent.id,displayName:'Consume business result',trigger:parentGraph});lockVersion(pv.id);setPublishedVersion(f.parent.id,pv.id);
+ const first=await run(f.parent.id,pv.id);
+ expect(f.children()).toHaveLength(1);expect(f.children()[0]!.status).toBe('SUCCEEDED');
+ expect(listWaitpointsByFlowRun(f.children()[0]!.id)).toHaveLength(0);
+ closeWorkflowDb();initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,79));configureWorkflowReadiness({pieces:catalog});
+ const final=await finish(first.id);expect(final.status).toBe('SUCCEEDED');expect(consume(final)).toEqual(value);
+ const replay=await run(f.parent.id,pv.id);expect(replay.status).toBe('SUCCEEDED');expect(consume(replay)).toEqual(value);expect(f.children()).toHaveLength(1);
 });
