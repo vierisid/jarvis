@@ -135,10 +135,13 @@ continuation of a run is queued or running, another is not queued behind it. A
 timer, approval or child whose own step already finished is retired instead of
 waking the run's next pause.
 
-A resume URL is not held to that last rule: the approval piece's Create
-Approval Links step makes its URL in one step, and the run waits for it at a
-later one. Each URL still continues the run once, and only while it is paused
-with no other continuation queued.
+Approvals and input forms are not answered by URL. The approval piece's Create
+Approval Links and Wait for Approval, and the Jarvis input piece's forms and
+approvals, create a request that only the signed-in user answers in Needs you
+(`POST /api/workflow-inputs/:id`); their links just open that page, and their
+waitpoints refuse a resume URL (403). Each request belongs to one run, so
+stopping one run never closes another run's request. The answer continues the
+run once, and only while it is paused with no other continuation queued.
 
 A parent run waiting on a required child workflow is continued by the child-run
 scheduler (`runtime/child-run-scheduler.ts`) once the child has finished. The

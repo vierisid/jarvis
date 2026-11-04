@@ -22,7 +22,8 @@ export const JARVIS_PIECE_PREFIX = '@jarvispieces/';
  * The vendored core pieces whose actions act only inside the run and Jarvis's
  * own workflow storage, so there is nothing outside Jarvis for Authority to
  * judge (#961). They are not audited one by one and obey Pause and Kill:
- *   approval     waits for a click on a resume link it makes; sends nothing.
+ *   approval     creates a request the signed-in user decides in Needs you
+ *                (/api/workflow-inputs); its links only open that page. Sends nothing.
  *   delay        waits.
  *   file-helper  reads, converts, zips and unzips the run's own files.
  *   schedule     a trigger only; no actions.
