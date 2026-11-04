@@ -115,7 +115,7 @@ export function createDomainPorts(scopeId: string, http: HostTransport, storage:
       for (const row of rows) {
         const doc = await get(`/api/brief/decisions/${encodeURIComponent(row.decisionId)}/document`);
         if (doc.decision?.revision !== row.revision || !Array.isArray(doc.actions)) throw Error('Decision changed');
-        if (!doc.actions.length && row.supportedActions?.some((action: string) => action !== 'inspect')) result.push(row);
+        if (!doc.actions.length) result.push(row);
       }
       return result;
     },

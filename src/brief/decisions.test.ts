@@ -289,7 +289,7 @@ test.each(['approval', 'work', 'effect'] as const)('%s projection excludes hosti
   expect(calls).toBe(0);
 });
 
-test('workflow rejection stays denied, then becomes an inspect-only blocked receipt across restart', async () => {
+test('workflow rejection stays denied, leaves the pending queue and retains its inspectable receipt across restart', async () => {
   const flow = createFlow();
   const piece = '@jarvispieces/piece-jarvis-tool';
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Rejected workflow', trigger: {
@@ -323,12 +323,12 @@ test('workflow rejection stays denied, then becomes an inspect-only blocked rece
   expect(getWorkflowEffect(pending.effectId)).toMatchObject({ status: 'blocked', decision: 'denied' });
   const blocked = queue.get(id);
   expect(blocked).toMatchObject({ state: 'blocked', approval: { status: 'denied' }, supportedActions: ['inspect'] });
-  expect((await read()).items).toEqual([blocked]);
-  expect((await queue.read({ runId: run.id })).data.items).toEqual([blocked]);
+  expect((await read()).items).toEqual([]);
+  expect((await queue.read({ runId: run.id })).data.items).toEqual([]);
   expect(queue.get(`effect:${pending.effectId}`)).toEqual(blocked);
   expect(dispatches).toBe(0); expect(calls).toBe(0);
   closeDb(); initWorkflowDb(file); wire();
-  expect(queue.get(id)).toEqual(blocked); expect((await read()).items).toEqual([blocked]);
+  expect(queue.get(id)).toEqual(blocked); expect((await read()).items).toEqual([]);
   for (const action of ['approve_permission', 'reject_permission', 'execute_once', 'close_without_running'] as const) {
     await expect(queue.resolve(id, { revision: blocked.revision, action })).rejects.toMatchObject({ status: 409, code: 'unsupported_action' });
   }
@@ -398,4 +398,16 @@ test('a browser click card names the element and page captured when it was raise
     actionCategory: 'control_app', urgency: 'normal', reason: 'Review', executionMode: 'workflow',
     context: JSON.stringify({ confirm: 'always', reviewSubject: { origin: 'javascript:alert(1)' } }) });
   expect(queue.get(`approval:${bad.id}`).review).toEqual({ toolName: 'browser_click', reason: 'Review' });
+});
+
+
+test('notification review shows frozen message, channels and run context without serializing unrelated arguments', async () => {
+  const a = approval('workflow'), e = effect('pending', a.id);
+  saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify',
+    arguments: { message: 'Daily check-in for 2026-11-04', channels: ['dashboard'], token: 'never serialize me' } });
+  const item = queue.get(`approval:${a.id}`);
+  expect(item.review).toMatchObject({ workflowName: 'Fixture', message: 'Daily check-in for 2026-11-04', channels: ['dashboard'] });
+  expect(item.review?.requestedAt).toBe(e.run.created);
+  expect(item.title).toContain('Daily check-in');
+  expect(JSON.stringify(item)).not.toContain('never serialize me');
 });

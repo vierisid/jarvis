@@ -48,3 +48,10 @@ test('Today shows the unplanned interview goal notice, and drops it once the ser
     await React.act(async () => root.unmount()); host.remove(); companion.remove(); reconciliation.stop(); rooms.retire(); transport.stop();
   }
 });
+
+test('Needs you never shows an all-clear while the independent permission list has cards, including during refresh', () => {
+  expect(Rooms.onlyOtherDecisions(null, 2)).toBe(true);
+  expect(Rooms.onlyOtherDecisions([{ actions: [] }] as any, 0)).toBe(true);
+  expect(Rooms.onlyOtherDecisions([{ actions: ['approve'] }] as any, 2)).toBe(false);
+  expect(Rooms.onlyOtherDecisions([], 0)).toBe(false);
+});

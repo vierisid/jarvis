@@ -16,7 +16,7 @@ export interface QueuedDecision extends BriefDecision {
   refs: DecisionReference[];
   relatedTruncated: boolean;
   supportedActions: DecisionAction[];
-  review?: { toolName: string; reason: string; target?: string; origin?: string; element?: string };
+  review?: { toolName: string; reason: string; target?: string; origin?: string; element?: string; workflowName?: string; requestedAt?: number; message?: string; channels?: string[] };
   placement: number;
   createdAt: number;
 }
