@@ -2591,6 +2591,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json(zoomStatus(ctx.config));
       },
     },
+    '/api/integrations/help-scout': {
+      GET: async () => {
+        const {helpScoutStatus} = await import('../integrations/help-scout-connection');
+        return json(helpScoutStatus(ctx.config));
+      },
+    },
     '/api/integrations/pipedrive': {
       GET: async () => {
         const {pipedriveStatus} = await import('../integrations/pipedrive-connection');
