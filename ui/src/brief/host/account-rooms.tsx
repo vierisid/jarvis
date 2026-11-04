@@ -1,4 +1,8 @@
 import React from 'react';
+import { LibraryPanel } from '../../v2/rooms/workflows/LibraryPanel';
+import { WorkflowEditorEnvironment } from '../../v2/rooms/workflows/WorkflowEditorEnvironment';
+import { BriefButton } from '../components/controls';
+import '../../v2/rooms/workflows/WorkflowsRoom.css';
 import type { BriefRoomRegistry, BriefShellPort } from '../contracts';
 import { BRIEF_ROOMS } from '../rooms/registry';
 import { ProfileController } from '../account/profile/controller';
@@ -50,7 +54,13 @@ export function createAccountRooms(host: AccountHost) {
     profile: { ...BRIEF_ROOMS.profile, Body: ({ shell }) => <ProfileWorkspace shell={shell} binding={{ ...base(), controller: profile }} /> },
     settings: { ...BRIEF_ROOMS.settings, Body: ({ shell }) => <SettingsWorkspace shell={shell} binding={{ ...base(), controller: settings }} /> },
     authority: { ...BRIEF_ROOMS.authority, Body: ({ shell }) => <AuthorityWorkspace shell={shell} binding={{ ...base(), controller: authority }} /> },
-    'connected-workspace': { ...BRIEF_ROOMS['connected-workspace'], Body: ({ shell }) => <ConnectedWorkspace shell={shell} binding={{ ...base(), controller: connections }} /> },
+    'connected-workspace': { ...BRIEF_ROOMS['connected-workspace'], Body: ({ shell }) => <ConnectedWorkspace shell={shell} binding={{ ...base(), controller: connections,
+      renderLibrary: (query, onReturn) => <WorkflowEditorEnvironment.Provider value={{ request: transport.request, portalHost: null, workspace: true }}>
+        <BriefButton variant="text" onClick={onReturn}>Back to service setup</BriefButton>
+        <p>Installing a connector makes it available to Jarvis. Account access is configured separately after installation.</p>
+        <LibraryPanel initialQuery={query} />
+      </WorkflowEditorEnvironment.Provider>,
+    }} /> },
     billing: BRIEF_ROOMS.billing,
   };
   return { rooms, profile, settings, authority, connections, guardShell: (shell: BriefShellPort) => guardProfileNavigation(shell, profile),

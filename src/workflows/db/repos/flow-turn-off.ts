@@ -8,6 +8,7 @@
  * was turned off are.
  */
 import { getWorkflowDb } from "../index";
+import { ActionOutcomeError } from "../../../actions/action-outcome";
 import { cancelFlowRun } from "./run-cancellation";
 import { clearScheduleWatch, recordFire } from "./trigger-fire";
 
@@ -23,6 +24,21 @@ export function turnedOffReason(runId: string): string | null {
     `SELECT f.disabled_at, r.created FROM flow_run r JOIN flow f ON f.id = r.flow_id WHERE r.id = ?`,
   ).get(runId);
   return row && row.disabled_at !== null && row.created <= row.disabled_at ? TURNED_OFF_REASON : null;
+}
+
+export const CHILD_TURNED_OFF = "Child workflow is turned off. Turn it on again to let other workflows call it.";
+/**
+ * Whether a person turned this workflow off (#1242): it was on, and is off now.
+ * A workflow saved off that was never turned on (a reusable child made only to
+ * be called) is not turned off; a parent may still call it.
+ */
+export function isTurnedOff(flow: { status: string; disabled_at?: number | null }): boolean {
+  return flow.status === "DISABLED" && flow.disabled_at != null;
+}
+
+/** The refusal a calling step records: blocked, and nothing was started. */
+export function childTurnedOffOutcome(): ActionOutcomeError {
+  return new ActionOutcomeError({ status: "blocked", code: "FLOW_TURNED_OFF", message: CHILD_TURNED_OFF, effect: "not_started" });
 }
 
 /** Stop one run of a turned-off workflow and record it. Call outside any transaction. */

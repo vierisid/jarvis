@@ -42,6 +42,8 @@ export interface WorkflowsStartResponse {
  *   - **cycle guard**: refuses the start if the target flow appears
  *     anywhere in the caller's parent-run chain. The route maps the
  *     resulting `SELF_RECURSION` error to a 409.
+ *   - **turned off** (#1242): refuses a target a person turned off with
+ *     `FLOW_TURNED_OFF`, a 409.
  *   - **payload**: passed through to RUN_FLOW as the trigger payload.
  *   - **return**: the started run's id; the call is fire-and-forget --
  *     optional waitForCompletion parks the parent until its child terminates.
@@ -89,11 +91,14 @@ export function createJarvisWorkflowsStartRoute(
       // unexpected failures while giving expected user mistakes a
       // crisp status code that the piece's error message can derive
       // from cleanly.
-      const code = (e as { code?: unknown }).code;
+      // A turned-off target (#1242) is recorded on the step as a typed outcome; it keeps its 409.
+      const outcomeCode = (e as { outcome?: { code?: unknown } }).outcome?.code;
+      const code = outcomeCode === "FLOW_TURNED_OFF" ? outcomeCode : (e as { code?: unknown }).code;
       if (typeof code === "string") {
         const message = e instanceof Error ? e.message : String(e);
         if (code === "FLOW_NOT_FOUND") return err(message, 404);
         if (code === "SELF_RECURSION") return err(message, 409);
+        if (code === "FLOW_TURNED_OFF") return err(message, 409);
         if (code === "WORKFLOW_NOT_READY") return err(message, 422);
         if (code === "VERSION_MISSING") return err(message, 422);
         if (code === "MISSING_REF") return err(message, 400);

@@ -162,7 +162,8 @@ jobs:
       # Engine tests skip without a built bundle and pieces, so this builds
       # them (seconds) and runs those files. After the full run on purpose:
       # built first, they would un-skip engine suites that need more pieces.
-      # The ClickUp, Mailchimp, Slack and Notion tests also install their pinned pieces from npm.
+      # The pieces-library engine tests also install their pinned pieces from
+      # npm; engine-ci-coverage.test.ts checks each one is listed here (#1235).
       - run: >-
           JARVIS_TEST_ENGINE_BUILD=1 bun test --retry=2
           src/workflows/runner/engine-runtime/emergency-hold-engine.test.ts
@@ -175,12 +176,16 @@ jobs:
           src/workflows/pieces-library/typeform-engine.test.ts
           src/workflows/pieces-library/asana-engine.test.ts
           src/workflows/pieces-library/calendly-engine.test.ts
+          src/workflows/pieces-library/figma-engine.test.ts
+          src/workflows/pieces-library/webflow-engine.test.ts
           src/workflows/pieces-library/mailchimp-engine.test.ts
           src/workflows/pieces-library/dropbox-engine.test.ts
           src/workflows/pieces-library/slack-engine.test.ts
           src/workflows/pieces-library/airtable-engine.test.ts
           src/workflows/pieces-library/intercom-engine.test.ts
           src/workflows/pieces-library/notion-engine.test.ts
+          src/workflows/pieces-library/trello-engine.test.ts
+          src/workflows/pieces-library/github-engine.test.ts
       # Not retried: deterministic.
       - run: bunx tsc --noEmit
 

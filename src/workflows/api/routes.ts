@@ -33,6 +33,7 @@ import { WorkflowInspectionError } from '../../brief/inspection-values';
 
 import { DEFAULT_IDS, getWorkflowDb } from '../db';
 import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
+import { OnboardingResolutionError, resolveOnboardingOutcome } from '../runtime/onboarding-service';
 import { runFailure } from '../runtime/run-failure';
 import { dismissFailures, listOpenFailures } from '../runtime/open-failures';
 import type { AuthorityEngine } from '../../authority/engine';
@@ -2280,7 +2281,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         if (!scopedRun(req, runId)) return err('run not found', 404);
         const read = await readWriteBody(req, 8192);
         if ('error' in read) return read.error;
-        const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority, via: 'dashboard' });
+        const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority, via: 'dashboard', ...(opts.credentialResolver ? { credentials: opts.credentialResolver } : {}) });
         return ok({ receipt, recovery: getRunRecovery(runId) });
       }),
     },
@@ -2298,6 +2299,25 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         if (resolution !== 'mark_done' && resolution !== 'release') return err('resolution must be mark_done or release', 400);
         const receipt = await decideRunRecovery(runId, { ...rest, action: resolution, effectId }, { via: 'dashboard' });
         return ok({ receipt, recovery: getRunRecovery(runId) });
+      }),
+    },
+    // #1243: a person's decision about a customer onboarding branch whose
+    // outcome is unknown, after checking ClickUp or Drive: mark_done with the
+    // created resource's ID or link, or release so a later run creates it.
+    // Records the decision; never creates or runs anything.
+    "/api/workflow-runs/:runId/effects/:effectId/onboarding": {
+      POST: req => trapErrors(async () => {
+        const { runId, effectId } = (req as RequestWithParams<{ runId: string; effectId: string }>).params;
+        if (!scopedRun(req, runId)) return err('run not found', 404);
+        const read = await readWriteBody(req, 8192);
+        if ('error' in read) return read.error;
+        if (Object.keys(read.body).some(k => !['branch', 'resolution', 'resource', 'note'].includes(k))) return err('Unexpected onboarding resolution field', 400);
+        try {
+          return ok(resolveOnboardingOutcome(callerProject(req), runId, { ...read.body, effectId } as Parameters<typeof resolveOnboardingOutcome>[2], 'dashboard'));
+        } catch (e) {
+          if (e instanceof OnboardingResolutionError) return err(e.message, e.status);
+          throw e;
+        }
       }),
     },
     "/api/workflow-runs/:runId/effects": {

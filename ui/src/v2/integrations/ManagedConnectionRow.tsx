@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CONNECTION_PROVIDER_NAMES, type ConnectionProvider } from '../../../../src/integrations/connection-providers';
 import { Button, Chip } from '../ui';
 import { requestSettingsTab } from '../shell/settings-tab-request';
 import { openRoom } from '../router';
 
-interface Status { connected: boolean; configured: boolean; reconnect: boolean; url: string | null; account: string | null; settings: boolean }
+interface Status { connected: boolean; configured: boolean; reconnect: boolean; url: string | null; account: string | null; settings: boolean; refused: boolean }
 function parseStatus(provider: ConnectionProvider, body: Record<string, unknown>): Status {
   const google = provider === 'google';
   if (typeof body.configured !== 'boolean' || typeof body[google ? 'is_authenticated' : 'connected'] !== 'boolean') throw new Error('Invalid connection status');
@@ -19,12 +19,28 @@ function parseStatus(provider: ConnectionProvider, body: Record<string, unknown>
   return { connected: body[google ? 'is_authenticated' : 'connected'] === true && !reconnect,
     configured: body.configured, reconnect, url,
     account: typeof account?.label === 'string' ? account.label : null,
-    settings: google && body.managed !== true && !body.reason };
+    settings: google && body.managed !== true && !body.reason,
+    // The daemon names why it refused this instance's setup config: a fault to fix, not an absent path.
+    refused: typeof body.reason === 'string' && body.reason.length > 0 };
+}
+
+/**
+ * The instance offers no way to set this provider up and nothing is connected:
+ * a self-hosted install for every hosted-only provider (no connect link, no
+ * Settings entry). Read from the daemon's own status, so a provider added to
+ * the hosted list needs no change here. A failed status check, or a config the
+ * daemon refused, is not this: those stay visible as rows.
+ */
+function noSetupPath(status: Status): boolean {
+  return !status.configured && !status.connected && !status.reconnect && !status.url && !status.settings && !status.refused;
 }
 
 /** Read-only status. The hosted Account page remains the sole OAuth entry point. */
-export function ManagedConnectionRow({ provider, refreshKey = 0, onManualSetup }: {
+export function ManagedConnectionRow({ provider, refreshKey = 0, onManualSetup, onNoSetupPath }: {
   provider: ConnectionProvider; refreshKey?: number; onManualSetup?: () => void;
+  /** Given, the row renders nothing while it has no setup path and reports
+   * that state here instead, so a list can summarise those providers once. */
+  onNoSetupPath?: (provider: ConnectionProvider, none: boolean) => void;
 }) {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState(false);
@@ -49,6 +65,14 @@ export function ManagedConnectionRow({ provider, refreshKey = 0, onManualSetup }
     void load(); window.addEventListener('focus', load);
     return () => { live = false; pending?.abort(); window.removeEventListener('focus', load); };
   }, [provider, refreshKey, retry]);
+  // While a refresh is pending (status reset, no error) keep the last answer,
+  // so Refresh does not briefly bring every collapsed row back.
+  const wasHidden = useRef(false);
+  const hidden = !!onNoSetupPath && (status ? noSetupPath(status) : !error && wasHidden.current);
+  useEffect(() => { wasHidden.current = hidden; }, [hidden]);
+  useEffect(() => { onNoSetupPath?.(provider, hidden); }, [onNoSetupPath, provider, hidden]);
+  useEffect(() => () => onNoSetupPath?.(provider, false), [onNoSetupPath, provider]);
+  if (hidden) return null;
   const state = error ? 'Could not check connection' : !status ? 'Checking connection…'
     : status.reconnect ? 'Reconnect required' : status.connected ? 'Connected' : status.url || status.settings ? 'Not connected' : 'Setup unavailable';
   return <section className="wf-conn__managed-row" aria-label={`${name} connection`}>

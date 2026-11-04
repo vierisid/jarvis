@@ -1,7 +1,8 @@
 import {afterEach,expect,test} from 'bun:test';
 import {CronScheduler,setCronTimezone} from '../../lib/cron-scheduler';
-import {collectQuarterlyReport,quarterlySetup,quarterlyTransport,reportQuarters} from './quarterly-report';
-import {quarterlyFixtureSetup as setup,quarterlyFixtureRequest,validateQuarterlyFixtures,quarterlyFixtureCases} from './quarterly-report-fixtures';
+import {collectQuarterlyReport,missingDateSearchBody,quarterlySetup,quarterlyTransport,reportQuarters} from './quarterly-report';
+import {hubspotSearchBody,SOURCE_READ_BUDGET_MS} from './weekly-report';
+import {quarterlyFixtureSetup as setup,quarterlyFixtureRequest,validateQuarterlyFixtures,quarterlyFixtureCases,hubspotDealStore} from './quarterly-report-fixtures';
 import graph from './fixtures/quarterly-report-generated.json';
 import {initWorkflowDb,closeWorkflowDb} from '../db';
 import {createFlow,getFlow} from '../db/repos/flow';
@@ -55,26 +56,88 @@ test('a deal with no amount is left out of totals and disclosed by count, not ze
 test('unknown dates invalidate both periods; selected stages and date property remain strict',async()=>{
   expect(()=>quarterlySetup({...setup,dealStageIds:[]})).toThrow();expect(()=>quarterlySetup({...setup,dealDateProperty:''})).toThrow();
   const base=quarterlyFixtureRequest(setup,at,'complete');
-  for(const mutation of ['changed_duplicate','malformed_page','missing_cursor','date_property']){
-    const report=await collectQuarterlyReport(setup,async(p,path,b)=>{const r=structuredClone(await base(p,path,b));if(path.includes('/objects/deals')&&path.includes('after')){
-      if(mutation==='changed_duplicate')r.results[0].properties.amount='2';
-      if(mutation==='malformed_page')r.results=null;
-      if(mutation==='missing_cursor')r.paging={next:{}};
-    }if(mutation==='date_property'&&path.includes('/properties/'))r.type='string';return r;},at);
+  for(const mutation of ['changed_between_reads','malformed_page','missing_cursor','date_property']){
+    const seen=new Set<string>();
+    const report=await collectQuarterlyReport(setup,async(p,path,b)=>{const r=structuredClone(await base(p,path,b));
+      const dated=b?.filterGroups?.[0]?.filters?.length===3,key=JSON.stringify(b),repeat=seen.has(key);if(dated)seen.add(key);
+      if(dated&&b!.after!==undefined){
+        if(mutation==='malformed_page')r.results=null;
+        if(mutation==='missing_cursor')r.paging={next:{}};
+      }
+      // The confirming read sees a deal changed since the first complete read.
+      if(mutation==='changed_between_reads'&&dated&&repeat&&r.results.length)r.results[0].properties.amount='2';
+      if(mutation==='date_property'&&path.includes('/properties/'))r.type='string';return r;},at);
     expect(report.complete).toBe(false);expect(report.datasets.every(d=>Object.keys(d.totals).length===0)).toBe(true);
+    const reason={changed_between_reads:'changed between the two complete reads',malformed_page:'Malformed result page',missing_cursor:'continuation cursor missing',date_property:'datetime date property'}[mutation]!;
+    expect(report.datasets.map(d=>d.coverage.reason)).toEqual([expect.stringContaining(reason),expect.stringContaining(reason)]);
   }
 });
+// #1244: a portal's deals outside the two quarters, however many, do not make either quarter Unavailable.
+function portal(deals:any[]){
+  const store=hubspotDealStore(deals),searches:any[]=[];
+  const request=async(_p:string,path:string,body?:any)=>{
+    if(path==='/account-info/v3/details')return {portalId:setup.hubspotPortalId,companyCurrency:'EUR'};
+    if(path===`/crm/v3/properties/deals/${setup.dealDateProperty}`)return {name:setup.dealDateProperty,type:'datetime'};
+    if(path==='/crm/v3/pipelines/deals')return {results:[{stages:setup.dealStageIds.map(id=>({id,metadata:{isClosed:'true'}}))}]};
+    if(body)searches.push(body);
+    return store(path,body);
+  };
+  return {request:request as any,searches};
+}
+const deal=(id:number,t:number,amount='1')=>({id:String(id).padStart(8,'0'),properties:{dealstage:setup.dealStageIds[0],[setup.dealDateProperty]:String(t),amount,deal_currency_code:'EUR'}});
+test('#1244: 25,000 older deals in the portal leave both quarters complete, read by quarter',async()=>{
+  const [current,prior]=reportQuarters(at);
+  const deals=[...Array.from({length:25_000},(_,i)=>deal(i,prior!.start-1-i*60_000)),deal(30_001,current!.start,'10'),deal(30_002,prior!.end-1,'5')];
+  const {request,searches}=portal(deals);
+  const report=await collectQuarterlyReport(setup,request,at);
+  expect(report.status).toBe('Complete');
+  expect(report.datasets.map(d=>d.totals.EUR)).toEqual([{count:1,amount:'10'},{count:1,amount:'5'}]);
+  // Each quarter's own date range, nothing else.
+  const windows=searches.filter(b=>b.filterGroups[0].filters.length===3).map(b=>b.filterGroups[0].filters.slice(1).map((f:any)=>Number(f.value)));
+  expect(new Set(windows.map(w=>JSON.stringify(w)))).toEqual(new Set([JSON.stringify([current!.start,current!.end]),JSON.stringify([prior!.start,prior!.end])]));
+});
+test('#1244: a quarter above the 10,000-result search cap is split and still complete',async()=>{
+  const [current]=reportQuarters(at),span=current!.end-current!.start;
+  const deals=Array.from({length:12_000},(_,i)=>deal(i,current!.start+Math.floor(i*span/12_000)));
+  const {request,searches}=portal(deals);
+  const report=await collectQuarterlyReport(setup,request,at);
+  expect(report.datasets[0]!.coverage.status).toBe('Complete');
+  expect(report.datasets[0]!.totals.EUR).toEqual({count:12_000,amount:'12000'});
+  expect(searches.every(b=>Number(b.after??0)+b.limit<=10_000)).toBe(true);
+});
+test('#1244: a quarter whose confirming read runs out of the source time budget is Unavailable, not partial',async()=>{
+  const [current]=reportQuarters(at);let now=0,searches=0;
+  // 450 deals: three pages a read. The first complete read lands, then the clock passes the budget mid-confirmation.
+  const {request}=portal(Array.from({length:450},(_,i)=>deal(i,current!.start+i,'10')));
+  const report=await collectQuarterlyReport(setup,async(p:any,path:string,b:any)=>{if(b&&b.filterGroups[0].filters.length===3&&++searches===5)now+=SOURCE_READ_BUDGET_MS;return request(p,path,b);},at,()=>{},()=>now);
+  expect(searches).toBe(5);expect(report.datasets[0]!.coverage.pages).toBe(5);
+  expect(report.complete).toBe(false);expect(report.datasets[0]!.coverage.reason).toContain('time budget');expect(report.datasets[0]!.totals).toEqual({});
+  expect(report.datasets[1]!.coverage.reason).toContain('time budget');
+});
 test('negative prior amount is labelled N/A and exact decimal arithmetic is retained',async()=>{
-  const request=quarterlyFixtureRequest(setup,at,'complete');const report=await collectQuarterlyReport(setup,async(p,path)=>{
-    const data=await request(p,path);for(const r of data.results??[])if(r.id==='prior-eur')r.properties.amount='-100.000001';return data;
+  const request=quarterlyFixtureRequest(setup,at,'complete');const report=await collectQuarterlyReport(setup,async(p,path,b)=>{
+    const data=await request(p,path,b);for(const r of data.results??[])if(r.id==='prior-eur')r.properties.amount='-100.000001';return data;
   },at);expect(report.comparisons.find(c=>c.currency==='EUR')!.amountChange).toMatchObject({delta:'200.000001',percentage:null,label:'Percentage N/A: negative prior baseline'});
 });
 test('read-only transport rejects provider writes, redirects and all unrelated providers',async()=>{
-  let calls=0;const request=quarterlyTransport('fixture',()=>{},(async(url:any,init:any)=>{calls++;expect(init.method).toBe('GET');expect(init.redirect).toBe('error');return Response.json({results:[]});}) as typeof fetch);
-  await request('hubspot','/crm/v3/objects/deals');expect(calls).toBe(1);
-  for(const [provider,path,body] of [['hubspot','/crm/v3/objects/deals',{}],['google','/drive/v3/files',undefined],['hubspot','//evil.invalid',undefined]] as const){
-    await expect(Promise.resolve().then(()=>request(provider,path,body))).rejects.toThrow();
-  }expect(calls).toBe(1);
+  const methods:string[]=[];const request=quarterlyTransport('fixture',()=>{},(async(url:any,init:any)=>{methods.push(init.method);expect(init.redirect).toBe('error');return Response.json({results:[]});}) as typeof fetch,async()=>{},0);
+  await request('hubspot','/crm/v3/pipelines/deals');
+  await request('hubspot','/crm/v3/objects/deals/search',hubspotSearchBody(setup,1,2));
+  await request('hubspot','/crm/v3/objects/deals/search',missingDateSearchBody(setup));
+  expect(methods).toEqual(['GET','POST','POST']);
+  const write={...hubspotSearchBody(setup,1,2),inputs:[{properties:{amount:'1'}}]};
+  for(const [provider,path,body] of [['hubspot','/crm/v3/pipelines/deals',{}],['hubspot','/crm/v3/objects/deals',undefined],['hubspot','/crm/v3/objects/deals/batch/update',hubspotSearchBody(setup,1,2)],
+    ['hubspot','/crm/v3/objects/deals/search',write],['hubspot','/crm/v3/objects/contacts/search',hubspotSearchBody(setup,1,2)],['hubspot','/crm/v3/objects/deals/search?x=1',hubspotSearchBody(setup,1,2)],
+    ['google','/drive/v3/files',undefined],['hubspot','//evil.invalid',undefined]] as const){
+    await expect(Promise.resolve().then(()=>request(provider,path,body as any))).rejects.toThrow();
+  }
+  expect(methods).toHaveLength(3);
+});
+test('searches are paced under HubSpot\'s five a second; plain reads are not',async()=>{
+  const waits:number[]=[];const request=quarterlyTransport('fixture',()=>{},(async()=>Response.json({results:[]})) as unknown as typeof fetch,async ms=>{waits.push(ms);},250);
+  await request('hubspot','/crm/v3/pipelines/deals');await request('hubspot','/crm/v3/objects/deals/search',hubspotSearchBody(setup,1,2));
+  await request('hubspot','/crm/v3/objects/deals/search',hubspotSearchBody(setup,1,2));
+  expect(waits).toHaveLength(1);expect(waits[0]!).toBeGreaterThan(0);expect(waits[0]!).toBeLessThanOrEqual(250);
 });
 test('cancellation stops even if a source failure could be reported unavailable',async()=>{
   await expect(collectQuarterlyReport(setup,quarterlyFixtureRequest(setup,at,'source_failure'),at,()=>{throw Error('Cancelled');})).rejects.toThrow('Cancelled');
@@ -119,7 +182,7 @@ test('readiness refuses a managed HubSpot connection and a non-Rome schedule',()
 test('the quarterly transport reads only its fixed HubSpot endpoints and retries a short 429 once more',async()=>{
   const seen:string[]=[];let limited=1;
   const request=quarterlyTransport('fixture',()=>{},(async(url:any)=>{seen.push(String(url));if(limited-->0)return new Response('',{status:429,headers:{'retry-after':'0'}});return Response.json({results:[]});}) as typeof fetch,async()=>{});
-  expect(await request('hubspot','/crm/v3/objects/deals?limit=100')).toEqual({results:[]});expect(seen).toEqual(['https://api.hubapi.com/crm/v3/objects/deals?limit=100','https://api.hubapi.com/crm/v3/objects/deals?limit=100']);
-  for(const path of ['/crm/v3/objects/contacts','/crm/v3/objects/deals/search','/crm/v3/objects/deals/123'])await expect(request('hubspot',path)).rejects.toThrow('outside the HubSpot read scope');
+  expect(await request('hubspot','/crm/v3/pipelines/deals')).toEqual({results:[]});expect(seen).toEqual(['https://api.hubapi.com/crm/v3/pipelines/deals','https://api.hubapi.com/crm/v3/pipelines/deals']);
+  for(const path of ['/crm/v3/objects/contacts','/crm/v3/objects/deals','/crm/v3/objects/deals/search','/crm/v3/objects/deals/123'])await expect(request('hubspot',path)).rejects.toThrow('outside the HubSpot read scope');
   expect(seen).toHaveLength(2);
 });

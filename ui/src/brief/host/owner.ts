@@ -15,7 +15,7 @@ import { createDataRooms } from './data-rooms';
 import { withGettingStarted } from '../today/getting-started/GettingStarted';
 import { OnboardingDraft, onboardingComposition, sessionOnboardingStorage } from '../onboarding/draft';
 import { openLegacyConnectionSetup } from '../connections/legacy-setup';
-import { requestGoalCreation } from '../../v2/rooms/goals/create-request';
+import { openGoalCreation } from './goal-creation';
 import { DESTINATIONS } from '../navigation/destinations';
 import type { SidecarInfo } from '../../v2/rooms/settings/useSettingsData';
 
@@ -73,10 +73,7 @@ export function createDashboardOwner(initial: HostDescriptor, ports: {
   });
   account.profile.setAccess(isBriefCapabilityEnabled(initial.capabilities, 'profileSettings'));
   const data = createDataRooms({ scopeId: initial.scopeId, transport, capabilities, storage: ports.storage, reconciliation,
-    createGoal: () => { void navigation.open(() => {
-      requestGoalCreation(); ports.explain('');
-      return { target: { kind: 'legacy', hash: '#/_room_goals' }, message: null };
-    }); } });
+    createGoal: () => { void openGoalCreation(navigation, ports.explain); } });
   rooms = withGettingStarted({ ...workflow.rooms, ...data.rooms, ...account.rooms }, data.setup, canLeave, () => isBriefCapabilityEnabled(capabilities(), 'profileSettings'),
     () => navigationHostCommit({ room: 'today', selection: {} }));
   if (BRIEF_ROOM_IDS.some(id => !rooms[id]?.Body)) throw Error('Incomplete dashboard composition');

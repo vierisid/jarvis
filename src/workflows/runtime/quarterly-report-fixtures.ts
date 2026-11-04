@@ -22,31 +22,56 @@ export const quarterlyFixtureCases = [
   ...scenarios.filter(s=>s!=='complete').map(s=>({name:s,scheduledFor:'2026-10-05T07:00:00Z',scenario:s})),
 ];
 
-/** Synthetic provider only. Every cursor is opaque, so treating it as a page number fails. */
+type Deal = { id: string; archived?: boolean; properties: Record<string, any> };
+const dealTime = (raw: unknown) => typeof raw === 'string' && /^\d{13}$/.test(raw) ? Number(raw) : typeof raw === 'string' && raw ? Date.parse(raw) : NaN;
+/** A synthetic HubSpot deal store answering CRM search as HubSpot documents it (https://developers.hubspot.com/docs/api/crm/search):
+ * filters applied, archived deals never returned, ascending hs_object_id, offset `after` paging, `total`, and a 400 past
+ * 10,000 results. `pageSize` below the requested limit exercises pagination. */
+export function hubspotDealStore(deals: Deal[], pageSize = 200) {
+  return (path: string, body?: Record<string, any>): Record<string, any> => {
+    const u = new URL('https://fixture.invalid' + path);
+    ensure(u.pathname === '/crm/v3/objects/deals/search' && body, 'unexpected endpoint');
+    const filters = body!.filterGroups[0].filters as Array<Record<string, any>>, offset = Number(body!.after ?? 0);
+    if (offset + body!.limit > 10000) throw Error('Fixture HubSpot search past 10,000 results (HTTP 400)');
+    const all = deals.filter(d => !d.archived && filters.every(f => {
+      const v = d.properties[f.propertyName];
+      if (f.operator === 'IN') return f.values.includes(v);
+      if (f.operator === 'NOT_HAS_PROPERTY') return v == null || v === '';
+      const t = dealTime(v);
+      return f.operator === 'GTE' ? t >= Number(f.value) : f.operator === 'LT' ? t < Number(f.value) : (() => { throw Error('Fixture: unsupported operator'); })();
+    })).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const results = all.slice(offset, offset + Math.min(body!.limit, pageSize));
+    return { total: all.length, results, ...offset + results.length < all.length ? { paging: { next: { after: String(offset + results.length) } } } : {} };
+  };
+}
+
+/** Synthetic provider only. */
 export function quarterlyFixtureRequest(setup: QuarterlySetup, at: string, scenario: QuarterlyScenario, calls: string[] = []): ReportRequest {
-  const [current,prior] = reportQuarters(at); let page = 0;
-  const row = (id:string,date:number,amount:any,c='EUR') => ({id,properties:{dealstage:setup.dealStageIds[0],[setup.dealDateProperty]:new Date(date).toISOString(),amount,deal_currency_code:c}});
+  const [current,prior] = reportQuarters(at);
+  const row = (id:string,date:number,amount:any,c='EUR'):Deal => ({id,properties:{dealstage:setup.dealStageIds[0],[setup.dealDateProperty]:new Date(date).toISOString(),amount,deal_currency_code:c}});
   const currentRow=row('current-eur',current!.start,'150');
   if(scenario==='missing_amount')currentRow.properties.amount=null;
   if(scenario==='missing_currency')currentRow.properties.deal_currency_code='';
   if(scenario==='missing_date')currentRow.properties[setup.dealDateProperty]='';
+  const deals:Deal[]=scenario==='empty'?[]:[currentRow,row('prior-eur',prior!.start,'100'),row('new-usd',current!.end-1,'25','USD'),row('zero-now',current!.start+1,'0','JPY'),row('zero-before',prior!.start+1,'0','JPY'),
+    row('prior-end',prior!.end-1,'50'),row('excluded-end',current!.end,'99999'),row('excluded-start',prior!.start-1,'99999'),{...row('open',current!.start,'99999'),properties:{...row('open',current!.start,'99999').properties,dealstage:'not-selected'}},{...row('archived',current!.start,'99999'),archived:true}];
+  // One deal a page, so every quarter takes several pages.
+  const store=hubspotDealStore(deals,1);
   return async(provider,path,body)=>{
-    ensure(provider==='hubspot'&&body===undefined,'unexpected provider mutation');calls.push(path);
+    ensure(provider==='hubspot'&&(body===undefined||path==='/crm/v3/objects/deals/search'),'unexpected provider mutation');calls.push(path);
     const u=new URL('https://fixture.invalid'+path);
     if(scenario==='source_failure')throw Error('Fixture source unavailable');
     if(u.pathname==='/account-info/v3/details')return {portalId:scenario==='account_mismatch'?'wrong':setup.hubspotPortalId};
     if(u.pathname===`/crm/v3/properties/deals/${setup.dealDateProperty}`)return {name:setup.dealDateProperty,type:'datetime'};
     if(u.pathname==='/crm/v3/pipelines/deals')return {results:[{stages:setup.dealStageIds.map(id=>({id,metadata:{isClosed:scenario==='open_stage'?'false':'true'}}))}]};
-    ensure(u.pathname==='/crm/v3/objects/deals','unexpected endpoint');
-    const cursor=u.searchParams.get('after');page++;
-    if(scenario==='empty')return {results:[]};
-    if(scenario==='page_failure'&&cursor)throw Error('Fixture second page unavailable');
-    if(scenario==='cursor_cycle')return {results:[currentRow],paging:{next:{after:'same-cursor'}}};
-    if(scenario==='page_limit')return {results:[row('page-'+page,current!.start,'1')],paging:{next:{after:'cursor-'+page}}};
-    if(!cursor)return {results:[currentRow,row('prior-eur',prior!.start,'100')],paging:{next:{after:'opaque/two?='}}};
-    if(cursor==='opaque/two?=')return {results:[currentRow,row('new-usd',current!.end-1,'25','USD'),row('zero-now',current!.start+1,'0','JPY'),row('zero-before',prior!.start+1,'0','JPY')],paging:{next:{after:'last & page'}}};
-    ensure(cursor==='last & page','cursor not followed exactly');
-    return {results:[row('prior-end',prior!.end-1,'50'),row('excluded-end',current!.end,'99999'),row('excluded-start',prior!.start-1,'99999'),{...row('open',current!.start,'99999'),properties:{dealstage:'not-selected'}},{...row('archived',current!.start,'99999'),archived:true}]};
+    const dated=body?.filterGroups?.[0]?.filters?.length===3;
+    if(scenario==='page_failure'&&dated&&body!.after!==undefined)throw Error('Fixture second page unavailable');
+    const page=store(path,body);
+    if(scenario==='cursor_cycle'&&dated&&page.paging)page.paging.next.after='0';
+    // `page_limit` keeps its name for saved fixture cases; it now models the search limit: every window reports a
+    // full 10,000-result cap, so no split can ever be read completely.
+    if(scenario==='page_limit'&&dated)return {...page,total:10000};
+    return page;
   };
 }
 
@@ -89,15 +114,21 @@ export async function runQuarterlyFixtures(saved:any,fixture:any={}) {
     for(const key of QUARTERLY_REQUIRED)if(props[key]===undefined||props[key]===null||props[key]==='')props[key]=quarterlyFixtureSetup[key];
     const setup=quarterlySetup(props), calls:string[]=[], request=quarterlyFixtureRequest(setup,c.scheduledFor,c.scenario,calls);
     const providerFetch=(async(url:any,init:any)=>{
-      const u=new URL(String(url));ensure(u.origin==='https://api.hubapi.com'&&init.method==='GET'&&init.redirect==='error','read-only request scope');
-      return Response.json(await request('hubspot',u.pathname+u.search));
+      const u=new URL(String(url)),search=u.pathname==='/crm/v3/objects/deals/search';
+      ensure(u.origin==='https://api.hubapi.com'&&init.method===(search?'POST':'GET')&&init.redirect==='error','read-only request scope');
+      return Response.json(await request('hubspot',u.pathname+u.search,search?JSON.parse(init.body):undefined));
     }) as typeof fetch;
-    const output=await collectQuarterlyReport(setup,quarterlyTransport('synthetic-fixture',()=>{},providerFetch),props.scheduledFor);
+    // Synthetic provider: no search pacing is needed.
+    const output=await collectQuarterlyReport(setup,quarterlyTransport('synthetic-fixture',()=>{},providerFetch,undefined,0),props.scheduledFor);
     if(c.expectedQuarter)ensure(output.quarters[0]!.label===c.expectedQuarter,c.name+': quarter differs');
     if(c.expectedPrior)ensure(output.quarters[1]!.label===c.expectedPrior,c.name+': prior quarter differs');
     const unavailable=!['complete','empty','missing_amount','notification_failure','notification_uncertain'].includes(c.scenario);
     ensure(output.partial===unavailable,c.name+': completeness differs');
     if(unavailable)ensure(output.comparisons[0]?.status==='Unavailable',c.name+': partial comparison leaked');
+    // Unavailable for the scenario's own reason, never a fixture fault that also reads as Unavailable.
+    const reason:Record<string,string>={source_failure:'Fixture source unavailable',page_failure:'second page unavailable',cursor_cycle:'Repeated or invalid cursor',page_limit:'cannot be split',
+      missing_currency:'company currency is unknown',missing_date:'Selected date missing',account_mismatch:'portal mismatch',open_stage:'available closed stages'};
+    if(unavailable)ensure(output.datasets.some(d=>d.coverage.reason?.includes(reason[c.scenario]!)),c.name+': Unavailable for another reason');
     if(['page_failure','cursor_cycle','page_limit','missing_date'].includes(c.scenario))ensure(output.datasets.every(d=>Object.keys(d.totals).length===0),'partial aggregates leaked');
     // A deal with no amount is left out of totals and disclosed by count; the quarter stays complete.
     if(c.scenario==='missing_amount')ensure(output.datasets[0]!.noAmount===1&&!output.datasets[0]!.totals.EUR&&output.datasets[1]!.totals.EUR?.amount==='150'&&output.summary.includes('1 deal with no amount not included'),'missing amount must be disclosed, not counted');
@@ -105,7 +136,7 @@ export async function runQuarterlyFixtures(saved:any,fixture:any={}) {
       ensure(output.datasets[0]!.totals.EUR?.amount==='150'&&output.datasets[1]!.totals.EUR?.amount==='150','page coverage or boundaries differ');
       ensure(output.comparisons.find(x=>x.currency==='USD')?.amountChange.percentage===null,'zero baseline divided');
       ensure(output.comparisons.find(x=>x.currency==='JPY')?.amountChange.label==='No change; both zero','both-zero baseline differs');
-      ensure(output.datasets[0]!.coverage.pages===3,'pagination not exercised');
+      ensure(output.datasets[0]!.coverage.pages===6,'pagination not exercised');
     }
     const input=resolveFixtureValue(notify.settings.input,{[saved.name]:payload,[report.name]:output});
     ensure(input.message===output.summary&&input.idempotencyKey===output.notificationKey,'summary/key must consume report output');

@@ -54,18 +54,28 @@ export const chromiumExe: string | undefined =
  * startup and, as a last resort, kill it directly.
  *
  * The traps come first, before Chromium exists, so there is no window in
- * which a signal kills the shell and orphans the browser. `trap :` keeps
- * TERM/INT/HUP from killing the shell: depending on the shell, `read` is
- * either interrupted and the cleanup runs at once, or it resumes and the
- * cleanup runs at EOF. Either way the browser goes with it. PIPE is ignored so
- * the `echo` cannot kill the shell if the owner is already gone.
+ * which a signal kills the shell and orphans the browser. TERM is IGNORED,
+ * not caught (#1241): when any test or hook times out, `bun test` SIGTERMs
+ * every subprocess still running ("killed 1 dangling process"), including
+ * this watchdog started in a suite's beforeAll. A caught TERM interrupted
+ * `read` and ran the cleanup, so one slow test stopped the browser the whole
+ * file shares, and every later test and retry found the CDP port closed.
+ * Ignored, TERM leaves the shell in `read` and only stdin EOF (the owner
+ * closing it, or exiting however it exits) stops the browser. `trap :` keeps
+ * INT/HUP from killing the shell: depending on the shell, `read` is either
+ * interrupted and the cleanup runs at once, or it resumes and the cleanup
+ * runs at EOF. Either way the browser goes with it. PIPE is ignored so the
+ * `echo` cannot kill the shell if the owner is already gone.
  *
- * What Chromium inherits: TERM and HUP are caught here, and a caught signal
- * resets to default on exec. INT and QUIT do not: a non-interactive shell
- * starts every `&` list with them ignored (bash and dash alike), and an
- * ignored signal stays ignored across exec. PIPE is inherited ignored too.
- * None of that matters, because the watchdog and close() only use TERM and
- * KILL.
+ * What Chromium inherits: an ignored signal stays ignored across exec, so the
+ * subshell resets TERM to default before exec'ing Chromium. Chromium installs
+ * its own TERM handler today (measured: without the reset close() is just as
+ * fast), so this only keeps a browser or wrapper that does not from ignoring
+ * the cleanup's `kill -TERM` and waiting out the grace for the KILL. HUP
+ * is caught here, and a caught signal resets to default on exec. INT and QUIT
+ * do not: a non-interactive shell starts every `&` list with them ignored
+ * (bash and dash alike). PIPE is inherited ignored too. None of that matters,
+ * because the watchdog and close() only use TERM and KILL.
  *
  * When `$c` is reaped depends on the shell. bash reaps it asynchronously, even
  * while blocked in `read`; dash only reaps when it next waits, so a browser
@@ -75,10 +85,10 @@ export const chromiumExe: string | undefined =
  * needs the pid space to wrap within one test run; accepted.
  */
 const WATCHDOG = `
-trap : TERM INT HUP
-trap '' PIPE
+trap '' TERM PIPE
+trap : INT HUP
 profile=$1; shift
-"$@" </dev/null >/dev/null 2>"$profile/chromium.stderr" &
+( trap - TERM; exec "$@" ) </dev/null >/dev/null 2>"$profile/chromium.stderr" &
 c=$!
 echo "$c"
 read -r _ || :
@@ -96,6 +106,12 @@ wait "$c" 2>/dev/null
  * spawn (chrome-sandbox.test.ts runs launchChrome itself), so it cannot run
  * under WATCHDOG. The browser is not this shell's child, so there is nothing
  * to reap; a zombie left for its real parent only costs the 5s grace.
+ *
+ * Unlike WATCHDOG it still stops the browser on TERM, so a bun test timeout
+ * stops it (#1241). That is right for its one caller, which launches a browser
+ * per test; a suite that shared one across tests would want WATCHDOG's
+ * ignored TERM, and shared-browser-timeouts.test.ts holds such a suite to
+ * explicit timeouts either way.
  */
 const PID_WATCHDOG = `
 trap : TERM INT HUP

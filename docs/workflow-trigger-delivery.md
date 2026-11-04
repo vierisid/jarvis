@@ -145,6 +145,18 @@ scheduler (`runtime/child-run-scheduler.ts`) once the child has finished. The
 child's waitpoint refuses a manual resume (403). A parent whose workflow was
 turned off is stopped instead of continued.
 
+A workflow that was turned off cannot be started by another one, as a reusable
+child or through run_workflow (#1242). A workflow that calls it is not ready,
+so its own runs are refused before they start, by schedule, event or hand, and
+so are the workflows that call it in turn. A run already under way fails the
+calling step with "Child workflow is turned off" and starts nothing; an
+approval given before the child was turned off does not start it either.
+Turning the child on again lets later runs call it. A workflow saved off and
+never turned on, as a reusable child usually is, can still be called, and an
+unpublished child still runs its latest draft. A workflow turned off before
+Jarvis recorded when workflows are turned off (v0.17.0) counts as never turned
+on.
+
 The run handler checks the waitpoint again, refuses a run of a workflow turned
 off since it began (and stops it), and does not continue a draft edited while
 its run was paused, also when the edited draft was then published: the run

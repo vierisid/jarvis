@@ -9,6 +9,13 @@ import {digest,resolveEffectContext,type WorkflowEffectContext} from './effect-c
 import {workflowEffectId,type WorkflowEffectBoundary} from './effect-boundary';
 import {SUBFLOW_PIECE,boundedJson,childCallInput} from './subflow-contract';
 import {assertRunNotCanceled} from './cancellation';
+import {childTurnedOffOutcome,isTurnedOff} from '../db/repos/flow-turn-off';
+import {WorkflowRunnerError} from '../adapters/workflow-runner';
+/** A child turned off after review is a definite refusal before anything started, not an uncertain dispatch. */
+function startChild(...args:Parameters<JarvisWorkflowRunnerAdapter['startNow']>){
+ try{return new JarvisWorkflowRunnerAdapter().startNow(...args);}
+ catch(e){if(e instanceof WorkflowRunnerError&&e.code==='FLOW_TURNED_OFF')throw childTurnedOffOutcome();throw e;}
+}
 
 /** `intentOf` names the child on the approval card (#1040): the flow ID and its pinned version's name. */
 export function createSubflowService(effects:WorkflowEffectBoundary,now=Date.now,intentOf?:(flowId:string,versionId:string)=>string){
@@ -24,6 +31,8 @@ export function createSubflowService(effects:WorkflowEffectBoundary,now=Date.now
    prepare:()=>{
     const old=getSubflowCall(id);if(old&&old.fingerprint!==fingerprint)throw Error('Invocation key was already used with different payload or configuration');
     const flow=getFlowInProject(ctx.projectId,call.flow);if(!flow)throw Error('Reusable child workflow not found in this project');
+    // #1242: refused before any approval card; dispatch (startNow) refuses it again.
+    if(!old&&isTurnedOff(flow))throw childTurnedOffOutcome();
     const versionId=old?.version_id??flow.published_version_id??getLatestDraft(flow.id)?.id;
     const version=versionId?getFlowVersion(versionId):null;if(!version&&!old?.result_json)throw Error('Reusable child version unavailable');
     return {arguments:{...call,versionId,versionDigest:old?.version_digest??digest(version!.trigger)},target:{flowId:call.flow,versionId,invocationKey:call.invocationKey,...(intentOf&&versionId?{intent:intentOf(call.flow,versionId)}:{})}};
@@ -33,7 +42,7 @@ export function createSubflowService(effects:WorkflowEffectBoundary,now=Date.now
     if(old){if(old.fingerprint!==fingerprint)throw Error('Invocation key was already used with different payload or configuration');return {callId:id};}
     const version=getFlowVersion(String(args.versionId));if(!version||digest(version.trigger)!==args.versionDigest)throw Error('Child version changed after review');
     const deadline=now()+call.timeoutSeconds*1000;
-    const started=new JarvisWorkflowRunnerAdapter().startNow({flowId:call.flow,payload:call.payload as Record<string,unknown>,waitForCompletion:true},ctx.runId,ctx.projectId,{effectId,stepName,versionId:version.id,deadline});
+    const started=startChild({flowId:call.flow,payload:call.payload as Record<string,unknown>,waitForCompletion:true},ctx.runId,ctx.projectId,{effectId,stepName,versionId:version.id,deadline});
     db.run('INSERT INTO workflow_subflow_call (id,parent_flow_id,fingerprint,child_run_id,effect_id,version_id,version_digest,deadline,schema_json) VALUES (?,?,?,?,?,?,?,?,?)',[id,run.flowId,fingerprint,started.runId,effectId,version.id,String(args.versionDigest),deadline,JSON.stringify(call.outputSchema)]);
     db.run('INSERT INTO workflow_subflow_wait (call_id,parent_run_id,waitpoint_id) VALUES (?,?,?)',[id,ctx.runId,started.waitpointId!]);
     return {callId:id};
