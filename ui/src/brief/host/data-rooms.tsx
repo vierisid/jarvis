@@ -55,6 +55,9 @@ function source<T>(domains: Source<T>['domains'], capability: Source<T>['capabil
     return { data: value.data, empty: false, asOf: Date.now() };
   } };
 }
+export function onlyOtherDecisions(data: readonly DecisionView[] | null, otherCount: number): boolean {
+  return (otherCount > 0 || !!data?.length) && !data?.some(row => row.actions.length > 0);
+}
 export function createDataRooms(host: { scopeId: string; transport: HostTransport; capabilities(): unknown;
   storage: Storage; reconciliation: BriefReconciliationClient; createGoal(): void }) {
   const { scopeId, transport, reconciliation } = host;
@@ -146,9 +149,10 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   }
   function NeedsYou({ shell }: { shell: BriefShellPort }) {
     const all = useBriefProjection(decisionRead);
-    const onlyOther = all.state === 'ready' && !!all.data?.length && !all.data.some(row => row.actions.length > 0);
+    const [otherCount, setOtherCount] = useState(0);
+    const onlyOther = onlyOtherDecisions(all.data, otherCount);
     return <>{onlyOther ? <header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
-      <PendingDecisions selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
+      <PendingDecisions onCount={setOtherCount} selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
   }
   const rooms: BriefRoomRegistry = {
     today: { ...BRIEF_ROOMS.today, Body: Today }, goals: { ...BRIEF_ROOMS.goals, Body: Goal }, 'completed-goals': { ...BRIEF_ROOMS['completed-goals'], Body: Goal },

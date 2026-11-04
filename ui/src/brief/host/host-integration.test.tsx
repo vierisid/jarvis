@@ -172,3 +172,11 @@ test('notification permission renders the reviewed message, destination and occu
   expect(host.textContent).toContain('dashboard'); expect(host.querySelector('time')?.dateTime).toBe('2026-11-04T08:00:00.000Z');
   transport.stop();
 });
+
+test('permission list reports its real count to suppress the unrelated document empty state', async () => {
+  const counts: number[] = [];
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Commands.PendingDecisions http={http} read={async () => [{ decisionId: 'request', revision: 'r', title: 'Review fixture', kind: 'permission', state: 'pending', supportedActions: ['inspect'] } as any]} enabled changed={() => {}} onCount={count => counts.push(count)} />));
+  expect(counts.at(-1)).toBe(1);
+  expect(host.textContent).toContain('Review fixture');
+});

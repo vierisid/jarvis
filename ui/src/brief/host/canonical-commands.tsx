@@ -34,9 +34,10 @@ export function browserCardTitle(r: Pick<QueuedDecision, 'review'>): { heading: 
 }
 
 /** Non-document F12 decisions retain their own action and result contract. */
-export function PendingDecisions({ http, read, enabled, changed, selection, navigate }: { selection?: string; navigate?(route: BriefRoute): void; http: HostTransport; read(): Promise<QueuedDecision[]>; enabled: boolean; changed(): void }) {
+export function PendingDecisions({ http, read, enabled, changed, selection, navigate, onCount }: { onCount?(count: number): void; selection?: string; navigate?(route: BriefRoute): void; http: HostTransport; read(): Promise<QueuedDecision[]>; enabled: boolean; changed(): void }) {
   const [rows, setRows] = useState<QueuedDecision[] | null>(null), [message, setMessage] = useState(''), [pending, setPending] = useState(false), [epoch, refresh] = useState(0);
   const [selected, select] = useState<string | null>(null);
+  useEffect(() => { onCount?.(rows?.length ?? 0); }, [rows, onCount]);
   const list = React.useRef<HTMLElement>(null), restoreFocus = React.useRef(false);
   useEffect(() => {
     if (restoreFocus.current && rows) {
