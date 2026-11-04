@@ -103,6 +103,10 @@ function meeting(raw: unknown, user: string, expectedId?: string) {
     join_url: join.href,
   };
 }
+/** Zoom accepted the create, so a re-run would make a second meeting. The
+ * effect stays unconfirmed (no completion receipt), which blocks a replay. */
+const CREATED_UNVERIFIED =
+  "Zoom created the meeting but returned details Jarvis could not verify. Check Zoom before retrying.";
 async function api(
   token: string,
   path: string,
@@ -151,7 +155,9 @@ async function api(
   const reader = response.body?.getReader();
   if (!reader)
     throw new Error(
-      "Zoom returned an empty response. Check the meeting before retrying.",
+      method === "POST"
+        ? CREATED_UNVERIFIED
+        : "Zoom returned an empty response. Check the meeting before retrying.",
     );
   try {
     const chunks: Uint8Array[] = [];
@@ -174,7 +180,9 @@ async function api(
     return result;
   } catch {
     throw new Error(
-      "Zoom returned an invalid or oversized response. Check the meeting before retrying.",
+      method === "POST"
+        ? CREATED_UNVERIFIED
+        : "Zoom returned an invalid or oversized response. Check the meeting before retrying.",
     );
   } finally {
     await reader.cancel().catch(() => {});
@@ -250,7 +258,11 @@ export async function runManagedZoomAction(
         participant_video: false,
       },
     });
-    return meeting(value, user);
+    try {
+      return meeting(value, user);
+    } catch {
+      throw new Error(CREATED_UNVERIFIED);
+    }
   }
   const id = zoomMeetingId(input.meeting_id),
     path = "/meetings/" + id;

@@ -1,10 +1,11 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { runManagedZoomAction, MANAGED_ZOOM_ACTIONS } from "./managed-zoom";
 import { zoomInputSchema, zoomEngineProps } from "./managed-zoom-inputs";
 import {
   resolveGovernedPieceAction,
   tracksPieceCompletion,
 } from "./piece-effects";
+import { executeAuthorizedPiece } from "./piece-effect-guard";
 const auth = {
   access_token: "PRIVATE_ACCESS",
   jarvis_user: "user1",
@@ -253,4 +254,66 @@ test("an update that moves the start time keeps the meeting's own timezone", asy
   expect(JSON.parse(String(f.calls[1]!.init.body))).toEqual({
     start_time: "2030-07-01T15:00:00Z",
   });
+});
+const createInput = {
+  auth,
+  topic: "Planning",
+  start_time: "2030-06-01T14:00:00Z",
+};
+for (const [label, response] of [
+  ["an unexpected join URL", Response.json({ ...meeting, join_url: "https://attacker.test/j/12345678901" })],
+  ["another host", Response.json({ ...meeting, host_id: "another-user" })],
+  ["a non-JSON body", new Response("PRIVATE_TOKEN <html>", { status: 201 })],
+  ["an empty body", new Response(null, { status: 201 })],
+] as const)
+  test("a create Zoom accepted but answered with " + label + " says the meeting exists", async () => {
+    let calls = 0;
+    const request = (async () => {
+      calls++;
+      return response;
+    }) as unknown as typeof fetch;
+    const error = await runManagedZoomAction("zoom_create_meeting", createInput, request).catch((e) => e);
+    expect(String(error)).toContain("Zoom created the meeting but");
+    expect(String(error)).toContain("Check Zoom before retrying");
+    expect(String(error)).not.toContain("PRIVATE");
+    expect(calls).toBe(1);
+  });
+const realFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
+test("a create that fails validation after dispatch posts no receipt, so a re-run cannot create a duplicate", async () => {
+  const zoomCalls: string[] = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    zoomCalls.push(String(init?.method) + " " + String(url));
+    return Response.json({ ...meeting, join_url: "https://attacker.test/j/12345678901" });
+  }) as typeof fetch;
+  const receipts: string[] = [];
+  const params = {
+    apiUrl: "http://127.0.0.1:1",
+    engineToken: "engine",
+    piece: "@activepieces/piece-zoom",
+    action: "zoom_create_meeting",
+    stepName: "meeting",
+    executionPath: [],
+    input: createInput,
+    fetchImpl: (async (url: string | URL | Request) => {
+      receipts.push(String(url));
+      return Response.json({});
+    }) as typeof fetch,
+  };
+  await expect(
+    executeAuthorizedPiece(
+      params,
+      { governed: true, dispatch: "authorized", effectId: "effect-1" } as any,
+      async () => {
+        throw new Error("the upstream piece must not run");
+      },
+    ),
+  ).rejects.toThrow("Zoom created the meeting but");
+  expect(zoomCalls).toEqual(["POST https://api.zoom.us/v2/users/me/meetings"]);
+  // No completion receipt: the daemon keeps this tracked effect dispatching,
+  // and a retry of a dispatching tracked effect is refused (recovery.test.ts).
+  expect(receipts).toEqual([]);
+  expect(tracksPieceCompletion(params.piece, params.action, params.input)).toBe(true);
 });
