@@ -175,3 +175,17 @@ test('reading the queue writes nothing unless a request actually closes', async 
   listHumanInputs(DEFAULT_IDS.project, requestFor(run.id).deadline); expect(changes()).toBe(before + 1);
   expect(requestFor(run.id).status).toBe('expired'); cancelFlowRun(run.id);
 });
+test('a legacy Wait for Approval inside a loop asks again for every item', async () => {
+  const flow = createFlow();
+  const ask = step('ask', '@activepieces/piece-approval', 'wait_for_approval', { prompt: 'Approve {{loop.item}}' });
+  const trigger: any = { name: 'trigger', type: 'EMPTY', settings: {}, nextAction: { name: 'loop', type: 'LOOP_ON_ITEMS', displayName: 'loop', settings: { items: '{{trigger.items}}' }, firstLoopAction: ask } };
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Looped approvals', trigger });
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id }); runs.push(run.id);
+  enqueue({ jobType: RUN_FLOW, payload: { runId: run.id, payload: { items: ['a', 'b'] } }, flowId: flow.id, flowRunId: run.id }); await worker.drain();
+  expect(getFlowRun(run.id)?.status).toBe('PAUSED');
+  const first = requestFor(run.id); expect(respond(first, 'approve').status).toBe(200); await finish();
+  expect(getFlowRun(run.id)?.status).toBe('PAUSED');
+  const pending = listHumanInputs(DEFAULT_IDS.project).filter(r => r.runId === run.id && r.status === 'pending');
+  expect(pending).toHaveLength(1); expect(pending[0]!.id).not.toBe(first.id);
+  expect(respond(pending[0]!, 'reject').status).toBe(200); await finish(); expect(getFlowRun(run.id)?.status).toBe('SUCCEEDED');
+});

@@ -36,6 +36,9 @@ const STATEMENTS: string[] = [
     waitpoint_id TEXT NOT NULL REFERENCES waitpoint(id) ON DELETE CASCADE,
     PRIMARY KEY(request_id,run_id,waitpoint_id)
   )`,
+  `CREATE INDEX IF NOT EXISTS idx_human_wait_waitpoint ON workflow_human_wait(waitpoint_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_human_wait_run ON workflow_human_wait(run_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_human_project ON workflow_human_request(project_id,status,deadline)`,
   `CREATE TABLE IF NOT EXISTS workflow_lead_batch (identity TEXT PRIMARY KEY, config TEXT NOT NULL, owner TEXT NOT NULL, lease_until INTEGER NOT NULL, progress TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS workflow_customer_onboarding (
     identity TEXT PRIMARY KEY, config TEXT NOT NULL, owner TEXT NOT NULL,

@@ -46,18 +46,21 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
   };
   if (typeof config.timeoutHours !== 'number' || !Number.isFinite(config.timeoutHours) || config.timeoutHours <= 0 || config.timeoutHours > 720) throw Error('Response deadline must be between 0 and 720 hours');
   const timeoutHours = config.timeoutHours;
-  const db = getWorkflowDb();
+  const db = getWorkflowDb(), pathKey = JSON.stringify(ctx.executionPath ?? []);
   return db.transaction(() => {
     let id = digest(['human-input-v1', ctx.projectId, run!.flowId, ctx.stepName, ctx.executionPath, config.requestKey, config.shared ? 'shared' : ctx.runId]);
     let existing = row(id);
     let linkedApproval = false;
     // Legacy links may be created before the waiting action. They only open the
     // authenticated form; neither link is a bearer approval or performs a GET mutation.
+    // Both lookups stay inside this loop iteration (execution path): a decision
+    // given for one iteration never answers the next.
     if (legacy && action === 'wait_for_approval') {
-      const candidates = db.query<Row, [string, string, string]>(`SELECT h.* FROM workflow_human_request h
-        WHERE project_id=? AND flow_id=? AND json_extract(record,'$.runId')=?
-        AND NOT EXISTS (SELECT 1 FROM workflow_human_wait w WHERE w.request_id=h.id)`).all(ctx.projectId, run!.flowId, ctx.runId);
-      const bound = db.query<Row, [string, string]>(`SELECT h.* FROM workflow_human_request h JOIN workflow_human_wait w ON w.request_id=h.id JOIN waitpoint p ON p.id=w.waitpoint_id WHERE w.run_id=? AND p.step_name=? ORDER BY p.created DESC LIMIT 1`).get(ctx.runId, ctx.stepName!);
+      const candidates = db.query<Row, [string, string, string, string]>(`SELECT h.* FROM workflow_human_request h
+        WHERE project_id=? AND flow_id=? AND json_extract(record,'$.runId')=? AND json_extract(record,'$.pathKey')=?
+        AND NOT EXISTS (SELECT 1 FROM workflow_human_wait w WHERE w.request_id=h.id)`).all(ctx.projectId, run!.flowId, ctx.runId, pathKey);
+      const bound = db.query<Row, [string, string, string]>(`SELECT h.* FROM workflow_human_request h JOIN workflow_human_wait w ON w.request_id=h.id JOIN waitpoint p ON p.id=w.waitpoint_id
+        WHERE w.run_id=? AND p.step_name=? AND json_extract(h.record,'$.pathKey')=? ORDER BY p.created DESC LIMIT 1`).get(ctx.runId, ctx.stepName!, pathKey);
       const linked = bound ?? (typeof input.requestId === 'string' && input.requestId ? row(input.requestId) : candidates.length === 1 ? candidates[0] : null);
       if (!bound && !input.requestId && candidates.length > 1) throw Error('Choose the approval request ID returned by Create Approval Links');
       if (linked) {
@@ -80,7 +83,7 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
         runId: ctx.runId, created: now, deadline: now + timeoutHours * 3600000, status: 'pending', answers: null };
       db.run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status) VALUES (?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint,record=excluded.record,deadline=excluded.deadline,status=excluded.status`,
-        [id, ctx.projectId, run!.flowId, fingerprint, JSON.stringify({ ...request, graphDigest: resolved.versionDigest }), request.deadline, request.status]);
+        [id, ctx.projectId, run!.flowId, fingerprint, JSON.stringify({ ...request, graphDigest: resolved.versionDigest, pathKey }), request.deadline, request.status]);
       existing = row(id)!;
     }
     const request = unpack(existing);
