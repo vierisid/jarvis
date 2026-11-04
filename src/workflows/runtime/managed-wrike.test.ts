@@ -288,3 +288,10 @@ test("manual task assignments receive the access-change category", () => {
   expect(wrikeTaskCategory({ assignees: [] })).toBe("write_data");
   expect(wrikeTaskCategory({ title: "Task" })).toBe("write_data");
 });
+
+test.each(["create_task", "update_task"])("%s takes the access-change category without a complete input", (action) => {
+  expect(resolveGovernedPieceAction(piece, action)?.category).toBe("modify_settings");
+  expect(resolveGovernedPieceAction(piece, action, { omittedFields: 1 })?.category).toBe("modify_settings");
+  expect(resolveGovernedPieceAction(piece, action, { title: "Task" })?.category).toBe("write_data");
+  expect(resolveGovernedPieceAction(piece, action, { assignees: [{ userId: "USER1" }] })?.category).toBe("modify_settings");
+});

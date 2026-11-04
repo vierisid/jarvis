@@ -331,39 +331,47 @@ export function useWorkflowEditor(flowId: string | null) {
     return restored;
   }, []);
 
-  /** Load (or reload) the catalog + version. */
+  const loadRequest = useRef<AbortController | null>(null);
+  /** Load one snapshot. Retired reads cannot replace the current edit buffer. */
   const reload = useCallback(async (): Promise<void> => {
     if (!flowId) return;
+    loadRequest.current?.abort();
+    const controller = new AbortController();
+    loadRequest.current = controller;
+    const current = () => loadRequest.current === controller && !controller.signal.aborted;
     setLoading(true);
     setError(null);
-    try {
-      const [catalogRes, detailRes, connRes] = await Promise.all([
-        fetch("/api/workflows/pieces"),
-        fetch(`/api/workflows/${flowId}`),
-        // Fetch connections in parallel so the editor can render the
-        // connection picker on first paint without a follow-up round
-        // trip. Failure is non-fatal -- the picker just renders empty
-        // and the user re-enters credentials, same as before this
-        // wiring landed.
-        fetch("/api/workflows/connections"),
-      ]);
-      if (!catalogRes.ok) throw new Error(`pieces -> ${catalogRes.status}`);
-      if (!detailRes.ok) throw new Error(`flow detail -> ${detailRes.status}`);
-      const catalogList = (await catalogRes.json()) as PieceCatalogEntry[];
-      setCatalog(catalogList);
-      if (connRes.ok) {
-        const connBody = (await connRes.json()) as { connections: ConnectionMeta[] };
-        setConnections(Array.isArray(connBody.connections) ? connBody.connections : []);
-      } else {
-        setConnections([]);
+    // Only retry interrupted reads, once. Saving and other writes never retry.
+    const read = async <T,>(path: string, label: string): Promise<T> => {
+      for (let attempt = 0; ; attempt++) {
+        controller.signal.throwIfAborted();
+        try {
+          const response = await fetch(path, { signal: controller.signal });
+          if (!response.ok) throw new Error(`${label} -> ${response.status}`);
+          return await response.json() as T;
+        } catch (error) {
+          const interrupted = error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name);
+          if (!current() || !interrupted || attempt > 0) throw error;
+        }
       }
-
-      const detail = (await detailRes.json()) as {
-        flow: { id: string };
-        latestDraft: FlowVersion | null;
-        published: FlowVersion | null;
-        uiMeta: FlowVersionUiMeta | null;
-      };
+    };
+    try {
+      const [catalogList, detail, connBody] = await Promise.all([
+        read<PieceCatalogEntry[]>("/api/workflows/pieces", "pieces"),
+        read<{
+          flow: { id: string };
+          latestDraft: FlowVersion | null;
+          published: FlowVersion | null;
+          uiMeta: FlowVersionUiMeta | null;
+        }>(`/api/workflows/${flowId}`, "flow detail"),
+        // Connections are optional for local AI steps. A failed picker read
+        // must not prevent opening and editing an otherwise available draft.
+        read<{ connections: ConnectionMeta[] }>("/api/workflows/connections", "connections")
+          .catch(() => ({ connections: [] })),
+      ]);
+      if (!current()) return;
+      setCatalog(catalogList);
+      setConnections(Array.isArray(connBody.connections) ? connBody.connections : []);
       let editable: FlowVersion | null = detail.latestDraft;
       if (!editable && detail.published) {
         // Clone the published version as a new draft so the editor has
@@ -390,18 +398,21 @@ export function useWorkflowEditor(flowId: string | null) {
       // exists. Drop it.
       setUndoStack([]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (current()) setError(e instanceof Error && ['AbortError', 'TimeoutError'].includes(e.name)
+        ? 'Workflow loading was interrupted. Retry loading to continue.'
+        : e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   }, [flowId, fetch]);
 
   useEffect(() => {
     if (ignoreNextLoadRef.current) {
       ignoreNextLoadRef.current = false;
-      return;
+    } else {
+      void reload();
     }
-    void reload();
+    return () => { loadRequest.current?.abort(); loadRequest.current = null; };
   }, [reload]);
 
   /**

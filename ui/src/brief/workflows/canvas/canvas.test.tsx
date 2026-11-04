@@ -460,3 +460,67 @@ test('request-ID-only setup is editable and does not ask for email',async()=>{
  await React.act(async()=>save.click());
  expect(fixture.snapshot().version.trigger.settings?.input).toEqual({request_id_field:'request.id'});
 });
+
+
+test('AppSumo: an aborted draft load recovers, then AI instructions survive save and reopen', async () => {
+  let attempts = 0;
+  const request: WorkflowCanvasBinding['request'] = async (input, init) => {
+    if (String(input) === '/api/workflows/meeting' && ++attempts === 1)
+      throw new DOMException('Fetch is aborted', 'AbortError');
+    return fixture.request(input, init);
+  };
+  await mount(request);
+  expect(editor.error).toBeNull();
+  expect(editor.version?.state).toBe('DRAFT');
+  expect(attempts).toBe(2);
+  const instructions = 'Return two action items: Maya sends a proposal Tuesday; Lee reviews it Wednesday.';
+  await React.act(async () => editor.updateStepInput('draft', 'instructions', instructions));
+  await React.act(async () => { expect((await editor.save()).ok).toBe(true); });
+  await React.act(async () => root.unmount());
+  root = createRoot(host);
+  await mount(request);
+  expect(editor.error).toBeNull();
+  expect(editor.allSteps.find(item => item.step.name === 'draft')?.step.settings?.input?.instructions).toBe(instructions);
+});
+
+test('AppSumo: an obsolete failed load cannot replace a newer successful draft', async () => {
+  let rejectOld!: (error: Error) => void;
+  const oldRequest: WorkflowCanvasBinding['request'] = async (input, init) => String(input) === '/api/workflows/meeting'
+    ? new Promise<Response>((_, reject) => { rejectOld = reject; }) : fixture.request(input, init);
+  await mount(oldRequest);
+  await mount(fixture.request);
+  expect(editor.version?.id).toBe(fixture.versionId);
+  await React.act(async () => rejectOld(new DOMException('Fetch is aborted', 'AbortError')));
+  expect(editor.error).toBeNull();
+  expect(editor.loading).toBe(false);
+});
+
+test('AppSumo: repeated interruption stops retrying and offers recovery in the editor', async () => {
+  const { WorkflowCanvasRoom } = await import('./WorkflowCanvasRoom');
+  let attempts = 0;
+  const request: WorkflowCanvasBinding['request'] = async (input, init) => {
+    if (String(input) === '/api/workflows/meeting' && ++attempts <= 2)
+      throw new DOMException('Fetch is aborted', 'AbortError');
+    return fixture.request(input, init);
+  };
+  const shell = { mode: 'preview', route: { room: 'workflow', selection: { flowId: 'meeting' } }, navigate() {} } as unknown as BriefShellPort;
+  await React.act(async () => root.render(<div className="brief-root"><WorkflowCanvasRoom shell={shell} binding={{
+    source: 'fixture', scopeId: 'retry-test', flowId: 'meeting', versionId: fixture.versionId, capabilities: caps, request,
+  }} /></div>));
+  expect(attempts).toBe(2);
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('Workflow loading was interrupted');
+  const retry = [...host.querySelectorAll('button')].find(button => button.textContent?.includes('Retry loading workflow'))!;
+  expect(retry.disabled).toBe(false);
+  await React.act(async () => retry.click());
+  expect(attempts).toBe(3);
+  expect(host.textContent).toContain('Saved draft');
+  expect(host.textContent).not.toContain('Workflow unavailable');
+});
+
+test('AppSumo: unavailable optional connections do not block draft editing', async () => {
+  await mount(async (input, init) => String(input) === '/api/workflows/connections'
+    ? new Response('{', { status: 200 }) : fixture.request(input, init));
+  expect(editor.error).toBeNull();
+  expect(editor.version?.state).toBe('DRAFT');
+  expect(editor.connections).toEqual([]);
+});

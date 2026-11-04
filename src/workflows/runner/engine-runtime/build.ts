@@ -303,6 +303,7 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/managed-wrike.ts',
   '../../runtime/managed-wrike-inputs.ts',
   '../../runtime/managed-todoist.ts',
+  '../../runtime/managed-figma.ts',
   '../../runtime/managed-github.ts',
   '../../runtime/managed-dropbox.ts',
   '../../runtime/managed-trello.ts',

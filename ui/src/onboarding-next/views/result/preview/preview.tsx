@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { WorkflowEditor } from '../../../../v2/rooms/workflows/WorkflowEditor';
 import { WorkflowEditorEnvironment } from '../../../../v2/rooms/workflows/WorkflowEditorEnvironment';
-import { versionBoundRequest } from '../../../../brief/workflows/canvas/request';
+import { isInterruptedRequest, versionBoundRequest } from '../../../../brief/workflows/canvas/request';
 import { CANVAS_CATALOG } from '../../../../brief/workflows/canvas/fixtures';
 import { NavigationShell } from '../../../../brief/shell/navigation/NavigationShell';
 import { UNKNOWN_NAVIGATION } from '../../../../brief/shell/navigation/model';
@@ -42,7 +42,7 @@ function Canvas({ draft, onDirtyChange, onUnavailable }: ResultCanvasProps) {
       return response({ error: 'This isolated preview cannot run, connect, install, or publish anything.' }, 403);
     }, { preconnect: fetch.preconnect });
     const bound = versionBoundRequest(request, draft.flowId, draft.versionId);
-    return { request: async (input: RequestInfo | URL, init?: RequestInit) => { try { return await bound(input, init); } catch (e) { invalid.current(); throw e; } }, workspace: true, sampleDrafts: samples.current };
+    return { request: async (input: RequestInfo | URL, init?: RequestInit) => { try { return await bound(input, init); } catch (e) { if (!isInterruptedRequest(e, init)) invalid.current(); throw e; } }, workspace: true, sampleDrafts: samples.current };
     // The fixture edit buffer belongs to the exact version, not theme, chat or host reads.
   }, [draft.scopeId, draft.flowId, draft.versionId]);
   return <div className="brief-workflow-canvas result-preview-canvas"><WorkflowEditorEnvironment.Provider value={{ ...environment, portalHost }}>

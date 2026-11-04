@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { WorkflowEditor } from '../../v2/rooms/workflows/WorkflowEditor';
 import { WorkflowEditorEnvironment } from '../../v2/rooms/workflows/WorkflowEditorEnvironment';
-import { versionBoundRequest } from '../../brief/workflows/canvas/request';
+import { isInterruptedRequest, versionBoundRequest } from '../../brief/workflows/canvas/request';
 import type { ResultCanvasProps } from '../views/result';
 import type { HostTransport } from '../../brief/host/http';
 import type { TourRoomRenderer, TourRoomRequest } from '../views/tour';
@@ -129,7 +129,7 @@ export function createResultCanvas(http: HostTransport, registerDirty: (dirty: b
       const bound = versionBoundRequest(http.request, draft.flowId, draft.versionId);
       return { workspace: true, sampleDrafts: samples.current, request: async (input: RequestInfo | URL, init?: RequestInit) => {
         try { const response = await bound(input, init); if ([401, 404, 409, 410].includes(response.status)) invalid.current(); return response; }
-        catch (error) { invalid.current(); throw error; }
+        catch (error) { if (!isInterruptedRequest(error, init)) invalid.current(); throw error; }
       } };
     }, [draft.scopeId, draft.flowId, draft.versionId]);
     useEffect(() => () => registerDirty(false), []);

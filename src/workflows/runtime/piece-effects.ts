@@ -87,7 +87,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === WRIKE_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === WRIKE_PIECE || piece === FIGMA_PIECE) && managedPieceChanges(piece, action))
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
     || (piece === '@activepieces/piece-google-drive' && ['upload_gdrive_file', 'drive_upload_file', 'drive_upload_from_url'].includes(String(action)))
     || (piece === '@activepieces/piece-google-sheets' && ['insert_row', 'sheets_append_values', 'sheets_add_row'].includes(String(action)))
@@ -112,7 +112,8 @@ export function wrikeTaskCategory(input: Record<string, unknown>): ActionCategor
 }
 const WRIKE_PIECE = '@activepieces/piece-wrike';
 const MONDAY_PIECE = '@activepieces/piece-monday';
-/** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist or monday.com action that changes the account (write,
+const FIGMA_PIECE = '@activepieces/piece-figma';
+/** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist, monday.com or Figma action that changes the account (write,
  * send, email, delete or an access change). None parks its flow, so each one
  * can be tracked; a read never is. A category the adapter does not map tracks
  * nothing, so ClickUp (no send_email or modify_settings names) and Mailchimp
@@ -844,15 +845,25 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
   targetProps: ['taskId', 'folderId', 'title', 'description', 'status', 'importance', 'entityType', 'entityId', 'text', 'assignees', 'authors', 'start_date', 'due_date', 'duration', 'customFields', 'plainText', 'fileName', 'file', 'parentFolderId', 'shareds', 'ownerIds', 'projectOwnerId'],
   categories: {
     read_data: ['find_task', 'find_folder'],
-    write_data: ['create_task', 'update_task', 'upload_attachment'],
+    write_data: ['upload_attachment'],
     send_message: ['add_comment'],
+    // Task actions take their worst case without inputs; the rule narrows plain edits.
     // Folder/project creation can assign owners and share access.
-    modify_settings: ['create_folder', 'create_project', 'custom_api_call'],
+    modify_settings: ['create_task', 'update_task', 'create_folder', 'create_project', 'custom_api_call'],
   },
   categoryFromInput: {
     create_task: {props:['assignees'],category:wrikeTaskCategory},
     update_task: {props:['assignees'],category:wrikeTaskCategory},
   },
+}, {
+  // Figma: every action of the pinned 0.6.3 bundle (`figma-engine.test.ts`
+  // checks the list against the installed package). A comment is shown to
+  // everyone with access to the file. The managed `jarvis:figma` connection runs
+  // only MANAGED_FIGMA_ACTIONS; `custom_api_call` and an action added upstream
+  // fall back to `modify_settings`.
+  catalogId: 'figma', pieceName: FIGMA_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['file_key', 'message'],
+  categories: { read_data: ['get_file', 'get_comments'], send_message: ['post_comment'] },
 }, {
   // monday.com, a community piece whose managed `jarvis:monday` connection
   // made it governed. Every action of the pinned 0.4.0 bundle is named
