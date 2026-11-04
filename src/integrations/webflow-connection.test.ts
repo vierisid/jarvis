@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import type { JarvisConfig } from "../config/types";
 import { readWebflowConnection, webflowStatus } from "./webflow-connection";
 import { webflowOptions } from "./webflow-options";
+import { webflowNeedsReconnect } from "./webflow-access";
 import { JarvisWebflowConnectionSource } from "../workflows/credentials/webflow-source";
 import { managedConnectionMisuse } from "../workflows/credentials/adapter";
 import {
@@ -26,6 +27,17 @@ const doc = () => ({
   workspaces: [{ id: site, name: "Sandbox" }],
   connected_at: new Date().toISOString(),
 });
+/** Webflow's /token/authorized_by for the connected user. */
+const accepted = (calls: string[] = []) =>
+  (async (url: unknown) => {
+    calls.push(String(url));
+    return Response.json({ id: "c".repeat(24), email: "owner@example.test" });
+  }) as unknown as typeof fetch;
+const refused = (status: number, calls: string[] = []) =>
+  (async (url: unknown) => {
+    calls.push(String(url));
+    return new Response("{}", { status });
+  }) as unknown as typeof fetch;
 const write = (v: unknown) =>
   writeFileSync(join(dir, "connections/webflow.json"), JSON.stringify(v));
 beforeEach(() => {
@@ -40,9 +52,10 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 test("status omits tokens, invalid documents fail closed, reconnect and disconnect invalidate identity", async () => {
   const c = doc();
   write(c);
-  const source = new JarvisWebflowConnectionSource(dir);
+  const source = new JarvisWebflowConnectionSource(config, accepted());
   expect(webflowStatus(config)).toMatchObject({
     connected: true,
+    reconnect: false,
     connect_url: "https://app.usejarvis.dev/account?integration=webflow",
   });
   expect(JSON.stringify(webflowStatus(config))).not.toContain("PRIVATE");
@@ -73,7 +86,7 @@ test("status omits tokens, invalid documents fail closed, reconnect and disconne
   expect(readWebflowConnection(dir)).toBeNull();
 });
 test("only four CMS actions may resolve the credential, never a trigger or arbitrary HTTP node", () => {
-  const source = new JarvisWebflowConnectionSource(dir);
+  const source = new JarvisWebflowConnectionSource(config);
   for (const action of [
     "get_collection_item",
     "find_collection_item",
@@ -148,20 +161,80 @@ test("picker validates site and generation before fetch and never returns stale-
     }) as unknown as typeof fetch),
   ).rejects.toThrow("changed");
 });
-test("actions have conservative effects; only writes need completion receipts", () => {
-  for (const action of ["get_collection_item", "find_collection_item"]) {
+test("a grant Webflow refuses shows reconnect until hosting delivers another one", async () => {
+  const c = doc();
+  write(c);
+  const calls: string[] = [];
+  // Throttling, an outage or a different account never asks for a reconnect.
+  for (const request of [refused(429), refused(503)])
+    await expect(
+      new JarvisWebflowConnectionSource(config, request).resolve("jarvis:webflow"),
+    ).rejects.toThrow();
+  await expect(
+    new JarvisWebflowConnectionSource(config, (async () =>
+      Response.json({ id: "e".repeat(24), email: "x@example.test" })) as unknown as typeof fetch,
+    ).resolve("jarvis:webflow"),
+  ).rejects.toThrow("account changed");
+  expect(webflowStatus(config)).toMatchObject({ connected: true, reconnect: false });
+  const source = new JarvisWebflowConnectionSource(config, refused(401, calls));
+  await expect(source.resolve("jarvis:webflow")).rejects.toThrow("Reconnect Webflow");
+  expect(calls).toEqual(["https://api.webflow.com/v2/token/authorized_by"]);
+  expect(webflowStatus(config)).toMatchObject({ connected: false, reconnect: true, account: c.account });
+  expect(source.identity("jarvis:webflow")).toBeNull();
+  // Marked: no further request until a new grant arrives.
+  await expect(source.resolve("jarvis:webflow")).rejects.toThrow("Reconnect Webflow");
+  expect(calls).toHaveLength(1);
+  write({ ...c, generation: randomUUID(), access_token: "PRIVATE-NEW" });
+  expect(webflowStatus(config)).toMatchObject({ connected: true, reconnect: false });
+  const ok: string[] = [];
+  const fresh = new JarvisWebflowConnectionSource(config, accepted(ok));
+  expect(fresh.identity("jarvis:webflow")).not.toBeNull();
+  expect((await fresh.resolve("jarvis:webflow"))?.value).toMatchObject({ access_token: "PRIVATE-NEW" });
+  // An accepted grant is checked once for the steps of a run, not per step.
+  await fresh.resolve("jarvis:webflow");
+  expect(ok).toHaveLength(1);
+});
+test("a 401 in the collection picker marks the grant for reconnect; a 403 does not", async () => {
+  const c = doc();
+  write(c);
+  const q = new URLSearchParams({ site, generation: c.generation });
+  await expect(webflowOptions(config, q, refused(403))).rejects.toThrow("site permissions");
+  expect(webflowNeedsReconnect(config, readWebflowConnection(dir)!)).toBe(false);
+  await expect(webflowOptions(config, q, refused(401))).rejects.toThrow("Reconnect Webflow");
+  expect(webflowStatus(config)).toMatchObject({ connected: false, reconnect: true });
+});
+test("actions have conservative effects; every change needs a completion receipt", () => {
+  for (const action of ["get_collection_item", "find_collection_item", "find_order", "list_sites", "list_collections"]) {
     expect(resolveGovernedPieceAction(piece, action)?.category).toBe(
       "read_data",
     );
     expect(tracksPieceCompletion(piece, action)).toBe(false);
   }
-  for (const action of ["create_collection_item", "update_collection_item"]) {
+  // Managed writes stay drafts: a write, not a message.
+  for (const action of ["create_collection_item", "update_collection_item", "unfulfill_order"]) {
     expect(resolveGovernedPieceAction(piece, action)?.category).toBe(
-      "send_message",
+      "write_data",
     );
     expect(tracksPieceCompletion(piece, action)).toBe(true);
   }
-  expect(resolveGovernedPieceAction(piece, "refund_order")?.category).toBe(
-    "make_payment",
-  );
+  for (const [action, category] of [
+    ["publish_collection_item", "send_message"],
+    ["delete_collection_item", "delete_data"],
+    ["custom_api_call", "modify_settings"],
+    ["refund_order", "make_payment"],
+    // Blind (no input): the worst case, narrowed below.
+    ["fulfill_order", "modify_settings"],
+  ] as const) {
+    expect(resolveGovernedPieceAction(piece, action)?.category).toBe(category);
+    // An uncertain failure is never replayed, a refund least of all.
+    expect(tracksPieceCompletion(piece, action)).toBe(true);
+  }
+  // Fulfilling emails the customer only with the email option on.
+  const fulfill = (input: unknown) =>
+    resolveGovernedPieceAction(piece, "fulfill_order", input)?.category;
+  expect(fulfill({ site_id: site, order_id: "o1", send_order_fulfilled_email: true })).toBe("send_email");
+  expect(fulfill({ site_id: site, order_id: "o1", send_order_fulfilled_email: "{{trigger.email}}" })).toBe("send_email");
+  expect(fulfill({ site_id: site, order_id: "o1", send_order_fulfilled_email: false })).toBe("write_data");
+  expect(fulfill({ site_id: site, order_id: "o1" })).toBe("write_data");
+  expect(resolveGovernedPieceAction(piece, "fulfill_order", { order_id: "o1" })?.adapter.targetProps).toContain("order_id");
 });

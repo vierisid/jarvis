@@ -120,7 +120,7 @@ export function WebflowConnection({
               {status?.connected ? (
                 <>Connected as {status.account?.label}.</>
               ) : status?.reconnect ? (
-                "Access has expired. Reconnect Webflow."
+                "Webflow refused this connection. Reconnect Webflow."
               ) : !status && !error ? (
                 "Checking connection…"
               ) : (

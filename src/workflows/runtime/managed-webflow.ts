@@ -40,6 +40,15 @@ export function managedWebflowInput(
   );
 }
 export const WEBFLOW_RESPONSE_LIMIT = 2 * 1024 * 1024;
+/** A refusal from Webflow; `status` 401 means the grant itself was refused (revoked). */
+export class WebflowRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
 /** Only fixed paths constructed below may call this helper. Never follow provider or user URLs. */
 export async function webflowRequest(
   token: string,
@@ -72,14 +81,20 @@ export async function webflowRequest(
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => {});
-    if ([401, 403].includes(response.status))
-      throw Error(
-        "Webflow refused access. Check the site permissions or reconnect Webflow.",
+    if (response.status === 401)
+      throw new WebflowRequestError(
+        "Webflow refused the connection. Reconnect Webflow.",
+        401,
       );
+    if (response.status === 403)
+      throw new WebflowRequestError(
+        "Webflow refused access to this site or collection. Check the site permissions.",
+        403,
+      );
+    // Webflow refuses a rate-limited request before acting on it.
     if (response.status === 429)
       throw Error(
-        "Webflow is rate limiting requests. Wait before trying again." +
-          uncertain,
+        "Webflow is rate limiting requests. Nothing was changed. Wait before trying again.",
       );
     throw Error(
       "Webflow could not complete the request (HTTP " +
@@ -197,12 +212,48 @@ export async function webflowCollections(
     return { id, name: c.displayName.slice(0, 200) };
   });
 }
-export async function webflowCollectionContext(
+type WebflowContext = {
+  locale: string | null;
+  fields: WebflowField[];
+};
+/** Site, collection list and schema reads, shared by the steps of a run for a short while. */
+const CONTEXT_TTL_MS = 60_000;
+const contexts = new Map<
+  string,
+  { at: number; request: typeof fetch; value: Promise<WebflowContext> }
+>();
+/**
+ * The collection's context, read at most once a minute per grant, site and
+ * collection in this process, so a run of several Webflow steps does not
+ * repeat three reads per step. Only a successful read is kept, and an entry
+ * is only reused for the same request function.
+ */
+export function webflowCollectionContext(
   token: string,
   site: string,
   collection: string,
   request: typeof fetch = fetch,
-) {
+): Promise<WebflowContext> {
+  const now = Date.now();
+  for (const [key, entry] of contexts)
+    if (now - entry.at > CONTEXT_TTL_MS) contexts.delete(key);
+  if (contexts.size >= 50) contexts.clear();
+  const key = JSON.stringify([token, site, collection]);
+  const cached = contexts.get(key);
+  if (cached?.request === request) return cached.value;
+  const value = readCollectionContext(token, site, collection, request);
+  contexts.set(key, { at: now, request, value });
+  value.catch(() => {
+    if (contexts.get(key)?.value === value) contexts.delete(key);
+  });
+  return value;
+}
+async function readCollectionContext(
+  token: string,
+  site: string,
+  collection: string,
+  request: typeof fetch,
+): Promise<WebflowContext> {
   // A collection endpoint alone does not establish that it belongs to the selected site.
   const choices = await webflowCollections(token, site, request);
   if (!choices.some((c) => c.id === collection))

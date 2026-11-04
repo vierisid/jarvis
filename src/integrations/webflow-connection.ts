@@ -2,6 +2,7 @@
 import { readManagedConnectionFile } from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { webflowNeedsReconnect } from "./webflow-access";
 
 export const WEBFLOW_PIECE = "@activepieces/piece-webflow";
 export const WEBFLOW_CONNECTION = "jarvis:webflow";
@@ -70,10 +71,14 @@ export function webflowConnectUrl(config: JarvisConfig): string | null {
 }
 export function webflowStatus(config: JarvisConfig) {
   const connection = readWebflowConnection(config.daemon.data_dir);
+  const reconnect = connection
+    ? webflowNeedsReconnect(config, connection)
+    : false;
   return {
     configured: !!webflowConnectUrl(config),
     connect_url: webflowConnectUrl(config),
-    connected: !!connection,
+    connected: !!connection && !reconnect,
+    reconnect,
     external_id: WEBFLOW_CONNECTION,
     account: connection?.account ?? null,
     workspaces: connection?.workspaces ?? [],

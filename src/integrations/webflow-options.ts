@@ -4,7 +4,9 @@ import {
   webflowCollections,
   webflowCollectionContext,
   webflowId,
+  WebflowRequestError,
 } from "../workflows/runtime/managed-webflow";
+import { recordWebflowRefusal } from "./webflow-access";
 import { credentialFingerprint } from "../workflows/credentials/adapter";
 export class WebflowOptionsInputError extends Error {}
 export async function webflowOptions(
@@ -31,9 +33,17 @@ export async function webflowOptions(
   }
   if (!c.workspaces.some((w) => w.id === site))
     throw new WebflowOptionsInputError("Choose a connected Webflow site.");
-  const result = collection
-    ? await webflowCollectionContext(c.access_token, site, collection, request)
-    : { collections: await webflowCollections(c.access_token, site, request) };
+  let result;
+  try {
+    result = collection
+      ? await webflowCollectionContext(c.access_token, site, collection, request)
+      : { collections: await webflowCollections(c.access_token, site, request) };
+  } catch (error) {
+    // A refused grant shows Reconnect on the card, as a refused run does.
+    if (error instanceof WebflowRequestError && error.status === 401)
+      recordWebflowRefusal(config, c);
+    throw error;
+  }
   const next = readWebflowConnection(config.daemon.data_dir);
   if (
     !next ||

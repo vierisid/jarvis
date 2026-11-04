@@ -318,6 +318,41 @@ describe("managed Webflow v2 CMS", () => {
     ).rejects.toThrow("may already have changed");
     expect(f.calls.filter((c) => c.init.method === "POST")).toHaveLength(1);
   });
+  test("a rate-limited write says nothing changed", async () => {
+    const f = fixture((_url, init) =>
+      init.method === "POST" ? new Response("{}", { status: 429 }) : undefined,
+    );
+    const e = await runManagedWebflowAction(
+      "create_collection_item",
+      input,
+      f.request,
+    ).catch((e) => e);
+    expect(String(e)).toContain("Nothing was changed");
+    expect(String(e)).not.toContain("may already have changed");
+  });
+  test("steps of a run share the site, collection list and schema reads", async () => {
+    const f = fixture();
+    const reads = () =>
+      f.calls.filter((c) => !/\/items/.test(c.url.pathname)).length;
+    await runManagedWebflowAction("get_collection_item", input, f.request);
+    expect(reads()).toBe(3);
+    await runManagedWebflowAction("find_collection_item", input, f.request);
+    await runManagedWebflowAction("update_collection_item", input, f.request);
+    expect(reads()).toBe(3);
+    // A failed read is not kept.
+    const failing = fixture((url) =>
+      url.pathname === "/v2/sites/" + site ? new Response("{}", { status: 503 }) : undefined,
+    );
+    await expect(
+      runManagedWebflowAction("get_collection_item", input, failing.request),
+    ).rejects.toThrow();
+    await expect(
+      runManagedWebflowAction("get_collection_item", input, failing.request),
+    ).rejects.toThrow();
+    expect(
+      failing.calls.filter((c) => c.url.pathname === "/v2/sites/" + site),
+    ).toHaveLength(2);
+  });
   test("response body cap fails safely", async () => {
     const f = fixture(
       () => new Response(" ".repeat(WEBFLOW_RESPONSE_LIMIT + 1)),

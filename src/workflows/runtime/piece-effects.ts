@@ -1063,15 +1063,15 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
     read_data: ['get_collection_item', 'find_collection_item', 'find_order', 'list_sites', 'list_collections'],
     // Publishing puts the item on the live site, in front of its visitors.
     send_message: ['publish_collection_item'],
-    // Fulfilling can email the customer; narrowed by input below.
-    send_email: ['fulfill_order'],
     // CMS items (managed writes stay drafts) and an order's fulfilment state.
     write_data: ['create_collection_item', 'update_collection_item', 'unfulfill_order'],
     delete_data: ['delete_collection_item'],
     // Moves money back to the customer.
     make_payment: ['refund_order'],
-    // Any request with the user's token.
-    modify_settings: ['custom_api_call'],
+    // Any request with the user's token, and fulfilling an order at its worst
+    // case (as every input rule starts): narrowed by input below to an email
+    // to the customer or a plain state change.
+    modify_settings: ['custom_api_call', 'fulfill_order'],
   },
   categoryFromInput: {
     fulfill_order: { props: ['send_order_fulfilled_email'], category: webflowFulfillOrderCategory },

@@ -21,6 +21,7 @@ import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
 import { enqueue } from "../db/repos/job-queue";
 import { CredentialResolver } from "../credentials/adapter";
 import { JarvisWebflowConnectionSource } from "../credentials/webflow-source";
+import type { JarvisConfig } from "../../config/types";
 import { AuthorityEngine } from "../../authority/engine";
 import { ApprovalManager } from "../../authority/approval";
 import { AuditTrail } from "../../authority/audit";
@@ -93,6 +94,8 @@ beforeAll(async () => {
         lastUpdated: "2026-10-29T12:00:00Z",
         createdOn: "2026-10-29T12:00:00Z",
       };
+      if (path === "/v2/token/authorized_by")
+        return Response.json({ id: "e".repeat(24), email: "owner@example.test" });
       if (path === "/v2/sites/" + site + "/collections")
         return Response.json({
           collections: [{ id: collection, displayName: "Articles" }],
@@ -159,7 +162,22 @@ beforeAll(async () => {
     }),
   );
   const resolver = new CredentialResolver();
-  resolver.register(new JarvisWebflowConnectionSource(dir));
+  // The daemon checks the grant with Webflow before handing it out.
+  const daemonFetch = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    if (url.origin !== "https://api.webflow.com")
+      throw new Error("unexpected host");
+    return fetch(
+      "http://127.0.0.1:" + provider.port + url.pathname + url.search,
+      init,
+    );
+  }) as typeof fetch;
+  resolver.register(
+    new JarvisWebflowConnectionSource(
+      { daemon: { data_dir: dir } } as JarvisConfig,
+      daemonFetch,
+    ),
+  );
   api = new SandboxApi({
     services: buildSandboxServiceBackends({
       credentialResolver: resolver,

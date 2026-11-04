@@ -5038,7 +5038,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const { JarvisAsanaConnectionSource } = await import("../workflows/credentials/asana-source");
       credentialResolver.register(new JarvisAsanaConnectionSource(jarvisConfig));
       const { JarvisWebflowConnectionSource } = await import("../workflows/credentials/webflow-source");
-      credentialResolver.register(new JarvisWebflowConnectionSource(jarvisConfig.daemon.data_dir));
+      credentialResolver.register(new JarvisWebflowConnectionSource(jarvisConfig));
       const { JarvisGitHubConnectionSource } = await import("../workflows/credentials/github-source");
       credentialResolver.register(new JarvisGitHubConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisDropboxConnectionSource } = await import("../workflows/credentials/dropbox-source");

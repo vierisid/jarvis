@@ -2570,7 +2570,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: async (req: Request) => {
         const {webflowOptions, WebflowOptionsInputError} = await import('../integrations/webflow-options');
         try { return json(await webflowOptions(ctx.config, new URL(req.url).searchParams)); }
-        catch(error) { return json({error:error instanceof Error ? error.message : 'Could not load Webflow collections.'}, error instanceof WebflowOptionsInputError ? 400 : 502); }
+        catch (error) {
+          if (error instanceof WebflowOptionsInputError) return json({error: error.message}, 400);
+          return json({error: 'Could not load Webflow choices. Check your connection or enter an ID.'}, 502);
+        }
       },
     },
     '/api/integrations/asana': {
