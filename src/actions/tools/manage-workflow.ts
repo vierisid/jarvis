@@ -31,7 +31,7 @@ import type { ToolDefinition } from "./registry.ts";
 import type { TriggerManager } from "../../workflows/runner/triggers/manager.ts";
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { ComposerLlmClient } from "./workflow-composer.ts";
-import { composePersistedFlow } from "./persisted-workflow-composer.ts";
+import { composePersistedFlow, type LibraryInstaller, type PersistedComposeDeps } from "./persisted-workflow-composer.ts";
 import { recheckJobContract, type JobContract } from "./job-contract.ts";
 import { getWorkflowComposition, latestSetupComposition, composedFlowId, compositionInProgress } from "../../workflows/db/repos/workflow-composition.ts";
 
@@ -91,7 +91,6 @@ import {
   type ExecutionTarget,
 } from "../../util/execution-environment.ts";
 import type {
-  ComposeDeps,
   ComposedFlow,
   ComposerLibraryEntry,
   ComposerSpecialistRole,
@@ -133,7 +132,7 @@ export interface ManageWorkflowDeps {
    * wording from this tool's description and from the composer's prompt.
    */
   library?: ComposerLibraryEntry[];
-  installLibraryPiece?: ComposeDeps["installLibraryPiece"];
+  installLibraryPiece?: LibraryInstaller;
   /**
    * Optional. The machines a composed step can execute on -- the enrolled
    * sidecars plus the brain's own host. When provided, the composer knows
@@ -1393,7 +1392,7 @@ async function actCompose(
     };
   }
 
-  const composeDeps: ComposeDeps = {
+  const composeDeps: PersistedComposeDeps = {
     llm: deps.llm,
     pieceRegistry: deps.pieceRegistry,
   };

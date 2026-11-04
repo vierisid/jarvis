@@ -228,3 +228,20 @@ test("a stalled preinstall is stopped at its bound, reported as failed, and the 
   expect(received?.aborted).toBe(true);
   expect(getWorkflowComposition(result.compositionRecordId)!.state).toBe("VALIDATED");
 });
+
+test("an installer with nothing approved to preinstall never reaches the composer loop (#1234)", async () => {
+  const installs: string[] = [];
+  let tools: string[] = [];
+  const library = [{ id: "fixture-calendar", npmPackage: "@activepieces/piece-fixture-calendar", displayName: "Fixture Calendar", description: "fixture" }];
+  const llm: ComposerLlmClient = { chat: async () => { throw new Error("unused"); }, chatTools: async (_messages, defs) => {
+    tools = defs.map(d => d.name);
+    return { content: "", tool_calls: [{ id: "submit", name: "submit_flow", arguments: JSON.parse(valid) }] };
+  } };
+  const result = await composePersistedFlow({ pieceRegistry: sampleCatalog(), llm, library,
+    installLibraryPiece: async id => { installs.push(id); } }, request);
+  expect(result.ok).toBe(true);
+  expect(tools).toContain("search_library");
+  expect(tools).not.toContain("install_library_piece");
+  expect(installs).toEqual([]);
+  expect(result.installedPieces).toBeUndefined();
+});
