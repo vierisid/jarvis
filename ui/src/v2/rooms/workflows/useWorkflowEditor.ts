@@ -1,4 +1,4 @@
-import { jsonInputScope, type JsonInputDraft } from './json-input-drafts';
+import { jsonInputBase, jsonInputScope, type JsonInputDraft } from './json-input-drafts';
 import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
 /**
  * Hook for the workflow visual editor.
@@ -249,13 +249,9 @@ export function useWorkflowEditor(flowId: string | null) {
   const setJsonInputDraft = useCallback((key: string, draft: JsonInputDraft) => {
     setJsonInputDrafts(current => ({ ...current, [key]: draft }));
   }, []);
-  const clearJsonInputDraft = useCallback((key: string) => {
-    setJsonInputDrafts(current => {
-      if (!(key in current)) return current;
-      const { [key]: _released, ...rest } = current;
-      return rest;
-    });
-  }, []);
+  const invalidJson = useMemo(() => Object.entries(jsonInputDrafts).filter(([, draft]) => draft.error)
+    .map(([key]) => { const [scope, field] = JSON.parse(key) as [string, string]; return { step: (JSON.parse(scope) as [string])[0], field }; }),
+  [jsonInputDrafts]);
 
   // Local edit buffer: a copy of `version.trigger` the editor mutates until save.
   const [draftTrigger, setDraftTrigger] = useState<FlowStepNode | null>(null);
@@ -328,30 +324,17 @@ export function useWorkflowEditor(flowId: string | null) {
     [draftTrigger, draftOrphans, stepPositions],
   );
 
-  // Undo reads the live graph to keep raw JSON for steps it does not touch.
-  const liveGraph = useRef({ trigger: draftTrigger, orphans: draftOrphans });
-  liveGraph.current = { trigger: draftTrigger, orphans: draftOrphans };
-
   /** Pop the most recent snapshot and restore the editor to it. */
   const undo = useCallback((): boolean => {
     let restored = false;
     setUndoStack((prev) => {
       if (prev.length === 0) return prev;
       const last = prev[prev.length - 1]!;
-      const before = stepSettingsByScope(liveGraph.current.trigger, liveGraph.current.orphans);
-      const after = stepSettingsByScope(last.trigger, last.orphans);
       setDraftTrigger(last.trigger);
       setDraftOrphans(last.orphans);
       setStepPositions(last.positions);
-      // Drop only buffers whose step settings the undo rewrote; the pruning
-      // effect below releases buffers for steps that no longer exist.
-      setJsonInputDrafts(current => {
-        const kept = Object.entries(current).filter(([key]) => {
-          const scope = JSON.parse(key)[0] as string;
-          return !after.has(scope) || before.get(scope) === after.get(scope);
-        });
-        return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
-      });
+      // Raw JSON drafts are not reset here: the pruning effect below keeps
+      // each one only while its field still holds the value it was typed against.
       setDirty(true);
       restored = true;
       return prev.slice(0, -1);
@@ -1215,8 +1198,8 @@ export function useWorkflowEditor(flowId: string | null) {
 
   /** Save the draft trigger back to the server. Returns the new version on success. */
   const save = useCallback(async (): Promise<ActionResult> => {
-    if (Object.values(jsonInputDrafts).some(draft => draft.error)) {
-      return { ok: false, message: 'Fix the invalid JSON fields before saving, or discard your edits.' };
+    if (invalidJson.length) {
+      return { ok: false, message: invalidJsonMessage(invalidJson) };
     }
     if (!flowId || !version || !draftTrigger) {
       return { ok: false, message: "nothing to save" };
@@ -1298,7 +1281,7 @@ export function useWorkflowEditor(flowId: string | null) {
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : String(e) };
     }
-  }, [flowId, version, draftTrigger, draftOrphans, stepPositions, fetch, jsonInputDrafts]);
+  }, [flowId, version, draftTrigger, draftOrphans, stepPositions, fetch, invalidJson]);
 
   const reset = useCallback((): void => {
     if (version) {
@@ -1469,11 +1452,18 @@ export function useWorkflowEditor(flowId: string | null) {
     [allSteps, catalog],
   );
 
-  // Deleted/replaced steps must not leave an invisible invalid field blocking Save.
+  // A raw draft lives only while its step exists and its field still holds the
+  // value the text was typed against. Deleted or replaced steps, undo, and any
+  // other change to that field release it, so no unseen buffer blocks Save.
   useEffect(() => {
-    const scopes = new Set([...allSteps.map(s => s.step), ...draftOrphans.flatMap(o => flattenSteps(o.node).map(s => s.step))].map(jsonInputScope));
+    const steps = new Map([...allSteps.map(s => s.step), ...draftOrphans.flatMap(o => flattenSteps(o.node).map(s => s.step))]
+      .map(step => [jsonInputScope(step), step] as const));
     setJsonInputDrafts(current => {
-      const entries = Object.entries(current).filter(([key]) => scopes.has(JSON.parse(key)[0]));
+      const entries = Object.entries(current).filter(([key, draft]) => {
+        const [scope, field] = JSON.parse(key) as [string, string];
+        const step = steps.get(scope);
+        return !!step && jsonInputBase(step.settings?.input?.[field]) === draft.base;
+      });
       return entries.length === Object.keys(current).length ? current : Object.fromEntries(entries);
     });
   }, [allSteps, draftOrphans]);
@@ -1493,8 +1483,10 @@ export function useWorkflowEditor(flowId: string | null) {
     dirty: dirty || Object.keys(jsonInputDrafts).length > 0,
     jsonInputDrafts,
     setJsonInputDraft,
-    clearJsonInputDraft,
-    hasInvalidJson: Object.values(jsonInputDrafts).some(draft => draft.error),
+    /** Steps and fields holding invalid raw JSON, for naming them where Save is blocked. */
+    invalidJson,
+    invalidJsonMessage: invalidJson.length ? invalidJsonMessage(invalidJson) : null,
+    hasInvalidJson: invalidJson.length > 0,
     validationGaps,
     reload,
     setVersionDisplayName,
@@ -1687,10 +1679,10 @@ export function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEn
  * Dates / Maps / Sets / `undefined` fields — none of which the trigger format
  * permits — so the loss is intentional.
  */
-/** Serialized settings of every step in the tree and detached chains, by JSON draft scope. */
-function stepSettingsByScope(trigger: FlowStepNode | null, orphans: OrphanStep[]): Map<string, string> {
-  const steps = [...(trigger ? flattenSteps(trigger) : []), ...orphans.flatMap(o => flattenSteps(o.node))];
-  return new Map(steps.map(({ step }) => [jsonInputScope(step), JSON.stringify(step.settings ?? null)]));
+/** Names the steps and fields whose raw JSON blocks a save. */
+function invalidJsonMessage(fields: { step: string; field: string }[]): string {
+  const list = fields.map(f => `${f.field} in step ${f.step}`).join(', ');
+  return `Fix the invalid JSON (${list}) before saving, or discard your edits.`;
 }
 
 // Pure tree-manipulation helpers (cloneTrigger, findStep, flattenSteps,

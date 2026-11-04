@@ -248,6 +248,7 @@ function CanvasHeader({
           size="sm"
           onClick={() => void save()}
           disabled={!editor.dirty || editor.hasInvalidJson || saving || !versionMatches}
+          title={editor.invalidJsonMessage ?? undefined}
         >
           {saving ? "Saving…" : "Save changes"}
         </BriefButton>
@@ -261,7 +262,7 @@ function CanvasHeader({
                 : runMessage ||
                   message?.text ||
                   (editor.dirty
-                    ? "Unsaved changes"
+                    ? editor.invalidJsonMessage ?? "Unsaved changes"
                     : editor.version?.state === "LOCKED"
                       ? "Published version"
                       : needsSetup ? "Saved draft · Setup required" : "Saved draft")}

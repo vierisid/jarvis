@@ -746,7 +746,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             {editor.version ? (
               <>
                 Version <code>{editor.version.id}</code> · {editor.version.state}
-                {editor.dirty ? " · unsaved changes" : null}
+                {editor.invalidJsonMessage ? ` · ${editor.invalidJsonMessage}` : editor.dirty ? " · unsaved changes" : null}
               </>
             ) : null}
           </p>
@@ -790,7 +790,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
           <Button variant="ghost" size="sm" onClick={onDiscard} disabled={!editor.dirty}>
             <Icon icon={RotateCcw} size={14} /> Discard
           </Button>
-          <Button variant="primary" size="sm" onClick={() => void onSave()} disabled={!editor.dirty || editor.hasInvalidJson}>
+          <Button variant="primary" size="sm" onClick={() => void onSave()} disabled={!editor.dirty || editor.hasInvalidJson} title={editor.invalidJsonMessage ?? undefined}>
             <Icon icon={Save} size={14} /> Save
           </Button>
           <Button
@@ -986,7 +986,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
           // (piece, action). Map at the boundary.
           allSteps={editor.allSteps.map((fs) => fs.step)}
         >
-          <JsonInputDraftContext.Provider value={{ scope: jsonInputScope(selectedStep), drafts: editor.jsonInputDrafts, set: editor.setJsonInputDraft, clear: editor.clearJsonInputDraft }}>
+          <JsonInputDraftContext.Provider value={{ scope: jsonInputScope(selectedStep), drafts: editor.jsonInputDrafts, set: editor.setJsonInputDraft }}>
           <PropertiesPanel
             key={selectedStep.name}
             workspace={workspace}
@@ -5149,16 +5149,14 @@ function JsonField({
   const [local, setLocal] = useState({ text: jsonValueToText(value), error: null as string | null });
   const lastPropagatedRef = useRef<unknown>(value);
   // A stored draft typed against a value that has since changed elsewhere
-  // (undo, a mapped field) is stale: show the graph value and release it.
+  // (undo, a mapped field) is stale: show the graph value. The editor hook
+  // releases it from the buffer.
   const base = jsonInputBase(value);
   const held = drafts?.drafts[key];
   const stored = held && held.base === base ? held : undefined;
   const text = drafts ? stored?.text ?? jsonValueToText(value) : local.text;
   const parseError = drafts ? stored?.error ?? null : local.error;
   const errorId = useId();
-  useEffect(() => {
-    if (held && !stored) drafts?.clear(key);
-  }, [held, stored, drafts, key]);
   useEffect(() => {
     if (value === lastPropagatedRef.current) return;
     setLocal({ text: jsonValueToText(value), error: null });

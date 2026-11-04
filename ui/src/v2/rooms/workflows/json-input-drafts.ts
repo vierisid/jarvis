@@ -10,6 +10,5 @@ export const JsonInputDraftContext = createContext<{
   scope: string;
   drafts: Record<string, JsonInputDraft>;
   set(key: string, draft: JsonInputDraft): void;
-  clear(key: string): void;
 } | null>(null);
 export const jsonInputKey = (scope: string, field: string) => JSON.stringify([scope, field]);

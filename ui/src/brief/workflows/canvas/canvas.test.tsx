@@ -544,7 +544,7 @@ test('invalid JSON stays dirty across node changes, blocks commands and can be d
   }); };
   expect(button('Publish version').disabled).toBe(false);
   await select('draft'); await type('{bad json');
-  expect(dirty).toBe(true); expect(host.textContent).toContain('Unsaved changes');
+  expect(dirty).toBe(true); expect(host.textContent).toContain('Fix the invalid JSON (payload in step draft)');
   expect(field().getAttribute('aria-invalid')).toBe('true');
   for (const name of ['Save changes', 'Publish version', 'Run workflow', 'Workflows']) expect(button(name).disabled).toBe(true);
   await select('notes'); await select('draft'); expect(field().value).toBe('{bad json');
@@ -596,4 +596,22 @@ test('undo of an unrelated delete keeps invalid JSON typed in another step', asy
   expect(field().value).toBe('{bad json');
   expect(field().getAttribute('aria-invalid')).toBe('true');
   expect(button('Save changes').disabled).toBe(true);
+});
+
+test('raw JSON is released when its field changes elsewhere, including an undo that rewrites it', async () => {
+  const { jsonInputScope, jsonInputKey, jsonInputBase } = await import('../../../v2/rooms/workflows/json-input-drafts');
+  fixture = makeCanvasFixture(false); await mount();
+  const draftStep = () => editor.allSteps.find(s => s.step.name === 'draft')!.step;
+  const key = jsonInputKey(jsonInputScope(draftStep()), 'payload');
+  const typeBad = async () => { await React.act(async () => editor.setJsonInputDraft(key, { text: '{bad', error: 'invalid JSON', base: jsonInputBase(draftStep().settings!.input!.payload) })); };
+  await typeBad(); expect(editor.invalidJson).toEqual([{ step: 'draft', field: 'payload' }]);
+  expect((await editor.save()).message).toContain('payload in step draft');
+  await React.act(async () => editor.updateStepInput('draft', 'payload', { mapped: true }));
+  expect(editor.hasInvalidJson).toBe(false); expect(editor.jsonInputDrafts).toEqual({});
+  await React.act(async () => editor.deleteStep('send'));
+  await React.act(async () => editor.updateStepInput('draft', 'payload', { typed: 1 }));
+  await typeBad(); expect(editor.hasInvalidJson).toBe(true);
+  await React.act(async () => { editor.undo(); });
+  expect(draftStep().settings!.input!.payload).toEqual({ mapped: true });
+  expect(editor.hasInvalidJson).toBe(false);
 });
