@@ -2563,6 +2563,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/integrations/figma': {
       GET: async () => { const {figmaStatus} = await import('../integrations/figma-connection'); return json(figmaStatus(ctx.config)); },
     },
+    '/api/integrations/pipedrive': {
+      GET: async () => {
+        const {pipedriveStatus} = await import('../integrations/pipedrive-connection');
+        return json(pipedriveStatus(ctx.config));
+      },
+    },
     '/api/integrations/webflow': {
       GET: async () => {
         const {webflowStatus} = await import('../integrations/webflow-connection');

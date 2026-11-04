@@ -87,7 +87,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE || piece === PIPEDRIVE_PIECE) && managedPieceChanges(piece, action))
     // A Webflow refund moves money and is not idempotent: never repeat one whose outcome is unknown.
     || (piece === WEBFLOW_PIECE && action === 'refund_order')
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
@@ -110,6 +110,13 @@ const TYPEFORM_PIECE = '@activepieces/piece-typeform';
 const LINEAR_PIECE = '@activepieces/piece-linear';
 const MONDAY_PIECE = '@activepieces/piece-monday';
 const FIGMA_PIECE = '@activepieces/piece-figma';
+const PIPEDRIVE_PIECE = '@activepieces/piece-pipedrive';
+/** Owner/visibility changes and marketing consent require access-level authority. */
+export function pipedriveRecordCategory(input: Record<string, unknown>): ActionCategory {
+  if (present(input.ownerId) || present(input.visibleTo) || present(input.marketing_status)) return 'modify_settings';
+  if (input.status === 'deleted') return 'delete_data';
+  return 'write_data';
+}
 const WEBFLOW_PIECE = '@activepieces/piece-webflow';
 /** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist, monday.com, Figma or Webflow action that changes the account (write,
  * send, email, delete or an access change). None parks its flow, so each one
@@ -847,6 +854,19 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  // Exact npm Pipedrive 0.10.3 action names; managed credentials run only eight contact/deal operations.
+  catalogId: 'pipedrive', pieceName: PIPEDRIVE_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['personId','dealId','name','title','term','fields','exactMatch','email','phone','organizationId','pipelineId','stageId','status','dealValue','dealValueCurrency','probability','expectedCloseDate','ownerId','visibleTo','marketing_status'],
+  categories: {
+    read_data: ['get-note', 'find-deals-associated-with-person', 'find-products', 'find-notes', 'get-product', 'find-user', 'get-deal', 'list-deals', 'search-deals', 'list-deal-products', 'get-person', 'list-persons', 'search-persons', 'get-organization', 'list-organizations', 'search-organizations', 'get-activity', 'list-activities', 'get-lead', 'get-lead-conversion-status', 'list-pipelines', 'list-stages', 'list-activity-types', 'list-users', 'get-current-user'],
+    write_data: ['create-note', 'update-note', 'add-labels-to-person', 'add-product-to-deal', 'remove-product-from-deal', 'attach-file'],
+    delete_data: ['delete-deal', 'delete-person', 'delete-organization', 'delete-activity', 'delete-lead', 'delete-note', 'delete-product', 'merge-deals', 'merge-persons', 'merge-organizations'],
+    // Upstream legacy Find operations create/delete filters. Managed connections use Search instead.
+    modify_settings: ['add-follower', 'create-activity', 'update-activity', 'create-deal', 'update-deal', 'create-lead', 'update-lead', 'create-organization', 'update-organization', 'create-person', 'update-person', 'create-product', 'update-product', 'find-product', 'find-organization', 'find-person', 'find-deal', 'find-activity', 'find-lead', 'convert-lead-to-deal', 'custom_api_call'],
+  },
+  categoryFromInput: Object.fromEntries(['create-person','update-person','create-deal','update-deal'].map(action =>
+    [action, {props:['ownerId','visibleTo','marketing_status','status'], category:pipedriveRecordCategory}])),
+}, {
   // Figma: every action of the pinned 0.6.3 bundle (`figma-engine.test.ts`
   // checks the list against the installed package). A comment is shown to
   // everyone with access to the file. The managed `jarvis:figma` connection runs
