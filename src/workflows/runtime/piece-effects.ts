@@ -225,27 +225,49 @@ export function webflowFulfillOrderCategory(input: Record<string, unknown>): Act
 }
 
 const GITLAB_MANAGED_AUTH: readonly string[] = ['{{connections.jarvis:gitlab}}', "{{connections['jarvis:gitlab']}}"];
+/** The non-secret projection marker of a step that runs on the managed GitLab connection. */
+export const GITLAB_MANAGED_MARKER = 'jarvis_managed';
+/**
+ * The engine pass (`sanitizePieceInput`) sees the resolved credential: it drops
+ * any `jarvis_managed` the workflow input carries and sets it only when the
+ * credential is the managed one, the same test (`jarvis_managed: "gitlab"` on
+ * the auth object) piece-effect-guard uses to send the step to
+ * `runManagedGitLabAction`. The daemon's pass (`projected`) keeps what the
+ * engine set, since `bound()` has already stripped the credential.
+ */
+export function redactGitLabInput(input: Record<string, unknown>, projected: boolean): Record<string, unknown> {
+  if (projected) return input;
+  const { [GITLAB_MANAGED_MARKER]: _forged, ...out } = input;
+  const auth = inputObject(input.auth);
+  return auth?.jarvis_managed === 'gitlab' ? { ...out, [GITLAB_MANAGED_MARKER]: 'gitlab' } : out;
+}
 /**
  * GitLab quick actions (slash-command lines) in an issue description can move,
  * close or change permissions on the issue, so such a description is a
- * settings change, including through manually configured accounts. A templated
- * description is only known at run time: on a manual account it takes that
- * worst case, but on the managed `jarvis:gitlab` connection it stays a write,
- * because `runManagedGitLabAction` refuses a resolved description with a slash
- * command before anything is sent (owner decision, #1268). `auth` is read only
- * as that exact reference (the configured step input; the run-time projection
- * strips it, where the description is already resolved), so it is not one of
- * the rule's `props`: a templated `auth` never narrows. A description longer
- * than the projection's 512 characters is judged as a settings change on
- * either account, since the run-time rule sees only its start.
+ * settings change, including through manually configured accounts.
+ *
+ * On the managed `jarvis:gitlab` connection any other description is a write,
+ * templated or long, because `runManagedGitLabAction` refuses a resolved
+ * description with a slash command before anything is sent (owner decisions,
+ * #1268). Managed means: in the configured step input (design time, `auth`
+ * present) the exact managed reference; in the run-time projection (`auth`
+ * stripped) the marker `redactGitLabInput` derived from the resolved
+ * credential. Neither is one of the rule's `props`: a templated `auth` never
+ * narrows, and workflow input cannot set the marker.
+ *
+ * On a manual account a templated description (only known at run time) and a
+ * description the projection cut at 512 characters (which may hide a quick
+ * action past the cut) take the worst case.
  */
 export function gitlabIssueCategory(input:Record<string,unknown>):ActionCategory {
  const d=input.description;
  if (d==null || d==='') return 'write_data';
- // A description the projection cut (`bound()`, 512 characters) may hide a
- // quick action past the cut, so it is judged as one.
- if (typeof d!=='string' || /(?:^|[\r\n])\s*\//.test(d) || CUT_NOTE.test(d)) return 'modify_settings';
- return !d.includes('{{') || (typeof input.auth==='string' && GITLAB_MANAGED_AUTH.includes(input.auth)) ? 'write_data' : 'modify_settings';
+ if (typeof d!=='string' || /(?:^|[\r\n])\s*\//.test(d)) return 'modify_settings';
+ const managed = Object.hasOwn(input,'auth')
+   ? typeof input.auth==='string' && GITLAB_MANAGED_AUTH.includes(input.auth)
+   : input[GITLAB_MANAGED_MARKER]==='gitlab';
+ if (managed) return 'write_data';
+ return d.includes('{{') || CUT_NOTE.test(d) ? 'modify_settings' : 'write_data';
 }
 
 /** Assignment can share a task with another person. Unresolved assignments use the safer category. */
@@ -457,9 +479,10 @@ export interface GovernedPieceAdapter {
   /**
    * Hide inline credentials a piece takes as ordinary props before the input
    * is bounded for the card and the effect record. Must be deterministic and
-   * idempotent: the daemon applies it again to what the engine sent.
+   * idempotent: the daemon applies it again to what the engine sent
+   * (`projected` true on that pass).
    */
-  redactInput?: (input: Record<string, unknown>) => Record<string, unknown>;
+  redactInput?: (input: Record<string, unknown>, projected: boolean) => Record<string, unknown>;
 }
 
 /**
@@ -980,6 +1003,7 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       "update_project_webhook",
     ]},
   categoryFromInput:{create_issue:{props:['description'],category:gitlabIssueCategory}},
+  redactInput:redactGitLabInput,
 }, {
   // Figma: every action of the pinned 0.6.3 bundle (`figma-engine.test.ts`
   // checks the list against the installed package). A comment is shown to
@@ -1792,9 +1816,9 @@ export function sanitizePieceInput(input: unknown, piece?: unknown): Record<stri
 }
 
 /** The piece's own credential redaction (`redactInput`), or the input as it is. */
-function redactFor(piece: unknown, input: Record<string, unknown>): Record<string, unknown> {
+function redactFor(piece: unknown, input: Record<string, unknown>, projected = false): Record<string, unknown> {
   const redact = governedPieceAdapter(piece)?.redactInput;
-  return redact ? redact(input) : input;
+  return redact ? redact(input, projected) : input;
 }
 
 /**
@@ -1827,7 +1851,7 @@ function redactFor(piece: unknown, input: Record<string, unknown>): Record<strin
  */
 export function reprojectPieceInput(input: unknown, piece?: unknown): Record<string, unknown> {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return {};
-  return bound(redactFor(piece, input as Record<string, unknown>), 0, true) as Record<string, unknown>;
+  return bound(redactFor(piece, input as Record<string, unknown>, true), 0, true) as Record<string, unknown>;
 }
 
 /**

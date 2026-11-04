@@ -214,13 +214,33 @@ test("shared schema, governance and managed dispatch preserve manual accounts", 
   expect(tracksPieceCompletion(piece, "create_issue")).toBe(true);
 });
 
-test("a quick action hidden past the projection cut is not a plain write",()=>{
+// The run-time projection: what the daemon judges (engine pass, then daemon pass).
+const managedAuth={access_token:"PRIVATE_ACCESS",jarvis_managed:"gitlab"},manualAuth={access_token:"PRIVATE_ACCESS"};
+const runtime=(auth:unknown,description:unknown,extra:Record<string,unknown>={})=>
+ resolveGovernedPieceAction(piece,"create_issue",reprojectPieceInput(sanitizePieceInput({auth,projectId:"1",title:"t",description,...extra},piece),piece))?.category;
+test("run time: the managed connection is a write at any description length; a manual one is judged on what it can see",()=>{
  const long="a".repeat(600)+"\n/move other/project";
- for(const auth of [undefined,"{{connections.jarvis:gitlab}}"]){
-  const projected=reprojectPieceInput(sanitizePieceInput({auth,projectId:"1",title:"t",description:long},piece),piece);
-  expect(resolveGovernedPieceAction(piece,"create_issue",projected)?.category).toBe("modify_settings");
- }
- expect(resolveGovernedPieceAction(piece,"create_issue",{description:long})?.category).toBe("modify_settings");
+ expect(runtime(managedAuth,long)).toBe("write_data");
+ expect(runtime(managedAuth,"b".repeat(5000))).toBe("write_data");
+ expect(runtime(manualAuth,long)).toBe("modify_settings");
+ expect(runtime(manualAuth,"b".repeat(5000))).toBe("modify_settings");
+ expect(runtime(manualAuth,"short\n/confidential")).toBe("modify_settings");
+ expect(runtime(manualAuth,"A plain bug report")).toBe("write_data");
+ expect(runtime(managedAuth,"A plain bug report")).toBe("write_data");
+ // The marker is in the projection; the credential is not.
+ const projected=sanitizePieceInput({auth:managedAuth,projectId:"1",title:"t"},piece);
+ expect(projected).toMatchObject({jarvis_managed:"gitlab"});
+ expect(JSON.stringify(projected)).not.toContain("PRIVATE_ACCESS");
+});
+test("workflow input cannot forge the managed marker: it comes only from the resolved credential",()=>{
+ const long="a".repeat(600)+"\n/move other/project";
+ for(const forged of ["gitlab",{x:1},true])
+  expect(runtime(manualAuth,long,{jarvis_managed:forged})).toBe("modify_settings");
+ expect(sanitizePieceInput({auth:manualAuth,jarvis_managed:"gitlab",title:"t"},piece)).not.toHaveProperty("jarvis_managed");
+ expect(runtime({access_token:"x",jarvis_managed:"wrike"},long)).toBe("modify_settings");
+ expect(runtime(undefined,long,{jarvis_managed:"gitlab"})).toBe("modify_settings");
+ // In the configured step input only the auth reference counts, never the marker.
+ expect(resolveGovernedPieceAction(piece,"create_issue",{auth:"{{connections.manual}}",jarvis_managed:"gitlab",description:"{{x}}"})?.category).toBe("modify_settings");
  // An array is not the managed reference, even when it stringifies to it.
  expect(resolveGovernedPieceAction(piece,"create_issue",{auth:["{{connections.jarvis:gitlab}}"],description:"{{x}}"})?.category).toBe("modify_settings");
 });
