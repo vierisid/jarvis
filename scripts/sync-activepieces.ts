@@ -424,11 +424,11 @@ const PATCH_INSERTIONS: Record<
         "            // \"Manual\" trigger AND for a non-manual trigger (e.g. SCHEDULE)\n" +
         "            // invoked MANUALLY from the Run button. Both must run: skip straight\n" +
         "            // into the action chain after the same bookkeeping (backup +\n" +
-        "            // sendUpdate). A real trigger firing carries a triggerName and still\n" +
-        "            // runs executeOnStart below, unchanged.\n" +
+        "            // sendUpdate). EMPTY triggers ignore leftover piece settings.\n" +
+        "            // A real piece trigger still runs executeOnStart below, unchanged.\n" +
         "            const jarvisTriggerName = (trigger as { settings?: { triggerName?: unknown } }).settings\n" +
         "                ?.triggerName\n" +
-        "            if (isNil(jarvisTriggerName)) {\n" +
+        "            if (trigger.type === 'EMPTY' || isNil(jarvisTriggerName)) {\n" +
         "                void runProgressService.backup({\n" +
         "                    engineConstants: constants,\n" +
         "                    flowExecutorContext: executionState,\n" +

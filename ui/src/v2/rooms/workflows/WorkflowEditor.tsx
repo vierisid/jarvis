@@ -865,7 +865,10 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
         {editor.loading ? (
           <div className="wf-editor__placeholder">Loading flow…</div>
         ) : editor.error ? (
-          <div className="wf-editor__placeholder wf-editor__placeholder--error">{editor.error}</div>
+          <div className="wf-editor__placeholder wf-editor__placeholder--error">
+            <p role="alert">{editor.error}</p>
+            <Button onClick={() => void editor.reload()}>Retry loading workflow</Button>
+          </div>
         ) : nodes.length === 0 ? (
           <div className="wf-editor__placeholder">This flow has no steps yet.</div>
         ) : (
