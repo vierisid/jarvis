@@ -48,3 +48,18 @@ test('Today shows the unplanned interview goal notice, and drops it once the ser
     await React.act(async () => root.unmount()); host.remove(); companion.remove(); reconciliation.stop(); rooms.retire(); transport.stop();
   }
 });
+
+test('Needs you never shows an all-clear while the independent permission list has cards or an unknown status', () => {
+  const snap = (state: string, data: unknown, extra: object = {}) => ({ state, data, refreshing: false, reason: null, ...extra }) as any;
+  expect(Rooms.onlyOtherDecisions(snap('empty', null), 2)).toBe(true);
+  expect(Rooms.onlyOtherDecisions(snap('stale', null, { refreshing: true }), 2)).toBe(true);
+  expect(Rooms.onlyOtherDecisions(snap('ready', [{ actions: [] }]), 0)).toBe(true);
+  expect(Rooms.onlyOtherDecisions(snap('ready', [{ actions: ['approve'] }]), 2)).toBe(false);
+  expect(Rooms.onlyOtherDecisions(snap('empty', null), 0)).toBe(false);
+  // An unknown (loading or failed) permission list is not an all-clear.
+  expect(Rooms.onlyOtherDecisions(snap('empty', null), null)).toBe(true);
+  // A document read that is loading or failed keeps its own room and status.
+  expect(Rooms.onlyOtherDecisions(snap('loading', null), 2)).toBe(false);
+  expect(Rooms.onlyOtherDecisions(snap('unavailable', null, { reason: 'down' }), 2)).toBe(false);
+  expect(Rooms.onlyOtherDecisions(snap('stale', [{ actions: [] }], { reason: 'down' }), 2)).toBe(false);
+});
