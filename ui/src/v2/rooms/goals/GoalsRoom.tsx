@@ -312,10 +312,12 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
       {/* Detail panel — expanded mode only */}
       {mode === "expanded" && selectedGoal && (
         <DetailPanel
+          key={selectedGoal.id}
           goal={selectedGoal}
           allGoals={data.goals}
           childrenByParent={data.childrenByParent}
           onClose={() => setSelectedId(null)}
+          onDetails={(input) => data.updateDetails(selectedGoal.id, input)}
           onScore={async (score, reason) => {
             const r = await data.updateScore(selectedGoal.id, score, reason);
             setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
@@ -1014,6 +1016,7 @@ function DetailPanel({
   childrenByParent,
   onClose,
   onScore,
+  onDetails,
   onStatus,
   onHealth,
 }: {
@@ -1021,12 +1024,32 @@ function DetailPanel({
   allGoals: Goal[];
   childrenByParent: Map<string, Goal[]>;
   onClose: () => void;
+  onDetails: (input: { title: string; deadline: number | null }) => Promise<{ ok: boolean; message: string }>;
   onScore: (score: number, reason: string) => void;
   onStatus: (status: GoalStatus) => void;
   onHealth: (health: GoalHealth) => void;
 }) {
   const parent = goal.parent_id ? allGoals.find((g) => g.id === goal.parent_id) : null;
   const children = childrenByParent.get(goal.id) ?? [];
+
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(goal.title);
+  const [deadline, setDeadline] = useState(dateInputValue(goal.deadline));
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const edit = () => { setTitle(goal.title); setDeadline(dateInputValue(goal.deadline)); setSaveError(null); setEditing(true); };
+  const saveDetails = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (saving || !title.trim()) return;
+    const parsed = deadline ? parseDeadlineInput(deadline) : null;
+    if (parsed === undefined) { setSaveError("Enter a valid deadline."); return; }
+    setSaving(true); setSaveError(null);
+    try {
+      const result = await onDetails({ title: title.trim(), deadline: parsed });
+      if (result.ok) setEditing(false); else setSaveError(result.message);
+    } catch { setSaveError("Could not save goal. Try again."); }
+    finally { setSaving(false); }
+  };
 
   // Local score draft so the slider feels responsive without spamming the API.
   const [scoreDraft, setScoreDraft] = useState(goal.score);
@@ -1061,6 +1084,21 @@ function DetailPanel({
       </header>
 
       <div className="v2-goals__side-body">
+        {editing ? <form className="v2-goals__side-section" aria-label="Edit goal details" onSubmit={saveDetails}>
+          <label className="v2-goals__field"><span className="v2-goals__field-label">Title</span>
+            <input className="v2-goals__input" value={title} onChange={e => setTitle(e.target.value)} required disabled={saving} autoFocus />
+          </label>
+          <label className="v2-goals__field"><span className="v2-goals__field-label">Deadline (optional)</span>
+            <input className="v2-goals__input" type="date" value={deadline} onChange={e => setDeadline(e.target.value)} disabled={saving} />
+          </label>
+          {deadline && <button type="button" className="v2-goals__btn v2-goals__btn--secondary" disabled={saving} onClick={() => setDeadline("")}>Clear deadline</button>}
+          {saveError && <p role="alert">{saveError}</p>}
+          <div className="v2-goals__chip-row">
+            <button type="button" className="v2-goals__btn v2-goals__btn--secondary" disabled={saving} onClick={() => setEditing(false)}>Cancel</button>
+            <button type="submit" className="v2-goals__btn v2-goals__btn--primary" disabled={saving || !title.trim()}>{saving ? "Saving…" : "Save details"}</button>
+          </div>
+        </form> : <button type="button" className="v2-goals__btn v2-goals__btn--secondary" onClick={edit}>Edit title and deadline</button>}
+
         {goal.description && (
           <p className="v2-goals__side-desc">{goal.description}</p>
         )}
@@ -1102,13 +1140,14 @@ function DetailPanel({
 
         <section className="v2-goals__side-section">
           <div className="v2-goals__side-label">Status</div>
-          <div className="v2-goals__chip-row">
+          <div className="v2-goals__chip-row" role="group" aria-label="Status">
             {GOAL_STATUSES.map((s) => (
               <button
                 key={s}
                 type="button"
                 className="v2-goals__chip"
                 data-active={goal.status === s}
+                aria-pressed={goal.status === s}
                 onClick={() => onStatus(s)}
               >
                 {s}
@@ -1119,13 +1158,14 @@ function DetailPanel({
 
         <section className="v2-goals__side-section">
           <div className="v2-goals__side-label">Health</div>
-          <div className="v2-goals__chip-row">
+          <div className="v2-goals__chip-row" role="group" aria-label="Health">
             {GOAL_HEALTHS.map((h) => (
               <button
                 key={h}
                 type="button"
                 className="v2-goals__chip"
                 data-active={goal.health === h}
+                aria-pressed={goal.health === h}
                 onClick={() => onHealth(h)}
               >
                 {h.replace(/_/g, " ")}
@@ -1174,6 +1214,30 @@ function CreateDialog({
   const [level, setLevel] = useState<GoalLevel>("task");
   const [deadlineStr, setDeadlineStr] = useState("");
   const [busy, setBusy] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [opener] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  const closeRef = useRef(onClose), busyRef = useRef(busy);
+  closeRef.current = onClose; busyRef.current = busy;
+  useEffect(() => {
+    const box = dialogRef.current!;
+    box.querySelector<HTMLInputElement>('input')?.focus();
+    const focusables = () => [...box.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex="0"]')];
+    const contain = () => { if (!box.contains(document.activeElement)) (focusables()[0] ?? box).focus(); };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopPropagation();
+        if (!busyRef.current) closeRef.current();
+      } else if (event.key === 'Tab') {
+        const items = focusables(), first = items[0], last = items.at(-1);
+        if (!first) { event.preventDefault(); box.focus(); return; }
+        if (event.shiftKey && (document.activeElement === first || !box.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && (document.activeElement === last || !box.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener('focusin', contain);
+    window.addEventListener('keydown', key, true);
+    return () => { document.removeEventListener('focusin', contain); window.removeEventListener('keydown', key, true); if (opener?.isConnected) opener.focus(); };
+  }, [opener]);
 
   const submit = async () => {
     if (!title.trim()) return;
@@ -1192,6 +1256,8 @@ function CreateDialog({
     <div className="v2-goals__overlay" onClick={() => !busy && onClose()}>
       <div
         className="v2-goals__dialog"
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="v2-goals-create-title"
@@ -1203,7 +1269,7 @@ function CreateDialog({
               New goal
             </div>
             <div className="v2-goals__dialog-subtitle">
-              Quick create — full detail editable in the side panel after.
+              You can edit the title and deadline after creating the goal.
             </div>
           </div>
           <button
@@ -1226,12 +1292,12 @@ function CreateDialog({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="What do you want to achieve?"
-              autoFocus
+              disabled={busy}
             />
           </label>
 
-          <label className="v2-goals__field">
-            <span className="v2-goals__field-label">Level</span>
+          <fieldset className="v2-goals__field v2-goals__level-field">
+            <legend className="v2-goals__field-label">Level</legend>
             <div className="v2-goals__chip-row">
               {GOAL_LEVELS.map((l) => (
                 <button
@@ -1239,13 +1305,15 @@ function CreateDialog({
                   type="button"
                   className="v2-goals__chip"
                   data-active={level === l}
+                  aria-pressed={level === l}
+                  disabled={busy}
                   onClick={() => setLevel(l)}
                 >
                   {l.replace(/_/g, " ")}
                 </button>
               ))}
             </div>
-          </label>
+          </fieldset>
 
           <label className="v2-goals__field">
             <span className="v2-goals__field-label">Deadline (optional)</span>
@@ -1253,6 +1321,7 @@ function CreateDialog({
               type="date"
               className="v2-goals__input"
               value={deadlineStr}
+              disabled={busy}
               onChange={(e) => setDeadlineStr(e.target.value)}
             />
           </label>
@@ -1330,10 +1399,15 @@ function monthShort(ts: number): string {
 
 /** Parse an `<input type="date">` value (YYYY-MM-DD) to local-time epoch ms.
  *  Returns undefined if the input is empty or malformed. */
+function dateInputValue(value: number | null): string {
+  if (value === null) return "";
+  const date = new Date(value);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
 function parseDeadlineInput(s: string): number | undefined {
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return undefined;
   const d = new Date(parseInt(m[1]!, 10), parseInt(m[2]!, 10) - 1, parseInt(m[3]!, 10), 23, 59, 0, 0);
-  if (isNaN(d.getTime())) return undefined;
+  if (isNaN(d.getTime()) || dateInputValue(d.getTime()) !== s) return undefined;
   return d.getTime();
 }

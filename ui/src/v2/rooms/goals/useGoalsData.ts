@@ -149,6 +149,22 @@ export function useGoalsData() {
     [refresh],
   );
 
+  const updateDetails = useCallback(
+    async (id: string, input: { title: string; deadline: number | null }): Promise<ActionResult> => {
+      try {
+        const resp = await fetch(`/api/goals/${encodeURIComponent(id)}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        });
+        if (!resp.ok) throw new Error(`Could not save goal (HTTP ${resp.status}).`);
+        await refresh();
+        return { ok: true, message: "Goal details saved." };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Could not save goal." };
+      }
+    }, [refresh],
+  );
+
   const updateScore = useCallback(
     async (id: string, score: number, reason: string): Promise<ActionResult> => {
       try {
@@ -215,6 +231,7 @@ export function useGoalsData() {
     refresh,
     findByName,
     createQuick,
+    updateDetails,
     updateScore,
     updateStatus,
     updateHealth,

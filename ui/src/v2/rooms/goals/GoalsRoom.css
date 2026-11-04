@@ -1144,3 +1144,6 @@
 .v2-goals__esb[data-tone="amb"] { background: color-mix(in srgb, var(--hold) 14%, transparent); color: var(--hold-tx); }
 .v2-goals__esb[data-tone="red"] { background: color-mix(in srgb, var(--listen) 11%, transparent); color: var(--listen-tx); }
 .v2-goals__esb[data-tone="mut"] { background: var(--panel); color: var(--ink2); }
+
+.v2-goals__level-field { margin: 0; padding: 0; border: 0; min-width: 0; }
+.v2-goals__level-field legend { margin-bottom: var(--s-2); }
