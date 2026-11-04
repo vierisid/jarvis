@@ -76,6 +76,7 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
   const [healthFilter, setHealthFilter] = useState<GoalHealth | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const newButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const open = () => { if (takeGoalCreation()) setCreateOpen(true); };
     open(); window.addEventListener(GOAL_CREATE_EVENT, open);
@@ -267,6 +268,7 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
           <Icon icon={RefreshCw} size="sm" />
         </button>
         <button
+          ref={newButtonRef}
           type="button"
           className="v2-goals__new-btn"
           onClick={() => setCreateOpen(true)}
@@ -336,6 +338,7 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
       {createOpen && (
         <CreateDialog
           onClose={() => setCreateOpen(false)}
+          fallbackFocus={newButtonRef}
           onCreate={async (input) => {
             const r = await data.createQuick(input);
             if (r.ok) {
@@ -1047,18 +1050,26 @@ function DetailPanel({
     setReturnFocus(false);
   }, [editing, returnFocus]);
   const closeEditor = () => { setEditing(false); setReturnFocus(true); };
-  const edit = () => { setTitle(goal.title); setDeadline(dateInputValue(goal.deadline)); setSaveError(null); setEditing(true); };
+  // What the form opened with. Save diffs against this, not the polled goal, so
+  // a deadline another writer changed meanwhile is not reverted by a title edit.
+  const [opened, setOpened] = useState({ title: goal.title, deadline: dateInputValue(goal.deadline) });
+  const [deadlineIncomplete, setDeadlineIncomplete] = useState(false);
+  const edit = () => {
+    const start = { title: goal.title, deadline: dateInputValue(goal.deadline) };
+    setOpened(start); setTitle(start.title); setDeadline(start.deadline); setDeadlineIncomplete(false); setSaveError(null); setEditing(true);
+  };
   const saveDetails = async (event: React.FormEvent) => {
     event.preventDefault();
     if (saving || !title.trim()) return;
-    const parsed = deadline ? parseDeadlineInput(deadline) : null;
-    if (parsed === undefined) { setSaveError("Enter a valid deadline."); return; }
+    // A partly cleared date reads as "" but is not a request to remove the deadline.
+    const parsed = deadlineIncomplete ? undefined : deadline ? parseDeadlineInput(deadline) : null;
+    if (parsed === undefined) { setSaveError("Enter a valid deadline, or use Clear deadline."); return; }
     // Send only what changed. The server re-runs health whenever a deadline is
     // present, and a date input can only express 23:59 on a day, so resending
     // an untouched deadline would move one set at another time and reset health.
     const input: GoalDetailsUpdate = {};
-    if (title.trim() !== goal.title) input.title = title.trim();
-    if (deadline !== dateInputValue(goal.deadline)) input.deadline = parsed;
+    if (title.trim() !== opened.title) input.title = title.trim();
+    if (deadline !== opened.deadline) input.deadline = parsed;
     if (!Object.keys(input).length) { closeEditor(); return; }
     setSaving(true); setSaveError(null);
     try {
@@ -1071,14 +1082,6 @@ function DetailPanel({
   // Local score draft so the slider feels responsive without spamming the API.
   const [scoreDraft, setScoreDraft] = useState(goal.score);
   const [scoreReason, setScoreReason] = useState("");
-  const lastIdRef = useRef(goal.id);
-  useEffect(() => {
-    if (lastIdRef.current !== goal.id) {
-      setScoreDraft(goal.score);
-      setScoreReason("");
-      lastIdRef.current = goal.id;
-    }
-  }, [goal.id, goal.score]);
 
   return (
     <aside className="v2-goals__side">
@@ -1101,14 +1104,15 @@ function DetailPanel({
       </header>
 
       <div className="v2-goals__side-body">
-        {editing ? <form className="v2-goals__side-section" aria-label="Edit goal details" onSubmit={saveDetails}>
+        {editing ? <form className="v2-goals__side-section" aria-label="Edit goal details" onSubmit={saveDetails}
+          onKeyDown={e => { if (e.key === "Escape" && !saving) { e.preventDefault(); e.stopPropagation(); closeEditor(); } }}>
           <label className="v2-goals__field"><span className="v2-goals__field-label">Title</span>
             <input className="v2-goals__input" value={title} onChange={e => setTitle(e.target.value)} required disabled={saving} autoFocus />
           </label>
           <label className="v2-goals__field"><span className="v2-goals__field-label">Deadline (optional)</span>
-            <input className="v2-goals__input" type="date" value={deadline} onChange={e => setDeadline(e.target.value)} disabled={saving} />
+            <input className="v2-goals__input" type="date" value={deadline} onChange={e => { setDeadline(e.target.value); setDeadlineIncomplete(!!e.target.validity?.badInput); }} disabled={saving} />
           </label>
-          {deadline && <button type="button" className="v2-goals__btn v2-goals__btn--secondary" disabled={saving} onClick={() => setDeadline("")}>Clear deadline</button>}
+          {(deadline || deadlineIncomplete) && <button type="button" className="v2-goals__btn v2-goals__btn--secondary" disabled={saving} onClick={() => { setDeadline(""); setDeadlineIncomplete(false); }}>Clear deadline</button>}
           {saveError && <p role="alert">{saveError}</p>}
           <div className="v2-goals__chip-row">
             <button type="button" className="v2-goals__btn v2-goals__btn--secondary" disabled={saving} onClick={closeEditor}>Cancel</button>
@@ -1223,9 +1227,12 @@ function DetailPanel({
 function CreateDialog({
   onClose,
   onCreate,
+  fallbackFocus,
 }: {
   onClose: () => void;
   onCreate: (input: { title: string; level: GoalLevel; deadline?: number }) => Promise<boolean>;
+  /** Where focus returns when the opener is gone, e.g. a Brief "Add goal" button that navigated here. */
+  fallbackFocus?: React.RefObject<HTMLElement | null>;
 }) {
   const [title, setTitle] = useState("");
   const [level, setLevel] = useState<GoalLevel>("task");
@@ -1233,12 +1240,12 @@ function CreateDialog({
   const [busy, setBusy] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const [opener] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null);
-  const closeRef = useRef(onClose), busyRef = useRef(busy);
-  closeRef.current = onClose; busyRef.current = busy;
+  const closeRef = useRef(onClose), busyRef = useRef(busy), fallbackRef = useRef(fallbackFocus);
+  closeRef.current = onClose; busyRef.current = busy; fallbackRef.current = fallbackFocus;
   useEffect(() => {
     const box = dialogRef.current!;
     box.querySelector<HTMLInputElement>('input')?.focus();
-    const focusables = () => [...box.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex="0"]')];
+    const focusables = () => [...box.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')];
     const contain = () => { if (!box.contains(document.activeElement)) (focusables()[0] ?? box).focus(); };
     const key = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -1253,11 +1260,13 @@ function CreateDialog({
     };
     document.addEventListener('focusin', contain);
     window.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('focusin', contain); window.removeEventListener('keydown', key, true); if (opener?.isConnected) opener.focus(); };
+    return () => { document.removeEventListener('focusin', contain); window.removeEventListener('keydown', key, true); (opener?.isConnected && opener !== document.body ? opener : fallbackRef.current?.current)?.focus(); };
   }, [opener]);
 
   const submit = async () => {
     if (!title.trim()) return;
+    // Disabling the focused control would drop focus to the page; hold it on the dialog.
+    dialogRef.current?.focus();
     setBusy(true);
     const deadlineMs = deadlineStr ? parseDeadlineInput(deadlineStr) : undefined;
     const ok = await onCreate({
@@ -1267,6 +1276,7 @@ function CreateDialog({
     });
     setBusy(false);
     if (ok) onClose();
+    else window.setTimeout(() => dialogRef.current?.querySelector<HTMLInputElement>('input')?.focus());
   };
 
   return (

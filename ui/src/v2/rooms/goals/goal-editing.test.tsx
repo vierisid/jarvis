@@ -112,3 +112,45 @@ test('at phone width the create dialog overlay stacks above the fixed detail pan
   // Equal specificity: the override must come after the base overlay rule.
   expect(overlay!.at).toBeGreaterThan(css.indexOf('.v2-goals__overlay {'));
 });
+test('a refused deadline shows the server reason in plain words',async()=>{
+  await render();await select();await click('Edit title and deadline');
+  const real=globalThis.fetch;
+  globalThis.fetch=(async(url:any,init?:RequestInit)=>init?.method==='PATCH'?Response.json({error:'goal.deadline: cannot be after its ancestor deadline'},{status:400}):real(url,init)) as typeof fetch;
+  await fill(host.querySelector<HTMLInputElement>('form input[type="date"]')!,'2026-11-21');await click('Save details');
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe("The deadline cannot be later than its parent goal's deadline. Pick an earlier date.");
+  expect(host.querySelector<HTMLInputElement>('form input[type="date"]')?.value).toBe('2026-11-21');
+});
+test('a partly cleared date is not saved as removing the deadline',async()=>{
+  await render();await select();await click('Edit title and deadline');
+  const input=host.querySelector<HTMLInputElement>('form input[type="date"]')!;
+  Object.defineProperty(input,'validity',{configurable:true,get:()=>({badInput:true})});
+  await fill(input,'');await click('Save details');
+  expect(writes).toHaveLength(0);expect(host.querySelector('[role="alert"]')?.textContent).toContain('Enter a valid deadline');
+  await click('Clear deadline');await click('Save details');expect(writes).toEqual([{method:'PATCH',body:{deadline:null}}]);
+});
+test('a deadline changed elsewhere while editing is not reverted by a title edit',async()=>{
+  await render();await select();await click('Edit title and deadline');
+  const moved=new Date(2026,11,5,9,0).getTime();goal={...goal,deadline:moved};
+  await React.act(async()=>{(host.querySelector('button[title="Refresh"]') as HTMLButtonElement).click();await wait();});
+  expect(goal.deadline).toBe(moved);
+  await fill(host.querySelector('form input')!,'Only the title');await click('Save details');
+  expect(writes).toEqual([{method:'PATCH',body:{title:'Only the title'}}]);expect(goal.deadline).toBe(moved);
+});
+test('Escape cancels the inline editor and returns focus to its button',async()=>{
+  await render();await select();await click('Edit title and deadline');
+  const input=host.querySelector<HTMLInputElement>('form input')!;
+  await React.act(async()=>{input.focus();input.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await wait();});
+  expect(host.querySelector('form')).toBeNull();expect(document.activeElement).toBe(button('Edit title and deadline'));expect(writes).toHaveLength(0);
+});
+test('a dialog opened by a Brief request returns focus to New when its opener is gone',async()=>{
+  const { requestGoalCreation } = await import('./create-request');
+  await render();(document.activeElement as HTMLElement|null)?.blur?.();
+  await React.act(async()=>{requestGoalCreation();await wait();});
+  expect(host.querySelector('[role="dialog"]')).toBeTruthy();
+  await key('Escape');expect(host.querySelector('[role="dialog"]')).toBeNull();expect(document.activeElement).toBe(button('New'));
+});
+test('at phone width room toasts stay above the fixed detail panel',async()=>{
+  const css=await Bun.file(new URL('./GoalsRoom.css',import.meta.url)).text();
+  const rule=[...css.matchAll(/@media \(max-width: 600px\) \{([\s\S]*?)\n\}/g)].map(m=>m[1]!.match(/\.v2-goals__toast\s*\{[^}]*z-index:\s*(\d+)/)).find(Boolean);
+  expect(Number(rule?.[1])).toBeGreaterThan(111);
+});

@@ -156,7 +156,7 @@ export function useGoalsData() {
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify(input),
         });
-        if (!resp.ok) throw new Error(`Could not save goal (HTTP ${resp.status}).`);
+        if (!resp.ok) throw new Error(await goalSaveError(resp));
         await refresh();
         return { ok: true, message: "Goal details saved." };
       } catch (err) {
@@ -239,6 +239,14 @@ export function useGoalsData() {
 }
 
 const EMPTY_GOALS: Goal[] = [];
+/** The server's reason for a refused goal edit, in plain words where it is known. */
+async function goalSaveError(resp: Response): Promise<string> {
+  let reason = "";
+  try { const body = await resp.json() as { error?: unknown }; if (typeof body?.error === "string") reason = body.error; } catch { /* no JSON body */ }
+  if (/deadline: cannot be after its ancestor deadline/.test(reason)) return "The deadline cannot be later than its parent goal's deadline. Pick an earlier date.";
+  if (/deadline: cannot precede an existing descendant deadline/.test(reason)) return "The deadline cannot be earlier than a sub-goal's deadline. Pick a later date.";
+  return reason ? `Could not save goal: ${reason} (HTTP ${resp.status}).` : `Could not save goal (HTTP ${resp.status}).`;
+}
 function readMetrics(value: unknown): GoalsMetrics {
   const metrics = readObject<GoalsMetrics>(value);
   const fields: (keyof GoalsMetrics)[] = ["total", "active", "completed", "failed", "killed", "avg_score", "on_track", "at_risk", "behind", "critical", "overdue"];

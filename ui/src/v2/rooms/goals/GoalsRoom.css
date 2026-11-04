@@ -882,6 +882,12 @@
   z-index: 6;
 }
 
+/* At phone width the detail panel is fixed at z-index 110; keep room toasts
+   (action results, create failures) visible above it and the dialog overlay. */
+@media (max-width: 600px) {
+  .v2-goals__toast { position: fixed; z-index: 112; }
+}
+
 .v2-goals__toast[data-tone="warn"] { background: var(--accent); }
 
 /* ── Inline mode ── */
