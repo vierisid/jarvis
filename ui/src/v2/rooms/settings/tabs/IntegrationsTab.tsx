@@ -352,7 +352,8 @@ export function IntegrationsTab({
       <GitHubConnection optional />
       <DropboxConnection optional />
       <TrelloConnection optional />
-      <LinearConnection optional /><WrikeConnection optional />
+      <LinearConnection optional />
+      <WrikeConnection optional />
       <MondayConnection optional />
       <TypeformConnection optional />
       <AirtableConnection optional />
