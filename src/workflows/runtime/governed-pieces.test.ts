@@ -27,7 +27,7 @@ import { maxWaitingWorkflowCards } from './deferred-cards';
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from './service-backends';
 import { AUTHORITY_REQUIREMENTS, type ActionCategory } from '../../roles/authority';
 import { DEFAULT_CONFIG } from '../../config/types';
-import { ABOVE_LEVEL_SUBSTITUTION } from '../../authority/tool-action-map';
+import { ABOVE_LEVEL_SUBSTITUTION, severityRank } from '../../authority/tool-action-map';
 import { ALL_PIECE_ADAPTERS, GOVERNED_PIECE_ADAPTERS, governedPieceTarget, redactHttpInput, REDACTED, governedPieceToolDefinition, governedPieceToolName, RESERVED_TARGET_KEYS, isWellFormedPieceActionName, PIECE_ACTION_NAME_MAX_CHARS, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { defangPieceProjection } from './piece-effect-receipt';
@@ -1723,6 +1723,34 @@ describe('#961: the core HTTP piece is governed by method', () => {
           .toBe(`${adapter.catalogId}/${action}: ${AUTHORITY_REQUIREMENTS[adapter.unknownActionCategory]}`);
       }
     }
+  });
+
+  test('every input rule of every adapter only narrows: never stricter than its blind category', () => {
+    // The table names the worst case and the rule may only narrow it. A rule
+    // that returns a stricter category (a Pipedrive deal whose `status` is
+    // `deleted`, once listed under modify_settings) would let a review at the
+    // blind category understate what the step can do.
+    const samples: unknown[] = [undefined, null, false, true, 0, 1, '', 'x', 'GET', 'POST', 'DELETE', 'get', 'deleted', 'open',
+      'won', 'lost', 'subscribed', 'unsubscribed', 'archived', 'private', 'public', 'closed', ['1'], { data: 'x' }];
+    const covered: string[] = [];
+    for (const adapter of ALL_PIECE_ADAPTERS) {
+      for (const [action, rule] of Object.entries(adapter.categoryFromInput ?? {})) {
+        covered.push(`${adapter.catalogId}/${action}`);
+        const blind = resolveGovernedPieceAction(adapter.pieceName, action)!.category;
+        const combos = rule.props.reduce<Record<string, unknown>[]>((acc, prop) =>
+          acc.flatMap(base => samples.map(value => value === undefined ? base : { ...base, [prop]: value })), [{}]);
+        const stricter = combos.flatMap((props) => {
+          const category = resolveGovernedPieceAction(adapter.pieceName, action, props)!.category;
+          return severityRank(category) > severityRank(blind) ? [`${adapter.catalogId}/${action} ${JSON.stringify(props)}: ${category} > ${blind}`] : [];
+        });
+        expect(stricter.slice(0, 5)).toEqual([]);
+      }
+    }
+    expect(covered).toEqual(expect.arrayContaining(['http/send_request', 'pipedrive/create-person', 'pipedrive/update-person',
+      'pipedrive/create-deal', 'pipedrive/update-deal']));
+    // A deleted deal is reached, and stays within the deal's blind category.
+    expect(resolveGovernedPieceAction('@activepieces/piece-pipedrive', 'update-deal', { status: 'deleted', ownerId: 2 })!.category).toBe('delete_data');
+    expect(resolveGovernedPieceAction('@activepieces/piece-pipedrive', 'update-deal')!.category).toBe('delete_data');
   });
 
   test('padding that pushes a rule\'s props out of the projection takes the blind category for every rule', () => {

@@ -166,17 +166,54 @@ test('notification permission renders the reviewed message, destination and occu
   const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
   const row = { decisionId: 'approval:notice', revision: 'r', kind: 'permission', state: 'pending', title: 'Send daily check-in',
     review: { toolName: 'workflow_notify', reason: 'Permission required', workflowName: 'Daily priorities', requestedAt: Date.UTC(2026, 10, 4, 8),
-      message: 'What are your priorities?\nWhat is blocking you?', channels: ['dashboard'] }, supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+      message: 'What are your priorities?\nWhat is blocking you?', channels: ['dashboard'], fallback: 'desktop' }, supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
   await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
   expect(host.textContent).toContain('Daily priorities'); expect(host.textContent).toContain('What is blocking you?');
-  expect(host.textContent).toContain('dashboard'); expect(host.querySelector('time')?.dateTime).toBe('2026-11-04T08:00:00.000Z');
+  expect(host.textContent).toContain('dashboard'); expect(host.textContent).toContain('If no dashboard is open: desktop notification');
+  expect(host.querySelector('time')?.dateTime).toBe('2026-11-04T08:00:00.000Z');
   transport.stop();
 });
 
 test('permission list reports its real count to suppress the unrelated document empty state', async () => {
-  const counts: number[] = [];
+  const counts: (number | null)[] = [];
   const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
   await React.act(async () => root.render(<Commands.PendingDecisions http={http} read={async () => [{ decisionId: 'request', revision: 'r', title: 'Review fixture', kind: 'permission', state: 'pending', supportedActions: ['inspect'] } as any]} enabled changed={() => {}} onCount={count => counts.push(count)} />));
   expect(counts.at(-1)).toBe(1);
   expect(host.textContent).toContain('Review fixture');
+});
+
+test('permission list reports an unknown count while it cannot read, and zero when the capability is off', async () => {
+  const counts: (number | null)[] = [];
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Commands.PendingDecisions http={http} read={async () => { throw Error('down'); }} enabled changed={() => {}} onCount={count => counts.push(count)} />));
+  expect(counts.at(-1)).toBeNull(); expect(host.textContent).toContain('Decision status is unavailable');
+  await React.act(async () => root.render(<Commands.PendingDecisions http={http} read={async () => []} enabled={false} changed={() => {}} onCount={count => counts.push(count)} />));
+  expect(counts.at(-1)).toBe(0);
+});
+
+test('the permission list takes exactly the rows without document actions, so it and DecisionsRoom never overlap', async () => {
+  const { createDomainPorts } = await import('./domain-ports');
+  const rows = [
+    { decisionId: 'approval:a', revision: 'r', kind: 'permission', supportedActions: ['inspect'] },
+    { decisionId: 'work:w', revision: 'r', kind: 'intent', supportedActions: ['inspect'] },
+    { decisionId: 'approval:c', revision: 'r', kind: 'permission', supportedActions: ['approve_permission', 'inspect'] },
+    { decisionId: 'decision:d', revision: 'r', kind: 'permission', supportedActions: ['approve_permission', 'inspect'] },
+  ];
+  const http = createHostTransport((async (path: string) => {
+    if (path.startsWith('/api/brief/decisions?')) return Response.json({ state: 'ready', data: { items: rows, nextCursor: null } });
+    const id = decodeURIComponent(path.split('/')[4]!);
+    return Response.json({ decision: { decisionId: id, revision: 'r' }, actions: id === 'decision:d' ? ['approve'] : [] });
+  }) as unknown as typeof fetch);
+  const ports = createDomainPorts('scope', http, { setItem() {} });
+  expect((await ports.otherDecisions()).map(row => row.decisionId)).toEqual(['approval:a', 'work:w', 'approval:c']);
+  http.stop();
+});
+
+test('an allowed permission card whose outcome is unknown shows its state, not a request for permission', async () => {
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const row = { decisionId: 'approval:done', revision: 'r', kind: 'permission', state: 'unknown', title: 'Send report', supportedActions: ['inspect'] };
+  await React.act(async () => root.render(<Commands.PendingDecisions http={http} read={async () => [row as any]} enabled changed={() => {}} />));
+  expect(host.textContent).not.toContain('permission is needed'); expect(host.textContent).not.toContain('needs your permission');
+  expect(host.textContent).not.toContain('Allowing this request'); expect(host.textContent).toContain('unknown');
+  http.stop();
 });

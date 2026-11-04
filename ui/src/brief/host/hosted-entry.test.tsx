@@ -4,7 +4,7 @@ import { FOREGROUND_ALIASES } from '../entry/release-route';
 import type { HostDescriptor } from './owner';
 import { resolveHostedEntry, useHostedEntry } from './hosted-entry';
 
-const hosted: HostDescriptor = { schemaVersion: 1, scopeId: 'project', generation: 'boot', installMode: 'hosted',
+const hosted: HostDescriptor = { schemaVersion: 1, scopeId: 'project', workspaceId: 'workspace', generation: 'boot', installMode: 'hosted',
   dashboard: 'brief', capabilities: { contractVersion: 1, capabilities: {} } };
 
 test('the hosted root and existing foreground bookmarks open Brief without URL opt-in', () => {

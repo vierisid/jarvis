@@ -33,11 +33,14 @@ export function browserCardTitle(r: Pick<QueuedDecision, 'review'>): { heading: 
   }
 }
 
+/** Only a card that can still be allowed asks for permission; an allowed, expired or unknown one shows its state. */
+const asksPermission = (row: QueuedDecision) => row.kind === 'permission' && row.supportedActions.includes('approve_permission');
 /** Non-document F12 decisions retain their own action and result contract. */
-export function PendingDecisions({ http, read, enabled, changed, selection, navigate, onCount }: { onCount?(count: number): void; selection?: string; navigate?(route: BriefRoute): void; http: HostTransport; read(): Promise<QueuedDecision[]>; enabled: boolean; changed(): void }) {
+export function PendingDecisions({ http, read, enabled, changed, selection, navigate, onCount }: { onCount?(count: number | null): void; selection?: string; navigate?(route: BriefRoute): void; http: HostTransport; read(): Promise<QueuedDecision[]>; enabled: boolean; changed(): void }) {
   const [rows, setRows] = useState<QueuedDecision[] | null>(null), [message, setMessage] = useState(''), [pending, setPending] = useState(false), [epoch, refresh] = useState(0);
   const [selected, select] = useState<string | null>(null);
-  useEffect(() => { onCount?.(rows?.length ?? 0); }, [rows, onCount]);
+  // null while loading or failed: an unknown permission list is not an empty one.
+  useEffect(() => { onCount?.(enabled ? rows?.length ?? null : 0); }, [rows, enabled, onCount]);
   const list = React.useRef<HTMLElement>(null), restoreFocus = React.useRef(false);
   useEffect(() => {
     if (restoreFocus.current && rows) {
@@ -80,8 +83,8 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
       <nav ref={list} className="brief-decision-list" aria-label="Requests to review">
         {rows?.map(item => <button key={item.decisionId} className="brief-decision-choice" type="button"
           aria-pressed={item.decisionId === row.decisionId} disabled={pending} onClick={() => select(item.decisionId)}>
-          <span><strong>{title(item)}</strong></span><span className="brief-decision-recipient">{item.workflow ? 'Workflow request' : 'Jarvis request'}</span>
-          <span className="brief-decision-hint">{browserCardTitle(item)?.kind ?? (item.kind === 'permission' ? 'Your permission is needed to continue.' : item.state.replaceAll('_', ' '))}</span>
+          <span><strong>{title(item)}</strong></span><span className="brief-decision-recipient">{item.review?.workflowName ?? (item.workflow ? 'Workflow request' : 'Jarvis request')}</span>
+          <span className="brief-decision-hint">{browserCardTitle(item)?.kind ?? (asksPermission(item) ? 'Your permission is needed to continue.' : item.state.replaceAll('_', ' '))}</span>
           <small>{item.decisionId === row.decisionId ? 'Selected' : 'Review request'}</small>
         </button>)}
       </nav>
@@ -92,16 +95,17 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
         <div className="brief-decision-context"><span>{row.review?.workflowName ?? (row.workflow ? 'Workflow request' : 'Jarvis request')}</span>
           {row.run && navigate && <BriefButton size="sm" onClick={() => navigate({ room: 'workflow-runs', selection: { flowId: row.run!.flowId, versionId: row.run!.versionId, runId: row.run!.runId } })}>Open workflow</BriefButton>}</div>
         <div className="brief-decision-document">
-          {row.review?.requestedAt && <p><strong>Run started</strong><br /><time dateTime={new Date(row.review.requestedAt).toISOString()}>{new Date(row.review.requestedAt).toLocaleString()}</time></p>}
+          {row.review?.requestedAt != null && <p><strong>Run started</strong><br /><time dateTime={new Date(row.review.requestedAt).toISOString()}>{new Date(row.review.requestedAt).toLocaleString()}</time></p>}
           {row.review?.message !== undefined && <><p><strong>Message</strong></p><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.review.message}</p>
-            <p><strong>Destination</strong><br />{row.review.channels?.join(', ')}</p></>}
+            <p><strong>Destination</strong><br />{row.review.channels?.join(', ')}
+              {row.review.fallback === 'desktop' && <><br />If no dashboard is open: desktop notification</>}</p></>}
           {row.review?.origin && <p><strong>Website</strong><br />{row.review.origin}</p>}
           {row.review?.element && <p><strong>Element</strong><br />{row.review.element}</p>}
           {row.review?.target && <p><strong>Computer</strong><br />{row.review.target}</p>}
-          <p>{row.kind === 'permission' ? 'Jarvis needs your permission for this action before it can continue.' : row.title}</p>
+          <p>{asksPermission(row) ? 'Jarvis needs your permission for this action before it can continue.' : row.title}</p>
           {browserCardTitle(row) && <p>{row.title}</p>}
           {row.review?.toolName.startsWith('browser_') && <p>The browser uses a separate Jarvis profile. If the site asks you to sign in, complete sign-in in that browser before starting a new run.</p>}
-          {row.kind === 'permission' && <p>Allowing this request does not change your Authority settings or confirm that the workflow has completed.</p>}
+          {asksPermission(row) && <p>Allowing this request does not change your Authority settings or confirm that the workflow has completed.</p>}
           <details className="brief-host-request-details"><summary>Request details</summary>{!browserCardTitle(row) && <p>{row.title}</p>}
             {row.review?.reason && row.review.reason !== row.title && <p>{row.review.reason}</p>}</details>
         </div>
