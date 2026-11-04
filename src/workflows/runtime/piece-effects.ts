@@ -87,7 +87,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === WRIKE_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE || piece === PIPEDRIVE_PIECE || piece === HELP_SCOUT_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === WRIKE_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE || piece === PIPEDRIVE_PIECE || piece === ZOOM_PIECE || piece === HELP_SCOUT_PIECE) && managedPieceChanges(piece, action))
     // A Webflow refund moves money and is not idempotent: never repeat one whose outcome is unknown.
     || (piece === WEBFLOW_PIECE && action === 'refund_order')
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
@@ -110,6 +110,7 @@ const TYPEFORM_PIECE = '@activepieces/piece-typeform';
 const LINEAR_PIECE = '@activepieces/piece-linear';
 const WRIKE_PIECE = '@activepieces/piece-wrike';
 const MONDAY_PIECE = '@activepieces/piece-monday';
+const ZOOM_PIECE = "@activepieces/piece-zoom";
 const HELP_SCOUT_PIECE = "@activepieces/piece-help-scout";
 const FIGMA_PIECE = '@activepieces/piece-figma';
 const PIPEDRIVE_PIECE = '@activepieces/piece-pipedrive';
@@ -869,6 +870,15 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  // All 12 actions in published Zoom 0.9.2; managed credentials enable five.
+  catalogId: 'zoom', pieceName: ZOOM_PIECE, unknownActionCategory: 'modify_settings',
+  targetProps: ['meeting_id','topic','start_time','duration','agenda','occurrence_id','schedule_for','password','require_authentication','auto_recording','audio','host_video','participant_video','join_before_host','waiting_room','mute_upon_entry','clear_agenda'],
+  categories: {
+    read_data: ['zoom_find_meeting','zoom_get_meeting','zoom_list_meetings','zoom_get_current_user','zoom_list_past_meeting_instances','zoom_list_recordings'],
+    modify_settings: ['zoom_create_meeting','zoom_update_meeting','zoom_update_meeting_by_id','custom_api_call'],
+    send_email: ['zoom_create_meeting_registrant'], delete_data: ['zoom_delete_meeting'],
+  },
+}, {
   // Exact npm Pipedrive 0.10.3 action names; managed credentials run only eight contact/deal operations.
   catalogId: 'pipedrive', pieceName: PIPEDRIVE_PIECE, unknownActionCategory: 'modify_settings',
   targetProps: ['personId','dealId','name','title','term','fields','exactMatch','email','phone','organizationId','pipelineId','stageId','status','dealValue','dealValueCurrency','probability','expectedCloseDate','ownerId','visibleTo','marketing_status','productId','activityId','noteId','leadId','mergeWithId','productAttachmentId','id'],

@@ -180,6 +180,7 @@ jobs:
           src/workflows/pieces-library/webflow-engine.test.ts
           src/workflows/pieces-library/wrike-engine.test.ts
           src/workflows/pieces-library/pipedrive-engine.test.ts
+          src/workflows/pieces-library/zoom-engine.test.ts
           src/workflows/pieces-library/help-scout-engine.test.ts
           src/workflows/pieces-library/mailchimp-engine.test.ts
           src/workflows/pieces-library/dropbox-engine.test.ts
@@ -803,7 +804,8 @@ jobs:
           exit $fail
 
   applescript-check:
-    runs-on: macos-latest
+    # Compile/probe is architecture-neutral; avoid the capacity-constrained ARM pool.
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -838,7 +840,8 @@ jobs:
     # change. workflow_dispatch always runs it (that's the "build me one"
     # button this job also exists for).
     if: needs.changes.outputs.sidecar == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: macos-latest
+    # Both targets are cross-compiled below; avoid the capacity-constrained ARM pool.
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

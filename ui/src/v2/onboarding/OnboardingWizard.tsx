@@ -2,6 +2,7 @@ import { CHAT_MODEL_SUGGESTIONS } from "../../../../src/llm/model-catalog";
 import { ClickUpConnection } from "../integrations/ClickUpConnection";
 import { MailchimpConnection } from "../integrations/MailchimpConnection";
 import { AsanaConnection } from "../integrations/AsanaConnection";
+import { ZoomConnection } from "../integrations/ZoomConnection";
 import { PipedriveConnection } from "../integrations/PipedriveConnection";
 import { HelpScoutConnection } from "../integrations/HelpScoutConnection";
 import { MondayConnection } from "../integrations/MondayConnection";
@@ -1363,7 +1364,7 @@ export function OnboardingWizard({
         return (
           <div className="obw-body"><div className="obw-wrap wide">
             <h2>Connect your everyday tools.</h2>
-            <ClickUpConnection optional /><GitHubConnection optional /><TrelloConnection optional /><MailchimpConnection optional /><SlackConnection optional /><DropboxConnection optional /><TodoistConnection optional /><AsanaConnection optional /><PipedriveConnection optional /><HelpScoutConnection optional /><IntercomConnection optional /><CalendlyConnection optional /><AirtableConnection optional /><TypeformConnection optional /><NotionConnection optional /><LinearConnection optional /><WrikeConnection optional /><MondayConnection optional /><FigmaConnection optional /><WebflowConnection optional />
+            <ClickUpConnection optional /><GitHubConnection optional /><TrelloConnection optional /><MailchimpConnection optional /><SlackConnection optional /><DropboxConnection optional /><TodoistConnection optional /><AsanaConnection optional /><PipedriveConnection optional /><ZoomConnection optional /><HelpScoutConnection optional /><IntercomConnection optional /><CalendlyConnection optional /><AirtableConnection optional /><TypeformConnection optional /><NotionConnection optional /><LinearConnection optional /><WrikeConnection optional /><MondayConnection optional /><FigmaConnection optional /><WebflowConnection optional />
             <div className="obw-sub">Start with the tools involved in your daily work. All optional, all revocable from Settings.</div>
             <div className="obw-rows" style={{ marginTop: 14 }}>
               {rows.map(([id, ic, nm, bd]) => {

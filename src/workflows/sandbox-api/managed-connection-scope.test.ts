@@ -1,3 +1,4 @@
+import { JarvisZoomConnectionSource } from "../credentials/zoom-source";
 import { JarvisPipedriveConnectionSource } from "../credentials/pipedrive-source";
 import { JarvisHelpScoutConnectionSource } from "../credentials/help-scout-source";
 /**
@@ -1495,6 +1496,37 @@ describe("managed Pipedrive is scoped to eight person/deal actions",()=>{
 
 // Real credential route: a valid OAuth document must never expose its token to
 // CODE, a different piece, unqualified actions, or trigger hooks.
+describe("managed Zoom is scoped to five meeting actions",()=>{
+ const PIECE="@activepieces/piece-zoom",TOKEN="synthetic-zoom-token",ref="{{connections.jarvis:zoom}}";
+ let dataDir:string;
+ beforeEach(()=>{
+  dataDir=mkdtempSync(join(tmpdir(),"zoom-scope-"));mkdirSync(join(dataDir,"connections"));
+  writeFileSync(join(dataDir,"connections/zoom.json"),JSON.stringify({version:1,provider:"zoom",status:"connected",generation:crypto.randomUUID(),
+   access_token:TOKEN,refresh_token:"private-refresh",expires_at:new Date(Date.now()+3600000).toISOString(),
+   refresh:{url:"https://app.usejarvis.dev/api/integrations/zoom/refresh",instance_id:crypto.randomUUID(),secret:"a".repeat(64)},
+   account:{id:"zoom-user",label:"Owner"},workspaces:[{id:"34",name:"Sandbox"}],connected_at:new Date().toISOString()}));
+  credentials.register(new JarvisZoomConnectionSource({daemon:{data_dir:dataDir},usejarvis_integrations:{page_url:"https://app.usejarvis.dev/account"}} as JarvisConfig));
+ });
+ afterEach(()=>rmSync(dataDir,{recursive:true,force:true}));
+ const step=(actionName:string):any=>({name:"zoom",type:"PIECE",settings:{pieceName:PIECE,actionName,input:{auth:ref}}});
+ const trigger:any={name:"trigger",type:"PIECE_TRIGGER",settings:{pieceName:PIECE,triggerName:"new_recording",actionName:"zoom_find_meeting",input:{auth:ref}}};
+ for(const [name,tree] of [["CODE",empty(code({conn:ref}))],["cross-piece",empty(gmail({auth:ref}))],...['zoom_delete_meeting','custom_api_call','zoom_list_recordings'].map(n=>[n,empty(step(n))]),["trigger",trigger]]){
+  test(String(name)+" cannot resolve Zoom",async()=>{
+   expect(bindingIssues(tree).length).toBeGreaterThan(0);const r=await fetchFor(runOf(tree),"jarvis:zoom");expect(r.status).toBe(403);expect(await r.text()).not.toContain(TOKEN);
+  });
+ }
+ test("every qualified action resolves only the access token and connected user",async()=>{
+  for(const action of ['zoom_create_meeting','zoom_find_meeting','zoom_get_meeting','zoom_update_meeting','zoom_update_meeting_by_id']){
+   const tree=empty(step(action));expect(bindingIssues(tree)).toEqual([]);const r=await fetchFor(runOf(tree),"jarvis:zoom");expect(r.status).toBe(200);
+   const result=await r.json();expect(result).toMatchObject({type:"OAUTH2",pieceName:PIECE,value:{access_token:TOKEN,jarvis_user:"zoom-user",jarvis_managed:"zoom",refresh_token:""}});
+   expect(JSON.stringify(result)).not.toContain("private-refresh");
+  }
+ });
+ test("trigger hook with a spoofed action name cannot resolve the credential",async()=>{
+  const flow=createFlow({}),version=createDraftVersion({flowId:flow.id,displayName:"Hook",trigger});
+  expect((await fetchFor(triggerHookRunId("poll",flow.id,version),"jarvis:zoom")).status).toBe(403);
+ });
+});
 describe("managed Help Scout is scoped to three support actions",()=>{
  const PIECE="@activepieces/piece-help-scout",TOKEN="synthetic-help-scout-token",ref="{{connections.jarvis:help-scout}}";
  let dataDir:string;
