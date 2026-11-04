@@ -1,6 +1,7 @@
 import {managedAirtableInput, managedAirtableIssue, runManagedAirtableAction} from './managed-airtable';
 import { hubspotContactInput, isHubspotContact } from './hubspot-contact';
 import { managedNotionInput, managedNotionIssue, runManagedNotionAction } from './managed-notion';
+import { managedPipedriveInput, runManagedPipedriveAction } from "./managed-pipedrive";
 import { managedWebflowInput, runManagedWebflowAction } from './managed-webflow';
 /**
  * Engine-side half of the governed-piece adapter.
@@ -25,6 +26,7 @@ import { managedWebflowInput, runManagedWebflowAction } from './managed-webflow'
  * Imported BY THE ENGINE BUNDLE: keep it pure. `fetch` only, no node built-ins.
  */
 
+import {managedWrikeInput, runManagedWrikeAction} from './managed-wrike';
 import {managedMondayInput, runManagedMondayAction} from './managed-monday';
 import {managedLinearInput, runManagedLinearAction} from './managed-linear';
 import {managedTypeformInput, runManagedTypeformAction} from './managed-typeform';
@@ -259,12 +261,14 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
     const issue = managedTrelloIssue(params.action, trello);
     if (issue) throw new Error(issue);
   }
+  const wrike = params.piece === "@activepieces/piece-wrike" ? managedWrikeInput(params.input) : null;
   const monday = params.piece === "@activepieces/piece-monday" ? managedMondayInput(params.input) : null;
   const figma = managedFigmaInput(String(params.piece), params.input) ? params.input : null;
   const todoist = params.piece === "@activepieces/piece-todoist" ? managedTodoistInput(params.input) : null;
   const asana = params.piece === "@activepieces/piece-asana" ? managedAsanaInput(params.input) : null;
   const dropbox = params.piece === '@activepieces/piece-dropbox' ? managedDropboxInput(params.input) : null;
   const intercom = params.piece === '@activepieces/piece-intercom' ? managedIntercomInput(params.input) : null;
+  const pipedrive = managedPipedriveInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
   const webflow = managedWebflowInput(String(params.piece), params.input) ? params.input as Record<string, unknown> : null;
   const slack = params.piece === '@activepieces/piece-slack' && managedSlackInput(params.input);
   if (slack) {
@@ -279,6 +283,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (airtable) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Airtable dispatch was not authorized');
     raw = await runManagedAirtableAction(String(params.action), airtable);
+  } else if (pipedrive) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Pipedrive dispatch was not authorized');
+    raw = await runManagedPipedriveAction(String(params.action), pipedrive);
   } else if (webflow) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Webflow dispatch was not authorized');
     raw = await runManagedWebflowAction(String(params.action), webflow);
@@ -291,6 +298,9 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else if (github) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('GitHub dispatch was not authorized');
     raw = await runManagedGitHubAction(String(params.action), github);
+  } else if (wrike) {
+    if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Wrike dispatch was not authorized');
+    raw = await runManagedWrikeAction(String(params.action), wrike);
   } else if (monday) {
     if (!governance.governed || governance.dispatch !== 'authorized') throw new Error('Monday dispatch was not authorized');
     raw = await runManagedMondayAction(String(params.action), monday);

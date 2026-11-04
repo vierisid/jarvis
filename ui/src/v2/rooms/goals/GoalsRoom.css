@@ -531,7 +531,17 @@
 }
 
 @media (max-width: 900px) {
-  .v2-goals__side { display: none; }
+  .v2-goals__side {
+    left: var(--s-4);
+    width: auto;
+  }
+}
+
+@media (max-width: 600px) {
+  .v2-goals--expanded .v2-goals__side {
+    position: fixed;
+    z-index: 110;
+  }
 }
 
 .v2-goals__side-head {
@@ -753,6 +763,13 @@
   z-index: 65;
 }
 
+/* At phone width the detail panel is fixed at z-index 110. The create dialog
+   is modal, so it sits above the panel: what is visible then matches where its
+   focus trap keeps focus. Placed after the base rule so it wins. */
+@media (max-width: 600px) {
+  .v2-goals__overlay { z-index: 111; }
+}
+
 .v2-goals__dialog {
   background: var(--paper);
   border: 1px solid var(--rule);
@@ -863,6 +880,12 @@
   box-shadow: 0 6px 20px -10px rgba(26, 26, 26, 0.4);
   max-width: 360px;
   z-index: 6;
+}
+
+/* At phone width the detail panel is fixed at z-index 110; keep room toasts
+   (action results, create failures) visible above it and the dialog overlay. */
+@media (max-width: 600px) {
+  .v2-goals__toast { position: fixed; z-index: 112; }
 }
 
 .v2-goals__toast[data-tone="warn"] { background: var(--accent); }
@@ -1144,3 +1167,6 @@
 .v2-goals__esb[data-tone="amb"] { background: color-mix(in srgb, var(--hold) 14%, transparent); color: var(--hold-tx); }
 .v2-goals__esb[data-tone="red"] { background: color-mix(in srgb, var(--listen) 11%, transparent); color: var(--listen-tx); }
 .v2-goals__esb[data-tone="mut"] { background: var(--panel); color: var(--ink2); }
+
+.v2-goals__level-field { margin: 0; padding: 0; border: 0; min-width: 0; }
+.v2-goals__level-field legend { margin-bottom: var(--s-2); }

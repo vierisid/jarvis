@@ -651,6 +651,21 @@ test('Webflow managed readiness replaces the dynamic v1 form with its static con
   expect(manual.some(i=>i.path.endsWith('collection_id'))).toBe(false);
 });
 
+test('Pipedrive managed readiness uses the same static contract as its engine; manual accounts keep the upstream form',()=>{
+  // The published 0.10.3 form shape: an owner dropdown and a dynamic custom field set.
+  const schema=propsToInputSchema({title:{type:'SHORT_TEXT',displayName:'Title',required:true},ownerId:{type:'DROPDOWN',displayName:'Owner',required:true},customfields:{type:'DYNAMIC',displayName:'Custom Fields',required:true}} as any);
+  const pieces=new PieceCatalog([{name:'@activepieces/piece-pipedrive',displayName:'Pipedrive',description:'',actions:{'update-deal':{name:'update-deal',displayName:'Update Deal',description:'',inputSchema:schema}}}]);
+  const node:any={name:'deal',type:'PIECE',settings:{pieceName:'@activepieces/piece-pipedrive',actionName:'update-deal',input:{auth:'{{connections.jarvis:pipedrive}}',dealId:'42',title:'Renewal',status:'won'}}};
+  const check=()=>compileWorkflow(graph(node),{pieces});
+  expect(check().issues.filter(i=>i.path.includes('ownerId')||i.path.includes('customfields'))).toEqual([]);
+  delete node.settings.input.dealId;
+  expect(check().issues.some(i=>i.path.endsWith('dealId'))).toBe(true);
+  node.settings.input.auth='{{connections.manual}}';
+  const manual=check().issues;
+  expect(manual.some(i=>i.path.endsWith('ownerId'))).toBe(true);
+  expect(manual.some(i=>i.path.endsWith('dealId'))).toBe(false);
+});
+
 test('Ask embedded contracts are validated before composition, publish and run', () => {
   const ask = new PieceCatalog([{ name: 'jarvis-ask', displayName: 'Ask', description: '', actions: { ask: { name: 'ask', displayName: 'Ask', description: '' } } }]);
   const g = (outputSchema: unknown) => ({ name: 'trigger', type: 'EMPTY', nextAction: { name: 'extract', type: 'PIECE', settings: { pieceName: 'jarvis-ask', actionName: 'ask', input: { prompt: 'Extract', outputSchema } } } });

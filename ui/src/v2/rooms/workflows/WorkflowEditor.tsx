@@ -1,4 +1,8 @@
+import { pipedriveInputSchema, isPipedriveReference } from "../../../../../src/workflows/runtime/managed-pipedrive-inputs";
+import { PipedriveConnection, usePipedriveStatus } from "../../integrations/PipedriveConnection";
+import { JsonInputDraftContext, jsonInputBase, jsonInputScope, jsonInputKey } from './json-input-drafts';
 import { mondayInputSchema } from "../../../../../src/workflows/runtime/managed-monday-inputs";
+import { isWrikeReference, wrikeInputSchema } from "../../../../../src/workflows/runtime/managed-wrike-inputs";
 import { AirtableLocation } from "../../integrations/AirtableLocation";
 import { NotionLocation } from "../../integrations/NotionLocation";
 import { webflowInputSchema } from "../../../../../src/workflows/runtime/managed-webflow-inputs";
@@ -33,8 +37,10 @@ import { AirtableConnection, useAirtableStatus } from "../../integrations/Airtab
 import { IntercomConnection, useIntercomStatus } from "../../integrations/IntercomConnection";
 import { CalendlyConnection, useCalendlyStatus } from "../../integrations/CalendlyConnection";
 import { NotionConnection, useNotionStatus } from "../../integrations/NotionConnection";
+import { WrikeFolder } from "../../integrations/WrikeFolder";
 import { LinearTeam } from "../../integrations/LinearTeam";
 import { LinearConnection, useLinearStatus } from "../../integrations/LinearConnection";
+import { WrikeConnection, useWrikeStatus } from "../../integrations/WrikeConnection";
 import { ClickUpConnection, useClickUpStatus } from "../../integrations/ClickUpConnection";
 import { FigmaConnection, useFigmaStatus } from "../../integrations/FigmaConnection";
 import { FigmaFileLocation } from "../../integrations/FigmaFileLocation";
@@ -687,7 +693,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
    * the last-saved version if that's what they want.
    */
   const handleRun = useCallback(async (): Promise<void> => {
-    if (!flowId) return;
+    if (!flowId || editor.hasInvalidJson) return;
     if (editor.dirty) {
       const proceed = await confirmDialog(
         "You have unsaved changes. Running will use the last SAVED version, not your current edits. Continue?",
@@ -703,7 +709,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
       setActionMessage({ tone: "warn", text: `Run failed: ${result.message}` });
     }
     window.setTimeout(() => setActionMessage(null), 2500);
-  }, [flowId, editor.dirty, runs]);
+  }, [flowId, editor.dirty, editor.hasInvalidJson, runs]);
 
   // Count of non-terminal runs surfaced as a badge on the Runs button so
   // users see "something's still going" without having to open the panel.
@@ -745,7 +751,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             {editor.version ? (
               <>
                 Version <code>{editor.version.id}</code> · {editor.version.state}
-                {editor.dirty ? " · unsaved changes" : null}
+                {editor.invalidJsonMessage ? ` · ${editor.invalidJsonMessage}` : editor.dirty ? " · unsaved changes" : null}
               </>
             ) : null}
           </p>
@@ -789,14 +795,14 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
           <Button variant="ghost" size="sm" onClick={onDiscard} disabled={!editor.dirty}>
             <Icon icon={RotateCcw} size={14} /> Discard
           </Button>
-          <Button variant="primary" size="sm" onClick={() => void onSave()} disabled={!editor.dirty}>
+          <Button variant="primary" size="sm" onClick={() => void onSave()} disabled={!editor.dirty || editor.hasInvalidJson} title={editor.invalidJsonMessage ?? undefined}>
             <Icon icon={Save} size={14} /> Save
           </Button>
           <Button
             variant="ghost"
             size="sm"
             onClick={() => void handleRun()}
-            disabled={runs.starting || !editor.version}
+            disabled={runs.starting || !editor.version || editor.hasInvalidJson}
             title={
               editor.dirty
                 ? "Run the LAST SAVED version (your unsaved edits won't apply)"
@@ -985,6 +991,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
           // (piece, action). Map at the boundary.
           allSteps={editor.allSteps.map((fs) => fs.step)}
         >
+          <JsonInputDraftContext.Provider value={{ scope: jsonInputScope(selectedStep), drafts: editor.jsonInputDrafts, set: editor.setJsonInputDraft }}>
           <PropertiesPanel
             key={selectedStep.name}
             workspace={workspace}
@@ -1058,6 +1065,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             }
             onTestFromHere={() => editor.testStepFromHere(selectedStep.name)}
           />
+          </JsonInputDraftContext.Provider>
         </NodeSettingsPopover>
       ) : null}
       {/* Side panel: this flow's run history. Toggled via the header Runs
@@ -3463,7 +3471,9 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const webflowSchema = webflowLocation ? webflowInputSchema(subName ?? "") : null;
   const baseSchema = webflowSchema ? {...webflowSchema,fields:webflowSchema.fields.filter(f=>!["site_id","collection_id","collection_fields"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))}
     : figmaLocation && asanaSchema ? {...asanaSchema,fields:asanaSchema.fields.filter(f=>f.name!=="file_key")} : asanaSchema;
-  const selectedSchema = managedMonday && mondayInputSchema(subName ?? "") ? {...mondayInputSchema(subName ?? "")!, fields:mondayInputSchema(subName ?? "")!.fields.filter(f=>!["board_id","group_id"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))} : managedTodoist && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['changes_info', ...(todoistLocation ? ['project_id','section_id'] : [])].includes(f.name)).map((f): PieceInputField => f.name === 'labels' ? {...f,type:'json',placeholder:'["work"]',description:'Label names as a JSON array. Empty arrays preserve current labels.'} : f)} : linearTeam && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['team_id','user_id'].includes(f.name)).map((f): PieceInputField => {
+  const pipedriveSchema = isPipedriveReference(piece?.name, step.settings?.input?.auth) ? pipedriveInputSchema(subName ?? "") : null;
+  const wrikeSchema = isWrikeReference(piece?.name, step.settings?.input?.auth) ? wrikeInputSchema(subName ?? "") : null;
+  const selectedSchema = pipedriveSchema ? {...pipedriveSchema,fields:pipedriveSchema.fields.map(f=>({...f,options:f.options ? [...f.options] : undefined}))} : wrikeSchema ? {...wrikeSchema, fields:wrikeSchema.fields.filter(f=>f.name !== "folderId").map(f=>({...f, options:f.options ? [...f.options] : undefined}))} : managedMonday && mondayInputSchema(subName ?? "") ? {...mondayInputSchema(subName ?? "")!, fields:mondayInputSchema(subName ?? "")!.fields.filter(f=>!["board_id","group_id"].includes(f.name)).map(f=>({...f,options:f.options?[...f.options]:undefined}))} : managedTodoist && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['changes_info', ...(todoistLocation ? ['project_id','section_id'] : [])].includes(f.name)).map((f): PieceInputField => f.name === 'labels' ? {...f,type:'json',placeholder:'["work"]',description:'Label names as a JSON array. Empty arrays preserve current labels.'} : f)} : linearTeam && baseSchema ? {...baseSchema, fields:baseSchema.fields.filter(f=>!['team_id','user_id'].includes(f.name)).map((f): PieceInputField => {
     if (f.name === 'priority_id') return {...f,type:'number',description:'0: no priority, 1: urgent, 2: high, 3: normal, 4: low.'};
     if (f.name === 'issue_id') return {...f,type:'string',placeholder:'ENG-123',description:'Issue key, model UUID or workflow variable.'};
     if (f.name === 'parent_id') return {...f,type:'string',placeholder:'Parent issue UUID',description:'Use the parent issue model UUID or a workflow variable.'};
@@ -3617,6 +3627,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
 
       {airtableLocation && <AirtableLocation input={step.settings?.input ?? {}} onChange={onSetInput} search={subName === "search_records"} />}
       {notionLocation && <NotionLocation input={step.settings?.input ?? {}} onChange={onSetInput} field={subName === "notion_get_block_children" ? "block_id" : "pageId"} />}
+      {wrikeSchema?.fields.some(f=>f.name === "folderId") && <WrikeFolder input={step.settings?.input ?? {}} onChange={onSetInput} required={subName === "create_task"} />}
       {linearTeam && <LinearTeam input={step.settings?.input ?? {}} onChange={onSetInput} required={subName !== "linear_search_issues"} />}
       {githubRepository && <GitHubRepository input={step.settings?.input ?? {}} onChange={onSetInput} />}
       {trelloLocation && <TrelloCardLocation input={step.settings?.input ?? {}} onChange={onSetInput} boardOnly={subName === "list_lists"} />}
@@ -3897,6 +3908,8 @@ function ConnectionPicker({
   // connections remain available.
   const isNotion = pieceName === "@activepieces/piece-notion";
   const notionStatus = useNotionStatus(isNotion), managedNotion = notionStatus?.connected === true;
+  const isWrike = pieceName === "@activepieces/piece-wrike";
+  const wrikeStatus = useWrikeStatus(isWrike), managedWrike = wrikeStatus?.connected === true;
   const isLinear = pieceName === "@activepieces/piece-linear";
   const linearStatus = useLinearStatus(isLinear), managedLinear = linearStatus?.connected === true;
   const isClickUp = pieceName === "@activepieces/piece-clickup";
@@ -3908,6 +3921,8 @@ function ConnectionPicker({
   const figmaStatus = useFigmaStatus(isFigma), managedFigma = figmaStatus?.connected === true;
   const isWebflow = pieceName === "@activepieces/piece-webflow";
   const managedWebflow = useWebflowStatus(isWebflow)?.connected === true;
+  const isPipedrive = pieceName === "@activepieces/piece-pipedrive";
+  const pipedriveStatus = usePipedriveStatus(isPipedrive), managedPipedrive = pipedriveStatus?.connected === true;
   const isAsana = pieceName === "@activepieces/piece-asana";
   const asanaStatus = useAsanaStatus(isAsana), managedAsana = asanaStatus?.connected === true;
   const isDropbox = pieceName === "@activepieces/piece-dropbox";
@@ -3918,10 +3933,11 @@ function ConnectionPicker({
   const isSlack = pieceName === "@activepieces/piece-slack";
   const slackStatus = useSlackStatus(isSlack), managedSlack = slackStatus?.connected === true;
   // Only point at the controls above when they actually offer hosted setup on this instance.
-  const hostedSetup = [typeformStatus, calendlyStatus, airtableStatus, intercomStatus, notionStatus, linearStatus, mondayStatus, todoistStatus, figmaStatus, asanaStatus, dropboxStatus, clickUpStatus, gitHubStatus, slackStatus].some(status => status?.configured === true);
+  const hostedSetup = [pipedriveStatus, wrikeStatus, typeformStatus, calendlyStatus, airtableStatus, intercomStatus, notionStatus, linearStatus, mondayStatus, todoistStatus, figmaStatus, asanaStatus, dropboxStatus, clickUpStatus, gitHubStatus, slackStatus].some(status => status?.configured === true);
   return (
     <div className="wf-props__connection">
       {isGitHub && <GitHubConnection optional onPick={onPick} currentValue={currentValue} />}
+      {isWrike && <><WrikeConnection optional onPick={onPick} currentValue={currentValue} />{managedWrike && <p className="wf-props__hint">Find, create and update tasks, or add comments. Use Wrike API IDs or workflow variables. Assignees, scheduling, custom fields, files and instant triggers are not supported yet.</p>}</>}
       {isLinear && <><LinearConnection optional onPick={onPick} currentValue={currentValue} />
         {managedLinear && <p className="wf-props__hint">Find, create and update issues, or add comments as your connected user. Use issue keys such as ENG-123 or model UUIDs copied from Linear. Deletion, project actions and instant triggers are not enabled.</p>}</>}
       {isTypeform && <><TypeformConnection optional onPick={onPick} currentValue={currentValue} />
@@ -3947,14 +3963,16 @@ function ConnectionPicker({
         {managedFigma && <p className="wf-props__hint">Read files and comments, or post feedback as the connected user. Use a Figma file link, key or workflow variable. API limits depend on your Figma plan.</p>}</>}
       {isWebflow && <><WebflowConnection optional onPick={onPick} currentValue={currentValue} />
         {managedWebflow && <p className="wf-props__hint">Find and read CMS items, and create or update drafts in the primary language. Publishing, archiving, media uploads and reference fields are not available.</p>}</>}
+      {isPipedrive && <><PipedriveConnection optional onPick={onPick} currentValue={currentValue} />
+        {managedPipedrive && <p className="wf-props__hint">Use Get, Search, Create or Update for people and deals. Legacy Find actions, custom fields, ownership, visibility, deletion and triggers are not enabled for this connection.</p>}</>}
       {isAsana && <><AsanaConnection optional onPick={onPick} currentValue={currentValue} />
         {managedAsana && <p className="wf-props__hint">This account supports creating, reading and updating tasks, listing project tasks and adding comments. Use Asana IDs or workflow variables. Tags are not supported yet.</p>}</>}
       {isSlack && <SlackConnection optional onPick={onPick} currentValue={currentValue} />}
       <label className="wf-props__field-label">
-        {managedMonday ? "monday.com account" : managedCalendly ? "Calendly account" : managedLinear ? "Linear account" : authDisplayName}
-        {!managedMonday && !managedCalendly && !managedLinear && <span className="wf-props__connection-type">({authType})</span>}
+        {managedPipedrive ? "Pipedrive account" : managedWrike ? "Wrike account" : managedMonday ? "monday.com account" : managedCalendly ? "Calendly account" : managedLinear ? "Linear account" : authDisplayName}
+        {!managedPipedrive && !managedWrike && !managedMonday && !managedCalendly && !managedLinear && <span className="wf-props__connection-type">({authType})</span>}
       </label>
-      {matching.length === 0 && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable && !managedFigma && !managedWebflow ? (
+      {matching.length === 0 && !managedPipedrive && !managedWrike && !managedMonday && !managedTodoist && !managedLinear && !managedNotion && !managedTypeform && !managedCalendly && !managedClickUp && !managedGitHub && !managedSlack && pieceName !== "@activepieces/piece-trello" && pieceName !== "@activepieces/piece-mailchimp" && !managedDropbox && !managedAsana && !managedIntercom && !managedAirtable && !managedFigma && !managedWebflow ? (
         <p className="wf-props__hint wf-props__connection-empty">
           {hostedSetup
             ? `Connect ${pieceDisplayName} using the connection controls above, then choose Use this account. You can also manage app connections in the Connections panel.`
@@ -5126,15 +5144,9 @@ function numberValueToText(value: unknown): string {
 }
 
 /**
- * JSON field: holds the raw text in local state so the user can type
- * intermediate (un-parseable) states. On valid JSON, propagates the parsed
- * object up. On invalid JSON, holds the text and shows an error chip.
- *
- * Critically, we track our last self-propagated value via a ref so that
- * round-trips like (user types `{"a":1}` → we propagate `{a:1}` → parent
- * re-renders with the new value → memoized `initial` becomes `{\n  "a": 1\n}`)
- * do NOT clobber the user's whitespace. We only re-sync `text` when `value`
- * differs from what we last sent up (i.e., an external change: load, reset).
+ * Preserve raw JSON in the editor buffer across node selections. Only parsed
+ * values enter the graph; invalid text still marks the editor dirty and blocks
+ * writes. Standalone fields use local state with the same parsing behavior.
  */
 function JsonField({
   field,
@@ -5147,39 +5159,33 @@ function JsonField({
   onChange: (next: unknown) => void;
   labelEl: React.ReactNode;
 }): React.ReactElement {
-  const [text, setText] = useState(() => jsonValueToText(value));
-  const [parseError, setParseError] = useState<string | null>(null);
+  const drafts = useContext(JsonInputDraftContext);
+  const key = jsonInputKey(drafts?.scope ?? '', field.name);
+  const [local, setLocal] = useState({ text: jsonValueToText(value), error: null as string | null });
   const lastPropagatedRef = useRef<unknown>(value);
-
+  // A stored draft typed against a value that has since changed elsewhere
+  // (undo, a mapped field) is stale: show the graph value. The editor hook
+  // releases it from the buffer.
+  const base = jsonInputBase(value);
+  const held = drafts?.drafts[key];
+  const stored = held && held.base === base ? held : undefined;
+  const text = drafts ? stored?.text ?? jsonValueToText(value) : local.text;
+  const parseError = drafts ? stored?.error ?? null : local.error;
+  const errorId = useId();
   useEffect(() => {
-    if (value === lastPropagatedRef.current) return; // self-induced; keep local text/whitespace
-    setText(jsonValueToText(value));
-    setParseError(null);
+    if (value === lastPropagatedRef.current) return;
+    setLocal({ text: jsonValueToText(value), error: null });
     lastPropagatedRef.current = value;
   }, [value]);
-
-  // Variable-picker hookup: insertions arrive as raw template text. We
-  // splice them into the textarea contents and re-run the parse path so
-  // a snippet like `{ "to": {{step_3.email}} }` propagates as a parse
-  // error (until the user closes the template) which is the right
-  // signal -- the picker DOESN'T quote the template for the user.
-  const varProps = useVariableFieldProps(text, (next) => {
-    setText(next);
-    if (next.trim() === "") {
-      setParseError(null);
-      lastPropagatedRef.current = undefined;
-      onChange(undefined);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(next);
-      setParseError(null);
-      lastPropagatedRef.current = parsed;
-      onChange(parsed);
-    } catch (err) {
-      setParseError((err as Error).message);
-    }
-  });
+  const change = (next: string) => {
+    let parsed: unknown, error: string | null = null;
+    try { parsed = next.trim() === '' ? undefined : JSON.parse(next); }
+    catch (cause) { error = (cause as Error).message; }
+    const draft = { text: next, error, base: error ? base : jsonInputBase(parsed) };
+    setLocal(draft); drafts?.set(key, draft);
+    if (!error) { lastPropagatedRef.current = parsed; onChange(parsed); }
+  };
+  const varProps = useVariableFieldProps(text, change);
 
   return (
     <label className="wf-props__field">
@@ -5189,27 +5195,12 @@ function JsonField({
         value={text}
         placeholder={field.placeholder ?? "{}"}
         {...varProps}
-        onChange={(e) => {
-          const next = e.target.value;
-          setText(next);
-          if (next.trim() === "") {
-            setParseError(null);
-            lastPropagatedRef.current = undefined;
-            onChange(undefined);
-            return;
-          }
-          try {
-            const parsed = JSON.parse(next);
-            setParseError(null);
-            lastPropagatedRef.current = parsed;
-            onChange(parsed);
-          } catch (err) {
-            setParseError((err as Error).message);
-          }
-        }}
+        aria-invalid={!!parseError}
+        aria-describedby={parseError ? errorId : undefined}
+        onChange={(e) => change(e.target.value)}
       />
       {parseError ? (
-        <span className="wf-props__field-help wf-props__field-help--error">JSON parse: {parseError}</span>
+        <span id={errorId} role="alert" className="wf-props__field-help wf-props__field-help--error">JSON parse: {parseError}</span>
       ) : field.description ? (
         <span className="wf-props__field-help">{field.description}</span>
       ) : null}

@@ -524,3 +524,94 @@ test('AppSumo: unavailable optional connections do not block draft editing', asy
   expect(editor.version?.state).toBe('DRAFT');
   expect(editor.connections).toEqual([]);
 });
+
+
+test('invalid JSON stays dirty across node changes, blocks commands and can be discarded or repaired', async () => {
+  fixture = makeCanvasFixture(false);
+  const { WorkflowCanvasRoom } = await import('./WorkflowCanvasRoom');
+  const shell = { mode: 'preview', route: { room: 'workflow', selection: { flowId: 'meeting' } }, navigate() {} } as unknown as BriefShellPort;
+  let dirty = false, published = 0, ran = 0;
+  await React.act(async () => root.render(<div className="brief-root"><WorkflowCanvasRoom shell={shell} binding={{
+    source: 'fixture', scopeId: 'json-buffer', flowId: 'meeting', versionId: fixture.versionId, capabilities: caps, request: fixture.request,
+    onDirtyChange(value) { dirty = value; }, publish: async () => { published++; }, run: async () => { ran++; return { ok: true, message: '' }; },
+  }} /></div>));
+  const button = (name: string) => [...host.querySelectorAll('button')].find(b => b.querySelector('.brief-button__label')?.textContent === name)!;
+  const select = async (id: string) => { await React.act(async () => host.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`)!.click()); };
+  const field = () => [...host.querySelectorAll('label')].find(l => l.textContent?.startsWith('Payload'))!.querySelector('textarea')!;
+  const type = async (text: string) => { await React.act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field(), text);
+    field().dispatchEvent(new Event('input', { bubbles: true }));
+  }); };
+  expect(button('Publish version').disabled).toBe(false);
+  await select('draft'); await type('{bad json');
+  expect(dirty).toBe(true); expect(host.textContent).toContain('Fix the invalid JSON (payload in step draft)');
+  expect(field().getAttribute('aria-invalid')).toBe('true');
+  for (const name of ['Save changes', 'Publish version', 'Run workflow', 'Workflows']) expect(button(name).disabled).toBe(true);
+  await select('notes'); await select('draft'); expect(field().value).toBe('{bad json');
+  await React.act(async () => button('Discard').click());
+  expect(dirty).toBe(false); expect(JSON.parse(field().value)).toEqual({ source: '{{notes.content}}' });
+  await type('{bad again'); await type('{"price":0,"active":false}');
+  expect(field().getAttribute('aria-invalid')).toBe('false'); expect(button('Save changes').disabled).toBe(false);
+  await React.act(async () => button('Save changes').click());
+  expect(dirty).toBe(false); expect(fixture.snapshot().version.trigger.nextAction!.nextAction!.settings!.input!.payload).toEqual({ price: 0, active: false });
+  expect(published).toBe(0); expect(ran).toBe(0);
+});
+
+test('invalid raw JSON cannot be saved programmatically and deleted steps release their buffer', async () => {
+  const { jsonInputScope, jsonInputKey } = await import('../../../v2/rooms/workflows/json-input-drafts');
+  await mount(); const step = editor.allSteps.find(s => s.step.name === 'draft')!.step;
+  await React.act(async () => editor.setJsonInputDraft(jsonInputKey(jsonInputScope(step), 'payload'), { text: '{bad', error: 'invalid JSON', base: JSON.stringify(step.settings!.input!.payload) }));
+  expect(editor.dirty).toBe(true);
+  await React.act(async () => expect((await editor.save()).ok).toBe(false));
+  expect(fixture.requests.every(r => r.method === 'GET')).toBe(true);
+  await React.act(async () => editor.deleteStep('draft'));
+  expect(editor.hasInvalidJson).toBe(false);
+});
+
+test('undo of an unrelated delete keeps invalid JSON typed in another step', async () => {
+  fixture = makeCanvasFixture(false);
+  const { WorkflowCanvasRoom } = await import('./WorkflowCanvasRoom');
+  const shell = { mode: 'preview', route: { room: 'workflow', selection: { flowId: 'meeting' } }, navigate() {} } as unknown as BriefShellPort;
+  await React.act(async () => root.render(<div className="brief-root"><WorkflowCanvasRoom shell={shell} binding={{
+    source: 'fixture', scopeId: 'json-undo', flowId: 'meeting', versionId: fixture.versionId, capabilities: caps, request: fixture.request,
+    onDirtyChange() {}, publish: async () => {}, run: async () => ({ ok: true, message: '' }),
+  }} /></div>));
+  const button = (name: string) => [...host.querySelectorAll('button')].find(b => b.querySelector('.brief-button__label')?.textContent === name)!;
+  const node = (id: string) => host.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
+  const select = async (id: string) => { await React.act(async () => node(id)!.click()); };
+  const field = () => [...host.querySelectorAll('label')].find(l => l.textContent?.startsWith('Payload'))!.querySelector('textarea')!;
+  await select('draft');
+  await React.act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field(), '{bad json');
+    field().dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await select('send');
+  const confirm = window.confirm; window.confirm = () => true;
+  try { await React.act(async () => host.querySelector<HTMLButtonElement>('button[title="Remove this step from the chain"]')!.click()); }
+  finally { window.confirm = confirm; }
+  expect(node('send')).toBeNull();
+  await React.act(async () => button('Undo').click());
+  expect(node('send')).not.toBeNull();
+  await select('draft');
+  expect(field().value).toBe('{bad json');
+  expect(field().getAttribute('aria-invalid')).toBe('true');
+  expect(button('Save changes').disabled).toBe(true);
+});
+
+test('raw JSON is released when its field changes elsewhere, including an undo that rewrites it', async () => {
+  const { jsonInputScope, jsonInputKey, jsonInputBase } = await import('../../../v2/rooms/workflows/json-input-drafts');
+  fixture = makeCanvasFixture(false); await mount();
+  const draftStep = () => editor.allSteps.find(s => s.step.name === 'draft')!.step;
+  const key = jsonInputKey(jsonInputScope(draftStep()), 'payload');
+  const typeBad = async () => { await React.act(async () => editor.setJsonInputDraft(key, { text: '{bad', error: 'invalid JSON', base: jsonInputBase(draftStep().settings!.input!.payload) })); };
+  await typeBad(); expect(editor.invalidJson).toEqual([{ step: 'draft', field: 'payload' }]);
+  expect((await editor.save()).message).toContain('payload in step draft');
+  await React.act(async () => editor.updateStepInput('draft', 'payload', { mapped: true }));
+  expect(editor.hasInvalidJson).toBe(false); expect(editor.jsonInputDrafts).toEqual({});
+  await React.act(async () => editor.deleteStep('send'));
+  await React.act(async () => editor.updateStepInput('draft', 'payload', { typed: 1 }));
+  await typeBad(); expect(editor.hasInvalidJson).toBe(true);
+  await React.act(async () => { editor.undo(); });
+  expect(draftStep().settings!.input!.payload).toEqual({ mapped: true });
+  expect(editor.hasInvalidJson).toBe(false);
+});
