@@ -37,10 +37,10 @@ import { createCompositionRoutes } from './composition-routes';
 import type { BriefCompositionProvider } from './composition';
 
 /** Mounted only inside the daemon's existing authenticated API route table. */
-export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities, activation?: OpportunityActivation, decisions?: DecisionQueue, recommendations?: Recommendations, documents?: DecisionDocuments, goals?: GoalMeasurements, outcomes?: Outcomes, memory?: MemoryStream, memoryUsage?: MemoryUsageLedger, memoryForget?: MemoryForget, workflowRemoval?: WorkflowRemoval, workflowContext?: WorkflowContext, connections?: ConnectedWorkspace, profileSettings?: ProfileSettings, host?: { generation: string; installMode(): 'self' | 'hosted'; dashboard?(): 'brief' | 'legacy' }) {
+export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities, activation?: OpportunityActivation, decisions?: DecisionQueue, recommendations?: Recommendations, documents?: DecisionDocuments, goals?: GoalMeasurements, outcomes?: Outcomes, memory?: MemoryStream, memoryUsage?: MemoryUsageLedger, memoryForget?: MemoryForget, workflowRemoval?: WorkflowRemoval, workflowContext?: WorkflowContext, connections?: ConnectedWorkspace, profileSettings?: ProfileSettings, host?: { generation: string; workspaceId: string; installMode(): 'self' | 'hosted'; dashboard?(): 'brief' | 'legacy' }) {
   return {
     '/api/brief/host': { GET: () => {
-      const response = host ? json({ schemaVersion: 1, scopeId: DEFAULT_IDS.project, generation: host.generation,
+      const response = host ? json({ schemaVersion: 1, scopeId: DEFAULT_IDS.project, workspaceId: host.workspaceId, generation: host.generation,
         installMode: host.installMode(), dashboard: host.dashboard?.() ?? 'legacy', capabilities: capabilities.snapshot() }) : json({ state: 'unsupported' }, 501);
       response.headers.set('Cache-Control', 'no-store'); return response;
     } },

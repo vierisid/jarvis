@@ -102,6 +102,7 @@ import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
 import { classifyEvent } from "./event-classifier.ts";
 import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
+import { loadWorkspaceId } from "./workspace-id.ts";
 import { createPostSetupServices } from "./post-setup-services.ts";
 import { createDaemonOnboardingAssembly } from "../onboarding-next/runtime/daemon-assembly.ts";
 import { runtimeModules } from "../onboarding-next/runtime/generated/catalog.ts";
@@ -4902,6 +4903,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       briefOpportunityActivation,
       briefCapabilities,
       daemonStartedAt: Date.now(),
+      workspaceId: loadWorkspaceId(config.dataDir),
       healthMonitor,
       agentService,
       config: jarvisConfig,

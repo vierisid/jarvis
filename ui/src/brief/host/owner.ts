@@ -19,12 +19,18 @@ import { openGoalCreation } from './goal-creation';
 import { DESTINATIONS } from '../navigation/destinations';
 import type { SidecarInfo } from '../../v2/rooms/settings/useSettingsData';
 
-export interface HostDescriptor { schemaVersion: 1; scopeId: string; generation: string; installMode: 'self' | 'hosted'; dashboard?: 'brief' | 'legacy'; capabilities: unknown }
+/** `workspaceId` persists across daemon restarts of one data directory; `generation` changes every boot. */
+export interface HostDescriptor { schemaVersion: 1; scopeId: string; workspaceId: string; generation: string; installMode: 'self' | 'hosted'; dashboard?: 'brief' | 'legacy'; capabilities: unknown }
 export function readHost(value: unknown): HostDescriptor {
   const v = value as HostDescriptor;
-  if (!v || v.schemaVersion !== 1 || typeof v.scopeId !== 'string' || !v.scopeId || typeof v.generation !== 'string' || !v.generation
+  if (!v || v.schemaVersion !== 1 || typeof v.scopeId !== 'string' || !v.scopeId || typeof v.workspaceId !== 'string' || !v.workspaceId || typeof v.generation !== 'string' || !v.generation
     || !['self', 'hosted'].includes(v.installMode) || (v.capabilities as any)?.contractVersion !== 1) throw Error('Dashboard host unavailable');
   return v;
+}
+/** Whether a refreshed descriptor still belongs to the owner mounted for `initial`. */
+export function sameOwner(initial: HostDescriptor, next: HostDescriptor): boolean {
+  return next.scopeId === initial.scopeId && next.workspaceId === initial.workspaceId && next.installMode === initial.installMode
+    && (next.dashboard ?? 'legacy') === (initial.dashboard ?? 'legacy');
 }
 export function createDashboardOwner(initial: HostDescriptor, ports: {
   storage: Storage; fetch?: typeof fetch; changed(): void; unauthorized(): void; explain(message: string): void;
@@ -51,9 +57,11 @@ export function createDashboardOwner(initial: HostDescriptor, ports: {
   const device = deviceNavigation(navigation, () => devices);
   const reconciliation = new BriefReconciliationClient({ capabilities: async signal => {
     const next = readHost(await transport.json('/api/brief/host', { signal }));
-    // A generation identifies a daemon boot, not an authenticated workspace.
-    // Keep mounted edit buffers on restart; scope changes and HTTP 401 still retire them.
-    if (next.scopeId !== initial.scopeId) { retire(); ports.unauthorized(); throw Error('Dashboard ownership changed'); }
+    // A generation identifies a daemon boot; the workspace id persists across
+    // restarts of one data directory. Keep mounted edit buffers on a restart of
+    // the same workspace. Another workspace, scope, install mode or dashboard
+    // choice (read once at mount) retires them, as does HTTP 401.
+    if (!sameOwner(initial, next)) { retire(); ports.unauthorized(); throw Error('Dashboard ownership changed'); }
     descriptor = next; navigation.setAccess(next.capabilities);
     account.profile.setAccess(isBriefCapabilityEnabled(next.capabilities, 'profileSettings')); ports.changed(); return next.capabilities;
   } });

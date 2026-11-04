@@ -102,7 +102,7 @@ export function ConnectedDashboard({ route, retained = null, integration = false
   }, [attempt, initialDescriptor]);
   if (!descriptor) return <main className="brief-root brief-foundation"><h1>{error ? 'Dashboard unavailable' : 'Opening your workspace…'}</h1>
     {error && <><p>Your saved work is retained.</p><button onClick={() => retry(n => n + 1)}>Reconnect</button></>}</main>;
-  return <OwnedDashboard key={JSON.stringify([descriptor.scopeId, descriptor.generation])} {...{ descriptor, route, retained, integration, legacy, installGuard }} />;
+  return <OwnedDashboard key={JSON.stringify([descriptor.scopeId, descriptor.workspaceId])} {...{ descriptor, route, retained, integration, legacy, installGuard }} />;
 }
 function OwnedDashboard({ descriptor, route, retained, integration, legacy, installGuard }: {
   descriptor: HostDescriptor; route: BriefRoute; retained: RoomKey | null; integration: boolean; legacy: ReactNode; installGuard(owner: DashboardOwner | null): void;
