@@ -1,6 +1,10 @@
 import type { WorkflowRequest } from "../../../v2/rooms/workflows/WorkflowEditorEnvironment";
 /** Editable-version pin, not a new server contract. F-21 supplies the scoped,
  * redacted request. A changed latest draft must never silently become editable. */
+/** A cancelled or interrupted read says nothing about the workflow; the editor retries or offers Retry. */
+export function isInterruptedRequest(error: unknown, init?: RequestInit): boolean {
+  return !!init?.signal?.aborted || (error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name));
+}
 export function versionBoundRequest(
   request: WorkflowRequest,
   flowId: string,
