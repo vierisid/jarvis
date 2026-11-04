@@ -2507,6 +2507,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         }
       },
     },
+    '/api/integrations/wrike/folders': {
+      GET: async (req: Request) => {
+        const {wrikeFolderOptions, WrikeOptionsInputError} = await import('../integrations/wrike-options');
+        const query = new URL(req.url).searchParams;
+        try { return json(await wrikeFolderOptions(ctx.config, query.get('title'), query.get('cursor'))); }
+        catch(error) { return json({error:error instanceof WrikeOptionsInputError ? error.message : 'Could not load Wrike folders. Check your connection or enter an API ID.'}, error instanceof WrikeOptionsInputError ? 400 : 502); }
+      },
+    },
+    '/api/integrations/wrike': {
+      GET: async () => {
+        const {wrikeStatus} = await import('../integrations/wrike-connection');
+        return json(wrikeStatus(ctx.config));
+      },
+    },
     '/api/integrations/linear': {
       GET: async () => {
         const {linearStatus} = await import('../integrations/linear-connection');
