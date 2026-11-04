@@ -1,4 +1,4 @@
-import { connectionProviderForPiece, isConnectionProvider } from '../../../../../src/integrations/connection-providers';
+import { CONNECTION_PROVIDER_NAMES, connectionProviderForPiece, isConnectionProvider, type ConnectionProvider } from '../../../../../src/integrations/connection-providers';
 import { ManagedConnectionRow } from '../../integrations/ManagedConnectionRow';
 /**
  * Connections panel: list `app_connection` rows + registered Jarvis sources,
@@ -9,7 +9,7 @@ import { ManagedConnectionRow } from '../../integrations/ManagedConnectionRow';
  * shows metadata + accepts new values via the add form.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { CONNECTION_SETUP_EVENT, takePieceSetup, type PieceSetupRequest } from './connection-setup-request';
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { requestSettingsTab } from "../../shell/settings-tab-request";
@@ -34,6 +34,17 @@ export function ConnectionsPanel(): React.ReactElement {
     return () => window.removeEventListener(CONNECTION_SETUP_EVENT, apply);
   }, []);
   const selectedProvider = setup?.kind === 'hosted_integration' ? setup.provider : null;
+  // Providers this instance cannot set up (every hosted-only one on a
+  // self-hosted install) collapse into one line instead of a row each (#1246).
+  const [noSetupPath, setNoSetupPath] = useState<ReadonlySet<ConnectionProvider>>(() => new Set());
+  const reportNoSetupPath = useCallback((provider: ConnectionProvider, none: boolean) => setNoSetupPath(current => {
+    if (current.has(provider) === none) return current;
+    const next = new Set(current);
+    if (none) next.add(provider); else next.delete(provider);
+    return next;
+  }), []);
+  const listed = conn.jarvisSources.flatMap(s => isConnectionProvider(s.id) && s.id !== selectedProvider ? [s.id] : []);
+  const unavailableNames = listed.filter(id => noSetupPath.has(id)).map(id => CONNECTION_PROVIDER_NAMES[id]);
   const [toast, setToast] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 
   const flash = (tone: "ok" | "warn", text: string): void => {
@@ -67,9 +78,11 @@ export function ConnectionsPanel(): React.ReactElement {
 
       {selectedProvider && <ManagedConnectionRow key={setup?.requestId} provider={selectedProvider} refreshKey={refreshKey} />}
       {conn.jarvisSources.some(s => isConnectionProvider(s.id)) && <div className="wf-conn__managed">
-        <p className="wf-conn__subtitle">Connect your apps securely in your browser. Your connected accounts are available to workflow steps.</p>
-        {conn.jarvisSources.filter(s => isConnectionProvider(s.id) && s.id !== selectedProvider).map(s => isConnectionProvider(s.id)
-          ? <ManagedConnectionRow key={s.id} provider={s.id} refreshKey={refreshKey} /> : null)}
+        {(selectedProvider || listed.some(id => !noSetupPath.has(id))) && <p className="wf-conn__subtitle">Connect your apps securely in your browser. Your connected accounts are available to workflow steps.</p>}
+        {listed.map(id => <ManagedConnectionRow key={id} provider={id} refreshKey={refreshKey} onNoSetupPath={reportNoSetupPath} />)}
+        {unavailableNames.length > 0 && <p className="wf-conn__subtitle">
+          One-click setup is not available on this instance for {unavailableNames.join(', ')}.
+        </p>}
       </div>}
       {conn.jarvisSources.some(s => !isConnectionProvider(s.id)) && <div className="wf-conn__sources">
         <span className="wf-conn__sources-label">Other registered sources:</span>
