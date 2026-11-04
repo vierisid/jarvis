@@ -315,7 +315,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "27"; // v27: managed Webflow CMS item output contracts; v26: Figma file/comment output contracts; v25: reusable child call flow_ref; v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts; v20: Typeform form and response output contracts; v21: Notion page output contracts; v22: Linear issue and comment output contracts; v23: Todoist task and completion output contracts; v24: managed monday.com item output contracts
+export const CATALOG_SCHEMA_VERSION = "28"; // Managed Help Scout customer, conversation and note outputs. // v27: managed Webflow CMS item output contracts; v26: Figma file/comment output contracts; v25: reusable child call flow_ref; v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts; v20: Typeform form and response output contracts; v21: Notion page output contracts; v22: Linear issue and comment output contracts; v23: Todoist task and completion output contracts; v24: managed monday.com item output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -1064,6 +1064,14 @@ export function enrichJarvisCatalogEntry(entry: PieceCatalogEntry): void {
       post_comment:{success:true,request_body:{message:'Design feedback'},response_body:comment},
     };
     for (const [name,sample] of Object.entries(samples)) if (entry.actions[name]) entry.actions[name]!.outputSample=sample;
+  }
+  if (entry.name === '@activepieces/piece-help-scout') {
+    const samples = {
+      find_customer:{found:true,data:{id:123,firstName:'Example',lastName:'Customer'}},
+      find_conversation:{found:true,data:{id:456,number:12,mailboxId:34,subject:'Example request',status:'active',preview:'Example message',primaryCustomer:{id:123,email:'customer@example.test'}}},
+      add_note:{id:'789'},
+    };
+    for(const [name,sample] of Object.entries(samples))if(entry.actions[name])entry.actions[name]!.outputSample=sample;
   }
   if (entry.name === '@activepieces/piece-webflow') {
     const item = {id:'580e64008c9a982ac9b8b754',fieldData:{name:'Example draft',slug:'example-draft'},isDraft:true,isArchived:false,cmsLocaleId:'653ad57de882f528b32e810e',lastPublished:null,lastUpdated:'2026-10-29T12:00:00Z',createdOn:'2026-10-29T12:00:00Z'};

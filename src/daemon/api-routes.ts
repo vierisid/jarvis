@@ -2563,6 +2563,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/integrations/figma': {
       GET: async () => { const {figmaStatus} = await import('../integrations/figma-connection'); return json(figmaStatus(ctx.config)); },
     },
+    '/api/integrations/help-scout': {
+      GET: async () => {
+        const {helpScoutStatus} = await import('../integrations/help-scout-connection');
+        return json(helpScoutStatus(ctx.config));
+      },
+    },
     '/api/integrations/webflow': {
       GET: async () => {
         const {webflowStatus} = await import('../integrations/webflow-connection');

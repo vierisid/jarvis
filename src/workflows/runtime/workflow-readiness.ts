@@ -1,3 +1,4 @@
+import { isHelpScoutReference, helpScoutInputSchema } from "./managed-help-scout-inputs";
 import { isMondayReference, mondayInputSchema } from "./managed-monday-inputs";
 import {managedAirtableIssue} from './managed-airtable';
 import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
@@ -539,9 +540,18 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           if (!sub) issue(node, `settings.${key}`, 'ACTION', `Unknown ${key} for ${pieceName}`);
           else if (object(input)) {
             const schema = root ? sub.inputSchema
+              : isHelpScoutReference(pieceName, input.auth) ? helpScoutInputSchema(settings.actionName) ?? sub.inputSchema
               : isWebflowReference(pieceName, input.auth) ? webflowInputSchema(settings.actionName) ?? sub.inputSchema
               : isMondayReference(pieceName, input.auth) ? mondayInputSchema(settings.actionName) ?? sub.inputSchema
               : sub.inputSchema;
+            if (!root && isHelpScoutReference(pieceName, input.auth) && settings.actionName === 'find_conversation') {
+              if (emptyInput(input.conversationId)) {
+                if (emptyInput(input.mailboxId)) needsSetup(node, 'settings.input.mailboxId', 'Choose a Conversation ID, or both Inbox ID and Conversation number');
+                if (emptyInput(input.number)) needsSetup(node, 'settings.input.number', 'Choose a Conversation ID, or both Inbox ID and Conversation number');
+              } else if (!emptyInput(input.mailboxId) || !emptyInput(input.number)) {
+                issue(node, 'settings.input.conversationId', 'INPUT', 'Choose a Conversation ID, or an inbox and number, not both');
+              }
+            }
             for (const field of schema?.fields ?? []) {
               const value = input[field.name];
               const path = `settings.input.${field.name}`;

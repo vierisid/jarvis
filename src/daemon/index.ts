@@ -8,6 +8,7 @@ import { mailchimpStatus } from "../integrations/mailchimp-connection";
 import { githubStatus } from '../integrations/github-connection';
 import { trelloStatus } from "../integrations/trello-connection";
 import { figmaStatus } from '../integrations/figma-connection';
+import { helpScoutStatus } from '../integrations/help-scout-connection';
 import { webflowStatus } from '../integrations/webflow-connection';
 import { asanaStatus } from '../integrations/asana-connection';
 import { todoistStatus } from '../integrations/todoist-connection';
@@ -4785,6 +4786,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       calendly: () => calendlyStatus(jarvisConfig),
       figma: () => figmaStatus(jarvisConfig),
       webflow: () => webflowStatus(jarvisConfig),
+      "help-scout": () => helpScoutStatus(jarvisConfig),
       slack: () => slackStatus(jarvisConfig),
       linear: () => linearStatus(jarvisConfig),
       airtable: () => airtableStatus(jarvisConfig),
@@ -5043,6 +5045,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentialResolver.register(new JarvisFigmaConnectionSource(jarvisConfig));
       const { JarvisWebflowConnectionSource } = await import("../workflows/credentials/webflow-source");
       credentialResolver.register(new JarvisWebflowConnectionSource(jarvisConfig));
+      const { JarvisHelpScoutConnectionSource } = await import("../workflows/credentials/help-scout-source");
+      credentialResolver.register(new JarvisHelpScoutConnectionSource(jarvisConfig));
       const { JarvisGitHubConnectionSource } = await import("../workflows/credentials/github-source");
       credentialResolver.register(new JarvisGitHubConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisDropboxConnectionSource } = await import("../workflows/credentials/dropbox-source");

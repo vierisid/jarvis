@@ -4,7 +4,7 @@ export const HOSTED_CONNECTION_PROVIDERS = {
   dropbox: 'Dropbox', asana: 'Asana', intercom: 'Intercom', typeform: 'Typeform', airtable: 'Airtable',
   notion: 'Notion', calendly: 'Calendly', linear: 'Linear', todoist: 'Todoist', monday: 'monday.com',
   figma: 'Figma',
-  webflow: 'Webflow',
+  webflow: 'Webflow', 'help-scout': 'Help Scout',
 } as const;
 export type HostedConnectionProvider = keyof typeof HOSTED_CONNECTION_PROVIDERS;
 export type ConnectionProvider = HostedConnectionProvider | 'google';

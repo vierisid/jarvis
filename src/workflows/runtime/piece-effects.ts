@@ -87,7 +87,7 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     || isHubspotContact(piece, action) || (piece === '@activepieces/piece-github' && ['github_create_issue', 'update_issue', 'createCommentOnAIssue'].includes(String(action)))
     || (piece === DROPBOX_PIECE && dropboxTracked(action))
     || (piece === '@activepieces/piece-trello' && (action === 'create_card' || action === 'move_card'))
-    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE) && managedPieceChanges(piece, action))
+    || ((piece === CLICKUP_PIECE || piece === MAILCHIMP_PIECE || piece === ASANA_PIECE || piece === INTERCOM_PIECE || piece === CALENDLY_PIECE || piece === TYPEFORM_PIECE || piece === LINEAR_PIECE || piece === TODOIST_PIECE || piece === MONDAY_PIECE || piece === FIGMA_PIECE || piece === WEBFLOW_PIECE || piece === HELP_SCOUT_PIECE) && managedPieceChanges(piece, action))
     // A Webflow refund moves money and is not idempotent: never repeat one whose outcome is unknown.
     || (piece === WEBFLOW_PIECE && action === 'refund_order')
     || (piece === '@activepieces/piece-gmail' && (GMAIL_TRACKED_SENDS.has(action) || action === 'gmail_add_label_to_email'))
@@ -109,6 +109,7 @@ const INTERCOM_PIECE = '@activepieces/piece-intercom';
 const TYPEFORM_PIECE = '@activepieces/piece-typeform';
 const LINEAR_PIECE = '@activepieces/piece-linear';
 const MONDAY_PIECE = '@activepieces/piece-monday';
+const HELP_SCOUT_PIECE = "@activepieces/piece-help-scout";
 const FIGMA_PIECE = '@activepieces/piece-figma';
 const WEBFLOW_PIECE = '@activepieces/piece-webflow';
 /** Every ClickUp, Mailchimp, Asana, Intercom, Calendly, Typeform, Linear, Todoist, monday.com, Figma or Webflow action that changes the account (write,
@@ -847,6 +848,12 @@ interface ResolvedPieceAction {
  * added upstream fall back to `modify_settings`.
  */
 export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
+  // Every action in published Help Scout 0.2.1; managed credentials enable three.
+  catalogId:'help-scout',pieceName:HELP_SCOUT_PIECE,unknownActionCategory:'modify_settings',
+  targetProps:['conversationId','mailboxId','number','email','text','userId','subject','status','assignTo','query'],
+  categories:{read_data:['find_customer','find_conversation','find_user'],write_data:['add_note','create_customer'],
+    send_email:['create_conversation','send_reply'],modify_settings:['update_customer_properties','custom_api_call']},
+}, {
   // Figma: every action of the pinned 0.6.3 bundle (`figma-engine.test.ts`
   // checks the list against the installed package). A comment is shown to
   // everyone with access to the file. The managed `jarvis:figma` connection runs
