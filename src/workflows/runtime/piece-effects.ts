@@ -1152,18 +1152,20 @@ export const MANAGED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [{
       'update_allocation', 'update_custom_field', 'update_custom_field_enum_option', 'update_project_brief',
       'update_section', 'update_tag', 'update_task', 'update_user', 'upload_attachment'],
     // Every delete, and the removals upstream labels DESTRUCTIVE.
+    // `update_project` sits here at its worst case, an archive, and narrows by input.
     delete_data: ['delete_allocation', 'delete_attachment', 'delete_comment', 'delete_custom_field',
       'delete_membership', 'delete_project', 'delete_project_brief', 'delete_section', 'delete_status_update',
-      'delete_tag', 'delete_task', 'remove_project_members', 'remove_user_from_team', 'remove_user_from_workspace'],
+      'delete_tag', 'delete_task', 'remove_project_members', 'remove_user_from_team', 'remove_user_from_workspace',
+      'update_project'],
     // Who can see or do what: granting a person access to a project, team or
     // workspace. `add_project_followers` makes a follower who is not yet a
     // member a member (upstream's own description). The project and team
-    // creates, `duplicate_project`, `update_project` and `update_team` sit
-    // here at their worst case (team, privacy, owner, visibility, copied
-    // members or permissions) and narrow by input.
+    // creates, `duplicate_project` and `update_team` sit here at their worst
+    // case (team, privacy, visibility, copied members or permissions) and
+    // narrow by input.
     modify_settings: ['add_project_followers', 'add_project_members', 'add_user_to_team', 'add_user_to_workspace',
       'approve_access_request', 'create_membership', 'create_project', 'create_team', 'duplicate_project',
-      'instantiate_project_template', 'update_project', 'update_team'],
+      'instantiate_project_template', 'update_team'],
   },
   categoryFromInput: {
     create_project: { props: ['team', 'privacy_setting'], category: asanaCreateProjectCategory },
