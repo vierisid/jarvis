@@ -1508,7 +1508,7 @@ describe("managed Help Scout is scoped to three support actions",()=>{
  });
  afterEach(()=>rmSync(dataDir,{recursive:true,force:true}));
  const step=(actionName:string):any=>({name:"help-scout",type:"PIECE",settings:{pieceName:PIECE,actionName,input:{auth:ref}}});
- const trigger:any={name:"trigger",type:"PIECE_TRIGGER",settings:{pieceName:PIECE,triggerName:"new_person",actionName:"find_customer",input:{auth:ref}}};
+ const trigger:any={name:"trigger",type:"PIECE_TRIGGER",settings:{pieceName:PIECE,triggerName:"new_customer",actionName:"find_customer",input:{auth:ref}}};
  for(const [name,tree] of [["CODE",empty(code({conn:ref}))],["cross-piece",empty(gmail({auth:ref}))],...['send_reply','custom_api_call','create_customer'].map(n=>[n,empty(step(n))]),["trigger",trigger]]){
   test(String(name)+" cannot resolve Help Scout",async()=>{
    expect(bindingIssues(tree).length).toBeGreaterThan(0);const r=await fetchFor(runOf(tree),"jarvis:help-scout");expect(r.status).toBe(403);expect(await r.text()).not.toContain(TOKEN);
