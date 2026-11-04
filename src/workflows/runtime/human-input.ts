@@ -109,7 +109,7 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
 export function listHumanInputs(projectId: string, now = Date.now()): HumanRequest[] {
   expireHumanInputs(now);
   return getWorkflowDb().query<Row, [string, string]>(`SELECT * FROM workflow_human_request WHERE project_id=? AND (status='pending' OR id IN
-    (SELECT id FROM workflow_human_request WHERE project_id=? AND status!='pending' ORDER BY deadline DESC LIMIT 20)) ORDER BY deadline,id`).all(projectId, projectId).map(unpack);
+    (SELECT id FROM workflow_human_request WHERE project_id=? AND status!='pending' ORDER BY deadline DESC LIMIT 20)) ORDER BY deadline,id`).all(projectId, projectId).map(record => withRunOutcomes(unpack(record)));
 }
 export function resolveHumanInput(projectId: string, id: string, input: Record<string, unknown>, now = Date.now()) {
   expireHumanInputs(now);
@@ -117,7 +117,8 @@ export function resolveHumanInput(projectId: string, id: string, input: Record<s
   const result = db.transaction(() => {
     const record = row(id);
     if (!record || record.project_id !== projectId) return { status: 404, error: 'Request not found' };
-    const request = unpack(record);
+    withdrawChangedRequest(record);
+    const request = unpack(row(id)!);
     const decision = input.decision;
     const status = decision === 'submit' && request.kind === 'input' ? 'submitted'
       : decision === 'approve' && request.kind === 'approval' ? 'approved'
@@ -152,6 +153,7 @@ function expireHumanInputs(now: number) {
     THEN 'cancelled' WHEN h.deadline <= ?1 THEN 'expired' END AS next
     FROM workflow_human_request h WHERE h.status='pending' AND next IS NOT NULL`).all(now);
   for (const record of closing) save({ ...unpack(record), status: record.next });
+  for (const record of db.query<Row, []>("SELECT * FROM workflow_human_request WHERE status='pending'").all()) withdrawChangedRequest(record);
 }
 /** Durable polling also covers a response received before the worker parks. */
 export function resumeHumanInputs(now = Date.now()): number {
@@ -171,4 +173,28 @@ export function resumeHumanInputs(now = Date.now()): number {
     if (waitpoint && claimContinuation({ runId: run.id, waitpoint, kind: 'approval', resumePayload: {}, now }) === 'resumed') count++;
   }
   return count;
+}
+
+/** Derive current run state without exposing step outputs or error arguments. */
+function withRunOutcomes(request: HumanRequest): HumanRequest {
+  const rows = getWorkflowDb().query<{ id: string; flow_version_id: string; status: string }, [string, string]>(`
+    SELECT DISTINCT r.id,r.flow_version_id,r.status FROM flow_run r
+    WHERE r.id=? OR r.id IN (SELECT run_id FROM workflow_human_wait WHERE request_id=?)
+    ORDER BY r.created,r.id`).all(request.runId, request.id);
+  return { ...request, runs: rows.length ? rows.map(r => ({ runId: r.id, versionId: r.flow_version_id, status: r.status }))
+    : [{ runId: request.runId, versionId: '', status: 'UNAVAILABLE' }] };
+}
+/** A stale draft cannot consume an answer the worker will refuse to resume. */
+function withdrawChangedRequest(record: Row): void {
+  if (record.status !== 'pending') return;
+  const request = unpack(record), graph = JSON.parse(record.record).graphDigest;
+  const live = getWorkflowDb().query<{ flow_version_id: string }, [string, string]>(`
+    SELECT r.flow_version_id FROM flow_run r JOIN flow f ON f.id=r.flow_id
+    WHERE r.status IN ('RUNNING','PAUSED','QUEUED')
+    AND NOT (f.disabled_at IS NOT NULL AND r.created <= f.disabled_at)
+    AND (r.id=? OR r.id IN (SELECT run_id FROM workflow_human_wait WHERE request_id=?))`).all(request.runId, request.id);
+  if (live.length && live.every(r => {
+    const version = getFlowVersion(r.flow_version_id);
+    return !version || digest(version.trigger) !== graph;
+  })) save({ ...request, status: 'cancelled', closureReason: 'workflow_changed' });
 }

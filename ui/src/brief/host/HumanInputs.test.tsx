@@ -62,3 +62,42 @@ test('the queue does not poll while the decisions capability is off', async () =
   await React.act(async () => root.render(<Probe enabled={false} />)); expect(reads).toBe(0);
   await React.act(async () => root.render(<Probe enabled />)); expect(reads).toBe(1);
 });
+
+test('request links resolve to the actual Brief run route with the selected run and version', async () => {
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputForm request={{...request, runs:[{runId:'run / one', versionId:'version', status:'PAUSED'}]}} http={http} changed={async()=>{}} />));
+  const { resolveBriefEntry } = await import('../entry/route');
+  const link = host.querySelector('a')!;
+  expect(resolveBriefEntry(link.href)).toEqual({kind:'brief',route:{room:'workflow-runs',selection:{flowId:'flow',versionId:'version',runId:'run / one'}}});
+});
+test('failed continuation stays visible outside collapsed history after submission and refresh', async () => {
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const failed = {...request,status:'submitted' as const,answers:{progress:'Saved'},runs:[{runId:'run',versionId:'v',status:'FAILED'}]};
+  await React.act(async () => root.render(<Forms.HumanInputInbox queue={{requests:[failed],error:'',refresh:async()=>{}}} http={http} />));
+  expect(host.textContent).toContain('Workflow failed. Review the run before retrying.');
+  expect(host.querySelector('article')?.closest('details')).toBeNull();
+  expect(host.querySelector('button[type="submit"]')).toBeNull();
+  expect(host.querySelector('a')?.href).toContain('runId=run');
+});
+test('expiry keeps the focused unsent form readable, copyable and recoverable after remount without another POST', async () => {
+  let writes=0, copied='';
+  Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>{copied=text;}}});
+  const http = createHostTransport((async () => {writes++; return Response.json({});}) as unknown as typeof fetch);
+  const render=(status:HumanRequest['status'])=>root.render(<Forms.HumanInputInbox queue={{requests:[{...request,status}],error:'',refresh:async()=>{}}} http={http} />);
+  await React.act(async()=>render('pending')); await change('textarea','Keep my detailed update'); await change('input[type="number"]','0'); await change('select','false');
+  const textarea=host.querySelector('textarea') as HTMLTextAreaElement; textarea.focus();
+  await React.act(async()=>render('expired'));
+  expect(document.activeElement).toBe(textarea); expect(textarea.readOnly).toBe(true); expect(textarea.value).toBe('Keep my detailed update');
+  expect(host.textContent).toContain('deadline passed'); expect(host.querySelector('button[type="submit"]')).toBeNull();
+  await click('Copy unsent answers'); expect(copied).toContain('Count: 0'); expect(copied).toContain('Blocked: false'); expect(writes).toBe(0);
+  await React.act(async()=>root.render(null)); await React.act(async()=>render('expired'));
+  expect((host.querySelector('textarea') as HTMLTextAreaElement).value).toBe('Keep my detailed update');
+  await click('Discard unsent answers'); expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toBeNull(); expect(host.querySelector('textarea')).toBeNull();
+});
+test('cancelled stale requests retain unsent text and explain why the answer was not accepted', async()=>{
+  sessionStorage.setItem('jarvis:workflow-input:test-request',JSON.stringify({progress:'Do not lose this'}));
+  const http=createHostTransport((async()=>Response.json({})) as unknown as typeof fetch);
+  await React.act(async()=>root.render(<Forms.HumanInputInbox queue={{requests:[{...request,status:'cancelled',closureReason:'workflow_changed'}],error:'',refresh:async()=>{}}} http={http}/>));
+  expect(host.textContent).toContain('Your answer was not accepted');expect(host.querySelector('button[type="submit"]')).toBeNull();
+  expect((host.querySelector('textarea') as HTMLTextAreaElement).value).toBe('Do not lose this');
+});

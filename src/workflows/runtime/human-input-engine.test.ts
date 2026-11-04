@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS, getWorkflowDb } from '../db';
 import { setEncryptionKey } from '../db/encryption';
 import { createFlow, getFlow } from '../db/repos/flow';
-import { createDraftVersion } from '../db/repos/flow-version';
+import { createDraftVersion, updateDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun, getFlowRun } from '../db/repos/flow-run';
 import { enqueue } from '../db/repos/job-queue';
 import { configureWorkflowReadiness, versionReadiness } from '../db/repos/flow-readiness';
@@ -188,4 +188,36 @@ test('a legacy Wait for Approval inside a loop asks again for every item', async
   const pending = listHumanInputs(DEFAULT_IDS.project).filter(r => r.runId === run.id && r.status === 'pending');
   expect(pending).toHaveLength(1); expect(pending[0]!.id).not.toBe(first.id);
   expect(respond(pending[0]!, 'reject').status).toBe(200); await finish(); expect(getFlowRun(run.id)?.status).toBe('SUCCEEDED');
+});
+
+test('accepted answer exposes failed continuation and its exact run after database reopen', async () => {
+  const f = fixture();
+  const graph = structuredClone(f.version.trigger);
+  graph.nextAction!.nextAction = step('failed', '@jarvispieces/piece-jarvis-subflow', 'require_success', { result: { status: 'failed', code: 'FIXTURE_FAILURE' } });
+  updateDraftVersion(f.version.id, { trigger: graph });
+  const run = await f.run(), request = requestFor(run.id);
+  expect(respond(request).status).toBe(200); await finish(); expect(getFlowRun(run.id)?.status).toBe('FAILED');
+  closeWorkflowDb(); initWorkflowDb(join(dir, 'fixture.db')); setEncryptionKey(Buffer.alloc(32, 81)); configureWorkflowReadiness({ pieces: catalog });
+  const receipt = requestFor(run.id); expect(receipt.status).toBe('submitted');
+  expect(receipt.runs).toEqual([{ runId: run.id, versionId: f.version.id, status: 'FAILED' }]);
+  const { humanRequestNeedsAttention } = await import('./human-input-contract'); expect(humanRequestNeedsAttention(receipt)).toBe(true);
+  const routes = createWorkflowRoutes();
+  const response = await routes['/api/workflow-inputs']!.GET!(new Request('http://localhost/api/workflow-inputs'));
+  expect((await response.json()).requests.find((r: HumanRequest) => r.id === receipt.id).runs).toEqual(receipt.runs);
+});
+test('editing a waiting draft withdraws the stale form before accepting an answer', async () => {
+  const f = fixture(), run = await f.run(), request = requestFor(run.id);
+  const graph = structuredClone(f.version.trigger); graph.nextAction!.settings!.input!.prompt = 'Changed question';
+  updateDraftVersion(f.version.id, { trigger: graph });
+  expect(respond(request).status).toBe(409); await finish();
+  const closed = requestFor(run.id); expect(closed).toMatchObject({ status: 'cancelled', closureReason: 'workflow_changed', answers: null });
+  expect(getFlowRun(run.id)?.status).toBe('FAILED'); expect(getFlowRun(run.id)?.steps?.returned).toBeUndefined();
+});
+test('shared response receipts include each waiting run without hiding a stopped sibling', async () => {
+  const f = fixture('input', false, false, true), first = await f.run('shared-outcomes'), second = await f.run('shared-outcomes');
+  cancelFlowRun(first.id); const request = listHumanInputs(DEFAULT_IDS.project).find(r => r.flowId === f.flow.id)!;
+  expect(request.status).toBe('pending'); expect(respond(request).status).toBe(200); await finish();
+  const receipt = listHumanInputs(DEFAULT_IDS.project).find(r => r.id === request.id)!;
+  expect(receipt.runs).toContainEqual({ runId: first.id, versionId: f.version.id, status: 'STOPPED' });
+  expect(receipt.runs).toContainEqual({ runId: second.id, versionId: f.version.id, status: 'SUCCEEDED' });
 });

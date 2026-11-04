@@ -6,6 +6,9 @@ export type HumanRequest = {
   requestKey: string; workflowName: string; flowId: string; runId: string; created: number; deadline: number;
   status: 'pending' | 'submitted' | 'approved' | 'rejected' | 'expired' | 'cancelled';
   answers: Record<string, unknown> | null;
+  /** Read-only continuation receipts. Shared forms can belong to several runs. */
+  runs?: Array<{ runId: string; versionId: string; status: string }>;
+  closureReason?: 'workflow_changed';
 };
 export function formFields(value: unknown): InputField[] {
   if (!Array.isArray(value) || !value.length || value.length > 20) throw Error('Provide 1–20 input fields');
@@ -45,4 +48,11 @@ export function answerErrors(fields: InputField[], value: unknown): Record<strin
   if (!errors._form && new TextEncoder().encode(JSON.stringify(answers)).length > HUMAN_INPUT_MAX_ANSWER_BYTES)
     errors._form = 'These answers are too long together. Shorten the longest answers and submit again.';
   return errors;
+}
+
+/** An accepted response is not evidence that its workflow completed. */
+export function humanRequestNeedsAttention(request: HumanRequest): boolean {
+  return request.status === 'pending' || request.closureReason === 'workflow_changed'
+    || (['submitted', 'approved'].includes(request.status) && !!request.runs?.some(run =>
+      !['QUEUED', 'RUNNING', 'PAUSED', 'SUCCEEDED'].includes(run.status)));
 }

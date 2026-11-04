@@ -1,4 +1,5 @@
-import { HumanInputsContext, HumanInputInbox, useHumanInputQueue } from './HumanInputs';
+import { humanRequestNeedsAttention } from '../../../../src/workflows/runtime/human-input-contract';
+import { HumanInputsContext, HumanInputInbox, useHumanInputQueue, hasLocalDraft } from './HumanInputs';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { DashboardEntry, BriefHost } from '../entry/DashboardEntry';
@@ -174,7 +175,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   const profile = useSyncExternalStore(host.account.profile.subscribe, host.account.profile.snapshot, host.account.profile.snapshot);
   const notices = useNotificationCenter(owner);
   const humanInputs = useHumanInputQueue(host.transport, isBriefCapabilityEnabled(host.capabilities(), 'decisions'));
-  const humanPending = humanInputs.requests.filter(r => r.status === 'pending').length;
+  const humanPending = humanInputs.requests.filter(r => humanRequestNeedsAttention(r) || hasLocalDraft(r)).length;
   const [attentionMessage, setAttentionMessage] = useState('');
   const resolveAttention = async (kind: 'clarifier' | 'repeat-back', id: string, decision: 'confirm' | 'cancel') => {
     try {
@@ -211,7 +212,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
       const result = await host.navigation.intent(request.room, true);
       return result.state === 'opened' && host.active();
     }} />{message && <p className="brief-host-notice" role="status">{message}</p>}
-    {!!humanPending && route.room !== 'needs-you' && <aside className="brief-human-banner" role="status">{humanPending} workflow {humanPending === 1 ? 'request needs' : 'requests need'} your response. <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>Open Needs you</button></aside>}
+    {!!humanPending && route.room !== 'needs-you' && <aside className="brief-human-banner" role="status">{humanPending} workflow {humanPending === 1 ? 'request needs' : 'requests need'} your attention. <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>Open Needs you</button></aside>}
     <BriefHost route={route} rooms={rooms} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
       const guarded = host.guardShell(base);
       return beforeNavigate ? { ...guarded, navigate: next => { void beforeNavigate().then(ok => { if (ok) guarded.navigate(next); }); } } : guarded;
