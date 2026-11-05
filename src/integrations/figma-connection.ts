@@ -3,6 +3,7 @@ import { figmaNeedsReconnect } from "./figma-refresh";
 import { readManagedConnectionFile } from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const FIGMA_PIECE = "@activepieces/piece-figma";
 export const FIGMA_CONNECTION = "jarvis:figma";
@@ -78,6 +79,7 @@ export function figmaStatus(config: JarvisConfig) {
   return {
     configured: !!figmaConnectUrl(config),
     connect_url: figmaConnectUrl(config),
+    ...hostedSetupFault(config, figmaConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: FIGMA_CONNECTION,

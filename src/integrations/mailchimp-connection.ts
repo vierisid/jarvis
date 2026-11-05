@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
 import { readConnectionFile } from "./connection-file";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const MAILCHIMP_PIECE = "@activepieces/piece-mailchimp";
 export const MAILCHIMP_CONNECTION = "jarvis:mailchimp";
@@ -51,7 +52,7 @@ export function mailchimpConnectUrl(config: JarvisConfig): string | null {
 }
 export function mailchimpStatus(config: JarvisConfig) {
   const connection = readMailchimpConnection(config.daemon.data_dir);
-  return {configured: !!mailchimpConnectUrl(config), connect_url: mailchimpConnectUrl(config),
+  return {configured: !!mailchimpConnectUrl(config), connect_url: mailchimpConnectUrl(config), ...hostedSetupFault(config, mailchimpConnectUrl(config)),
     connected: !!connection, external_id: MAILCHIMP_CONNECTION,
     account: connection?.account ?? null, workspaces: connection?.workspaces ?? [],
     generation: connection?.generation ?? null, connected_at: connection?.connected_at ?? null};

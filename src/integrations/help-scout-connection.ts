@@ -2,6 +2,7 @@ import { readConnectionFile } from "./connection-file";
 import { createManagedRotatingRefresher } from "./managed-rotating-refresh";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const HELP_SCOUT_PIECE = "@activepieces/piece-help-scout";
 export const HELP_SCOUT_CONNECTION = "jarvis:help-scout";
@@ -95,6 +96,7 @@ export function helpScoutStatus(config: JarvisConfig) {
   return {
     configured: !!helpScoutConnectUrl(config),
     connect_url: helpScoutConnectUrl(config),
+    ...hostedSetupFault(config, helpScoutConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: HELP_SCOUT_CONNECTION,
