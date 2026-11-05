@@ -25,6 +25,14 @@ export interface ScannedPackage {
   verdict: LicenseVerdict;
   /** From the root's dependencies down to this package, as `name@version`. Empty when unreachable. */
   chain: string[];
+  /**
+   * Every dependency of the root manifest (by name) this package is installed
+   * for: the root dependency itself, or one whose dependency tree reaches it.
+   * `chain` names one shortest path; this names every root dependency that
+   * would ship it, which is what a per-piece decision needs (#971). A bundled
+   * copy is reached from whatever reaches its carrier.
+   */
+  reachedFrom: string[];
 }
 
 export interface LicenseScan {
@@ -34,6 +42,15 @@ export interface LicenseScan {
   errors: string[];
   /** REVIEWED_LICENSES entries no package in this tree used. */
   unusedReviewed: string[];
+  /**
+   * Each entry of `errors` that is about one package directory, keyed by the
+   * error text, with the root dependencies whose tree reaches that directory
+   * (empty: a leftover nothing depends on). An error not listed here is about
+   * the tree as a whole (no bun.lock, a hidden directory, a link where a scope
+   * belongs). #971: a per-piece decision charges an error to the pieces that
+   * reach it.
+   */
+  errorReachedFrom: Map<string, string[]>;
 }
 
 interface Found {
@@ -44,6 +61,8 @@ interface Found {
   pkg: Record<string, unknown>;
   /** Shipped inside another package's tarball, so bun.lock does not know it. */
   bundled: boolean;
+  /** Under its own name, but bun.lock does not list it there (`unvouched: "declared"`); see `lockMiss`. */
+  unvouched?: "absent" | "version";
 }
 
 const MAX_PACKAGE_JSON_BYTES = 4 * 1024 * 1024;
@@ -73,6 +92,14 @@ export interface ScanOptions extends EvaluateOptions {
    * "if-present" checks only when there is one. Default "if-present".
    */
   lockfile?: "required" | "if-present";
+  /**
+   * What a package bun.lock does not vouch for, found under its own name, is:
+   * "error" (default; the hosted shared tree, built fresh) or "declared" (a
+   * self-managed pieces dir, #971): judged on the license it declares, with
+   * no upstream presumption. bun leaves old nested copies behind that the
+   * current lock no longer lists, and they are still ordinary packages.
+   */
+  unvouched?: "error" | "declared";
 }
 
 type LockPackages = Record<string, unknown>;
@@ -93,6 +120,18 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
   const visited = new Set<string>();
   const errors: string[] = [];
   const rel = (p: string) => relative(realRoot, p) || ".";
+  /** Package directories the scan refused to decide, with why. */
+  const rejected = new Map<string, string>();
+  const reject = (dir: string, error: string): void => {
+    errors.push(error);
+    if (!rejected.has(dir)) rejected.set(dir, error);
+  };
+  /** Problems found at a path (a hidden or linked directory, the depth limit): charged to the package that holds the path. */
+  const pathErrors: Array<[string, string]> = [];
+  const atPath = (path: string, error: string): void => {
+    errors.push(error);
+    pathErrors.push([path, error]);
+  };
 
   let lock: LockPackages | null = null;
   try {
@@ -145,6 +184,27 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
     return null;
   };
 
+  /**
+   * Why bun.lock does not vouch for a package bun put under its own name:
+   * "absent", the lock has no entry at that place (an old copy bun left behind,
+   * and nothing else could have put it there under that name), or "version",
+   * the lock lists that name there at another version. Null for anything else:
+   * the lock names another package there (an alias), or a store entry.
+   */
+  const lockMiss = (real: string, name: string, version: string): "absent" | "version" | null => {
+    const marker = `${sep}node_modules${sep}`;
+    const at = real.lastIndexOf(marker);
+    if (at < 0 || !lock) return null;
+    const located = real.slice(at + marker.length).split(sep).join("/");
+    if (located !== name) return null;
+    const relPath = rel(real).split(sep).join("/");
+    if (/^node_modules\/\.bun\//.test(relPath)) return null;
+    const key = relPath.replace(/^node_modules\//, "").split("/node_modules/").join("/");
+    const entry = Object.hasOwn(lock, key) ? lock[key] : undefined;
+    if (!Array.isArray(entry)) return "absent";
+    return typeof entry[0] === "string" && entry[0].startsWith(`${name}@`) && entry[0] !== `${name}@${version}` ? "version" : null;
+  };
+
   const visitPackage = (dir: string, bundled: boolean): void => {
     let real: string;
     try {
@@ -152,7 +212,7 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
       if (st.isSymbolicLink()) {
         real = realpathSync(dir);
         if (!inside(real)) {
-          errors.push(`${rel(dir)} links outside the tree, to ${real}`);
+          reject(dir, `${rel(dir)} links outside the tree, to ${real}`);
           return;
         }
         if (!statSync(real).isDirectory()) return;
@@ -162,7 +222,7 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
         return;
       }
     } catch (e) {
-      errors.push(`${rel(dir)}: ${(e as Error).message}`);
+      reject(dir, `${rel(dir)}: ${(e as Error).message}`);
       return;
     }
     // Every directory once, package or not, so a link cycle ends.
@@ -183,25 +243,28 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not a JSON object");
       pkg = parsed as Record<string, unknown>;
     } catch (e) {
-      errors.push(`${rel(real)}/package.json is unreadable: ${(e as Error).message}`);
+      reject(real, `${rel(real)}/package.json is unreadable: ${(e as Error).message}`);
       return;
     }
     const name = pkg["name"];
     const version = pkg["version"];
     if (typeof name !== "string" || name.length > 214 || !PACKAGE_NAME.test(name) || typeof version !== "string" || !SEMVER.test(version)) {
-      errors.push(`${rel(real)}/package.json has no valid npm name and semver version`);
+      reject(real, `${rel(real)}/package.json has no valid npm name and semver version`);
       return;
     }
     const wrong = identityProblem(real, name, version, bundled);
-    if (wrong) {
-      errors.push(wrong);
+    // Under its own name but not in bun.lock: in a self-managed dir, judged on what it declares.
+    const miss = wrong !== null && opts.unvouched === "declared" ? lockMiss(real, name, version) : null;
+    const unvouched = miss !== null;
+    if (wrong && !unvouched) {
+      reject(real, wrong);
       return;
     }
     const kept: Record<string, unknown> = {};
     for (const k of ["license", "licenses", "dependencies", "optionalDependencies", "peerDependencies"]) {
       if (Object.hasOwn(pkg, k)) kept[k] = pkg[k];
     }
-    found.set(real, { dir: real, name, version, pkg: kept, bundled });
+    found.set(real, { dir: real, name, version, pkg: kept, bundled, ...(miss ? { unvouched: miss } : {}) });
     // npm bundleDependencies ship inside this tarball, so bun.lock does not
     // list them: they are bundled copies, like a node_modules below the root.
     const listed = pkg["bundleDependencies"] ?? pkg["bundledDependencies"];
@@ -217,7 +280,7 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
    */
   const findShippedNodeModules = (dir: string, depth: number): void => {
     if (depth > MAX_PACKAGE_DEPTH) {
-      errors.push(
+      atPath(dir,
         `${rel(dir)} is more than ${MAX_PACKAGE_DEPTH} directories below its package root, so the scan did not look ` +
           `inside it for a node_modules the package ships and cannot vouch for what is there. Check that package by ` +
           `hand; if it is fine, raise MAX_PACKAGE_DEPTH in license-scan.ts, otherwise leave its piece out with ` +
@@ -233,7 +296,7 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
     }
     for (const e of entries) {
       if (e.isSymbolicLink() && e.name === "node_modules") {
-        errors.push(`${rel(join(dir, e.name))} is a link; the scan does not follow a node_modules elsewhere`);
+        atPath(join(dir, e.name), `${rel(join(dir, e.name))} is a link; the scan does not follow a node_modules elsewhere`);
         continue;
       }
       if (!e.isDirectory()) continue;
@@ -251,7 +314,7 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
     try {
       const st = lstatSync(nm);
       if (st.isSymbolicLink()) {
-        errors.push(`${rel(nm)} is a link; the scan does not follow a node_modules elsewhere`);
+        atPath(nm, `${rel(nm)} is a link; the scan does not follow a node_modules elsewhere`);
         return;
       }
       if (!st.isDirectory()) return;
@@ -267,7 +330,7 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
         let keys: string[] = [];
         try {
           if (!lstatSync(p).isDirectory()) {
-            errors.push(`${rel(p)} is not a directory`);
+            atPath(p, `${rel(p)} is not a directory`);
             continue;
           }
           keys = readdirSync(p);
@@ -280,7 +343,7 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
         // packages Node still loads by path.
         if (!BUN_HIDDEN.has(n)) {
           try {
-            if (lstatSync(p).isDirectory()) errors.push(`${rel(p)} is a hidden directory bun does not write; not scanned`);
+            if (lstatSync(p).isDirectory()) atPath(p, `${rel(p)} is a hidden directory bun does not write; not scanned`);
           } catch {}
         }
         continue;
@@ -289,7 +352,7 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
         let scoped: string[] = [];
         try {
           if (lstatSync(p).isSymbolicLink()) {
-            errors.push(`${rel(p)} is a link, where a scope directory belongs`);
+            atPath(p, `${rel(p)} is a link, where a scope directory belongs`);
             continue;
           }
           scoped = readdirSync(p);
@@ -315,6 +378,25 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
           const real = realpathSync(candidate);
           const hit = byDir.get(real);
           if (hit) return hit;
+        } catch {}
+      }
+      if (d === realRoot || !inside(d)) return null;
+      const up = dirname(d);
+      if (up === d) return null;
+      d = up;
+    }
+  };
+  /** The refused package directory a dependency resolves to, if that is what it finds first. */
+  const resolveRejected = (fromDir: string, dep: string): string | null => {
+    let d = fromDir;
+    for (;;) {
+      const candidate = join(d, "node_modules", dep);
+      if (existsSync(candidate) || rejected.has(candidate)) {
+        if (rejected.has(candidate)) return candidate;
+        try {
+          const real = realpathSync(candidate);
+          if (byDir.has(real)) return null;
+          if (rejected.has(real)) return real;
         } catch {}
       }
       if (d === realRoot || !inside(d)) return null;
@@ -359,6 +441,43 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
     }
   }
 
+  // Which root dependencies reach each package: a walk per root dependency
+  // over the same edges, each package's edges resolved once.
+  const edges = new Map<string, Found[]>();
+  const edgesOf = (f: Found): Found[] => {
+    let out = edges.get(f.dir);
+    if (!out) {
+      out = depNames(f.pkg).map((dep) => resolveDep(f.dir, dep)).filter((g): g is Found => g !== null);
+      edges.set(f.dir, out);
+    }
+    return out;
+  };
+  const reachedFrom = new Map<string, Set<string>>();
+  const rejectedFrom = new Map<string, Set<string>>();
+  const markRejected = (dir: string | null, dep: string): void => {
+    if (dir === null) return;
+    let set = rejectedFrom.get(dir);
+    if (!set) rejectedFrom.set(dir, (set = new Set()));
+    set.add(dep);
+  };
+  for (const dep of depNames(rootPkg)) {
+    const start = resolveDep(realRoot, dep);
+    if (!start) { markRejected(resolveRejected(realRoot, dep), dep); continue; }
+    const seen = new Set<string>([start.dir]);
+    const stack = [start];
+    while (stack.length > 0) {
+      const f = stack.pop()!;
+      let set = reachedFrom.get(f.dir);
+      if (!set) reachedFrom.set(f.dir, (set = new Set()));
+      set.add(dep);
+      for (const g of edgesOf(f)) if (!seen.has(g.dir)) { seen.add(g.dir); stack.push(g); }
+      // A dependency that lands on a package the scan refused, and anything
+      // refused inside this package's own tree, is this root's problem too.
+      for (const name of depNames(f.pkg)) if (!resolveDep(f.dir, name)) markRejected(resolveRejected(f.dir, name), dep);
+      for (const dir of rejected.keys()) if (dir.startsWith(f.dir + sep)) markRejected(dir, dep);
+    }
+  }
+
   // A bundled copy has no edge in any manifest: its chain is the chain of the
   // package whose tarball carried it.
   const owners = [...found.values()].filter((f) => !f.bundled).sort((a, b) => b.dir.length - a.dir.length);
@@ -389,10 +508,17 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
         f.name,
         f.version,
         f.pkg,
-        f.bundled ? { ...opts, catalogPackages: new Set(), upstream: false, bundledAt } : opts,
+        f.bundled ? { ...opts, catalogPackages: new Set(), upstream: false, bundledAt }
+          // A copy the lock has no entry for keeps the upstream presumption: under
+          // its own name, it came from the registry under that name (an old
+          // nested SDK copy bun left). One the lock lists at another version does not.
+          : f.unvouched === "version" ? { ...opts, catalogPackages: new Set(), upstream: false } : opts,
       );
       if (verdict.allowed && verdict.basis === "reviewed") usedReviewed.add(`${f.name}@${f.version}`);
-      return { name: f.name, version: f.version, path: rel(f.dir), verdict, chain: chains.get(f.dir) ?? [] };
+      const carrier = f.bundled ? owner : undefined;
+      const roots = reachedFrom.get(f.dir) ?? (carrier ? reachedFrom.get(carrier.dir) : undefined);
+      return { name: f.name, version: f.version, path: rel(f.dir), verdict, chain: chains.get(f.dir) ?? [],
+        reachedFrom: roots ? [...roots].sort() : [] };
     })
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
@@ -401,6 +527,14 @@ export function scanInstalledTree(root: string, opts: ScanOptions = {}): License
     violations: packages.filter((p) => !p.verdict.allowed),
     errors,
     unusedReviewed: reviewedKeys.filter((k) => !usedReviewed.has(k)).sort(),
+    errorReachedFrom: new Map([
+      ...[...rejected].map(([dir, error]) => [error, [...(rejectedFrom.get(dir) ?? [])].sort()] as [string, string[]]),
+      ...pathErrors.flatMap(([path, error]) => {
+        // The deepest package that holds the path; none (the root node_modules itself) is a tree problem.
+        const owner = [...found.values()].filter((f) => path.startsWith(f.dir + sep)).sort((a, b) => b.dir.length - a.dir.length)[0];
+        return owner ? [[error, [...(reachedFrom.get(owner.dir) ?? [])].sort()] as [string, string[]]] : [];
+      }),
+    ]),
   };
 }
 

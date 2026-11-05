@@ -308,3 +308,44 @@ describe("renderNotices", () => {
     expect(text).not.toContain("bad@1.0.0");
   });
 });
+
+describe("reachedFrom (#971: a decision per installed piece)", () => {
+  test("a package two root dependencies share is reached from both, though its chain names one", () => {
+    const root = tree();
+    pkg(root, { name: "pieces", private: true, dependencies: { "@activepieces/piece-a": "1", "@activepieces/piece-b": "1", ok: "1" } });
+    const nm = join(root, "node_modules");
+    pkg(join(nm, "@activepieces/piece-a"), { name: "@activepieces/piece-a", version: "1.0.0", license: "MIT", dependencies: { shared: "1" } });
+    pkg(join(nm, "@activepieces/piece-b"), { name: "@activepieces/piece-b", version: "1.0.0", license: "MIT", dependencies: { mid: "1" } });
+    pkg(join(nm, "mid"), { name: "mid", version: "1.0.0", license: "MIT", dependencies: { shared: "1" } });
+    pkg(join(nm, "shared"), { name: "shared", version: "1.0.0", license: "GPL-3.0-only" });
+    pkg(join(nm, "ok"), { name: "ok", version: "1.0.0", license: "MIT" });
+    pkg(join(nm, "stray"), { name: "stray", version: "1.0.0", license: "MIT" });
+    const scan = scanInstalledTree(root);
+    const by = Object.fromEntries(scan.packages.map((p) => [p.name, p.reachedFrom]));
+    expect(scan.violations.map((p) => p.chain)).toEqual([["@activepieces/piece-a@1.0.0", "shared@1.0.0"]]);
+    expect(by.shared).toEqual(["@activepieces/piece-a", "@activepieces/piece-b"]);
+    expect(by.mid).toEqual(["@activepieces/piece-b"]);
+    expect(by.ok).toEqual(["ok"]);
+    // On disk but no dependency reaches it.
+    expect(by.stray).toEqual([]);
+  });
+});
+
+describe("errorReachedFrom (#971)", () => {
+  test("a package the scan refuses is charged to the root dependencies that reach it; a leftover to none; a tree problem is not listed", () => {
+    const root = tree();
+    pkg(root, { name: "pieces", private: true, dependencies: { a: "1", b: "1" } });
+    const nm = join(root, "node_modules");
+    pkg(join(nm, "a"), { name: "a", version: "1.0.0", license: "MIT", dependencies: { unlocked: "1" } });
+    pkg(join(nm, "b"), { name: "b", version: "1.0.0", license: "MIT" });
+    pkg(join(nm, "unlocked"), { name: "unlocked", version: "1.0.0", license: "MIT" });
+    pkg(join(nm, "stray"), { name: "stray", version: "2.0.0", license: "MIT" });
+    mkdirSync(join(nm, ".hidden"));
+    writeFileSync(join(root, "bun.lock"), '{"lockfileVersion":1,"packages":{"a":["a@1.0.0","",{},"sha512-x"],"b":["b@1.0.0","",{},"sha512-x"],},}');
+    const scan = scanInstalledTree(root, { lockfile: "required" });
+    const by = Object.fromEntries([...scan.errorReachedFrom].map(([error, roots]) => [error.split(" ")[0], roots]));
+    expect(by).toEqual({ [join("node_modules", "unlocked")]: ["a"], [join("node_modules", "stray")]: [] });
+    expect(scan.errors.some((e) => e.includes(".hidden"))).toBe(true);
+    expect([...scan.errorReachedFrom.keys()].some((e) => e.includes(".hidden"))).toBe(false);
+  });
+});

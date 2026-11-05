@@ -15,13 +15,14 @@
  * defend against concurrent processes touching the same on-disk dir.
  */
 
-import { promises as fs, existsSync, mkdirSync } from "node:fs";
+import { promises as fs, existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { catalogById, excludedReason, PieceExcludedError, type CatalogEntry } from "./catalog";
 import { sanitizedEnv } from "../../util/subprocess-env";
 import { BUN_INSTALL_ARGS, SANITIZED_INSTALL_HINT } from "../../util/sanitized-install";
+import { enforcePiecesTree, PieceLicenseError, type PiecesLicenseCheck } from "./install-licenses";
 
 const ROOT_ENV = "JARVIS_PIECES_DIR";
 
@@ -162,11 +163,20 @@ export interface InstallOptions {
   runBunInstall?: (cwd: string, signal?: AbortSignal) => Promise<void>;
   /** Aborting stops the install: the bun install child is killed. */
   signal?: AbortSignal;
+  /** Test seam for the license check (#971); production uses `checkInstalledPieceLicenses`. */
+  checkLicenses?: (base: string, npmPackages: readonly string[]) => PiecesLicenseCheck;
 }
 
 export interface InstallResult {
   manifest: InstalledManifest;
   piece: InstalledPiece;
+  /**
+   * Other installed pieces the license check took off disk after this install
+   * (#971): the install brought back one held at boot, or another piece now
+   * fails. Neither the engine nor the next boot loads them; the editor's
+   * in-memory catalog keeps listing them until the daemon restarts.
+   */
+  alsoHeld: Array<{ npmPackage: string; problems: string[] }>;
 }
 
 /**
@@ -192,6 +202,9 @@ export async function installPiece(
 
   // 1. Manifest add/update (range from catalog, resolved filled in after).
   const manifest = await readManifest(base);
+  // What the install looked like before, so a refused piece can be rolled
+  // back to it, versions included (#971): bun.lock holds them.
+  const before = await snapshotInstall(base);
   const existing = manifest.pieces.find((p) => p.id === id);
   const placeholder: InstalledPiece = {
     id,
@@ -216,14 +229,50 @@ export async function installPiece(
   // 2. bun install (idempotent; resolves the full manifest each call).
   opts.signal?.throwIfAborted();
   const installer = opts.runBunInstall ?? runBunInstall;
-  await installer(base, opts.signal);
-
-  // 3. Read back the resolved version from node_modules.
-  const resolved = await readResolvedVersion(base, entry);
-  if (!resolved) {
-    throw new Error(
-      `bun install completed but ${entry.npmPackage} is missing from node_modules`,
-    );
+  const enforce = (pieces: readonly InstalledPiece[]) =>
+    enforcePiecesTree(base, pieces.map((p) => p.npmPackage), { check: opts.checkLicenses, remove: removePackageDir });
+  let resolved: string | null;
+  let enforced: ReturnType<typeof enforce>;
+  try {
+    await installer(base, opts.signal);
+    // 3. Read back the resolved version from node_modules.
+    resolved = await readResolvedVersion(base, entry);
+    if (!resolved) {
+      throw new Error(
+        `bun install completed but ${entry.npmPackage} is missing from node_modules`,
+      );
+    }
+    // 4. License check (#971) over the whole tree: the release bun resolved
+    // and every package it pulls in, and every other piece the install may
+    // have brought back (bun re-creates a piece held at boot).
+    enforced = enforce(nextManifest.pieces);
+  } catch (e) {
+    // A failed, aborted or half-finished install may still have put packages
+    // on disk: whatever it left is checked, so nothing denied stays loadable.
+    try { enforce(nextManifest.pieces); } catch { /* the original error is the one to report */ }
+    throw e;
+  }
+  const refused = enforced.held.find((h) => h.npmPackage === entry.npmPackage);
+  if (refused) {
+    // Put the previous install back: manifest, package.json and bun.lock, then
+    // bun again, so an update returns to the version it had. bun does not
+    // prune, so the tree is enforced against the restored manifest after,
+    // which takes a refused fresh install off disk.
+    let rollbackError: string | undefined;
+    try {
+      await restoreInstall(base, before);
+      await installer(base);
+    } catch (e) {
+      rollbackError = (e as Error).message;
+    }
+    try {
+      enforce((await readManifest(base)).pieces);
+    } catch (e) {
+      rollbackError ??= (e as Error).message;
+    }
+    // Whatever the rollback managed, a refused fresh install is not left on disk.
+    if (!existing) removePackageDir(base, entry.npmPackage);
+    throw new PieceLicenseError(id, refused.problems, rollbackError);
   }
   placeholder.resolvedVersion = resolved;
   const finalManifest: InstalledManifest = {
@@ -231,7 +280,67 @@ export async function installPiece(
     pieces: nextManifest.pieces.map((p) => (p.id === id ? placeholder : p)),
   };
   await writeManifest(finalManifest, base);
-  return { manifest: finalManifest, piece: placeholder };
+  const alsoHeld = enforced.held.filter((h) => h.removed).map(({ npmPackage, problems }) => ({ npmPackage, problems }));
+  return { manifest: finalManifest, piece: placeholder, alsoHeld };
+}
+
+/** The files that decide an install: the manifest, the package.json bun reads, and bun's lockfile. */
+const INSTALL_STATE_FILES = ["installed.json", "package.json", "bun.lock"] as const;
+type InstallSnapshot = Record<(typeof INSTALL_STATE_FILES)[number], string | null>;
+
+async function snapshotInstall(base: string): Promise<InstallSnapshot> {
+  const out = {} as InstallSnapshot;
+  for (const name of INSTALL_STATE_FILES) {
+    const path = join(base, name);
+    out[name] = existsSync(path) ? await fs.readFile(path, "utf8") : null;
+  }
+  return out;
+}
+
+async function restoreInstall(base: string, snapshot: InstallSnapshot): Promise<void> {
+  mkdirSync(base, { recursive: true });
+  for (const name of INSTALL_STATE_FILES) {
+    const path = join(base, name);
+    const text = snapshot[name];
+    if (text === null) rmSync(path, { force: true });
+    else await fs.writeFile(path, text, "utf8");
+  }
+  // The previous package.json, or none: bun then prunes the refused piece.
+  if (snapshot["package.json"] === null) {
+    await fs.writeFile(pkgJsonPath(base), synthesizePackageJson(snapshot["installed.json"] === null
+      ? EMPTY_MANIFEST : await readManifest(base)), "utf8");
+  }
+}
+
+/** An npm package name, scoped or not, with no path segment that could leave `node_modules`. */
+const SAFE_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/u;
+
+/**
+ * Take one package out of the pieces dir's `node_modules`, by exact name.
+ * False when the name is not a plain npm package name, when there is nothing
+ * there, or when `node_modules` or the scope directory is a link (removing
+ * through it would delete outside the pieces dir).
+ */
+export function removePackageDir(base: string, npmPackage: string): boolean {
+  if (!SAFE_PACKAGE_NAME.test(npmPackage) || npmPackage === "node_modules") return false;
+  const nodeModules = join(base, "node_modules");
+  const dir = join(nodeModules, npmPackage);
+  try {
+    if (!lstatSync(nodeModules).isDirectory()) return false;
+    if (npmPackage.includes("/") && !lstatSync(join(nodeModules, npmPackage.split("/")[0]!)).isDirectory()) return false;
+    lstatSync(dir);
+  } catch {
+    return false;
+  }
+  // A link (bun's isolated layout) is removed itself; its target is not followed.
+  // A removal the filesystem refuses (EACCES, EBUSY) reports false, so the
+  // caller says the piece could not be held rather than abort the whole check.
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    return false;
+  }
+  return !existsSync(dir);
 }
 
 export async function uninstallPiece(
@@ -250,9 +359,18 @@ export async function uninstallPiece(
   };
   await writeManifest(nextManifest, base);
   await writeSynthesizedPackageJson(nextManifest, base);
-  // Run bun install so dropped deps are pruned from node_modules.
+  // Run bun install for the new manifest. bun does not prune a dropped
+  // piece, so the tree is enforced after (#971): the uninstalled piece leaves
+  // node_modules, and a held piece bun brought back is taken off again.
   const installer = opts.runBunInstall ?? runBunInstall;
-  await installer(base);
+  try {
+    await installer(base);
+  } finally {
+    // A cleanup failure never hides bun's own error.
+    try {
+      enforcePiecesTree(base, nextManifest.pieces.map((p) => p.npmPackage), { check: opts.checkLicenses, remove: removePackageDir });
+    } catch { /* reported by the next install or boot, which enforce again */ }
+  }
   return nextManifest;
 }
 
