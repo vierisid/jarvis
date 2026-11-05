@@ -322,6 +322,12 @@
   font-size: 0.78rem;
 }
 .wf-runs__paused-err { color: var(--accent-1, #f87171); }
+.wf-runs__onboarding { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--rule-soft); border-radius: 6px; font-size: 0.8rem; }
+.wf-runs__onboarding p { margin: 4px 0; }
+.wf-runs__onboarding-branch { display: grid; gap: 4px; margin-top: 8px; }
+.wf-runs__onboarding-branch input { min-width: 0; }
+.wf-runs__onboarding-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.wf-runs__onboarding-err { color: var(--accent-1, #f87171); }
 .wf-runs__paused-list { list-style: disc inside; margin: 6px 0 0; padding: 0; }
 .wf-runs__paused-list li { margin: 2px 0; }
 .wf-runs__paused-step { font-weight: 600; color: var(--ink-1); }
