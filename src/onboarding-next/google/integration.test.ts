@@ -43,3 +43,31 @@ it('completes existing OAuth exchange and canonical persistence with isolated pr
     expect((await restarted.read({})).connection).toMatchObject({ state: 'connected', attemptId: null });
   } finally { globalThis.fetch = originalFetch; await rm(dir, { recursive: true, force: true }); }
 });
+
+it('a callback after Cancel stores no tokens and makes no token request', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'on-b-03-cancel-'));
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  const tokensPath = join(dir, 'google-tokens.json'), redirectUri = 'https://jarvis.example.test/api/auth/google/callback';
+  const owner = { actorId: 'fixture', projectId: 'fixture' };
+  try {
+    const request = (async (input: string | URL | Request) => {
+      requests.push(String(input));
+      if (String(input) === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'test-access', refresh_token: 'test-refresh', expires_in: 3600 });
+      throw new Error('Unexpected fixture request');
+    }) as typeof fetch;
+    globalThis.fetch = request;
+    const auth = () => new GoogleAuth('test-client', 'test-secret', { tokensPath, redirectUri });
+    const binding = { id: 'test-vault', owner, installMode: 'self' as const,
+      readGrant: createGoogleGrantReader({ auth, clientId: 'test-client', fetch: request }),
+      self: { redirectUri, auth: auth(), flows: new GoogleOAuthFlowStore(), onTokensSaved() {} } };
+    const provider = createGoogleProvider({ authorize: () => owner, resolve: () => binding });
+    const begun = await provider.begin({}), state = new URL(begun.launch!.url).searchParams.get('state')!;
+    await provider.cancel({}, begun.launch!.attemptId);
+    const result = await provider.callback({}, { state, code: 'fixture-code' });
+    expect(result.connection).toEqual({ state: 'cancelled', attemptId: begun.launch!.attemptId });
+    expect(requests).not.toContain('https://oauth2.googleapis.com/token');
+    expect(auth().getTokens()).toBeNull();
+    expect(await Bun.file(tokensPath).exists()).toBe(false);
+  } finally { globalThis.fetch = originalFetch; await rm(dir, { recursive: true, force: true }); }
+});

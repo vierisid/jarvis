@@ -55,9 +55,15 @@ document these read-only checks. No send scope or second OAuth broker is added.
 `begin` first checks current access, then returns one launch URL for a pending
 attempt. Opening it is not success. Duplicate begins reuse the pending state;
 duplicate, foreign, superseded or expired callbacks cannot exchange codes.
-Cancellation stops waiting. A valid callback already in flight, or delivered
-after cancellation but before expiry, may still save a grant. A fresh read shows
-that real grant without attributing it to a cancelled or newer attempt.
+Self-hosted: Cancel abandons the attempt. A callback delivered after Cancel
+consumes its state but never exchanges the code, so no tokens are stored and the
+attempt stays `cancelled`. Starting a new attempt spends a cancelled attempt's
+state at once. Cancel cannot recall an exchange already in flight. A window
+reported as not opened is not a cancellation: open detection can be wrong, so a
+consent the user did finish in the browser is still saved. Hosted: the control
+plane completes the grant and no callback reaches this provider, so Cancel only
+stops waiting. In every case a fresh read shows a real grant without attributing
+it to a cancelled or newer attempt.
 
 Attempts are bounded, in-memory, ten-minute records, matching the existing OAuth
 store. A daemon restart requires retrying an unfinished attempt; existing grants

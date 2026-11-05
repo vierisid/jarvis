@@ -6,7 +6,10 @@ const TTL = 10 * 60_000;
 const MAX_OWNERS = 256;
 const sameOwner = (a: GoogleScope, b: GoogleScope) => a.actorId === b.actorId && a.projectId === b.projectId;
 const validId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 512;
-interface Attempt { id: string; state?: string; expiresAt: number; consumed: boolean; cancelled: boolean }
+/** cancelled: stop attributing results. abandoned: the user cancelled, so the code is never exchanged.
+ * A window that failed to open only sets cancelled: open detection can be wrong, and a consent
+ * the user did finish in the browser is still saved. */
+interface Attempt { id: string; state?: string; expiresAt: number; consumed: boolean; cancelled: boolean; abandoned?: boolean }
 interface Slot {
   streamId: string;
   bindingId: string;
@@ -114,6 +117,10 @@ export function createGoogleProvider<Context>(ports: GooglePorts<Context>) {
         const previousAttempt = slot.attempt, wasCancelled = previousAttempt?.cancelled;
         const read = await refresh(binding, slot);
         if (read.ready || slot.connection.state === 'pending' || previousAttempt && !wasCancelled && previousAttempt.cancelled) return { snapshot: read };
+        // A replaced, abandoned attempt's state is spent now, so it can never exchange later.
+        if (previousAttempt?.abandoned && previousAttempt.state && !previousAttempt.consumed) {
+          previousAttempt.consumed = true; binding.self?.flows.consume(previousAttempt.state, now());
+        }
         const attempt: Attempt = { id: randomUUID(), expiresAt: now() + TTL, consumed: false, cancelled: false };
         slot.attempt = attempt;
         try {
@@ -136,13 +143,15 @@ export function createGoogleProvider<Context>(ports: GooglePorts<Context>) {
         }
       });
     },
-    /** Cancel stops waiting, not a grant already being saved by GoogleAuth. Skip uses this same path. */
+    /** Cancel abandons the attempt: a later callback for it is consumed without an exchange.
+     * An exchange already in flight when Cancel arrives cannot be recalled; its grant is real.
+     * Skip uses this same path. */
     async cancel(context: Context, attemptId: string) {
       if (!validId(attemptId)) throw new GoogleStateError('invalid_request');
       const { binding, slot } = await selected(context);
       if (slot.bindingId !== binding.id) throw new GoogleStateError('unavailable');
       if (slot.bindingId === binding.id && slot.attempt?.id === attemptId && slot.connection.state !== 'connected') {
-        slot.attempt.cancelled = true;
+        slot.attempt.cancelled = true; slot.attempt.abandoned = true;
         set(slot, { state: 'cancelled', attemptId }, 'waiting_cancelled');
       }
       return snapshot(binding, slot);
@@ -166,6 +175,9 @@ export function createGoogleProvider<Context>(ports: GooglePorts<Context>) {
         const flow = binding.self.flows.consume(input.state, now());
         attempt.consumed = true;
         if (!flow || flow.redirectUri !== binding.self.redirectUri) throw new GoogleStateError('invalid_callback');
+        // Cancel abandons the attempt. Its state is spent above and its code is never
+        // exchanged, so no tokens are stored and the attempt stays cancelled.
+        if (attempt.abandoned) return snapshot(binding, slot);
         if (input.error) {
           if (!attempt.cancelled) set(slot, { state: 'error', attemptId: attempt.id,
             message: 'Google sign-in was denied. Try again, or skip for now.' }, 'consent_denied');

@@ -92,12 +92,38 @@ describe('google-state.v1', () => {
     expect((await f.provider.read(owner)).connection).toEqual({ state: 'expired', attemptId: a.id });
     await expect(f.provider.callback(owner, { state: a.state, code: 'fixture-code' })).rejects.toMatchObject({ code: 'invalid_callback' });
   });
-  it('cancels without connecting or revoking; late valid grant is unattributed', async () => {
+  it('cancels without connecting or revoking; a later callback consumes the state without exchanging', async () => {
     const f = fixture(), a = await start(f);
     expect((await f.provider.cancel(owner, a.id)).connection.state).toBe('cancelled');
     expect((await f.provider.read(owner)).connection.state).toBe('cancelled');
-    expect(f.stats().exchanges).toBe(0);
+    const late = await f.provider.callback(owner, { state: a.state, code: 'fixture-code' });
+    expect(late.connection).toEqual({ state: 'cancelled', attemptId: a.id }); expect(late.ready).toBe(false);
+    expect(f.stats()).toMatchObject({ exchanges: 0, reloads: 0 });
+    // The state is spent: a replay cannot exchange it either.
+    await expect(f.provider.callback(owner, { state: a.state, code: 'fixture-code' })).rejects.toMatchObject({ code: 'invalid_callback' });
+    expect((await f.provider.read(owner)).connection.state).toBe('cancelled'); expect(f.stats().exchanges).toBe(0);
+  });
+  it('still saves a consent finished after the window was reported as not opened, unattributed', async () => {
+    const f = fixture(), a = await start(f);
+    expect((await f.provider.externalFailed(owner, a.id)).reason).toBe('external_open_failed');
     expect((await f.provider.callback(owner, { state: a.state, code: 'fixture-code' })).connection).toMatchObject({ state: 'connected', attemptId: null });
+    expect(f.stats().exchanges).toBe(1);
+  });
+  it('a new attempt spends the cancelled attempt state at once', async () => {
+    const f = fixture(), a = await start(f);
+    await f.provider.cancel(owner, a.id); const b = await start(f);
+    expect(f.binding.self!.flows.consume(a.state, 1000)).toBeNull();
+    await expect(f.provider.callback(owner, { state: a.state, code: 'fixture-code' })).rejects.toMatchObject({ code: 'invalid_callback' });
+    expect((await f.provider.read(owner)).connection).toEqual({ state: 'pending', attemptId: b.id }); expect(f.stats().exchanges).toBe(0);
+  });
+  it('a callback queued behind other work when Cancel arrives does not exchange', async () => {
+    const f = fixture(), a = await start(f), entered = deferred<void>(), release = deferred<GoogleGrant>();
+    f.binding.readGrant = async () => { entered.resolve(); return release.promise; };
+    const read = f.provider.read(owner); await entered.promise;
+    const callback = f.provider.callback(owner, { state: a.state, code: 'fixture-code' });
+    await f.provider.cancel(owner, a.id); release.resolve({ state: 'absent' }); await read;
+    expect((await callback).connection).toEqual({ state: 'cancelled', attemptId: a.id });
+    expect(f.stats().exchanges).toBe(0); expect(f.binding.self!.flows.consume(a.state, 1000)).toBeNull();
   });
   it('cancels during exchange immediately and does not attribute completion after it', async () => {
     const f = fixture(), a = await start(f), entered = deferred<void>(), release = deferred<void>();

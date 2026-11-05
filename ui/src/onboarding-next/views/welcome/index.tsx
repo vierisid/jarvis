@@ -9,6 +9,8 @@ export interface WelcomeModel {
   theme: WelcomeTheme;
   installMode: "hosted" | "self" | "unknown";
   state: { kind: "ready" } | { kind: "pending"; message: string } | { kind: "error"; message: string };
+  /** After setup the exit is a permanent onboarding exit, not "later". */
+  setupCompleted?: boolean;
 }
 
 export interface WelcomeCopy {
@@ -101,7 +103,7 @@ export function WelcomeView({ model, onSetUp, onExit, onThemeChange, copy = welc
           className="on-welcome__control on-welcome__exit"
           aria-disabled={pending}
           onClick={() => { if (!pending) onExit(); }}
-        >I’ll do this later</Button>
+        >{model.setupCompleted ? "Skip the rest and explore Jarvis" : "I’ll do this later"}</Button>
       </div>
       <div className="on-welcome__feedback">
         <p role="status">{model.state.kind === "pending" ? model.state.message : ""}</p>
