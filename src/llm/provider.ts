@@ -1,3 +1,4 @@
+import { truncateHead } from '../util/truncate.ts';
 export type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
@@ -266,7 +267,7 @@ export function capTextBlocks(blocks: ContentBlock[], maxChars: number): Content
       out[lastText] = { type: 'text', text: (out[lastText] as { text: string }).text + note };
       continue;
     }
-    out.push({ type: 'text', text: b.text.slice(0, budget) + note });
+    out.push({ type: 'text', text: truncateHead(b.text, budget) + note });
   }
   return out;
 }

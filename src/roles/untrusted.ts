@@ -31,6 +31,7 @@
  */
 
 import type { ContentBlock } from '../llm/provider.ts';
+import { truncateWithNote } from '../util/truncate.ts';
 
 /**
  * The FIXED half of the delimiters: the token the standing rule in
@@ -1119,9 +1120,7 @@ export function markUntrustedToolFailure(
   maxChars: number,
   outsideFailure = false,
 ): string {
-  const capped = message.length > maxChars
-    ? message.slice(0, maxChars) + `\n... (truncated, was ${message.length} chars)`
-    : message;
+  const capped = truncateWithNote(message, maxChars);
   if (!outsideFailure) return markUntrustedToolResult(name, category, capped);
   // Same two policies `markUntrustedToolResult` applies, for the same reasons:
   // an empty failure is reported as empty rather than as an empty block, and a

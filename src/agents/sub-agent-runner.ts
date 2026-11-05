@@ -18,6 +18,7 @@
 
 import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
+import { truncateWithNote } from '../util/truncate.ts';
 import type { ContentBlock, LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
 import { capTextBlocks, guardImageSize } from '../llm/provider.ts';
 import { ToolRegistry, isToolResult, type ToolDefinition } from '../actions/tools/registry.ts';
@@ -399,9 +400,7 @@ const denialText = (name: string, reason: string) =>
 function boundedResult(raw: unknown): { text: string; trailer: string } {
   const { outside, trailer } = splitToolReturn(raw);
   let result = outside;
-  if (result.length > MAX_TOOL_RESULT_CHARS) {
-    result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
-  }
+  result = truncateWithNote(result, MAX_TOOL_RESULT_CHARS);
   return { text: result, trailer };
 }
 

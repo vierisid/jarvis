@@ -2,6 +2,7 @@ import type { Server, ServerWebSocket } from 'bun';
 import { markPanelSession } from './panel-session-marker.ts';
 import { debugRpcGate } from '../daemon/debug-rpc-gate.ts';
 import { timingSafeEqual } from 'node:crypto';
+import { isOpenAccessHostAllowed } from './open-access-host.ts';
 import path from 'node:path';
 import { isWithin } from '../util/path.ts';
 import type { SidecarManager } from '../sidecar/manager.ts';
@@ -308,6 +309,21 @@ export class WebSocketServer {
             return Response.json({ error: 'mint failed' }, { status: 500 });
           }
           return Response.json({ access_token: minted.token, expires_in: minted.expiresIn });
+        }
+
+        // 0c. Open access serves anyone who reaches the socket, so a DNS-rebound
+        //     name must not count as reaching it (open-access-host.ts).
+        //     Public routes keep their own checks and are reached through
+        //     tunnels on any name by design.
+        //     Exempt by PATH only: isPublicRoute also passes every OPTIONS
+        //     request, and the dev-server proxies below forward OPTIONS.
+        if (self.insecureOpenAccess && !self.unixPath && !isPublicRoute(pathname, 'GET') && !isPublicRoute(pathname, 'POST')
+          && !isOpenAccessHostAllowed(req.headers.get('host'), { corsOrigin: self.corsOrigin })) {
+          return new Response(
+            'Forbidden: while auth.insecure_open_access is on, Jarvis answers only on localhost, an IP address, or the host of daemon.public_url. '
+            + 'Open it by one of those, or set daemon.public_url to the address you use.',
+            { status: 403 },
+          );
         }
 
         // 1. Auth check. A request is authorized by a PANEL SESSION cookie
