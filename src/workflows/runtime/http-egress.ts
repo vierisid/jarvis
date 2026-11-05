@@ -204,9 +204,25 @@ export class EgressRefusedError extends Error {
   readonly code = REFUSED_CODE;
 }
 
-function refusal(host: string, address: string, policy: EgressPolicy): EgressRefusedError {
+function refusal(host: string, address: string, policy: EgressPolicy, label = 'HTTP request'): EgressRefusedError {
   const allowed = policy === 'public-only' ? 'public addresses' : 'public and private-network addresses';
-  return new EgressRefusedError(`HTTP request to ${host} refused: it resolves to ${address}, and this Jarvis's HTTP steps reach only ${allowed} (never this machine, loopback, link-local or cloud metadata)`);
+  return new EgressRefusedError(`${label} to ${host} refused: it resolves to ${address}, and this Jarvis's workflow steps reach only ${allowed} (never this machine, loopback, link-local or cloud metadata)`);
+}
+
+/**
+ * A response past `MAX_RESPONSE_BYTES` (#1153). A refusal like any other the
+ * guard makes, so every place that already fails the step on a refusal (the
+ * HTTP and GraphQL pieces, never retried or continued past, and the engine's
+ * file download, which otherwise turns an error into an empty file) fails it
+ * on this too.
+ */
+export class ResponseTooLargeError extends EgressRefusedError {
+  /**
+   * Unlike every other refusal, this one comes after the request went out: a
+   * caller that records refusals as "not sent" must not record this one so,
+   * or a retry would send a non-read request twice.
+   */
+  readonly afterSend = true;
 }
 
 /** Refuse an IP-literal host outside the policy. A name is checked by `guardedLookup` instead. */
@@ -240,6 +256,62 @@ export function guardedLookup(policy: EgressPolicy, resolve: LookupImpl = dnsLoo
     });
   };
 }
+
+/**
+ * A connection that is not HTTP (#961): the core SMTP piece's mail server, the
+ * core SFTP piece's SFTP, FTP or FTPS server. Their clients (nodemailer, ssh2,
+ * basic-ftp) take no `lookup`, so the host is resolved here once, every
+ * address it resolves to is checked like an HTTP hop's, and the caller
+ * connects to the returned address: a literal, never the name again, so
+ * nothing can resolve it a second time. A TLS client passes the name as its
+ * `servername`, so the certificate is still checked against the name.
+ */
+export function resolveGuardedAddress(hostname: string, policy: EgressPolicy, options: {
+  /** What is connecting, for the refusal message: "SMTP connection", "SFTP connection". */
+  label: string;
+  resolve?: LookupImpl;
+  allowAddress?: (address: string) => boolean;
+}): Promise<string> {
+  const allowed = options.allowAddress ?? ((address: string) => destinationAllowed(address, policy));
+  const host = String(hostname ?? '').trim();
+  const literal = host.replace(/^\[(.*)\]$/u, '$1');
+  if (host === '') return Promise.reject(new EgressRefusedError(`${options.label} refused: no host`));
+  if (isIP(literal) !== 0) {
+    if (!allowed(literal)) return Promise.reject(refusal(host, literal, policy, options.label));
+    return Promise.resolve(literal);
+  }
+  const resolveImpl = options.resolve ?? (dnsLookup as unknown as LookupImpl);
+  return new Promise((done, fail) => {
+    resolveImpl(host, { all: true }, (error, addresses) => {
+      if (error) return fail(error);
+      const list = Array.isArray(addresses) ? addresses : [];
+      if (list.length === 0) return fail(new EgressRefusedError(`${options.label} to ${host} refused: it resolves to no address`));
+      const outside = list.find((entry) => !allowed(entry.address));
+      if (outside) return fail(refusal(host, outside.address, policy, options.label));
+      // IPv4 first when the name has both: an engine with no IPv6 route would
+      // otherwise fail where the client's own lookup (which prefers IPv4 on
+      // most systems) would have connected. Every address was checked above.
+      done((list.find((entry) => isIP(entry.address) === 4) ?? list[0]!).address);
+    });
+  });
+}
+
+/** follow-redirects' default (21), which axios applies when a request sets none; a request may ask for fewer. */
+export const MAX_REDIRECTS = 21;
+
+/**
+ * The most a workflow HTTP request (the HTTP and GraphQL steps, and the
+ * engine's file download) reads of a response (#1153). Upstream reads without
+ * limit, so one response could fill the engine's memory, and the engine
+ * cannot carry one past this anyway: it fails a run whose step data passes
+ * `AP_MAX_FLOW_RUN_LOG_SIZE_MB` (10 MiB by default, which Jarvis does not
+ * change) less its 256 KiB error offset (`helper/logging-utils.ts`), and a
+ * binary response is stored as base64, 4/3 its size. So
+ * (10 MiB - 256 KiB) * 3/4, and a step fails naming this cap instead of the
+ * run failing on "Flow run data size exceeded" after the whole body was read.
+ * `http-egress.test.ts` pins the derivation. A request may ask for less, never more.
+ */
+export const MAX_RESPONSE_BYTES = ((10 * 1024 * 1024 - 256 * 1024) * 3) / 4;
 
 /** The subset of axios this needs; the piece passes its own bundled copy. */
 interface AxiosLike {
@@ -302,13 +374,26 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     config.httpAgent = new HttpAgent({ keepAlive: false, lookup } as ConstructorParameters<typeof HttpAgent>[0]);
     config.httpsAgent = new HttpsAgent({ keepAlive: false, lookup } as ConstructorParameters<typeof HttpsAgent>[0]);
     config.proxy = false; config.lookup = lookup; config.adapter = 'http';
+    const asked = typeof config.maxContentLength === 'number' ? config.maxContentLength : -1;
+    config.maxContentLength = asked >= 0 && asked < MAX_RESPONSE_BYTES ? asked : MAX_RESPONSE_BYTES;
+    // A stream is handed over unread, so the size cap would not apply to it.
+    if (config.responseType === 'stream') throw new EgressRefusedError('HTTP request refused: a streamed response would not be held to the size cap');
+    // follow-redirects' own default, which axios uses when given none; never more.
+    if (typeof config.maxRedirects !== 'number' || config.maxRedirects > MAX_REDIRECTS) config.maxRedirects = MAX_REDIRECTS;
     return config;
   });
   // A refusal raised inside the transport (the lookup, a redirect) reaches
   // axios as an AxiosError, which the piece's HTTP client turns into a bare
   // "status 500". Hand it back as itself, so the step fails naming the rule.
   instance.interceptors.response.use(undefined, (error: unknown) => {
-    throw egressRefusalIn(error) ?? error;
+    const refused = egressRefusalIn(error);
+    if (refused) throw refused;
+    // axios's own wording for a body past maxContentLength.
+    const message = (error as { message?: unknown } | null)?.message;
+    if (typeof message === 'string' && /^maxContentLength size of \d+ exceeded$/u.test(message)) {
+      throw new ResponseTooLargeError(`HTTP response refused: it is larger than ${MAX_RESPONSE_BYTES} bytes, the most a workflow step can carry (${message})`);
+    }
+    throw error;
   });
   return instance as ReturnType<A['create']>;
 }

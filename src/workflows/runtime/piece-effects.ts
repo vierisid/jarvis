@@ -97,7 +97,11 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     // #961: an HTTP request that is not a read is a send whose outcome the
     // server alone knows, so a retry after a lost or failed request is
     // refused rather than repeated. Without the input it is assumed a send.
-    || (piece === HTTP_PIECE && action === 'send_request' && !httpRequestIsRead(ruleInput(input) ?? {}));
+    || (piece === HTTP_PIECE && action === 'send_request' && !httpRequestIsRead(ruleInput(input) ?? {}))
+    // #961: a GraphQL request always carries a body, and an email is sent at
+    // most once: neither is repeated after an attempt whose outcome is unknown.
+    || (piece === GRAPHQL_PIECE && action === 'send_request')
+    || (piece === SMTP_PIECE && action === 'send-email');
 }
 
 const CLICKUP_PIECE = '@activepieces/piece-clickup';
@@ -338,6 +342,13 @@ function dropboxTracked(action: unknown): boolean {
   return typeof action === 'string' && (['write_data', 'send_message', 'delete_data'] as const)
     .some(category => categories[category]?.includes(action));
 }
+
+/** The vendored core GraphQL piece (#961). */
+export const GRAPHQL_PIECE = '@activepieces/piece-graphql';
+/** The vendored core SMTP piece (#961). */
+export const SMTP_PIECE = '@activepieces/piece-smtp';
+/** The vendored core FTP/SFTP piece (#961). */
+export const SFTP_PIECE = '@activepieces/piece-sftp';
 
 /** The vendored core HTTP piece (#961). */
 export const HTTP_PIECE = '@activepieces/piece-http';
@@ -787,7 +798,64 @@ export const CORE_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
     categoryFromInput: { send_request: { props: ['method', 'body'], category: httpRequestCategory } },
     redactInput: redactHttpInput,
   },
+  {
+    catalogId: 'graphql',
+    pieceName: GRAPHQL_PIECE,
+    unknownActionCategory: 'delete_data',
+    targetProps: ['method', 'url'],
+    // Its one action always sends the query as a body, whatever the method, so
+    // it is an HTTP request with a body: a send for GET, POST, PUT and PATCH,
+    // and the worst case for DELETE or anything else (`graphqlRequestCategory`).
+    categories: { delete_data: ['send_request'] },
+    categoryFromInput: { send_request: { props: ['method'], category: graphqlRequestCategory } },
+    // Headers, query parameters and the URL can carry a credential, as on the HTTP step.
+    redactInput: redactGraphqlInput,
+  },
+  {
+    catalogId: 'smtp',
+    pieceName: SMTP_PIECE,
+    unknownActionCategory: 'send_email',
+    targetProps: ['from', 'senderName', 'to', 'cc', 'bcc', 'replyTo', 'subject'],
+    categories: { send_email: ['send-email'] },
+  },
+  {
+    catalogId: 'sftp',
+    pieceName: SFTP_PIECE,
+    // Deletes a file or a whole folder tree on the server.
+    unknownActionCategory: 'delete_data',
+    targetProps: ['filePath', 'fileName', 'directoryPath', 'folderPath', 'oldPath', 'newPath', 'recursive'],
+    categories: {
+      read_data: ['read_file_content', 'listFolderContents'],
+      // Makes a directory; nothing is replaced and nothing leaves the run.
+      write_data: ['createFolder'],
+      // Puts content on a server the connection names, replacing a file
+      // already at that path: as an HTTP PUT, a send. Not tracked: a repeat
+      // after an unknown outcome writes the same bytes to the same path.
+      send_message: ['upload_file', 'create_file'],
+      // A rename replaces whatever is at the new path on servers that allow
+      // it (FTP RNTO does), and deletes remove a file or a folder tree.
+      delete_data: ['renameFileOrFolder', 'deleteFile', 'deleteFolder'],
+    },
+  },
 ];
+
+/**
+ * A GraphQL request's category: always an HTTP request with a body (the piece
+ * sends `{ query, variables }` whatever the method), so never a read.
+ */
+export function graphqlRequestCategory(input: Record<string, unknown>): ActionCategory {
+  return httpRequestCategory({ method: input.method, body: { data: 'query' } });
+}
+
+/**
+ * The GraphQL step's inline credentials: as the HTTP step's (headers, query
+ * parameters, the URL, the proxy password), plus credential-named fields in
+ * its variables (a login mutation's `password`).
+ */
+export function redactGraphqlInput(input: Record<string, unknown>): Record<string, unknown> {
+  const out = redactHttpInput(input);
+  return inputObject(out.variables) || Array.isArray(out.variables) ? { ...out, variables: redactNamed(out.variables) } : out;
+}
 
 /**
  * An HTTP request's category, by method (owner decision on #961). A GET or a
@@ -860,8 +928,102 @@ function redactBody(body: unknown): unknown {
         ? { ...field, textFieldValue: typeof field.textFieldValue === 'string' ? redactValue(field.textFieldValue) : REDACTED } : row;
     }) };
   }
+  if (typeof data === 'string') return { ...fields, data: redactBodyText(data) };
   return { ...fields, data: redactNamed(data) };
 }
+
+/**
+ * Credential-named fields in a value, at any depth `bound()` keeps, or in a
+ * JSON or form-encoded string: a response a durable receipt keeps (#1153).
+ */
+export function redactCredentials(value: unknown): unknown {
+  return typeof value === 'string' ? redactBodyText(value) : redactNamed(value);
+}
+
+/**
+ * Field and header names a durable receipt never keeps the value of (#1153):
+ * tokens, secrets, passwords and API keys by their usual names. Narrower than
+ * `isSecretName`, which judges what a reviewer is shown: a receipt is what a
+ * replayed step hands the flow, so a `key` (a Jira issue key) or a
+ * `token_type` must survive it.
+ */
+const RECEIPT_SECRET = /^(?:x[-_])?(?:(?:access|refresh|id|auth|subject|csrf|session|bearer|api)[-_]?token|token|client[-_]?secret|secret|password|passwd|api[-_]?key|authorization|private[-_]?key|session(?:[-_]?id)?|sessid|phpsessid)$/iu;
+const isReceiptSecret = (name: string) => RECEIPT_SECRET.test(name);
+
+/**
+ * A response as a durable receipt keeps it (#1153): every field or header
+ * whose name is a token's, at any depth, and token pairs in a JSON or
+ * form-encoded string, replaced by `[redacted]`. `redacted` says whether
+ * anything was, so the receipt can say so to a replay.
+ */
+export function redactReceipt(value: unknown): { value: unknown; redacted: boolean } {
+  let redacted = false;
+  const walk = (item: unknown, depth: number): unknown => {
+    if (depth > 64) return item;
+    if (typeof item === 'string') {
+      const out = redactBodyText(item, isReceiptSecret);
+      if (out !== item) redacted = true;
+      return out;
+    }
+    if (Array.isArray(item)) return item.map((entry) => walk(entry, depth + 1));
+    const fields = inputObject(item);
+    if (!fields) return item;
+    return Object.fromEntries(Object.entries(fields).map(([key, entry]) => {
+      if (isReceiptSecret(key) && entry !== null && entry !== undefined && entry !== '' && entry !== REDACTED) {
+        redacted = true;
+        return [key, REDACTED];
+      }
+      return [key, walk(entry, depth + 1)];
+    }));
+  };
+  const out = walk(value, 0);
+  return { value: out, redacted };
+}
+
+/** A name as written or percent-decoded (`api%5Fkey` is `api_key`). */
+function isSecretParam(raw: string): boolean {
+  let decoded = raw;
+  try { decoded = decodeURIComponent(raw.replace(/\+/gu, ' ')); } catch { /* not valid percent-encoding: judge it as written */ }
+  return isSecretName(raw) || isSecretName(decoded);
+}
+
+/**
+ * A raw string body (#1153): credential-named JSON string fields and
+ * credential-named form-encoded pairs. Text edits only, so a body the engine
+ * cut still reads the same and a second pass changes nothing; a JSON value the
+ * cut left unterminated is redacted to the end.
+ */
+function redactBodyText(text: string, secret: (name: string) => boolean = isSecretName): string {
+  // A key is at most 128 plain characters, so each quote the scan starts at
+  // looks a bounded way ahead: linear on hostile text, where an unbounded key
+  // made it quadratic and, past JavaScriptCore's backtrack limit, silently
+  // match nothing (#1153 review).
+  const json = text.replace(/("([^"\\\n]{1,128})"\s*:\s*")((?:[^"\\]|\\.)*)("|$)/gu, (whole, head: string, name: string, value: string, end: string) =>
+    secret(name) && value !== '' ? `${head}${redactValue(value)}${end}` : whole);
+  // Form pairs only in text that is form-encoded through and through: in JSON
+  // or prose a pair would run on and hide what follows from the card.
+  if (!FORM_ENCODED.test(json)) return json;
+  return json.replace(/(^|&)([^=&]+=)([^&]*)/gu, (whole, lead: string, name: string, value: string) =>
+    (secret === isSecretName ? isSecretParam(name.slice(0, -1)) : secret(name.slice(0, -1))) && value !== '' ? `${lead}${name}${redactValue(value)}` : whole);
+}
+
+/** `a=1&b=2`: no whitespace, quotes, braces or angle brackets anywhere (a cut note's tail aside). */
+const FORM_ENCODED = /^[^\s"'{}<>=&]+=[^\s"'{}<>&]*(?:&[^\s"'{}<>=&]+=[^\s"'{}<>&]*)*(?:\.\.\. \[\d+ more characters\])?$/u;
+
+/**
+ * Webhook URLs whose path is the credential (#1153): a Slack incoming webhook
+ * (`hooks.slack.com/services/T/B/<secret>`), a Discord webhook
+ * (`/api/webhooks/<id>/<token>`) and a Telegram bot (`/bot<token>/`). Only the
+ * secret segment is replaced, so the card still shows where the request goes.
+ */
+const PATH_SECRETS: readonly RegExp[] = [
+  // Scheme, optional userinfo (already redacted by then), host with an optional trailing dot and port, any slashes.
+  /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?hooks\.slack\.com\.?(?::\d+)?[\\/]+(?:services|triggers|workflows)(?:[\\/]+[^/\\?#]+)*[\\/]+)([^/\\?#]+)/iu,
+  /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?(?:[a-z0-9-]+\.)*discord(?:app)?\.com\.?(?::\d+)?[\\/]+api[\\/]+(?:v\d+[\\/]+)?webhooks[\\/]+[^/\\?#]+[\\/]+)([^/\\?#]+)/iu,
+  /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?api\.telegram\.org\.?(?::\d+)?[\\/]+(?:file[\\/]+)?bot)([^/\\?#]+)/iu,
+  // Teams incoming webhook: .../webhookb2/<group>@<tenant>/IncomingWebhook/<secret>/<owner>.
+  /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?(?:[a-z0-9-]+\.)*webhook\.office\.com\.?(?::\d+)?[\\/]+webhookb2[\\/]+[^/\\?#]+[\\/]+IncomingWebhook[\\/]+)([^/\\?#]+)/iu,
+];
 
 /**
  * The HTTP piece takes credentials as plain props: Basic or Bearer fields, a
@@ -885,8 +1047,12 @@ export function redactHttpInput(input: Record<string, unknown>): Record<string, 
     out.url = out.url
       // Userinfo runs to the LAST @ before the path, so a password holding an @ goes whole.
       .replace(/^(\s*[a-z][a-z0-9+.-]*:[\\/]*)[^/\\?#]*@/iu, `$1${REDACTED}@`)
-      .replace(/([?&;][^=&#;]*=)([^&#;]*)/gu, (whole, name: string, value: string) =>
-        isSecretName(name.slice(1, -1)) && value !== '' ? `${name}${redactValue(value)}` : whole);
+      // Query and fragment (`#access_token=` from an implicit OAuth grant), names as written or percent-decoded.
+      .replace(/([?&;#][^=&#;]*=)([^&#;]*)/gu, (whole, name: string, value: string) =>
+        isSecretParam(name.slice(1, -1)) && value !== '' ? `${name}${redactValue(value)}` : whole);
+    for (const pattern of PATH_SECRETS) {
+      out.url = (out.url as string).replace(pattern, (whole, head: string, secret: string) => secret !== '' ? `${head}${redactValue(secret)}` : whole);
+    }
   }
   return out;
 }

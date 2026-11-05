@@ -39,7 +39,7 @@ import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import {managedIntercomInput, runManagedIntercomAction} from './managed-intercom';
 import {managedCalendlyInput, runManagedCalendlyAction} from './managed-calendly';
-import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
+import { GRAPHQL_PIECE, HTTP_PIECE, isGovernedPiece, redactReceipt, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
 import {managedGitHubInput, managedGitHubIssue, runManagedGitHubAction} from './managed-github';
@@ -380,15 +380,32 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
  * Only a retry of a step whose receipt is recorded reads the stored copy.
  */
 export function receiptBody(piece: unknown, effectId: string, result: unknown): string {
-  if (piece !== HTTP_PIECE) return JSON.stringify({ effectId, result: result ?? null });
+  // The core GraphQL piece (#961) answers with the same HTTP response shape.
+  if (piece !== HTTP_PIECE && piece !== GRAPHQL_PIECE) return JSON.stringify({ effectId, result: result ?? null });
   const response = result !== null && typeof result === 'object' ? result as { status?: unknown; headers?: unknown; body?: unknown } : {};
-  // A session cookie the server set is a credential, and the receipt is durable.
-  const stored = result !== null && typeof result === 'object' && !Array.isArray(result) && 'headers' in result
-    ? { ...(result as Record<string, unknown>), headers: withoutCookies(response.headers) } : result;
+  // A session cookie the server set is a credential, and the receipt is
+  // durable; so is a token in the response (an OAuth code exchange, a login),
+  // in its headers or body at any depth, #1153. A failure the step continued
+  // past (HttpError.errorMessage(): { response, request }) keeps no request
+  // body, which can hold the credentials it sent. Only a replay of a recorded
+  // step reads this copy, and `receiptRedacted` tells it values were replaced.
+  let shaped: unknown = result;
+  if (result !== null && typeof result === 'object' && !Array.isArray(result)) {
+    const fields = { ...(result as Record<string, unknown>) };
+    if ('headers' in fields) fields.headers = withoutCookies(fields.headers);
+    const request = fields.request;
+    if (request !== null && typeof request === 'object' && !Array.isArray(request) && 'body' in request) fields.request = { ...request, body: null };
+    shaped = fields;
+  }
+  const { value: cleaned, redacted } = redactReceipt(shaped);
+  const stored = redacted && cleaned !== null && typeof cleaned === 'object' && !Array.isArray(cleaned)
+    ? { ...(cleaned as Record<string, unknown>), receiptRedacted: true } : cleaned;
   const whole = JSON.stringify({ effectId, result: stored ?? null });
   if (new TextEncoder().encode(whole).byteLength <= PIECE_RECEIPT_MAX_BYTES) return whole;
   const bodyBytes = new TextEncoder().encode(JSON.stringify(response.body ?? null)).byteLength;
-  const reduced = JSON.stringify({ effectId, result: { status: response.status ?? null, headers: withoutCookies(response.headers), body: null, receiptOmittedBodyBytes: bodyBytes } });
+  const headers = redactReceipt(withoutCookies(response.headers));
+  const reduced = JSON.stringify({ effectId, result: { status: response.status ?? null, headers: headers.value, body: null, receiptOmittedBodyBytes: bodyBytes,
+    ...(headers.redacted ? { receiptRedacted: true } : {}) } });
   if (new TextEncoder().encode(reduced).byteLength <= PIECE_RECEIPT_MAX_BYTES) return reduced;
   return JSON.stringify({ effectId, result: { status: response.status ?? null, headers: null, body: null, receiptOmittedBodyBytes: bodyBytes } });
 }

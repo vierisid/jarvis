@@ -291,12 +291,12 @@ RUN bun run build:workflows
 # without it the loop would run once on a path that does not exist and the
 # "built nothing" message below could never print.
 # The loaded vendored core pieces (#961) are checked the same way. This list
-# must equal LOADED_CORE_PIECES in build-pieces.ts (core-pieces.test.ts pins it).
+# must equal LOADED_CORE_PIECES in runner/engine-runtime/build.ts (core-pieces.test.ts pins it).
 RUN set -eu; \
     pieces=/app/src/workflows/activepieces/packages/pieces/jarvis; \
     core=/app/src/workflows/activepieces/packages/pieces/core; \
     n=0; \
-    for dir in "$pieces"/*/ "$core/approval/" "$core/delay/" "$core/http/" "$core/schedule/"; do \
+    for dir in "$pieces"/*/ "$core/approval/" "$core/crypto/" "$core/csv/" "$core/data-mapper/" "$core/data-summarizer/" "$core/date-helper/" "$core/delay/" "$core/file-helper/" "$core/graphql/" "$core/http/" "$core/image-helper/" "$core/math-helper/" "$core/pdf/" "$core/qrcode/" "$core/schedule/" "$core/sftp/" "$core/smtp/" "$core/store/" "$core/text-helper/" "$core/xml/"; do \
       [ -d "$dir" ] || { case "$dir" in "$core"/*) echo "core piece directory missing: $dir" >&2; exit 1;; esac; continue; }; \
       for artifact in dist/package.json dist/src/index.js dist/.source-hash; do \
         [ -f "$dir$artifact" ] || { \
@@ -328,7 +328,7 @@ RUN set -eu; \
       mkdir -p "/out/pieces/$name"; \
       cp -a "${dir}dist" "/out/pieces/$name/dist"; \
     done; \
-    for name in approval delay http schedule; do \
+    for name in approval crypto csv data-mapper data-summarizer date-helper delay file-helper graphql http image-helper math-helper pdf qrcode schedule sftp smtp store text-helper xml; do \
       mkdir -p "/out/core-pieces/$name"; \
       cp -a "$core/$name/dist" "/out/core-pieces/$name/dist"; \
     done; \

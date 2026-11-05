@@ -47,6 +47,7 @@ import {
 import { resolve, basename } from "node:path";
 import {
   ENGINE_BUILD_PATHS,
+  LOADED_CORE_PIECES,
   bundleHash,
   ensureStagingInstalled as ensureEngineStagingInstalled,
 } from "./build";
@@ -68,21 +69,36 @@ export const PIECE_JARVIS_SOURCES: readonly string[] = [
   "workflows/runtime/subflow-contract.ts",
 ];
 
+/** The loaded vendored core pieces (#961); defined in `build.ts`, whose staging install carries their dependencies. */
+export { LOADED_CORE_PIECES } from "./build";
+
 /**
- * The vendored core pieces (`packages/pieces/core`) Jarvis builds and loads
- * (#961). Each is governed (`CORE_PIECE_ADAPTERS`) or acts only inside the run
- * (`IN_RUN_STEP_PIECES`). Left out, and why:
- *   - webhook: the editor's Webhook trigger is Jarvis's own ingress
- *     (`/api/webhooks/<flowId>`, with an optional signing secret); the core
- *     piece's trigger would never fire through the engine, and its two
- *     "return response" actions answer a synchronous webhook Jarvis does not
- *     hold open.
- *   - store, file-helper: they need `deep-equal` and `@zip.js/zip.js`, which
- *     the engine's committed staging install does not carry yet; adding them
- *     changes the staging lockfile and so every engine bundle, which is its
- *     own change.
+ * Bump when the esbuild options in `buildPiece` change (#961: `*.node`
+ * external, `import.meta.url`, the jsdom sync-XHR worker), so a cached piece
+ * compiled under the old options is rebuilt rather than reused.
  */
-export const LOADED_CORE_PIECES: readonly string[] = ["approval", "delay", "http", "schedule"];
+const PIECE_BUILD_OPTIONS_VERSION = "piece-build/v2";
+
+/**
+ * jsdom (the core text helper's HTML parser) resolves the worker it spawns for
+ * a synchronous XMLHttpRequest when it loads: `require.resolve` of a file a
+ * bundle does not carry, which throws at load. A piece's jsdom never runs
+ * scripts, so there is no synchronous request to serve: the worker path is
+ * null, and a request that needed it fails rather than spawns a process.
+ */
+const JSDOM_SYNC_XHR = 'require.resolve ? require.resolve("./xhr-sync-worker.js") : null';
+const jsdomNoSyncXhr = {
+  name: "jarvis-jsdom-no-sync-xhr",
+  setup(build: { onLoad(options: { filter: RegExp }, cb: (args: { path: string }) => { contents: string; loader: string }): void }) {
+    build.onLoad({ filter: /[\\/]jsdom[\\/]lib[\\/]jsdom[\\/]living[\\/]xhr[\\/]XMLHttpRequest-impl\.js$/ }, (args) => {
+      const source = readFileSync(args.path, "utf8");
+      if (source.split(JSDOM_SYNC_XHR).length !== 2) {
+        throw new Error(`jsdom's XMLHttpRequest-impl.js changed; review the sync-XHR worker patch in build-pieces.ts (${args.path})`);
+      }
+      return { contents: source.replace(JSDOM_SYNC_XHR, "null"), loader: "js" };
+    });
+  },
+};
 
 export interface BuildPieceResult {
   pieceDir: string;
@@ -116,6 +132,9 @@ export interface BuildPieceOptions {
 function pieceHash(pieceDir: string): string {
   const hasher = createHash("sha256");
   hasher.update(bundleHash()).update("\0");
+  // How a piece is compiled is part of what it is: a change to the esbuild
+  // options below must rebuild every cached piece.
+  hasher.update(PIECE_BUILD_OPTIONS_VERSION).update("\0");
   // Vendored pieces import a few pure Jarvis modules (the action-outcome wire
   // contract; the HTTP piece's egress guard). Include them so an edit to one
   // cannot leave an old copy compiled into dist/ (`core-pieces.test.ts` pins
@@ -275,7 +294,18 @@ export async function buildPiece(
         "pieces/common/src",
       ),
     },
-    external: ["isolated-vm", "utf-8-validate", "bufferutil"],
+    // `*.node`: native addons a dependency loads inside a try and falls back
+    // from (ssh2's sshcrypto and cpu-features, for the core SFTP piece, #961).
+    // The staging install runs no install scripts, so none is ever built; kept
+    // as a relative require that finds nothing beside the bundle, so the
+    // pure-JS path runs.
+    external: ["isolated-vm", "utf-8-validate", "bufferutil", "*.node"],
+    // An ES module dependency (openpgp, for the core crypto piece) reads
+    // `import.meta.url`, which a CommonJS bundle does not have: it is the
+    // bundle file's own URL instead.
+    define: { "import.meta.url": "__jarvisImportMetaUrl" },
+    banner: { js: 'var __jarvisImportMetaUrl = require("node:url").pathToFileURL(__filename).href;' },
+    plugins: [jsdomNoSyncXhr],
     nodePaths: [STAGING_NODE_MODULES],
     logLevel: "warning",
   });

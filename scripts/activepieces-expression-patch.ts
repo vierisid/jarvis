@@ -62,6 +62,84 @@ export const expressionPatches = {
     ["            if (attempts < 3) continue;\n            throw error;\n          case 'continue_none':",
       "            if (attempts < maxAttempts) continue;\n            throw error;\n          case 'continue_none':"],
   ],
+  // #961: the core SMTP, GraphQL and FTP/SFTP pieces connect only through the
+  // egress guard. SMTP sends once; GraphQL refuses a proxy and is not retried by
+  // default; the SFTP piece lists no trigger and keeps FTP data connections on
+  // the checked address; the PDF piece drops "Convert to Image" (a shell, its
+  // source is stubbed by sync-activepieces.ts) and the password generator uses
+  // a CSPRNG. `activepieces-expression-patch.test.ts` round-trips them.
+  "packages/pieces/core/smtp/src/lib/common/index.ts": [
+    ["  },\n};",
+      "  },\n  // === END JARVIS PATCH ===\n};"],
+    ["    const smtpOptions = smtpCommon.constructConfig(auth);\n    const transporter = nodemailer.createTransport(smtpOptions);\n    return transporter;",
+      "    const smtpOptions = smtpCommon.constructConfig(auth);\n    const host = String(auth.host ?? '').trim();\n    const address = await resolveGuardedAddress(host, egressPolicyFromEnv(), { label: 'SMTP connection' });\n    const transporter = nodemailer.createTransport({\n      ...smtpOptions,\n      host: address,\n      ...(isIP(host.replace(/^\\[(.*)\\]$/u, '$1')) === 0 ? { servername: host } : {}),\n    }, {\n      // Message defaults: nothing in a message may make nodemailer read a\n      // local file or fetch a URL (an attachment or html given as { path }).\n      disableFileAccess: true,\n      disableUrlAccess: true,\n    });\n    return transporter;"],
+    ["  },\n  createSMTPTransport(auth: smtpAuthParams) {\n    const smtpOptions = smtpCommon.constructConfig(auth);",
+      "  },\n  // === JARVIS PATCH (#961): the mail server passes the egress guard ===\n  // The host is resolved once, every address is checked against this\n  // install's policy, and nodemailer connects to the checked address, never\n  // resolving the name itself. The name stays the TLS servername, so the\n  // certificate is still checked against it.\n  async createSMTPTransport(auth: smtpAuthParams) {\n    const smtpOptions = smtpCommon.constructConfig(auth);"],
+    ["import nodemailer from 'nodemailer';\n",
+      "import nodemailer from 'nodemailer';\nimport { isIP } from 'node:net';\n// Jarvis (#961): the workflow egress guard.\nimport { egressPolicyFromEnv, resolveGuardedAddress } from '../../../../../../../../runtime/http-egress';\n"],
+  ],
+  "packages/pieces/core/smtp/src/index.ts": [
+    ["    } catch (e) {\n      const castedError = (e as Record<string, unknown>)",
+      "    } catch (e) {\n      // Jarvis (#961): a refused address says which rule refused it.\n      if ((e as { code?: unknown })?.code === 'ERR_EGRESS_REFUSED') {\n        return { valid: false, error: (e as Error).message };\n      }\n      const castedError = (e as Record<string, unknown>)"],
+    ["        try {\n      const transporter = smtpCommon.createSMTPTransport(auth);\n      return new Promise((resolve, reject) => {",
+      "        try {\n      // Jarvis (#961): resolved and checked by the egress guard first.\n      const transporter = await smtpCommon.createSMTPTransport(auth);\n      return new Promise((resolve, reject) => {"],
+  ],
+  "packages/pieces/core/smtp/src/lib/actions/send-email.ts": [
+    ["  }\n}\n\nfunction getFrom(senderName: string|undefined, from: string) {",
+      "  }\n}\n// === END JARVIS PATCH ===\n\nfunction getFrom(senderName: string|undefined, from: string) {"],
+    ["async function sendWithRetry(transporter: any, mailOptions: any) {\n  const maxRetries = 3;\n  let retryCount = 0;\n  \n  while (retryCount < maxRetries) {\n    try {\n      const info = await transporter.sendMail(mailOptions);\n      return info;\n    } catch (error: any) {\n      if ('code' in error && error.code === 'ECONNRESET' && retryCount < maxRetries - 1) {\n        retryCount++;\n        await new Promise(resolve => setTimeout(resolve, 3000));\n        continue;\n      }\n      throw error;\n    }\n  }\n}",
+      "async function sendWithRetry(transporter: any, mailOptions: any) {\n  return await transporter.sendMail(mailOptions);\n}"],
+    ["\nasync function sendWithRetry(transporter: any, mailOptions: any) {",
+      "\n// === JARVIS PATCH (#961): an email is sent once ===\n// Upstream tried again after ECONNRESET, but a reset after the server took the\n// message (after DATA) is a sent email, and trying again sends it twice. The\n// send is tracked (Q-07): an attempt whose outcome is unknown is refused\n// rather than repeated.\nasync function sendWithRetry(transporter: any, mailOptions: any) {"],
+    ["  run: async ({ auth, propsValue }) => {\n    const transporter = smtpCommon.createSMTPTransport(auth.props);\n",
+      "  run: async ({ auth, propsValue }) => {\n    // Jarvis (#961): resolved and checked by the egress guard first.\n    const transporter = await smtpCommon.createSMTPTransport(auth.props);\n"],
+  ],
+  "packages/pieces/core/graphql/src/lib/actions/query.ts": [
+    ["    } catch (error) {\n      if (failsafe) {",
+      "    } catch (error) {\n      // A refused address fails the step as itself, even with \"No Error on Failure\".\n      const refused = egressRefusalIn(error);\n      if (refused) throw refused;\n      if (failsafe) {"],
+    ["    try {\n      if (use_proxy) {\n        const proxySettings = context.propsValue.proxy_settings;\n        assertNotNullOrUndefined(proxySettings, 'Proxy Settings');\n        assertNotNullOrUndefined(proxySettings['proxy_host'], 'Proxy Host');\n        assertNotNullOrUndefined(proxySettings['proxy_port'], 'Proxy Port');\n        let proxyUrl;\n\n        if (proxySettings['proxy_username'] && proxySettings['proxy_password']) {\n          proxyUrl = `http://${proxySettings['proxy_username']}:${proxySettings['proxy_password']}@${proxySettings['proxy_host']}:${proxySettings['proxy_port']}`;\n        } else {\n          proxyUrl = `http://${proxySettings['proxy_host']}:${proxySettings['proxy_port']}`;\n        }\n  \n        const httpsAgent = new HttpsProxyAgent(proxyUrl)\n        const axiosClient = axios.create({\n          httpsAgent,\n        });\n\n        const proxied_response = await axiosClient.request(request);\n        return proxied_response.data;\n      }\n      return await httpClient.sendRequest(request);\n    } catch (error) {",
+      "    try {\n      return await httpClient.sendRequest(request, egressGuardedAxios(axios, egressPolicyFromEnv(), { read: false }) as never);\n    } catch (error) {"],
+    ["\n    try {",
+      "\n    // === JARVIS PATCH (#961): every connection passes the egress guard ===\n    // As the core HTTP piece: each hop is resolved once, checked against this\n    // install's policy and connected to at the checked address, a redirect to\n    // another origin is refused (a GraphQL request is never a read), and a\n    // proxy, which would pick the address itself, is refused.\n    if (use_proxy) {\n      throw new Error('Jarvis does not send GraphQL steps through a proxy: the address check would not apply. Turn off \"Use Proxy\".');\n    }\n    // === END JARVIS PATCH ===\n    try {"],
+    ["    continueOnFailure: { hide: true },\n    retryOnFailure: { defaultValue: true },\n  },",
+      "    continueOnFailure: { hide: true },\n    retryOnFailure: { hide: true, defaultValue: false },\n  },"],
+    ["  },\n  errorHandlingOptions: {",
+      "  },\n  // Jarvis (#961): a GraphQL request always carries its query as a body, so it\n  // is a send, not a read, and is never repeated by default (Q-07): the engine\n  // refuses a retry whose first attempt's outcome is unknown anyway.\n  errorHandlingOptions: {"],
+    ["import axios from 'axios';\n",
+      "import axios from 'axios';\n// Jarvis (#961): the workflow egress guard.\nimport { egressGuardedAxios, egressPolicyFromEnv, egressRefusalIn } from '../../../../../../../../runtime/http-egress';\n"],
+    ["import { httpMethodDropdown } from '../common/props';\nimport { HttpsProxyAgent } from 'https-proxy-agent';\nimport axios from 'axios';",
+      "import { httpMethodDropdown } from '../common/props';\nimport axios from 'axios';"],
+  ],
+  "packages/pieces/core/sftp/src/lib/common.ts": [
+    ["        rejectUnauthorized: !(allow_unauthorized_certificates ?? false),\n      }",
+      "        rejectUnauthorized: !(allow_unauthorized_certificates ?? false),\n        ...servername,\n      }"],
+    ["  } else {\n    const ftpClient = new FTPClient();\n    await ftpClient.access({",
+      "  } else {\n    // Jarvis (#961): a PASV reply names the host for the data connection, so a\n    // server could send it to any address, past the guard (and an FTP bounce).\n    // With allowSeparateTransferHost off, basic-ftp connects data sockets to\n    // the control connection's address, the one the guard checked; EPSV names\n    // only a port anyway. 30000 is basic-ftp's default timeout.\n    const ftpClient = new FTPClient(30000, { allowSeparateTransferHost: false });\n    await ftpClient.access({"],
+    ["  const { protocol, host, port, allow_unauthorized_certificates, allow_anonymous_login, username, password, privateKey, algorithm } = auth;\n  const protocolBackwardCompatibility = await getProtocolBackwardCompatibility(protocol);\n  if (protocolBackwardCompatibility === 'sftp') {\n    const sftp = new Client();",
+      "  const { protocol, host, port, allow_unauthorized_certificates, allow_anonymous_login, username, password, privateKey, algorithm } = auth;\n  const protocolBackwardCompatibility = await getProtocolBackwardCompatibility(protocol);\n  // === JARVIS PATCH (#961): the server passes the egress guard ===\n  // The host is resolved once, every address is checked against this\n  // install's policy, and the client connects to the checked address, never\n  // resolving the name itself. FTPS keeps the name as its TLS servername, so\n  // the certificate is still checked against it.\n  const name = String(auth.host ?? '').trim();\n  const host = await resolveGuardedAddress(name, egressPolicyFromEnv(), {\n    label: `${protocolBackwardCompatibility.toUpperCase()} connection`,\n  });\n  const servername = isIP(name.replace(/^\\[(.*)\\]$/u, '$1')) === 0 ? { servername: name } : {};\n  // === END JARVIS PATCH ===\n  if (protocolBackwardCompatibility === 'sftp') {\n    const sftp = new Client();"],
+    ["export async function getClient<T extends Client | FTPClient>(auth: { protocol: string | undefined, host: string, port: number, allow_unauthorized_certificates: boolean | undefined, allow_anonymous_login: boolean | undefined, username: string, password: string | undefined, privateKey: string | undefined, algorithm: ServerHostKeyAlgorithm[] | string[] | undefined }): Promise<T> {\n  const { protocol, host, port, allow_unauthorized_certificates, allow_anonymous_login, username, password, privateKey, algorithm } = auth;\n  const protocolBackwardCompatibility = await getProtocolBackwardCompatibility(protocol);",
+      "export async function getClient<T extends Client | FTPClient>(auth: { protocol: string | undefined, host: string, port: number, allow_unauthorized_certificates: boolean | undefined, allow_anonymous_login: boolean | undefined, username: string, password: string | undefined, privateKey: string | undefined, algorithm: ServerHostKeyAlgorithm[] | string[] | undefined }): Promise<T> {\n  const { protocol, port, allow_unauthorized_certificates, allow_anonymous_login, username, password, privateKey, algorithm } = auth;\n  const protocolBackwardCompatibility = await getProtocolBackwardCompatibility(protocol);"],
+    ["import { Client as FTPClient } from 'basic-ftp';\n",
+      "import { Client as FTPClient } from 'basic-ftp';\nimport { isIP } from 'node:net';\n// Jarvis (#961): the workflow egress guard.\nimport { egressPolicyFromEnv, resolveGuardedAddress } from '../../../../../../../runtime/http-egress';\n"],
+  ],
+  "packages/pieces/core/sftp/src/index.ts": [
+    ["  ],\n  triggers: [newOrModifiedFile],\n});",
+      "  ],\n  // Jarvis (#961): the polling trigger is not loaded. A trigger runs outside\n  // the effect boundary, where nothing governs or guards its connection.\n  triggers: [],\n});"],
+    ["import { readFileContent } from './lib/actions/read-file';\nimport { newOrModifiedFile } from './lib/triggers/new-modified-file';\nimport { deleteFolderAction } from './lib/actions/delete-folder';",
+      "import { readFileContent } from './lib/actions/read-file';\nimport { deleteFolderAction } from './lib/actions/delete-folder';"],
+  ],
+  "packages/pieces/core/pdf/src/index.ts": [
+    ["    extractText,\n    convertToImage,\n    textToPdf,",
+      "    extractText,\n    // Jarvis (#961): \"Convert to Image\" is not loaded; it runs pdftoppm in a\n    // shell outside the run (see lib/actions/convert-to-image.ts).\n    textToPdf,"],
+    ["import { extractText } from './lib/actions/extract-text';\nimport { convertToImage } from './lib/actions/convert-to-image';\nimport { textToPdf } from './lib/actions/text-to-pdf';",
+      "import { extractText } from './lib/actions/extract-text';\nimport { textToPdf } from './lib/actions/text-to-pdf';"],
+  ],
+  "packages/pieces/core/crypto/src/lib/actions/generate-password.ts": [
+    ["    for (let i = 0; i < length; i++) {\n      const randomIndex = Math.floor(Math.random() * charset.length);\n      password += charset[randomIndex];",
+      "    for (let i = 0; i < length; i++) {\n      // Jarvis (#961): a password from a CSPRNG, not Math.random().\n      const randomIndex = randomInt(charset.length);\n      password += charset[randomIndex];"],
+    ["import {\n  Property,",
+      "import { randomInt } from 'node:crypto';\nimport {\n  Property,"],
+  ],
   // #961: a file property's URL is fetched through the egress guard, before
   // Authority is asked, rather than by a plain fetch of a flow-chosen URL.
   "packages/server/engine/src/lib/variables/processors/file.ts": [

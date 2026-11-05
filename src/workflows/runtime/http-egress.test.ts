@@ -7,8 +7,10 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createServer, type Server } from 'node:http';
 import axios from 'axios';
 import type { LookupAddress } from 'node:dns';
-import { addressAllowed, assertHostAllowed, canonicalAddress, classifyAddress, destinationAllowed, egressGuardedAxios, egressPolicyFromEnv,
-  guardedFileDownload, guardedLookup, interfaceAddresses, EGRESS_POLICY_ENV, EgressRefusedError } from './http-egress';
+import { readFileSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
+import { MAX_RESPONSE_BYTES, ResponseTooLargeError, resolveGuardedAddress, addressAllowed, assertHostAllowed, canonicalAddress, classifyAddress, destinationAllowed, egressGuardedAxios, egressPolicyFromEnv,
+  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, EGRESS_POLICY_ENV, EgressRefusedError } from './http-egress';
 
 describe('which addresses the HTTP step may reach', () => {
   const table: Array<[string, 'public' | 'private' | 'blocked']> = [
@@ -89,6 +91,17 @@ describe('the guarded client connects only where it checked', () => {
       if (req.url === '/to-blocked-name') { res.writeHead(302, { location: `http://internal.test:${port}/secret` }); res.end(); return; }
       if (req.url === '/to-other-origin') { res.writeHead(307, { location: `http://other.test:${port}/landing` }); res.end(); return; }
       if (req.url === '/to-same-origin') { res.writeHead(307, { location: '/landing' }); res.end(); return; }
+      const big = /^\/big\?n=(\d+)(&chunked)?$/u.exec(req.url ?? '');
+      if (big) {
+        const n = Number(big[1]);
+        // Chunked: no length up front, so only counting the bytes can stop it.
+        res.writeHead(200, big[2] ? { 'content-type': 'application/octet-stream' } : { 'content-type': 'application/octet-stream', 'content-length': String(n) });
+        const chunk = Buffer.alloc(1024 * 1024, 120);
+        let left = n;
+        const pump = () => { while (left > 0) { const part = chunk.subarray(0, Math.min(left, chunk.length)); left -= part.length; if (!res.write(part)) { res.once('drain', pump); return; } } res.end(); };
+        pump();
+        return;
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, url: req.url }));
     });
@@ -113,6 +126,37 @@ describe('the guarded client connects only where it checked', () => {
   const FAST = 3_000;
   const client = (read: boolean, allowAddress?: (a: string) => boolean) =>
     egressGuardedAxios(axios, 'public-only', { read, resolve, timeoutMs: FAST, ...(allowAddress ? { allowAddress } : {}) });
+
+  test('#1153: a response larger than a step can carry is refused, with or without a length; up to it is read', async () => {
+    // The engine's run-data ceiling (logging-utils.ts: 10 MiB default, 256 KiB error offset), base64 for a binary body.
+    const logging = readFileSync(resolvePath(import.meta.dir, '../activepieces/packages/server/engine/src/lib/helper/logging-utils.ts'), 'utf8');
+    expect(logging).toContain("const DEFAULT_MAX_LOG_SIZE_FOR_TESTING = '10'");
+    expect(logging).toContain('const ERROR_OFFSET = 256 * 1024');
+    expect(MAX_RESPONSE_BYTES).toBe(((10 * 1024 * 1024 - 256 * 1024) * 3) / 4);
+    expect(Number.isInteger(MAX_RESPONSE_BYTES)).toBe(true);
+    const get = (n: number, chunked = false) => client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/big?n=${n}${chunked ? '&chunked' : ''}`, responseType: 'arraybuffer' });
+    expect((await get(MAX_RESPONSE_BYTES)).data.byteLength).toBe(MAX_RESPONSE_BYTES);
+    await expect(get(MAX_RESPONSE_BYTES + 1)).rejects.toBeInstanceOf(ResponseTooLargeError);
+    await expect(get(MAX_RESPONSE_BYTES + 1, true)).rejects.toBeInstanceOf(ResponseTooLargeError);
+    // A refusal, so the pieces fail the step on it rather than retry or continue past it.
+    expect(egressRefusalIn(await get(MAX_RESPONSE_BYTES + 1).catch((e) => e))).toBeInstanceOf(ResponseTooLargeError);
+    // Raised after the request went out, which a "refused, so not sent" reading must not miss.
+    expect(new ResponseTooLargeError('x').afterSend).toBe(true);
+    // A larger cap a request asks for is not honoured; a smaller one is.
+    await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/big?n=${MAX_RESPONSE_BYTES + 1}`, maxContentLength: -1 })).rejects.toThrow(/maxContentLength/);
+    await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/big?n=2048`, maxContentLength: 1024 })).rejects.toThrow(/maxContentLength/);
+    // A stream would escape the cap, so it is refused; redirects stay at follow-redirects' default or fewer.
+    await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/ok`, responseType: 'stream' })).rejects.toBeInstanceOf(EgressRefusedError);
+    let seenConfig: { maxRedirects?: number } = {};
+    const probe = client(true, onlyLocal);
+    // Registered after the guard's, so it runs before it; the guard then sets the same config object.
+    probe.interceptors.request.use((config) => { seenConfig = config; return config; });
+    await probe.request({ method: 'GET', url: `http://ops.test:${port}/ok`, maxRedirects: 1000 });
+    expect(seenConfig.maxRedirects).toBe(21);
+    // The engine's file download is held to the same size.
+    await expect(guardedFileDownload(axios, `http://ops.test:${port}/big?n=${MAX_RESPONSE_BYTES + 1}`, 'public-only', { resolve, allowAddress: onlyLocal, timeoutMs: FAST }))
+      .rejects.toBeInstanceOf(ResponseTooLargeError);
+  }, 30_000);
 
   test('a name is connected to at the address its lookup checked, with one lookup', async () => {
     lookups = []; seen.length = 0;
@@ -196,5 +240,48 @@ describe('the guarded client connects only where it checked', () => {
 
   test('only http and https are spoken', async () => {
     await expect(client(true).request({ method: 'GET', url: 'file:///etc/passwd' })).rejects.toThrow(/not http or https/);
+  });
+});
+
+describe('#961: a non-HTTP connection (SMTP, SFTP, FTP) is resolved once and connects to the checked address', () => {
+  const resolver = (answers: Record<string, string[]>, seen: string[]) =>
+    ((host: string, _opts: unknown, cb: (e: Error | null, a: LookupAddress[]) => void) => {
+      seen.push(host);
+      const list = answers[host];
+      if (!list) return cb(Object.assign(new Error(`getaddrinfo ENOTFOUND ${host}`), { code: 'ENOTFOUND' }), []);
+      cb(null, list.map((address) => ({ address, family: address.includes(':') ? 6 : 4 })));
+    }) as never;
+
+  test('a name is resolved once and the first checked address is what the client connects to', async () => {
+    const seen: string[] = [];
+    await expect(resolveGuardedAddress('mail.example.com', 'public-only', { label: 'SMTP connection', resolve: resolver({ 'mail.example.com': ['93.184.216.34', '93.184.216.35'] }, seen) }))
+      .resolves.toBe('93.184.216.34');
+    expect(seen).toEqual(['mail.example.com']);
+    // IPv4 first when a name has both, whatever order DNS answered in.
+    await expect(resolveGuardedAddress('dual.example.com', 'public-only', { label: 'SMTP connection',
+      resolve: resolver({ 'dual.example.com': ['2606:2800:220:1:248:1893:25c8:1946', '93.184.216.34'] }, []) })).resolves.toBe('93.184.216.34');
+    await expect(resolveGuardedAddress('v6.example.com', 'public-only', { label: 'SMTP connection',
+      resolve: resolver({ 'v6.example.com': ['2606:2800:220:1:248:1893:25c8:1946'] }, []) })).resolves.toBe('2606:2800:220:1:248:1893:25c8:1946');
+  });
+
+  test('a name with ANY address outside the policy is refused, naming the connection', async () => {
+    const seen: string[] = [];
+    await expect(resolveGuardedAddress('mixed.example.com', 'private-allowed', { label: 'SFTP connection', resolve: resolver({ 'mixed.example.com': ['93.184.216.34', '127.0.0.1'] }, seen) }))
+      .rejects.toThrow(/^SFTP connection to mixed\.example\.com refused: it resolves to 127\.0\.0\.1/);
+    await expect(resolveGuardedAddress('nas.lan', 'public-only', { label: 'FTP connection', resolve: resolver({ 'nas.lan': ['192.168.1.5'] }, []) }))
+      .rejects.toThrow(/reach only public addresses/);
+    await expect(resolveGuardedAddress('nas.lan', 'private-allowed', { label: 'FTP connection', resolve: resolver({ 'nas.lan': ['192.168.1.5'] }, []) }))
+      .resolves.toBe('192.168.1.5');
+  });
+
+  test('a literal is checked without a lookup, brackets and all; an empty host is refused', async () => {
+    const seen: string[] = [];
+    const opts = { label: 'SMTP connection', resolve: resolver({}, seen) };
+    await expect(resolveGuardedAddress('[::1]', 'private-allowed', opts)).rejects.toThrow(/refused/);
+    await expect(resolveGuardedAddress('169.254.169.254', 'private-allowed', opts)).rejects.toThrow(/refused/);
+    await expect(resolveGuardedAddress('93.184.216.34', 'public-only', opts)).resolves.toBe('93.184.216.34');
+    await expect(resolveGuardedAddress('[2606:2800:220:1:248:1893:25c8:1946]', 'public-only', opts)).resolves.toBe('2606:2800:220:1:248:1893:25c8:1946');
+    await expect(resolveGuardedAddress('  ', 'public-only', opts)).rejects.toThrow(/no host/);
+    expect(seen).toEqual([]);
   });
 });

@@ -22,20 +22,37 @@ export const JARVIS_PIECE_PREFIX = '@jarvispieces/';
  * The vendored core pieces whose actions act only inside the run and Jarvis's
  * own workflow storage, so there is nothing outside Jarvis for Authority to
  * judge (#961). They are not audited one by one and obey Pause and Kill:
- *   approval     creates a request the signed-in user decides in Needs you
- *                (/api/workflow-inputs); its links only open that page. Sends nothing.
- *   delay        waits.
- *   file-helper  reads, converts, zips and unzips the run's own files.
- *   schedule     a trigger only; no actions.
- *   store        reads and writes the workflow's own key-value store.
+ *   approval        creates a request the signed-in user decides in Needs you
+ *                   (/api/workflow-inputs); its links only open that page. Sends nothing.
+ *   crypto          hashes, signs (HMAC), encrypts (OpenPGP), encodes and makes passwords.
+ *   csv, xml        converts between JSON and CSV or XML.
+ *   data-mapper     reshapes the step's input.
+ *   data-summarizer sums, averages, counts and finds the extremes of a list.
+ *   date-helper     date arithmetic and formatting.
+ *   delay           waits.
+ *   file-helper     reads, converts, zips and unzips the run's own files.
+ *   image-helper    reads, resizes, crops, rotates and compresses the run's images.
+ *   math-helper     arithmetic.
+ *   pdf             reads and builds the run's PDFs (upstream's "Convert to Image",
+ *                   which runs pdftoppm in a shell, is not loaded).
+ *   qrcode          draws a QR code.
+ *   schedule        a trigger only; no actions.
+ *   store           reads and writes the workflow's own key-value store.
+ *   text-helper     string, HTML and Markdown operations (HTML is parsed, never run).
+ * A file one of them is given by URL is fetched by the engine's file download,
+ * through the egress guard, as for any piece.
  * A core piece that reaches outside Jarvis is governed instead
  * (`CORE_PIECE_ADAPTERS` in piece-effects.ts), and `core-pieces.test.ts` holds
  * every vendored core piece, and every action of each one here, to exactly one
  * of the two.
  */
 export const IN_RUN_STEP_PIECES: ReadonlySet<string> = new Set([
-  '@activepieces/piece-approval', '@activepieces/piece-delay', '@activepieces/piece-file-helper',
-  '@activepieces/piece-schedule', '@activepieces/piece-store',
+  '@activepieces/piece-approval', '@activepieces/piece-crypto', '@activepieces/piece-csv',
+  '@activepieces/piece-data-mapper', '@activepieces/piece-data-summarizer', '@activepieces/piece-date-helper',
+  '@activepieces/piece-delay', '@activepieces/piece-file-helper', '@activepieces/piece-image-helper',
+  '@activepieces/piece-math-helper', '@activepieces/piece-pdf', '@activepieces/piece-qrcode',
+  '@activepieces/piece-schedule', '@activepieces/piece-store', '@activepieces/piece-text-helper',
+  '@activepieces/piece-xml',
 ]);
 
 /**

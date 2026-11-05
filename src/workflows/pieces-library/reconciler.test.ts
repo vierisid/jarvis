@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { writeManifest, readManifest } from "./installer";
@@ -24,13 +24,19 @@ afterEach(() => {
   rmSync(base, { recursive: true, force: true });
 });
 
-function fakeInstall(pkg: string, version: string): void {
+function fakeInstall(pkg: string, version: string, extra: Record<string, unknown> = {}): void {
   const dir = resolve(base, "node_modules", pkg);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     resolve(dir, "package.json"),
-    JSON.stringify({ name: pkg, version }) + "\n",
+    JSON.stringify({ name: pkg, version, ...extra }) + "\n",
   );
+  // bun writes bun.lock with every package it resolved; the license check
+  // (#971) reads identities from it, as it does on a real install.
+  const lockPath = resolve(base, "bun.lock");
+  const lock = existsSync(lockPath) ? JSON.parse(readFileSync(lockPath, "utf8")) as { lockfileVersion: number; packages: Record<string, unknown> } : { lockfileVersion: 1, packages: {} };
+  lock.packages[pkg] = [`${pkg}@${version}`, "", {}, "sha512-x"];
+  writeFileSync(lockPath, JSON.stringify(lock));
 }
 
 describe("reconcilePiecesLibrary", () => {
@@ -119,6 +125,7 @@ describe("reconcilePiecesLibrary", () => {
     // catalog pin would be re-pinned (and the install accepted as the new
     // truth), so use the catalog's own range here to isolate plain drift.
     const gmailRange = catalogById().get("gmail")!.versionRange;
+    const lines: string[] = [];
     await writeManifest(
       {
         version: 1,
@@ -140,10 +147,11 @@ describe("reconcilePiecesLibrary", () => {
         // Materialize a newer patch -- bun re-resolved during install.
         fakeInstall("@activepieces/piece-gmail", "0.12.5");
       },
-      log: () => {},
+      log: (l) => lines.push(l),
     });
     expect(result.drifted).toHaveLength(1);
     expect(result.drifted[0]?.onDiskVersion).toBe("0.12.5");
+    expect(lines).toContain("reconcile: 1 piece(s) resolved to a different version than the manifest records (re-run install or update manifest)");
     expect(result.drifted[0]?.piece.resolvedVersion).toBe("0.12.3");
   });
 
@@ -265,5 +273,74 @@ describe("#971: an install that already has an excluded piece", () => {
     const lines: string[] = [];
     await reconcilePiecesLibrary({ base, runBunInstall: async () => fakeInstall("@activepieces/piece-slack", "0.16.4"), log: (l) => lines.push(l) });
     expect(lines.some((l) => l.includes("stays installed but is withdrawn"))).toBe(false);
+  });
+});
+
+describe("#971: the license check at boot", () => {
+  const twoPieces = () => writeManifest({ version: 1, pieces: [
+    { id: "gmail", npmPackage: "@activepieces/piece-gmail", versionRange: "0.12.3", resolvedVersion: "0.12.3", installedAt: 1 },
+    { id: "slack", npmPackage: "@activepieces/piece-slack", versionRange: "0.16.4", resolvedVersion: "0.16.4", installedAt: 1 },
+  ] }, base);
+  const install = () => {
+    fakeInstall("@activepieces/piece-gmail", "0.12.3", { dependencies: { "gpl-lib": "1.0.0" } });
+    fakeInstall("gpl-lib", "1.0.0", { license: "GPL-2.0-only" });
+    fakeInstall("@activepieces/piece-slack", "0.16.4", { dependencies: { "ok-lib": "1.0.0" } });
+    fakeInstall("ok-lib", "1.0.0", { license: "ISC" });
+  };
+
+  test("a piece the policy denies is logged and held: off node_modules, kept in the manifest; the others load", async () => {
+    await twoPieces();
+    const lines: string[] = [];
+    const result = await reconcilePiecesLibrary({ base, runBunInstall: async () => install(), log: (l) => lines.push(l) });
+    expect(result.held.map((h) => h.piece.id)).toEqual(["gmail"]);
+    expect(result.held[0]!.problems.join("\n")).toMatch(/gpl-lib@1\.0\.0 .*GPL-2\.0-only/);
+    expect(result.materialized.map((p) => p.id)).toEqual(["slack"]);
+    expect(existsSync(resolve(base, "node_modules/@activepieces/piece-gmail"))).toBe(false);
+    expect(existsSync(resolve(base, "node_modules/@activepieces/piece-slack/package.json"))).toBe(true);
+    expect((await readManifest(base)).pieces.map((p) => p.id)).toEqual(["gmail", "slack"]);
+    expect(lines.some((l) => /WARNING gmail \(@activepieces\/piece-gmail\) is held and not loaded: the license policy denies/.test(l))).toBe(true);
+  });
+
+  test("a piece directory no manifest entry lists (a refused or uninstalled piece bun left) is removed at boot", async () => {
+    await twoPieces();
+    const lines: string[] = [];
+    await reconcilePiecesLibrary({ base, log: (l) => lines.push(l), runBunInstall: async () => {
+      install();
+      fakeInstall("@activepieces/piece-trello", "1.0.0");
+    } });
+    expect(existsSync(resolve(base, "node_modules/@activepieces/piece-trello"))).toBe(false);
+    expect(lines).toContain("reconcile: removed @activepieces/piece-trello from node_modules: no manifest entry lists it");
+  });
+
+  test("a piece directory only a held piece depends on is removed with it, so the denied tree is not loadable", async () => {
+    await writeManifest({ version: 1, pieces: [
+      { id: "gmail", npmPackage: "@activepieces/piece-gmail", versionRange: "0.12.3", resolvedVersion: "0.12.3", installedAt: 1 },
+    ] }, base);
+    const result = await reconcilePiecesLibrary({ base, log: () => {}, runBunInstall: async () => {
+      fakeInstall("@activepieces/piece-gmail", "0.12.3", { dependencies: { "@activepieces/piece-helper": "1.0.0" } });
+      fakeInstall("@activepieces/piece-helper", "1.0.0", { license: "MIT", dependencies: { "gpl-lib": "1.0.0" } });
+      fakeInstall("gpl-lib", "1.0.0", { license: "GPL-3.0-only" });
+    } });
+    expect(result.held.map((h) => h.piece.id)).toEqual(["gmail"]);
+    expect(existsSync(resolve(base, "node_modules/@activepieces/piece-helper"))).toBe(false);
+  });
+
+  test("with an empty manifest, piece directories an old uninstall left are still removed", async () => {
+    await writeManifest({ version: 1, pieces: [] }, base);
+    fakeInstall("@activepieces/piece-trello", "1.0.0");
+    const lines: string[] = [];
+    const result = await reconcilePiecesLibrary({ base, log: (l) => lines.push(l), runBunInstall: async () => { throw new Error("must not run"); } });
+    expect(result.ranInstall).toBe(false);
+    expect(existsSync(resolve(base, "node_modules/@activepieces/piece-trello"))).toBe(false);
+    expect(lines).toContain("reconcile: removed @activepieces/piece-trello from node_modules: no manifest entry lists it");
+  });
+
+  test("a license check that throws holds every installed piece rather than loading them unchecked", async () => {
+    await twoPieces();
+    const result = await reconcilePiecesLibrary({ base, runBunInstall: async () => install(), log: () => {},
+      checkLicenses: () => { throw new Error("boom"); } });
+    expect(result.held.map((h) => [h.piece.id, h.problems])).toEqual([
+      ["gmail", ["the license check failed: boom"]], ["slack", ["the license check failed: boom"]]]);
+    expect(result.materialized).toEqual([]);
   });
 });
