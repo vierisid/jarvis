@@ -56,6 +56,7 @@ import { chatErrorPayload, recordChatFailure } from '../failures/chat.ts';
 import { failureEvidence } from '../failures/evidence.ts';
 import { failureText, projectFailure, type UserFailure } from '../failures/projection.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
+import { truncateText } from '../vault/commitment-text.ts';
 import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-context.ts';
@@ -70,7 +71,7 @@ import {
 } from './voice-room-action-gate.ts';
 import { getCronTimezone } from '../lib/cron-scheduler.ts';
 import { findContent } from '../vault/content-pipeline.ts';
-import { findEntities } from '../vault/entities.ts';
+import { listEntityNames } from '../vault/entities.ts';
 import { roomActionArgs, roomActionEntityArg, roomActionTargetKind, roomActionTimeArg, SETTLED_TIME_ARG, withoutEntityPin } from './room-action-targets.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
@@ -1647,7 +1648,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
     if (looksLikeCommitment(text)) {
       try {
-        const taskLabel = text.length > 80 ? text.slice(0, 77) + '...' : text;
+        // Cut on a code point boundary (#1115): `slice` split a surrogate
+        // pair, and createCommitment then stored a replacement character.
+        const taskLabel = truncateText(text, 80);
         taskCommitment = createCommitment(taskLabel, {
           assigned_to: 'jarvis',
           created_from: 'user',
@@ -1895,7 +1898,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // Mark task as completed
       if (taskCommitment) {
         try {
-          const resultSummary = fullText.length > 200 ? fullText.slice(0, 197) + '...' : fullText;
+          const resultSummary = truncateText(fullText, 200);
           const updated = updateCommitmentStatus(taskCommitment.id, 'completed', resultSummary);
           if (updated) this.broadcastTaskUpdate(updated, 'updated');
         } catch (err) {
@@ -2204,7 +2207,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * The lists a held room action's item is found in (#1008), read from the
    * same sources the rooms load them from: /api/sites/projects, /api/content
    * and /api/vault/commitments, and the memory entities a remembered fact
-   * attaches to (#1023), as /api/vault/entities lists them.
+   * attaches to (#1023), by id and name only (#1118), the set
+   * /api/vault/entity-match matches the Memory room's lookups against.
    */
   protected roomActionTargetLists(): RoomActionTargetLists {
     return {
@@ -2214,7 +2218,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       },
       content: async () => findContent({}),
       task: async () => findCommitments({}),
-      entity: async () => findEntities({}),
+      // Names only (#1118): the match needs nothing else.
+      entity: async () => listEntityNames(),
     };
   }
 

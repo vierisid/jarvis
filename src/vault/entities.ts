@@ -89,6 +89,18 @@ export function getEntity(id: string): Entity | null {
 }
 
 /**
+ * Every entity's id and name, and nothing else (#1118): what matching a
+ * spoken or typed name against the vault needs. The held remember_that and
+ * the Memory room's lookup read the whole table per action, properties JSON
+ * included, to compare names. No LIKE prefilter: `matchEntityByName`
+ * compares NFC-folded, case-folded whole words, which LIKE (ASCII-only case
+ * folding, no normalisation) would wrongly narrow.
+ */
+export function listEntityNames(): Array<{ id: string; name: string }> {
+  return getDb().query<{ id: string; name: string }, []>('SELECT id, name FROM entities').all();
+}
+
+/**
  * Find entities matching query criteria
  */
 export function findEntities(query: {

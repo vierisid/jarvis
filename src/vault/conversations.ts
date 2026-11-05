@@ -191,7 +191,19 @@ export function getMessages(
 }
 
 /**
- * Get the most recent conversation for a channel, with its messages.
+ * Get the most recent conversation for a channel, with its messages: the
+ * channel's own, never one that belongs to a sender on it (#884,
+ * `ConversationOwner`). Every caller names no sender (the dashboard's restore,
+ * the agent's dialogue for a turn on its channel, /api/vault/conversations/active
+ * including its `channel=all`), and a sender's thread is
+ * read only through its own conversation id, so handing one to a caller that
+ * names none would show one person's turns to another (#1123).
+ *
+ * No time cutoff, unlike getOrCreateConversation's 4 hours (#1131): a turn's
+ * WRITER calls getOrCreateConversation first, which starts a new conversation
+ * after the gap, so the newest conversation is already the fresh one by the
+ * time the dialogue is read; and the dashboard's restore shows the last chat
+ * however old it is. Pebble keeps its own window (pebble-dialogue.ts).
  */
 export function getRecentConversation(channel: string): {
   conversation: Conversation;
@@ -199,7 +211,7 @@ export function getRecentConversation(channel: string): {
 } | null {
   const db = getDb();
   const row = db.prepare(
-    'SELECT * FROM conversations WHERE channel = ? AND (workspace_id IS NULL OR workspace_id = ?) ORDER BY last_message_at DESC, id DESC LIMIT 1'
+    'SELECT * FROM conversations WHERE channel = ? AND sender IS NULL AND (workspace_id IS NULL OR workspace_id = ?) ORDER BY last_message_at DESC, id DESC LIMIT 1'
   ).get(channel, defaultConversationWorkspace(db)) as ConversationRow | null;
 
   if (!row) return null;

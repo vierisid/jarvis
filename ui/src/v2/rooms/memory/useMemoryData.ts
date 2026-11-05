@@ -1,5 +1,4 @@
 import { readMemoryPages } from './memory-pages';
-import { matchEntityByName } from "../../../../../src/daemon/room-action-targets";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const POLL_INTERVAL_MS = 8000;
@@ -244,19 +243,22 @@ export function useMemoryData() {
       let target: { id: string; name: string } | null = entity && entity !== "new" ? { id: entity.id, name: subjectTrim } : null;
       if (!target) {
         try {
-          const resp = await fetch("/api/vault/entities");
+          // Matched by the daemon, with the matcher it settles a held card
+          // with, over names only (#1118): this used to fetch every entity,
+          // properties included, to compare one name.
+          const resp = await fetch(`/api/vault/entity-match?name=${encodeURIComponent(subjectTrim)}`);
           if (!resp.ok) throw new Error(await resp.text() || `HTTP ${resp.status}`);
-          const match = matchEntityByName(await resp.json() as Entity[], subjectTrim);
+          const match = await resp.json() as { entity: { id: string; name: string } | null; ambiguous?: number };
           // The card said a new entity; one by that name was made since (say
           // by another card), so neither a second one nor that one is what
           // was approved.
-          if (entity === "new" && match) {
+          if (entity === "new" && (match.entity || match.ambiguous)) {
             return { ok: false, message: `${subjectTrim} was added to memory since I asked; nothing was saved. Say it again.` };
           }
-          if (match && "ambiguous" in match) {
+          if (match.ambiguous) {
             return { ok: false, message: `${match.ambiguous} entities match "${subjectTrim}"; add the fact from the entity itself.` };
           }
-          if (match) target = match.entity;
+          if (match.entity) target = match.entity;
         } catch (err) {
           return { ok: false, message: err instanceof Error ? err.message : "Failed" };
         }
