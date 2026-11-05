@@ -37,6 +37,7 @@ import type { AuthorityLearner } from '../authority/learning.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import { applyQuickOverride } from '../authority/quick-override.ts';
+import { desktopEnabledFromSection } from '../actions/tools/desktop-guard.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { authorityConfigPatchError, isActionCategory } from '../authority/config-validation.ts';
 
@@ -1715,7 +1716,67 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           heartbeat: config.heartbeat,
           active_role: config.active_role,
           voice: config.voice ?? { wake_engine: 'openwakeword' },
+          // The desktop off switch (#905) as the daemon reads it, so Settings
+          // shows what is in force, not just what is stored (#1159).
+          desktop: { enabled: desktopEnabledFromSection(config.desktop) },
         });
+      },
+    },
+
+    /**
+     * Turn desktop control (desktop.enabled, #905) on or off from Settings
+     * (#1159). It used to be config.yaml only, with a restart, which a hosted
+     * install cannot edit at all. Only a real boolean is accepted: this is a
+     * privacy switch, and a value the guard would read some other way must not
+     * be stored as the user's choice. Persists that one key over the stored row
+     * (persistPlainUserPatch), sets the live section the guard is bound to, and
+     * runs the desktop applier, so tools, captures and the pebble follow at
+     * once.
+     */
+    '/api/config/desktop': {
+      POST: async (req: Request) => {
+        let body: unknown;
+        try {
+          body = await req.json();
+        } catch {
+          return error('Invalid request body');
+        }
+        const enabled = (body as { enabled?: unknown } | null)?.enabled;
+        if (typeof enabled !== 'boolean') return error('enabled must be true or false');
+        const { persistPlainUserPatch } = await import('./user-settings.ts');
+        const setLive = () => {
+          // A section that is there but not a mapping (desktop: false) is
+          // replaced, not spread: the choice just made is the whole answer.
+          const current = ctx.config.desktop;
+          const base = typeof current === 'object' && current !== null && !Array.isArray(current) ? current : {};
+          ctx.config.desktop = { ...base, enabled };
+        };
+        const apply = async () => (ctx.settingsReload ? ctx.settingsReload.applyNow('desktop') : null);
+        // Off fails closed (#1159 security review): it takes effect now even if
+        // it cannot be saved, so a store that refuses the write does not leave
+        // the desktop and clipboard reachable after the user turned them off.
+        // On is saved first and applied only once it is.
+        let saveFailure: unknown = null;
+        if (!enabled) {
+          setLive();
+          try { persistPlainUserPatch('desktop', { enabled }); } catch (err) { saveFailure = err; }
+        } else {
+          try { persistPlainUserPatch('desktop', { enabled }); } catch (err) { saveFailure = err; }
+          if (saveFailure !== null) {
+            console.error('[Config] Could not save desktop.enabled:', saveFailure);
+            return error('Desktop control could not be saved, so it was not turned on.', 500);
+          }
+          setLive();
+        }
+        const applyErr = await apply();
+        if (saveFailure !== null) {
+          console.error('[Config] Could not save desktop.enabled:', saveFailure);
+          return error('Desktop control is off for now, but the choice could not be saved: it may come back on at the next restart or settings reload.', 500);
+        }
+        const what = enabled ? 'Desktop control is on.' : 'Desktop control is off.';
+        return json(applyErr
+          ? { ok: false, enabled, message: `${what} Saved, but applying it failed: ${applyErr.error}` }
+          : { ok: true, enabled, message: what });
       },
     },
 

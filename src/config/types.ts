@@ -285,12 +285,14 @@ export type DesktopConfig = {
   /**
    * The desktop off switch (#905). `false` stops Jarvis from asking for or
    * acting on any machine's desktop: the desktop_* tools, capture_screen,
-   * ui_snapshot / ui_act / run_skill on a desktop surface, record_skill, and
-   * the pebble's own screenshot and foreground-window reads. Screen events a
-   * sidecar sends are dropped unread by awareness and the generic event
-   * pipeline; the sidecar's own observer still captures and OCRs the screen.
-   * Browser tools are unaffected. Takes effect on restart (set in
-   * config.yaml). A value or a section in the wrong shape fails closed; an
+   * get_clipboard / set_clipboard (#1159), ui_snapshot / ui_act / run_skill on
+   * a desktop surface, record_skill, and the pebble's own screenshot and
+   * foreground-window reads. Screen and clipboard events a sidecar sends are
+   * dropped unread by awareness and the generic event pipeline; the sidecar's
+   * own observers still capture, OCR and read. Browser tools and run_command
+   * are unaffected. Settings sets it at once (POST /api/config/desktop,
+   * #1159); a config.yaml edit is imported at the next start. A value or a
+   * section in the wrong shape fails closed; an
    * empty one is the default (desktop-guard.ts desktopEnabledFromSection).
    * Default true.
    */

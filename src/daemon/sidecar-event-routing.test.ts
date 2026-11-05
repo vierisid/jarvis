@@ -29,11 +29,23 @@ test('desktop on, awareness off: the old pass-through is unchanged', () => {
 test('other sidecar events are never skipped here, switch on or off', () => {
   for (const on of [true, false]) {
     desktopOn = on;
-    for (const type of ['clipboard_change', 'file_change', 'notification', 'process_started']) {
+    for (const type of ['file_change', 'notification', 'process_started']) {
       expect(skipGenericSidecarEvent(type, false)).toBe(false);
       expect(skipGenericSidecarEvent(type, true)).toBe(false);
     }
   }
+});
+
+test('#1159: the clipboard follows the switch: clipboard_change is dropped while desktop is off, kept while on', () => {
+  // The sidecar keeps sending what was copied (it cannot be told to pause
+  // its observer yet); nothing of it may reach the vault, the dashboard or the
+  // observer.clipboard_changed workflow bus while desktop control is off.
+  desktopOn = false;
+  expect(skipGenericSidecarEvent('clipboard_change', false)).toBe(true);
+  expect(skipGenericSidecarEvent('clipboard_change', true)).toBe(true);
+  desktopOn = true;
+  expect(skipGenericSidecarEvent('clipboard_change', false)).toBe(false);
+  expect(skipGenericSidecarEvent('clipboard_change', true)).toBe(false);
 });
 
 test('the daemon pipeline asks this predicate', async () => {

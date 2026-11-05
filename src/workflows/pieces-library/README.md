@@ -413,7 +413,10 @@ An `EXCLUDED` piece is not offered there either.
 The engine's own staging install (`runner/engine-runtime/engine-staging.lock`),
 whose packages the engine and the vendored core pieces compile in, is held to
 the same policy by `staging-licenses.test.ts` (under
-`JARVIS_TEST_ENGINE_BUILD=1`).
+`JARVIS_TEST_ENGINE_BUILD=1`). So is the brain's own locked install, every
+package in the repository's `node_modules`, by `scripts/check-root-licenses.ts`
+and its test (#1166); a denied package awaiting a decision is listed there as a
+known violation, by exact version and declared license.
 
 Actual Budget (`actualbudget`) is `EXCLUDED` for this reason (owner decision
 2026-10-23: everywhere, not only hosted). `@activepieces/piece-actualbudget@0.1.9`

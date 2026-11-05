@@ -325,6 +325,8 @@ export interface RootConfig {
     active_hours: { start: number; end: number };
     aggressiveness: string;
   };
+  /** desktop.enabled as the daemon reads it (#905, #1159). Absent on an older daemon. */
+  desktop?: { enabled: boolean };
 }
 
 export interface PersonalityModel {
@@ -990,6 +992,28 @@ export function useSettingsData() {
     [refresh],
   );
 
+  // -- Desktop control (desktop.enabled, applied at once) --
+  const setDesktopEnabled = useCallback(
+    async (enabled: boolean): Promise<ActionResult> => {
+      try {
+        const r = await postJson<{ ok: boolean; message: string }>(
+          "/api/config/desktop",
+          { enabled },
+        );
+        return r.ok
+          ? { ok: true, message: r.message }
+          : { ok: false, message: r.message || "Failed to apply the desktop setting." };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      } finally {
+        // Also after a failure: an "off" that could not be saved is still in
+        // force, and the switch must show what the daemon reads.
+        await refresh();
+      }
+    },
+    [refresh],
+  );
+
   // ── Service control ─────────────────────────────────────────────────
   const restartDaemon = useCallback(async (): Promise<ActionResult> => {
     try {
@@ -1192,6 +1216,7 @@ export function useSettingsData() {
     setSTTLanguage,
     setTTS,
     setVoiceConfig,
+    setDesktopEnabled,
     restartDaemon,
     saveProfile,
     clearProfile,

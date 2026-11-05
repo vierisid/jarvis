@@ -205,6 +205,15 @@ authority:
 # conversations:
 #   channel_message_retention_days: 90
 
+# Desktop control (#905). false stops Jarvis from listing windows, taking
+# screenshots, reading the screen, reading or writing the clipboard, and
+# clicking, typing or launching apps on any machine; screen awareness ignores
+# captures too. Browser tools keep working, and run_command is not covered (it
+# has its own approvals and --no-local-tools). Settings > General > Desktop
+# control changes it at once; a change here is imported at the next start.
+# desktop:
+#   enabled: true
+
 # Text-to-Speech (voice output)
 tts:
   enabled: false

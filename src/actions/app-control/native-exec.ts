@@ -83,8 +83,33 @@ export const defaultExec: NativeExec = async (cmd, input, opts) => {
     return { status: null, stdout: '', stderr: '', error: error instanceof Error ? error : new Error(String(error)) };
   }
 
+  return settleNativeExec(proc, opts);
+};
+
+/** What settleNativeExec needs of a spawned script: Bun.spawn with stdout and stderr piped. */
+export type NativeProcess = {
+  readonly exited: Promise<number>;
+  readonly exitCode: number | null;
+  readonly signalCode: string | null;
+  readonly stdout: ReadableStream<Uint8Array>;
+  readonly stderr: ReadableStream<Uint8Array>;
+  kill(signal?: NodeJS.Signals | number): void;
+};
+
+/**
+ * Wait for a script defaultExec just spawned, under the bound and the output
+ * cap. Separate from the spawn so tests can hand it stand-in processes and fix
+ * the order of exit, overflow and bound themselves; the spawn stays in
+ * defaultExec, where src/spawn-env-guard.test.ts can see it.
+ *
+ * @internal Exported for tests; callers use defaultExec.
+ */
+export async function settleNativeExec(proc: NativeProcess, opts?: NativeExecOptions): Promise<NativeExecResult> {
   const bound = nativeExecTimeoutMs + (opts?.extraMs ?? 0);
   let failure: Error | undefined;
+  // Whether the cap was passed on stdout, the answer: that is never whole, so
+  // it is refused however the script then exits.
+  let stdoutOverflowed = false;
   const kill = () => { try { proc.kill('SIGKILL'); } catch { /* already gone */ } };
   let stopped!: () => void;
   const wasStopped = new Promise<void>((resolve) => { stopped = resolve; });
@@ -102,13 +127,12 @@ export const defaultExec: NativeExec = async (cmd, input, opts) => {
   };
   // Both read alongside the run, so a chatty script cannot fill a pipe and stall.
   // A stdout that could not be read is no answer, never an empty one.
-  const stdout = readCapped(proc.stdout, nativeExecMaxOutput, overflow).catch(() => undefined);
+  const stdout = readCapped(proc.stdout, nativeExecMaxOutput, () => { stdoutOverflowed = true; overflow(); }).catch(() => undefined);
   // stderr keeps what arrived even if a descendant holds the pipe open past
   // the drain (#893 review): the error text is usually written before that.
   // Past the cap it stops a running script; once the script has exited, a
   // leftover child flooding stderr does not turn its exit into a failure
-  // (#904 review; capture-file.ts goes further and also lets a script that
-  // exits 0 before the kill lands succeed).
+  // (#904 review).
   const stderrChunks: Uint8Array[] = [];
   const stderr = readCapped(proc.stderr, nativeExecMaxOutput, () => {
     if (proc.exitCode === null && proc.signalCode === null) overflow();
@@ -122,15 +146,28 @@ export const defaultExec: NativeExec = async (cmd, input, opts) => {
   } finally {
     clearTimeout(timer);
   }
-  if (failure) return { status: null, stdout: '', stderr: '', error: failure };
+  // A stderr flood that came while the script still ran, where the kill did
+  // not land and the script then exited by itself (a status, no signal), is
+  // reported as that exit, as capture-file.ts reports it (#1159): a script
+  // that exited 0 did its work, and calling it stopped would invite a retry
+  // that does it twice (a second typing of the same text). stdout is still
+  // read to the end below and must be whole.
+  const ownExit = status !== null && proc.signalCode === null;
+  const floodOnly = (failure as NodeJS.ErrnoException | undefined)?.code === 'ENOBUFS' && !stdoutOverflowed && ownExit;
+  if (failure && !floodOnly) return { status: null, stdout: '', stderr: '', error: failure };
   // Killed by a signal (not by the bound): no exit status, as spawnSync
   // reported it, rather than Bun's 128 + signal.
   if (proc.signalCode !== null) status = null;
 
   const drained = <T>(p: Promise<T>, fallback: T): Promise<T> => Promise.race([p, Bun.sleep(DRAIN_MS).then(() => fallback)]);
   const [out, errRead] = await Promise.all([drained<string | undefined>(stdout, undefined), drained<string | null>(stderr, null)]);
-  const err = errRead ?? Buffer.concat(stderrChunks).toString('utf-8');
-  if (failure) return { status: null, stdout: '', stderr: '', error: failure };
+  // What arrived before a cap or an unclosed pipe: only its head is decoded
+  // (#1159 security review). A flood the run survived can have kept up to the
+  // output cap, and the error carries 500 characters of it.
+  const err = errRead ?? headText(stderrChunks, STDERR_HEAD_BYTES);
+  // The answer can pass the cap while it is drained, after the script exited
+  // (overflow() then sets the failure, if a stderr flood had not already).
+  if (stdoutOverflowed) return { status: null, stdout: '', stderr: '', error: failure };
   // A failed run is reported as its exit and stderr; its stdout is not the
   // answer anyway.
   if (out === undefined && status !== 0) return { status, stdout: '', stderr: err };
@@ -138,7 +175,26 @@ export const defaultExec: NativeExec = async (cmd, input, opts) => {
   // the script may well have done its work.
   if (out === undefined) return { status, stdout: '', stderr: err, error: codedError('its output never closed or could not be read', 'EPIPE') };
   return { status, stdout: out, stderr: err };
-};
+}
+
+/** How much of the stderr kept past a cap or a held pipe is decoded: well past what the error carries. */
+const STDERR_HEAD_BYTES = 64 * 1024;
+
+/** The first `limit` bytes of `chunks` as text, without joining the rest. */
+function headText(chunks: readonly Uint8Array[], limit: number): string {
+  const head: Uint8Array[] = [];
+  let size = 0;
+  for (const chunk of chunks) {
+    if (size >= limit) break;
+    const part = chunk.byteLength > limit - size ? chunk.subarray(0, limit - size) : chunk;
+    head.push(part);
+    size += part.byteLength;
+  }
+  return Buffer.concat(head).toString('utf-8');
+}
+
+/** How much of a failed script's stderr its error carries: capture-file.ts's figure. */
+export const NATIVE_EXEC_STDERR_REPORT_CHARS = 500;
 
 /**
  * Run a command and return stdout, throwing on spawn failure or non-zero
@@ -164,7 +220,10 @@ export async function runNative(exec: NativeExec, cmd: string[], input: string, 
     throw new Error(`${what} failed to start: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    const stderr = result.stderr.trim();
+    // Bounded like capture-file.ts's report (#1159 review): stderr is kept up
+    // to the output cap, and a flood the run survived must not land whole in
+    // the tool result and the log. The reason is written first.
+    const stderr = result.stderr.trim().slice(0, NATIVE_EXEC_STDERR_REPORT_CHARS);
     const exitInfo = result.status === null ? 'was killed (timeout?)' : `exited with code ${result.status}`;
     throw new Error(`${what} ${exitInfo}${stderr ? `: ${stderr}` : ''}`);
   }
