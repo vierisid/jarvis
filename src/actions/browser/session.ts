@@ -70,6 +70,14 @@ export type PageSnapshot = {
   /** Page text, truncated by the formatter. Outside content. */
   text: string;
   elements: PageElement[];
+  /**
+   * The element-map generation this snapshot's fill committed (#1161): the
+   * value `snapshotGeneration()` had the moment these ids became the live
+   * ones. The tool records it in the reading model loop's SnapshotReadLog, so
+   * a card that loop raises binds the map it read and not one another caller
+   * filled since. Ours, never the page's, and never rendered.
+   */
+  elementGeneration?: number;
 };
 
 // JS function injected into the page to extract interactive elements.
@@ -384,6 +392,15 @@ function reconnectedRefusal(elementId: number): string {
 
 const SNAPSHOT_LOCK_BUSY = 'Error: another browser snapshot or typed input is still running on this browser, '
   + 'so nothing was done. Try again in a moment.';
+
+/**
+ * A snapshot refused because a forget (a scroll, a paging key) landed between
+ * its read of the generation and its fill (#1161; the sidecar's #878 check in
+ * browser_snapshot.go, same words after the prefix this side's snapshot
+ * errors carry).
+ */
+const SNAPSHOT_MOVED_MESSAGE = 'Snapshot failed: the page moved while the snapshot was being taken '
+  + '(it was scrolled at the same time); take another snapshot';
 
 /**
  * The same lock timeout met by `navigate`'s closing snapshot. The navigation was
@@ -1290,6 +1307,19 @@ export class BrowserController {
     // (#592). REFUSED rather than degraded when no world can be minted: falling
     // back to a main-world evaluate would put the page-writable global straight
     // back, reachable by any page that can make createIsolatedWorld fail.
+    // The generation as it stands before the world is fetched (#878, the
+    // sidecar's genBefore; #1161 for this side). Fills are serialised by the
+    // snapshot lock, which this holds, so the only thing that can move it
+    // before the fill is `forgetSnapshotElements` -- a scroll, a paging key, a
+    // dead id found by an action -- which deliberately does not take the lock.
+    // From here on such a forget either drops the world this snapshot is about
+    // to arm (`elementWorld = null`, so the fill would pair coordinates with a
+    // world nothing reads) or races the script's measurement, and the fill
+    // must not then install coordinates the forget said are gone. Taken BEFORE
+    // `elementWorldContext` rather than after it: a forget that lands while the
+    // world is being minted nulls `elementWorld` under a context id this call
+    // already holds, which is the first of those two cases.
+    const genBefore = this.snapshotGen;
     const contextId = await this.elementWorldContext(before.loaderId, beforeFrameId);
     if (contextId === null) {
       throw new Error('Snapshot failed: could not create the isolated world the element references live in.');
@@ -1302,7 +1332,7 @@ export class BrowserController {
     // each throw site, so a throw added later cannot skip it.
     let committed = false;
     try {
-      return await this.completeSnapshot(contextId, before, beforeStamp, () => { committed = true; });
+      return await this.completeSnapshot(contextId, before, beforeStamp, genBefore, () => { committed = true; });
     } finally {
       if (!committed) this.forgetSnapshotElements();
     }
@@ -1318,6 +1348,7 @@ export class BrowserController {
     contextId: number,
     before: { url: string; loaderId: string },
     beforeStamp: string,
+    genBefore: number,
     commit: () => void,
   ): Promise<PageSnapshot> {
     const result = await this.cdp.send('Runtime.evaluate', {
@@ -1362,6 +1393,15 @@ export class BrowserController {
     const after = await this.readTopFrame().catch(() => null);
     const sameDocument = before !== null && after !== null
       && before.loaderId !== '' && before.loaderId === after.loaderId;
+
+    // A forget landed after `genBefore` was read (see snapshotLocked): the
+    // page moved while this was being taken, so these coordinates may describe
+    // where the elements used to be. Refused, as the sidecar refuses it; the
+    // caller's cleanup forgets the world this script armed. The sidecar's
+    // wording, so the model reads the same thing from either browser.
+    if (this.snapshotGen !== genBefore) {
+      throw new Error(SNAPSHOT_MOVED_MESSAGE);
+    }
 
     // Store coordinates locally, strip from LLM-facing data
     this.elementCoords.clear();
@@ -1408,6 +1448,7 @@ export class BrowserController {
       browserDocumentId: sameDocument && before.url ? before.loaderId : null,
       text: data.text,
       elements: cleanElements,
+      elementGeneration: this.snapshotGen,
     };
   }
 
