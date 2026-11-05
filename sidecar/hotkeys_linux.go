@@ -608,6 +608,23 @@ static int jarvisHotkeyProbeConnectionFd(void) {
     return fd;
 }
 
+// jarvisHotkeyProbeAtom opens its own connection, interns `name` (creating it
+// unless only_if_exists), and closes the connection again. Returns the atom,
+// 0 (None) when only_if_exists and the server does not know the name, or -1
+// when the display will not open.
+//
+// For TestLinuxXServerKeepsStateWhenItsLastClientLeaves (#1257): an atom is
+// server state that only a server reset throws away, so "created by one
+// client, still there for the next one after the first has gone" is how a test
+// tells a server started with -noreset from one that is not.
+static long jarvisHotkeyProbeAtom(const char* name, int only_if_exists) {
+    Display* dpy = XOpenDisplay(NULL);
+    if (!dpy) return -1;
+    Atom a = XInternAtom(dpy, name, only_if_exists ? True : False);
+    XCloseDisplay(dpy);
+    return (long)a;
+}
+
 #define HK_FD_SETSIZE FD_SETSIZE
 
 // hkFortifyLevel reports glibc's fortification level for this translation unit.
@@ -1237,6 +1254,21 @@ func hotkeyProbeConnectionFd() int {
 	hotkeyCreateMu.Lock()
 	defer hotkeyCreateMu.Unlock()
 	return int(C.jarvisHotkeyProbeConnectionFd())
+}
+
+// hotkeyProbeAtom interns name on a connection of its own and closes it again;
+// see jarvisHotkeyProbeAtom. -1 means no display.
+func hotkeyProbeAtom(name string, onlyIfExists bool) int64 {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	flag := C.int(0)
+	if onlyIfExists {
+		flag = 1
+	}
+	// Same lock as every other open and close here: the display list.
+	hotkeyCreateMu.Lock()
+	defer hotkeyCreateMu.Unlock()
+	return int64(C.jarvisHotkeyProbeAtom(cname, flag))
 }
 
 // hotkeyGrabOverBrokenConnection runs the real grab sequence over a connection
