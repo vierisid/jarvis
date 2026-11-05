@@ -1,14 +1,26 @@
 # Brief dashboard boundary
 
-The Brief dashboard is opt-in. A normal URL still renders `AppShellV2`; `ui/src/main.tsx` mounts
-`DashboardEntry` around that same element.
+`ui/src/main.tsx` mounts `host/DashboardRoot.tsx`. It renders the connected Brief dashboard for
+Brief routes and otherwise `DashboardEntry` (with no release record, runtime, navigation or
+conversation) around `AppShellV2`.
+
+Installs the daemon treats as hosted (`isHostedInstall`, which includes self-hosted brains on a Unix
+socket or with a `usejarvis_ai` block) open the Brief dashboard at `/` (#1185). The authenticated host
+descriptor (`GET /api/brief/host`, read by `host/hosted-entry.ts`) selects it, and the routing is D33's
+`resolveReleaseEntry` (`entry/release-route.ts`) with the rollout forced to `released`, so the entry
+table in `scripts/brief-release/README.md` describes hosted routing too, except that hosted Brief keeps
+maintenance links inside the Brief host (`host/DashboardRoot.tsx`). `?brief=0` on a fresh load, or
+`JARVIS_HOSTED_DASHBOARD=legacy` plus a restart, returns to `AppShellV2`; `docs/hosted-dashboard.md`
+describes that path. Everywhere else the Brief dashboard is opt-in.
 
 ## Entry points
 
-The release switch (`entry/release.ts`, `entry/release-route.ts`) is off: `BRIEF_RELEASE` has
-`rollout: "off"` and `ui/src/main.tsx` supplies no release runtime or live composition, so every
-ordinary URL renders `AppShellV2`. `scripts/brief-release/README.md` holds the integration contract,
-the release checklist and the rollback table.
+The D33 release record (`entry/release.ts`, `BRIEF_RELEASE`) is off and does not select the hosted
+default: `BRIEF_RELEASE` has `rollout: "off"`, and `DashboardEntry` gets no release runtime or live
+composition, so it would stay off even with a filled record. `scripts/brief-release/README.md` holds
+the integration contract, the release checklist and the rollback table.
+
+Outside the hosted default (self-hosted installs, and hosted with `JARVIS_HOSTED_DASHBOARD=legacy`):
 
 - Internal review needs the existing developer setting: run
   `localStorage.setItem("jarvis-devtools", "1")` in the dashboard's origin, then reload. The setting is
@@ -25,7 +37,7 @@ the release checklist and the rollback table.
   with an `onboarding` query, stays with `AppShellV2`.
 
 Rollback: `?brief=0` on a fresh load always opens `AppShellV2`. The "Return to current dashboard"
-links set `brief=0` rather than removing the parameter, so they also override a future default-on
+links set `brief=0` rather than removing the parameter, so they also override the hosted default-on
 release.
 
 ## Layout
@@ -208,8 +220,8 @@ sidebar changes.
 
 - The conversation comes only from the composition root as `conversation: BriefConversationBinding`
   (`source` plus `content`). The host creates no thread, socket, microphone, request or persistence.
-  Without a binding (the default today, `main.tsx` passes none) the opener is hidden and inert and the
-  released Talk/Pebble overlay is untouched. `source` must be `"live"` in live mode and `"fixture"` in
+  Without a binding (`DashboardEntry` gets none from `DashboardRoot`) the opener is hidden and inert
+  and the released Talk/Pebble overlay is untouched. `source` must be `"live"` in live mode and `"fixture"` in
   preview mode, otherwise nothing mounts.
 - The opener is gated by the same `canMountNavigation` check as the navigation chrome. Losing that
   capability hides the panel without remounting the room or the conversation.
