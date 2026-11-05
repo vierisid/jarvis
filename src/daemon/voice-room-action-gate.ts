@@ -42,6 +42,19 @@ import {
 import { PASSED_GRACE_MS, parseRelativeDate } from '../voice/parse-date.ts';
 import { isSingleValued, predicateKey, valueKey } from '../vault/fact-policy.ts';
 
+/**
+ * `s` with every control, format, line- or paragraph-separator character
+ * written as a visible `\uXXXX` (#1008). JSON leaves bidi overrides and
+ * zero-width characters as they are, and one in a value (from the classifier,
+ * or a stored item name) could reorder or hide the rest of the card or of a
+ * refusal (#1156). Shared by the card (describeRoomAction), the refusals and
+ * the room's reply (roomActionReply), which repeat what the classifier or the
+ * realtime model wrote.
+ */
+export function visible(s: string): string {
+  return s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u${c.codePointAt(0)!.toString(16).padStart(4, '0')}`);
+}
+
 export type RealtimeRoomActionContext = {
   /** The emergency state when it stops execution (paused, killed), else null. */
   halted: string | null;
@@ -74,7 +87,7 @@ export function realtimeRoomActionDecision(
 ): { reason: 'paused' | 'killed' | 'blocked' | 'tainted'; message: string } | null {
   const categories = roomActionCategories(ra.room, ra.action);
   if (categories.length === 0) return null;
-  const what = `${ra.room}/${ra.action}`;
+  const what = visible(`${ra.room}/${ra.action}`);
   if (ctx.halted) {
     return { reason: ctx.halted === 'killed' ? 'killed' : 'paused', message: `[SYSTEM ${ctx.halted.toUpperCase()}] ${what} was not sent: actions are suspended while the system is ${ctx.halted}.` };
   }
@@ -88,7 +101,7 @@ export function realtimeRoomActionDecision(
     return {
       reason: 'tainted',
       message: `[BLOCKED] ${what} (${tainted}) was not sent: this session read outside content (${[...ctx.taint].join(', ')}) and voice cannot approve it. `
-        + 'Tell the user what you wanted to do and ask them to say it again as a fresh request.',
+        + 'Tell the user what you wanted to do and ask them to say it again as a fresh request, in their own words: a plain yes is not enough.',
     };
   }
   return null;
@@ -142,7 +155,9 @@ export type RoomActionAuditReason =
   // Its dashboard went before answering an action recorded as started.
   | 'late_disconnected_after_started'
   | 'held' | 'refused_yes' | 'cancelled' | 'unsettled' | 'blocked' | 'tainted'
-  | 'paused' | 'killed' | 'expired' | 'disconnected' | 'shutdown' | 'failed' | 'not_a_room_action';
+  | 'paused' | 'killed' | 'expired' | 'disconnected' | 'shutdown' | 'failed' | 'not_a_room_action'
+  // A held action confirmed after the time its card showed (#1156).
+  | 'time_passed';
 
 /**
  * Whether a room action the room answered for ran, for its audit row: done,
@@ -182,21 +197,29 @@ export function roomActionExecuted(outcome: RoomActionOutcome): boolean {
  * refusal is recorded too, as `modify_settings`.
  */
 export function roomActionAuditRow(
-  ra: { room: string; action: string },
+  ra: { room: string; action: string; args?: Record<string, unknown>; timeZone?: string },
   origin: RoomActionOrigin,
   decision: AuthorityDecisionType,
   executed: boolean,
   who: { agentId: string; agentName: string },
-  opts: { approvalId?: string | null; channel?: ResolutionChannel; reason: RoomActionAuditReason },
+  opts: { approvalId?: string | null; channel?: ResolutionChannel; reason: RoomActionAuditReason; ref?: string },
 ): RoomActionAuditRow | null {
   const listed = roomActionCategories(ra.room, ra.action);
   const authorityOverride = ra.room === 'authority' && (ra.action === 'grant_access' || ra.action === 'revoke_access');
   const categories: readonly RoomActionCategory[] = listed.length > 0 ? listed : authorityOverride ? ['modify_settings'] : [];
   if (categories.length === 0) return null;
+  // The instant it was settled to and the zone it was read in (#1156), so the
+  // row says when the action was for, not only that it ran.
+  const ts = ra.args?.[SETTLED_TIME_ARG];
+  const at = typeof ts === 'number' && Number.isFinite(ts) && ra.timeZone
+    ? `; at ${new Date(ts).toISOString()} ${ra.timeZone}` : '';
+  // The id shared by an action's first row and a late answer's follow-up
+  // row (#1156): approval_id is null for realtime and unheld actions.
+  const ref = opts.ref ? `; ref ${opts.ref}` : '';
   return {
     agent_id: who.agentId,
     agent_name: who.agentName,
-    tool_name: `room_action(${ra.room}/${ra.action}; via ${origin}; ${categories.join(', ')}; ${opts.reason})`,
+    tool_name: `room_action(${ra.room}/${ra.action}; via ${origin}; ${categories.join(', ')}; ${opts.reason}${at}${ref})`,
     action_category: categories[0]!,
     authority_decision: decision,
     approval_id: opts.approvalId ?? null,
@@ -366,14 +389,27 @@ export function settleRoomActionTime(
 }
 
 /**
+ * A held action whose settled time has passed by the time it is confirmed
+ * (#1156): what to say, or null when it has none or it is still to come.
+ * The card showed that instant, so it is refused, not moved, as
+ * settleRoomActionTime refuses a time already gone when it is said.
+ */
+export function settledTimePassed(ra: HeldRoomAction, now: number, what: string): string | null {
+  const ts = ra.args?.[SETTLED_TIME_ARG];
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return null;
+  if (ts >= now - SETTLED_TIME_GRACE_MS) return null;
+  const shown = ra.timeZone ? shortTime(ts, ra.timeZone) : new Date(ts).toISOString();
+  return `I haven't done "${what}": it was for ${shown}, which passed before it was confirmed. Ask again with a later time.`;
+}
+
+/**
  * A name the classifier gave, as a refusal repeats it to every dashboard:
  * quoted, and cut at 80 characters, since it is not checked against anything.
  */
 function quoted(s: string): string {
   // JSON leaves bidi overrides and zero-width characters as they are; written
   // out, one cannot reorder or hide the rest of the reply (#1022 review).
-  return JSON.stringify(s.length > 80 ? `${s.slice(0, 80)}...` : s)
-    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u${c.codePointAt(0)!.toString(16).padStart(4, '0')}`);
+  return visible(JSON.stringify(s.length > 80 ? `${s.slice(0, 80)}...` : s));
 }
 
 /**
@@ -451,7 +487,7 @@ async function resolveHeldTarget(
   const shown = targetName(kind, item);
   const same = items.filter((i) => targetName(kind, i).trim().toLowerCase() === shown.trim().toLowerCase()).length;
   if (same > 1) {
-    return { ok: false, message: `${not}: ${same} ${noun}s are called ${JSON.stringify(shown)}, so I can't tell which you mean. Do it from the room.` };
+    return { ok: false, message: `${not}: ${same} ${noun}s are called ${visible(JSON.stringify(shown))}, so I can't tell which you mean. Do it from the room.` };
   }
   return { ok: true, ra: { ...ra, args: { ...args, id: item.id, name: shown } } };
 }

@@ -18,7 +18,7 @@ import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import type { LLMTool } from '../llm/provider.ts';
 import { recordUsage } from '../llm/usage.ts';
 import { hostedRealtimeError } from '../util/hosted-error.ts';
-import { RealtimeTaint } from '../agents/realtime-taint.ts';
+import { echoesAssistant, MAX_PENDING_UTTERANCES, RealtimeTaint } from '../agents/realtime-taint.ts';
 import { estimateTranscriptionCostUsd } from './realtime-budget.ts';
 
 export type RealtimeVoiceDeps = {
@@ -70,6 +70,18 @@ export class RealtimeVoiceSession {
    * boundary at all, and how every surface came to share one set.
    */
   readonly taint = new RealtimeTaint();
+  /**
+   * What the assistant said that can still be coming back through the mic:
+   * the reply being spoken (its deltas so far) and the last finals before it.
+   * Audio is played as it streams, so only a reply still playing or just
+   * finished can echo; RECENT_REPLIES bounds the finals kept.
+   */
+  private speaking = '';
+  private speakingFor: string | undefined;
+  private recentReplies: string[] = [];
+  /** Utterance item id -> the assistant speech that could leak into it. */
+  private speechAtTurnStart = new Map<string, string[]>();
+  private static readonly RECENT_REPLIES = 2;
 
   constructor(resolved: ResolvedRealtimeVoice, transport: AudioTransport, deps: RealtimeVoiceDeps) {
     this.deps = deps;
@@ -83,10 +95,20 @@ export class RealtimeVoiceSession {
     this.session = deps.sessionFactory ? deps.sessionFactory(opts) : new RealtimeSession(opts);
 
     this.session.onTranscript((t) => {
+      if (t.role === 'assistant') this.noteAssistantSpeech(t);
       // Only a final transcript of something the user said clears the
       // session's taint, and only what was read before that utterance began
-      // (#1007; see RealtimeTaint).
-      if (t.role === 'user' && t.final) this.taint.userTranscript(t.itemId, t.text);
+      // (#1007; see RealtimeTaint). The assistant's own speech heard back
+      // through the mic is not something the user said (#1156).
+      if (t.role === 'user' && t.final) {
+        // Only what was playing or had been said when the utterance began
+        // can have leaked into it. A reply to the utterance itself, which
+        // often restates it and can be streaming before its transcript
+        // lands, cannot be an echo of it (#1156 review).
+        const heardBefore = t.itemId ? this.speechAtTurnStart.get(t.itemId) : undefined;
+        if (t.itemId) this.speechAtTurnStart.delete(t.itemId);
+        if (!echoesAssistant(t.text, heardBefore ?? [])) this.taint.userTranscript(t.itemId, t.text);
+      }
       this.deps.onTranscript?.(t);
     });
     // The taint-gating turn boundary, wired HERE rather than by each caller:
@@ -98,7 +120,19 @@ export class RealtimeVoiceSession {
     // where an utterance began; its transcript (above) clears (#1007).
     // Optional call because a test fake of the inner session may not
     // implement it.
-    this.session.onUserTurnStart?.((itemId) => this.taint.userTurnStarted(itemId));
+    this.session.onUserTurnStart?.((itemId, assistantAudible) => {
+      this.taint.userTurnStarted(itemId);
+      if (itemId && !this.speechAtTurnStart.has(itemId)) {
+        // Only while assistant audio can still be playing can the mic hear
+        // it (#1156 review): once it has played out, the person's words are
+        // theirs, even when they repeat the last reply.
+        this.speechAtTurnStart.set(itemId, assistantAudible === false ? [] : this.assistantSpeech());
+        // A cough leaves a start no transcript claims; bounded as RealtimeTaint's are.
+        while (this.speechAtTurnStart.size > MAX_PENDING_UTTERANCES) {
+          this.speechAtTurnStart.delete(this.speechAtTurnStart.keys().next().value as string);
+        }
+      }
+    });
     // The one place both realtime surfaces (the dashboard socket in ws-service
     // and the pebble in pebble-realtime) receive session errors, so the hosted
     // rule lives here rather than in each of them. The proxy relays upstream
@@ -168,6 +202,23 @@ export class RealtimeVoiceSession {
     });
   }
 
+  private noteAssistantSpeech(t: RealtimeTranscript): void {
+    if (!t.final) {
+      // A reply whose final never came (cancelled) is not run into the next.
+      if (t.replyTo !== this.speakingFor) this.speaking = '';
+      this.speakingFor = t.replyTo;
+      this.speaking += t.text;
+      return;
+    }
+    this.speaking = '';
+    this.recentReplies.push(t.text);
+    if (this.recentReplies.length > RealtimeVoiceSession.RECENT_REPLIES) this.recentReplies.shift();
+  }
+
+  private assistantSpeech(): string[] {
+    return this.speaking ? [...this.recentReplies, this.speaking] : [...this.recentReplies];
+  }
+
   connect(): Promise<void> {
     return this.session.connect();
   }
@@ -180,6 +231,17 @@ export class RealtimeVoiceSession {
   /** Stop the current spoken response without closing the conversation. */
   interrupt(): void {
     if (!this.closed) this.session.interrupt();
+  }
+
+  /**
+   * The person stopped the reply (the dashboard's stop, a stop phrase): cut
+   * the unheard rest from the conversation, as a barge-in does, and stop it.
+   */
+  stopReply(): void {
+    if (this.closed) return;
+    // Optional call because a test fake of the inner session may not implement it.
+    if (this.session.stopReply) this.session.stopReply();
+    else this.session.interrupt();
   }
 
   close(): void {

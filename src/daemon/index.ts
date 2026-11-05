@@ -102,6 +102,7 @@ import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } 
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
 import { configureHostedDashboard } from './hosted-dashboard';
 import { REALTIME_NAV_TOOLS } from "./realtime-nav-tools.ts";
+import { RealtimeBudgetTracker, realtimeBudgetFile } from "./realtime-budget.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
@@ -1145,6 +1146,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // (`pebble.play_pcm`); the daemon runs the realtime session itself. See
       // PebbleRealtimeManager + PebbleAudioTransport — all the OpenAI protocol
       // logic is reused from the dashboard realtime path.
+      let pebbleRealtimeBudget: RealtimeBudgetTracker | undefined;
       const pebbleRealtime = new PebbleRealtimeManager({
         dispatchRPC: (sidecarId, method, params) => sidecarManager.dispatchRPC(sidecarId, method, params ?? {}),
         dispatchNotify: (sidecarId, method, params) => sidecarManager.dispatchNotify(sidecarId, method, params ?? {}),
@@ -1165,6 +1167,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // Judged against this pebble session's own taint (#928), which the
           // voice session clears at its own turn boundary.
           return agentService.getOrchestrator().executeRealtimeToolCall(name, args, { blockedCategories, taint });
+        },
+        // The same ledger file as the dashboard's sessions, so one monthly
+        // budget covers both surfaces (#1156).
+        budget: () => {
+          pebbleRealtimeBudget ??= RealtimeBudgetTracker.fromFile(realtimeBudgetFile(agentService.getConfig().daemon?.data_dir));
+          return pebbleRealtimeBudget;
         },
         onState: (sidecarId, state, text) => { void setState(sidecarId, state, text); },
         onStatus: (sidecarId, status, detail) => {
