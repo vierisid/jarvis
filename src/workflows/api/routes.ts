@@ -1,5 +1,6 @@
 import { dismissHumanInput, listHumanInputs, resolveHumanInput } from '../runtime/human-input';
 import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
+import { readBoundedText } from '../../util/bounded-body.ts';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion } from './editor-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
@@ -1471,19 +1472,15 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // an object is refused rather than silently replaced with {}:
           // resuming a step with a payload the sender never sent is worse
           // than telling the sender its payload was the wrong shape.
-          let rawBody: string;
-          try {
-            rawBody = await req.text();
-          } catch {
-            return err("failed to read request body");
+          // Counted in bytes while it streams in, so a chunked body cannot
+          // be buffered whole before the cap runs (util/bounded-body.ts).
+          const read = await readBoundedText(req, WAITPOINT_RESUME_MAX_BODY_BYTES);
+          if (!read.ok) {
+            return read.reason === "too_large"
+              ? err("resume payload too large", 413)
+              : err("failed to read request body");
           }
-          // String length, like the sibling ingress. A string's UTF-8 encoding
-          // is never shorter than its UTF-16 code-unit count, so this never
-          // rejects a body that is actually within the byte cap; an
-          // all-multibyte body is bounded within a small factor above it.
-          if (rawBody.length > WAITPOINT_RESUME_MAX_BODY_BYTES) {
-            return err("resume payload too large", 413);
-          }
+          const rawBody = read.text;
           let resumePayload: Record<string, unknown> = {};
           if (rawBody.trim()) {
             let parsed: unknown;

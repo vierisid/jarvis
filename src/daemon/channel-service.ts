@@ -86,7 +86,8 @@ export function recipientWarning(status: Record<string, RecipientStatus>): strin
   return lines.length ? lines.join(' ') : null;
 }
 
-export type ApprovalCommandHandler = (action: 'approve' | 'deny', shortId: string, channel: string) => Promise<string>;
+/** `deciderId` is the channel user id of whoever typed the reply, recorded with the decision (#1155). */
+export type ApprovalCommandHandler = (action: 'approve' | 'deny', shortId: string, channel: string, deciderId?: string) => Promise<string>;
 
 /**
  * A send that did not complete. `mayHaveArrived` (Q-19): the channel may have
@@ -113,7 +114,8 @@ export class ChannelService implements Service {
   /**
    * The owner's private chat per channel, for proactive broadcasts and
    * notify (#852, #916). Only the channel's owner is recorded; a value saved
-   * by an older version for another listed user is loaded but never used. Persisted to the settings table (see
+   * by an older version for another listed user is loaded but never used.
+   * Persisted to the settings table (see
    * {@link LAST_RECIPIENT_PREFIX}) and reloaded on start, so a daemon restart
    * doesn't drop the recipient and silently break notifications until the
    * user re-messages the bot. Read through `getBroadcastRecipient`, never
@@ -619,10 +621,9 @@ export class ChannelService implements Service {
     // Check for approval commands: "approve <id>" or "deny <id>"
     const decision = this.approvalHandler ? channelDecisionCommand(msg.text) : null;
     if (this.approvalHandler && decision) {
-      // Only someone the allow-list names may decide (#811). An empty list lets
-      // anyone who can reach the bot chat -- any member of the guild on
-      // Discord, anyone on Telegram -- and that must not extend to approving
-      // a gated action.
+      // Only someone the allow-list names may decide (#811). An enabled
+      // channel needs a list (#918), but the adapter's answer can be stale
+      // (#860), so the list as configured now is what counts here.
       if (!allowListed) return channelDecisionNeedsAllowList(channelTag);
       // And only the owner (#916). The card went to the owner's chat; another
       // listed user may chat with the bot but does not decide for the owner.
@@ -631,8 +632,12 @@ export class ChannelService implements Service {
       // action, and the text need not look like a command to the person
       // forwarding it, so it is never their decision.
       if (msg.forwarded === true) return channelDecisionForwarded(channelTag);
+      // And only from the owner's private chat with the bot (#1155): the
+      // card was sent there, and a decision typed in a group or server
+      // channel runs the owner's tool and posts its result to every member.
+      if (!isPrivateChat(msg)) return channelDecisionNotPrivate(channelTag);
       try {
-        return await this.approvalHandler(decision.action, decision.shortId, channelTag);
+        return await this.approvalHandler(decision.action, decision.shortId, channelTag, String(userId));
       } catch (err) {
         return `Error processing approval: ${err instanceof Error ? err.message : String(err)}`;
       }
@@ -653,11 +658,15 @@ export class ChannelService implements Service {
     //    assistant (#909): their private context, their tools, and learning
     //    from the turn. Any other sender is a guest; see
     //    AgentService.handleGuestMessage for exactly what a guest gets.
+    //    And only in a private chat with the bot (owner decision, #1155): in
+    //    a Telegram group or a Discord server channel every member reads the
+    //    reply, so the owner's turn there gets a guest's treatment too.
     //    A guest's turn still runs under origin 'user': the owner chose to
     //    list them, the turn is foreground, and a separate origin would need
     //    the hosted platform to weigh it. Filed as a follow-up (#909 review).
+    const who = owner ? (isPrivateChat(msg) ? 'owner' : 'shared') : 'guest';
     const response = await runWithOrigin('user', () => this.agentService.handleThreadMessage(
-      msg.text, channelTag, { conversationId: conversation.id, contextKey: `channel:${channelTag}:${sender}`, sender: owner ? 'owner' : 'guest' },
+      msg.text, channelTag, { conversationId: conversation.id, contextKey: `channel:${channelTag}:${sender}`, sender: who },
     ));
 
     // 3. Persist assistant response to vault
@@ -725,6 +734,14 @@ export function channelDecisionNeedsAllowList(channel: string): string {
  */
 export function channelDecisionNotOwner(channel: string): string {
   return `Approvals can only be decided from ${channel} by this channel's owner, the first user listed under Allowed user IDs in Jarvis Settings > Channels, and that is not you. Nothing was approved or denied.`;
+}
+
+/**
+ * The answer to an `approve <id>` or `deny <id>` the owner typed in a group or
+ * server channel (#1155). Nothing is decided.
+ */
+export function channelDecisionNotPrivate(channel: string): string {
+  return `Approvals can only be decided from your private chat with the bot on ${channel}, where the card was sent, not from a group or server channel that other people read. Nothing was approved or denied.`;
 }
 
 /**

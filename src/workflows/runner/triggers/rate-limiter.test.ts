@@ -133,6 +133,31 @@ describe("WebhookManager rate limiting", () => {
     expect(fired.length).toBe(0);
   });
 
+  test("a chunked body over the cap is refused while it streams, not after it is buffered", async () => {
+    // req.text() would pull all 64 MiB before the cap ran (Bun 1.3.x does not
+    // apply maxRequestBodySize to a chunked body); a bounded read stops near it.
+    for (const secret of [undefined, "s3cret"]) {
+      const wm = new WebhookManager();
+      wm.register("flow1", secret);
+      const fired: string[] = [];
+      wm.setTriggerCallback((id) => { fired.push(id); });
+      let pulled = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(c) {
+          if (pulled >= 64 * 1024 * 1024) { c.close(); return; }
+          pulled += 65_536;
+          c.enqueue(new Uint8Array(65_536).fill(0x61));
+        },
+      }, { highWaterMark: 0 });
+      const res = await wm.handleRequest("flow1", new Request("http://x/", {
+        method: "POST", body: stream, headers: secret ? { "X-Jarvis-Signature": "0".repeat(64) } : {},
+      }));
+      expect(res.status).toBe(413);
+      expect(pulled).toBeLessThan(WEBHOOK_MAX_BODY_BYTES + 4 * 65_536);
+      expect(fired.length).toBe(0);
+    }
+  });
+
   test("a malformed signature is refused without firing", async () => {
     const wm = new WebhookManager();
     wm.register("sec", "s3cret");

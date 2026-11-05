@@ -150,7 +150,9 @@ export class SiteProxy {
       return Response.json({ error: `Dev server for "${projectId}" is not running` }, { status: 502 });
     }
 
-    const resp = await this.forward(req, port, subPath);
+    // The query goes with the path: dev servers read it (Vite's ?import,
+    // ?t= cache-busting, ?token= on its HMR socket).
+    const resp = await this.forward(req, port, subPath + new URL(req.url).search);
     // Set cookie so the catch-all knows which project subsequent requests belong to
     resp.headers.append('set-cookie', `${COOKIE_NAME}=${projectId}; Path=/; SameSite=Lax`);
     return resp;
@@ -171,23 +173,25 @@ export class SiteProxy {
   }
 
   /**
-   * Get the WebSocket target URL for a proxied connection.
+   * Get the WebSocket target URL for a proxied connection. `search` is the
+   * upgrade request's query, kept: Vite >= 6.0.9 refuses an HMR socket that
+   * does not carry its `?token=`.
    */
-  getWebSocketTarget(projectId: string, subPath: string): string | null {
+  getWebSocketTarget(projectId: string, subPath: string, search = ''): string | null {
     const port = this.devServerManager.getPort(projectId);
     if (port === null) return null;
-    return `ws://127.0.0.1:${port}${subPath}`;
+    return `ws://127.0.0.1:${port}${subPath}${search}`;
   }
 
   /**
    * Get the WebSocket target URL using the __proj cookie (catch-all).
    */
-  getWebSocketTargetFromCookie(req: Request, pathname: string): string | null {
+  getWebSocketTargetFromCookie(req: Request, pathname: string, search = ''): string | null {
     const projectId = this.projectFromCookie(req);
     if (!projectId) return null;
     const port = this.devServerManager.getPort(projectId);
     if (port === null) return null;
-    return `ws://127.0.0.1:${port}${pathname}`;
+    return `ws://127.0.0.1:${port}${pathname}${search}`;
   }
 
   // ── Internal ──
@@ -217,10 +221,15 @@ export class SiteProxy {
       headers.set('x-forwarded-for', clientIp);
       headers.set('x-forwarded-proto', 'http');
 
-      const init: RequestInit = {
+      // decompress: false, so the body passes through as the dev server
+      // encoded it. Bun's fetch otherwise inflates a gzip/br body but keeps
+      // its Content-Encoding (measured on Bun 1.3.8, 1.3.11 and 1.4.2), and
+      // the browser then fails to decode plain bytes labelled gzip.
+      const init: RequestInit & { decompress?: boolean } = {
         method: req.method,
         headers,
         redirect: 'manual',
+        decompress: false,
       };
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         init.body = req.body;
