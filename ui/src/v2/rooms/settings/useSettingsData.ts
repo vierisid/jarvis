@@ -516,6 +516,23 @@ function preserveRef<T>(prev: T, next: T): T {
   }
 }
 
+/** The body of POST /api/config/llm/test for a provider row's overrides. */
+export function providerTestBody(
+  name: string,
+  overrides?: { kind?: LLMProviderKind; model?: string; baseUrl?: string; apiKey?: string; authHeader?: string },
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { name };
+  if (overrides?.kind) body.kind = overrides.kind;
+  if (overrides?.model) body.model = overrides.model;
+  if (overrides && Object.hasOwn(overrides, "baseUrl")) {
+    body.base_url = overrides.baseUrl ?? "";
+  }
+  if (overrides?.apiKey) body.api_key = overrides.apiKey;
+  // An empty header is sent: it clears a saved gateway header for this test (#1162).
+  if (overrides?.authHeader !== undefined) body.auth_header = overrides.authHeader;
+  return body;
+}
+
 /**
  * Settings Room data hook.
  *
@@ -778,14 +795,7 @@ export function useSettingsData() {
       overrides?: { kind?: LLMProviderKind; model?: string; baseUrl?: string; apiKey?: string; authHeader?: string },
     ): Promise<ProviderTestResult> => {
       try {
-        const body: Record<string, unknown> = { name };
-        if (overrides?.kind) body.kind = overrides.kind;
-        if (overrides?.model) body.model = overrides.model;
-        if (overrides && Object.hasOwn(overrides, "baseUrl")) {
-          body.base_url = overrides.baseUrl ?? "";
-        }
-        if (overrides?.apiKey) body.api_key = overrides.apiKey;
-        if (overrides?.authHeader) body.auth_header = overrides.authHeader;
+        const body = providerTestBody(name, overrides);
         const r = await postJson<{ ok: boolean; model?: string; models?: string[]; error?: string }>(
           "/api/config/llm/test",
           body,

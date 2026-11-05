@@ -299,15 +299,17 @@ function DayView({ weekStart, idx, events, selectedId, onSelect, selectedEvent }
 }
 
 /* ── create dialog ── */
-function CreateDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (input: { title: string; when: string; priority: CalendarPriority }) => Promise<boolean> }) {
+export function CreateDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (input: { title: string; when: string; priority: CalendarPriority }) => Promise<boolean> }) {
   const [title, setTitle] = useState("");
   const [when, setWhen] = useState("");
   const [priority, setPriority] = useState<CalendarPriority>("normal");
   const [busy, setBusy] = useState(false);
   const parsed = useMemo(() => (when.trim() ? parseRelativeDate(when) : null), [when]);
 
+  // A time that does not parse is not an undated event: refuse it, as the voice path does (#1162).
+  const unreadable = !!when.trim() && !parsed;
   const submit = async () => {
-    if (!title.trim()) return;
+    if (!title.trim() || unreadable) return;
     setBusy(true);
     const ok = await onCreate({ title: title.trim(), when: when.trim(), priority });
     setBusy(false);
@@ -329,7 +331,7 @@ function CreateDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (i
           <div>
             <div className="rk-cal__field-lab">when</div>
             <input className="rk-cal__dialog-input" value={when} onChange={(e) => setWhen(e.target.value)} placeholder="e.g. tomorrow at 3pm, next monday" />
-            <div className="rk-cal__parse">{when.trim() ? (parsed ? `→ ${formatFullDateTime(parsed.ts)}` : "Couldn't parse that — leave blank for an undated task.") : "Leave blank for an undated task."}</div>
+            <div className="rk-cal__parse">{when.trim() ? (parsed ? `→ ${formatFullDateTime(parsed.ts)}` : "Couldn't read that time. Fix it, or clear it for an undated task.") : "Leave blank for an undated task."}</div>
           </div>
           <div>
             <div className="rk-cal__field-lab">priority</div>
@@ -342,7 +344,7 @@ function CreateDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (i
         </div>
         <div className="rk-cal__dialog-acts" style={{ padding: "0 18px 16px" }}>
           <button className="rk-cal__sbtn" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="rk-cal__sbtn rk-cal__sbtn--pri" onClick={submit} disabled={busy || !title.trim()}>{busy ? "Creating…" : "Create"}</button>
+          <button className="rk-cal__sbtn rk-cal__sbtn--pri" onClick={submit} disabled={busy || !title.trim() || unreadable}>{busy ? "Creating…" : "Create"}</button>
         </div>
       </div>
     </div>
