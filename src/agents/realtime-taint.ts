@@ -46,6 +46,12 @@
  *
  * Fail safe throughout: a transcript with no item id, or one whose utterance
  * start was never seen, clears nothing.
+ *
+ * Nor does a bare affirmation ("yes", "ok", "do it") while the session holds
+ * any mark (owner decision 2026-11-05, #1156): after a page read, "shall I
+ * run it?" can be the page speaking through the assistant, and a plain yes to
+ * it is not the person's own request. The accepted cost: they have to say
+ * what they want ("yes, run the build").
  */
 
 /** A transcript with no letter or digit in it is not something the user said. */
@@ -92,6 +98,24 @@ class SequencedMarks extends Set<string> {
   clearThrough(watermark: number): void {
     for (const [mark, at] of this.noted) if (at <= watermark) this.delete(mark);
   }
+}
+
+/**
+ * Replies that only agree to what was just proposed, with nothing of their own
+ * in them (owner decision 2026-11-05, #1156). Compared whole, after
+ * lowercasing, dropping punctuation and a leading "jarvis" or "hey jarvis".
+ */
+const BARE_AFFIRMATIONS: ReadonlySet<string> = new Set([
+  'yes', 'yeah', 'yep', 'yup', 'yes please', 'please do', 'ok', 'okay', 'k', 'sure', 'alright', 'all right',
+  'do it', 'go ahead', 'go for it', 'yes do it', 'yes go ahead', 'ok do it', 'okay do it', 'sure do it',
+  'ok go ahead', 'okay go ahead', 'sure go ahead', 'sounds good', 'confirm', 'confirmed', 'approve', 'approved',
+]);
+
+/** Whether `text` is only a yes to whatever was proposed (see BARE_AFFIRMATIONS). */
+export function isBareAffirmation(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/[^\p{L}\p{N}' ]+/gu, ' ').replace(/\s+/g, ' ').trim()
+    .replace(/^(hey )?jarvis /, '');
+  return BARE_AFFIRMATIONS.has(normalized);
 }
 
 /** The words of `text`, lowercased, for comparing what was heard with what was said. */
@@ -162,6 +186,11 @@ export class RealtimeTaint {
    */
   userTranscript(itemId: string | undefined, text: string): boolean {
     if (!SPOKEN.test(text)) return false;
+    // A bare "yes" after the session read outside content agrees to what the
+    // assistant proposed, and that proposal may be the page's (owner
+    // decision 2026-11-05, #1156). It is not a fresh request, so it clears
+    // nothing; the person says what they want in their own words instead.
+    if (this.marks.size > 0 && isBareAffirmation(text)) return false;
     if (!itemId) return false;
     const began = this.utterances.get(itemId);
     if (began === undefined) return false;
