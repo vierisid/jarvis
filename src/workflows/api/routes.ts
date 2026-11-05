@@ -2392,11 +2392,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       }),
     },
     // Acknowledges a failed or withdrawn outcome so it leaves Needs you. Same
-    // signed-in, project-scoped route family as the response above; no body.
+    // signed-in, project-scoped route family and request generation as the response above.
     "/api/workflow-inputs/:id/dismiss": {
-      POST: req => trapErrors(() => {
+      POST: req => trapErrors(async () => {
         const { id } = (req as RequestWithParams<{ id: string }>).params;
-        const { status, ...result } = dismissHumanInput(callerProject(req), id);
+        const raw = await req.text(); if (new TextEncoder().encode(raw).length > 1000) return err('Response too large', 413);
+        let body: unknown; try { body = raw ? JSON.parse(raw) : {}; } catch { return err('Invalid JSON', 400); }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return err('Response object required', 400);
+        const { status, ...result } = dismissHumanInput(callerProject(req), id, Date.now(), (body as Record<string, unknown>).generation);
         return Response.json(result, { status });
       }),
     },

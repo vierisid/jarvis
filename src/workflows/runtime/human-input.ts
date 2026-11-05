@@ -15,6 +15,12 @@ const row = (id: string) => getWorkflowDb().query<Row, [string]>('SELECT * FROM 
 const unpack = (r: Row): HumanRequest => ({ ...JSON.parse(r.record), status: r.status });
 /** Instance of a request: a shared form reopened after it closed counts up. */
 const generationOf = (request: { generation?: number }) => request.generation ?? 0;
+/** Old clients may answer an original request, never a reopened instance. */
+function matchesGeneration(request: HumanRequest, expected: unknown): boolean {
+  return expected === generationOf(request) || (expected === undefined && generationOf(request) === 0);
+}
+const staleResponse = (request: HumanRequest) => ({ status: 409,
+  error: 'This request was reopened. Your response belongs to an earlier request and was not accepted. Review the current request.', request });
 /** SQL: the current instance of request row `h` (records from before generations are 0). */
 const CURRENT_GENERATION = `COALESCE(json_extract(h.record,'$.generation'),0)`;
 function save(request: HumanRequest) {
@@ -141,7 +147,9 @@ export function resolveHumanInput(projectId: string, id: string, input: Record<s
   const result = db.transaction(() => {
     const record = row(id);
     if (!record || record.project_id !== projectId) return { status: 404, error: 'Request not found' };
-    const decision = input.decision, kind = unpack(record).kind;
+    const current = unpack(record);
+    if (!matchesGeneration(current, input.generation)) return staleResponse(current);
+    const decision = input.decision, kind = current.kind;
     const status = decision === 'submit' && kind === 'input' ? 'submitted'
       : decision === 'approve' && kind === 'approval' ? 'approved'
       : decision === 'reject' && kind === 'approval' ? 'rejected' : decision === 'cancel' ? 'cancelled' : null;
@@ -218,12 +226,13 @@ function withRunOutcomes(request: HumanRequest): HumanRequest {
  * Acknowledge a closed request whose outcome needed attention (a failed run, a
  * withdrawn form). It then stops counting in Needs you; the record is kept.
  */
-export function dismissHumanInput(projectId: string, id: string, now = Date.now()) {
+export function dismissHumanInput(projectId: string, id: string, now = Date.now(), generation?: unknown) {
   const db = getWorkflowDb();
   return db.transaction(() => {
     const record = row(id);
     if (!record || record.project_id !== projectId) return { status: 404, error: 'Request not found' };
     const request = withRunOutcomes(unpack(record));
+    if (!matchesGeneration(request, generation)) return staleResponse(request);
     if (request.dismissedAt) return { status: 200, request };
     if (!humanRequestDismissable(request)) return { status: 409, error: request.status === 'pending' ? 'This request is still waiting for a response' : 'This request has nothing to dismiss yet', request };
     const { runs: _runs, ...stored } = request;
