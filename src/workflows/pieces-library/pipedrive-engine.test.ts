@@ -3,7 +3,7 @@
  * EngineRuntime with downstream references. Only provider/refresh network
  * boundaries are local fixtures; no live Pipedrive calls or account credentials.
  * Gated on JARVIS_TEST_ENGINE_BUILD=1 like the other engine tests; CI runs it
- * in test.yml's engine step. */
+ * in the required test job, whose bun test run sets that gate. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {
   mkdtempSync,

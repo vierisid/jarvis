@@ -1,6 +1,6 @@
 /** Published Help Scout package through Worker and EngineRuntime. It installs the
  * pinned piece from npm and builds an engine bundle, so it runs only with
- * JARVIS_TEST_ENGINE_BUILD=1 (the CI engine step lists it). Provider HTTP alone is
+ * JARVIS_TEST_ENGINE_BUILD=1 (the required test job's bun test run sets it). Provider HTTP alone is
  * redirected in a disposable engine bundle. No live credentials. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {

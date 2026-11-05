@@ -156,41 +156,21 @@ jobs:
       # A step-level retry would re-run the whole ~130s suite on a runner still
       # carrying the orphaned chrome processes the previous attempt leaked --
       # slower, and less likely to pass.
+      #
+      # JARVIS_TEST_ENGINE_BUILD=1 for the whole run (#1256). The engine suites
+      # (src/workflows/runner/engine-runtime, the engine half of several
+      # src/workflows/runtime suites, the pieces-library provider
+      # qualifications) skip without it unless a bundle and pieces happen to be
+      # built already. Before this they ran here only because an ungated
+      # *-engine test sorted earlier and built both first, so a rename or a
+      # reorder would have turned them into silent skips; and the provider
+      # qualifications ran in a second step that listed each file by hand.
+      # With the gate set, each suite builds what it needs (cached after the
+      # first build) and none of them depends on file order or on a list.
+      # engine-ci-coverage.test.ts holds this step to that.
       - run: bun test --retry=2
-      # The real engine (Q-08): a step held while Jarvis is paused must come
-      # back the way it was about to run, which only the engine itself shows.
-      # Engine tests skip without a built bundle and pieces, so this builds
-      # them (seconds) and runs those files. After the full run on purpose:
-      # built first, they would un-skip engine suites that need more pieces.
-      # The pieces-library engine tests also install their pinned pieces from
-      # npm; engine-ci-coverage.test.ts checks each one is listed here (#1235).
-      - run: >-
-          JARVIS_TEST_ENGINE_BUILD=1 bun test --retry=2
-          src/workflows/runner/engine-runtime/emergency-hold-engine.test.ts
-          src/workflows/runner/engine-runtime/outer-worker-delay.test.ts
-          src/workflows/runner/engine-runtime/core-http-piece.test.ts
-          src/workflows/pieces-library/clickup-engine.test.ts
-          src/workflows/pieces-library/monday-engine.test.ts
-          src/workflows/pieces-library/todoist-engine.test.ts
-          src/workflows/pieces-library/linear-engine.test.ts
-          src/workflows/pieces-library/typeform-engine.test.ts
-          src/workflows/pieces-library/asana-engine.test.ts
-          src/workflows/pieces-library/calendly-engine.test.ts
-          src/workflows/pieces-library/figma-engine.test.ts
-          src/workflows/pieces-library/webflow-engine.test.ts
-          src/workflows/pieces-library/wrike-engine.test.ts
-          src/workflows/pieces-library/pipedrive-engine.test.ts
-          src/workflows/pieces-library/zoom-engine.test.ts
-          src/workflows/pieces-library/help-scout-engine.test.ts
-          src/workflows/pieces-library/gitlab-engine.test.ts
-          src/workflows/pieces-library/mailchimp-engine.test.ts
-          src/workflows/pieces-library/dropbox-engine.test.ts
-          src/workflows/pieces-library/slack-engine.test.ts
-          src/workflows/pieces-library/airtable-engine.test.ts
-          src/workflows/pieces-library/intercom-engine.test.ts
-          src/workflows/pieces-library/notion-engine.test.ts
-          src/workflows/pieces-library/trello-engine.test.ts
-          src/workflows/pieces-library/github-engine.test.ts
+        env:
+          JARVIS_TEST_ENGINE_BUILD: "1"
       # Not retried: deterministic.
       - run: bunx tsc --noEmit
 

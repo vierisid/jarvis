@@ -219,6 +219,9 @@ describe("assertInputsFromStaging", () => {
 });
 
 const stagingEsbuild = resolve(ENGINE_BUILD_PATHS.STAGING_DIR, "node_modules/esbuild/lib/main.js");
+// JARVIS_TEST_ENGINE_BUILD=1 installs staging first, so CI runs these whatever
+// order the files load in rather than only after another suite built (#1256).
+if (process.env.JARVIS_TEST_ENGINE_BUILD === "1") await ensureStagingInstalled();
 
 describe.skipIf(!existsSync(stagingEsbuild))("our sources resolve packages from staging alone (#836)", () => {
   /**

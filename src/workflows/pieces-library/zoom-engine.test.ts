@@ -1,7 +1,7 @@
 /** Published Zoom package through Worker and EngineRuntime. Provider HTTP alone
  * is redirected in a disposable engine bundle; no live credentials.
  * Gated on JARVIS_TEST_ENGINE_BUILD=1 like the other engine tests; CI runs it
- * in test.yml's engine step. */
+ * in the required test job, whose bun test run sets that gate. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {
   mkdtempSync,
