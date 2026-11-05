@@ -2476,7 +2476,7 @@ export class AgentOrchestrator {
       if (refusedIntent) {
         logAudit('denied', false);
         return `[BLOCKED] ${name} (${refusedIntent.actionCategory}) was not run: the user did not approve that kind of action when asked, and voice cannot approve it now. `
-          + 'Tell the user it was not done; they can ask for it again as a fresh request.';
+          + 'Tell the user it was not done; they can ask for it again as a fresh request, in their own words: a plain yes is not enough.';
       }
 
       // Taint-gated approvals cannot be auto-approved: the whole point is
@@ -2485,7 +2485,7 @@ export class AgentOrchestrator {
       if (decision.requiresApproval && decision.profileLabel?.includes(TAINT_PROFILE_LABEL)) {
         logAudit('denied', false);
         return `[BLOCKED] ${name} (${actionCategory}) was not run: this session read outside content (${[...this.getTurnTaint()].join(', ')}) and voice cannot approve it. ` +
-               `Tell the user what you wanted to do and ask them to say it again as a fresh request.`;
+               `Tell the user what you wanted to do and ask them to say it again as a fresh request, in their own words: a plain yes is not enough.`;
       }
 
       // Other requiresApproval -> auto-approved in realtime; audited as such.

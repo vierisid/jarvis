@@ -849,7 +849,7 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
       const { frames, realtime } = setup({ tainted: true });
       expect(await realtime(room, action, args)).toBe(
         `[BLOCKED] ${room}/${action} (${category}) was not sent: this session read outside content (browser_navigate) and voice cannot approve it. `
-        + 'Tell the user what you wanted to do and ask them to say it again as a fresh request.');
+        + 'Tell the user what you wanted to do and ask them to say it again as a fresh request, in their own words: a plain yes is not enough.');
       expect(frames()).toEqual([]);
     }
   });

@@ -47,11 +47,12 @@
  * Fail safe throughout: a transcript with no item id, or one whose utterance
  * start was never seen, clears nothing.
  *
- * Nor does a bare affirmation ("yes", "ok", "do it") while the session holds
- * any mark (owner decision 2026-11-05, #1156): after a page read, "shall I
- * run it?" can be the page speaking through the assistant, and a plain yes to
- * it is not the person's own request. The accepted cost: they have to say
- * what they want ("yes, run the build").
+ * Nor does a bare affirmation ("yes", "ok", "yeah go ahead") while the
+ * session holds any mark (owner decision 2026-11-05, #1156): after a page
+ * read, "shall I run it?" can be the page speaking through the assistant, and
+ * a plain yes to it is not the person's own request. Any mark includes a
+ * declined intent (Q-08): a spoken yes does not walk around a denied card.
+ * The accepted cost: they have to say what they want ("yes, run the build").
  */
 
 /** A transcript with no letter or digit in it is not something the user said. */
@@ -101,21 +102,34 @@ class SequencedMarks extends Set<string> {
 }
 
 /**
- * Replies that only agree to what was just proposed, with nothing of their own
- * in them (owner decision 2026-11-05, #1156). Compared whole, after
- * lowercasing, dropping punctuation and a leading "jarvis" or "hey jarvis".
+ * A reply that only agrees to what was just proposed, with nothing of its own
+ * in it (owner decision 2026-11-05, #1156): at least one word of agreement,
+ * and every other word filler, politeness or a wake word. Any word of content
+ * ("build", "email", "bob") makes it the person's own request, so this cannot
+ * hold an ordinary request back.
+ *
+ * Wide on purpose: a yes missed here clears the taint, which is the unsafe
+ * direction. ws-service's isVoiceAffirmative is narrow on purpose (a yes it
+ * misses leaves a held room action unconfirmed); do not merge the two.
+ * English and Italian, the languages known to be spoken to it; a yes in
+ * another language still clears.
  */
-const BARE_AFFIRMATIONS: ReadonlySet<string> = new Set([
-  'yes', 'yeah', 'yep', 'yup', 'yes please', 'please do', 'ok', 'okay', 'k', 'sure', 'alright', 'all right',
-  'do it', 'go ahead', 'go for it', 'yes do it', 'yes go ahead', 'ok do it', 'okay do it', 'sure do it',
-  'ok go ahead', 'okay go ahead', 'sure go ahead', 'sounds good', 'confirm', 'confirmed', 'approve', 'approved',
+const AGREEMENT: ReadonlySet<string> = new Set([
+  'yes', 'yeah', 'yea', 'yep', 'yup', 'ya', 'yah', 'ok', 'okay', 'k', 'kk', 'sure', 'alright', 'right', 'fine',
+  'correct', 'affirmative', 'proceed', 'confirm', 'confirmed', 'approve', 'approved', 'absolutely', 'definitely',
+  'certainly', 'mhm', 'agreed', 'do', 'ahead', 'si', 'sì', 'certo', 'procedi', 'bene', 'fallo', 'vai', 'perfetto', 'esatto',
+]);
+const FILLER: ReadonlySet<string> = new Set([
+  'it', 'go', 'for', 'now', 'just', "let's", 'lets', 'please', 'thanks', 'thank', 'you', 'sir',
+  'sounds', 'good', "that's", 'thats', 'that', 'this', 'one', 'all', 'is', 'so', 'then', 'o', 'and', 'again', 'thing',
+  'uh', 'um', 'mm', 'hmm', 'huh', 'er', 'ah', 'oh', 'jarvis', 'hey', 'hi',
+  'va', 'pure', 'grazie', 'per', 'favore', 'dai', 'ok',
 ]);
 
-/** Whether `text` is only a yes to whatever was proposed (see BARE_AFFIRMATIONS). */
+/** Whether `text` is only a yes to whatever was proposed (see AGREEMENT). */
 export function isBareAffirmation(text: string): boolean {
-  const normalized = text.toLowerCase().replace(/[^\p{L}\p{N}' ]+/gu, ' ').replace(/\s+/g, ' ').trim()
-    .replace(/^(hey )?jarvis /, '');
-  return BARE_AFFIRMATIONS.has(normalized);
+  const said = words(text.normalize('NFKC'));
+  return said.some((w) => AGREEMENT.has(w)) && said.every((w) => AGREEMENT.has(w) || FILLER.has(w));
 }
 
 /** The words of `text`, lowercased, for comparing what was heard with what was said. */
@@ -181,8 +195,9 @@ export class RealtimeTaint {
   /**
    * A final transcript of what the user said. Clears the marks noted before
    * that utterance began, and returns whether it cleared (anything or nothing)
-   * as a boundary. An empty or wordless transcript, one with no item id, and
-   * one for an utterance whose start was not seen are no boundary.
+   * as a boundary. An empty or wordless transcript, one with no item id, one
+   * for an utterance whose start was not seen, and a bare affirmation while
+   * any mark is held (#1156) are no boundary.
    */
   userTranscript(itemId: string | undefined, text: string): boolean {
     if (!SPOKEN.test(text)) return false;

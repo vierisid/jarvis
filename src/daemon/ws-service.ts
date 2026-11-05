@@ -433,6 +433,10 @@ const VOICE_AFFIRMATIVE_PHRASES = new Set([
 ]);
 
 /**
+ * Narrow on purpose: a yes this misses leaves a held action unconfirmed. The
+ * realtime taint's isBareAffirmation is wide on purpose (a yes it misses
+ * clears the taint); they are not one list.
+ *
  * Whether the person said a plain yes, read from the transcript itself rather
  * than from the classifier (#973): a held room action is held because the
  * classifier's reading is not trusted, so the same classifier may not be the
