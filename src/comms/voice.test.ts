@@ -14,6 +14,7 @@ import {
   splitIntoSentences,
 } from './voice.ts';
 import type { STTConfig, TTSConfig } from '../config/types.ts';
+import { edgeSynthesize } from './edge-tts-client.ts';
 
 /** Build a minimal valid WAV buffer */
 function makeWavBuffer(pcmBytes = 100): Buffer {
@@ -966,16 +967,34 @@ describe('#1156: a hung TTS provider times out instead of blocking later speech'
     await expect(new SarvamTTSProvider({ api_key: 'k' }, 50).synthesize('hi')).rejects.toThrow();
   });
 
-  test('Edge, whose service socket has no read timeout of its own', async () => {
-    const neverEnds = {
-      Communicate: class {
-        async *stream(): AsyncGenerator<{ type: string; data?: Buffer }> { await new Promise(() => {}); }
-      },
-    } as unknown as typeof import('edge-tts-universal');
-    const edge = new EdgeTTSProvider('v', '+0%', '+0%', 50, async () => neverEnds);
-    await expect(edge.synthesize('hi')).rejects.toThrow('Edge TTS timed out after 50ms');
-    // The streaming form every speaker uses goes through it too.
-    const drained = (async () => { for await (const _ of edge.synthesizeStream('hi')) { /* none */ } })();
-    await expect(drained).rejects.toThrow('timed out');
+  test('Edge, whose service socket has no read timeout of its own: times out and closes it', async () => {
+    // A local service that accepts the request and never answers.
+    let closes = 0;
+    const silent = Bun.serve({
+      hostname: '127.0.0.1', port: 0,
+      fetch(req, srv) { return srv.upgrade(req) ? undefined : new Response('no', { status: 400 }); },
+      websocket: { message() {}, close() { closes++; } },
+    });
+    try {
+      const endpoint = `ws://127.0.0.1:${silent.port}/v1`;
+      const seen: Array<{ voice: string; rate: string; volume: string; pitch: string; timeoutMs: number }> = [];
+      const edge = new EdgeTTSProvider('en-GB-SoniaNeural', '+10%', '-5%', 50, (text, opts) => {
+        seen.push({ voice: opts.voice, rate: opts.rate, volume: opts.volume, pitch: opts.pitch, timeoutMs: opts.timeoutMs });
+        return edgeSynthesize(text, { ...opts, endpoint });
+      });
+      await expect(edge.synthesize('hi')).rejects.toThrow('Edge TTS timed out after 50ms');
+      // The streaming form every speaker uses goes through it too.
+      const drained = (async () => { for await (const _ of edge.synthesizeStream('hi')) { /* none */ } })();
+      await expect(drained).rejects.toThrow('timed out');
+      expect(seen).toEqual([
+        { voice: 'en-GB-SoniaNeural', rate: '+10%', volume: '-5%', pitch: '+0Hz', timeoutMs: 50 },
+        { voice: 'en-GB-SoniaNeural', rate: '+10%', volume: '-5%', pitch: '+0Hz', timeoutMs: 50 },
+      ]);
+      // Both sockets were closed, not left to the service (#1166).
+      for (let i = 0; i < 100 && closes < 2; i++) await Bun.sleep(20);
+      expect(closes).toBe(2);
+    } finally {
+      silent.stop(true);
+    }
   });
 });
