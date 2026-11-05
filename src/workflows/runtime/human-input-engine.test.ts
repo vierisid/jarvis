@@ -316,3 +316,25 @@ test('a delayed dismissal cannot acknowledge the failed result of a reopened req
   expect(requestFor(second.id).dismissedAt).toBeUndefined();
   expect(dismissHumanInput(DEFAULT_IDS.project, current.id, Date.now(), 1).status).toBe(200);
 });
+
+test('older closed requests remain directly accessible and history uses closure time, not deadline', async () => {
+  const f=fixture(), run=await f.run('history'), request=requestFor(run.id), db=getWorkflowDb();
+  cancelFlowRun(run.id); listHumanInputs(DEFAULT_IDS.project);
+  const closed=Date.now()+1000;
+  for(let i=0;i<25;i++) db.run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status) VALUES (?,?,?,?,?,?,'submitted')`,
+    [`history-${i}`,DEFAULT_IDS.project,f.flow.id,'x',JSON.stringify({...request,id:`history-${i}`,created:closed+i,closedAt:closed+i,deadline:closed+1000000-i,answers}),closed+1000000-i]);
+  const routes=createWorkflowRoutes();
+  const get=async(path:string,key:string,params={})=>routes[key]!.GET!(Object.assign(new Request('http://localhost'+path),{params}));
+  const listed=await (await get('/api/workflow-inputs','/api/workflow-inputs')).json();
+  expect(listed.requests.some((r:HumanRequest)=>r.id==='history-24')).toBe(true);
+  expect(listed.requests.some((r:HumanRequest)=>r.id===request.id)).toBe(false);
+  const direct=await get('/api/workflow-inputs/'+request.id,'/api/workflow-inputs/:id',{id:request.id});
+  expect(direct.status).toBe(200);expect((await direct.json()).request.status).toBe('cancelled');
+  const page=await (await get('/api/workflow-inputs/history?cursor='+encodeURIComponent(listed.historyCursor),'/api/workflow-inputs/history')).json();
+  expect(page.requests.some((r:HumanRequest)=>r.id===request.id)).toBe(true);
+  const all=[...listed.requests,...page.requests].filter((r:HumanRequest)=>r.id.startsWith('history-'));
+  expect(new Set(all.map((r:HumanRequest)=>r.id)).size).toBe(25);
+  expect((await get('/api/workflow-inputs/history?cursor=bad','/api/workflow-inputs/history')).status).toBe(400);
+  const {getHumanInput}=await import('./human-input'); expect(getHumanInput('other-project',request.id)).toBeNull();
+  db.run("DELETE FROM workflow_human_request WHERE id LIKE 'history-%'");
+});

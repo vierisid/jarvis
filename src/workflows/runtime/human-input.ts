@@ -23,7 +23,8 @@ const staleResponse = (request: HumanRequest) => ({ status: 409,
   error: 'This request was reopened. Your response belongs to an earlier request and was not accepted. Review the current request.', request });
 /** SQL: the current instance of request row `h` (records from before generations are 0). */
 const CURRENT_GENERATION = `COALESCE(json_extract(h.record,'$.generation'),0)`;
-function save(request: HumanRequest) {
+function save(request: HumanRequest, now = Date.now()) {
+  if (request.status !== 'pending' && request.closedAt === undefined) request.closedAt = request.status === 'expired' ? request.deadline : now;
   getWorkflowDb().run('UPDATE workflow_human_request SET status=?,record=? WHERE id=?', [request.status, JSON.stringify(request), request.id]);
 }
 function text(value: unknown, name: string, max: number): string {
@@ -105,7 +106,7 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
     const earlier = db.query('SELECT 1 FROM workflow_human_wait WHERE request_id=? AND run_id=? AND generation<?').get(id, ctx.runId, generationOf(request));
     if (earlier && !db.query('SELECT 1 FROM workflow_human_wait WHERE request_id=? AND run_id=? AND generation=?').get(id, ctx.runId, generationOf(request)))
       throw Error(`Human request ${request.reopenedFrom ?? 'expired'}`);
-    if (request.status === 'pending' && now >= request.deadline) { request.status = 'expired'; save(request); }
+    if (request.status === 'pending' && now >= request.deadline) { request.status = 'expired'; save(request, now); }
     if (linksOnly) return { requestId: id, approvalLink: `/?brief=1#/brief/needs-you?inputId=${id}`, disapprovalLink: `/?brief=1#/brief/needs-you?inputId=${id}` };
     // The legacy Wait for Approval kept its old contract: it never failed the
     // run, it returned `{ approved }` and let the flow branch on it.
@@ -138,8 +139,30 @@ const UNDISMISSED_OUTCOME = `h.status IN ('submitted','approved','cancelled') AN
 export function listHumanInputs(projectId: string, now = Date.now()): HumanRequest[] {
   expireHumanInputs(now);
   return getWorkflowDb().query<Row, [string]>(`SELECT * FROM workflow_human_request h WHERE h.project_id=?1 AND (h.status='pending' OR h.id IN
-    (SELECT id FROM workflow_human_request WHERE project_id=?1 AND status!='pending' ORDER BY deadline DESC LIMIT 20)
+    (SELECT id FROM workflow_human_request WHERE project_id=?1 AND status!='pending' ORDER BY COALESCE(json_extract(record,'$.closedAt'),json_extract(record,'$.created'),0) DESC,id DESC LIMIT 20)
     OR (${UNDISMISSED_OUTCOME})) ORDER BY h.deadline,h.id`).all(projectId).map(record => withRunOutcomes(unpack(record)));
+}
+/** Authenticated deep links and local draft recovery are not limited by the recent page. */
+export function getHumanInput(projectId: string, id: string, now = Date.now()): HumanRequest | null {
+  expireHumanInputs(now);
+  const record = row(id);
+  return record?.project_id === projectId ? withRunOutcomes(unpack(record)) : null;
+}
+const CLOSED_TIME = "COALESCE(json_extract(record,'$.closedAt'),json_extract(record,'$.created'),0)";
+/** Stable keyset pagination: new responses cannot shift older pages or duplicate records. */
+export function humanInputHistory(projectId: string, cursor?: string | null) {
+  let before: [number, string] | null = null;
+  if (cursor) {
+    let value: unknown; try { value = JSON.parse(cursor); } catch { throw Error('Invalid history cursor'); }
+    if (!Array.isArray(value) || value.length !== 2 || typeof value[0] !== 'number' || !Number.isFinite(value[0])
+      || typeof value[1] !== 'string' || value[1].length > 200) throw Error('Invalid history cursor');
+    before = value as [number, string];
+  }
+  const rows = getWorkflowDb().query<Row, [string, number | null, string | null]>(`SELECT * FROM workflow_human_request
+    WHERE project_id=?1 AND status!='pending' AND (?2 IS NULL OR ${CLOSED_TIME}<?2 OR (${CLOSED_TIME}=?2 AND id<?3))
+    ORDER BY ${CLOSED_TIME} DESC,id DESC LIMIT 21`).all(projectId, before?.[0] ?? null, before?.[1] ?? null);
+  const requests = rows.slice(0, 20).map(record => withRunOutcomes(unpack(record))), last = requests.at(-1);
+  return { requests, nextCursor: rows.length > 20 && last ? JSON.stringify([last.closedAt ?? last.created ?? 0, last.id]) : null };
 }
 export function resolveHumanInput(projectId: string, id: string, input: Record<string, unknown>, now = Date.now()) {
   expireHumanInputs(now);
@@ -166,7 +189,7 @@ export function resolveHumanInput(projectId: string, id: string, input: Record<s
     }
     const errors = status === 'submitted' ? answerErrors(request.fields, answers) : {};
     if (Object.keys(errors).length) return { status: 422, error: 'Check the highlighted answers', errors };
-    request.status = status; request.answers = answers as Record<string, unknown> | null; save(request);
+    request.status = status; request.answers = answers as Record<string, unknown> | null; save(request, now);
     return { status: 200, request };
   }).immediate();
   resumeHumanInputs(now);
@@ -187,7 +210,7 @@ function expireHumanInputs(now: number) {
   const closing = db.query<Row & { next: 'expired' | 'cancelled' }, [number]>(`SELECT h.*, CASE WHEN NOT EXISTS (${LIVE_RUN}
       AND ${INSTANCE_RUN}) THEN 'cancelled' WHEN h.deadline <= ?1 THEN 'expired' END AS next
     FROM workflow_human_request h WHERE h.status='pending' AND next IS NOT NULL`).all(now);
-  for (const record of closing) save({ ...unpack(record), status: record.next });
+  for (const record of closing) save({ ...unpack(record), status: record.next }, now);
 }
 /** Durable polling also covers a response received before the worker parks. */
 export function resumeHumanInputs(now = Date.now()): number {

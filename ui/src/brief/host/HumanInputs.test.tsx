@@ -160,3 +160,56 @@ test('reopening a shared request never prefills or submits the expired generatio
   await click('Submit update'); expect(writes).toEqual([{decision:'submit',generation:1,answers:{progress:'New response',count:0,blocked:false}}]);
   expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toContain('Old response');
 });
+
+test('a submitted answer has a read-only copyable receipt with zero and false',async()=>{
+ let copied='';Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>{copied=text;}}});
+ const http=createHostTransport((async()=>{throw Error('No write expected');}) as unknown as typeof fetch);
+ const receipt={...request,status:'submitted' as const,answers:{progress:'Accepted handover',count:0,blocked:false}};
+ await React.act(async()=>root.render(<Forms.HumanInputForm request={receipt} http={http} changed={async()=>{}}/>));
+ expect(host.textContent).toContain('Accepted handover');expect(host.textContent).toContain('Submitted answers');
+ await click('Copy submitted answers');expect(copied).toContain('Count: 0');expect(copied).toContain('Blocked: false');
+ expect(host.querySelector('button[type="submit"]')).toBeNull();
+});
+test('an unsent answer survives leaving the recent list and a full UI remount',async()=>{
+ const http=createHostTransport((async()=>Response.json({request:{...request,status:'cancelled'}})) as unknown as typeof fetch);
+ const render=(requests:HumanRequest[])=>root.render(<Forms.HumanInputInbox queue={{requests,error:'',refresh:async()=>{}}} http={http}/>);
+ await React.act(async()=>render([request]));await change('textarea','Recover beyond history');
+ await React.act(async()=>render([{...request,status:'cancelled'}]));
+ await React.act(async()=>render([]));
+ expect((host.querySelector('textarea') as HTMLTextAreaElement)?.value).toBe('Recover beyond history');
+ await React.act(async()=>root.render(null));await React.act(async()=>render([]));
+ expect((host.querySelector('textarea') as HTMLTextAreaElement)?.value).toBe('Recover beyond history');
+ expect(host.querySelector('button[type="submit"]')).toBeNull();
+});
+
+test('a deep link loads a request outside recent history and older responses can be paged',async()=>{
+ const urls:string[]=[];
+ const old={...request,id:'old',status:'submitted' as const,answers:{progress:'Old accepted answer',count:0,blocked:false}};
+ const http=createHostTransport((async(url)=>{urls.push(String(url));return Response.json(String(url).includes('/history?')?{requests:[{...old,id:'older'}],nextCursor:null}:{request:old});}) as typeof fetch);
+ await React.act(async()=>root.render(<Forms.HumanInputInbox queue={{requests:[],error:'',refresh:async()=>{},historyCursor:'[123,"last"]'}} http={http} focusId="old"/>));
+ expect(host.textContent).toContain('Old accepted answer');expect(urls[0]).toBe('/api/workflow-inputs/old');
+ expect(document.activeElement?.getAttribute('aria-labelledby')).toBe('human-title-old');
+ await click('Load older responses');expect(urls.at(-1)).toContain('/api/workflow-inputs/history?cursor=');
+ expect(host.querySelectorAll('article')).toHaveLength(2);
+ expect([...host.querySelectorAll('button')].some(b=>b.textContent==='Load older responses')).toBe(false);
+});
+test('the queue fetches a locally saved draft beyond the recent page',async()=>{
+ sessionStorage.setItem('jarvis:workflow-input:test-request',JSON.stringify({progress:'Beyond page one'}));
+ const urls:string[]=[];
+ const http=createHostTransport((async(url)=>{urls.push(String(url));return Response.json(String(url).endsWith('/test-request')?{request:{...request,status:'cancelled'}}:{requests:[],historyCursor:null});}) as typeof fetch);
+ function Probe(){const queue=Forms.useHumanInputQueue(http);return <Forms.HumanInputInbox queue={queue} http={http}/>;}
+ await React.act(async()=>root.render(<Probe/>));
+ expect(urls).toContain('/api/workflow-inputs/test-request');expect((host.querySelector('textarea') as HTMLTextAreaElement).value).toBe('Beyond page one');
+ expect(host.querySelector('button[type="submit"]')).toBeNull();
+});
+test('a recovered earlier draft remains separate and copyable after a new generation is answered',async()=>{
+ const {rememberDraft}=await import('./human-input-drafts');rememberDraft({...request,status:'expired'});
+ sessionStorage.setItem('jarvis:workflow-input:test-request',JSON.stringify({progress:'Earlier unsent'}));
+ const current={...request,generation:1,status:'submitted' as const,answers:{progress:'New accepted',count:0,blocked:false}};
+ const http=createHostTransport((async()=>Response.json({})) as unknown as typeof fetch);
+ await React.act(async()=>root.render(<Forms.HumanInputInbox queue={{requests:[current],error:'',refresh:async()=>{}}} http={http}/>));
+ expect((host.querySelector('textarea') as HTMLTextAreaElement).value).toBe('Earlier unsent');
+ expect(host.textContent).toContain('New accepted');expect(host.textContent).toContain('earlier or unavailable request');
+ expect(host.querySelector('button[type="submit"]')).toBeNull();
+ await click('Discard unsent answers');expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toBeNull();
+});

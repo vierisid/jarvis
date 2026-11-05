@@ -6,6 +6,8 @@ export type HumanRequest = {
   requestKey: string; workflowName: string; flowId: string; runId: string; created: number; deadline: number;
   status: 'pending' | 'submitted' | 'approved' | 'rejected' | 'expired' | 'cancelled';
   answers: Record<string, unknown> | null;
+  /** Time this instance closed, independent of its response deadline. */
+  closedAt?: number;
   /** Read-only continuation receipts. Shared forms can belong to several runs. */
   runs?: Array<{ runId: string; versionId: string; status: string }>;
   closureReason?: 'workflow_changed';
