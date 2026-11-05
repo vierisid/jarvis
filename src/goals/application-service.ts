@@ -22,6 +22,11 @@ export function getGoalApplication(): GoalApplicationService {
   return application;
 }
 
+/** A score write whose expected revision no longer matches; carries the goal as it is now. */
+export class GoalScoreConflict extends Error {
+  constructor(readonly goal: Goal) { super('Goal score changed since this draft; review the current score before saving'); this.name = 'GoalScoreConflict'; }
+}
+
 export class GoalApplicationService {
   private readonly delivery: GoalEventDelivery;
   constructor(private readonly db: Database) { this.delivery = new GoalEventDelivery(db); }
@@ -79,22 +84,26 @@ export class GoalApplicationService {
       return checked.deadline === undefined ? goal : this.refreshHealth(goal);
     });
   }
-  scoreGoal(id: string, score: number, reason = '', source = 'user'): Goal | null {
-    return this.recordScore(id, score, reason, source)?.goal ?? null;
+  /** `expectedUpdatedAt`, when given, refuses with GoalScoreConflict unless the goal is unchanged since then. */
+  scoreGoal(id: string, score: number, reason = '', source = 'user', expectedUpdatedAt?: number): Goal | null {
+    return this.recordScore(id, score, reason, source, expectedUpdatedAt)?.goal ?? null;
   }
   /** Returns the exact progress receipt needed by a checked work result's atomic write. */
-  recordScore(id: string, score: number, reason: string, source = 'user') {
+  recordScore(id: string, score: number, reason: string, source = 'user', expectedUpdatedAt?: number) {
     text(id, 'goal_id');
     number(score, 'score', 0, 1);
     text(reason, 'reason', false);
     text(source, 'source', true, 512);
+    if (expectedUpdatedAt !== undefined) number(expectedUpdatedAt, 'expected_updated_at', 0, Number.MAX_SAFE_INTEGER, true);
     if (source === 'daily_review') invalid('source', 'Automatic goal reviews require a verified measurement-to-score mapping');
     return this.transaction(() => {
       const before = vault.getGoal(id);
       if (!before) return null;
       if (before.measurement) invalid('score', 'Use a new measurement to update measured goal progress');
+      if (expectedUpdatedAt !== undefined && before.updated_at !== expectedUpdatedAt) throw new GoalScoreConflict(before);
       const progress = vault.addProgressEntry(id, 'manual', before.score, score, reason, source);
-      this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?', [score, reason, progress.created_at, id]);
+      // Every score write moves the revision, even within the same millisecond, so expected_updated_at cannot miss it.
+      this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?', [score, reason, Math.max(progress.created_at, before.updated_at + 1), id]);
       const goal = vault.getGoal(id)!;
       queueGoalEvent({ type: 'goal_scored', goalId: id, data: { score, reason, source, progressId: progress.id }, timestamp: progress.created_at });
       return { goal: this.refreshHealth(goal), progress };
