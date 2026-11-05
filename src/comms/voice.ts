@@ -403,6 +403,25 @@ export function createSTTProvider(
 }
 
 /**
+ * Hard cap on one synthesis round-trip, for every TTS provider (#1156). The
+ * reply, a spoken voice answer and proactive speech each speak their
+ * sentences in sequence on a socket, so one stalled request used to silence
+ * everything after it on that socket, with no error. Raised from the hosted
+ * provider's own cap, which it already had (it is generous for one sentence,
+ * and bounded for a reply that never split).
+ */
+export const TTS_TIMEOUT_MS = 30_000;
+
+/** `work` or, after `ms`, a rejection naming `what` (for a provider with no abort of its own). */
+function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
+
+/**
  * Edge TTS Provider — uses Microsoft Edge's online TTS service (free, no API key).
  * Runs server-side only (browser WebSocket can't set required headers).
  */
@@ -410,21 +429,38 @@ export class EdgeTTSProvider implements TTSProvider {
   private voice: string;
   private rate: string;
   private volume: string;
+  private timeoutMs: number;
+  private load: () => Promise<typeof import('edge-tts-universal')>;
 
-  constructor(voice = 'en-US-AriaNeural', rate = '+0%', volume = '+0%') {
+  constructor(
+    voice = 'en-US-AriaNeural', rate = '+0%', volume = '+0%', timeoutMs = TTS_TIMEOUT_MS,
+    // Lazy-loaded: edge-tts-universal costs ~27MB RSS, only pay it when Edge
+    // TTS is actually used, not on daemon boot. Injectable for tests.
+    load: () => Promise<typeof import('edge-tts-universal')> = () => import('edge-tts-universal'),
+  ) {
     this.voice = voice;
     this.rate = rate;
     this.volume = volume;
+    this.timeoutMs = timeoutMs;
+    this.load = load;
   }
 
+  /**
+   * Bounded by TTS_TIMEOUT_MS: the service's socket has only a connect
+   * timeout. The library has no abort, so a request that times out leaves
+   * its socket open until the service closes it; the speaker is not held.
+   */
   async synthesize(text: string): Promise<Buffer> {
-    // Lazy-loaded: edge-tts-universal costs ~27MB RSS, only pay it when
-    // Edge TTS is actually used, not on daemon boot.
-    const { Communicate } = await import('edge-tts-universal');
+    return withDeadline(this.synthesizeUnbounded(text), this.timeoutMs, 'Edge TTS');
+  }
+
+  private async synthesizeUnbounded(text: string): Promise<Buffer> {
+    const { Communicate } = await this.load();
     const comm = new Communicate(text, {
       voice: this.voice,
       rate: this.rate,
       volume: this.volume,
+      connectionTimeout: this.timeoutMs,
     });
     const chunks: Buffer[] = [];
     for await (const chunk of comm.stream()) {
@@ -460,8 +496,10 @@ export class ElevenLabsTTSProvider implements TTSProvider {
   private model: string;
   private stability: number;
   private similarityBoost: number;
+  private timeoutMs: number;
 
-  constructor(config: NonNullable<TTSConfig['elevenlabs']>) {
+  constructor(config: NonNullable<TTSConfig['elevenlabs']>, timeoutMs = TTS_TIMEOUT_MS) {
+    this.timeoutMs = timeoutMs;
     this.apiKey = config.api_key;
     // Voice ids are opaque alphanumeric tokens; anything else (slashes, query
     // chars) would rewrite the request path below, so fall back to the default.
@@ -489,6 +527,8 @@ export class ElevenLabsTTSProvider implements TTSProvider {
             similarity_boost: this.similarityBoost,
           },
         }),
+        // Bounds the body read too (#1156).
+        signal: AbortSignal.timeout(this.timeoutMs),
       }
     );
 
@@ -521,8 +561,6 @@ export class ElevenLabsTTSProvider implements TTSProvider {
 /** Per-request ceiling for hosted speech. Generous for a spoken sentence,
  * bounded for a reply that never split. */
 const MAX_TTS_INPUT_CHARS = 4_000;
-/** Hard cap on one synthesis round-trip — see the call site. */
-const TTS_TIMEOUT_MS = 30_000;
 
 /** MP3 frame sniff: an ID3 tag, or an MPEG audio sync word (0xFF Ex). Used to
  * accept a correct response whose content-type header a proxy stripped or
@@ -630,8 +668,10 @@ export class SarvamTTSProvider implements TTSProvider {
   private language: string;
   private speaker: string;
   private samplingRate: number;
+  private timeoutMs: number;
 
-  constructor(config: NonNullable<TTSConfig['sarvam']>) {
+  constructor(config: NonNullable<TTSConfig['sarvam']>, timeoutMs = TTS_TIMEOUT_MS) {
+    this.timeoutMs = timeoutMs;
     this.apiKey = config.api_key;
     this.model = config.model ?? 'bulbul:v3';
     this.language = config.language ?? 'en-IN';
@@ -653,6 +693,8 @@ export class SarvamTTSProvider implements TTSProvider {
         speaker: this.speaker,
         speech_sample_rate: this.samplingRate,
       }),
+      // Bounds the body read too (#1156).
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!response.ok) {

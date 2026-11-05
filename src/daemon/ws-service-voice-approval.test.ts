@@ -952,7 +952,12 @@ describe('#889: a reply to a spoken yes or no is spoken to the asker and kept', 
     expect(internals().voiceAnswers.has(asker)).toBe(false);
   });
 
-  test('a refusal is not spoken while a real chat turn is mid-speech', async () => {
+  // Was "a refusal is not spoken while a real chat turn is mid-speech", which
+  // pinned the #1156 bug: by the time the person answers here the reply is
+  // written and only its audio plays, so the answer was neither spoken nor
+  // kept. It is now spoken once that audio is sent, and kept after the reply.
+  // A turn still writing its reply keeps the old rule (the ttsStreaming test above).
+  test('a refusal said while a written reply\'s audio still plays is spoken after it, and kept (#1156)', async () => {
     let releaseChatAudio!: () => void;
     const chatAudio = new Promise<void>((r) => { releaseChatAudio = r; });
     svc.setTTSProvider({
@@ -976,8 +981,131 @@ describe('#889: a reply to a spoken yes or no is spoken to the asker and kept', 
     await chat;
     await settle();
     expect(replies()).toEqual([voiceApprovalAmbiguous('approve', 2)]);
-    expect(ttsFrames(asker).map((f) => [f.type, f.payload?.requestId])).toEqual([['tts_start', 'chat-1'], ['tts_end', 'chat-1']]);
+    expect(ttsFrames(asker).map((f) => [f.type, f.payload?.requestId])).toEqual([
+      ['tts_start', 'chat-1'], ['tts_end', 'chat-1'], ['tts_start', 'r1'], ['tts_end', 'r1'],
+    ]);
+    expect(synthesized[0]).toBe('Here is a long answer.');
+    expect(synthesized.slice(1).join(' ')).toBe(voiceApprovalAmbiguous('approve', 2));
+    expect(persisted()).toEqual([
+      { role: 'user', content: 'tell me something nice' }, { role: 'assistant', content: 'Here is a long answer.' },
+      { role: 'user', content: 'yes' }, { role: 'assistant', content: voiceApprovalAmbiguous('approve', 2) },
+    ]);
+  });
+
+  test('a refusal while a reply is still being written and already talking is shown only, through the real turn (#1156 review)', async () => {
+    let releaseRest!: () => void;
+    const rest = new Promise<void>((r) => { releaseRest = r; });
+    (svc as unknown as { agentService: Record<string, unknown> }).agentService.streamMessage = () => ({
+      stream: (async function* () {
+        yield { type: 'text', text: 'First part. ' };
+        await rest;
+        yield { type: 'text', text: 'Second part.' };
+        yield { type: 'done', response: { content: 'First part. Second part.', tool_calls: [], usage: { input_tokens: 0, output_tokens: 0 }, model: 'fixture', finish_reason: 'stop' } };
+      })(),
+      onComplete: async () => {},
+    });
+    const chat = internals().routeMessage({ type: 'chat', id: 'chat-1', payload: { text: 'tell me' }, timestamp: 0 }, asker);
+    await settle();
+    expect(internals().activeChats.get(asker)?.ttsStreaming).toBe(true);
+    pendingEmail('alice@example.com', 1000);
+    const b = pendingEmail('bob@example.com', 2000);
+    await say('yes', b.id);
+    releaseRest();
+    await chat;
+    await settle();
+    expect(replies()).toEqual([voiceApprovalAmbiguous('approve', 2)]);
+    expect(ttsFrames(asker).every((f) => f.payload?.requestId === 'chat-1')).toBe(true);
+    expect(persisted().map((m) => m.content)).toEqual(['tell me', 'First part. Second part.']);
+  });
+
+  test('an approval decided while a written reply\'s audio still plays is kept and spoken after it (#1156)', async () => {
+    let releaseChatAudio!: () => void;
+    const chatAudio = new Promise<void>((r) => { releaseChatAudio = r; });
+    svc.setTTSProvider({
+      synthesize: async () => Buffer.from('x'),
+      synthesizeStream: async function* (text: string) {
+        synthesized.push(text);
+        if (text.startsWith('Here')) await chatAudio;
+        yield Buffer.from(`audio:${text}`);
+      },
+    });
+    (svc as unknown as { agentService: Record<string, unknown> }).agentService.streamMessage = () => ({
+      stream: (async function* () {
+        yield { type: 'text', text: 'Here is a long answer.' };
+        yield { type: 'done', response: { content: 'Here is a long answer.', tool_calls: [], usage: { input_tokens: 0, output_tokens: 0 }, model: 'fixture', finish_reason: 'stop' } };
+      })(),
+      onComplete: async () => {},
+    });
+    const chat = internals().routeMessage({ type: 'chat', id: 'chat-1', payload: { text: 'tell me something nice' }, timestamp: 0 }, asker);
+    await settle();
+    const a = pendingEmail('alice@example.com', 1000);
+    await say('yes', a.id);
+    expect(status(a)).toBe('executed');
+    // Not interleaved with the reply's audio still being sent.
+    expect(ttsFrames(asker).map((f) => f.payload?.requestId)).toEqual(['chat-1']);
+    releaseChatAudio();
+    await chat;
+    await settle();
+    expect(ttsFrames(asker).map((f) => [f.type, f.payload?.requestId])).toEqual([
+      ['tts_start', 'chat-1'], ['tts_end', 'chat-1'], ['tts_start', 'r1'], ['tts_end', 'r1'],
+    ]);
+    // Queued behind the reply the dashboard is still playing, not cutting it.
+    expect(ttsFrames(asker).find((f) => f.type === 'tts_start' && f.payload?.requestId === 'r1')?.payload?.queue).toBe(true);
+    expect(ttsFrames(asker).find((f) => f.type === 'tts_start' && f.payload?.requestId === 'chat-1')?.payload?.queue).toBeUndefined();
+    expect(synthesized).toEqual(['Here is a long answer.', 'Approving the request.']);
+    expect(persisted().slice(2)).toEqual([{ role: 'user', content: 'yes' }, { role: 'assistant', content: 'Approving the request.' }]);
+  });
+
+  test('a stop while an answer waits for the reply\'s audio drops the answer too', async () => {
+    let releaseChatAudio!: () => void;
+    const chatAudio = new Promise<void>((r) => { releaseChatAudio = r; });
+    svc.setTTSProvider({
+      synthesize: async () => Buffer.from('x'),
+      synthesizeStream: async function* (text: string) { synthesized.push(text); await chatAudio; yield Buffer.from(`audio:${text}`); },
+    });
+    (svc as unknown as { agentService: Record<string, unknown> }).agentService.streamMessage = () => ({
+      stream: (async function* () {
+        yield { type: 'text', text: 'Here is a long answer.' };
+        yield { type: 'done', response: { content: 'Here is a long answer.', tool_calls: [], usage: { input_tokens: 0, output_tokens: 0 }, model: 'fixture', finish_reason: 'stop' } };
+      })(),
+      onComplete: async () => {},
+    });
+    const chat = internals().routeMessage({ type: 'chat', id: 'chat-1', payload: { text: 'tell me something nice' }, timestamp: 0 }, asker);
+    await settle();
+    const a = pendingEmail('alice@example.com', 1000);
+    await say('yes', a.id);
+    await internals().routeMessage({ type: 'cancel', payload: {}, timestamp: 0 }, asker);
+    releaseChatAudio();
+    await chat;
+    await settle();
     expect(synthesized).toEqual(['Here is a long answer.']);
+    expect(ttsFrames(asker).some((f) => f.payload?.requestId === 'r1')).toBe(false);
+  });
+
+  test('the dashboard\'s stop, which names the reply, drops a waiting answer too (#1156 review)', async () => {
+    let releaseChatAudio!: () => void;
+    const chatAudio = new Promise<void>((r) => { releaseChatAudio = r; });
+    svc.setTTSProvider({
+      synthesize: async () => Buffer.from('x'),
+      synthesizeStream: async function* (text: string) { synthesized.push(text); await chatAudio; yield Buffer.from(`audio:${text}`); },
+    });
+    (svc as unknown as { agentService: Record<string, unknown> }).agentService.streamMessage = () => ({
+      stream: (async function* () {
+        yield { type: 'text', text: 'Here is a long answer.' };
+        yield { type: 'done', response: { content: 'Here is a long answer.', tool_calls: [], usage: { input_tokens: 0, output_tokens: 0 }, model: 'fixture', finish_reason: 'stop' } };
+      })(),
+      onComplete: async () => {},
+    });
+    const chat = internals().routeMessage({ type: 'chat', id: 'chat-1', payload: { text: 'tell me something nice' }, timestamp: 0 }, asker);
+    await settle();
+    const a = pendingEmail('alice@example.com', 1000);
+    await say('yes', a.id);
+    await internals().routeMessage({ type: 'cancel', payload: { requestId: 'chat-1' }, id: 'chat-1', timestamp: 0 }, asker);
+    releaseChatAudio();
+    await chat;
+    await settle();
+    expect(synthesized).toEqual(['Here is a long answer.']);
+    expect(ttsFrames(asker).some((f) => f.payload?.requestId === 'r1')).toBe(false);
   });
 
   const heldAnswer = () => {
@@ -1178,6 +1306,134 @@ describe('#889: a reply to a spoken yes or no is spoken to the asker and kept', 
     await settle();
     expect(synthesized).toEqual([]);
     expect(persisted()).toEqual([]);
+  });
+
+  test('an answer that is not spoken still ends an earlier one still playing (#1156)', async () => {
+    const release = heldAnswer();
+    const a = pendingEmail('alice@example.com', 1000);
+    const b = pendingEmail('bob@example.com', 2000);
+    await say('yes', b.id);
+    expect(internals().voiceAnswers.get(asker)?.requestId).toBe('r1');
+    // The refusal is still playing when a chat turn opens and a decided
+    // answer, which is not spoken over an open turn, arrives.
+    mgr.deny(a.id, 'dashboard');
+    internals().activeChats.set(asker, { requestId: 'chat-1', controller: new AbortController() });
+    await internals().routeMessage({ type: 'voice_text', payload: { requestId: 'r2', text: 'yes', shownApprovalId: b.id }, timestamp: 0 }, asker);
+    await settle();
+    expect(status(b)).toBe('executed');
+    expect(cancelledEnds('r1')).toHaveLength(1);
+    expect(internals().voiceAnswers.has(asker)).toBe(false);
+    release();
+    await settle();
+    expect(binary).toEqual([]);
+  });
+
+  test('a stop or a stop phrase cuts a realtime reply through stopReply (#1156)', async () => {
+    const calls: string[] = [];
+    internals().realtimeSessions.set(asker, { session: { isResponding: true, interrupt: () => calls.push('interrupt'), stopReply: () => calls.push('stopReply') }, lastMicAt: 0 });
+    await internals().routeMessage({ type: 'cancel', payload: {}, timestamp: 0 }, asker);
+    await internals().routeMessage({ type: 'voice_text', payload: { requestId: 'r9', text: 'Jarvis stop' }, timestamp: 0 }, asker);
+    await settle();
+    expect(calls).toEqual(['stopReply', 'stopReply']);
+    // The stop phrase names no clip, so the dashboard flushes whatever plays.
+    const ends = ttsFrames(asker).filter((f) => f.type === 'tts_end' && f.payload?.cancelled === true);
+    expect(ends.at(-1)?.payload).toEqual({ cancelled: true });
+  });
+
+  test('a confirmed clarifier whose chat turn fails does not run the yes as a turn of its own (#1156 review)', async () => {
+    const confirmations = (svc as unknown as { pendingVoiceConfirmations: Map<string, unknown> }).pendingVoiceConfirmations;
+    confirmations.set('c1', { id: 'c1', transcript: 'what is the weather', kind: 'clarifier', createdAt: 1, ws: asker, channel: 'websocket', intent: {} });
+    const turns: string[] = [];
+    (svc as unknown as { handleChat: (m: { payload: { text: string } }) => Promise<void> }).handleChat = async (m) => {
+      turns.push(m.payload.text);
+      throw new Error('provider down');
+    };
+    await say('yes', '');
+    expect(turns).toEqual(['what is the weather']);
+    expect(replies()).toEqual(['Approving what is the weather.']);
+  });
+
+  test('a confirmed clarifier says it is approving before its answer, not after it (#1156)', async () => {
+    const confirmations = (svc as unknown as { pendingVoiceConfirmations: Map<string, unknown> }).pendingVoiceConfirmations;
+    confirmations.set('c1', { id: 'c1', transcript: 'what is the weather', kind: 'clarifier', createdAt: 1, ws: asker, channel: 'websocket', intent: {} });
+    (svc as unknown as { handleChat: () => Promise<void> }).handleChat = async () => {
+      svc.broadcastAssistantAck('It is sunny.', 'c1');
+    };
+    await say('yes', '');
+    expect(replies()).toEqual(['Approving what is the weather.', 'It is sunny.']);
+  });
+
+  describe('proactive speech never interleaves with a reply or a voice answer (#1156)', () => {
+    type Client = { name: string; sendBinary: (chunk: Buffer) => void };
+    let one: Client;
+    let two: Client;
+    let proactiveAudio: Array<{ to: string; chunk: string }>;
+    beforeEach(() => {
+      proactiveAudio = [];
+      const client = (name: string): Client => ({ name, sendBinary: (chunk) => { proactiveAudio.push({ to: name, chunk: String(chunk) }); } });
+      one = client('one');
+      two = client('two');
+      const server = (svc as unknown as { wsServer: Record<string, unknown> }).wsServer;
+      server.getClients = () => new Set([one, two]);
+      server.getClientCount = () => 2;
+    });
+
+    test('a socket taken over before any proactive audio reached it is not counted as reached', async () => {
+      let releaseFirst!: () => void;
+      const first = new Promise<void>((r) => { releaseFirst = r; });
+      svc.setTTSProvider({
+        synthesize: async () => Buffer.from('x'),
+        synthesizeStream: async function* (text: string) {
+          synthesized.push(text);
+          if (text.startsWith('First')) await first;
+          yield Buffer.from(`audio:${text}`);
+        },
+      });
+      const proactive = svc.broadcastProactiveVoice('First sentence here.');
+      await settle();
+      pendingEmail('alice@example.com', 1000);
+      const b = pendingEmail('bob@example.com', 2000);
+      await say('yes', b.id, one);
+      releaseFirst();
+      expect(await proactive).toBe(1);
+      expect(proactiveAudio.map((x) => x.to)).toEqual(['two']);
+    });
+
+    test('a socket already speaking a reply or a voice answer gets no proactive speech', async () => {
+      internals().activeChats.set(one, { requestId: 'chat-1', controller: new AbortController(), ttsStreaming: true });
+      internals().voiceAnswers.set(two, { requestId: 'r1' });
+      expect(await svc.broadcastProactiveVoice('Your build finished.')).toBe(0);
+      expect(proactiveAudio).toEqual([]);
+      expect(toClient.filter((f) => /^tts_/.test(String(f.m.type)))).toEqual([]);
+    });
+
+    test('a voice answer that starts on a socket mid-proactive takes it over', async () => {
+      let releaseSecond!: () => void;
+      const second = new Promise<void>((r) => { releaseSecond = r; });
+      svc.setTTSProvider({
+        synthesize: async () => Buffer.from('x'),
+        synthesizeStream: async function* (text: string) {
+          synthesized.push(text);
+          if (text.startsWith('Second')) await second;
+          yield Buffer.from(`audio:${text}`);
+        },
+      });
+      const proactive = svc.broadcastProactiveVoice('First sentence here. Second sentence here.');
+      await settle();
+      // A voice answer starts talking on `one` while the proactive call waits.
+      pendingEmail('alice@example.com', 1000);
+      const b = pendingEmail('bob@example.com', 2000);
+      await say('yes', b.id, one);
+      releaseSecond();
+      // Both sockets heard some of it before `one` was taken over.
+      expect(await proactive).toBe(2);
+      await settle();
+      expect(proactiveAudio.filter((x) => x.to === 'one').map((x) => x.chunk)).toEqual(['audio:First sentence here.']);
+      expect(proactiveAudio.filter((x) => x.to === 'two').map((x) => x.chunk)).toEqual(['audio:First sentence here.', 'audio:Second sentence here.']);
+      // `one` heard the proactive start, then only the voice answer's frames.
+      const toOne = toClient.filter((f) => f.ws === one && /^tts_/.test(String(f.m.type))).map((f) => [f.m.type, String(f.m.payload?.requestId ?? '').replace(/-\d+$/, '')]);
+      expect(toOne).toEqual([['tts_start', 'proactive'], ['tts_start', 'r1'], ['tts_end', 'r1']]);
+    });
   });
 });
 

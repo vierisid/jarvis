@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { describeRoomAction, isVoiceAffirmative, roomActionReply, WebSocketService } from './ws-service.ts';
+import { describeRoomAction, isVoiceAffirmative, roomActionRefusal, roomActionReply, WebSocketService } from './ws-service.ts';
 import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
 import { ROOM_ACTION_QUEUE_TTL_MS } from './room-action-results.ts';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
@@ -850,7 +850,7 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
       const { frames, realtime } = setup({ tainted: true });
       expect(await realtime(room, action, args)).toBe(
         `[BLOCKED] ${room}/${action} (${category}) was not sent: this session read outside content (browser_navigate) and voice cannot approve it. `
-        + 'Tell the user what you wanted to do and ask them to say it again as a fresh request.');
+        + 'Tell the user what you wanted to do and ask them to say it again as a fresh request, in their own words: a plain yes is not enough.');
       expect(frames()).toEqual([]);
     }
   });
@@ -923,9 +923,9 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
     }
   });
 
-  test('the live session forwards a user transcript\'s item id to the dashboard (#1007)', async () => {
+  test('the live session forwards a user transcript\'s item id, and the utterance a reply answers, to the dashboard (#1007, #1156)', async () => {
     const src = await Bun.file(new URL('./ws-service.ts', import.meta.url)).text();
-    expect(src).toContain('payload: { role: t.role, text: t.text, final: t.final, ...(t.itemId ? { itemId: t.itemId } : {}) },');
+    expect(src).toContain('payload: { role: t.role, text: t.text, final: t.final, ...(t.itemId ? { itemId: t.itemId } : {}), ...(t.replyTo ? { replyTo: t.replyTo } : {}) },');
   });
 
   test('the live session charges its input transcription to the BYO budget (#1007)', async () => {
@@ -1006,6 +1006,37 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
       setSystemTime(new Date('2026-10-21T04:10:00Z'));
       expect(await internals.resolveVoiceConfirmation('i-tasks-create_task', 'confirm')).toEqual({ ok: true });
       expect(sentArgs(speaker.sent)).toEqual({ title: 'Pay rent', when: 'tomorrow at 9am', when_ts: Date.parse('2026-10-21T13:00:00Z') });
+    });
+
+    // #1156: the confirm path ran the instant the card showed even after it
+    // had gone by while the card waited.
+    test('a hold confirmed after its time has passed is refused, not run', async () => {
+      const { internals, speaker, other, svc } = setup();
+      const rows: Array<{ tool_name: string; authority_decision: string; executed: boolean }> = [];
+      svc.setAuditTrail({ log: (e: (typeof rows)[number]) => { rows.push(e); return e; } } as never);
+      await zone(internals, speaker.ws, 'America/New_York');
+      setSystemTime(new Date('2026-10-20T15:00:00Z')); // 11:00 in New York
+      await internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'Call Bob', when: 'today at 11:30am' }), 'call bob at 11:30', 'req', speaker.ws);
+      expect(other.sent.some((m) => m.payload?.source === 'repeat_back_request')).toBe(true);
+      // The yes comes an hour later.
+      setSystemTime(new Date('2026-10-20T16:00:00Z'));
+      expect(await internals.resolveVoiceConfirmation('i-tasks-create_task', 'confirm')).toEqual({ ok: true });
+      expect(sentArgs(speaker.sent)).toBeUndefined();
+      const said = speaker.sent.map((m) => m.payload?.text).filter(Boolean) as string[];
+      expect(said.some((t) => t.startsWith('I haven\'t done "Tasks: create task": it was for ') && t.includes('which passed before it was confirmed'))).toBe(true);
+      // Recorded as refused for that reason, with the instant it was for.
+      expect(rows.at(-1)).toMatchObject({ authority_decision: 'denied', executed: false,
+        tool_name: 'room_action(tasks/create_task; via confirm; write_data; time_passed; at 2026-10-20T15:30:00.000Z America/New_York)' });
+    });
+
+    test('a hold confirmed before its time runs it', async () => {
+      const { internals, speaker } = setup();
+      await zone(internals, speaker.ws, 'America/New_York');
+      setSystemTime(new Date('2026-10-20T15:00:00Z'));
+      await internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'Call Bob', when: 'today at 11:30am' }), 'call bob at 11:30', 'req', speaker.ws);
+      setSystemTime(new Date('2026-10-20T15:20:00Z'));
+      expect(await internals.resolveVoiceConfirmation('i-tasks-create_task', 'confirm')).toEqual({ ok: true });
+      expect(sentArgs(speaker.sent)).toMatchObject({ when_ts: Date.parse('2026-10-20T15:30:00Z') });
     });
 
     test('the zone is the speaker\'s, from voice_start too; another dashboard\'s does not count', async () => {
@@ -1595,8 +1626,11 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
       impact: 'read', confidence: 0.99, room_action: { room: room as never, action, args }, ...over,
     });
     const yes = (said: string): Intent => ({ id: `y-${Math.random()}`, utterance: said, verb: 'ask', object: null, args: {}, impact: 'read', confidence: 0.6, confirmation_response: 'approve' });
-    const brief = () => rows.map((r) => `${r.authority_decision}:${r.executed ? 'ran' : 'not-run'}:${r.channel}:${r.tool_name}`);
-    return { svc: base.svc, orchestrator, internals, speaker, other, rows, answering, intent, yes, brief, taint };
+    // The ref (#1156) is random, so it is read apart (refs) and left out here.
+    const REF = /; ref [0-9a-f-]{36}\)$/;
+    const brief = () => rows.map((r) => `${r.authority_decision}:${r.executed ? 'ran' : 'not-run'}:${r.channel}:${r.tool_name.replace(REF, ')')}`);
+    const refs = () => rows.map((r) => /; ref ([0-9a-f-]{36})\)$/.exec(r.tool_name)?.[1] ?? null);
+    return { svc: base.svc, orchestrator, internals, speaker, other, rows, answering, intent, yes, brief, refs, taint };
   };
 
   test('the realtime path: a run, a refusal, and a view action, which writes nothing', async () => {
@@ -1688,6 +1722,35 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     // Once: a second late answer adds nothing.
     await late(t.speaker, true);
     expect(t.brief()).toHaveLength(2);
+    // The follow-up names the row it follows (#1156): approval_id is null here.
+    expect(t.rows.map((r) => r.approval_id)).toEqual([null, null]);
+    const [first, follow] = t.refs();
+    expect(first).toEqual(expect.any(String));
+    expect(follow).toBe(first);
+  });
+
+  test('a refusal repeating the classifier\'s action escapes bidi and zero-width characters (#1156)', async () => {
+    const msg = roomActionRefusal({ room: 'tasks\u202E', action: 'wipe\u200Ball' }, 'user') ?? '';
+    expect(msg).toBe('tasks\\u202e has no "wipe\\u200ball" action, so I did not send it.');
+    expect(msg).not.toMatch(/[\u202E\u200B]/);
+  });
+
+  test('the room\'s reply escapes bidi and zero-width characters in what it repeats (#1156 review)', () => {
+    const reply = roomActionReply({ room: 'tasks', action: 'create_task', args: { title: 'Pay\u202Eevil' } }, 'accepted');
+    expect(reply).toContain('Pay\\u202eevil');
+    expect(reply).not.toMatch(/\u202E/);
+  });
+
+  test('each action sent gets its own ref (#1156)', async () => {
+    const t = setup();
+    t.answering();
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws, { taint: t.taint });
+    t.answering();
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'y' } }, t.speaker.ws, { taint: t.taint });
+    const [a, b] = t.refs();
+    expect(a).toEqual(expect.any(String));
+    expect(b).toEqual(expect.any(String));
+    expect(a).not.toBe(b);
   });
 
   test('a late answer after no answer, on the confirm path, keeps the hold\'s id and channel', async () => {
@@ -1701,6 +1764,11 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
       'allowed:ran:click:room_action(tasks/create_task; via confirm; write_data; late_accepted_after_no_answer)',
     ]);
     expect(t.rows.map((r) => r.approval_id)).toEqual(['i-tasks-create_task', 'i-tasks-create_task', 'i-tasks-create_task']);
+    // The sent row and its late follow-up share a ref (#1156); the hold row precedes the send.
+    const [held, sentRef, lateRef] = t.refs();
+    expect(held).toBeNull();
+    expect(sentRef).toEqual(expect.any(String));
+    expect(lateRef).toBe(sentRef);
   });
 
   // A started action, or a claimed one, is recorded as run. If its dashboard

@@ -31,6 +31,8 @@ export type ChatMessage = {
   detail?: string; // raw error/debug payload, rendered collapsed in the chat
   /** Q-19: a failed turn, as the daemon projected it. Rendered as is, never re-classified. */
   failure?: UserFailure;
+  /** A realtime voice reply: the user utterance it answers (#1156). */
+  realtimeReplyTo?: string;
 };
 
 /** Socket events seen while one pending-approvals read is in flight (#1087). */
@@ -260,14 +262,18 @@ export type VoiceCallbacks = {
    *  duration of the playback so TTS doesn't self-trigger via mic echo.
    *  `containsStop` — the sentence contains a spoken stop phrase
    *  ("Jarvis, stop"), so the UI must also suppress its stop-phrase
-   *  bypass or the echo cancels the playback. */
-  onTTSStart: (requestId: string, containsWake: boolean, containsStop?: boolean) => void;
+   *  bypass or the echo cancels the playback.
+   *  `queue` - play after the clip still playing out (it was sent whole)
+   *  instead of cutting it: a voice answer held behind a reply (#1156). */
+  onTTSStart: (requestId: string, containsWake: boolean, containsStop?: boolean, queue?: boolean) => void;
   /** Mid-turn flip: a later sentence in the same turn contains "Jarvis"
    *  (and possibly a stop phrase). */
   onTTSContainsWake?: (containsStop?: boolean) => void;
   /** `bargeIn` — realtime voice sends tts_end{bargeIn:true} when the user
-   *  starts speaking, so the player can flush queued output immediately. */
-  onTTSEnd: (requestId?: string, bargeIn?: boolean) => void;
+   *  starts speaking, so the player can flush queued output immediately.
+   *  `cancelled` - the daemon stopped this speech (a stop, a cancel from
+   *  elsewhere, a superseding turn): drop what is queued, do not play it out. */
+  onTTSEnd: (requestId?: string, bargeIn?: boolean, cancelled?: boolean) => void;
   /**
    * `requestId` is set when the error ended a turn this tab did not send as
    * text (another tab's, or a voice turn): the voice hook reacts only to its own.
@@ -283,6 +289,29 @@ export type VoiceCallbacks = {
   /** The socket dropped; nothing the daemon had in flight on it will finish. */
   onDisconnect?: () => void;
 };
+
+/** Add a final realtime transcript to the thread, in conversation order. */
+export function appendRealtimeTranscript(
+  prev: ChatMessage[],
+  payload: { role?: unknown; text?: unknown; final?: unknown; itemId?: unknown; replyTo?: unknown } | undefined,
+  timestamp: number,
+  id: string,
+): ChatMessage[] {
+  // Only completed utterances become chat messages.
+  if (!payload?.final || typeof payload.text !== "string" || !payload.text) return prev;
+  if (payload.role === "assistant") {
+    const replyTo = typeof payload.replyTo === "string" && payload.replyTo ? payload.replyTo : undefined;
+    return [...prev, { id, role: "assistant", content: payload.text, timestamp, ...(replyTo ? { realtimeReplyTo: replyTo } : {}) }];
+  }
+  const line: ChatMessage = { id, role: "user", content: payload.text, timestamp };
+  // The user's transcript is asynchronous and can land after the reply it
+  // prompted (#1007). That reply names the utterance it answers, so the
+  // line goes back before the first one that does (#1156).
+  const itemId = typeof payload.itemId === "string" && payload.itemId ? payload.itemId : undefined;
+  const at = itemId ? prev.findIndex((m) => m.realtimeReplyTo === itemId) : -1;
+  if (at < 0) return [...prev, line];
+  return [...prev.slice(0, at), line, ...prev.slice(at)];
+}
 
 /**
  * Route a realtime_status frame to the voice hook. An error goes to the
@@ -855,6 +884,7 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
             msg.payload?.requestId,
             Boolean(msg.payload?.containsWake),
             Boolean(msg.payload?.containsStop),
+            msg.payload?.queue === true,
           );
           setThinking(false); // speaking supersedes thinking
           return;
@@ -874,6 +904,7 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
           voiceCallbacksRef.current?.onTTSEnd(
             msg.payload?.requestId,
             Boolean(msg.payload?.bargeIn),
+            msg.payload?.cancelled === true,
           );
           return;
         }
@@ -897,17 +928,9 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
           return;
         }
         if (msg.type === "realtime_transcript") {
-          // Only surface completed utterances as chat messages.
           if (msg.payload?.final && msg.payload?.text) {
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: uuid(),
-                role: (msg.payload.role === "assistant" ? "assistant" : "user") as MessageRole,
-                content: msg.payload.text,
-                timestamp: msg.timestamp,
-              },
-            ]);
+            const id = uuid();
+            setMessages((prev) => appendRealtimeTranscript(prev, msg.payload, msg.timestamp, id));
           }
           return;
         }
