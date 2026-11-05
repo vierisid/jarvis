@@ -40,6 +40,7 @@ import {
   roomActionTargetKind, roomActionTimeArg, SETTLED_TIME_ARG, withRoomActionDefaults, type RoomActionTargetKind,
 } from './room-action-targets.ts';
 import { PASSED_GRACE_MS, parseRelativeDate } from '../voice/parse-date.ts';
+import { isSingleValued, predicateKey, valueKey } from '../vault/fact-policy.ts';
 
 export type RealtimeRoomActionContext = {
   /** The emergency state when it stops execution (paused, killed), else null. */
@@ -212,6 +213,13 @@ export type RoomActionTargetLists = {
   [K in RoomActionTargetKind]: () => Promise<ReadonlyArray<{ id: string } & Record<string, unknown>>>;
 } & {
   entity: () => Promise<ReadonlyArray<{ id: string; name: string }>>;
+  /**
+   * An entity's facts for one predicate (aliases folded) that are not
+   * superseded, in the default scope, for the card to say what a remembered
+   * fact will contest (#1167). Optional: a list without it says nothing
+   * about existing facts.
+   */
+  entityFacts?: (entityId: string, predicate: string) => Promise<ReadonlyArray<{ predicate: string; object: string; confirmed: boolean }>>;
 };
 
 const TARGET_NOUN: Record<RoomActionTargetKind, string> = { project: 'project', content: 'content item', task: 'task' };
@@ -227,7 +235,17 @@ function targetName(kind: RoomActionTargetKind, item: Record<string, unknown>): 
  * was settled in (#1022), for the card and the reply to name it by; it is
  * not sent to the room, which takes the settled instant as given.
  */
-export type HeldRoomAction = { room: string; action: string; args?: Record<string, unknown>; timeZone?: string };
+export type HeldRoomAction = {
+  room: string; action: string; args?: Record<string, unknown>; timeZone?: string;
+  /**
+   * For a held remember_that on an existing entity (#1167): the value it
+   * already holds for a single-valued predicate, which the new fact will
+   * contest rather than replace (vault/fact-policy.ts currentState: an
+   * unconfirmed write supersedes nothing). Display only, for the card, and
+   * as of the moment the card was raised.
+   */
+  factConflict?: { value: string; confirmed: boolean };
+};
 
 /** When a voice action is settled, and the IANA zone its wall-clock times are in (#1022). */
 export type VoiceClock = { now: number; timeZone: string };
@@ -438,6 +456,47 @@ async function resolveHeldTarget(
   return { ok: true, ra: { ...ra, args: { ...args, id: item.id, name: shown } } };
 }
 
+/** `ra` with exactly this lookup's conflict: one it arrived with is never kept. */
+function withFactConflict(ra: HeldRoomAction, factConflict: HeldRoomAction['factConflict'] | null): HeldRoomAction {
+  const { factConflict: _old, ...rest } = ra;
+  return factConflict ? { ...rest, factConflict } : rest;
+}
+
+/**
+ * What a remembered fact will contest on `entityId` (#1167), or null.
+ *
+ * NOT what it replaces: a remember_that write is unconfirmed, and an
+ * unconfirmed fact supersedes nothing (vault/facts.ts createFact). For a
+ * single-valued predicate a different current value is contested -- both
+ * marked contested, or, when the existing one is confirmed, it stays and the
+ * new one is contested. A multi-valued predicate keeps both, so nothing is
+ * said. A list that cannot be read says nothing rather than refusing: the
+ * write it describes is unchanged either way.
+ */
+async function currentFactConflict(
+  lists: RoomActionTargetLists,
+  entityId: string,
+  predicate: string,
+  object: string,
+): Promise<{ value: string; confirmed: boolean } | null> {
+  if (!lists.entityFacts || !isSingleValued(predicate)) return null;
+  let facts: Awaited<ReturnType<NonNullable<RoomActionTargetLists['entityFacts']>>>;
+  try {
+    facts = await lists.entityFacts(entityId, predicate);
+  } catch {
+    return null;
+  }
+  const key = predicateKey(predicate);
+  const value = valueKey(predicate, object);
+  const same = facts.filter((f) => predicateKey(f.predicate) === key);
+  // The write lands on a confirmed row with this very value (createFact reuses
+  // it) and nothing changes: the confirmed value stays above every other.
+  if (same.some((f) => f.confirmed && valueKey(f.predicate, f.object) === value)) return null;
+  const others = same.filter((f) => valueKey(f.predicate, f.object) !== value);
+  const shown = others.find((f) => f.confirmed) ?? others[0];
+  return shown ? { value: shown.object, confirmed: shown.confirmed } : null;
+}
+
 /**
  * The memory entity a held remember_that attaches to, settled before its
  * card (#1023): the one its subject names (matchEntityByName, as the Memory
@@ -484,12 +543,16 @@ async function resolveHeldEntity(
     // The card names it, so another by the same name is one it cannot tell apart.
     const same = entities.filter((e) => foldEntityName(e.name) === foldEntityName(entity.name)).length;
     if (same > 1) return { ok: false, message: `${not}: ${same} things in your memory are called ${quoted(entity.name)}, so I can't tell which you mean. Add it from the room.` };
-    return { ok: true, ra: { ...ra, args: { ...args, [entityArg]: entity.name, id: entity.id } } };
+    const factConflict = await currentFactConflict(lists, entity.id, String(args.predicate), String(args.object));
+    return { ok: true, ra: withFactConflict({ ...ra, args: { ...args, [entityArg]: entity.name, id: entity.id } }, factConflict) };
   }
   const match = matchEntityByName(entities, name);
   if (match && 'ambiguous' in match) {
     return { ok: false, message: `${not}: ${match.ambiguous} things in your memory match ${quoted(name)}, so I can't tell which you mean. Say its full name, or add it from the room.` };
   }
-  if (match) return { ok: true, ra: { ...ra, args: { ...args, [entityArg]: match.entity.name, id: match.entity.id } } };
+  if (match) {
+    const factConflict = await currentFactConflict(lists, match.entity.id, String(args.predicate), String(args.object));
+    return { ok: true, ra: withFactConflict({ ...ra, args: { ...args, [entityArg]: match.entity.name, id: match.entity.id } }, factConflict) };
+  }
   return { ok: true, ra: { ...ra, args: { ...args, [entityArg]: name, new_entity: true } } };
 }

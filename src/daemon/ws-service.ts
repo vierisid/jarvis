@@ -72,6 +72,7 @@ import {
 import { getCronTimezone } from '../lib/cron-scheduler.ts';
 import { findContent } from '../vault/content-pipeline.ts';
 import { listEntityNames } from '../vault/entities.ts';
+import { findFacts } from '../vault/facts.ts';
 import { roomActionArgs, roomActionEntityArg, roomActionTargetKind, roomActionTimeArg, SETTLED_TIME_ARG, withoutEntityPin } from './room-action-targets.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
@@ -2220,6 +2221,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       task: async () => findCommitments({}),
       // Names only (#1118): the match needs nothing else.
       entity: async () => listEntityNames(),
+      // The default scope a remember_that writes in (#1167).
+      entityFacts: async (entityId, predicate) => findFacts({ subject_id: entityId, predicate, scope: '' })
+        .map((f) => ({ predicate: f.predicate, object: f.object, confirmed: f.verified_at !== null })),
     };
   }
 
@@ -3952,11 +3956,19 @@ export function describeRoomAction(ra: HeldRoomAction): string {
   const lands = entityName === null ? []
     : typeof ra.args?.id === 'string' && ra.args.id ? [`to the memory entity ${entityName}`]
       : ra.args?.new_entity === true ? [`to a new memory entity ${entityName} (a concept)`] : [];
+  // What it contests (#1167): said, because the card used to read as if the
+  // fact simply landed, and a new value for a single-valued predicate leaves
+  // the entity with two values, not one.
+  const conflict = ra.factConflict;
+  const contests = !conflict || entityName === null ? []
+    : [`(it differs from ${visible(JSON.stringify(conflict.value))} already saved; ${conflict.confirmed
+      ? 'that confirmed value stays, and this one is marked contested'
+      : 'the values are kept, marked contested'})`];
   // The instant it runs at, settled before the card (#1022).
   const settledAt = timed ? settledTime(ra) : null;
   const at = settledAt === null ? [] : [`at ${visible(settledAt)}`];
   const effects = roomActionCategories(ra.room, ra.action).map((c) => ROOM_ACTION_EFFECT[c]);
-  return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...lands, ...at, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
+  return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...lands, ...contests, ...at, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
 }
 
 /** The time `ra` was settled to (#1022), as the card names it, or null when it carries none. */
