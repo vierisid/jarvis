@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { currentSnapshotReader } from '../actions/tools/sidecar-route';
 import { runSubAgent, type GovernedToolCall, type GovernedToolDispatch, type SubAgentCheckpoint, type SubAgentResult } from './sub-agent-runner';
 import { ToolRegistry } from '../actions/tools/registry';
 import { AuthorityEngine } from '../authority/engine';
@@ -499,5 +500,64 @@ describe('a tool that returns an image (#709)', () => {
     expect(shotResult).toContain('Desktop screenshot captured.');
     expect(shotResult).toContain('could not be kept across a pause');
     expect(shotResult).not.toContain('earlier step');
+  });
+});
+
+/**
+ * #1161: a paused delegation resumes through a NEW AgentInstance with a new
+ * id. Its approved call runs as the reader that raised the card (the paused
+ * run's), so a snapshot that call takes is recorded there -- and a resumed run
+ * under a fresh scope read its own, empty, record on its next card.
+ */
+describe('a resumed sub-agent keeps the snapshot reader of the run that paused', () => {
+  const withId = (id: string) => Object.assign(agent(), { id });
+
+  test('the approved call and the resumed run\'s later calls run as the paused run\'s reader', async () => {
+    const { r } = registry();
+    r.register({ name: 'look', category: 'file-ops', description: 'synthetic', parameters: {},
+      execute: async () => currentSnapshotReader() });
+    const a = authority();
+    const paused = await runSubAgent({ agent: withId('first-spawn'), task: 'save', context: '', llmManager: llm([[write('c1')]]).manager,
+      toolRegistry: r, authorityEngine: a.engine, maxIterations: 3, governedTools: async () => ({ kind: 'paused', approval }) });
+    expect(paused.paused?.deliveryScopeId).toBe('sub-agent:first-spawn');
+
+    const readers: string[] = [];
+    const resumed = await runSubAgent({ agent: withId('second-spawn'), task: 'save', context: '', toolRegistry: r,
+      llmManager: llm([[{ id: 'c2', name: 'look', arguments: {} }]]).manager, authorityEngine: a.engine, maxIterations: 3,
+      governedTools: async () => { readers.push(currentSnapshotReader()); return { kind: 'executed', result: 'saved' }; },
+      resume: resumeFrom(paused) });
+    expect(resumed.terminationReason).toBe('completed');
+    // The paused write and the resumed run's own later call (`look` is gated
+    // here too, so it reaches the dispatch): both under the paused run's reader.
+    expect(readers).toEqual(['named:sub-agent:first-spawn', 'named:sub-agent:first-spawn']);
+  });
+
+  test('a resume of a checkpoint without a scope that pauses again records the scope it ran under', async () => {
+    const { r } = registry();
+    const a = authority();
+    const paused = await runSubAgent({ agent: withId('first-spawn'), task: 'save', context: '', llmManager: llm([[write('c1')]]).manager,
+      toolRegistry: r, authorityEngine: a.engine, maxIterations: 3, governedTools: async () => ({ kind: 'paused', approval }) });
+    const old = resumeFrom(paused);
+    delete old.pending.deliveryScopeId; // written before the field existed
+    const again = await runSubAgent({ agent: withId('second-spawn'), task: 'save', context: '', toolRegistry: r, llmManager: llm([]).manager,
+      authorityEngine: a.engine, maxIterations: 3, governedTools: async () => ({ kind: 'paused', approval }), resume: old });
+    expect(again.terminationReason).toBe('paused');
+    // The scope whose records this run kept at the pause, so the next resume reads them.
+    expect(again.paused?.deliveryScopeId).toBe('sub-agent:second-spawn');
+  });
+
+  test('a carried scope of any other shape is not taken over', async () => {
+    const { r } = registry();
+    const a = authority();
+    const paused = await runSubAgent({ agent: withId('first-spawn'), task: 'save', context: '', llmManager: llm([[write('c1')]]).manager,
+      toolRegistry: r, authorityEngine: a.engine, maxIterations: 3, governedTools: async () => ({ kind: 'paused', approval }) });
+    const readers: string[] = [];
+    const forged = resumeFrom(paused);
+    forged.pending = { ...forged.pending, deliveryScopeId: 'default' };
+    await runSubAgent({ agent: withId('second-spawn'), task: 'save', context: '', toolRegistry: r, llmManager: llm([]).manager,
+      authorityEngine: a.engine, maxIterations: 3,
+      governedTools: async () => { readers.push(currentSnapshotReader()); return { kind: 'executed', result: 'saved' }; },
+      resume: forged });
+    expect(readers).toEqual(['named:sub-agent:second-spawn']);
   });
 });

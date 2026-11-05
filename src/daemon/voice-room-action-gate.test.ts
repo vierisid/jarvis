@@ -73,6 +73,41 @@ describe('resolveHeldRoomAction (#1008)', () => {
     expect(await held({ subject: 'Alice', id: 'e1' })).toEqual({ ok: true, ra: { room: 'memory', action: 'remember_that', args: { ...fact, subject: 'James', id: 'e1' } } });
   });
 
+  test('a remembered fact says which current value it contests, never that it replaces one (#1167)', async () => {
+    const facts = (rows: Array<{ predicate: string; object: string; confirmed: boolean }>) => ({ entityFacts: async () => rows });
+    const held = (args: Record<string, unknown>, over: Partial<RoomActionTargetLists>) =>
+      resolveHeldRoomAction({ room: 'memory', action: 'remember_that', args: { subject: 'Alice', ...args } }, lists(over), 'Memory: remember that');
+    // Single-valued, a different unconfirmed value: both will be contested.
+    const both = await held({ predicate: 'birthday', object: 'april 2' }, facts([{ predicate: 'birthday', object: 'march 15', confirmed: false }]));
+    expect(both.ok && both.ra.factConflict).toEqual({ value: 'march 15', confirmed: false });
+    // A confirmed one is the one shown: it stays.
+    const kept = await held({ predicate: 'date_of_birth', object: 'april 2' }, facts([
+      { predicate: 'birthday', object: 'may 1', confirmed: false }, { predicate: 'birthday', object: 'march 15', confirmed: true }]));
+    expect(kept.ok && kept.ra.factConflict).toEqual({ value: 'march 15', confirmed: true });
+    // A case-sensitive single-valued predicate tells "UTC" from "utc".
+    const tz = await held({ predicate: 'timezone', object: 'utc' }, facts([{ predicate: 'timezone', object: 'UTC', confirmed: false }]));
+    expect(tz.ok && tz.ra.factConflict).toEqual({ value: 'UTC', confirmed: false });
+    // The spoken value is already the confirmed one: the write changes nothing,
+    // so nothing is said, though another unconfirmed value is contested.
+    const own = await held({ predicate: 'birthday', object: 'March 15' }, facts([
+      { predicate: 'birthday', object: 'march 15', confirmed: true }, { predicate: 'birthday', object: 'may 1', confirmed: false }]));
+    expect(own.ok && 'factConflict' in own.ra).toBe(false);
+    // One it arrived with is not kept when this lookup finds none.
+    const stale = await resolveHeldRoomAction({ room: 'memory', action: 'remember_that', args: { subject: 'Alice', predicate: 'likes', object: 'x' },
+      factConflict: { value: 'old', confirmed: true } }, lists(facts([])), 'Memory: remember that');
+    expect(stale.ok && 'factConflict' in stale.ra).toBe(false);
+    // The same value (any case, for a case-insensitive predicate), a multi-valued
+    // predicate, or a list that cannot be read: nothing to say.
+    for (const [args, over] of [
+      [{ predicate: 'birthday', object: 'March 15' }, facts([{ predicate: 'birthday', object: 'march 15', confirmed: false }])],
+      [{ predicate: 'likes', object: 'coffee' }, facts([{ predicate: 'likes', object: 'tea', confirmed: false }])],
+      [{ predicate: 'birthday', object: 'april 2' }, { entityFacts: async () => { throw new Error('db locked'); } }],
+    ] as const) {
+      const r = await held(args, over as Partial<RoomActionTargetLists>);
+      expect(r.ok && 'factConflict' in r.ra).toBe(false);
+    }
+  });
+
   test('a remembered fact whose entity cannot be settled is not held (#1023)', async () => {
     const held = (args: Record<string, unknown>, over: Partial<RoomActionTargetLists> = {}) =>
       resolveHeldRoomAction({ room: 'memory', action: 'remember_that', args: { predicate: 'p', object: 'o', ...args } }, lists(over), 'Memory: remember that');

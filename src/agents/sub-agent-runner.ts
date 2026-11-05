@@ -129,6 +129,16 @@ export type SubAgentPause = GovernedToolCall & {
    * checked at all when they were queued.
    */
   offered?: string[];
+  /**
+   * The site-playbook delivery scope the run that PAUSED ran under (#1161),
+   * which is also the snapshot reader its card was raised as
+   * (`currentSnapshotReader`, sidecar-route.ts). The resumed run takes it
+   * over, so the approved call -- which records any snapshot it takes under
+   * the reader that raised its card -- and the resumed run's own next card
+   * read the same record. Absent on a checkpoint written before this field;
+   * such a resume runs under a fresh scope, as every resume did.
+   */
+  deliveryScopeId?: string;
 };
 
 /** The state a caller keeps between turns, and everything a paused run needs to continue later. */
@@ -676,9 +686,11 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
    * (#586).
    *
    * PER SPAWN, not per durable delegation: a delegation that pauses for approval
-   * comes back through a fresh `AgentInstance` with a fresh id, so the playbook
-   * can be delivered once more after the resume. That is the harmless direction
-   * (a repeat, not a loss) and it is not worth a durable key to avoid.
+   * comes back through a fresh `AgentInstance` with a fresh id. A resume of a
+   * PAUSED CALL takes the paused spawn's id over (#1161, below), because the
+   * scope is also the snapshot reader; a resume after a crash mid-conversation
+   * (nothing pending) still starts a fresh one, so a playbook can be delivered
+   * once more there -- the harmless direction.
    *
    * A sub-agent is its own conversation with its own history, but it is NOT its
    * own tool set: `createScopedToolRegistry` registers the same module-level
@@ -693,7 +705,14 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
    * second would leave exactly the bug this closes, on the path nobody looks
    * at -- an approved sub-agent call recording its delivery against the chat.
    */
-  const deliveryScopeId = `sub-agent:${agentId}`;
+  //
+  // EXCEPT a resume of a paused call, which takes the paused run's scope over
+  // (#1161). The approved call runs with the reader that raised its card --
+  // the paused run's -- so a navigate records its snapshot there; under a
+  // fresh scope the resumed run's next element card found nothing recorded
+  // for itself and bound no snapshot at all. A repeat playbook is not the
+  // concern; reading one record is.
+  const deliveryScopeId = carriedDeliveryScope(resume?.pending?.deliveryScopeId) ?? `sub-agent:${agentId}`;
   const inDeliveryScope = <T>(fn: () => Promise<T>): Promise<T> =>
     withTemplateDeliveryScope(deliveryScopeId, fn);
   /**
@@ -757,7 +776,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     messages: durableMessages(messages), toolsUsed: [...toolsUsed], tokensUsed: { ...totalUsage }, sequence, iteration,
     taint: [...taint], failedToolCalls: [...failedToolCalls],
   });
+  let pausedAtExit = false;
   const finish = (partial: Pick<SubAgentResult, 'success' | 'response' | 'terminationReason'> & Partial<SubAgentResult>): SubAgentResult => {
+    pausedAtExit = partial.terminationReason === 'paused';
     finishActivity(partial.success && partial.terminationReason === 'completed' ? 'completed' : 'failed');
     return {
       toolsUsed: [...new Set(toolsUsed)],
@@ -898,7 +919,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       sequence += 1;
       const dispatched = await asThisAgent(() => inDeliveryScope(() => executeTool(toolRegistry, tc, sequence, authorityCtx)));
       if ('paused' in dispatched) {
-        return { ...dispatched.paused, remaining: calls.slice(index + 1), iteration, offered: [...offered] };
+        return { ...dispatched.paused, remaining: calls.slice(index + 1), iteration, offered: [...offered], deliveryScopeId };
       }
       // Whatever the sub-agent actually called stays exposed for the rest of
       // the run -- registered names only, and only while the filter is on.
@@ -935,7 +956,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       } catch (err) {
         throw new GovernedDispatchError(err instanceof Error ? err.message : String(err), err);
       }
-      if (governed.kind === 'paused') return finish({ success: true, response: '', terminationReason: 'paused', paused: { ...pending, approval: governed.approval } });
+      if (governed.kind === 'paused') return finish({ success: true, response: '', terminationReason: 'paused', paused: { ...pending, approval: governed.approval, deliveryScopeId } });
       record(pending.toolCall, governedText(authorityCtx, pending.toolCall, pending.toolCategory, governed,
         toolRegistry.get(pending.toolCall.name)?.failureIsOutsideContent === true));
       // A checkpoint written before `offered` existed: if this run's model is
@@ -1032,9 +1053,22 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     stopListening?.();
     agent.idle();
     // The remote snapshot generations this spawn recorded (#879): the scope id
-    // is per spawn, so no later call of this run will read them.
-    forgetSnapshotReader(deliveryScopeId);
+    // is per spawn, so no later call of this run will read them -- unless the
+    // run PAUSED (#1161): its resume takes this scope over and reads them, and
+    // forgets them when it settles. A pause never resumed leaves them to the
+    // record's cap, which evicts least recently written first and fails closed.
+    if (!pausedAtExit) forgetSnapshotReader(deliveryScopeId);
   }
+}
+
+/**
+ * A delivery scope id carried on a checkpoint (#1161), or null when it is not
+ * one this runner would have minted. The checkpoint is stored data: a value of
+ * another shape (another reader's name, 'default') must not become the
+ * resumed run's reader.
+ */
+function carriedDeliveryScope(value: unknown): string | null {
+  return typeof value === 'string' && /^sub-agent:[\w.:-]{1,200}$/.test(value) ? value : null;
 }
 
 /**

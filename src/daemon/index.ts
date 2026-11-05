@@ -196,6 +196,7 @@ import {
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
 import { runRoomPanelIntent, type RoomPanelDeps } from "./pebble-room-panel.ts";
 import { makeFastPathTurns, PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
+import { startChannelMessageRetention } from "./channel-message-retention.ts";
 import { isGonePanelError, makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
 import { pebbleBlinded, pushPebbleBlinded } from "./pebble-blind.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
@@ -4356,6 +4357,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     };
     expireUnanswered();
     setInterval(expireUnanswered, 10 * 60_000).unref?.();
+    // Channel conversation messages are kept forever unless the owner set a
+    // retention (#1167); then a daily sweep deletes the older ones.
+    startChannelMessageRetention(jarvisConfig);
     // A workflow card past its explicit deadline leaves the dashboard the same way.
     onApprovalDeadlineExpired(request => wsService.broadcastApprovalUpdate(request));
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.

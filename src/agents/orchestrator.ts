@@ -915,7 +915,7 @@ export class AgentOrchestrator {
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
     const turnTaint = new Set<string>();
-    // The remote snapshots THIS loop reads, entered around each of its tool
+    // The browser snapshots THIS loop reads (remote #827, local #1161), entered around each of its tool
     // calls, so a browser card it raises binds the snapshot it read and not
     // the newest one another channel or the voice route took (#827,
     // actions/tools/snapshot-read-log.ts).
@@ -1085,7 +1085,7 @@ export class AgentOrchestrator {
     // "ask first, then run it", so the taint is rebuilt from the history
     // instead of starting clean.
     const turnTaint = new Set<string>();
-    // The remote snapshots THIS loop reads, entered around each of its tool
+    // The browser snapshots THIS loop reads (remote #827, local #1161), entered around each of its tool
     // calls, so a browser card it raises binds the snapshot it read and not
     // the newest one another channel or the voice route took (#827,
     // actions/tools/snapshot-read-log.ts). A resume replays snapshot replies
@@ -1390,7 +1390,7 @@ export class AgentOrchestrator {
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
     const turnTaint = new Set<string>(conversation?.untrustedSources);
-    // The remote snapshots THIS loop reads, entered around each of its tool
+    // The browser snapshots THIS loop reads (remote #827, local #1161), entered around each of its tool
     // calls, so a browser card it raises binds the snapshot it read and not
     // the newest one another channel or the voice route took (#827,
     // actions/tools/snapshot-read-log.ts).
