@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   describeSettledTime, unrecognisedTimeZone, realtimeRoomActionDecision, resolveHeldRoomAction as resolveHeld, roomActionAuditRow, settleRoomActionTime, voiceTimeZone,
+  settledTimePassed, visible,
   type RoomActionTargetLists, type VoiceClock,
 } from './voice-room-action-gate.ts';
 
@@ -70,6 +71,41 @@ describe('resolveHeldRoomAction (#1008)', () => {
     expect(await held({ subject: 'James', new_entity: true })).toEqual({ ok: true, ra: { room: 'memory', action: 'remember_that', args: { ...fact, subject: 'James', id: 'e1' } } });
     // An id it gave is checked, and shown by that entity's name.
     expect(await held({ subject: 'Alice', id: 'e1' })).toEqual({ ok: true, ra: { room: 'memory', action: 'remember_that', args: { ...fact, subject: 'James', id: 'e1' } } });
+  });
+
+  test('a remembered fact says which current value it contests, never that it replaces one (#1167)', async () => {
+    const facts = (rows: Array<{ predicate: string; object: string; confirmed: boolean }>) => ({ entityFacts: async () => rows });
+    const held = (args: Record<string, unknown>, over: Partial<RoomActionTargetLists>) =>
+      resolveHeldRoomAction({ room: 'memory', action: 'remember_that', args: { subject: 'Alice', ...args } }, lists(over), 'Memory: remember that');
+    // Single-valued, a different unconfirmed value: both will be contested.
+    const both = await held({ predicate: 'birthday', object: 'april 2' }, facts([{ predicate: 'birthday', object: 'march 15', confirmed: false }]));
+    expect(both.ok && both.ra.factConflict).toEqual({ value: 'march 15', confirmed: false });
+    // A confirmed one is the one shown: it stays.
+    const kept = await held({ predicate: 'date_of_birth', object: 'april 2' }, facts([
+      { predicate: 'birthday', object: 'may 1', confirmed: false }, { predicate: 'birthday', object: 'march 15', confirmed: true }]));
+    expect(kept.ok && kept.ra.factConflict).toEqual({ value: 'march 15', confirmed: true });
+    // A case-sensitive single-valued predicate tells "UTC" from "utc".
+    const tz = await held({ predicate: 'timezone', object: 'utc' }, facts([{ predicate: 'timezone', object: 'UTC', confirmed: false }]));
+    expect(tz.ok && tz.ra.factConflict).toEqual({ value: 'UTC', confirmed: false });
+    // The spoken value is already the confirmed one: the write changes nothing,
+    // so nothing is said, though another unconfirmed value is contested.
+    const own = await held({ predicate: 'birthday', object: 'March 15' }, facts([
+      { predicate: 'birthday', object: 'march 15', confirmed: true }, { predicate: 'birthday', object: 'may 1', confirmed: false }]));
+    expect(own.ok && 'factConflict' in own.ra).toBe(false);
+    // One it arrived with is not kept when this lookup finds none.
+    const stale = await resolveHeldRoomAction({ room: 'memory', action: 'remember_that', args: { subject: 'Alice', predicate: 'likes', object: 'x' },
+      factConflict: { value: 'old', confirmed: true } }, lists(facts([])), 'Memory: remember that');
+    expect(stale.ok && 'factConflict' in stale.ra).toBe(false);
+    // The same value (any case, for a case-insensitive predicate), a multi-valued
+    // predicate, or a list that cannot be read: nothing to say.
+    for (const [args, over] of [
+      [{ predicate: 'birthday', object: 'March 15' }, facts([{ predicate: 'birthday', object: 'march 15', confirmed: false }])],
+      [{ predicate: 'likes', object: 'coffee' }, facts([{ predicate: 'likes', object: 'tea', confirmed: false }])],
+      [{ predicate: 'birthday', object: 'april 2' }, { entityFacts: async () => { throw new Error('db locked'); } }],
+    ] as const) {
+      const r = await held(args, over as Partial<RoomActionTargetLists>);
+      expect(r.ok && 'factConflict' in r.ra).toBe(false);
+    }
   });
 
   test('a remembered fact whose entity cannot be settled is not held (#1023)', async () => {
@@ -280,3 +316,31 @@ describe('the time a room action is for is settled before anything is shown or s
   });
 });
 
+
+describe('#1156: room action audit rows and refusals', () => {
+  const who = { agentId: 'a', agentName: 'PA' };
+  test('a row says the instant it was settled to and the zone, and its ref', () => {
+    const ts = Date.parse('2026-10-21T13:00:00Z');
+    const row = roomActionAuditRow({ room: 'tasks', action: 'create_task', args: { title: 'x', when: 'tomorrow at 9am', when_ts: ts }, timeZone: 'America/New_York' },
+      'realtime', 'allowed', true, who, { reason: 'accepted', ref: 'r-1' });
+    expect(row?.tool_name).toBe('room_action(tasks/create_task; via realtime; write_data; accepted; at 2026-10-21T13:00:00.000Z America/New_York; ref r-1)');
+  });
+
+  test('an instant with no zone was not settled here and is not recorded as settled', () => {
+    const row = roomActionAuditRow({ room: 'tasks', action: 'create_task', args: { when_ts: 1 } }, 'realtime', 'allowed', true, who, { reason: 'accepted' });
+    expect(row?.tool_name).toBe('room_action(tasks/create_task; via realtime; write_data; accepted)');
+  });
+
+  test('settledTimePassed: a time still to come, or none, is fine; one gone is refused with when it was', () => {
+    const now = Date.parse('2026-10-20T16:00:00Z');
+    const ra = (ts: unknown) => ({ room: 'tasks', action: 'create_task', args: { when_ts: ts }, timeZone: 'America/New_York' });
+    expect(settledTimePassed(ra(now + 60_000), now, 'Tasks: create task')).toBeNull();
+    expect(settledTimePassed({ room: 'tasks', action: 'create_task', args: {} }, now, 'Tasks: create task')).toBeNull();
+    expect(settledTimePassed(ra(Date.parse('2026-10-20T15:30:00Z')), now, 'Tasks: create task'))
+      .toBe('I haven\'t done "Tasks: create task": it was for Tue, Oct 20, 11:30 EDT, which passed before it was confirmed. Ask again with a later time.');
+  });
+
+  test('visible writes bidi, zero-width and control characters as escapes', () => {
+    expect(visible('a\u2066b\u200Bc\nd')).toBe('a\\u2066b\\u200bc\\u000ad');
+  });
+});

@@ -211,3 +211,26 @@ test("profile failure is explicit and allows writing a request without irrelevan
   expect(input().readOnly).toBe(false);
   await click('Create my workflow'); expect(intents[0]!.action).toBe('create');
 });
+
+test("a request with a saved draft is read-only and offers only the way back to it (#1070)", async () => {
+  let edits = 0;
+  await mount({ savedDraft: true, draft: { prompt: "Every Monday, summarise my sales.", contextRefs: [], answers: {} } }, { onDraftChange: () => { edits++; } });
+  expect(input().readOnly).toBe(true);
+  expect(input().value).toBe("Every Monday, summarise my sales.");
+  for (const name of ["Create my workflow", "Retry same request", "Back to the tour", "Explore Jarvis first", ...examples.map(e => e.label)]) expect(() => button(name)).toThrow();
+  expect(document.activeElement).toBe(button("Back to your draft"));
+  await act(async () => { input().value = "Changed"; input().dispatchEvent(new Event("input", { bubbles: true })); });
+  expect(edits).toBe(0);
+  expect(host.textContent).toContain("already has a saved draft workflow");
+  await key({ metaKey: true });
+  expect(intents).toEqual([]);
+  await click("Back to your draft");
+  expect(intents).toEqual([{ journeyId: "j-1", revision: 1, from: "activation", action: "view_draft", to: "result" }]);
+  expect(effects).toBe(0);
+});
+test("a saved draft whose request text is not on this device says so instead of an empty box (#1070)", async () => {
+  await mount({ savedDraft: true, draft: { prompt: "", contextRefs: [], answers: {} } });
+  expect(host.querySelector("textarea")).toBeNull();
+  expect(host.textContent).toContain("isn't stored on this device");
+  expect(() => button("Back to your draft")).not.toThrow();
+});

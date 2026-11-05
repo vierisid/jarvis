@@ -10,7 +10,8 @@
  *   aggressive: 5s cancel window
  */
 
-import { getDueCommitments, getUpcoming, updateCommitmentStatus, getCommitment, isWorkItemCommitment } from '../vault/commitments.ts';
+import { getDueCommitments, getUpcoming, updateCommitmentStatus, getCommitment, isWorkItemCommitment, parseParkedRequestIds, PARKED_RESULT_PREFIX } from '../vault/commitments.ts';
+import { truncateText } from '../vault/commitment-text.ts';
 import type { Commitment } from '../vault/commitments.ts';
 import { runWithAdmission } from '../llm/background-budget.ts';
 import type { IAgentService } from './agent-service-interface.ts';
@@ -39,17 +40,9 @@ const CANCEL_WINDOW: Record<Aggressiveness, number> = {
 /** Minimal view of an approval request the executor needs to settle a commitment. */
 export type ApprovalLookup = (requestId: string) => { status: string; execution_result: string | null } | null;
 
-/** Result prefix of a commitment parked on approval requests. */
-const AWAITING_PREFIX = 'Awaiting user approval ';
-const AWAITING_RE = /^Awaiting user approval \[req:([^\]]*)\]/;
-
-/** Request ids encoded in a parked commitment's result, or null if not parked. */
-export function parseParkedRequestIds(result: string | null | undefined): string[] | null {
-  if (!result) return null;
-  const m = AWAITING_RE.exec(result);
-  if (!m) return null;
-  return m[1]!.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
-}
+// The parked-result marker lives with the store (#1115), which keeps every
+// other writer from forging it; re-exported for the callers that read it here.
+export { parseParkedRequestIds } from '../vault/commitments.ts';
 
 export class CommitmentExecutor {
   private agentService: IAgentService | null = null;
@@ -120,7 +113,7 @@ export class CommitmentExecutor {
         const current = getCommitment(commitmentId);
         if (!current || current.status !== 'active') continue;
         if (executed > 0) {
-          const summary = results.join('\n').slice(0, 500) || 'Approved and executed';
+          const summary = truncateText(results.join('\n'), 500) || 'Approved and executed';
           updateCommitmentStatus(commitmentId, 'completed', summary);
           console.log(`[Executor] Completed after approval: "${entry.what}"`);
         } else {
@@ -399,7 +392,9 @@ export class CommitmentExecutor {
     const prompt = [
       '[COMMITMENT EXECUTION — MANDATORY]',
       '',
-      `You previously committed to: "${state.what}"`,
+      // JSON-encoded (#1115): the task text is data, and a quote in it closed
+      // the quoting this line used to rely on.
+      `You previously committed to: ${JSON.stringify(state.what)}`,
       'This commitment is now due. Execute it NOW using your tools.',
       '',
       'Instructions:',
@@ -476,9 +471,8 @@ export class CommitmentExecutor {
       timestamp: Date.now(),
     });
 
-    const resultSummary = response
-      ? response.length > 500 ? response.slice(0, 497) + '...' : response
-      : 'Executed successfully';
+    // Cut on a code point boundary: `slice` could split a surrogate pair.
+    const resultSummary = response ? truncateText(response, 500) : 'Executed successfully';
 
     // A turn that stopped on an approval request did not do the work. Park
     // the commitment as active, remember which requests it is waiting on,
@@ -491,7 +485,7 @@ export class CommitmentExecutor {
       try {
         // The request ids ride in the stored result so a restarted daemon can
         // pick the parked commitment back up instead of re-running it.
-        updateCommitmentStatus(state.commitmentId, 'active', `${AWAITING_PREFIX}[req:${requestIds.join(',')}]: ${resultSummary}`);
+        updateCommitmentStatus(state.commitmentId, 'active', `${PARKED_RESULT_PREFIX}[req:${requestIds.join(',')}]: ${resultSummary}`, { parked: true });
       } catch (err) {
         console.error('[Executor] Failed to update commitment status:', err);
       }

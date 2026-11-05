@@ -30,7 +30,30 @@ func checkClipboard() string {
 	return "xclip or xsel not found"
 }
 
+// procVersionPath is read to recognise WSL (a seam for tests).
+var procVersionPath = "/proc/version"
+
+// wslReason is non-empty when this Linux sidecar runs inside WSL (#1159). The
+// display there is WSLg's, which shows only the Linux GUI apps started from
+// WSL and none of the Windows desktop the person is looking at, so a
+// screenshot comes back empty and input lands nowhere useful. Same test as
+// the brain's WSLBridge.isWSL (src/actions/terminal/wsl-bridge.ts).
+func wslReason() string {
+	b, err := os.ReadFile(procVersionPath)
+	if err != nil {
+		return ""
+	}
+	v := strings.ToLower(string(b))
+	if strings.Contains(v, "microsoft") || strings.Contains(v, "wsl") {
+		return "running inside WSL, whose display is not the Windows desktop (install the Windows sidecar for screen and desktop access)"
+	}
+	return ""
+}
+
 func checkScreenshot() string {
+	if r := wslReason(); r != "" {
+		return r
+	}
 	for _, tool := range []string{"scrot", "import", "gnome-screenshot"} {
 		if _, err := exec.LookPath(tool); err == nil {
 			return ""
@@ -75,6 +98,9 @@ func checkBrowser(cfg *SidecarConfig) string {
 }
 
 func checkDesktop() string {
+	if r := wslReason(); r != "" {
+		return r
+	}
 	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
 		return "no display server (DISPLAY/WAYLAND_DISPLAY not set)"
 	}

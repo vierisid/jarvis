@@ -152,10 +152,34 @@ test('hosted setup commits through B02 before navigating; self setup keeps the e
     expect(f.calls.includes('setup.complete')).toBe(mode === 'hosted'); s.dispose();
   }
 });
-test('Welcome exit leaves the UI without manufacturing completed progress', async () => {
+test('Welcome Explore before setup only leaves this mount, so welcome and setup come back (#1070)', async () => {
   const f = fixture(), s = createSession(f.config); await s.start(); const before = f.journey();
   await s.act(s.key(), 'explore'); expect(s.state().mode).toBe('complete'); expect(f.journey()).toEqual(before);
   expect(f.calls).not.toContain('journey.transition'); s.dispose();
+  const again = createSession(f.config); await again.start(); expect(again.state().view).toBe('welcome'); again.dispose();
+});
+test('Welcome Explore after setup persists an explored exit, so the welcome screen does not return (#1070)', async () => {
+  const f = fixture(); f.setJourney({ setupState: 'completed' });
+  const s = createSession(f.config); await s.start(); expect(s.state().view).toBe('welcome');
+  await s.act(s.key(), 'explore'); expect(s.state().mode).toBe('complete');
+  expect(f.journey()).toMatchObject({ stepId: 'exited', completion: 'explored' }); expect(f.calls).toContain('journey.transition'); s.dispose();
+  const again = createSession(f.config); await again.start(); expect(again.state().mode).toBe('complete'); again.dispose();
+});
+test('result Back shows the request and View draft returns to it, both through the journey (#1070)', async () => {
+  const f = fixture(); f.setJourney({ stepId: 'result', setupState: 'completed', interviewState: 'done', tourState: 'done',
+    activationState: 'draft_saved', jobId: 'job-1', buildRequestId: 'request-1', draft: { flowId: 'flow', versionId: 'version' } });
+  const s = createSession(f.config); await s.start(); expect(s.state().view).toBe('result');
+  await s.act(s.key(), 'back', { action: 'back' });
+  expect(s.state().view).toBe('activation'); expect(f.journey()).toMatchObject({ stepId: 'activation', jobId: 'job-1' });
+  expect(f.calls).not.toContain('result:back');
+  // Back to the tour and Explore are not offered while the draft is held.
+  for (const action of ['back', 'explore']) {
+    const held = createSession(f.config); await held.start(); expect(held.state().view).toBe('activation');
+    const calls = f.calls.length; await held.act(held.key(), action, { draft: { prompt: 'x' } });
+    expect(held.state().blocked).toBe(true); expect(f.calls.slice(calls)).not.toContain('journey.transition'); held.dispose();
+  }
+  await s.act(s.key(), 'view_draft', { action: 'view_draft' });
+  expect(s.state().view).toBe('result'); expect(f.journey().stepId).toBe('result'); s.dispose();
 });
 test('leaving Google cancels through its owner before navigation; failed cancellation retains the journey', async () => {
   for (const failed of [false, true]) {

@@ -115,7 +115,7 @@ function parseRequest(input: unknown, lane: 'navigation' | 'acknowledgement'): T
     || fields.some(k => !(nullable.includes(k) && c[k] === null) && !identity(c[k]))) {
     throw new JourneyError('invalid_command');
   }
-  if (c.type === 'navigate' && !oneOf(c.stepId, JOURNEY_STEPS.slice(0, 7))) throw new JourneyError('invalid_command');
+  if (c.type === 'navigate' && !oneOf(c.stepId, [...JOURNEY_STEPS.slice(0, 7), 'result'])) throw new JourneyError('invalid_command');
   if ((c.type === 'tour_finished' || c.type === 'interview_finished') && !oneOf(c.state, ['done', 'skipped'])) {
     throw new JourneyError('invalid_command');
   }
@@ -141,7 +141,15 @@ function apply(s: JourneySnapshot, c: Navigation | Acknowledgement): JourneySnap
   const tourDone = s.tourState === 'done' || s.tourState === 'skipped';
   switch (c.type) {
     case 'navigate': {
-      requireState(s.completion === 'active' && s.replayReturnStepId === null && !s.jobId && !s.buildRequestId);
+      requireState(s.completion === 'active' && s.replayReturnStepId === null);
+      if (s.draft !== null) {
+        // A saved draft holds its job: the only moves are back to its request
+        // (read-only, no new job) and forward to the draft again.
+        requireState(!!s.jobId && ((s.stepId === 'result' && c.stepId === 'activation') || (s.stepId === 'activation' && c.stepId === 'result')));
+        n.stepId = c.stepId;
+        break;
+      }
+      requireState(!s.jobId && !s.buildRequestId && c.stepId !== 'result');
       const adjacent: Partial<Record<JourneyStep, JourneyStep[]>> = {
         welcome: ['explain'], explain: ['welcome', 'legacy-provider-setup', 'google'],
         'legacy-provider-setup': ['explain', 'google'], google: ['explain', 'interview'],
@@ -199,7 +207,11 @@ function apply(s: JourneySnapshot, c: Navigation | Acknowledgement): JourneySnap
       if (s.replayReturnStepId !== null) n.replayReturnStepId = 'result'; else n.stepId = 'result';
       break;
     case 'explore':
-      requireState(s.completion === 'active' && s.stepId === 'activation' && s.replayReturnStepId === null && s.jobId === null && !s.buildRequestId);
+      // Welcome's Explore exits onboarding too, so the welcome screen does not return.
+      // Only after setup: an exit before it would leave no way back to first-run
+      // setup, and the daemon refuses chat until setup completes.
+      requireState(s.completion === 'active' && (s.stepId === 'activation' || (s.stepId === 'welcome' && s.setupState === 'completed'))
+        && s.replayReturnStepId === null && s.jobId === null && !s.buildRequestId);
       n.completion = 'explored'; n.activationState = 'explored'; n.stepId = 'exited';
       break;
     case 'finish':

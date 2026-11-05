@@ -46,6 +46,13 @@
  *
  * Fail safe throughout: a transcript with no item id, or one whose utterance
  * start was never seen, clears nothing.
+ *
+ * Nor does a bare affirmation ("yes", "ok", "yeah go ahead") while the
+ * session holds any mark (owner decision 2026-11-05, #1156): after a page
+ * read, "shall I run it?" can be the page speaking through the assistant, and
+ * a plain yes to it is not the person's own request. Any mark includes a
+ * declined intent (Q-08): a spoken yes does not walk around a denied card.
+ * The accepted cost: they have to say what they want ("yes, run the build").
  */
 
 /** A transcript with no letter or digit in it is not something the user said. */
@@ -94,6 +101,75 @@ class SequencedMarks extends Set<string> {
   }
 }
 
+/**
+ * A reply that only agrees to what was just proposed, with nothing of its own
+ * in it (owner decision 2026-11-05, #1156): at least one word of agreement,
+ * and every other word filler, politeness or a wake word. Any word of content
+ * ("build", "email", "bob") makes it the person's own request, so this cannot
+ * hold an ordinary request back.
+ *
+ * Wide on purpose: a yes missed here clears the taint, which is the unsafe
+ * direction. ws-service's isVoiceAffirmative is narrow on purpose (a yes it
+ * misses leaves a held room action unconfirmed); do not merge the two.
+ * English and Italian, the languages known to be spoken to it; a yes in
+ * another language still clears.
+ */
+const AGREEMENT: ReadonlySet<string> = new Set([
+  'yes', 'yeah', 'yea', 'yep', 'yup', 'ya', 'yah', 'ok', 'okay', 'k', 'kk', 'sure', 'alright', 'right', 'fine',
+  'correct', 'affirmative', 'proceed', 'confirm', 'confirmed', 'approve', 'approved', 'absolutely', 'definitely',
+  'certainly', 'mhm', 'agreed', 'do', 'ahead', 'si', 'sì', 'certo', 'procedi', 'bene', 'fallo', 'vai', 'perfetto', 'esatto',
+]);
+const FILLER: ReadonlySet<string> = new Set([
+  'it', 'go', 'for', 'now', 'just', "let's", 'lets', 'please', 'thanks', 'thank', 'you', 'sir',
+  'sounds', 'good', "that's", 'thats', 'that', 'this', 'one', 'all', 'is', 'so', 'then', 'o', 'and', 'again', 'thing',
+  'uh', 'um', 'mm', 'hmm', 'huh', 'er', 'ah', 'oh', 'jarvis', 'hey', 'hi',
+  'va', 'pure', 'grazie', 'per', 'favore', 'dai', 'ok',
+]);
+
+/** Whether `text` is only a yes to whatever was proposed (see AGREEMENT). */
+export function isBareAffirmation(text: string): boolean {
+  const said = words(text.normalize('NFKC'));
+  return said.some((w) => AGREEMENT.has(w)) && said.every((w) => AGREEMENT.has(w) || FILLER.has(w));
+}
+
+/** The words of `text`, lowercased, for comparing what was heard with what was said. */
+function words(text: string): string[] {
+  return text.toLowerCase().match(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu) ?? [];
+}
+
+/**
+ * Whether a user transcript is the assistant's own speech coming back in
+ * through the mic (#1156): every word of it, in order and side by side, is in
+ * something the assistant has just said. The browser's echo cancellation and
+ * the pebble's half-duplex mic gate catch most of it, not all (a loud speaker,
+ * the room's tail after the gate reopens), and an echo transcribes to words
+ * like any speech, so on its own it would clear the session's taint with
+ * words the page put in the assistant's mouth.
+ *
+ * Fail safe: a person repeating the assistant's words exactly ("send it" after
+ * "shall I send it?") is taken for an echo too, and clears nothing. The cost is
+ * the one the owner accepted for #1007: a governed request is refused until
+ * the person says something of their own.
+ *
+ * Defence in depth, not a detector: an echo the transcription model changes
+ * (a word misheard, room noise added) still clears. The caller compares only
+ * with what the assistant had said when the utterance began, never with the
+ * reply to it.
+ */
+export function echoesAssistant(userText: string, assistantSpeech: readonly string[]): boolean {
+  const said = words(userText);
+  if (said.length === 0) return false;
+  for (const speech of assistantSpeech) {
+    const heard = words(speech);
+    for (let i = 0; i + said.length <= heard.length; i++) {
+      let j = 0;
+      while (j < said.length && heard[i + j] === said[j]) j++;
+      if (j === said.length) return true;
+    }
+  }
+  return false;
+}
+
 export class RealtimeTaint {
   /** The set the orchestrator enters for this session's tool calls. */
   readonly marks = new SequencedMarks();
@@ -119,11 +195,17 @@ export class RealtimeTaint {
   /**
    * A final transcript of what the user said. Clears the marks noted before
    * that utterance began, and returns whether it cleared (anything or nothing)
-   * as a boundary. An empty or wordless transcript, one with no item id, and
-   * one for an utterance whose start was not seen are no boundary.
+   * as a boundary. An empty or wordless transcript, one with no item id, one
+   * for an utterance whose start was not seen, and a bare affirmation while
+   * any mark is held (#1156) are no boundary.
    */
   userTranscript(itemId: string | undefined, text: string): boolean {
     if (!SPOKEN.test(text)) return false;
+    // A bare "yes" after the session read outside content agrees to what the
+    // assistant proposed, and that proposal may be the page's (owner
+    // decision 2026-11-05, #1156). It is not a fresh request, so it clears
+    // nothing; the person says what they want in their own words instead.
+    if (this.marks.size > 0 && isBareAffirmation(text)) return false;
     if (!itemId) return false;
     const began = this.utterances.get(itemId);
     if (began === undefined) return false;

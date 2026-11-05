@@ -53,9 +53,40 @@ export class FakeRenderer {
 
   send(method: string, params: Record<string, any> = {}): Promise<any> {
     return new Promise((resolve, reject) => {
-      this.queue.push({ method, params, resolve, reject });
+      const pending = { method, params, resolve, reject };
+      if (this.hold?.when(pending)) {
+        this.hold.held.push(pending);
+        this.hold.reached();
+        return;
+      }
+      this.queue.push(pending);
       void this.drain();
     });
+  }
+
+  private hold: { when: (p: Pending) => boolean; held: Pending[]; reached: () => void } | null = null;
+
+  /**
+   * Set aside every message matching `when` as it is sent, while everything
+   * else keeps being answered in order -- the reply to one CDP command coming
+   * back after replies to commands sent later, which one session does when
+   * they are served by different processes (the browser and the renderer).
+   * `reached` resolves once the first one is set aside; `release` queues what
+   * was held, in the order it was sent, and stops holding.
+   */
+  holdBack(when: (p: Pending) => boolean): { reached: Promise<void>; release: () => void } {
+    let reached!: () => void;
+    const promise = new Promise<void>((r) => { reached = r; });
+    this.hold = { when, held: [], reached };
+    return {
+      reached: promise,
+      release: () => {
+        const held = this.hold?.held ?? [];
+        this.hold = null;
+        this.queue.push(...held);
+        void this.drain();
+      },
+    };
   }
 
   async close(): Promise<void> {}
