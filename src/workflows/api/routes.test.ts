@@ -1186,6 +1186,31 @@ describe("workflow API: waitpoint resume ingress guards", () => {
     expect(getWaitpoint(waitpointId)?.resumedAt).toBeNull();
   });
 
+  test("a chunked body over the cap is refused while it streams, not after it is buffered", async () => {
+    const r = createWorkflowRoutes();
+    const post = r["/api/webhooks/waitpoints/:id"]?.POST;
+    const { waitpointId } = await pausedWaitpoint();
+    const { getWaitpoint } = await import("../db/repos/waitpoint");
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (pulled >= 64 * 1024 * 1024) { c.close(); return; }
+        pulled += 65_536;
+        c.enqueue(new Uint8Array(65_536).fill(0x61));
+      },
+    }, { highWaterMark: 0 });
+    const req = new Request(`http://x/api/webhooks/waitpoints/${waitpointId}`, {
+      method: "POST",
+      body: stream,
+    }) as Request & { params: { id: string } };
+    req.params = { id: waitpointId };
+    const res = await (post as (q: Request) => Promise<Response>)(req);
+    expect(res.status).toBe(413);
+    // req.text() would have pulled all 64 MiB before measuring it.
+    expect(pulled).toBeLessThan(WAITPOINT_RESUME_MAX_BODY_BYTES + 4 * 65_536);
+    expect(getWaitpoint(waitpointId)?.resumedAt).toBeNull();
+  });
+
   test("a JSON body that is not an object is refused instead of silently becoming {}", async () => {
     const r = createWorkflowRoutes();
     const post = r["/api/webhooks/waitpoints/:id"]?.POST;

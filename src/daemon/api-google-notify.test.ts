@@ -151,6 +151,23 @@ describe('POST /api/webhooks/google/notify', () => {
     expect(synced).toEqual([]);
   });
 
+  it('refuses a chunked body over the cap while it streams, before any signature work', async () => {
+    const { post, synced } = makeRoutes();
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (pulled >= 64 * 1024 * 1024) { c.close(); return; }
+        pulled += 65_536;
+        c.enqueue(new Uint8Array(65_536).fill(0x61));
+      },
+    }, { highWaterMark: 0 });
+    const res = await post(new Request('http://x/api/webhooks/google/notify', { method: 'POST', body: stream }));
+    expect(res.status).toBe(413);
+    // req.text() would have pulled all 64 MiB before the HMAC refused it.
+    expect(pulled).toBeLessThanOrEqual(65_536);
+    expect(synced).toEqual([]);
+  });
+
   it('404s when no notify secret is configured', async () => {
     // Self-hosted, or a hosted config predating the bridge: there is nothing to
     // verify against, so nothing may be accepted. Notably it must NOT fall

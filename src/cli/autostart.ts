@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { c, printOk, printErr, printWarn } from './helpers.ts';
 import { getLogDir } from '../daemon/pid.ts';
-import { alreadyScheduled, runCommand, scheduleUnitRestart, type CommandRunner } from './systemd-unit.ts';
+import { alreadyScheduled, runCommand, scheduleUnitRestart, type CommandResult, type CommandRunner } from './systemd-unit.ts';
 import { MODEL_EXEC_ENV_KEY_FLAG, MODEL_EXEC_MARKER_ENV } from '../util/model-exec-marker.ts';
 
 function canSpawnBinary(binary: string): boolean {
@@ -259,6 +259,45 @@ async function startSystemdService(): Promise<boolean> {
 }
 
 /**
+ * Whether jarvis.service is loaded AND names `pid` (this daemon) as its
+ * MainPID. An installed unit file says nothing about who is running: with the
+ * daemon started by hand (`jarvis start` in a shell) the unit is loaded but
+ * inactive, or crash-looping on the lock this daemon holds, and restarting it
+ * leaves this daemon untouched while the caller is told it restarted. Same
+ * rule as systemd-unit.ts detectSystemdUnit, which the CLI's restart uses.
+ */
+export function keepaliveUnitRunsPid(run: CommandRunner = runCommand, pid: number = process.pid): boolean {
+  return keepaliveUnitState(run, pid) === 'runs';
+}
+
+/**
+ * `runs`: jarvis.service is loaded and `pid` is its MainPID. `other`: systemd
+ * answered and it is not (not loaded, inactive, another process). `unknown`:
+ * systemd could not be asked (no user bus, no systemctl), which says nothing
+ * about where this daemon runs and must not be reported as "not under it".
+ */
+export function keepaliveUnitState(run: CommandRunner = runCommand, pid: number = process.pid): 'runs' | 'other' | 'unknown' {
+  let show: CommandResult;
+  try {
+    // `KEY=value` rather than `--value`, which needs systemd 230 (as unitInfo).
+    show = run(['systemctl', '--user', 'show', '--property=LoadState', '--property=MainPID', 'jarvis.service']);
+  } catch {
+    return 'unknown';
+  }
+  if (show.exitCode !== 0) return 'unknown';
+  const values = new Map<string, string>();
+  for (const line of show.stdout.split('\n')) {
+    const eq = line.indexOf('=');
+    if (eq > 0) values.set(line.slice(0, eq).trim(), line.slice(eq + 1).trim());
+  }
+  if (!values.has('LoadState')) return 'unknown';
+  if (values.get('LoadState') !== 'loaded') return 'other';
+  const mainPid = Number.parseInt(values.get('MainPID') ?? '', 10);
+  if (!Number.isInteger(mainPid)) return 'unknown';
+  return Number.isInteger(pid) && pid > 0 && mainPid === pid ? 'runs' : 'other';
+}
+
+/**
  * Restart the keepalive unit from inside it: the daemon's
  * `/api/system/autostart/restart`, which the Settings room and the voice
  * `restart_daemon` call, and which has to answer before it goes (#1037).
@@ -278,18 +317,28 @@ async function startSystemdService(): Promise<boolean> {
  * SCHEDULE_DELAY_SEC later, outside the cgroup, and what this answers is
  * whether systemd accepted the timer, which nothing kills. What could make
  * the old command fail at once is still checked at once: the unit must be
- * loaded (not missing, masked or unreadable), or this is a no. A timer still
- * pending from an earlier request is a restart already on its way, so a yes.
+ * loaded (not missing, masked or unreadable) and this daemon must be its
+ * MainPID, or this is a no. A timer still pending from an earlier request is
+ * a restart already on its way, so a yes.
  */
-export function scheduleSystemdRestart(run: CommandRunner = runCommand): boolean {
+export function scheduleSystemdRestart(run: CommandRunner = runCommand, pid: number = process.pid): boolean {
+  return requestSystemdRestart(run, pid) === 'scheduled';
+}
+
+/**
+ * scheduleSystemdRestart with the reason for a no: `not_this_daemon` (the
+ * unit is not loaded or does not run this pid), `unknown` (systemd could not
+ * be asked), `failed` (systemd refused the timer). One systemctl show.
+ */
+export function requestSystemdRestart(run: CommandRunner = runCommand, pid: number = process.pid): 'scheduled' | 'not_this_daemon' | 'unknown' | 'failed' {
+  const state = keepaliveUnitState(run, pid);
+  if (state === 'other') return 'not_this_daemon';
+  if (state === 'unknown') return 'unknown';
   try {
-    // `KEY=value` rather than `--value`, which needs systemd 230 (as unitInfo).
-    const load = run(['systemctl', '--user', 'show', '--property=LoadState', 'jarvis.service']);
-    if (load.exitCode !== 0 || load.stdout.trim() !== 'LoadState=loaded') return false;
     const scheduled = scheduleUnitRestart({ name: 'jarvis.service' }, run);
-    return scheduled.exitCode === 0 || alreadyScheduled(scheduled);
+    return scheduled.exitCode === 0 || alreadyScheduled(scheduled) ? 'scheduled' : 'failed';
   } catch {
-    return false;
+    return 'failed';
   }
 }
 

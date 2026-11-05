@@ -707,7 +707,7 @@ describe("Q-19: one retry after a timeout, for approval cards only", () => {
 describe("#811: an approve or deny needs a sender the allow-list names", () => {
   const message = (text: string, senderAllowListed?: boolean): ChannelMessage => ({
     id: "m1", channel: "discord", from: "someone", text, timestamp: 0,
-    metadata: { channelId: "c1", userId: U1 },
+    metadata: { channelId: "c1", userId: U1, isDM: true },
     ...(senderAllowListed === undefined ? {} : { senderAllowListed }),
   });
   const setup = () => {
@@ -738,7 +738,7 @@ describe("#811: an approve or deny needs a sender the allow-list names", () => {
   test("a sender the list names decides as before", async () => {
     const { decisions, handle } = setup();
     expect(await handle(message("approve 1a2b3c4d", true))).toBe("decided");
-    expect(decisions).toEqual([["approve", "1a2b3c4d", "discord"]]);
+    expect(decisions).toEqual([["approve", "1a2b3c4d", "discord", "100000000000000001"]]);
   });
 
   test("ordinary chat from the same sender still works", async () => {
@@ -785,7 +785,7 @@ describe("#914: a forwarded approve or deny decides nothing", () => {
     for (const forwarded of [false, undefined]) {
       const { decisions, handle } = setup();
       expect(await handle(message("approve 1a2b3c4d", forwarded))).toBe("decided");
-      expect(decisions).toEqual([["approve", "1a2b3c4d", "telegram"]]);
+      expect(decisions).toEqual([["approve", "1a2b3c4d", "telegram", "42"]]);
     }
   });
 
@@ -991,7 +991,7 @@ describe("#852: parsePersistedRecipient", () => {
 describe("#860: a user removed from the allow-list cannot decide", () => {
   const approve = (userId: string | number, senderAllowListed: boolean): ChannelMessage => ({
     id: "m", channel: "telegram", from: "someone", text: "approve 1a2b3c4d", timestamp: 0,
-    metadata: { chatId: String(userId), userId },
+    metadata: { chatId: String(userId), userId, chatType: "private" },
     senderAllowListed,
   });
 
@@ -1008,7 +1008,7 @@ describe("#860: a user removed from the allow-list cannot decide", () => {
     config.channels.telegram.allowed_users = [];
     // An adapter still holding the old list says the sender is listed.
     expect(await handle(approve(42, true))).toBe(channelDecisionNeedsAllowList("telegram"));
-    expect(decisions).toEqual([["approve", "1a2b3c4d", "telegram"]]);
+    expect(decisions).toEqual([["approve", "1a2b3c4d", "telegram", "42"]]);
     // A sender the adapter saw as listed but the config does not name is
     // never the recipient either.
     expect(svc.getBroadcastRecipient("telegram")).toBeNull();
@@ -1079,7 +1079,7 @@ describe("#860: a user removed from the allow-list cannot decide", () => {
       send(42);
       await Bun.sleep(150);
       expect(replies).toEqual(["decided"]);
-      expect(decisions).toEqual([["approve", "1a2b3c4d", "telegram"]]);
+      expect(decisions).toEqual([["approve", "1a2b3c4d", "telegram", "42"]]);
 
       // The control, proving the restart applied the new list rather than
       // breaking the channel: the user it now names IS heard.
@@ -1087,8 +1087,8 @@ describe("#860: a user removed from the allow-list cannot decide", () => {
       await until(() => replies.length === 2);
       expect(replies[1]).toBe("decided");
       expect(decisions).toEqual([
-        ["approve", "1a2b3c4d", "telegram"],
-        ["approve", "1a2b3c4d", "telegram"],
+        ["approve", "1a2b3c4d", "telegram", "42"],
+        ["approve", "1a2b3c4d", "telegram", "7"],
       ]);
     } finally {
       await svc.stop();

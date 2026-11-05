@@ -124,81 +124,91 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          # The Actions cache is writable by any run on main, and Go reuses
-          # cached modules and build output without re-verifying them (#681).
-          cache: false
-          # Track sidecar/go.mod as the single source of the Go version.
-          go-version-file: sidecar/go.mod
-          cache-dependency-path: sidecar/go.sum
-
-      # Same toolchain set as test.yml's sidecar-build: GTK/WebKit for the
-      # native cgo build, mingw for the windows cross-build of the patched code.
-      - name: Install Linux UI libraries + mingw
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          # libx11-dev/libx11-xcb-dev/libxcb1-dev are named explicitly for
-          # `#cgo pkg-config: x11 x11-xcb xcb` in hotkeys_linux.go (#577). They
-          # arrive transitively through the GTK stack today, so this is a no-op
-          # on the current runner image -- which is the reason to name them:
-          # a cgo build that fails because an indirect dependency was dropped
-          # upstream is an awful thing to debug.
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config build-essential \
-            libx11-dev libx11-xcb-dev libxcb1-dev \
-            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
-          for d in /usr/lib/*/pkgconfig; do
-            [ -f "$d/webkit2gtk-4.1.pc" ] && sudo ln -sf "$d/webkit2gtk-4.1.pc" "$d/webkit2gtk-4.0.pc" || true
-            [ -f "$d/javascriptcoregtk-4.1.pc" ] && sudo ln -sf "$d/javascriptcoregtk-4.1.pc" "$d/javascriptcoregtk-4.0.pc" || true
-          done
-
-      - name: Re-vendor + re-apply jarvis.patch
+      # Everything that touches upstream code runs in sealed containers
+      # (#1255), in .github/scripts/webview-contained-build.sh: the re-vendor,
+      # the patch check, go vet/build/test and the mingw cross-build. On the
+      # host it had passwordless sudo, so with root it could read this job's
+      # Actions runtime token out of the runner process and write main-scoped
+      # cache entries at a key test.yml later restores (#1047).
+      #
+      # The toolchain image is built first, from no context, out of the
+      # golang image of sidecar/go.mod's go line by digest plus Debian
+      # packages (webview-toolchain.Dockerfile); no upstream code exists yet.
+      # Then two containers of it, each with no variable of this job (no -e),
+      # no docker socket, no root (--user, the runner's own uid, which owns
+      # the copy), no capabilities and no-new-privileges, and one writable
+      # mount: a copy of the checkout, without .git, in RUNNER_TEMP.
+      #   fetch  re-vendors and downloads the modules, with network, running
+      #          no module code;
+      #   build  runs the upstream code, with no network at all.
+      # Nothing on the host runs Go or a script of the copy; the steps after
+      # this one only read files out of it.
+      - name: Re-vendor, patch, build and test in a sealed container
         env:
           VERSION: ${{ needs.check.outputs.version }}
-        run: scripts/vendor-webview.sh "$VERSION"
-
-      - name: Verify the hidden-window patch landed
         run: |
           set -euo pipefail
-          h=sidecar/third_party/webview_go/libs/webview/include/webview.h
-          grep -q "PATCHED (jarvis)" "$h"
-          grep -q "ShowWindow(m_window, SW_HIDE)" "$h"
-
-      # ── Compatibility gate ─────────────────────────────────────
-      - name: Compat - build + vet + test (linux/amd64, cgo)
-        working-directory: sidecar
-        env:
-          CGO_ENABLED: "1"
-        run: |
-          set -euo pipefail
-          go vet ./...
-          go build ./...
-          go test ./...
-
-      - name: Compat - cross-build (windows/amd64, mingw) [patched win32 path]
-        working-directory: sidecar
-        env:
-          GOOS: windows
-          GOARCH: amd64
-          CGO_ENABLED: "1"
-          CC: x86_64-w64-mingw32-gcc
-          CXX: x86_64-w64-mingw32-g++
-        run: |
-          set -euo pipefail
-          export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
-          go build -o /tmp/jarvis-sidecar.exe .
+          work="$RUNNER_TEMP/webview-work"
+          rm -rf "$work"
+          mkdir -p "$work"
+          tar -C "$GITHUB_WORKSPACE" --exclude=./.git -cf - . | tar -C "$work" -xf -
+          docker build -t jarvis-webview-toolchain:local - < .github/scripts/webview-toolchain.Dockerfile
+          docker run --rm \
+            --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+            -v "$work:/work" \
+            -w /work \
+            jarvis-webview-toolchain:local \
+            /work/.github/scripts/webview-contained-build.sh fetch "$VERSION"
+          docker run --rm --network none \
+            --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+            -v "$work:/work" \
+            -w /work \
+            jarvis-webview-toolchain:local \
+            /work/.github/scripts/webview-contained-build.sh build
 
       # Only the paths the PR commits, as the add-paths below list them. The
       # vendor dir carries a .gitattributes, which upload-artifact leaves out
       # unless asked, and the PR would then delete it.
+      #
+      # The copy was writable by upstream code, so it is read as data and
+      # links are refused before anything is copied (#1255): a plain cp
+      # follows a link named on its command line, so a go.mod turned into a
+      # link would read whatever it points at on this host -- the runner's
+      # own files included -- into the artifact. publish refuses links too;
+      # this keeps the host from reading through one at all.
       - name: Collect the vendored tree
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/webview-bump"
           mkdir -p "$out"
-          cp -R sidecar/third_party/webview_go "$out/webview_go"
-          cp sidecar/go.mod sidecar/go.sum "$out/"
+          work="$RUNNER_TEMP/webview-work"
+          tree="$work/sidecar/third_party/webview_go"
+          # The path to the tree first, which walks nothing: no component of
+          # it a link, and the module files plain files.
+          if [ -L "$work/sidecar" ] || [ -L "$work/sidecar/third_party" ] || [ -L "$tree" ] || [ ! -d "$tree" ] \
+            || [ -L "$work/sidecar/go.mod" ] || [ ! -f "$work/sidecar/go.mod" ] \
+            || [ -L "$work/sidecar/go.sum" ] || [ ! -f "$work/sidecar/go.sum" ]; then
+            echo "::error::the vendored tree or a module file is not where a plain re-vendor puts it"
+            exit 1
+          fi
+          # Then bounded before anything walks the whole tree or copies it:
+          # the same limits publish holds the artifact to (#1049), so an
+          # oversized tree costs this job a stat walk, not a copy and an
+          # upload. head stops find early on a huge one.
+          if [ "$(find "$tree" -mindepth 1 | head -n 151 | wc -l)" -gt 150 ]; then
+            echo "::error::the vendored tree holds more than 150 entries"
+            exit 1
+          fi
+          if [ "$(du -cs --apparent-size --block-size=1 "$tree" "$work/sidecar/go.mod" "$work/sidecar/go.sum" | tail -n 1 | cut -f 1)" -gt 8388608 ]; then
+            echo "::error::the vendored tree and module files hold more than 8 MiB"
+            exit 1
+          fi
+          if [ -n "$(find "$tree" -not -type f -not -type d -print -quit)" ]; then
+            echo "::error::the vendored tree holds something other than files and directories"
+            exit 1
+          fi
+          cp -RP "$work/sidecar/third_party/webview_go" "$out/webview_go"
+          cp -P "$work/sidecar/go.mod" "$work/sidecar/go.sum" "$out/"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -22,6 +22,7 @@ import {
   ENGINE_ABSENT_MODULES,
   ENGINE_BUILD_PATHS,
   ENGINE_ESBUILD_CONFIG,
+  ensureStagingInstalled,
   findCachedBundle,
   runtimeResolvedModules,
   type EngineMetafile,
@@ -98,6 +99,9 @@ describe("the build refuses a bundle that resolves code at run time (#759)", () 
  * where the staging install (and so esbuild) is absent; CI's build opt-in has it.
  */
 const stagingEsbuild = resolve(ENGINE_BUILD_PATHS.STAGING_DIR, "node_modules/esbuild/lib/main.js");
+// JARVIS_TEST_ENGINE_BUILD=1 installs staging first, so CI runs these whatever
+// order the files load in rather than only after another suite built (#1256).
+if (process.env.JARVIS_TEST_ENGINE_BUILD === "1") await ensureStagingInstalled();
 describe.skipIf(!existsSync(stagingEsbuild))("an absent module throws at every require (#759)", () => {
   test("the second require of a compiled-out name throws MODULE_NOT_FOUND, not an empty object", async () => {
     const dir = scratch("stub");

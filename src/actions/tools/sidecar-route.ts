@@ -16,6 +16,7 @@ import {
   type ExecutionTarget,
 } from '../../util/execution-environment.ts';
 import { isNoLocalTools } from './local-tools-guard.ts';
+import { truncateHead } from '../../util/truncate.ts';
 import { ActionOutcomeError, type ActionFailure } from '../action-outcome.ts';
 import { SidecarRPCError } from '../../sidecar/rpc.ts';
 import { compareSemver, parseSemver } from '../../sidecar/compat.ts';
@@ -376,7 +377,7 @@ const MAX_REPLY_DESCRIPTION_CHARS = 1200;
 
 /** Cut a remote string to a budget, saying so rather than cutting silently. */
 function boundRemote(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max)}... (truncated, was ${s.length} chars)` : s;
+  return s.length > max ? `${truncateHead(s, max)}... (truncated, was ${s.length} chars)` : s;
 }
 
 /**

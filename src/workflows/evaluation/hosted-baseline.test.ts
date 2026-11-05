@@ -287,11 +287,20 @@ test('a baseline is sanitized and keeps identities, limits and verdicts', () => 
   const baseline = baselineReport([run()], new Date('2026-10-09T11:00:00Z')) as any;
   expect(baseline.status).toBe('completed');
   expect(baseline.runs[0].profile).toMatchObject({ id: 'starter', upstreamModel: 'terra-test', revisionSha256: resolveAdminEvidence(hosted).revisionSha256 });
-  expect(baseline.runs[0].authorization).toEqual({ approvedBy: 'Owner', approvedAt: '2026-10-08', validUntil: '2026-10-12', maxRequests: 10, maxTokens: 50_000 });
+  expect(baseline.runs[0].authorization).toEqual({ schemaVersion: 1, approvedBy: 'Owner', approvedAt: '2026-10-08', validUntil: '2026-10-12',
+    tasksets: null, maxRequests: 10, maxTokens: 50_000 });
   expect(baseline.groups['starter/baseline-v1/natural'].verdicts.sample).toBe('insufficient_sample');
   const text = JSON.stringify(baseline);
   for (const sentinel of ['SPEC-SENTINEL', 'PROMPT-SENTINEL', 'SYSTEM-SENTINEL', 'GRAPH-SENTINEL', 'RAW-SENTINEL', 'NOTE-SENTINEL',
     'URL-SENTINEL', 'ROUTING-SENTINEL', '/home/someone', 'inPerMtok']) expect(text).not.toContain(sentinel);
+});
+
+test('#1168: the baseline names the task sets its spend authorization covers', () => {
+  const own = run().manifest.taskset;
+  const tasksets = [{ version: own.version, sha256: own.sha256 }, { version: 'other-heldout-1', sha256: 'f'.repeat(64) }];
+  const authorization = { ...run().manifest.authorization, schemaVersion: 2, tasksets };
+  const baseline = baselineReport([run({ manifest: { authorization } })], new Date('2026-10-09T11:00:00Z')) as any;
+  expect(baseline.runs[0].authorization).toMatchObject({ schemaVersion: 2, tasksets });
 });
 
 test('synthetic, development, unpinned and mismatched runs are refused; an unrun hosted holdout is not_run', () => {

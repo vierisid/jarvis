@@ -136,7 +136,9 @@ import {
   getAutostartName,
   isAutostartInstalled,
   scheduleAutostartRestart,
+  requestSystemdRestart,
 } from '../cli/autostart.ts';
+import { readBoundedText } from '../util/bounded-body.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { runWithAdmission } from '../llm/background-budget.ts';
 import { getGoalApplication } from '../goals/application-service.ts';
@@ -256,6 +258,12 @@ export type ApiContext = {
  * not to police seconds.
  */
 const NOTIFY_MAX_SKEW_MS = 5 * 60 * 1000;
+/**
+ * The doorbell body is `{"source":...,"at":<ISO time>}` (usejarvis
+ * apps/user-api google-push.ts): 53 bytes today, 56 at the largest Date an ISO
+ * string can carry. 4 KiB leaves it room to grow a field or two.
+ */
+const NOTIFY_MAX_BODY_BYTES = 4096;
 
 // CORS headers — scoped to the dashboard origin, not wildcard
 let CORS: Record<string, string> = {
@@ -1775,6 +1783,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           manager: keepaliveSupported ? getAutostartName() : 'unsupported',
           installed,
           keepalive_supported: keepaliveSupported,
+          // Not narrowed by a systemctl probe: that is a blocking spawn on
+          // every status read. The POST answers 409 when the unit does not
+          // run this daemon.
           restart_supported: keepaliveSupported && installed,
         });
       },
@@ -1787,6 +1798,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         }
         if (!isAutostartInstalled()) {
           return error('JARVIS keepalive mode is not installed yet.', 400);
+        }
+        // An installed unit is not proof it runs THIS daemon: restarting it
+        // while the daemon was started by hand restarts nothing here.
+        if (process.platform === 'linux') {
+          const outcome = requestSystemdRestart();
+          if (outcome === 'not_this_daemon') {
+            return error('This JARVIS is not running under its keepalive service, so restarting the service would not restart it. Restart it the way it was started.', 409);
+          }
+          if (outcome !== 'scheduled') return error('Failed to schedule keepalive service restart.');
+          return json({ ok: true, message: `Restarting the JARVIS 24/7 ${getAutostartName()} service.` });
         }
         const scheduled = scheduleAutostartRestart();
         if (!scheduled) {
@@ -2917,7 +2938,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         // predates the bridge. Nothing can be verified, so nothing is accepted.
         if (!secret) return error('not configured', 404);
 
-        const raw = await req.text();
+        // Read under a cap while it streams in: this route is public and the
+        // signature can only be checked once the body is held (bounded-body.ts).
+        const read = await readBoundedText(req, NOTIFY_MAX_BODY_BYTES);
+        if (!read.ok) return read.reason === 'too_large' ? error('body too large', 413) : error('bad body', 400);
+        const raw = read.text;
         const { INSTANCE_SIGNATURE_HEADER, verifyWithSecret } = await import(
           '../integrations/google-signature.ts'
         );
@@ -3754,15 +3779,18 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
      */
     '/api/palette/pick': {
       POST: async (req: Request) => {
+        const body = (await req.json().catch(() => null)) as
+          | { kind?: unknown; key?: unknown; openInRoom?: unknown }
+          | null;
+        // A non-string key used to pass `!body.key` (a number, an object) and
+        // was then dropped silently downstream with a 204. Checked before the
+        // handler lookup, so a malformed pick is a 400 whatever the state.
+        if (!body || (body.kind !== 'room' && body.kind !== 'object') || typeof body.key !== 'string' || !body.key || body.key.length > 256) {
+          return error('kind ("room"|"object") and key (a string of at most 256 characters) are required', 400);
+        }
         const { getPaletteHandler } = await import('./palette-controller.ts');
         const h = getPaletteHandler();
         if (!h) return error('Palette handler not registered', 503);
-        const body = (await req.json().catch(() => null)) as
-          | { kind?: string; key?: string; openInRoom?: boolean }
-          | null;
-        if (!body || (body.kind !== 'room' && body.kind !== 'object') || !body.key) {
-          return error('kind ("room"|"object") and key are required', 400);
-        }
         try {
           await h.pick({ kind: body.kind, key: body.key, openInRoom: !!body.openInRoom });
         } catch (err) {

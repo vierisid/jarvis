@@ -5,7 +5,7 @@
  * is wired to it, so a vendor sync that dropped the patch would fail here.
  *
  * Needs the compiled piece. Like the other engine suites it skips without one,
- * and CI builds it in the engine step (`JARVIS_TEST_ENGINE_BUILD=1`).
+ * and CI builds it because its bun test run sets `JARVIS_TEST_ENGINE_BUILD=1`.
  */
 import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';

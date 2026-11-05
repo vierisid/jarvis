@@ -12,15 +12,18 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { bundleHash, findCachedBundle } from "../runner/engine-runtime/build";
+import { buildEngineBundle, bundleHash, findCachedBundle } from "../runner/engine-runtime/build";
 import { BundleIntegrityError } from "../runner/engine-runtime/bundle-integrity";
 import { closeWorkflowDb, initWorkflowDb } from "../db";
 import { CredentialResolver } from "../credentials/adapter";
 import { bootstrapWorkflowEngine } from "./engine-bootstrap";
 
 // A real bundle to publish as the shared root; the same gate the end-to-end
-// suites use, so this runs wherever they do.
-const cached = findCachedBundle({ sharedRoot: null });
+// suites use, so this runs wherever they do. JARVIS_TEST_ENGINE_BUILD=1 builds
+// one when none is cached, so CI runs this whatever order the files load in
+// (#1256).
+const cached = findCachedBundle({ sharedRoot: null })
+  ?? (process.env.JARVIS_TEST_ENGINE_BUILD === "1" ? await buildEngineBundle({ sharedRoot: null }) : null);
 
 const made: string[] = [];
 const savedPiecesDir = process.env.JARVIS_PIECES_DIR;

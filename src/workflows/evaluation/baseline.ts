@@ -128,7 +128,7 @@ export function baselineReport(runs: BaselineRun[], generatedAt = new Date()) {
         profile: { id: m.profile.id, version: m.profile.version, intendedModel: m.profile.intendedModel,
           ...pick(m.profileEvidence, ['planKey', 'planName', 'profileKey', 'slot', 'modelKey', 'upstreamModel', 'reasoningEffort',
             'proxyFallbacks', 'exportedAt', 'exportedBy', 'revisionSha256']) },
-        authorization: pick(m.authorization, ['approvedBy', 'approvedAt', 'validUntil', 'maxRequests', 'maxTokens']),
+        authorization: pick(m.authorization, ['schemaVersion', 'approvedBy', 'approvedAt', 'validUntil', 'tasksets', 'maxRequests', 'maxTokens']),
         limits: { maxRequests: m.maxRequests ?? null, maxTokens: m.maxTokens ?? null },
         transport: { attempts: run.rows.reduce((n, r) => n + r.transport.length, 0), refused: stops },
       };

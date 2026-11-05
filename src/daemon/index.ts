@@ -4778,8 +4778,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Note: toolRegistry set after startAll() below
 
     // Wire channel approval handler
-    channelService.setApprovalHandler((action, shortId, channel) =>
-      channelApprovalReply(action, shortId, channel, { approvalManager, deferredExecutor, wsService, auditTrail }));
+    channelService.setApprovalHandler((action, shortId, channel, deciderId) =>
+      channelApprovalReply(action, shortId, channel, { approvalManager, deferredExecutor, wsService, auditTrail }, deciderId));
 
     console.log(`[Daemon] Authority engine initialized (governed: ${authorityEngine.getConfig().governed_categories.join(', ')})`);
 
