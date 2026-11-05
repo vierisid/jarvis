@@ -3,7 +3,7 @@ import { truncateHead, truncateWithNote } from './truncate.ts';
 import { capTextBlocks } from '../llm/provider.ts';
 import { markUntrustedToolFailure } from '../roles/untrusted.ts';
 
-const EMOJI = '\u{1F600}'; // two code units: 😀
+const EMOJI = '\u{1F600}'; // two code units: \uD83D\uDE00
 
 /** Every lone surrogate in `s`; [] when it is well-formed. */
 const lone = (s: string) => (s.isWellFormed() ? [] : [...s].filter((c) => c.length === 1 && /[\uD800-\uDFFF]/.test(c)));
@@ -33,7 +33,7 @@ describe('truncateWithNote', () => {
   test('a lone surrogate the input carried is repaired in the kept head', () => {
     const out = truncateHead('x\uDE00' + 'y'.repeat(10), 5);
     expect(lone(out)).toEqual([]);
-    expect(out).toBe('x�yyy');
+    expect(out).toBe('x\ufffdyyy');
   });
 });
 

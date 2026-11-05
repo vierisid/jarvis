@@ -34,7 +34,7 @@ describe('readBoundedText', () => {
   });
 
   test('counts bytes, not UTF-16 code units, and decodes like req.text()', async () => {
-    const cjk = '漢'.repeat(400); // 400 code units, 1200 UTF-8 bytes
+    const cjk = '\u6f22'.repeat(400); // 400 code units, 1200 UTF-8 bytes
     expect(await readBoundedText(new Request('http://x/', { method: 'POST', body: cjk }), 1000))
       .toEqual({ ok: false, reason: 'too_large' });
     const ok = await readBoundedText(new Request('http://x/', { method: 'POST', body: cjk }), 1200);
