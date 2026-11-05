@@ -203,6 +203,83 @@ describe("dashboard audio format and lifecycle", () => {
     expect(cancels).toEqual([expect.objectContaining({ payload: { requestId: "voice-answer-1" }, id: "voice-answer-1" })]);
   });
 
+  // #1156: the daemon's own stop (a stop phrase, a cancel from another tab,
+  // a superseding turn) sends tts_end{cancelled}; the queued audio used to
+  // play out regardless.
+  test("a cancelled tts_end from the daemon stops the clip and drops what is queued", async () => {
+    await mount();
+    await beginTTS("chat-1");
+    await act(async () => { voice.handleTTSBinary(mp3()); voice.handleTTSBinary(mp3()); });
+    const before = decoded.length;
+    await act(async () => { voice.handleTTSEnd("chat-1", false, true); });
+    expect(contexts.every(ctx => ctx.state === "closed")).toBe(true);
+    expect(voice.voiceState).toBe("idle");
+    expect(voice.ttsAudioPlaying).toBe(false);
+    // The source that was playing ends: nothing queued plays after it.
+    await act(async () => { sources()[0]?.onended?.(); });
+    expect(decoded.length).toBe(before);
+  });
+
+  test("a cancelled tts_end after the clip was sent whole still stops it", async () => {
+    await mount();
+    await beginTTS("chat-1");
+    await act(async () => { voice.handleTTSBinary(mp3()); voice.handleTTSEnd("chat-1"); });
+    expect(voice.voiceState).toBe("speaking");
+    await act(async () => { voice.handleTTSEnd("chat-1", false, true); });
+    expect(contexts.every(ctx => ctx.state === "closed")).toBe(true);
+    expect(voice.voiceState).toBe("idle");
+  });
+
+  test("a cancelled tts_end naming no clip stops one already sent whole", async () => {
+    await mount();
+    await beginTTS("chat-1");
+    await act(async () => { voice.handleTTSEnd("chat-1"); });
+    await act(async () => { voice.handleTTSEnd(undefined, false, true); });
+    expect(contexts.every(ctx => ctx.state === "closed")).toBe(true);
+    expect(voice.voiceState).toBe("idle");
+  });
+
+  test("a cancelled tts_end for another clip leaves the playing one alone", async () => {
+    await mount();
+    await beginTTS("proactive-1");
+    // Sent whole and still playing: only its playing id names it now.
+    await act(async () => { voice.handleTTSEnd("proactive-1"); });
+    await act(async () => { voice.handleTTSEnd("chat-old", false, true); });
+    expect(voice.voiceState).toBe("speaking");
+    expect(contexts.some(ctx => ctx.state !== "closed")).toBe(true);
+  });
+
+  // #1156 review: the daemon speaks a held voice answer once the reply was
+  // sent whole, while its end still plays here; it must not be cut off.
+  test("a queued voice answer that starts after a reply was sent whole plays behind it", async () => {
+    await mount();
+    await beginTTS("chat-1");
+    await act(async () => { voice.handleTTSBinary(mp3()); voice.handleTTSEnd("chat-1"); });
+    const before = decoded.length;
+    await act(async () => { voice.handleTTSStart("r1", false, false, true); voice.handleTTSBinary(mp3()); });
+    expect(contexts.some(ctx => ctx.state !== "closed")).toBe(true);
+    // The reply's queued chunk still plays when the first one ends, then r1's.
+    await act(async () => { sources().at(-1)!.onended?.(); });
+    await act(async () => { sources().at(-1)!.onended?.(); });
+    expect(decoded.length).toBe(before + 2);
+  });
+
+  test("any other clip after one sent whole still supersedes it", async () => {
+    await mount();
+    await beginTTS("answer-1");
+    await act(async () => { voice.handleTTSBinary(mp3()); voice.handleTTSEnd("answer-1"); });
+    await act(async () => { voice.handleTTSStart("proactive-1"); });
+    expect(contexts[0]!.state).toBe("closed");
+  });
+
+  test("a clip still being sent is superseded by the next one", async () => {
+    await mount();
+    await beginTTS("chat-1");
+    await act(async () => { voice.handleTTSBinary(mp3()); });
+    await act(async () => { voice.handleTTSStart("chat-2"); });
+    expect(contexts[0]!.state).toBe("closed");
+  });
+
   test("once a clip has played out, a later cancel names nothing", async () => {
     await mount();
     await beginTTS("voice-answer-1");

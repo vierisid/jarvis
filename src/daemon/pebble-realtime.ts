@@ -23,6 +23,7 @@ import { hostedRealtimeIncluded } from './realtime-gate.ts';
 import type { LLMTool } from '../llm/provider.ts';
 import type { SidecarAudioChannel } from '../sidecar/manager.ts';
 import type { RealtimeTaint } from '../agents/realtime-taint.ts';
+import { recordTranscriptionSpend, type RealtimeBudgetTracker } from './realtime-budget.ts';
 
 export type PebbleRealtimeState = 'listening' | 'speaking' | 'thinking' | 'idle';
 export type PebbleRealtimeStatus = 'live' | 'closed' | 'error';
@@ -66,6 +67,13 @@ export type PebbleRealtimeDeps = {
    *  capture path rather than letting every press open a session that dies
    *  half a second later. `detail` is for the log, not the user. */
   onUnusableSession?: (sidecarId: string, detail: string) => void;
+  /**
+   * The monthly realtime spend ledger the dashboard's sessions use (#1156).
+   * A pebble session is refused once `monthly_budget_usd` is reached, and its
+   * minutes and input transcription are charged to it, except on the hosted
+   * path, where the proxy is the billing authority.
+   */
+  budget?: () => RealtimeBudgetTracker;
   /** Injectable voice-session factory (tests), mirroring the seam
    *  RealtimeVoiceSession itself offers. Defaults to the real session. */
   createSession?: (
@@ -82,6 +90,8 @@ type Entry = {
   startedAt: number;
   lastState?: PebbleRealtimeState; // dedupe textless set_state so repeats don't flood RPCs
   transcript: TranscriptAccumulator;
+  /** The proxy bills this session, not the local ledger. */
+  hosted: boolean;
   /** Set on the first transcript from either side. A session that closes
    *  without one carried no conversation, which is what separates "the server
    *  would not serve this" from "the conversation ended". */
@@ -202,6 +212,18 @@ export class PebbleRealtimeManager {
       this.pendingStarts.delete(sidecarId);
     }
 
+    // Monthly spend guard, as on the dashboard (WSService.tryStartRealtimeVoice).
+    // The pebble used to skip it, so its sessions ran on with the budget spent.
+    // Downgraded to one-shot capture for this connection, so the summon key
+    // still works; a reconnect or a settings reload re-advertises.
+    const hosted = resolved.provider === 'usejarvis_ai';
+    if (!hosted && resolved.monthlyBudgetUsd && this.deps.budget && !this.budgetAllows(resolved.monthlyBudgetUsd)) {
+      this.deps.onStatus?.(sidecarId, 'closed',
+        `Monthly realtime voice budget ($${resolved.monthlyBudgetUsd}) reached. Live voice is paused until next month or until you raise the limit in Settings > Voice.`);
+      this.deps.onUnusableSession?.(sidecarId, 'the monthly realtime budget is reached');
+      return;
+    }
+
     const transport = new PebbleAudioTransport({
       // Output audio → the sidecar's streaming PCM player. Prefer the dedicated
       // audio channel (raw binary, isolated from the bulk control connection so
@@ -239,6 +261,8 @@ export class PebbleRealtimeManager {
       tools: this.deps.tools(),
       instructions: this.deps.instructions(),
       executeToolCall: (name, args, taint) => this.deps.executeToolCall(sidecarId, name, args, resolved.blockedCategories, taint),
+      // Billed apart from the minutes; a hosted session is not charged here.
+      ...(this.deps.budget ? { onTranscriptionCostUsd: (usd: number) => recordTranscriptionSpend(this.deps.budget!, resolved.provider, usd) } : {}),
       onTranscript: (t) => {
         // Drive the pebble: assistant turn → speaking (with growing bubble
         // text), user turn → listening. foldTranscript accumulates the delta
@@ -275,7 +299,7 @@ export class PebbleRealtimeManager {
       this.stop(sidecarId);
     }, resolved.maxSessionMinutes * 60_000);
 
-    this.sessions.set(sidecarId, { session, transport, timeout, startedAt: Date.now(), transcript: newTranscriptAccumulator() });
+    this.sessions.set(sidecarId, { session, transport, timeout, startedAt: Date.now(), hosted, transcript: newTranscriptAccumulator() });
 
     try {
       // Resolves only once the socket is OPEN (comms/realtime.ts connect), so
@@ -291,6 +315,10 @@ export class PebbleRealtimeManager {
         this.deps.onState?.(sidecarId, 'listening');
       }
     } catch (err) {
+      // A stop() while it dialed (the summon key toggled off, the sidecar
+      // gone) closes the socket, which fails the dial. That is not a failed
+      // connect, and must not switch this sidecar off live voice (#1156).
+      if (this.sessions.get(sidecarId)?.session !== session) return;
       const detail = err instanceof Error ? err.message : String(err);
       this.deps.onStatus?.(sidecarId, 'error', `Realtime connect failed: ${detail}`);
       this.stop(sidecarId);
@@ -317,6 +345,17 @@ export class PebbleRealtimeManager {
     this.deps.onUnusableSession?.(sidecarId, detail);
   }
 
+  private budgetAllows(budgetUsd: number): boolean {
+    try {
+      return this.deps.budget!().canStart(budgetUsd);
+    } catch (err) {
+      // An unreadable ledger reads as empty (FileBudgetStore), so this is a
+      // broken tracker, not a full budget.
+      console.warn('[pebble-realtime] could not read the realtime budget:', err);
+      return true;
+    }
+  }
+
   /** Feed one mic PCM frame (s16/mono/24 kHz) from the sidecar into the session. */
   pushMicChunk(sidecarId: string, pcm: Buffer): void {
     this.sessions.get(sidecarId)?.transport.pushMicChunk(pcm);
@@ -334,6 +373,14 @@ export class PebbleRealtimeManager {
     if (!entry) return;
     this.sessions.delete(sidecarId);
     clearTimeout(entry.timeout);
+    // Charge its minutes, as the dashboard does on close (closeRealtimeVoice).
+    if (!entry.hosted && this.deps.budget) {
+      try {
+        this.deps.budget().recordSessionSeconds((Date.now() - entry.startedAt) / 1000);
+      } catch (err) {
+        console.warn('[pebble-realtime] failed to record realtime spend:', err);
+      }
+    }
     try { entry.session.close(); } catch {/* ignore */}
     try { entry.transport.stop(); } catch {/* ignore */}
     this.deps.onState?.(sidecarId, 'idle');

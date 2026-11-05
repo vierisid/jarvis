@@ -23,7 +23,7 @@ import { DailyRhythm } from './rhythm.ts';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, untrustedClose, unsafeUntrustedNoncesForTests } from '../roles/untrusted.ts';
 import { startWorkItemRun } from './workflow-bridge.ts';
 import { getRunRecovery } from '../workflows/runtime/recovery.ts';
-import { checkWorkResult, configureWorkItem, createPlannedWork, createWorkItem, decideWorkItem, getWorkItem, listWorkItems, setWorkBlocker } from './work-items.ts';
+import { checkWorkResult, configureWorkItem, createPlannedWork, createWorkItem, decideWorkItem, getWorkItem, listWorkItems, setWorkBlocker, WorkItemError } from './work-items.ts';
 
 let directory: string;
 let dbPath: string;
@@ -357,6 +357,14 @@ describe('Today work trace', () => {
     expect(JSON.parse(new TextDecoder().decode(child.stdout))).toEqual({ id, decisionId, runId: started.body.id, status: 'verified', checkId: today.body[0].resultCheck.id });
     expect((await call('/api/work-items/:id/result', 'POST', `/api/work-items/${id}/result`, { ...result, goalScore: 0.7 })).status).toBe(409);
     expect(goals.getProgressHistory(goal.id)).toHaveLength(1);
+  });
+
+  test('#1115: a plan action with no text left once made one line is dropped, not fatal to the check-in', async () => {
+    initDatabase(':memory:');
+    const plan = await new DailyRhythm({ chatTier: async () => ({ content: JSON.stringify({ daily_actions: ['\u0085', '\u200E', 'Real action'] }) }) }).runMorningPlan();
+    expect(plan.dailyActions).toEqual(['Real action']);
+    expect(plan.workItems).toHaveLength(1);
+    expect(() => createWorkItem({ title: '\u0001\u0085' })).toThrow(WorkItemError);
   });
 
   test('legacy strings and fallback rhythms have stable work IDs without inventing goal links', async () => {

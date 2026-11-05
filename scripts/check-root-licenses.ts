@@ -41,13 +41,8 @@ export interface KnownViolation {
 
 /** Denied installed packages awaiting an owner decision, by exact `name@version`. */
 export const KNOWN_ROOT_VIOLATIONS: Readonly<Record<string, KnownViolation>> = {
-  "edge-tts-universal@1.4.0": {
-    license: "AGPL-3.0",
-    reason:
-      "Edge TTS client used by src/comms/voice.ts. AGPL-3.0 is not allowed by the policy; replacing, " +
-      "isolating or accepting it is an open owner decision in #1166. Its dependency xml-escape@1.1.0 has a " +
-      "REVIEWED_LICENSES entry added for this tree: remove both together.",
-  },
+  // Empty: edge-tts-universal@1.4.0 (AGPL-3.0), the one entry, was replaced by
+  // the in-repo client src/comms/edge-tts-client.ts (#1166).
 };
 
 export interface RootLicenseCheck {

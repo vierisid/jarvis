@@ -284,26 +284,82 @@ func TestUpdaterRejectsConcurrentApply(t *testing.T) {
 
 // If the new binary does not come up, the previous one is put back and the
 // failure carries a command the user can run instead.
-func TestUpdaterRollsBackWhenHandOffFails(t *testing.T) {
-	mode := nativeMode(t)
-	live := filepath.Join(mode.InstallDir, filepath.Base(update.ExecutableIn(mode.InstallDir)))
-	f := newFakeUpdater(t, "0.9.7", mode)
-	f.published["0.10.0"] = true
-	f.OnAck("0.10.0")
-	f.waitSettled(t)
-
-	// A real Swap, so there is an .old to roll back to.
-	f.install = func(_ context.Context, _ *update.Release, dir string, _ func(string)) error {
-		staged := t.TempDir()
-		if err := os.WriteFile(filepath.Join(staged, filepath.Base(live)), []byte("new"), 0755); err != nil {
-			return err
-		}
-		return update.Swap(staged, dir)
-	}
-	if err := os.WriteFile(live, []byte("old"), 0755); err != nil {
+// writePayload puts a sidecar binary holding content where an install
+// directory (or a staged package) keeps it on this platform: a bare binary on
+// linux and windows, inside Jarvis.app on darwin. Before #1160 this test wrote
+// a bare binary everywhere, so on darwin the Swap found no Jarvis.app, the
+// install failed before any hand-off, and the test passed on that failure
+// without ever rolling anything back.
+func writePayload(t *testing.T, dir, content string) string {
+	t.Helper()
+	exe := update.ExecutableIn(dir)
+	if err := os.MkdirAll(filepath.Dir(exe), 0755); err != nil {
 		t.Fatal(err)
 	}
-	f.handOff = func(string) error { return errors.New("exited immediately") }
+	if err := os.WriteFile(exe, []byte(content), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return exe
+}
+
+// payloadEntryIn is the top-level entry Swap replaces in dir: the binary, or
+// Jarvis.app on darwin.
+func payloadEntryIn(t *testing.T, dir string) string {
+	t.Helper()
+	rel, err := filepath.Rel(dir, update.ExecutableIn(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
+}
+
+// handOffFailsAfterSwap sets up a native update whose payload really is
+// swapped in (so there is an .old) and whose hand-off then fails. It returns
+// the live executable and counters for the startup-rollback marker.
+func handOffFailsAfterSwap(t *testing.T, afterSwap func(dir string)) (f *fakeUpdater, live string, marks, clears *atomic.Int32) {
+	t.Helper()
+	mode := nativeMode(t)
+	f = newFakeUpdater(t, "0.9.7", mode)
+	f.published["0.10.0"] = true
+	// Every seam the attempt uses is set before OnAck, whose goroutines read
+	// them. And this process counts as proven already, so OnAck's
+	// cleanupPrevious does nothing: it would otherwise clear the marker (and
+	// remove the .old) concurrently with the attempt under test.
+	marks, clears = new(atomic.Int32), new(atomic.Int32)
+	f.markPending = func(string, string, string) error { marks.Add(1); return nil }
+	f.clearPending = func() { clears.Add(1) }
+	f.Updater.mu.Lock()
+	f.cleaned = true
+	f.Updater.mu.Unlock()
+
+	live = writePayload(t, mode.InstallDir, "old")
+	f.install = func(_ context.Context, _ *update.Release, dir string, _ func(string)) error {
+		staged := t.TempDir()
+		writePayload(t, staged, "new")
+		if err := update.Swap(staged, dir); err != nil {
+			return err
+		}
+		if afterSwap != nil {
+			afterSwap(dir)
+		}
+		return nil
+	}
+	f.handOff = func(exe string) error {
+		f.mu.Lock()
+		f.handedOff = append(f.handedOff, exe)
+		f.mu.Unlock()
+		if b, _ := os.ReadFile(exe); string(b) != "new" {
+			t.Errorf("handed off to %s holding %q, want the new payload", exe, b)
+		}
+		return errors.New("exited immediately")
+	}
+	f.OnAck("0.10.0")
+	f.waitSettled(t)
+	return f, live, marks, clears
+}
+
+func TestUpdaterRollsBackWhenHandOffFails(t *testing.T) {
+	f, live, marks, clears := handOffFailsAfterSwap(t, nil)
 
 	if err := f.Start(""); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -314,12 +370,59 @@ func TestUpdaterRollsBackWhenHandOffFails(t *testing.T) {
 	if o.State.Phase != updatePhaseFailed || o.State.ManualCommand == "" {
 		t.Fatalf("state = %+v, want failed with a manual command", o.State)
 	}
+	// The hand-off was reached: a failure earlier (an install that never
+	// swapped) would satisfy everything below without rolling anything back.
+	f.mu.Lock()
+	handed := len(f.handedOff)
+	f.mu.Unlock()
+	if handed != 1 {
+		t.Fatalf("hand-off attempted %d time(s), want 1: the rollback path was not exercised", handed)
+	}
 	if b, _ := os.ReadFile(live); string(b) != "old" {
 		t.Errorf("live copy after rollback = %q, want old", b)
+	}
+	// Rolled back: the marker no longer describes what is installed.
+	if marks.Load() != 1 || clears.Load() != 1 {
+		t.Errorf("pending marker written %d, cleared %d time(s); want 1 and 1", marks.Load(), clears.Load())
 	}
 	// The update stays on offer for another try.
 	if o.Version != "0.10.0" {
 		t.Errorf("offer after failure = %q, want 0.10.0", o.Version)
+	}
+}
+
+// #1160. When the rollback itself fails, the new version is still what is
+// installed, and the next start (autostart at login) runs it. The marker is
+// what lets that start count itself and restore the previous version after
+// three unproven starts (update_pending.go). Clearing it before the rollback,
+// as the undo used to, left a broken install with that safety net gone.
+func TestUpdaterKeepsThePendingMarkerWhenRollbackFails(t *testing.T) {
+	// The copy kept for rollback vanishes after the swap, so Rollback fails.
+	f, live, marks, clears := handOffFailsAfterSwap(t, func(dir string) {
+		if err := os.RemoveAll(filepath.Join(dir, payloadEntryIn(t, dir)) + ".old"); err != nil {
+			t.Fatal(err)
+		}
+		if update.HasOld(dir) {
+			t.Fatal("the rollback copy is still there")
+		}
+	})
+
+	if err := f.Start(""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitUntil(t, func() bool { return f.Offer().State.Phase == updatePhaseFailed })
+	o := f.Offer()
+	if !strings.Contains(o.State.Error, "restoring the previous version failed") {
+		t.Fatalf("error = %q, want the failed restore reported", o.State.Error)
+	}
+	if b, _ := os.ReadFile(live); string(b) != "new" {
+		t.Fatalf("live copy = %q, want the new payload still installed", b)
+	}
+	if marks.Load() != 1 {
+		t.Fatalf("pending marker written %d time(s), want 1", marks.Load())
+	}
+	if n := clears.Load(); n != 0 {
+		t.Errorf("pending marker cleared %d time(s) although the rollback failed: the next start cannot restore the previous version", n)
 	}
 }
 
@@ -537,6 +640,47 @@ func TestUpdaterCooldownAfterFailure(t *testing.T) {
 		t.Fatalf("retry after the cooldown: %v", err)
 	}
 	f.waitSettled(t)
+}
+
+// #1160. Start reads failedAt only while it holds the busy flag. A failing
+// attempt sets failedAt and only then clears the flag (finishApply), so a
+// Start that read failedAt BEFORE taking the flag could read the old value,
+// win the flag the moment the failure cleared it, and start a fresh download
+// with no cooldown at all. That interleaving has no seam to force it from
+// outside, so the invariant that rules it out is pinned instead: the one read
+// of failedAt (lastFailure) happens with the flag already held, and a refusal
+// hands the flag back, or no update could ever start again.
+func TestUpdaterStartReadsTheCooldownWhileHoldingTheBusyFlag(t *testing.T) {
+	f := newFakeUpdater(t, "0.9.7", update.Mode{Kind: update.ModePackageManager, PackageManager: "npm"})
+	f.published["0.10.0"] = true
+	f.cooldown = 15 * time.Second
+	f.OnAck("0.10.0")
+	f.waitSettled(t)
+
+	clock := time.Unix(1_000_000, 0)
+	f.now = func() time.Time { return clock }
+	var reads, unheld atomic.Int32
+	f.readFailedAt = func() time.Time {
+		reads.Add(1)
+		if !f.applying.Load() {
+			unheld.Add(1)
+		}
+		// Inside the cooldown of a failure that has just been recorded.
+		return clock.Add(-time.Second)
+	}
+
+	if err := f.Start(""); !errors.Is(err, ErrUpdateCooldown) {
+		t.Fatalf("Start inside the cooldown: %v, want ErrUpdateCooldown", err)
+	}
+	if n := reads.Load(); n != 1 {
+		t.Fatalf("Start read failedAt %d time(s), want once (through lastFailure)", n)
+	}
+	if n := unheld.Load(); n != 0 {
+		t.Errorf("Start read failedAt without holding the busy flag: a failure landing then is missed")
+	}
+	if f.applying.Load() {
+		t.Fatal("a refused Start kept the busy flag: every later Start would report busy")
+	}
 }
 
 // What the package manager installed is signature-checked before it runs.

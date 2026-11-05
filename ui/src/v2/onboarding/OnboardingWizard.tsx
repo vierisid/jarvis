@@ -1293,7 +1293,7 @@ export function OnboardingWizard({
       case "speak": {
         const opts: Array<["off" | "edge" | "elevenlabs", string, string, string]> = [
           ["off", "voloff", "No voice", "Text replies only. Lightest option."],
-          ["edge", "vol", "Edge TTS", "Free, clean, ships with Jarvis. Pick a voice below."],
+          ["edge", "vol", "Edge TTS", "Free, no key needed. Microsoft does not serve it in every region. Pick a voice below."],
           ["elevenlabs", "vol", "ElevenLabs", "Higher fidelity. Needs an ElevenLabs key."],
         ];
         return (

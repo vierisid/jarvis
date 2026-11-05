@@ -7,8 +7,6 @@
 
 import type { ServerWebSocket } from 'bun';
 import { withMemoryRecall } from '../vault/memory-use-context.ts';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { Service, ServiceStatus } from './services.ts';
 import type { AgentService } from './agent-service.ts';
@@ -50,12 +48,13 @@ import { tagRealtimePcm } from '../comms/realtime-frame.ts';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES, REALTIME_ROOM_KEYS, REALTIME_WINDOW_ACTIONS } from './realtime-nav-tools.ts';
 import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
-import { RealtimeBudgetTracker, recordTranscriptionSpend } from './realtime-budget.ts';
+import { RealtimeBudgetTracker, realtimeBudgetFile, recordTranscriptionSpend } from './realtime-budget.ts';
 import { hostedRealtimeIncluded } from './realtime-gate.ts';
 import { chatErrorPayload, recordChatFailure } from '../failures/chat.ts';
 import { failureEvidence } from '../failures/evidence.ts';
 import { failureText, projectFailure, type UserFailure } from '../failures/projection.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
+import { truncateText } from '../vault/commitment-text.ts';
 import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-context.ts';
@@ -65,12 +64,13 @@ import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
 import { isPresentationRoomAction, isRoomAction, roomActionCategories, type RoomActionCategory } from './room-actions.ts';
 import {
   classifierMustConfirmRoomAction, daemonTimeZone, describeSettledTime, realtimeRoomActionDecision, resolveHeldRoomAction,
-  roomActionAuditRow, roomActionExecuted, settleRoomActionTime, unrecognisedTimeZone, voiceTimeZone, type HeldRoomAction, type RoomActionAuditReason,
+  roomActionAuditRow, roomActionExecuted, settleRoomActionTime, settledTimePassed, visible, unrecognisedTimeZone, voiceTimeZone, type HeldRoomAction, type RoomActionAuditReason,
   type RoomActionOrigin, type RealtimeRoomActionContext, type RoomActionTargetLists, type VoiceClock, type VoiceClockUnavailable,
 } from './voice-room-action-gate.ts';
 import { getCronTimezone } from '../lib/cron-scheduler.ts';
 import { findContent } from '../vault/content-pipeline.ts';
-import { findEntities } from '../vault/entities.ts';
+import { listEntityNames } from '../vault/entities.ts';
+import { findFacts } from '../vault/facts.ts';
 import { roomActionArgs, roomActionEntityArg, roomActionTargetKind, roomActionTimeArg, SETTLED_TIME_ARG, withoutEntityPin } from './room-action-targets.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
@@ -82,6 +82,20 @@ import type { RealtimeTaint } from '../agents/realtime-taint.ts';
 const ROOM_ACTION_ID_MAX = 64;
 /** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
 const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
+
+/**
+ * One foreground chat turn on a dashboard socket. `ttsStreaming` is true from
+ * the turn's tts_start to its tts_end; `replied` once its reply is written,
+ * after which only its audio may still be playing (#1156). `settled` wakes
+ * whoever waits for it to let go of the socket (releaseActiveChat).
+ */
+type ActiveChat = {
+  requestId: string;
+  controller: AbortController;
+  ttsStreaming?: boolean;
+  replied?: boolean;
+  settled?: Array<() => void>;
+};
 
 type VoiceSession = {
   requestId: string;
@@ -421,6 +435,10 @@ const VOICE_AFFIRMATIVE_PHRASES = new Set([
 ]);
 
 /**
+ * Narrow on purpose: a yes this misses leaves a held action unconfirmed. The
+ * realtime taint's isBareAffirmation is wide on purpose (a yes it misses
+ * clears the taint); they are not one list.
+ *
  * Whether the person said a plain yes, read from the transcript itself rather
  * than from the classifier (#973): a held room action is held because the
  * classifier's reading is not trusted, so the same classifier may not be the
@@ -466,10 +484,14 @@ export class WebSocketService implements Service {
    * spoken voice answer can tell a turn that is talking from one that is only
    * open, e.g. blocked on an inline approval (#889).
    */
-  private activeChats = new Map<
-    ServerWebSocket<unknown>,
-    { requestId: string; controller: AbortController; ttsStreaming?: boolean }
-  >();
+  private activeChats = new Map<ServerWebSocket<unknown>, ActiveChat>();
+  /**
+   * The proactive speech each socket is playing (#1156), by the call that
+   * owns it. A reply or a voice answer that starts talking on the socket
+   * takes it over, and the proactive call stops sending there, so the two
+   * never interleave in one audio queue.
+   */
+  private proactiveVoice = new Map<ServerWebSocket<unknown>, symbol>();
   /**
    * The reply to a spoken yes or no being spoken on a socket (#889), at most
    * one each. Kept apart from activeChats: it may play while a chat turn is
@@ -738,6 +760,7 @@ export class WebSocketService implements Service {
     this.briefChat?.transport.detach(ws);
     this.cancelActiveChat(ws, 'disconnect', false);
     this.stopVoiceAnswer(ws, false);
+    this.proactiveVoice.delete(ws);
     // A room action this dashboard was asked about can no longer be
     // answered: say so now rather than after the wait (#965).
     this.roomActionResults.abandonAnswerer(ws);
@@ -1087,11 +1110,21 @@ export class WebSocketService implements Service {
     // the model, and the open mic would feed that clip back into the session.
     // Only the audio is skipped for it; a session merely left open (it lives
     // for max_session_minutes) still gets proactive voice.
-    const targets = [...this.wsServer.getClients()].filter((client) => !this.realtimeTurnActive(client));
+    // Nor to a socket already speaking a reply or a voice answer (#1156): its
+    // audio would interleave with theirs in the one playback queue.
+    const targets = [...this.wsServer.getClients()].filter((client) => !this.realtimeTurnActive(client)
+      && !this.activeChats.get(client)?.ttsStreaming && !this.voiceAnswers.has(client));
     if (targets.length === 0) {
-      console.log('[WSService] Proactive TTS skipped: every client is mid-turn in a realtime session');
+      console.log('[WSService] Proactive TTS skipped: every client is mid-turn or already speaking');
       return 0;
     }
+    // A reply or voice answer that starts talking on one of them takes it
+    // back (proactiveVoice); from then on nothing more is sent there.
+    const token = Symbol('proactive');
+    for (const client of targets) this.proactiveVoice.set(client, token);
+    const owned = () => targets.filter((client) => this.proactiveVoice.get(client) === token);
+    // Sockets sent any audio: a socket taken over first heard none (#1156 review).
+    const reached = new Set<ServerWebSocket<unknown>>();
 
     let chunkCount = 0;
     try {
@@ -1119,9 +1152,10 @@ export class WebSocketService implements Service {
           for await (const chunk of this.ttsProvider.synthesizeStream(sentence)) {
             checkpointExecution();
             // Send binary audio to the target clients
-            for (const ws of targets) {
+            for (const ws of owned()) {
               try {
                 ws.sendBinary(chunk);
+                reached.add(ws);
               } catch { /* client may have disconnected */ }
             }
             chunkCount++;
@@ -1138,21 +1172,23 @@ export class WebSocketService implements Service {
         payload: { requestId },
         timestamp: Date.now(),
       };
-      for (const client of targets) this.wsServer.sendToClient(client, endMsg);
+      for (const client of owned()) this.wsServer.sendToClient(client, endMsg);
       console.log(`[WSService] Proactive TTS complete: "${text.slice(0, 60)}..." (${chunkCount} chunks)`);
-      return chunkCount > 0 ? targets.length : 0;
+      return reached.size;
     } catch (err) {
       console.error('[WSService] Proactive TTS error:', err instanceof Error ? err.message : err);
       // Still send tts_end so client doesn't get stuck
       try {
-        for (const client of targets) {
+        for (const client of owned()) {
           this.wsServer.sendToClient(client, { type: 'tts_end', payload: {}, timestamp: Date.now() });
         }
       } catch { /* ignore */ }
       // Preserve cancellation in the delivery report after closing the UI's
       // audio session. A canceled stream must not be reported as delivered.
       checkpointExecution();
-      return chunkCount > 0 ? targets.length : 0;
+      return reached.size;
+    } finally {
+      for (const client of owned()) this.proactiveVoice.delete(client);
     }
   }
 
@@ -1270,8 +1306,9 @@ export class WebSocketService implements Service {
     const active = this.activeChats.get(ws);
     if (!active) return false;
     if (expectedRequestId && active.requestId !== expectedRequestId) return false;
-    this.activeChats.delete(ws);
+    // Aborted first, so whoever wakes on the release sees a cancelled turn.
     active.controller.abort(reason);
+    this.releaseActiveChat(ws, active);
     if (notify) {
       // Stream chunks are broadcast to every dashboard, and the aborted relay
       // never emits its `status: done` — so the terminal `cancelled` status
@@ -1327,7 +1364,9 @@ export class WebSocketService implements Service {
         const requestId = (msg.payload as { requestId?: string } | undefined)?.requestId;
         this.cancelActiveChat(ws, 'user', true, requestId);
         this.stopVoiceAnswer(ws, true, requestId);
-        this.realtimeSessions.get(ws)?.session.interrupt();
+        // The dashboard flushes the reply it was playing: the unheard rest is
+        // cut from the conversation, as on a barge-in (#1156).
+        this.realtimeSessions.get(ws)?.session.stopReply();
         return undefined;
       }
 
@@ -1647,7 +1686,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
     if (looksLikeCommitment(text)) {
       try {
-        const taskLabel = text.length > 80 ? text.slice(0, 77) + '...' : text;
+        // Cut on a code point boundary (#1115): `slice` split a surrogate
+        // pair, and createCommitment then stored a replacement character.
+        const taskLabel = truncateText(text, 80);
         taskCommitment = createCommitment(taskLabel, {
           assigned_to: 'jarvis',
           created_from: 'user',
@@ -1667,7 +1708,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       }
     }
 
-    const activeChat: { requestId: string; controller: AbortController; ttsStreaming?: boolean } | null = ws
+    const activeChat: ActiveChat | null = ws
       ? { requestId, controller: new AbortController() }
       : null;
     if (ws && activeChat) this.activeChats.set(ws, activeChat);
@@ -1758,9 +1799,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
             ttsStartSent = false; // prevent duplicate tts_end
             if (activeChat) activeChat.ttsStreaming = false;
             retainActiveForTTS = false;
-            if (activeChat && this.activeChats.get(ws) === activeChat) {
-              this.activeChats.delete(ws);
-            }
+            if (activeChat) this.releaseActiveChat(ws, activeChat);
           }
           return;
         }
@@ -1782,6 +1821,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           // into its audio, so it ends here (#889).
           if (activeChat) activeChat.ttsStreaming = true;
           this.stopVoiceAnswer(ws);
+          // Proactive speech on this socket stops here too (#1156).
+          this.proactiveVoice.delete(ws);
           this.wsServer.sendToClient(ws, {
             type: 'tts_start',
             payload: { requestId, containsWake: sentenceHasWake, containsStop: sentenceHasStop },
@@ -1891,11 +1932,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         this.broadcastNotificationToDashboard(failureText(projectFailure(failureEvidence(err),
           { label: 'Saving this reply to the conversation', sideEffects: false }), { detail: true }), 'normal');
       }
+      // Its reply is written; all that may be left is its audio (#1156).
+      if (activeChat) activeChat.replied = true;
 
       // Mark task as completed
       if (taskCommitment) {
         try {
-          const resultSummary = fullText.length > 200 ? fullText.slice(0, 197) + '...' : fullText;
+          const resultSummary = truncateText(fullText, 200);
           const updated = updateCommitmentStatus(taskCommitment.id, 'completed', resultSummary);
           if (updated) this.broadcastTaskUpdate(updated, 'updated');
         } catch (err) {
@@ -1971,10 +2014,22 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         timestamp: Date.now(),
       };
     } finally {
-      if (ws && activeChat && !retainActiveForTTS && this.activeChats.get(ws) === activeChat) {
-        this.activeChats.delete(ws);
-      }
+      if (ws && activeChat && !retainActiveForTTS) this.releaseActiveChat(ws, activeChat);
     }
+  }
+
+  /** End `chat`'s hold on `ws` if it still has it, and wake whoever waits on it. */
+  private releaseActiveChat(ws: ServerWebSocket<unknown>, chat: ActiveChat): void {
+    if (this.activeChats.get(ws) === chat) this.activeChats.delete(ws);
+    const waiters = chat.settled ?? [];
+    chat.settled = [];
+    for (const wake of waiters) wake();
+  }
+
+  /** Resolves once `chat` no longer holds its socket (finished, cancelled or superseded). */
+  private chatSettled(ws: ServerWebSocket<unknown>, chat: ActiveChat): Promise<void> {
+    if (this.activeChats.get(ws) !== chat) return Promise.resolve();
+    return new Promise((resolve) => { (chat.settled ??= []).push(resolve); });
   }
 
   /**
@@ -2150,10 +2205,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       onTranscript: (t) =>
         this.wsServer.sendToClient(ws, {
           type: 'realtime_transcript',
-          // The user line's item id, for a client that wants to order it
-          // before the reply it prompted, which can arrive first (#1007).
-          // The dashboard does not yet; it appends finals as they arrive.
-          payload: { role: t.role, text: t.text, final: t.final, ...(t.itemId ? { itemId: t.itemId } : {}) },
+          // The user line's item id, and on a reply the utterance it
+          // answers: the user's transcript can land after the reply it
+          // prompted (#1007), and the dashboard puts it back before it (#1156).
+          payload: { role: t.role, text: t.text, final: t.final, ...(t.itemId ? { itemId: t.itemId } : {}), ...(t.replyTo ? { replyTo: t.replyTo } : {}) },
           timestamp: Date.now(),
         }),
       onError: (err) => {
@@ -2204,7 +2259,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * The lists a held room action's item is found in (#1008), read from the
    * same sources the rooms load them from: /api/sites/projects, /api/content
    * and /api/vault/commitments, and the memory entities a remembered fact
-   * attaches to (#1023), as /api/vault/entities lists them.
+   * attaches to (#1023), by id and name only (#1118), the set
+   * /api/vault/entity-match matches the Memory room's lookups against.
    */
   protected roomActionTargetLists(): RoomActionTargetLists {
     return {
@@ -2214,7 +2270,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       },
       content: async () => findContent({}),
       task: async () => findCommitments({}),
-      entity: async () => findEntities({}),
+      // Names only (#1118): the match needs nothing else.
+      entity: async () => listEntityNames(),
+      // The default scope a remember_that writes in (#1167).
+      entityFacts: async (entityId, predicate) => findFacts({ subject_id: entityId, predicate, scope: '' })
+        .map((f) => ({ predicate: f.predicate, object: f.object, confirmed: f.verified_at !== null })),
     };
   }
 
@@ -2227,11 +2287,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * path writes none: a decision with no row is the gap this closes.
    */
   private auditRoomAction(
-    ra: { room: string; action: string },
+    ra: HeldRoomAction,
     origin: RoomActionOrigin,
     decision: AuthorityDecisionType,
     executed: boolean,
-    opts: { approvalId?: string | null; channel?: ResolutionChannel; reason: RoomActionAuditReason },
+    opts: { approvalId?: string | null; channel?: ResolutionChannel; reason: RoomActionAuditReason; ref?: string },
   ): void {
     try {
       const primary = this.agentService.getOrchestrator().getPrimary();
@@ -2251,9 +2311,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * run after `no_answer` is on record.
    */
   private auditLateRoomAnswer(
-    ra: { room: string; action: string },
+    ra: HeldRoomAction,
     origin: RoomActionOrigin,
-    opts: { approvalId?: string | null; channel?: ResolutionChannel },
+    // `ref` is the first row's (#1156), which this one repeats.
+    opts: { approvalId?: string | null; channel?: ResolutionChannel; ref?: string },
   ): LateRoomAnswer {
     return (answer, reported) => {
       console.warn(`[WSService] late answer for room action ${ra.room}/${ra.action}: ${answer}, after it was reported ${reported}`);
@@ -2395,13 +2456,15 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // the model is told that, not "Done" (#965).
         const ra = timed.ra;
         this.navigateForRoomAction(ra, ws, reqId);
+        // Links this row to a late answer's follow-up row (#1156).
+        const ref = crypto.randomUUID();
         // Shorter than the realtime session's wait for sibling tool results,
         // so a slow room cannot leave this result to be voiced on its own
         // (and the model, seeing none, calling the tool again).
         const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, {
-          client: ws, onLate: this.auditLateRoomAnswer(ra, 'realtime', {}),
+          client: ws, onLate: this.auditLateRoomAnswer(ra, 'realtime', { ref }),
         });
-        this.auditRoomAction(ra, 'realtime', 'allowed', roomActionExecuted(outcome), { reason: outcome });
+        this.auditRoomAction(ra, 'realtime', 'allowed', roomActionExecuted(outcome), { reason: outcome, ref });
         const reply = roomActionReply(ra, outcome);
         // The model, told only "didn't accept", may call again and raise a
         // second card (#1016).
@@ -2422,8 +2485,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   /** Lazily build the monthly spend tracker, persisted under the data dir. */
   private getRealtimeBudget(): RealtimeBudgetTracker {
     if (!this.realtimeBudget) {
-      const dataDir = this.agentService.getConfig().daemon?.data_dir || join(homedir(), '.jarvis');
-      this.realtimeBudget = RealtimeBudgetTracker.fromFile(join(dataDir, 'realtime-budget.json'));
+      this.realtimeBudget = RealtimeBudgetTracker.fromFile(realtimeBudgetFile(this.agentService.getConfig().daemon?.data_dir));
     }
     return this.realtimeBudget;
   }
@@ -2753,10 +2815,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     if (isVoiceStopCommand(trimmed)) {
       this.cancelActiveChat(ws, 'voice');
       this.stopVoiceAnswer(ws);
-      this.realtimeSessions.get(ws)?.session.interrupt();
+      this.realtimeSessions.get(ws)?.session.stopReply();
+      // Names no clip, so the dashboard flushes whatever still plays, a
+      // reply already sent whole included (#1156). `requestId` is the stop
+      // utterance's own, which no clip carries.
       this.wsServer.sendToClient(ws, {
         type: 'tts_end',
-        payload: { requestId, cancelled: true },
+        payload: { cancelled: true },
         id: requestId,
         timestamp: Date.now(),
       });
@@ -2943,8 +3008,16 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // every voice answer needs confidence >= 0.85.
     if (route === 'act' && intent.confirmation_response) {
       const decision = intent.confirmation_response;
+      // A confirmed clarifier or repeat-back runs its chat turn inside the
+      // resolve, so its "Approving" line is shown before that turn starts,
+      // not after its answer (#1156).
+      let announced = false;
+      const beforeChat = (label: string) => {
+        announced = true;
+        this.answerVoiceDecision(`Approving ${label}.`, requestId, ws, trimmed, { decided: true, spoken: '' });
+      };
       try {
-        const resolved = await this.resolveLatestPendingByVoice(decision, classifierConfidence, shownApprovalId, { transcript: trimmed, ws });
+        const resolved = await this.resolveLatestPendingByVoice(decision, classifierConfidence, shownApprovalId, { transcript: trimmed, ws, beforeChat });
         if (resolved) {
           if (resolved.kind === 'refused') {
             // In the thread, where the person reads replies: nothing was
@@ -2953,7 +3026,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           } else if (resolved.kind === 'gated') {
             // In the thread too, and saying which reason (#856).
             this.answerVoiceDecision(resolved.message, requestId, ws, trimmed, { decided: false });
-          } else if (!(resolved.kind === 'room_action' && decision === 'approve')) {
+          } else if (!(resolved.kind === 'room_action' && decision === 'approve') && !announced) {
             // A confirmed room action has already said what its room did.
             const verb = decision === 'approve' ? 'Approving' : 'Cancelling';
             // A confirmed clarifier or repeat-back has already run its chat
@@ -2964,9 +3037,20 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           this.broadcastThinkingEnd(requestId);
           return;
         }
+        // "Approving" is already shown: the held turn was handed to chat and
+        // failed there, so the yes is not run as a chat turn of its own.
+        if (announced) {
+          this.broadcastThinkingEnd(requestId);
+          return;
+        }
         // Nothing pending → fall through to chat below.
       } catch (err) {
         console.warn('[WSService] voice confirmation resolution failed:', err);
+      }
+      // "Approving" is shown: whatever failed after it, the yes is not a chat turn.
+      if (announced) {
+        this.broadcastThinkingEnd(requestId);
+        return;
       }
     }
 
@@ -3099,7 +3183,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     decision: 'approve' | 'cancel',
     confidence: number,
     shownApprovalId?: string | null,
-    speaker?: { transcript: string; ws: ServerWebSocket<unknown> },
+    speaker?: { transcript: string; ws: ServerWebSocket<unknown>; beforeChat?: (label: string) => void },
   ): Promise<
     | { kind: 'approval' | 'clarifier' | 'repeat_back' | 'room_action'; label: string }
     | { kind: 'gated'; label: string; reason: VoiceApprovalGateReason; message: string }
@@ -3212,15 +3296,17 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           return { kind: 'refused', message: refused };
         }
       }
+      const label = latest.transcript.length > 60
+        ? latest.transcript.slice(0, 60) + '...'
+        : latest.transcript;
+      const beforeChat = speaker?.beforeChat;
       const result = await this.resolveVoiceConfirmation(
         latest.id,
         decision === 'approve' ? 'confirm' : 'cancel',
         'voice',
+        beforeChat ? { beforeChat: () => beforeChat(label) } : {},
       );
       if (!result.ok) return null;
-      const label = latest.transcript.length > 60
-        ? latest.transcript.slice(0, 60) + '…'
-        : latest.transcript;
       return {
         kind: latest.roomAction ? 'room_action' : latest.kind === 'clarifier' ? 'clarifier' : 'repeat_back',
         label,
@@ -3243,7 +3329,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     speaker?: { transcript: string; ws: ServerWebSocket<unknown> },
   ): string | null {
     // The short form: the card shows the arguments, and this may be spoken.
-    const what = `${roomTitle(held.roomAction!.room)}: ${held.roomAction!.action.replace(/_/g, ' ')}`;
+    const what = roomActionWhat(held.roomAction!);
     if (speaker && speaker.ws !== held.ws) {
       return `I haven't done ${what}: it is waiting on another dashboard. Confirm it there.`;
     }
@@ -3279,6 +3365,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // How the person answered, for a held room action's audit row (#1009):
     // the REST endpoints are a card click, a spoken answer passes 'voice'.
     via: 'click' | 'voice' = 'click',
+    // Called just before a confirmed transcript goes to chat, so what says
+    // it was confirmed lands before the answer (#1156).
+    opts: { beforeChat?: () => void } = {},
   ): Promise<{ ok: boolean; reason?: string }> {
     const pending = this.pendingVoiceConfirmations.get(id);
     if (!pending) return { ok: false, reason: 'not-found' };
@@ -3318,6 +3407,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     }
 
     try {
+      opts.beforeChat?.();
       this.broadcastThinkingStart(pending.id);
       await this.handleChat({
         type: 'chat',
@@ -3574,9 +3664,17 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       this.broadcastAssistantAck(`I didn't do that: actions are suspended while the system is ${state}. Ask again once it is resumed.`, requestId);
       return;
     }
-    // A confirmed hold runs the time its card showed (#1022). Anything else
-    // has its time settled now, as a card would have it.
-    if (audit.origin !== 'confirm') {
+    // A confirmed hold runs the time its card showed (#1022), unless that
+    // time went by while the card waited (#1156). Anything else has its time
+    // settled now, as a card would have it.
+    if (audit.origin === 'confirm') {
+      const passed = settledTimePassed(ra, Date.now(), roomActionWhat(ra));
+      if (passed) {
+        this.auditRoomAction(ra, audit.origin, 'denied', false, { ...auditOpts, reason: 'time_passed' });
+        this.broadcastAssistantAck(passed, requestId);
+        return;
+      }
+    } else {
       const timed = settleRoomActionTime(ra, this.voiceClock(ws), roomActionWhat(ra));
       if (!timed.ok) {
         this.auditRoomAction(ra, audit.origin, 'denied', false, { ...auditOpts, reason: 'unsettled' });
@@ -3586,18 +3684,20 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       ra = timed.ra;
     }
     let outcome: RoomActionOutcome;
+    // Links this row to a late answer's follow-up row (#1156).
+    const sentOpts = { ...auditOpts, ref: crypto.randomUUID() };
     try {
       this.navigateForRoomAction(ra, ws, requestId);
       outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, {
-        client: ws, onLate: this.auditLateRoomAnswer(ra, audit.origin, auditOpts),
+        client: ws, onLate: this.auditLateRoomAnswer(ra, audit.origin, sentOpts),
       });
     } catch (err) {
       // The decision still gets its row, so a hold is never left open in it.
-      this.auditRoomAction(ra, audit.origin, 'allowed', false, { ...auditOpts, reason: 'failed' });
+      this.auditRoomAction(ra, audit.origin, 'allowed', false, { ...sentOpts, reason: 'failed' });
       throw err;
     }
     console.log(`[WSService] room action ${ra.room}/${ra.action}: ${outcome}`);
-    this.auditRoomAction(ra, audit.origin, 'allowed', roomActionExecuted(outcome), { ...auditOpts, reason: outcome });
+    this.auditRoomAction(ra, audit.origin, 'allowed', roomActionExecuted(outcome), { ...sentOpts, reason: outcome });
     this.broadcastAssistantAck(roomActionReply(ra, outcome), requestId);
   }
 
@@ -3635,7 +3735,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    *
    * Nothing is kept while a chat turn is open on the socket: that turn has
    * kept its user message and keeps its reply when it ends, and these two
-   * would land between them on reload.
+   * would land between them on reload. A turn whose reply is already kept
+   * and is only playing its audio is not open in that sense (#1156).
    *
    * `decided` is true when the answer approved or cancelled something; false
    * when it was refused or gated and decided nothing (see speakVoiceAnswer).
@@ -3650,7 +3751,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     const spoken = opts.spoken ?? spokenVoiceReply(text);
     this.broadcastAssistantAck(text, requestId);
     if (!spoken) return;
-    if (!this.activeChats.has(ws)) {
+    const open = this.activeChats.get(ws);
+    if (!open || open.replied) {
       try {
         // The person's own words first, so the reply answers something.
         const conversationId = getOrCreateConversation('websocket').id;
@@ -3683,6 +3785,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    *     answer's tts_end; such a refusal is shown only.
    * If the turn starts talking, it ends this answer (handleChat's tts_start).
    *
+   * A turn whose reply is written and only its audio is still playing is
+   * done deciding anything: this answer waits for that audio to be sent and
+   * is spoken after it (#1156), instead of being dropped.
+   *
    * The open turn is not necessarily the one waiting on the card answered: a
    * decided answer is then shown only even so. Telling the two apart needs the
    * turn that raised the card, which the request does not record.
@@ -3690,13 +3796,30 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * A stop, a cancel, a new chat turn, a disconnect or the next voice answer
    * ends it too.
    */
-  private async speakVoiceAnswer(text: string, requestId: string, ws: ServerWebSocket<unknown>, decided: boolean): Promise<void> {
+  private async speakVoiceAnswer(text: string, requestId: string, ws: ServerWebSocket<unknown>, decided: boolean, afterReply = false): Promise<void> {
     const tts = this.ttsProvider;
     if (!tts || !text.trim()) return;
+    // An earlier answer still playing is stale now, whether or not this one
+    // is spoken (#1156): a refusal kept talking under a later decision.
+    this.stopVoiceAnswer(ws);
     if (this.realtimeSessions.has(ws)) return;
     const open = this.activeChats.get(ws);
+    if (open?.replied) {
+      // Held here, so a stop, a cancel or the next answer ends it as usual.
+      const held = { requestId, controller: new AbortController(), started: false };
+      this.voiceAnswers.set(ws, held);
+      await this.chatSettled(ws, open);
+      if (this.voiceAnswers.get(ws) !== held || held.controller.signal.aborted) return;
+      this.voiceAnswers.delete(ws);
+      // The turn was stopped, not finished: the person asked for silence
+      // (the stop button and a barge-in cancel name the reply), so nothing
+      // queued behind it speaks either (#1156 review).
+      if (open.controller.signal.aborted) return;
+      // Whatever holds the socket now is judged afresh, and it is queued
+      // behind the reply's audio still playing on the dashboard.
+      return this.speakVoiceAnswer(text, requestId, ws, decided, true);
+    }
     if (open && (decided || open.ttsStreaming)) return;
-    this.stopVoiceAnswer(ws);
     const active = { requestId, controller: new AbortController(), started: false };
     this.voiceAnswers.set(ws, active);
     const aborted = () => active.controller.signal.aborted;
@@ -3705,9 +3828,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         if (aborted()) break;
         if (!active.started) {
           active.started = true;
+          // Proactive speech on this socket stops here (#1156).
+          this.proactiveVoice.delete(ws);
           this.wsServer.sendToClient(ws, {
             type: 'tts_start',
-            payload: { requestId, containsWake: containsWakePhrase(text), containsStop: containsStopPhrase(text) },
+            // `queue`: play after the reply's audio the dashboard still has,
+            // rather than cutting it off (#1156). Any other clip supersedes.
+            payload: { requestId, containsWake: containsWakePhrase(text), containsStop: containsStopPhrase(text), ...(afterReply ? { queue: true } : {}) },
             id: requestId,
             timestamp: Date.now(),
           });
@@ -3947,11 +4074,19 @@ export function describeRoomAction(ra: HeldRoomAction): string {
   const lands = entityName === null ? []
     : typeof ra.args?.id === 'string' && ra.args.id ? [`to the memory entity ${entityName}`]
       : ra.args?.new_entity === true ? [`to a new memory entity ${entityName} (a concept)`] : [];
+  // What it contests (#1167): said, because the card used to read as if the
+  // fact simply landed, and a new value for a single-valued predicate leaves
+  // the entity with two values, not one.
+  const conflict = ra.factConflict;
+  const contests = !conflict || entityName === null ? []
+    : [`(it differs from ${visible(JSON.stringify(conflict.value))} already saved; ${conflict.confirmed
+      ? 'that confirmed value stays, and this one is marked contested'
+      : 'the values are kept, marked contested'})`];
   // The instant it runs at, settled before the card (#1022).
   const settledAt = timed ? settledTime(ra) : null;
   const at = settledAt === null ? [] : [`at ${visible(settledAt)}`];
   const effects = roomActionCategories(ra.room, ra.action).map((c) => ROOM_ACTION_EFFECT[c]);
-  return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...lands, ...at, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
+  return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...lands, ...contests, ...at, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
 }
 
 /** The time `ra` was settled to (#1022), as the card names it, or null when it carries none. */
@@ -3961,16 +4096,6 @@ function settledTime(ra: HeldRoomAction): string | null {
   // zone was not settled here, and is not shown as if it were.
   if (typeof ts !== 'number' || !Number.isFinite(ts) || !ra.timeZone) return null;
   return describeSettledTime(ts, ra.timeZone);
-}
-
-/**
- * `s` with every control, format, line- or paragraph-separator character
- * written as a visible `\uXXXX` (#1008). JSON leaves bidi overrides and
- * zero-width characters as they are, and one in a value (from the classifier,
- * or a stored item name) could reorder or hide the rest of the card.
- */
-function visible(s: string): string {
-  return s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u${c.codePointAt(0)!.toString(16).padStart(4, '0')}`);
 }
 
 /** What each category a room action can reach means, for the repeat-back. */
@@ -3995,6 +4120,12 @@ export function roomActionReply(
   ra: HeldRoomAction,
   outcome: RoomActionOutcome,
 ): string {
+  // It repeats what the classifier or the model wrote (a title, a name, a
+  // tab), so bidi and zero-width characters are shown, not obeyed (#1156).
+  return visible(roomActionReplyText(ra, outcome));
+}
+
+function roomActionReplyText(ra: HeldRoomAction, outcome: RoomActionOutcome): string {
   const title = roomTitle(ra.room);
   if (ra.action === 'switch_tab') return tabSwitchReply(title, String(ra.args?.tab ?? '') || 'that tab', outcome);
   switch (outcome) {
@@ -4033,12 +4164,13 @@ export function roomActionRefusal(
       ? "Permissions can't be changed by voice. Use the Grants tab in Authority."
       : "Permissions can't be changed by voice. Tell the user to use the Grants tab in Authority.";
   }
-  return `${roomTitle(ra.room)} has no "${ra.action}" action, so I did not send it.`;
+  // Both are the classifier's or the model's words here (#1156).
+  return `${visible(roomTitle(ra.room))} has no "${visible(ra.action)}" action, so I did not send it.`;
 }
 
-/** How a refusal names a room action: "Tasks: create task". */
+/** How a refusal names a room action: "Tasks: create task". Escaped (#1156). */
 function roomActionWhat(ra: { room: string; action: string }): string {
-  return `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`;
+  return visible(`${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`);
 }
 
 function roomTitle(room: string): string {

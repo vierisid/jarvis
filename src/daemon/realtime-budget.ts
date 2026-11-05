@@ -14,7 +14,8 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 
 /** Approximate blended $/min for gpt-realtime-2 (matches the Voice settings hint). */
 export const ESTIMATED_USD_PER_MINUTE = 0.30;
@@ -92,6 +93,14 @@ class FileBudgetStore implements BudgetStore {
       console.warn('[RealtimeBudget] failed to persist spend:', err);
     }
   }
+}
+
+/**
+ * Where the realtime spend ledger lives: one file for every realtime surface
+ * (the dashboard's sessions and the pebble's, #1156), so one budget covers both.
+ */
+export function realtimeBudgetFile(dataDir: string | undefined): string {
+  return join(dataDir || join(homedir(), '.jarvis'), 'realtime-budget.json');
 }
 
 export class RealtimeBudgetTracker {

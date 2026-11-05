@@ -635,3 +635,199 @@ describe('RealtimeSession.connect after its error sink closed it', () => {
     expect(dialed).toBe(0);
   });
 });
+
+describe('#1156: barge-in truncates the unheard part of the reply', () => {
+  // 24 kHz s16 mono: 48 bytes a millisecond.
+  const audio = (ms: number) => Buffer.alloc(ms * 48).toString('base64');
+
+  function clocked() {
+    let t = 1_000;
+    const made = makeSession({ now: () => t });
+    return { ...made, advance: (ms: number) => { t += ms; } };
+  }
+
+  test('sends conversation.item.truncate at the time played so far', async () => {
+    const { socket, session, advance } = clocked();
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(3000) });
+    socket.emit({ type: 'response.done', response: {} });
+    advance(1200);
+    socket.sent = [];
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'user_2' });
+    const truncate = socket.sent.map((s) => JSON.parse(s)).find((m) => m.type === 'conversation.item.truncate');
+    expect(truncate).toMatchObject({ item_id: 'item_a', content_index: 0, audio_end_ms: 1200 });
+  });
+
+  test('two chunks of one item count as one item\'s audio', async () => {
+    const { socket, session, advance } = clocked();
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(500) });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(500) });
+    advance(400);
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'user_2' });
+    const truncate = socket.sent.map((s) => JSON.parse(s)).find((m) => m.type === 'conversation.item.truncate');
+    expect(truncate?.audio_end_ms).toBe(400);
+  });
+
+  test('a response still generating is cut at the end of the audio that arrived, never past it', async () => {
+    const { socket, session, advance } = clocked();
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(500) });
+    advance(2000);
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'user_2' });
+    const truncate = socket.sent.map((s) => JSON.parse(s)).find((m) => m.type === 'conversation.item.truncate');
+    expect(truncate).toMatchObject({ item_id: 'item_a', audio_end_ms: 500 });
+  });
+
+  test('an item queued behind another starts when that one ends, and each is cut where playback is', async () => {
+    const { socket, session, advance } = clocked();
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(1000) });
+    socket.emit({ type: 'response.done', response: {} });
+    advance(100);
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_b', content_index: 0, delta: audio(2000) });
+    socket.emit({ type: 'response.done', response: {} });
+    // 600ms in: item_a (0..1000) is playing, item_b (1000..3000) has not begun.
+    advance(500);
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'user_2' });
+    const cuts = socket.sent.map((s) => JSON.parse(s)).filter((m) => m.type === 'conversation.item.truncate')
+      .map((m) => [m.item_id, m.audio_end_ms]);
+    expect(cuts).toEqual([['item_a', 600], ['item_b', 0]]);
+  });
+
+  test('a stall inside one item keeps the cut relative to the item (#1156 review)', async () => {
+    const { socket, session, advance } = clocked();
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(500) });
+    advance(700); // all 500ms played; generation stalls
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(500) });
+    advance(200);
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'user_2' });
+    const cuts = socket.sent.map((s) => JSON.parse(s)).filter((m) => m.type === 'conversation.item.truncate');
+    expect(cuts.map((m) => [m.item_id, m.audio_end_ms])).toEqual([['item_a', 700]]);
+  });
+
+  test('a stop cuts the unheard rest and starts the next reply\'s clock afresh (#1156 review)', async () => {
+    const { socket, session, advance } = clocked();
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(5000) });
+    socket.emit({ type: 'response.done', response: {} });
+    advance(1000);
+    socket.sent = [];
+    session.stopReply();
+    const cut = socket.sent.map((s) => JSON.parse(s)).find((m) => m.type === 'conversation.item.truncate');
+    expect(cut).toMatchObject({ item_id: 'item_a', audio_end_ms: 1000 });
+    expect(socket.sentTypes()).toContain('response.cancel');
+    // The client flushed item_a: the next reply plays from its arrival.
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_b', content_index: 0, delta: audio(3000) });
+    advance(400);
+    socket.sent = [];
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'user_3' });
+    const cuts = socket.sent.map((s) => JSON.parse(s)).filter((m) => m.type === 'conversation.item.truncate');
+    expect(cuts.map((m) => [m.item_id, m.audio_end_ms])).toEqual([['item_b', 400]]);
+  });
+
+  test('a stop during a response ignores its in-flight audio, so a later barge-in cuts nothing heard (#1156 review)', async () => {
+    const { socket, session, advance, sentAudio } = clocked();
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(2000) });
+    advance(1000);
+    session.stopReply();
+    const played = sentAudio.length;
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(500) });
+    expect(sentAudio.length).toBe(played);
+    advance(300);
+    socket.sent = [];
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'user_2' });
+    expect(socket.sentTypes()).not.toContain('conversation.item.truncate');
+    expect(socket.sentTypes()).not.toContain('response.cancel');
+  });
+
+  test('an earlier item all played is not cut because a new response has started', async () => {
+    const { socket, session, advance } = clocked();
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(300) });
+    socket.emit({ type: 'response.done', response: {} });
+    advance(500);
+    socket.emit({ type: 'response.created' }); // no audio from it yet
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'user_2' });
+    expect(socket.sentTypes()).not.toContain('conversation.item.truncate');
+  });
+
+  test('a hosted session sends no truncate until the proxy is known to relay it', async () => {
+    let t = 1_000;
+    const { socket, session } = makeSession({ now: () => t, resolved: { ...RESOLVED, provider: 'usejarvis_ai' } });
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(3000) });
+    t += 500;
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'user_2' });
+    expect(socket.sentTypes()).not.toContain('conversation.item.truncate');
+    expect(socket.sentTypes()).toContain('response.cancel');
+  });
+
+  test('sends nothing once all of it can have played', async () => {
+    const { socket, session, advance } = clocked();
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(800) });
+    socket.emit({ type: 'response.done', response: {} });
+    advance(800);
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'user_2' });
+    expect(socket.sentTypes()).not.toContain('conversation.item.truncate');
+  });
+
+  test('a refused truncate does not end the session; other errors still do', async () => {
+    const { socket, session, advance } = clocked();
+    const errs: string[] = [];
+    session.onError((e) => errs.push(e));
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'item_a', content_index: 0, delta: audio(3000) });
+    advance(100);
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'user_2' });
+    const truncate = socket.sent.map((s) => JSON.parse(s)).find((m) => m.type === 'conversation.item.truncate');
+    socket.emit({ type: 'error', error: { message: 'audio_end_ms is too large', event_id: truncate.event_id } });
+    expect(errs).toEqual([]);
+    socket.emit({ type: 'error', error: { message: 'boom', event_id: 'someone_else' } });
+    expect(errs).toEqual(['boom']);
+  });
+});
+
+describe('#1156: an assistant transcript names the utterance it answers', () => {
+  test('replyTo is the utterance begun before the reply started', async () => {
+    const { socket, session } = makeSession();
+    const got: Array<Record<string, unknown>> = [];
+    session.onTranscript((t) => got.push(t));
+    await session.connect();
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'user_1' });
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio_transcript.done', transcript: 'Sure.' });
+    // The user's own line lands after the reply to it.
+    socket.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'user_1', transcript: 'Hi there' });
+    expect(got).toEqual([
+      { role: 'assistant', text: 'Sure.', final: true, replyTo: 'user_1' },
+      { role: 'user', text: 'Hi there', final: true, itemId: 'user_1' },
+    ]);
+  });
+
+  test('a reply with no utterance before it carries none', async () => {
+    const { socket, session } = makeSession();
+    const got: Array<Record<string, unknown>> = [];
+    session.onTranscript((t) => got.push(t));
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_audio_transcript.done', transcript: 'Hello.' });
+    expect(got).toEqual([{ role: 'assistant', text: 'Hello.', final: true }]);
+  });
+});

@@ -7,7 +7,7 @@ import { appendUserProfileFact, clearUserProfile, getUserProfile, saveUserProfil
 import { getSetting, setSetting } from '../../vault/settings.ts';
 import { USER_PROFILE_SETTING_KEY } from '../../user/profile.ts';
 import { createCanonicalInterviewProfileStore, createInterviewProfileProvider } from './index.ts';
-import { factId, receiptKey } from './provider.ts';
+import { factId, receiptKey, RECEIPT_KEY_PREFIX, RECEIPT_RETENTION } from './provider.ts';
 import type { CommitInput, Store, Transaction } from './types.ts';
 
 const owner = { actorId: 'owner', projectId: 'project' };
@@ -28,6 +28,25 @@ beforeEach(() => {
 afterEach(() => { closeDb(); rmSync(dir, { recursive: true, force: true }); });
 
 describe('canonical atomic acknowledgements', () => {
+  test('keeps only the newest receipts; a pending replay after pruning still reconciles (#1070)', async () => {
+    setSetting('unrelated.setting', '1');
+    const total = RECEIPT_RETENTION + 8;
+    for (let i = 0; i < total; i++) {
+      await provider().commit(input({ attemptId: `attempt-${i}`, turnId: `turn-${i}`, clientRequestId: `request-${i}`,
+        facts: [{ theme: 'work', summary: `Fact ${i}` }] }));
+    }
+    const keys = (getDb().query('SELECT key FROM settings WHERE substr(key, 1, ?) = ?').all(RECEIPT_KEY_PREFIX.length, RECEIPT_KEY_PREFIX) as { key: string }[]).map(r => r.key);
+    expect(keys).toHaveLength(RECEIPT_RETENTION);
+    for (let i = 0; i < total; i++) expect(keys.includes(receiptKey(owner, `attempt-${i}`))).toBe(i >= total - RECEIPT_RETENTION);
+    // Retention never touches facts or other settings.
+    expect(getUserProfile()?.interview_facts).toHaveLength(total); expect(getSetting('unrelated.setting')).toBe('1');
+    // The newest attempt is the one B04 can still be retrying: its receipt is still read, so a
+    // reused attempt with different content conflicts instead of writing again.
+    const last = total - 1;
+    await expect(provider().commit(input({ attemptId: `attempt-${last}`, turnId: `turn-${last}`, clientRequestId: `request-${last}`,
+      facts: [{ theme: 'work', summary: 'Different' }] }))).rejects.toThrow('conflict');
+    expect(getUserProfile()?.interview_facts).toHaveLength(total);
+  });
   test('default-off and missing storage have no effects', async () => {
     await expect(createInterviewProfileProvider({ store }).commit(input())).rejects.toThrow('unavailable');
     await expect(createInterviewProfileProvider({ enabled: true }).commit(input())).rejects.toThrow('unavailable');

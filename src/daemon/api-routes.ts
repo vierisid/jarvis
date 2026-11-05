@@ -41,7 +41,8 @@ import { desktopEnabledFromSection } from '../actions/tools/desktop-guard.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { authorityConfigPatchError, isActionCategory } from '../authority/config-validation.ts';
 
-import { findEntities, getEntity, searchEntitiesByName, createEntity } from '../vault/entities.ts';
+import { findEntities, getEntity, searchEntitiesByName, createEntity, listEntityNames } from '../vault/entities.ts';
+import { matchEntityByName } from './room-action-targets.ts';
 import { findFacts, createFact, FactInputError } from '../vault/facts.ts';
 import { createFactDecisionRoutes } from '../vault/fact-routes.ts';
 import { findRelationships, getEntityRelationships, createRelationship } from '../vault/relationships.ts';
@@ -51,13 +52,14 @@ import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-versi
 const VALID_ENTITY_TYPES = new Set(['person', 'project', 'tool', 'place', 'concept', 'event']);
 import { getDb } from '../vault/schema.ts';
 import { findCommitments, getUpcoming, createCommitment, getCommitment, patchCommitment, reorderCommitments } from '../vault/commitments.ts';
-import { COMMITMENT_CREATE_MAX_BODY_BYTES, readBoundedJson, validateCommitmentCreate, validateCommitmentPatch } from './commitment-patch.ts';
+import { COMMITMENT_CREATE_MAX_BODY_BYTES, COMMITMENT_PATCH_MAX_BODY_BYTES, readBoundedJson, validateCommitmentCreate, validateCommitmentPatch } from './commitment-patch.ts';
 import { getOrCreateConversation, getMessages, getRecentConversation } from '../vault/conversations.ts';
 import { telegramAllowList, discordAllowList, channelOwnerId } from '../comms/channels/allow-list.ts';
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
 import { listAgentActivity, countAgentActivity } from '../vault/agent-activity.ts';
 import { getPersonality } from '../personality/model.ts';
-import { clearUserProfile, getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
+import { getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
+import { forgetUserProfile } from '../onboarding-next/runtime/forget.ts';
 import {
   USER_PROFILE_QUESTIONS,
   countAnsweredUserProfileQuestions,
@@ -154,6 +156,7 @@ import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import type { BriefConversationProvider } from '../brief/conversations.ts';
 import { defaultConversationWorkspace } from '../vault/conversation-schema.ts';
+import { edgeTtsStatus } from '../comms/edge-tts-client.ts';
 
 export type ApiContext = {
   /** Optional B11 runtime. Default-off; legacy routes remain independent. */
@@ -507,9 +510,35 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!body.type || !VALID_ENTITY_TYPES.has(body.type)) {
             return error(`type must be one of: ${Array.from(VALID_ENTITY_TYPES).join(', ')}`, 400);
           }
-          const entity = createEntity(body.type, body.name, body.properties, body.source ?? 'dashboard');
+          // User-entered labels only, as for facts (#1113): an entity labelled
+          // `user_profile` is read as the owner's profile entity (the newest
+          // one wins), and the automatic labels are how memory tells what it
+          // inferred from what it was told.
+          const source = body.source ?? 'dashboard';
+          if (typeof source !== 'string' || !API_FACT_SOURCES.has(source)) {
+            return error(`source must be one of: ${[...API_FACT_SOURCES].join(', ')}`, 400);
+          }
+          const entity = createEntity(body.type, body.name, body.properties, source);
           return json(entity);
         } catch (err) { return errorFromException(err); }
+      },
+    },
+
+    // The entity a name means, matched here rather than in the client (#1118):
+    // the Memory room's remember_that fetched the whole entity list, every
+    // property included, to compare one name. The same matcher the daemon
+    // settles a held remember_that with.
+    '/api/vault/entity-match': {
+      GET: (req: Request) => {
+        const name = getSearchParams(req).get('name') ?? '';
+        if (!name.trim()) return error('name is required', 400);
+        // The bound a task's text has (COMMITMENT_WHAT_MAX_CHARS); a spoken
+        // or typed subject is far shorter, and the match costs its length
+        // times the number of entities.
+        if (name.length > 500) return error('name must be at most 500 characters', 400);
+        const match = matchEntityByName(listEntityNames(), name);
+        if (match && 'ambiguous' in match) return json({ entity: null, ambiguous: match.ambiguous });
+        return json({ entity: match ? match.entity : null });
       },
     },
 
@@ -754,13 +783,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       // Status, priority or assigned_to, alone or together, and nothing else
       // (#1020): the Tasks room sends priority and assigned_to on their own.
       PATCH: async (req: Request & { params: { id: string } }) => {
-        let body: unknown;
-        try {
-          body = await req.json();
-        } catch {
-          return error('Invalid request body');
-        }
-        const parsed = validateCommitmentPatch(body);
+        // Read no further than a valid patch can be (#1115).
+        const read = await readBoundedJson(req, COMMITMENT_PATCH_MAX_BODY_BYTES);
+        if (!read.ok) return error(read.error, read.status);
+        const parsed = validateCommitmentPatch(read.body);
         if (!parsed.ok) return error(parsed.error);
         let updated: ReturnType<typeof patchCommitment>;
         try {
@@ -805,7 +831,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const channel = params.get('channel') ?? 'websocket';
 
         if (channel === 'all') {
-          // Return the most recent conversation per channel
+          // Return the most recent conversation per channel: the channel's
+          // own (#1123, getRecentConversation), so for telegram and discord,
+          // whose conversations each belong to a sender since #884, usually
+          // none. Sender threads are listed by /api/vault/conversations.
           const channels = ['websocket', 'telegram', 'discord'];
           const results: Record<string, unknown> = {};
           for (const ch of channels) {
@@ -1186,7 +1215,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/user-profile/clear': {
       POST: () => {
-        clearUserProfile();
+        forgetUserProfile();
         const { profile, revision } = readEditableProfile();
         return json({ ok: true, message: 'User profile cleared.', profile, revision,
           questions: USER_PROFILE_QUESTIONS, answered_count: 0,
@@ -1269,7 +1298,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           }
           if (scope === 'all' || scope === 'profile') {
             o.setup_skipped_profile = false;
-            clearUserProfile();
+            forgetUserProfile();
             cleared.push('profile');
           }
           if (scope === 'all' || scope === 'tutorial') {
@@ -3326,6 +3355,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           enabled: tts?.enabled ?? false,
           provider: effective?.provider ?? tts?.provider ?? 'edge',
           usejarvis_available: hasUsejarvisAi(ctx.config),
+          // Microsoft's service refused this install's last Edge request
+          // (#1166): Settings says so instead of leaving voice silent.
+          edge_unavailable: edgeTtsStatus().unavailable,
           voice: tts?.voice ?? 'en-US-AriaNeural',
           rate: tts?.rate ?? '+0%',
           volume: tts?.volume ?? '+0%',

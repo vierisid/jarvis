@@ -8,6 +8,7 @@ import { createEntity, findEntities } from './entities.ts';
 import { createFact, FACT_TEXT_LIMIT } from './facts.ts';
 import { createRelationship } from './relationships.ts';
 import { createCommitment } from './commitments.ts';
+import { oneLineTaskText } from './commitment-text.ts';
 import { USER_PROFILE_VAULT_SOURCE } from './user-profile.ts';
 import { wrapUntrusted } from '../roles/untrusted.ts';
 
@@ -313,6 +314,9 @@ export async function extractAndStore(
     // Store commitments
     for (const commitmentData of extraction.commitments) {
       const { what, when_due, priority } = commitmentData;
+      // One empty item is skipped rather than ending the loop (#1115):
+      // createCommitment refuses a task with no text left in it.
+      if (typeof what !== 'string' || oneLineTaskText(what) === null) continue;
 
       const whenDueTimestamp = parseDate(when_due);
 
