@@ -109,6 +109,9 @@ type Updater struct {
 	schedule     func(d time.Duration, f func()) func()
 	now          func() time.Time
 	cooldown     time.Duration
+	// readFailedAt, when set, replaces lastFailure's read of failedAt: tests
+	// use it to see when Start reads the cooldown (#1160).
+	readFailedAt func() time.Time
 
 	// Hooks, set by the client / platform UI. All optional.
 	onChange     func(UpdateOffer) // tray item, open prompt
@@ -546,7 +549,6 @@ func (u *Updater) Start(version string) error {
 	u.mu.Lock()
 	target := u.available
 	latest := u.latest
-	sinceFailure := u.now().Sub(u.failedAt)
 	u.mu.Unlock()
 	// Not confirmed yet (the registry check is still running, or found
 	// nothing an hour ago and has not retried): check again right now rather
@@ -562,11 +564,25 @@ func (u *Updater) Start(version string) error {
 	if version != "" && version != target {
 		return fmt.Errorf("requested sidecar %s, but the available update is %s", version, target)
 	}
-	if sinceFailure < u.cooldown {
-		return ErrUpdateCooldown
-	}
 	if !u.applying.CompareAndSwap(false, true) {
 		return ErrUpdateBusy
+	}
+	// The cooldown is read only once the busy flag is ours (#1160). A failing
+	// attempt records failedAt before it clears the flag (finishApply), so
+	// from here its failure is always visible. Read before the flag was taken,
+	// as it used to be, a Start racing that failure could see the old
+	// failedAt, then win the flag the moment it was cleared and begin a new
+	// download with no cooldown at all. The clock is read outside u.mu (see
+	// failAttempt).
+	//
+	// The claim also means a refused Start holds the flag for the moment this
+	// check takes: a registry check landing then skips its state update, and
+	// a concurrent Start gets ErrUpdateBusy. Both are harmless inside a
+	// cooldown.
+	now := u.now()
+	if now.Sub(u.lastFailure()) < u.cooldown {
+		u.applying.Store(false)
+		return ErrUpdateCooldown
 	}
 	if recheck {
 		go u.checkThenApply(target)
@@ -574,6 +590,16 @@ func (u *Updater) Start(version string) error {
 		go u.apply(target)
 	}
 	return nil
+}
+
+// lastFailure is when the last attempt failed, read under u.mu.
+func (u *Updater) lastFailure() time.Time {
+	if u.readFailedAt != nil {
+		return u.readFailedAt()
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.failedAt
 }
 
 // applyPanicError is the failure an install attempt that panicked reports
@@ -752,10 +778,17 @@ func (u *Updater) applyNative(ctx context.Context, version string, att *applyAtt
 	// The payload is in place. Until the new binary takes over, failing means
 	// putting the previous one back.
 	att.undo = func() error {
+		// The marker goes only once the previous version is back (#1160). If
+		// the rollback fails, the new version is still what is installed and
+		// what the next start runs; the marker is what lets that start count
+		// itself and restore the previous copy (checkPendingUpdate). The
+		// uninstall entry likewise keeps naming what is really installed.
+		if err := update.Rollback(dir); err != nil {
+			return err
+		}
 		u.clearPending()
-		rbErr := update.Rollback(dir)
 		_ = update.RefreshRegistration(dir, u.running)
-		return rbErr
+		return nil
 	}
 	if err := update.RefreshRegistration(dir, version); err != nil {
 		log.Printf("[update] could not refresh the uninstall entry: %v", err)
