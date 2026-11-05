@@ -1,5 +1,5 @@
 import { CONNECTION_PROVIDER_NAMES, connectionProviderForPiece, isConnectionProvider, type ConnectionProvider } from '../../../../../src/integrations/connection-providers';
-import { ManagedConnectionRow } from '../../integrations/ManagedConnectionRow';
+import { ManagedConnectionRow, type RowState } from '../../integrations/ManagedConnectionRow';
 /**
  * Connections panel: list `app_connection` rows + registered Jarvis sources,
  * add / delete connections. Renders inline below the workflows list when the
@@ -35,16 +35,22 @@ export function ConnectionsPanel(): React.ReactElement {
   }, []);
   const selectedProvider = setup?.kind === 'hosted_integration' ? setup.provider : null;
   // Providers this instance cannot set up (every hosted-only one on a
-  // self-hosted install) collapse into one line instead of a row each (#1246).
-  const [noSetupPath, setNoSetupPath] = useState<ReadonlySet<ConnectionProvider>>(() => new Set());
-  const reportNoSetupPath = useCallback((provider: ConnectionProvider, none: boolean) => setNoSetupPath(current => {
-    if (current.has(provider) === none) return current;
-    const next = new Set(current);
-    if (none) next.add(provider); else next.delete(provider);
+  // self-hosted install) collapse into one line instead of a row each (#1246),
+  // and providers still on their first status check share one checking line
+  // instead of a row and a status region each (#1260). A row that has not
+  // reported yet is on its first check too: rows report from an effect, after
+  // the first paint, and an empty map must not read as "all shown".
+  const [rowStates, setRowStates] = useState<ReadonlyMap<ConnectionProvider, RowState>>(() => new Map());
+  const reportRowState = useCallback((provider: ConnectionProvider, state: RowState | null) => setRowStates(current => {
+    if ((current.get(provider) ?? null) === state) return current;
+    const next = new Map(current);
+    if (state) next.set(provider, state); else next.delete(provider);
     return next;
   }), []);
   const listed = conn.jarvisSources.flatMap(s => isConnectionProvider(s.id) && s.id !== selectedProvider ? [s.id] : []);
-  const unavailableNames = listed.filter(id => noSetupPath.has(id)).map(id => CONNECTION_PROVIDER_NAMES[id]);
+  const rowState = (id: ConnectionProvider): RowState => rowStates.get(id) ?? 'pending';
+  const unavailableNames = listed.filter(id => rowState(id) === 'none').map(id => CONNECTION_PROVIDER_NAMES[id]);
+  const checking = listed.some(id => rowState(id) === 'pending');
   const [toast, setToast] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 
   const flash = (tone: "ok" | "warn", text: string): void => {
@@ -78,8 +84,9 @@ export function ConnectionsPanel(): React.ReactElement {
 
       {selectedProvider && <ManagedConnectionRow key={setup?.requestId} provider={selectedProvider} refreshKey={refreshKey} />}
       {conn.jarvisSources.some(s => isConnectionProvider(s.id)) && <div className="wf-conn__managed">
-        {(selectedProvider || listed.some(id => !noSetupPath.has(id))) && <p className="wf-conn__subtitle">Connect your apps securely in your browser. Your connected accounts are available to workflow steps.</p>}
-        {listed.map(id => <ManagedConnectionRow key={id} provider={id} refreshKey={refreshKey} onNoSetupPath={reportNoSetupPath} />)}
+        {(selectedProvider || listed.some(id => rowState(id) === 'shown')) && <p className="wf-conn__subtitle">Connect your apps securely in your browser. Your connected accounts are available to workflow steps.</p>}
+        {listed.map(id => <ManagedConnectionRow key={id} provider={id} refreshKey={refreshKey} onCollapsed={reportRowState} />)}
+        <p className="wf-conn__subtitle" role="status">{checking ? 'Checking connections...' : ''}</p>
         {unavailableNames.length > 0 && <p className="wf-conn__subtitle">
           One-click setup is not available on this instance for {unavailableNames.join(', ')}.
         </p>}

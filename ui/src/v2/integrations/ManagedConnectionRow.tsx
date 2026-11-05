@@ -35,12 +35,17 @@ function noSetupPath(status: Status): boolean {
   return !status.configured && !status.connected && !status.reconnect && !status.url && !status.settings && !status.refused;
 }
 
+export type RowState = 'none' | 'pending' | 'shown';
+
 /** Read-only status. The hosted Account page remains the sole OAuth entry point. */
-export function ManagedConnectionRow({ provider, refreshKey = 0, onManualSetup, onNoSetupPath }: {
+export function ManagedConnectionRow({ provider, refreshKey = 0, onManualSetup, onCollapsed }: {
   provider: ConnectionProvider; refreshKey?: number; onManualSetup?: () => void;
-  /** Given, the row renders nothing while it has no setup path and reports
-   * that state here instead, so a list can summarise those providers once. */
-  onNoSetupPath?: (provider: ConnectionProvider, none: boolean) => void;
+  /** Given, the row renders nothing while it has no setup path ('none') or
+   * before its first status answer ('pending'), and reports its state here
+   * ('shown' once it renders, null when it unmounts), so a list can summarise
+   * those providers once instead of flashing a row per provider on first
+   * load (#1260). */
+  onCollapsed?: (provider: ConnectionProvider, state: RowState | null) => void;
 }) {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState(false);
@@ -66,19 +71,21 @@ export function ManagedConnectionRow({ provider, refreshKey = 0, onManualSetup, 
     return () => { live = false; pending?.abort(); window.removeEventListener('focus', load); };
   }, [provider, refreshKey, retry]);
   // While a refresh is pending (status reset, no error) keep the last answer,
-  // so Refresh does not briefly bring every collapsed row back.
-  const wasHidden = useRef(false);
-  const hidden = !!onNoSetupPath && (status ? noSetupPath(status) : !error && wasHidden.current);
-  useEffect(() => { wasHidden.current = hidden; }, [hidden]);
-  useEffect(() => { onNoSetupPath?.(provider, hidden); }, [onNoSetupPath, provider, hidden]);
-  useEffect(() => () => onNoSetupPath?.(provider, false), [onNoSetupPath, provider]);
-  if (hidden) return null;
-  const state = error ? 'Could not check connection' : !status ? 'Checking connection…'
+  // so Refresh does not briefly bring every collapsed row back. Before the
+  // first answer there is none to keep: the row waits collapsed as 'pending'.
+  const last = useRef<RowState>('pending');
+  const state: RowState = !onCollapsed ? 'shown'
+    : status ? (noSetupPath(status) ? 'none' : 'shown') : error ? 'shown' : last.current;
+  useEffect(() => { last.current = state; }, [state]);
+  useEffect(() => { onCollapsed?.(provider, state); }, [onCollapsed, provider, state]);
+  useEffect(() => () => onCollapsed?.(provider, null), [onCollapsed, provider]);
+  if (state !== 'shown') return null;
+  const label = error ? 'Could not check connection' : !status ? 'Checking connection…'
     : status.reconnect ? 'Reconnect required' : status.connected ? 'Connected' : status.url || status.settings ? 'Not connected' : 'Setup unavailable';
   return <section className="wf-conn__managed-row" aria-label={`${name} connection`}>
     <div className="wf-conn__managed-details">
       <strong>{name}</strong>
-      <div role="status"><Chip tone={status?.connected ? 'ok' : error || status?.reconnect ? 'warn' : 'neutral'}>{state}</Chip>
+      <div role="status"><Chip tone={status?.connected ? 'ok' : error || status?.reconnect ? 'warn' : 'neutral'}>{label}</Chip>
         {status?.connected && status.account && <span>{status.account}</span>}</div>
       {status && !status.url && !status.settings && <p>One-click setup is not available on this instance yet.</p>}
     </div>
