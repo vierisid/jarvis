@@ -838,6 +838,8 @@ export const getClipboardTool: ToolDefinition = {
   name: 'get_clipboard',
   description: 'Read the clipboard contents. Optionally specify a "target" sidecar name/ID to read from a remote machine instead of locally.',
   category: 'general',
+  // The clipboard is desktop state: off with desktop.enabled, on every machine (#1159).
+  usesDesktop: true,
   parameters: {
     target: {
       type: 'string',
@@ -863,6 +865,8 @@ export const setClipboardTool: ToolDefinition = {
   name: 'set_clipboard',
   description: 'Write text to the clipboard. Optionally specify a "target" sidecar name/ID to write to a remote machine instead of locally.',
   category: 'general',
+  // The clipboard is desktop state: off with desktop.enabled, on every machine (#1159).
+  usesDesktop: true,
   parameters: {
     content: {
       type: 'string',

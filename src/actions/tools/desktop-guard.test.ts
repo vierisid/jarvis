@@ -41,7 +41,7 @@ beforeEach(() => {
   // A connected sidecar with every capability, so an un-refused call has
   // somewhere to go and is visible here.
   setSidecarManagerRef({
-    listSidecars: () => [{ id: 'pc-1', name: 'PC', connected: true, capabilities: ['desktop', 'browser', 'screenshot'] }],
+    listSidecars: () => [{ id: 'pc-1', name: 'PC', connected: true, capabilities: ['desktop', 'browser', 'screenshot', 'clipboard'] }],
     dispatchRPC: async (_id: string, method: string) => { rpcs.push(method); throw new Error('stub sidecar'); },
   } as unknown as SidecarManager);
   __setLocalDesktopControllerFactoryForTests(() => { localReached++; throw new Error('stub controller'); });
@@ -163,6 +163,24 @@ describe('desktop.enabled: false refuses at ToolRegistry.execute', () => {
     }
     // Not vacuous: every un-refused call really went out to the sidecar.
     expect(rpcs.length).toBe(DESKTOP_TOOLS.length);
+  });
+
+  test('get_clipboard and set_clipboard are refused, typed, and never reach a sidecar (#1159)', async () => {
+    desktopOn = false;
+    for (const [name, args] of [['get_clipboard', {}], ['set_clipboard', { content: 'x' }]] as const) {
+      // An explicit target, so an un-refused call would go out to the stub sidecar.
+      const err = await refusal(() => registry().execute(name, { ...args, target: 'pc-1' }));
+      expect({ tool: name, refused: err !== null }).toEqual({ tool: name, refused: true });
+      expect(err!.outcome).toEqual({ status: 'blocked', code: DESKTOP_DISABLED_CODE, effect: 'not_started', message: DESKTOP_DISABLED_MESSAGE });
+    }
+    expect(rpcs).toEqual([]);
+    expect(localReached).toBe(0);
+    // Not vacuous: with the switch on the same calls go out.
+    desktopOn = true;
+    for (const [name, args] of [['get_clipboard', {}], ['set_clipboard', { content: 'x' }]] as const) {
+      expect(await refusal(() => registry().execute(name, { ...args, target: 'pc-1' }))).toBeNull();
+    }
+    expect(rpcs).toEqual(['get_clipboard', 'set_clipboard']);
   });
 
   test('ui_snapshot is refused for the desktop (explicit or default kind) but not for the browser', async () => {
@@ -338,7 +356,7 @@ describe('desktop.enabled: false refuses at ToolRegistry.execute', () => {
 });
 
 describe('desktop.enabled: false withholds the always-desktop tools from what is offered', () => {
-  const ALWAYS = [...DESKTOP_TOOLS.map((t) => t.name), 'capture_screen'];
+  const ALWAYS = [...DESKTOP_TOOLS.map((t) => t.name), 'capture_screen', 'get_clipboard', 'set_clipboard'];
 
   test('toolsInScope drops them, with and without a scope, and keeps the mixed-surface tools', () => {
     desktopOn = false;

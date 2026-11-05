@@ -16,6 +16,7 @@ export function GeneralTab({
 }) {
   const { autostart, rootCfg, personality, role } = data;
   const [restarting, setRestarting] = useState(false);
+  const [savingDesktop, setSavingDesktop] = useState(false);
 
   const handleRestart = async () => {
     if (!await confirmDialog("Restart Jarvis now? Your dashboard will reconnect after a few seconds.")) return;
@@ -88,6 +89,42 @@ export function GeneralTab({
           </>
         ) : (
           <div className="v2-set__empty">Service controls unavailable.</div>
+        )}
+      </section>
+
+      {/* Desktop control (desktop.enabled, #905) */}
+      <section className="v2-set__section">
+        <div className="v2-set__section-head">
+          <div>
+            <h3 className="v2-set__section-title">Desktop control</h3>
+            <div className="v2-set__section-sub">
+              Lets Jarvis see the screen, read and write the clipboard, list windows and click or type
+              in desktop apps, on this machine and on connected devices. Off turns all of that off at
+              once, including screen awareness; browser tools keep working. Shell commands are not
+              covered and keep their own approvals.
+            </div>
+          </div>
+        </div>
+        {rootCfg?.desktop ? (
+          <label className="v2-set__toggle-row">
+            <button
+              type="button"
+              className="v2-set__toggle"
+              data-checked={rootCfg.desktop.enabled}
+              aria-checked={rootCfg.desktop.enabled}
+              role="switch"
+              disabled={savingDesktop}
+              onClick={async () => {
+                setSavingDesktop(true);
+                const r = await data.setDesktopEnabled(!rootCfg.desktop!.enabled);
+                setSavingDesktop(false);
+                onToast(r.message, r.ok ? "ok" : "warn");
+              }}
+            />
+            <span>Allow desktop control</span>
+          </label>
+        ) : (
+          <div className="v2-set__empty">Desktop setting unavailable.</div>
         )}
       </section>
 

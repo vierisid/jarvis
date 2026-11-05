@@ -81,5 +81,5 @@ test('the daemon pushes the observer pause on connect, on the long-press, and fr
   expect(awareness).toContain("pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()))");
   const desktopAt = index.indexOf("settingsReload.registerApplier('desktop'");
   const desktop = index.slice(desktopAt, index.indexOf('});', desktopAt));
-  expect(desktop).toContain('pushObserverPause(pebbleBlindDeps, observerPause(awarenessOn, isDesktopEnabled()))');
+  expect(desktop).toContain("pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()))");
 });

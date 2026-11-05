@@ -28,7 +28,7 @@
  *   values, so tokens/keys stay out of the event path.
  *
  * Sections whose config is re-hydrated but that have no component applier
- * yet (cron schedules, heartbeat aggressiveness, goals, sites, desktop,
+ * yet (cron schedules, heartbeat aggressiveness, goals, sites,
  * workflows, ...) keep today's behavior: new values are visible to live
  * config readers, construction-time snapshots stay until restart.
  *
