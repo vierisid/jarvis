@@ -1180,3 +1180,41 @@ describe('#889: a reply to a spoken yes or no is spoken to the asker and kept', 
     expect(persisted()).toEqual([]);
   });
 });
+
+describe('#1158: a voice decision is the shared decision flow', () => {
+  function throwingAudit(): AuditTrail {
+    const audit = new AuditTrail();
+    (audit as unknown as { log: () => never }).log = () => { throw new Error('audit store unavailable'); };
+    return audit;
+  }
+
+  test('an audit write that fails does not leave a voice approval written but never executed or announced', async () => {
+    svc.setAuditTrail(throwingAudit());
+    const a = pendingEmail('alice@example.com', 1000);
+    const resolved = await svc.resolveLatestPendingByVoice('approve', 1, a.id);
+    expect(resolved).toEqual({ kind: 'approval', label: expect.any(String) });
+    expect(status(a)).toBe('executed');
+    expect(executions).toEqual(['send_email:alice@example.com']);
+    expect(sent.some((m) => m.payload?.source === 'approval_update' && (m.payload.request as { id?: string })?.id === a.id)).toBe(true);
+  });
+
+  test('an audit write that fails does not turn a refused voice answer into a throw', async () => {
+    svc.setAuditTrail(throwingAudit());
+    const a = pendingEmail('alice@example.com', 1000);
+    pendingEmail('carol@example.com', 2000);
+    // Two cards up: refused, and the refusal survives the audit failure.
+    const resolved = await svc.resolveLatestPendingByVoice('approve', 1, a.id);
+    expect(resolved).toEqual({ kind: 'refused', message: expect.any(String) });
+    expect(status(a)).toBe('pending');
+  });
+
+  test('an audit write that fails does not leave a voice denial unrecorded or unannounced', async () => {
+    svc.setAuditTrail(throwingAudit());
+    const a = pendingEmail('bob@example.com', 1000);
+    const resolved = await svc.resolveLatestPendingByVoice('cancel', 1, a.id);
+    expect(resolved).toEqual({ kind: 'approval', label: expect.any(String) });
+    expect(status(a)).toBe('denied');
+    expect(executions).toEqual([]);
+    expect(sent.some((m) => m.payload?.source === 'approval_update' && (m.payload.request as { id?: string })?.id === a.id)).toBe(true);
+  });
+});

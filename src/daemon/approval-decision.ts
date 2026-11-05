@@ -1,6 +1,6 @@
 /**
  * The complete approve/deny flow shared by every decision surface (dashboard
- * REST, chat channels, OS-notification buttons): flip the request, run the
+ * REST, chat channels, OS-notification buttons, voice): flip the request, run the
  * deferred executor where the request isn't owned by a blocked in-process
  * caller, record denials, and broadcast so dashboard cards update.
  *
