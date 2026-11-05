@@ -23,7 +23,8 @@ import { getWaitpoint } from "../db/repos/waitpoint";
 import { workflowFileDir } from "./routes/files";
 import { createWorkflowFile } from "../db/repos/workflow-file";
 import { triggerHookRunId } from "../runner/triggers/hook-run-id";
-import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const sampleIdentity = () => ({
@@ -500,6 +501,7 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
   let registry: SandboxRegistry;
   let testRunId: string;
   let testFlowId: string;
+  let dataDir: string;
 
   async function authedFetchForRun(path: string, init: RequestInit = {}, runId = testRunId): Promise<Response> {
     const id = { ...sampleIdentity(), runId };
@@ -517,7 +519,10 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
   }
 
   beforeAll(async () => {
-    process.env.JARVIS_WORKFLOW_DATA_DIR = `/tmp/jarvis-sandbox-test-${Math.random().toString(36).slice(2, 10)}`;
+    // Its own directory, removed in afterAll: the step-file routes write blobs
+    // under it, and a fixed /tmp name left one behind per run (#1168).
+    dataDir = mkdtempSync(join(tmpdir(), "jarvis-sandbox-test-"));
+    process.env.JARVIS_WORKFLOW_DATA_DIR = dataDir;
     initWorkflowDb(":memory:");
     signer = new EngineTokenSigner();
     registry = new SandboxRegistry();
@@ -548,6 +553,7 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     await api.stop();
     closeWorkflowDb();
     delete process.env.JARVIS_WORKFLOW_DATA_DIR;
+    rmSync(dataDir, { recursive: true, force: true });
   });
 
   test("POST /v1/step-files stores blob and returns a /v1/step-files/<id> URL", async () => {

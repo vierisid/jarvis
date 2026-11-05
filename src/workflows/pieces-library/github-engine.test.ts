@@ -1,5 +1,5 @@
 /** Published 0.7.3 metadata and all managed actions qualified in the real engine against local provider fixtures.
- * Gated on JARVIS_TEST_ENGINE_BUILD=1 (or JARVIS_TEST_GITHUB_ENGINE=1); CI runs it in test.yml's engine step. */
+ * Gated on JARVIS_TEST_ENGINE_BUILD=1 (or JARVIS_TEST_GITHUB_ENGINE=1); CI runs it in the required test job, whose bun test run sets that gate. */
 import {afterAll, beforeAll, expect, test} from 'bun:test';
 import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {join} from 'node:path';

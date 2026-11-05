@@ -6,8 +6,8 @@
  * once. Only the real engine shows that: the daemon side cannot see which way
  * the engine re-runs a parked step.
  *
- * Skipped without a built engine bundle and pieces; CI builds them for this
- * file with JARVIS_TEST_ENGINE_BUILD=1 (.github/workflows/test.yml).
+ * Skipped without a built engine bundle and pieces; CI builds them because the
+ * required job's bun test run sets JARVIS_TEST_ENGINE_BUILD=1 (.github/workflows/test.yml).
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
