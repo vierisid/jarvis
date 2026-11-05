@@ -275,42 +275,77 @@ export interface EdgeSynthesisOptions extends EdgeProsody {
   maxSsmlTextBytes?: number;
 }
 
+/**
+ * Why a synthesis failed, for callers that report it: "unavailable" when the
+ * service answers but refuses this client (Microsoft has moved some regions to
+ * a token this client does not implement, #1166), "unreachable" when it
+ * cannot be reached at all.
+ */
+export type EdgeTTSErrorCode = 'unavailable' | 'unreachable' | 'failed';
+
+/** What a user sees when the service refuses this client. */
+export const EDGE_UNAVAILABLE_MESSAGE =
+  'Edge TTS is unavailable in this region: Microsoft\'s service refused the connection. ' +
+  'Choose another voice provider in Settings.';
+export const EDGE_UNREACHABLE_MESSAGE = 'Edge TTS could not reach Microsoft\'s service. Check the network connection.';
+
 /** A failed synthesis. The message never carries the URL, its token or the spoken text. */
 export class EdgeTTSError extends Error {
-  /** The handshake itself was refused (wrong token, clock, or a blocked network). */
+  /** The handshake itself was refused (wrong token, clock, region, or a blocked network). */
   readonly refused: boolean;
-  constructor(message: string, refused = false) {
+  readonly code: EdgeTTSErrorCode;
+  constructor(message: string, refused = false, code: EdgeTTSErrorCode = 'failed') {
     super(message);
     this.name = 'EdgeTTSError';
     this.refused = refused;
+    this.code = code;
   }
 }
 
+/** When the service last refused this client as unavailable; cleared by any synthesis that works. */
+let unavailableSince: number | null = null;
+
+/** Whether Edge TTS was last found unavailable here, for Settings to say so. */
+export function edgeTtsStatus(): { unavailable: boolean; since: number | null } {
+  return { unavailable: unavailableSince !== null, since: unavailableSince };
+}
+
+/** Tests only. */
+export function resetEdgeTtsStatus(): void {
+  unavailableSince = null;
+}
+
+function unavailable(): EdgeTTSError {
+  unavailableSince ??= Date.now();
+  return new EdgeTTSError(EDGE_UNAVAILABLE_MESSAGE, true, 'unavailable');
+}
+
 /**
- * How far the service's clock is from ours, from the Date header of a HEAD
- * request to the endpoint's https (or, for tests, http) form; null when it
- * cannot be told. Bounded by `signal`.
+ * Whether the service answers at all, and how far its clock is from ours,
+ * from a HEAD request to the endpoint's https (or, for tests, http) form.
+ * Any HTTP answer means it is reachable; the skew is null when its Date
+ * header is missing. Bounded by `signal`.
  */
-async function serviceClockSkew(endpoint: string, signal: AbortSignal): Promise<number | null> {
+async function probeService(endpoint: string, signal: AbortSignal): Promise<{ reachable: boolean; skew: number | null }> {
   try {
     const url = endpoint.replace(/^ws(s?):/, 'http$1:');
     const sent = Date.now();
     const res = await fetch(url, { method: 'HEAD', signal, redirect: 'manual' });
     await res.body?.cancel();
     const date = Date.parse(res.headers.get('date') ?? '');
-    if (Number.isNaN(date)) return null;
     // The header has one-second resolution; take our clock halfway through the request.
-    return date - (sent + Date.now()) / 2;
+    return { reachable: true, skew: Number.isNaN(date) ? null : date - (sent + Date.now()) / 2 };
   } catch {
-    return null;
+    return { reachable: false, skew: null };
   }
 }
 
 /**
  * Synthesize `text` and return the complete MP3. Rejects on timeout, abort,
- * a refused handshake, a connection that closes before the turn ends, a
- * malformed message, too much data, or a turn that ends with no audio. Every
- * socket it opens is closed before it settles.
+ * a refused handshake (fast, as "unavailable" or "unreachable"), a
+ * connection that closes before the turn ends, a malformed message, too much
+ * data, or a turn that ends with no audio. Every socket it opens is closed
+ * before it settles.
  */
 export async function edgeSynthesize(text: string, opts: EdgeSynthesisOptions): Promise<Buffer> {
   validateProsody(opts);
@@ -329,18 +364,21 @@ export async function edgeSynthesize(text: string, opts: EdgeSynthesisOptions): 
   const budget = { left: opts.maxAudioBytes ?? MAX_AUDIO_BYTES };
   try {
     const audio: Uint8Array[] = [];
-    let retried = false;
+    let probed = false;
     for (const piece of pieces) {
       try {
         for (const chunk of await synthesizeOne(piece, opts, controller.signal, budget)) audio.push(chunk);
       } catch (err) {
-        if (retried || !(err instanceof EdgeTTSError) || !err.refused) throw err;
-        retried = true;
-        // A refused token is most often a wrong local clock: learn the
-        // service's, and retry this piece once if it differs enough.
-        const skew = await serviceClockSkew(opts.endpoint ?? EDGE_TTS_ENDPOINT, controller.signal);
+        if (!(err instanceof EdgeTTSError) || !err.refused) throw err;
+        if (probed) throw unavailable();
+        probed = true;
+        // Tell a refusal by the service from no network, and learn its clock:
+        // a wrong local clock gets a refused token too.
+        const probe = await probeService(opts.endpoint ?? EDGE_TTS_ENDPOINT, controller.signal);
         controller.signal.throwIfAborted();
-        if (skew === null || Math.abs(skew - clockSkewMs) < CLOCK_SKEW_RETRY_MS) throw err;
+        if (!probe.reachable) throw new EdgeTTSError(EDGE_UNREACHABLE_MESSAGE, true, 'unreachable');
+        const skew = probe.skew;
+        if (skew === null || Math.abs(skew - clockSkewMs) < CLOCK_SKEW_RETRY_MS) throw unavailable();
         const previous = clockSkewMs;
         clockSkewMs = skew;
         try {
@@ -348,10 +386,11 @@ export async function edgeSynthesize(text: string, opts: EdgeSynthesisOptions): 
         } catch (retryErr) {
           // Keep a learned skew only once it has worked.
           if (clockSkewMs === skew) clockSkewMs = previous; // unless another request has moved it since
-          throw retryErr;
+          throw retryErr instanceof EdgeTTSError && retryErr.refused ? unavailable() : retryErr;
         }
       }
     }
+    unavailableSince = null;
     return Buffer.concat(audio);
   } finally {
     clearTimeout(timer);
@@ -459,9 +498,8 @@ function synthesizeOne(
     // The error event's message can carry the full URL, token included, so
     // it is never forwarded. Bun reports a refused handshake as a close (it
     // may fire error first), so both report the same way.
-    const refused = () => new EdgeTTSError(
-      'Edge TTS could not connect (check the network; the service may also require a newer token, or the clock is wrong)',
-      true);
+    // Refined by edgeSynthesize into "unavailable" or "unreachable".
+    const refused = () => new EdgeTTSError('Edge TTS could not connect', true);
     ws.onerror = () => {
       finish(opened ? new EdgeTTSError('Edge TTS connection failed') : refused());
     };

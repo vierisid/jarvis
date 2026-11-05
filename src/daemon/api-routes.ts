@@ -156,6 +156,7 @@ import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import type { BriefConversationProvider } from '../brief/conversations.ts';
 import { defaultConversationWorkspace } from '../vault/conversation-schema.ts';
+import { edgeTtsStatus } from '../comms/edge-tts-client.ts';
 
 export type ApiContext = {
   /** Optional B11 runtime. Default-off; legacy routes remain independent. */
@@ -3354,6 +3355,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           enabled: tts?.enabled ?? false,
           provider: effective?.provider ?? tts?.provider ?? 'edge',
           usejarvis_available: hasUsejarvisAi(ctx.config),
+          // Microsoft's service refused this install's last Edge request
+          // (#1166): Settings says so instead of leaving voice silent.
+          edge_unavailable: edgeTtsStatus().unavailable,
           voice: tts?.voice ?? 'en-US-AriaNeural',
           rate: tts?.rate ?? '+0%',
           volume: tts?.volume ?? '+0%',

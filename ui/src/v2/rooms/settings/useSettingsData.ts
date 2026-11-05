@@ -253,6 +253,8 @@ export interface TTSConfig {
   provider: string;
   /** True on hosted installs: the "Usejarvis AI (included)" option applies. */
   usejarvis_available?: boolean;
+  /** Microsoft refused this install's last Edge TTS request (region not served). */
+  edge_unavailable?: boolean;
   voice: string;
   rate: string;
   volume: string;

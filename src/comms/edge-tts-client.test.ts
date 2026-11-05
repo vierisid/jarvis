@@ -5,8 +5,13 @@ import {
   edgeSynthesize,
   edgeVoiceName,
   escapeSsmlText,
+  EDGE_UNAVAILABLE_MESSAGE,
+  EDGE_UNREACHABLE_MESSAGE,
+  EdgeTTSError,
+  edgeTtsStatus,
   parseBinaryMessage,
   resetClockSkew,
+  resetEdgeTtsStatus,
   secMsGec,
   splitEscapedText,
   type EdgeSynthesisOptions,
@@ -39,7 +44,7 @@ type Behaviour = (turn: Turn) => void;
 interface Seen { url: URL; headers: Headers; messages: string[]; closed: Promise<number> }
 
 let server: ReturnType<typeof Bun.serve> | null = null;
-afterEach(() => { server?.stop(true); server = null; resetClockSkew(); });
+afterEach(() => { server?.stop(true); server = null; resetClockSkew(); resetEdgeTtsStatus(); });
 
 /**
  * A local stand-in for the service. `behave` answers each SSML request;
@@ -338,11 +343,36 @@ describe('edgeSynthesize against a local fake service', () => {
     expectNoSecrets(err, 'secret words');
   });
 
-  test('a refused handshake is an error without the URL or its token', async () => {
+  test('a refused handshake fails fast as "unavailable in this region", without the URL or its token', async () => {
     const svc = fakeService(speaks, 403);
-    const err = await edgeSynthesize('secret words', svc.opts()).catch((e) => e);
-    expect((err as Error).message).toStartWith('Edge TTS could not connect');
+    const started = Date.now();
+    const err = await edgeSynthesize('secret words', svc.opts({ timeoutMs: 30_000 })).catch((e) => e);
+    // Not the 30s timeout the old package ran into on every sentence.
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(err).toBeInstanceOf(EdgeTTSError);
+    expect((err as EdgeTTSError).code).toBe('unavailable');
+    expect((err as Error).message).toBe(EDGE_UNAVAILABLE_MESSAGE);
     expectNoSecrets(err, 'secret words');
+    // Settings can tell, until a synthesis works again.
+    expect(edgeTtsStatus().unavailable).toBe(true);
+    server!.stop(true);
+    const ok = fakeService(speaks);
+    await edgeSynthesize('hi', ok.opts());
+    expect(edgeTtsStatus()).toEqual({ unavailable: false, since: null });
+  });
+
+  test('a service that cannot be reached at all is "unreachable", not "unavailable"', async () => {
+    // Accepts TCP and hangs up at once: neither the handshake nor the probe gets an answer.
+    const tcp = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { open(s) { s.end(); }, data() {} } });
+    try {
+      const err = await edgeSynthesize('hi', { ...PROSODY, timeoutMs: 10_000, endpoint: `ws://127.0.0.1:${tcp.port}/v1` })
+        .catch((e) => e);
+      expect((err as EdgeTTSError).code).toBe('unreachable');
+      expect((err as Error).message).toBe(EDGE_UNREACHABLE_MESSAGE);
+      expect(edgeTtsStatus().unavailable).toBe(false);
+    } finally {
+      tcp.stop(true);
+    }
   });
 
   test('a turn with no audio, or a malformed audio frame, is an error', async () => {
@@ -510,10 +540,10 @@ describe('edgeSynthesize lifecycle and clock', () => {
 
   test('a learned skew is dropped when the retry fails too', async () => {
     const svc = fakeService(speaks, 403, () => new Date(Date.now() + 3_600_000).toUTCString());
-    await expect(edgeSynthesize('hi', svc.opts())).rejects.toThrow('could not connect');
+    await expect(edgeSynthesize('hi', svc.opts())).rejects.toThrow(EDGE_UNAVAILABLE_MESSAGE);
     expect(svc.seen).toHaveLength(2);
     // The next request starts from our own clock again.
-    await expect(edgeSynthesize('hi', svc.opts())).rejects.toThrow('could not connect');
+    await expect(edgeSynthesize('hi', svc.opts())).rejects.toThrow(EDGE_UNAVAILABLE_MESSAGE);
     // (Either side of a window edge that the request may have crossed.)
     expect([secMsGec(Date.now()), secMsGec(Date.now() - 5000)])
       .toContain(svc.seen[2]!.url.searchParams.get('Sec-MS-GEC')!);
@@ -522,7 +552,7 @@ describe('edgeSynthesize lifecycle and clock', () => {
   test('a refusal with the clocks in step is not retried', async () => {
     const svc = fakeService(speaks, 403, () => new Date().toUTCString());
     const err = await edgeSynthesize('secret words', svc.opts()).catch((e) => e);
-    expect((err as Error).message).toStartWith('Edge TTS could not connect');
+    expect((err as Error).message).toBe(EDGE_UNAVAILABLE_MESSAGE);
     expectNoSecrets(err, 'secret words');
     expect(svc.seen).toHaveLength(1);
   });
