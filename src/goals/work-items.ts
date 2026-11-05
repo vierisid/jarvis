@@ -8,6 +8,7 @@ import { getFlow } from '../workflows/db/repos/flow.ts';
 import { getFlowVersion } from '../workflows/db/repos/flow-version.ts';
 import { getFlowRun, type FlowRun } from '../workflows/db/repos/flow-run.ts';
 import { listWaitpointsByFlowRun } from '../workflows/db/repos/waitpoint.ts';
+import { oneLineTaskText } from '../vault/commitment-text.ts';
 
 export type WorkMode = 'manual' | 'workflow';
 export type WorkDecision = {
@@ -52,7 +53,9 @@ function workflowAvailable(): boolean {
   return !!getDb().query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'flow_run'").get();
 }
 function requiredText(value: unknown, name: string): string {
-  if (typeof value !== 'string' || !value.trim() || value.length > 10_000) {
+  // Nothing left once made one line is blank too (#1115): createCommitment
+  // would refuse it with an error that is not this route's 400.
+  if (typeof value !== 'string' || value.length > 10_000 || oneLineTaskText(value) === null) {
     throw new WorkItemError(`${name} must be non-empty text of at most 10000 characters`);
   }
   return value.trim();

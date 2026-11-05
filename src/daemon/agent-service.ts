@@ -87,6 +87,7 @@ import { getRecentConversation, getMessages } from '../vault/conversations.ts';
 import { PEBBLE_CHANNEL, PEBBLE_DIALOGUE_WINDOW_MS, recordPebbleExchange } from './pebble-dialogue.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import type { ScopedChatInput } from '../brief/chat-transport.ts';
+import { commitmentPromptLine } from '../vault/commitment-text.ts';
 
 export class AgentService implements Service, IAgentService {
   name = 'agent';
@@ -1246,12 +1247,7 @@ export class AgentService implements Service, IAgentService {
         const allCommitments = [...due, ...upcoming];
 
         if (allCommitments.length > 0) {
-          context.activeCommitments = allCommitments.map((c) => {
-            const dueStr = c.when_due
-              ? ` (due: ${new Date(c.when_due).toLocaleString()})`
-              : '';
-            return `[${c.priority}] ${c.what}${dueStr} — ${c.status}`;
-          });
+          context.activeCommitments = allCommitments.map(commitmentPromptLine);
         }
       } catch (err) {
         console.error('[AgentService] Error loading commitments:', err);

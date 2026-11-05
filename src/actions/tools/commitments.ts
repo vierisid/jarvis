@@ -10,8 +10,18 @@ import type { CommitmentPriority, CommitmentStatus } from '../../vault/commitmen
 import {
   createCommitment, getCommitment, findCommitments,
   updateCommitmentStatus, updateCommitmentDue, getUpcoming,
-  COMMITMENT_PRIORITIES, COMMITMENT_STATUSES,
+  COMMITMENT_PRIORITIES, COMMITMENT_STATUSES, parseParkedRequestIds, CommitmentTextError,
 } from '../../vault/commitments.ts';
+
+/**
+ * A stored task field as the model reads it (#1115): JSON-encoded, so text
+ * that holds a quote, a bracket or what looks like " -- completed [user]"
+ * stays inside its own field instead of reading as the listing's next one.
+ */
+const quoted = (text: string) => JSON.stringify(text);
+
+/** Free text that may span lines, with each further line indented, as `get` shows a context (#1036). */
+const indented = (text: string) => text.split(/\r\n|\r|\n|\u2028|\u2029|\u0085/).join('\n  ');
 
 const VALID_STATUSES: readonly string[] = COMMITMENT_STATUSES;
 const VALID_PRIORITIES: readonly string[] = COMMITMENT_PRIORITIES;
@@ -97,8 +107,8 @@ export const commitmentsTool: ToolDefinition = {
         if (items.length === 0) return 'No commitments found matching the criteria.';
         return items.map(c => {
           const due = c.when_due ? ` (due: ${new Date(c.when_due).toLocaleString()})` : '';
-          const assignee = c.assigned_to ? ` [${c.assigned_to}]` : '';
-          return `[${c.id}] [${c.priority}] ${c.what}${due} — ${c.status}${assignee}`;
+          const assignee = c.assigned_to ? ` [${quoted(c.assigned_to)}]` : '';
+          return `[${c.id}] [${c.priority}] ${quoted(c.what)}${due} — ${c.status}${assignee}`;
         }).join('\n');
       }
 
@@ -108,17 +118,17 @@ export const commitmentsTool: ToolDefinition = {
         if (!item) return `Commitment not found: ${params.id}`;
         return [
           `ID: ${item.id}`,
-          `Task: ${item.what}`,
+          `Task: ${quoted(item.what)}`,
           `Status: ${item.status}`,
           `Priority: ${item.priority}`,
           `Due: ${item.when_due ? new Date(item.when_due).toLocaleString() : 'none'}`,
-          `Assigned to: ${item.assigned_to || 'unassigned'}`,
+          `Assigned to: ${item.assigned_to ? quoted(item.assigned_to) : 'unassigned'}`,
           // Context may span lines (#1036); each further line is indented so
           // it cannot read as one of the fields around it.
-          `Context: ${item.context ? item.context.split(/\r\n|\r|\n/).join('\n  ') : 'none'}`,
+          `Context: ${item.context ? indented(item.context) : 'none'}`,
           `Created: ${new Date(item.created_at).toLocaleString()}`,
           item.completed_at ? `Completed: ${new Date(item.completed_at).toLocaleString()}` : null,
-          item.result ? `Result: ${item.result}` : null,
+          item.result ? `Result: ${indented(item.result)}` : null,
         ].filter(Boolean).join('\n');
       }
 
@@ -136,16 +146,25 @@ export const commitmentsTool: ToolDefinition = {
           return `Error: Invalid priority "${params.priority}". Must be: ${VALID_PRIORITIES.join(', ')}`;
         }
 
-        const item = createCommitment(params.what as string, {
-          when_due: whenDue,
-          priority: (params.priority as CommitmentPriority) || undefined,
-          context: params.context as string | undefined,
-          assigned_to: params.assigned_to as string | undefined,
-          created_from: 'jarvis',
-        });
+        if (typeof params.what !== 'string') return 'Error: "what" must be text';
+        let item: ReturnType<typeof createCommitment>;
+        try {
+          item = createCommitment(params.what, {
+            when_due: whenDue,
+            priority: (params.priority as CommitmentPriority) || undefined,
+            context: params.context as string | undefined,
+            assigned_to: params.assigned_to as string | undefined,
+            created_from: 'jarvis',
+          });
+        } catch (err) {
+          // Only the task-text refusal is the model's to read; anything else
+          // is not this call's input and goes to the registry as before.
+          if (err instanceof CommitmentTextError) return `Error: ${err.message}`;
+          throw err;
+        }
 
         const due = item.when_due ? ` — due: ${new Date(item.when_due).toLocaleString()}` : '';
-        return `Created commitment: [${item.id}] "${item.what}" (${item.priority})${due}`;
+        return `Created commitment: [${item.id}] ${quoted(item.what)} (${item.priority})${due}`;
       }
 
       case 'update_status': {
@@ -155,13 +174,18 @@ export const commitmentsTool: ToolDefinition = {
           return `Error: Invalid status "${params.status}". Must be: ${VALID_STATUSES.join(', ')}`;
         }
 
+        // The executor reads a result that starts like this as the request ids
+        // it is waiting on, and closes the task from their outcome (#1115).
+        if (typeof params.result === 'string' && parseParkedRequestIds(params.result)) {
+          return 'Error: "result" cannot start with "Awaiting user approval [req:"; that marks a task the executor parked on approvals.';
+        }
         const updated = updateCommitmentStatus(
           params.id as string,
           params.status as CommitmentStatus,
           params.result as string | undefined,
         );
         if (!updated) return `Commitment not found: ${params.id}`;
-        return `Updated: [${updated.id}] "${updated.what}" — now ${updated.status}${updated.result ? ` (result: ${updated.result})` : ''}`;
+        return `Updated: [${updated.id}] ${quoted(updated.what)} — now ${updated.status}${updated.result ? ` (result: ${indented(updated.result)})` : ''}`;
       }
 
       case 'set_due': {
@@ -177,7 +201,7 @@ export const commitmentsTool: ToolDefinition = {
         const updated = updateCommitmentDue(params.id as string, whenDue);
         if (!updated) return `Commitment not found: ${params.id}`;
         const due = updated.when_due ? new Date(updated.when_due).toLocaleString() : 'cleared';
-        return `Due date updated: [${updated.id}] "${updated.what}" — due: ${due}`;
+        return `Due date updated: [${updated.id}] ${quoted(updated.what)} — due: ${due}`;
       }
 
       default:

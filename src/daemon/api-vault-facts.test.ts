@@ -78,3 +78,39 @@ test('#1099: a forgotten automatic fact is refused as a bad source, and Forget s
   expect((await post({ subject_id: subject, predicate: 'lives_in', object: 'Berlin' })).status).toBe(200);
   expect(factCount()).toBe(1);
 });
+
+const postEntity = (body: unknown) => routes()['/api/vault/entities'].POST(new Request('http://localhost/api/vault/entities', {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+}));
+const entityCount = () => getDb().query<{ n: number }, []>('SELECT COUNT(*) AS n FROM entities').get()!.n;
+
+test('#1113 for entities: only user-entered source labels are accepted', async () => {
+  // `user_profile` is how the vault finds the owner's profile entity (the
+  // newest one wins), so a posted one took the owner's place.
+  for (const source of ['user_profile', 'goal_completion', 'llm_extraction', 'awareness', 'Dashboard', 42]) {
+    const response = await postEntity({ name: 'Mallory', type: 'person', source });
+    expect({ source, status: response.status }).toEqual({ source, status: 400 });
+  }
+  expect(entityCount()).toBe(0);
+  for (const source of ['dashboard', 'user', 'api', undefined]) {
+    const response = await postEntity({ name: `ok-${source}`, type: 'person', source });
+    expect(response.status).toBe(200);
+    expect((await response.json()).source).toBe(source ?? 'dashboard');
+  }
+});
+
+test('#1118: a name is matched by the daemon over names only, with the shared matcher', async () => {
+  createEntity('person', 'Alice Smith', { secret: 'x'.repeat(1000) });
+  createEntity('person', 'James');
+  createEntity('person', 'Bob'); createEntity('person', 'bob');
+  const match = async (name: string) => (await routes()['/api/vault/entity-match'].GET(
+    new Request(`http://localhost/api/vault/entity-match?name=${encodeURIComponent(name)}`))).json();
+  expect((await match('alice')).entity.name).toBe('Alice Smith');
+  // Only what a match needs: no properties travel.
+  expect(Object.keys((await match('alice')).entity).sort()).toEqual(['id', 'name']);
+  expect(await match('me')).toEqual({ entity: null });
+  expect(await match('Bob')).toEqual({ entity: null, ambiguous: 2 });
+  expect((await routes()['/api/vault/entity-match'].GET(new Request('http://localhost/api/vault/entity-match'))).status).toBe(400);
+  expect((await routes()['/api/vault/entity-match'].GET(new Request(`http://localhost/api/vault/entity-match?name=${'a'.repeat(501)}`))).status).toBe(400);
+  expect((await match('a'.repeat(500))).entity).toBeNull();
+});

@@ -164,6 +164,67 @@ export function insertConversationMessage(
   };
 }
 
+/** How many messages one prune transaction deletes, so a first sweep over years of history does not hold the writer for long. */
+export const PRUNE_BATCH = 1000;
+
+/**
+ * Delete the stored messages of channel conversations older than `before`
+ * (#1167): every conversation that belongs to a sender (one per person on
+ * Telegram and Discord, #884) and every conversation on `alsoChannels`
+ * (Pebble's). That includes any turn the dashboard posted into such a thread
+ * (Brief can open one): those are channel messages too, and their Brief turn
+ * records, which hold the same text, go with them once finished. The
+ * dashboard's own conversations (no sender, not on those channels) are not
+ * touched. The conversation rows stay, with their message counts brought back
+ * in line, so nothing that refers to a conversation loses it. Deletes in
+ * batches of PRUNE_BATCH. Returns how many messages were deleted.
+ */
+export function pruneChannelConversationMessages(before: number, alsoChannels: readonly string[] = []): number {
+  const db = getDb();
+  const owned = `SELECT id FROM conversations WHERE sender IS NOT NULL${alsoChannels.length ? ` OR channel IN (${alsoChannels.map(() => '?').join(', ')})` : ''}`;
+  const binds = [before, ...alsoChannels];
+  const touched = new Set(db.query<{ conversation_id: string }, Array<string | number>>(
+    `SELECT DISTINCT conversation_id FROM conversation_messages WHERE created_at < ? AND conversation_id IN (${owned})`,
+  ).all(...binds).map((r) => r.conversation_id));
+  const batch = db.prepare(`DELETE FROM conversation_messages WHERE rowid IN (
+    SELECT rowid FROM conversation_messages WHERE created_at < ? AND conversation_id IN (${owned}) LIMIT ${PRUNE_BATCH})`);
+  let deleted = 0;
+  for (;;) {
+    const n = db.transaction(() => batch.run(...binds).changes)();
+    deleted += n;
+    if (n < PRUNE_BATCH) break;
+  }
+  // Counts first, in their own transaction, so nothing after them can leave
+  // a count describing messages that are gone.
+  db.transaction(() => {
+    const recount = db.prepare('UPDATE conversations SET message_count = (SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = ?) WHERE id = ?');
+    for (const id of touched) recount.run(id, id);
+  })();
+  // A finished Brief turn in one of these threads keeps its input and its
+  // events' payloads, the same text the deleted messages held; deleting the
+  // turn takes its events and approval links with it (ON DELETE CASCADE).
+  // Only finished turns: a queued or running one is still being written. An
+  // attachment sent with such a turn refers to it with no ON DELETE action,
+  // so it is let go of first: its bytes and extracted text (the same content)
+  // are dropped and its row kept as the tombstone attachments keep on expiry.
+  // Run on every sweep, not only one that deleted messages, so a turn a
+  // failed earlier sweep left behind is still cleared.
+  const tables = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name));
+  if (tables.has('brief_chat_turns')) {
+    const turns = `SELECT turn_id FROM brief_chat_turns WHERE created_at < ? AND state IN ('completed', 'failed', 'cancelled')
+      AND conversation_id IN (${owned})`;
+    db.transaction(() => {
+      if (tables.has('brief_chat_attachments')) {
+        db.prepare(`UPDATE brief_chat_attachments SET turn_id = NULL, bytes = NULL, extracted_text = NULL,
+          state = CASE WHEN state = 'removed' THEN 'removed' ELSE 'expired' END
+          WHERE turn_id IN (${turns})`).run(...binds);
+      }
+      db.prepare(`DELETE FROM brief_chat_turns WHERE turn_id IN (${turns})`).run(...binds);
+    })();
+  }
+  return deleted;
+}
+
 /**
  * Get messages for a conversation, ordered by time ascending.
  */
@@ -191,7 +252,19 @@ export function getMessages(
 }
 
 /**
- * Get the most recent conversation for a channel, with its messages.
+ * Get the most recent conversation for a channel, with its messages: the
+ * channel's own, never one that belongs to a sender on it (#884,
+ * `ConversationOwner`). Every caller names no sender (the dashboard's restore,
+ * the agent's dialogue for a turn on its channel, /api/vault/conversations/active
+ * including its `channel=all`), and a sender's thread is
+ * read only through its own conversation id, so handing one to a caller that
+ * names none would show one person's turns to another (#1123).
+ *
+ * No time cutoff, unlike getOrCreateConversation's 4 hours (#1131): a turn's
+ * WRITER calls getOrCreateConversation first, which starts a new conversation
+ * after the gap, so the newest conversation is already the fresh one by the
+ * time the dialogue is read; and the dashboard's restore shows the last chat
+ * however old it is. Pebble keeps its own window (pebble-dialogue.ts).
  */
 export function getRecentConversation(channel: string): {
   conversation: Conversation;
@@ -199,7 +272,7 @@ export function getRecentConversation(channel: string): {
 } | null {
   const db = getDb();
   const row = db.prepare(
-    'SELECT * FROM conversations WHERE channel = ? AND (workspace_id IS NULL OR workspace_id = ?) ORDER BY last_message_at DESC, id DESC LIMIT 1'
+    'SELECT * FROM conversations WHERE channel = ? AND sender IS NULL AND (workspace_id IS NULL OR workspace_id = ?) ORDER BY last_message_at DESC, id DESC LIMIT 1'
   ).get(channel, defaultConversationWorkspace(db)) as ConversationRow | null;
 
   if (!row) return null;
