@@ -36,6 +36,7 @@ import {createManageWorkflowTool} from '../../actions/tools/manage-workflow';
 import {getWorkflowDb} from '../db';
 import {createWaitpoint} from '../db/repos/waitpoint';
 import {cancelFlowRun} from '../db/repos/run-cancellation';
+import {resumeCompletedChildRuns} from './child-run-scheduler';
 import {resumeSubflowCalls} from '../db/repos/subflow';
 import {parentTestGraph,childTestGraph} from './subflow-test-data';
 import {configuredSubflowGraphs,validateSubflowFixtures} from './subflow-fixtures';
@@ -255,8 +256,10 @@ for(const canceledIndex of [0,1]) test(`cancel shared parent ${canceledIndex}: t
  const f=await sharedApprovalFixture(),parents=[await f.run(),await f.run()],child=f.children()[0]!;
  expect(parents.map(r=>r.status)).toEqual(['PAUSED','PAUSED']);expect(f.children()).toHaveLength(1);expect(child.status).toBe('PAUSED');
  expect(cancelFlowRun(parents[canceledIndex]!.id).accepted).toBe(true);
+ resumeCompletedChildRuns();
  expect(getFlowRun(child.id)?.status).toBe('PAUSED');
  closeWorkflowDb();initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,79));configureWorkflowReadiness({pieces:catalog});
+ resumeCompletedChildRuns();
  const request=listHumanInputs(DEFAULT_IDS.project).find(r=>r.runId===child.id)!;
  expect(request.status).toBe('pending');expect(resolveHumanInput(DEFAULT_IDS.project,request.id,{decision:'approve',generation:request.generation??0}).status).toBe(200);
  resumeHumanInputs();await worker.drain();expect(getFlowRun(child.id)?.status).toBe('SUCCEEDED');
