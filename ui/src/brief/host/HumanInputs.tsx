@@ -1,3 +1,4 @@
+import { EmergencyStatusContext } from './EmergencyStatus';
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { answerErrors, humanRequestDismissable, humanRequestNeedsAttention, type HumanRequest } from '../../../../src/workflows/runtime/human-input-contract';
 import type { HostTransport } from './http';
@@ -119,11 +120,12 @@ export function HumanInputForm({ request, http, changed, focused = false }: { re
   </article>;
 }
 function RunOutcomes({ request }: { request: HumanRequest }) {
+  const emergency = React.useContext(EmergencyStatusContext);
   const runs = request.runs ?? [{ runId: request.runId, versionId: '', status: 'UNKNOWN' }];
   return <ul className="brief-human-runs" aria-label="Workflow continuation">{runs.map(run => {
     const href = '/?brief=1' + briefHash({ room: 'workflow-runs', selection: { flowId: request.flowId, runId: run.runId, ...(run.versionId ? { versionId: run.versionId } : {}) } });
     const status = run.status === 'SUCCEEDED' ? 'Workflow completed.'
-      : run.status === 'PAUSED' ? 'Workflow is waiting.'
+      : run.status === 'PAUSED' ? emergency === 'paused' ? 'Global emergency pause is holding this workflow. Saved responses will continue after you resume Jarvis.' : 'Workflow is waiting.'
       : ['QUEUED', 'RUNNING'].includes(run.status) ? 'Workflow is continuing.'
       : run.status === 'STOPPED' ? 'Workflow was stopped.'
       : ['UNKNOWN', 'UNAVAILABLE'].includes(run.status) ? 'Run status is unavailable. Open the run to check.'

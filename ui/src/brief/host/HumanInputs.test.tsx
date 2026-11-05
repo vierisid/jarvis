@@ -146,3 +146,13 @@ test('a dismissed request with a kept draft no longer counts, and an answered on
   await React.act(async () => root.render(<Forms.HumanInputForm request={{ ...request, status: 'submitted', runs: [{ runId: 'run', versionId: 'v', status: 'SUCCEEDED' }] }} http={http} changed={async () => {}} />));
   expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toBeNull();
 });
+
+test('a submitted answer held by global pause explains why it has not continued', async () => {
+  const { EmergencyStatusContext } = await import('./EmergencyStatus');
+  const http = createHostTransport((async()=>{throw new Error('No write expected');}) as unknown as typeof fetch);
+  const held = { ...request, status:'submitted' as const, runs:[{runId:'run',versionId:'version',status:'PAUSED'}] };
+  await React.act(async()=>root.render(<EmergencyStatusContext.Provider value="paused"><Forms.HumanInputForm request={held} http={http} changed={async()=>{}} /></EmergencyStatusContext.Provider>));
+  expect(host.textContent).toContain('Global emergency pause is holding this workflow');
+  expect(host.textContent).toContain('Saved responses will continue');
+  expect(host.querySelector('a')?.href).toContain('runId=run');
+});

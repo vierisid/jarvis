@@ -5,6 +5,8 @@ import { enqueue } from '../workflows/db/repos/job-queue';
 import { assertCodeStepsAllowed } from '../workflows/db/repos/flow-code-steps';
 import { assertVersionReady } from '../workflows/db/repos/flow-readiness';
 import { getFlowRun } from '../workflows/db/repos/flow-run';
+import { workflowDiagnostic } from './workflow-diagnostic';
+import { recoverySteps } from '../failures/projection';
 import { runFailure } from '../workflows/runtime/run-failure';
 import { getRunRecovery } from '../workflows/runtime/recovery';
 import { bindingDrift, runConnectionBindingViews, type BindingDrift } from '../workflows/db/repos/binding-pins';
@@ -319,20 +321,22 @@ export class WorkflowContext {
     // reconciles, retries or records a decision. A run stopped by the lifecycle
     // (its workflow turned off or removed, or Kill) names that reason first.
     const run = getFlowRun(r.id)!, failure = runFailure(run), recovery = getRunRecovery(r.id);
+    const diagnostic = workflowDiagnostic(run.failedStep?.errorMessage);
+    const next = failure && diagnostic ? recoverySteps('edit_and_run_again', ...failure.next.map(n => n.step).filter(step => step !== 'run_again' && step !== 'edit_and_run_again')) : failure?.next;
     const stoppedBy = run.failedStep?.name === '<lifecycle>' ? `${run.failedStep.displayName}.` : null;
     const summary = failure ? [stoppedBy, failure.headline, failure.outcome].filter(Boolean).join(' ')
       : 'Recorded execution evidence; success alone does not verify goal progress.';
     return { ...this.summary(r), summary,
       failure: failure ? { category: failure.category, effect: failure.effect, headline: stoppedBy ?? failure.headline,
-        outcome: failure.outcome, next: failure.next, code: failure.code } : null,
+        outcome: failure.outcome, next: next!, code: failure.code } : null,
       recovery: recovery ? { state: recovery.state, reason: recovery.reason, needsAttention: recovery.needsAttention,
         canReplay: false as const, newRunRequired: true as const } : null,
       trigger: null, finishedAt: r.finish_time,
       steps: entries.map(([name, raw, path]) => { const s = object(raw) ? raw : {};
         return { id: `step-${path}`, title: `Step ${name}`, description: failure && name === run.failedStep?.name
-          ? [failure.headline, failure.outcome, ...failure.next.map(n => n.label)].join(' ') : 'Recorded step input and output.',
+          ? [failure.headline, diagnostic, failure.outcome, ...next!.map(n => n.label)].filter(Boolean).join(' ') : 'Recorded step input and output.',
           status: typeof s.status === 'string' ? status(s.status) : 'uncertain',
-          fields: [inspectionValue('Input', s.input), inspectionValue('Output', s.output)] }; }),
+          fields: [...(diagnostic && name === run.failedStep?.name ? [{ label: 'Diagnostic', value: diagnostic }] : []), inspectionValue('Input', s.input), inspectionValue('Output', s.output)] }; }),
       effects, waits, context: used,
       inspection: { status: 'partial', note: `Text values and field names are redacted. Context covers retained records only.${nodes ? '' : ' Immutable historical graph unavailable.'}${steps == null ? ' Step data was not recorded.' : ''}` } };
   }

@@ -576,3 +576,17 @@ test('failed step explains the safe failure and distinguishes spawn permission f
     description: 'This records permission to start the agent, not whether its task succeeded.' });
   expect(JSON.stringify(detail)).not.toContain('private browser detail');
 });
+
+test('failed expression inspection explains the repair without leaking expression values or stack paths', () => {
+  const r = run();
+  const errorMessage = 'engine executor: WorkflowExpressionError: Unsupported workflow expression: non-JSON object in {{ private_customer_email }}. token=secret-token at /private/path';
+  updateRun(r.id, { status: 'FAILED', failedStep: { name: 'finish', displayName: 'Finish', errorMessage },
+    steps: { finish: { type: 'PIECE', status: 'FAILED', input: {}, errorMessage } } });
+  const detail = service.selection(flowId, versionId, r.id).run!;
+  expect(detail.steps[0]!.fields.find(f => f.label === 'Diagnostic')?.value).toContain('not plain JSON');
+  expect(detail.steps[0]!.description).toContain('validate the draft');
+  expect(detail.failure!.next.some(n => n.step === 'edit_and_run_again')).toBe(true);
+  expect(detail.failure!.next.some(n => n.step === 'run_again')).toBe(false);
+  const exposed = JSON.stringify(detail);
+  for (const secret of ['private_customer_email', 'secret-token', '/private/path', 'WorkflowExpressionError:']) expect(exposed).not.toContain(secret);
+});
