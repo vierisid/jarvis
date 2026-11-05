@@ -1,6 +1,6 @@
 # D33 reversible dashboard release switch
 
-The shipped `BRIEF_RELEASE` is **off**. D32's live craft gate, F28's activation/migration gate, Q22's quality gate, the integrated live composition and team deployment approval are still required. Passing these switch tests does not pass those gates.
+The shipped `BRIEF_RELEASE` is **off**. It does not decide the hosted default: since #1185, hosted installs open Brief through the authenticated host descriptor (`ui/src/brief/host/hosted-entry.ts`, `docs/hosted-dashboard.md`), which reads none of the release records below but routes with this switch's `resolveReleaseEntry`, rollout `released`, so the Entry and rollback table at the end describes hosted routing too, except that hosted Brief keeps maintenance links (`briefMaintenance=1`, settings hashes) inside the Brief host (`ui/src/brief/host/DashboardRoot.tsx`). The record and checklist apply only to turning Brief on by default where that descriptor does not. No real release record has been written yet, and filling `BRIEF_RELEASE` alone would change nothing: `DashboardRoot` also passes `DashboardEntry` no release runtime or live composition.
 
 ## Quick verification
 
@@ -21,7 +21,7 @@ Open `http://127.0.0.1:4433/`. This server binds loopback and serves only a synt
 
 ## Integration contract
 
-`DashboardEntry` accepts `release` and `runtime` at composition. The default remains off and `ui/src/main.tsx` supplies no runtime binding. The integration owner must supply the authenticated runtime and all live room bodies/navigation/conversation before mounting; no guessed version or provider registration belongs in D33.
+`DashboardEntry` accepts `release` and `runtime` at composition. The default remains off and `host/DashboardRoot.tsx` (mounted by `ui/src/main.tsx`) supplies no runtime binding. The integration owner must supply the authenticated runtime and all live room bodies/navigation/conversation before mounting; no guessed version or provider registration belongs in D33.
 
 - `candidate` is the full SHA of the **integrated UI candidate**, not this PR or a dependency PR. All three gate records, team approval and runtime must refer to that candidate. Evidence-only receipt commits may follow the tested code; document this relationship in the release receipt.
 - `gates` contains reviewed D32, F28 and Q22 results. Each must be `passed`, `source: live` and identify its reviewed artifact. Failed, blocked, not-run, missing or fixture evidence keeps the switch off.
@@ -29,7 +29,7 @@ Open `http://127.0.0.1:4433/`. This server binds loopback and serves only a synt
 - `approval` references the team's deployment authorization for that candidate. It is not inferred from tests or CI.
 - `rollout: cohort` uses the existing `?brief=1` opt-in on selected sessions. There is no new account targeting service, percentage rollout or backend feature flag. Distribute opt-in links only to the approved small cohort. `released` aliases foreground routes by default after the cohort observation/approval process. `off` disables production entry.
 
-`assessBriefRelease` validates the record's structure, provenance labels and candidate/combination match. **It does not open artifacts, execute the three upstream suites, authenticate attestations or certify their truth.** The integration/release owner reviews the actual evidence. Nothing in this PR supplies a passed production record.
+`assessBriefRelease` validates the record's structure, provenance labels and candidate/combination match. **It does not open artifacts, execute the three upstream suites, authenticate attestations or certify their truth.** The integration/release owner reviews the actual evidence. Nothing in the repository supplies a passed production record.
 
 The composition check requires every registered room body, live ready navigation and one live conversation. This catches missing destinations and fixture owners; it cannot prove an arbitrary body has no dead controls. Room adapters and F28 still enforce capability/readiness and action guards. Do not replace them with gate booleans.
 
@@ -60,7 +60,7 @@ the result with the deployment approval. Every item must hold for the same `cand
    `candidate`.
 
 If any item fails, leave `rollout: "off"`. A later CLI can join these records automatically once the
-first real release record exists; until then this list is the binding.
+first real release record exists (#1104); until then this list is the binding.
 
 ## Entry and rollback
 
@@ -74,7 +74,7 @@ first real release record exists; until then this list is the binding.
 | `briefMaintenance=1`, or a settings hash with `settingsTab`/`sidecarId` | Existing maintenance/device-settings owner, including older F25 bookmarks |
 | `?brief=0` | Explicit v2 override, even with a released default |
 
-The configuration and developer-tools setting are read once per document. Polling or a new config object cannot destroy open work. Feature action guards still respond to outages. Rollback applies on the next load: set `rollout: off` in the same release configuration and reload after saving; ordinary `beforeunload` guards remain in force. An individual session can use `?brief=0` immediately on a fresh load. Never trigger a background reload to enforce the UI flag.
+The configuration and developer-tools setting are read once per document. Polling or a new config object cannot destroy open work. Feature action guards still respond to outages. For the hosted default, roll back with `JARVIS_HOSTED_DASHBOARD=legacy` and a restart (`docs/hosted-dashboard.md`). For this switch, rollback applies on the next load: set `rollout: off` in the same release configuration and reload after saving; ordinary `beforeunload` guards remain in force. An individual session can use `?brief=0` immediately on a fresh load. Never trigger a background reload to enforce the UI flag.
 
 A bookmarked Brief path under a disabled gate is replaced with its usable legacy parent **before** v2 mounts. Query connection parameters survive. `briefReturn` carries the normalized Brief route and selection IDs; v2 intentionally does not attempt to interpret those IDs. To revisit after reactivation, use that hash with an approved `brief=1` link. No writes, effect replay, schema downgrade, deletion or cleanup of the old implementation occurs.
 

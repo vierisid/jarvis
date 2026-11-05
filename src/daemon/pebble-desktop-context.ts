@@ -143,7 +143,7 @@ export function pebbleActionDirectives(): string[] {
     '',
     'The pebble is a *visual narrator only* - it flies to the action target so the user can see what JARVIS is doing, but it does NOT control the user\'s cursor.',
     '',
-    '**Desktop control is turned off on this Jarvis** (desktop.enabled: false). You cannot list windows, see the screen, click, type, take screenshots or open or focus apps outside the browser, and the desktop tools are not available. Do not try to reach the desktop another way. If the user asks for something on their desktop, say that desktop control is off and that they can turn it back on by setting desktop.enabled to true in config.yaml and restarting Jarvis.',
+    '**Desktop control is turned off on this Jarvis** (desktop.enabled: false). You cannot list windows, see the screen, click, type, take screenshots, read or write the clipboard or open or focus apps outside the browser, and the desktop and clipboard tools are not available. Do not try to reach the desktop another way. If the user asks for something on their desktop, say that desktop control is off and that they can turn it back on in Settings > General > Desktop control, or by setting desktop.enabled to true in config.yaml and restarting Jarvis.',
     '',
     'When you finish a multi-step task, give a short verbal confirmation ("Done - the page is open.") rather than re-narrating each step.',
     '',

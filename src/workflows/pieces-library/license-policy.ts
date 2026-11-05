@@ -136,6 +136,14 @@ export const REVIEWED_LICENSES: Readonly<Record<string, ReviewedLicense>> = {
       "staging install by jimp@0.22.12 > @jimp/custom > @jimp/core, for the core image-helper and pdf " +
       "pieces (#961) (reviewed 2026-11-05).",
   },
+  "xml-escape@1.1.0": {
+    declared: "MIT License",
+    license: "MIT",
+    reason:
+      "package.json declares \"MIT License\", which is not an SPDX id; the tarball ships LICENSE, \"The MIT " +
+      "License (MIT)\", copyright 2014 Michael Hernandez, with the full MIT grant and disclaimer. Pulled into " +
+      "the brain's production dependencies by edge-tts-universal@1.4.0 (#1166) (reviewed 2026-11-05).",
+  },
   // absurd-sql@0.0.54 would need one too, as MIT (no license field, ships
   // the MIT text in LICENSE), but only @actual-app/core pulls it and
   // actualbudget is EXCLUDED, so it is not in the shared tree (or any catalog).

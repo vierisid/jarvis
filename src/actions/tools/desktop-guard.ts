@@ -3,14 +3,15 @@
  *
  * `desktop.enabled: false` means Jarvis does not ask for or act on the user's
  * desktop: it requests no window lists, UI trees or screen captures, and sends
- * no clicks, typing, key presses, app launches or window focus -- on this
- * machine or on a connected sidecar. On the observer side Jarvis ignores what
- * arrives: awareness and the generic sidecar event pipeline drop the screen
- * events a sidecar sends (sidecar-event-routing.ts), the pebble takes no
- * screenshot or window list of its own, and a skill recording stops. It does
- * NOT stop a sidecar's own screen observer: the sidecar still captures and
- * OCRs the screen and sends those events, which the daemon then drops unread
- * (stopping it at the source is a follow-up). The browser tools are
+ * no clicks, typing, key presses, app launches or window focus, and does not
+ * read or write the clipboard (#1159) -- on this machine or on a connected
+ * sidecar. On the observer side Jarvis ignores what arrives: awareness and the
+ * generic sidecar event pipeline drop the screen and clipboard events a
+ * sidecar sends (sidecar-event-routing.ts), the pebble takes no screenshot or
+ * window list of its own, and a skill recording stops. It does NOT stop a
+ * sidecar's own screen and clipboard observers: the sidecar still captures,
+ * OCRs and reads, and sends those events, which the daemon then drops unread
+ * (stopping them at the source needs a sidecar change). The browser tools are
  * unaffected. A screenshot the user attaches themselves from the dashboard is
  * the user's own act and is not covered. The default is `true`, so an install
  * that never set it behaves as before.
@@ -22,12 +23,19 @@
  *   DESKTOP_DISABLED_MESSAGE, at the orchestrator before any approval card and
  *   again in `ToolRegistry.execute`, which every dispatch path goes through.
  *
- * Changing it takes a restart: the value comes from config.yaml, which is
- * imported into the settings store at boot, and nothing writes the stored
- * `desktop` section at run time, so no settings reload carries a new value
- * today. The check still reads the config object live, so a future writer
- * plus a reload would apply at once. Lives in its own module, like local-tools-guard.ts, so
- * the registry, the tool filter and the tools can all import it.
+ * Settings changes it at run time (POST /api/config/desktop, #1159): the
+ * route sets the live config object this check reads and runs the desktop
+ * applier, so it applies at once. An edit to config.yaml is imported into the
+ * settings store at boot, so that way takes a restart.
+ *
+ * Not covered: run_command. A shell can capture the screen or send input
+ * itself (screencapture, osascript, xdotool), and a list of such commands
+ * would always be incomplete, so the terminal is governed by its own approval
+ * and by --no-local-tools, not by this switch (owner decision, #1159). The
+ * prompt note below still tells the model not to reach the desktop that way.
+ *
+ * Lives in its own module, like local-tools-guard.ts, so the registry, the
+ * tool filter and the tools can all import it.
  */
 
 import { ActionOutcomeError } from '../action-outcome.ts';
@@ -100,8 +108,8 @@ export const DESKTOP_DISABLED_CODE = 'DESKTOP_DISABLED';
 
 export const DESKTOP_DISABLED_MESSAGE =
   'Error: Desktop control is turned off on this Jarvis (desktop.enabled: false), so this was not run. '
-  + 'Jarvis will not list windows, look at the screen or act on desktop apps on any machine until the user turns it back on '
-  + '(desktop.enabled: true in config.yaml, then restart Jarvis). '
+  + 'Jarvis will not list windows, look at the screen, read or write the clipboard or act on desktop apps on any machine until the user turns it back on '
+  + '(Settings > General > Desktop control, or desktop.enabled: true in config.yaml and a restart). '
   + 'Browser tools still work. Do NOT retry; tell the user desktop control is off.';
 
 /** Whether this call, with these arguments, would reach the desktop. */
@@ -162,12 +170,12 @@ export function desktopOffSystemNote(): string | null {
     '# Desktop control is off',
     '',
     'The user has turned desktop control off (desktop.enabled: false). The tool guide above documents the desktop tools, '
-    + 'but on this install you cannot list windows, read the screen, or click, type, press keys, launch or focus apps on any machine: '
-    + 'the desktop_* tools and capture_screen are not available, ui_snapshot, ui_act and run_skill work only on the browser, '
+    + 'but on this install you cannot list windows, read the screen, read or write the clipboard, or click, type, press keys, launch or focus apps on any machine: '
+    + 'the desktop_* tools, capture_screen, get_clipboard and set_clipboard are not available, ui_snapshot, ui_act and run_skill work only on the browser, '
     + 'and record_skill cannot start a recording. '
     + 'Do not try to reach the desktop another way, for example through shell commands. '
     + 'If the user asks for something on their desktop, say that desktop control is off and that they can turn it back on '
-    + 'by setting desktop.enabled to true in config.yaml and restarting Jarvis.',
+    + 'in Settings > General > Desktop control, or by setting desktop.enabled to true in config.yaml and restarting Jarvis.',
   ].join('\n');
 }
 

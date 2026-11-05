@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MacAppController } from './macos.ts';
-import { __setNativeExecMaxOutputForTests, __setNativeExecTimeoutForTests, defaultExec, runNative, type NativeExec } from './native-exec.ts';
+import { __setNativeExecMaxOutputForTests, __setNativeExecTimeoutForTests, defaultExec, runNative, settleNativeExec, type NativeExec, type NativeProcess } from './native-exec.ts';
 import { TYPE_MS_PER_CHAR, typingAllowanceMs } from './typing-allowance.ts';
 import { WindowsAppController } from './windows.ts';
 
@@ -115,6 +115,87 @@ describe.skipIf(process.platform === 'win32')('defaultExec (#893)', () => {
     expect(await settle(runNative(defaultExec, [leaky], '', 'osascript'), 6000))
       .toBe('osascript exited with code 0 but its output never closed or could not be read');
     expect(performance.now() - started).toBeLessThan(3000);
+  });
+});
+
+/**
+ * #1159: a stderr flood that came while the script still ran, where the kill
+ * did not land and the script then exited by itself, was reported as
+ * "stopped: output passed" even for an exit 0; capture-file.ts reports the
+ * script's own exit. Stand-in processes, so the order of flood, kill and exit
+ * is the test's, not the scheduler's.
+ */
+describe('a stderr flood during the run is judged as capture-file.ts judges it (#1159)', () => {
+  const CAP = 64 * 1024;
+  const after = (ms: number, bytes: Uint8Array | null, head?: string) => new ReadableStream<Uint8Array>({
+    start(c) { if (head) c.enqueue(new TextEncoder().encode(head)); },
+    async pull(c) { await Bun.sleep(ms); if (bytes) c.enqueue(bytes); c.close(); },
+  });
+  /** Exits by itself with `code` at 30 ms; the kill is recorded but does not land unless `killLands`. */
+  function standIn(code: number, stdout: ReadableStream<Uint8Array>, stderr: ReadableStream<Uint8Array>, killLands = false) {
+    let exited = false;
+    let signal: string | null = null;
+    let resolveExit!: (n: number) => void;
+    const exitedP = new Promise<number>((r) => { resolveExit = r; });
+    void Bun.sleep(30).then(() => { if (!exited) { exited = true; resolveExit(code); } });
+    const proc: NativeProcess & { kills: number } = {
+      kills: 0,
+      exited: exitedP,
+      get exitCode() { return exited && signal === null ? code : null; },
+      get signalCode() { return signal; },
+      stdout, stderr,
+      kill() { proc.kills++; if (killLands && !exited) { exited = true; signal = 'SIGKILL'; resolveExit(137); } },
+    };
+    return proc;
+  }
+  const run = (proc: NativeProcess) => settle(runNative((_cmd, _in, opts) => settleNativeExec(proc, opts), ['osascript'], '', 'osascript'), 5000);
+
+  test('a script that exits 0 by itself after the flood keeps its answer', async () => {
+    __setNativeExecMaxOutputForTests(CAP);
+    const proc = standIn(0, after(40, new TextEncoder().encode('ok\n')), after(10, new Uint8Array(200_000)));
+    expect(await run(proc)).toBe('resolved: ok\n');
+    // The flood did try to stop it: the guard still fires, only the verdict follows the exit.
+    expect(proc.kills).toBe(1);
+  });
+
+  test('a script that fails by itself after the flood is reported for its failure', async () => {
+    __setNativeExecMaxOutputForTests(CAP);
+    const proc = standIn(1, after(0, null), after(10, new Uint8Array(200_000), 'execution error'));
+    expect(await run(proc)).toBe('osascript exited with code 1: execution error');
+  });
+
+  test('a flood that arrives in pipe-sized pieces is not carried whole into the error', async () => {
+    __setNativeExecMaxOutputForTests(CAP);
+    // Real pipes deliver the flood in pieces, each kept until the cap passes.
+    let sent = 0;
+    const stderr = new ReadableStream<Uint8Array>({
+      start(c) { c.enqueue(new TextEncoder().encode('execution error\n')); },
+      async pull(c) { await Bun.sleep(1); if (sent >= 200_000) { c.close(); return; } sent += 16 * 1024; c.enqueue(new Uint8Array(16 * 1024).fill(120)); },
+    });
+    const proc = standIn(1, after(0, null), stderr);
+    const message = await run(proc);
+    expect(message.startsWith('osascript exited with code 1: execution error')).toBe(true);
+    expect(message.length).toBeLessThanOrEqual('osascript exited with code 1: '.length + 500);
+  });
+
+  test('an answer that passes the cap while it is drained, after a forgiven flood, is refused', async () => {
+    __setNativeExecMaxOutputForTests(CAP);
+    // stderr floods at 10 ms, the kill does not land, it exits 0 at 30 ms, and
+    // stdout passes the cap at 40 ms, after the exit.
+    const proc = standIn(0, after(40, new Uint8Array(200_000)), after(10, new Uint8Array(200_000)));
+    expect(await run(proc)).toBe(`osascript was stopped: output passed ${CAP} bytes`);
+  });
+
+  test('a flood whose kill lands is still reported as stopped', async () => {
+    __setNativeExecMaxOutputForTests(CAP);
+    const proc = standIn(0, after(40, new TextEncoder().encode('ok\n')), after(10, new Uint8Array(200_000)), true);
+    expect(await run(proc)).toBe(`osascript was stopped: output passed ${CAP} bytes`);
+  });
+
+  test('an answer past the cap is refused even when the script exits 0 by itself', async () => {
+    __setNativeExecMaxOutputForTests(CAP);
+    const proc = standIn(0, after(10, new Uint8Array(200_000)), after(0, null));
+    expect(await run(proc)).toBe(`osascript was stopped: output passed ${CAP} bytes`);
   });
 });
 
