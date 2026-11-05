@@ -8,7 +8,7 @@ import type {
   LLMStreamEvent,
   LLMErrorCode,
 } from './provider.ts';
-import { classifyErrorString, getLLMErrorCode, LLMProviderError } from './provider.ts';
+import { addUsage, classifyErrorString, hasUsage, getLLMErrorCode, LLMProviderError, type LLMUsage } from './provider.ts';
 import { abortableDelay, raceWithSignal } from '../util/abort.ts';
 import {
   type Tier,
@@ -377,25 +377,41 @@ export class LLMManager {
         .slice(candidateIndex + 1)
         .some((candidate) => candidate.provider.name !== provider.name
           && !exhaustedProviders.has(candidate.provider.name));
+      // Tokens of attempts that failed after the provider reported
+      // usage (a cut-off body); recorded with the call, never as zero (#1258).
+      const spent: LLMUsage = { input_tokens: 0, output_tokens: 0 };
       try {
         const response = await this.invokeWithRetry(
           provider,
           messages,
           mergedOptions,
           hasAlternativeProvider,
+          spent,
         );
+        addUsage(spent, response.usage);
         recordUsage({
           tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
           model: response.model || model || '',
-          input_tokens: response.usage?.input_tokens ?? 0,
-          output_tokens: response.usage?.output_tokens ?? 0,
-          cache_read_input_tokens: response.usage?.cache_read_input_tokens ?? 0,
-          cache_creation_input_tokens: response.usage?.cache_creation_input_tokens ?? 0,
+          input_tokens: spent.input_tokens,
+          output_tokens: spent.output_tokens,
+          cache_read_input_tokens: spent.cache_read_input_tokens ?? 0,
+          cache_creation_input_tokens: spent.cache_creation_input_tokens ?? 0,
           latency_ms: Date.now() - started,
         });
         return response;
       } catch (err) {
-        if (err instanceof BackgroundThrottled) throw err;
+        if (err instanceof BackgroundThrottled) {
+          // As in streamTier: an attempt that reported usage before the budget
+          // refused the retry is still recorded (#1258).
+          if (hasUsage(spent)) recordUsage({
+            tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
+            model: model || '', input_tokens: spent.input_tokens, output_tokens: spent.output_tokens,
+            cache_read_input_tokens: spent.cache_read_input_tokens ?? 0,
+            cache_creation_input_tokens: spent.cache_creation_input_tokens ?? 0,
+            latency_ms: Date.now() - started, error_code: 'background_throttled',
+          });
+          throw err;
+        }
         options?.signal?.throwIfAborted();
         const msg = err instanceof Error ? err.message : String(err);
         const code = getLLMErrorCode(err);
@@ -405,7 +421,9 @@ export class LLMManager {
         failures.push(msg);
         recordUsage({
           tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
-          model: model || '', input_tokens: 0, output_tokens: 0,
+          model: model || '', input_tokens: spent.input_tokens, output_tokens: spent.output_tokens,
+          cache_read_input_tokens: spent.cache_read_input_tokens ?? 0,
+          cache_creation_input_tokens: spent.cache_creation_input_tokens ?? 0,
           latency_ms: Date.now() - started, error_code: code,
         });
         if (!this.shouldFailOver(code, msg)) throw err;
@@ -444,6 +462,8 @@ export class LLMManager {
       let finalResponse: LLMResponse | null = null;
       let terminalError: Extract<LLMStreamEvent, { type: 'error' }> | null = null;
       let emittedContent = false;
+      // As in chatTier: failed attempts' reported tokens count too (#1258).
+      const spent: LLMUsage = { input_tokens: 0, output_tokens: 0 };
       const hasAlternativeProvider = candidates
         .slice(candidateIndex + 1)
         .some((candidate) => candidate.provider.name !== provider.name
@@ -455,6 +475,7 @@ export class LLMManager {
           messages,
           mergedOptions,
           hasAlternativeProvider,
+          spent,
         )) {
           if (event.type === 'done') finalResponse = event.response;
           if (event.type === 'text' || event.type === 'tool_call') emittedContent = true;
@@ -467,13 +488,17 @@ export class LLMManager {
       } finally {
         // Runs even when the consumer stops iterating mid-stream (client
         // disconnect / stop) so partial calls still land in telemetry.
-        if (terminalError?.code !== 'background_throttled') recordUsage({
+        addUsage(spent, finalResponse?.usage);
+        // A throttled call none of whose attempts reported usage is not
+        // recorded, as before; one whose attempt reported usage and then
+        // throttled its own retry is (#1258).
+        if (terminalError?.code !== 'background_throttled' || hasUsage(spent)) recordUsage({
           tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
           model: finalResponse?.model || model || '',
-          input_tokens: finalResponse?.usage?.input_tokens ?? 0,
-          output_tokens: finalResponse?.usage?.output_tokens ?? 0,
-          cache_read_input_tokens: finalResponse?.usage?.cache_read_input_tokens ?? 0,
-          cache_creation_input_tokens: finalResponse?.usage?.cache_creation_input_tokens ?? 0,
+          input_tokens: spent.input_tokens,
+          output_tokens: spent.output_tokens,
+          cache_read_input_tokens: spent.cache_read_input_tokens ?? 0,
+          cache_creation_input_tokens: spent.cache_creation_input_tokens ?? 0,
           latency_ms: Date.now() - started,
           error_code: terminalError?.code
             ?? (terminalError ? classifyErrorString(terminalError.error) : undefined),
@@ -517,6 +542,7 @@ export class LLMManager {
     messages: LLMMessage[],
     options?: LLMOptions,
     failFastOnRateLimit = false,
+    spent?: LLMUsage,
   ): Promise<LLMResponse> {
     const errors: string[] = [];
     let lastCode: LLMErrorCode = 'unknown';
@@ -538,6 +564,7 @@ export class LLMManager {
         return result;
       } catch (err) {
         if (err instanceof BackgroundThrottled) throw err;
+        if (spent && err instanceof LLMProviderError) addUsage(spent, err.usage);
         options?.signal?.throwIfAborted();
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
@@ -565,6 +592,7 @@ export class LLMManager {
     messages: LLMMessage[],
     options?: LLMOptions,
     failFastOnRateLimit = false,
+    spent?: LLMUsage,
   ): AsyncIterable<LLMStreamEvent> {
     const errors: string[] = [];
     let lastErrorCode: LLMErrorCode | undefined;
@@ -580,6 +608,7 @@ export class LLMManager {
         for await (const event of backgroundStream(withMemoryHandoff(provider), messages, options)) {
           if (event.type === 'error') {
             hasError = true;
+            if (spent) addUsage(spent, event.usage);
             errors.push(`attempt ${attempt}: ${event.error}`);
             lastErrorCode = event.code ?? classifyErrorString(event.error);
             retryableEvent = this.shouldRetryCode(lastErrorCode);
@@ -609,6 +638,7 @@ export class LLMManager {
         if (failFastOnRateLimit && lastErrorCode === 'rate_limit') break;
         if (!await this.waitForRetry(eventRetryAfterMs, retryBudget)) break;
       } catch (err) {
+        if (spent && err instanceof LLMProviderError) addUsage(spent, err.usage);
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
         lastErrorCode = err instanceof LLMProviderError ? err.code : classifyErrorString(errorMsg);

@@ -25,18 +25,39 @@ export type LLMToolCall = {
 export type LLMResponse = {
   content: string;
   tool_calls: LLMToolCall[];
-  usage: {
-    // Normalized across providers: input_tokens counts only UNCACHED prompt
-    // tokens (billed at full price). The full prompt size is
-    // input_tokens + cache_read_input_tokens + cache_creation_input_tokens.
-    input_tokens: number;
-    output_tokens: number;
-    cache_read_input_tokens?: number;      // tokens served from provider prompt cache (~0.1x on Anthropic, 0.5x on OpenAI)
-    cache_creation_input_tokens?: number;  // tokens written to provider prompt cache (1.25x on Anthropic; always 0 on OpenAI)
-  };
+  usage: LLMUsage;
   model: string;
   finish_reason: 'stop' | 'tool_use' | 'length' | 'error';
 };
+
+export type LLMUsage = {
+  // Normalized across providers: input_tokens counts only UNCACHED prompt
+  // tokens (billed at full price). The full prompt size is
+  // input_tokens + cache_read_input_tokens + cache_creation_input_tokens.
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;      // tokens served from provider prompt cache (~0.1x on Anthropic, 0.5x on OpenAI)
+  cache_creation_input_tokens?: number;  // tokens written to provider prompt cache (1.25x on Anthropic; always 0 on OpenAI)
+};
+
+/** Whether any token count of `usage` is non-zero. */
+export function hasUsage(usage: LLMUsage): boolean {
+  return usage.input_tokens > 0 || usage.output_tokens > 0
+    || (usage.cache_read_input_tokens ?? 0) > 0 || (usage.cache_creation_input_tokens ?? 0) > 0;
+}
+
+/** Adds `from` into `into`, so a call's failed attempts still count (#1258). */
+export function addUsage(into: LLMUsage, from: LLMUsage | undefined): void {
+  if (!from) return;
+  into.input_tokens += from.input_tokens;
+  into.output_tokens += from.output_tokens;
+  if (from.cache_read_input_tokens) {
+    into.cache_read_input_tokens = (into.cache_read_input_tokens ?? 0) + from.cache_read_input_tokens;
+  }
+  if (from.cache_creation_input_tokens) {
+    into.cache_creation_input_tokens = (into.cache_creation_input_tokens ?? 0) + from.cache_creation_input_tokens;
+  }
+}
 
 /**
  * Structured classification for provider/stream errors. Lets the UI render
@@ -72,7 +93,12 @@ export type LLMStreamEvent =
   | { type: 'text'; text: string; segmentEnd?: boolean }
   | { type: 'tool_call'; tool_call: LLMToolCall }
   | { type: 'done'; response: LLMResponse }
-  | { type: 'error'; error: string; code?: LLMErrorCode; retry_after_ms?: number };
+  /**
+   * `usage` is what the provider already reported before the failure (for
+   * example a stream cut off after message_start), so the tokens it already
+   * reported are not recorded as zero (#1258).
+   */
+  | { type: 'error'; error: string; code?: LLMErrorCode; retry_after_ms?: number; usage?: LLMUsage };
 
 /** HTTP-aware provider failure used to carry Retry-After into the router. */
 export class LLMProviderError extends Error {
@@ -80,6 +106,8 @@ export class LLMProviderError extends Error {
     message: string,
     readonly code: LLMErrorCode,
     readonly retryAfterMs?: number,
+    /** Usage the provider reported before failing (#1258). */
+    readonly usage?: LLMUsage,
   ) {
     super(message);
     this.name = 'LLMProviderError';
