@@ -353,6 +353,17 @@ describe('#608: a declared outside-content failure is framed for a sub-agent', (
     expect(texts.c2).toBe(`Error executing manage_goals: Tool 'manage_goals' execution failed: ${stepName}`);
   });
 
+  test('a flagged plain-Error failure from a taint source taints the run (#1156)', async () => {
+    const r = new ToolRegistry();
+    r.register({ name: 'desktop_screenshot', category: 'desktop', description: 'synthetic', parameters: {},
+      failureIsOutsideContent: true, execute: async () => { throw new Error(stepName); } });
+    const result = await runSubAgent({ agent: agent(), task: 'look', context: '',
+      llmManager: llm([[call('c1', 'desktop_screenshot')]]).manager,
+      toolRegistry: r, authorityEngine: authority([]).engine, maxIterations: 3 });
+    expect(Object.fromEntries(toolMessages(result)).c1).toContain(UNTRUSTED_OPEN);
+    expect(result.taint).toContain('desktop_screenshot');
+  });
+
   test('governedText frames a flagged failure too', async () => {
     // `governedTools` stands in for the workflow effect boundary, which records
     // the raw message and hands it back as the dispatch's answer.
@@ -370,6 +381,19 @@ describe('#608: a declared outside-content failure is framed for a sub-agent', (
 
     const plainRun = await run('manage_goals');
     expect(Object.fromEntries(toolMessages(plainRun)).c1).toBe(raw);
+  });
+
+  test('a governed flagged failure from a taint source taints the run (#1156 review)', async () => {
+    const a = authority(['execute_command']);
+    const r = new ToolRegistry();
+    r.register({ name: 'desktop_screenshot', category: 'desktop', description: 'synthetic', parameters: {},
+      failureIsOutsideContent: true, authorityGate: gate, execute: async () => 'never' });
+    const result = await runSubAgent({ agent: agent(), task: 'look', context: '',
+      llmManager: llm([[call('c1', 'desktop_screenshot')]]).manager, toolRegistry: r,
+      authorityEngine: a.engine, auditTrail: a.audit, maxIterations: 3,
+      governedTools: async () => ({ kind: 'failed', result: stepName }) });
+    expect(Object.fromEntries(toolMessages(result)).c1).toContain(UNTRUSTED_OPEN);
+    expect(result.taint).toContain('desktop_screenshot');
   });
 });
 

@@ -293,11 +293,11 @@ export type UseVoiceReturn = {
   activeWakeEngine: ActiveWakeEngine;
   // Called by useWebSocket for TTS events
   handleTTSBinary: (data: ArrayBuffer) => void;
-  handleTTSStart: (requestId: string, containsWake?: boolean, containsStop?: boolean) => void;
+  handleTTSStart: (requestId: string, containsWake?: boolean, containsStop?: boolean, queue?: boolean) => void;
   /** Mid-turn flip: a later sentence in the same TTS turn contains "Jarvis"
    *  (and, when `containsStop`, a spoken stop phrase). */
   handleTTSContainsWake: (containsStop?: boolean) => void;
-  handleTTSEnd: (requestId?: string, bargeIn?: boolean) => void;
+  handleTTSEnd: (requestId?: string, bargeIn?: boolean, cancelled?: boolean) => void;
   /** `requestId`: the failed turn, when it was not a text turn this tab sent; ignored unless this hook started it. */
   handleError: (message?: string, requestId?: string) => void;
   /** Realtime session closed server-side — stop the mic, return to idle.
@@ -1050,20 +1050,27 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     if (!ttsPlayingRef.current) playNextTTSChunk();
   }, [playNextTTSChunk]);
 
-  const handleTTSStart = useCallback((requestId: string, containsWake = false, containsStop = false) => {
+  const handleTTSStart = useCallback((requestId: string, containsWake = false, containsStop = false, queue = false) => {
     console.log("[Voice] TTS start:", requestId, containsWake ? "(contains wake)" : "");
-    ttsPlaybackGenerationRef.current++;
-    // Stop any lingering playback from a previous TTS session
-    if (ttsPlayingRef.current || ttsQueueRef.current.length > 0) {
-      audioContextRef.current?.close();
-      audioContextRef.current = null;
+    // A new clip supersedes the one playing, as it always has, except a
+    // voice answer the daemon held until a reply was sent whole (`queue`,
+    // #1156): that reply is only playing out, and the answer goes after it
+    // instead of cutting its end off. A clip still being sent is superseded
+    // even then. A stop the daemon makes arrives as a cancelled tts_end.
+    const supersedes = !queue || ttsRequestIdRef.current !== null;
+    if (supersedes) {
+      ttsPlaybackGenerationRef.current++;
+      if (ttsPlayingRef.current || ttsQueueRef.current.length > 0) {
+        audioContextRef.current?.close();
+        audioContextRef.current = null;
+      }
+      ttsQueueRef.current = [];
+      ttsPlayingRef.current = false;
     }
     ttsRequestIdRef.current = requestId;
     ttsPlayingRequestIdRef.current = requestId;
     ttsContainsWakeRef.current = containsWake;
     ttsContainsStopRef.current = containsStop;
-    ttsQueueRef.current = [];
-    ttsPlayingRef.current = false;
     setVoiceState("speaking");
     setTtsAudioPlaying(true);
     // Pre-warm AudioContext so it's ready for binary chunks
@@ -1097,7 +1104,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     }
   }, [stopSpeechWakeIfNeeded]);
 
-  const handleTTSEnd = useCallback((requestId?: string, bargeIn = false) => {
+  const handleTTSEnd = useCallback((requestId?: string, bargeIn = false, cancelled = false) => {
     // Realtime: tts_end is used by the server only as a barge-in signal
     // (user started speaking) — flush queued output so we stop talking over them.
     if (bargeIn && !requestId) {
@@ -1106,6 +1113,20 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     }
     if (requestId && ttsRequestIdRef.current && requestId !== ttsRequestIdRef.current) {
       return;
+    }
+    if (cancelled) {
+      // A stop the daemon made (#1156): what is queued, and what is playing,
+      // is speech nobody wants any more. Only for the clip it names: once a
+      // clip has been sent whole, its id lives on as the playing one.
+      const current = ttsRequestIdRef.current ?? ttsPlayingRequestIdRef.current;
+      if (!requestId || !current || requestId === current) {
+        ttsPlaybackGenerationRef.current++;
+        ttsQueueRef.current = [];
+        ttsPlayingRef.current = false;
+        ttsPlayingRequestIdRef.current = null;
+        audioContextRef.current?.close();
+        audioContextRef.current = null;
+      }
     }
     ttsRequestIdRef.current = null;
     ttsContainsWakeRef.current = false;

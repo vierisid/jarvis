@@ -402,6 +402,12 @@ export class AgentOrchestrator {
     if (isActionCategory(trimmed)) this.currentTaint().add(`${DECLINED_INTENT}${trimmed}`);
   }
 
+  /** The categories an unapproved intent governs in the current turn or session (Q-08). */
+  private declinedIntentCategories(): Set<string> {
+    return new Set([...this.currentTaint()].filter((mark) => mark.startsWith(DECLINED_INTENT))
+      .map((mark) => mark.slice(DECLINED_INTENT.length)));
+  }
+
   private noteTaint(toolName: string, category: string | undefined): void {
     if (isTaintSourceTool(toolName, category)) this.currentTaint().add(toolName);
   }
@@ -2303,6 +2309,8 @@ export class AgentOrchestrator {
       // byte for byte, including its absence of a cap, because capping 49 other
       // tools' errors is a separate decision from framing this one's.
       if (failing?.failureIsOutsideContent === true) {
+        // Framed as outside content, so it taints as the typed branch does (#1156).
+        this.noteTaint(toolCall.name, failing.category);
         return `Error executing ${toolCall.name}: `
           + markUntrustedToolFailure(toolCall.name, failing.category, message, MAX_TOOL_RESULT_CHARS, true);
       }
@@ -2457,6 +2465,20 @@ export class AgentOrchestrator {
         return `[AUTHORITY DENIED] Cannot execute ${name}: ${decision.reason}.`;
       }
 
+      // A category the person just declined on a request_approval card
+      // (Q-08, #1156) is not auto-approved by voice either, whatever asked
+      // for the approval: the denial is the person's answer, and a spoken
+      // command right after it is the model's, not theirs.
+      const declined = this.declinedIntentCategories();
+      const refusedIntent = decision.requiresApproval
+        ? perCategory.find((d) => d.requiresApproval && declined.has(d.actionCategory))
+        : undefined;
+      if (refusedIntent) {
+        logAudit('denied', false);
+        return `[BLOCKED] ${name} (${refusedIntent.actionCategory}) was not run: the user did not approve that kind of action when asked, and voice cannot approve it now. `
+          + 'Tell the user it was not done; they can ask for it again as a fresh request.';
+      }
+
       // Taint-gated approvals cannot be auto-approved: the whole point is
       // that content the session read must not turn into an action without
       // the user. Refuse, and let the model say so out loud.
@@ -2481,6 +2503,14 @@ export class AgentOrchestrator {
         : registry.execute(name, args));
       const category = tool?.category;
       this.noteTaint(name, category);
+      // As on the task path: an intent the person did not approve (denied,
+      // expired or unanswered) governs its category for the rest of the
+      // session's turn (Q-08, #1156). Cleared with the session's other marks
+      // by the person's next words.
+      if (name === 'request_approval') {
+        const verdict = isToolResult(raw) ? '' : toolReturnText(raw);
+        if (!verdict.startsWith('[APPROVED]') && !verdict.startsWith('[ERROR]')) this.noteDeclinedIntent(args.action_category);
+      }
       if (isToolResult(raw)) {
         // Realtime function output is text; flatten non-text blocks to a tag.
         // The text is capped before flattening and framing, like the block
@@ -2503,6 +2533,8 @@ export class AgentOrchestrator {
       // The realtime path, same shape and the same reasoning as the text path's
       // plain-Error branch above (#608).
       if (tool?.failureIsOutsideContent === true) {
+        // Framed as outside content, so it taints as the typed branch does (#1156).
+        this.noteTaint(name, tool.category);
         return `Error executing ${name}: `
           + markUntrustedToolFailure(name, tool.category, message, MAX_TOOL_RESULT_CHARS, true);
       }

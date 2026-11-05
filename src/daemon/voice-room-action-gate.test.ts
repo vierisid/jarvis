@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   describeSettledTime, unrecognisedTimeZone, realtimeRoomActionDecision, resolveHeldRoomAction as resolveHeld, roomActionAuditRow, settleRoomActionTime, voiceTimeZone,
+  settledTimePassed, visible,
   type RoomActionTargetLists, type VoiceClock,
 } from './voice-room-action-gate.ts';
 
@@ -280,3 +281,31 @@ describe('the time a room action is for is settled before anything is shown or s
   });
 });
 
+
+describe('#1156: room action audit rows and refusals', () => {
+  const who = { agentId: 'a', agentName: 'PA' };
+  test('a row says the instant it was settled to and the zone, and its ref', () => {
+    const ts = Date.parse('2026-10-21T13:00:00Z');
+    const row = roomActionAuditRow({ room: 'tasks', action: 'create_task', args: { title: 'x', when: 'tomorrow at 9am', when_ts: ts }, timeZone: 'America/New_York' },
+      'realtime', 'allowed', true, who, { reason: 'accepted', ref: 'r-1' });
+    expect(row?.tool_name).toBe('room_action(tasks/create_task; via realtime; write_data; accepted; at 2026-10-21T13:00:00.000Z America/New_York; ref r-1)');
+  });
+
+  test('an instant with no zone was not settled here and is not recorded as settled', () => {
+    const row = roomActionAuditRow({ room: 'tasks', action: 'create_task', args: { when_ts: 1 } }, 'realtime', 'allowed', true, who, { reason: 'accepted' });
+    expect(row?.tool_name).toBe('room_action(tasks/create_task; via realtime; write_data; accepted)');
+  });
+
+  test('settledTimePassed: a time still to come, or none, is fine; one gone is refused with when it was', () => {
+    const now = Date.parse('2026-10-20T16:00:00Z');
+    const ra = (ts: unknown) => ({ room: 'tasks', action: 'create_task', args: { when_ts: ts }, timeZone: 'America/New_York' });
+    expect(settledTimePassed(ra(now + 60_000), now, 'Tasks: create task')).toBeNull();
+    expect(settledTimePassed({ room: 'tasks', action: 'create_task', args: {} }, now, 'Tasks: create task')).toBeNull();
+    expect(settledTimePassed(ra(Date.parse('2026-10-20T15:30:00Z')), now, 'Tasks: create task'))
+      .toBe('I haven\'t done "Tasks: create task": it was for Tue, Oct 20, 11:30 EDT, which passed before it was confirmed. Ask again with a later time.');
+  });
+
+  test('visible writes bidi, zero-width and control characters as escapes', () => {
+    expect(visible('a\u2066b\u200Bc\nd')).toBe('a\\u2066b\\u200bc\\u000ad');
+  });
+});

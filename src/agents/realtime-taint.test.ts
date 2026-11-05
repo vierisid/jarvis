@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { RealtimeTaint, MAX_PENDING_UTTERANCES } from './realtime-taint.ts';
+import { RealtimeTaint, MAX_PENDING_UTTERANCES, echoesAssistant } from './realtime-taint.ts';
 
 describe('RealtimeTaint (#1007)', () => {
   test('a VAD start alone clears nothing', () => {
@@ -72,5 +72,20 @@ describe('RealtimeTaint (#1007)', () => {
     // The newest are still answered.
     expect(t.userTranscript(`cough-${MAX_PENDING_UTTERANCES - 1}`, 'hello')).toBe(true);
     expect([...t.marks]).toEqual([]);
+  });
+});
+
+describe('echoesAssistant (#1156)', () => {
+  test('words of the assistant\'s speech, in order and adjacent, are an echo', () => {
+    expect(echoesAssistant('shall I run it', ['Done. Shall I run it?'])).toBe(true);
+    expect(echoesAssistant('Shall I RUN it?!', ['Shall I run it?'])).toBe(true);
+    expect(echoesAssistant("it's done", ["Okay, it's done."])).toBe(true);
+  });
+
+  test('the user\'s own words are not', () => {
+    expect(echoesAssistant('run it', ['Shall I send it?'])).toBe(false);
+    expect(echoesAssistant('shall run it', ['Shall I run it?'])).toBe(false);
+    expect(echoesAssistant('yes', [])).toBe(false);
+    expect(echoesAssistant('...', ['...'])).toBe(false);
   });
 });

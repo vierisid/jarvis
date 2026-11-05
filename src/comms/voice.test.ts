@@ -943,3 +943,39 @@ describe('STT language is configurable (was hardcoded to en everywhere)', () => 
     expect(await languageSentBy({ provider: 'usejarvis', language: 'it' }, hosted)).toBe('it');
   });
 });
+
+describe('#1156: a hung TTS provider times out instead of blocking later speech', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  /** A provider that accepts the request and never answers. */
+  const hangingFetch = () => {
+    globalThis.fetch = ((_url: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+    })) as unknown as typeof fetch;
+  };
+
+  test('ElevenLabs', async () => {
+    hangingFetch();
+    const { ElevenLabsTTSProvider } = await import('./voice.ts');
+    await expect(new ElevenLabsTTSProvider({ api_key: 'k' }, 50).synthesize('hi')).rejects.toThrow();
+  });
+
+  test('Sarvam', async () => {
+    hangingFetch();
+    await expect(new SarvamTTSProvider({ api_key: 'k' }, 50).synthesize('hi')).rejects.toThrow();
+  });
+
+  test('Edge, whose service socket has no read timeout of its own', async () => {
+    const neverEnds = {
+      Communicate: class {
+        async *stream(): AsyncGenerator<{ type: string; data?: Buffer }> { await new Promise(() => {}); }
+      },
+    } as unknown as typeof import('edge-tts-universal');
+    const edge = new EdgeTTSProvider('v', '+0%', '+0%', 50, async () => neverEnds);
+    await expect(edge.synthesize('hi')).rejects.toThrow('Edge TTS timed out after 50ms');
+    // The streaming form every speaker uses goes through it too.
+    const drained = (async () => { for await (const _ of edge.synthesizeStream('hi')) { /* none */ } })();
+    await expect(drained).rejects.toThrow('timed out');
+  });
+});

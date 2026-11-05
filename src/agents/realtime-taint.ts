@@ -94,6 +94,44 @@ class SequencedMarks extends Set<string> {
   }
 }
 
+/** The words of `text`, lowercased, for comparing what was heard with what was said. */
+function words(text: string): string[] {
+  return text.toLowerCase().match(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu) ?? [];
+}
+
+/**
+ * Whether a user transcript is the assistant's own speech coming back in
+ * through the mic (#1156): every word of it, in order and side by side, is in
+ * something the assistant has just said. The browser's echo cancellation and
+ * the pebble's half-duplex mic gate catch most of it, not all (a loud speaker,
+ * the room's tail after the gate reopens), and an echo transcribes to words
+ * like any speech, so on its own it would clear the session's taint with
+ * words the page put in the assistant's mouth.
+ *
+ * Fail safe: a person repeating the assistant's words exactly ("send it" after
+ * "shall I send it?") is taken for an echo too, and clears nothing. The cost is
+ * the one the owner accepted for #1007: a governed request is refused until
+ * the person says something of their own.
+ *
+ * Defence in depth, not a detector: an echo the transcription model changes
+ * (a word misheard, room noise added) still clears. The caller compares only
+ * with what the assistant had said when the utterance began, never with the
+ * reply to it.
+ */
+export function echoesAssistant(userText: string, assistantSpeech: readonly string[]): boolean {
+  const said = words(userText);
+  if (said.length === 0) return false;
+  for (const speech of assistantSpeech) {
+    const heard = words(speech);
+    for (let i = 0; i + said.length <= heard.length; i++) {
+      let j = 0;
+      while (j < said.length && heard[i + j] === said[j]) j++;
+      if (j === said.length) return true;
+    }
+  }
+  return false;
+}
+
 export class RealtimeTaint {
   /** The set the orchestrator enters for this session's tool calls. */
   readonly marks = new SequencedMarks();
