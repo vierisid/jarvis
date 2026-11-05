@@ -306,8 +306,8 @@ export class EdgeTTSError extends Error {
 let unavailableSince: number | null = null;
 
 /** Whether Edge TTS was last found unavailable here, for Settings to say so. */
-export function edgeTtsStatus(): { unavailable: boolean; since: number | null } {
-  return { unavailable: unavailableSince !== null, since: unavailableSince };
+export function edgeTtsStatus(): { unavailable: boolean } {
+  return { unavailable: unavailableSince !== null };
 }
 
 /** Tests only. */
@@ -365,12 +365,18 @@ export async function edgeSynthesize(text: string, opts: EdgeSynthesisOptions): 
   try {
     const audio: Uint8Array[] = [];
     let probed = false;
+    let served = false;
     for (const piece of pieces) {
       try {
         for (const chunk of await synthesizeOne(piece, opts, controller.signal, budget)) audio.push(chunk);
+        served = true;
       } catch (err) {
         if (!(err instanceof EdgeTTSError) || !err.refused) throw err;
-        if (probed) throw unavailable();
+        // Served a moment ago: a passing refusal (throttling, a server
+        // error), not a region the service does not serve.
+        if (served) throw new EdgeTTSError('Edge TTS refused the request', true);
+        // Already known here, and already probed in this call: no further probe.
+        if (probed || unavailableSince !== null) throw unavailable();
         probed = true;
         // Tell a refusal by the service from no network, and learn its clock:
         // a wrong local clock gets a refused token too.
@@ -388,6 +394,7 @@ export async function edgeSynthesize(text: string, opts: EdgeSynthesisOptions): 
           if (clockSkewMs === skew) clockSkewMs = previous; // unless another request has moved it since
           throw retryErr instanceof EdgeTTSError && retryErr.refused ? unavailable() : retryErr;
         }
+        served = true;
       }
     }
     unavailableSince = null;

@@ -348,7 +348,7 @@ describe('edgeSynthesize against a local fake service', () => {
     const started = Date.now();
     const err = await edgeSynthesize('secret words', svc.opts({ timeoutMs: 30_000 })).catch((e) => e);
     // Not the 30s timeout the old package ran into on every sentence.
-    expect(Date.now() - started).toBeLessThan(5000);
+    expect(Date.now() - started).toBeLessThan(2000);
     expect(err).toBeInstanceOf(EdgeTTSError);
     expect((err as EdgeTTSError).code).toBe('unavailable');
     expect((err as Error).message).toBe(EDGE_UNAVAILABLE_MESSAGE);
@@ -358,7 +358,29 @@ describe('edgeSynthesize against a local fake service', () => {
     server!.stop(true);
     const ok = fakeService(speaks);
     await edgeSynthesize('hi', ok.opts());
-    expect(edgeTtsStatus()).toEqual({ unavailable: false, since: null });
+    expect(edgeTtsStatus()).toEqual({ unavailable: false });
+  });
+
+  test('once known unavailable, a refusal is reported without probing again', async () => {
+    let heads = 0;
+    server = Bun.serve({
+      hostname: '127.0.0.1', port: 0,
+      fetch(req) { if (req.method === 'HEAD') heads++; return new Response('', { status: 403 }); },
+    });
+    const opts = { ...PROSODY, timeoutMs: 5000, endpoint: `ws://127.0.0.1:${server.port}/v1` };
+    await expect(edgeSynthesize('hi', opts)).rejects.toThrow(EDGE_UNAVAILABLE_MESSAGE);
+    await expect(edgeSynthesize('hi', opts)).rejects.toThrow(EDGE_UNAVAILABLE_MESSAGE);
+    expect(heads).toBe(1);
+  });
+
+  test('a refusal after this call was already served is a passing failure, not "unavailable"', async () => {
+    let connections = 0;
+    const svc = fakeService(speaks, () => (++connections === 2 ? 403 : undefined));
+    const text = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ');
+    const err = await edgeSynthesize(text, svc.opts({ maxSsmlTextBytes: 60 })).catch((e) => e);
+    expect((err as EdgeTTSError).code).toBe('failed');
+    expect((err as Error).message).toBe('Edge TTS refused the request');
+    expect(edgeTtsStatus().unavailable).toBe(false);
   });
 
   test('a service that cannot be reached at all is "unreachable", not "unavailable"', async () => {
@@ -528,6 +550,7 @@ describe('edgeSynthesize lifecycle and clock', () => {
     const audio = await edgeSynthesize('hi', svc.opts());
     expect(audio.toString()).toBe('AAABBBCCC');
     expect(svc.seen).toHaveLength(2);
+    expect(edgeTtsStatus().unavailable).toBe(false);
     // The correction is kept: the next request needs no retry.
     await edgeSynthesize('hi', svc.opts());
     expect(svc.seen).toHaveLength(3);
