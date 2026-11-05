@@ -124,6 +124,15 @@
 #      pinned by digest. Not checked: the BuildKit layer cache docker-build
 #      reads with cache-from type=gha, whose index is the latest any run
 #      on main wrote, not an exact key.
+#  14. (#1255) update-webview.yml runs no Go, no repository script and no
+#      host Go toolchain outside a docker run, and a job there that runs
+#      docker runs only file-moving commands on the host. Its toolchain image
+#      is built from no context, FROM golang at the go line of sidecar/go.mod
+#      by digest, with only RUN besides; each docker run takes only --rm,
+#      --user (not root), --cap-drop ALL, no-new-privileges, one -v of a copy
+#      under RUNNER_TEMP at /work, -w /work and --network none, runs that
+#      image and one phase of the contained build script and nothing after
+#      it, and every phase but fetch has no network.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -156,7 +165,7 @@ trap 'rm -rf "$WORK"' EXIT
 # check <rule> <file>: one violation per line, nothing when clean.
 #   rule = scoped | publish-perms | pinned | authority | reach | untrusted
 #          | mutable | narrow | pushcache | opens-pr | catalog-pr | npmpin
-#          | runs | persist | images | license-scan | pr-license-scan
+#          | runs | persist | images | license-scan | pr-license-scan | contained
 check() {
 	# Written to a file once and run from there, not handed to bun -e: the
 	# source outgrew the 128 KiB Linux allows a single argument
@@ -2443,6 +2452,149 @@ if (rule === "pr-license-scan") {
   for (const p of PATHS)
     if (!listed.includes(p)) out.push("changes: the pieces-licenses filter does not list " + p + ", so a PR changing it does not run the license scan");
 }
+if (rule === "contained") {
+  // (#1255) A job that runs upstream code runs it inside sealed docker runs,
+  // never on the host runner: the host has passwordless sudo, and with root
+  // that code reads the runtime token out of the runner process and writes
+  // main-scoped cache entries (#1047). An allow-list, not a deny-list, so a
+  // spelling this rule did not think of fails rather than passes:
+  //  - no Go command, repository script or host Go toolchain anywhere here
+  //    outside a docker run;
+  //  - in a job that runs docker, every host command is one of a few that
+  //    only move files (the copy is read as data, never executed);
+  //  - docker build only as "docker build -t <tag> - < <Dockerfile>" (no
+  //    context), its every FROM golang at the go line of sidecar/go.mod by
+  //    digest, and only FROM and RUN in it;
+  //  - docker run only with --rm, --user (not root), --cap-drop ALL,
+  //    --security-opt no-new-privileges, one -v of a copy under RUNNER_TEMP
+  //    at /work, -w, and --network none; the image is the tag built in the
+  //    same step or golang at that go line by digest; the command is a
+  //    phase of the contained build script, nothing after it, and every
+  //    phase but fetch runs with --network none.
+  const goCode = /(?:^|[^\w.-])go\s+[a-z]+\b/;
+  const repoScript = /(?:^|[\s;&|(\/])(?:\.\/)?scripts\/[\w.\/-]+/;
+  const SCRIPT = "/work/.github/scripts/webview-contained-build.sh";
+  const fs = require("node:fs");
+  let mod = "";
+  try { mod = fs.readFileSync(process.env.REPO + "/sidecar/go.mod", "utf8"); } catch {}
+  const goLine = /^go\s+(\S+)\s*$/m.exec(mod)?.[1] ?? "";
+  if (!goLine) out.push("sidecar/go.mod has no go line to hold the image to");
+  const goImage = (img) => /@sha256:[0-9a-f]{64}$/.test(img) &&
+    (img.startsWith("golang:" + goLine + "-") || img.startsWith("golang:" + goLine + "@"));
+  // Path segments only: no ., no .., nothing but a plain name.
+  const tempPath = (p) => /^\$\{?RUNNER_TEMP\}?(?:\/[\w-][\w.-]*)+$/.test(p) && !/\/\.\.?(?:\/|$)/.test(p);
+  const hostOk = new Set(["set", "rm", "mkdir", "tar", "find", "cp", "echo", "exit", "fi", "then", "[", "test", "head", "tail", "wc", "du", "cut", "docker"]);
+  // Arguments of those commands that run a program of their own.
+  const runsProgram = /(?:^|\s)(?:-exec|-execdir|-ok|-okdir|--to-command|--use-compress-program|-I|--checkpoint-action|--info-script|--new-volume-script|-F)(?:[=\s]|$)/;
+  let runs = 0;
+  for (const [name, job] of Object.entries(jobs)) {
+    const flat = flatSteps(job.steps);
+    const runText = flat.map(({ st }) => typeof st.run === "string" ? st.run : "").join("\n");
+    const hasDocker = /(?:^|\n)\s*docker\s/.test(runText);
+    for (const [i, { st: s }] of flat.entries()) {
+      const label = name + ": step " + (s.name ?? s.id ?? s.uses ?? String(i));
+      if (String(s.uses ?? "").toLowerCase().startsWith("actions/setup-go@"))
+        out.push(label + ": installs Go on the host runner");
+      const run = typeof s.run === "string" ? s.run : "";
+      const lines = run.replace(/\\\n/g, " ").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+      // Variables that hold a copy under RUNNER_TEMP: assigned exactly once
+      // in the step, to such a path.
+      const assigned = {};
+      for (const l of lines) {
+        const m = /^([A-Za-z_]\w*)=(.*)$/.exec(l);
+        if (m) (assigned[m[1]] ??= []).push(m[2].replace(/^"(.*)"$/, "$1"));
+      }
+      const temp = new Set(Object.entries(assigned).filter(([, v]) => v.length === 1 && tempPath(v[0])).map(([k]) => k));
+      const built = new Set();
+      for (const l of lines) {
+        const docker = /^docker\s/.test(l);
+        // Quoted text blanked, so a message is not a command; text handed to
+        // a shell (bash -c "go test") is a command, so it stays.
+        const bare = /\b(?:ba|z)?sh\s+-c\b/.test(l) ? l
+          : l.replace(/"(?:[^"\\$`]|\\.)*"/g, "\"\"").replace(/\x27[^\x27]*\x27/g, "\"\"");
+        if (!docker) {
+          if (goCode.test(bare)) out.push(label + ": runs Go on the host, outside docker run: " + l);
+          if (repoScript.test(bare)) out.push(label + ": runs a repository script on the host, outside docker run: " + l);
+          if (/\bdocker\b/.test(l)) out.push(label + ": runs docker other than at the start of a line: " + l);
+          if (hasDocker && runsProgram.test(bare)) out.push(label + ": a host command here runs a program of its own: " + l);
+          if (hasDocker) {
+            // Every command word on the line; $( ) and backticks are
+            // commands too.
+            const inner = [...l.matchAll(/\$\(([^()]*)\)/g)].map((m) => m[1]);
+            for (const part of [bare, ...inner]) {
+              for (const seg of part.split(/&&|\|\||[;|`]|\$\(|\)|\bthen\b|\bdo\b|\belse\b|\bif\b|\bwhile\b|\buntil\b/)) {
+                const words = seg.trim().split(/\s+/).filter(Boolean);
+                while (words.length && (/^[A-Za-z_]\w*=/.test(words[0]) || words[0] === "!")) words.shift();
+                if (!words.length) continue;
+                const cmd = words[0].replace(/^["]+|["]+$/g, "");
+                if (cmd === "" || cmd === "]" || /^\d*[<>]/.test(cmd)) continue;
+                if (!hostOk.has(cmd)) out.push(label + ": runs " + JSON.stringify(cmd) + " on the host in a job that runs upstream code in docker; only commands that move files may: " + l);
+              }
+            }
+          }
+          continue;
+        }
+        if (/&&|\|\||;|\||`/.test(l.replace(/"(?:[^"\\]|\\.)*"/g, "\"\""))) out.push(label + ": a docker line runs something else with it: " + l);
+        // Words as the shell splits them: whitespace outside double quotes,
+        // the quotes then dropped.
+        const words = (l.match(/(?:[^\s"]+|"(?:[^"\\]|\\.)*")+/g) ?? []).map((w) => w.replace(/"/g, ""));
+        if (words[1] === "build") {
+          const m = /^docker build -t ([a-z0-9][\w.\/-]*:[\w.-]+) - < (\.github\/[\w.\/-]+)$/.exec(l);
+          if (!m) { out.push(label + ": docker build other than \"docker build -t <tag> - < <Dockerfile>\": " + l); continue; }
+          let df = "";
+          try { df = fs.readFileSync(process.env.REPO + "/" + m[2], "utf8"); } catch { out.push(label + ": cannot read " + m[2]); continue; }
+          const instr = df.replace(/\\\n/g, " ").split("\n").map((x) => x.trim()).filter((x) => x && !x.startsWith("#"));
+          for (const x of instr) {
+            const [op, img] = x.split(/\s+/);
+            if (!/^(?:FROM|RUN)$/i.test(op)) out.push(label + ": " + m[2] + " has " + op + ", not only FROM and RUN");
+            if (/^FROM$/i.test(op) && !goImage(img ?? "")) out.push(label + ": " + m[2] + " is FROM " + img + ", not golang:" + goLine + " by digest");
+          }
+          if (!instr.some((x) => /^FROM\s/i.test(x))) out.push(label + ": " + m[2] + " has no FROM");
+          built.add(m[1]);
+          continue;
+        }
+        if (words[1] !== "run") { out.push(label + ": docker " + words[1] + " is not docker build or docker run: " + l); continue; }
+        runs++;
+        const seen = { rm: 0, user: 0, capdrop: 0, nnp: 0, network: "", vols: [], workdir: 0 };
+        let k = 2;
+        for (; k < words.length && words[k].startsWith("-"); k++) {
+          const w = words[k], v = words[k + 1] ?? "";
+          if (w === "--rm") seen.rm++;
+          else if (w === "--user") { seen.user++; k++; if (v !== "$(id -u):$(id -g)" && !/^[1-9]\d*:[1-9]\d*$/.test(v)) out.push(label + ": docker run --user " + v + " is not the runner uid: " + l); }
+          else if (w === "--cap-drop") { k++; if (v === "ALL") seen.capdrop++; else out.push(label + ": docker run --cap-drop " + v + ", not ALL: " + l); }
+          else if (w === "--security-opt") { k++; if (v === "no-new-privileges") seen.nnp++; else out.push(label + ": docker run --security-opt " + v + " loosens the container: " + l); }
+          else if (w === "--network") { k++; if (v === "none") seen.network = "none"; else out.push(label + ": docker run --network " + v + ", not none: " + l); }
+          else if (w === "-v") { k++; seen.vols.push(v); }
+          else if (w === "-w") { k++; seen.workdir++; if (v !== "/work") out.push(label + ": docker run -w " + v + ", not /work: " + l); }
+          else out.push(label + ": docker run flag " + w + " is not one this rule allows: " + l);
+        }
+        if (!seen.rm) out.push(label + ": docker run without --rm: " + l);
+        if (!seen.user) out.push(label + ": docker run without --user, so it runs as root: " + l);
+        if (!seen.capdrop) out.push(label + ": docker run without --cap-drop ALL: " + l);
+        if (!seen.nnp) out.push(label + ": docker run without --security-opt no-new-privileges: " + l);
+        if (seen.vols.length !== 1) out.push(label + ": docker run has " + seen.vols.length + " mounts, not one: " + l);
+        for (const v of seen.vols) {
+          const [src, dst, ...rest] = v.split(":");
+          const ref = /^\$\{?([A-Za-z_]\w*)\}?$/.exec(src)?.[1];
+          if (!(ref && temp.has(ref)) && !tempPath(src))
+            out.push(label + ": docker run mounts " + JSON.stringify(src) + ", which is not a copy under RUNNER_TEMP: " + l);
+          if (dst !== "/work" || rest.length) out.push(label + ": docker run mounts at " + JSON.stringify(v.slice(src.length + 1)) + ", not /work: " + l);
+        }
+        const image = words[k] ?? "";
+        if (!built.has(image) && !goImage(image))
+          out.push(label + ": docker run image " + JSON.stringify(image) + " is neither the toolchain this step built nor golang:" + goLine + " by digest: " + l);
+        const argv = words.slice(k + 1);
+        if (argv[0] !== SCRIPT || !["fetch", "build"].includes(argv[1] ?? ""))
+          out.push(label + ": docker run runs something other than a phase of " + SCRIPT + ": " + l);
+        else if (argv[1] !== "fetch" && seen.network !== "none")
+          out.push(label + ": docker run of the " + argv[1] + " phase, which runs upstream code, without --network none: " + l);
+        if (argv[1] === "fetch" ? argv.length !== 3 : argv.length !== 2)
+          out.push(label + ": docker run passes the script other arguments than its phase takes: " + l);
+      }
+    }
+  }
+  if (runs === 0) out.push("no docker run in this workflow, so nothing here is contained");
+}
 if (rule === "pinned") {
   const uses = [];
   for (const [name, job] of Object.entries(jobs)) {
@@ -3219,6 +3371,124 @@ expect_clean "sync-pieces-catalog.yml: no job that installs dependencies or runs
 	untrusted "$WORKFLOWS/sync-pieces-catalog.yml"
 expect_clean "update-webview.yml: no job that builds or tests upstream Go code, or runs a repository script, holds a write scope or a secret (#983)" \
 	untrusted "$WORKFLOWS/update-webview.yml"
+expect_clean "update-webview.yml: upstream code runs only inside a sealed, digest-pinned docker run (#1255)" \
+	contained "$WORKFLOWS/update-webview.yml"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'the Go tests back on the host runner (#1255)' contained "$WORKFLOWS/update-webview.yml" \
+		'      - name: Collect the vendored tree' $'      - run: cd sidecar && go test ./...\n      - name: Collect the vendored tree' \
+		'runs Go on the host, outside docker run: cd sidecar && go test ./...'
+	expect_caught 'the vendoring script back on the host runner (#1255)' contained "$WORKFLOWS/update-webview.yml" \
+		'      - name: Collect the vendored tree' $'      - run: scripts/vendor-webview.sh "$VERSION"\n      - name: Collect the vendored tree' \
+		'runs a repository script on the host, outside docker run'
+	expect_caught 'a host Go toolchain back in the build job (#1255)' contained "$WORKFLOWS/update-webview.yml" \
+		'      - name: Collect the vendored tree' $'      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n      - name: Collect the vendored tree' \
+		'installs Go on the host runner'
+	expect_caught 'Go by absolute path on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'      - name: Collect the vendored tree' $'      - run: /usr/local/go/bin/go test ./...\n      - name: Collect the vendored tree' \
+		'runs Go on the host, outside docker run'
+	expect_caught 'Go handed to a shell on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'      - name: Collect the vendored tree' $'      - run: bash -c "cd sidecar && go test ./..."\n      - name: Collect the vendored tree' \
+		'runs Go on the host, outside docker run'
+	expect_caught 'find running a program on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'          cp -RP ' $'          find "$tree" -name x -exec sh {} \\;\n          cp -RP ' \
+		'a host command here runs a program of its own'
+	expect_caught 'tar running a program on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'          cp -RP ' $'          tar -cf /dev/null --to-command=sh "$tree"\n          cp -RP ' \
+		'a host command here runs a program of its own'
+	expect_caught 'awk back on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'          cp -RP ' $'          awk \x27BEGIN { system("sh") }\x27\n          cp -RP ' \
+		'runs "awk" on the host'
+	expect_caught 'make on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'      - name: Collect the vendored tree' $'      - run: make -C sidecar test\n      - name: Collect the vendored tree' \
+		'runs "make" on the host'
+	expect_caught 'the copy executed on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'          cp -RP ' $'          sh "$work/sidecar/third_party/webview_go/x.sh"\n          cp -RP ' \
+		'runs "sh" on the host'
+	expect_caught 'more run after a docker run, on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'webview-contained-build.sh build' 'webview-contained-build.sh build && go test ./...' \
+		'a docker line runs something else with it'
+	expect_caught 'a variable passed into the container (#1255)' contained "$WORKFLOWS/update-webview.yml" \
+		'          docker run --rm \' '          docker run --rm -e ACTIONS_RUNTIME_TOKEN \' \
+		'docker run flag -e is not one this rule allows'
+	expect_caught 'a variable passed in a combined short flag (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'          docker run --rm \' '          docker run --rm -te ACTIONS_RUNTIME_TOKEN \' \
+		'docker run flag -te is not one this rule allows'
+	expect_caught 'the container left behind (#1255)' contained "$WORKFLOWS/update-webview.yml" \
+		'          docker run --rm \' '          docker run \' \
+		'docker run without --rm'
+	expect_caught 'a privileged container (#1255)' contained "$WORKFLOWS/update-webview.yml" \
+		'          docker run --rm \' '          docker run --rm --privileged \' \
+		'docker run flag --privileged is not one this rule allows'
+	expect_caught 'the build phase on the host network (#1255)' contained "$WORKFLOWS/update-webview.yml" \
+		'          docker run --rm --network none \' '          docker run --rm --network host \' \
+		'docker run --network host, not none'
+	expect_caught 'the build phase with network (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'          docker run --rm --network none \' '          docker run --rm \' \
+		'docker run of the build phase, which runs upstream code, without --network none'
+	expect_caught 'a container as root (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'            --user "$(id -u):$(id -g)" --cap-drop ALL' '            --cap-drop ALL' \
+		'docker run without --user, so it runs as root'
+	expect_caught 'a container as uid 0 (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'            --user "$(id -u):$(id -g)" --cap-drop ALL' '            --user 0:0 --cap-drop ALL' \
+		'docker run --user 0:0 is not the runner uid'
+	expect_caught 'capabilities kept (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		' --cap-drop ALL --security-opt' ' --security-opt' \
+		'docker run without --cap-drop ALL'
+	expect_caught 'setuid allowed in the container (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		' --security-opt no-new-privileges' '' \
+		'docker run without --security-opt no-new-privileges'
+	expect_caught 'the docker socket mounted (#1255)' contained "$WORKFLOWS/update-webview.yml" \
+		'            -v "$work:/work" \' $'            -v "$work:/work" \\\n            -v /var/run/docker.sock:/var/run/docker.sock:ro \\' \
+		'docker run has 2 mounts, not one'
+	expect_caught 'a second, read-only mount (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'            -v "$work:/work" \' $'            -v "$work:/work" \\\n            -v "$HOME:/h:ro" \\' \
+		'docker run has 2 mounts, not one'
+	expect_caught 'the checkout itself mounted (#1255)' contained "$WORKFLOWS/update-webview.yml" \
+		'            -v "$work:/work" \' '            -v "$GITHUB_WORKSPACE:/work" \' \
+		'which is not a copy under RUNNER_TEMP'
+	expect_caught 'all of RUNNER_TEMP mounted through .. (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'          work="$RUNNER_TEMP/webview-work"' '          work="$RUNNER_TEMP/.."' \
+		'which is not a copy under RUNNER_TEMP'
+	expect_caught 'the copy variable pointed elsewhere later (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'          mkdir -p "$work"' $'          mkdir -p "$work"\n          work="$HOME"' \
+		'which is not a copy under RUNNER_TEMP'
+	expect_caught 'the image by tag alone (#1255)' contained "$WORKFLOWS/update-webview.yml" \
+		'            jarvis-webview-toolchain:local \' '            golang:1.25.0-bookworm \' \
+		'is neither the toolchain this step built nor golang:'
+	expect_caught 'a digest smuggled in a label (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'          docker run --rm \' '          docker run --rm --label x=y@sha256:0000000000000000000000000000000000000000000000000000000000000000 \' \
+		'docker run flag --label is not one this rule allows'
+	expect_caught 'the toolchain built with a context (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'- < .github/scripts/webview-toolchain.Dockerfile' '.github/scripts' \
+		'docker build other than'
+	expect_caught 'another command in the container (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'webview-contained-build.sh build' 'webview-contained-build.sh build extra' \
+		'passes the script other arguments than its phase takes'
+}
+# The toolchain Dockerfile is read from the repository, so its mutants run
+# against a scratch copy of the two files the rule reads.
+df_caught() {
+	local repo="${WORK}/df-repo"
+	rm -rf "$repo"
+	mkdir -p "$repo/sidecar" "$repo/.github/scripts"
+	cp "${REPO_DIR:-${HERE}/../..}/sidecar/go.mod" "$repo/sidecar/go.mod"
+	if ! FROM="${REPO_DIR:-${HERE}/../..}/.github/scripts/webview-toolchain.Dockerfile" TO="$repo/.github/scripts/webview-toolchain.Dockerfile" OLD="$2" NEW="$3" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
+'; then
+		no "Dockerfile mutant '$1' could be applied (webview-toolchain.Dockerfile no longer has the text it mutates)"
+		return
+	fi
+	local found
+	found="$(REPO_DIR="$repo" check contained "$WORKFLOWS/update-webview.yml")" || { no "reports: $1" "the bun helper failed"; return; }
+	if grep -qF -- "$4" <<<"$found"; then ok "reports: $1"; else no "reports: $1, for the reason it exists" "wanted '${4}', got:
+${found}"; fi
+}
+df_caught 'the toolchain FROM a tag alone (#1255)' '@sha256:81dc45d05a7444ead8c92a389621fafabc8e40f8fd1a19d7e5df14e61e98bc1a' '' 'not golang:'
+df_caught 'the toolchain on another Go than sidecar/go.mod (#1255)' 'FROM golang:1.25.0-' 'FROM golang:1.24.0-' 'is FROM golang:1.24.0-'
+df_caught 'the toolchain fetching more than Debian packages (#1255 review)' 'FROM golang:' $'ADD https://example.invalid/x /x\nFROM golang:' 'has ADD, not only FROM and RUN'
 
 echo
 echo "every PR opened with create-pull-request takes a token whose CI runs (#981, #983)"
@@ -4626,7 +4896,7 @@ if (!s.includes(old)) process.exit(2);
 await Bun.write(process.env.TO, s.replace(old, "    timeout-minutes: 30\n    permissions:\n      contents: write\n"));
 ' || no "the webview build job write-scope copy could be made (update-webview.yml no longer has the text it mutates)"
 	expect_caught 'a write-scoped job off the release path persisting its token (#982)' narrow "${WORK}/uw-write.yml" \
-		$'        with:\n          persist-credentials: false\n      - uses: actions/setup-go@' '      - uses: actions/setup-go@' \
+		$'        with:\n          persist-credentials: false\n      # Everything that touches upstream code' '      # Everything that touches upstream code' \
 		'build: checkout leaves the token in .git/config'
 	expect_caught 'a read-only job persisting a secret it checked out with (#982)' narrow "$WORKFLOWS/docker-build.yml" \
 		$'        with:\n          persist-credentials: false\n\n      - name: Set up Docker Buildx\n' $'        with:\n          token: ${{ secrets.SOME_PAT }}\n\n      - name: Set up Docker Buildx\n' \
@@ -4868,13 +5138,13 @@ echo "the webview_go bump PR is opened with the PAT, by a job that runs no upstr
 		$'      - name: Refuse without the webview PR token\n' $'      - name: Refuse without the webview PR token\n        if: github.event_name == \x27schedule\x27\n' \
 		'no earlier step refuses when RELEASE_PR_TOKEN is empty'
 	expect_caught 'the PAT handed to the job that builds upstream code (#983)' catalog-pr "$WORKFLOWS/update-webview.yml" \
-		$'        env:\n          CGO_ENABLED: "1"\n        run: |\n          set -euo pipefail\n          go vet ./...' $'        env:\n          CGO_ENABLED: "1"\n          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}\n        run: |\n          set -euo pipefail\n          go vet ./...' \
+		$'      - name: Re-vendor, patch, build and test in a sealed container\n        env:\n          VERSION: ${{ needs.check.outputs.version }}\n' $'      - name: Re-vendor, patch, build and test in a sealed container\n        env:\n          VERSION: ${{ needs.check.outputs.version }}\n          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}\n' \
 		'secrets.RELEASE_PR_TOKEN is read 3 times'
 	# ...and the same, seen by the rule that keeps upstream code away from
 	# any secret: the Go tests run with the PAT in reach.
 	expect_caught 'the build job reading the PAT while it runs the Go tests (#983)' untrusted "$WORKFLOWS/update-webview.yml" \
-		$'        env:\n          CGO_ENABLED: "1"\n        run: |\n          set -euo pipefail\n          go vet ./...' $'        env:\n          CGO_ENABLED: "1"\n          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}\n        run: |\n          set -euo pipefail\n          go vet ./...' \
-		'build: step Compat - build + vet + test (linux/amd64, cgo): builds or tests Go code (module code is compiled or run) in a job holding a secret other than GITHUB_TOKEN: go test ./...'
+		$'      - name: Re-vendor, patch, build and test in a sealed container\n        env:\n          VERSION: ${{ needs.check.outputs.version }}\n' $'      - name: Re-vendor, patch, build and test in a sealed container\n        env:\n          VERSION: ${{ needs.check.outputs.version }}\n          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}\n' \
+		'build: step Re-vendor, patch, build and test in a sealed container: runs a repository script in a job holding a secret other than GITHUB_TOKEN'
 	expect_caught 'the Go tests back in the job holding the PAT (#983)' untrusted "$WORKFLOWS/update-webview.yml" \
 		'      - name: Open / update the bump PR' $'      - run: cd sidecar && go test ./...\n      - name: Open / update the bump PR' \
 		'publish: step 4: builds or tests Go code (module code is compiled or run) in a job holding a secret other than GITHUB_TOKEN'
