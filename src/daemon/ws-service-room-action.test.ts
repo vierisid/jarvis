@@ -14,6 +14,7 @@ import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import type { RoomActionTargetLists } from './voice-room-action-gate.ts';
 import { getCronTimezone, setCronTimezone } from '../lib/cron-scheduler.ts';
 import { closeDb, initDatabase } from '../vault/schema.ts';
+import { correctFact, createFact } from '../vault/facts.ts';
 import { createCommitment } from '../vault/commitments.ts';
 import { createContent } from '../vault/content-pipeline.ts';
 import { createEntity } from '../vault/entities.ts';
@@ -1181,6 +1182,16 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
       // Every memory entity, as /api/vault/entities lists them (#1023).
       const alice = createEntity('person', 'Alice Smith');
       expect((await lists.entity()).map((e) => [e.id, e.name])).toEqual([[alice.id, 'Alice Smith']]);
+      // Names only (#1118), and the entity's current default-scope facts (#1167).
+      expect(Object.keys((await lists.entity())[0]!).sort()).toEqual(['id', 'name']);
+      createFact(alice.id, 'birthday', 'march 15', { source: 'dashboard' });
+      createFact(alice.id, 'birthday', 'june 1', { source: 'dashboard', scope: 'work' });
+      createFact(alice.id, 'likes', 'tea', { source: 'dashboard' });
+      const old = createFact(alice.id, 'timezone', 'UTC', { source: 'dashboard' });
+      correctFact(old.id, 'Europe/Rome', 'moved');
+      expect(await lists.entityFacts!(alice.id, 'date_of_birth')).toEqual([{ predicate: 'birthday', object: 'march 15', confirmed: false }]);
+      // A superseded row is not current.
+      expect((await lists.entityFacts!(alice.id, 'timezone')).map((f) => f.object)).toEqual(['Europe/Rome']);
       // No site builder, no projects: the hold is refused, not guessed.
       await expect(lists.project()).rejects.toThrow('site builder not available');
     } finally {
@@ -1211,6 +1222,22 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
     expect(await internals.resolveVoiceConfirmation('i-memory-remember_that', 'confirm')).toEqual({ ok: true });
     expect(speaker.sent.find((m) => m.payload?.source === 'room_action')!.payload.args)
       .toEqual({ subject: 'Alice Smith', predicate: 'birthday', object: 'march 15', id: 'e-1' });
+  });
+
+  test('a remembered fact\'s card says the current value it contests, not that it replaces it (#1167)', async () => {
+    const { svc, internals, speaker, other } = setup();
+    (svc as unknown as { roomActionTargetLists: () => RoomActionTargetLists }).roomActionTargetLists = () => ({
+      project: async () => [], content: async () => [], task: async () => [],
+      entity: async () => [{ id: 'e-1', name: 'Alice Smith' }],
+      entityFacts: async () => [{ predicate: 'birthday', object: 'march 15', confirmed: true }],
+    });
+    await internals.routeClassifiedVoiceIntent(
+      intent('memory', 'remember_that', { subject: 'alice', predicate: 'Birthday', object: 'april 2' }), 'remember alice', 'req', speaker.ws);
+    expect(other.sent.find((m) => m.payload?.source === 'repeat_back_request')!.payload.action)
+      .toBe('Memory: remember that {"subject": "Alice Smith", "predicate": "birthday", "object": "april 2"} to the memory entity "Alice Smith" '
+        + '(it differs from "march 15" already saved; that confirmed value stays, and this one is marked contested) (saves data)');
+    expect(describeRoomAction({ room: 'memory', action: 'remember_that', args: { subject: 'A', predicate: 'birthday', object: 'x', id: 'e' },
+      factConflict: { value: 'y', confirmed: false } })).toContain('(it differs from "y" already saved; the values are kept, marked contested)');
   });
 
   test('a fact for an entity no one has made yet says it makes one (#1023)', async () => {

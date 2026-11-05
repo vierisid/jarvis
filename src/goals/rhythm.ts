@@ -14,6 +14,7 @@ import { getGoalApplication } from './application-service.ts';
 import { createPlannedWork, listWorkItems, type WorkItem } from './work-items.ts';
 import { wrapUntrusted } from '../roles/untrusted.ts';
 import { buildGoalReviewBundle, type GoalReviewRecord } from './review-evidence.ts';
+import { oneLineTaskText } from '../vault/commitment-text.ts';
 
 export type MorningPlanResult = {
   checkIn: GoalCheckIn;
@@ -99,7 +100,9 @@ export class DailyRhythm {
     const goalIds = new Set(activeGoals.map(g => g.id));
     const actions = (Array.isArray(plan.daily_actions) ? plan.daily_actions : []).slice(0, 20).flatMap((action: unknown) => {
       const a = typeof action === 'string' ? { title: action, goal_id: null } : action as { title?: unknown; goal_id?: unknown } | null;
-      if (!a || typeof a.title !== 'string' || !a.title.trim() || a.title.length > 10_000) return [];
+      // A title with no text left once made one line is no task (#1115):
+      // createCommitment refuses it, and that would end the whole check-in.
+      if (!a || typeof a.title !== 'string' || a.title.length > 10_000 || oneLineTaskText(a.title) === null) return [];
       return [{ title: a.title.trim(), goalId: typeof a.goal_id === 'string' && goalIds.has(a.goal_id) ? a.goal_id : null }];
     });
     const dailyActions = actions.map((a: { title: string }) => a.title);

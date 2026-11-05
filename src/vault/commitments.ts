@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { getDb, generateId } from './schema.ts';
 import { currentTurnScopeId } from '../actions/tools/turn-scope-store.ts';
+import { oneLineTaskText } from './commitment-text.ts';
 
 export type CommitmentPriority = 'low' | 'normal' | 'high' | 'critical';
 export type CommitmentStatus = 'pending' | 'active' | 'completed' | 'failed' | 'escalated';
@@ -14,6 +15,41 @@ export type CommitmentScheduleOptions = {
 };
 
 const EXCLUDE_WORK_ITEMS = 'AND NOT EXISTS (SELECT 1 FROM commitment_work WHERE work_id = commitments.id)';
+
+/**
+ * Result prefix of a commitment the executor parked on approval requests
+ * (daemon/commitment-executor.ts). The request ids ride in the stored result
+ * so a restarted daemon picks the wait back up instead of running the
+ * commitment again -- which makes the result text an instruction to the
+ * executor: on its next tick it waits on those ids and closes the commitment
+ * from their outcome, taking an executed request's result as its own (#1115).
+ */
+export const PARKED_RESULT_PREFIX = 'Awaiting user approval ';
+const PARKED_RESULT_RE = /^Awaiting user approval \[req:([^\]]*)\]/;
+
+/** Request ids encoded in a parked commitment's result, or null if not parked. */
+export function parseParkedRequestIds(result: string | null | undefined): string[] | null {
+  if (!result) return null;
+  const m = PARKED_RESULT_RE.exec(result);
+  if (!m) return null;
+  return m[1]!.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+/**
+ * A result any writer but the executor's parking may store (#1115): one the
+ * executor would read as parked is labelled so it no longer does. The writers
+ * that store a model's reply (the executor's completion, the chat's tracked
+ * task) cannot be refused, so this is where they are held; the dashboard and
+ * the commitments tool refuse such a result first, with a reason.
+ */
+function storableResult(result: string | undefined): string | undefined {
+  return result !== undefined && parseParkedRequestIds(result) ? `Result: ${result}` : result;
+}
+
+/** A task whose text has nothing left in it once made one line (#1115). */
+export class CommitmentTextError extends Error {
+  override readonly name = 'CommitmentTextError';
+}
 
 export function isWorkItemCommitment(id: string): boolean {
   return !!getDb().query('SELECT 1 FROM commitment_work WHERE work_id = ?').get(id);
@@ -130,6 +166,12 @@ export function createCommitment(
     scope_id?: string;
   }
 ): Commitment {
+  // One well-formed line, from every writer (#1115): the commitments tool
+  // lists tasks one per line and the executor quotes this text into a prompt,
+  // and only the dashboard's create checked it.
+  const text = oneLineTaskText(what);
+  if (text === null) throw new CommitmentTextError('A task needs some text to say what it is');
+  what = text;
   const db = getDb();
   const id = generateId();
   const now = Date.now();
@@ -324,8 +366,11 @@ export function getDueCommitments(options: CommitmentScheduleOptions = {}): Comm
 export function updateCommitmentStatus(
   id: string,
   status: CommitmentStatus,
-  result?: string
+  result?: string,
+  /** Only the executor's parking writes a parked result (#1115); see `storableResult`. */
+  opts: { parked?: boolean } = {},
 ): Commitment | null {
+  if (!opts.parked) result = storableResult(result);
   const db = getDb();
   const commitment = getCommitment(id);
   if (!commitment) return null;

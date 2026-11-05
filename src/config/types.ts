@@ -119,6 +119,26 @@ export type ChannelConfig = {
   };
 };
 
+/**
+ * Stored-conversation housekeeping (#1167).
+ *
+ * SYSTEM-owned, like `pebble:` and `tools:`: read from config.yaml and NOT in
+ * USER_OWNED_SECTIONS. Deliberately not a key of the user-owned `channels`
+ * section: that section is stored in the DB with the bot tokens, and a
+ * partial `channels:` block in config.yaml is imported over the whole
+ * section, which would wipe a dashboard-configured Telegram or Discord setup.
+ */
+export type ConversationsConfig = {
+  /**
+   * Days to keep the stored messages of channel conversations -- every
+   * per-sender thread on Telegram and Discord, and Pebble's voice exchanges.
+   * Absent or 0 keeps them forever, which is the default, so nothing is
+   * deleted on an existing install until this is set; 90 is the suggested
+   * value. Swept once a day, from the next daemon start.
+   */
+  channel_message_retention_days?: number;
+};
+
 export type WakeEngine = 'openwakeword' | 'webspeech' | 'auto';
 
 /**
@@ -882,6 +902,8 @@ export type JarvisConfig = {
   awareness?: AwarenessConfig;
   /** Pebble overlay hotkeys. SYSTEM-owned; absent means the shipped defaults. */
   pebble?: PebbleConfig;
+  /** Stored-conversation housekeeping. SYSTEM-owned; absent keeps everything. */
+  conversations?: ConversationsConfig;
   llm: LLMConfig;
   personality: {
     core_traits: string[];
