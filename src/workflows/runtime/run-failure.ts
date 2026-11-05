@@ -28,6 +28,7 @@ import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-e
 import { walkFlowNodes } from '../db/flow-graph';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import { nodeConnectionReferences, type RunConnectionBindingView } from '../db/repos/binding-pins';
+import { expressionFailureGuidance } from './expression-failure';
 
 const ENDED_BADLY = new Set(['FAILED', 'TIMEOUT', 'INTERNAL_ERROR', 'QUOTA_EXCEEDED', 'MEMORY_LIMIT_EXCEEDED', 'SCHEDULE_FAILURE', 'STOPPED']);
 
@@ -202,7 +203,13 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
     sideEffects = own.some(dispatched) || !node || untracked(node);
   }
   // The sentence is about the failed step; it also says what the steps before it had done.
-  return withOtherSteps(projectFailure(evidence, { label, sideEffects }, links), otherSteps(run, records, graph, step.name), 'Steps before it');
+  const reading = withOtherSteps(projectFailure(evidence, { label, sideEffects }, links), otherSteps(run, records, graph, step.name), 'Steps before it');
+  // An input expression that failed on its data: running it again unchanged
+  // fails the same way, so the first step names what to change. Only the
+  // advice changes; what took effect is read from the evidence above.
+  const guidance = outcome ? null : expressionFailureGuidance(step.errorMessage);
+  return guidance ? { ...reading, next: [{ step: 'edit_and_run_again', label: guidance },
+    ...reading.next.filter(n => n.step !== 'run_again' && n.step !== 'edit_and_run_again')] } : reading;
 }
 
 /**

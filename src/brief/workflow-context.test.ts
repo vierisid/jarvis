@@ -7,6 +7,7 @@ import { initWorkflowDb, getWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../
 import { createFlow, deleteFlow, setPublishedVersion } from '../workflows/db/repos/flow';
 import { createDraftVersion, lockVersion, updateDraftVersion } from '../workflows/db/repos/flow-version';
 import { createFlowRun, getFlowRun, updateRun } from '../workflows/db/repos/flow-run';
+import { runFailure } from '../workflows/runtime/run-failure';
 import { DefaultWorkerHandlers } from '../workflows/sandbox-api/worker-handlers';
 import { SandboxRegistry } from '../workflows/sandbox-api/sandbox-registry';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
@@ -583,10 +584,16 @@ test('failed expression inspection explains the repair without leaking expressio
   updateRun(r.id, { status: 'FAILED', failedStep: { name: 'finish', displayName: 'Finish', errorMessage },
     steps: { finish: { type: 'PIECE', status: 'FAILED', input: {}, errorMessage } } });
   const detail = service.selection(flowId, versionId, r.id).run!;
-  expect(detail.steps[0]!.fields.find(f => f.label === 'Diagnostic')?.value).toContain('not plain JSON');
-  expect(detail.steps[0]!.description).toContain('validate the draft');
-  expect(detail.failure!.next.some(n => n.step === 'edit_and_run_again')).toBe(true);
+  // Brief reads the shared projection that Runs and Today read.
+  expect(detail.failure!.next).toEqual(runFailure(getFlowRun(r.id)!)!.next);
+  expect(detail.failure!.next[0]).toMatchObject({ step: 'edit_and_run_again' });
+  expect(detail.failure!.next[0]!.label).toContain('not plain JSON data');
   expect(detail.failure!.next.some(n => n.step === 'run_again')).toBe(false);
+  // The step says each next step once.
+  const description = detail.steps[0]!.description;
+  expect(description.split(detail.failure!.next[0]!.label).length).toBe(2);
+  expect(description.match(/run it again/gi)?.length ?? 0).toBeLessThanOrEqual(1);
+  expect(description).not.toContain('validate the draft');
   const exposed = JSON.stringify(detail);
   for (const secret of ['private_customer_email', 'secret-token', '/private/path', 'WorkflowExpressionError:']) expect(exposed).not.toContain(secret);
 });
