@@ -316,3 +316,27 @@ test('a delayed dismissal cannot acknowledge the failed result of a reopened req
   expect(requestFor(second.id).dismissedAt).toBeUndefined();
   expect(dismissHumanInput(DEFAULT_IDS.project, current.id, Date.now(), 1).status).toBe(200);
 });
+
+test('response and dismissal bodies are capped while they stream, without a declared length', async () => {
+  const routes = createWorkflowRoutes();
+  // 64 chunks of 16 KB, pulled one at a time, so the test sees how much of the body was read.
+  let pulled = 0;
+  const post = (path: string, id: string) => {
+    pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled++ === 64) controller.close(); else controller.enqueue(new Uint8Array(16_000).fill(32));
+      },
+    });
+    return Object.assign(new Request(`http://localhost${path}`, { method: 'POST', body, duplex: 'half' } as RequestInit), { params: { id } });
+  };
+  const response = await routes['/api/workflow-inputs/:id']!.POST!(post('/api/workflow-inputs/missing', 'missing'));
+  expect(response.status).toBe(413);
+  expect(pulled).toBeLessThan(10);
+  const dismissal = await routes['/api/workflow-inputs/:id/dismiss']!.POST!(post('/api/workflow-inputs/missing/dismiss', 'missing'));
+  expect(dismissal.status).toBe(413);
+  expect(pulled).toBeLessThan(4);
+  // Under the cap the same route reaches the lookup.
+  const small = Object.assign(new Request('http://localhost/api/workflow-inputs/missing/dismiss', { method: 'POST', body: '{}' }), { params: { id: 'missing' } });
+  expect((await routes['/api/workflow-inputs/:id/dismiss']!.POST!(small)).status).toBe(404);
+});

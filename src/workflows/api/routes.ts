@@ -130,6 +130,9 @@ import {
   type ExecutionTarget,
 } from "../../util/execution-environment";
 
+/** A dismissal carries only the request generation it acknowledges. */
+const HUMAN_INPUT_DISMISS_MAX_BODY_BYTES = 1000;
+
 type RequestWithParams<P extends Record<string, string> = Record<string, string>> = Request & {
   params: P;
 };
@@ -2391,8 +2394,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       POST: req => trapErrors(async () => {
         const { id } = (req as RequestWithParams<{ id: string }>).params;
         // This authenticated route is intentionally outside the public webhook prefix.
-        if (Number(req.headers.get('content-length') ?? 0) > HUMAN_INPUT_MAX_BODY_BYTES) return err('Response too large', 413);
-        const raw = await req.text(); if (new TextEncoder().encode(raw).length > HUMAN_INPUT_MAX_BODY_BYTES) return err('Response too large', 413);
+        // Counted in bytes while it streams in, so a chunked body cannot be buffered whole first.
+        const read = await readBoundedText(req, HUMAN_INPUT_MAX_BODY_BYTES);
+        if (!read.ok) return read.reason === 'too_large' ? err('Response too large', 413) : err('failed to read request body');
+        const raw = read.text;
         let body: unknown; try { body = JSON.parse(raw); } catch { return err('Invalid JSON', 400); }
         if (!body || typeof body !== 'object' || Array.isArray(body)) return err('Response object required', 400);
         const { status, ...result } = resolveHumanInput(callerProject(req), id, body as Record<string, unknown>);
@@ -2404,7 +2409,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflow-inputs/:id/dismiss": {
       POST: req => trapErrors(async () => {
         const { id } = (req as RequestWithParams<{ id: string }>).params;
-        const raw = await req.text(); if (new TextEncoder().encode(raw).length > 1000) return err('Response too large', 413);
+        const read = await readBoundedText(req, HUMAN_INPUT_DISMISS_MAX_BODY_BYTES);
+        if (!read.ok) return read.reason === 'too_large' ? err('Response too large', 413) : err('failed to read request body');
+        const raw = read.text;
         let body: unknown; try { body = raw ? JSON.parse(raw) : {}; } catch { return err('Invalid JSON', 400); }
         if (!body || typeof body !== 'object' || Array.isArray(body)) return err('Response object required', 400);
         const { status, ...result } = dismissHumanInput(callerProject(req), id, Date.now(), (body as Record<string, unknown>).generation);
