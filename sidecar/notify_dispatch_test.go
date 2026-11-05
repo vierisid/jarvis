@@ -406,10 +406,13 @@ func TestConnectionHandlersSurviveAConfigReload(t *testing.T) {
 // against a fake brain: the RPCs must answer, not METHOD_NOT_FOUND, and the
 // read loop must be running at all.
 func TestConnectAndServeAnswersTheConnectionHandlers(t *testing.T) {
+	prevS, prevC := screenObserversPaused.Load(), clipboardObserverPaused.Load()
 	prevShow := showNotification
 	prevEmit := notifyEmitActionV.Load()
 	prevTray := getTrayStatus()
 	t.Cleanup(func() {
+		screenObserversPaused.Store(prevS)
+		clipboardObserverPaused.Store(prevC)
 		showNotification = prevShow
 		if f, ok := prevEmit.(func(string, string, string) error); ok {
 			setNotifyEmitAction(f)
@@ -424,6 +427,7 @@ func TestConnectAndServeAnswersTheConnectionHandlers(t *testing.T) {
 	showNotification = func(n Notification) { shown <- n }
 
 	wsURL, replies := brainScript(t,
+		`{"type":"rpc_request","id":"r1","method":"observers.set_paused","params":{"screen":true,"clipboard":true}}`,
 		`{"type":"rpc_request","id":"r2","method":"notify.show","params":{"id":"n1","kind":"done","title":"t","body":"b"}}`,
 		`{"type":"rpc_request","id":"r3","method":"tray.status","params":{}}`,
 	)
@@ -448,7 +452,7 @@ func TestConnectAndServeAnswersTheConnectionHandlers(t *testing.T) {
 
 	got := map[string]map[string]any{}
 	deadline := time.After(10 * time.Second)
-	for len(got) < 2 {
+	for len(got) < 3 {
 		select {
 		case m := <-replies:
 			if p, ok := m["payload"].(map[string]any); ok && m["type"] == "rpc_result" {
@@ -457,13 +461,16 @@ func TestConnectAndServeAnswersTheConnectionHandlers(t *testing.T) {
 				}
 			}
 		case <-deadline:
-			t.Fatalf("only %d of 2 RPCs answered (%v): connectAndServe never served them", len(got), got)
+			t.Fatalf("only %d of 3 RPCs answered (%v): connectAndServe never served them", len(got), got)
 		}
 	}
 	for id, m := range got {
 		if e, ok := m["error"].(map[string]any); ok && e != nil {
 			t.Errorf("%s answered with error %v", id, e)
 		}
+	}
+	if !screenObserversPaused.Load() || !clipboardObserverPaused.Load() {
+		t.Error("observers.set_paused did not apply")
 	}
 	select {
 	case n := <-shown:

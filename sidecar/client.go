@@ -49,11 +49,11 @@ type SidecarClient struct {
 	tokenProvider *accessTokenProvider // mints short-lived panel access tokens
 	handlers      map[string]RPCHandler
 	// connHandlers are the capability-independent handlers connectAndServe
-	// registers (tray.status, notify.show). reloadConfig
+	// registers (tray.status, notify.show, observers.set_paused). reloadConfig
 	// rebuilds c.handlers from NewHandlerRegistry, which does not know them;
 	// they are put back from here, or every update_config left the brain's
-	// notifications and tray pushes answered METHOD_NOT_FOUND until the next
-	// reconnect (#1160). Guarded by mu.
+	// notifications, tray pushes and observer pauses answered METHOD_NOT_FOUND
+	// until the next reconnect (#1160, #1159). Guarded by mu.
 	connHandlers map[string]RPCHandler
 	// conn is read by readLoop/sendJSON/sendBinary (per-connection goroutines)
 	// and written by connectAndServe; Stop() clears it from the signal-handler
@@ -667,7 +667,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	}
 
 	// Connection handlers that do not depend on the pebble: registered for
-	// every sidecar (before #1160 they sat inside the pebble block, so a
+	// every sidecar (before #1159/#1160 they sat inside the pebble block, so a
 	// sidecar without the pebble capability showed no notifications), outside
 	// c.mu (setConnHandler takes it, so it must never be called with c.mu
 	// held), and kept across reloadConfig.
@@ -686,6 +686,9 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		showNotification(notificationFromParams(params))
 		return &RPCResult{Result: map[string]any{"ok": true}}, nil
 	})
+	// The brain's awareness / desktop off switches, applied to the
+	// observers at the source (#1159). Not persisted; see observers_pause.go.
+	c.setConnHandler("observers.set_paused", makeObserversSetPausedHandler())
 	// Bounded by sendUIEvent (#1160) and nothing else: not obsCtx, which the
 	// first update_config cancels (reloadConfig calls c.obsCancel, this
 	// connection's obsCancel), and which would then fail every tap, and

@@ -196,7 +196,7 @@ import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
 import { runRoomPanelIntent, type RoomPanelDeps } from "./pebble-room-panel.ts";
 import { makeFastPathTurns, PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
 import { isGonePanelError, makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
-import { pebbleBlinded, pushPebbleBlinded } from "./pebble-blind.ts";
+import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded } from "./pebble-blind.ts";
 import { createSidecarOfflineNotifier } from "./sidecar-offline-notice.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
 import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
@@ -1007,6 +1007,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 6c. Create sidecar manager
     const sidecarManager = new SidecarManager(jarvisConfig.daemon.data_dir.replace('~', os.homedir()));
     const pebbleBlindDeps = { connected: () => sidecarManager.listConnected(), dispatchRPC: sidecarManager.dispatchRPC.bind(sidecarManager) };
+    // A sidecar keeps its observer pause only in memory and starts unpaused:
+    // tell every machine that connects (#1159).
+    sidecarManager.onSidecarConnected((sc) => {
+      const awarenessOn = (jarvisConfig.awareness as { enabled?: boolean } | undefined)?.enabled !== false;
+      void pushObserverPause(pebbleBlindDeps, observerPause(awarenessOn, isDesktopEnabled()), sc.id);
+    });
 
     // The bench harness backdoor must never be on quietly. Say so at startup,
     // every time, and say why a set secret did not enable it.
@@ -2068,6 +2074,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // The pressed one is awaited before the ack; a slow or wedged other machine
           // must not hold up the spoken answer here.
           await pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(nextEnabled, isDesktopEnabled()), sidecarId);
+          // And the observers themselves, at the source (#1159). Not awaited:
+          // the spoken answer must not wait on other machines.
+          void pushObserverPause(pebbleBlindDeps, observerPause(nextEnabled, isDesktopEnabled()));
           const ack = seeing
             ? "Awareness back on. I can see your screen again."
             : nextEnabled
@@ -4490,12 +4499,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // The glyph follows the stored choice too, on every pebble (#1157).
       // Not awaited: appliers run in one serialized queue, and a sidecar RPC can take 30s to give up.
       void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
+      void pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()));
     });
     // desktop (#905): nothing writes the stored desktop section at run time
     // today, so this does not fire yet (a change takes a restart). It is here
     // so that a future writer plus a reload also stops the one thing already
     // running: a skill recording's input hooks on the sidecar.
     settingsReload.registerApplier('desktop', async () => {
+      // The pebble glyph and the sidecar observers follow desktop.enabled
+      // too (#905, #1159). Not awaited, like the awareness applier above.
+      const awarenessOn = (jarvisConfig.awareness as { enabled?: boolean } | undefined)?.enabled !== false;
+      void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(awarenessOn, isDesktopEnabled()));
+      void pushObserverPause(pebbleBlindDeps, observerPause(awarenessOn, isDesktopEnabled()));
       if (!isDesktopEnabled() && endRecordingForDesktopOff()) {
         console.log('[Tools] desktop.enabled turned off: the running skill recording was stopped and discarded.');
       }
