@@ -15,11 +15,11 @@
  * So the full `bun test` run of the required job sets the gate itself, and
  * every suite whose skip depends on built engine artifacts honours it.
  *
- * What this cannot see: a suite is found by its text (a skip, plus the gate,
- * findCachedBundle or the staging esbuild), so one that skips through a shared
- * helper, or only on built pieces, or that returns early instead of skipping,
- * is not found; and "honours" means the gate is read outside a comment, not
- * that it reaches the skip. Two engine qualifications sit behind a gate of
+ * What this cannot see: a suite is found by its text, not its name (any file
+ * that reads the gate, or that skips on findCachedBundle or the staging
+ * esbuild), so one that skips through a shared helper or only on built pieces
+ * without reading the gate is not found; and "honours" means the gate is read
+ * outside a comment, not that it reaches the skip. Two engine qualifications sit behind a gate of
  * their own on purpose and are not found either: the Q13 ones in
  * src/brief/opportunity-activation.test.ts and
  * src/awareness/prepared-opportunities.test.ts (JARVIS_TEST_PREPARED_Q13).
@@ -71,14 +71,16 @@ const code = (src: string): string => src.replace(/^\s*\/\*[\s\S]*?\*\//gm, '').
 const readsGate = (src: string): boolean => new RegExp(`process\\.env(?:\\.${GATE}\\b|\\[\\s*['"]${GATE}['"]\\s*\\])`).test(code(src));
 
 /**
- * A suite whose skip can depend on built engine artifacts: it has a skip, and
- * it reads the gate, looks for a cached bundle, or looks for the staging
- * install. Over-inclusive on purpose; the exemptions below say why each extra
- * one is fine.
+ * A suite that depends on built engine artifacts, found by content, never by
+ * name: any test file that reads the gate (however it is named, and whether
+ * it skips or returns early), and any that skips on a cached bundle or on the
+ * staging install. Over-inclusive on purpose; the exemptions below say why
+ * each extra one is fine.
  */
 function engineGated(src: string): boolean {
+  if (readsGate(src)) return true;
   if (!/\.(?:skipIf|skip|if)\s*\(/.test(src)) return false;
-  return readsGate(src) || /\bfindCachedBundle\s*\(/.test(src) || /\bstagingEsbuild\b/.test(src);
+  return /\bfindCachedBundle\s*\(/.test(src) || /\bstagingEsbuild\b/.test(src);
 }
 
 /** Detected as engine-gated, but correctly not opted in by the gate alone. */
