@@ -142,3 +142,47 @@ test('the first load never shows the connect subtitle before a provider has answ
   } finally { observer.disconnect(); }
   expect(added.join('|')).not.toContain('Connect your apps securely');
 });
+
+// #1259: a hosted install whose setup page is misconfigured reports a reason on
+// every hosted provider. That is a fault to fix, not the self-hosted limitation:
+// it must neither collapse into the "not available" note nor read as 22 neutral rows.
+test('hosted providers the daemon refused show their reason once, as a warning, not as a row each (#1259)', async () => {
+  // The daemon's wording for this case (src/integrations/hosted-setup.ts on the runtime side).
+  const broken = { configured: false, connected: false, connect_url: null,
+    reason: 'One-click setup is broken on this hosted instance: its integrations page link (usejarvis_integrations.page_url) is missing or invalid.' };
+  await panel({ slack: broken, figma: broken, trello: selfHosted }, host => {
+    expect(rows(host)).toEqual([]);
+    const warning = host.querySelector('.wf-conn__refused');
+    // The reason is shown as the daemon wrote it, once, after the providers it stops.
+    expect(warning?.textContent).toBe('Setup refused Slack, Figma: ' + broken.reason);
+    expect(warning?.querySelector('.v2-chip--warn')).toBeTruthy();
+    expect(host.textContent).toContain('One-click setup is not available on this instance for Trello.');
+    expect(host.textContent).not.toMatch(/not available on this instance for [^.]*Slack/);
+    expect(host.textContent).not.toContain('Checking connections...');
+  });
+});
+
+test('a refused Google row names the reason it was refused (#1259)', async () => {
+  await panel({ google: { configured: false, is_authenticated: false, reason: 'refresh_url set without instance_id' } }, host => {
+    expect(rows(host)).toEqual(['Google connection']);
+    expect(host.textContent).toContain('refresh_url set without instance_id');
+  });
+});
+
+test('Refresh keeps the refused reason while the statuses reload, never a generic one (#1259)', async () => {
+  const React = await import('react');
+  const broken = { configured: false, connected: false, connect_url: null, reason: 'usejarvis_integrations.page_url is missing' };
+  let hold: Promise<void> | null = null, release = () => {};
+  await panel({ slack: broken, figma: broken }, async host => {
+    expect(host.querySelector('.wf-conn__refused')?.textContent).toContain('page_url is missing');
+    hold = new Promise(r => { release = r; });
+    const refresh = [...host.querySelectorAll('button')].find(b => b.textContent?.includes('Refresh'))!;
+    await React.act(async () => refresh.click());
+    for (let i = 0; i < 3; i++) await React.act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const lines = [...host.querySelectorAll('.wf-conn__refused')].map(l => l.textContent);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('Slack, Figma');
+    expect(lines[0]).toContain('page_url is missing');
+    await React.act(async () => { release(); await new Promise(r => setTimeout(r, 0)); });
+  }, () => hold ?? Promise.resolve());
+});

@@ -400,6 +400,7 @@
 .wf-conn__header { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--s-3); }
 .wf-conn__title { margin: 0; font-size: 1rem; font-weight: 600; color: var(--ink-1); }
 .wf-conn__subtitle { margin: 2px 0 0; font-size: 0.78rem; color: var(--ink-3); }
+.wf-conn__refused { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin: var(--s-2) 0 0; font-size: 0.78rem; overflow-wrap: anywhere; }
 .wf-conn__actions { display: flex; gap: var(--s-1); }
 
 .wf-conn__sources {
