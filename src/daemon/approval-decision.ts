@@ -31,7 +31,7 @@ export function resolutionChannel(decidedBy: string): ResolutionChannel {
   if (decidedBy === DASHBOARD_DECIDER) return 'click';
   if (decidedBy === 'voice') return 'voice';
   if (decidedBy === 'notification') return 'notification';
-  if (decidedBy === 'telegram' || decidedBy === 'discord') return 'chat';
+  if (/^(telegram|discord)(:|$)/.test(decidedBy)) return 'chat';
   return 'system';
 }
 
@@ -146,6 +146,8 @@ export async function channelApprovalReply(
   shortId: string,
   channel: string,
   deps: ApprovalDecisionDeps,
+  /** Who typed the reply, as the channel names them. Recorded as `<channel>:<id>` (#1155). */
+  deciderId?: string,
 ): Promise<string> {
   if (action === 'approve' && !LITERAL_TEXT_CHANNELS.has(channel)) return CHANNEL_APPROVE_REFUSED_CHANNEL;
   const match = deps.approvalManager.findByShortId(shortId);
@@ -164,7 +166,8 @@ export async function channelApprovalReply(
     if (!card.approvable) return card.refusal === 'look_alike' ? CHANNEL_APPROVE_REFUSED_LOOK_ALIKE : CHANNEL_APPROVE_REFUSED;
   }
 
-  const outcome = await applyApprovalDecision(action, request.id, channel, deps);
+  const decidedBy = deciderId && /^[A-Za-z0-9_-]{1,64}$/.test(deciderId) ? `${channel}:${deciderId}` : channel;
+  const outcome = await applyApprovalDecision(action, request.id, decidedBy, deps);
   return channelDecisionReply(outcome, request);
 }
 
