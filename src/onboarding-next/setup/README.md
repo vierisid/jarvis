@@ -37,7 +37,10 @@ vaults, route through existing authenticated tenancy before selecting the adapte
   setup turns it off; the user re-enables it with a long-press. A long-press
   made before this change (#390 persisted it unmarked) is unmarked too, so it
   is also turned off once and needs one long-press again. Setup is not
-  Awareness consent.
+  Awareness consent. **Policy (owner decision, #1070):** hosted setup saves
+  Awareness off unless the user explicitly chose it. This intentionally differs
+  from the legacy default (`DEFAULT_CONFIG.awareness.enabled: true`) and must not
+  be "fixed" back to it when onboarding-next is activated.
 - Self-hosted results return `next: 'legacy_setup'` until the existing setup path
   has persisted completion **and** the injected existing LLM check confirms
   configuration. A skip marker alone is insufficient. This module accepts no

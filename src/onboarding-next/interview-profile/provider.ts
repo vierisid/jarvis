@@ -15,7 +15,14 @@ export function validScope(scope: Scope): boolean {
 }
 /** Match the canonical writer's case-insensitive (theme, summary) identity. */
 export const factId = (scope: Scope, fact: Fact) => `if1_${hash([scope.actorId, scope.projectId, fact.theme.toLowerCase(), fact.summary.toLowerCase()])}`;
-export const receiptKey = (scope: Scope, attemptId: string) => `onboarding-next.interview-profile.v1.${hash([scope.actorId, scope.projectId, attemptId])}`;
+export const RECEIPT_KEY_PREFIX = 'onboarding-next.interview-profile.v1.';
+export const receiptKey = (scope: Scope, attemptId: string) => `${RECEIPT_KEY_PREFIX}${hash([scope.actorId, scope.projectId, attemptId])}`;
+/** Receipts kept per vault. Only the one pending attempt's receipt is ever re-read
+ * (B04 holds one pending turn per scope). A maximal interview measured 31 receipts
+ * (opening plus the interviewer's 30-turn cap; B04 refuses past 32 turns), so 32
+ * keeps every receipt of the current interview and drops only older ones. Worst
+ * case about 9 KB each (128 fact ids), so about 290 KB in all. */
+export const RECEIPT_RETENTION = 32;
 
 export function normalizeFacts(value: unknown): Fact[] {
   if (!Array.isArray(value) || value.length > 128) throw new InterviewProfileError('invalid_input');

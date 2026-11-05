@@ -3,7 +3,7 @@ import { terminal, type Job } from './store';
 import { BuildError, type Artifact, type Dependencies, type DraftInput, type DraftResult, type IntentResult,
   type JourneyCommand, type Result, type Scope, type SubmitInput } from './types';
 export type * from './types';
-export { createSqliteBuildStore, initializeBuildJobStore } from './store';
+export { createSqliteBuildStore, initializeBuildJobStore, terminal } from './store';
 
 const fail = (error: unknown): Result => ({ availability: error instanceof BuildError && ['disabled', 'binding_missing'].includes(error.reason)
   ? 'unsupported' : 'unavailable', reason: error instanceof BuildError ? error.reason : 'storage_unavailable' });

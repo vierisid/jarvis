@@ -7,6 +7,8 @@ other onboarding, D, F or Q module. The existing onboarding entry is untouched.
 ## Host contract
 
 Pass a serializable `WelcomeModel`, `onSetUp`, `onExit` and `onThemeChange`.
+Set `setupCompleted` once setup is done: `onExit` is then a permanent onboarding
+exit, so the button reads "Skip the rest and explore Jarvis" instead of "later".
 The host owns persistence, supported/ready gating, routing and async results.
 Each deliberate activation emits one intent. While `state.kind` is `pending`,
 setup and exit are guarded and visibly disabled but retain keyboard focus.

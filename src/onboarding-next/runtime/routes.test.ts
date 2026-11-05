@@ -114,6 +114,10 @@ describe('Google OAuth return page', () => {
     expect(html).toContain('<h1>Google connection needs attention</h1>');
     expect(html).not.toContain('<script'); expect(html).not.toContain('s1');
   });
+  test('a callback for a cancelled attempt says it was cancelled (#1070)', async () => {
+    const h = harness({ connection: { state: 'cancelled', attemptId: 'a1' } });
+    expect(await (await h.open('?state=s1&code=c1')).text()).toContain('<h1>Google connection cancelled</h1>');
+  });
   test('a missing, empty or repeated parameter is refused before the callback runs', async () => {
     for (const query of ['', '?code=c1', '?state=&code=c1', '?state=a&state=b&code=c1', '?state=a&code=c1&code=c2', '?state=a&error=x&error=y']) {
       const h = harness(), response = await h.open(query);
