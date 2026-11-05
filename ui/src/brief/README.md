@@ -192,8 +192,8 @@ mounted live yet; a composition root wires it after the rooms it targets are rea
   points). Under an approved release (owner decision on #1106) the notice shows only when `<room>`
   is shaped like a room id (lower-case letters and digits in hyphen-separated words, at most 64
   characters) and the URL passes the same opt-in rules as a known room; anything else under
-  `#/brief/` is malformed and opens the current dashboard. The developer-setting path still shows
-  the notice for any unknown `#/brief/` hash, malformed or not.
+  `#/brief/` is malformed and opens the current dashboard. The developer-setting path follows the
+  same rule (#1162): only a well-formed id gets the notice.
 
 `?brief=preview&specimen=navigation-compatibility#/_brief_preview` opens these parts over fixture
 notifications. It starts no API read, socket, voice or Settings write.
@@ -527,8 +527,9 @@ ingredients (ready, loading, unavailable). It sends no request.
   a request that was never sent. `Check result` (`check()`, #1093) reads that same request back through
   the optional `port.reconcile`, F-21's `GET /api/brief/workflows/:flowId/run-requests/:requestId`: an
   accepted receipt shows and selects its run and unlocks Run; F-21's `not_found` (no run has been
-  accepted under that ID yet) unlocks Run for a new, explicit request and says that one still in
-  transit could yet start; any other answer leaves it uncertain.
+  accepted under that ID) withdraws the ID in the same transaction, so one still in transit can no
+  longer start (#1162), and unlocks Run for a new, explicit request; any other answer leaves it
+  uncertain.
 - `briefRunsPort(scope, request)` is the read half of the port, over F-21 (#1100): F-21's keyset reader
   owns Brief run history, so `list` reads `GET /api/brief/workflows/:flowId/runs[?cursor=]` (newest
   first, 50 a page, opaque cursor) and `detail` reads `GET /api/brief/workflows/:flowId/runs/:runId`, the

@@ -161,3 +161,27 @@ describe("#1066 Settings existing provider row never carries a typed key across 
     expect(keyInput().value).toBe("");
   });
 });
+
+// #1162 (from #1108): back on the official Anthropic endpoint, a gateway's
+// auth header was kept, because only a row that sends a header sent one. The
+// wizard already clears it; the Settings row must too, on Test and on Save.
+describe("#1162 Settings provider row drops a gateway auth header on the official endpoint", () => {
+  test("switching the custom endpoint off sends an empty auth header with the empty base URL", async () => {
+    calls.length = 0;
+    const data = {
+      testProvider: async (name: string, input: unknown) => { calls.push({ op: "test", name, input }); return { ok: true, message: "ok" }; },
+      upsertProvider: async (name: string, input: unknown) => { calls.push({ op: "upsert", name, input }); return { ok: true, message: "saved" }; },
+    };
+    host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
+    const entry = { kind: "anthropic" as const, has_api_key: true, base_url: "https://gateway.example", auth_header: "x-api-key" };
+    await act(async () => { root!.render(<ProviderRow name="anthropic" entry={entry as never} data={data as never} onToast={() => {}} expanded onToggleExpanded={() => {}} />); });
+    await act(async () => host!.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
+    await setValue(keyInput(), ANTHROPIC_KEY, "input");
+    await clickButton(/^Test connection$/);
+    await clickButton(/^Save$/);
+    expect(calls.map(c => [c.op, c.input])).toEqual([
+      ["test", expect.objectContaining({ baseUrl: "", authHeader: "" })],
+      ["upsert", { api_key: ANTHROPIC_KEY, base_url: "", auth_header: "" }],
+    ]);
+  });
+});

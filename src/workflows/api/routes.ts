@@ -36,7 +36,7 @@ import { WorkflowInspectionError } from '../../brief/inspection-values';
 
 import { DEFAULT_IDS, getWorkflowDb } from '../db';
 import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
-import { OnboardingResolutionError, resolveOnboardingOutcome } from '../runtime/onboarding-service';
+import { OnboardingResolutionError, resolveOnboardingOutcome, runOnboardingOutcomes } from '../runtime/onboarding-service';
 import { runFailure } from '../runtime/run-failure';
 import { dismissFailures, listOpenFailures } from '../runtime/open-failures';
 import type { AuthorityEngine } from '../../authority/engine';
@@ -2299,6 +2299,15 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         if (resolution !== 'mark_done' && resolution !== 'release') return err('resolution must be mark_done or release', 400);
         const receipt = await decideRunRecovery(runId, { ...rest, action: resolution, effectId }, { via: 'dashboard' });
         return ok({ receipt, recovery: getRunRecovery(runId) });
+      }),
+    },
+    // #1261: what the dashboard needs to offer the decision below: each customer
+    // onboarding of the run and the state of its two branches now.
+    "/api/workflow-runs/:runId/onboarding": {
+      GET: req => trapErrors(() => {
+        const { runId } = (req as RequestWithParams<{ runId: string }>).params;
+        const onboardings = runOnboardingOutcomes(callerProject(req), runId);
+        return onboardings ? ok({ runId, onboardings }) : err('run not found', 404);
       }),
     },
     // #1243: a person's decision about a customer onboarding branch whose

@@ -18,6 +18,7 @@
  */
 
 import type { ConfirmationCtrl, SpeakConfirmation } from './pebble-confirmation.ts';
+import { isGonePanelError } from './pebble-nav-tool.ts';
 
 export type RoomPanelIntent = { action: 'open' | 'close'; key: string; title: string };
 
@@ -92,7 +93,7 @@ export async function runRoomPanelIntent(
         // never arrived): drop the dead id, and say it is not open, which is
         // what is true. The sidecar's text is panels.go's ErrPanelUnknown,
         // "panel.close[<id>]: panel not found".
-        if (/panel not found|unknown panel/i.test(String(err))) {
+        if (isGonePanelError(err)) {
           deps.log?.(`[ambient-ui] panel.close(${key}): sidecar no longer has ${target.id}; dropped it`);
           deps.untrackPanel(sidecarId, target.id);
           outcome = 'not_open';

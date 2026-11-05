@@ -850,8 +850,9 @@ export class WebSocketService implements Service {
   /**
    * The same heartbeat, to dashboard clients only (#1026). For the pebble's
    * fast-path confirmations ("Closed Settings.", "Hid the amber background
-   * agent."): they acknowledge something done on this screen, so by the
-   * owner's decision they never go to Telegram or Discord.
+   * agent.") and, since #1157, its full spoken replies: they answer the person
+   * at this screen, so by the owner's decision they never go to Telegram or
+   * Discord.
    */
   broadcastHeartbeatToDashboard(text: string): void {
     const message: WSMessage = {
@@ -1511,7 +1512,6 @@ export class WebSocketService implements Service {
   private async handleChatTurn(msg: WSMessage, ws?: ServerWebSocket<unknown>): Promise<WSMessage | void> {
     const payload = msg.payload as {
       text?: string;
-      channel?: string;
       projectId?: string;
       currentRoom?: string;
       /** Set by `processVoiceTranscript` when it falls through to chat —
@@ -1550,7 +1550,10 @@ export class WebSocketService implements Service {
       };
     }
 
-    const channel = payload.channel ?? 'websocket';
+    // A dashboard turn is always the websocket channel. The frame does not name
+    // it: a claimed "telegram" or "pebble" would write to and read back that
+    // channel's conversation and get its prompt (#1157).
+    const channel = 'websocket';
     const requestId = msg.id ?? crypto.randomUUID();
 
     // A dashboard socket owns at most one foreground turn. This is the

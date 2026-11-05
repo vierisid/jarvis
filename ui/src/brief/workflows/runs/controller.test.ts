@@ -369,7 +369,7 @@ test("a request the server holds no receipt for unlocks Run without re-sending i
   await s.check();
   expect(seen).toEqual([id]);
   expect(s.getSnapshot()).toMatchObject({ submission: "idle", request: null });
-  expect(s.getSnapshot().message).toContain("No run has been recorded for that request yet");
+  expect(s.getSnapshot().message).toContain("No run was recorded for that request, and it can no longer start");
   expect(s.canRun).toBe(true);
   expect(sent).toBe(1);
   s.retire();

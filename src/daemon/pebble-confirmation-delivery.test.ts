@@ -53,9 +53,10 @@ describe('pebble fast-path confirmations stay on the dashboard (#1026)', () => {
     const wiring = src.slice(src.indexOf('const speakConfirmation = makeSpeakConfirmation({'));
     expect(wiring.slice(0, wiring.indexOf('});'))).toContain('heartbeat: (text) => wsService.broadcastHeartbeatToDashboard(text),');
     // The panel-intent path used to call broadcastHeartbeat(confirm) itself.
-    // What still reaches channels from index.ts is the full LLM reply of a
-    // pebble turn and the goal service's chat callback, nothing else.
+    // Since #1157 (owner decision) the full LLM reply of a pebble turn is
+    // dashboard-only too, so the goal service's chat callback is the only
+    // thing in index.ts that still reaches channels.
     const direct = [...src.matchAll(/wsService\.broadcastHeartbeat\(([^)]*)\)/g)].map((m) => m[1]);
-    expect(direct.sort()).toEqual(['fullText', 'text']);
+    expect(direct.sort()).toEqual(['text']);
   });
 });

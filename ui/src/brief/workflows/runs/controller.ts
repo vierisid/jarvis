@@ -406,9 +406,9 @@ export class WorkflowRunsController {
   /** Read the uncertain request's durable outcome by its ID. Nothing is re-sent: an
    * accepted receipt shows its run and unlocks Run; an answer that no run has been
    * recorded for the ID yet unlocks Run for a new, explicit request (never an
-   * automatic one); anything else leaves it uncertain and locked. A missing receipt
-   * is true only when read: an original request still in transit may yet land, so
-   * the message says so rather than inviting another run. */
+   * automatic one); anything else leaves it uncertain and locked. The read that
+   * answers "not found" also withdraws the ID on the server (#1162), so an original
+   * request still in transit can no longer start a run. */
   check = async () => {
     if (!this.canCheck) return;
     const request = this.state.request!;
@@ -426,9 +426,9 @@ export class WorkflowRunsController {
           submission: "idle",
           request: null,
           message:
-            "No run has been recorded for that request yet. If it was still on its way it could still start, so check history before running again.",
+            "No run was recorded for that request, and it can no longer start. You can run the workflow again.",
         });
-        // Re-read history now, so a request that did land is on screen for that choice.
+        // Re-read history now, so what is on screen matches the server before the next choice.
         void this.refresh();
         return;
       }

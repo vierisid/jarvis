@@ -66,7 +66,7 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
     <div ref={viewport} className="brief-message-scroll" tabIndex={0} role="region" aria-label="Conversation messages" onScroll={scroll.onScroll}>
       <div ref={content} className="brief-message-content">
         {history.cursor && binding.loadOlder && <button type="button" className="brief-history-button" disabled={loading || history.state === "loading"} onClick={loadOlder}>{loading || history.state === "loading" ? "Loading earlier messages…" : "Load earlier messages"}</button>}
-        {(historyFailed || history.state === "error") && <p className="brief-message-notice" role="status">{items.length ? "Earlier messages could not be loaded. Your current messages are still here." : "Conversation history could not be loaded."}</p>}
+        {(historyFailed || history.state === "error") && <p className="brief-message-notice">{items.length ? "Earlier messages could not be loaded. Your current messages are still here." : "Conversation history could not be loaded."}</p>}
         {!items.length && history.state !== "error" && <h2 className="brief-type-section-heading brief-message-empty">{history.state === "idle" || history.state === "loading" ? "Loading conversation…" : "What are we moving forward?"}</h2>}
         {items.map(item => {
           if (item.kind === "user") return <article key={item.key} data-thread-item={item.key} className="brief-user-message" aria-label="Your message"><p data-reading-anchor="user">{item.message.content}</p></article>;
@@ -77,10 +77,11 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
             {activities.length > 0 && <ActivityList activities={activities} turn={turn} expanded={expanded} connected={binding.connected} reduced={reduced}
               toggle={() => { scroll.beforeToggle(viewport.current?.querySelector<HTMLElement>(`[data-thread-item="${CSS.escape(item.key)}"] .brief-activity-toggle`) ?? undefined); memory.expanded[item.key] = !expanded; setVersion(v => v + 1); }}/> }
             {/* Say why the turn waits instead of "working", then the existing dashboard card for it (#1075). */}
-            {/* The cards are regions, not dialogs (#1092): this line is what a screen reader hears, so it names the
-                action and changes in place when another one arrives or a card's details land. The card below
-                already shows the action, so the naming part is for screen readers only. */}
-            {item.awaitingApproval && <p className="brief-message-notice" data-reading-anchor="approval" role="status">Waiting for your approval before continuing.{" "}
+            {/* The cards are regions, not dialogs (#1092): this line names the action, and liveNotice says the
+                same in the thread's one status region, which changes in place when another one arrives or a
+                card's details land (#1162). The card below already shows the action, so the naming part is for
+                screen readers only. */}
+            {item.awaitingApproval && <p className="brief-message-notice" data-reading-anchor="approval">Waiting for your approval before continuing.{" "}
               <span className="brief-sr-only">{waitingDetail(item.pendingApprovalIds, binding.approvalCards)}</span></p>}
             {item.pendingApprovalIds.map(approvalId => {
               const card = binding.approvalCards?.[approvalId];
@@ -89,20 +90,38 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
                   onApprove={decide && (() => void decide(approvalId, "approve"))} onCancel={decide && (() => void decide(approvalId, "deny"))}/>
               </div> : null;
             })}
-            {!activities.length && running(turn) && !item.awaitingApproval && <div className="brief-response-working" role="status" data-reduced={reduced}>
+            {!activities.length && running(turn) && !item.awaitingApproval && <div className="brief-response-working" data-reduced={reduced}>
             <span className="brief-activity-marker" data-current={binding.connected} aria-hidden="true"/>
             <span>{binding.connected ? (turn?.state === "queued" ? "Waiting to respond…" : "Preparing your response…") : "Reconnecting…"}</span>
           </div>}
             {message?.content && <ReplyMarkdown text={message.content}/>}
-            {(failed || cancelled) && <p className="brief-message-notice" data-error={failed} data-reading-anchor="terminal" role="status">
+            {(failed || cancelled) && <p className="brief-message-notice" data-error={failed} data-reading-anchor="terminal">
               {failed ? "This response could not finish." : "Response stopped."}{message?.content ? " The partial answer is kept above." : ""}</p>}
             {turn?.state === "completed" && !message?.content && <p className="brief-message-notice" data-reading-anchor="terminal">Finished without a text reply.</p>}
           </article>;
         })}
       </div>
     </div>
+    {/* One persistent live region (#1162): a status region inserted together with its text is
+        announced unreliably, so the notices above are plain text and this one changes in place. */}
+    <p className="brief-sr-only" role="status">{liveNotice(items, binding, historyFailed || history.state === "error")}</p>
     {!scroll.following && items.length > 0 && <button className="brief-reply-latest" type="button" onClick={scroll.toLatest}><ArrowDown size={14} aria-hidden="true"/>Latest messages</button>}
   </section>;
+}
+
+/** What the region says now: the latest reply's state, else a history failure. */
+function liveNotice(items: ReturnType<typeof threadItems>, binding: MessageBinding, historyFailed: boolean): string {
+  const latest = [...items].reverse().find(item => item.kind !== "user");
+  if (latest?.kind === "reply") {
+    const turn = latest.turn;
+    if (latest.awaitingApproval) return `Waiting for your approval before continuing. ${waitingDetail(latest.pendingApprovalIds, binding.approvalCards)}`.trim();
+    if (turn?.state === "failed") return `This response could not finish.${latest.message?.content ? " The partial answer is kept above." : ""}`;
+    if (turn?.state === "cancelled") return `Response stopped.${latest.message?.content ? " The partial answer is kept above." : ""}`;
+    if (running(turn) && !latest.activities.length)
+      return binding.connected ? (turn?.state === "queued" ? "Waiting to respond…" : "Preparing your response…") : "Reconnecting…";
+  }
+  if (historyFailed) return items.length ? "Earlier messages could not be loaded. Your current messages are still here." : "Conversation history could not be loaded.";
+  return "";
 }
 
 function waitingDetail(ids: readonly string[], cards: MessageBinding["approvalCards"]): string {

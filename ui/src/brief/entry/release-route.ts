@@ -52,6 +52,9 @@ export function resolveReleaseEntry(href: string, rollout: BriefRollout, devtool
   // It cannot turn foreground aliases on or enable feature providers.
   if (devtools) {
     const internal = resolveBriefEntry(href);
+    // The release rule for a room this build lacks (#1106): only a well-formed
+    // id gets the notice; a malformed one keeps the current dashboard (#1162).
+    if (internal.kind === "moved" && !wellFormedUnknownRoom(href)) return { kind: "legacy" };
     if (internal.kind !== "legacy") return internal;
   }
   if (rollout === "off" || (rollout === "cohort" && flag !== "1") || (flag !== null && flag !== "1")) {

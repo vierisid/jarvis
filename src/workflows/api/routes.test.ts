@@ -1711,6 +1711,7 @@ describe("#729: the flow, version and run routes share one project scope", () =>
     { name: "run cancel", route: "/api/workflow-runs/:runId/cancel", method: "POST", kind: "run" },
     { name: "run recovery POST", route: "/api/workflow-runs/:runId/recovery", method: "POST", body: {}, kind: "run" },
     { name: "effect identity POST", route: "/api/workflow-runs/:runId/effects/:effectId/identity", method: "POST", body: { resolution: "release" }, kind: "run" },
+    { name: "run onboarding GET", route: "/api/workflow-runs/:runId/onboarding", method: "GET", kind: "run" },
     { name: "run waitpoints", route: "/api/workflow-runs/:runId/waitpoints", method: "GET", kind: "run" },
   ];
 

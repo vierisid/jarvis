@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ONBOARDING_ACCOUNTS, ONBOARDING_ACTION, ONBOARDING_PIECE, onboardingResource, onboardingSetup, onboardingCustomer, onboardingTransport, onboardCustomer, type OnboardingResolutionRecord, type ResourceBranch, type ResourceOutcome } from './customer-onboarding';
-import { acquireOnboarding, OnboardingRecordError, recordedCustomerNames, resolveOnboardingBranch } from '../db/repos/customer-onboarding';
+import { acquireOnboarding, OnboardingRecordError, readOnboardingRecord, recordedCustomerNames, resolveOnboardingBranch } from '../db/repos/customer-onboarding';
 import { getFlowRunInProject } from '../db/repos/flow-run';
 import { listWorkflowEffects } from '../db/repos/workflow-effect';
 import { boundedReceiptText } from '../../roles/untrusted';
@@ -54,6 +54,41 @@ export function resolveOnboardingOutcome(projectId: string, runId: string, input
     if (e instanceof OnboardingRecordError) throw new OnboardingResolutionError(e.message, e.status);
     throw e;
   }
+}
+
+/** One customer onboarded by a run, with what is on record now for its two branches (#1261). */
+export interface RunOnboardingOutcome {
+  effectId: string;
+  customer: { id: string; name: string | null };
+  /** A run holds this customer now: nothing can be resolved until it finishes. */
+  running: boolean;
+  branches: Partial<Record<ResourceBranch, { status: 'succeeded' | 'failed' | 'unknown' | 'dispatching'; url?: string; detail?: string }>>;
+}
+/**
+ * The customer onboardings of a run, read-only, so the dashboard can offer the
+ * same resolution as the route below for a branch still unknown (#1261). The
+ * record is per customer, so this is its current state, which a later run or
+ * an earlier decision may already have settled. A record that names no
+ * customer is left out: it cannot be resolved.
+ */
+export function runOnboardingOutcomes(projectId: string, runId: string): RunOnboardingOutcome[] | null {
+  const run = getFlowRunInProject(projectId, runId);
+  if (!run) return null;
+  return listWorkflowEffects(run.id).filter(e => e.route === 'customer-onboarding' && e.provenance.piece === ONBOARDING_PIECE).flatMap(effect => {
+    const customer = (effect.arguments as { customer?: { id?: unknown; name?: unknown } }).customer;
+    if (typeof customer?.id !== 'string' || !customer.id) return [];
+    const record = readOnboardingRecord(onboardingIdentity(effect.projectId, run.flowId, customer.id));
+    const branches: RunOnboardingOutcome['branches'] = {};
+    for (const branch of ['clickup', 'drive'] as const) {
+      const state = record?.results[branch];
+      if (!state) continue;
+      branches[branch] = state.status === 'dispatching' ? { status: 'dispatching' } : { status: state.status,
+        ...(typeof state.url === 'string' ? { url: state.url } : {}),
+        ...(typeof state.detail === 'string' ? { detail: boundedReceiptText(state.detail, 500) } : {}) };
+    }
+    return [{ effectId: effect.id, customer: { id: customer.id, name: typeof customer.name === 'string' ? boundedReceiptText(customer.name, 200) : null },
+      running: record?.running ?? false, branches }];
+  });
 }
 
 export function createOnboardingService(deps: { effects: WorkflowEffectBoundary; credentials: CredentialResolver; fetchImpl?: typeof fetch }) {
