@@ -2483,7 +2483,9 @@ if (rule === "contained") {
     (img.startsWith("golang:" + goLine + "-") || img.startsWith("golang:" + goLine + "@"));
   // Path segments only: no ., no .., nothing but a plain name.
   const tempPath = (p) => /^\$\{?RUNNER_TEMP\}?(?:\/[\w-][\w.-]*)+$/.test(p) && !/\/\.\.?(?:\/|$)/.test(p);
-  const hostOk = new Set(["set", "rm", "mkdir", "tar", "find", "cp", "echo", "exit", "fi", "then", "[", "test", "head", "wc", "du", "awk", "docker"]);
+  const hostOk = new Set(["set", "rm", "mkdir", "tar", "find", "cp", "echo", "exit", "fi", "then", "[", "test", "head", "tail", "wc", "du", "cut", "docker"]);
+  // Arguments of those commands that run a program of their own.
+  const runsProgram = /(?:^|\s)(?:-exec|-execdir|-ok|-okdir|--to-command|--use-compress-program|-I|--checkpoint-action|--info-script|--new-volume-script|-F)(?:[=\s]|$)/;
   let runs = 0;
   for (const [name, job] of Object.entries(jobs)) {
     const flat = flatSteps(job.steps);
@@ -2514,6 +2516,7 @@ if (rule === "contained") {
           if (goCode.test(bare)) out.push(label + ": runs Go on the host, outside docker run: " + l);
           if (repoScript.test(bare)) out.push(label + ": runs a repository script on the host, outside docker run: " + l);
           if (/\bdocker\b/.test(l)) out.push(label + ": runs docker other than at the start of a line: " + l);
+          if (hasDocker && runsProgram.test(bare)) out.push(label + ": a host command here runs a program of its own: " + l);
           if (hasDocker) {
             // Every command word on the line; $( ) and backticks are
             // commands too.
@@ -2557,7 +2560,7 @@ if (rule === "contained") {
         for (; k < words.length && words[k].startsWith("-"); k++) {
           const w = words[k], v = words[k + 1] ?? "";
           if (w === "--rm") seen.rm++;
-          else if (w === "--user") { seen.user++; k++; if (v !== "$(id -u):$(id -g)" && !/^[1-9]\d*:\d+$/.test(v)) out.push(label + ": docker run --user " + v + " is not the runner uid: " + l); }
+          else if (w === "--user") { seen.user++; k++; if (v !== "$(id -u):$(id -g)" && !/^[1-9]\d*:[1-9]\d*$/.test(v)) out.push(label + ": docker run --user " + v + " is not the runner uid: " + l); }
           else if (w === "--cap-drop") { k++; if (v === "ALL") seen.capdrop++; else out.push(label + ": docker run --cap-drop " + v + ", not ALL: " + l); }
           else if (w === "--security-opt") { k++; if (v === "no-new-privileges") seen.nnp++; else out.push(label + ": docker run --security-opt " + v + " loosens the container: " + l); }
           else if (w === "--network") { k++; if (v === "none") seen.network = "none"; else out.push(label + ": docker run --network " + v + ", not none: " + l); }
@@ -3387,6 +3390,15 @@ expect_clean "update-webview.yml: upstream code runs only inside a sealed, diges
 	expect_caught 'Go handed to a shell on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
 		'      - name: Collect the vendored tree' $'      - run: bash -c "cd sidecar && go test ./..."\n      - name: Collect the vendored tree' \
 		'runs Go on the host, outside docker run'
+	expect_caught 'find running a program on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'          cp -RP ' $'          find "$tree" -name x -exec sh {} \\;\n          cp -RP ' \
+		'a host command here runs a program of its own'
+	expect_caught 'tar running a program on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'          cp -RP ' $'          tar -cf /dev/null --to-command=sh "$tree"\n          cp -RP ' \
+		'a host command here runs a program of its own'
+	expect_caught 'awk back on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
+		'          cp -RP ' $'          awk \x27BEGIN { system("sh") }\x27\n          cp -RP ' \
+		'runs "awk" on the host'
 	expect_caught 'make on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
 		'      - name: Collect the vendored tree' $'      - run: make -C sidecar test\n      - name: Collect the vendored tree' \
 		'runs "make" on the host'

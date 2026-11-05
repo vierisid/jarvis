@@ -183,21 +183,27 @@ jobs:
           mkdir -p "$out"
           work="$RUNNER_TEMP/webview-work"
           tree="$work/sidecar/third_party/webview_go"
-          # Bounded before anything walks the whole tree or copies it: the
-          # same limits publish holds the artifact to (#1049), so an oversized
-          # tree costs this job a stat walk, not a copy and an upload. head
-          # stops find early on a huge one.
-          if [ "$(find "$tree" -mindepth 1 2>/dev/null | head -n 151 | wc -l)" -gt 150 ]; then
+          # The path to the tree first, which walks nothing: no component of
+          # it a link, and the module files plain files.
+          if [ -L "$work/sidecar" ] || [ -L "$work/sidecar/third_party" ] || [ -L "$tree" ] || [ ! -d "$tree" ] \
+            || [ -L "$work/sidecar/go.mod" ] || [ ! -f "$work/sidecar/go.mod" ] \
+            || [ -L "$work/sidecar/go.sum" ] || [ ! -f "$work/sidecar/go.sum" ]; then
+            echo "::error::the vendored tree or a module file is not where a plain re-vendor puts it"
+            exit 1
+          fi
+          # Then bounded before anything walks the whole tree or copies it:
+          # the same limits publish holds the artifact to (#1049), so an
+          # oversized tree costs this job a stat walk, not a copy and an
+          # upload. head stops find early on a huge one.
+          if [ "$(find "$tree" -mindepth 1 | head -n 151 | wc -l)" -gt 150 ]; then
             echo "::error::the vendored tree holds more than 150 entries"
             exit 1
           fi
-          if [ "$(du -s --apparent-size --block-size=1 "$tree" "$work/sidecar/go.mod" "$work/sidecar/go.sum" | awk '{ n += $1 } END { print n }')" -gt 8388608 ]; then
+          if [ "$(du -cs --apparent-size --block-size=1 "$tree" "$work/sidecar/go.mod" "$work/sidecar/go.sum" | tail -n 1 | cut -f 1)" -gt 8388608 ]; then
             echo "::error::the vendored tree and module files hold more than 8 MiB"
             exit 1
           fi
-          if [ -n "$(find "$work/sidecar/third_party/webview_go" "$work/sidecar/go.mod" "$work/sidecar/go.sum" -not -type f -not -type d -print -quit)" ] \
-            || [ ! -d "$work/sidecar/third_party/webview_go" ] || [ -L "$work/sidecar/third_party/webview_go" ] \
-            || [ -L "$work/sidecar/third_party" ] || [ -L "$work/sidecar" ]; then
+          if [ -n "$(find "$tree" -not -type f -not -type d -print -quit)" ]; then
             echo "::error::the vendored tree holds something other than files and directories"
             exit 1
           fi

@@ -123,6 +123,7 @@ jobs:
               - '.github/scripts/webview-toolchain.Dockerfile'
               - 'scripts/vendor-webview.sh'
               - 'sidecar/go.mod'
+              - 'sidecar/go.sum'
               - 'sidecar/third_party/webview_go/**'
               # Not test.yml as a whole, unlike the filters above: the job
               # runs update-webview.yml's steps, so a test.yml edit changes

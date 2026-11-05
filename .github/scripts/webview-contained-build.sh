@@ -59,6 +59,9 @@ fetch)
 		exit 2
 		;;
 	esac
+	# A writable module cache, so the copy can be removed again by the uid
+	# that owns it (Go writes it read-only by default).
+	export GOFLAGS=-modcacherw
 	scripts/vendor-webview.sh "$version"
 	# Everything the build phase will need, for every platform go.mod lists.
 	(cd sidecar && go mod download)
