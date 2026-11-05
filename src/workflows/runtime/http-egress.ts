@@ -204,9 +204,9 @@ export class EgressRefusedError extends Error {
   readonly code = REFUSED_CODE;
 }
 
-function refusal(host: string, address: string, policy: EgressPolicy): EgressRefusedError {
+function refusal(host: string, address: string, policy: EgressPolicy, label = 'HTTP request'): EgressRefusedError {
   const allowed = policy === 'public-only' ? 'public addresses' : 'public and private-network addresses';
-  return new EgressRefusedError(`HTTP request to ${host} refused: it resolves to ${address}, and this Jarvis's HTTP steps reach only ${allowed} (never this machine, loopback, link-local or cloud metadata)`);
+  return new EgressRefusedError(`${label} to ${host} refused: it resolves to ${address}, and this Jarvis's workflow steps reach only ${allowed} (never this machine, loopback, link-local or cloud metadata)`);
 }
 
 /** Refuse an IP-literal host outside the policy. A name is checked by `guardedLookup` instead. */
@@ -239,6 +239,45 @@ export function guardedLookup(policy: EgressPolicy, resolve: LookupImpl = dnsLoo
       return done(null, list[0]!.address, list[0]!.family);
     });
   };
+}
+
+/**
+ * A connection that is not HTTP (#961): the core SMTP piece's mail server, the
+ * core SFTP piece's SFTP, FTP or FTPS server. Their clients (nodemailer, ssh2,
+ * basic-ftp) take no `lookup`, so the host is resolved here once, every
+ * address it resolves to is checked like an HTTP hop's, and the caller
+ * connects to the returned address: a literal, never the name again, so
+ * nothing can resolve it a second time. A TLS client passes the name as its
+ * `servername`, so the certificate is still checked against the name.
+ */
+export function resolveGuardedAddress(hostname: string, policy: EgressPolicy, options: {
+  /** What is connecting, for the refusal message: "SMTP connection", "SFTP connection". */
+  label: string;
+  resolve?: LookupImpl;
+  allowAddress?: (address: string) => boolean;
+}): Promise<string> {
+  const allowed = options.allowAddress ?? ((address: string) => destinationAllowed(address, policy));
+  const host = String(hostname ?? '').trim();
+  const literal = host.replace(/^\[(.*)\]$/u, '$1');
+  if (host === '') return Promise.reject(new EgressRefusedError(`${options.label} refused: no host`));
+  if (isIP(literal) !== 0) {
+    if (!allowed(literal)) return Promise.reject(refusal(host, literal, policy, options.label));
+    return Promise.resolve(literal);
+  }
+  const resolveImpl = options.resolve ?? (dnsLookup as unknown as LookupImpl);
+  return new Promise((done, fail) => {
+    resolveImpl(host, { all: true }, (error, addresses) => {
+      if (error) return fail(error);
+      const list = Array.isArray(addresses) ? addresses : [];
+      if (list.length === 0) return fail(new EgressRefusedError(`${options.label} to ${host} refused: it resolves to no address`));
+      const outside = list.find((entry) => !allowed(entry.address));
+      if (outside) return fail(refusal(host, outside.address, policy, options.label));
+      // IPv4 first when the name has both: an engine with no IPv6 route would
+      // otherwise fail where the client's own lookup (which prefers IPv4 on
+      // most systems) would have connected. Every address was checked above.
+      done((list.find((entry) => isIP(entry.address) === 4) ?? list[0]!).address);
+    });
+  });
 }
 
 /** The subset of axios this needs; the piece passes its own bundled copy. */

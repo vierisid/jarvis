@@ -87,8 +87,11 @@ Practical consequences:
   Library's Community section (both modes), under governed categories in the
   Authority room, and with a "Not approval-gated" badge on each community
   action step in the flow editor. Since #961 the HTTP request step is governed
-  (see `Core pieces` below). The built-in steps that act only inside the run
-  (delay, signed-in approval requests, schedule; store and file helper once loaded) run
+  (see `Core pieces` below), and so are the GraphQL, SMTP and FTP/SFTP steps.
+  The built-in steps that act only inside the run (delay, signed-in approval
+  requests, schedule, store, the file, text, date, math, image, PDF, CSV, XML,
+  crypto, QR code, data mapper and data summarizer helpers; upstream's PDF
+  "Convert to Image" is not loaded, as it runs a shell) run
   without approval and leave no row of their own; the Authority room note
   says so. Which pieces count is `src/workflows/runtime/step-admission.ts`,
   which both the admission and `/api/workflows/pieces` (`notApprovalGated`)
@@ -611,20 +614,26 @@ What this does NOT do:
 
 ### Core pieces (#961)
 
-Upstream keeps its general-purpose pieces in `packages/pieces/core`. Seven are
-vendored (`scripts/sync-activepieces.ts`). Jarvis now builds and loads four of
-them (`LOADED_CORE_PIECES` in `runner/engine-runtime/build-pieces.ts`), lists
-each in the editor's catalog, and runs them from the vendored `dist/`, never
-from an npm copy of the same name:
+Upstream keeps its general-purpose pieces in `packages/pieces/core` (27 at the
+pin). Jarvis vendors and loads every one that does not need the Activepieces
+server (`LOADED_CORE_PIECES` in `runner/engine-runtime/build.ts`, vendored by
+`scripts/sync-activepieces.ts`), lists each in the editor's catalog, and runs
+them from the vendored `dist/`, never from an npm copy of the same name. Their
+third-party dependencies are part of the engine's committed staging install
+(`engine-staging.lock`), so they are license-checked with it (#971):
 
 | Piece | How it is governed |
 |---|---|
 | `http` | Governed (`CORE_PIECE_ADAPTERS` in `runtime/piece-effects.ts`), by method. GET and HEAD with no body are `read_data`; a GET or HEAD that carries a body sends it (axios does) and is `send_message`. POST, PUT and PATCH are `send_message`: they carry content to an endpoint the flow names, which need not be the user's own account, so at the shipped defaults they raise a card naming the method and URL. DELETE, and any other method, is `delete_data`, denied below level 9. `parse_url` is `read_data` (pure). |
-| `approval`, `delay`, `schedule` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. |
-| `store`, `file-helper` | Classified in-run, but not loaded yet: they need `deep-equal` and `@zip.js/zip.js`, which the committed engine staging install does not carry. |
-| `webhook` | Not loaded. The editor's Webhook trigger is Jarvis's own ingress (below); the core piece's trigger would never fire through the engine, and its "return response" actions answer a synchronous webhook Jarvis does not hold open. |
+| `graphql` | Governed like an HTTP request with a body, because the piece always sends its query as one: GET, POST, PUT and PATCH are `send_message`, anything else `delete_data`. Tracked (sent once), egress-guarded, a proxy is refused, and "Retry on failure" is off and hidden. Header, query, URL and variable credentials are redacted from the card. |
+| `smtp` | Governed: `send-email` is `send_email`, so it asks at the shipped defaults. Tracked (sent once): upstream's resend after a connection reset is removed, since a reset after the server took the message is a sent email. The mail server passes the egress guard; the connection's host name stays the TLS name. |
+| `sftp` | Governed by action: `read_file_content` and `listFolderContents` are `read_data`; `createFolder` is `write_data`; `upload_file` and `create_file` put content on the server and replace a file at that path, so they are `send_message`, as an HTTP PUT is (not tracked: a repeat writes the same bytes to the same path); `renameFileOrFolder` (which can replace the target), `deleteFile` and `deleteFolder` are `delete_data`. The server passes the egress guard for SFTP, FTP and FTPS, and an FTP data connection always goes to the checked control address, never to a host a PASV reply names. Its polling trigger (`new_file`) is not loaded: a trigger runs outside the effect boundary. |
+| `pdf` | Acts only inside the run, without upstream's "Convert to Image", which is not loaded: it writes the PDF to the OS temp dir and runs poppler's `pdftoppm` through `/bin/sh` with the engine's environment. |
+| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. |
+| `webhook` | Vendored, not loaded. The editor's Webhook trigger is Jarvis's own ingress (below); the core piece's trigger would never fire through the engine, and its "return response" actions answer a synchronous webhook Jarvis does not hold open. |
+| `tables`, `forms`, `subflows`, `connections`, `tags`, `manual-trigger` | Not vendored: each needs the Activepieces server (its API, its form and chat pages, its MANUAL trigger strategy). Child workflows use the "Jarvis: Reusable workflows" piece, and a workflow started by hand uses the editor's own manual trigger. `CORE_PIECES_LEFT_OUT` gives each reason. |
 
-`core-pieces.test.ts` holds every vendored core piece to exactly one of these,
+`core-pieces.test.ts` holds every upstream core piece to exactly one of these,
 and every action of an in-run piece to a reviewed list.
 
 HTTP request specifics:

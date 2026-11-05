@@ -97,7 +97,11 @@ export function tracksPieceCompletion(piece: unknown, action: unknown, input?: u
     // #961: an HTTP request that is not a read is a send whose outcome the
     // server alone knows, so a retry after a lost or failed request is
     // refused rather than repeated. Without the input it is assumed a send.
-    || (piece === HTTP_PIECE && action === 'send_request' && !httpRequestIsRead(ruleInput(input) ?? {}));
+    || (piece === HTTP_PIECE && action === 'send_request' && !httpRequestIsRead(ruleInput(input) ?? {}))
+    // #961: a GraphQL request always carries a body, and an email is sent at
+    // most once: neither is repeated after an attempt whose outcome is unknown.
+    || (piece === GRAPHQL_PIECE && action === 'send_request')
+    || (piece === SMTP_PIECE && action === 'send-email');
 }
 
 const CLICKUP_PIECE = '@activepieces/piece-clickup';
@@ -338,6 +342,13 @@ function dropboxTracked(action: unknown): boolean {
   return typeof action === 'string' && (['write_data', 'send_message', 'delete_data'] as const)
     .some(category => categories[category]?.includes(action));
 }
+
+/** The vendored core GraphQL piece (#961). */
+export const GRAPHQL_PIECE = '@activepieces/piece-graphql';
+/** The vendored core SMTP piece (#961). */
+export const SMTP_PIECE = '@activepieces/piece-smtp';
+/** The vendored core FTP/SFTP piece (#961). */
+export const SFTP_PIECE = '@activepieces/piece-sftp';
 
 /** The vendored core HTTP piece (#961). */
 export const HTTP_PIECE = '@activepieces/piece-http';
@@ -787,7 +798,64 @@ export const CORE_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
     categoryFromInput: { send_request: { props: ['method', 'body'], category: httpRequestCategory } },
     redactInput: redactHttpInput,
   },
+  {
+    catalogId: 'graphql',
+    pieceName: GRAPHQL_PIECE,
+    unknownActionCategory: 'delete_data',
+    targetProps: ['method', 'url'],
+    // Its one action always sends the query as a body, whatever the method, so
+    // it is an HTTP request with a body: a send for GET, POST, PUT and PATCH,
+    // and the worst case for DELETE or anything else (`graphqlRequestCategory`).
+    categories: { delete_data: ['send_request'] },
+    categoryFromInput: { send_request: { props: ['method'], category: graphqlRequestCategory } },
+    // Headers, query parameters and the URL can carry a credential, as on the HTTP step.
+    redactInput: redactGraphqlInput,
+  },
+  {
+    catalogId: 'smtp',
+    pieceName: SMTP_PIECE,
+    unknownActionCategory: 'send_email',
+    targetProps: ['from', 'senderName', 'to', 'cc', 'bcc', 'replyTo', 'subject'],
+    categories: { send_email: ['send-email'] },
+  },
+  {
+    catalogId: 'sftp',
+    pieceName: SFTP_PIECE,
+    // Deletes a file or a whole folder tree on the server.
+    unknownActionCategory: 'delete_data',
+    targetProps: ['filePath', 'fileName', 'directoryPath', 'folderPath', 'oldPath', 'newPath', 'recursive'],
+    categories: {
+      read_data: ['read_file_content', 'listFolderContents'],
+      // Makes a directory; nothing is replaced and nothing leaves the run.
+      write_data: ['createFolder'],
+      // Puts content on a server the connection names, replacing a file
+      // already at that path: as an HTTP PUT, a send. Not tracked: a repeat
+      // after an unknown outcome writes the same bytes to the same path.
+      send_message: ['upload_file', 'create_file'],
+      // A rename replaces whatever is at the new path on servers that allow
+      // it (FTP RNTO does), and deletes remove a file or a folder tree.
+      delete_data: ['renameFileOrFolder', 'deleteFile', 'deleteFolder'],
+    },
+  },
 ];
+
+/**
+ * A GraphQL request's category: always an HTTP request with a body (the piece
+ * sends `{ query, variables }` whatever the method), so never a read.
+ */
+export function graphqlRequestCategory(input: Record<string, unknown>): ActionCategory {
+  return httpRequestCategory({ method: input.method, body: { data: 'query' } });
+}
+
+/**
+ * The GraphQL step's inline credentials: as the HTTP step's (headers, query
+ * parameters, the URL, the proxy password), plus credential-named fields in
+ * its variables (a login mutation's `password`).
+ */
+export function redactGraphqlInput(input: Record<string, unknown>): Record<string, unknown> {
+  const out = redactHttpInput(input);
+  return inputObject(out.variables) || Array.isArray(out.variables) ? { ...out, variables: redactNamed(out.variables) } : out;
+}
 
 /**
  * An HTTP request's category, by method (owner decision on #961). A GET or a

@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createServer, type Server } from 'node:http';
 import axios from 'axios';
 import type { LookupAddress } from 'node:dns';
-import { addressAllowed, assertHostAllowed, canonicalAddress, classifyAddress, destinationAllowed, egressGuardedAxios, egressPolicyFromEnv,
+import { resolveGuardedAddress, addressAllowed, assertHostAllowed, canonicalAddress, classifyAddress, destinationAllowed, egressGuardedAxios, egressPolicyFromEnv,
   guardedFileDownload, guardedLookup, interfaceAddresses, EGRESS_POLICY_ENV, EgressRefusedError } from './http-egress';
 
 describe('which addresses the HTTP step may reach', () => {
@@ -196,5 +196,48 @@ describe('the guarded client connects only where it checked', () => {
 
   test('only http and https are spoken', async () => {
     await expect(client(true).request({ method: 'GET', url: 'file:///etc/passwd' })).rejects.toThrow(/not http or https/);
+  });
+});
+
+describe('#961: a non-HTTP connection (SMTP, SFTP, FTP) is resolved once and connects to the checked address', () => {
+  const resolver = (answers: Record<string, string[]>, seen: string[]) =>
+    ((host: string, _opts: unknown, cb: (e: Error | null, a: LookupAddress[]) => void) => {
+      seen.push(host);
+      const list = answers[host];
+      if (!list) return cb(Object.assign(new Error(`getaddrinfo ENOTFOUND ${host}`), { code: 'ENOTFOUND' }), []);
+      cb(null, list.map((address) => ({ address, family: address.includes(':') ? 6 : 4 })));
+    }) as never;
+
+  test('a name is resolved once and the first checked address is what the client connects to', async () => {
+    const seen: string[] = [];
+    await expect(resolveGuardedAddress('mail.example.com', 'public-only', { label: 'SMTP connection', resolve: resolver({ 'mail.example.com': ['93.184.216.34', '93.184.216.35'] }, seen) }))
+      .resolves.toBe('93.184.216.34');
+    expect(seen).toEqual(['mail.example.com']);
+    // IPv4 first when a name has both, whatever order DNS answered in.
+    await expect(resolveGuardedAddress('dual.example.com', 'public-only', { label: 'SMTP connection',
+      resolve: resolver({ 'dual.example.com': ['2606:2800:220:1:248:1893:25c8:1946', '93.184.216.34'] }, []) })).resolves.toBe('93.184.216.34');
+    await expect(resolveGuardedAddress('v6.example.com', 'public-only', { label: 'SMTP connection',
+      resolve: resolver({ 'v6.example.com': ['2606:2800:220:1:248:1893:25c8:1946'] }, []) })).resolves.toBe('2606:2800:220:1:248:1893:25c8:1946');
+  });
+
+  test('a name with ANY address outside the policy is refused, naming the connection', async () => {
+    const seen: string[] = [];
+    await expect(resolveGuardedAddress('mixed.example.com', 'private-allowed', { label: 'SFTP connection', resolve: resolver({ 'mixed.example.com': ['93.184.216.34', '127.0.0.1'] }, seen) }))
+      .rejects.toThrow(/^SFTP connection to mixed\.example\.com refused: it resolves to 127\.0\.0\.1/);
+    await expect(resolveGuardedAddress('nas.lan', 'public-only', { label: 'FTP connection', resolve: resolver({ 'nas.lan': ['192.168.1.5'] }, []) }))
+      .rejects.toThrow(/reach only public addresses/);
+    await expect(resolveGuardedAddress('nas.lan', 'private-allowed', { label: 'FTP connection', resolve: resolver({ 'nas.lan': ['192.168.1.5'] }, []) }))
+      .resolves.toBe('192.168.1.5');
+  });
+
+  test('a literal is checked without a lookup, brackets and all; an empty host is refused', async () => {
+    const seen: string[] = [];
+    const opts = { label: 'SMTP connection', resolve: resolver({}, seen) };
+    await expect(resolveGuardedAddress('[::1]', 'private-allowed', opts)).rejects.toThrow(/refused/);
+    await expect(resolveGuardedAddress('169.254.169.254', 'private-allowed', opts)).rejects.toThrow(/refused/);
+    await expect(resolveGuardedAddress('93.184.216.34', 'public-only', opts)).resolves.toBe('93.184.216.34');
+    await expect(resolveGuardedAddress('[2606:2800:220:1:248:1893:25c8:1946]', 'public-only', opts)).resolves.toBe('2606:2800:220:1:248:1893:25c8:1946');
+    await expect(resolveGuardedAddress('  ', 'public-only', opts)).rejects.toThrow(/no host/);
+    expect(seen).toEqual([]);
   });
 });

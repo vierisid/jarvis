@@ -39,7 +39,7 @@ import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import {managedIntercomInput, runManagedIntercomAction} from './managed-intercom';
 import {managedCalendlyInput, runManagedCalendlyAction} from './managed-calendly';
-import { HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
+import { GRAPHQL_PIECE, HTTP_PIECE, isGovernedPiece, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
 import {managedGitHubInput, managedGitHubIssue, runManagedGitHubAction} from './managed-github';
@@ -380,7 +380,8 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
  * Only a retry of a step whose receipt is recorded reads the stored copy.
  */
 export function receiptBody(piece: unknown, effectId: string, result: unknown): string {
-  if (piece !== HTTP_PIECE) return JSON.stringify({ effectId, result: result ?? null });
+  // The core GraphQL piece (#961) answers with the same HTTP response shape.
+  if (piece !== HTTP_PIECE && piece !== GRAPHQL_PIECE) return JSON.stringify({ effectId, result: result ?? null });
   const response = result !== null && typeof result === 'object' ? result as { status?: unknown; headers?: unknown; body?: unknown } : {};
   // A session cookie the server set is a credential, and the receipt is durable.
   const stored = result !== null && typeof result === 'object' && !Array.isArray(result) && 'headers' in result

@@ -1842,6 +1842,11 @@ describe('#961: the core HTTP piece is governed by method', () => {
     const cookie = { status: 200, headers: { 'Set-Cookie': 'sid=1', 'content-type': 'x' }, body: 'ok' };
     expect(JSON.parse(receiptBody(HTTP, effectId, cookie)).result.headers).toEqual({ 'content-type': 'x' });
     expect(JSON.parse(receiptBody(HTTP, effectId, { ...cookie, body: 'x'.repeat(PIECE_RECEIPT_MAX_BYTES) })).result.headers).toEqual({ 'content-type': 'x' });
+    // #961: a GraphQL request is a tracked send with the same response shape, so a sent
+    // request whose answer is large is recorded, not left uncertain, and keeps no cookie.
+    const graphql = '@activepieces/piece-graphql';
+    expect(JSON.parse(receiptBody(graphql, effectId, big))).toEqual({ effectId, result: { status: 201, headers: { a: 'b' }, body: null, receiptOmittedBodyBytes: PIECE_RECEIPT_MAX_BYTES + 2 } });
+    expect(JSON.parse(receiptBody(graphql, effectId, cookie)).result.headers).toEqual({ 'content-type': 'x' });
   });
 });
 
