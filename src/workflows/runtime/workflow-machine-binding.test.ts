@@ -51,7 +51,8 @@ function fixture() {
   setSidecarManagerRef(manager as any);
   const flow = createFlow({});
   const action = (name: string, nextAction?: any): any => ({ name, type: 'PIECE', settings: {
-    pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1', actionName: 'invoke', input: {},
+    // Each step names its tool: a call must ask for exactly that one (#1152).
+    pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1', actionName: 'invoke', input: { toolName: 'desktop_list_windows' },
   }, ...(nextAction ? { nextAction } : {}) });
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Machine binding',
     trigger: { name: 'trigger', type: 'EMPTY', nextAction: action('first', action('second', action('third'))) } });
@@ -102,6 +103,8 @@ test('reconnecting the same machine cannot reuse approval for its old session', 
 test('a missing later capability cannot move a run to another computer', async () => {
   const f = fixture();
   f.machines[0]!.capabilities = ['desktop'];
+  f.version.trigger.nextAction!.nextAction!.settings!.input = { toolName: 'desktop_screenshot' };
+  updateDraftVersion(f.version.id, { trigger: f.version.trigger });
   await f.invoke('first');
   await expect(f.invoke('second', {}, 'desktop_screenshot')).rejects.toThrow(/capability|screenshot/i);
   expect(f.calls).toEqual(['a']);
@@ -199,7 +202,7 @@ test('old machine receipts cannot acquire a replacement session after upgrade', 
 
 test('UI previews cannot carry old sample assumptions to a newly selected machine', async () => {
   const f = fixture();
-  f.version.trigger.nextAction!.nextAction!.settings!.input = { params: { pid: '{{ first.pid }}' } };
+  f.version.trigger.nextAction!.nextAction!.settings!.input = { toolName: 'desktop_list_windows', params: { pid: '{{ first.pid }}' } };
   updateDraftVersion(f.version.id, { trigger: f.version.trigger });
   ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'second', sampleData: { first: { element_id: 17, pid: 1234 } } });
   await expect(f.invoke('second', { target: 'b' })).rejects.toThrow(/test outputs.*provenance/);
@@ -216,7 +219,7 @@ for (const input of [
   { params: { pid: '{{ 100 + 23 }}' } },
 ]) test(`literal UI previews ignore unrelated samples: ${JSON.stringify(input)}`, async () => {
   const f = fixture();
-  f.version.trigger.nextAction!.nextAction!.settings!.input = input;
+  f.version.trigger.nextAction!.nextAction!.settings!.input = { toolName: 'desktop_list_windows', ...input };
   updateDraftVersion(f.version.id, { trigger: f.version.trigger });
   ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'second', sampleData: { first: { pid: 123 }, second: { old: true } } });
   await f.invoke('second');
@@ -225,7 +228,7 @@ for (const input of [
 
 test('a literal preview input override replaces the saved UI dependency', async () => {
   const f = fixture();
-  f.version.trigger.nextAction!.nextAction!.settings!.input = { params: { pid: '{{ first.pid }}' } };
+  f.version.trigger.nextAction!.nextAction!.settings!.input = { toolName: 'desktop_list_windows', params: { pid: '{{ first.pid }}' } };
   updateDraftVersion(f.version.id, { trigger: f.version.trigger });
   ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'second', sampleData: { first: { pid: 123 } },
     sampleInputOverride: { second: { toolName: 'desktop_list_windows', params: {} } } });
@@ -238,7 +241,7 @@ for (const source of ['first.pid', 'first[third.key]', 'true ? first.pid : 0',
   test(`preview overrides cannot reuse unqualified samples: ${source}`, async () => {
     const f = fixture();
     ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'second', sampleData: { first: { pid: 123 }, third: { key: 'pid' } },
-      sampleInputOverride: { second: { params: { nested: [{ value: `{{ ${source} }}` }] } } } });
+      sampleInputOverride: { second: { toolName: 'desktop_list_windows', params: { nested: [{ value: `{{ ${source} }}` }] } } } });
     await expect(f.invoke('second')).rejects.toThrow(/test outputs.*provenance/);
     expect(f.calls).toEqual([]);
   });
@@ -246,7 +249,7 @@ for (const source of ['first.pid', 'first[third.key]', 'true ? first.pid : 0',
 
 test('a preview uses its current trigger payload rather than the trigger sample', async () => {
   const f = fixture();
-  f.version.trigger.nextAction!.nextAction!.settings!.input = { params: { target: '{{ trigger.target }}' } };
+  f.version.trigger.nextAction!.nextAction!.settings!.input = { toolName: 'desktop_list_windows', params: { target: '{{ trigger.target }}' } };
   updateDraftVersion(f.version.id, { trigger: f.version.trigger });
   ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'second', sampleData: { trigger: { target: 'b' } } });
   await f.invoke('second', { target: 'a' });
@@ -256,7 +259,7 @@ test('a preview uses its current trigger payload rather than the trigger sample'
 for (const [previewStep, source] of [['second', 'first.windows'], ['second', 'trigger.windows'], ['loop', 'first.windows']]) test(`loop preview inputs retain sample provenance: ${previewStep} / ${source}`, async () => {
   const f = fixture();
   const inner = f.version.trigger.nextAction!.nextAction!;
-  inner.settings!.input = { params: { pid: '{{ loop.item.pid }}' } };
+  inner.settings!.input = { toolName: 'desktop_list_windows', params: { pid: '{{ loop.item.pid }}' } };
   f.version.trigger.nextAction!.nextAction = { name: 'loop', type: 'LOOP_ON_ITEMS',
     settings: { items: `{{ ${source} }}` }, firstLoopAction: inner };
   updateDraftVersion(f.version.id, { trigger: f.version.trigger });
@@ -270,7 +273,7 @@ for (const [previewStep, source] of [['second', 'first.windows'], ['second', 'tr
 test('a router preview checks the input of the child that actually dispatches', async () => {
   const f = fixture();
   const inner = f.version.trigger.nextAction!.nextAction!;
-  inner.settings!.input = { params: { pid: '{{ first.pid }}' } };
+  inner.settings!.input = { toolName: 'desktop_list_windows', params: { pid: '{{ first.pid }}' } };
   f.version.trigger.nextAction!.nextAction = { name: 'router', type: 'ROUTER', settings: {}, children: [inner] };
   updateDraftVersion(f.version.id, { trigger: f.version.trigger });
   ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'router', sampleData: { first: { pid: 123 } } });

@@ -175,6 +175,26 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     expect(loadUserSection('tts')).toBeUndefined(); // nothing persisted
   });
 
+  test('GET /api/config/tts reports when Microsoft last refused Edge TTS here (#1166)', async () => {
+    const { edgeSynthesize, resetEdgeTtsStatus } = await import('../comms/edge-tts-client.ts');
+    const routes = createApiRoutes(makeCtx(structuredClone(DEFAULT_CONFIG)));
+    const read = async () => (await (await getHandler(routes, '/api/config/tts', 'GET')(new Request('http://x/api/config/tts'))).json()) as { edge_unavailable: boolean };
+    resetEdgeTtsStatus();
+    expect((await read()).edge_unavailable).toBe(false);
+    // A local stand-in for the service that refuses every handshake.
+    const refusing = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('', { status: 403 }) });
+    try {
+      await expect(edgeSynthesize('hi', {
+        voice: 'en-US-AriaNeural', rate: '+0%', volume: '+0%', pitch: '+0Hz', timeoutMs: 5000,
+        endpoint: `ws://127.0.0.1:${refusing.port}/v1`,
+      })).rejects.toThrow('unavailable in this region');
+      expect((await read()).edge_unavailable).toBe(true);
+    } finally {
+      refusing.stop(true);
+      resetEdgeTtsStatus();
+    }
+  });
+
   test('POST /api/config/tts rejects an unknown provider string', async () => {
     const config = hostedConfig();
     const routes = createApiRoutes(makeCtx(config));

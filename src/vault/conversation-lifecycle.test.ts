@@ -203,3 +203,20 @@ test('channel history keeps insertion order for equal timestamps despite the Bri
   expect(getMessages(conversation.id, { before: 101, limit: 2 }).map(m => m.id)).toEqual(['z-first', 'a-reply']);
   expect(getMessages(conversation.id, { before: 100 })).toEqual([]);
 });
+
+// #1162 (from #1131): the Pebble's voice dialogue is stored as a conversation
+// (pebble-dialogue.ts), and showed up in Brief history as a closed "Chat history" tab.
+test('the Pebble voice dialogue is not a Brief chat: not listed, not opened', () => {
+  const repo = memory();
+  const chat = repo.create({ title: 'Mine' });
+  const pebble = getOrCreateConversation('pebble');
+  addMessage(pebble.id, { role: 'user', content: 'open tasks' });
+  const websocket = getOrCreateConversation('websocket');
+  addMessage(websocket.id, { role: 'user', content: 'hello' });
+  const listed = repo.list().items.map(c => c.conversationId);
+  expect(listed).toContain(chat.conversationId);
+  expect(listed).toContain(websocket.id);
+  expect(listed).not.toContain(pebble.id);
+  expect(repo.list({ closed: true }).items.map(c => c.conversationId)).not.toContain(pebble.id);
+  expect(() => repo.get(pebble.id)).toThrow('Conversation not found');
+});

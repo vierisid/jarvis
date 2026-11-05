@@ -3,6 +3,7 @@ import { asanaNeedsReconnect } from "./asana-refresh";
 import {readManagedConnectionFile} from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const ASANA_PIECE = "@activepieces/piece-asana";
 export const ASANA_CONNECTION = "jarvis:asana";
@@ -79,6 +80,7 @@ export function asanaStatus(config: JarvisConfig) {
   return {
     configured: !!asanaConnectUrl(config),
     connect_url: asanaConnectUrl(config),
+    ...hostedSetupFault(config, asanaConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: ASANA_CONNECTION,

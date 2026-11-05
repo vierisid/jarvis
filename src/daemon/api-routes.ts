@@ -37,10 +37,12 @@ import type { AuthorityLearner } from '../authority/learning.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import { applyQuickOverride } from '../authority/quick-override.ts';
+import { desktopEnabledFromSection } from '../actions/tools/desktop-guard.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { authorityConfigPatchError, isActionCategory } from '../authority/config-validation.ts';
 
-import { findEntities, getEntity, searchEntitiesByName, createEntity } from '../vault/entities.ts';
+import { findEntities, getEntity, searchEntitiesByName, createEntity, listEntityNames } from '../vault/entities.ts';
+import { matchEntityByName } from './room-action-targets.ts';
 import { findFacts, createFact, FactInputError } from '../vault/facts.ts';
 import { createFactDecisionRoutes } from '../vault/fact-routes.ts';
 import { findRelationships, getEntityRelationships, createRelationship } from '../vault/relationships.ts';
@@ -50,13 +52,14 @@ import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-versi
 const VALID_ENTITY_TYPES = new Set(['person', 'project', 'tool', 'place', 'concept', 'event']);
 import { getDb } from '../vault/schema.ts';
 import { findCommitments, getUpcoming, createCommitment, getCommitment, patchCommitment, reorderCommitments } from '../vault/commitments.ts';
-import { COMMITMENT_CREATE_MAX_BODY_BYTES, readBoundedJson, validateCommitmentCreate, validateCommitmentPatch } from './commitment-patch.ts';
+import { COMMITMENT_CREATE_MAX_BODY_BYTES, COMMITMENT_PATCH_MAX_BODY_BYTES, readBoundedJson, validateCommitmentCreate, validateCommitmentPatch } from './commitment-patch.ts';
 import { getOrCreateConversation, getMessages, getRecentConversation } from '../vault/conversations.ts';
 import { telegramAllowList, discordAllowList, channelOwnerId } from '../comms/channels/allow-list.ts';
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
 import { listAgentActivity, countAgentActivity } from '../vault/agent-activity.ts';
 import { getPersonality } from '../personality/model.ts';
-import { clearUserProfile, getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
+import { getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
+import { forgetUserProfile } from '../onboarding-next/runtime/forget.ts';
 import {
   USER_PROFILE_QUESTIONS,
   countAnsweredUserProfileQuestions,
@@ -136,7 +139,9 @@ import {
   getAutostartName,
   isAutostartInstalled,
   scheduleAutostartRestart,
+  requestSystemdRestart,
 } from '../cli/autostart.ts';
+import { readBoundedText } from '../util/bounded-body.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { runWithAdmission } from '../llm/background-budget.ts';
 import { getGoalApplication } from '../goals/application-service.ts';
@@ -151,6 +156,7 @@ import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import type { BriefConversationProvider } from '../brief/conversations.ts';
 import { defaultConversationWorkspace } from '../vault/conversation-schema.ts';
+import { edgeTtsStatus } from '../comms/edge-tts-client.ts';
 
 export type ApiContext = {
   /** Optional B11 runtime. Default-off; legacy routes remain independent. */
@@ -256,6 +262,12 @@ export type ApiContext = {
  * not to police seconds.
  */
 const NOTIFY_MAX_SKEW_MS = 5 * 60 * 1000;
+/**
+ * The doorbell body is `{"source":...,"at":<ISO time>}` (usejarvis
+ * apps/user-api google-push.ts): 53 bytes today, 56 at the largest Date an ISO
+ * string can carry. 4 KiB leaves it room to grow a field or two.
+ */
+const NOTIFY_MAX_BODY_BYTES = 4096;
 
 // CORS headers — scoped to the dashboard origin, not wildcard
 let CORS: Record<string, string> = {
@@ -498,9 +510,35 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!body.type || !VALID_ENTITY_TYPES.has(body.type)) {
             return error(`type must be one of: ${Array.from(VALID_ENTITY_TYPES).join(', ')}`, 400);
           }
-          const entity = createEntity(body.type, body.name, body.properties, body.source ?? 'dashboard');
+          // User-entered labels only, as for facts (#1113): an entity labelled
+          // `user_profile` is read as the owner's profile entity (the newest
+          // one wins), and the automatic labels are how memory tells what it
+          // inferred from what it was told.
+          const source = body.source ?? 'dashboard';
+          if (typeof source !== 'string' || !API_FACT_SOURCES.has(source)) {
+            return error(`source must be one of: ${[...API_FACT_SOURCES].join(', ')}`, 400);
+          }
+          const entity = createEntity(body.type, body.name, body.properties, source);
           return json(entity);
         } catch (err) { return errorFromException(err); }
+      },
+    },
+
+    // The entity a name means, matched here rather than in the client (#1118):
+    // the Memory room's remember_that fetched the whole entity list, every
+    // property included, to compare one name. The same matcher the daemon
+    // settles a held remember_that with.
+    '/api/vault/entity-match': {
+      GET: (req: Request) => {
+        const name = getSearchParams(req).get('name') ?? '';
+        if (!name.trim()) return error('name is required', 400);
+        // The bound a task's text has (COMMITMENT_WHAT_MAX_CHARS); a spoken
+        // or typed subject is far shorter, and the match costs its length
+        // times the number of entities.
+        if (name.length > 500) return error('name must be at most 500 characters', 400);
+        const match = matchEntityByName(listEntityNames(), name);
+        if (match && 'ambiguous' in match) return json({ entity: null, ambiguous: match.ambiguous });
+        return json({ entity: match ? match.entity : null });
       },
     },
 
@@ -745,13 +783,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       // Status, priority or assigned_to, alone or together, and nothing else
       // (#1020): the Tasks room sends priority and assigned_to on their own.
       PATCH: async (req: Request & { params: { id: string } }) => {
-        let body: unknown;
-        try {
-          body = await req.json();
-        } catch {
-          return error('Invalid request body');
-        }
-        const parsed = validateCommitmentPatch(body);
+        // Read no further than a valid patch can be (#1115).
+        const read = await readBoundedJson(req, COMMITMENT_PATCH_MAX_BODY_BYTES);
+        if (!read.ok) return error(read.error, read.status);
+        const parsed = validateCommitmentPatch(read.body);
         if (!parsed.ok) return error(parsed.error);
         let updated: ReturnType<typeof patchCommitment>;
         try {
@@ -796,7 +831,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const channel = params.get('channel') ?? 'websocket';
 
         if (channel === 'all') {
-          // Return the most recent conversation per channel
+          // Return the most recent conversation per channel: the channel's
+          // own (#1123, getRecentConversation), so for telegram and discord,
+          // whose conversations each belong to a sender since #884, usually
+          // none. Sender threads are listed by /api/vault/conversations.
           const channels = ['websocket', 'telegram', 'discord'];
           const results: Record<string, unknown> = {};
           for (const ch of channels) {
@@ -1177,7 +1215,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/user-profile/clear': {
       POST: () => {
-        clearUserProfile();
+        forgetUserProfile();
         const { profile, revision } = readEditableProfile();
         return json({ ok: true, message: 'User profile cleared.', profile, revision,
           questions: USER_PROFILE_QUESTIONS, answered_count: 0,
@@ -1260,7 +1298,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           }
           if (scope === 'all' || scope === 'profile') {
             o.setup_skipped_profile = false;
-            clearUserProfile();
+            forgetUserProfile();
             cleared.push('profile');
           }
           if (scope === 'all' || scope === 'tutorial') {
@@ -1680,7 +1718,67 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           heartbeat: config.heartbeat,
           active_role: config.active_role,
           voice: config.voice ?? { wake_engine: 'openwakeword' },
+          // The desktop off switch (#905) as the daemon reads it, so Settings
+          // shows what is in force, not just what is stored (#1159).
+          desktop: { enabled: desktopEnabledFromSection(config.desktop) },
         });
+      },
+    },
+
+    /**
+     * Turn desktop control (desktop.enabled, #905) on or off from Settings
+     * (#1159). It used to be config.yaml only, with a restart, which a hosted
+     * install cannot edit at all. Only a real boolean is accepted: this is a
+     * privacy switch, and a value the guard would read some other way must not
+     * be stored as the user's choice. Persists that one key over the stored row
+     * (persistPlainUserPatch), sets the live section the guard is bound to, and
+     * runs the desktop applier, so tools, captures and the pebble follow at
+     * once.
+     */
+    '/api/config/desktop': {
+      POST: async (req: Request) => {
+        let body: unknown;
+        try {
+          body = await req.json();
+        } catch {
+          return error('Invalid request body');
+        }
+        const enabled = (body as { enabled?: unknown } | null)?.enabled;
+        if (typeof enabled !== 'boolean') return error('enabled must be true or false');
+        const { persistPlainUserPatch } = await import('./user-settings.ts');
+        const setLive = () => {
+          // A section that is there but not a mapping (desktop: false) is
+          // replaced, not spread: the choice just made is the whole answer.
+          const current = ctx.config.desktop;
+          const base = typeof current === 'object' && current !== null && !Array.isArray(current) ? current : {};
+          ctx.config.desktop = { ...base, enabled };
+        };
+        const apply = async () => (ctx.settingsReload ? ctx.settingsReload.applyNow('desktop') : null);
+        // Off fails closed (#1159 security review): it takes effect now even if
+        // it cannot be saved, so a store that refuses the write does not leave
+        // the desktop and clipboard reachable after the user turned them off.
+        // On is saved first and applied only once it is.
+        let saveFailure: unknown = null;
+        if (!enabled) {
+          setLive();
+          try { persistPlainUserPatch('desktop', { enabled }); } catch (err) { saveFailure = err; }
+        } else {
+          try { persistPlainUserPatch('desktop', { enabled }); } catch (err) { saveFailure = err; }
+          if (saveFailure !== null) {
+            console.error('[Config] Could not save desktop.enabled:', saveFailure);
+            return error('Desktop control could not be saved, so it was not turned on.', 500);
+          }
+          setLive();
+        }
+        const applyErr = await apply();
+        if (saveFailure !== null) {
+          console.error('[Config] Could not save desktop.enabled:', saveFailure);
+          return error('Desktop control is off for now, but the choice could not be saved: it may come back on at the next restart or settings reload.', 500);
+        }
+        const what = enabled ? 'Desktop control is on.' : 'Desktop control is off.';
+        return json(applyErr
+          ? { ok: false, enabled, message: `${what} Saved, but applying it failed: ${applyErr.error}` }
+          : { ok: true, enabled, message: what });
       },
     },
 
@@ -1775,6 +1873,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           manager: keepaliveSupported ? getAutostartName() : 'unsupported',
           installed,
           keepalive_supported: keepaliveSupported,
+          // Not narrowed by a systemctl probe: that is a blocking spawn on
+          // every status read. The POST answers 409 when the unit does not
+          // run this daemon.
           restart_supported: keepaliveSupported && installed,
         });
       },
@@ -1787,6 +1888,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         }
         if (!isAutostartInstalled()) {
           return error('JARVIS keepalive mode is not installed yet.', 400);
+        }
+        // An installed unit is not proof it runs THIS daemon: restarting it
+        // while the daemon was started by hand restarts nothing here.
+        if (process.platform === 'linux') {
+          const outcome = requestSystemdRestart();
+          if (outcome === 'not_this_daemon') {
+            return error('This JARVIS is not running under its keepalive service, so restarting the service would not restart it. Restart it the way it was started.', 409);
+          }
+          if (outcome !== 'scheduled') return error('Failed to schedule keepalive service restart.');
+          return json({ ok: true, message: `Restarting the JARVIS 24/7 ${getAutostartName()} service.` });
         }
         const scheduled = scheduleAutostartRestart();
         if (!scheduled) {
@@ -2917,7 +3028,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         // predates the bridge. Nothing can be verified, so nothing is accepted.
         if (!secret) return error('not configured', 404);
 
-        const raw = await req.text();
+        // Read under a cap while it streams in: this route is public and the
+        // signature can only be checked once the body is held (bounded-body.ts).
+        const read = await readBoundedText(req, NOTIFY_MAX_BODY_BYTES);
+        if (!read.ok) return read.reason === 'too_large' ? error('body too large', 413) : error('bad body', 400);
+        const raw = read.text;
         const { INSTANCE_SIGNATURE_HEADER, verifyWithSecret } = await import(
           '../integrations/google-signature.ts'
         );
@@ -3240,6 +3355,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           enabled: tts?.enabled ?? false,
           provider: effective?.provider ?? tts?.provider ?? 'edge',
           usejarvis_available: hasUsejarvisAi(ctx.config),
+          // Microsoft's service refused this install's last Edge request
+          // (#1166): Settings says so instead of leaving voice silent.
+          edge_unavailable: edgeTtsStatus().unavailable,
           voice: tts?.voice ?? 'en-US-AriaNeural',
           rate: tts?.rate ?? '+0%',
           volume: tts?.volume ?? '+0%',
@@ -3754,15 +3872,18 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
      */
     '/api/palette/pick': {
       POST: async (req: Request) => {
+        const body = (await req.json().catch(() => null)) as
+          | { kind?: unknown; key?: unknown; openInRoom?: unknown }
+          | null;
+        // A non-string key used to pass `!body.key` (a number, an object) and
+        // was then dropped silently downstream with a 204. Checked before the
+        // handler lookup, so a malformed pick is a 400 whatever the state.
+        if (!body || (body.kind !== 'room' && body.kind !== 'object') || typeof body.key !== 'string' || !body.key || body.key.length > 256) {
+          return error('kind ("room"|"object") and key (a string of at most 256 characters) are required', 400);
+        }
         const { getPaletteHandler } = await import('./palette-controller.ts');
         const h = getPaletteHandler();
         if (!h) return error('Palette handler not registered', 503);
-        const body = (await req.json().catch(() => null)) as
-          | { kind?: string; key?: string; openInRoom?: boolean }
-          | null;
-        if (!body || (body.kind !== 'room' && body.kind !== 'object') || !body.key) {
-          return error('kind ("room"|"object") and key are required', 400);
-        }
         try {
           await h.pick({ kind: body.kind, key: body.key, openInRoom: !!body.openInRoom });
         } catch (err) {

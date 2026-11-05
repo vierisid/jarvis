@@ -50,8 +50,14 @@ Initial bundled pieces (Phase 1):
 From `packages/pieces/core/` (built-in primitives):
 
 ```
-approval, delay, file-helper, http, schedule, store, webhook
+approval, crypto, csv, data-mapper, data-summarizer, date-helper, delay,
+file-helper, graphql, http, image-helper, math-helper, pdf, qrcode, schedule,
+sftp, smtp, store, text-helper, webhook, xml
 ```
+
+Every core piece at the pin except the ones that need the Activepieces server
+(`CORE_PIECES_LEFT_OUT` in `src/workflows/runner/engine-runtime/build.ts`,
+#961). All but `webhook` are loaded.
 
 Community pieces (Gmail, Slack, Notion, ...) are NOT vendored. They install
 on demand at runtime via `bun install` from the curated catalog in

@@ -28,7 +28,7 @@ import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from '.
 import { AUTHORITY_REQUIREMENTS, type ActionCategory } from '../../roles/authority';
 import { DEFAULT_CONFIG } from '../../config/types';
 import { ABOVE_LEVEL_SUBSTITUTION, severityRank } from '../../authority/tool-action-map';
-import { ALL_PIECE_ADAPTERS, GOVERNED_PIECE_ADAPTERS, governedPieceTarget, redactHttpInput, REDACTED, governedPieceToolDefinition, governedPieceToolName, RESERVED_TARGET_KEYS, isWellFormedPieceActionName, PIECE_ACTION_NAME_MAX_CHARS, reprojectPieceInput,
+import { ALL_PIECE_ADAPTERS, GOVERNED_PIECE_ADAPTERS, governedPieceTarget, redactCredentials, redactHttpInput, REDACTED, governedPieceToolDefinition, governedPieceToolName, RESERVED_TARGET_KEYS, isWellFormedPieceActionName, PIECE_ACTION_NAME_MAX_CHARS, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { digest } from './effect-context';
@@ -62,7 +62,9 @@ function fixture(piece: string, action: string, level = 10, names: { displayName
     context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
   const approvals = new ApprovalManager();
   const deliveredApprovals: string[] = [];
+  const closedCards: string[] = [];
   const options: BuildServiceBackendsOptions = { credentialResolver: new CredentialResolver(),
+    onWorkflowCardClosed: (approvalId) => { closedCards.push(approvalId); },
     llmManager: { chat: async () => ({ content: '' }) } as any,
     authorityEngine: authority, emergencyController: new EmergencyController(),
     auditTrail: new AuditTrail(), eventBuffer: new WorkflowEventBuffer(), approvalManager: approvals,
@@ -73,7 +75,7 @@ function fixture(piece: string, action: string, level = 10, names: { displayName
   const context = { runId: run.id, projectId: DEFAULT_IDS.project, stepName, executionPath: [] };
   const authorize = async (input: Record<string, unknown> = {}) =>
     backends.pieceAuthorize!({ piece, action, input, inputDigest: await pieceInputDigest(input) }, context);
-  return { authority, approvals, deliveredApprovals, backends, context, run, version, authorize, options };
+  return { authority, approvals, deliveredApprovals, closedCards, backends, context, run, version, authorize, options };
 }
 
 const SEND_INPUT = {
@@ -1454,6 +1456,8 @@ describe('Q-07 after #953: no Gmail send is replayed by an engine retry', () => 
         outcome: { code: 'WORKFLOW_UPGRADED', effect: 'not_started' } });
       expect(f.approvals.getRequest(approvalId)).toMatchObject(decided
         ? { status: 'executed', execution_outcome: 'blocked' } : { status: 'denied' });
+      // A denied card is reported, so the dashboard stops offering it (#1152).
+      expect(f.closedCards).toEqual(decided ? [] : [approvalId]);
       // An engine retry of the same step repeats the typed outcome; it does not claim a send may have happened.
       await expect(f.authorize(REPLY_INPUT)).rejects.toThrow(/before an upgrade changed how sends are tracked/);
     });
@@ -1694,6 +1698,54 @@ describe('#961: the core HTTP piece is governed by method', () => {
     }
   });
 
+  test('#1153: tokens in URL fragments, percent-encoded names, webhook paths and string bodies are redacted too', () => {
+    const url = (u: string) => String(redactHttpInput(request('GET', { url: u })).url);
+    expect(url('https://app.test/cb#access_token=t1&state=s1')).toBe('https://app.test/cb#access_token=[redacted]&state=s1');
+    expect(url('https://x.test/?api%5Fkey=k1&access%5ftoken=k2&q=1')).toBe('https://x.test/?api%5Fkey=[redacted]&access%5ftoken=[redacted]&q=1');
+    expect(url('https://hooks.slack.com/services/T0001/B0002/AbCdEfSecret')).toBe('https://hooks.slack.com/services/T0001/B0002/[redacted]');
+    expect(url('https://discord.com/api/webhooks/123456/tok-en_1?wait=true')).toBe('https://discord.com/api/webhooks/123456/[redacted]?wait=true');
+    expect(url('https://discordapp.com/api/v10/webhooks/123456/tok')).toBe('https://discordapp.com/api/v10/webhooks/123456/[redacted]');
+    expect(url('https://api.telegram.org/bot123456:ABC-def/sendMessage')).toBe('https://api.telegram.org/bot[redacted]/sendMessage');
+    // A path that only looks alike is content.
+    expect(url('https://example.test/services/T1/B2/readme')).toBe('https://example.test/services/T1/B2/readme');
+    const body = (data: string) => (redactHttpInput(request('POST', { body_type: 'raw', body: { data } })).body as { data: string }).data;
+    expect(body('{"password":"p1","note":"n","nested":{"apiKey": "k1"}}')).toBe('{"password":"[redacted]","note":"n","nested":{"apiKey": "[redacted]"}}');
+    expect(body('grant_type=authorization_code&code=c0&client_secret=c1&redirect_uri=x')).toBe('grant_type=authorization_code&code=c0&client_secret=[redacted]&redirect_uri=x');
+    expect(body('plain text with a password word')).toBe('plain text with a password word');
+    for (const u of ['https://app.test/cb#access_token=t1', 'https://hooks.slack.com/services/T1/B2/X3', 'https://api.telegram.org/bot1:A/x']) {
+      expect(url(url(u))).toBe(url(u));
+    }
+    expect(body(body('{"token":"t"}'))).toBe(body('{"token":"t"}'));
+  });
+
+  test('#1153 review: a string body can never hide later content from the card', () => {
+    const body = (data: string) => (redactHttpInput(request('POST', { body_type: 'raw', body: { data } })).body as { data: string }).data;
+    // Text that is not form-encoded is not read as form pairs.
+    expect(body('Hello team,\nplease review &token=see below\nTransfer 5000 to ATTACKER')).toBe('Hello team,\nplease review &token=see below\nTransfer 5000 to ATTACKER');
+    expect(body('{"to":"a@b.test","text":"hi&token=x","amount":"5000","iban":"ATTACKER"}')).toBe('{"to":"a@b.test","text":"hi&token=x","amount":"5000","iban":"ATTACKER"}');
+    expect(body('{"token_hint":"none","q":"a=b"}')).toBe('{"token_hint":"[redacted]","q":"a=b"}');
+  });
+
+  test('#1153 review: hostile string bodies are redacted in linear time and nothing after them escapes', () => {
+    const hostile = '\\"'.repeat(100_000) + '{"password":"p1"}';
+    const started = performance.now();
+    const out = String(redactCredentials(hostile));
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(out.endsWith('{"password":"[redacted]"}')).toBe(true);
+  });
+
+  test('#1153 review: webhook secrets behind a port, a trailing dot, userinfo or backslashes, and Slack trigger and Teams URLs', () => {
+    const url = (u: string) => String(redactHttpInput(request('GET', { url: u })).url);
+    expect(url('https://hooks.slack.com:443/services/T1/B2/S3')).toBe('https://hooks.slack.com:443/services/T1/B2/[redacted]');
+    expect(url('https://hooks.slack.com./services/T1/B2/S3')).toBe('https://hooks.slack.com./services/T1/B2/[redacted]');
+    expect(url('https://hooks.slack.com\\services\\T1\\B2\\S3')).toBe('https://hooks.slack.com\\services\\T1\\B2\\[redacted]');
+    expect(url('https://hooks.slack.com/triggers/T1/123/S3')).toBe('https://hooks.slack.com/triggers/T1/123/[redacted]');
+    expect(url('https://hooks.slack.com/workflows/T1/A2/123/S3')).toBe('https://hooks.slack.com/workflows/T1/A2/123/[redacted]');
+    expect(url('https://u:pw@api.telegram.org/bot1:ABC/sendMessage')).toBe('https://[redacted]@api.telegram.org/bot[redacted]/sendMessage');
+    expect(url('https://acme.webhook.office.com/webhookb2/g1@t1/IncomingWebhook/S3/o1')).toBe('https://acme.webhook.office.com/webhookb2/g1@t1/IncomingWebhook/[redacted]/o1');
+    for (const u of ['https://hooks.slack.com:443/services/T1/B2/S3', 'https://acme.webhook.office.com/webhookb2/g/IncomingWebhook/S/o']) expect(url(url(u))).toBe(url(u));
+  });
+
   test('a wide input whose projection loses the method is a tracked worst case on both sides', async () => {
     const wide = request('GET', Object.fromEntries(Array.from({ length: 45 }, (_, i) => [`a${String(i).padStart(2, '0')}`, i])));
     let sent: Record<string, any> = {};
@@ -1842,6 +1894,43 @@ describe('#961: the core HTTP piece is governed by method', () => {
     const cookie = { status: 200, headers: { 'Set-Cookie': 'sid=1', 'content-type': 'x' }, body: 'ok' };
     expect(JSON.parse(receiptBody(HTTP, effectId, cookie)).result.headers).toEqual({ 'content-type': 'x' });
     expect(JSON.parse(receiptBody(HTTP, effectId, { ...cookie, body: 'x'.repeat(PIECE_RECEIPT_MAX_BYTES) })).result.headers).toEqual({ 'content-type': 'x' });
+    // #961: a GraphQL request is a tracked send with the same response shape, so a sent
+    // request whose answer is large is recorded, not left uncertain, and keeps no cookie.
+    const graphql = '@activepieces/piece-graphql';
+    expect(JSON.parse(receiptBody(graphql, effectId, big))).toEqual({ effectId, result: { status: 201, headers: { a: 'b' }, body: null, receiptOmittedBodyBytes: PIECE_RECEIPT_MAX_BYTES + 2 } });
+    expect(JSON.parse(receiptBody(graphql, effectId, cookie)).result.headers).toEqual({ 'content-type': 'x' });
+  });
+
+  test('#1153: a token an HTTP or GraphQL response carries never reaches the durable receipt, and the receipt says so', () => {
+    const effectId = `wfe_${'b'.repeat(64)}`;
+    const deep = { a: { b: { c: { d: { e: { f: { g: { access_token: 'deep1' } } } } } } } };
+    const oauth = { status: 200, headers: { 'content-type': 'application/json', 'X-Subject-Token': 'ks1', 'x-auth-token': 'xa1' },
+      body: { access_token: 'at1', refresh_token: 'rt1', id_token: 'it1', token_type: 'Bearer', expires_in: 3600,
+        data: { user: { api_key: 'k1', name: 'Ann' }, issue: { id: '10000', key: 'PROJ-1' } }, deep } };
+    for (const piece of [HTTP, '@activepieces/piece-graphql']) {
+      const stored = JSON.parse(receiptBody(piece, effectId, oauth)).result;
+      expect(stored.body).toEqual({ access_token: '[redacted]', refresh_token: '[redacted]', id_token: '[redacted]', token_type: 'Bearer',
+        expires_in: 3600, data: { user: { api_key: '[redacted]', name: 'Ann' }, issue: { id: '10000', key: 'PROJ-1' } },
+        deep: { a: { b: { c: { d: { e: { f: { g: { access_token: '[redacted]' } } } } } } } } });
+      expect(stored.headers).toEqual({ 'content-type': 'application/json', 'X-Subject-Token': '[redacted]', 'x-auth-token': '[redacted]' });
+      // A replay of this step gets this copy back: it says what it is.
+      expect(stored.receiptRedacted).toBe(true);
+      // Too large to keep whole, the headers it keeps are redacted too.
+      const big = JSON.parse(receiptBody(piece, effectId, { ...oauth, body: 'x'.repeat(PIECE_RECEIPT_MAX_BYTES) })).result;
+      expect(big).toMatchObject({ headers: { 'X-Subject-Token': '[redacted]' }, body: null, receiptRedacted: true });
+      const text = JSON.parse(receiptBody(piece, effectId, { ...oauth, body: 'access_token=at2&expires_in=1' })).result;
+      expect(text.body).toBe('access_token=[redacted]&expires_in=1');
+      const json = JSON.parse(receiptBody(piece, effectId, { ...oauth, body: '{"refresh_token":"rt3","n":1}' })).result;
+      expect(json.body).toBe('{"refresh_token":"[redacted]","n":1}');
+      // Nothing to hide: stored as it is, with no marker.
+      const plain = { status: 200, headers: { a: 'b' }, body: { ok: true } };
+      expect(JSON.parse(receiptBody(piece, effectId, plain)).result).toEqual(plain);
+    }
+    // The "continue on failure" shape (HttpError.errorMessage()): the request body is not kept, the response's tokens are redacted.
+    const failed = { response: { status: 401, body: { refresh_token: 'RT', error: 'invalid_grant' } },
+      request: { body: 'grant_type=password&username=u&password=PW&client_secret=CS' } };
+    const kept = JSON.parse(receiptBody(HTTP, effectId, failed)).result;
+    expect(kept).toEqual({ response: { status: 401, body: { refresh_token: '[redacted]', error: 'invalid_grant' } }, request: { body: null }, receiptRedacted: true });
   });
 });
 

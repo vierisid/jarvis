@@ -72,7 +72,11 @@ and 2 MB serialized state. The checkpoint omits the duplicate system prompt and
 does not use Pebble history. Future/corrupt records fail closed and stay intact.
 No transcript, provider exception, credentials or profile facts are logged as
 telemetry. Local records contain user text and follow the vault's privacy/access
-controls. B11 must wire Forget/retention policy before activation.
+controls. There is one record per scope; a new interview starts only after it is
+removed. Forget (`/api/user-profile/clear`, and `/api/onboarding/reset` with scope
+`profile` or `all`) deletes it through B11's `runtime/forget.ts`, in the same
+SQLite transaction as the profile. A turn in flight then finds no session, is
+fenced as stale and writes nothing back.
 
 ## Written transport and client
 

@@ -2,6 +2,7 @@ import type { Server, ServerWebSocket } from 'bun';
 import { markPanelSession } from './panel-session-marker.ts';
 import { debugRpcGate } from '../daemon/debug-rpc-gate.ts';
 import { timingSafeEqual } from 'node:crypto';
+import { isOpenAccessHostAllowed } from './open-access-host.ts';
 import path from 'node:path';
 import { isWithin } from '../util/path.ts';
 import type { SidecarManager } from '../sidecar/manager.ts';
@@ -113,6 +114,40 @@ function isPublicRoute(pathname: string, method: string): boolean {
     method === 'OPTIONS'
   );
 }
+
+/**
+ * The subprotocols a dev-server HMR client asked for (`Sec-WebSocket-Protocol`,
+ * e.g. Vite's `vite-hmr`). The bridge must answer with one of them: a browser
+ * fails a handshake that offered a protocol and got none back, and Vite
+ * ignores an upgrade that does not carry its own. Tokens only (RFC 6455).
+ */
+export function requestedSubprotocols(req: Request): string[] {
+  const raw = req.headers.get('sec-websocket-protocol');
+  if (!raw) return [];
+  return raw.split(',').map((p) => p.trim()).filter((p) => /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(p)).slice(0, 8);
+}
+
+/** The handshake answer for the bridge: the first requested protocol, offered upstream too. */
+function subprotocolHeaders(protocols: string[]): { headers?: Record<string, string> } {
+  return protocols.length ? { headers: { 'Sec-WebSocket-Protocol': protocols[0]! } } : {};
+}
+
+/**
+ * The same-origin path to redirect to once `token` is dropped from `url`.
+ * Leading slashes collapse to one: a request for `//evil.example/x` has that
+ * pathname, and a `Location` starting `//` is a link to another host.
+ */
+export function withoutTokenParam(url: URL): string {
+  const params = new URLSearchParams(url.searchParams);
+  params.delete('token');
+  const qs = params.toString();
+  return '/' + url.pathname.replace(/^[/\\]+/, '') + (qs ? '?' + qs : '');
+}
+
+/** Frames held for a dev-server bridge while its upstream socket connects. */
+const PROXY_PENDING_MAX_FRAMES = 64;
+/** ...and their total size in bytes, so the hold is not 64 x maxPayloadLength. */
+const PROXY_PENDING_MAX_BYTES = 1024 * 1024;
 
 /** Simple sliding-window rate limiter for proxy requests */
 class ProxyRateLimiter {
@@ -248,7 +283,7 @@ export class WebSocketServer {
     // one variant, so the pair is cast to the port variant; at runtime Bun
     // receives exactly one of the two keys.
     const listenOpts = (this.unixPath ? { unix: this.unixPath } : { port: this.port, ...(this.hostname ? { hostname: this.hostname } : {}) }) as { port: number };
-    this.server = Bun.serve<{ sidecar_id?: string; channel?: string; proxy_target?: string; panel_session?: string; _proxyUpstream?: WebSocket }>({
+    this.server = Bun.serve<{ sidecar_id?: string; channel?: string; proxy_target?: string; proxy_protocols?: string[]; panel_session?: string; _proxyUpstream?: WebSocket }>({
       ...listenOpts,
       idleTimeout: 30, // seconds — prevent timeout during heavy processing (OCR, PowerShell)
 
@@ -310,6 +345,21 @@ export class WebSocketServer {
           return Response.json({ access_token: minted.token, expires_in: minted.expiresIn });
         }
 
+        // 0c. Open access serves anyone who reaches the socket, so a DNS-rebound
+        //     name must not count as reaching it (open-access-host.ts).
+        //     Public routes keep their own checks and are reached through
+        //     tunnels on any name by design.
+        //     Exempt by PATH only: isPublicRoute also passes every OPTIONS
+        //     request, and the dev-server proxies below forward OPTIONS.
+        if (self.insecureOpenAccess && !self.unixPath && !isPublicRoute(pathname, 'GET') && !isPublicRoute(pathname, 'POST')
+          && !isOpenAccessHostAllowed(req.headers.get('host'), { corsOrigin: self.corsOrigin })) {
+          return new Response(
+            'Forbidden: while auth.insecure_open_access is on, Jarvis answers only on localhost, an IP address, or the host of daemon.public_url. '
+            + 'Open it by one of those, or set daemon.public_url to the address you use.',
+            { status: 403 },
+          );
+        }
+
         // 1. Auth check. A request is authorized by a PANEL SESSION cookie
         // (panel-sessions.ts). The access token minted from the enrollment JWT
         // is now a bootstrap credential only: it arrives as ?token= on a freshly
@@ -336,6 +386,20 @@ export class WebSocketServer {
             // the session so an open panel counts as live (panel-sessions.ts).
             panelSessionId = session.id;
             markPanelSession(req, session.sid);
+            // A panel re-opened while its cookie is still live arrives with a
+            // fresh ?token= it does not need. Redirect it away like the
+            // bootstrap below does, or the credential stays in the address
+            // bar, history and the Referer a preview's dev server receives.
+            // Only a token this daemon minted: a dev server's own ?token=
+            // (Vite's HMR socket, its pages) is not ours to strip.
+            // Every `token` param is checked: a junk one first must not hide
+            // a real one behind it.
+            const strayTokens = url.searchParams.getAll('token');
+            if (strayTokens.length > 0 && (req.method === 'GET' || req.method === 'HEAD')
+              && req.headers.get('upgrade') === null
+              && (await Promise.all(strayTokens.map((t) => self.sidecarManager!.verifyAccessToken(t)))).some(Boolean)) {
+              return new Response(null, { status: 302, headers: { 'Location': withoutTokenParam(url) } });
+            }
           }
           if (!session) {
             // No session yet (a freshly spawned panel) or a dead one. Bootstrap
@@ -346,10 +410,7 @@ export class WebSocketServer {
               ? await self.sidecarManager.openPanelSession(queryToken)
               : null;
             if (opened) {
-              const cleanParams = new URLSearchParams(url.searchParams);
-              cleanParams.delete('token');
-              const qs = cleanParams.toString();
-              const redirectTo = pathname + (qs ? '?' + qs : '');
+              const redirectTo = withoutTokenParam(url);
               // Mark the cookie Secure whenever the connection is TLS (directly,
               // or terminated upstream and forwarded) so the session id can't
               // leak over a downgraded http request to the same host.
@@ -362,7 +423,7 @@ export class WebSocketServer {
               return new Response(null, {
                 status: 302,
                 headers: {
-                  'Location': redirectTo || '/',
+                  'Location': redirectTo,
                   'Set-Cookie': cookie,
                 },
               });
@@ -419,7 +480,13 @@ export class WebSocketServer {
         }
 
         // 3b. Site builder proxy — intercept before API route matching
-        if (self.siteProxy && pathname.startsWith('/api/sites/') && pathname.includes('/proxy')) {
+        // The dev-server proxies forward whatever reaches them. isPublicRoute
+        // lets every OPTIONS past the auth block (for CORS preflight), which
+        // then never resolves a session for it, so outside open access no
+        // OPTIONS reaches a dev server at all. A same-origin preview sends no
+        // preflight, and an explicit OPTIONS from it gets the daemon's answer.
+        const proxyAuthorized = self.insecureOpenAccess || panelSessionId !== null;
+        if (self.siteProxy && proxyAuthorized && pathname.startsWith('/api/sites/') && pathname.includes('/proxy')) {
           const match = self.siteProxy.matchProxy(pathname);
           if (match) {
             // Rate limit proxy requests
@@ -431,15 +498,17 @@ export class WebSocketServer {
             }
             // WebSocket upgrade for HMR — bridge to dev server
             if (req.headers.get('upgrade')?.toLowerCase() === 'websocket') {
-              const targetUrl = self.siteProxy.getWebSocketTarget(match.projectId, match.subPath);
+              const targetUrl = self.siteProxy.getWebSocketTarget(match.projectId, match.subPath, url.search);
               if (!targetUrl) {
                 return new Response('Dev server not running', { status: 502 });
               }
+              const protocols = requestedSubprotocols(req);
               const success = server.upgrade(req, {
                 // panel_session so a revoked device's dev-server bridge is hung
                 // up on like any other panel socket; it passed the same auth
                 // block to get here.
-                data: { proxy_target: targetUrl, panel_session: panelSessionId ?? undefined },
+                data: { proxy_target: targetUrl, proxy_protocols: protocols, panel_session: panelSessionId ?? undefined },
+                ...subprotocolHeaders(protocols),
               });
               if (success) return undefined;
               return new Response('WebSocket upgrade failed', { status: 500 });
@@ -567,15 +636,17 @@ export class WebSocketServer {
         //    dev server using the __proj cookie set by the explicit proxy route.
         //    This handles absolute paths (/src/main.tsx, /node_modules/...) that
         //    frameworks emit and that don't match any JARVIS route.
-        if (self.siteProxy) {
+        if (self.siteProxy && proxyAuthorized) {
           // WebSocket upgrade (e.g. Vite HMR)
           if (req.headers.get('upgrade')?.toLowerCase() === 'websocket') {
-            const targetUrl = self.siteProxy.getWebSocketTargetFromCookie(req, pathname);
+            const targetUrl = self.siteProxy.getWebSocketTargetFromCookie(req, pathname, url.search);
             if (targetUrl) {
+              const protocols = requestedSubprotocols(req);
               const success = server.upgrade(req, {
                 // panel_session so a revoked device's dev-server bridge is hung up on
                 // like any other panel socket; it passed the same auth block.
-                data: { proxy_target: targetUrl, panel_session: panelSessionId ?? undefined },
+                data: { proxy_target: targetUrl, proxy_protocols: protocols, panel_session: panelSessionId ?? undefined },
+                ...subprotocolHeaders(protocols),
               });
               if (success) return undefined;
             }
@@ -603,7 +674,10 @@ export class WebSocketServer {
           // HMR proxy WebSocket — bridge to dev server
           const proxyTarget = (ws.data as any)?.proxy_target as string | undefined;
           if (proxyTarget) {
-            const upstream = new WebSocket(proxyTarget);
+            const protocols = (ws.data as any)?.proxy_protocols as string[] | undefined;
+            // Only the protocol the client was answered with, so the dev
+            // server cannot settle on a different one behind the bridge.
+            const upstream = protocols?.length ? new WebSocket(proxyTarget, protocols[0]!) : new WebSocket(proxyTarget);
             (ws.data as any)._proxyUpstream = upstream;
             upstream.onmessage = (e) => {
               try {
@@ -613,6 +687,11 @@ export class WebSocketServer {
                 if (size > 16 * 1024 * 1024) return; // drop oversized frames
                 ws.send(data);
               } catch { /* client gone */ }
+            };
+            upstream.onopen = () => {
+              const pending = (ws.data as any)._proxyPending as Array<string | Buffer> | undefined;
+              (ws.data as any)._proxyPending = undefined;
+              for (const frame of pending ?? []) { try { upstream.send(frame); } catch { /* upstream gone */ } }
             };
             upstream.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
             upstream.onclose = () => { try { ws.close(); } catch { /* ignore */ } };
@@ -642,6 +721,16 @@ export class WebSocketServer {
           if (proxyUpstream) {
             if (proxyUpstream.readyState === WebSocket.OPEN) {
               proxyUpstream.send(message);
+            } else if (proxyUpstream.readyState === WebSocket.CONNECTING) {
+              // The client may speak before the upstream handshake finishes;
+              // hold a few frames for it rather than drop them silently.
+              const pending = ((ws.data as any)._proxyPending ??= []) as Array<string | Buffer>;
+              const held = ((ws.data as any)._proxyPendingBytes ?? 0)
+                + (typeof message === 'string' ? Buffer.byteLength(message) : message.length);
+              if (pending.length < PROXY_PENDING_MAX_FRAMES && held <= PROXY_PENDING_MAX_BYTES) {
+                pending.push(message);
+                (ws.data as any)._proxyPendingBytes = held;
+              } else { try { ws.close(1013, 'dev server not ready'); } catch { /* ignore */ } }
             }
             return;
           }
@@ -876,6 +965,10 @@ export class WebSocketServer {
    * opened from that sidecar's token. Every /ws socket carries one, except
    * under `insecure_open_access`, where no socket has an identity and every
    * one already has the whole dashboard API: there, any socket may.
+   *
+   * Not a pure read: resolvePanelSession drops a session whose sidecar is no
+   * longer enrolled, which hangs up that session's sockets. A caller probing
+   * every client (ws-service's `.some(accepts)`) must iterate a copy.
    */
   socketSpeaksForSidecar(ws: unknown, sidecarId: string): boolean {
     if (this.insecureOpenAccess) return true;

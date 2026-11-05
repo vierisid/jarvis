@@ -2,6 +2,7 @@ import { wrikeNeedsReconnect } from "./wrike-refresh";
 import { readManagedConnectionFile } from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const WRIKE_PIECE = "@activepieces/piece-wrike";
 export const WRIKE_CONNECTION = "jarvis:wrike";
@@ -88,6 +89,7 @@ export function wrikeStatus(config: JarvisConfig) {
   return {
     configured: !!wrikeConnectUrl(config),
     connect_url: wrikeConnectUrl(config),
+    ...hostedSetupFault(config, wrikeConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: WRIKE_CONNECTION,

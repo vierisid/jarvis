@@ -197,6 +197,23 @@ authority:
 #   summon_hotkey: "ctrl+shift+space"   # show the pebble / start listening
 #   palette_hotkey: "ctrl+shift+k"      # open the room picker at the cursor
 
+# Channel conversation retention: how many days to keep the stored messages of
+# Telegram and Discord conversations (one thread per sender, including any turns
+# posted into them from the dashboard) and Pebble's voice exchanges. Off by
+# default (kept forever). 90 is a sensible value. Swept once a day from the next
+# start. The dashboard's own chats are not affected.
+# conversations:
+#   channel_message_retention_days: 90
+
+# Desktop control (#905). false stops Jarvis from listing windows, taking
+# screenshots, reading the screen, reading or writing the clipboard, and
+# clicking, typing or launching apps on any machine; screen awareness ignores
+# captures too. Browser tools keep working, and run_command is not covered (it
+# has its own approvals and --no-local-tools). Settings > General > Desktop
+# control changes it at once; a change here is imported at the next start.
+# desktop:
+#   enabled: true
+
 # Text-to-Speech (voice output)
 tts:
   enabled: false

@@ -82,7 +82,8 @@ export function createLiveOnboardingAdapters(ports: LiveOnboardingPorts): Config
     if (typeof data.prompt !== 'string' || !Array.isArray(data.contextRefs) || !object(data.answers)) fail();
     const draft = { prompt: data.prompt, contextRefs: data.contextRefs, answers: data.answers };
     return { model: { journeyId: c.journey.journeyId, revision: c.journey.revision + activationRevision,
-      availability: 'ready', phase: 'ready', draft, interview: { ...suggestions, state: suggestionState }, ...activationFeedback, ...(data.pendingRequest ? { pendingRequest: data.pendingRequest } : {}) } };
+      availability: 'ready', phase: 'ready', draft, interview: { ...suggestions, state: suggestionState }, ...activationFeedback,
+      ...(c.journey.draft ? { savedDraft: true } : data.pendingRequest ? { pendingRequest: data.pendingRequest } : {}) } };
   }
   let resultRevision = 0;
   function resultModel(c: Context, result: unknown): ResultModel {
@@ -214,11 +215,11 @@ export function createLiveOnboardingAdapters(ports: LiveOnboardingPorts): Config
     },
       setDraft(c, value) {
         if (!object(value) || typeof value.prompt !== 'string' || value.prompt.length > 2000 || !Array.isArray(value.contextRefs) || !object(value.answers)) fail();
-        if (store(c).read('activation')?.pendingRequest) fail();
+        if (c.journey.draft || store(c).read('activation')?.pendingRequest) fail();
         store(c).save('activation', { prompt: value.prompt, contextRefs: value.contextRefs, answers: value.answers }); return activation(c);
       },
       async command(c, action, input) {
-        if (action !== 'create' || !object(input) || input.journeyId !== c.journey.journeyId || !object(input.request) || !object(input.answers)) fail();
+        if (c.journey.draft || action !== 'create' || !object(input) || input.journeyId !== c.journey.journeyId || !object(input.request) || !object(input.answers)) fail();
         const request = input.request as ActivationRequest;
         const draft = store(c).read('activation');
         if (!draft || request.prompt !== draft.prompt || JSON.stringify(request.contextRefs) !== JSON.stringify(draft.contextRefs)

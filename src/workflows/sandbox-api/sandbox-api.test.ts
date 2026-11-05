@@ -23,7 +23,7 @@ import { getWaitpoint } from "../db/repos/waitpoint";
 import { workflowFileDir } from "./routes/files";
 import { createWorkflowFile } from "../db/repos/workflow-file";
 import { triggerHookRunId } from "../runner/triggers/hook-run-id";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -695,6 +695,50 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     }
     // The first one would have landed at <root>/escaped, outside workflow-files.
     expect(existsSync(join(root, "escaped"))).toBe(false);
+  });
+
+  test("POST /v1/step-files refuses a step or flow directory that is a symlink out of the base (#1154)", async () => {
+    const root = process.env.JARVIS_WORKFLOW_DATA_DIR!;
+    const outside = join(root, "outside");
+    const flowDir = join(root, "workflow-files", testFlowId);
+    mkdirSync(outside, { recursive: true });
+    mkdirSync(flowDir, { recursive: true });
+    // The step directory planted as a link to somewhere else.
+    const link = join(flowDir, "step_link");
+    symlinkSync(outside, link);
+    try {
+      const r = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "step_link") });
+      expect(r.status).toBe(400);
+      expect(readdirSync(outside)).toEqual([]);
+      // A dangling link is refused the same way, not a server error.
+      const dangling = join(flowDir, "step_dangling");
+      symlinkSync(join(root, "nowhere"), dangling);
+      try {
+        const d = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "step_dangling") });
+        expect(d.status).toBe(400);
+      } finally { rmSync(dangling); }
+    } finally { rmSync(link); }
+    // The flow directory itself planted as a link: nothing is created through it.
+    renameSync(flowDir, `${flowDir}.real`);
+    symlinkSync(outside, flowDir);
+    try {
+      const again = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "step_new") });
+      expect(again.status).toBe(400);
+      expect(readdirSync(outside)).toEqual([]);
+    } finally {
+      rmSync(flowDir);
+      renameSync(`${flowDir}.real`, flowDir);
+    }
+  });
+
+  test("POST /v1/step-files reports a disk fault as a server error, not a bad path (#1154)", async () => {
+    const flowDir = join(process.env.JARVIS_WORKFLOW_DATA_DIR!, "workflow-files", testFlowId);
+    mkdirSync(flowDir, { recursive: true });
+    chmodSync(flowDir, 0o500);
+    try {
+      const r = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "step_readonly") });
+      expect(r.status).toBe(500);
+    } finally { chmodSync(flowDir, 0o700); }
   });
 
   test("POST /v1/step-files refuses a flowId the token's run does not belong to", async () => {

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
 import { readConnectionFile } from "./connection-file";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const SLACK_PIECE = "@activepieces/piece-slack";
 export const SLACK_CONNECTION = "jarvis:slack";
@@ -45,7 +46,7 @@ export function slackConnectUrl(config: JarvisConfig): string | null {
 }
 export function slackStatus(config: JarvisConfig) {
   const connection = readSlackConnection(config.daemon.data_dir);
-  return {configured: !!slackConnectUrl(config), connect_url: slackConnectUrl(config),
+  return {configured: !!slackConnectUrl(config), connect_url: slackConnectUrl(config), ...hostedSetupFault(config, slackConnectUrl(config)),
     connected: !!connection, external_id: SLACK_CONNECTION,
     account: connection?.account ?? null, workspaces: connection?.workspaces ?? [],
     generation: connection?.generation ?? null, connected_at: connection?.connected_at ?? null};

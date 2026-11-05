@@ -7,6 +7,7 @@ import { prepareSubmission, type SubmissionConfig } from '../../runtime/form-sub
  */
 
 import { KeyedRateLimiter } from './rate-limiter.ts';
+import { readBoundedText } from '../../../util/bounded-body.ts';
 
 // ── Types ──
 
@@ -240,23 +241,16 @@ export class WebhookManager {
     // the split exists to prevent. The cost of that ordering is one body
     // read plus one HMAC per junk request, both bounded and cheap.
 
-    // Body cap: declared size first (no read at all), then the actual size
-    // for chunked bodies that declare none.
-    const declared = Number(req.headers.get('content-length') ?? '0');
-    if (Number.isFinite(declared) && declared > WEBHOOK_MAX_BODY_BYTES) {
-      return json(413, { error: 'Payload too large' });
+    // Body cap: declared size first (no read at all), then the bytes that
+    // actually arrive, counted while they stream in. `req.text()` would buffer
+    // a chunked body of any size before a cap could run (util/bounded-body.ts).
+    const read = await readBoundedText(req, WEBHOOK_MAX_BODY_BYTES);
+    if (!read.ok) {
+      return read.reason === 'too_large'
+        ? json(413, { error: 'Payload too large' })
+        : json(400, { error: 'Failed to read request body' });
     }
-
-    // Read raw body once
-    let rawBody: string;
-    try {
-      rawBody = await req.text();
-    } catch {
-      return json(400, { error: 'Failed to read request body' });
-    }
-    if (rawBody.length > WEBHOOK_MAX_BODY_BYTES) {
-      return json(413, { error: 'Payload too large' });
-    }
+    const rawBody = read.text;
 
     // Validate HMAC signature if a secret is configured
     let verifiedSignature: string | null = null;

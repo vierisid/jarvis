@@ -2,6 +2,7 @@
 import {join} from "node:path";
 import type {JarvisConfig} from "../config/types";
 import {readConnectionFile} from "./connection-file";
+import { hostedSetupFault } from "./hosted-setup";
 export const INTERCOM_PIECE = "@activepieces/piece-intercom";
 export const INTERCOM_CONNECTION = "jarvis:intercom";
 export const INTERCOM_HOSTS = {us:"api.intercom.io", eu:"api.eu.intercom.io", au:"api.au.intercom.io"} as const;
@@ -31,6 +32,6 @@ export function intercomConnectUrl(config:JarvisConfig):string|null {
 }
 export function intercomStatus(config:JarvisConfig) {
   const c=readIntercomConnection(config.daemon.data_dir),url=intercomConnectUrl(config);
-  return {configured:!!url,connect_url:url,connected:!!c,external_id:INTERCOM_CONNECTION,
+  return {configured:!!url,connect_url:url,...hostedSetupFault(config,url),connected:!!c,external_id:INTERCOM_CONNECTION,
     account:c?.account ?? null,workspaces:c?.workspaces ?? [],generation:c?.generation ?? null,connected_at:c?.connected_at ?? null};
 }

@@ -69,6 +69,12 @@ describe("ON-U-01 isolated welcome", () => {
     expect(intents).toEqual(["exit"]);
     expect(networkCalls).toBe(0);
   });
+  test("after setup the exit says it skips the rest, since it is a permanent exit (#1070)", async () => {
+    await mount({ setupCompleted: true });
+    expect([...host.querySelectorAll("button")].some(b => b.textContent === "I’ll do this later")).toBe(false);
+    await click("Skip the rest and explore Jarvis");
+    expect(intents).toEqual(["exit"]);
+  });
   test("pending blocks both intents while leaving focus and the action label stable", async () => {
     await mount();
     const start = button("Set up Jarvis");

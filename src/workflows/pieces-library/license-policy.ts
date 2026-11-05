@@ -127,6 +127,15 @@ export const REVIEWED_LICENSES: Readonly<Record<string, ReviewedLicense>> = {
       "No NOTICE file. 0.3.3 is the latest release. Pulled in by snowflake-sdk@2.3.4 (Apache-2.0) via " +
       "@activepieces/piece-snowflake@0.4.1 (reviewed 2026-10-27).",
   },
+  "exif-parser@0.1.12": {
+    declared: null,
+    license: "MIT",
+    reason:
+      "package.json has no license field; the tarball ships LICENSE.md, \"The MIT License\", copyright 2010 " +
+      "Bruno Windels and Daniel Leinich, with the full MIT grant and disclaimer. Pulled into the engine " +
+      "staging install by jimp@0.22.12 > @jimp/custom > @jimp/core, for the core image-helper and pdf " +
+      "pieces (#961) (reviewed 2026-11-05).",
+  },
   // absurd-sql@0.0.54 would need one too, as MIT (no license field, ships
   // the MIT text in LICENSE), but only @actual-app/core pulls it and
   // actualbudget is EXCLUDED, so it is not in the shared tree (or any catalog).

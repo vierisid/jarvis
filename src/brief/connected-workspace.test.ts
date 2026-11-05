@@ -171,6 +171,12 @@ test('managed Notion shows its stored grant, a renewal that needs reconnect, and
   expect(provider.read().rows.some(r=>r.sourceId==='native:notion')).toBe(false);
 });
 
+test('a hosted provider whose setup is broken stays visible as unavailable, without a setup action (#1259)', () => {
+  sources.notion = () => ({configured:false,connected:false,reconnect:false,account:null,reason:'One-click setup is broken on this hosted instance'});
+  expect(row('native:notion')).toMatchObject({status:'unavailable',authenticated:null,setupActionId:null});
+  expect(provider.read().setup.some(s => s.id === 'setup:notion')).toBe(false);
+});
+
 test('managed Airtable shows its stored grant, reads a reconnect as disconnected and routes setup to its own hosted integration', () => {
   sources.airtable = () => ({configured:true, connected:true, account:{id:'usr1',label:'owner@example.test'}});
   expect(row('native:airtable')).toMatchObject({status:'connected',evidence:'stored_grant',accountId:'usr1',setupActionId:'setup:airtable'});

@@ -75,8 +75,9 @@ export function createOnboardingRoutes(runtime: OnboardingRuntime): Record<strin
       if (!query.get('state') || query.getAll('state').length !== 1 || query.getAll('code').length > 1 || query.getAll('error').length > 1) throw new RuntimeError('invalid_request', 400);
       const result = await runtime.execute(req, 'google.callback', { state: query.get('state')!,
         ...(query.has('code') ? { code: query.get('code')! } : {}), ...(query.has('error') ? { error: query.get('error')! } : {}) });
-      const connected = (result as { connection?: { state?: string } })?.connection?.state === 'connected';
-      return new Response(`<!doctype html><meta name="viewport" content="width=device-width"><title>Google connection</title><main><h1>${connected ? 'Google connected' : 'Google connection needs attention'}</h1><p>Return to Jarvis to check your connection. You can close this tab.</p></main>`,
+      const state = (result as { connection?: { state?: string } })?.connection?.state;
+      const heading = state === 'connected' ? 'Google connected' : state === 'cancelled' ? 'Google connection cancelled' : 'Google connection needs attention';
+      return new Response(`<!doctype html><meta name="viewport" content="width=device-width"><title>Google connection</title><main><h1>${heading}</h1><p>Return to Jarvis to check your connection. You can close this tab.</p></main>`,
         { headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'" } });
     } catch (e) { return fail(e); }
   } };

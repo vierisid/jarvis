@@ -23,7 +23,6 @@ package main
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 	"log"
 	"net/url"
 	"os"
@@ -201,49 +200,11 @@ func windowsShowNotification(n Notification) {
 	}()
 }
 
-func notifyURI(id, kind, action, nonce string) string {
-	u := "jarvis://n?id=" + url.QueryEscape(id) + "&kind=" + url.QueryEscape(kind) + "&a=" + url.QueryEscape(action)
-	if nonce != "" {
-		u += "&n=" + url.QueryEscape(nonce)
-	}
-	return u
-}
-
 func showToast(n Notification) error {
-	body := n.Body
-	if n.Meta != "" {
-		body += " · " + n.Meta
-	}
-
-	nonce := mintNotifyNonce(n.ID)
-
-	var acts strings.Builder
-	for _, a := range n.Actions {
-		fmt.Fprintf(&acts, `<action content="%s" activationType="protocol" arguments="%s"/>`,
-			xmlEscape(a.Label), xmlEscape(notifyURI(n.ID, n.Kind, a.ID, nonce)))
-	}
-
-	// launch (body click) always reviews in-app — never an approve.
-	xml := `<toast activationType="protocol" launch="` + xmlEscape(notifyURI(n.ID, n.Kind, "review", nonce)) + `">` +
-		`<visual><binding template="ToastGeneric">` +
-		`<text>` + xmlEscape(n.Title) + `</text>` +
-		`<text>` + xmlEscape(body) + `</text>` +
-		`</binding></visual>`
-	if acts.Len() > 0 {
-		xml += `<actions>` + acts.String() + `</actions>`
-	}
-	xml += `</toast>`
-
-	// The XML is one line (no newlines / no '@ sequence), safe inside a literal
-	// single-quoted here-string.
-	script := `[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]|Out-Null
-[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom,ContentType=WindowsRuntime]|Out-Null
-$d=New-Object Windows.Data.Xml.Dom.XmlDocument
-$d.LoadXml(@'
-` + xml + `
-'@)
-$t=New-Object Windows.UI.Notifications.ToastNotification $d
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('` + notifyAUMID + `').Show($t)`
+	// Built, escaped and wrapped in notify_toast_xml.go (untagged, so it is
+	// tested on every platform). The XML reaches PowerShell only as base64:
+	// no title or body text appears in the script itself (#1160).
+	script := toastScript(toastXML(n, mintNotifyNonce(n.ID)), notifyAUMID)
 
 	// Bounded: a hung PowerShell would otherwise leak a goroutine + process per
 	// notification and suppress the balloon fallback forever.
@@ -264,17 +225,6 @@ func psEncode(s string) string {
 		b[i*2+1] = byte(r >> 8)
 	}
 	return base64.StdEncoding.EncodeToString(b)
-}
-
-func xmlEscape(s string) string {
-	r := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		`"`, "&quot;",
-		"'", "&apos;",
-	)
-	return r.Replace(s)
 }
 
 // ── fallback: tray balloon (buttonless) ──────────────────────────────────────
@@ -315,8 +265,6 @@ func onBalloonClick() {
 	pendingNotifyMu.Lock()
 	n := pendingNotify
 	pendingNotifyMu.Unlock()
-	if trayOpenChat != nil {
-		go trayOpenChat()
-	}
-	notifyEmitAction(n.ID, n.Kind, "review")
+	// Tray thread: the shared helper keeps the brain write off it (#1160).
+	dispatchNotifyAction(n.ID, n.Kind, "review", trayOpenChat)
 }

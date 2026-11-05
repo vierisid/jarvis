@@ -446,12 +446,11 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 	}
 	trayClientDarwin = client
 	trayEmitDarwin = func(et string, p map[string]any) {
-		_ = client.sendEvent(context.Background(), SidecarEvent{
-			EventType: et,
-			Timestamp: time.Now().UnixMilli(),
-			Priority:  "normal",
-			Payload:   p,
-		}, nil)
+		// Bounded: it runs on the trayCtlAsync worker that notification
+		// taps share (#1160).
+		_ = sendUIEvent(context.Background(), func(wctx context.Context, e SidecarEvent) error {
+			return client.sendEvent(wctx, e, nil)
+		}, et, p)
 	}
 	// The brain pushes tray.status → setTrayStatus → trayRefresh; rebuild the menu.
 	trayRefresh = darwinRebuildTray

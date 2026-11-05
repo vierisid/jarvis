@@ -459,8 +459,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       }
     }
     if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input) && context.phase !== 'composition') {
-      const name = staticInput(input.toolName);
-      if (!name.known && context.tool) runtime(node, 'settings.input', 'tool-input', 'Resolve the tool identity and validate its parameters at governed tool dispatch');
+      const name = { value: input.toolName };
+      // Named in the workflow, never by a template: run data choosing the tool
+      // is refused at dispatch as well (effect-context.ts, #1152).
+      if (typeof input.toolName === 'string' && input.toolName.includes('{{')) issue(node, 'settings.input.toolName', 'TOOL_BINDING', 'Name the tool directly; a template would let run data choose which tool runs');
       else if (typeof name.value !== 'string') issue(node, 'settings.input.toolName', 'TOOL_BINDING', 'Tool identity must resolve to a string');
       else {
         const tool = context.tool?.(name.value);

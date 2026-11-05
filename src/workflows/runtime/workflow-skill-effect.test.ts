@@ -70,7 +70,8 @@ function fixture(governed: string[] = []) {
   const flow = createFlow({});
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Send the weekly mail', trigger: {
     name: 'trigger', type: 'EMPTY', nextAction: { name: 'action', type: 'PIECE', settings: {
-      pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1', actionName: 'invoke', input: {},
+      // The step names its tool: a call must ask for exactly that one (#1152).
+      pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1', actionName: 'invoke', input: { toolName: 'run_skill' },
     } },
   } });
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });

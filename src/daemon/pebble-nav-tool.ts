@@ -28,9 +28,21 @@ const panelId = (result: unknown): string =>
   (result && typeof result === 'object' && 'id' in (result as object))
     ? String((result as { id?: unknown }).id ?? '') : '';
 
-/** The sidecar window states an action names. A Map, so only these keys answer (#975). */
+/**
+ * The sidecar no longer has that window: panels.go's ErrPanelUnknown ("panel
+ * not found", from close/focus/set_window_state on an id it does not hold)
+ * or errPanelWindowClosed ("window already closed", an id whose window is
+ * gone). A panel.closed event that never arrived leaves such an id tracked;
+ * a caller that sees this drops it rather than keep sending to it (#1157).
+ */
+export function isGonePanelError(err: unknown): boolean {
+  return /panel not found|unknown panel|window already closed/i.test(String(err));
+}
+
+/** The sidecar window states an action names. A Map, so only these keys answer (#975).
+ * "expand" is the realtime model's word for maximize (REALTIME_WINDOW_ACTIONS). */
 const WINDOW_STATES = new Map<string, string>([
-  ['maximize', 'maximized'], ['maximized', 'maximized'],
+  ['expand', 'maximized'], ['maximize', 'maximized'], ['maximized', 'maximized'],
   ['minimize', 'minimized'], ['minimized', 'minimized'],
   ['restore', 'normal'], ['normal', 'normal'],
 ]);
@@ -74,7 +86,9 @@ export function makePebbleNavTool(deps: PebbleNavDeps) {
         return pebbleRoomActionResult(await openRoom(String(args.room ?? '')), String(args.action ?? ''));
       case 'control_dashboard_window': {
         const action = String(args.action ?? '');
-        const target = deps.findPanel(sidecarId, args.target ? String(args.target) : undefined);
+        // "most_recent" is the schema's word for no particular room (the default).
+        const hint = typeof args.target === 'string' && args.target && args.target !== 'most_recent' ? args.target : undefined;
+        const target = deps.findPanel(sidecarId, hint);
         if (!target) return "There's no window open to do that with.";
         try {
           if (action === 'close') {
@@ -92,7 +106,11 @@ export function makePebbleNavTool(deps: PebbleNavDeps) {
             return `Done.`;
           }
           return "I'm not sure how to do that with the window.";
-        } catch {
+        } catch (err) {
+          if (isGonePanelError(err)) {
+            deps.untrackPanel(sidecarId, target.id);
+            return `${target.title} isn't open any more.`;
+          }
           return "I couldn't do that with the window.";
         }
       }

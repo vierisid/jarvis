@@ -155,3 +155,32 @@ describe('SiteProxy response headers', () => {
     expect(resp?.headers.getSetCookie()).toEqual([]);
   });
 });
+
+describe('SiteProxy passes the request through intact (#1163)', () => {
+  test('the explicit route keeps the query string', async () => {
+    const req = dashboardRequest('/api/sites/proj1/proxy/src/main.tsx?import&t=123', {});
+    const resp = await proxy().proxyHttp(req, 'proj1', '/src/main.tsx');
+    expect(resp.status).toBe(200);
+    expect(new URL(seen[0]!.url).pathname + new URL(seen[0]!.url).search).toBe('/src/main.tsx?import&t=123');
+  });
+
+  test('WebSocket targets keep the query string (Vite HMR ?token=)', () => {
+    const p = proxy();
+    expect(p.getWebSocketTarget('proj1', '/', '?token=abc')).toBe(`ws://127.0.0.1:${devServer.port}/?token=abc`);
+    const req = dashboardRequest('/?token=abc', { cookie: '__proj=proj1' });
+    expect(p.getWebSocketTargetFromCookie(req, '/', '?token=abc')).toBe(`ws://127.0.0.1:${devServer.port}/?token=abc`);
+  });
+
+  test('a compressed dev-server body reaches the browser still compressed, matching its Content-Encoding', async () => {
+    const plain = 'hello world '.repeat(200);
+    respondWith = () => new Response(Bun.gzipSync(new TextEncoder().encode(plain)), {
+      headers: { 'content-encoding': 'gzip', 'content-type': 'text/plain' },
+    });
+    const resp = await proxy().proxyHttp(dashboardRequest('/api/sites/proj1/proxy/', { 'accept-encoding': 'gzip' }), 'proj1', '/');
+    expect(resp.headers.get('content-encoding')).toBe('gzip');
+    const bytes = new Uint8Array(await resp.arrayBuffer());
+    // gzip magic: the body was not inflated behind a header that still says gzip.
+    expect([bytes[0], bytes[1]]).toEqual([0x1f, 0x8b]);
+    expect(new TextDecoder().decode(Bun.gunzipSync(bytes))).toBe(plain);
+  });
+});

@@ -176,14 +176,20 @@ describe('#884: each channel sender has a conversation of their own', () => {
     });
     const handle = service(agent, [1001, 2002]);
     await handle(telegram(1001, OWNER_TELEGRAM_SECRET, true));
+    // Neither a guest nor the owner writing in a group (#1155: every member
+    // reads it) reaches the conversation tier.
     await handle(telegramGroup(1001, -100, 'what did I ask you before?'));
-    // A guest never reaches the conversation tier.
     await handle(telegram(2002, 'what did the last person ask you?', true));
+    await handle(telegram(1001, 'and now?', true));
 
     expect(dialogues).toHaveLength(2);
-    expect(dialogues[1]!.map((m) => m.content).join('\n')).not.toContain(OWNER_TELEGRAM_SECRET);
-    // And the group message is the turn, not repeated as history.
-    expect(dialogues[1]).toEqual([]);
+    // The first turn is the turn, not repeated as history.
+    expect(dialogues[0]).toEqual([]);
+    // The owner's private chat carries its own history and nothing from the group or the guest.
+    const own = dialogues[1]!.map((m) => m.content).join('\n');
+    expect(own).toContain(OWNER_TELEGRAM_SECRET);
+    expect(own).not.toContain('what did I ask you before?');
+    expect(own).not.toContain('what did the last person ask you?');
   });
 
   test('a sender the list does not name teaches the agent nothing; a listed one still does', async () => {
@@ -318,14 +324,15 @@ describe('#884 review: conv-tier tasks belong to the chat that delegated them', 
         processTurn: async (_t: string, _c: unknown, turn: { contextKey?: string }) => { keys.push(turn.contextKey); return { text: 'ok' }; },
       },
     });
-    // #909: only the owner reaches the conv tier, so the threads compared are
-    // the owner's private chat and a group; the guest (2002) takes none.
+    // #909: only the owner reaches the conv tier, and since #1155 only from
+    // their private chat; the group and the guest (2002) take none.
     const handle = service(agent, [1001, 2002]);
     await handle(telegram(1001, 'a', true));
-    await handle(telegramGroup(1001, -100, 'b'));
-    await handle(telegram(2002, 'guest', true));
+    // Answered, as a guest, not dropped.
+    expect(await handle(telegramGroup(1001, -100, 'b'))).toBeTruthy();
+    expect(await handle(telegram(2002, 'guest', true))).toBeTruthy();
     await handle(telegram(1001, 'c', true));
-    expect(keys).toEqual(['channel:telegram:user:1001/chat:1001', 'channel:telegram:user:1001/chat:-100', 'channel:telegram:user:1001/chat:1001']);
+    expect(keys).toEqual(['channel:telegram:user:1001/chat:1001', 'channel:telegram:user:1001/chat:1001']);
   });
 });
 

@@ -27,6 +27,10 @@ const runColumns = 'id, flow_id, flow_version_id, project_id, status, environmen
 /** One short label for Runs, Context and the start receipt (#1100). The full ID
  * stays in `runId`, which the views show as the label's title and in inspection. */
 const runLabel = (r: Pick<RunRow, 'id' | 'environment'>) => `${r.environment === 'TESTING' ? 'Test run' : 'Run'} ${r.id.slice(-6)}`;
+/** The digest of a request ID a "not found" receipt read withdrew (#1162). Not a sha256 hex.
+ * Fences have their own budget and expire after a day: a POST still in transit
+ * is long settled by then, and a read must never use up the capacity for runs. */
+const WITHDRAWN = 'withdrawn', FENCE_LIMIT = 1_000, FENCE_TTL_MS = 24 * 60 * 60 * 1000;
 /** A stored receipt, labelled as today. Receipts written before #1100 carry the
  * long `Run <full id>`; a Brief manual start is always a production run. */
 function receipt(stored: string): ManualInspectionRunResult {
@@ -337,10 +341,32 @@ export class WorkflowContext {
     if (!inspectionId(flowId) || !inspectionId(requestId)) throw new WorkflowInspectionError('invalid_identity');
     // The accepted receipt owns its scope even after a hard deletion removes
     // the flow and run. A read must neither lose that outcome nor enqueue work.
-    const row = this.db.query<{ result: string }, [string, string, string]>(
-      'SELECT result FROM brief_manual_run_requests WHERE project_id=? AND request_id=? AND flow_id=?').get(this.projectId, requestId, flowId);
-    if (!row) throw new WorkflowInspectionError('not_found', 404);
-    return receipt(row.result);
+    const lookup = () => this.db.query<{ digest: string; result: string }, [string, string, string]>(
+      'SELECT digest,result FROM brief_manual_run_requests WHERE project_id=? AND request_id=? AND flow_id=?').get(this.projectId, requestId, flowId);
+    // An existing receipt is an ordinary read; only a miss takes the write lock.
+    const existing = lookup();
+    if (existing && existing.digest !== WITHDRAWN) return receipt(existing.result);
+    const found = this.db.transaction((): { result: string } | { refused: WorkflowInspectionError } => {
+      const row = lookup();
+      if (row) return row.digest === WITHDRAWN ? { refused: new WorkflowInspectionError('not_found', 404) } : row;
+      // #1162 (owner decision): answering "not found" withdraws the ID, in the
+      // same transaction, so a POST still in transit cannot start a run after
+      // the person was told none started; start() refuses a withdrawn ID. This
+      // keeps D-19: nothing is replayed. Written only for a workflow in scope
+      // (a late POST for any other is refused by start() anyway) and within
+      // its own budget; a full budget cannot fence, so the read does not say "not found".
+      const taken = this.db.query('SELECT 1 FROM brief_manual_run_requests WHERE project_id=? AND request_id=?').get(this.projectId, requestId);
+      if (!taken && this.db.query('SELECT 1 FROM flow WHERE id=? AND project_id=?').get(flowId, this.projectId)) {
+        this.db.run('DELETE FROM brief_manual_run_requests WHERE digest=? AND created<?', [WITHDRAWN, Date.now() - FENCE_TTL_MS]);
+        const count = this.db.query<{ n: number }, [string]>('SELECT count(*) AS n FROM brief_manual_run_requests WHERE digest=?').get(WITHDRAWN)!.n;
+        if (count >= FENCE_LIMIT) return { refused: new WorkflowInspectionError('request_capacity', 503) };
+        this.db.run('INSERT INTO brief_manual_run_requests VALUES (?,?,?,?,?,?)',
+          [this.projectId, requestId, flowId, WITHDRAWN, JSON.stringify({ status: 'withdrawn', requestId }), Date.now()]);
+      }
+      return { refused: new WorkflowInspectionError('not_found', 404) };
+    }).immediate();
+    if ('refused' in found) throw found.refused;
+    return receipt(found.result);
   }
   start(flowId: string, raw: unknown): ManualInspectionRunResult {
     this.flow(flowId);
@@ -355,10 +381,13 @@ export class WorkflowContext {
       const prior = this.db.query<{ digest: string; result: string }, [string, string]>(
         'SELECT digest,result FROM brief_manual_run_requests WHERE project_id=? AND request_id=?').get(this.projectId, requestId);
       if (prior) {
+        // A receipt read found nothing and withdrew this ID (#1162): no run starts under it.
+        if (prior.digest === WITHDRAWN) throw new WorkflowInspectionError('request_withdrawn', 409);
         if (prior.digest !== digest) throw new WorkflowInspectionError('request_conflict', 409);
         return receipt(prior.result);
       }
-      const count = this.db.query<{ n: number }, []>('SELECT count(*) AS n FROM brief_manual_run_requests').get()!.n;
+      // Fences have their own budget (FENCE_LIMIT): they never take a run's place.
+      const count = this.db.query<{ n: number }, [string]>('SELECT count(*) AS n FROM brief_manual_run_requests WHERE digest<>?').get(WITHDRAWN)!.n;
       if (count >= LIMIT.requests) throw new WorkflowInspectionError('request_capacity', 503);
       const version = this.version(flowId, versionId);
       if (!version || version.state !== 'LOCKED') throw new WorkflowInspectionError('immutable_version_required', 409);

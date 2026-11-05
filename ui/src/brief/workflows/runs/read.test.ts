@@ -161,7 +161,9 @@ test("the controller unlocks an unconfirmed Run from the real receipt and select
   controller.retire();
 });
 
-test("a request that lands after a not-recorded check still shows in history and is never re-sent (#1093)", async () => {
+// #1162 (owner decision, replacing the #1093 behaviour): the not-found read withdraws
+// the request ID, so the original request arriving afterwards starts nothing.
+test("a request that arrives after a not-recorded check is refused, and is never re-sent (#1093, #1162)", async () => {
   let held: { requestId: string; scopeId: string; versionId: string } | undefined;
   let sent = 0;
   const port = { ...briefRunsPort(scope(), serve), start: async (r: { requestId: string; scopeId: string; versionId: string }) => {
@@ -174,12 +176,14 @@ test("a request that lands after a not-recorded check still shows in history and
   await controller.start();
   await controller.check();
   expect(controller.getSnapshot()).toMatchObject({ submission: "idle", request: null });
-  expect(controller.getSnapshot().message).toContain("could still start");
-  // The original request commits after the check answered not_found.
-  const late = context.start(flowId, { brief: { scopeId: held!.scopeId, versionId: held!.versionId, requestId: held!.requestId }, payload: {} });
+  expect(controller.getSnapshot().message).toContain("can no longer start");
+  // The original request arrives after the check answered not_found: it is refused.
+  expect(() => context.start(flowId, { brief: { scopeId: held!.scopeId, versionId: held!.versionId, requestId: held!.requestId }, payload: {} }))
+    .toThrow("request_withdrawn");
   await controller.refresh();
   const history = controller.getSnapshot().history;
-  expect(history.status === "ready" && history.data.items.map(r => r.runId)).toEqual([late.run.runId]);
+  // No run under any ID: the read answers an empty history.
+  expect(history.status).toBe("empty");
   expect(sent).toBe(1);
   controller.retire();
 });

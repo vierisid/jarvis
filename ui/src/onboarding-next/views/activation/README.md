@@ -56,6 +56,10 @@ Use phase `ready` only if safe same-key reconciliation can be requested; while
 the actual job is working use `submitting` or hand off to ON-U-08. Never unlock a
 possibly accepted job by incrementing revision for unrelated UI state.
 
+`savedDraft: true` means this request already produced the saved draft (the user
+came Back from the result). The request is read-only, Create, Back and Explore
+are withheld, and the only control, "Back to your draft", emits `view_draft`.
+
 `resolve_connection` is an optional host navigation intent retaining the draft,
 not OAuth or a connection mutation. Enable its button only when the host can
 handle it. Back targets the tour; Explore is an explicit exit without workflow

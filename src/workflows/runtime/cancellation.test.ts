@@ -254,12 +254,13 @@ test("cancellation during webhook body parsing wins over resume", async () => {
   const run = fixture("PAUSED");
   const wp = createWaitpoint({ flowRunId: run.id, projectId: run.projectId, stepName: "wait", type: "WEBHOOK" });
   const entered = deferred(), body = deferred();
-  // The route reads the body as text so it can cap the raw size before
-  // parsing; json() delegates to the same stall so this stays a body-read
-  // hold whichever one the handler reaches for.
-  const stalledBody = async () => { entered.resolve(); await body.promise; return "{}"; };
-  const req = Object.assign(new Request("http://local/resume", { method: "POST" }), { params: { id: wp.id },
-    text: stalledBody, json: async () => JSON.parse(await stalledBody()) });
+  // The route reads the body stream itself so it can cap the bytes as they
+  // arrive (util/bounded-body.ts), so the hold is on the stream: its first
+  // pull waits, whichever reader the handler uses.
+  const stalled = new ReadableStream<Uint8Array>({
+    async pull(c) { entered.resolve(); await body.promise; c.enqueue(new TextEncoder().encode("{}")); c.close(); },
+  }, { highWaterMark: 0 });
+  const req = Object.assign(new Request("http://local/resume", { method: "POST", body: stalled }), { params: { id: wp.id } });
   const response = createWorkflowRoutes()["/api/webhooks/waitpoints/:id"]!.POST!(req);
   await entered.promise;
   cancelFlowRun(run.id); body.resolve();

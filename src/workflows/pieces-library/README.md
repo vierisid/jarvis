@@ -383,9 +383,40 @@ simply lacks a declaration, or leave the piece out: of everything with
 reason either way. The build logs every id it leaves out from both lists and
 records them, with reasons, as `licenses.excluded` in its summary.
 
-A self-managed install fetches pieces from npm onto the user's own machine
-and is not scanned, but it only offers what the catalog lists, so an
-`EXCLUDED` piece is not offered there either.
+A self-managed install fetches pieces from npm onto the user's own machine,
+and since 2026-11 (owner decision) it is scanned too, with the same policy,
+piece by piece (`install-licenses.ts`):
+
+- The engine finds pieces by walking `node_modules/@activepieces`, and bun
+  neither prunes a piece dropped from package.json nor leaves a removed one
+  removed. So after every `bun install` there (install, rollback, uninstall,
+  boot) `enforcePiecesTree` removes each piece directory the manifest does not
+  list and each listed piece that fails.
+- A piece fails for a denied package its dependency tree reaches, for a
+  package in its tree the scan cannot decide (unreadable, an alias bun.lock
+  does not vouch for, a link out of the tree), and for a problem with the
+  whole tree (no bun.lock). A package under its own name that the current
+  bun.lock does not list (bun leaves old nested copies behind) is judged on
+  the license it declares, with no upstream presumption. A package nothing in
+  the manifest reaches, which an uninstall or update leaves behind, fails
+  nothing, and a piece directory nothing lists or depends on is removed.
+- Install: a piece that fails is refused (`PieceLicenseError`, with each
+  package and the chain that pulled it in) and rolled back: `installed.json`,
+  `package.json` and `bun.lock` are put back and bun runs again, so an update
+  returns to the version it had; a refused fresh install is removed.
+- Boot: a piece that fails is logged and held: removed from `node_modules`,
+  kept in the manifest, so the Library still lists it and the next boot checks
+  again. Every other piece loads.
+
+An `EXCLUDED` piece is not offered there either.
+
+The engine's own staging install (`runner/engine-runtime/engine-staging.lock`),
+whose packages the engine and the vendored core pieces compile in, is held to
+the same policy by `staging-licenses.test.ts` (under
+`JARVIS_TEST_ENGINE_BUILD=1`). So is the brain's own locked install, every
+package in the repository's `node_modules`, by `scripts/check-root-licenses.ts`
+and its test (#1166); a denied package awaiting a decision is listed there as a
+known violation, by exact version and declared license.
 
 Actual Budget (`actualbudget`) is `EXCLUDED` for this reason (owner decision
 2026-10-23: everywhere, not only hosted). `@activepieces/piece-actualbudget@0.1.9`

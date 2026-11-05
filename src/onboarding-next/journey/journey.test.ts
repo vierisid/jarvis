@@ -425,6 +425,46 @@ describe('acknowledgement boundaries and scoped tutorial replay', () => {
     expect(ready(await ack(f.provider, { type: 'tour_finished', state: 'skipped' }))).toMatchObject({ stepId: 'exited', completion: 'explored' });
   });
 
+  test('Explore on welcome after setup is a durable exit, so the welcome screen does not come back (#1070)', async () => {
+    const f = fixture();
+    expect(ready(await f.provider.read()).stepId).toBe('welcome');
+    // Before setup there is no durable exit: nothing could lead back to setup, and chat needs it.
+    expect(await nav(f.provider, { type: 'explore' })).toMatchObject({ availability: 'unavailable', reason: 'invalid_transition' });
+    ready(await nav(f.provider, { type: 'navigate', stepId: 'explain' })); ready(await ack(f.provider, { type: 'setup_completed' }));
+    ready(await nav(f.provider, { type: 'navigate', stepId: 'welcome' }));
+    expect(ready(await nav(f.provider, { type: 'explore' }))).toMatchObject({ stepId: 'exited', completion: 'explored', activationState: 'explored' });
+    expect(ready(await f.make(owner, f.open()).read())).toMatchObject({ stepId: 'exited', completion: 'explored' });
+    // Only welcome and activation can explore: not a mid-journey step.
+    const g = fixture(); ready(await nav(g.provider, { type: 'navigate', stepId: 'explain' }));
+    expect(await nav(g.provider, { type: 'explore' })).toMatchObject({ availability: 'unavailable', reason: 'invalid_transition' });
+  });
+
+  test('Back from a saved draft shows its request without releasing the job, and returns to the draft (#1070)', async () => {
+    const f = fixture(); await activation(f.provider);
+    await startBuild(f.provider, 'job-1');
+    expect(ready(await ack(f.provider, { type: 'draft_saved', jobId: 'job-1', flowId: 'flow', versionId: 'version' })).stepId).toBe('result');
+    const back = ready(await nav(f.provider, { type: 'navigate', stepId: 'activation' }));
+    expect(back).toMatchObject({ stepId: 'activation', completion: 'active', jobId: 'job-1', buildRequestId: 'request-job-1',
+      draft: { flowId: 'flow', versionId: 'version' }, activationState: 'draft_saved' });
+    // No second job, no exit and no other step while the draft is held.
+    expect(await ack(f.provider, { type: 'reserve_build', buildRequestId: 'request-2' })).toMatchObject({ reason: 'invalid_transition' });
+    expect(await nav(f.provider, { type: 'explore' })).toMatchObject({ reason: 'invalid_transition' });
+    expect(await nav(f.provider, { type: 'navigate', stepId: 'tour' })).toMatchObject({ reason: 'invalid_transition' });
+    expect(await nav(f.provider, { type: 'finish' })).toMatchObject({ reason: 'invalid_transition' });
+    // A tutorial replay is the one scoped exception: it returns to the same place, draft still held.
+    ready(await nav(f.provider, { type: 'replay_tutorial' }));
+    expect(ready(await ack(f.provider, { type: 'tour_finished', state: 'done' }))).toMatchObject({ stepId: 'activation', jobId: 'job-1', draft: { flowId: 'flow' } });
+    expect(ready(await nav(f.provider, { type: 'navigate', stepId: 'result' }))).toMatchObject({ stepId: 'result', jobId: 'job-1' });
+    expect(ready(await nav(f.provider, { type: 'finish' }))).toMatchObject({ stepId: 'exited', completion: 'completed' });
+  });
+
+  test('navigate to result is refused without a saved draft (#1070)', async () => {
+    const f = fixture(); await activation(f.provider);
+    expect(await nav(f.provider, { type: 'navigate', stepId: 'result' })).toMatchObject({ reason: 'invalid_transition' });
+    await startBuild(f.provider, 'job-1');
+    expect(await nav(f.provider, { type: 'navigate', stepId: 'result' })).toMatchObject({ reason: 'invalid_transition' });
+  });
+
   test('pending job survives replay/restart, including a result arriving during replay', async () => {
     const f = fixture(); await activation(f.provider);
     await startBuild(f.provider, 'job-1');
