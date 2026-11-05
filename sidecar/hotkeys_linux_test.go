@@ -3,10 +3,12 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // requireXHotkeyTests is the env var CI sets to say "these tests must actually
@@ -284,6 +286,13 @@ func TestLinuxXGrabIsReleasedOnStop(t *testing.T) {
 	first()
 
 	second, err := startHotkeyListener(spec, func() {})
+	if err != nil && !strings.Contains(err.Error(), "already held") {
+		// Not a refusal, so not evidence about the release at all: the second
+		// create never got as far as a grab. Under CI's Xvfb this was "no X
+		// display" from a server resetting between clients (#1257), which used
+		// to be reported below as an asynchronous release.
+		requireX(t, "%q: the regrab after stop() failed before it could grab, so this run says nothing about the release: %v", spec, err)
+	}
 	if err != nil {
 		// Could be our leak, or could be another process (another copy of this
 		// test, or a real sidecar) taking the combination in the gap. Re-probe
@@ -297,6 +306,46 @@ func TestLinuxXGrabIsReleasedOnStop(t *testing.T) {
 		t.Fatalf("%q could not be grabbed immediately after stop() but was free on a retry; the release is not synchronous: %v", spec, err)
 	}
 	second()
+}
+
+// The X server these tests run against must not reset when its last client
+// leaves (#1257).
+//
+// An X server started without -noreset regenerates itself the moment its
+// client count drops to zero: it throws away its state (atoms, grabs,
+// properties) and only then accepts new clients. A connection still in its
+// handshake in that window is dropped by the server, XOpenDisplay
+// returns NULL, and the create reports "no X display". These tests open and
+// close connections back to back, often with nothing else connected, so on such
+// a server any of them can fail that way: TestLinuxXGrabIsReleasedOnStop did,
+// about 1 run in 600 under a resetting Xvfb (5 of 3000 runs) and 0 of 3000
+// under -noreset, and CI read it as a grab released asynchronously.
+//
+// A desktop session does not reset while it is running (its own clients stay
+// connected), so this is a property of the test server, and CI starts Xvfb with
+// -noreset. Off CI it skips rather than fails, like every requireX case here:
+// xvfb-run, for one, starts Xvfb without -noreset. This holds
+// it there: an atom created by one client must still exist for the next client
+// after the first has gone, which only a reset can prevent. No wait between
+// the two: measured against a resetting Xvfb, the second connection saw the
+// reset (atom gone, or the connection refused) in 200 of 200 runs with no
+// delay, and against Xvfb -noreset it found the atom in 500 of 500.
+//
+// It can only see a reset while it is the only client, so every test before it
+// must close what it opens. Do not "fix" a failure here by holding a
+// connection open for the whole run: that hides the reset from this guard
+// while leaving the server's behaviour unchanged.
+func TestLinuxXServerKeepsStateWhenItsLastClientLeaves(t *testing.T) {
+	name := fmt.Sprintf("JARVIS_NORESET_PROBE_%d_%d", os.Getpid(), time.Now().UnixNano())
+	if created := hotkeyProbeAtom(name, false); created <= 0 {
+		requireX(t, "cannot open the X display to create a probe atom (got %d)", created)
+	}
+	switch got := hotkeyProbeAtom(name, true); {
+	case got == -1:
+		requireX(t, "the X display would not open again right after the only other client left; the server is resetting when its last client leaves, so every X test here can fail with \"no X display\" -- start it with -noreset (#1257)")
+	case got == 0:
+		requireX(t, "an atom created by one client was gone for the next; the X server reset when its last client left, so a connection opened in that window fails with \"no X display\" -- start it with -noreset (#1257)")
+	}
 }
 
 // The grab path must not touch the process-wide X error handler at all.

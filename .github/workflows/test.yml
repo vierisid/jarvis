@@ -311,7 +311,7 @@ jobs:
       # directions, and it is the convention this file already states for the
       # windows job below.
       X_HOTKEY_TESTS: '^TestLinuxX'
-      X_HOTKEY_TEST_COUNT: '8'
+      X_HOTKEY_TEST_COUNT: '9'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -389,7 +389,13 @@ jobs:
           # the runner wait on the step until that process exits, which for a
           # display server is forever. Its log goes to a file so a failure
           # further down is still diagnosable.
-          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp \
+          # -noreset (#1257): without it the server resets every time its
+          # last client leaves, and a connection opened during that reset is
+          # dropped, so XOpenDisplay fails and a test reports "no X display".
+          # These tests close and reopen connections back to back with nothing
+          # else connected; TestLinuxXServerKeepsStateWhenItsLastClientLeaves
+          # fails if this flag goes.
+          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp -noreset \
             > "${RUNNER_TEMP:-/tmp}/xvfb.log" 2>&1 &
           xvfb_pid=$!
           disown "$xvfb_pid" 2>/dev/null || true
