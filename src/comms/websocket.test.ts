@@ -3,7 +3,7 @@ import { PanelSessionStore, PANEL_SESSION_CLOSED_CODE } from '../sidecar/panel-s
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { WebSocketServer, type WSMessage } from './websocket.ts';
+import { WebSocketServer, requestedSubprotocols, withoutTokenParam, type WSMessage } from './websocket.ts';
 
 let server: WebSocketServer;
 
@@ -622,4 +622,49 @@ test('WebSocketServer - sendToClient unicasts JSON', async () => {
 
   ws.close();
   server.stop();
+});
+
+test('WebSocketServer - a daemon ?token= is redirected away even when the panel already has a session (#1163)', async () => {
+  const authServer = new WebSocketServer(3164);
+  const mgr = fakeSidecarManager('valid-access-token');
+  authServer.setSidecarManager(mgr);
+  authServer.setApiRoutes({ '/api/thing': { GET: () => Response.json({ ok: true }) } });
+  authServer.start();
+  const cookie = `panel_session=${mgr.sessions.create('s1').id}`;
+  try {
+    const res = await fetch('http://localhost:3164/?room=chat&token=valid-access-token', { headers: { Cookie: cookie }, redirect: 'manual' });
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/?room=chat');
+    // A junk token first does not hide a real one behind it.
+    const doubled = await fetch('http://localhost:3164/?token=junk&token=valid-access-token', { headers: { Cookie: cookie }, redirect: 'manual' });
+    expect(doubled.status).toBe(302);
+    expect(doubled.headers.get('location')).toBe('/');
+    // A path that starts with two slashes is not redirected off-origin.
+    const offsite = await fetch('http://localhost:3164//evil.example/x?token=valid-access-token', { headers: { Cookie: cookie }, redirect: 'manual' });
+    expect(offsite.status).toBe(302);
+    expect(offsite.headers.get('location')).toBe('/evil.example/x');
+    // A ?token= the daemon did not mint (a dev server's own, e.g. Vite's) is left alone.
+    const foreign = await fetch('http://localhost:3164/api/thing?token=vite-own-token', { headers: { Cookie: cookie }, redirect: 'manual' });
+    expect(foreign.status).toBe(200);
+  } finally {
+    authServer.stop();
+  }
+});
+
+test('withoutTokenParam keeps the redirect on this origin and drops every token', () => {
+  const at = (path: string) => withoutTokenParam(new URL(`http://localhost:3142${path}`));
+  expect(at('/?room=chat&token=a')).toBe('/?room=chat');
+  expect(at('/?token=a&token=b')).toBe('/');
+  expect(at('//evil.example/x?token=a')).toBe('/evil.example/x');
+  expect(at('/\\evil.example/x?token=a')).toBe('/evil.example/x');
+  expect(at('///evil.example?token=a&q=1')).toBe('/evil.example?q=1');
+});
+
+test('requestedSubprotocols keeps RFC 6455 tokens only, at most eight', () => {
+  const req = (value?: string) => new Request('http://x/', value === undefined ? {} : { headers: { 'Sec-WebSocket-Protocol': value } });
+  expect(requestedSubprotocols(req())).toEqual([]);
+  expect(requestedSubprotocols(req('vite-hmr'))).toEqual(['vite-hmr']);
+  expect(requestedSubprotocols(req('vite-hmr, vite-ping'))).toEqual(['vite-hmr', 'vite-ping']);
+  expect(requestedSubprotocols(req('a b, ok, x;y, "q", ,'))).toEqual(['ok']);
+  expect(requestedSubprotocols(req(Array.from({ length: 12 }, (_, i) => `p${i}`).join(',')))).toHaveLength(8);
 });
