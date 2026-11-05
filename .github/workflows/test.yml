@@ -437,7 +437,8 @@ jobs:
           # dropped, so XOpenDisplay fails and a test reports "no X display".
           # These tests close and reopen connections back to back with nothing
           # else connected; TestLinuxXServerKeepsStateWhenItsLastClientLeaves
-          # fails if this flag goes.
+          # fails if this flag goes, as long as nothing else holds a
+          # connection to this server while it runs (see that test).
           Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp -noreset \
             > "${RUNNER_TEMP:-/tmp}/xvfb.log" 2>&1 &
           xvfb_pid=$!
