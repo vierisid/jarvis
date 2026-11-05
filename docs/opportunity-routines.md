@@ -94,6 +94,55 @@ The `structured hypotheses reference every role` test provides a
 reproducible service-level example; lifecycle tests exercise real SQLite, sidecar
 ingestion, capture expiry, restart, delivery, feedback and suppression.
 
+## Measuring on real screens
+
+The corpora above are synthetic and use the catalog's own phrases, so they cannot
+show how often detection fires on real screens (#1068). No real OCR is committed.
+The phrases are not to be changed until it has been measured on real captures.
+
+Stored captures are deleted after `awareness.retention` (1 hour by default, 24
+hours for key moments such as an app switch), long before a routine can recur.
+A routine is a series of app switches, so both limits matter. On a machine whose
+owner has opted in, first keep captures for the measurement period, knowing that
+this keeps the screen's OCR text in the brain's database, and the screenshot
+files on the desktop machine, for as long:
+
+```yaml
+awareness:
+  retention:
+    full_hours: 336          # 14 days, for the measurement only;
+    key_moment_hours: 336    # put both back afterwards
+```
+
+and restart Jarvis (a `config.yaml` change is imported at the next start).
+
+After at least a few working days with awareness on:
+
+```sh
+bun run scripts/measure-routine-ocr.ts            # $JARVIS_HOME/jarvis.db or ~/.jarvis/jarvis.db
+bun run scripts/measure-routine-ocr.ts path/to/jarvis.db   # if daemon.db_path is set
+```
+
+It reads the last 14 days of `screen_captures` read-only and prints counts only:
+- `spanDays`, the whole days between the oldest and newest capture. A short span
+  means captures were deleted, not that detection failed.
+- Captures stopped at each gate: oversize, private, reading, and excluded. The
+  live pipeline never stores an excluded capture, so that count is expected to
+  be 0.
+- For each family:
+  - how many read captures matched the source, operation and output phrases
+    (each alone, and source with operation);
+  - the stage each capture was given;
+  - how many captures a gate stopped that would otherwise have been given a stage;
+  - the ordered episodes and the distinct days they start on, grouped as the
+    assessment groups them (recurring reports per cadence).
+- The proposals the assessment would make, before dismissals or known patterns.
+
+No OCR text, title, app name, capture id, device id or timestamp is printed, so
+the report can be shared. A phrase change
+should cite these counts from more than one machine, before and after, and keep
+the existing fixtures and the single-repeated-view case passing.
+
 ## Turning it off
 
 Discovery follows the existing awareness setting; there is no separate flag.
