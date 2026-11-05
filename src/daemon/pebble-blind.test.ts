@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { pebbleBlinded, pushPebbleBlinded } from './pebble-blind.ts';
+import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded } from './pebble-blind.ts';
 
 // #1157: the blind glyph reached only the pressed pebble, and never followed a
 // settings change, so another machine's pebble showed the old state.
@@ -39,4 +39,47 @@ test('the long-press and the awareness settings applier both push to every pebbl
   expect(toggle).not.toContain("dispatchRPC(sidecarId, 'pebble.set_blinded'");
   const applier = index.slice(marks[2], marks[3]);
   expect(applier).toContain('void pushPebbleBlinded(pebbleBlindDeps,');
+});
+
+// #1159: the sidecar's screen and clipboard observers kept running while
+// awareness or desktop control was off; the brain now pauses them at the source.
+test('the observer pause: screen follows awareness and desktop, clipboard follows desktop only', () => {
+  expect(observerPause(true, true)).toEqual({ screen: false, clipboard: false });
+  expect(observerPause(false, true)).toEqual({ screen: true, clipboard: false });
+  expect(observerPause(true, false)).toEqual({ screen: true, clipboard: true });
+  expect(observerPause(false, false)).toEqual({ screen: true, clipboard: true });
+});
+
+test('the observer pause reaches every connected sidecar, or just the one that connected; an old sidecar refusing it is harmless', async () => {
+  const sent: Array<[string, unknown]> = [];
+  const deps = {
+    connected: () => [{ id: 'old', capabilities: ['awareness'] }, { id: 'b', capabilities: ['clipboard'] }, { id: 'c', capabilities: [] }],
+    dispatchRPC: async (id: string, method: string, params: Record<string, unknown>) => {
+      sent.push([id, { method, ...params }]);
+      if (id === 'old') throw new Error('Unknown method: observers.set_paused');
+      return {};
+    },
+  };
+  await pushObserverPause(deps, { screen: true, clipboard: false });
+  expect(sent).toEqual([
+    ['old', { method: 'observers.set_paused', screen: true, clipboard: false }],
+    ['b', { method: 'observers.set_paused', screen: true, clipboard: false }],
+    ['c', { method: 'observers.set_paused', screen: true, clipboard: false }],
+  ]);
+  sent.length = 0;
+  await pushObserverPause(deps, { screen: false, clipboard: true }, 'b');
+  expect(sent).toEqual([['b', { method: 'observers.set_paused', screen: false, clipboard: true }]]);
+});
+
+test('the daemon pushes the observer pause on connect, on the long-press, and from both settings appliers', () => {
+  const index = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+  const connect = index.slice(index.indexOf('const pebbleBlindDeps = '), index.indexOf('// The bench harness backdoor'));
+  expect(connect).toMatch(/onSidecarConnected\(\(sc\) => \{[\s\S]*pushObserverPause\(pebbleBlindDeps, observerPause\(awarenessOn, isDesktopEnabled\(\)\), sc\.id\)/);
+  const toggle = index.slice(index.indexOf("event.event_type !== 'pebble.blind_toggle'"), index.indexOf("console.log(`[ambient-ui] blind toggle"));
+  expect(toggle).toContain('pushObserverPause(pebbleBlindDeps, observerPause(nextEnabled, isDesktopEnabled()))');
+  const awareness = index.slice(index.indexOf("settingsReload.registerApplier('awareness'"), index.indexOf("settingsReload.registerApplier('desktop'"));
+  expect(awareness).toContain("pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()))");
+  const desktopAt = index.indexOf("settingsReload.registerApplier('desktop'");
+  const desktop = index.slice(desktopAt, index.indexOf('});', desktopAt));
+  expect(desktop).toContain("pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()))");
 });

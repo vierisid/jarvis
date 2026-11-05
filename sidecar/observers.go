@@ -173,9 +173,18 @@ func NewClipboardObserver(pollMs int) *ClipboardObserver {
 
 // Run polls the clipboard until ctx is cancelled, calling send on changes.
 func (o *ClipboardObserver) Run(ctx context.Context, send EventSender) {
-	// Read initial content
-	initial, err := readClipboardContent()
-	if err != nil {
+	// Read initial content, unless the brain has paused the observer (an
+	// update_config restart while paused): then the first read after the
+	// resume is the baseline.
+	seenEpoch := clipboardPauseEpoch.Load()
+	rebaseline := clipboardObserverPaused.Load()
+	initial, err := "", error(nil)
+	if !rebaseline {
+		initial, err = readClipboardContent()
+	}
+	if rebaseline {
+		log.Printf("[clipboard] Paused by the brain; not reading the clipboard")
+	} else if err != nil {
 		log.Printf("[clipboard] Failed to read initial clipboard: %v", err)
 	} else {
 		o.mu.Lock()
@@ -194,6 +203,18 @@ func (o *ClipboardObserver) Run(ctx context.Context, send EventSender) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Paused by the brain (#1159): do not read the clipboard at all.
+			// On resume the first read only re-baselines, so what was copied
+			// while paused is never sent.
+			if clipboardObserverPaused.Load() {
+				rebaseline = true
+				continue
+			}
+			// A pause that began and ended between two polls.
+			if e := clipboardPauseEpoch.Load(); e != seenEpoch {
+				seenEpoch = e
+				rebaseline = true
+			}
 			content, err := readClipboardContent()
 			if err != nil {
 				continue
@@ -205,6 +226,10 @@ func (o *ClipboardObserver) Run(ctx context.Context, send EventSender) {
 				o.lastContent = content
 			}
 			o.mu.Unlock()
+			if rebaseline {
+				rebaseline = false
+				continue
+			}
 
 			if err == nil && !changed {
 				// silent poll - no change
@@ -230,9 +255,13 @@ func (o *ClipboardObserver) Run(ctx context.Context, send EventSender) {
 }
 
 // readClipboardContent reads the system clipboard using platform commands.
-func readClipboardContent() (string, error) {
-	return platformClipboardRead()
-}
+// The observers read the platform through these vars so tests can see what
+// a paused observer still touches (#1159).
+var (
+	readClipboardContent  = platformClipboardRead
+	observerCaptureScreen = captureScreenBytes
+	observerActiveWindow  = platformGetActiveWindow
+)
 
 // ── Screen Observer ──────────────────────────────────────────────────
 
@@ -312,10 +341,12 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 	// PowerShell subprocess), so a voice turn beginning one tick later would
 	// otherwise land right on top of a screenshot, a pixel diff and an OCR
 	// subprocess. Aborting mid-capture costs one skipped observation.
-	if ambientSuppressedNow() {
+	// screenObservationHeld also covers the brain's pause (awareness or
+	// desktop control off, #1159), at each of the same stages.
+	if screenObservationHeld() {
 		return
 	}
-	imageData, err := captureScreenBytes()
+	imageData, err := observerCaptureScreen()
 	if err != nil {
 		log.Printf("[screen] Capture failed: %v", err)
 		return
@@ -323,8 +354,8 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 	if len(imageData) == 0 {
 		return
 	}
-	if ambientSuppressedNow() {
-		return // a voice turn started while we were grabbing the screen
+	if screenObservationHeld() {
+		return // a voice turn started (or a pause) while we were grabbing the screen
 	}
 
 	changePct := o.computePixelDiff(imageData)
@@ -352,7 +383,7 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 
 	var ocrText string
 	var ocrDurationMs int64
-	if o.ocrEnabled && !ambientSuppressedNow() {
+	if o.ocrEnabled && !screenObservationHeld() {
 		ocr, err := platformOCR(imagePath)
 		if err != nil {
 			log.Printf("[screen] OCR failed: %v", err)
@@ -362,7 +393,7 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 		}
 	}
 
-	appName, windowTitle := platformGetActiveWindow()
+	appName, windowTitle := observerActiveWindow()
 
 	log.Printf("[screen] Change detected (%.1f%%), capture #%d (%d bytes, ocr %dms, %d chars)",
 		changePct*100, captureId, len(imageData), ocrDurationMs, len(ocrText))
@@ -383,8 +414,8 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 		},
 	}
 
-	if ambientSuppressedNow() {
-		// A voice turn started while we were capturing. Dropping the event here
+	if screenObservationHeld() {
+		// A voice turn started (or a pause) while we were capturing. Dropping the event here
 		// matters as much as skipping the capture: the brain answers one by
 		// pulling the image back with a fetch_capture RPC, and that multi-
 		// megabyte reply would land on the connection mid-conversation.
@@ -466,7 +497,11 @@ func (o *WindowObserver) Run(ctx context.Context, send EventSender) {
 }
 
 func (o *WindowObserver) poll(ctx context.Context, send EventSender) {
-	appName, windowTitle := platformGetActiveWindow()
+	// Window titles are what is on screen too (#1159).
+	if screenObserversPaused.Load() {
+		return
+	}
+	appName, windowTitle := observerActiveWindow()
 
 	o.mu.Lock()
 	prevApp := o.lastApp
