@@ -2,6 +2,7 @@ import type { STTConfig, TTSConfig } from '../config/types.ts';
 import { redactSecrets } from '../util/redact.ts';
 import { hostedProxyError } from '../util/hosted-error.ts';
 import { originHeaders } from '../llm/origin.ts';
+import { edgeSynthesize } from './edge-tts-client.ts';
 
 export interface STTProvider {
   transcribe(audio: Buffer): Promise<string>;
@@ -412,63 +413,42 @@ export function createSTTProvider(
  */
 export const TTS_TIMEOUT_MS = 30_000;
 
-/** `work` or, after `ms`, a rejection naming `what` (for a provider with no abort of its own). */
-function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms);
-  });
-  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
-}
-
 /**
  * Edge TTS Provider — uses Microsoft Edge's online TTS service (free, no API key).
  * Runs server-side only (browser WebSocket can't set required headers).
+ * The client is in-repo (edge-tts-client.ts, #1166).
  */
 export class EdgeTTSProvider implements TTSProvider {
   private voice: string;
   private rate: string;
   private volume: string;
   private timeoutMs: number;
-  private load: () => Promise<typeof import('edge-tts-universal')>;
+  private synth: typeof edgeSynthesize;
 
   constructor(
     voice = 'en-US-AriaNeural', rate = '+0%', volume = '+0%', timeoutMs = TTS_TIMEOUT_MS,
-    // Lazy-loaded: edge-tts-universal costs ~27MB RSS, only pay it when Edge
-    // TTS is actually used, not on daemon boot. Injectable for tests.
-    load: () => Promise<typeof import('edge-tts-universal')> = () => import('edge-tts-universal'),
+    // Injectable for tests.
+    synth: typeof edgeSynthesize = edgeSynthesize,
   ) {
     this.voice = voice;
     this.rate = rate;
     this.volume = volume;
     this.timeoutMs = timeoutMs;
-    this.load = load;
+    this.synth = synth;
   }
 
   /**
-   * Bounded by TTS_TIMEOUT_MS: the service's socket has only a connect
-   * timeout. The library has no abort, so a request that times out leaves
-   * its socket open until the service closes it; the speaker is not held.
+   * Bounded by TTS_TIMEOUT_MS for the whole text: on timeout the client
+   * closes its socket, so nothing is left open.
    */
   async synthesize(text: string): Promise<Buffer> {
-    return withDeadline(this.synthesizeUnbounded(text), this.timeoutMs, 'Edge TTS');
-  }
-
-  private async synthesizeUnbounded(text: string): Promise<Buffer> {
-    const { Communicate } = await this.load();
-    const comm = new Communicate(text, {
+    return this.synth(text, {
       voice: this.voice,
       rate: this.rate,
       volume: this.volume,
-      connectionTimeout: this.timeoutMs,
+      pitch: '+0Hz',
+      timeoutMs: this.timeoutMs,
     });
-    const chunks: Buffer[] = [];
-    for await (const chunk of comm.stream()) {
-      if (chunk.type === 'audio' && chunk.data) {
-        chunks.push(chunk.data);
-      }
-    }
-    return Buffer.concat(chunks);
   }
 
   /**
