@@ -24,8 +24,8 @@ pure preparation path and the canonical writer's opt-in `deferCompletion` option
 Existing `runInterviewTurn` and one-argument profile writes retain their behavior.
 
 B11 alone owns daemon/API registration, live authorization, eligibility, journey
-acknowledgement and session retention/Forget binding. Supply those before enabling
-the new interview. There is no client-accessible fact/wrap endpoint. B04 supplies
+acknowledgement and the session retention/Forget binding (`runtime/forget.ts`).
+There is no client-accessible fact/wrap endpoint. B04 supplies
 its current lease/auth guard and abort signal on every commit. Construction and
 manifest discovery alone do not make the new journey available.
 
@@ -57,9 +57,17 @@ The canonical interview writer is append/deduplicate, not semantic replacement.
 A different summary (including a model-extracted correction) is a different
 canonical entry; this adapter neither guesses which earlier statement to delete
 nor overwrites structured wizard corrections. Explicit correction/Forget retains
-its existing owner. Before activation, B11 must fence/remove pending session work
-when Forget runs and coordinate receipt/session retention. Receipt replay checks
-alone cannot certify a complete Forget lifecycle.
+its existing owner. Forget (B11's `runtime/forget.ts`) deletes all receipts with
+the profile and the B04 session, in one transaction, so a pending commit is fenced
+as stale and cannot write facts back.
+
+Retention: each receipt write keeps only the newest 32 receipts (by insertion
+order, in the same transaction). Only the one pending attempt's receipt is ever
+re-read, and it is always the newest. A maximal interview measured 31 receipts
+(the opening plus the interviewer's 30-turn cap) at about 0.5 KB each with four
+facts, so 32 keeps every receipt of the current interview. The worst case is
+about 9 KB per receipt (128 fact ids), about 290 KB for all 32. The vault has one
+profile, so the cap applies across the vault.
 
 The store port requires atomic synchronous canonical writes. An asynchronous or
 remote writer cannot satisfy it. There is no exactly-once model inference claim:

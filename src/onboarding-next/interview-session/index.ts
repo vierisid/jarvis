@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Command, Dependencies, PendingTurn, PreparedTurn, RecordV1, Result, Scope, Snapshot } from './types.ts';
 import { scopeKey } from './settings.ts';
 export type * from './types.ts';
-export { createSettingsInterviewStore } from './settings.ts';
+export { createSettingsInterviewStore, INTERVIEW_KEY_PREFIX } from './settings.ts';
 
 const MAX_TURNS = 32; // Existing interviewer caps at 30; includes opening and safeguard.
 const MAX_TEXT = 16_384;

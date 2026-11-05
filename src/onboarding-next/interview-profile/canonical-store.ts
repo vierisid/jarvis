@@ -1,7 +1,7 @@
 import { USER_PROFILE_SETTING_KEY } from '../../user/profile.ts';
 import { getDb } from '../../vault/schema.ts';
 import { appendUserProfileFact, getUserProfile, markInterviewWrapped } from '../../vault/user-profile.ts';
-import { validScope, InterviewProfileError } from './provider.ts';
+import { validScope, InterviewProfileError, RECEIPT_KEY_PREFIX, RECEIPT_RETENTION } from './provider.ts';
 import type { CanonicalStoreOptions, Store } from './types.ts';
 
 /** Adapt the existing singleton vault and writer, without opening a database or
@@ -48,6 +48,13 @@ export function createCanonicalInterviewProfileStore(options: CanonicalStoreOpti
           writeReceipt(key, receipt) {
             db.run(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, unixepoch())
               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, [key, JSON.stringify(receipt)]);
+            // Retention: keep the newest receipts by insertion order, in this same
+            // transaction. The one just written is the newest, so it always survives.
+            // Only VACUUM renumbers rowids (the vault uses VACUUM INTO for backups only);
+            // a reorder could only change which older, never re-read, receipts go.
+            db.run(`DELETE FROM settings WHERE substr(key, 1, ?) = ? AND key <> ? AND rowid NOT IN (
+              SELECT rowid FROM settings WHERE substr(key, 1, ?) = ? ORDER BY rowid DESC LIMIT ?)`,
+            [RECEIPT_KEY_PREFIX.length, RECEIPT_KEY_PREFIX, key, RECEIPT_KEY_PREFIX.length, RECEIPT_KEY_PREFIX, RECEIPT_RETENTION]);
           },
         });
       }).immediate();

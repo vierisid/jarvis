@@ -198,7 +198,8 @@ import { runRoomPanelIntent, type RoomPanelDeps } from "./pebble-room-panel.ts";
 import { makeFastPathTurns, PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
 import { startChannelMessageRetention } from "./channel-message-retention.ts";
 import { isGonePanelError, makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
-import { pebbleBlinded, pushPebbleBlinded } from "./pebble-blind.ts";
+import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded } from "./pebble-blind.ts";
+import { createSidecarOfflineNotifier } from "./sidecar-offline-notice.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
 import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
 import { bindDesktopSwitch, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled } from "../actions/tools/desktop-guard.ts";
@@ -1008,6 +1009,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 6c. Create sidecar manager
     const sidecarManager = new SidecarManager(jarvisConfig.daemon.data_dir.replace('~', os.homedir()));
     const pebbleBlindDeps = { connected: () => sidecarManager.listConnected(), dispatchRPC: sidecarManager.dispatchRPC.bind(sidecarManager) };
+    // A sidecar keeps its observer pause only in memory and starts unpaused:
+    // tell every machine that connects (#1159).
+    sidecarManager.onSidecarConnected((sc) => {
+      const awarenessOn = (jarvisConfig.awareness as { enabled?: boolean } | undefined)?.enabled !== false;
+      void pushObserverPause(pebbleBlindDeps, observerPause(awarenessOn, isDesktopEnabled()), sc.id);
+    });
 
     // The bench harness backdoor must never be on quietly. Say so at startup,
     // every time, and say why a set secret did not enable it.
@@ -2076,6 +2083,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // The pressed one is awaited before the ack; a slow or wedged other machine
           // must not hold up the spoken answer here.
           await pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(nextEnabled, isDesktopEnabled()), sidecarId);
+          // And the observers themselves, at the source (#1159). Not awaited:
+          // the spoken answer must not wait on other machines.
+          void pushObserverPause(pebbleBlindDeps, observerPause(nextEnabled, isDesktopEnabled()));
           const ack = seeing
             ? "Awareness back on. I can see your screen again."
             : nextEnabled
@@ -4501,6 +4511,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // The glyph follows the stored choice too, on every pebble (#1157).
       // Not awaited: appliers run in one serialized queue, and a sidecar RPC can take 30s to give up.
       void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
+      void pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()));
     });
     // desktop (#905): Settings writes it at run time (POST /api/config/desktop,
     // #1159). Tools, captures and the prompt read the switch live; what is
@@ -4510,8 +4521,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       if (!isDesktopEnabled() && endRecordingForDesktopOff()) {
         console.log('[Tools] desktop.enabled turned off: the running skill recording was stopped and discarded.');
       }
-      // Not awaited, like the awareness applier's push.
+      // Not awaited, like the awareness applier's push. The sidecar observers
+      // follow desktop.enabled too (#1159).
       void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
+      void pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()));
     });
     // voice: resolveRealtimeVoice reads live config per call, so the dashboard
     // needs no applier, but a connected pebble keeps the realtime verdict it
@@ -4674,19 +4687,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }, 3000);
     approvalNotifyTimer.unref?.();
 
-    // A machine dropped → tell the other connected sidecars. Keep a name map so
-    // the body can say which machine (the sidecar object is gone by disconnect).
-    // On connect we also fire the "update" notification when the sidecar is
+    // A machine dropped -> tell the other connected sidecars (below). On
+    // connect we also fire the "update" notification when the sidecar is
     // behind: below SIDECAR_RECOMMENDED_VERSION ('suggested'), or behind the
     // sidecar this brain ships with. Only for sidecars that predate
     // self-update (no update_* feature): newer ones prompt natively at
     // startup or get the dashboard hint, and a second nudge would be noise.
     // Sent only to that machine, deduped per (id, version) for this brain
     // process so a reconnect flap can't nag.
-    const sidecarNameById = new Map<string, string>();
     const notifiedUpdateKeys = new Set<string>();
     sidecarManager.onSidecarConnected((sc) => {
-      sidecarNameById.set(sc.id, sc.name);
       const behind = sc.updateStatus === 'suggested' || isUpdateAvailable(sc.version);
       const selfUpdating = sc.features?.some((f) => f === 'update_prompt' || f === 'update_apply') ?? false;
       if (behind && !selfUpdating) {
@@ -4710,43 +4720,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
       }
     });
-    // Offline toasts ride a grace timer (a quick reconnect cancels it) plus a
-    // per-machine cooldown, so a flapping connection can't nag every flap.
-    const offlineNotifyTimers = new Map<string, ReturnType<typeof setTimeout>>();
-    const offlineNotifiedAt = new Map<string, number>();
-    const OFFLINE_NOTIFY_GRACE_MS = 15_000;
-    const OFFLINE_NOTIFY_COOLDOWN_MS = 5 * 60_000;
-    sidecarManager.onSidecarConnected((sc) => {
-      const t = offlineNotifyTimers.get(sc.id);
-      if (t) {
-        clearTimeout(t);
-        offlineNotifyTimers.delete(sc.id);
-      }
-    });
-    sidecarManager.onSidecarDisconnected((id) => {
-      const name = sidecarNameById.get(id) ?? 'A machine';
-      sidecarNameById.delete(id);
-      if (offlineNotifyTimers.has(id)) return;
-      const last = offlineNotifiedAt.get(id) ?? 0;
-      if (Date.now() - last < OFFLINE_NOTIFY_COOLDOWN_MS) return;
-      const timer = setTimeout(() => {
-        offlineNotifyTimers.delete(id);
-        offlineNotifiedAt.set(id, Date.now());
-        notifyAll({
-          id: `sidecar:${id}`,
-          kind: 'sidecar',
-          title: 'Sidecar disconnected',
-          body: `${name} went offline. The agent can’t act on that machine until it’s back.`,
-          destructive: false,
-          actions: [
-            { id: 'review', label: 'Open Jarvis', primary: true },
-            { id: 'dismiss', label: 'Dismiss' },
-          ],
-        });
-      }, OFFLINE_NOTIFY_GRACE_MS);
-      timer.unref?.();
-      offlineNotifyTimers.set(id, timer);
-    });
+    // Offline toasts: grace timer, per-machine cooldown armed only by a
+    // notice someone received (sidecar-offline-notice.ts, #1160).
+    const offlineNotifier = createSidecarOfflineNotifier({ notify: notifyAll });
+    sidecarManager.onSidecarConnected((sc) => offlineNotifier.connected(sc.id, sc.name));
+    sidecarManager.onSidecarDisconnected((id) => offlineNotifier.disconnected(id));
 
     // The user's choice from a notification. Only the approval buttons act on the
     // brain (Approve/Deny, mirroring the dashboard endpoint); 'review'/'dismiss'

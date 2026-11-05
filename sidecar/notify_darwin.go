@@ -11,7 +11,8 @@ package main
 //
 // Buttons come from categories registered up front (one per kind): approval →
 // Approve/Deny, approval_review → Open Jarvis/Dismiss, done → View/Dismiss,
-// sidecar → Open Jarvis/Dismiss. A kind with no category shows no buttons. The user's
+// sidecar, update, usage and workflow -> Open Jarvis/Dismiss (Later for
+// update). A kind with no category shows no buttons. The user's
 // tap arrives on the delegate and is forwarded to the brain as notify.action.
 // (No jarvis:// protocol hop like Windows — macOS delivers the response into the
 // running process directly.)
@@ -110,7 +111,14 @@ static void jarvisNotifySetup(void) {
         UNNotificationAction* dismissU  = [UNNotificationAction actionWithIdentifier:@"dismiss" title:@"Dismiss"     options:UNNotificationActionOptionNone];
         UNNotificationCategory* usage   = [UNNotificationCategory categoryWithIdentifier:@"usage" actions:@[viewU, dismissU] intentIdentifiers:@[] options:UNNotificationCategoryOptionNone];
 
-        [center setNotificationCategories:[NSSet setWithObjects:approval, approvalReview, done, sidecar, update, usage, nil]];
+        // workflow: a workflow that could not start or was refused for what
+        // it is bound to (src/workflows/runtime/binding-refusals.ts). It had
+        // no category, so on macOS it showed with no buttons at all (#1160).
+        UNNotificationAction* openW     = [UNNotificationAction actionWithIdentifier:@"review"  title:@"Open Jarvis" options:UNNotificationActionOptionForeground];
+        UNNotificationAction* dismissW  = [UNNotificationAction actionWithIdentifier:@"dismiss" title:@"Dismiss"     options:UNNotificationActionOptionNone];
+        UNNotificationCategory* workflow = [UNNotificationCategory categoryWithIdentifier:@"workflow" actions:@[openW, dismissW] intentIdentifiers:@[] options:UNNotificationCategoryOptionNone];
+
+        [center setNotificationCategories:[NSSet setWithObjects:approval, approvalReview, done, sidecar, update, usage, workflow, nil]];
 
         [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
                               completionHandler:^(BOOL granted, NSError* _Nullable error) {
@@ -131,7 +139,7 @@ static void jarvisNotifyShow(const char* cid, const char* ckind, const char* cti
             content.title = title;
             content.body  = body;
             content.sound = [UNNotificationSound defaultSound];
-            content.categoryIdentifier = kind; // approval / approval_review / done / sidecar / update / usage
+            content.categoryIdentifier = kind; // approval / approval_review / done / sidecar / update / usage / workflow
             content.userInfo = @{@"id": nid, @"kind": kind};
             UNNotificationRequest* req = [UNNotificationRequest requestWithIdentifier:[[NSUUID UUID] UUIDString]
                                                                               content:content

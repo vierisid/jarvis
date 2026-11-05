@@ -58,7 +58,8 @@ import { telegramAllowList, discordAllowList, channelOwnerId } from '../comms/ch
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
 import { listAgentActivity, countAgentActivity } from '../vault/agent-activity.ts';
 import { getPersonality } from '../personality/model.ts';
-import { clearUserProfile, getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
+import { getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
+import { forgetUserProfile } from '../onboarding-next/runtime/forget.ts';
 import {
   USER_PROFILE_QUESTIONS,
   countAnsweredUserProfileQuestions,
@@ -1213,7 +1214,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/user-profile/clear': {
       POST: () => {
-        clearUserProfile();
+        forgetUserProfile();
         const { profile, revision } = readEditableProfile();
         return json({ ok: true, message: 'User profile cleared.', profile, revision,
           questions: USER_PROFILE_QUESTIONS, answered_count: 0,
@@ -1296,7 +1297,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           }
           if (scope === 'all' || scope === 'profile') {
             o.setup_skipped_profile = false;
-            clearUserProfile();
+            forgetUserProfile();
             cleared.push('profile');
           }
           if (scope === 'all' || scope === 'tutorial') {

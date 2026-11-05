@@ -162,3 +162,35 @@ test('saved result mounts inside the workspace and completion preserves that wor
     expect(draft.value).toBe('Keep this conversation'); expect(mounts).toBe(1);
   } finally { session.dispose(); }
 });
+
+test('the result view Back is wired to the journey back to the request (#1070)', async () => {
+  const { fixture: sessionFixture } = await import('./test-fixture.ts');
+  const { createSession } = await import('./session.ts'); const { ViewHost } = await import('./ViewHost.tsx');
+  const f = sessionFixture(); let resultProps: Record<string, unknown> | undefined;
+  f.config.modules = f.config.modules.map(m => m.manifest.id !== 'ON-U-09' ? m : { ...m, load: async () => ({ ResultView: (p: Record<string, unknown>) => { resultProps = p; return null; } }) });
+  f.setJourney({ stepId: 'result', setupState: 'completed', interviewState: 'done', tourState: 'done', activationState: 'draft_saved', revision: 1, jobId: 'job', buildRequestId: 'request', draft: { flowId: 'flow', versionId: 'v1' } });
+  const session = createSession(f.config); await session.start();
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  try {
+    await React.act(async () => root!.render(<ViewHost session={session} legacy={null} />));
+    expect(typeof resultProps?.onBack).toBe('function');
+    await React.act(async () => { await (resultProps!.onBack as (v: unknown) => Promise<void>)({ action: 'back' }); });
+    expect(f.journey()).toMatchObject({ stepId: 'activation', jobId: 'job' }); expect(session.state().view).toBe('activation');
+  } finally { session.dispose(); }
+});
+
+test('welcome learns whether setup is done, so its exit label matches a permanent exit (#1070)', async () => {
+  const { fixture: sessionFixture } = await import('./test-fixture.ts');
+  const { createSession } = await import('./session.ts'); const { ViewHost } = await import('./ViewHost.tsx');
+  for (const setupState of ['pending', 'completed'] as const) {
+    const f = sessionFixture(); let model: Record<string, unknown> | undefined;
+    f.config.modules = f.config.modules.map(m => m.manifest.id !== 'ON-U-01' ? m : { ...m, load: async () => ({ WelcomeView: (p: { model: Record<string, unknown> }) => { model = p.model; return null; } }) });
+    f.setJourney({ setupState });
+    const session = createSession(f.config); await session.start();
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    try {
+      await React.act(async () => root!.render(<ViewHost session={session} legacy={null} />));
+      expect(model?.setupCompleted).toBe(setupState === 'completed');
+    } finally { session.dispose(); await React.act(async () => root!.unmount()); root = undefined; host.remove(); }
+  }
+});
