@@ -107,9 +107,14 @@ test('manual invoke graphs require known tool identities and their actual parame
   action.settings.input.params.recipient = '{{trigger.email}}';
   expect(compileWorkflow(graph(action), context).ready).toBe(true);
   expect(compileWorkflow(graph(action), context).runtimeChecks.some(c => c.guard === 'tool-input')).toBe(true);
+  // A templated tool identity is refused (owner, 2026-11-05, #1152): run data must not choose which tool runs.
   action.settings.input.toolName = '{{trigger.tool}}';
-  expect(compileWorkflow(graph(action), context).ready).toBe(true);
-  expect(compileWorkflow(graph(action), context).runtimeChecks.some(c => c.guard === 'tool-input' && c.path === 'settings.input')).toBe(true);
+  const templated = compileWorkflow(graph(action), context);
+  expect(templated.ready).toBe(false);
+  expect(templated.issues.some(i => i.code === 'TOOL_BINDING' && i.path.endsWith('settings.input.toolName') && i.message.includes('template'))).toBe(true);
+  // A constant expression too: the run refuses any template, so readiness does.
+  action.settings.input.toolName = '{{ "send" }}';
+  expect(compileWorkflow(graph(action), context).issues.some(i => i.code === 'TOOL_BINDING' && i.message.includes('template'))).toBe(true);
   action.settings.input = { toolName: 'list' };
   expect(compileWorkflow(graph(action), { pieces: catalog, tool: () => ({ params: [] }) }).ready).toBe(true);
 });

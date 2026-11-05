@@ -3,6 +3,7 @@ import { airtableNeedsReconnect } from "./airtable-refresh";
 import { readConnectionFile } from "./connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const AIRTABLE_PIECE = "@activepieces/piece-airtable";
 export const AIRTABLE_CONNECTION = "jarvis:airtable";
@@ -80,6 +81,7 @@ export function airtableStatus(config: JarvisConfig) {
   return {
     configured: !!airtableConnectUrl(config),
     connect_url: airtableConnectUrl(config),
+    ...hostedSetupFault(config, airtableConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: AIRTABLE_CONNECTION,

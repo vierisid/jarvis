@@ -3,6 +3,7 @@ import { gitlabNeedsReconnect } from "./gitlab-refresh";
 import { readConnectionFile } from "./connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const GITLAB_PIECE = "@activepieces/piece-gitlab";
 export const GITLAB_CONNECTION = "jarvis:gitlab";
@@ -83,6 +84,7 @@ export function gitlabStatus(config: JarvisConfig) {
   return {
     configured: !!gitlabConnectUrl(config),
     connect_url: gitlabConnectUrl(config),
+    ...hostedSetupFault(config, gitlabConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: GITLAB_CONNECTION,

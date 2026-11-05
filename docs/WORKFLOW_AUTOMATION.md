@@ -61,6 +61,11 @@ Practical consequences:
   and it does not bypass Authority, emergency state, cancellation or approval.
   Every one of these is a terminal receipt: repeating the step, or restarting
   the daemon, returns the same failure without dispatching again.
+- A `jarvis-tool` step runs only the tool it names: a call for that step
+  asking for any other tool is refused, and a step that names no tool runs
+  none. The `toolName` must be written directly: a templated one (`{{...}}`)
+  would let run data, such as a webhook body, choose the tool, so readiness
+  refuses it and a run refuses it with `WORKFLOW_STEP_INPUT_NOT_FIXED`.
 - `jarvis-tool` only invokes tools with a bounded, declared Authority action (see
   `BOUNDED_TOOLS` in `src/workflows/runtime/effect-capabilities.ts`). Tools whose
   effect is a script or a click sequence -- `run_command`, `browser_click`,

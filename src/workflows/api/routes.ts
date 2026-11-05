@@ -1444,17 +1444,19 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             return err("resume payload too large", 413);
           }
           if (getWorkflowDb().query('SELECT request_id FROM workflow_human_wait WHERE waitpoint_id=?').get(id)) return err('Respond to this request in Needs you', 403);
-          const ownedEffect = getWorkflowDb().query('SELECT id FROM workflow_effect WHERE waitpoint_id=?').get(id);
-          if (ownedEffect) return err('This waitpoint is owned by Authority; resolve its approval request', 403);
-          if (getWorkflowDb().query('SELECT effect_id FROM workflow_child_run WHERE waitpoint_id=?').get(id)) {
-            return err('This waitpoint resumes when the required child workflow completes', 403);
-          }
+          // HOLD and DEFER are asked first: their effect record names them
+          // too, but there is no approval request to resolve (#1152).
           // A step parked while Jarvis was paused is released by Jarvis on
           // Resume, never by a URL (Q-08).
           if (wp.type === "HOLD") return err("This waitpoint holds a step while Jarvis is paused; Jarvis releases it when resumed", 403);
           // A step waiting for a place in its flow's card budget is released
           // by Jarvis when one frees, never by a URL (#1039).
           if (wp.type === "DEFER") return err("This waitpoint holds a step until its workflow has room for another approval card; Jarvis releases it", 403);
+          const ownedEffect = getWorkflowDb().query('SELECT id FROM workflow_effect WHERE waitpoint_id=?').get(id);
+          if (ownedEffect) return err('This waitpoint is owned by Authority; resolve its approval request', 403);
+          if (getWorkflowDb().query('SELECT effect_id FROM workflow_child_run WHERE waitpoint_id=?').get(id)) {
+            return err('This waitpoint resumes when the required child workflow completes', 403);
+          }
           if (wp.resumedAt !== null) return err("waitpoint already resumed", 410);
           const run = getFlowRun(wp.flowRunId);
           if (!run) return err("waitpoint references a missing run", 410);

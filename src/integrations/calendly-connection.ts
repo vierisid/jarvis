@@ -3,6 +3,7 @@ import { calendlyNeedsReconnect } from "./calendly-refresh";
 import { readConnectionFile } from "./connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const CALENDLY_PIECE = "@activepieces/piece-calendly";
 export const CALENDLY_CONNECTION = "jarvis:calendly";
@@ -80,6 +81,7 @@ export function calendlyStatus(config: JarvisConfig) {
   return {
     configured: !!calendlyConnectUrl(config),
     connect_url: calendlyConnectUrl(config),
+    ...hostedSetupFault(config, calendlyConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: CALENDLY_CONNECTION,

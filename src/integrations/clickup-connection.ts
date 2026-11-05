@@ -11,6 +11,7 @@
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
 import { readConnectionFile } from "./connection-file";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const CLICKUP_PIECE = "@activepieces/piece-clickup";
 export const CLICKUP_CONNECTION = "jarvis:clickup";
@@ -47,7 +48,7 @@ export function clickUpConnectUrl(config: JarvisConfig): string | null {
 }
 export function clickUpStatus(config: JarvisConfig) {
   const connection = readClickUpConnection(config.daemon.data_dir);
-  return {configured: !!clickUpConnectUrl(config), connect_url: clickUpConnectUrl(config),
+  return {configured: !!clickUpConnectUrl(config), connect_url: clickUpConnectUrl(config), ...hostedSetupFault(config, clickUpConnectUrl(config)),
     connected: !!connection, external_id: CLICKUP_CONNECTION,
     account: connection?.account ?? null, workspaces: connection?.workspaces ?? [],
     generation: connection?.generation ?? null, connected_at: connection?.connected_at ?? null};

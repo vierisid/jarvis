@@ -7,6 +7,8 @@ import type { ConnectedRow, ConnectedWorkspaceSnapshot, ConnectionSetupAction } 
 
 interface HostedConnectionObservation {
   configured: boolean; connected: boolean; reconnect?: boolean; account: { id: string; label: string } | null;
+  /** Set when setup is expected here but cannot start (integrations/hosted-setup.ts, #1259). */
+  reason?: string;
 }
 export type ConnectedWorkspaceSources = Partial<Record<HostedConnectionProvider, () => HostedConnectionObservation>> & {
   devices?: () => Pick<SidecarInfo, 'id' | 'name' | 'status' | 'connected'>[];
@@ -98,6 +100,10 @@ export class ConnectedWorkspace {
             if (c.configured) offer(row, { id: `setup:${id}`, label: name,
               target: { kind: 'hosted_integration', provider: id }, verifies: { kind: 'native_service', serviceId: id } });
             rows.push(row);
+          } else if (c.reason) {
+            // Hosted setup is expected here but broken (#1259): a fault to
+            // show, not a provider this instance simply does not offer.
+            row.status = 'unavailable'; rows.push(row);
           }
         } catch { row.status = 'unavailable'; rows.push(row); }
       }

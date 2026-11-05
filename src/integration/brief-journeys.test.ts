@@ -98,7 +98,7 @@ for (const interrupted of [false, true]) test(`source goal → next work → che
 test('source governed effect requires approval and keeps one receipt across restart/replay', async () => {
   const flow = createFlow();
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Synthetic effect', trigger: { name: 'trigger', type: 'EMPTY', nextAction: {
-    name: 'write', type: 'PIECE', settings: { pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1', actionName: 'invoke', input: {} },
+    name: 'write', type: 'PIECE', settings: { pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1', actionName: 'invoke', input: { toolName: 'write_file' } },
   } } });
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
   let effects = 0;

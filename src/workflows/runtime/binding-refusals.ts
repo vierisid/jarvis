@@ -19,6 +19,7 @@
  * enabled or published again since, is why it is blocked.
  */
 import { getWorkflowDb } from '../db';
+import { ENDED_RUN_STATUSES_SQL } from '../db/schema';
 import { readBindingPins } from '../db/repos/binding-pins';
 import { getFlowRun, type FlowRun } from '../db/repos/flow-run';
 import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
@@ -42,7 +43,7 @@ export const BINDING_FAILURE_CODES: ReadonlySet<string> = new Set([
 ]);
 
 const READINESS_STEP = '<readiness>';
-const ENDED = `('SUCCEEDED','FAILED','TIMEOUT','INTERNAL_ERROR','QUOTA_EXCEEDED','MEMORY_LIMIT_EXCEEDED','SCHEDULE_FAILURE','STOPPED')`;
+const ENDED = ENDED_RUN_STATUSES_SQL;
 const CODES = `(${[...BINDING_FAILURE_CODES].map((code) => `'${code}'`).join(',')})`;
 
 export interface BindingBlock {
@@ -72,6 +73,11 @@ function blockOf(run: FlowRun): BindingBlock | null {
     runId: run.id, at: run.finishTime ?? run.updated };
 }
 
+/** The latest ended run of a flow, a single-step test run aside. Exported for its query-plan test. */
+export const LATEST_ENDED_RUN_SQL = `SELECT id, status, failed_step, finish_time, updated FROM flow_run INDEXED BY idx_flow_run_ended
+  WHERE project_id = ? AND flow_id = ? AND status IN ${ENDED} AND step_name_to_test IS NULL
+  ORDER BY created DESC, id DESC LIMIT 1`;
+
 /**
  * Why an enabled workflow is blocked, or null: the most recently created of
  * its runs that has ended (a single-step test run aside) was refused for
@@ -82,13 +88,17 @@ function blockOf(run: FlowRun): BindingBlock | null {
  * Read on every poll of the workflows list, so the run is projected only when
  * its row and effect records already show one of these refusals.
  */
+
 export function flowBindingBlock(flow: { id: string; project_id: string; status: string }): BindingBlock | null {
   if (flow.status !== 'ENABLED') return null;
   const db = getWorkflowDb();
-  // Ordered as idx_brief_run_history, so this reads the index, not the runs.
+  // Filtered and ordered as idx_flow_run_ended (db/schema.ts), so this reads
+  // the index to its first entry, not past every run still waiting. Named:
+  // without table statistics the planner takes idx_brief_run_history for
+  // the same order. The schema always creates it, so a store without it
+  // fails loudly rather than scanning, as deferred-cards.ts does.
   const row = db.query<{ id: string; status: string; failed_step: string | null; finish_time: number | null; updated: number }, [string, string]>(
-    `SELECT id, status, failed_step, finish_time, updated FROM flow_run WHERE project_id = ? AND flow_id = ? AND status IN ${ENDED}
-      AND step_name_to_test IS NULL ORDER BY created DESC, id DESC LIMIT 1`).get(flow.project_id, flow.id);
+    LATEST_ENDED_RUN_SQL).get(flow.project_id, flow.id);
   if (!row || row.status === 'SUCCEEDED' || row.status === 'STOPPED' || !row.failed_step) return null;
   const accepted = readBindingPins(flow.id)?.pinnedAt;
   if (accepted !== undefined && (row.finish_time ?? row.updated) < accepted) return null;
