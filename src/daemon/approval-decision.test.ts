@@ -48,6 +48,18 @@ describe('applyApprovalDecision', () => {
     };
   });
 
+  test('a chat decision records which channel user made it, and audits as chat (#1155)', async () => {
+    const audit = new AuditTrail();
+    const req = makeRequest(mgr);
+    expect(await channelApprovalReply('deny', req.id.slice(0, 8), 'telegram', { ...deps, auditTrail: audit }, '42')).toContain('Denied');
+    expect(mgr.getRequest(req.id)!.decided_by).toBe('telegram:42');
+    expect(getDb().query('SELECT channel FROM audit_trail WHERE approval_id = ?').get(req.id)).toEqual({ channel: 'chat' });
+    // An id that is not a plain token is not spliced into the record.
+    const other = makeRequest(mgr);
+    await channelApprovalReply('deny', other.id.slice(0, 8), 'discord', deps, 'x y\n');
+    expect(mgr.getRequest(other.id)!.decided_by).toBe('discord');
+  });
+
   test('click-only cards cannot be approved through main channel or notification wrappers', async () => {
     const req = makeRequest(mgr);
     getDb().run('UPDATE approval_requests SET context = ? WHERE id = ?',

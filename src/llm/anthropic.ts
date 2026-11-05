@@ -258,7 +258,7 @@ export class AnthropicProvider implements LLMProvider {
       } catch (err) {
         // An unterminated last line that does not parse is a body cut off
         // mid-event, the same as one cut between events (#1097).
-        if (i === lines.length - 1) throw new LLMProviderError(STREAM_ENDED_EARLY, 'network');
+        if (i === lines.length - 1) throw new LLMProviderError(STREAM_ENDED_EARLY, 'network', undefined, usage);
         throw new Error(`Anthropic gateway returned invalid SSE JSON: ${err instanceof Error ? err.message : String(err)}`);
       }
 
@@ -332,7 +332,8 @@ export class AnthropicProvider implements LLMProvider {
     }
 
     // As in stream(): without message_stop the body was cut off (#1097).
-    if (!sawMessageStop) throw new LLMProviderError(STREAM_ENDED_EARLY, 'network');
+    // Carry the usage already reported so it is recorded, not zero (#1258).
+    if (!sawMessageStop) throw new LLMProviderError(STREAM_ENDED_EARLY, 'network', undefined, usage);
 
     return {
       content,
@@ -391,6 +392,10 @@ export class AnthropicProvider implements LLMProvider {
     // message_delta, and must not read as a normal completion.
     let sawMessageStop = false;
     const usage: LLMResponse['usage'] = { input_tokens: 0, output_tokens: 0 };
+    // Once message_start arrived the provider has reported usage, so every
+    // error from here on carries the usage reported so far (#1258).
+    let sawMessageStart = false;
+    const reported = () => (sawMessageStart ? { usage: { ...usage } } : {});
     let responseModel = model;
 
     const reader = response.body.getReader();
@@ -417,8 +422,12 @@ export class AnthropicProvider implements LLMProvider {
           try {
             const event = JSON.parse(data) as AnthropicStreamEvent;
 
+            if (event.type === 'message_start') sawMessageStart = true;
             if (event.type === 'message_start' && event.message.usage) {
               usage.input_tokens = event.message.usage.input_tokens;
+              // As on the chat path: the starting count, which message_delta's
+              // cumulative count replaces, so a cut before it is not zero.
+              usage.output_tokens = event.message.usage.output_tokens ?? 0;
               if (event.message.usage.cache_read_input_tokens !== undefined) {
                 usage.cache_read_input_tokens = event.message.usage.cache_read_input_tokens;
               }
@@ -479,6 +488,7 @@ export class AnthropicProvider implements LLMProvider {
                 type: 'error',
                 error: `${event.error.type}: ${event.error.message}`,
                 code: classifyAnthropicErrorType(event.error.type),
+                ...reported(),
               };
               return;
             }
@@ -492,7 +502,7 @@ export class AnthropicProvider implements LLMProvider {
       }
 
       if (!sawMessageStop) {
-        yield { type: 'error', error: STREAM_ENDED_EARLY, code: 'network' };
+        yield { type: 'error', error: STREAM_ENDED_EARLY, code: 'network', ...reported() };
         return;
       }
 
@@ -508,7 +518,7 @@ export class AnthropicProvider implements LLMProvider {
         },
       };
     } catch (err) {
-      yield { type: 'error', error: `Stream error: ${err}`, code: 'network' };
+      yield { type: 'error', error: `Stream error: ${err}`, code: 'network', ...reported() };
     } finally {
       // Every early return (an error event, a cut body, a consumer that
       // stops iterating) releases the connection instead of leaving it open.

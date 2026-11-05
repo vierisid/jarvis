@@ -67,3 +67,10 @@ export function resolveOnboardingBranch(identity: string, branch: ResourceBranch
     return outcome;
   }).immediate();
 }
+
+/** What is on record now for one customer onboarding identity, read-only: each
+ * branch's latest state and whether a run holds the customer. Null for no record. */
+export function readOnboardingRecord(identity: string, now = Date.now): { running: boolean; results: Partial<Record<ResourceBranch, ResourceState>> } | null {
+  const row = getWorkflowDb().query('SELECT lease_until,results FROM workflow_customer_onboarding WHERE identity=?').get(identity) as { lease_until: number; results: string } | null;
+  return row ? { running: row.lease_until > now(), results: JSON.parse(row.results) } : null;
+}

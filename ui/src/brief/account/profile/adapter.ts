@@ -25,6 +25,9 @@ export function createProfilePort(
       });
       if ([401, 403].includes(response.status)) return { state: "unavailable" };
       if ([404, 501].includes(response.status)) return { state: "unsupported" };
+      // Only the feature switched off answers 503 "unavailable"; any other failure is an error (#1162).
+      if (response.status === 503 && (await response.clone().json().catch(() => null) as { code?: unknown } | null)?.code === "unavailable")
+        return { state: "unavailable" };
       if (!response.ok || signal.aborted) return { state: "error" };
       const result = await response.json();
       const data =

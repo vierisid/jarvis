@@ -216,6 +216,50 @@ test('accepted request recovery survives hard deletion and restart while retaini
   expect(db.query('SELECT id FROM workflow_job').all()).toEqual(jobs);
   expect(db.query('SELECT * FROM brief_manual_run_requests').all()).toHaveLength(1);
 });
+// #1162 (owner decision): a receipt read that answers "not found" fences the
+// request ID. A POST still in transit that commits afterwards would otherwise
+// start a run the person was told had not started, and a second Run makes two.
+test('a receipt read that finds nothing withdraws the request ID: a late POST under it starts nothing', () => {
+  expect(() => service.request(flowId, 'in-transit')).toThrow('not_found');
+  expect(() => service.start(flowId, command('in-transit'))).toThrow('request_withdrawn');
+  expect(db.query('SELECT id FROM flow_run').all()).toHaveLength(0);
+  expect(db.query('SELECT id FROM workflow_job').all()).toHaveLength(0);
+  // Still "not found" to the next read, and the fence holds across a restart.
+  expect(() => service.request(flowId, 'in-transit')).toThrow('not_found');
+  closeWorkflowDb(); db = initWorkflowDb(file); service = new WorkflowContext(db, DEFAULT_IDS.project, () => true);
+  expect(() => service.start(flowId, command('in-transit'))).toThrow('request_withdrawn');
+  // A request that did commit first keeps its receipt; nothing is fenced over it.
+  const accepted = service.start(flowId, command('landed'));
+  expect(service.request(flowId, 'landed')).toEqual(accepted);
+  expect(service.start(flowId, command('landed'))).toEqual(accepted);
+});
+test('the fence is only written for a workflow in scope, and a full run table does not stop it', () => {
+  expect(() => service.request(createFlow({ projectId: 'proj_other' }).id, 'foreign-flow')).toThrow('not_found');
+  expect(() => service.request('flow_missing', 'missing-flow')).toThrow('not_found');
+  expect(db.query('SELECT request_id FROM brief_manual_run_requests').all()).toEqual([]);
+  db.run(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<10000)
+    INSERT INTO brief_manual_run_requests SELECT 'fixture-project','request-'||i,'fixture-flow','digest','{}',1 FROM n`);
+  // Fences have their own budget (next test): a run table at capacity still lets a read fence.
+  expect(() => service.request(flowId, 'at-capacity')).toThrow('not_found');
+  expect(() => service.start(flowId, command('at-capacity'))).toThrow('request_withdrawn');
+});
+test('fences have their own bounded budget: reads never use up the capacity for real runs, and old fences expire', () => {
+  db.run(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<1000)
+    INSERT INTO brief_manual_run_requests SELECT 'fixture-project','fence-'||i,?,'withdrawn','{}',? FROM n`, [flowId, Date.now()]);
+  // A full fence budget refuses another fence, but a real run still starts, even
+  // with the receipts one short of their own capacity: fences are not counted.
+  expect(() => service.request(flowId, 'one-more-fence')).toThrow('request_capacity');
+  db.run(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<9999)
+    INSERT INTO brief_manual_run_requests SELECT 'fixture-project','receipt-'||i,'fixture-flow','digest','{}',1 FROM n`);
+  expect(service.start(flowId, command('real-run')).status).toBe('accepted');
+  expect(() => service.start(flowId, command('over'))).toThrow('request_capacity');
+  // Fences older than a day are gone before the next one is counted.
+  db.run("UPDATE brief_manual_run_requests SET created = 1 WHERE digest = 'withdrawn'");
+  expect(() => service.request(flowId, 'fresh-fence')).toThrow('not_found');
+  expect(db.query("SELECT request_id FROM brief_manual_run_requests WHERE digest = 'withdrawn'").all()).toEqual([{ request_id: 'fresh-fence' }]);
+  // Receipts are never evicted.
+  expect(service.request(flowId, 'real-run').status).toBe('accepted');
+});
 test('request key reuse with changed version, flow or input refuses without another run', () => {
   service.start(flowId, command());
   expect(() => service.start(flowId, command('fixture-request', { changed: 1 }))).toThrow('request_conflict');

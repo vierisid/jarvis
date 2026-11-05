@@ -9,7 +9,8 @@
 
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { makePalettePick, makePebbleNavTool, type PebblePanelEntry } from './pebble-nav-tool.ts';
+import { isGonePanelError, makePalettePick, makePebbleNavTool, type PebblePanelEntry } from './pebble-nav-tool.ts';
+import { REALTIME_WINDOW_ACTIONS } from './realtime-nav-tools.ts';
 import { PEBBLE_ROOMS } from './pebble-intents.ts';
 
 /** Every key a plain object answers to without holding it. */
@@ -143,5 +144,78 @@ describe('the daemon uses these', () => {
     expect(src).toContain('const executePebbleNavTool = makePebbleNavTool({');
     expect(src).toContain('const nav = await executePebbleNavTool(sidecarId, name, args);');
     expect(src).toMatch(/setPaletteHandler\(\{\s*pick:\s*makePalettePick\(\{/);
+  });
+});
+
+// #1157: the window actions the realtime model is offered, the target it is
+// told to default to, and a window the sidecar no longer has.
+describe('control_dashboard_window follow-ups (#1157)', () => {
+  const panel: PebblePanelEntry = { id: 'p1', key: 'tasks', title: 'Tasks' };
+  function windowHarness(fail?: string) {
+    const rpcs: { method: string; params: Record<string, unknown> }[] = [];
+    const hints: Array<string | undefined> = [], untracked: string[] = [];
+    const nav = makePebbleNavTool({
+      dispatchRPC: async (_s, method, params) => {
+        rpcs.push({ method, params });
+        // The daemon's text for a sidecar handler error: rpc.ts prefixes the code to panels.go's error.
+        if (fail) throw new Error(`HANDLER_ERROR: ${method}[p1]: ${fail}`);
+        return {};
+      },
+      dashboardURL: (key) => `http://dash/#/_panel_${key}`,
+      boundsForRoom: (_k, w, h) => ({ x: -1, y: -1, w, h }),
+      trackPanel: () => {},
+      untrackPanel: (_s, id) => { untracked.push(id); },
+      findPanel: (_s, hint) => { hints.push(hint); return panel; },
+    });
+    return { nav, rpcs, hints, untracked };
+  }
+
+  test.each([...REALTIME_WINDOW_ACTIONS])('every offered action "%s" reaches the sidecar', async (action) => {
+    const h = windowHarness();
+    const reply = await h.nav('s1', 'control_dashboard_window', { action });
+    expect(reply).not.toBe("I'm not sure how to do that with the window.");
+    expect(h.rpcs).toHaveLength(1);
+  });
+
+  test('expand maximizes the window', async () => {
+    const h = windowHarness();
+    expect(await h.nav('s1', 'control_dashboard_window', { action: 'expand' })).toBe('Done.');
+    expect(h.rpcs).toEqual([{ method: 'panel.set_window_state', params: { id: 'p1', state: 'maximized' } }]);
+  });
+
+  test('"most_recent" is no room hint; a room key still is', async () => {
+    const h = windowHarness();
+    await h.nav('s1', 'control_dashboard_window', { action: 'minimize', target: 'most_recent' });
+    await h.nav('s1', 'control_dashboard_window', { action: 'minimize' });
+    await h.nav('s1', 'control_dashboard_window', { action: 'minimize', target: 'tasks' });
+    expect(h.hints).toEqual([undefined, undefined, 'tasks']);
+  });
+
+  test('a window the sidecar no longer has is dropped, and the reply says it is not open', async () => {
+    for (const gone of ['panel not found', 'window already closed']) {
+      const h = windowHarness(gone);
+      expect(await h.nav('s1', 'control_dashboard_window', { action: 'minimize' })).toBe("Tasks isn't open any more.");
+      expect(h.untracked).toEqual(['p1']);
+    }
+    const other = windowHarness('webview busy');
+    expect(await other.nav('s1', 'control_dashboard_window', { action: 'minimize' })).toBe("I couldn't do that with the window.");
+    expect(other.untracked).toEqual([]);
+  });
+
+  test('the gone-panel check matches the sidecar error texts in panels.go exactly', () => {
+    const go = readFileSync(new URL('../../sidecar/panels.go', import.meta.url), 'utf8');
+    const texts = [...go.matchAll(/var (?:ErrPanelUnknown|errPanelWindowClosed) = errors\.New\("([^"]+)"\)/g)].map(m => m[1]!);
+    expect(texts).toEqual(['panel not found', 'window already closed']);
+    for (const text of texts) expect(isGonePanelError(new Error(`HANDLER_ERROR: panel.set_window_state[p1]: ${text}`))).toBe(true);
+    expect(isGonePanelError(new Error('HANDLER_ERROR: panel.spawn: panel already exists'))).toBe(false);
+  });
+
+  test('the dashboard window-action path drops a dead id with the same check', () => {
+    // index.ts's window-action intent kept dead ids for focus/maximize/minimize/restore:
+    // its /unknown panel/ never matched the sidecar's text.
+    const index = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+    expect(index).not.toMatch(/\/unknown panel\/i\.test/);
+    expect(index).toContain("const gone = isGonePanelError(err);\n            if (action === 'close' || gone) {");
+    expect(index).toContain("gone ? `${target.title} isn't open any more.` : \"I couldn't do that with the window.\"");
   });
 });

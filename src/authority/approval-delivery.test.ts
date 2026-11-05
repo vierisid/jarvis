@@ -1105,6 +1105,30 @@ describe('#791 review: the toast budget fails closed on widths it cannot know', 
     expect(toastLookAlike('T\u00f4i \u0111\u00e3 nh\u1eadn \u0111\u01b0\u1ee3c.Anh g\u1eedi l\u1ea1i nh\u00e9')).toBe(true);
   });
 
+  test.each([
+    ['a middle dot in a domain (U+00B7)', 'Log in to paypal\u00b7com'],
+    ['a hyphenation point in a domain (U+2027)', 'Log in to paypal\u2027com'],
+    ['an ideographic full stop in a domain (U+3002)', 'Pay 500 EUR to paypal\u3002com'],
+    ['a halfwidth ideographic full stop in an address (U+FF61)', 'Send email to billing@paypal\uff61com'],
+    ['a katakana middle dot in a domain (U+30FB)', 'Log in to paypal\u30fbcom'],
+    ['a halfwidth katakana middle dot in a domain (U+FF65)', 'Log in to paypal\uff65com'],
+    ['a Greek ano teleia in a domain (U+0387)', 'Log in to paypal\u0387com'],
+    ['a bullet operator in a domain (U+2219)', 'Log in to paypal\u2219com'],
+    ['a dot operator in a domain (U+22C5)', 'Log in to paypal\u22c5com'],
+    ['a word separator middle dot in a domain (U+2E31)', 'Log in to paypal\u2e31com'],
+  ])('#1158: %s between ASCII letters is a look-alike', (_label, body) => {
+    expect(toastLookAlike(body)).toBe(true);
+  });
+
+  test.each([
+    ['Japanese ending a sentence with an ideographic full stop', '\u4f1a\u8b70\u306f\uff13\u6642\u3067\u3059\u3002'],
+    ['a Latin sentence ending in an ideographic full stop', 'Send the report to bob\u3002'],
+    ['a middle dot between spaced words', 'Lunch \u00b7 2pm'],
+    ['a katakana middle dot between katakana words', '\u30b8\u30e7\u30f3\u30fb\u30b9\u30df\u30b9\u306b\u9001\u308b'],
+  ])('#1158: %s stays approvable', (_label, body) => {
+    expect(toastLookAlike(body)).toBe(false);
+  });
+
   test('#858: a decomposed mark below counts like a precomposed one', () => {
     // The toast fails a lone combining mark closed on width already; the
     // chat card has no width list, so the rule reads the NFD form.

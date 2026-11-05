@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../db';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion } from '../db/repos/flow-version';
-import { createFlowRun } from '../db/repos/flow-run';
+import { createFlowRun, ensureRunExecutionConfig } from '../db/repos/flow-run';
 import { ToolRegistry } from '../../actions/tools/registry';
 import { DESKTOP_DISABLED_CODE, setDesktopEnabledSource } from '../../actions/tools/desktop-guard';
 import { AuthorityEngine } from '../../authority/engine';
@@ -33,7 +33,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorkflowRoutes } from '../api/routes';
-import { WorkflowEffectBoundary } from './effect-boundary';
+import { GOVERNANCE_REFUSALS, WorkflowEffectBoundary } from './effect-boundary';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { createJarvisContextVaultSearchRoute } from '../sandbox-api/routes/jarvis-context';
 import { getSidecarManager, setSidecarManagerRef } from '../../actions/tools/sidecar-route';
@@ -59,7 +59,8 @@ function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' | 'context' | '
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Governed routine', trigger: {
     name: 'trigger', type: 'EMPTY', nextAction: { name: 'action', type: 'PIECE', settings: {
       pieceName: `@jarvispieces/piece-jarvis-${PIECE_FOR_ROUTE[route]}`, pieceVersion: '0.0.1',
-      actionName: ACTION_FOR_ROUTE[route], input: {},
+      // A tool step names its tool: a call must ask for exactly that one (#1152).
+      actionName: ACTION_FOR_ROUTE[route], input: route === 'tool' ? { toolName: 'write_file' } : {},
     } },
   } });
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
@@ -94,7 +95,12 @@ function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' | 'context' | '
     }
     return backends.notify!({ message: 'Synthetic notification', channels: ['dashboard'], priority: 'normal' }, context);
   };
-  return { calls, authority, emergency, invoke, approvals, deliveredApprovals, backends, context, run, version, registry, options };
+  /** Name another tool on the step: a call must ask for the tool its step names (#1152). */
+  const useTool = (toolName: string) => {
+    version.trigger.nextAction!.settings!.input = { toolName };
+    updateDraftVersion(version.id, { trigger: version.trigger });
+  };
+  return { calls, authority, emergency, invoke, approvals, deliveredApprovals, backends, context, run, version, registry, options, useTool };
 }
 
 describe('workflow effect boundary', () => {
@@ -547,10 +553,65 @@ describe('workflow effect boundary', () => {
     expect(f.calls).toHaveLength(0);
   });
 
+  test('a tool step that names its tool runs only that tool (#1152)', async () => {
+    const f = fixture();
+    f.version.trigger.nextAction!.settings!.input = { toolName: 'write_file' };
+    updateDraftVersion(f.version.id, { trigger: f.version.trigger });
+    const other: unknown[] = [];
+    f.registry.register({ name: 'read_file', category: 'file-ops', description: 'Synthetic read', parameters: {},
+      execute: async args => { other.push(args); return 'saved'; } });
+    // A call naming this step cannot ask for another tool than the one the step names.
+    await expect(f.backends.toolsInvoke!({ toolName: 'read_file', params: { path: '/tmp/synthetic' } }, f.context))
+      .rejects.toThrow("the step's toolName is not the one this call asks for");
+    expect(other).toEqual([]);
+    expect(listWorkflowEffects(f.run.id)).toEqual([]);
+    // The tool it names runs as before.
+    await f.invoke();
+    expect(f.calls).toHaveLength(1);
+  });
+
+  test('a tool step whose tool is a template runs no tool, typed and not started (#1152)', async () => {
+    const f = fixture();
+    f.version.trigger.nextAction!.settings!.input = { toolName: '{{trigger.body.tool}}' };
+    updateDraftVersion(f.version.id, { trigger: f.version.trigger });
+    const error = await f.invoke().then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(ActionOutcomeError);
+    expect((error as ActionOutcomeError).outcome).toMatchObject({ status: 'blocked', code: 'WORKFLOW_STEP_INPUT_NOT_FIXED', effect: 'not_started' });
+    expect(f.calls).toEqual([]);
+    // Refused before anything is recorded or asked.
+    expect(listWorkflowEffects(f.run.id)).toEqual([]);
+    expect(f.approvals.getPending()).toEqual([]);
+    // Typed even when run data names a tool that does not exist: no lookup runs first.
+    const unknown = await f.backends.toolsInvoke!({ toolName: 'no_such_tool', params: {} }, f.context).then(() => null, (e: unknown) => e);
+    expect((unknown as ActionOutcomeError).outcome?.code).toBe('WORKFLOW_STEP_INPUT_NOT_FIXED');
+    // A refusal a probe step cannot handle as an outcome: the step fails even with requireSuccess off.
+    expect(GOVERNANCE_REFUSALS.has('WORKFLOW_STEP_INPUT_NOT_FIXED')).toBe(true);
+  });
+
+  test('a step test runs the tool its frozen preview override names (#1152)', async () => {
+    const f = fixture();
+    f.registry.register({ name: 'read_file', category: 'file-ops', description: 'Synthetic read', parameters: {},
+      execute: async args => { f.calls.push({ read: args }); return 'read'; } });
+    ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'action', sampleInputOverride: { action: { toolName: 'read_file', params: { path: '/tmp/synthetic' } } } });
+    // The override replaces the step's input, as the engine runs it: its tool is the one pinned.
+    await f.backends.toolsInvoke!({ toolName: 'read_file', params: { path: '/tmp/synthetic' } }, f.context);
+    expect(f.calls).toEqual([{ read: { path: '/tmp/synthetic' } }]);
+    await expect(f.invoke()).rejects.toThrow("the step's toolName is not the one this call asks for");
+  });
+
+  test('a tool step whose graph states no tool name runs no tool (#1152)', async () => {
+    const f = fixture();
+    f.version.trigger.nextAction!.settings!.input = {};
+    updateDraftVersion(f.version.id, { trigger: f.version.trigger });
+    await expect(f.invoke()).rejects.toThrow("the step's toolName is not the one this call asks for");
+    expect(f.calls).toEqual([]);
+  });
+
   test('a refused capability is audited, not silently rejected', async () => {
     const f = fixture();
     f.registry.register({ name: 'run_command', category: 'terminal', description: 'Synthetic shell', parameters: {},
       execute: async () => 'ran' });
+    f.useTool('run_command');
     await expect(f.backends.toolsInvoke!({ toolName: 'run_command', params: { command: 'id' } }, f.context))
       .rejects.toThrow(/opaque code\/UI effects/);
     expect(f.calls).toHaveLength(0);
@@ -566,6 +627,7 @@ describe('workflow effect boundary', () => {
     const f = fixture();
     f.registry.register({ name: 'mystery_sender', description: 'Unknown effect', category: 'general', parameters: {},
       execute: async () => { f.calls.push('bad'); } });
+    f.useTool('mystery_sender');
     await expect(f.backends.toolsInvoke!({ toolName: 'mystery_sender', params: {} }, f.context)).rejects.toThrow(/Unsupported/);
     expect(f.calls).toHaveLength(0);
   });
@@ -765,6 +827,7 @@ describe('workflow effect boundary', () => {
       workflowEffect: { category: 'send_email', target: params => ({ recipient: params.to }) },
       execute: async args => { f.calls.push(args); return 'sent'; } });
     f.authority.addOverride({ action: 'send_email', allowed: false });
+    f.useTool('send_invoice_email');
     await expect(f.backends.toolsInvoke!({ toolName: 'send_invoice_email', params: { to: 'billing@example.test' } }, f.context)).rejects.toThrow(/denied/);
     expect(f.calls).toHaveLength(0);
     expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ actionCategory: 'send_email', target: { recipient: 'billing@example.test' }, status: 'blocked' });
@@ -775,6 +838,7 @@ describe('workflow effect boundary', () => {
     f.registry.register({ name: 'desktop_list_windows', description: 'Bounded desktop read', category: 'desktop', parameters: {},
       execute: async () => { f.calls.push('listed'); return 'windows'; } });
     setDesktopEnabledSource(() => false);
+    f.useTool('desktop_list_windows');
     try {
       const refused = await f.backends.toolsInvoke!({ toolName: 'desktop_list_windows', params: {} }, f.context).then(() => null, (e: unknown) => e);
       expect(refused).toBeInstanceOf(ActionOutcomeError);
@@ -797,6 +861,7 @@ describe('workflow effect boundary', () => {
   for (const tool of ['run_command', 'browser_click', 'browser_evaluate']) test(`${tool} cannot hide undeclared business effects`, async () => {
     const f = fixture();
     f.registry.register({ name: tool, description: 'Opaque effect', category: 'browser', parameters: {}, execute: async () => { f.calls.push('unsafe'); } });
+    f.useTool(tool);
     await expect(f.backends.toolsInvoke!({ toolName: tool, params: {} }, f.context)).rejects.toThrow(/opaque/);
     expect(f.calls).toHaveLength(0);
   });

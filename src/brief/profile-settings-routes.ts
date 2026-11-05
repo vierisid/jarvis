@@ -15,7 +15,10 @@ export function createProfileSettingsRoutes(capabilities: BriefCapabilities, jso
       if (new URL(req.url).search) throw new ProfileSettingsError('unexpected_query');
       res = json(await fn(req));
     } catch (e) {
-      res = e instanceof ProfileSettingsError || e instanceof ProfileEditError ? json({ code: e.code }, e.status) : json({ code: 'unavailable' }, 503);
+      // "unavailable" is the flag-off answer only (#1162). Anything unexpected,
+      // which may come after a write committed, is an internal error: the
+      // caller cannot tell whether it took effect.
+      res = e instanceof ProfileSettingsError || e instanceof ProfileEditError ? json({ code: e.code }, e.status) : json({ code: 'internal' }, 500);
     }
     res.headers.set('Cache-Control', 'no-store'); res.headers.set('X-Content-Type-Options', 'nosniff'); return res;
   };

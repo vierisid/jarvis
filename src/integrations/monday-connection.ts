@@ -3,6 +3,7 @@ import { mondayNeedsReconnect } from "./monday-refresh";
 import { readManagedConnectionFile } from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const MONDAY_PIECE = "@activepieces/piece-monday";
 export const MONDAY_CONNECTION = "jarvis:monday";
@@ -79,6 +80,7 @@ export function mondayStatus(config: JarvisConfig) {
   return {
     configured: !!mondayConnectUrl(config),
     connect_url: mondayConnectUrl(config),
+    ...hostedSetupFault(config, mondayConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: MONDAY_CONNECTION,

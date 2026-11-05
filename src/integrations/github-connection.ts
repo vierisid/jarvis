@@ -1,6 +1,7 @@
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const GITHUB_PIECE = "@activepieces/piece-github";
 export const GITHUB_CONNECTION = "jarvis:github";
@@ -62,7 +63,7 @@ export function githubConnectUrl(config: JarvisConfig): string | null {
 }
 export function githubStatus(config: JarvisConfig) {
   const connection = readGitHubConnection(config.daemon.data_dir);
-  return {configured: !!githubConnectUrl(config), connect_url: githubConnectUrl(config),
+  return {configured: !!githubConnectUrl(config), connect_url: githubConnectUrl(config), ...hostedSetupFault(config, githubConnectUrl(config)),
     connected: !!connection, external_id: GITHUB_CONNECTION,
     account: connection?.account ?? null, workspaces: connection?.workspaces ?? [],
     generation: connection?.generation ?? null, connected_at: connection?.connected_at ?? null};

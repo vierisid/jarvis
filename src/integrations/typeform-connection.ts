@@ -3,6 +3,7 @@ import { typeformNeedsReconnect } from "./typeform-refresh";
 import { readManagedConnectionFile } from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const TYPEFORM_PIECE = "@activepieces/piece-typeform";
 export const TYPEFORM_CONNECTION = "jarvis:typeform";
@@ -80,6 +81,7 @@ export function typeformStatus(config: JarvisConfig) {
   return {
     configured: !!typeformConnectUrl(config),
     connect_url: typeformConnectUrl(config),
+    ...hostedSetupFault(config, typeformConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: TYPEFORM_CONNECTION,

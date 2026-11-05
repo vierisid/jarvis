@@ -23,7 +23,7 @@ import { isAgentStopCard, type DeferredExecutor } from '../authority/deferred-ex
 import { activeEmergencyState, type EmergencyState } from '../authority/emergency.ts';
 import { approvalIntentFields, approvalIntentParts, boundedApprovalLabel, formatApprovalIntent } from '../authority/approval-delivery.ts';
 import type { AuditTrail, AuthorityDecisionType, ResolutionChannel } from '../authority/audit.ts';
-import { heldApprovalMessage } from './approval-decision.ts';
+import { applyApprovalDecision, heldApprovalMessage } from './approval-decision.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
 import { resolveToolGate } from '../authority/tool-action-map.ts';
 import type { ActionCategory } from '../roles/authority.ts';
@@ -850,8 +850,9 @@ export class WebSocketService implements Service {
   /**
    * The same heartbeat, to dashboard clients only (#1026). For the pebble's
    * fast-path confirmations ("Closed Settings.", "Hid the amber background
-   * agent."): they acknowledge something done on this screen, so by the
-   * owner's decision they never go to Telegram or Discord.
+   * agent.") and, since #1157, its full spoken replies: they answer the person
+   * at this screen, so by the owner's decision they never go to Telegram or
+   * Discord.
    */
   broadcastHeartbeatToDashboard(text: string): void {
     const message: WSMessage = {
@@ -1511,7 +1512,6 @@ export class WebSocketService implements Service {
   private async handleChatTurn(msg: WSMessage, ws?: ServerWebSocket<unknown>): Promise<WSMessage | void> {
     const payload = msg.payload as {
       text?: string;
-      channel?: string;
       projectId?: string;
       currentRoom?: string;
       /** Set by `processVoiceTranscript` when it falls through to chat —
@@ -1550,7 +1550,10 @@ export class WebSocketService implements Service {
       };
     }
 
-    const channel = payload.channel ?? 'websocket';
+    // A dashboard turn is always the websocket channel. The frame does not name
+    // it: a claimed "telegram" or "pebble" would write to and read back that
+    // channel's conversation and get its prompt (#1157).
+    const channel = 'websocket';
     const requestId = msg.id ?? crypto.randomUUID();
 
     // A dashboard socket owns at most one foreground turn. This is the
@@ -3040,6 +3043,28 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
+   * The audit row for a voice answer that decided nothing (mismatch, two
+   * cards up, gated, held). Guarded: an audit store that throws must not turn
+   * the refusal into a "yes" passed on to chat.
+   */
+  private auditVoiceRefusal(request: ApprovalRequest): void {
+    try {
+      this.auditTrail?.log({
+        agent_id: request.agent_id,
+        agent_name: request.agent_name,
+        tool_name: request.tool_name,
+        action_category: request.action_category as ActionCategory,
+        authority_decision: 'approval_required',
+        approval_id: request.id,
+        executed: false,
+        channel: 'voice',
+      });
+    } catch (err) {
+      console.warn('[WSService] could not audit a refused voice decision:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
    * Phase 6.3.5b — voice approve/cancel for the most-recent pending action.
    *
    * Priority order: pending approval (authority pipeline) > pending
@@ -3094,31 +3119,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           // Nothing decided; logged like a gated reply so a refused voice
           // decision is forensically visible against the request it did not
           // touch.
-          this.auditTrail?.log({
-            agent_id: latest.agent_id,
-            agent_name: latest.agent_name,
-            tool_name: latest.tool_name,
-            action_category: latest.action_category as ActionCategory,
-            authority_decision: 'approval_required',
-            approval_id: latest.id,
-            executed: false,
-            channel: 'voice',
-          });
+          this.auditVoiceRefusal(latest);
           return { kind: 'refused', message: mismatch };
         }
         if (pending.length > 1) {
           // The newest is the one shown, but it is not the only one (#855):
           // the person may have been reading any card on the rail.
-          this.auditTrail?.log({
-            agent_id: latest.agent_id,
-            agent_name: latest.agent_name,
-            tool_name: latest.tool_name,
-            action_category: latest.action_category as ActionCategory,
-            authority_decision: 'approval_required',
-            approval_id: latest.id,
-            executed: false,
-            channel: 'voice',
-          });
+          this.auditVoiceRefusal(latest);
           return { kind: 'refused', message: voiceApprovalAmbiguous(decision, pending.length) };
         }
 
@@ -3146,16 +3153,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           // dashboard click. We log a 'voice' channel audit row marked
           // approval_required so the gated event is forensically visible
           // even though no decision was applied.
-          this.auditTrail?.log({
-            agent_id: latest.agent_id,
-            agent_name: latest.agent_name,
-            tool_name: latest.tool_name,
-            action_category: latest.action_category as ActionCategory,
-            authority_decision: 'approval_required',
-            approval_id: latest.id,
-            executed: false,
-            channel: 'voice',
-          });
+          this.auditVoiceRefusal(latest);
           const why: VoiceApprovalGateReason = gate.reason === 'destructive_impact' ? 'destructive' : gate.reason;
           return { kind: 'gated', label, reason: why, message: voiceApprovalGatedMessage(decision, why, latest) };
         }
@@ -3165,63 +3163,30 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           const emergency = activeEmergencyState();
           if (emergency !== 'normal' && !isAgentStopCard(latest)) {
             // Nothing decided; audited like every other refused voice decision.
-            this.auditTrail?.log({
-              agent_id: latest.agent_id,
-              agent_name: latest.agent_name,
-              tool_name: latest.tool_name,
-              action_category: latest.action_category as ActionCategory,
-              authority_decision: 'approval_required',
-              approval_id: latest.id,
-              executed: false,
-              channel: 'voice',
-            });
+            this.auditVoiceRefusal(latest);
             return { kind: 'refused', message: heldApprovalMessage(emergency) };
           }
-          const approved = this.approvalManager.approve(latest.id, 'voice');
-          if (!approved) return null;
-          // Audit the voice resolution distinctly from the click path so
-          // forensics can isolate any false-positive voice approvals.
-          this.auditTrail?.log({
-            agent_id: latest.agent_id,
-            agent_name: latest.agent_name,
-            tool_name: latest.tool_name,
-            action_category: latest.action_category as ActionCategory,
-            authority_decision: 'allowed',
-            approval_id: latest.id,
-            executed: false,
-            channel: 'voice',
-          });
-          // Same skip-on-intent-only and skip-on-inline path as the REST
-          // endpoint: inline requests are executed by the blocked gate.
-          if (this.deferredExecutor && approved.tool_name !== 'request_approval' && approved.execution_mode !== 'inline') {
-            try {
-              await this.deferredExecutor.executeApproved(latest.id, 'voice');
-            } catch (err) {
-              console.warn('[WSService] voice-approved execution failed:', err);
-            }
-          }
-          const updated = this.approvalManager.getRequest(latest.id);
-          if (updated) this.broadcastApprovalUpdate(updated);
-          return { kind: 'approval', label };
         }
-        // cancel
-        const denied = this.approvalManager.deny(latest.id, 'voice');
-        if (!denied) return null;
-        this.auditTrail?.log({
-          agent_id: latest.agent_id,
-          agent_name: latest.agent_name,
-          tool_name: latest.tool_name,
-          action_category: latest.action_category as ActionCategory,
-          authority_decision: 'denied',
-          approval_id: latest.id,
-          executed: false,
-          channel: 'voice',
+        // The decision itself is the one every other surface makes
+        // (applyApprovalDecision): the write, the audit row (which cannot
+        // abort a decision already written), execution and the broadcast.
+        // It used to be inlined here, where an audit write that threw left
+        // an approval written but never executed or announced.
+        if (!this.deferredExecutor) {
+          return { kind: 'refused', message: 'I cannot decide approvals by voice right now, so nothing was approved or cancelled. Decide it on its card.' };
+        }
+        const outcome = await applyApprovalDecision(decision === 'approve' ? 'approve' : 'deny', latest.id, 'voice', {
+          approvalManager: this.approvalManager,
+          deferredExecutor: this.deferredExecutor,
+          wsService: this,
+          auditTrail: this.auditTrail,
         });
-        if (this.deferredExecutor) {
-          this.deferredExecutor.recordDenial(denied);
+        if (outcome.status === 'already_decided') return null;
+        if (outcome.status === 'held') return { kind: 'refused', message: heldApprovalMessage(outcome.state) };
+        if (outcome.status === 'needs_dashboard') {
+          return { kind: 'gated', label, reason: 'click_only', message: voiceApprovalGatedMessage(decision, 'click_only', latest) };
         }
-        const updated = this.approvalManager.getRequest(latest.id);
-        if (updated) this.broadcastApprovalUpdate(updated);
+        // An execution failure is logged by the shared flow.
         return { kind: 'approval', label };
       }
       if (typeof shownApprovalId === 'string') {

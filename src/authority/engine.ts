@@ -378,9 +378,11 @@ export function combineDecisions(decisions: readonly AuthorityDecision[]): Autho
 }
 
 /**
- * Tighten a base decision with a per-orchestrator profile. Pure: denials pass
- * through untouched, approvals are never removed, and the profile can only
- * add a denial (level cap) or an approval requirement (governed category).
+ * Tighten a base decision with a per-orchestrator profile. Pure: approvals
+ * are never removed, and the profile can only add a denial (denied category,
+ * level cap) or an approval requirement (governed category). A base denial
+ * passes through, except a level shortfall, which a denied category or the
+ * cap replaces with a denial nothing can turn into a card.
  */
 export function applyProfile(base: AuthorityDecision, profile: AuthorityProfile): AuthorityDecision {
   const label = profile.label ?? 'agent profile';
@@ -400,9 +402,12 @@ export function applyProfile(base: AuthorityDecision, profile: AuthorityProfile)
     };
   }
 
-  if (!base.allowed) return base;
-
-  if (profile.level_cap !== undefined) {
+  // Also before the early return, for the same reason: a base level
+  // shortfall can become an approval card (`substituteAboveLevel`), so a
+  // category above the profile's cap must be denied by the cap, which nothing
+  // lifts. Returning the base shortfall let a capped category become a card
+  // the cap forbids, while raising the level made it a denial (#1158).
+  if (profile.level_cap !== undefined && (base.allowed || base.deniedByLevel)) {
     const requiredLevel = AUTHORITY_REQUIREMENTS[actionCategory];
     if (profile.level_cap < requiredLevel) {
       return {
@@ -414,6 +419,8 @@ export function applyProfile(base: AuthorityDecision, profile: AuthorityProfile)
       };
     }
   }
+
+  if (!base.allowed) return base;
 
   if (!base.requiresApproval && profile.governed_categories?.includes(actionCategory)) {
     return {

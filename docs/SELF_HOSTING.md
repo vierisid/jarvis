@@ -149,7 +149,12 @@ auth:
 While this is on, **anyone who can reach the daemon can use your Jarvis** -
 the daemon logs a loud warning on every boot. Use it on a machine that is
 not exposed (or reachable only via localhost/SSH tunnel), enroll your first
-device, then remove the flag and restart. It can only be enabled by editing
+device, then remove the flag and restart. While it is on, the dashboard
+answers only when it is addressed as `localhost`, by IP address, or by the
+host of `daemon.public_url`; any other name (including this machine's LAN
+hostname) is refused, so a web page cannot reach it by re-pointing a domain at
+your machine. To use a LAN or tunnel name during setup, set it as
+`daemon.public_url`. It can only be enabled by editing
 the file on the server; nothing in the dashboard or API can turn it on.
 
 ## 1. Single machine

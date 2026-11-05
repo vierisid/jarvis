@@ -57,3 +57,28 @@ export function recordPebbleExchange(userText: string, reply: string): boolean {
     return false;
   }
 }
+
+/**
+ * A fast-path turn (a room panel, a settings change, a background task, a
+ * sub-pebble close) answers without the LLM, so it never reached
+ * recordPebbleExchange and "do that again" resolved to the LLM turn before it
+ * (#1157). What each turn spoke is gathered here and stored as that turn's
+ * reply once the fast path has handled it. Keyed by the turn's ctrl object.
+ */
+export function makeFastPathTurns(record: (userText: string, reply: string) => boolean) {
+  const spoken = new WeakMap<object, string[]>();
+  return {
+    spoke(turn: object, text: string): void {
+      const lines = spoken.get(turn) ?? [];
+      lines.push(text); spoken.set(turn, lines);
+    },
+    /** Store the turn if it spoke; returns whether it was stored. Unlike an
+     * LLM reply, a turn cancelled after its confirmation was shown is still
+     * stored: the action itself already happened. */
+    finish(turn: object, userText: string): boolean {
+      const lines = spoken.get(turn);
+      spoken.delete(turn);
+      return lines?.length ? record(userText, lines.join(' ')) : false;
+    },
+  };
+}

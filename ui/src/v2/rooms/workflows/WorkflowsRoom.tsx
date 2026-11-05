@@ -16,6 +16,7 @@
 import { CONNECTION_SETUP_EVENT, hasPieceSetup } from './connection-setup-request';
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { confirmDialog } from "../../ui/ConfirmDialog";
+import { OnboardingOutcomes } from "./OnboardingOutcomes";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -534,6 +535,7 @@ function RunRow({ run, expanded, onToggle, onCancel }: RunRowProps): React.React
             <dd>{run.triggeredBy ?? "manual"}</dd>
           </dl>
           {run.status === "PAUSED" ? <PausedRunCallout runId={run.id} /> : null}
+          {isTerminal ? <OnboardingOutcomes runId={run.id} /> : null}
           {run.failure ? <FailureNotice failure={run.failure} />
             : run.cancellation?.inFlightMayHaveCompleted ? <p>{CANCELED_EFFECT_WARNING}</p> : null}
           {run.steps && Object.keys(run.steps).length > 0 ? (

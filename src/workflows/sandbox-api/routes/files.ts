@@ -25,9 +25,12 @@
  * flow must be the one the token's run belongs to (the flow_run row, or the
  * flow a trigger hook's run id names), the step name must be one safe path
  * segment, and the resolved directory must stay under the files base.
+ * Checked lexically for the flow and the step directory, then on disk: the
+ * real path of the step directory must be exactly <base>/<flowId>/<stepName>,
+ * so a symlink planted at either level cannot redirect the write (#1154).
  */
 
-import { mkdirSync, existsSync, writeFileSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, existsSync, writeFileSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { resolve, basename, join, relative, isAbsolute, sep } from "node:path";
 import { homedir } from "node:os";
 import { workflowFileBase } from "../config";
@@ -87,9 +90,27 @@ export const stepFilesUploadRoute: RouteHandler = async (ctx: RouteContext) => {
   if (runFlowId === null) return err("this sandbox's run belongs to no flow", 403);
   if (flowId !== runFlowId) return err("flowId does not match this sandbox's run", 403);
   const base = workflowFileBase();
-  const dir = resolve(base, runFlowId, stepName);
-  if (!isStrictlyWithin(dir, base)) return err("invalid file location", 400);
+  const flowDir = resolve(base, runFlowId);
+  const dir = resolve(flowDir, stepName);
+  if (!isStrictlyWithin(flowDir, base) || !isStrictlyWithin(dir, flowDir)) return err("invalid file location", 400);
   if (!(file instanceof Blob)) return err("missing file blob", 400);
+  // One level at a time, so a symlinked flow directory is refused before
+  // anything is created through it. A link swapped in between this check
+  // and the write is not covered (Node has no per-component O_NOFOLLOW);
+  // this refuses one already planted. A dangling link or a file in the way
+  // makes mkdir throw, which is the same refusal.
+  try {
+    mkdirSync(flowDir, { recursive: true });
+    const realFlowDir = join(realpathSync(base), runFlowId);
+    if (realpathSync(flowDir) !== realFlowDir) return err("invalid file location", 400);
+    mkdirSync(dir, { recursive: true });
+    if (realpathSync(dir) !== join(realFlowDir, stepName)) return err("invalid file location", 400);
+  } catch (error) {
+    // A path in the way is the refusal; a disk fault is not the caller's.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "EEXIST" || code === "ELOOP") return err("invalid file location", 400);
+    throw error;
+  }
   const buf = Buffer.from(await file.arrayBuffer());
 
   const fileRow = createWorkflowFile({
@@ -106,8 +127,8 @@ export const stepFilesUploadRoute: RouteHandler = async (ctx: RouteContext) => {
   // buffer-via-DB. The DB blob is the source of truth; the disk copy is a
   // convenience for local-process file URLs.
   const safeName = `${fileRow.id}__${safeBasename(fileName)}`;
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(resolve(dir, safeName), buf);
+  // A new name: never follow or replace something already there.
+  writeFileSync(resolve(dir, safeName), buf, { flag: "wx" });
 
   return json({
     url: `/v1/step-files/${fileRow.id}`,

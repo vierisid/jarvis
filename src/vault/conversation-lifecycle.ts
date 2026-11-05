@@ -52,7 +52,8 @@ export class ConversationRepository {
     c.started_at, c.last_message_at, c.message_count,
     (SELECT content FROM conversation_messages m WHERE m.conversation_id = c.id AND m.role = 'user' AND trim(m.content) <> '' ORDER BY m.created_at, m.id LIMIT 1) AS first_message, t.title, t.revision, t.is_open, t.tab_order
     FROM conversations c JOIN conversation_tabs t ON t.conversation_id = c.id
-    WHERE COALESCE(c.workspace_id, ?) = ?`;
+    WHERE COALESCE(c.workspace_id, ?) = ?
+      AND COALESCE(c.channel, '') <> 'pebble'`; // the Pebble's voice dialogue store (PEBBLE_CHANNEL), not a chat (#1162)
   private scopeArgs(): [string, string, string] { return [this.rootWorkspace, this.rootWorkspace, this.workspaceId]; }
   private row(id: string): Row {
     if (typeof id !== 'string' || !id || id.length > 200) throw new ConversationRequestError('Conversation not found', 404);

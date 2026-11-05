@@ -62,7 +62,9 @@ function fixture(piece: string, action: string, level = 10, names: { displayName
     context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
   const approvals = new ApprovalManager();
   const deliveredApprovals: string[] = [];
+  const closedCards: string[] = [];
   const options: BuildServiceBackendsOptions = { credentialResolver: new CredentialResolver(),
+    onWorkflowCardClosed: (approvalId) => { closedCards.push(approvalId); },
     llmManager: { chat: async () => ({ content: '' }) } as any,
     authorityEngine: authority, emergencyController: new EmergencyController(),
     auditTrail: new AuditTrail(), eventBuffer: new WorkflowEventBuffer(), approvalManager: approvals,
@@ -73,7 +75,7 @@ function fixture(piece: string, action: string, level = 10, names: { displayName
   const context = { runId: run.id, projectId: DEFAULT_IDS.project, stepName, executionPath: [] };
   const authorize = async (input: Record<string, unknown> = {}) =>
     backends.pieceAuthorize!({ piece, action, input, inputDigest: await pieceInputDigest(input) }, context);
-  return { authority, approvals, deliveredApprovals, backends, context, run, version, authorize, options };
+  return { authority, approvals, deliveredApprovals, closedCards, backends, context, run, version, authorize, options };
 }
 
 const SEND_INPUT = {
@@ -1454,6 +1456,8 @@ describe('Q-07 after #953: no Gmail send is replayed by an engine retry', () => 
         outcome: { code: 'WORKFLOW_UPGRADED', effect: 'not_started' } });
       expect(f.approvals.getRequest(approvalId)).toMatchObject(decided
         ? { status: 'executed', execution_outcome: 'blocked' } : { status: 'denied' });
+      // A denied card is reported, so the dashboard stops offering it (#1152).
+      expect(f.closedCards).toEqual(decided ? [] : [approvalId]);
       // An engine retry of the same step repeats the typed outcome; it does not claim a send may have happened.
       await expect(f.authorize(REPLY_INPUT)).rejects.toThrow(/before an upgrade changed how sends are tracked/);
     });

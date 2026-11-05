@@ -35,7 +35,8 @@ function fixture(route: "tool" | "notify", effect: () => Promise<unknown>) {
   const version = createDraftVersion({ flowId: flow.id, displayName: "Cancellation + Authority", trigger: {
     name: "trigger", type: "EMPTY", nextAction: { name: "action", type: "PIECE", settings: {
       pieceName: `@jarvispieces/piece-jarvis-${route}`, pieceVersion: "0.0.1",
-      actionName: route === "tool" ? "invoke" : "notify", input: {},
+      // A tool step names its tool: a call must ask for exactly that one (#1152).
+      actionName: route === "tool" ? "invoke" : "notify", input: route === "tool" ? { toolName: "write_file" } : {},
     } },
   } });
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
