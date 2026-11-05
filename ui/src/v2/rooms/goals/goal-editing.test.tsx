@@ -18,6 +18,7 @@ beforeEach(() => {
     time_horizon:'monthly', score:0, score_reason:null, status:'active', health:'on_track', deadline:new Date(2026,10,20,23,59).getTime(),
     started_at:null, estimated_hours:null, actual_hours:0, authority_level:0, tags:[], dependencies:[], sort_order:0,
     created_at:1, updated_at:1, completed_at:null};
+  sessionStorage.clear();
   writes=[]; fail=false;
   globalThis.fetch = (async (url: any, init?: RequestInit) => {
     const path=String(url), method=init?.method ?? 'GET';
@@ -26,6 +27,10 @@ beforeEach(() => {
       if(fail) return Response.json({error:'Unavailable'}, {status:503});
       // Like the server, a present deadline re-runs health even when unchanged.
       if(method === 'PATCH') goal={...goal,...body,...('deadline' in body?{health:'on_track' as const}:{})};
+      else if(path.endsWith('/score')) {
+        if(body.source !== 'user') return Response.json({error:'source must be user'}, {status:400});
+        goal={...goal,score:body.score,score_reason:body.reason};
+      }
       else if(path.endsWith('/status')) goal={...goal,status:body.status};
       else if(path.endsWith('/health')) goal={...goal,health:body.health};
       else if(method === 'POST') goal={...goal,...body};
@@ -153,4 +158,62 @@ test('at phone width room toasts stay above the fixed detail panel',async()=>{
   const css=await Bun.file(new URL('./GoalsRoom.css',import.meta.url)).text();
   const rule=[...css.matchAll(/@media \(max-width: 600px\) \{([\s\S]*?)\n\}/g)].map(m=>m[1]!.match(/\.v2-goals__toast\s*\{[^}]*z-index:\s*(\d+)/)).find(Boolean);
   expect(Number(rule?.[1])).toBeGreaterThan(111);
+});
+
+const scoreInput = () => host.querySelector<HTMLInputElement>('input[aria-label="Goal score"]')!;
+const reasonInput = () => host.querySelector<HTMLInputElement>('section[aria-label="Update goal score"] input[type="text"]')!;
+test('score saves with the user source and the entered reason, then clears its draft', async () => {
+  await render(); await select(); await fill(scoreInput(), '50'); await fill(reasonInput(), 'Milestone shipped');
+  await click('Save score');
+  expect(writes).toEqual([{method:'POST',body:{score:0.5,reason:'Milestone shipped',source:'user'}}]);
+  expect(goal.score).toBe(0.5); expect(goal.score_reason).toBe('Milestone shipped');
+  expect(sessionStorage.getItem('jarvis:goal-score-draft:goal-1')).toBeNull();
+  expect(button('Save score').disabled).toBe(true); expect(reasonInput().value).toBe('');
+});
+test('score and reason survive closing the detail and unmounting the entire room without a write', async () => {
+  await render(); await select(); await fill(scoreInput(), '75'); await fill(reasonInput(), 'Keep this update');
+  await click('Close detail'); await select(); expect(scoreInput().value).toBe('75'); expect(reasonInput().value).toBe('Keep this update');
+  await React.act(async () => root.unmount()); root=createRoot(host); await render(); await select();
+  expect(scoreInput().value).toBe('75'); expect(reasonInput().value).toBe('Keep this update'); expect(writes).toHaveLength(0);
+  await click('Discard score draft'); expect(scoreInput().value).toBe('0'); expect(reasonInput().value).toBe('');
+  expect(sessionStorage.getItem('jarvis:goal-score-draft:goal-1')).toBeNull();
+});
+test('failed score saves show a reason and preserve the draft for a successful retry', async () => {
+  await render(); await select(); await fill(scoreInput(), '25'); await fill(reasonInput(), 'Progress made');
+  fail=true; await click('Save score');
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('Unavailable');
+  expect(scoreInput().value).toBe('25'); expect(reasonInput().value).toBe('Progress made'); expect(goal.score).toBe(0);
+  await click('Close detail'); await select(); expect(reasonInput().value).toBe('Progress made');
+  fail=false; await click('Save score'); expect(goal.score).toBe(0.25); expect(goal.score_reason).toBe('Progress made');
+});
+test('drafts are isolated by goal and a clean score follows refreshed server data', async () => {
+  await render(); await select(); await fill(scoreInput(), '80'); await fill(reasonInput(), 'First goal only');
+  await click('Close detail'); goal={...goal,id:'goal-2',title:'Other goal',score:0.2};
+  await React.act(async()=>{host.querySelector<HTMLButtonElement>('button[title="Refresh"]')!.click();await wait();}); await select(); expect(scoreInput().value).toBe('20'); expect(reasonInput().value).toBe('');
+  goal={...goal,score:0.4}; await React.act(async()=>{host.querySelector<HTMLButtonElement>('button[title="Refresh"]')!.click();await wait();}); expect(scoreInput().value).toBe('40');
+  await fill(scoreInput(), '60'); goal={...goal,score:0.5}; await React.act(async()=>{host.querySelector<HTMLButtonElement>('button[title="Refresh"]')!.click();await wait();}); expect(scoreInput().value).toBe('60');
+  await click('Discard score draft'); expect(scoreInput().value).toBe('50');
+});
+
+test('a pending score save disables duplicate submissions and editing', async () => {
+  await render(); await select(); await fill(scoreInput(), '45');
+  const original=globalThis.fetch; let resolve!: (response:Response)=>void;
+  globalThis.fetch=(async(url:any,init?:RequestInit)=>String(url).endsWith('/score')?new Promise<Response>(r=>{resolve=r;}):original(url,init)) as typeof fetch;
+  await click('Save score');expect(button('Saving…').disabled).toBe(true);expect(scoreInput().disabled).toBe(true);expect(reasonInput().disabled).toBe(true);
+  await React.act(async()=>{resolve(Response.json({error:'Temporary failure'},{status:503}));await wait();});
+  expect(button('Save score').disabled).toBe(false);expect(scoreInput().value).toBe('45');
+  await click('Discard score draft');
+});
+test('unavailable browser storage retains SPA drafts and warns before refreshing', async () => {
+  await render(); await select();
+  const original=Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage')!;
+  Object.defineProperty(globalThis, 'sessionStorage', {configurable:true,get:()=>{throw new Error('Storage blocked');}});
+  try {
+    await fill(scoreInput(), '65'); await fill(reasonInput(), 'Keep even with storage full');
+    expect(host.textContent).toContain('Browser storage is unavailable');
+    const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event);expect(event.defaultPrevented).toBe(true);
+    await click('Close detail');await select();expect(reasonInput().value).toBe('Keep even with storage full');
+    expect(host.textContent).toContain('Browser storage is unavailable');
+    await click('Discard score draft');
+  } finally { Object.defineProperty(globalThis, 'sessionStorage', original); }
 });

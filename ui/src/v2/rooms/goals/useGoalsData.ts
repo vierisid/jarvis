@@ -171,10 +171,10 @@ export function useGoalsData() {
         const resp = await fetch(`/api/goals/${encodeURIComponent(id)}/score`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ score, reason, source: "dashboard" }),
+          body: JSON.stringify({ score, reason, source: "user" }),
         });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        refresh();
+        if (!resp.ok) throw new Error(await goalSaveError(resp));
+        await refresh();
         return { ok: true, message: `Score updated to ${(score * 100).toFixed(0)}%.` };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };

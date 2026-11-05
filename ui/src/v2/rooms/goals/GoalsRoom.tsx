@@ -29,6 +29,7 @@ import {
   type GoalStatus,
 } from "./useGoalsData";
 import "./GoalsRoom.css";
+import { GoalScoreEditor } from "./GoalScoreEditor";
 import { isRoomTab, type RoomTab } from "../../../../../src/daemon/room-tabs";
 import { withRoomActionDefaults } from "../../../../../src/daemon/room-action-targets";
 
@@ -323,6 +324,7 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
           onScore={async (score, reason) => {
             const r = await data.updateScore(selectedGoal.id, score, reason);
             setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
+            return r;
           }}
           onStatus={async (status) => {
             const r = await data.updateStatus(selectedGoal.id, status);
@@ -1028,7 +1030,7 @@ function DetailPanel({
   childrenByParent: Map<string, Goal[]>;
   onClose: () => void;
   onDetails: (input: GoalDetailsUpdate) => Promise<{ ok: boolean; message: string }>;
-  onScore: (score: number, reason: string) => void;
+  onScore: (score: number, reason: string) => Promise<{ ok: boolean; message: string }>;
   onStatus: (status: GoalStatus) => void;
   onHealth: (health: GoalHealth) => void;
 }) {
@@ -1079,9 +1081,6 @@ function DetailPanel({
     finally { setSaving(false); }
   };
 
-  // Local score draft so the slider feels responsive without spamming the API.
-  const [scoreDraft, setScoreDraft] = useState(goal.score);
-  const [scoreReason, setScoreReason] = useState("");
 
   return (
     <aside className="v2-goals__side">
@@ -1131,33 +1130,7 @@ function DetailPanel({
           </section>
         )}
 
-        <section className="v2-goals__side-section">
-          <div className="v2-goals__side-label">Score · {(scoreDraft * 100).toFixed(0)}%</div>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            step={5}
-            value={Math.round(scoreDraft * 100)}
-            onChange={(e) => setScoreDraft(parseInt(e.target.value, 10) / 100)}
-            className="v2-goals__score-slider"
-          />
-          <input
-            type="text"
-            className="v2-goals__input"
-            placeholder="Reason for the change…"
-            value={scoreReason}
-            onChange={(e) => setScoreReason(e.target.value)}
-          />
-          <button
-            type="button"
-            className="v2-goals__btn v2-goals__btn--primary"
-            disabled={Math.abs(scoreDraft - goal.score) < 0.005}
-            onClick={() => onScore(scoreDraft, scoreReason || "Updated via dashboard")}
-          >
-            Save score
-          </button>
-        </section>
+        <GoalScoreEditor goalId={goal.id} score={goal.score} onSave={onScore} />
 
         <section className="v2-goals__side-section">
           <div className="v2-goals__side-label">Status</div>
