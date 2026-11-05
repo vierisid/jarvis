@@ -51,6 +51,15 @@ export type RealtimeTranscript = {
    * only when true.
    */
   interrupted?: boolean;
+  /**
+   * An assistant transcript's user utterance: the item id of the last
+   * utterance the user began before this reply started. The user's own
+   * transcript is asynchronous and can land after the reply to it, so the
+   * dashboard uses this to put that line back before the reply (#1156).
+   * Absent when no utterance was seen first (a greeting, a tool follow-up
+   * with nothing said yet).
+   */
+  replyTo?: string;
 };
 
 /**
@@ -121,6 +130,8 @@ export type RealtimeSessionOptions = {
   socketFactory?: RealtimeSocketFactory;
   /** Override TOOL_RESULT_GRACE_MS (tests). */
   toolResultGraceMs?: number;
+  /** Wall clock in ms (tests). Defaults to Date.now. */
+  now?: () => number;
 };
 
 /**
@@ -239,7 +250,7 @@ export class RealtimeSession {
   private closeCb: ((detail?: string) => void) | null = null;
   private speechStartedCb: (() => void) | null = null;
   /** Separate from speechStartedCb, which the session uses for barge-in playback control. */
-  private userTurnStartCb: ((itemId?: string) => void) | null = null;
+  private userTurnStartCb: ((itemId?: string, assistantAudible?: boolean) => void) | null = null;
   // Response-latency instrumentation (user-stopped → first audio).
   private turnEndedAt = 0;
   private loggedResponseLatency = false;
@@ -269,6 +280,24 @@ export class RealtimeSession {
   // arriving from the response we just cancelled, and mark its final
   // transcript interrupted, until the next one begins.
   private suppressOutputAudio = false;
+  // The utterance the user began most recently, and the one the current
+  // response answers (snapshotted at response.created). See replyTo.
+  private lastUserItemId: string | undefined;
+  private responseReplyTo: string | undefined;
+  // Each assistant audio item (content part) whose audio arrived, and how
+  // much did, in arrival order.
+  private audioItems = new Map<string, { itemId: string; contentIndex: number; totalMs: number }>();
+  // Spans of that audio not yet all played: when each could start playing,
+  // where in its item it begins, and how long it is. A stall inside one item
+  // starts a new span at the item's offset so far.
+  private audioSpans: Array<{ key: string; startAt: number; offsetMs: number; audioMs: number }> = [];
+  // When the audio queued so far can have finished playing, at the earliest.
+  private playEndAt = 0;
+  // The response in flight has sent audio (so it holds audio not yet here).
+  private responseHasAudio = false;
+  // event_ids of the truncates sent, so an error answering one is not fatal.
+  private truncateEventIds = new Set<string>();
+  private truncateSeq = 0;
 
   constructor(opts: RealtimeSessionOptions) {
     this.opts = opts;
@@ -307,7 +336,7 @@ export class RealtimeSession {
    * model has already started acting. The voice taint boundary records here
    * where the utterance began; only its transcript clears (#1007).
    */
-  onUserTurnStart(cb: (itemId?: string) => void): void { this.userTurnStartCb = cb; }
+  onUserTurnStart(cb: (itemId?: string, assistantAudible?: boolean) => void): void { this.userTurnStartCb = cb; }
 
   /**
    * Connect, send session.update, and wire the transport's mic + playback.
@@ -481,6 +510,124 @@ export class RealtimeSession {
     this.ws.send(JSON.stringify(payload));
   }
 
+  private now(): number {
+    return this.opts.now ? this.opts.now() : Date.now();
+  }
+
+  private replyToField(): { replyTo?: string } {
+    return this.responseReplyTo ? { replyTo: this.responseReplyTo } : {};
+  }
+
+  /**
+   * Track the assistant audio being played, for truncateUnplayedAudio. Audio
+   * plays in the order it arrives and no faster than real time, so each span
+   * starts no earlier than the later of its arrival and the end of the audio
+   * queued ahead of it (`playEndAt`).
+   */
+  private notePlayedAudio(evt: Record<string, unknown>, bytes: number): void {
+    const itemId = typeof evt.item_id === 'string' ? evt.item_id : null;
+    if (!itemId) return;
+    const contentIndex = typeof evt.content_index === 'number' ? evt.content_index : 0;
+    if (this.responseActive) this.responseHasAudio = true;
+    // s16 mono: two bytes a sample.
+    const ms = (bytes / 2 / this.opts.transport.outputSampleRate) * 1000;
+    const now = this.now();
+    const queuedFrom = Math.max(this.playEndAt, now);
+    // Spans all played can no longer be cut; nor can items with none left,
+    // except the newest, whose response may still be sending.
+    this.audioSpans = this.audioSpans.filter((sp) => sp.startAt + sp.audioMs > now);
+    const key = `${itemId}:${contentIndex}`;
+    const newest = [...this.audioItems.keys()].at(-1);
+    for (const k of this.audioItems.keys()) {
+      if (k !== newest && k !== key && !this.audioSpans.some((sp) => sp.key === k)) this.audioItems.delete(k);
+    }
+    let item = this.audioItems.get(key);
+    if (!item) {
+      item = { itemId, contentIndex, totalMs: 0 };
+      this.audioItems.set(key, item);
+    }
+    const last = this.audioSpans.at(-1);
+    if (last && last.key === key && last.startAt + last.audioMs === queuedFrom) last.audioMs += ms;
+    else this.audioSpans.push({ key, startAt: queuedFrom, offsetMs: item.totalMs, audioMs: ms });
+    item.totalMs += ms;
+    this.playEndAt = queuedFrom + ms;
+  }
+
+  /**
+   * Tell the server how much of each reply's audio the user can have heard
+   * (`conversation.item.truncate`), so its transcript in the conversation
+   * stops there and the model does not take the unheard rest as said. Sent on
+   * barge-in and on a stop (stopReply), both of which flush the client's
+   * playback. Played audio is not reported back to the daemon, so it is
+   * bounded from above (notePlayedAudio): within an item, no more than the
+   * audio before its first span still playing plus the time that span could
+   * have played, and no more than the audio that arrived. An item all of
+   * whose audio can have played is left alone, unless its response is still
+   * sending audio: the server then holds audio that never arrived here, and
+   * the cut goes at the end of what did. The server refuses an end past the
+   * audio it holds; the second bound keeps within it, and a refusal is not
+   * fatal (see `error`).
+   */
+  private truncateUnplayedAudio(responseWasActive: boolean): void {
+    // Not on the hosted proxy until it is known to relay the event: an error
+    // it answered without our event_id would end the session on every barge-in.
+    if (this.opts.resolved.provider === 'usejarvis_ai') {
+      this.audioItems = new Map();
+      this.audioSpans = [];
+      this.playEndAt = 0;
+      return;
+    }
+    const items = [...this.audioItems];
+    const spans = this.audioSpans;
+    this.audioItems = new Map();
+    this.audioSpans = [];
+    this.playEndAt = 0;
+    const now = this.now();
+    items.forEach(([key, item], index) => {
+      const playing = spans.find((sp) => sp.key === key && sp.startAt + sp.audioMs > now);
+      let endMs: number;
+      if (playing) {
+        endMs = playing.offsetMs + Math.min(playing.audioMs, Math.max(0, now - playing.startAt));
+      } else if (responseWasActive && this.responseHasAudio && index === items.length - 1) {
+        endMs = item.totalMs;
+      } else {
+        return;
+      }
+      const eventId = `jarvis_truncate_${++this.truncateSeq}`;
+      this.truncateEventIds.add(eventId);
+      // An accepted truncate is never answered by id, so only the latest few
+      // are kept: an error answers an event just sent, not one from minutes ago.
+      for (const old of this.truncateEventIds) {
+        if (this.truncateEventIds.size <= 4) break;
+        this.truncateEventIds.delete(old);
+      }
+      this.send({
+        type: 'conversation.item.truncate',
+        event_id: eventId,
+        item_id: item.itemId,
+        content_index: item.contentIndex,
+        audio_end_ms: Math.floor(endMs),
+      });
+    });
+  }
+
+  /**
+   * The person stopped the reply (the dashboard's stop, a stop phrase): its
+   * unheard rest is cut from the conversation as on a barge-in, then it is
+   * cancelled.
+   */
+  stopReply(): void {
+    const responseWasActive = this.responseActive;
+    this.truncateUnplayedAudio(responseWasActive);
+    this.interrupt();
+    // As on barge-in: what the cancelled response still sends is neither
+    // played nor counted as heard (#1156 review).
+    if (responseWasActive) {
+      this.responseActive = false;
+      this.suppressOutputAudio = true;
+    }
+  }
+
   /** Dispatch a parsed server event. Exposed for unit testing. */
   handleServerEvent(evt: Record<string, unknown>): void {
     const type = evt.type as string;
@@ -511,6 +658,8 @@ export class RealtimeSession {
         }
         this.suppressOutputAudio = false;
         this.responseStartedAt = Date.now();
+        this.responseReplyTo = this.lastUserItemId;
+        this.responseHasAudio = false;
         break;
       }
       case 'response.done': {
@@ -546,7 +695,9 @@ export class RealtimeSession {
             console.log(`[realtime] response latency: ${Date.now() - this.turnEndedAt}ms (user stopped → first audio)`);
             this.loggedResponseLatency = true;
           }
-          this.audioCb?.(Buffer.from(delta, 'base64'));
+          const pcm = Buffer.from(delta, 'base64');
+          this.notePlayedAudio(evt, pcm.length);
+          this.audioCb?.(pcm);
         }
         break;
       }
@@ -558,13 +709,13 @@ export class RealtimeSession {
         // text and the pebble can ignore it.
         if (this.suppressOutputAudio) break;
         const delta = evt.delta as string | undefined;
-        if (delta) this.transcriptCb?.({ role: 'assistant', text: delta, final: false });
+        if (delta) this.transcriptCb?.({ role: 'assistant', text: delta, final: false, ...this.replyToField() });
         break;
       }
       case 'response.output_audio_transcript.done': {
         const text = evt.transcript as string | undefined;
         if (text) {
-          this.transcriptCb?.({ role: 'assistant', text, final: true, ...(this.suppressOutputAudio ? { interrupted: true } : {}) });
+          this.transcriptCb?.({ role: 'assistant', text, final: true, ...(this.suppressOutputAudio ? { interrupted: true } : {}), ...this.replyToField() });
         }
         break;
       }
@@ -582,17 +733,26 @@ export class RealtimeSession {
         // billing for speech the user will never hear) and suppress any deltas
         // still in flight from it. `stopPlayback` (local) is wired via the
         // callback; without the cancel, OpenAI keeps generating server-side.
+        const responseWasActive = this.responseActive;
+        // Whether assistant audio can still be playing as the user starts:
+        // only then can what the mic hears be the assistant's own voice.
+        const assistantAudible = this.playEndAt > this.now();
         if (this.responseActive) {
           this.interrupt();
           this.responseActive = false;
           this.suppressOutputAudio = true;
         }
+        // The reply's audio usually outlives its response (the model writes
+        // faster than it is played), so this is not only for an active one.
+        this.truncateUnplayedAudio(responseWasActive);
         // Hold deferred tool voicing until the VAD answers this turn (see
         // response.created): a response.create now would talk over the user or
         // be refused. Should no response ever follow, the next one lifts it.
         this.userTurnOpen = true;
+        const userItemId = typeof evt.item_id === 'string' ? evt.item_id : undefined;
+        if (userItemId) this.lastUserItemId = userItemId;
         this.speechStartedCb?.();
-        this.userTurnStartCb?.(typeof evt.item_id === 'string' ? evt.item_id : undefined);
+        this.userTurnStartCb?.(userItemId, assistantAudible);
         break;
       }
       case 'response.output_item.added': {
@@ -620,8 +780,15 @@ export class RealtimeSession {
         break;
       }
       case 'error': {
-        const e = evt.error as { message?: string; code?: string } | undefined;
+        const e = evt.error as { message?: string; code?: string; event_id?: string } | undefined;
         const msg = e?.message || 'Unknown realtime error';
+        // A refused truncate (its estimate overshot what the server holds)
+        // leaves the reply's text whole, as before truncate was sent. Not
+        // worth ending the session over.
+        if (typeof e?.event_id === 'string' && this.truncateEventIds.delete(e.event_id)) {
+          console.warn(`[realtime] truncate refused: ${msg}`);
+          break;
+        }
         // Benign barge-in race: we sent response.cancel after the model had
         // just finished server-side (its response.done hadn't reached us yet),
         // so there was nothing left to cancel. Harmless — the response is over.

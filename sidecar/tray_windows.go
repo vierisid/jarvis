@@ -131,12 +131,11 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 	trayOpenSettings = client.OpenSettings
 	trayOpenLogs = client.OpenLogViewer
 	trayEmit = func(et string, p map[string]any) {
-		_ = client.sendEvent(context.Background(), SidecarEvent{
-			EventType: et,
-			Timestamp: time.Now().UnixMilli(),
-			Priority:  "normal",
-			Payload:   p,
-		}, nil)
+		// Bounded: it runs on the trayCtlAsync worker that notification
+		// taps share (#1160).
+		_ = sendUIEvent(context.Background(), func(wctx context.Context, e SidecarEvent) error {
+			return client.sendEvent(wctx, e, nil)
+		}, et, p)
 	}
 	// Pebble-state changes (tray.status pushes) re-render the icon so the tray
 	// mirrors the pebble like the macOS status item. The render must happen on

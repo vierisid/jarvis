@@ -17,13 +17,20 @@ import type { RoomStatus } from '../tour/types';
 import type { TourStep } from '../tour/steps';
 import { createActivationIntentProvider, type IntentServices } from '../activation-intent';
 import { createComposeDraftProvider, createSqliteDraftStore, initializeComposeDraftStore, type Intent } from '../compose-draft';
-import { createBuildJobsProvider, createSqliteBuildStore, initializeBuildJobStore } from '../build-jobs';
+import { createBuildJobsProvider, createSqliteBuildStore, initializeBuildJobStore, terminal } from '../build-jobs';
 import { createDraftResultProvider, createSqliteResultReader, createDraftCompletionGuard } from '../result';
 import type { Binder, Capability, Context, Scope, Provider } from './contract';
 import { RuntimeError } from './runtime';
 import { getGoalApplication } from '../../goals/application-service';
 import { createInitialGoalPlanner, saveInitialInterviewGoal } from './initial-goal';
 import { getDb } from '../../vault/schema';
+import { runWithOrigin } from '../../llm/origin';
+import { runWithAdmission } from '../../llm/background-budget';
+
+/** Q-20: model work a person is waiting on, like Brief composition. Never an exempt class. */
+const foreground = <T>(fn: () => T): T => runWithAdmission('foreground', () => runWithOrigin('user', fn));
+/** Detached worker work: governed by the background budget. Clears any inherited class. */
+const background = <T>(fn: () => T): T => runWithAdmission(undefined, () => runWithOrigin('background', fn));
 
 export interface OnboardingAssemblyPorts {
   owner: Scope;
@@ -73,7 +80,8 @@ export function createOnboardingAssembly(ports: OnboardingAssemblyPorts) {
   }, readLegacy: ports.readLegacy });
   const prepareGoal = createInitialGoalPlanner((text, signal) => {
     if (!ports.planInitialGoal) throw Error('Goal planner unavailable');
-    return ports.planInitialGoal(text, signal);
+    // Only an explore/finish request waits on the plan (journey prepareExit).
+    return foreground(() => ports.planInitialGoal!(text, signal));
   });
   const persistence: typeof settingsPersistence = {
     transaction(scope, operation) {
@@ -118,6 +126,14 @@ export function createOnboardingAssembly(ports: OnboardingAssemblyPorts) {
   const tour = createTourProvider<Context>({ enabled: true, authorize,
     journeyFor: (_scope, context) => journey(context), roomStatus: ports.roomStatus });
   const intent = createActivationIntentProvider<Context>({ enabled: true, authorize, servicesFor: ports.intent });
+  // Requests submitted (or re-submitted) in this process whose first compose has not
+  // run yet. That attempt answers the person who just pressed Create; any later
+  // attempt (deferral, lease reclaim, restart) is worker retry work.
+  const firstAttempts = new Set<string>(), submitting = new Set<string>();
+  const unattempted = (requestId: string) => {
+    try { const job = buildStore.read(owner, { requestId }); return !!job && job.attempts === 0 && !terminal(job); }
+    catch { return false; }
+  };
   const draft = createComposeDraftProvider<Context>({ enabled: true, authorize,
     servicesFor: (_scope, context) => current() ? {
       id: generation, store: draftStore, access: async () => !!authorize(context),
@@ -128,7 +144,14 @@ export function createOnboardingAssembly(ports: OnboardingAssemblyPorts) {
     servicesFor: (_scope, context) => current() ? {
       id: generation, store: buildStore, access: async () => !!authorize(context), journey: journey(context),
       validate: (submission, signal) => intent.validate(context, submission, signal),
-      draft: { compose: (input, control) => draft.compose(context, input, control), reconcile: input => draft.reconcile(context, input) },
+      draft: { compose: (input, control) => {
+        const requestId = input.submission.request.requestId;
+        // attempts === 1: a marker never upgrades a compose that is not the first attempt.
+        let first = false;
+        try { first = firstAttempts.delete(requestId) && buildStore.read(owner, { requestId })?.attempts === 1; } catch { /* background */ }
+        return first ? foreground(() => draft.compose(context, input, control)) : background(() => draft.compose(context, input, control));
+      },
+      reconcile: input => draft.reconcile(context, input) },
     } : null });
   const resultServices = new WeakMap<Context, import('../result/types').Services>();
   const result = createDraftResultProvider<Context>({ enabled: true, authorize,
@@ -150,11 +173,14 @@ export function createOnboardingAssembly(ports: OnboardingAssemblyPorts) {
     // A durable job belongs to the server, never the submitting HTTP signal.
     const context: Context = { request: new Request('http://onboarding-worker.invalid/'), scope: owner, signal: lifetime.signal };
     workerContexts.add(context);
-    pending = (async () => {
+    pending = background(async () => {
       if (current()) await build.runNext(context);
-    })().catch(() => { /* Durable job state remains the recovery authority. */ }).finally(() => {
+    }).catch(() => { /* Durable job state remains the recovery authority. */ }).finally(() => {
       workerContexts.delete(context);
       pending = null;
+      // Forget markers for requests that will never compose (needs input, cancelled, failed).
+      // A submit still in flight owns its marker: its job may not be accepted yet.
+      for (const requestId of firstAttempts) if (!submitting.has(requestId) && !unattempted(requestId)) firstAttempts.delete(requestId);
       if (running && !stopped) {
         timer = setTimeout(wake, Math.max(50, ports.workerIntervalMs ?? 1000));
         timer.unref?.();
@@ -184,7 +210,8 @@ export function createOnboardingAssembly(ports: OnboardingAssemblyPorts) {
       } }),
     'interview-profile.v1': binder({}),
     'interview-session.v1': binder({ 'interview.command': async (input, c) => {
-      const value = await interview.request(c, input);
+      // The staged interviewer runs inside this request: the person waits on the reply.
+      const value = await foreground(() => interview.request(c, input));
       if (value.kind === 'ok' && (value.snapshot.phase === 'done' || value.snapshot.phase === 'skipped')) {
         const read = await journey(c).read();
         if (read.availability === 'ready' && read.snapshot.interviewState !== value.snapshot.phase)
@@ -195,7 +222,23 @@ export function createOnboardingAssembly(ports: OnboardingAssemblyPorts) {
     'tour.v1': binder({ 'tour.command': async (input, c) => tour.request(c, input) }),
     'activation-intent.v1': binder({ 'intent.validate': async (input, c) => intent.validate(c, input, c.signal) }),
     'compose-draft.v1': binder({}),
-    'build-job.v1': binder({ 'build.submit': async (input, c) => { const value = await build.submit(c, input); if (value.availability === 'ready') wake(); return value; },
+    'build-job.v1': binder({ 'build.submit': async (input, c) => {
+      // Mark before submitting: a worker pass already in flight may claim the job
+      // before this request returns, and its first attempt must still be foreground.
+      const requestId = (input as { submission?: { request?: { requestId?: unknown } } } | null)?.submission?.request?.requestId;
+      const marked = typeof requestId === 'string' && !firstAttempts.has(requestId);
+      if (marked) { firstAttempts.add(requestId); submitting.add(requestId); }
+      let value;
+      try { value = await build.submit(c, input); }
+      finally {
+        if (marked) {
+          submitting.delete(requestId);
+          if (!(value?.availability === 'ready' && unattempted(requestId))) firstAttempts.delete(requestId);
+        }
+      }
+      if (value.availability === 'ready') wake();
+      return value;
+    },
       'build.read': async (input, c) => build.read(c, input), 'build.cancel': async (input, c) => build.cancel(c, input) }),
     'draft-result.v1': binder({ 'result.read': async (input, c) => result.read(c, input) }),
   };

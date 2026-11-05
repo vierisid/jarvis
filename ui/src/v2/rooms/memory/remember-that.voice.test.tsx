@@ -8,6 +8,7 @@
  */
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { matchEntityByName } from "../../../../../src/daemon/room-action-targets";
 
 const NativeResponse = globalThis.Response;
 const originalFetch = globalThis.fetch;
@@ -58,6 +59,13 @@ async function mount(): Promise<{ dispatch: ReturnType<Bus["useRoomActionDispatc
     // The room's own paged load, which the action must not match against.
     if (url.startsWith("/api/vault/page")) return NativeResponse.json({ items: url.includes("kind=entities") ? LOADED : [], nextCursor: null });
     calls.push(`${method} ${url}${init?.body ? ` ${String(init.body)}` : ""}`);
+    // The daemon's answer (#1118): its matcher over the vault's names.
+    if (method === "GET" && url.startsWith("/api/vault/entity-match?")) {
+      const match = matchEntityByName(VAULT, new URL(url, "http://localhost").searchParams.get("name") ?? "");
+      if (match && "ambiguous" in match) return NativeResponse.json({ entity: null, ambiguous: match.ambiguous });
+      return NativeResponse.json({ entity: match ? { id: match.entity.id, name: match.entity.name } : null });
+    }
+    // The whole list is not what a lookup reads any more.
     if (method === "GET" && url === "/api/vault/entities") return NativeResponse.json(VAULT);
     if (method === "POST" && url === "/api/vault/entities") {
       const { name } = JSON.parse(String(init!.body)) as { name: string };
@@ -106,7 +114,7 @@ test("a new entity the card promised is made, though a loaded name (James) holds
   expect(answer).toBe("true accepted");
   expect(calls).toEqual([
     // Checked first: none by that name has been made since the card.
-    "GET /api/vault/entities",
+    "GET /api/vault/entity-match?name=me",
     `POST /api/vault/entities ${JSON.stringify({ name: "me", type: "concept", source: "dashboard" })}`,
     fact("e-new"),
   ]);
@@ -115,17 +123,17 @@ test("a new entity the card promised is made, though a loaded name (James) holds
 test("unsettled (the realtime path), the subject is matched against the vault, not a substring of what is loaded", async () => {
   // "alice" is a word of "Alice Smith": that entity, though the room has not loaded it.
   expect(await remember({ subject: "alice", predicate: "birthday", object: "march 15" }))
-    .toEqual({ answer: "true accepted", calls: ["GET /api/vault/entities", fact("e-alice")] });
+    .toEqual({ answer: "true accepted", calls: ["GET /api/vault/entity-match?name=alice", fact("e-alice")] });
   // "me" is inside "James" but not a word of it: a new entity, not James.
   const me = await remember({ subject: "me", predicate: "birthday", object: "march 15" });
   expect(me.calls).toEqual([
-    "GET /api/vault/entities",
+    "GET /api/vault/entity-match?name=me",
     `POST /api/vault/entities ${JSON.stringify({ name: "me", type: "concept", source: "dashboard" })}`,
     fact("e-new"),
   ]);
   // Two entities called "bob": refused, nothing written.
   expect(await remember({ subject: "Bob", predicate: "birthday", object: "march 15" }))
-    .toEqual({ answer: "false rejected", calls: ["GET /api/vault/entities"] });
+    .toEqual({ answer: "false rejected", calls: ["GET /api/vault/entity-match?name=Bob"] });
 });
 
 test("a pinned entity deleted since the card is refused, not swapped for another or made again", async () => {
@@ -139,6 +147,13 @@ test("a new entity the card promised is not made when one by that name was added
   // Another held card for "Alice Smith" made it first; the vault has it now.
   const { answer, calls } = await remember({ subject: "alice smith", predicate: "birthday", object: "march 15", new_entity: true });
   expect(answer).toBe("false rejected");
-  expect(calls).toEqual(["GET /api/vault/entities"]);
+  expect(calls).toEqual(["GET /api/vault/entity-match?name=alice%20smith"]);
   expect(host.textContent).toContain("alice smith was added to memory since I asked; nothing was saved. Say it again.");
+});
+
+test("a new entity the card promised is not made when its name has since become ambiguous", async () => {
+  const { answer, calls } = await remember({ subject: "Bob", predicate: "birthday", object: "march 15", new_entity: true });
+  expect(answer).toBe("false rejected");
+  expect(calls).toEqual(["GET /api/vault/entity-match?name=Bob"]);
+  expect(host.textContent).toContain("Bob was added to memory since I asked; nothing was saved. Say it again.");
 });

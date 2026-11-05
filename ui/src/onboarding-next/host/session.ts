@@ -110,8 +110,13 @@ export function createSession(config: Configuration) {
       await check();
       const view = state.view!;
       if (view === 'welcome') {
-        if (action === 'explore') { update({ mode: 'complete' }); return; }
-        if (action === 'continue') await navigate({ type: 'navigate', stepId: 'explain' });
+        // After setup, Explore is a durable exit (B01): welcome does not return on the next load.
+        // Before setup it only leaves this mount, so welcome and setup come back ("I'll do this later").
+        if (action === 'explore') {
+          if (state.journey!.setupState !== 'completed') { update({ mode: 'complete' }); return; }
+          await navigate({ type: 'explore' });
+        }
+        else if (action === 'continue') await navigate({ type: 'navigate', stepId: 'explain' });
         else throw new Unavailable();
       } else if (view === 'explainer') {
         if (action === 'back') await navigate({ type: 'navigate', stepId: 'welcome' });
@@ -132,9 +137,17 @@ export function createSession(config: Configuration) {
       } else if (view === 'interview' && action === 'continue') {
         await navigate({ type: 'navigate', stepId: 'tour' });
       } else if (view === 'activation' && (action === 'back' || action === 'explore')) {
+        // A saved draft holds this request: only Back to your draft is offered.
+        if (state.journey!.draft) throw new Unavailable();
         // The view supplied its current draft; save it before leaving the screen.
         adapters.activation!.setDraft?.(context(), (input as { draft?: unknown })?.draft);
         await navigate(action === 'back' ? { type: 'replay_tutorial' } : { type: 'explore' });
+      } else if (view === 'activation' && action === 'view_draft') {
+        // The request belongs to a saved draft: return to it; no new job is possible here.
+        await navigate({ type: 'navigate', stepId: 'result' });
+      } else if (view === 'result' && action === 'back') {
+        // Back shows the original request; the saved draft and its job stay held.
+        await navigate({ type: 'navigate', stepId: 'activation' });
       } else {
         const adapter = adapters[view as keyof Configuration['adapters']];
         if (!adapter) throw new Unavailable();

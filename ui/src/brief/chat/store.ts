@@ -71,6 +71,8 @@ export class ConversationStore {
   private legacy: Record<string, LocalState> = dictionary();
   /** Field keys this window read or wrote with a value; reset per workspace. */
   private present = new Set<string>();
+  /** Field keys whose last write from this window failed (quota, blocked storage). */
+  private unsaved = new Set<string>();
   private storageKey = '';
   private requestErrors = new Map<string, string>();
   private dismissedFailures = new Map<string, string>();
@@ -116,8 +118,14 @@ export class ConversationStore {
   /** An empty field is removed rather than stored, so used conversations leave no keys behind (#1088). */
   private write(id: string, field: keyof LocalState, value: unknown) {
     const key = this.fieldKey(id, field);
-    if (this.removable(id, field, value)) { this.storage!.removeItem!(key); this.present.delete(key); }
-    else { this.storage!.setItem(key, JSON.stringify(value)); this.present.add(key); }
+    try {
+      if (this.removable(id, field, value)) { this.storage!.removeItem!(key); this.present.delete(key); }
+      else { this.storage!.setItem(key, JSON.stringify(value)); this.present.add(key); }
+      this.unsaved.delete(key);
+    } catch (error) {
+      // The stored value is older than this window's: never merge from it (#1162).
+      this.unsaved.add(key); throw error;
+    }
   }
 
   /**
@@ -145,6 +153,29 @@ export class ConversationStore {
     } catch { /* Cleanup is best effort; it never blocks opening the workspace. */ }
   }
 
+  /**
+   * The single-key blob of an older version (#1162): each of its values moves to
+   * its own field key unless that key already holds a newer one, and once every
+   * move landed the blob is removed and stops pinning empty fields as stored
+   * keys. A failed move keeps the blob, and its values, for the next load.
+   */
+  private migrateLegacy() {
+    const storage = this.storage;
+    if (!storage?.removeItem) return;
+    try {
+      const empty = emptyLocal();
+      for (const [id, local] of Object.entries(this.legacy)) {
+        for (const field of localFields) {
+          const key = this.fieldKey(id, field);
+          if (JSON.stringify(local[field]) === JSON.stringify(empty[field]) || storage.getItem(key) != null) continue;
+          storage.setItem(key, JSON.stringify(local[field]));
+        }
+      }
+      storage.removeItem(this.storageKey);
+      this.legacy = dictionary();
+    } catch { /* Kept: the blob is read again on the next load. */ }
+  }
+
   private localState(id: string): LocalState {
     let local = this.saved[id] ?? emptyLocal();
     for (const field of localFields) {
@@ -160,7 +191,7 @@ export class ConversationStore {
   restoreTabs(tabs: ConversationTabs) {
     let sweep = false;
     if (this.state.workspaceId !== tabs.workspaceId) {
-      this.replay.clear(); this.saved = dictionary(); this.legacy = dictionary(); this.present.clear(); sweep = true;
+      this.replay.clear(); this.saved = dictionary(); this.legacy = dictionary(); this.present.clear(); this.unsaved.clear(); sweep = true;
       this.requestErrors.clear(); this.dismissedFailures.clear();
       this.consumedAttachments.clear();
       this.state = { ...this.state, workspaceId: tabs.workspaceId, conversations: dictionary(), persistenceError: null };
@@ -172,6 +203,7 @@ export class ConversationStore {
             const local = readLocal(saved);
             if (local) { this.saved[id] = local; this.legacy[id] = local; }
           }
+          this.migrateLegacy();
         }
       } catch { /* Bad/blocked storage never prevents a server-backed conversation from opening. */ }
     }
@@ -252,7 +284,10 @@ export class ConversationStore {
       // window's cleared list. One this window never managed to save (quota)
       // still holds only this window's references.
       const key = this.fieldKey(id, 'attachments');
-      if (raw == null && this.storage?.removeItem && this.present.has(key)) { this.present.delete(key); items = []; }
+      // This window's last write of the list failed: what is stored is older
+      // than what it holds, so its own list stands (#1162).
+      if (this.unsaved.has(key)) { /* keep chat.attachments */ }
+      else if (raw == null && this.storage?.removeItem && this.present.has(key)) { this.present.delete(key); items = []; }
       else if (raw != null) {
         const latest = readLocal({ ...emptyLocal(), attachments: JSON.parse(raw) });
         // Merge the latest saved references before clearing accepted identities.

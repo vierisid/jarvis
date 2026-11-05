@@ -5,7 +5,7 @@ import { createDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun, updateRun, type FlowRun } from '../db/repos/flow-run';
 import { saveWorkflowEffect } from '../db/repos/workflow-effect';
 import type { ActionFailure } from '../../actions/action-outcome';
-import { _resetBindingNoticesForTests, bindingRefusalNotifier, flowBindingBlock, markBindingNoticeTold, runtimeBindingNotice, workflowRunNotice, type BindingNotification } from './binding-refusals';
+import { _resetBindingNoticesForTests, bindingRefusalNotifier, flowBindingBlock, LATEST_ENDED_RUN_SQL, markBindingNoticeTold, runtimeBindingNotice, workflowRunNotice, type BindingNotification } from './binding-refusals';
 import { runFailureNotice } from './run-failure';
 import { TOAST_TITLE_MAX } from '../../comms/toast-limits';
 
@@ -299,5 +299,12 @@ describe('flowBindingBlock (#1080)', () => {
     f.refused(OFFLINE);
     getWorkflowDb().run("UPDATE flow SET status = 'DISABLED' WHERE id = ?", [f.flow.id]);
     expect(flowBindingBlock(f.row())).toBeNull();
+  });
+});
+
+describe('the Workflows list blocked lookup reads its own index (#1152)', () => {
+  test('the latest ended run is found through idx_flow_run_ended, not by stepping past waiting runs', () => {
+    const plan = getWorkflowDb().query(`EXPLAIN QUERY PLAN ${LATEST_ENDED_RUN_SQL}`).all('p', 'f') as Array<{ detail: string }>;
+    expect(plan.map((p) => p.detail)).toEqual(['SEARCH flow_run USING INDEX idx_flow_run_ended (project_id=? AND flow_id=?)']);
   });
 });

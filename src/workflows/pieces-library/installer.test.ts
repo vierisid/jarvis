@@ -10,11 +10,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   installPiece,
+  removePackageDir,
   runPiecesBunInstall,
   withLibraryLock,
   readManifest,
@@ -23,6 +24,7 @@ import {
   writeManifest,
 } from "./installer";
 import { excludedReason, findCatalogEntry, PieceExcludedError } from "./catalog";
+import { PieceLicenseError } from "./install-licenses";
 
 let base: string;
 
@@ -39,13 +41,19 @@ afterEach(() => {
  * `<base>/node_modules/<pkg>/package.json` with the resolved version. Tests
  * call this from inside their `runBunInstall` stub.
  */
-function fakeInstall(pkg: string, resolvedVersion: string): void {
+function fakeInstall(pkg: string, resolvedVersion: string, extra: Record<string, unknown> = {}): void {
   const pkgDir = resolve(base, "node_modules", pkg);
   mkdirSync(pkgDir, { recursive: true });
   writeFileSync(
     resolve(pkgDir, "package.json"),
-    JSON.stringify({ name: pkg, version: resolvedVersion }) + "\n",
+    JSON.stringify({ name: pkg, version: resolvedVersion, ...extra }) + "\n",
   );
+  // bun writes bun.lock with every package it resolved; the license check
+  // (#971) reads identities from it, as it does on a real install.
+  const lockPath = resolve(base, "bun.lock");
+  const lock = existsSync(lockPath) ? JSON.parse(readFileSync(lockPath, "utf8")) as { lockfileVersion: number; packages: Record<string, unknown> } : { lockfileVersion: 1, packages: {} };
+  lock.packages[pkg] = [`${pkg}@${resolvedVersion}`, "", {}, "sha512-x"];
+  writeFileSync(lockPath, JSON.stringify(lock));
 }
 
 describe("manifest read/write", () => {
@@ -328,4 +336,224 @@ test("Library writers serialize and a failed install does not poison the queue",
   expect(await failure).toBe("install failed");
   await b;
   expect(order).toEqual(["install started", "next writer"]);
+});
+
+
+describe("installPiece license check (#971)", () => {
+  /** gmail at `version`, depending on `dep`, which is installed with `license`. */
+  const installWithDep = (version: string, dep: string, license: string | null) => () => {
+    fakeInstall("@activepieces/piece-gmail", version, { dependencies: { [dep]: "1.0.0" } });
+    fakeInstall(dep, "1.0.0", license === null ? {} : { license });
+  };
+  const state = () => ({
+    manifest: readFileSync(resolve(base, "installed.json"), "utf8"),
+    pkg: existsSync(resolve(base, "package.json")) ? readFileSync(resolve(base, "package.json"), "utf8") : null,
+    lock: existsSync(resolve(base, "bun.lock")) ? readFileSync(resolve(base, "bun.lock"), "utf8") : null,
+  });
+  const gmailDir = () => resolve(base, "node_modules/@activepieces/piece-gmail");
+
+  test("a permissive dependency tree installs", async () => {
+    const result = await installPiece("gmail", { base, runBunInstall: async () => installWithDep("0.12.3", "left-pad", "MIT")() });
+    expect(result.piece.resolvedVersion).toBe("0.12.3");
+  });
+
+  test("a fresh install pulling a GPL package is refused and rolled back, and the piece is off disk though bun does not prune", async () => {
+    const calls: string[] = [];
+    const err = await installPiece("gmail", { base, runBunInstall: async () => {
+      calls.push(readFileSync(resolve(base, "package.json"), "utf8"));
+      // Like real bun: the rollback install leaves the dropped piece where it is.
+      if (calls.length === 1) installWithDep("0.12.3", "copyleft-lib", "GPL-3.0-only")();
+    } }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(PieceLicenseError);
+    expect((err as PieceLicenseError).problems.join("\n")).toMatch(/copyleft-lib@1\.0\.0 .*GPL-3\.0-only.*via @activepieces\/piece-gmail@0\.12\.3 > copyleft-lib@1\.0\.0/);
+    expect((err as Error).message).toMatch(/piece "gmail" was not installed: the license policy denies/);
+    // bun ran a second time, against the package.json from before the install: no pieces.
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(calls[1]!).dependencies).toEqual({});
+    expect((await readManifest(base)).pieces).toEqual([]);
+    expect(existsSync(gmailDir())).toBe(false);
+  });
+
+  test("an update to a release with a denied dependency puts the previous install back, lockfile included", async () => {
+    await installPiece("gmail", { base, runBunInstall: async () => installWithDep("0.12.3", "left-pad", "MIT")() });
+    const before = state();
+    let n = 0;
+    let rollbackLock = null as string | null;
+    const err = await installPiece("gmail", { base, runBunInstall: async () => {
+      if (++n === 1) { installWithDep("0.12.9", "no-license-lib", null)(); return; }
+      // The rollback install sees the lockfile from before, which pins 0.12.3; bun puts that version back.
+      rollbackLock = state().lock;
+      fakeInstall("@activepieces/piece-gmail", "0.12.3", { dependencies: { "left-pad": "1.0.0" } });
+    } }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(PieceLicenseError);
+    expect((err as PieceLicenseError).problems.join("\n")).toMatch(/no-license-lib@1\.0\.0 .*no license declared/);
+    expect(rollbackLock).toBe(before.lock);
+    expect(JSON.parse(readFileSync(resolve(gmailDir(), "package.json"), "utf8")).version).toBe("0.12.3");
+    expect(state().manifest).toBe(before.manifest);
+    expect(state().pkg).toBe(before.pkg);
+  });
+
+  test("a denied package another piece also reaches is still this piece's problem, though its chain runs through the other", async () => {
+    // airtable sorts first, so the shortest chain to the shared package runs through it.
+    await writeManifest({ version: 1, pieces: [{ id: "airtable", npmPackage: "@activepieces/piece-airtable", versionRange: "1.0.0", resolvedVersion: "1.0.0", installedAt: 1 }] }, base);
+    const err = await installPiece("gmail", { base, runBunInstall: async () => {
+      fakeInstall("@activepieces/piece-airtable", "1.0.0", { dependencies: { "agpl-lib": "1.0.0" } });
+      fakeInstall("@activepieces/piece-gmail", "0.12.3", { dependencies: { "agpl-lib": "1.0.0" } });
+      fakeInstall("agpl-lib", "1.0.0", { license: "AGPL-3.0-or-later" });
+    } }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(PieceLicenseError);
+    expect((err as PieceLicenseError).problems.join("\n")).toMatch(/agpl-lib@1\.0\.0 .*via @activepieces\/piece-airtable@1\.0\.0 > agpl-lib@1\.0\.0 \(reached from @activepieces\/piece-gmail\)/);
+  });
+
+  test("a leftover an uninstall left behind does not refuse an install; a refused package the piece reaches does", async () => {
+    // What bun leaves after an uninstall: a package on disk that bun.lock no longer lists.
+    mkdirSync(resolve(base, "node_modules/kind-of"), { recursive: true });
+    writeFileSync(resolve(base, "node_modules/kind-of/package.json"), JSON.stringify({ name: "kind-of", version: "6.0.3", license: "MIT" }));
+    const ok = await installPiece("gmail", { base, runBunInstall: async () => installWithDep("0.12.3", "left-pad", "MIT")() });
+    expect(ok.piece.resolvedVersion).toBe("0.12.3");
+    // A problem the scan finds inside a package the piece reaches refuses it.
+    const err = await installPiece("slack", { base, runBunInstall: async () => {
+      fakeInstall("@activepieces/piece-slack", "0.16.4", { dependencies: { "kind-of": "6.0.3" } });
+      mkdirSync(resolve(base, "node_modules/kind-of/node_modules/.weird"), { recursive: true });
+    } }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(PieceLicenseError);
+    expect((err as PieceLicenseError).problems.join("\n")).toMatch(/node_modules\/kind-of\/node_modules\/\.weird is a hidden directory bun does not write/);
+  });
+
+  test("old nested copies bun leaves behind are judged on their license, not refused for the lock (measured on a real install)", async () => {
+    // As on a real ~/.jarvis/pieces: axios/node_modules/form-data at an older version, which bun.lock no longer lists.
+    const result = await installPiece("gmail", { base, runBunInstall: async () => {
+      fakeInstall("@activepieces/piece-gmail", "0.12.3", { dependencies: { axios: "1.0.0" } });
+      fakeInstall("axios", "1.0.0", { license: "MIT", dependencies: { "form-data": "4" } });
+      const nested = resolve(base, "node_modules/axios/node_modules/form-data");
+      mkdirSync(nested, { recursive: true });
+      writeFileSync(resolve(nested, "package.json"), JSON.stringify({ name: "form-data", version: "4.0.5", license: "MIT" }));
+    } });
+    expect(result.piece.resolvedVersion).toBe("0.12.3");
+    // The same unlisted copy with no license is still a problem: no presumption without the lock.
+    const err = await installPiece("slack", { base, runBunInstall: async () => {
+      fakeInstall("@activepieces/piece-slack", "0.16.4", { dependencies: { "old-dep": "1" } });
+      mkdirSync(resolve(base, "node_modules/old-dep"), { recursive: true });
+      writeFileSync(resolve(base, "node_modules/old-dep/package.json"), JSON.stringify({ name: "old-dep", version: "1.0.0" }));
+    } }).then(() => null, (e: unknown) => e);
+    expect((err as PieceLicenseError).problems.join("\n")).toMatch(/old-dep@1\.0\.0 .*no license declared/);
+  });
+
+  test("an old nested Activepieces SDK copy bun left keeps upstream's MIT, as the listed copy does", async () => {
+    const result = await installPiece("gmail", { base, runBunInstall: async () => {
+      fakeInstall("@activepieces/piece-gmail", "0.12.3", { dependencies: { "@activepieces/shared": "0.57.2" } });
+      fakeInstall("@activepieces/shared", "0.60.0");
+      const nested = resolve(gmailDir(), "node_modules/@activepieces/shared");
+      mkdirSync(nested, { recursive: true });
+      writeFileSync(resolve(nested, "package.json"), JSON.stringify({ name: "@activepieces/shared", version: "0.57.2" }));
+    } });
+    expect(result.piece.resolvedVersion).toBe("0.12.3");
+  });
+
+  test("a problem inside a leftover nothing uses fails nothing", async () => {
+    const stray = resolve(base, "node_modules/stray");
+    mkdirSync(resolve(stray, "node_modules/.weird"), { recursive: true });
+    writeFileSync(resolve(stray, "package.json"), JSON.stringify({ name: "stray", version: "1.0.0", license: "MIT" }));
+    const result = await installPiece("gmail", { base, runBunInstall: async () => installWithDep("0.12.3", "left-pad", "MIT")() });
+    expect(result.piece.resolvedVersion).toBe("0.12.3");
+  });
+
+  test("a piece another installed piece depends on is not removed as a stray", async () => {
+    await installPiece("gmail", { base, runBunInstall: async () => {
+      fakeInstall("@activepieces/piece-gmail", "0.12.3", { dependencies: { "@activepieces/piece-helper": "1.0.0" } });
+      fakeInstall("@activepieces/piece-helper", "1.0.0", { license: "MIT" });
+    } });
+    expect(existsSync(resolve(base, "node_modules/@activepieces/piece-helper"))).toBe(true);
+  });
+
+  test("a piece directory only a held piece depends on goes too, so its denied tree is not left loadable", async () => {
+    const err = await installPiece("gmail", { base, runBunInstall: async () => {
+      fakeInstall("@activepieces/piece-gmail", "0.12.3", { dependencies: { "@activepieces/piece-helper": "1.0.0" } });
+      fakeInstall("@activepieces/piece-helper", "1.0.0", { license: "MIT", dependencies: { "gpl-lib": "1.0.0" } });
+      fakeInstall("gpl-lib", "1.0.0", { license: "GPL-3.0-only" });
+    } }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(PieceLicenseError);
+    expect(existsSync(resolve(base, "node_modules/@activepieces/piece-helper"))).toBe(false);
+    expect(existsSync(gmailDir())).toBe(false);
+  });
+
+  test("an install that brings back a piece held at boot takes it off again, and says so", async () => {
+    await writeManifest({ version: 1, pieces: [{ id: "airtable", npmPackage: "@activepieces/piece-airtable", versionRange: "1.0.0", resolvedVersion: "1.0.0", installedAt: 1 }] }, base);
+    await installPiece("gmail", { base, runBunInstall: async () => {
+      fakeInstall("@activepieces/piece-airtable", "1.0.0", { dependencies: { "gpl-lib": "1.0.0" } });
+      fakeInstall("gpl-lib", "1.0.0", { license: "GPL-2.0-only" });
+      installWithDep("0.12.3", "left-pad", "MIT")();
+    } });
+    expect(existsSync(resolve(base, "node_modules/@activepieces/piece-airtable"))).toBe(false);
+    expect(existsSync(gmailDir())).toBe(true);
+  });
+
+  test("the install result names the other pieces it took off disk", async () => {
+    await writeManifest({ version: 1, pieces: [{ id: "airtable", npmPackage: "@activepieces/piece-airtable", versionRange: "1.0.0", resolvedVersion: "1.0.0", installedAt: 1 }] }, base);
+    const result = await installPiece("gmail", { base, runBunInstall: async () => {
+      fakeInstall("@activepieces/piece-airtable", "1.0.0", { dependencies: { "gpl-lib": "1.0.0" } });
+      fakeInstall("gpl-lib", "1.0.0", { license: "GPL-2.0-only" });
+      installWithDep("0.12.3", "left-pad", "MIT")();
+    } });
+    expect(result.alsoHeld.map((h) => h.npmPackage)).toEqual(["@activepieces/piece-airtable"]);
+  });
+
+  test("an uninstall takes the piece off disk though bun does not prune it", async () => {
+    await installPiece("gmail", { base, runBunInstall: async () => installWithDep("0.12.3", "left-pad", "MIT")() });
+    await uninstallPiece("gmail", { base, runBunInstall: async () => {} });
+    expect(existsSync(gmailDir())).toBe(false);
+  });
+
+  test("a failed install is still checked: a denied release it left on disk is removed", async () => {
+    const err = await installPiece("gmail", { base, runBunInstall: async () => {
+      installWithDep("0.12.3", "copyleft-lib", "GPL-3.0-only")();
+      throw new Error("bun install exited with code 1");
+    } }).then(() => null, (e: unknown) => e);
+    expect((err as Error).message).toBe("bun install exited with code 1");
+    expect(existsSync(gmailDir())).toBe(false);
+  });
+
+  test("a rollback bun cannot finish still takes the refused piece off disk", async () => {
+    let n = 0;
+    const err = await installPiece("gmail", { base, runBunInstall: async () => {
+      if (++n === 1) installWithDep("0.12.3", "copyleft-lib", "GPL-3.0-only")();
+      else throw new Error("registry unreachable");
+    } }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(PieceLicenseError);
+    expect((err as PieceLicenseError).rollbackError).toBe("registry unreachable");
+    expect(existsSync(gmailDir())).toBe(false);
+    expect((await readManifest(base)).pieces).toEqual([]);
+  });
+
+  test("a license check that throws refuses the install rather than letting it through", async () => {
+    const err = await installPiece("gmail", { base, runBunInstall: async () => installWithDep("0.12.3", "left-pad", "MIT")(),
+      checkLicenses: () => { throw new Error("boom"); } }).then(() => null, (e: unknown) => e);
+    expect((err as PieceLicenseError).problems).toEqual(["the license check failed: boom"]);
+  });
+
+  test("removePackageDir reports a removal the filesystem refuses instead of throwing", () => {
+    if (process.getuid?.() === 0) return; // root ignores the permission this relies on
+    fakeInstall("@activepieces/piece-gmail", "1.0.0");
+    const scope = resolve(base, "node_modules/@activepieces");
+    chmodSync(scope, 0o555);
+    try {
+      expect(removePackageDir(base, "@activepieces/piece-gmail")).toBe(false);
+    } finally { chmodSync(scope, 0o755); }
+    expect(existsSync(gmailDir())).toBe(true);
+  });
+
+  test("removePackageDir removes only a plain package name under a real node_modules", () => {
+    fakeInstall("@activepieces/piece-gmail", "1.0.0");
+    for (const bad of ["../x", "@activepieces/../../x", "/etc", "node_modules", "", "Upper"]) expect(`${bad}: ${removePackageDir(base, bad)}`).toBe(`${bad}: false`);
+    expect(removePackageDir(base, "@activepieces/piece-gmail")).toBe(true);
+    expect(removePackageDir(base, "@activepieces/piece-gmail")).toBe(false);
+    // A scope directory that is a link is never removed through.
+    const outside = mkdtempSync(join(tmpdir(), "jarvis-pieces-outside-"));
+    try {
+      mkdirSync(join(outside, "piece-x"), { recursive: true });
+      symlinkSync(outside, resolve(base, "node_modules/@evil"));
+      expect(removePackageDir(base, "@evil/piece-x")).toBe(false);
+      expect(existsSync(join(outside, "piece-x"))).toBe(true);
+    } finally { rmSync(outside, { recursive: true, force: true }); }
+  });
 });

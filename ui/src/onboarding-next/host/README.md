@@ -41,9 +41,11 @@ The approved order is welcome → explainer → Google → written interview →
 tour → Pebble demonstration → activation → build → saved result. Self-hosted
 pending setup uses the injected existing provider-setup port after the explainer.
 Hosted setup calls B02 completion and verifies its acknowledgement before Google.
-The welcome Exit control leaves this UI mount without marking durable completion.
-B01 allows the durable Explore action at activation. Finishing/skipping a tutorial
-keeps activation visible; old tutorial flags cannot dismiss it. Result completion
+Once setup is completed, the welcome Explore control persists B01's `explore`
+exit, so the welcome screen does not return on the next load. Before setup it only
+leaves this mount: welcome and setup return next time, because the daemon refuses
+chat until setup completes. B01 also allows Explore at activation.
+Finishing/skipping a tutorial keeps activation visible; old tutorial flags cannot dismiss it. Result completion
 uses B01's guarded `finish` transition, never a Talk request or workflow run.
 
 ## Wire boundary and feature adapters
@@ -83,8 +85,10 @@ subscriptions and releases resources without deleting durable records.
 
 Google skip/back cancels through its owner before navigation. Interview Continue
 remains guarded by B01; result Finish goes through the result adapter, which
-replays B10's exact continuation, and B01 still validates it. Back/Explore from activation persist the
-current draft first. Render callbacks carry the current journey/revision/view key;
+replays B10's exact continuation, and B01 still validates it. Result Back navigates
+to Activation, which shows the saved request read-only (`savedDraft`) with only
+"Back to your draft"; the draft and its job stay held. Back/Explore from
+activation persist the current draft first. Render callbacks carry the current journey/revision/view key;
 old callbacks and overlapping actions cannot advance a newer screen. Focus moves
 to the new heading after saving. A same-screen refresh restores the prior control
 and text selection after the interaction lock clears, unless the user moved

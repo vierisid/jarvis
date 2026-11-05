@@ -1,6 +1,6 @@
 /**
- * The remote browser snapshots ONE model loop has read, as ambient context
- * (#827).
+ * The browser snapshots ONE model loop has read, as ambient context (#827 for
+ * remote browsers, #1161 for the local one).
  *
  * #676 records the newest `elem_gen` each READER saw from each sidecar, so a
  * reviewed click carries the generation of the snapshot its card was raised
@@ -68,13 +68,23 @@ export type SnapshotReadLog = {
    * and anything another reader snapshots meanwhile is in that record.
    */
   readonly resumedWithReads: boolean;
+  /**
+   * The LOCAL controller's element-map generation of this loop's newest local
+   * snapshot (#1161; `PageSnapshot.elementGeneration`), or undefined when the
+   * loop has read none. The local half of `generations`: the controller is one
+   * process-global object every caller shares, so its current generation is
+   * whatever any of them snapshotted last, and a card bound to it bound
+   * another reader's map. Written by the local browser_snapshot and
+   * browser_navigate tools, read by `browserCallGuard` at review.
+   */
+  localGeneration: number | undefined;
 };
 
 const store = new AsyncLocalStorage<SnapshotReadLog>();
 
 /** A fresh, empty log for one model loop. */
 export function newSnapshotReadLog(opts: { resumedWithReads?: boolean } = {}): SnapshotReadLog {
-  return { generations: new Map(), resumedWithReads: opts.resumedWithReads === true };
+  return { generations: new Map(), resumedWithReads: opts.resumedWithReads === true, localGeneration: undefined };
 }
 
 /** Run `fn` as part of the loop that owns `log`. */

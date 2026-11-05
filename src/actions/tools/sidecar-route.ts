@@ -16,6 +16,7 @@ import {
   type ExecutionTarget,
 } from '../../util/execution-environment.ts';
 import { isNoLocalTools } from './local-tools-guard.ts';
+import { truncateHead } from '../../util/truncate.ts';
 import { ActionOutcomeError, type ActionFailure } from '../action-outcome.ts';
 import { SidecarRPCError } from '../../sidecar/rpc.ts';
 import { compareSemver, parseSemver } from '../../sidecar/compat.ts';
@@ -376,7 +377,7 @@ const MAX_REPLY_DESCRIPTION_CHARS = 1200;
 
 /** Cut a remote string to a budget, saying so rather than cutting silently. */
 function boundRemote(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max)}... (truncated, was ${s.length} chars)` : s;
+  return s.length > max ? `${truncateHead(s, max)}... (truncated, was ${s.length} chars)` : s;
 }
 
 /**
@@ -904,9 +905,10 @@ const remoteSnapshotGenerations = new Map<string, string>();
  * a handful (background tasks are capped at MAX_RUNNING_TASKS, 5; synchronous
  * delegations and workflow sub-agents add a few more) -- so an entry still in
  * use is only evicted after 256 other readers have written since it last did.
- * Orphans come from approved calls run after their reader settled, which
- * includes a resumed sub-agent's pending call: it runs under the reviewed
- * (old) reader, while the resumed run has a new id and forgets only its own.
+ * Orphans come from approved calls run after their reader settled, and from
+ * a sub-agent that paused and was never resumed: a paused run keeps its keys
+ * because its resume takes the scope over and reads them (#1161,
+ * sub-agent-runner.ts), forgetting them when it settles.
  * Eviction fails CLOSED: a card raised by that reader binds no generation and
  * its approved click is refused as unverified. At most 256 keys of a sidecar id
  * plus a reader name and a value of at most 64 characters (#676).

@@ -45,6 +45,11 @@ that runs the attempt for a person waiting on it may mark it foreground, as
 F-07's Brief composition does (`runWithAdmission('foreground', () =>
 runWithOrigin('user', ...))`); it must not grant an exempt class.
 
+B11 (`runtime/assembly.ts`) does exactly that for the first attempt (stored
+attempt count 1) of a request submitted, or re-submitted, in the same process. Every other
+attempt, including any retry after a deferral, lease reclaim or restart, runs
+explicitly as `background` with no admission class.
+
 ## Composition compatibility patch
 
 The existing `composePersistedFlow` remains the only planner and validator.

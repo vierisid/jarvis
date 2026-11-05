@@ -21,6 +21,7 @@ import { resolve, join } from "node:path";
 import {
   piecesBaseDir,
   readManifest,
+  removePackageDir,
   runPiecesBunInstall,
   writeManifest,
   synthesizePackageJson,
@@ -28,6 +29,7 @@ import {
   type InstalledPiece,
 } from "./installer";
 import { catalogById, withdrawnPiece } from "./catalog";
+import { enforcePiecesTree, type PiecesLicenseCheck } from "./install-licenses";
 
 export interface ReconcileResult {
   /** True when the manifest had at least one piece (otherwise we skipped install). */
@@ -40,12 +42,20 @@ export interface ReconcileResult {
   missing: InstalledPiece[];
   /** Pieces in the manifest whose resolved version differs from on-disk now. */
   drifted: Array<{ piece: InstalledPiece; onDiskVersion: string }>;
+  /**
+   * Installed pieces the license policy denies (#971): taken out of
+   * `node_modules` so nothing loads them, kept in the manifest. Not in
+   * `materialized`.
+   */
+  held: Array<{ piece: InstalledPiece; problems: string[] }>;
 }
 
 export interface ReconcileOptions {
   base?: string;
   runBunInstall?: (cwd: string) => Promise<void>;
   log?: (line: string) => void;
+  /** Test seam for the license check (#971); production uses `checkInstalledPieceLicenses`. */
+  checkLicenses?: (base: string, npmPackages: readonly string[]) => PiecesLicenseCheck;
 }
 
 export async function reconcilePiecesLibrary(
@@ -55,12 +65,16 @@ export async function reconcilePiecesLibrary(
   const log = opts.log ?? ((m) => console.log(`[pieces-library] ${m}`));
 
   if (!existsSync(base)) {
-    return { ranInstall: false, declared: 0, materialized: [], missing: [], drifted: [] };
+    return { ranInstall: false, declared: 0, materialized: [], missing: [], drifted: [], held: [] };
   }
 
   const manifest = await readManifest(base);
   if (manifest.pieces.length === 0) {
-    return { ranInstall: false, declared: 0, materialized: [], missing: [], drifted: [] };
+    // Nothing to install, but bun does not prune: pieces uninstalled before
+    // the license check existed can still sit where the engine looks (#971).
+    const enforced = enforcePiecesTree(base, [], { check: opts.checkLicenses, remove: removePackageDir });
+    for (const stray of enforced.strays) log(`reconcile: removed ${stray} from node_modules: no manifest entry lists it`);
+    return { ranInstall: false, declared: 0, materialized: [], missing: [], drifted: [], held: [] };
   }
 
   // Verified pieces follow the catalog's exact pin, not the range captured
@@ -158,12 +172,38 @@ export async function reconcilePiecesLibrary(
     );
   }
 
+  // License check (#971, owner decision 2026-11-05): an installed piece whose
+  // release or any package it pulls in the policy denies is logged and held.
+  // Its package leaves node_modules, so the editor's catalog and the engine's
+  // loader do not find it; the manifest keeps it, so the Library still lists
+  // it and the next boot checks again (a new release or a reviewed entry can
+  // clear it). Boot carries on with every other piece.
+  const held: Array<{ piece: InstalledPiece; problems: string[] }> = [];
+  // bun does not prune, so every piece directory the manifest does not list
+  // (a refused or uninstalled piece) is removed here too.
+  const enforced = enforcePiecesTree(base, manifest.pieces.map((p) => p.npmPackage), { check: opts.checkLicenses, remove: removePackageDir });
+  for (const stray of enforced.strays) log(`reconcile: removed ${stray} from node_modules: no manifest entry lists it`);
+  for (const line of enforced.leftovers) log(`reconcile: license check, leftover nothing installed uses: ${line}`);
+  for (const h of enforced.held) {
+    const piece = manifest.pieces.find((p) => p.npmPackage === h.npmPackage)!;
+    // Held only when it is off disk; one that could not be removed still loads.
+    if (h.removed) {
+      held.push({ piece, problems: h.problems });
+      const at = materialized.indexOf(piece);
+      if (at >= 0) materialized.splice(at, 1);
+    }
+    log(h.removed
+      ? `reconcile: WARNING ${piece.id} (${piece.npmPackage}) is held and not loaded: the license policy denies what it installs -- ${h.problems.join("; ")}. Uninstall it from the Library, or wait for a release that passes.`
+      : `reconcile: WARNING ${piece.id} (${piece.npmPackage}) fails the license policy but could not be removed from node_modules, so it is NOT held -- ${h.problems.join("; ")}. Uninstall it from the Library.`);
+  }
+
   return {
     ranInstall: true,
     declared: manifest.pieces.length,
     materialized,
     missing,
     drifted,
+    held,
   };
 }
 

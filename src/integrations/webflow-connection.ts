@@ -3,6 +3,7 @@ import { readManagedConnectionFile } from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
 import { webflowNeedsReconnect } from "./webflow-access";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const WEBFLOW_PIECE = "@activepieces/piece-webflow";
 export const WEBFLOW_CONNECTION = "jarvis:webflow";
@@ -77,6 +78,7 @@ export function webflowStatus(config: JarvisConfig) {
   return {
     configured: !!webflowConnectUrl(config),
     connect_url: webflowConnectUrl(config),
+    ...hostedSetupFault(config, webflowConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: WEBFLOW_CONNECTION,

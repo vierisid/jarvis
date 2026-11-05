@@ -369,6 +369,26 @@ describe('Vault Extractor', () => {
     });
   });
 
+  describe('extractAndStore commitments (#1115)', () => {
+    test('stores each task as one line and skips an empty one instead of dropping the rest', async () => {
+      const provider = {
+        name: 'mock',
+        async chat(): Promise<LLMResponse> {
+          return {
+            content: JSON.stringify({ entities: [], facts: [], relationships: [], commitments: [
+              { what: '\n ' }, { what: 'Call the bank\nstatus: completed' }, { what: 'Book flights' },
+            ] }),
+            tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 }, model: 'mock-model', finish_reason: 'stop',
+          };
+        },
+        async *stream() { yield { type: 'done', response: {} as any }; },
+        async listModels() { return ['mock-model']; },
+      } as LLMProvider;
+      await extractAndStore('remind me', 'ok', makeManager(provider));
+      expect(findCommitments({}).map((c) => c.what).sort()).toEqual(['Book flights', 'Call the bank status: completed']);
+    });
+  });
+
   describe('extractAndStore user profile dedup', () => {
     /** Provider whose chat() always returns the given extraction JSON. */
     function extractionProvider(extraction: ExtractionResult): LLMProvider {

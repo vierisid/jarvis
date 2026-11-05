@@ -5,6 +5,7 @@ import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import type { RealtimeVoiceSession, RealtimeVoiceDeps } from './realtime-voice.ts';
 import { RealtimeTaint } from '../agents/realtime-taint.ts';
 import type { PebbleAudioTransport } from '../comms/pebble-audio-transport.ts';
+import { RealtimeBudgetTracker, estimateSessionCostUsd, monthKey, type BudgetState } from './realtime-budget.ts';
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -178,6 +179,26 @@ describe('a session that never becomes usable downgrades the summon hotkey', () 
     expect(statuses).toEqual(['closed']);
   });
 
+  // #1156: closing the socket mid-dial fails the dial. That is the stop, not
+  // a failed connect: no error, and live voice stays on for the sidecar.
+  test('a stop that fails the pending dial is not reported as a failed connect', async () => {
+    planAllows();
+    let fail!: (err: Error) => void;
+    const fake = fakeSession(() => new Promise<void>((_r, reject) => { fail = reject; }));
+    const statuses: Array<{ status: string; detail?: string }> = [];
+    const unusable: string[] = [];
+    const mgr = makeManager({ createSession: fake.createSession,
+      onStatus: (_id, status, detail) => { statuses.push({ status, detail }); },
+      onUnusableSession: (id) => { unusable.push(id); } });
+    const starting = mgr.start('sidecar-1');
+    await new Promise((r) => setTimeout(r, 0));
+    mgr.stop('sidecar-1');
+    fail(new Error('realtime socket closed before it opened'));
+    await starting;
+    expect(statuses.map((s) => s.status)).toEqual(['closed']);
+    expect(unusable).toEqual([]);
+  });
+
   test('a conversation that ran does NOT downgrade when it ends', async () => {
     planAllows();
     const unusable: string[] = [];
@@ -328,5 +349,87 @@ describe('foldTranscript', () => {
   test('user deltas emit nothing', () => {
     const acc = newTranscriptAccumulator();
     expect(foldTranscript(acc, { role: 'user', text: 'he', final: false }, 1000)).toBeNull();
+  });
+});
+
+// #1156: the pebble ran on with the monthly budget spent, and charged nothing.
+describe('the pebble is held to the monthly realtime budget', () => {
+  const byoResolved = (budget?: number): ResolvedRealtimeVoice => ({
+    provider: 'openai', url: 'wss://api.openai.com/v1/realtime', apiKey: 'sk-test', model: 'gpt-realtime-2',
+    reasoningEffort: 'low', maxSessionMinutes: 10, blockedCategories: [], monthlyBudgetUsd: budget,
+  });
+  const ledger = (spent = 0) => {
+    let state: BudgetState | null = spent > 0 ? { month: monthKey(new Date()), spentUsd: spent } : null;
+    const tracker = new RealtimeBudgetTracker({ load: () => state, save: (s) => { state = s; } });
+    return { tracker, spent: () => tracker.getMonthSpend() };
+  };
+  const fakeSession = () => {
+    let voiceDeps: RealtimeVoiceDeps | null = null;
+    const createSession = ((_r: unknown, _t: unknown, deps: RealtimeVoiceDeps) => {
+      voiceDeps = deps;
+      return { connect: async () => {}, close: () => {}, interrupt: () => {} } as unknown as RealtimeVoiceSession;
+    }) as NonNullable<ConstructorParameters<typeof PebbleRealtimeManager>[0]['createSession']>;
+    return { createSession, deps: () => voiceDeps! };
+  };
+
+  test('a spent budget refuses the session and falls back to one-shot capture', async () => {
+    const { tracker } = ledger(5);
+    const statuses: Array<{ status: string; detail?: string }> = [];
+    const unusable: string[] = [];
+    const fake = fakeSession();
+    const mgr = makeManager({ resolve: () => ({ ok: true, resolved: byoResolved(5) }), budget: () => tracker,
+      createSession: fake.createSession,
+      onStatus: (_id, status, detail) => { statuses.push({ status, detail }); },
+      onUnusableSession: (id) => { unusable.push(id); } });
+    await mgr.start('sidecar-1');
+    expect(mgr.isActive('sidecar-1')).toBe(false);
+    expect(statuses).toEqual([{ status: 'closed', detail: expect.stringContaining('budget') }]);
+    expect(unusable).toEqual(['sidecar-1']);
+  });
+
+  test('a session under budget runs, and its minutes and transcription are charged', async () => {
+    const { tracker, spent } = ledger(1);
+    const fake = fakeSession();
+    const mgr = makeManager({ resolve: () => ({ ok: true, resolved: byoResolved(5) }), budget: () => tracker,
+      createSession: fake.createSession });
+    await mgr.start('sidecar-1');
+    expect(mgr.isActive('sidecar-1')).toBe(true);
+    fake.deps().onTranscriptionCostUsd?.(0.25);
+    expect(spent()).toBeCloseTo(1.25, 6);
+    mgr.stop('sidecar-1');
+  });
+
+  test('the minutes it ran are charged on stop', async () => {
+    const { tracker, spent } = ledger(0);
+    const fake = fakeSession();
+    const mgr = makeManager({ resolve: () => ({ ok: true, resolved: byoResolved(5) }), budget: () => tracker,
+      createSession: fake.createSession });
+    const realNow = Date.now;
+    let now = realNow();
+    Date.now = () => now;
+    try {
+      await mgr.start('sidecar-1');
+      now += 120_000;
+      mgr.stop('sidecar-1');
+    } finally {
+      Date.now = realNow;
+    }
+    expect(spent()).toBeCloseTo(estimateSessionCostUsd(120), 6);
+  });
+
+  test('a hosted session is neither refused nor charged here', async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ data: [{ id: 'uj-realtime' }] }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    })) as unknown as typeof fetch;
+    // A spent BYO ledger does not hold a hosted session back.
+    const { tracker, spent } = ledger(5);
+    const fake = fakeSession();
+    const mgr = makeManager({ resolve: () => ({ ok: true, resolved: { ...hostedResolved(), monthlyBudgetUsd: 5 } }),
+      budget: () => tracker, createSession: fake.createSession });
+    await mgr.start('sidecar-1');
+    expect(mgr.isActive('sidecar-1')).toBe(true);
+    fake.deps().onTranscriptionCostUsd?.(0.25);
+    mgr.stop('sidecar-1');
+    expect(spent()).toBe(5);
   });
 });

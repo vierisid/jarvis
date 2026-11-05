@@ -91,7 +91,9 @@ export type GoogleConfig = {
  * chat, each in a conversation of their own (#884), but only the owner:
  *   - gets turns built from the owner's private context (profile, knowledge,
  *     commitments, goals, observations) with the owner's tools, and teaches
- *     the assistant anything. Every other listed user is a guest: a plain
+ *     the assistant anything, in a private chat with the bot only: in a group
+ *     or server channel every member reads the reply, so the owner is a guest
+ *     there too (#1155). Every other listed user is a guest: a plain
  *     conversational model with none of that and no tools
  *     (AgentService.handleGuestMessage).
  *   - may approve or deny from the channel. Anyone else's `approve <id>` or
@@ -115,6 +117,26 @@ export type ChannelConfig = {
     allowed_users: string[];  // Discord user IDs; the first is the owner (#916)
     guild_id?: string;        // restrict to single guild
   };
+};
+
+/**
+ * Stored-conversation housekeeping (#1167).
+ *
+ * SYSTEM-owned, like `pebble:` and `tools:`: read from config.yaml and NOT in
+ * USER_OWNED_SECTIONS. Deliberately not a key of the user-owned `channels`
+ * section: that section is stored in the DB with the bot tokens, and a
+ * partial `channels:` block in config.yaml is imported over the whole
+ * section, which would wipe a dashboard-configured Telegram or Discord setup.
+ */
+export type ConversationsConfig = {
+  /**
+   * Days to keep the stored messages of channel conversations -- every
+   * per-sender thread on Telegram and Discord, and Pebble's voice exchanges.
+   * Absent or 0 keeps them forever, which is the default, so nothing is
+   * deleted on an existing install until this is set; 90 is the suggested
+   * value. Swept once a day, from the next daemon start.
+   */
+  channel_message_retention_days?: number;
 };
 
 export type WakeEngine = 'openwakeword' | 'webspeech' | 'auto';
@@ -263,12 +285,14 @@ export type DesktopConfig = {
   /**
    * The desktop off switch (#905). `false` stops Jarvis from asking for or
    * acting on any machine's desktop: the desktop_* tools, capture_screen,
-   * ui_snapshot / ui_act / run_skill on a desktop surface, record_skill, and
-   * the pebble's own screenshot and foreground-window reads. Screen events a
-   * sidecar sends are dropped unread by awareness and the generic event
-   * pipeline; the sidecar's own observer still captures and OCRs the screen.
-   * Browser tools are unaffected. Takes effect on restart (set in
-   * config.yaml). A value or a section in the wrong shape fails closed; an
+   * get_clipboard / set_clipboard (#1159), ui_snapshot / ui_act / run_skill on
+   * a desktop surface, record_skill, and the pebble's own screenshot and
+   * foreground-window reads. Screen and clipboard events a sidecar sends are
+   * dropped unread by awareness and the generic event pipeline; the sidecar's
+   * own observers still capture, OCR and read. Browser tools and run_command
+   * are unaffected. Settings sets it at once (POST /api/config/desktop,
+   * #1159); a config.yaml edit is imported at the next start. A value or a
+   * section in the wrong shape fails closed; an
    * empty one is the default (desktop-guard.ts desktopEnabledFromSection).
    * Default true.
    */
@@ -878,6 +902,8 @@ export type JarvisConfig = {
   awareness?: AwarenessConfig;
   /** Pebble overlay hotkeys. SYSTEM-owned; absent means the shipped defaults. */
   pebble?: PebbleConfig;
+  /** Stored-conversation housekeeping. SYSTEM-owned; absent keeps everything. */
+  conversations?: ConversationsConfig;
   llm: LLMConfig;
   personality: {
     core_traits: string[];

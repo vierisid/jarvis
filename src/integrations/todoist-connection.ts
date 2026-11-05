@@ -3,6 +3,7 @@ import { todoistNeedsReconnect } from "./todoist-refresh";
 import { readManagedConnectionFile } from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const TODOIST_PIECE = "@activepieces/piece-todoist";
 export const TODOIST_CONNECTION = "jarvis:todoist";
@@ -81,6 +82,7 @@ export function todoistStatus(config: JarvisConfig) {
   return {
     configured: !!todoistConnectUrl(config),
     connect_url: todoistConnectUrl(config),
+    ...hostedSetupFault(config, todoistConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: TODOIST_CONNECTION,

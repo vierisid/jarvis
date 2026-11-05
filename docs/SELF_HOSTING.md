@@ -149,7 +149,12 @@ auth:
 While this is on, **anyone who can reach the daemon can use your Jarvis** -
 the daemon logs a loud warning on every boot. Use it on a machine that is
 not exposed (or reachable only via localhost/SSH tunnel), enroll your first
-device, then remove the flag and restart. It can only be enabled by editing
+device, then remove the flag and restart. While it is on, the dashboard
+answers only when it is addressed as `localhost`, by IP address, or by the
+host of `daemon.public_url`; any other name (including this machine's LAN
+hostname) is refused, so a web page cannot reach it by re-pointing a domain at
+your machine. To use a LAN or tunnel name during setup, set it as
+`daemon.public_url`. It can only be enabled by editing
 the file on the server; nothing in the dashboard or API can turn it on.
 
 ## 1. Single machine
@@ -498,6 +503,26 @@ into your stored settings on the next start:
 sites:
   enabled: false
 ```
+
+### Turning desktop control off
+
+**Settings > General > Desktop control** (or `desktop.enabled: false` in
+`config.yaml`) stops Jarvis from asking for or acting on the desktop of any
+machine: no window lists, screenshots, screen reading, clipboard reads or
+writes, clicks, typing, key presses, app launches or window focus, and screen
+awareness ignores what the desktop app sends. The browser tools keep working.
+The Settings switch applies at once and works on hosted installs too; a
+`config.yaml` edit is imported at startup, so restart the daemon after it.
+
+It does not cover `run_command`. A shell command can capture the screen or send
+input on its own, and a list of such commands would never be complete, so the
+terminal keeps its own approvals and `--no-local-tools` instead. The desktop
+app itself keeps running its screen and clipboard observers while the switch is
+off; the brain drops what they send, until a desktop app update can pause them.
+
+Workflows follow the switch too: while it is off, a workflow step that uses
+`get_clipboard` or `set_clipboard` (or any desktop tool) is refused, and a
+workflow triggered by `observer.clipboard_changed` does not fire.
 
 ### Timezone
 

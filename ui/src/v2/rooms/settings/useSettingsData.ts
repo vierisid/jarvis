@@ -253,6 +253,8 @@ export interface TTSConfig {
   provider: string;
   /** True on hosted installs: the "Usejarvis AI (included)" option applies. */
   usejarvis_available?: boolean;
+  /** Microsoft refused this install's last Edge TTS request (region not served). */
+  edge_unavailable?: boolean;
   voice: string;
   rate: string;
   volume: string;
@@ -325,6 +327,8 @@ export interface RootConfig {
     active_hours: { start: number; end: number };
     aggressiveness: string;
   };
+  /** desktop.enabled as the daemon reads it (#905, #1159). Absent on an older daemon. */
+  desktop?: { enabled: boolean };
 }
 
 export interface PersonalityModel {
@@ -514,6 +518,23 @@ function preserveRef<T>(prev: T, next: T): T {
   } catch {
     return next;
   }
+}
+
+/** The body of POST /api/config/llm/test for a provider row's overrides. */
+export function providerTestBody(
+  name: string,
+  overrides?: { kind?: LLMProviderKind; model?: string; baseUrl?: string; apiKey?: string; authHeader?: string },
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { name };
+  if (overrides?.kind) body.kind = overrides.kind;
+  if (overrides?.model) body.model = overrides.model;
+  if (overrides && Object.hasOwn(overrides, "baseUrl")) {
+    body.base_url = overrides.baseUrl ?? "";
+  }
+  if (overrides?.apiKey) body.api_key = overrides.apiKey;
+  // An empty header is sent: it clears a saved gateway header for this test (#1162).
+  if (overrides?.authHeader !== undefined) body.auth_header = overrides.authHeader;
+  return body;
 }
 
 /**
@@ -778,14 +799,7 @@ export function useSettingsData() {
       overrides?: { kind?: LLMProviderKind; model?: string; baseUrl?: string; apiKey?: string; authHeader?: string },
     ): Promise<ProviderTestResult> => {
       try {
-        const body: Record<string, unknown> = { name };
-        if (overrides?.kind) body.kind = overrides.kind;
-        if (overrides?.model) body.model = overrides.model;
-        if (overrides && Object.hasOwn(overrides, "baseUrl")) {
-          body.base_url = overrides.baseUrl ?? "";
-        }
-        if (overrides?.apiKey) body.api_key = overrides.apiKey;
-        if (overrides?.authHeader) body.auth_header = overrides.authHeader;
+        const body = providerTestBody(name, overrides);
         const r = await postJson<{ ok: boolean; model?: string; models?: string[]; error?: string }>(
           "/api/config/llm/test",
           body,
@@ -975,6 +989,28 @@ export function useSettingsData() {
         return { ok: true, message: r.message || "Voice settings saved." };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      }
+    },
+    [refresh],
+  );
+
+  // -- Desktop control (desktop.enabled, applied at once) --
+  const setDesktopEnabled = useCallback(
+    async (enabled: boolean): Promise<ActionResult> => {
+      try {
+        const r = await postJson<{ ok: boolean; message: string }>(
+          "/api/config/desktop",
+          { enabled },
+        );
+        return r.ok
+          ? { ok: true, message: r.message }
+          : { ok: false, message: r.message || "Failed to apply the desktop setting." };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      } finally {
+        // Also after a failure: an "off" that could not be saved is still in
+        // force, and the switch must show what the daemon reads.
+        await refresh();
       }
     },
     [refresh],
@@ -1182,6 +1218,7 @@ export function useSettingsData() {
     setSTTLanguage,
     setTTS,
     setVoiceConfig,
+    setDesktopEnabled,
     restartDaemon,
     saveProfile,
     clearProfile,

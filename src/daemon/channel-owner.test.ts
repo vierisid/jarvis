@@ -7,7 +7,7 @@
  * owner may decide from the channel.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { ChannelService, channelDecisionNotOwner, recipientWarning } from "./channel-service";
+import { ChannelService, channelDecisionNotOwner, channelDecisionNotPrivate, recipientWarning } from "./channel-service";
 import type { ChannelAdapter, ChannelMessage } from "../comms/channels/telegram";
 import { channelOwnerId } from "../comms/channels/allow-list";
 import { closeDb, initDatabase } from "../vault/schema";
@@ -165,7 +165,17 @@ describe("#916: only the owner may approve or deny from the channel", () => {
     const { decisions, handle } = setup({ telegram: [42, 7], discord: [OWNER, SPOUSE] });
     expect(await handle(tg(42, "approve 1a2b3c4d"))).toBe("decided");
     expect(await handle(dc(OWNER, "owner-dm", "deny 1a2b3c4d"))).toBe("decided");
-    expect(decisions).toEqual([["approve", "1a2b3c4d", "telegram"], ["deny", "1a2b3c4d", "discord"]]);
+    // With who decided (#1155), recorded on the decision.
+    expect(decisions).toEqual([["approve", "1a2b3c4d", "telegram", "42"], ["deny", "1a2b3c4d", "discord", OWNER]]);
+  });
+
+  test("the owner deciding in a group or server channel is refused, and nothing is decided (#1155)", async () => {
+    const { decisions, chats, handle } = setup({ telegram: [42, 7], discord: [OWNER, SPOUSE] });
+    expect(await handle(tg(42, "approve 1a2b3c4d", "supergroup"))).toBe(channelDecisionNotPrivate("telegram"));
+    const server: ChannelMessage = { ...dc(OWNER, "server-chan", "deny 1a2b3c4d"), metadata: { channelId: "server-chan", userId: OWNER, isDM: false } };
+    expect(await handle(server)).toBe(channelDecisionNotPrivate("discord"));
+    expect(decisions).toEqual([]);
+    expect(chats).toEqual([]);
   });
 
   test("ordinary chat from another listed user is still answered", async () => {

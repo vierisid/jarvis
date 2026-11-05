@@ -162,6 +162,39 @@ const WORKSPACE_PKG_RELS = [
 ] as const;
 
 /**
+ * The vendored core pieces (`packages/pieces/core`) Jarvis builds and loads
+ * (#961): every core piece upstream ships at the pin except the ones below.
+ * Each is governed (`CORE_PIECE_ADAPTERS` in runtime/piece-effects.ts) or acts
+ * only inside the run (`IN_RUN_STEP_PIECES` in runtime/step-admission.ts), and
+ * their third-party dependencies are part of the staging install (so of the
+ * committed lockfile and `bundleHash()`). Not loaded, and why
+ * (`CORE_PIECES_LEFT_OUT`).
+ */
+export const LOADED_CORE_PIECES: readonly string[] = [
+  "approval", "crypto", "csv", "data-mapper", "data-summarizer", "date-helper", "delay", "file-helper", "graphql", "http",
+  "image-helper", "math-helper", "pdf", "qrcode", "schedule", "sftp", "smtp", "store", "text-helper", "xml",
+];
+
+/**
+ * Every upstream core piece at the pin that Jarvis does not load, with the
+ * reason. `core-pieces.test.ts` holds the vendored directory to exactly
+ * `LOADED_CORE_PIECES` plus the vendored entries here, and this list plus
+ * `LOADED_CORE_PIECES` to the whole upstream core folder.
+ */
+export const CORE_PIECES_LEFT_OUT: Readonly<Record<string, { vendored: boolean; reason: string }>> = {
+  webhook: { vendored: true, reason: "the editor's Webhook trigger is Jarvis's own ingress (/api/webhooks/<flowId>, with an optional signing secret); the core trigger would never fire through the engine, and its two return-response actions answer a synchronous webhook Jarvis does not hold open" },
+  tables: { vendored: false, reason: "reads and writes Activepieces Tables through the Activepieces server API, which Jarvis does not run" },
+  forms: { vendored: false, reason: "serves forms and chat pages from the Activepieces server; Jarvis has its own workflow input forms" },
+  subflows: { vendored: false, reason: "calls flows through the Activepieces server API; a Jarvis workflow calls a child with the 'Jarvis: Reusable workflows' piece (@jarvispieces/piece-jarvis-subflow)" },
+  connections: { vendored: false, reason: "reads connections through the Activepieces server API; Jarvis hands out connections itself" },
+  tags: { vendored: false, reason: "tags runs through the Activepieces server API" },
+  "manual-trigger": { vendored: false, reason: "a MANUAL-strategy trigger the Activepieces server fires; a Jarvis workflow started by hand uses the editor's own manual (EMPTY) trigger and the Run button" },
+};
+
+/** The `package.json` of each loaded core piece, relative to VENDOR_PACKAGES. */
+const CORE_PIECE_PKG_RELS = LOADED_CORE_PIECES.map((name) => `pieces/core/${name}/package.json`);
+
+/**
  * Security floor for transitive deps the staging install resolves. When a
  * vendored manifest pins a dep at a version with a known advisory reachable
  * from JARVIS (e.g. axios in pieces/common feeds the HTTP node, which webhook
@@ -221,7 +254,9 @@ function versionMeetsFloor(declared: string, floor: string): boolean {
 
 /**
  * Synthesize the staging-dir package.json: union of every non-workspace dep
- * across the four workspace packages the engine bundle imports, plus esbuild.
+ * across the four workspace packages the engine bundle imports and the loaded
+ * core pieces (`LOADED_CORE_PIECES`, whose bundles compile against this
+ * install), plus esbuild.
  * Applies SECURITY_FLOOR via the `overrides` block when upstream's declared
  * version sits below the floor. On dep version conflict between manifests,
  * the latest entry wins -- we'd flag in CI if this ever matters, but in
@@ -229,7 +264,10 @@ function versionMeetsFloor(declared: string, floor: string): boolean {
  */
 export function buildStagingPackageJson(): string {
   const deps: Record<string, string> = {};
-  for (const rel of WORKSPACE_PKG_RELS) {
+  // The loaded core pieces first, so where one of them names a version the
+  // engine's own workspace packages also name, the engine's pin wins (the
+  // core HTTP piece's https-proxy-agent 7.0.4 against the engine's 7.0.6).
+  for (const rel of [...CORE_PIECE_PKG_RELS, ...WORKSPACE_PKG_RELS]) {
     const pkg = JSON.parse(
       readFileSync(resolve(VENDOR_PACKAGES, rel), "utf8"),
     ) as { dependencies?: Record<string, string> };

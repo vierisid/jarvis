@@ -392,3 +392,11 @@ test("tutorial wrapper delegates only tutorial scope to the existing reset owner
     globalThis.fetch = old;
   }
 });
+
+// #1162: the route answers 503 { code: "unavailable" } only when the feature is off.
+test("a settings read maps the flag-off answer to unavailable, and an internal error to error", async () => {
+  const answer = (status: number, code: string) => createSettingsPort("scope", { canWrite: true,
+    destinations: {}, request: async () => Response.json({ code }, { status }) } as never).read(new AbortController().signal);
+  expect(await answer(503, "unavailable")).toEqual({ state: "unavailable" });
+  expect(await answer(500, "internal")).toEqual({ state: "error" });
+});

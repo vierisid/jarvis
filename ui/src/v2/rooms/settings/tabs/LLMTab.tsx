@@ -495,13 +495,14 @@ export function ProviderRow({
               onClick={async () => {
                 setTesting(true);
                 setTestResult(null);
+                const testUrl = optionalUrl ? (customEndpoint ? baseUrl : "") : (baseUrl || undefined);
                 const r = await data.testProvider(name, {
                   kind: entry.kind,
                   apiKey: apiKey || undefined,
-                  baseUrl: optionalUrl
-                    ? (customEndpoint ? baseUrl : "")
-                    : (baseUrl || undefined),
-                  ...(sendsHeader ? { authHeader } : {}),
+                  baseUrl: testUrl,
+                  // On the provider's own origin, its own header: one kept from
+                  // a gateway would send the key as the wrong credential (#1162).
+                  ...(sendsHeader ? { authHeader } : testUrl === "" ? { authHeader: "" } : {}),
                 });
                 setTestResult({ ok: r.ok, text: r.message, models: r.models });
                 setTesting(false);
@@ -522,6 +523,8 @@ export function ProviderRow({
                 if (apiKey) input.api_key = apiKey;
                 if (usesUrl || optionalUrl) input.base_url = supportsUrl ? baseUrl : "";
                 if (sendsHeader) input.auth_header = authHeader;
+                // As in the onboarding wizard: back on the official endpoint, no gateway header (#1162).
+                if (input.base_url === "") input.auth_header = "";
                 const r = await data.upsertProvider(name, input);
                 onToast(r.message, r.ok ? "ok" : "warn");
                 if (r.ok) setApiKey("");

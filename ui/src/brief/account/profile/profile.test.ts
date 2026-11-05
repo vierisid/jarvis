@@ -437,3 +437,13 @@ test("bad acknowledgment, mismatched readback and forged port confirmation never
     c.retire();
   }
 });
+
+// #1162: the route answers 503 { code: "unavailable" } only when the feature is
+// off; any other failure is an error, which a read reports as such.
+test("a read maps the flag-off answer to unavailable, and an internal error to error", async () => {
+  const answer = (status: number, code: string) => createProfilePort("scope", { canWrite: true,
+    request: async () => Response.json({ code }, { status }) }).read(new AbortController().signal);
+  expect(await answer(503, "unavailable")).toEqual({ state: "unavailable" });
+  expect(await answer(500, "internal")).toEqual({ state: "error" });
+  expect(await answer(503, "other")).toEqual({ state: "error" });
+});

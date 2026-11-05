@@ -1,14 +1,26 @@
 # Brief dashboard boundary
 
-The Brief dashboard is opt-in. A normal URL still renders `AppShellV2`; `ui/src/main.tsx` mounts
-`DashboardEntry` around that same element.
+`ui/src/main.tsx` mounts `host/DashboardRoot.tsx`. It renders the connected Brief dashboard for
+Brief routes and otherwise `DashboardEntry` (with no release record, runtime, navigation or
+conversation) around `AppShellV2`.
+
+Installs the daemon treats as hosted (`isHostedInstall`, which includes self-hosted brains on a Unix
+socket or with a `usejarvis_ai` block) open the Brief dashboard at `/` (#1185). The authenticated host
+descriptor (`GET /api/brief/host`, read by `host/hosted-entry.ts`) selects it, and the routing is D33's
+`resolveReleaseEntry` (`entry/release-route.ts`) with the rollout forced to `released`, so the entry
+table in `scripts/brief-release/README.md` describes hosted routing too, except that hosted Brief keeps
+maintenance links inside the Brief host (`host/DashboardRoot.tsx`). `?brief=0` on a fresh load, or
+`JARVIS_HOSTED_DASHBOARD=legacy` plus a restart, returns to `AppShellV2`; `docs/hosted-dashboard.md`
+describes that path. Everywhere else the Brief dashboard is opt-in.
 
 ## Entry points
 
-The release switch (`entry/release.ts`, `entry/release-route.ts`) is off: `BRIEF_RELEASE` has
-`rollout: "off"` and `ui/src/main.tsx` supplies no release runtime or live composition, so every
-ordinary URL renders `AppShellV2`. `scripts/brief-release/README.md` holds the integration contract,
-the release checklist and the rollback table.
+The D33 release record (`entry/release.ts`, `BRIEF_RELEASE`) is off and does not select the hosted
+default: `BRIEF_RELEASE` has `rollout: "off"`, and `DashboardEntry` gets no release runtime or live
+composition, so it would stay off even with a filled record. `scripts/brief-release/README.md` holds
+the integration contract, the release checklist and the rollback table.
+
+Outside the hosted default (self-hosted installs, and hosted with `JARVIS_HOSTED_DASHBOARD=legacy`):
 
 - Internal review needs the existing developer setting: run
   `localStorage.setItem("jarvis-devtools", "1")` in the dashboard's origin, then reload. The setting is
@@ -25,7 +37,7 @@ the release checklist and the rollback table.
   with an `onboarding` query, stays with `AppShellV2`.
 
 Rollback: `?brief=0` on a fresh load always opens `AppShellV2`. The "Return to current dashboard"
-links set `brief=0` rather than removing the parameter, so they also override a future default-on
+links set `brief=0` rather than removing the parameter, so they also override the hosted default-on
 release.
 
 ## Layout
@@ -192,8 +204,8 @@ mounted live yet; a composition root wires it after the rooms it targets are rea
   points). Under an approved release (owner decision on #1106) the notice shows only when `<room>`
   is shaped like a room id (lower-case letters and digits in hyphen-separated words, at most 64
   characters) and the URL passes the same opt-in rules as a known room; anything else under
-  `#/brief/` is malformed and opens the current dashboard. The developer-setting path still shows
-  the notice for any unknown `#/brief/` hash, malformed or not.
+  `#/brief/` is malformed and opens the current dashboard. The developer-setting path follows the
+  same rule (#1162): only a well-formed id gets the notice.
 
 `?brief=preview&specimen=navigation-compatibility#/_brief_preview` opens these parts over fixture
 notifications. It starts no API read, socket, voice or Settings write.
@@ -208,8 +220,8 @@ sidebar changes.
 
 - The conversation comes only from the composition root as `conversation: BriefConversationBinding`
   (`source` plus `content`). The host creates no thread, socket, microphone, request or persistence.
-  Without a binding (the default today, `main.tsx` passes none) the opener is hidden and inert and the
-  released Talk/Pebble overlay is untouched. `source` must be `"live"` in live mode and `"fixture"` in
+  Without a binding (`DashboardEntry` gets none from `DashboardRoot`) the opener is hidden and inert
+  and the released Talk/Pebble overlay is untouched. `source` must be `"live"` in live mode and `"fixture"` in
   preview mode, otherwise nothing mounts.
 - The opener is gated by the same `canMountNavigation` check as the navigation chrome. Losing that
   capability hides the panel without remounting the room or the conversation.
@@ -527,8 +539,9 @@ ingredients (ready, loading, unavailable). It sends no request.
   a request that was never sent. `Check result` (`check()`, #1093) reads that same request back through
   the optional `port.reconcile`, F-21's `GET /api/brief/workflows/:flowId/run-requests/:requestId`: an
   accepted receipt shows and selects its run and unlocks Run; F-21's `not_found` (no run has been
-  accepted under that ID yet) unlocks Run for a new, explicit request and says that one still in
-  transit could yet start; any other answer leaves it uncertain.
+  accepted under that ID) withdraws the ID in the same transaction, so one still in transit can no
+  longer start (#1162), and unlocks Run for a new, explicit request; any other answer leaves it
+  uncertain.
 - `briefRunsPort(scope, request)` is the read half of the port, over F-21 (#1100): F-21's keyset reader
   owns Brief run history, so `list` reads `GET /api/brief/workflows/:flowId/runs[?cursor=]` (newest
   first, 50 a page, opaque cursor) and `detail` reads `GET /api/brief/workflows/:flowId/runs/:runId`, the

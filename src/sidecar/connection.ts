@@ -11,6 +11,7 @@ import type { EventScheduler } from './scheduler.ts';
 import type { BinarySpool } from './binary-spool.ts';
 import { SPOOL_THRESHOLD_BYTES } from './binary-spool.ts';
 import { validateEvent, validateBinaryFrame, MAX_JSON_SIZE } from './validator.ts';
+import { droppedWhileDesktopOff } from '../daemon/sidecar-event-routing.ts';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const MAX_MISSED_PONGS = 3;
@@ -83,6 +84,12 @@ export class SidecarConnection {
     }
 
     const event = result.event;
+
+    // Desktop state the user has switched off (#1159): dropped on arrival, not
+    // only when the queue drains, so a copy or a capture made while
+    // desktop.enabled was off cannot be processed after it is turned back on
+    // (the consumers drop it at dispatch too).
+    if (droppedWhileDesktopOff(event.event_type)) return;
 
     // If event references binary data via ref, wait for the binary frame, then
     // normalize it to an inline descriptor. Downstream consumers (rpc_result
