@@ -19,7 +19,7 @@ import { ActionOutcomeError, type ActionFailure } from '../../actions/action-out
 import { getFlowRun } from '../db/repos/flow-run';
 import { createWaitpoint, getWaitpoint } from '../db/repos/waitpoint';
 import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
-import { canonicalJson, digest, resolveEffectContext, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
+import { canonicalJson, digest, resolveEffectContext, STEP_INPUT_NOT_FIXED, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
 import { aboveLevelMayAsk, governedCategoriesFor, substituteAboveLevel } from '../../authority/tool-action-map';
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
 import { budgetCap, budgetOf, deferredAhead, deferredAheadLimit, waitingWorkflowCards } from './deferred-cards';
@@ -39,6 +39,8 @@ export interface WorkflowAuthorityDependencies {
   authorityEngine?: AuthorityEngine; auditTrail?: AuditTrail; emergencyController?: EmergencyController;
   approvalManager?: ApprovalManager;
   onWorkflowApproval?: (request: ApprovalRequest) => void | Promise<void>;
+  /** Hears each workflow card the boundary closed, so the dashboard stops offering it (#1152). */
+  onWorkflowCardClosed?: (approvalId: string) => void;
 }
 /**
  * Who an effect is dispatched for when it is not the workflow itself. A
@@ -51,6 +53,8 @@ export type EffectPrincipal = {
 export interface EffectInvocation {
   context: WorkflowEffectContext; piece: string; action: string; route: string;
   toolName: string; category: ActionCategory; toolCategory: string;
+  /** Step inputs the call must match where the graph states them literally (`resolveEffectContext`). */
+  pinnedInput?: Record<string, string>;
   /**
    * Every category the effect reaches when it spans more than one (a skill
    * that clicks controls and sends a message). Each is checked and the
@@ -144,16 +148,28 @@ export type EffectReply = { result: unknown; outcome?: ActionOutcome; approval?:
  * partial effect is possible") and why an `unknown` outcome is `failed` here
  * rather than `blocked`: `blocked` would tell an operator nothing happened.
  *
- * A no-op for an effect with no approval, and for an approval that is not
- * `approved` -- `markExecuted` only writes an approved row, so a denied or
- * expired one keeps its own status. The receipt names the effect, so the
- * approval leads to the record that holds the detail. Best effort: a failed
- * receipt write must not replace the error the step is about to throw.
+ * A card still pending when its effect is blocked is denied (#1152): a
+ * refusal on a step asked again while its card waits (Authority now denies
+ * it, say) used to leave the card pending and approvable, and no sweep
+ * reaches it while the run lives, since sweeps read only pending effects.
+ *
+ * A no-op for an effect with no approval, and for an approval that is
+ * neither pending nor `approved` -- `markExecuted` only writes an approved
+ * row, so a denied or expired one keeps its own status. The receipt names the
+ * effect, so the approval leads to the record that holds the detail; a denied
+ * card has no receipt, and its effect id is in the card's context. Best
+ * effort: a failed receipt write must not replace the error the step is
+ * about to throw.
  */
 export function closeEffectApproval(approvals: ApprovalManager | undefined, effect: WorkflowEffect,
-  outcome: 'blocked' | 'failed'): void {
+  outcome: 'blocked' | 'failed', onCardClosed?: (approvalId: string) => void): void {
   if (!effect.approvalId || !approvals) return;
   try {
+    const request = approvals.getRequest(effect.approvalId);
+    if (request?.status === 'pending' && request.execution_mode === 'workflow') {
+      if (approvals.deny(effect.approvalId, 'workflow-effect-blocked')) onCardClosed?.(effect.approvalId);
+      return;
+    }
     approvals.markExecuted(effect.approvalId, boundedReceiptText(canonicalJson({ effectId: effect.id,
       status: effect.status, error: effect.error ?? null }), RECEIPT_MAX_CHARS), outcome);
   } catch (error) { console.error('[Workflow Authority] approval receipt failed:', error); }
@@ -179,7 +195,9 @@ const refused = (error: PolicyRefusal): ActionFailure =>
  * handles one as an outcome to branch on: it fails the step, even a probe's.
  */
 export const GOVERNANCE_REFUSALS: ReadonlySet<string> = new Set(['EMERGENCY_STOPPED', 'RUN_NOT_RUNNING', 'AUTHORITY_DENIED',
-  'APPROVAL_DENIED', 'APPROVAL_EXPIRED', 'APPROVAL_WITHDRAWN', 'APPROVAL_REQUIRED', 'WORKFLOW_CHANGED', 'CARD_CANNOT_SHOW']);
+  'APPROVAL_DENIED', 'APPROVAL_EXPIRED', 'APPROVAL_WITHDRAWN', 'APPROVAL_REQUIRED', 'WORKFLOW_CHANGED', 'CARD_CANNOT_SHOW',
+  // A step whose tool run data would choose cannot run as written (#1152).
+  STEP_INPUT_NOT_FIXED]);
 
 /** The durable identity of an effect: one per run, step, loop position and route. */
 export const workflowEffectId = (runId: string, stepName: string, executionPath: Array<[string, number]>, route: string) =>
@@ -254,7 +272,7 @@ export class WorkflowEffectBoundary {
   async invoke(input: EffectInvocation): Promise<EffectReply> {
     const { authorityEngine: authority, emergencyController: emergency, auditTrail: audit, approvalManager: approvals } = this.deps;
     if (!authority || !emergency || !audit) throw new Error('Workflow Authority is unavailable; execution denied');
-    const resolved = resolveEffectContext(input.context, input.piece, input.action);
+    const resolved = resolveEffectContext(input.context, input.piece, input.action, input.pinnedInput);
     const id = workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, input.route);
     let effect = getWorkflowEffect(id);
     // A piece effect recorded before Q-08 has a request digest without the
@@ -396,27 +414,32 @@ export class WorkflowEffectBoundary {
       }
       return decision;
     };
-    const held = holdIfPaused();
-    if (held) {
-      // A step released from waiting for a place (#1039) that Pause holds
-      // when it runs again keeps that place through the hold: its record
-      // names the HOLD, so only this record's own hold keeps it live
-      // (`deferred-cards.ts`), never another pass of the same step. One not
-      // yet released keeps its open DEFER, which already keeps it live.
-      if (record.deferral && !record.approvalId) {
+    // A step released from waiting for a place (#1039) that Pause holds
+    // when it runs again keeps that place through the hold: its record
+    // names the HOLD, so only this record's own hold keeps it live
+    // (`deferred-cards.ts`), never another pass of the same step. One not
+    // yet released keeps its open DEFER, which already keeps it live.
+    // Creating the HOLD and naming it are one transaction, as on the DEFER
+    // path: a crash between them would leave the step without its place
+    // until it asked again after Resume (#1152).
+    const held = emergency.getState() !== 'paused' ? null : getWorkflowDb().transaction(() => {
+      const reply = holdIfPaused();
+      if (reply && record.deferral && !record.approvalId) {
         const current = record.waitpointId ? getWaitpoint(record.waitpointId) : null;
         if (!current || current.type !== 'DEFER' || current.resumedAt !== null) {
-          record.waitpointId = held.approval!.waitpointId; saveWorkflowEffect(record);
+          record.waitpointId = reply.approval!.waitpointId; saveWorkflowEffect(record);
         }
       }
-      return held;
-    }
+      return reply;
+    })();
+    if (held) return held;
     // Bindings first, so a stale one is refused before anyone is asked to approve it.
     try { input.revalidate?.(record); } catch (error) {
       if (error instanceof ActionOutcomeError) {
         // Authority never ran, but nothing ran either: the trail says denied, not allowed.
         record.outcome = error.outcome; record.status = 'blocked'; record.decision = 'denied'; record.error = error.message;
-        record.reason = error.message; record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false);
+        record.reason = error.message; record.finishedAt = Date.now(); saveWorkflowEffect(record);
+        closeEffectApproval(approvals, record, 'blocked', this.deps.onWorkflowCardClosed); log(false);
       }
       throw error;
     }
@@ -426,7 +449,7 @@ export class WorkflowEffectBoundary {
       const outcome = error instanceof PolicyRefusal ? refused(error) : null;
       if (outcome) record.outcome = outcome;
       record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record);
-      closeEffectApproval(approvals, record, 'blocked');
+      closeEffectApproval(approvals, record, 'blocked', this.deps.onWorkflowCardClosed);
       log(false);
       throw outcome ? new ActionOutcomeError(outcome) : error;
     }
@@ -566,7 +589,7 @@ export class WorkflowEffectBoundary {
         record.status = 'blocked'; record.decision = 'denied';
         record.error = 'Workflow approval predates required UI review; start a new reviewed run';
         record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record);
-        closeEffectApproval(approvals, record, 'blocked');
+        closeEffectApproval(approvals, record, 'blocked', this.deps.onWorkflowCardClosed);
         log(false); throw new Error(record.error);
       }
       // Expired/kept supported documents remain reviewable. Only an explicit
@@ -592,7 +615,7 @@ export class WorkflowEffectBoundary {
       if (!run || run.status !== 'RUNNING') throw new PolicyRefusal('RUN_NOT_RUNNING', `Workflow effect blocked: run is ${run?.status ?? 'missing'}`);
       input.validateTarget?.(record.arguments, record.target);
       input.revalidate?.(record);
-      const latest = resolveEffectContext(input.context, input.piece, input.action);
+      const latest = resolveEffectContext(input.context, input.piece, input.action, input.pinnedInput);
       if (latest.versionDigest !== record.versionDigest) throw new PolicyRefusal('WORKFLOW_CHANGED', 'Workflow version changed before dispatch');
       const current = policy();
       if (record.approvalId && approvals?.getRequest(record.approvalId)?.status !== 'approved') {
@@ -609,7 +632,7 @@ export class WorkflowEffectBoundary {
         const outcome = error instanceof PolicyRefusal ? refused(error) : error.outcome;
         record.outcome = outcome; record.status = 'blocked'; record.error = error.message;
         record.finishedAt = Date.now(); saveWorkflowEffect(record);
-        closeEffectApproval(approvals, record, 'blocked');
+        closeEffectApproval(approvals, record, 'blocked', this.deps.onWorkflowCardClosed);
         log(false);
         throw error instanceof PolicyRefusal ? new ActionOutcomeError(outcome) : error;
       }

@@ -63,24 +63,26 @@ export const budgetCap = (budget: CardBudget): number =>
 
 const LIVE = `('QUEUED','RUNNING','PAUSED')`;
 /**
- * A step waiting for a place, exactly as `idx_workflow_effect_deferred`
+ * A step waiting for a place, exactly as `idx_workflow_effect_deferred_valid`
  * (db/schema.ts) is filtered, so the planner reads the index rather than
  * parsing every pending record: a flood that nobody answers grows this set
  * by up to 60 a minute per flow (the webhook limit).
  */
-const DEFERRED = `e.status = 'pending' AND e.approval_id IS NULL AND json_extract(e.record, '$.deferral.budget') IS NOT NULL`;
+const DEFERRED = `e.status = 'pending' AND e.approval_id IS NULL AND json_valid(e.record)
+  AND json_extract(e.record, '$.deferral.budget') IS NOT NULL`;
 /**
  * A waiting step holds its place only while it is live: parked (or about to
  * park) on its DEFER waitpoint, or held by Pause at its step after it was
  * released (the boundary then names that HOLD on the record, so it is this
  * record's own, never another pass of the same step's), or with the
- * continuation that wakes either still queued or running. One whose step did not ask again when its
- * run woke (the step failed first and the run went on), or that a later
- * deferral of the same run superseded, holds no place: otherwise one such
- * record, the oldest in the queue, would keep a place for as long as its run
- * lived, and every later step of the flow would wait behind it. If it asks
- * again it keeps its age (`deferral.since` is kept while the budget is the
- * same), so a step Pause held after its release is not sent to the back.
+ * continuation that wakes either still queued or running. One whose step
+ * did not ask again when its run woke (the step failed first and the run
+ * went on), or that a later deferral of the same run superseded, holds no
+ * place: otherwise one such record, the oldest in the queue, would keep a
+ * place for as long as its run lived, and every later step of the flow would
+ * wait behind it. If it asks again it keeps its age (`deferral.since` is kept
+ * while the budget is the same), so a step Pause held after its release is
+ * not sent to the back.
  */
 const LIVE_DEFERRAL = `EXISTS (SELECT 1 FROM waitpoint w WHERE w.id = e.waitpoint_id AND w.type IN ('DEFER','HOLD')
   AND (w.resumed_at IS NULL OR EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id = e.run_id AND j.job_type = 'RUN_FLOW'
@@ -159,7 +161,7 @@ export function releaseDeferredSteps(now = Date.now()): number {
     // Deliberately hard: the schema always creates the index
     // (db/schema.ts); a database without it fails this loudly, and the tick
     // logs it, rather than quietly scanning every record.
-    `SELECT DISTINCT ${FLOW} AS flow_id, ${BUDGET} AS budget FROM workflow_effect e INDEXED BY idx_workflow_effect_deferred
+    `SELECT DISTINCT ${FLOW} AS flow_id, ${BUDGET} AS budget FROM workflow_effect e INDEXED BY idx_workflow_effect_deferred_valid
       WHERE ${DEFERRED}`).all();
   // Read whole, then acted on: stopping a run rewrites rows of this table,
   // which must not happen under an open cursor over it. A place a stopped

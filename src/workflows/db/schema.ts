@@ -24,6 +24,15 @@ export const DEFAULT_IDS = {
   project: "jrv_proj_default",
 } as const;
 
+/**
+ * The statuses a run ends in, as SQL. Shared with the Workflows list's
+ * "blocked" lookup (runtime/binding-refusals.ts), whose index below is
+ * partial over exactly this filter: a query that states it differently
+ * stops using the index.
+ */
+export const ENDED_RUN_STATUSES_SQL =
+  `('SUCCEEDED','FAILED','TIMEOUT','INTERNAL_ERROR','QUOTA_EXCEEDED','MEMORY_LIMIT_EXCEEDED','SCHEDULE_FAILURE','STOPPED')`;
+
 const STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS workflow_human_request (
     id TEXT PRIMARY KEY, project_id TEXT NOT NULL, flow_id TEXT NOT NULL REFERENCES flow(id) ON DELETE CASCADE,
@@ -219,6 +228,11 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_flow_run_project ON flow_run(project_id)`,
   `CREATE INDEX IF NOT EXISTS idx_flow_run_started ON flow_run(start_time)`,
   `CREATE INDEX IF NOT EXISTS idx_flow_run_parent ON flow_run(parent_run_id)`,
+  // The latest ended run of a flow, for the Workflows list's "blocked" badge
+  // (#1152). Over the run history index it stepped past every run still
+  // waiting: 8.4 ms a flow with 50k PAUSED runs ahead of the ended one.
+  `CREATE INDEX IF NOT EXISTS idx_flow_run_ended ON flow_run(project_id, flow_id, created DESC, id DESC)
+    WHERE status IN ${ENDED_RUN_STATUSES_SQL} AND step_name_to_test IS NULL`,
 
   // Durable effect identity and dispatch fence, independent of run-log uploads.
   `CREATE TABLE IF NOT EXISTS workflow_effect (
@@ -234,10 +248,14 @@ const STATEMENTS: string[] = [
   // #1039: steps waiting for a place in their flow's card budget, by flow,
   // budget and age. Partial and over expressions, so the timer's release and
   // each new step's place in the queue read only this set and parse no
-  // record (runtime/deferred-cards.ts states the same filter).
-  `CREATE INDEX IF NOT EXISTS idx_workflow_effect_deferred ON workflow_effect(
+  // record (runtime/deferred-cards.ts states the same filter). json_valid
+  // comes before any json_extract, so one malformed record can neither fail
+  // building the index at boot nor fail a write that lands in it. The first
+  // version lacked it and is replaced, since IF NOT EXISTS keeps an old one.
+  `DROP INDEX IF EXISTS idx_workflow_effect_deferred`,
+  `CREATE INDEX IF NOT EXISTS idx_workflow_effect_deferred_valid ON workflow_effect(
     json_extract(record, '$.flowId'), json_extract(record, '$.deferral.budget'), json_extract(record, '$.deferral.since'))
-    WHERE status = 'pending' AND approval_id IS NULL AND json_extract(record, '$.deferral.budget') IS NOT NULL`,
+    WHERE status = 'pending' AND approval_id IS NULL AND json_valid(record) AND json_extract(record, '$.deferral.budget') IS NOT NULL`,
 
   // A nested dispatch is bound to the parent's effect (including loop path).
   // Keep the child id even if its flow is deleted: missing is not success.

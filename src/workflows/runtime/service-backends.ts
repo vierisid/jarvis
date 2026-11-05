@@ -374,6 +374,9 @@ export function buildSandboxServiceBackends(
     : null;
   const toolsInvoke: ToolsInvokeFn | undefined = toolAdapter
     ? async (req, ctx) => {
+        // The step's own tool first (#1152): a templated step is refused typed,
+        // and a call for another tool is refused before any lookup names it.
+        resolveEffectContext(ctx, '@jarvispieces/piece-jarvis-tool', 'invoke', { toolName: req.toolName });
         if (!toolAdapter.has(req.toolName)) {
           throw new Error(`tool not found: ${req.toolName}`);
         }
@@ -397,6 +400,8 @@ export function buildSandboxServiceBackends(
         })();
         const gate = resolveToolGate(tool, req.toolName, req.params);
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
+          // The tool the step names, not only the step (#1152).
+          pinnedInput: { toolName: req.toolName },
           ...(gate.confirm === 'always' ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review this UI effect' } } : {}),
           // As at the chat gate: a gated call over the workflow's level asks
           // instead of failing the step.
@@ -783,7 +788,7 @@ export function buildSandboxServiceBackends(
           saveWorkflowEffect(blocked);
           // The approval that parked it was granted and is now never acted on
           // (#845): its receipt, as the boundary gives its own refusals.
-          closeEffectApproval(opts.approvalManager, blocked, 'blocked');
+          closeEffectApproval(opts.approvalManager, blocked, 'blocked', opts.onWorkflowCardClosed);
         };
         const gate = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
         const refusedCategory = severityRank(gate.actionCategory) > severityRank(call.actionCategory)
@@ -1164,8 +1169,8 @@ export function buildSandboxServiceBackends(
       legacy.outcome = { status: 'blocked', code: 'WORKFLOW_UPGRADED', message, effect: 'not_started' };
       legacy.finishedAt = Date.now(); saveWorkflowEffect(legacy);
       const card = legacy.approvalId ? opts.approvalManager?.getRequest(legacy.approvalId) : null;
-      if (card?.status === 'pending') opts.approvalManager?.deny(card.id, 'workflow-upgrade');
-      else closeEffectApproval(opts.approvalManager, legacy, 'blocked');
+      if (card?.status === 'pending') { if (opts.approvalManager?.deny(card.id, 'workflow-upgrade')) opts.onWorkflowCardClosed?.(card.id); }
+      else closeEffectApproval(opts.approvalManager, legacy, 'blocked', opts.onWorkflowCardClosed);
       throw new ActionOutcomeError(legacy.outcome);
     }
     // Already ended above (or otherwise settled without sending): repeat its
