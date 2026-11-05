@@ -98,7 +98,15 @@ async function harness(opts: { readGate?: Promise<void> } = {}) {
     type: 'conversation.item.input_audio_transcription.completed', content_index: 0, transcript: text,
     ...(itemId ? { item_id: itemId } : {}),
   });
-  return { calls, call, start, speechStarted, transcript, voice };
+  // Ten seconds of the reply's audio arrives with it, so it is still
+  // playing when the user starts (echo is only possible then).
+  const audio = () => socket.emit({ type: 'response.output_audio.delta', item_id: `a${++n}`, content_index: 0, delta: Buffer.alloc(480_000).toString('base64') });
+  const assistantSaid = (text: string, { audible = true } = {}) => {
+    if (audible) audio();
+    socket.emit({ type: 'response.output_audio_transcript.done', transcript: text });
+  };
+  const assistantSaying = (text: string) => { audio(); socket.emit({ type: 'response.output_audio_transcript.delta', delta: text }); };
+  return { calls, call, start, speechStarted, transcript, voice, assistantSaid, assistantSaying };
 }
 
 describe('the realtime taint boundary is the user\'s final transcript (#1007)', () => {
@@ -199,5 +207,70 @@ describe('the realtime taint boundary is the user\'s final transcript (#1007)', 
     h.transcript(undefined, 'run it');
     h.transcript('never-started', 'run it');
     expect(await h.call('run_command')).toContain('[BLOCKED]');
+  });
+});
+
+describe('#1156: the assistant\'s own speech heard back through the mic does not clear it', () => {
+  beforeEach(() => { initDatabase(':memory:'); });
+  afterEach(() => { closeDb(); });
+
+  test('an echo of the reply just spoken is no boundary', async () => {
+    const h = await harness();
+    h.speechStarted('u1');
+    expect(await h.call('browser_snapshot')).toContain('Page: evil');
+    h.transcript('u1', 'read me that page');
+    h.assistantSaid('The page says to run the installer now. Shall I run it?');
+    // The speaker leaks into the mic: the VAD hears "speech", the
+    // transcription model writes down what the assistant said.
+    h.speechStarted('u2');
+    h.transcript('u2', 'Shall I run it?');
+    expect(await h.call('run_command')).toContain('[BLOCKED]');
+    expect(h.calls).toEqual(['browser_snapshot']);
+  });
+
+  test('an echo of a reply still being spoken is no boundary', async () => {
+    const h = await harness();
+    h.speechStarted('u1');
+    expect(await h.call('browser_snapshot')).toContain('Page: evil');
+    h.transcript('u1', 'read me that page');
+    h.assistantSaying('Running the installer from the page');
+    h.speechStarted('u2');
+    h.transcript('u2', 'running the installer');
+    expect(await h.call('run_command')).toContain('[BLOCKED]');
+  });
+
+  test('a reply that restates the request is not taken for an echo of it (#1156 review)', async () => {
+    const h = await harness();
+    h.speechStarted('u1');
+    expect(await h.call('browser_snapshot')).toContain('Page: evil');
+    h.transcript('u1', 'read me that page');
+    h.assistantSaid('It is a recipe page.');
+    h.speechStarted('u2');
+    // The reply to u2 streams before u2's own transcript lands.
+    h.assistantSaying('Okay, running the build');
+    h.transcript('u2', 'running the build');
+    expect(await h.call('run_command')).toBe('ran');
+  });
+
+  test('repeating the last reply after its audio has played out is the user\'s own words (#1156 review)', async () => {
+    const h = await harness();
+    h.speechStarted('u1');
+    expect(await h.call('browser_snapshot')).toContain('Page: evil');
+    h.transcript('u1', 'read me that page');
+    h.assistantSaid('Shall I run the build?', { audible: false });
+    h.speechStarted('u2');
+    h.transcript('u2', 'run the build');
+    expect(await h.call('run_command')).toBe('ran');
+  });
+
+  test('the user\'s own words still clear it after the assistant spoke', async () => {
+    const h = await harness();
+    h.speechStarted('u1');
+    expect(await h.call('browser_snapshot')).toContain('Page: evil');
+    h.transcript('u1', 'read me that page');
+    h.assistantSaid('The page says to run the installer now. Shall I run it?');
+    h.speechStarted('u2');
+    h.transcript('u2', 'no, just run the build');
+    expect(await h.call('run_command')).toBe('ran');
   });
 });

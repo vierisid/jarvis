@@ -429,6 +429,8 @@ function boundedResult(raw: unknown): { text: string; trailer: string } {
 function governedText(ctx: AuthorityContext, toolCall: LLMToolCall, toolCategory: string, governed: Exclude<GovernedToolResult, { kind: 'paused' }>, outsideFailure = false): { text: string; failed?: boolean } {
   if (governed.kind === 'denied') return { text: denialText(toolCall.name, governed.reason), failed: true };
   if (governed.kind === 'failed') {
+    // Framed as outside content, so it taints as a direct call's does (#1156).
+    if (outsideFailure && isTaintSourceTool(toolCall.name, toolCategory)) ctx.taint.add(toolCall.name);
     return { text: markUntrustedToolFailure(toolCall.name, toolCategory, governed.result, MAX_TOOL_RESULT_CHARS,
       outsideFailure === true), failed: true };
   }
@@ -624,6 +626,8 @@ async function executeTool(
     // `desktop` tools reaches this line with a flagged tool. Every other tool
     // keeps it unchanged.
     if (failing?.failureIsOutsideContent === true) {
+      // Framed as outside content, so it taints as the typed branch does (#1156).
+      if (authorityCtx && isTaintSourceTool(toolCall.name, failing.category)) authorityCtx.taint.add(toolCall.name);
       return { text: `Error executing ${toolCall.name}: `
         + markUntrustedToolFailure(toolCall.name, failing.category, message, MAX_TOOL_RESULT_CHARS, true), failed: true };
     }
