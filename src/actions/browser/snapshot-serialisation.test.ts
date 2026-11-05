@@ -429,3 +429,70 @@ describe('#875: a snapshot in flight cannot re-arm the refs under a reviewed act
     })).toBe('may_have_occurred');
   });
 });
+
+/**
+ * #1161: the local half of the sidecar's #878 genBefore check. A scroll or a
+ * paging key drops the element map WITHOUT the snapshot lock (the pebble's
+ * readers need the drop at once), so it can land between a snapshot's script
+ * measuring the page and that snapshot's fill. Before the check the fill then
+ * installed the pre-scroll coordinates over the drop, and paired them with a
+ * world the drop had already let go of.
+ */
+describe('#1161: a forget during a snapshot is not undone by its fill', () => {
+  /** Hold the snapshot's post-script frame-tree re-read, and only that one. */
+  function holdTheFill(fake: FakeRenderer) {
+    let scripted = false;
+    let taken = false;
+    fake.afterAnswer = (label) => { if (label === 'evaluate:snapshot') scripted = true; };
+    return fake.holdBack((p) => {
+      if (taken || !scripted || p.method !== 'Page.getFrameTree') return false;
+      taken = true;
+      return true;
+    });
+  }
+
+  test('a paging key between the script and the fill makes the snapshot refuse and leaves no stale point', async () => {
+    const fake = new FakeRenderer([{ name: 'Buy', x: 50, y: 40 }]);
+    const browser = controllerOver(fake);
+    const hold = holdTheFill(fake);
+    const snap = browser.snapshot().then(() => 'resolved', (err: Error) => err.message);
+    await hold.reached;
+
+    // The script has measured the page and armed the world; the fill waits on
+    // the re-read. The page scrolls, and the map is dropped.
+    await browser.pressKey('PageDown');
+    hold.release();
+
+    expect(await snap).toContain('the page moved while the snapshot was being taken');
+    // Nothing for the pebble to point at: the drop stands.
+    expect(browser.snapshotElementPoint(1)).toBeNull();
+  });
+
+  test('a forget while the isolated world is being minted refuses too (genBefore is read before the world)', async () => {
+    // The world's context id is already in this snapshot's hands when the
+    // forget nulls `elementWorld`, so a fill would pair coordinates with a
+    // world nothing reads: the next click would find no world.
+    const fake = new FakeRenderer([{ name: 'Buy', x: 50, y: 40 }]);
+    const browser = controllerOver(fake);
+    const hold = fake.holdBack((p) => p.method === 'Page.createIsolatedWorld');
+    const snap = browser.snapshot().then(() => 'resolved', (err: Error) => err.message);
+    await hold.reached;
+    await browser.pressKey('PageDown');
+    hold.release();
+
+    expect(await snap).toContain('the page moved while the snapshot was being taken');
+    expect(browser.snapshotElementPoint(1)).toBeNull();
+  });
+
+  test('the same held fill with no forget in between still fills (control)', async () => {
+    const fake = new FakeRenderer([{ name: 'Buy', x: 50, y: 40 }]);
+    const browser = controllerOver(fake);
+    const hold = holdTheFill(fake);
+    const snap = browser.snapshot().then(() => 'resolved', (err: Error) => err.message);
+    await hold.reached;
+    hold.release();
+
+    expect(await snap).toBe('resolved');
+    expect(browser.snapshotElementPoint(1)).toEqual({ x: 50, y: 40 });
+  });
+});

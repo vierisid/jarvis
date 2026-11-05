@@ -30,6 +30,7 @@ import {
   type SidecarPageRead,
 } from './sidecar-route.ts';
 import { currentReviewedExecution, type ReviewedExecution, type ReviewedRemoteSnapshot } from './reviewed-call-scope.ts';
+import type { SnapshotReadLog } from './snapshot-read-log.ts';
 import { getMachineScope } from '../machine-scope.ts';
 import { WebappTemplateDelivery, globalWebappTemplateDelivery, usablePageUrl } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
@@ -1228,7 +1229,13 @@ function browserReviewSubject(tool: 'browser_navigate' | 'browser_click' | 'brow
     const origin = url ? pageOrigin(url) : null;
     const subject: { origin?: string; element?: string } = origin && /^https?:\/\//.test(origin) ? { origin: forCard(origin, 120) } : {};
     if (tool === 'browser_click' && typeof params.element_id === 'number') {
-      const label = remote ? null : browser.snapshotElementLabel(params.element_id);
+      // Only from the map the card binds (#1161 review): when this loop's own
+      // read is not the controller's current map, the current label names
+      // another reader's element [n], and the card would show it while the
+      // approval is held to the loop's (and refused as superseded).
+      const log = remote ? undefined : currentSnapshotReadLog();
+      const sameMap = log?.localGeneration === undefined || log.localGeneration === browser.snapshotGeneration();
+      const label = remote || !sameMap ? null : browser.snapshotElementLabel(params.element_id);
       // Already one escaped literal (`elementCardLabel`); forCard would not escape a quote.
       subject.element = `${label ?? 'element'} [${params.element_id}]`;
     }
@@ -1311,7 +1318,13 @@ function browserCallGuard(
     // controller's snapshot lock (#875). The guard's own comparison runs
     // before the action takes that lock, so a snapshot finishing in between
     // passes it.
-    const localSnapshotGen = local && opts.bindDocument ? browser.snapshotGeneration() : undefined;
+    //
+    // And it is THIS LOOP's read when the loop made one (#1161), not the
+    // controller's current generation: that one is whatever any caller --
+    // another chat channel, a task-tier call -- snapshotted last, so a card
+    // bound to it bound a map the person never saw. See `reviewedLocalGeneration`.
+    const readLog = currentSnapshotReadLog();
+    const localSnapshotGen = local && opts.bindDocument ? reviewedLocalGeneration(readLog) : undefined;
     // What the remote call will be held to (#676), captured NOW -- the newest
     // generation is re-recorded on every snapshot, so reading it at execution
     // would name a snapshot the person never saw. Only for the element-
@@ -1325,10 +1338,19 @@ function browserCallGuard(
     // And the model LOOP that raised it (#827), when there is one, so the card
     // binds the snapshot this loop read rather than the newest one any
     // default-scope caller took, and an approved navigate records into it.
-    const readLog = reviewedRoute ? currentSnapshotReadLog() : undefined;
+    //
+    // A local call carries the loop too (#1161), so an approved local navigate
+    // records the page it returned as that loop's read: the executor runs
+    // every approved UI call inside a reviewed scope, and inside one the log
+    // is the scope's (`currentSnapshotReadLog`), so without it the read
+    // landed nowhere and the loop's next card bound the previous page's map.
     const reader = { reader: currentSnapshotReader(), ...(readLog ? { readLog } : {}) };
+    const localReviewed: ReviewedExecution = {
+      ...(localSnapshotGen !== undefined ? { localSnapshotGen } : {}),
+      ...(local && readLog ? { readLog } : {}),
+    };
     const reviewed: ReviewedExecution | undefined = !reviewedRoute
-      ? (localSnapshotGen !== undefined ? { localSnapshotGen } : undefined)
+      ? (Object.keys(localReviewed).length > 0 ? localReviewed : undefined)
       : opts.bindDocument
         ? { remoteBrowserSnapshot: reviewedRemoteSnapshot(reviewedRoute), ...reader }
         : reader;
@@ -1356,6 +1378,34 @@ function browserCallGuard(
     };
     return reviewed ? Object.assign(guard, { reviewed }) : guard;
   };
+}
+
+/**
+ * The local element-map generation a card raised now is bound to (#1161).
+ *
+ * The raising loop's own newest local read when it made one, the way
+ * `remoteSnapshotGeneration` prefers the loop's remote read (#827). A loop
+ * RESUMED with snapshot replies in its buffer and no local read of its own
+ * binds nothing (undefined), so the approved action is refused as unbound
+ * rather than held to whatever another caller snapshotted during the pause.
+ * Otherwise -- no loop (a sub-agent's or a workflow's card, the voice route),
+ * or a loop that read nothing locally -- the controller's current generation,
+ * as before: the residual #827 states for remote cards, here too.
+ */
+function reviewedLocalGeneration(log: SnapshotReadLog | undefined): number | undefined {
+  if (log?.localGeneration !== undefined) return log.localGeneration;
+  if (log?.resumedWithReads) return undefined;
+  return browser.snapshotGeneration();
+}
+
+/**
+ * Record a local snapshot as the current model loop's read (#1161). Outside a
+ * loop, or for a reader that is not the loop's (`currentSnapshotReadLog`
+ * answers undefined for a sub-agent or a workflow), there is nothing to write.
+ */
+function recordLocalRead(snap: PageSnapshot): void {
+  const log = currentSnapshotReadLog();
+  if (log && snap.elementGeneration !== undefined) log.localGeneration = snap.elementGeneration;
 }
 
 /**
@@ -1491,6 +1541,7 @@ export const browserNavigateTool: ToolDefinition = {
     if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
       const snap = await browser.navigate(url);
+      recordLocalRead(snap);
       recordActionVerification('browser_navigate', observedPage(snap.browserUrl, snap.browserDocumentId));
       return globalWebappTemplateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
     } catch (err) {
@@ -1521,6 +1572,7 @@ export const browserSnapshotTool: ToolDefinition = {
     if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
       const snap = await browser.snapshot();
+      recordLocalRead(snap);
       recordActionVerification('browser_snapshot', observedPage(snap.browserUrl, snap.browserDocumentId));
       return globalWebappTemplateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
     } catch (err) {

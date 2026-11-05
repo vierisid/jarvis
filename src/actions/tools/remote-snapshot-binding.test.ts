@@ -18,6 +18,8 @@ import { closeDb, initDatabase } from '../../vault/schema.ts';
 import { ApprovalManager } from '../../authority/approval.ts';
 import { AuditTrail } from '../../authority/audit.ts';
 import { DeferredExecutor } from '../../authority/deferred-executor.ts';
+import { AuthorityEngine } from '../../authority/engine.ts';
+import { runSubAgent } from '../../agents/sub-agent-runner.ts';
 import { ToolRegistry } from './registry.ts';
 import { browserClickTool, browserHoverTool, browserNavigateTool, browserSnapshotTool, browserTypeTool, browserScrollTool } from './builtin.ts';
 import {
@@ -488,5 +490,66 @@ describe('a card binds the snapshot its own model loop read (#827)', () => {
     mgr.approve(req.id, 'dashboard');
     await executor(mgr, registry).executeApprovedWithReceipt(req.id);
     expect(fake.actions()[0]!.params.elem_gen).toBe('epoch.1');
+  });
+});
+
+/**
+ * #1161: a paused sub-agent comes back through a new AgentInstance. Its
+ * approved call records under the reader that raised the card; the resumed
+ * run now takes that reader over (sub-agent-runner.ts), and the paused run
+ * keeps its record for it instead of forgetting it at the pause.
+ */
+describe('a resumed sub-agent reads the record its paused run and approved call wrote (#1161)', () => {
+  test('an approved navigate a sub-agent raised is read back under the same scope, not under a new one', async () => {
+    const fake = fakeSidecar();
+    setSidecarManagerRef(fake.manager);
+    const registry = registryWith(browserNavigateTool, browserClickTool);
+    const mgr = new ApprovalManager();
+    const nav = withTemplateDeliveryScope('sub-agent:first-spawn', () =>
+      approvedRequest(mgr, 'browser_navigate', { url: 'https://bank.example/next', target: 'remote-box' }, registry));
+    fake.state.nextGen = 'epoch.2';
+    mgr.approve(nav.id, 'dashboard');
+    await executor(mgr, registry).executeApprovedWithReceipt(nav.id);
+
+    await expect(withTemplateDeliveryScope('sub-agent:first-spawn', async () => remoteSnapshotGeneration('remote-box'))).resolves.toBe('epoch.2');
+    // What the resumed run read before #1161, under its own fresh scope.
+    await expect(withTemplateDeliveryScope('sub-agent:second-spawn', async () => remoteSnapshotGeneration('remote-box'))).resolves.toBeNull();
+  });
+
+  test('a run that pauses keeps its reads for the resume; one that completes forgets them', async () => {
+    const fake = fakeSidecar();
+    setSidecarManagerRef(fake.manager);
+    const r = new ToolRegistry();
+    r.register(browserSnapshotTool);
+    r.register({ name: 'write_file', category: 'file-ops', description: 'synthetic', parameters: {}, execute: async () => 'saved' });
+    const engine = new AuthorityEngine({ default_level: 10, governed_categories: ['write_data'], overrides: [], context_rules: [],
+      learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
+    const agent = (id: string) => ({
+      id, agent: { role: { id: 'fixture', name: 'Fixture', description: '', responsibilities: [] }, authority: { max_authority_level: 10 } },
+      setTask() {}, activate() {}, idle() {}, addMessage() {}, getMessages: () => [],
+    }) as any;
+    const model = (turns: Array<Array<{ id: string; name: string; arguments: Record<string, unknown> }>>) => {
+      let call = 0;
+      return { chatTier: async () => {
+        const turn = turns[call++];
+        return turn
+          ? { content: '', finish_reason: 'tool_use', tool_calls: turn, usage: { input_tokens: 1, output_tokens: 1 } }
+          : { content: 'done', finish_reason: 'end_turn', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 } };
+      } } as any;
+    };
+    const snap = { id: 's1', name: 'browser_snapshot', arguments: { target: 'remote-box' } };
+    const write = { id: 'w1', name: 'write_file', arguments: { path: '/tmp/synthetic', content: 'x' } };
+    const read = (id: string) => withTemplateDeliveryScope(`sub-agent:${id}`, async () => remoteSnapshotGeneration('remote-box'));
+
+    const paused = await runSubAgent({ agent: agent('first-spawn'), task: 't', context: '', llmManager: model([[snap], [write]]),
+      toolRegistry: r, authorityEngine: engine, maxIterations: 4,
+      governedTools: async () => ({ kind: 'paused', approval: { effectId: 'e', approvalId: 'a', waitpointId: 'w' } }) });
+    expect(paused.terminationReason).toBe('paused');
+    expect(await read('first-spawn')).toBe('epoch.1');
+
+    const done = await runSubAgent({ agent: agent('other-spawn'), task: 't', context: '', llmManager: model([[snap]]),
+      toolRegistry: r, authorityEngine: engine, maxIterations: 4 });
+    expect(done.terminationReason).toBe('completed');
+    expect(await read('other-spawn')).toBeNull();
   });
 });
