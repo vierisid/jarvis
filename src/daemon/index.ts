@@ -4490,14 +4490,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // Not awaited: appliers run in one serialized queue, and a sidecar RPC can take 30s to give up.
       void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
     });
-    // desktop (#905): nothing writes the stored desktop section at run time
-    // today, so this does not fire yet (a change takes a restart). It is here
-    // so that a future writer plus a reload also stops the one thing already
-    // running: a skill recording's input hooks on the sidecar.
-    settingsReload.registerApplier('desktop', async () => {
+    // desktop (#905): Settings writes it at run time (POST /api/config/desktop,
+    // #1159). Tools, captures and the prompt read the switch live; what is
+    // already running is stopped here: a skill recording's input hooks on the
+    // sidecar. The pebble glyph follows too, as it does for awareness.
+    settingsReload.registerApplier('desktop', async (cfg) => {
       if (!isDesktopEnabled() && endRecordingForDesktopOff()) {
         console.log('[Tools] desktop.enabled turned off: the running skill recording was stopped and discarded.');
       }
+      // Not awaited, like the awareness applier's push.
+      void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
     });
     // voice: resolveRealtimeVoice reads live config per call, so the dashboard
     // needs no applier, but a connected pebble keeps the realtime verdict it
@@ -5333,8 +5335,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       setNoLocalTools(true);
     }
 
-    // 9b-ter. desktop.enabled (#905). Bound to the live config object, but a
-    // change takes a restart today: see desktop-guard.ts.
+    // 9b-ter. desktop.enabled (#905). Bound to the live config object, which
+    // Settings changes in place (#1159): see desktop-guard.ts.
     bindDesktopSwitch(jarvisConfig);
     {
       const stored: unknown = jarvisConfig.desktop;
@@ -5342,7 +5344,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         console.warn(`[Tools] desktop is ${JSON.stringify(stored)}, not { enabled: true | false }; reading it as ${desktopEnabledFromSection(stored) ? 'ON' : 'OFF'}.`);
       }
       if (!desktopEnabledFromSection(stored)) {
-        console.log('[Tools] Desktop control is off (desktop.enabled: false). Desktop tools, screen capture, desktop UI reads and awareness captures are refused.');
+        console.log('[Tools] Desktop control is off (desktop.enabled: false). Desktop tools, screen capture, clipboard tools and events, desktop UI reads and awareness captures are refused.');
       }
     }
 
