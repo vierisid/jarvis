@@ -13,6 +13,8 @@ export function ProfileTab({
   const profile = data.profile;
   const [editing, setEditing] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
+  // After a conflict the draft is reviewed where it clashed: Save is on every step then (#1162).
+  const [saveAnyStep, setSaveAnyStep] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [draftRevision, setDraftRevision] = useState<string | undefined>();
   // The saved answers the draft started from, so a conflict can tell edited answers apart.
@@ -71,6 +73,7 @@ export function ProfileTab({
       // written until the user presses Save again, which is conflict-checked once more.
       const latest = r.latest;
       const clashes = clashingAnswers(baseAnswers, answers, latest.answers);
+      setSaveAnyStep(true);
       setAnswers(rebaseDraft(baseAnswers, answers, latest.answers));
       setBaseAnswers(latest.answers);
       setDraftRevision(latest.revision);
@@ -128,6 +131,7 @@ export function ProfileTab({
               onClick={() => {
                 if (editing || saving) return;
                 setEditing(true);
+                setSaveAnyStep(false);
                 setStepIndex(0);
               }}
             >
@@ -220,13 +224,20 @@ export function ProfileTab({
               Previous
             </button>
             {stepIndex < steps.length - 1 ? (
-              <button
-                type="button"
-                className="v2-set__btn v2-set__btn--primary"
-                onClick={() => setStepIndex((p) => Math.min(p + 1, steps.length - 1))}
-              >
-                Next
-              </button>
+              <span style={{ display: "flex", gap: "var(--s-2)" }}>
+                {saveAnyStep && (
+                  <button type="button" className="v2-set__btn" onClick={handleSave} disabled={saving}>
+                    {saving ? "Saving…" : "Save profile"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="v2-set__btn v2-set__btn--primary"
+                  onClick={() => setStepIndex((p) => Math.min(p + 1, steps.length - 1))}
+                >
+                  Next
+                </button>
+              </span>
             ) : (
               <button
                 type="button"

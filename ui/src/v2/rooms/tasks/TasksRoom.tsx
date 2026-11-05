@@ -277,7 +277,7 @@ function TaskDrawer({ task, onClose, onStatus }: { task: Task; onClose: () => vo
   );
 }
 
-function CreateDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (input: { what: string; when: string; priority: TaskPriority; assigned_to: string; context: string }) => Promise<boolean> }) {
+export function CreateDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (input: { what: string; when: string; priority: TaskPriority; assigned_to: string; context: string }) => Promise<boolean> }) {
   const [what, setWhat] = useState("");
   const [when, setWhen] = useState("");
   const [priority, setPriority] = useState<TaskPriority>("normal");
@@ -285,7 +285,9 @@ function CreateDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (i
   const [context, setContext] = useState("");
   const [busy, setBusy] = useState(false);
   const parsed = useMemo(() => (when.trim() ? parseRelativeDate(when) : null), [when]);
-  const submit = async () => { if (!what.trim()) return; setBusy(true); const ok = await onCreate({ what: what.trim(), when: when.trim(), priority, assigned_to: assigned.trim(), context: context.trim() }); setBusy(false); if (ok) onClose(); };
+  // A time that does not parse is not an undated task: refuse it, as the voice path does (#1162).
+  const unreadable = !!when.trim() && !parsed;
+  const submit = async () => { if (!what.trim() || unreadable) return; setBusy(true); const ok = await onCreate({ what: what.trim(), when: when.trim(), priority, assigned_to: assigned.trim(), context: context.trim() }); setBusy(false); if (ok) onClose(); };
   return (
     <div className="rk-tasks__overlay" onClick={() => !busy && onClose()}>
       <div className="rk-tasks__dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
@@ -293,14 +295,14 @@ function CreateDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (i
         <div className="rk-tasks__dialog-body">
           <div><div className="rk-tasks__flab">task</div><input className="rk-tasks__input" value={what} onChange={(e) => setWhat(e.target.value)} placeholder="What needs doing?" autoFocus /></div>
           <div><div className="rk-tasks__flab">when · optional</div><input className="rk-tasks__input" value={when} onChange={(e) => setWhen(e.target.value)} placeholder="friday at 5pm" />
-            <div className="rk-tasks__parse">{when.trim() ? (parsed ? `→ ${formatFull(parsed.ts)}` : "Couldn't parse. The task will have no due date.") : "Leave blank for an undated task."}</div></div>
+            <div className="rk-tasks__parse">{when.trim() ? (parsed ? `→ ${formatFull(parsed.ts)}` : "Couldn't read that time. Fix it, or clear it for an undated task.") : "Leave blank for an undated task."}</div></div>
           <div><div className="rk-tasks__flab">priority</div><div className="rk-tasks__chiprow">{TASK_PRIORITIES.map((p) => <button key={p} className={`rk-tasks__sbtn${priority === p ? " rk-tasks__sbtn--pri" : ""}`} onClick={() => setPriority(p)}>{p}</button>)}</div></div>
           <div><div className="rk-tasks__flab">assignee · optional</div><input className="rk-tasks__input" value={assigned} onChange={(e) => setAssigned(e.target.value)} placeholder="you / jarvis / agent name" /></div>
           <div><div className="rk-tasks__flab">context · optional</div><input className="rk-tasks__input" value={context} onChange={(e) => setContext(e.target.value)} placeholder="Background or notes." /></div>
         </div>
         <div className="rk-tasks__dialog-acts">
           <button className="rk-tasks__sbtn" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="rk-tasks__sbtn rk-tasks__sbtn--pri" onClick={submit} disabled={busy || !what.trim()}>{busy ? "Creating…" : "Create"}</button>
+          <button className="rk-tasks__sbtn rk-tasks__sbtn--pri" onClick={submit} disabled={busy || !what.trim() || unreadable}>{busy ? "Creating…" : "Create"}</button>
         </div>
       </div>
     </div>

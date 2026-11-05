@@ -636,7 +636,9 @@ export class AgentService implements Service, IAgentService {
    * chat's key.
    *
    * `sender` says whose turn it is (#909): the channel's owner, the first
-   * entry of its allow-list, or a guest, any other sender. Only the owner's
+   * entry of its allow-list, or a guest, any other sender; `shared` is the
+   * owner writing where others read the reply (a group, a server channel),
+   * handled as a guest (#1155). Only the owner's
    * turn is the owner's assistant. A guest's is `handleGuestMessage`: a plain
    * conversational model with none of the owner's private context and no
    * tools, and nothing is learned from it. Knowledge extraction and
@@ -649,13 +651,13 @@ export class AgentService implements Service, IAgentService {
   async handleThreadMessage(
     text: string,
     channel: string,
-    thread: { conversationId: string; contextKey: string; sender: 'owner' | 'guest' },
+    thread: { conversationId: string; contextKey: string; sender: 'owner' | 'guest' | 'shared' },
   ): Promise<string> {
     if (activeTurns.isDraining) throw new DrainingError();
     const endTurn = activeTurns.begin();
     try {
       const history = withoutTrailingTurn(await this.loadDialogue(thread.conversationId), text);
-      if (thread.sender !== 'owner') return await this.handleGuestMessage(text, channel, history);
+      if (thread.sender !== 'owner') return await this.handleGuestMessage(text, channel, history, thread.sender === 'shared');
       let response: string;
       if (this.convOrchestrator) {
         response = await this.handleMessageConv(text, channel, null, undefined, history, thread.contextKey);
@@ -705,9 +707,9 @@ export class AgentService implements Service, IAgentService {
    * Billed to the conversation tier when one is configured, else medium,
    * under its own subsystem label so guest usage is visible.
    */
-  private async handleGuestMessage(text: string, channel: string, history: LLMMessage[]): Promise<string> {
+  private async handleGuestMessage(text: string, channel: string, history: LLMMessage[], shared = false): Promise<string> {
     const messages: LLMMessage[] = [
-      { role: 'system', content: this.buildGuestSystemPrompt(channel) },
+      { role: 'system', content: this.buildGuestSystemPrompt(channel, shared) },
       ...history,
       { role: 'user', content: text },
     ];
@@ -722,13 +724,19 @@ export class AgentService implements Service, IAgentService {
    * The guest's system prompt (#909). Built from config only, never from the
    * vault, the user profile or the learned personality: the owner's name is
    * left out too, since it is the owner's to give.
+   *
+   * `shared`: the owner wrote in a group or server channel, where every member
+   * reads the reply, so the turn gets a guest's treatment (owner decision on
+   * #1155) and the prompt says why instead of calling the writer a stranger.
    */
-  buildGuestSystemPrompt(channel: string): string {
+  private buildGuestSystemPrompt(channel: string, shared = false): string {
     const name = this.config.personality?.assistant_name?.trim() || 'JARVIS';
     const traits = (this.config.personality?.core_traits ?? []).slice(0, 6).join(', ');
     return [
       `You are ${name}, an AI assistant, answering a message sent to you on ${channel}.`,
-      'The person writing is NOT your owner. Your owner allowed them to message you, as a guest.',
+      shared
+        ? 'This message was sent in a group or server channel that other people can read, so whoever wrote it, treat this conversation as a guest conversation.'
+        : 'The person writing is NOT your owner. Your owner allowed them to message you, as a guest.',
       'In this conversation you have nothing of your owner\'s: no profile, memories, notes, files, calendar, email, commitments, tasks, accounts or tools. Do not claim to know anything about your owner, and do not guess.',
       'Help as a general assistant, from general knowledge. If they ask about your owner, or ask you to do something (send, schedule, look up, run, remember, approve), say plainly that you cannot do that from this chat.',
       traits ? `Your character: ${traits}.` : '',

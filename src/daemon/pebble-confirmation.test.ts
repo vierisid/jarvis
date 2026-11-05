@@ -102,11 +102,15 @@ describe('speakConfirmation', () => {
     expect(events.at(-1)).toMatch(/^hold:/);
   });
 
-  test('heartbeat: false keeps the confirmation off the dashboard, nothing else changes', async () => {
-    const { events, ctrl, speak } = harness();
-    await speak('s1', 'Opening Settings.', ctrl, { heartbeat: false });
-    expect(events.some((e) => e.startsWith('heartbeat'))).toBe(false);
-    expect(events.at(-1)).toBe('state:idle');
+  // #1157: the heartbeat:false option had no caller and is gone; what a turn
+  // spoke is reported so the fast-path turn can be remembered.
+  test('what was shown is reported for the turn, and nothing for a turn cancelled first', async () => {
+    const heard: Array<[object, string]> = [];
+    const make = (ctrl: { cancelled: boolean }) => makeSpeakConfirmation({ setState: async () => {}, heartbeat: () => {}, synthesizer: () => null,
+      play: async () => {}, hold: async () => {}, spoken: (turn, text) => { heard.push([turn, text]); } })('s1', 'Opening Settings.', ctrl);
+    const shown = { cancelled: false }, dismissed = { cancelled: true };
+    await make(shown); await make(dismissed);
+    expect(heard).toEqual([[shown, 'Opening Settings.']]);
   });
 
   test('a failing synthesizer still returns to idle', async () => {

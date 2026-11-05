@@ -91,7 +91,9 @@ export type GoogleConfig = {
  * chat, each in a conversation of their own (#884), but only the owner:
  *   - gets turns built from the owner's private context (profile, knowledge,
  *     commitments, goals, observations) with the owner's tools, and teaches
- *     the assistant anything. Every other listed user is a guest: a plain
+ *     the assistant anything, in a private chat with the bot only: in a group
+ *     or server channel every member reads the reply, so the owner is a guest
+ *     there too (#1155). Every other listed user is a guest: a plain
  *     conversational model with none of that and no tools
  *     (AgentService.handleGuestMessage).
  *   - may approve or deny from the channel. Anyone else's `approve <id>` or

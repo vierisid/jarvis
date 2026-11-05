@@ -161,6 +161,12 @@ test("an answer changed on both sides is named with its newer value and its step
     // The form jumped to the step holding Company and still shows the user's value.
     expect(Array.from(host!.querySelectorAll("input")).some((el) => el.value === "Mine")).toBe(true);
     expect(h.saved()).toMatchObject({ company: "Theirs" });
+    // #1162: that step is not the last, and the toast says "save again": Save is right there.
+    expect(h.button("Next")).toBeDefined();
+    await h.click("Save profile");
+    await until(() => h.posts.length === 2);
+    expect(h.posts).toEqual([409, 200]);
+    expect(h.saved()).toMatchObject({ company: "Mine" });
   });
 });
 

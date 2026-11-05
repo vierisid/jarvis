@@ -194,8 +194,9 @@ import {
 } from "./pebble-intents.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
 import { runRoomPanelIntent, type RoomPanelDeps } from "./pebble-room-panel.ts";
-import { PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
-import { makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
+import { makeFastPathTurns, PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
+import { isGonePanelError, makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
+import { pebbleBlinded, pushPebbleBlinded } from "./pebble-blind.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
 import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
 import { bindDesktopSwitch, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled } from "../actions/tools/desktop-guard.ts";
@@ -1004,6 +1005,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 6c. Create sidecar manager
     const sidecarManager = new SidecarManager(jarvisConfig.daemon.data_dir.replace('~', os.homedir()));
+    const pebbleBlindDeps = { connected: () => sidecarManager.listConnected(), dispatchRPC: sidecarManager.dispatchRPC.bind(sidecarManager) };
 
     // The bench harness backdoor must never be on quietly. Say so at startup,
     // every time, and say why a set secret did not enable it.
@@ -2060,8 +2062,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // Awareness drops every capture while desktop.enabled is off (#905),
           // so turning it on then still leaves the pebble blind, and says so.
           const seeing = nextEnabled && isDesktopEnabled();
-          await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_blinded', { blinded: !seeing })
-            .catch(() => { /* sidecar may have detached */ });
+          // Every pebble, not just the pressed one: another machine's glyph
+          // would otherwise show the old state (#1157).
+          // The pressed one is awaited before the ack; a slow or wedged other machine
+          // must not hold up the spoken answer here.
+          await pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(nextEnabled, isDesktopEnabled()), sidecarId);
           const ack = seeing
             ? "Awareness back on. I can see your screen again."
             : nextEnabled
@@ -2721,8 +2726,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // the pebble to whoever cancelled it (#964). See pebble-confirmation.ts.
       // Its mirror goes to the dashboard only, never to Telegram or Discord:
       // it acknowledges something done on this screen (#1026).
+      const pebbleFastPathTurns = makeFastPathTurns((userText, reply) => agentService.recordPebbleExchange(userText, reply));
       const speakConfirmation = makeSpeakConfirmation({
         setState,
+        spoken: (ctrl, text) => pebbleFastPathTurns.spoke(ctrl, text),
         heartbeat: (text) => wsService.broadcastHeartbeatToDashboard(text),
         synthesizer: () => {
           const tts = pebbleTTS;
@@ -3036,10 +3043,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             console.warn(`[ambient-ui] window-action ${action} failed:`, err);
             // The window may have been closed externally — drop our cache
             // so subsequent commands don't keep trying a dead id.
-            if (action === 'close' || /unknown panel/i.test(String(err))) {
+            const gone = isGonePanelError(err);
+            if (action === 'close' || gone) {
               untrackPanel(sidecarId, target.id);
             }
-            await speakConfirmation(sidecarId, "I couldn't do that with the window.", ctrl);
+            // Same answer as the realtime nav tool for a window that is gone.
+            await speakConfirmation(sidecarId, gone ? `${target.title} isn't open any more.` : "I couldn't do that with the window.", ctrl);
           }
           return true;
         }
@@ -3378,27 +3387,34 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // here too and shouldn't try to trigger region capture again.
         if (!opts?.image) {
           if (await tryHandleRegionIntent(sidecarId, userText, ctrl)) {
+            // Stores only a refusal it spoke; a started capture re-enters the LLM path, which stores it.
+            pebbleFastPathTurns.finish(ctrl, opts?.historyText ?? userText);
             console.log(`[ambient-ui] region-intent fast path took ${Date.now() - cycleStart}ms (waiting for capture…)`);
             return;
           }
         }
         if (await tryHandleSettingsIntent(sidecarId, userText, ctrl)) {
+          pebbleFastPathTurns.finish(ctrl, opts?.historyText ?? userText);
           console.log(`[ambient-ui] settings-intent fast path took ${Date.now() - cycleStart}ms`);
           return;
         }
         if (await tryHandleInPanelAction(sidecarId, userText, ctrl)) {
+          pebbleFastPathTurns.finish(ctrl, opts?.historyText ?? userText);
           console.log(`[ambient-ui] in-panel-action fast path took ${Date.now() - cycleStart}ms`);
           return;
         }
         if (await tryHandleSubPebbleCloseIntent(sidecarId, userText, ctrl)) {
+          pebbleFastPathTurns.finish(ctrl, opts?.historyText ?? userText);
           console.log(`[ambient-ui] sub-pebble-close fast path took ${Date.now() - cycleStart}ms`);
           return;
         }
         if (await tryHandleBackgroundIntent(sidecarId, userText, ctrl)) {
+          pebbleFastPathTurns.finish(ctrl, opts?.historyText ?? userText);
           console.log(`[ambient-ui] background-intent fast path took ${Date.now() - cycleStart}ms`);
           return;
         }
         if (await tryHandlePanelIntent(sidecarId, userText, ctrl)) {
+          pebbleFastPathTurns.finish(ctrl, opts?.historyText ?? userText);
           console.log(`[ambient-ui] panel-intent fast path took ${Date.now() - cycleStart}ms`);
           return;
         }
@@ -3862,7 +3878,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // setState lost a race).
         pebbleBubbleGen++;
         await setState(sidecarId, 'speaking', fullText);
-        try { wsService.broadcastHeartbeat(fullText); } catch { /* dashboard may not be open */ }
+        // Dashboard only, like the fast-path confirmations (#1026): a spoken
+        // reply to the person at this machine is not a Telegram or Discord
+        // message. Owner decision, #1157.
+        try { wsService.broadcastHeartbeatToDashboard(fullText); } catch { /* dashboard may not be open */ }
 
         // Long-answer overflow — if the response is too long to comfortably
         // fit in the speaking bubble, register it in the answer store and
@@ -4467,6 +4486,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // enabled flag is the one knob with a live setter today.
     settingsReload.registerApplier('awareness', async (cfg) => {
       awarenessService?.toggle(cfg.awareness?.enabled !== false);
+      // The glyph follows the stored choice too, on every pebble (#1157).
+      // Not awaited: appliers run in one serialized queue, and a sidecar RPC can take 30s to give up.
+      void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
     });
     // desktop (#905): nothing writes the stored desktop section at run time
     // today, so this does not fire yet (a change takes a restart). It is here
@@ -4756,8 +4778,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Note: toolRegistry set after startAll() below
 
     // Wire channel approval handler
-    channelService.setApprovalHandler((action, shortId, channel) =>
-      channelApprovalReply(action, shortId, channel, { approvalManager, deferredExecutor, wsService, auditTrail }));
+    channelService.setApprovalHandler((action, shortId, channel, deciderId) =>
+      channelApprovalReply(action, shortId, channel, { approvalManager, deferredExecutor, wsService, auditTrail }, deciderId));
 
     console.log(`[Daemon] Authority engine initialized (governed: ${authorityEngine.getConfig().governed_categories.join(', ')})`);
 

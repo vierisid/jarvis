@@ -510,6 +510,19 @@ function addressTokenReadsAsAscii(body: string): boolean {
  */
 const ADDRESS_SEPARATOR_SKELETON = /^[.@/\\]$/;
 const ASCII_GRAPHIC = /^[\x21-\x7e]$/;
+/**
+ * Dots that read as a domain's dot between ASCII letters but whose skeleton
+ * is not `.` (#1158). Every middle-dot shape (U+00B7, U+0387 GREEK ANO
+ * TELEIA, U+2027, U+2219, U+22C5, U+2E31, U+30FB, U+FF65, U+2022...) shares
+ * the skeleton U+00B7, so they are found by skeleton, not by a list; the
+ * ideographic full stops U+3002 and U+FF61, which URL parsers even map to `.`
+ * (UTS 46), have skeletons of their own and are named. Same both-sides rule
+ * as every stand-in: Japanese ending a sentence with U+3002 keeps its
+ * Approve. The cost: a Catalan geminate (`col\u00b7lecci\u00f3`) between
+ * ASCII letters is deny-only from chat.
+ */
+const DOT_STAND_IN = /^[\u3002\uff61]$/u;
+const MIDDLE_DOT_SKELETON = '\u00b7';
 /** Marks and invisibles a reader does not see as a character, skipped when looking for a stand-in's neighbours. */
 const UNSEEN = /^[\p{M}\p{Default_Ignorable_Code_Point}]$/u;
 
@@ -537,7 +550,7 @@ const UNSEEN = /^[\p{M}\p{Default_Ignorable_Code_Point}]$/u;
 function separatorLookAlike(body: string): boolean {
   const chars = [...body];
   const isStandIn = (ch: string | undefined) => ch !== undefined && ch > '\x7f'
-    && !/^[\p{L}\p{N}]$/u.test(ch) && ADDRESS_SEPARATOR_SKELETON.test(confusableSkeleton(ch));
+    && !/^[\p{L}\p{N}]$/u.test(ch) && (ADDRESS_SEPARATOR_SKELETON.test(confusableSkeleton(ch)) || confusableSkeleton(ch) === MIDDLE_DOT_SKELETON || DOT_STAND_IN.test(ch));
   const seen = (i: number, step: number) => {
     while (chars[i] !== undefined && UNSEEN.test(chars[i]!)) i += step;
     return chars[i];

@@ -2,6 +2,7 @@ import type { RoleDefinition } from '../roles/types.ts';
 import type { SystemPromptParts } from '../roles/prompt-builder.ts';
 import type { LLMMessage, LLMResponse, LLMStreamEvent, LLMToolCall, LLMTool, ContentBlock } from '../llm/provider.ts';
 import { capTextBlocks, guardImageSize } from '../llm/provider.ts';
+import { truncateWithNote } from '../util/truncate.ts';
 import { LLMManager } from '../llm/manager.ts';
 import type { Tier } from '../llm/tiers.ts';
 import { AgentInstance, canSpawnChildren } from './agent.ts';
@@ -109,9 +110,7 @@ const MAX_TOOL_RESULT_CHARS = 6000; // Cap individual tool results to control co
  * and a cut made after the frame is drawn would drop its closing line.
  */
 function capToolResult(text: string): string {
-  return text.length > MAX_TOOL_RESULT_CHARS
-    ? text.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${text.length} chars)`
-    : text;
+  return truncateWithNote(text, MAX_TOOL_RESULT_CHARS);
 }
 // How long the authority gate blocks waiting for the user to approve a
 // gated tool call before falling back to the deferred (fire-and-forget)
@@ -2279,9 +2278,7 @@ export class AgentOrchestrator {
       // OUTSIDE half only; the trailer is repo-authored and bounded by the
       // template, so it is added on top rather than competing with page text for
       // the budget.
-      if (result.length > MAX_TOOL_RESULT_CHARS) {
-        result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
-      }
+      result = truncateWithNote(result, MAX_TOOL_RESULT_CHARS);
 
       // Outside content (pages, screen text, clipboard, files) is framed as data.
       return markUntrustedToolResult(toolCall.name, category, result) + trailer;
@@ -2494,9 +2491,7 @@ export class AgentOrchestrator {
       }
       const { outside, trailer } = splitToolReturn(raw);
       let result = outside;
-      if (result.length > MAX_TOOL_RESULT_CHARS) {
-        result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
-      }
+      result = truncateWithNote(result, MAX_TOOL_RESULT_CHARS);
       return markUntrustedToolResult(name, category, result) + trailer;
     } catch (err) {
       if (err instanceof ActionOutcomeError) {

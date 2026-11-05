@@ -186,3 +186,63 @@ describe('#909: a listed user who is not the owner is answered as a guest', () =
     expect(text(provider.seen[0]!.messages)).not.toContain(OWNER_COMMITMENT);
   });
 });
+
+describe('#1155: the owner writing in a group or server channel is answered as a guest', () => {
+  beforeEach(() => {
+    initDatabase(':memory:');
+    createCommitment(OWNER_COMMITMENT, { when_due: Date.now() + 3_600_000 });
+    saveUserProfile({ preferred_name: OWNER_NAME });
+  });
+  afterEach(() => closeDb());
+
+  const group = (userId: number, text: string): ChannelMessage => ({
+    id: 'm', channel: 'telegram', from: 'someone', text, timestamp: 0,
+    metadata: { chatId: -100123, userId, chatType: 'supergroup' },
+    senderAllowListed: true,
+  });
+
+  test('every member reads the reply, so it carries none of the owner\'s context, tools or learning', async () => {
+    const { agent, provider, learned } = agentFixture();
+    const handle = service(agent, [42, 7]);
+    // What the owner said in their private chat is not the group's history (#884).
+    const SECRET = 'my safe code is 4471';
+    await handle(dm(42, SECRET));
+    await Bun.sleep(0);
+    learned.length = 0;
+    provider.seen = [];
+    expect(await handle(group(42, 'what is pending?'))).toBe('reply');
+    const sent = text(provider.seen[0]!.messages);
+    expect(sent).not.toContain(SECRET);
+    expect(sent).not.toContain(OWNER_COMMITMENT);
+    expect(sent).not.toContain(OWNER_NAME);
+    expect(sent).toContain('group or server channel that other people can read');
+    expect(sent).not.toContain('is NOT your owner');
+    expect(provider.seen[0]!.options?.tools ?? []).toEqual([]);
+    await Bun.sleep(0);
+    expect(learned).toEqual([]);
+
+    // Not vacuous: the same owner in their private chat is still the owner.
+    provider.seen = [];
+    await handle(dm(42, 'what is pending?'));
+    expect(text(provider.seen[0]!.messages)).toContain(OWNER_COMMITMENT);
+  });
+
+  test('a Discord server channel counts as shared, a Discord DM does not', async () => {
+    const OWNER = '100000000000000002';
+    const config = { channels: { discord: { enabled: false, bot_token: '', allowed_users: [OWNER] } } };
+    const { agent, provider } = agentFixture();
+    const svc = new ChannelService(config as never, agent);
+    const handle = (m: ChannelMessage) =>
+      (svc as unknown as { handleChannelMessage(m: ChannelMessage): Promise<string> }).handleChannelMessage(m);
+    const dc = (isDM: boolean): ChannelMessage => ({
+      id: 'm', channel: 'discord', from: 'someone', text: 'what is pending?', timestamp: 0,
+      metadata: { channelId: isDM ? 'dm-1' : 'server-chan', userId: OWNER, isDM },
+      senderAllowListed: true,
+    });
+    await handle(dc(false));
+    expect(text(provider.seen[0]!.messages)).not.toContain(OWNER_COMMITMENT);
+    provider.seen = [];
+    await handle(dc(true));
+    expect(text(provider.seen[0]!.messages)).toContain(OWNER_COMMITMENT);
+  });
+});
