@@ -2,7 +2,7 @@
  * real engine. Provider URLs in disposable package/engine copies target a
  * local fixture; no live Slack calls or account credentials are used.
  * Gated on JARVIS_TEST_ENGINE_BUILD=1 like the other engine tests; CI runs it
- * in test.yml's engine step. It installs the pinned 0.23.1 from npm. */
+ * in the required test job, whose bun test run sets that gate. It installs the pinned 0.23.1 from npm. */
 import {afterAll, beforeAll, expect, test} from 'bun:test';
 import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync} from 'node:fs';
 import {join} from 'node:path';

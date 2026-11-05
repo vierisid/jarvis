@@ -1,4 +1,4 @@
-/** Published GitLab package through Worker and EngineRuntime. Gated on JARVIS_TEST_ENGINE_BUILD=1 (CI engine step).
+/** Published GitLab package through Worker and EngineRuntime. Gated on JARVIS_TEST_ENGINE_BUILD=1 (set on the required test job's bun test run).
  * Provider HTTP alone is redirected in a disposable engine bundle. No live credentials. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {

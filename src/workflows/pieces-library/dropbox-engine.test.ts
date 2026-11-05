@@ -1,7 +1,7 @@
 /** Actual npm piece in the real engine. Only fetch to its provider host is redirected
  * in a disposable engine copy; no live Dropbox calls or account credentials are used.
  * Gated on JARVIS_TEST_ENGINE_BUILD=1 like the other engine tests; CI runs it
- * in test.yml's engine step. It installs the pinned 0.9.2 from npm. */
+ * in the required test job, whose bun test run sets that gate. It installs the pinned 0.9.2 from npm. */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {
   mkdtempSync,

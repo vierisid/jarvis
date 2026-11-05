@@ -2,7 +2,7 @@
  * real engine. Provider URLs in disposable package/engine copies target a
  * local fixture; no live Trello calls or account credentials are used.
  * Gated on JARVIS_TEST_ENGINE_BUILD=1 (or JARVIS_TEST_TRELLO_ENGINE=1); CI runs it
- * in test.yml's engine step. It installs 0.8.1, the version the catalog installs. */
+ * in the required test job, whose bun test run sets that gate. It installs 0.8.1, the version the catalog installs. */
 import {afterAll, beforeAll, expect, test} from 'bun:test';
 import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {join} from 'node:path';

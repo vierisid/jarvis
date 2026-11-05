@@ -52,6 +52,7 @@ jobs:
       daemon-cli: ${{ steps.filter.outputs.daemon-cli }}
       toast: ${{ steps.filter.outputs.toast }}
       pieces-licenses: ${{ steps.filter.outputs.pieces-licenses }}
+      webview-build: ${{ steps.filter.outputs.webview-build }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -114,6 +115,20 @@ jobs:
               - 'src/workflows/activepieces/LICENSE.activepieces'
               - '.github/actions/bun-setup/**'
               - '.github/workflows/test.yml'
+            # What the webview_go bump's sealed build runs (#1255): see
+            # webview-build below.
+            webview-build:
+              - '.github/workflows/update-webview.yml'
+              - '.github/scripts/webview-contained-build.sh'
+              - '.github/scripts/webview-toolchain.Dockerfile'
+              - 'scripts/vendor-webview.sh'
+              - 'sidecar/go.mod'
+              - 'sidecar/go.sum'
+              - 'sidecar/third_party/webview_go/**'
+              # Not test.yml as a whole, unlike the filters above: the job
+              # runs update-webview.yml's steps, so a test.yml edit changes
+              # what it does only when it edits the job, and the build costs
+              # several minutes on every run (#1255 review).
 
   test:
     runs-on: ubuntu-latest
@@ -156,41 +171,21 @@ jobs:
       # A step-level retry would re-run the whole ~130s suite on a runner still
       # carrying the orphaned chrome processes the previous attempt leaked --
       # slower, and less likely to pass.
+      #
+      # JARVIS_TEST_ENGINE_BUILD=1 for the whole run (#1256). The engine suites
+      # (src/workflows/runner/engine-runtime, the engine half of several
+      # src/workflows/runtime suites, the pieces-library provider
+      # qualifications) skip without it unless a bundle and pieces happen to be
+      # built already. Before this they ran here only because an ungated
+      # *-engine test sorted earlier and built both first, so a rename or a
+      # reorder would have turned them into silent skips; and the provider
+      # qualifications ran in a second step that listed each file by hand.
+      # With the gate set, each suite builds what it needs (cached after the
+      # first build) and none of them depends on file order or on a list.
+      # engine-ci-coverage.test.ts holds this step to that.
       - run: bun test --retry=2
-      # The real engine (Q-08): a step held while Jarvis is paused must come
-      # back the way it was about to run, which only the engine itself shows.
-      # Engine tests skip without a built bundle and pieces, so this builds
-      # them (seconds) and runs those files. After the full run on purpose:
-      # built first, they would un-skip engine suites that need more pieces.
-      # The pieces-library engine tests also install their pinned pieces from
-      # npm; engine-ci-coverage.test.ts checks each one is listed here (#1235).
-      - run: >-
-          JARVIS_TEST_ENGINE_BUILD=1 bun test --retry=2
-          src/workflows/runner/engine-runtime/emergency-hold-engine.test.ts
-          src/workflows/runner/engine-runtime/outer-worker-delay.test.ts
-          src/workflows/runner/engine-runtime/core-http-piece.test.ts
-          src/workflows/pieces-library/clickup-engine.test.ts
-          src/workflows/pieces-library/monday-engine.test.ts
-          src/workflows/pieces-library/todoist-engine.test.ts
-          src/workflows/pieces-library/linear-engine.test.ts
-          src/workflows/pieces-library/typeform-engine.test.ts
-          src/workflows/pieces-library/asana-engine.test.ts
-          src/workflows/pieces-library/calendly-engine.test.ts
-          src/workflows/pieces-library/figma-engine.test.ts
-          src/workflows/pieces-library/webflow-engine.test.ts
-          src/workflows/pieces-library/wrike-engine.test.ts
-          src/workflows/pieces-library/pipedrive-engine.test.ts
-          src/workflows/pieces-library/zoom-engine.test.ts
-          src/workflows/pieces-library/help-scout-engine.test.ts
-          src/workflows/pieces-library/gitlab-engine.test.ts
-          src/workflows/pieces-library/mailchimp-engine.test.ts
-          src/workflows/pieces-library/dropbox-engine.test.ts
-          src/workflows/pieces-library/slack-engine.test.ts
-          src/workflows/pieces-library/airtable-engine.test.ts
-          src/workflows/pieces-library/intercom-engine.test.ts
-          src/workflows/pieces-library/notion-engine.test.ts
-          src/workflows/pieces-library/trello-engine.test.ts
-          src/workflows/pieces-library/github-engine.test.ts
+        env:
+          JARVIS_TEST_ENGINE_BUILD: "1"
       # Not retried: deterministic.
       - run: bunx tsc --noEmit
 
@@ -223,6 +218,55 @@ jobs:
         env:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/license-scan-cache
         run: bun run scripts/check-piece-licenses.ts --install "$RUNNER_TEMP/license-scan" --summary-md "$GITHUB_STEP_SUMMARY"
+
+  # --- The webview_go bump's sealed build, on a PR that changes it (#1255) ---
+  # update-webview.yml runs that build only monthly, or on a dispatch from
+  # main that also opens a real bump PR, so a change to it would otherwise
+  # first run for real on main. This runs THE SAME step, read out of that
+  # workflow rather than copied, on the version already pinned: it re-vendors
+  # that version in the container, builds and tests it there, and the result
+  # must be the committed tree. Then the collect step, the same way. Only on a
+  # change to what that build runs: it installs the GTK and mingw toolchains
+  # in the container.
+  webview-build:
+    needs: changes
+    if: needs.changes.outputs.webview-build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run update-webview.yml's build steps on the pinned version
+        run: |
+          set -euo pipefail
+          wf=.github/workflows/update-webview.yml
+          for name in "Re-vendor, patch, build and test in a sealed container" "Collect the vendored tree"; do
+            n="$(NAME="$name" yq '[.jobs.build.steps[] | select(.name == strenv(NAME))] | length' "$wf")"
+            if [ "$n" != 1 ]; then
+              echo "::error::update-webview.yml's build job has $n steps named '$name', not 1"
+              exit 1
+            fi
+          done
+          NAME="Re-vendor, patch, build and test in a sealed container" yq '.jobs.build.steps[] | select(.name == strenv(NAME)) | .run' "$wf" > "$RUNNER_TEMP/webview-build.sh"
+          NAME="Collect the vendored tree" yq '.jobs.build.steps[] | select(.name == strenv(NAME)) | .run' "$wf" > "$RUNNER_TEMP/webview-collect.sh"
+          # Both steps start "set -euo pipefail"; anything else means yq did not
+          # hand back the script itself, and running it would prove nothing.
+          for f in webview-build.sh webview-collect.sh; do
+            if [ "$(head -n 1 "$RUNNER_TEMP/$f")" != "set -euo pipefail" ]; then
+              echo "::error::$f was not extracted as the step's script"
+              exit 1
+            fi
+          done
+          VERSION="$(cat sidecar/third_party/webview_go/UPSTREAM_VERSION)" bash -e "$RUNNER_TEMP/webview-build.sh"
+          bash -e "$RUNNER_TEMP/webview-collect.sh"
+          # The pinned version re-vendors to the committed tree. WebView2.h
+          # arrives from upstream with CRLF line ends, which git stores as LF.
+          out="$RUNNER_TEMP/webview-bump"
+          diff -r --strip-trailing-cr sidecar/third_party/webview_go "$out/webview_go"
+          cmp sidecar/go.mod "$out/go.mod"
+          cmp sidecar/go.sum "$out/go.sum"
+          echo "the sealed build re-vendored $(cat "$out/webview_go/UPSTREAM_VERSION") to the committed tree"
 
   # ─── Daemon lifecycle on macOS (launchd) ───────────────────────
   # The ubuntu `test` job runs the same files, but every launchd assertion in
@@ -311,7 +355,7 @@ jobs:
       # directions, and it is the convention this file already states for the
       # windows job below.
       X_HOTKEY_TESTS: '^TestLinuxX'
-      X_HOTKEY_TEST_COUNT: '8'
+      X_HOTKEY_TEST_COUNT: '9'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -389,7 +433,14 @@ jobs:
           # the runner wait on the step until that process exits, which for a
           # display server is forever. Its log goes to a file so a failure
           # further down is still diagnosable.
-          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp \
+          # -noreset (#1257): without it the server resets every time its
+          # last client leaves, and a connection opened during that reset is
+          # dropped, so XOpenDisplay fails and a test reports "no X display".
+          # These tests close and reopen connections back to back with nothing
+          # else connected; TestLinuxXServerKeepsStateWhenItsLastClientLeaves
+          # fails if this flag goes, as long as nothing else holds a
+          # connection to this server while it runs (see that test).
+          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp -noreset \
             > "${RUNNER_TEMP:-/tmp}/xvfb.log" 2>&1 &
           xvfb_pid=$!
           disown "$xvfb_pid" 2>/dev/null || true
