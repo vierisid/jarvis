@@ -604,6 +604,17 @@ export function ChannelsTab({
 
         {ttsCfg?.provider === "edge" && (
           <>
+            {ttsCfg?.edge_unavailable ? (
+              <div className="v2-set__hint v2-set__hint--warn" role="status">
+                Edge TTS is unavailable in this region: Microsoft's service refused the connection, so Jarvis
+                cannot speak with it. Choose another provider above.
+              </div>
+            ) : (
+              <div className="v2-set__hint">
+                Edge TTS is a free Microsoft service that is not available in every region. If Jarvis stays
+                silent, choose another provider above.
+              </div>
+            )}
             <div className="v2-set__field">
               <label className="v2-set__field-label">Voice</label>
               <select

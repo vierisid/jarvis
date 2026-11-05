@@ -12,12 +12,17 @@ import type { Operation } from './contract';
 import { findGoals } from '../../vault/goals';
 import { ProfileSettings } from '../../brief/profile-settings';
 import { DEFAULT_CONFIG } from '../../config/types';
+import { currentOrigin } from '../../llm/origin';
+import { currentAdmission } from '../../llm/background-budget';
 
 let assembly: ReturnType<typeof createOnboardingAssembly>;
 let routes: ReturnType<typeof createOnboardingRoutes>;
 let interviewReply: (() => Promise<any>) | undefined;
 let modelCalls = 0, connected = true, setupCompleted: number | null = null;
 let planSignals: AbortSignal[] = [], planHang = false;
+/** Q-20 class each model port ran under: `where:origin/admission`. */
+let classes: string[] = [];
+const record = (where: string) => { classes.push(`${where}:${currentOrigin()}/${currentAdmission()}`); };
 const owner = { actorId: DEFAULT_IDS.user, projectId: DEFAULT_IDS.project };
 const authorize = (r: Request) => connected && r.headers.get('cookie') === 'local-test=owner' ? owner : null;
 const request = (path: string, body?: unknown, signal?: AbortSignal) => new Request('http://localhost' + path,
@@ -39,33 +44,36 @@ async function navigate(stepId: string) {
     requestId: crypto.randomUUID(), command: { type: 'navigate', stepId } });
   expect(r.availability).toBe('ready');
 }
-beforeEach(() => { planSignals = []; planHang = false;
-  closeWorkflowDb(); initWorkflowDb(':memory:');
-  interviewReply = undefined; modelCalls = 0; connected = true; setupCompleted = 42;
+function ports(): Parameters<typeof createOnboardingAssembly>[0] {
   const catalog = sampleCatalog(); configureWorkflowReadiness({ pieces: catalog });
-  assembly = createOnboardingAssembly({ owner, database: getWorkflowDb(), authorize,
+  return { owner, database: getWorkflowDb(), authorize,
     readLegacy: () => ({ setup_completed: false, setup_skipped_profile: false, profile_completed: false,
       tutorial_completed: false, tutorial_dismissed: false, tutorial_progress_step: null }),
     setup: { store: { read: () => ({ installMode: 'self', configured: true, completedAt: setupCompleted }),
       completeHosted: () => setupCompleted ??= 42 }, services: { read: async () => 'running', start: async () => {} } },
     google: () => ({ id: 'isolated-google', owner, installMode: 'self', readGrant: async () => ({ state: 'absent' }) }),
     interviewer: createStagedInterviewer({ llmForScope: () => ({ hasConversationTier: () => false,
-      chatTier: async () => interviewReply ? interviewReply() : ({ content: 'What repeats each week?', model: 'isolated-model', usage: { input_tokens: 0, output_tokens: 0 }, finish_reason: 'stop', tool_calls: [] }),
+      chatTier: async () => (record('interview'), interviewReply ? interviewReply() : ({ content: 'What repeats each week?', model: 'isolated-model', usage: { input_tokens: 0, output_tokens: 0 }, finish_reason: 'stop', tool_calls: [] })),
     } as unknown as LLMManager) }),
     intent: () => ({ id: 'isolated-intent', access: async () => 'ready', resolve: async () => ({ availability: 'unavailable' }),
       assess: async () => ({ schemaVersion: 1, issues: [] }) }),
     composer: () => ({ pieceRegistry: catalog, maxAttempts: 1, llm: { chat: async () => {
-      modelCalls++; return { text: JSON.stringify({ displayName: 'Weekly brief', trigger: { name: 'trigger', type: 'EMPTY',
+      modelCalls++; record('compose'); return { text: JSON.stringify({ displayName: 'Weekly brief', trigger: { name: 'trigger', type: 'EMPTY',
         nextAction: { name: 'draft', type: 'PIECE', settings: { pieceName: 'jarvis-ask', actionName: 'ask', input: { prompt: 'Prepare a weekly brief.' } } } } }) };
     } } }),
-    planInitialGoal: async (_text, signal) => { planSignals.push(signal);
+    planInitialGoal: async (_text, signal) => { planSignals.push(signal); record('plan');
       // Like chatTier, a hanging model call ends when its signal aborts.
       if (planHang) await new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
       return { objective: { title: 'Sales objective', description: 'Grow the brand', success_criteria: '50 orders a month', time_horizon: 'quarterly' },
       key_results: [{ title: '50 monthly orders', description: 'Grow orders', success_criteria: '50 orders in a month' }, { title: 'Weekly sales review', description: 'Review sales', success_criteria: 'Weekly report in use' }],
       milestones: [{ key_result_index: 0, title: 'Establish baseline', description: 'Read current orders' }, { key_result_index: 1, title: 'Prepare report', description: 'Use provided sales totals' }] }; },
     resolveContext: async () => ({}), roomStatus: () => 'ready', ready: () => true, workerIntervalMs: 50,
-  });
+  };
+}
+beforeEach(() => { planSignals = []; planHang = false; classes = [];
+  closeWorkflowDb(); initWorkflowDb(':memory:');
+  interviewReply = undefined; modelCalls = 0; connected = true; setupCompleted = 42;
+  assembly = createOnboardingAssembly(ports());
   assembly.start(); routes = createOnboardingRoutes(runtime());
 });
 afterEach(async () => { assembly.stop(); await assembly.idle(); closeWorkflowDb(); });
@@ -111,10 +119,35 @@ test('authenticated real routes advance onboarding, dispatch a durable job and h
   }
   expect(saved.state).toBe('saved'); expect(saved.activation).toBe('disabled'); expect(saved.versionState).toBe('DRAFT');
   expect(modelCalls).toBe(1);
+  // The person who pressed Create waits on this first attempt (#1070).
+  expect(classes).toEqual(['compose:user/foreground']);
   expect(getWorkflowDb().query('SELECT id FROM flow').all()).toHaveLength(1);
   expect(getWorkflowDb().query('SELECT id FROM flow_run').all()).toHaveLength(0);
   expect((await call('journey.transition', saved.continuation.input)).snapshot.completion).toBe('completed');
   expect((await journey()).draft).toEqual({ flowId: saved.flowId, versionId: saved.versionId });
+});
+
+test('a compose the worker retries after a restart is governed background work, not foreground (#1070)', async () => {
+  // This process accepts the job but its worker never runs (a restart before the first attempt).
+  assembly.stop(); await assembly.idle();
+  assembly = createOnboardingAssembly(ports()); routes = createOnboardingRoutes(runtime());
+  const restarted = createOnboardingAssembly(ports());
+  try {
+    await navigate('explain'); await call('setup.complete', { action: 'complete_setup' });
+    await navigate('google'); await navigate('interview');
+    await call('interview.command', { type: 'skip', sessionId: null }); await navigate('tour');
+    const tour = (await call('tour.command', { type: 'read' })).snapshot;
+    await call('tour.command', { type: 'navigate', sessionId: tour.sessionId, revision: tour.revision, requestId: crypto.randomUUID(), from: tour.stepId, action: 'skip' });
+    const submission = { action: 'create', request: { schemaVersion: 1, intentVersion: 1, requestId: 'restart-request', prompt: 'Prepare a weekly brief.', contextRefs: [] }, answers: {} };
+    const intent = await call('intent.validate', submission);
+    const accepted = await call('build.submit', { schemaVersion: 1, journeyId: (await journey()).journeyId, intentId: intent.intent.intentId, submission });
+    expect(modelCalls).toBe(0);
+    restarted.start();
+    let saved;
+    for (let i = 0; i < 100; i++) { saved = await call('result.read', { schemaVersion: 1, jobId: accepted.status.jobId }); if (saved.state === 'saved') break; await Bun.sleep(20); }
+    expect(saved.state).toBe('saved');
+    expect(classes).toEqual(['compose:background/undefined']);
+  } finally { restarted.stop(); await restarted.idle(); }
 });
 
 test('revoked credentials and client scope injection cannot reach a write', async () => {
@@ -204,6 +237,46 @@ test('live UI adapters retain request identity after a lost submit response and 
 });
 
 
+test('result Back shows the saved request read-only through real routes and returns to the same draft (#1070)', async () => {
+  const host = uiHost();
+  try {
+    await toActivation(host);
+    host.draft(host.key(), { prompt: 'Prepare a weekly brief.', contextRefs: [], answers: {} });
+    const j = host.state().journey!;
+    await host.act(host.key(), 'create', { action: 'create', journeyId: j.journeyId, revision: j.revision,
+      request: { schemaVersion: 1, intentVersion: 1, requestId: 'back-request', prompt: 'Prepare a weekly brief.', contextRefs: [] }, answers: {} });
+    await settle(host, () => host.state().view === 'result' || !!(host.state().presentation?.model.result as any)?.reference);
+    if (host.state().view === 'build') {
+      const m = host.state().presentation!.model;
+      await host.act(host.key(), 'open_result', { action: 'open_result', journeyId: j.journeyId, requestId: 'back-request',
+        jobId: m.jobId, commandId: 'open-result', result: (m.result as any).reference });
+    }
+    expect(host.state().view).toBe('result');
+    const saved = host.state().presentation!.model.result as any;
+    await host.act(host.key(), 'back', { action: 'back' });
+    expect(host.state().view).toBe('activation');
+    const request = host.state().presentation!.model as any;
+    expect(request.savedDraft).toBe(true); expect(request.pendingRequest).toBeUndefined(); expect(request.draft.prompt).toBe('Prepare a weekly brief.');
+    expect((await journey())).toMatchObject({ stepId: 'activation', jobId: saved.jobId, draft: { flowId: saved.flowId, versionId: saved.versionId } });
+    // A refresh restores the same read-only request, and editing it is refused.
+    await host.refresh(); expect((host.state().presentation!.model as any).savedDraft).toBe(true);
+    host.draft(host.key(), { prompt: 'Something else', contextRefs: [], answers: {} }); expect(host.state().blocked).toBe(true);
+    await host.refresh(); expect(host.state().blocked).toBe(false); expect((host.state().presentation!.model as any).draft.prompt).toBe('Prepare a weekly brief.');
+    // Another device has no local request text: it is told so, and still cannot start an edit.
+    const other = uiHost({ storage: new Map() });
+    try {
+      await other.start(); expect(other.state().view).toBe('activation');
+      expect(other.state().presentation!.model).toMatchObject({ savedDraft: true, draft: { prompt: '' } });
+      other.draft(other.key(), { prompt: 'A new request', contextRefs: [], answers: {} }); expect(other.state().blocked).toBe(true);
+    } finally { other.dispose(); }
+    await host.act(host.key(), 'view_draft', { action: 'view_draft' });
+    expect(host.state().view).toBe('result');
+    await host.act(host.key(), 'finish', { action: 'finish', scopeId: saved.scopeId, journeyId: saved.journeyId, jobId: saved.jobId });
+    expect(host.state().mode).toBe('complete'); expect(modelCalls).toBe(1);
+    expect(getWorkflowDb().query('SELECT id FROM flow').all()).toHaveLength(1);
+  } finally { host.dispose(); }
+});
+
 test('a completed interview reaches the dashboard with Profile context and exactly one goal through real routes', async () => {
   await navigate('explain'); await call('setup.complete', { action: 'complete_setup' });
   await navigate('google'); await navigate('interview');
@@ -220,6 +293,7 @@ test('a completed interview reaches the dashboard with Profile context and exact
   const finished = await call('interview.command', { type: 'answer', sessionId: start.snapshot.sessionId,
     turnId: start.snapshot.turnId, clientRequestId: 'answer-first', text: 'I run a Cornish surf brand. I want 50 orders a month by December. That is everything for now.' });
   expect(finished.snapshot.phase).toBe('done');
+  expect(classes).toEqual(['interview:user/foreground', 'interview:user/foreground']); classes = [];
   expect(new ProfileSettings(DEFAULT_CONFIG).profile().interviewFacts).toHaveLength(3);
   expect(findGoals()).toHaveLength(0);
   await navigate('tour'); const tour = (await call('tour.command', { type: 'read' })).snapshot;
@@ -258,6 +332,7 @@ test('a completed interview reaches the dashboard with Profile context and exact
   await call('journey.transition', exit);
   // The planner receives the bounded deadline signal, still live after the plan returned.
   expect(planSignals.length).toBe(1); expect(planSignals[0]).toBeInstanceOf(AbortSignal); expect(planSignals[0]!.aborted).toBe(false);
+  expect(classes).toEqual(['plan:user/foreground', 'plan:user/foreground']);
   expect(findGoals()).toHaveLength(5); expect(findGoals().find(g => g.level === 'objective')).toMatchObject({ title: summary, status: 'active' });
   expect(findGoals().every(g => g.status === 'active')).toBe(true);
   expect((await journey()).completion).toBe('explored');

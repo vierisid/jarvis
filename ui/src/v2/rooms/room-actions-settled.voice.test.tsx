@@ -76,6 +76,7 @@ function getReply(url: string): Response {
   if (url === "/api/sites/projects") return NativeResponse.json([PROJECT]);
   if (["/api/goals", "/api/workflows", "/api/vault/entities", "/api/vault/facts", "/api/vault/relationships"].includes(url.split("?")[0]!)) return NativeResponse.json([]);
   if (url.startsWith("/api/calendar")) return NativeResponse.json([]);
+  if (url.startsWith("/api/vault/entity-match?")) return NativeResponse.json({ entity: null });
   return new NativeResponse("", { status: 404 });
 }
 

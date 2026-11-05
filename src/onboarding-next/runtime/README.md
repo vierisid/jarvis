@@ -91,11 +91,9 @@ in a global provider. Injected synthetic binders exist only in tests.
 B03 is currently **binding_missing**: its canonical account-store binding,
 authenticated self-hosted return route/legacy exchange serialization and trusted
 hosted public OAuth client ID are not supplied by this daemon seam yet. Stored
-token booleans cannot substitute for verified Google access. B04 also lacks B05's
-staged interviewer/profile commit port and session retention/Forget binding.
-B05–B10 are absent at this baseline. Those adapters must be completed in this
-runtime owner as their providers become available; copying their source into a
-candidate does not enable them. No fallback model, profile writer or workflow
+token booleans cannot substitute for verified Google access.
+Adapters are completed in this runtime owner as their providers become
+available; copying their source into a candidate does not enable them. No fallback model, profile writer or workflow
 engine is created here.
 
 The production constructor supplies neither a release tuple nor a decision hook.
@@ -103,6 +101,31 @@ The later assembled candidate needs ON-U-10, U11/B13 evidence and the D/F/Q rele
 record before any cutover. Local fixtures and merging this PR are not release
 approval. Provider support, business progress (e.g. setup complete), installation,
 service readiness and release permission are separate states.
+
+## Model admission (Q-20)
+
+Model work a person waits on runs as `runWithAdmission('foreground', () =>
+runWithOrigin('user', ...))`, like Brief composition: the staged interviewer
+inside `interview.command`, the initial-goal plan inside an explore/finish
+transition, and the first compose attempt of a request submitted (or
+re-submitted) in this process whose first attempt has not run yet. The detached
+worker otherwise runs as `background` with no admission class, so retries pass
+the background budget. Nothing here is `exempt`.
+
+## Forget
+
+`forget.ts` is the profile Forget for both legacy routes (`/api/user-profile/clear`
+and `/api/onboarding/reset` with scope `profile` or `all`), enabled or not. In one
+immediate SQLite transaction it runs `clearUserProfile()` and deletes the interview
+transcripts (`onboarding-next.interview.v1.*`), the profile-commit receipts
+(`onboarding-next.interview-profile.v1.*`) and the goal plans drafted from the
+interview (`onboarding-next.initial-okr.v1.*`). It keeps the journey record and
+the initial-goal receipt (goal ids only): they are progress, not personal data.
+Goals already created from the interview stay: they are the user's goals now.
+The activation request and its build/draft records (and the browser's local
+activation draft) are kept too: they belong to the workflow the user asked for,
+not to the interview.
+A test pins that production code reaches `clearUserProfile()` only through it.
 
 ## Verification and rollback
 

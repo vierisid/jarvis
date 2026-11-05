@@ -27,3 +27,37 @@ export async function pushPebbleBlinded(deps: BlindPushDeps, blinded: boolean, a
     done: deps.dispatchRPC(s.id, 'pebble.set_blinded', { blinded }).then(() => {}, () => { /* detached, or no cap yet */ }) }));
   await (awaitFor === undefined ? Promise.all(pushes.map(p => p.done)) : pushes.find(p => p.id === awaitFor)?.done);
 }
+
+/**
+ * What the sidecar's own observers must stop doing (#1159), sent as
+ * `observers.set_paused`. Without this the sidecar kept screenshotting,
+ * saving and OCRing every tick, and reading the clipboard, while awareness
+ * or desktop control was off. The brain drops screen events only while
+ * desktop is off or the awareness service runs, and never drops
+ * clipboard_change, so pausing also stops those feeds (the generic event
+ * pipeline, and the observer.clipboard_changed trigger while desktop is off).
+ *
+ * - screen (screenshots, OCR, window titles): paused while awareness or
+ *   desktop control is off, the same rule as the pebble's blind glyph.
+ * - clipboard: paused while desktop control is off. Not tied to awareness,
+ *   because clipboard_change also feeds the observer.clipboard_changed
+ *   workflow trigger.
+ */
+export type ObserverPause = { screen: boolean; clipboard: boolean };
+
+export function observerPause(awarenessEnabled: boolean, desktopEnabled: boolean): ObserverPause {
+  return { screen: pebbleBlinded(awarenessEnabled, desktopEnabled), clipboard: !desktopEnabled };
+}
+
+/**
+ * Push the pause to every connected sidecar, or only to `onlyId` (a machine
+ * that just connected). Not persisted on the sidecar: a fresh process starts
+ * unpaused, so it must be told on every connect. A sidecar that predates the
+ * RPC answers METHOD_NOT_FOUND, which is swallowed: it keeps observing as it
+ * always did, and the brain still drops what it sends.
+ */
+export async function pushObserverPause(deps: BlindPushDeps, pause: ObserverPause, onlyId?: string): Promise<void> {
+  const targets = deps.connected().filter(s => onlyId === undefined || s.id === onlyId);
+  await Promise.all(targets.map(s =>
+    deps.dispatchRPC(s.id, 'observers.set_paused', { ...pause }).then(() => {}, () => { /* old sidecar, or detached */ })));
+}

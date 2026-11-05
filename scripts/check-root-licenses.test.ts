@@ -117,9 +117,12 @@ describe("checkRootLicenses", () => {
 });
 
 describe("the repository's own production dependencies", () => {
-  test("pass the license policy, apart from the listed known violations", () => {
+  test("pass the license policy with no known violations", () => {
+    // The last one, edge-tts-universal (AGPL-3.0), was replaced (#1166). A
+    // new denied package fails here; listing it needs this test changed too.
+    expect(KNOWN_ROOT_VIOLATIONS).toEqual({});
     const r = checkRootLicenses(resolve(import.meta.dir, ".."));
     expect(r.problems).toEqual([]);
-    expect(r.known).toHaveLength(Object.keys(KNOWN_ROOT_VIOLATIONS).length);
+    expect(r.known).toEqual([]);
   });
 });

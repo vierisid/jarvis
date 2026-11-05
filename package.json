@@ -80,7 +80,6 @@
     "@types/react-dom": "^19.2.3",
     "@xyflow/react": "^12.10.1",
     "discord.js": "^14.25.1",
-    "edge-tts-universal": "^1.4.0",
     "fuse.js": "^7.3.0",
     "jose": "^6.2.0",
     "jpeg-js": "0.4.4",
@@ -102,6 +101,7 @@
     "@happy-dom/global-registrator": "^20.14.0",
     "@types/bun": "latest",
     "@types/pngjs": "6.0.5",
+    "axios": "1.16.1",
     "happy-dom": "^20.14.0",
     "js-tiktoken": "1.0.21",
     "socket.io-client": "^4.8.3"

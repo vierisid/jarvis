@@ -37,6 +37,7 @@ import { getRecentObservations, describeObservationForPrompt } from '../vault/ob
 import { findContent } from '../vault/content-pipeline.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { BackgroundThrottled, currentAdmission, runWithAdmission } from '../llm/background-budget.ts';
+import { commitmentPromptLine } from '../vault/commitment-text.ts';
 
 const BG_CDP_PORT = 9223;
 const BG_PROFILE_DIR = join(homedir(), '.jarvis', 'browser', 'bg-profile');
@@ -288,12 +289,7 @@ export class BackgroundAgentService implements Service, IAgentService {
       const allCommitments = [...due, ...upcoming];
 
       if (allCommitments.length > 0) {
-        context.activeCommitments = allCommitments.map((c) => {
-          const dueStr = c.when_due
-            ? ` (due: ${new Date(c.when_due).toLocaleString()})`
-            : '';
-          return `[${c.priority}] ${c.what}${dueStr} — ${c.status}`;
-        });
+        context.activeCommitments = allCommitments.map(commitmentPromptLine);
       }
     } catch (err) {
       console.error('[BackgroundAgent] Error loading commitments:', err);

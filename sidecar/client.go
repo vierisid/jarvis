@@ -48,6 +48,13 @@ type SidecarClient struct {
 	claims        *SidecarTokenClaims
 	tokenProvider *accessTokenProvider // mints short-lived panel access tokens
 	handlers      map[string]RPCHandler
+	// connHandlers are the capability-independent handlers connectAndServe
+	// registers (tray.status, notify.show, observers.set_paused). reloadConfig
+	// rebuilds c.handlers from NewHandlerRegistry, which does not know them;
+	// they are put back from here, or every update_config left the brain's
+	// notifications, tray pushes and observer pauses answered METHOD_NOT_FOUND
+	// until the next reconnect (#1160, #1159). Guarded by mu.
+	connHandlers map[string]RPCHandler
 	// conn is read by readLoop/sendJSON/sendBinary (per-connection goroutines)
 	// and written by connectAndServe; Stop() clears it from the signal-handler
 	// goroutine. atomic.Pointer makes those cross-goroutine accesses race-free
@@ -529,7 +536,7 @@ func (c *SidecarClient) reloadConfig() {
 	}
 
 	// Rebuild handler registry (picks up capability changes)
-	c.handlers = NewHandlerRegistry(c.config, &c.mu, c.availableCaps, c.panels, c.pebble, c.subPebble, c.playback, c.regions, c.reloadConfig, c.claims.Brain, c.tokenProvider.Token)
+	c.rebuildHandlers()
 
 	// Restart observers (picks up interval/threshold changes)
 	if c.obsCancel != nil {
@@ -549,6 +556,27 @@ func (c *SidecarClient) reloadConfig() {
 	}
 
 	log.Println("[sidecar] Config reloaded: handlers rebuilt, observers restarted")
+}
+
+// rebuildHandlers replaces c.handlers with a fresh registry plus the
+// connection handlers in c.connHandlers. Caller holds c.mu.
+func (c *SidecarClient) rebuildHandlers() {
+	registry := NewHandlerRegistry(c.config, &c.mu, c.availableCaps, c.panels, c.pebble, c.subPebble, c.playback, c.regions, c.reloadConfig, c.claims.Brain, c.tokenProvider.Token)
+	for name, h := range c.connHandlers {
+		registry[name] = h
+	}
+	c.handlers = registry
+}
+
+// setConnHandler registers a handler that must survive reloadConfig.
+func (c *SidecarClient) setConnHandler(name string, h RPCHandler) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.connHandlers == nil {
+		c.connHandlers = make(map[string]RPCHandler)
+	}
+	c.connHandlers[name] = h
+	c.handlers[name] = h
 }
 
 func (c *SidecarClient) runPreflight() {
@@ -637,6 +665,40 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		log.Println("[sidecar] opening the dashboard (open-at-startup preference)")
 		go c.OpenChat()
 	}
+
+	// Connection handlers that do not depend on the pebble: registered for
+	// every sidecar (before #1159/#1160 they sat inside the pebble block, so a
+	// sidecar without the pebble capability showed no notifications), outside
+	// c.mu (setConnHandler takes it, so it must never be called with c.mu
+	// held), and kept across reloadConfig.
+	//
+	// Tray menu live data (brain -> sidecar): approvals count, recent
+	// activity, pause/mute, brain/sidecar health (design: usejarvis-tray s00).
+	c.setConnHandler("tray.status", func(params map[string]any) (*RPCResult, error) {
+		setTrayStatus(trayStatusFromParams(params))
+		return &RPCResult{Result: map[string]any{"ok": true}}, nil
+	})
+	// Outbound OS notification (brain -> sidecar): the reasons Jarvis
+	// interrupts: approval / done / sidecar / update / usage / workflow
+	// (design: usejarvis-tray s01). The sidecar raises it natively; the
+	// choice comes back via notify.action (emitted below).
+	c.setConnHandler("notify.show", func(params map[string]any) (*RPCResult, error) {
+		showNotification(notificationFromParams(params))
+		return &RPCResult{Result: map[string]any{"ok": true}}, nil
+	})
+	// The brain's awareness / desktop off switches, applied to the
+	// observers at the source (#1159). Not persisted; see observers_pause.go.
+	c.setConnHandler("observers.set_paused", makeObserversSetPausedHandler())
+	// Bounded by sendUIEvent (#1160) and nothing else: not obsCtx, which the
+	// first update_config cancels (reloadConfig calls c.obsCancel, this
+	// connection's obsCancel), and which would then fail every tap, and
+	// sometimes close the connection, until the next reconnect. A dropped
+	// connection still fails the write at once (c.conn is loaded at call
+	// time). The old code read c.obsCtx without c.mu.
+	setNotifyEmitAction(func(id, kind, action string) error {
+		return sendUIEvent(context.Background(), func(wctx context.Context, e SidecarEvent) error { return c.sendEvent(wctx, e, nil) },
+			"notify.action", map[string]any{"id": id, "kind": kind, "action": action})
+	})
 
 	// Wire the pebble's summon hotkey to the brain via a SidecarEvent.
 	// The daemon listens for "pebble.summon" and drives state transitions
@@ -1154,28 +1216,6 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			}
 			return &RPCResult{Result: map[string]any{"enabled": enabled}}, nil
 		}
-		// Tray menu live data (brain → sidecar): approvals count, recent
-		// activity, pause/mute, brain/sidecar health (design: usejarvis-tray §00).
-		c.handlers["tray.status"] = func(params map[string]any) (*RPCResult, error) {
-			setTrayStatus(trayStatusFromParams(params))
-			return &RPCResult{Result: map[string]any{"ok": true}}, nil
-		}
-		// Outbound OS notification (brain → sidecar): the four reasons Jarvis
-		// interrupts — approval / done / sidecar / update (design: usejarvis-tray
-		// §01). The sidecar raises it natively; the choice comes back via
-		// notify.action (emitted below).
-		c.handlers["notify.show"] = func(params map[string]any) (*RPCResult, error) {
-			showNotification(notificationFromParams(params))
-			return &RPCResult{Result: map[string]any{"ok": true}}, nil
-		}
-		setNotifyEmitAction(func(id, kind, action string) {
-			_ = c.sendEvent(c.obsCtx, SidecarEvent{
-				EventType: "notify.action",
-				Timestamp: time.Now().UnixMilli(),
-				Priority:  "normal",
-				Payload:   map[string]any{"id": id, "kind": kind, "action": action},
-			}, nil)
-		})
 		c.handlers["pebble.realtime_status"] = func(params map[string]any) (*RPCResult, error) {
 			state, _ := params["state"].(string)
 			detail, _ := params["detail"].(string)

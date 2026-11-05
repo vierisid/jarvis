@@ -11,24 +11,15 @@
  * before.
  */
 import {
-  COMMITMENT_PRIORITIES, COMMITMENT_STATUSES, type CommitmentPatch, type CommitmentPriority, type CommitmentStatus,
+  COMMITMENT_PRIORITIES, COMMITMENT_STATUSES, PARKED_RESULT_PREFIX, parseParkedRequestIds, type CommitmentPatch, type CommitmentPriority, type CommitmentStatus,
 } from '../vault/commitments.ts';
+import {
+  COMMITMENT_ASSIGNEE_MAX_CHARS, COMMITMENT_CONTEXT_MAX_CHARS, COMMITMENT_WHAT_MAX_CHARS, NOT_ONE_LINE, NOT_TEXT, withoutHiddenText,
+} from '../vault/commitment-text.ts';
 
 const WRITABLE = new Set(['status', 'result', 'priority', 'assigned_to']);
 
-/**
- * Length bounds on what the dashboard may store in a task (#1036).
- *
- * Measured on a real vault (41 tasks, from chat extraction, goal check-ins,
- * the model and the dashboard): the longest `what` was 112 characters, the
- * longest `context` 27 and the longest `assigned_to` 6. The bounds are well
- * clear of that. A task's text has to fit an approval card sentence
- * (`forCard` caps a value at 600); `context` takes the bound the goals routes
- * already put on a goal's description (`goals/validation.ts` `text`).
- */
-export const COMMITMENT_WHAT_MAX_CHARS = 500;
-export const COMMITMENT_ASSIGNEE_MAX_CHARS = 100;
-export const COMMITMENT_CONTEXT_MAX_CHARS = 20_000;
+export { COMMITMENT_WHAT_MAX_CHARS, COMMITMENT_ASSIGNEE_MAX_CHARS, COMMITMENT_CONTEXT_MAX_CHARS } from '../vault/commitment-text.ts';
 
 /**
  * The most a create body needs: every text field at its bound with each
@@ -40,47 +31,17 @@ export const COMMITMENT_CREATE_MAX_BODY_BYTES =
   6 * (COMMITMENT_WHAT_MAX_CHARS + COMMITMENT_ASSIGNEE_MAX_CHARS + COMMITMENT_CONTEXT_MAX_CHARS) + 1024;
 
 /**
- * What ends a line for something reading the text, not only `\n`: every C0
- * control (the line breaks with them; a tab is made a space first), DEL, every C1 control (NEL,
- * U+0085, is a line break) and the Unicode line and paragraph separators.
+ * The longest result a PATCH may store (#1115). The writers in this repo store
+ * at most 500 characters of a reply (the executor) or 200 (the chat's tracked
+ * task), plus the parked marker; a result is free text shown with the task,
+ * so it takes the bound `context` already has rather than a new one.
  */
-// eslint-disable-next-line no-control-regex
-const NOT_ONE_LINE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+export const COMMITMENT_RESULT_MAX_CHARS = COMMITMENT_CONTEXT_MAX_CHARS;
 
-/** The same, less the tab and the line breaks a block of text may hold. */
-// eslint-disable-next-line no-control-regex
-const NOT_TEXT = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/;
+/** The most a PATCH body needs, by the same arithmetic as the create's. */
+export const COMMITMENT_PATCH_MAX_BODY_BYTES = 6 * (COMMITMENT_RESULT_MAX_CHARS + COMMITMENT_ASSIGNEE_MAX_CHARS) + 1024;
 
 type Field = { ok: true; value: string | null } | { ok: false };
-
-/**
- * Characters that reorder or hide text, dropped on save (#1036): the bidi
- * embeddings, overrides and isolates, the LRM, RLM and Arabic letter marks,
- * and the tag characters, which spell ASCII nobody sees. They change what
- * the model reads without changing what a person sees.
- *
- * NOT the wider set an approval card drops (`withoutCardInvisibles`): that
- * is fine for a card, which is shown once, but stored text is the user's,
- * and it would change it. The ZWNJ (U+200C) and ZWJ (U+200D) spell Persian,
- * Malayalam and the other scripts that need them, and join emoji sequences;
- * the variation selectors U+FE00-FE0F pick emoji or text presentation and
- * make keycaps (the #859 carve-out keeps U+FE0E and U+FE0F for the same
- * reason); a soft hyphen is a hyphenation point. They are kept.
- */
-const REORDERS_OR_HIDES = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu;
-
-/**
- * An emoji tag sequence (UTS #51): the black flag, a subdivision code of
- * lower-case tag letters and tag digits, and CANCEL TAG, as in the England,
- * Scotland and Wales flags. Its tags are kept; any other tag character is
- * dropped, including upper case or spaces between a flag and its CANCEL TAG,
- * which no flag uses and which is how hidden ASCII would hide inside one.
- */
-const TAGS = /\u{1F3F4}[\u{E0030}-\u{E0039}\u{E0061}-\u{E007A}]{1,6}\u{E007F}|[\u{E0000}-\u{E007F}]/gu;
-
-function withoutHiddenText(value: string): string {
-  return value.replace(REORDERS_OR_HIDES, '').replace(TAGS, (match) => (match.startsWith('\u{1F3F4}') ? match : ''));
-}
 
 /**
  * A text field as it is stored, or not ok. Control characters are refused
@@ -126,10 +87,19 @@ export function validateCommitmentPatch(body: unknown): { ok: true; patch: Commi
     }
     patch.status = b.status as CommitmentStatus;
   }
-  // null is no result, as it always was.
+  // null is no result, as it always was. Text under the rules `context` has,
+  // and bounded (#1115): it was stored whatever its length.
   if (has('result') && b.result !== null) {
-    if (typeof b.result !== 'string') return { ok: false, error: 'Invalid result: text, or null' };
-    patch.result = b.result;
+    const result = field(b.result, { oneLine: false, max: COMMITMENT_RESULT_MAX_CHARS, blank: 'null' });
+    if (!result.ok) {
+      return { ok: false, error: `Invalid result: text of at most ${COMMITMENT_RESULT_MAX_CHARS} characters, with no control characters but line breaks and tabs, or null` };
+    }
+    // The executor reads a result that starts like this as the approval
+    // requests it is waiting on, and closes the task from their outcome.
+    if (parseParkedRequestIds(result.value)) {
+      return { ok: false, error: `Invalid result: it cannot start with "${PARKED_RESULT_PREFIX}[req:", which marks a task waiting on approvals` };
+    }
+    if (result.value !== null) patch.result = result.value;
   }
   if (has('priority')) {
     if (!(COMMITMENT_PRIORITIES as readonly unknown[]).includes(b.priority)) {

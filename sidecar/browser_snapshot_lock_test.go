@@ -45,3 +45,43 @@ func TestASnapshotWaitingBehindAStuckOneRefusesInsteadOfQueueing(t *testing.T) {
 	// the pipe, so a second call would race the first one's reader.
 	fb.noCommandWithin(200 * time.Millisecond)
 }
+
+// #1161: navigate's closing snapshot meeting the lock timeout reported the
+// generic "so nothing was done", though Page.navigate had already been sent
+// and the page had moved. It says what happened instead, in the local
+// browser's words (src/actions/browser/session.ts NAVIGATED_SNAPSHOT_LOCK_BUSY).
+func TestNavigateWhoseSnapshotMeetsTheLockTimeoutSaysTheNavigationStarted(t *testing.T) {
+	fb := newTypeFixture(t)
+	previous := snapshotLockTimeout
+	snapshotLockTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { snapshotLockTimeout = previous })
+	fb.client.snapMu.Lock()
+	t.Cleanup(fb.client.snapMu.Unlock)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := makeBrowserNavigateHandler(guardTestConfig())(map[string]any{"url": "https://example.com/next"})
+		done <- err
+	}()
+	c := fb.nextCommand()
+	if c.Method != "Page.navigate" {
+		t.Fatalf("first command = %q, want Page.navigate", c.Method)
+	}
+	fb.reply(c.ID)
+	fb.write(map[string]any{"method": "Page.loadEventFired", "params": map[string]any{}})
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("navigate succeeded with the snapshot lock held")
+		}
+		if strings.Contains(err.Error(), "nothing was done") {
+			t.Fatalf("navigate reported %q: false, the navigation was sent", err)
+		}
+		if err.Error() != navigatedSnapshotLockBusy {
+			t.Fatalf("navigate error = %q, want %q", err, navigatedSnapshotLockBusy)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("navigate never answered")
+	}
+}

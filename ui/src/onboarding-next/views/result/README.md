@@ -59,7 +59,8 @@ include its renderer and B10/finish bindings, not merely module discovery.
 
 `onOpenWorkflow` carries the exact B10 workflow route. `onRefresh` repeats a
 read/reconciliation of the same job and retained reference, never a build retry.
-`onBack` restores the original request without starting another job. All actions
+`onBack` restores the original request without starting another job: U10 moves
+the journey to Activation, which shows it read-only while the draft stays held. All actions
 carry scope/job IDs, presentation revision and a command UUID for host-side
 reservation/deduplication. A resolved delivery stays pending until authoritative
 acknowledgement/navigation. A rejected delivery requires Check again; late
