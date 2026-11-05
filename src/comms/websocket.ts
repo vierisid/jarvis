@@ -876,6 +876,10 @@ export class WebSocketServer {
    * opened from that sidecar's token. Every /ws socket carries one, except
    * under `insecure_open_access`, where no socket has an identity and every
    * one already has the whole dashboard API: there, any socket may.
+   *
+   * Not a pure read: resolvePanelSession drops a session whose sidecar is no
+   * longer enrolled, which hangs up that session's sockets. A caller probing
+   * every client (ws-service's `.some(accepts)`) must iterate a copy.
    */
   socketSpeaksForSidecar(ws: unknown, sidecarId: string): boolean {
     if (this.insecureOpenAccess) return true;
