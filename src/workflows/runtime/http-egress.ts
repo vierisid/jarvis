@@ -209,6 +209,22 @@ function refusal(host: string, address: string, policy: EgressPolicy, label = 'H
   return new EgressRefusedError(`${label} to ${host} refused: it resolves to ${address}, and this Jarvis's workflow steps reach only ${allowed} (never this machine, loopback, link-local or cloud metadata)`);
 }
 
+/**
+ * A response past `MAX_RESPONSE_BYTES` (#1153). A refusal like any other the
+ * guard makes, so every place that already fails the step on a refusal (the
+ * HTTP and GraphQL pieces, never retried or continued past, and the engine's
+ * file download, which otherwise turns an error into an empty file) fails it
+ * on this too.
+ */
+export class ResponseTooLargeError extends EgressRefusedError {
+  /**
+   * Unlike every other refusal, this one comes after the request went out: a
+   * caller that records refusals as "not sent" must not record this one so,
+   * or a retry would send a non-read request twice.
+   */
+  readonly afterSend = true;
+}
+
 /** Refuse an IP-literal host outside the policy. A name is checked by `guardedLookup` instead. */
 export function assertHostAllowed(hostname: string, policy: EgressPolicy,
   allowed: (address: string) => boolean = (address) => destinationAllowed(address, policy)): void {
@@ -280,6 +296,23 @@ export function resolveGuardedAddress(hostname: string, policy: EgressPolicy, op
   });
 }
 
+/** follow-redirects' default (21), which axios applies when a request sets none; a request may ask for fewer. */
+export const MAX_REDIRECTS = 21;
+
+/**
+ * The most a workflow HTTP request (the HTTP and GraphQL steps, and the
+ * engine's file download) reads of a response (#1153). Upstream reads without
+ * limit, so one response could fill the engine's memory, and the engine
+ * cannot carry one past this anyway: it fails a run whose step data passes
+ * `AP_MAX_FLOW_RUN_LOG_SIZE_MB` (10 MiB by default, which Jarvis does not
+ * change) less its 256 KiB error offset (`helper/logging-utils.ts`), and a
+ * binary response is stored as base64, 4/3 its size. So
+ * (10 MiB - 256 KiB) * 3/4, and a step fails naming this cap instead of the
+ * run failing on "Flow run data size exceeded" after the whole body was read.
+ * `http-egress.test.ts` pins the derivation. A request may ask for less, never more.
+ */
+export const MAX_RESPONSE_BYTES = ((10 * 1024 * 1024 - 256 * 1024) * 3) / 4;
+
 /** The subset of axios this needs; the piece passes its own bundled copy. */
 interface AxiosLike {
   create(config: Record<string, unknown>): {
@@ -341,13 +374,26 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     config.httpAgent = new HttpAgent({ keepAlive: false, lookup } as ConstructorParameters<typeof HttpAgent>[0]);
     config.httpsAgent = new HttpsAgent({ keepAlive: false, lookup } as ConstructorParameters<typeof HttpsAgent>[0]);
     config.proxy = false; config.lookup = lookup; config.adapter = 'http';
+    const asked = typeof config.maxContentLength === 'number' ? config.maxContentLength : -1;
+    config.maxContentLength = asked >= 0 && asked < MAX_RESPONSE_BYTES ? asked : MAX_RESPONSE_BYTES;
+    // A stream is handed over unread, so the size cap would not apply to it.
+    if (config.responseType === 'stream') throw new EgressRefusedError('HTTP request refused: a streamed response would not be held to the size cap');
+    // follow-redirects' own default, which axios uses when given none; never more.
+    if (typeof config.maxRedirects !== 'number' || config.maxRedirects > MAX_REDIRECTS) config.maxRedirects = MAX_REDIRECTS;
     return config;
   });
   // A refusal raised inside the transport (the lookup, a redirect) reaches
   // axios as an AxiosError, which the piece's HTTP client turns into a bare
   // "status 500". Hand it back as itself, so the step fails naming the rule.
   instance.interceptors.response.use(undefined, (error: unknown) => {
-    throw egressRefusalIn(error) ?? error;
+    const refused = egressRefusalIn(error);
+    if (refused) throw refused;
+    // axios's own wording for a body past maxContentLength.
+    const message = (error as { message?: unknown } | null)?.message;
+    if (typeof message === 'string' && /^maxContentLength size of \d+ exceeded$/u.test(message)) {
+      throw new ResponseTooLargeError(`HTTP response refused: it is larger than ${MAX_RESPONSE_BYTES} bytes, the most a workflow step can carry (${message})`);
+    }
+    throw error;
   });
   return instance as ReturnType<A['create']>;
 }

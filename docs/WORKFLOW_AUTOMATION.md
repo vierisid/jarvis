@@ -646,9 +646,27 @@ HTTP request specifics:
   props. The Basic and Bearer fields, the proxy password, any header, query
   parameter or URL `user:password@` whose name reads as a credential are shown
   as `[redacted]` on the card and in the effect record (`redactHttpInput`).
-  Names are matched as words (`author` is content, `X-Api-Key` is not), at any
-  depth of a JSON or form body. The engine's digest of the whole input still
+  Names are matched as words (`author` is content, `X-Api-Key` is not), as
+  written or percent-decoded, at any depth of a JSON or form body, in a raw
+  JSON string body or a wholly form-encoded one, and in a URL fragment
+  (`#access_token=`). The secret path segment of a Slack, Discord, Telegram or
+  Teams webhook URL is redacted too. The engine's digest of the whole input still
   binds the approval to what runs.
+- **Receipts keep no tokens.** The durable receipt of a sent request drops
+  `Set-Cookie`, redacts token-named fields and headers at any depth
+  (`access_token`, `refresh_token`, `client_secret`, `X-Auth-Token`, ...; not
+  `key` or `token_type`) and keeps no request body from a failure the step
+  continued past. A redacted receipt carries `receiptRedacted: true`. The step
+  itself still hands the flow the whole response; only a replay of a recorded
+  step reads the receipt.
+- **Size.** A response (and an engine file download) is read up to 7.3 MiB,
+  `(10 MiB - 256 KiB) * 3/4`: the engine fails a run whose step data passes
+  10 MiB less a 256 KiB offset, and a binary response is stored as base64. A
+  larger one fails the step as a refusal, never retried or continued past, and
+  a file field whose download is too large fails its step instead of being
+  sent empty. A streamed response is refused. Redirects stop at
+  follow-redirects' 21, and the run's own deadline (600 s by default, plus the
+  daemon's 30 s ack margin) bounds a request that sets no timeout.
 - **Egress.** Every connection is resolved once, each address checked, and the
   connection made to the checked address (`runtime/http-egress.ts`); IP
   literals and every redirect target are checked too, and a request that is not
