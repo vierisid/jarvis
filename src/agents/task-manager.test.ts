@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { AgentTaskManager, MAX_RUNNING_TASKS, RUN_STOPPED_REASON, TaskCapacityError, TaskRunStoppedError } from './task-manager.ts';
+import { AgentTaskManager, MAX_RUNNING_TASKS, RUN_STOPPED_REASON, RUN_TURNED_OFF_REASON, TaskCapacityError, TaskRunStoppedError } from './task-manager.ts';
 import { withRunOwner, type RunOwner } from '../actions/run-owner-scope.ts';
 import { AgentInstance } from './agent.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
@@ -385,12 +385,16 @@ describe('a task started for a workflow run belongs to that run (#1018)', () => 
     let state: 'live' | 'ended' | 'stopped' = 'live';
     const listeners = new Set<() => void>();
     const endedListeners = new Set<() => void>();
+    const turnedOffListeners = new Set<() => void>();
     const owner: RunOwner = { runId, stopped: () => state === 'stopped', ended: () => state === 'ended',
       onStopped: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
-      onEnded: (listener) => { endedListeners.add(listener); return () => endedListeners.delete(listener); } };
-    return { owner, listeners, endedListeners,
+      onEnded: (listener) => { endedListeners.add(listener); return () => endedListeners.delete(listener); },
+      onTurnedOff: (listener) => { turnedOffListeners.add(listener); return () => turnedOffListeners.delete(listener); } };
+    return { owner, listeners, endedListeners, turnedOffListeners,
       stop: () => { state = 'stopped'; for (const listener of [...listeners]) listener(); },
       end: () => { state = 'ended'; for (const listener of [...endedListeners]) listener(); },
+      /** The workflow turned off while the run executes: the run is live, and new tasks read it as stopped. */
+      turnOff: () => { state = 'stopped'; for (const listener of [...turnedOffListeners]) listener(); },
       gone: () => { state = 'stopped'; } };
   }
   /**
@@ -430,6 +434,30 @@ describe('a task started for a workflow run belongs to that run (#1018)', () => 
     expect(manager.getTask(id)).toMatchObject({ status: 'cancelled', cancelRequested: RUN_STOPPED_REASON });
     expect(manager.getTask(id)!.result!.response).toBe(`Task cancelled: ${RUN_STOPPED_REASON}`);
     expect(r.listeners.size).toBe(0);
+  });
+
+  test('turning the workflow off while its run executes cancels the task, saying why, and the task stops listening (#1152)', async () => {
+    const manager = new AgentTaskManager(untilStopped);
+    const r = run();
+    const id = withRunOwner(r.owner, () => manager.launch(launchOptions('wf')));
+    expect(r.turnedOffListeners.size).toBe(1);
+    r.turnOff();
+    await settle(manager, id);
+    expect(manager.getTask(id)).toMatchObject({ status: 'cancelled', cancelRequested: RUN_TURNED_OFF_REASON });
+    expect([r.listeners.size, r.endedListeners.size, r.turnedOffListeners.size]).toEqual([0, 0, 0]);
+  });
+
+  test('a task whose run ended on its own is not cancelled by a later turn-off (#1152)', async () => {
+    const manager = new AgentTaskManager(untilStopped);
+    const r = run();
+    const id = withRunOwner(r.owner, () => manager.launch(launchOptions('wf')));
+    r.end();
+    expect(r.turnedOffListeners.size).toBe(0);
+    r.turnOff();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(manager.getTask(id)!.status).toBe('running');
+    manager.cancel(id);
+    await settle(manager, id);
   });
 
   test('a task whose run is already stopped does not start, and leaves no record', () => {
