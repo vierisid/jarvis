@@ -628,7 +628,8 @@ async function writePrReport(
   writeFileSync(reportPath, markdown);
   // The PR body is cut to fit GitHub (#1165); the cut points here, which the
   // workflow uploads with the rest of the report directory.
-  writeFileSync(join(dirname(reportPath), REPORT_FULL_FILE), full);
+  const fullReportPath = join(dirname(reportPath), REPORT_FULL_FILE);
+  writeFileSync(fullReportPath, full);
   const changed = hasChanges(diff);
   info(`Wrote PR report to ${reportPath} (verdict: ${verdict}, changes: ${changed})`);
   if (!changed) {
