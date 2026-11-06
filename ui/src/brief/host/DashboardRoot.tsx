@@ -175,7 +175,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   const owner = useBriefConversation(), billing = useBilling({ refreshOnMount: false }); useBriefProjection(host.refresh);
   const profile = useSyncExternalStore(host.account.profile.subscribe, host.account.profile.snapshot, host.account.profile.snapshot);
   const notices = useNotificationCenter(owner);
-  const emergency = useEmergencyStatus(host.transport, owner.settingsEvents);
+  const emergency = useEmergencyStatus(host.transport, owner.emergencyRevision);
   const humanInputs = useHumanInputQueue(host.transport, isBriefCapabilityEnabled(host.capabilities(), 'decisions'));
   const humanPending = humanInputs.requests.filter(r => humanRequestNeedsAttention(r) || hasLocalDraft(r)).length;
   const [attentionMessage, setAttentionMessage] = useState('');
@@ -214,7 +214,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
       const result = await host.navigation.intent(request.room, true);
       return result.state === 'opened' && host.active();
     }} />{message && <p className="brief-host-notice" role="status">{message}</p>}
-    <EmergencyStatusBanner state={emergency} open={() => { void host.navigation.navigate('emergency-controls'); }} />
+    <EmergencyStatusBanner state={emergency} open={() => host.navigation.navigate('emergency-controls')} />
     {!!humanPending && route.room !== 'needs-you' && <aside className="brief-human-banner" role="status">{humanPending} workflow {humanPending === 1 ? 'request needs' : 'requests need'} your attention. <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>Open Needs you</button></aside>}
     <BriefHost route={route} rooms={rooms} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
       const guarded = host.guardShell(base);

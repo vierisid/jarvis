@@ -266,3 +266,18 @@ test("a burst of warnings does not evict unread proactive notices, and a bold le
   expect(state.notices.filter(n => n.source !== "proactive")).toHaveLength(3);
   expect(state.notices.find(n => n.id === "p1")).toMatchObject({ title: "Opportunity p1", text: "A cheaper plan is available" });
 });
+
+describe("emergency_state broadcast", () => {
+  test("each broadcast bumps the revision readers re-read the status on, and adds no chat or approval", async () => {
+    const socket = sockets[0]!;
+    await openUntilApprovalsRequested(socket);
+    expect(state.emergencyRevision).toBe(0);
+    const emergency = (value: string) => ({ data: JSON.stringify({ type: "notification", payload: { source: "emergency_state", state: value }, priority: "urgent", timestamp: 3 }) });
+    await deliver(socket, emergency("paused"));
+    expect(state.emergencyRevision).toBe(1);
+    await deliver(socket, emergency("normal"));
+    expect(state.emergencyRevision).toBe(2);
+    expect(state.messages).toEqual([]);
+    expect(state.approvals).toEqual([]);
+  });
+});
