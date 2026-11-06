@@ -1,6 +1,7 @@
 import { assertEqual, BaseStepOutput, EngineGenericError, executionJournal, FailedStep, FlowActionType, FlowRunStatus, GenericStepOutput, isNil, LoopStepOutput, LoopStepResult, RespondResponse, StepOutput, StepOutputStatus } from '@activepieces/shared'
 import { loggingUtils } from '../../helper/logging-utils'
 import { StepExecutionPath } from './step-execution-path'
+import { stepExpressionOutput } from '../../../../../../../../runtime/engine-expression-data'
 
 
 export type FlowVerdict = {
@@ -168,7 +169,7 @@ export class FlowExecutorContext {
 
 function extractOutput(steps: Record<string, StepOutput>): Record<string, unknown> {
     return Object.entries(steps).reduce((acc: Record<string, unknown>, [stepName, step]) => {
-        acc[stepName] = step.output
+        acc[stepName] = stepExpressionOutput(step)
         return acc
     }, {} as Record<string, unknown>)
 }

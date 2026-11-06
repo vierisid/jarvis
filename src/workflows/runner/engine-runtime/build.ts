@@ -321,6 +321,8 @@ export function buildStagingPackageJson(): string {
  * new patch is a one-line cache-invalidation registration.
  */
 export const PATCHED_VENDOR_SOURCES = [
+  "../../activepieces/packages/server/engine/src/lib/handler/context/flow-execution-context.ts",
+  "../../runtime/engine-expression-data.ts",
   '../../runtime/safe-expression.ts',
   '../../runtime/input-validation.ts',
   '../../runtime/resolved-input-guard.ts',
