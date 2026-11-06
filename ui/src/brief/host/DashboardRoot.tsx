@@ -214,9 +214,8 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
       const result = await host.navigation.intent(request.room, true);
       return result.state === 'opened' && host.active();
     }} />{message && <p className="brief-host-notice" role="status">{message}</p>}
-    <EmergencyStatusBanner state={emergency} open={() => host.navigation.navigate('emergency-controls')} />
     {!!humanPending && route.room !== 'needs-you' && <aside className="brief-human-banner" role="status">{humanPending} workflow {humanPending === 1 ? 'request needs' : 'requests need'} your attention. <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>Open Needs you</button></aside>}
-    <BriefHost route={route} rooms={rooms} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
+    <BriefHost route={route} rooms={rooms} notice={<EmergencyStatusBanner state={emergency} open={() => host.navigation.navigate('emergency-controls')} />} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
       const guarded = host.guardShell(base);
       return beforeNavigate ? { ...guarded, navigate: next => { void beforeNavigate().then(ok => { if (ok) guarded.navigate(next); }); } } : guarded;
     }}
