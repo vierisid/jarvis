@@ -670,3 +670,9 @@
 .wf-detail__permission { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
 .wf-detail__permission p { margin: 4px 0; flex: 1 1 220px; }
 .wf-detail__permission-err { margin: 4px 0; color: var(--accent-1, #f87171); }
+.wf-detail__read-hosts { margin-top: 6px; }
+.wf-detail__host-list { list-style: none; margin: 0; padding: 0; flex: 1 1 100%; }
+.wf-detail__host-list li { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 0; }
+.wf-detail__host-list code { overflow-wrap: anywhere; }
+.wf-detail__host-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 1 100%; }
+.wf-detail__host-add input { flex: 1 1 160px; min-width: 0; }

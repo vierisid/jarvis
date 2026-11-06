@@ -39,6 +39,18 @@ export interface Flow {
     grantedAt: number | null;
   };
   /**
+   * Hosts this flow's HTTP GET steps may read without an approval card.
+   * `grantedBy` is `upgrade` when the list was seeded from what the flow
+   * already read before the list existed. Set through
+   * `POST /api/workflows/:id/read-hosts` (`{ hosts }`, `[]` clears). Absent
+   * from a daemon without the list.
+   */
+  readHosts?: {
+    hosts: string[];
+    grantedBy: "user" | "upgrade" | null;
+    grantedAt: number | null;
+  };
+  /**
    * #1080: why this enabled workflow is not doing its work, from its latest
    * finished run: a readiness refusal (a pinned connection or computer that
    * changed, Q-05), or a run refused because its computer was offline or a

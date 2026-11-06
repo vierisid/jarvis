@@ -10,6 +10,7 @@ import { Button } from "../../ui";
 import type { Flow } from "./useWorkflowsData";
 
 type CodeSteps = NonNullable<Flow["codeSteps"]>;
+type ReadHostList = NonNullable<Flow["readHosts"]>;
 
 function grantNote(grantedBy: "user" | "upgrade" | null | undefined, grantedAt: number | null | undefined): string {
   if (grantedBy === "upgrade") return " Added at upgrade, because this workflow already did this before the setting existed.";
@@ -92,6 +93,100 @@ export function FlowPermissions({ flow, onChanged }: { flow: Flow; onChanged: ()
           : <Button size="sm" variant="ghost" disabled={busy} onClick={() => void setCodeSteps(true)}>Allow CODE steps</Button>) : null}
       </div>
       {message ? <p className="wf-detail__permission-err" role="alert">{message}</p> : null}
+      {flow.readHosts ? <ReadHosts flow={flow} list={flow.readHosts} name={name} onChanged={onChanged} /> : null}
     </section>
+  );
+}
+
+/** The server's ceiling on one flow's read list. */
+const MAX_READ_HOSTS = 64;
+
+/**
+ * A typed host as the server will store it (lowercase, punycode), or null when
+ * it is not a bare host name; then it is sent as typed and the server says why
+ * it refuses it.
+ */
+function grantedForm(typed: string): string | null {
+  if (!typed || /[/:@?#\\\s]/.test(typed)) return null;
+  try { return new URL(`http://${typed}`).hostname; } catch { return null; }
+}
+
+/**
+ * The hosts this flow's HTTP GET steps may read without an approval card. Adding
+ * one widens what runs unasked, so it is confirmed; removing one narrows it.
+ * The whole list is sent each time, built from the latest list this view knows
+ * when the request goes out; the server checks each host and says why it
+ * refuses one.
+ */
+function ReadHosts({ flow, list: fromList, name, onChanged }: { flow: Flow; list: ReadHostList; name: string; onChanged: () => void }): React.ReactElement {
+  const [list, setList] = useLatest<ReadHostList>(fromList);
+  const current = useRef(list);
+  current.current = list;
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const acting = useRef(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  /** `next` is built after any confirmation, from the list as it is then. */
+  const save = async (next: (hosts: string[]) => string[], ask?: { title: string; message: string }): Promise<boolean> => {
+    if (acting.current) return false;
+    acting.current = true; setBusy(true); setMessage(null);
+    try {
+      if (ask && !await confirmDialog(ask.message, { title: ask.title, confirmLabel: "Add host", danger: true })) return false;
+      const res = await fetch(`/api/workflows/${encodeURIComponent(flow.id)}/read-hosts`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hosts: next(current.current.hosts) }),
+      });
+      if (!res.ok) { setMessage(await errorText(res, "Could not change the read list")); return false; }
+      const saved = await res.json().catch(() => null) as { readHosts?: ReadHostList } | null;
+      if (saved?.readHosts && Array.isArray(saved.readHosts.hosts)) { setList(saved.readHosts); current.current = saved.readHosts; }
+      onChanged();
+      return true;
+    } catch {
+      setMessage("Could not change the read list. Check the connection and try again.");
+      return false;
+    } finally { acting.current = false; setBusy(false); }
+  };
+
+  const add = async () => {
+    const typed = draft.trim().toLowerCase();
+    if (!typed) return;
+    const host = grantedForm(typed) ?? typed;
+    if (current.current.hosts.includes(host)) { setDraft(""); return; }
+    // Show the host as it will be granted; a lookalike typed in another script shows its punycode.
+    const shown = host === typed ? host : `${host} (typed as ${typed})`;
+    const ok = await save(hosts => hosts.includes(host) ? hosts : [...hosts, host], {
+      title: "Read this host without asking?",
+      message: `Let the workflow ${name} send HTTP GET requests to ${shown} without asking?\nThey run without an approval card, including whatever the workflow puts in their address or headers. Requests that send, change or delete still ask.`,
+    });
+    if (ok) setDraft("");
+  };
+  const remove = (host: string) => void save(hosts => hosts.filter(h => h !== host));
+
+  const id = `wf-read-hosts-${flow.id}`;
+  return (
+    <div className="wf-detail__permission wf-detail__read-hosts">
+      <p>
+        <strong>Hosts it may read without asking</strong>: {list.hosts.length ? `${list.hosts.length}.` : "none. Each HTTP GET step asks first."}
+        {list.hosts.length ? grantNote(list.grantedBy, list.grantedAt) : null}
+      </p>
+      {list.hosts.length ? (
+        <ul className="wf-detail__host-list" aria-label="Hosts it may read without asking">
+          {list.hosts.map(host => (
+            <li key={host}>
+              <code>{host}</code>
+              <Button size="sm" variant="ghost" disabled={busy} aria-label={`Remove ${host}`} onClick={() => remove(host)}>Remove</Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <form className="wf-detail__host-add" onSubmit={e => { e.preventDefault(); void add(); }}>
+        <label htmlFor={id}>Add a host</label>
+        <input id={id} value={draft} disabled={busy || list.hosts.length >= MAX_READ_HOSTS} placeholder="api.example.com"
+          autoCapitalize="off" autoCorrect="off" spellCheck={false} maxLength={253} onChange={e => setDraft(e.target.value)} />
+        <Button size="sm" variant="ghost" type="submit" disabled={busy || !draft.trim() || list.hosts.length >= MAX_READ_HOSTS}>Add</Button>
+      </form>
+      {list.hosts.length >= MAX_READ_HOSTS ? <p>This flow has the most hosts it can list ({MAX_READ_HOSTS}).</p> : null}
+      {message ? <p className="wf-detail__permission-err" role="alert">{message}</p> : null}
+    </div>
   );
 }
