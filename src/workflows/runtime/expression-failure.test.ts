@@ -34,7 +34,11 @@ describe('expressionFailureGuidance', () => {
   });
 
   test('a property name from the data that reaches the prototype', () => {
-    expect(guidance('prototype access', `a[${SECRET}]`, { a: {}, [SECRET]: '__proto__' })).toContain('(__proto__, prototype or constructor)');
+    const lookup = guidance('prototype access', `a[${SECRET}]`, { a: {}, [SECRET]: '__proto__' });
+    expect(lookup).toContain('(__proto__, prototype or constructor)');
+    // The same reason when the data returned simply holds such a key.
+    expect(guidance('prototype access', SECRET, { [SECRET]: { constructor: 1 } })).toBe(lookup);
+    expect(lookup).toContain('as a key in the data or as a key it looks up');
   });
 
   test('a property key from the data that is not text or a number', () => {
@@ -42,7 +46,11 @@ describe('expressionFailureGuidance', () => {
   });
 
   test('an operator applied to a value that is not a finite primitive', () => {
-    expect(guidance('operators require finite primitive values', `${SECRET} + 1`, { [SECRET]: { nested: true } })).toContain('applies an operator to a value that is not plain text');
+    const operand = guidance('operators require finite primitive values', `${SECRET} + 1`, { [SECRET]: { nested: true } });
+    expect(operand).toContain('such as a list or an object, text that is not a number, or a division by zero');
+    // Results that are not finite raise the same reason.
+    expect(guidance('operators require finite primitive values', `a / ${SECRET}`, { a: 1, [SECRET]: 0 })).toBe(operand);
+    expect(guidance('operators require finite primitive values', `${SECRET} - 1`, { [SECRET]: 'abc' })).toBe(operand);
   });
 
   test('an accessor property or a value that is not data', () => {

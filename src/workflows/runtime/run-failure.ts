@@ -205,7 +205,7 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   // The sentence is about the failed step; it also says what the steps before it had done.
   const reading = withOtherSteps(projectFailure(evidence, { label, sideEffects }, links), otherSteps(run, records, graph, step.name), 'Steps before it');
   // An input expression that failed on its data: running it again unchanged
-  // fails the same way, so the first step names what to change. Only the
+  // usually fails the same way, so the first step names what to change. Only the
   // advice changes; what took effect is read from the evidence above.
   const guidance = outcome ? null : expressionFailureGuidance(step.errorMessage);
   return guidance ? { ...reading, next: [{ step: 'edit_and_run_again', label: guidance },

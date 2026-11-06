@@ -27,11 +27,14 @@ const SIZE = 'The data this input reads is larger or more deeply nested than a w
 const GUIDANCE: Record<string, string> = {
   'non-JSON object': 'An input reads a value that is not plain JSON data, such as a date or binary object. '
     + "Map the plain fields this step needs from the earlier step's output.",
-  'prototype access': 'An input looks up a property name taken from the data that workflows do not allow '
-    + `(__proto__, prototype or constructor). ${CHECK_MAPPING}`,
+  // Raised for a key the expression looks up and for a key inside the data it reads.
+  'prototype access': 'An input reads data that uses a property name workflows do not allow '
+    + '(__proto__, prototype or constructor), as a key in the data or as a key it looks up. '
+    + "Map only the fields this step needs from the earlier step's output.",
   'invalid property key': `An input looks up a property with a key from the data that is not text or a number. ${CHECK_MAPPING}`,
-  'operators require finite primitive values': 'An input applies an operator to a value that is not plain text, '
-    + `a finite number, true or false, or empty, such as a list or an object. ${CHECK_MAPPING}`,
+  // Raised for an operand and for a result that is not finite.
+  'operators require finite primitive values': 'An input applies an operator to a value it cannot use, '
+    + `such as a list or an object, text that is not a number, or a division by zero. ${CHECK_MAPPING}`,
   'accessor property': `An input reads a value that is computed rather than stored as data. ${CHECK_MAPPING}`,
   'non-data value': `An input reads a value that is not data, such as a function. ${CHECK_MAPPING}`,
   'value size limit': SIZE,
