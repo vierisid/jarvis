@@ -102,6 +102,7 @@ import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } 
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
 import { configureHostedDashboard } from './hosted-dashboard';
 import { REALTIME_NAV_TOOLS } from "./realtime-nav-tools.ts";
+import { RealtimeBudgetTracker, realtimeBudgetFile } from "./realtime-budget.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
@@ -194,8 +195,11 @@ import {
 } from "./pebble-intents.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
 import { runRoomPanelIntent, type RoomPanelDeps } from "./pebble-room-panel.ts";
-import { PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
-import { makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
+import { makeFastPathTurns, PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
+import { startChannelMessageRetention } from "./channel-message-retention.ts";
+import { isGonePanelError, makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
+import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded } from "./pebble-blind.ts";
+import { createSidecarOfflineNotifier } from "./sidecar-offline-notice.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
 import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
 import { bindDesktopSwitch, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled } from "../actions/tools/desktop-guard.ts";
@@ -1004,6 +1008,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 6c. Create sidecar manager
     const sidecarManager = new SidecarManager(jarvisConfig.daemon.data_dir.replace('~', os.homedir()));
+    const pebbleBlindDeps = { connected: () => sidecarManager.listConnected(), dispatchRPC: sidecarManager.dispatchRPC.bind(sidecarManager) };
+    // A sidecar keeps its observer pause only in memory and starts unpaused:
+    // tell every machine that connects (#1159).
+    sidecarManager.onSidecarConnected((sc) => {
+      const awarenessOn = (jarvisConfig.awareness as { enabled?: boolean } | undefined)?.enabled !== false;
+      void pushObserverPause(pebbleBlindDeps, observerPause(awarenessOn, isDesktopEnabled()), sc.id);
+    });
 
     // The bench harness backdoor must never be on quietly. Say so at startup,
     // every time, and say why a set secret did not enable it.
@@ -1135,6 +1146,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // (`pebble.play_pcm`); the daemon runs the realtime session itself. See
       // PebbleRealtimeManager + PebbleAudioTransport — all the OpenAI protocol
       // logic is reused from the dashboard realtime path.
+      let pebbleRealtimeBudget: RealtimeBudgetTracker | undefined;
       const pebbleRealtime = new PebbleRealtimeManager({
         dispatchRPC: (sidecarId, method, params) => sidecarManager.dispatchRPC(sidecarId, method, params ?? {}),
         dispatchNotify: (sidecarId, method, params) => sidecarManager.dispatchNotify(sidecarId, method, params ?? {}),
@@ -1155,6 +1167,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // Judged against this pebble session's own taint (#928), which the
           // voice session clears at its own turn boundary.
           return agentService.getOrchestrator().executeRealtimeToolCall(name, args, { blockedCategories, taint });
+        },
+        // The same ledger file as the dashboard's sessions, so one monthly
+        // budget covers both surfaces (#1156).
+        budget: () => {
+          pebbleRealtimeBudget ??= RealtimeBudgetTracker.fromFile(realtimeBudgetFile(agentService.getConfig().daemon?.data_dir));
+          return pebbleRealtimeBudget;
         },
         onState: (sidecarId, state, text) => { void setState(sidecarId, state, text); },
         onStatus: (sidecarId, status, detail) => {
@@ -2060,8 +2078,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // Awareness drops every capture while desktop.enabled is off (#905),
           // so turning it on then still leaves the pebble blind, and says so.
           const seeing = nextEnabled && isDesktopEnabled();
-          await sidecarManager.dispatchRPC(sidecarId, 'pebble.set_blinded', { blinded: !seeing })
-            .catch(() => { /* sidecar may have detached */ });
+          // Every pebble, not just the pressed one: another machine's glyph
+          // would otherwise show the old state (#1157).
+          // The pressed one is awaited before the ack; a slow or wedged other machine
+          // must not hold up the spoken answer here.
+          await pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(nextEnabled, isDesktopEnabled()), sidecarId);
+          // And the observers themselves, at the source (#1159). Not awaited:
+          // the spoken answer must not wait on other machines.
+          void pushObserverPause(pebbleBlindDeps, observerPause(nextEnabled, isDesktopEnabled()));
           const ack = seeing
             ? "Awareness back on. I can see your screen again."
             : nextEnabled
@@ -2721,8 +2745,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // the pebble to whoever cancelled it (#964). See pebble-confirmation.ts.
       // Its mirror goes to the dashboard only, never to Telegram or Discord:
       // it acknowledges something done on this screen (#1026).
+      const pebbleFastPathTurns = makeFastPathTurns((userText, reply) => agentService.recordPebbleExchange(userText, reply));
       const speakConfirmation = makeSpeakConfirmation({
         setState,
+        spoken: (ctrl, text) => pebbleFastPathTurns.spoke(ctrl, text),
         heartbeat: (text) => wsService.broadcastHeartbeatToDashboard(text),
         synthesizer: () => {
           const tts = pebbleTTS;
@@ -3036,10 +3062,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             console.warn(`[ambient-ui] window-action ${action} failed:`, err);
             // The window may have been closed externally — drop our cache
             // so subsequent commands don't keep trying a dead id.
-            if (action === 'close' || /unknown panel/i.test(String(err))) {
+            const gone = isGonePanelError(err);
+            if (action === 'close' || gone) {
               untrackPanel(sidecarId, target.id);
             }
-            await speakConfirmation(sidecarId, "I couldn't do that with the window.", ctrl);
+            // Same answer as the realtime nav tool for a window that is gone.
+            await speakConfirmation(sidecarId, gone ? `${target.title} isn't open any more.` : "I couldn't do that with the window.", ctrl);
           }
           return true;
         }
@@ -3378,27 +3406,34 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // here too and shouldn't try to trigger region capture again.
         if (!opts?.image) {
           if (await tryHandleRegionIntent(sidecarId, userText, ctrl)) {
+            // Stores only a refusal it spoke; a started capture re-enters the LLM path, which stores it.
+            pebbleFastPathTurns.finish(ctrl, opts?.historyText ?? userText);
             console.log(`[ambient-ui] region-intent fast path took ${Date.now() - cycleStart}ms (waiting for capture…)`);
             return;
           }
         }
         if (await tryHandleSettingsIntent(sidecarId, userText, ctrl)) {
+          pebbleFastPathTurns.finish(ctrl, opts?.historyText ?? userText);
           console.log(`[ambient-ui] settings-intent fast path took ${Date.now() - cycleStart}ms`);
           return;
         }
         if (await tryHandleInPanelAction(sidecarId, userText, ctrl)) {
+          pebbleFastPathTurns.finish(ctrl, opts?.historyText ?? userText);
           console.log(`[ambient-ui] in-panel-action fast path took ${Date.now() - cycleStart}ms`);
           return;
         }
         if (await tryHandleSubPebbleCloseIntent(sidecarId, userText, ctrl)) {
+          pebbleFastPathTurns.finish(ctrl, opts?.historyText ?? userText);
           console.log(`[ambient-ui] sub-pebble-close fast path took ${Date.now() - cycleStart}ms`);
           return;
         }
         if (await tryHandleBackgroundIntent(sidecarId, userText, ctrl)) {
+          pebbleFastPathTurns.finish(ctrl, opts?.historyText ?? userText);
           console.log(`[ambient-ui] background-intent fast path took ${Date.now() - cycleStart}ms`);
           return;
         }
         if (await tryHandlePanelIntent(sidecarId, userText, ctrl)) {
+          pebbleFastPathTurns.finish(ctrl, opts?.historyText ?? userText);
           console.log(`[ambient-ui] panel-intent fast path took ${Date.now() - cycleStart}ms`);
           return;
         }
@@ -3862,7 +3897,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // setState lost a race).
         pebbleBubbleGen++;
         await setState(sidecarId, 'speaking', fullText);
-        try { wsService.broadcastHeartbeat(fullText); } catch { /* dashboard may not be open */ }
+        // Dashboard only, like the fast-path confirmations (#1026): a spoken
+        // reply to the person at this machine is not a Telegram or Discord
+        // message. Owner decision, #1157.
+        try { wsService.broadcastHeartbeatToDashboard(fullText); } catch { /* dashboard may not be open */ }
 
         // Long-answer overflow — if the response is too long to comfortably
         // fit in the speaking bubble, register it in the answer store and
@@ -4329,6 +4367,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     };
     expireUnanswered();
     setInterval(expireUnanswered, 10 * 60_000).unref?.();
+    // Channel conversation messages are kept forever unless the owner set a
+    // retention (#1167); then a daily sweep deletes the older ones.
+    startChannelMessageRetention(jarvisConfig);
     // A workflow card past its explicit deadline leaves the dashboard the same way.
     onApprovalDeadlineExpired(request => wsService.broadcastApprovalUpdate(request));
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
@@ -4467,15 +4508,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // enabled flag is the one knob with a live setter today.
     settingsReload.registerApplier('awareness', async (cfg) => {
       awarenessService?.toggle(cfg.awareness?.enabled !== false);
+      // The glyph follows the stored choice too, on every pebble (#1157).
+      // Not awaited: appliers run in one serialized queue, and a sidecar RPC can take 30s to give up.
+      void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
+      void pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()));
     });
-    // desktop (#905): nothing writes the stored desktop section at run time
-    // today, so this does not fire yet (a change takes a restart). It is here
-    // so that a future writer plus a reload also stops the one thing already
-    // running: a skill recording's input hooks on the sidecar.
-    settingsReload.registerApplier('desktop', async () => {
+    // desktop (#905): Settings writes it at run time (POST /api/config/desktop,
+    // #1159). Tools, captures and the prompt read the switch live; what is
+    // already running is stopped here: a skill recording's input hooks on the
+    // sidecar. The pebble glyph follows too, as it does for awareness.
+    settingsReload.registerApplier('desktop', async (cfg) => {
       if (!isDesktopEnabled() && endRecordingForDesktopOff()) {
         console.log('[Tools] desktop.enabled turned off: the running skill recording was stopped and discarded.');
       }
+      // Not awaited, like the awareness applier's push. The sidecar observers
+      // follow desktop.enabled too (#1159).
+      void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
+      void pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()));
     });
     // voice: resolveRealtimeVoice reads live config per call, so the dashboard
     // needs no applier, but a connected pebble keeps the realtime verdict it
@@ -4638,19 +4687,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }, 3000);
     approvalNotifyTimer.unref?.();
 
-    // A machine dropped → tell the other connected sidecars. Keep a name map so
-    // the body can say which machine (the sidecar object is gone by disconnect).
-    // On connect we also fire the "update" notification when the sidecar is
+    // A machine dropped -> tell the other connected sidecars (below). On
+    // connect we also fire the "update" notification when the sidecar is
     // behind: below SIDECAR_RECOMMENDED_VERSION ('suggested'), or behind the
     // sidecar this brain ships with. Only for sidecars that predate
     // self-update (no update_* feature): newer ones prompt natively at
     // startup or get the dashboard hint, and a second nudge would be noise.
     // Sent only to that machine, deduped per (id, version) for this brain
     // process so a reconnect flap can't nag.
-    const sidecarNameById = new Map<string, string>();
     const notifiedUpdateKeys = new Set<string>();
     sidecarManager.onSidecarConnected((sc) => {
-      sidecarNameById.set(sc.id, sc.name);
       const behind = sc.updateStatus === 'suggested' || isUpdateAvailable(sc.version);
       const selfUpdating = sc.features?.some((f) => f === 'update_prompt' || f === 'update_apply') ?? false;
       if (behind && !selfUpdating) {
@@ -4674,43 +4720,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
       }
     });
-    // Offline toasts ride a grace timer (a quick reconnect cancels it) plus a
-    // per-machine cooldown, so a flapping connection can't nag every flap.
-    const offlineNotifyTimers = new Map<string, ReturnType<typeof setTimeout>>();
-    const offlineNotifiedAt = new Map<string, number>();
-    const OFFLINE_NOTIFY_GRACE_MS = 15_000;
-    const OFFLINE_NOTIFY_COOLDOWN_MS = 5 * 60_000;
-    sidecarManager.onSidecarConnected((sc) => {
-      const t = offlineNotifyTimers.get(sc.id);
-      if (t) {
-        clearTimeout(t);
-        offlineNotifyTimers.delete(sc.id);
-      }
-    });
-    sidecarManager.onSidecarDisconnected((id) => {
-      const name = sidecarNameById.get(id) ?? 'A machine';
-      sidecarNameById.delete(id);
-      if (offlineNotifyTimers.has(id)) return;
-      const last = offlineNotifiedAt.get(id) ?? 0;
-      if (Date.now() - last < OFFLINE_NOTIFY_COOLDOWN_MS) return;
-      const timer = setTimeout(() => {
-        offlineNotifyTimers.delete(id);
-        offlineNotifiedAt.set(id, Date.now());
-        notifyAll({
-          id: `sidecar:${id}`,
-          kind: 'sidecar',
-          title: 'Sidecar disconnected',
-          body: `${name} went offline. The agent can’t act on that machine until it’s back.`,
-          destructive: false,
-          actions: [
-            { id: 'review', label: 'Open Jarvis', primary: true },
-            { id: 'dismiss', label: 'Dismiss' },
-          ],
-        });
-      }, OFFLINE_NOTIFY_GRACE_MS);
-      timer.unref?.();
-      offlineNotifyTimers.set(id, timer);
-    });
+    // Offline toasts: grace timer, per-machine cooldown armed only by a
+    // notice someone received (sidecar-offline-notice.ts, #1160).
+    const offlineNotifier = createSidecarOfflineNotifier({ notify: notifyAll });
+    sidecarManager.onSidecarConnected((sc) => offlineNotifier.connected(sc.id, sc.name));
+    sidecarManager.onSidecarDisconnected((id) => offlineNotifier.disconnected(id));
 
     // The user's choice from a notification. Only the approval buttons act on the
     // brain (Approve/Deny, mirroring the dashboard endpoint); 'review'/'dismiss'
@@ -4756,8 +4770,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Note: toolRegistry set after startAll() below
 
     // Wire channel approval handler
-    channelService.setApprovalHandler((action, shortId, channel) =>
-      channelApprovalReply(action, shortId, channel, { approvalManager, deferredExecutor, wsService, auditTrail }));
+    channelService.setApprovalHandler((action, shortId, channel, deciderId) =>
+      channelApprovalReply(action, shortId, channel, { approvalManager, deferredExecutor, wsService, auditTrail }, deciderId));
 
     console.log(`[Daemon] Authority engine initialized (governed: ${authorityEngine.getConfig().governed_categories.join(', ')})`);
 
@@ -5311,8 +5325,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       setNoLocalTools(true);
     }
 
-    // 9b-ter. desktop.enabled (#905). Bound to the live config object, but a
-    // change takes a restart today: see desktop-guard.ts.
+    // 9b-ter. desktop.enabled (#905). Bound to the live config object, which
+    // Settings changes in place (#1159): see desktop-guard.ts.
     bindDesktopSwitch(jarvisConfig);
     {
       const stored: unknown = jarvisConfig.desktop;
@@ -5320,7 +5334,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         console.warn(`[Tools] desktop is ${JSON.stringify(stored)}, not { enabled: true | false }; reading it as ${desktopEnabledFromSection(stored) ? 'ON' : 'OFF'}.`);
       }
       if (!desktopEnabledFromSection(stored)) {
-        console.log('[Tools] Desktop control is off (desktop.enabled: false). Desktop tools, screen capture, desktop UI reads and awareness captures are refused.');
+        console.log('[Tools] Desktop control is off (desktop.enabled: false). Desktop tools, screen capture, clipboard tools and events, desktop UI reads and awareness captures are refused.');
       }
     }
 
@@ -5599,6 +5613,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         emergencyController,
         approvalManager,
         onWorkflowApproval: request => approvalDelivery.deliver(request),
+        // A card the boundary closed with its blocked effect (#1152).
+        onWorkflowCardClosed: (approvalId) => {
+          const request = approvalManager.getRequest(approvalId);
+          if (request) wsService.broadcastApprovalUpdate(request);
+        },
         // Give the jarvis-ask piece the same Jarvis-flavoured system
         // prompt the chat agent uses, so workflow LLM calls answer as
         // Jarvis rather than as the bare base model. `"workflow"` is the

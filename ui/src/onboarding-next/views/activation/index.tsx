@@ -43,6 +43,8 @@ export interface ActivationModel {
   message?: string;
   /** Restore this exact request and its answers when a submit needs reconciliation. */
   pendingRequest?: { request: ActivationRequest; answers: Record<string, string> };
+  /** This request already has a saved draft (Back from the result): read-only, with a way back to it. */
+  savedDraft?: boolean;
 }
 export type ActivationIntent = {
   journeyId: string; revision: number; from: "activation";
@@ -51,6 +53,7 @@ export type ActivationIntent = {
   | { action: "back"; to: "tour"; draft: ActivationDraft }
   | { action: "explore"; to: "exited"; draft: ActivationDraft }
   | { action: "resolve_connection"; issueId: string; draft: ActivationDraft }
+  | { action: "view_draft"; to: "result" }
 );
 export interface ActivationViewProps {
   model: ActivationModel;
@@ -78,17 +81,19 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
   const [retrying, setRetrying] = useState(false);
   const blocked = model.phase === "checking" || model.phase === "submitting" || model.phase === "accepted";
   const busy = blocked || pending === model.revision;
-  const recovery = retrying || Boolean(model.pendingRequest);
-  const editable = !busy && !recovery;
+  const saved = Boolean(model.savedDraft);
+  const recovery = !saved && (retrying || Boolean(model.pendingRequest));
+  const editable = !busy && !recovery && !saved;
   const valid = Boolean(model.draft.prompt.trim()) && model.draft.prompt.length <= MAX_PROMPT_LENGTH;
   const available = model.availability === "ready";
-  const canSubmit = !busy && available && (recovery || valid);
+  const canSubmit = !saved && !busy && available && (recovery || valid);
   const personalized = Boolean(model.interview?.suggestions.length);
-  const examples = personalized ? model.interview!.suggestions : model.interview?.goal || model.interview?.state === "unavailable" ? [] : activationExamples;
+  const examples = saved ? [] : personalized ? model.interview!.suggestions : model.interview?.goal || model.interview?.state === "unavailable" ? [] : activationExamples;
+  const backToDraft = useRef<HTMLButtonElement>(null);
   const issues = model.issues?.filter(issue => !issue.reference || model.draft.contextRefs.some(ref =>
     ref.kind === issue.reference!.kind && ref.id === issue.reference!.id)) ?? [];
 
-  useLayoutEffect(() => { live.current.mounted = true; input.current?.focus({ preventScroll: true });
+  useLayoutEffect(() => { live.current.mounted = true; (saved ? backToDraft.current : input.current)?.focus({ preventScroll: true });
     return () => { live.current.mounted = false; }; }, []);
   useLayoutEffect(() => {
     lock.current = null; setPending(null); setLocalError(""); uncertain.current = null; setRetrying(false);
@@ -156,7 +161,9 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
     dispatch({ journeyId: model.journeyId, revision: model.revision, from: "activation", draft: model.draft,
       ...(action === "back" ? { action: "back", to: "tour" } : { action: "explore", to: "exited" }) });
   };
-  const notice = localError || model.message || (model.phase === "accepted" ? "Your request was accepted. Opening the build…"
+  const notice = localError || model.message || (saved ? model.draft.prompt.trim() ? "This request already has a saved draft workflow. Go back to it to continue."
+    : "This request already has a saved draft workflow. Its text isn't stored on this device; go back to the draft to review it."
+    : model.phase === "accepted" ? "Your request was accepted. Opening the build…"
     : busy ? pendingAction.current === "explore" ? "Preparing your goal plan and opening your workspace…" : "Checking your request…" : !available ? "Workflow creation isn’t available yet. You can keep your request and explore Jarvis first." : "");
   return <section className="on-activation" data-theme={model.theme} data-personalized={personalized || Boolean(model.interview?.goal)} aria-labelledby={`${id}-title`}>
     <div className="on-activation__content">
@@ -166,7 +173,7 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
       <label className="on-activation__question" htmlFor={`${id}-prompt`}>{personalized || model.interview?.goal ? "Which part of your work should we start with?" : "What’s one task you keep doing?"}</label>
       <form className="on-activation__form" onSubmit={event => { event.preventDefault(); submit(); }}>
         {model.interview?.goal && <p className="on-activation__goal"><strong>Your goal:</strong> {model.interview.goal}</p>}
-        <p className="on-activation__hint" id={`${id}-hint`}>{model.interview?.state === "unavailable"
+        <p className="on-activation__hint" id={`${id}-hint`}>{saved ? "Your request, as you sent it." : model.interview?.state === "unavailable"
           ? "We couldn’t load your interview. Describe your routine below, or reload to try again."
           : personalized ? "From your interview. Choose a starting point, then edit the request below."
           : model.interview?.goal ? "Describe a routine that will help you work toward this goal."
@@ -177,7 +184,7 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
               if (!editable) return; edit({ ...model.draft, prompt: example.prompt }); input.current?.focus();
             }}>{example.label}</button>)}
         </div>}
-        <div className="on-activation__prompt-space">
+        {!(saved && !model.draft.prompt.trim()) && <div className="on-activation__prompt-space">
           <textarea ref={input} id={`${id}-prompt`} className="on-activation__prompt" value={model.draft.prompt}
             onChange={event => edit({ ...model.draft, prompt: event.target.value })} readOnly={!editable}
             aria-describedby={`${id}-hint ${id}-review ${id}-notice`} aria-invalid={model.phase === "invalid" || model.draft.prompt.length > MAX_PROMPT_LENGTH}
@@ -187,7 +194,7 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
                 event.preventDefault(); submit();
               }
             }} />
-        </div>
+        </div>}
         {model.draft.prompt.length > MAX_PROMPT_LENGTH && <p className="on-activation__error" role="alert">Keep your request under {MAX_PROMPT_LENGTH.toLocaleString("en-US")} characters. Your text hasn’t been shortened.</p>}
         {Boolean(issues.length) && <div className="on-activation__issues" aria-label="Details to continue">
           {issues.map((issue, i) => <div className="on-activation__issue" key={issue.id}>
@@ -215,15 +222,19 @@ function ActivationSession({ model, onDraftChange, onIntent, canResolveConnectio
             </>}
           </div>)}
         </div>}
-        <p className="on-activation__review" id={`${id}-review`}>Jarvis will build the steps. You’ll review the workflow before it runs.</p>
+        {!saved && <p className="on-activation__review" id={`${id}-review`}>Jarvis will build the steps. You’ll review the workflow before it runs.</p>}
         <div className="on-activation__notice" id={`${id}-notice`} role="status" aria-live="polite">{notice}</div>
-        <button type="submit" className="on-activation__create" aria-disabled={!canSubmit}>
-          {busy ? "Checking your request…" : recovery ? "Retry same request" : "Create my workflow"}
-        </button>
-        <nav className="on-activation__navigation" aria-label="Onboarding navigation">
-          <button type="button" aria-disabled={!editable} onClick={() => navigate("back")}>Back to the tour</button>
-          <button type="button" aria-disabled={!editable} onClick={() => navigate("explore")}>Explore Jarvis first</button>
-        </nav>
+        {saved ? <button ref={backToDraft} type="button" className="on-activation__create" aria-disabled={busy}
+          onClick={() => dispatch({ journeyId: model.journeyId, revision: model.revision, from: "activation", action: "view_draft", to: "result" })}>Back to your draft</button>
+        : <>
+          <button type="submit" className="on-activation__create" aria-disabled={!canSubmit}>
+            {busy ? "Checking your request…" : recovery ? "Retry same request" : "Create my workflow"}
+          </button>
+          <nav className="on-activation__navigation" aria-label="Onboarding navigation">
+            <button type="button" aria-disabled={!editable} onClick={() => navigate("back")}>Back to the tour</button>
+            <button type="button" aria-disabled={!editable} onClick={() => navigate("explore")}>Explore Jarvis first</button>
+          </nav>
+        </>}
       </form>
     </div>
   </section>;

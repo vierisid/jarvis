@@ -394,14 +394,25 @@ func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, pageIdentity, error) {
 // waiting for any of them.
 var snapshotLockTimeout = 10 * time.Second
 
+// errSnapshotLockBusy is lockSnapshots' refusal. Callers match it with
+// errors.Is (navigate, #1161), so wrap it only with %w.
+var errSnapshotLockBusy = errors.New("another browser snapshot or typed input is still running on this browser, so nothing " +
+	"was done. Try again in a moment")
+
+// navigatedSnapshotLockBusy is the same timeout met by navigate's closing
+// snapshot (#1161). Page.navigate was sent by then, so "nothing was done"
+// would be false. Same words as the local browser's
+// NAVIGATED_SNAPSHOT_LOCK_BUSY (src/actions/browser/session.ts).
+const navigatedSnapshotLockBusy = "The navigation was started, but the page could not be read because another " +
+	"browser snapshot or typed input was still running on this browser. Take a browser_snapshot."
+
 // lockSnapshots takes snapMu, or refuses once snapshotLockTimeout has passed.
 // Polled rather than a channel so a zero-value cdpClient stays usable.
 func (c *cdpClient) lockSnapshots() error {
 	deadline := time.Now().Add(snapshotLockTimeout)
 	for !c.snapMu.TryLock() {
 		if time.Now().After(deadline) {
-			return fmt.Errorf("another browser snapshot or typed input is still running on this browser, so nothing " +
-				"was done. Try again in a moment")
+			return errSnapshotLockBusy
 		}
 		time.Sleep(5 * time.Millisecond)
 	}

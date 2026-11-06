@@ -3,6 +3,7 @@ import { zoomNeedsReconnect } from "./zoom-refresh";
 import { readConnectionFile } from "./connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const ZOOM_PIECE = "@activepieces/piece-zoom";
 export const ZOOM_CONNECTION = "jarvis:zoom";
@@ -77,6 +78,7 @@ export function zoomStatus(config: JarvisConfig) {
   return {
     configured: !!zoomConnectUrl(config),
     connect_url: zoomConnectUrl(config),
+    ...hostedSetupFault(config, zoomConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: ZOOM_CONNECTION,

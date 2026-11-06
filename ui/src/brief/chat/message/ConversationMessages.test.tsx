@@ -116,18 +116,24 @@ test("delayed initial history preserves the saved reading position through empty
   if(scrollHeight)Object.defineProperty(HTMLElement.prototype,"scrollHeight",scrollHeight);else delete (HTMLElement.prototype as any).scrollHeight;
  }
 });
+// #1162 moved the live part to the thread's one persistent status region (see below);
+// what a screen reader hears is asserted there, the visible line keeps its text.
 test("the waiting line names what needs approval and says when another arrives, in the same live element (#1092)",async()=>{
  setTurn({state:"running"});binding.chat!.activity={};
+ await render();const live=host.querySelector<HTMLElement>('[role="status"]')!;
  binding.chat!.approvals={p:{conversationId:"a",turnId:"t",requestId:"r",status:"pending"}};await render();
  const line=host.querySelector<HTMLElement>('[data-reading-anchor="approval"]')!;
- expect(line.getAttribute("role")).toBe("status");expect(line.textContent!.trim()).toBe("Waiting for your approval before continuing.");
+ expect(host.querySelector('[role="status"]')).toBe(live);expect(live.textContent!.trim()).toBe("Waiting for your approval before continuing.");
+ expect(line.textContent!.trim()).toBe("Waiting for your approval before continuing.");
  // The card's details land after the id: the same line now names the action, for screen readers only.
  binding.approvalCards={p:{id:"p",intent:"Send the report to Dana",intentReason:"",category:"send_email",impact:"external"}};await render();
  expect(host.querySelector('[data-reading-anchor="approval"]')).toBe(line);expect(line.querySelector(".brief-sr-only")?.textContent).toContain("Send the report to Dana");
+ expect(host.querySelector('[role="status"]')).toBe(live);expect(live.textContent).toContain("Send the report to Dana");
  binding.chat!.approvals={...binding.chat!.approvals,q:{conversationId:"a",turnId:"t",requestId:"r",status:"pending"}};
  binding.approvalCards={...binding.approvalCards,q:{id:"q",intent:"Delete the draft",intentReason:"",category:"delete_data",impact:"destructive"}};await render();
  // Same element, new text: a screen reader hears the change in an existing live region.
  expect(host.querySelector('[data-reading-anchor="approval"]')).toBe(line);expect(line.querySelector(".brief-sr-only")?.textContent).toContain("2 actions");
+ expect(host.querySelector('[role="status"]')).toBe(live);expect(live.textContent).toContain("2 actions");
 });
 
 
@@ -140,4 +146,21 @@ test("the Figma current-work pebble covers plain replies, pauses offline and dis
  expect(host.querySelector('.brief-response-working [data-current="true"]')).toBeNull(); expect(host.textContent).toContain('Reconnecting');
  binding={...binding,connected:true}; setTurn({state:'completed'}); await render();
  expect(host.querySelector('.brief-response-working')).toBeNull(); expect(host.textContent).toContain('Agree the scope.');
+});
+// #1162 (from #1110): a role=status region inserted together with its text is
+// announced unreliably. One persistent region carries the current notice.
+test("one persistent status region carries the latest turn's notice as it changes",async()=>{
+ setTurn({state:"running"});binding.chat!.activity={};await render();
+ const regions=()=>[...host.querySelectorAll('[role="status"]')];
+ expect(regions()).toHaveLength(1);const region=regions()[0]!;
+ expect(region.textContent).toContain("Preparing your response");
+ binding.chat!.approvals={p:{conversationId:"a",turnId:"t",requestId:"r",status:"pending"}};await render();
+ expect(regions().length===1&&regions()[0]===region).toBe(true);expect(region.textContent).toContain("Waiting for your approval");
+ binding.chat!.approvals={};setTurn({state:"failed"});await render();
+ expect(regions().length===1&&regions()[0]===region).toBe(true);expect(region.textContent).toContain("This response could not finish.");
+ // The visible notices stay, without a region of their own.
+ expect(host.querySelector(".brief-message-notice[data-error]")?.textContent).toContain("could not finish");
+ // With no reply in progress or failed, a history failure is what the region says.
+ setTurn({state:"completed"});binding.chat!.history={state:"error",cursor:null};await render();
+ expect(regions().length===1&&regions()[0]===region).toBe(true);expect(region.textContent).toContain("could not be loaded");
 });

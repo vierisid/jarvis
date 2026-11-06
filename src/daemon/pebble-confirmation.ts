@@ -33,13 +33,14 @@ export interface SpeakConfirmationDeps {
   /** Wait roughly as long as the clip takes to play. */
   hold: (ms: number) => Promise<void>;
   warn?: (message: string, err: unknown) => void;
+  /** The text was shown for this turn (not cancelled first), so the turn can be remembered (#1157). */
+  spoken?: (ctrl: ConfirmationCtrl, text: string) => void;
 }
 
 export type SpeakConfirmation = (
   sidecarId: string,
   text: string,
   ctrl: ConfirmationCtrl,
-  opts?: { heartbeat?: boolean },
 ) => Promise<void>;
 
 /** How long the bubble stays up for a confirmation of this length. */
@@ -48,11 +49,12 @@ export function confirmationHoldMs(text: string): number {
 }
 
 export function makeSpeakConfirmation(deps: SpeakConfirmationDeps): SpeakConfirmation {
-  return async (sidecarId, text, ctrl, opts) => {
+  return async (sidecarId, text, ctrl) => {
     // Checked before anything reaches the pebble: see the header.
     if (ctrl.cancelled) return;
     await deps.setState(sidecarId, 'speaking', text);
-    if (opts?.heartbeat !== false && !ctrl.cancelled) {
+    deps.spoken?.(ctrl, text);
+    if (!ctrl.cancelled) {
       try { deps.heartbeat(text); } catch { /* ignore */ }
     }
     const synthesize = deps.synthesizer();

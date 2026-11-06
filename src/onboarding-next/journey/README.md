@@ -38,8 +38,15 @@ operation. It resets only tutorial progress, retains completion, setup, intervie
 job and draft identities, and returns to the prior location when the tour ends.
 It clears the journey's copied legacy tour-step hint too, without changing the
 original legacy settings row.
-Finishing an ordinary tour leads to Activation. Explore first explicitly exits
-without creating a workflow; finishing Result exits after a draft acknowledgement.
+Finishing an ordinary tour leads to Activation. Explore from Activation, or from
+Welcome once setup is completed, explicitly exits without creating a workflow,
+so the welcome screen does not return on the next load. Before setup, Welcome
+has no durable exit: the daemon refuses chat until setup completes, and an
+exited journey has no way back to it. Finishing Result exits after a draft
+acknowledgement. While a saved draft holds its job, navigation is only Result ->
+Activation (Back to the request, shown read-only) and Activation -> Result: no
+new job, Explore or other step until Finish. A tutorial replay is the one scoped
+exception; it returns to the same place.
 
 Every **new** `finish` also requires the injected synchronous `validateFinish`
 guard to return exactly `true` inside the same persistence transaction. Bind B10's
@@ -131,6 +138,10 @@ collisions and prevents old `saveUserSection('onboarding', ...)` writers from
 erasing the journey. It is additive in the existing table, not a new profile store.
 Rollback disables/unregisters the provider and retains this row and all legacy
 settings, profiles, connections, jobs and drafts. It does not reverse side effects.
+
+Forget (`runtime/forget.ts`) keeps this row by policy: the journey is progress,
+not personal data. It holds step and state identifiers only. Forget deletes the
+interview transcripts, profile-commit receipts and drafted goal plans instead.
 
 Legacy status is an initial compatibility projection, not a continuously merged
 second authority. ON-B-11 must coordinate legacy/new write ownership on cutover

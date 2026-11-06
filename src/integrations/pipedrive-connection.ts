@@ -3,6 +3,7 @@ import { pipedriveNeedsReconnect } from "./pipedrive-refresh";
 import { readManagedConnectionFile } from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const PIPEDRIVE_PIECE = "@activepieces/piece-pipedrive";
 export const PIPEDRIVE_CONNECTION = "jarvis:pipedrive";
@@ -93,6 +94,7 @@ export function pipedriveStatus(config: JarvisConfig) {
   return {
     configured: !!pipedriveConnectUrl(config),
     connect_url: pipedriveConnectUrl(config),
+    ...hostedSetupFault(config, pipedriveConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: PIPEDRIVE_CONNECTION,

@@ -13,7 +13,8 @@ import { GoalValidationError } from '../../goals/validation';
 import { markInitialGoalUnplanned } from '../../goals/initial-goal-notice';
 
 const receiptKey = (s: JourneySnapshot) => `onboarding-next.initial-goal.v1.${s.scopeId}.${s.journeyId}`;
-const planKey = (s: JourneySnapshot) => `onboarding-next.initial-okr.v1.${s.scopeId}.${s.journeyId}`;
+export const INITIAL_PLAN_KEY_PREFIX = 'onboarding-next.initial-okr.v1.';
+const planKey = (s: JourneySnapshot) => `${INITIAL_PLAN_KEY_PREFIX}${s.scopeId}.${s.journeyId}`;
 function source() {
   const facts = (getUserProfile()?.interview_facts ?? []).filter(f => f.summary.trim() && !interviewSourceWithheld(getDb(), f))
     .sort((a, b) => a.recorded_at - b.recorded_at);

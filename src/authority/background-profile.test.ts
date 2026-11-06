@@ -4,6 +4,7 @@ import { ApprovalManager } from './approval.ts';
 import { AuditTrail } from './audit.ts';
 import { AuthorityEngine, applyProfile, type AuthorityConfig, type AuthorityCheckParams } from './engine.ts';
 import { buildBackgroundProfile, DEFAULT_BACKGROUND_GOVERNED } from './background-profile.ts';
+import { substituteAboveLevel } from './tool-action-map.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import type { ToolDefinition } from '../actions/tools/registry.ts';
@@ -145,6 +146,32 @@ describe('AuthorityEngine with a profile', () => {
     }));
     expect(d.allowed).toBe(false);
     expect(d.reason).toContain('level cap 4');
+  });
+
+  test('a category above the cap is denied by the cap even when the base is only a level shortfall (#1158)', () => {
+    // Base: level 3 is below send_email's 7, a shortfall a confirm-gated tool
+    // may turn into an approval card. The cap (4) forbids send_email outright,
+    // so no card may come of it, or raising the level would be the stricter.
+    const engine = new AuthorityEngine(makeConfig());
+    const profile = buildBackgroundProfile({ level_cap: 4, governed_categories: [] });
+    const check = (actionCategory: AuthorityCheckParams['actionCategory'], agentAuthorityLevel = 3) =>
+      engine.checkAuthority(makeParams({ agentAuthorityLevel, actionCategory, profile }));
+    const low = check('send_email');
+    expect(low.allowed).toBe(false);
+    expect(low.reason).toContain('level cap 4');
+    expect(low.deniedByLevel).toBeUndefined();
+    const substituted = substituteAboveLevel(low, { confirm: 'above_level', floorCategory: 'write_data' }, (c) => check(c));
+    expect(substituted.allowed).toBe(false);
+    // Same answer at a level that clears send_email: the cap, not the level, decides.
+    const high = check('send_email', 9);
+    expect({ allowed: high.allowed, reason: high.reason }).toEqual({ allowed: low.allowed, reason: low.reason });
+    // A shortfall under the cap is still the base's to substitute.
+    const lowEngine = new AuthorityEngine(makeConfig({ default_level: 1 }));
+    const checkLow = (actionCategory: AuthorityCheckParams['actionCategory']) =>
+      lowEngine.checkAuthority(makeParams({ agentAuthorityLevel: 1, actionCategory, profile }));
+    const under = checkLow('write_data');
+    expect(under.deniedByLevel).toBe(true);
+    expect(substituteAboveLevel(under, { confirm: 'above_level', floorCategory: 'read_data' }, checkLow).requiresApproval).toBe(true);
   });
 
   test('applyProfile is a no-op with an empty profile', () => {

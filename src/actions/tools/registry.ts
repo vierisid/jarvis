@@ -96,7 +96,8 @@ export type ToolDefinition = {
   authorityGate?: (params: Record<string, unknown>) => ToolGate | null;
   /**
    * Trusted declaration, never accepted from model input: this tool reaches the
-   * user's desktop (a window list, a UI tree, a screen capture, or input), so
+   * user's desktop (a window list, a UI tree, a screen capture, input, or the
+   * clipboard), so
    * `desktop.enabled: false` refuses it (#905, desktop-guard.ts). `true` for
    * every call, or a cheap check of one call's arguments that must not act.
    * Category `desktop` implies `true`.

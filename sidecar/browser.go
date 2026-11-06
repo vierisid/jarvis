@@ -949,6 +949,10 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 		time.Sleep(800 * time.Millisecond)
 
 		formatted, id, gen, err := takeFormattedSnapshot(cdp)
+		if errors.Is(err, errSnapshotLockBusy) {
+			// The navigation was sent: "nothing was done" would be false (#1161).
+			return nil, errors.New(navigatedSnapshotLockBusy)
+		}
 		if err != nil {
 			return nil, err
 		}

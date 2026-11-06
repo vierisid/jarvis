@@ -279,7 +279,8 @@ test('clearing a legacy draft stores the empty value so the legacy copy cannot c
   const storage = deviceStorage(new Map([[key, legacy]])), store = fixture(storage);
   store.setDraft('a', ''); store.setScroll('a', { top: 0, atBottom: true });
   expect(fixture(storage).getSnapshot().conversations.a).toMatchObject({ draft: '', scroll: { top: 0, atBottom: true } });
-  expect(storage.records.get(key)).toBe(legacy);
+  // Since #1162 the blob is moved into field keys and removed on load, so it cannot bring the draft back.
+  expect(storage.records.has(key)).toBe(false);
 });
 
 test('references this window could not save survive acceptance of another reference (#1088)', () => {
@@ -342,4 +343,50 @@ test('switching workspaces away and back forgets which keys this window saw (#10
   full = true; store.setAttachments('a', [file('two'), file('three')]);
   store.acceptAttachments('a', ['two']);
   expect(store.getSnapshot().conversations.a?.attachments.map(item => item.attachmentId)).toEqual(['three']);
+});
+
+// #1162 (from #1139): this window's last attachments write failed, so the stored
+// list is an older one; acceptance merged from it and dropped the newer references.
+test('after a failed attachments write, acceptance keeps this window\'s own newer references', () => {
+  const inner = deviceStorage(); let full = false;
+  const storage = { ...quotaOnAttachments(inner), get length() { return inner.length; },
+    setItem: (key: string, value: string) => { if (full && key.endsWith('.attachments')) throw new Error('Quota'); inner.setItem(key, value); } };
+  const store = fixture(storage);
+  store.setAttachments('a', [file('one')]);
+  expect(inner.records.get(fieldKey('a', 'attachments'))).toContain('"one"');
+  full = true; store.setAttachments('a', [file('one'), file('two'), file('three')]);
+  store.acceptAttachments('a', ['one']);
+  expect(store.getSnapshot().conversations.a?.attachments.map(item => item.attachmentId)).toEqual(['two', 'three']);
+  // Once a write lands again, the stored list is current and is what acceptance reads.
+  full = false; store.setAttachments('a', [file('two'), file('three')]);
+  fixture(inner).setAttachments('a', [file('two'), file('three'), file('four')]);
+  store.acceptAttachments('a', ['two']);
+  expect(store.getSnapshot().conversations.a?.attachments.map(item => item.attachmentId)).toEqual(['three', 'four']);
+});
+
+// #1162 (from #1139): the single-key blob of an older version was read on every
+// load and never removed, and kept empty fields stored as keys forever.
+test('the legacy single-key blob moves into field keys once and is removed; a newer field key wins', () => {
+  const key = 'jarvis.brief.chat.v1.workspace';
+  const legacy = JSON.stringify({ version: 1, conversations: { a: { draft: 'Legacy draft', attachments: [file('legacy')], scroll: { top: 0, atBottom: true }, unread: [], readSequence: 0 },
+    b: { draft: 'Old B', attachments: [], scroll: { top: 0, atBottom: true }, unread: [], readSequence: 0 } } });
+  const storage = deviceStorage(new Map([[key, legacy], [fieldKey('b', 'draft'), '"Newer B"']]));
+  const store = fixture(storage);
+  expect(storage.records.has(key)).toBe(false);
+  expect(store.getSnapshot().conversations.a).toMatchObject({ draft: 'Legacy draft', attachments: [file('legacy')] });
+  expect(store.getSnapshot().conversations.b?.draft).toBe('Newer B');
+  expect(fixture(storage).getSnapshot().conversations.a?.draft).toBe('Legacy draft');
+  // With the blob gone, clearing the draft removes its key instead of storing an empty one.
+  store.setDraft('a', '');
+  expect(storage.records.has(fieldKey('a', 'draft'))).toBe(false);
+  expect(fixture(storage).getSnapshot().conversations.a?.draft).toBe('');
+});
+
+test('a legacy blob whose move fails is kept, with its values, for the next load', () => {
+  const key = 'jarvis.brief.chat.v1.workspace';
+  const legacy = JSON.stringify({ version: 1, conversations: { a: { draft: '', attachments: [file('legacy')], scroll: { top: 0, atBottom: true }, unread: [], readSequence: 0 } } });
+  const inner = deviceStorage(new Map([[key, legacy]]));
+  const store = fixture(quotaOnAttachments(inner));
+  expect(inner.records.get(key)).toBe(legacy);
+  expect(store.getSnapshot().conversations.a?.attachments.map(item => item.attachmentId)).toEqual(['legacy']);
 });

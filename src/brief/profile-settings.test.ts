@@ -227,3 +227,27 @@ test('setup checklist routes are gated, reject extra fields and return durable a
   const disabled=createProfileSettingsRoutes(new BriefCapabilities(),json)['/api/brief/getting-started'];
   expect((await disabled.GET(new Request('http://localhost/api/brief/getting-started'))).status).toBe(501);
 });
+
+// #1162: every unexpected error answered 503 "unavailable", the flag-off answer,
+// even after patchUserProfile had written. Only flag-off is "unavailable" now.
+test('flag-off is the only "unavailable"; an error after the write is an internal error, not "unavailable"', async () => {
+  const { createProfileSettingsRoutes } = await import('./profile-settings-routes');
+  const { BriefCapabilities } = await import('./capabilities');
+  const json = (v:unknown, status=200) => Response.json(v,{status});
+  const caps = new BriefCapabilities([{id:'profileSettings',provider:service}],['profileSettings']);
+  const routes = createProfileSettingsRoutes(caps,json,service);
+  const read = () => routes['/api/brief/profile-settings'].GET(new Request('http://localhost/api/brief/profile-settings'));
+  const revision = (await (await read()).json()).data.profile.revision;
+  const original = service.profile;
+  // The write commits, then the read-back throws.
+  service.profile = () => { throw new Error('read-back failed'); };
+  try {
+    const res = await routes['/api/brief/profile-settings/profile'].PATCH(new Request('http://localhost/api/brief/profile-settings/profile',
+      {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision,answers:{company:'Written'}})}));
+    expect([res.status, await res.json()]).toEqual([500, {code:'internal'}]);
+    expect(getUserProfile()?.answers.company).toBe('Written');
+  } finally { service.profile = original; }
+  process.env.JARVIS_BRIEF_PROFILE_SETTINGS = '0';
+  const off = await read();
+  expect([off.status, await off.json()]).toEqual([503, {code:'unavailable'}]);
+});

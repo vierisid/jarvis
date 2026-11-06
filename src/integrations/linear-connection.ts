@@ -3,6 +3,7 @@ import { linearNeedsReconnect } from "./linear-refresh";
 import { readManagedConnectionFile } from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const LINEAR_PIECE = "@activepieces/piece-linear";
 export const LINEAR_CONNECTION = "jarvis:linear";
@@ -81,6 +82,7 @@ export function linearStatus(config: JarvisConfig) {
   return {
     configured: !!linearConnectUrl(config),
     connect_url: linearConnectUrl(config),
+    ...hostedSetupFault(config, linearConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: LINEAR_CONNECTION,

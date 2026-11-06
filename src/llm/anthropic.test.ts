@@ -1,4 +1,10 @@
-import { describe, expect, it, afterEach } from 'bun:test';
+import { describe, expect, it, afterEach, beforeEach } from 'bun:test';
+import { LLMManager } from './manager.ts';
+import { setUsageDatabase } from './usage.ts';
+import { initDatabase, closeDb } from '../vault/schema.ts';
+import { Database } from 'bun:sqlite';
+import { BackgroundBudget, BackgroundThrottled, BACKGROUND_LIMITS, setBackgroundBudget, type BackgroundLimits } from './background-budget.ts';
+import { runWithOrigin } from './origin.ts';
 import { AnthropicProvider, anthropicMessagesUrl } from './anthropic.ts';
 import { CHAT_MODEL_SUGGESTIONS } from './model-catalog.ts';
 import { LLMProviderError, type LLMMessage, type LLMStreamEvent } from './provider.ts';
@@ -537,17 +543,21 @@ describe('AnthropicProvider stream completion (#1097)', () => {
     expect(events.map((e) => e.type)).toEqual(['text', 'done']);
   });
 
-  for (const [label, events] of [
-    ['EOF after message_delta, before message_stop', toolTurn.slice(0, -1)],
-    ['EOF before message_delta and message_stop', toolTurn.slice(0, -2)],
-    ['EOF mid-text, before any terminal event', textTurn.slice(0, 3)],
-    ['EOF after message_delta of a text turn', textTurn.slice(0, -1)],
+  for (const [label, events, outputTokens] of [
+    ['EOF after message_delta, before message_stop', toolTurn.slice(0, -1), 9],
+    ['EOF before message_delta and message_stop', toolTurn.slice(0, -2), 0],
+    ['EOF mid-text, before any terminal event', textTurn.slice(0, 3), 0],
+    ['EOF after message_delta of a text turn', textTurn.slice(0, -1), 3],
   ] as const) {
     it(`${label} is a retryable network error, never done`, async () => {
       const out = await run(events as unknown[]);
       expect(out.some((e) => e.type === 'done')).toBe(false);
       const last = out[out.length - 1];
-      expect(last).toEqual({ type: 'error', error: 'Anthropic stream ended before completion', code: 'network' });
+      expect(last).toEqual({
+        type: 'error', error: 'Anthropic stream ended before completion', code: 'network',
+        // message_start (and any message_delta) before the cut is carried (#1258).
+        usage: { input_tokens: 5, output_tokens: outputTokens },
+      });
     });
   }
 
@@ -580,7 +590,10 @@ describe('AnthropicProvider stream completion (#1097)', () => {
     const body = sse(toolTurn);
     const out = await runRaw(body.slice(0, body.lastIndexOf('message_stop') + 4));
     expect(out.some((e) => e.type === 'done')).toBe(false);
-    expect(out[out.length - 1]).toEqual({ type: 'error', error: 'Anthropic stream ended before completion', code: 'network' });
+    expect(out[out.length - 1]).toEqual({
+      type: 'error', error: 'Anthropic stream ended before completion', code: 'network',
+      usage: { input_tokens: 5, output_tokens: 9 },
+    });
   });
 
   it('text and a complete tool call before the cut still end in an error, not done', async () => {
@@ -623,5 +636,172 @@ describe('AnthropicProvider stream completion (#1097)', () => {
     expect(err).toBeInstanceOf(LLMProviderError);
     expect((err as LLMProviderError).code).toBe('network');
     expect((err as LLMProviderError).message).toBe('Anthropic stream ended before completion');
+  });
+});
+
+describe('usage of a cut-off Anthropic call is recorded (#1258)', () => {
+  const start = { type: 'message_start', message: { model: 'claude-test', usage: { input_tokens: 40, output_tokens: 1, cache_read_input_tokens: 7 } } };
+  const text = [
+    start,
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn', usage: { output_tokens: 12 } } },
+  ];
+  const whole = [...text, { type: 'message_stop' }];
+  // Usage reported, then cut before any text or tool call reached the consumer.
+  const headOnly = [start];
+  const sse = (events: unknown[]) => events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('');
+
+  type Row = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; error_code: string | null };
+  let db: ReturnType<typeof initDatabase>;
+  beforeEach(() => {
+    closeDb();
+    db = initDatabase(':memory:');
+    setUsageDatabase(() => db);
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    setUsageDatabase(() => null);
+    closeDb();
+  });
+
+  /** Each fetch answers the next body; the last one repeats. */
+  function serve(...bodies: unknown[][]) {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      const events = bodies[Math.min(calls++, bodies.length - 1)]!;
+      return new Response(sse(events), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }) as unknown as typeof fetch;
+    return () => calls;
+  }
+  function manager(): LLMManager {
+    const m = new LLMManager();
+    m.registerProvider(new AnthropicProvider('key'));
+    m.setTierMap({ medium: { provider: 'anthropic', model: 'claude-test' } });
+    return m;
+  }
+  const rows = () => db.query(
+    'SELECT input_tokens, output_tokens, cache_read_input_tokens, error_code FROM llm_usage',
+  ).all() as Row[];
+
+  it('a stream cut after text records the reported usage with the error', async () => {
+    const calls = serve(text);
+    const out: LLMStreamEvent[] = [];
+    for await (const e of manager().streamTier('medium', 'test', [{ role: 'user', content: 'hi' }])) out.push(e);
+    expect(out.map((e) => e.type)).toEqual(['text', 'error']);
+    expect(calls()).toBe(1); // text was emitted, so no retry
+    expect(rows()).toEqual([{ input_tokens: 40, output_tokens: 12, cache_read_input_tokens: 7, error_code: 'network' }]);
+  });
+
+  it('every retried cut-off attempt is counted', async () => {
+    const calls = serve(headOnly);
+    for await (const _ of manager().streamTier('medium', 'test', [{ role: 'user', content: 'hi' }])) { /* drain */ }
+    expect(calls()).toBe(3);
+    expect(rows()).toEqual([{ input_tokens: 120, output_tokens: 3, cache_read_input_tokens: 21, error_code: 'network' }]);
+  });
+
+  it('a cut attempt before a successful retry still counts', async () => {
+    serve(headOnly, whole);
+    const out: LLMStreamEvent[] = [];
+    for await (const e of manager().streamTier('medium', 'test', [{ role: 'user', content: 'hi' }])) out.push(e);
+    const done = out.find((e) => e.type === 'done');
+    // The response itself reports only its own usage...
+    expect(done?.type === 'done' && done.response.usage).toEqual({ input_tokens: 40, output_tokens: 12, cache_read_input_tokens: 7 });
+    // ...while the record holds both reported attempts.
+    expect(rows()).toEqual([{ input_tokens: 80, output_tokens: 13, cache_read_input_tokens: 14, error_code: null }]);
+  });
+
+  it('chatTier records the usage of an SSE chat body cut off on every attempt', async () => {
+    const calls = serve(text);
+    const err = await manager().chatTier('medium', 'test', [{ role: 'user', content: 'hi' }]).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(LLMProviderError);
+    expect(calls()).toBe(3);
+    expect(rows()).toEqual([{ input_tokens: 120, output_tokens: 36, cache_read_input_tokens: 21, error_code: 'network' }]);
+  });
+
+  it('chatTier counts a cut attempt before a successful retry', async () => {
+    serve(text, whole);
+    const response = await manager().chatTier('medium', 'test', [{ role: 'user', content: 'hi' }]);
+    expect(response.usage).toEqual({ input_tokens: 40, output_tokens: 12, cache_read_input_tokens: 7 });
+    expect(rows()).toEqual([{ input_tokens: 80, output_tokens: 24, cache_read_input_tokens: 14, error_code: null }]);
+  });
+
+  it('an error event after message_start carries the usage reported so far', async () => {
+    serve([...text.slice(0, 3), { type: 'error', error: { type: 'overloaded_error', message: 'busy' } }]);
+    const out: LLMStreamEvent[] = [];
+    for await (const e of new AnthropicProvider('key').stream([{ role: 'user', content: 'hi' }])) out.push(e);
+    expect(out.at(-1)).toEqual({
+      type: 'error', error: 'overloaded_error: busy', code: 'server',
+      usage: { input_tokens: 40, output_tokens: 1, cache_read_input_tokens: 7 },
+    });
+  });
+
+  it('a read that fails after message_start carries the usage reported so far', async () => {
+    const head = new TextEncoder().encode(sse(text.slice(0, 3)));
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (head.length && !(controller as unknown as { sent?: boolean }).sent) {
+          (controller as unknown as { sent?: boolean }).sent = true;
+          controller.enqueue(head);
+        } else controller.error(new Error('socket reset'));
+      },
+    }), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as unknown as typeof fetch;
+    const out: LLMStreamEvent[] = [];
+    for await (const e of new AnthropicProvider('key').stream([{ role: 'user', content: 'hi' }])) out.push(e);
+    const last = out.at(-1);
+    expect(last?.type === 'error' && last.error).toContain('Stream error');
+    expect(last?.type === 'error' && last.usage).toEqual({ input_tokens: 40, output_tokens: 1, cache_read_input_tokens: 7 });
+  });
+
+  describe('governed background work', () => {
+    afterEach(() => setBackgroundBudget(null));
+    const budget = (limits: BackgroundLimits = BACKGROUND_LIMITS) => {
+      const store = new Database(':memory:');
+      return new BackgroundBudget(() => store, limits);
+    };
+    // A governed cut-off backs the provider off, so the budget refuses the
+    // in-provider retry: the first attempt's usage must survive that.
+    it('streamTier records a reported attempt whose retry the budget refused', async () => {
+      setBackgroundBudget(budget());
+      const calls = serve(headOnly);
+      const out: LLMStreamEvent[] = [];
+      await runWithOrigin('background', async () => {
+        for await (const e of manager().streamTier('medium', 'test', [{ role: 'user', content: 'hi' }])) out.push(e);
+      });
+      expect(calls()).toBe(1);
+      expect(out.at(-1)).toMatchObject({ type: 'error', code: 'background_throttled' });
+      expect(rows()).toEqual([{ input_tokens: 40, output_tokens: 1, cache_read_input_tokens: 7, error_code: 'background_throttled' }]);
+    });
+
+    it('chatTier records a reported attempt whose retry the budget refused', async () => {
+      setBackgroundBudget(budget());
+      const calls = serve(headOnly);
+      const err = await runWithOrigin('background', () => manager().chatTier('medium', 'test', [{ role: 'user', content: 'hi' }]))
+        .then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(BackgroundThrottled);
+      expect(calls()).toBe(1);
+      expect(rows()).toEqual([{ input_tokens: 40, output_tokens: 1, cache_read_input_tokens: 7, error_code: 'background_throttled' }]);
+    });
+
+    it('a call the budget refused before any attempt is still not recorded', async () => {
+      setBackgroundBudget(budget({ ...BACKGROUND_LIMITS, requests: 0 }));
+      const calls = serve(whole);
+      await runWithOrigin('background', async () => {
+        for await (const _ of manager().streamTier('medium', 'test', [{ role: 'user', content: 'hi' }])) { /* drain */ }
+      });
+      const err = await runWithOrigin('background', () => manager().chatTier('medium', 'test', [{ role: 'user', content: 'hi' }]))
+        .then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(BackgroundThrottled);
+      expect(calls()).toBe(0);
+      expect(rows()).toEqual([]);
+    });
+  });
+
+  it('an error before message_start carries no usage', async () => {
+    serve([{ type: 'error', error: { type: 'invalid_request_error', message: 'bad' } }]);
+    const out: LLMStreamEvent[] = [];
+    for await (const e of new AnthropicProvider('key').stream([{ role: 'user', content: 'hi' }])) out.push(e);
+    expect(out).toEqual([{ type: 'error', error: 'invalid_request_error: bad', code: 'bad_request' }]);
   });
 });

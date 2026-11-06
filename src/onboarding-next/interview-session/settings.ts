@@ -5,7 +5,8 @@ import type { Scope, Store } from './types.ts';
 export function scopeKey(scope: Scope): string {
   return createHash('sha256').update(JSON.stringify([scope.actorId, scope.projectId])).digest('hex');
 }
-export const settingsKey = (scope: Scope) => `onboarding-next.interview.v1.${scopeKey(scope)}`;
+export const INTERVIEW_KEY_PREFIX = 'onboarding-next.interview.v1.';
+export const settingsKey = (scope: Scope) => `${INTERVIEW_KEY_PREFIX}${scopeKey(scope)}`;
 
 /** Uses the existing vault settings table and its explicit database owner.
  * No open, migration, read, registration or other effect on construction. */

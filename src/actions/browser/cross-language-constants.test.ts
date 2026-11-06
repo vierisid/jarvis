@@ -60,6 +60,16 @@ describe('constants duplicated across the two browser halves', () => {
     expect(go).toContain('"element [%d] was reviewed against a browser snapshot that has since been replaced or dropped, so "');
   });
 
+  test('navigate meeting the snapshot lock says the navigation started, in both languages (#1161)', async () => {
+    const session = await Bun.file(join(import.meta.dir, 'session.ts')).text();
+    const go = await goSource('browser_snapshot.go');
+    for (const part of ["The navigation was started, but the page could not be read because another ",
+      "browser snapshot or typed input was still running on this browser. Take a browser_snapshot."]) {
+      expect(session).toContain(`'${part}'`);
+      expect(go).toContain(`"${part}"`);
+    }
+  });
+
   test('the retired-ids notice is one sentence in both languages', async () => {
     const session = await Bun.file(join(import.meta.dir, 'session.ts')).text();
     const sentence = 'Element ids from the previous snapshot no longer apply '

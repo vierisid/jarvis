@@ -29,3 +29,30 @@ export function isCustomerOnboardingStep(nodeType: unknown, settings: unknown): 
   const s = settings as Record<string, unknown>;
   return isOnboardingStep(s) && s.triggerName === undefined;
 }
+
+/** The two independent resources a customer onboarding creates. */
+export type ResourceBranch = 'clickup' | 'drive';
+
+/**
+ * The resource a person found after checking an unknown branch (#1243): the ID
+ * or the link of exactly the kind this step creates. A ClickUp task link
+ * (https://app.clickup.com/t/<id>) or a Google Drive folder link
+ * (https://drive.google.com/drive/folders/<id>, also under /u/<n>/, with any
+ * query); anything else is refused rather than guessed.
+ */
+export function onboardingResource(branch: ResourceBranch, reference: unknown): { id: string; url: string } {
+  if (typeof reference !== 'string' || !reference.trim() || reference.length > 2048) throw Error('Give the ID or link of the created resource');
+  const value = reference.trim(), idPattern = /^[\w-]{1,256}$/;
+  let id: string | undefined;
+  if (idPattern.test(value)) id = value;
+  else {
+    let url: URL;
+    try { url = new URL(value); } catch { throw Error(`Give the ${branch === 'clickup' ? 'ClickUp task' : 'Drive folder'} ID or its link`); }
+    const match = url.protocol === 'https:' && !url.username && !url.password && !url.port && (branch === 'clickup'
+      ? url.hostname === 'app.clickup.com' && /^\/t\/([\w-]{1,256})\/?$/.exec(url.pathname)
+      : url.hostname === 'drive.google.com' && /^\/drive\/(?:u\/\d{1,2}\/)?folders\/([\w-]{1,256})\/?$/.exec(url.pathname));
+    if (!match) throw Error(branch === 'clickup' ? 'Give the ClickUp task ID or its https://app.clickup.com/t/ link' : 'Give the Drive folder ID or its https://drive.google.com/drive/folders/ link');
+    id = match[1]!;
+  }
+  return { id, url: branch === 'clickup' ? `https://app.clickup.com/t/${id}` : `https://drive.google.com/drive/folders/${id}` };
+}

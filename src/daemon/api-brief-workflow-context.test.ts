@@ -153,3 +153,18 @@ test('real panel authentication protects every inspection and start route over a
     expect((await send(startUrl, { method: 'POST', headers, body: JSON.stringify(command()) })).status).toBe(404);
   } finally { server.stop(); rmSync(directory, { recursive: true, force: true }); }
 });
+
+// #1162 (from #1143): the manual-run POST refused a provider of another project
+// than the caller's, but the four GET routes never compared them.
+test('the read routes refuse a provider scoped to another project than the caller, like the start route', async () => {
+  const foreign = new WorkflowContext(getWorkflowDb(), 'proj_foreign_1162');
+  const theirFlow = createFlow({ projectId: 'proj_foreign_1162' }).id;
+  const caps = new BriefCapabilities(registerWorkflowContext(foreign), ['workflowContext']);
+  const routes = { ...createApiRoutes({ briefWorkflowContext: foreign, briefCapabilities: caps } as ApiContext) } as Record<string, any>;
+  for (const path of [selection, list, detail, request]) {
+    const response = await call(path, undefined, path === selection ? `?versionId=${versionId}` : '', routes, { flowId: theirFlow, runId: 'run_x' });
+    expect([path, response.status, response.body]).toEqual([path, 404, { code: 'not_found' }]);
+  }
+  // Nothing was fenced on the foreign scope by the receipt read either.
+  expect(getWorkflowDb().query('SELECT request_id FROM brief_manual_run_requests').all()).toEqual([]);
+});

@@ -3,6 +3,7 @@ import { notionNeedsReconnect } from "./notion-refresh";
 import { readManagedConnectionFile } from "./managed-connection-file";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const NOTION_PIECE = "@activepieces/piece-notion";
 export const NOTION_CONNECTION = "jarvis:notion";
@@ -80,6 +81,7 @@ export function notionStatus(config: JarvisConfig) {
   return {
     configured: !!notionConnectUrl(config),
     connect_url: notionConnectUrl(config),
+    ...hostedSetupFault(config, notionConnectUrl(config)),
     connected: !!connection && !reconnect,
     reconnect,
     external_id: NOTION_CONNECTION,

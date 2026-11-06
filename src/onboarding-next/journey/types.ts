@@ -47,7 +47,7 @@ export interface LegacyStatus {
 }
 
 export type Navigation =
-  | { type: 'navigate'; stepId: 'welcome' | 'explain' | 'legacy-provider-setup' | 'google' | 'interview' | 'tour' | 'activation' }
+  | { type: 'navigate'; stepId: 'welcome' | 'explain' | 'legacy-provider-setup' | 'google' | 'interview' | 'tour' | 'activation' | 'result' }
   | { type: 'replay_tutorial' }
   | { type: 'explore' }
   | { type: 'finish' };

@@ -934,7 +934,7 @@ describe('the workflow effect boundary rates write_file the same way', () => {
     const flow = createFlow();
     const version = createDraftVersion({ flowId: flow.id, displayName: 'write step', trigger: {
       name: 'trigger', type: 'EMPTY', nextAction: { name: 'action', type: 'PIECE', settings: {
-        pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1', actionName: 'invoke', input: {} } },
+        pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1', actionName: 'invoke', input: { toolName: 'write_file' } } },
     } });
     const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
     const registry = new ToolRegistry();

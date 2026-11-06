@@ -44,13 +44,29 @@ const VENDOR_PATHS: string[] = [
   "packages/pieces/framework",
   "packages/pieces/common",
   // Built-in primitives (live under packages/pieces/core in upstream)
+  // Every core piece but the ones that need the Activepieces server
+  // (CORE_PIECES_LEFT_OUT in src/workflows/runner/engine-runtime/build.ts, #961).
   "packages/pieces/core/approval",
+  "packages/pieces/core/crypto",
+  "packages/pieces/core/csv",
+  "packages/pieces/core/data-mapper",
+  "packages/pieces/core/data-summarizer",
+  "packages/pieces/core/date-helper",
   "packages/pieces/core/delay",
   "packages/pieces/core/file-helper",
+  "packages/pieces/core/graphql",
   "packages/pieces/core/http",
+  "packages/pieces/core/image-helper",
+  "packages/pieces/core/math-helper",
+  "packages/pieces/core/pdf",
+  "packages/pieces/core/qrcode",
   "packages/pieces/core/schedule",
+  "packages/pieces/core/sftp",
+  "packages/pieces/core/smtp",
   "packages/pieces/core/store",
+  "packages/pieces/core/text-helper",
   "packages/pieces/core/webhook",
+  "packages/pieces/core/xml",
   // Curated community pieces (Phase 1 set; expand later by editing this list)
   "packages/pieces/community/claude",
   "packages/pieces/community/discord",
@@ -198,6 +214,16 @@ export const v8IsolateCodeSandbox: CodeSandbox = {
         throw new Error(message)
     },
 }
+`,
+  "packages/pieces/core/pdf/src/lib/actions/convert-to-image.ts": `// THIS FILE IS A JARVIS STUB (#961).
+// Upstream's "Convert to Image" action writes the PDF under the OS temp dir and
+// runs poppler's \`pdftoppm\` on it through \`/bin/sh\`, with the engine's own
+// environment: a child process and files outside the run, which the core PDF
+// piece's other actions never need and the in-run rule does not allow. The
+// action is not loaded (the piece's index no longer lists it), and this stub
+// keeps the path so a vendor sync notices if upstream moves it.
+
+export {};
 `,
 };
 

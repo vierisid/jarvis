@@ -66,13 +66,13 @@ const DEFAULT_GOVERNED = ['send_email', 'send_message', 'make_payment'];
 
 function services(approvals: ApprovalManager, governed: string[] = DEFAULT_GOVERNED,
   call?: { name: string; args: Record<string, unknown>; registry: ToolRegistry }, audit = new AuditTrail(),
-  emergency = new EmergencyController()) {
+  emergency = new EmergencyController(), authority?: AuthorityEngine) {
   const child = () => ({ id: 'child', agent: { role: ROLE, authority: { allowed_tools: ROLE.tools, max_authority_level: 10 } },
     setTask() {}, activate() {}, idle() {}, addMessage() {}, getMessages: () => [] });
   const registry = call?.registry ?? new ToolRegistry();
   return buildSandboxServiceBackends({ credentialResolver: new CredentialResolver(), eventBuffer: new WorkflowEventBuffer(),
     toolRegistry: registry,
-    authorityEngine: new AuthorityEngine({ default_level: 10, governed_categories: governed as never, overrides: [],
+    authorityEngine: authority ?? new AuthorityEngine({ default_level: 10, governed_categories: governed as never, overrides: [],
       context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }),
     emergencyController: emergency, auditTrail: audit, approvalManager: approvals,
     agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), getProfileFor: () => null, getTaintGating: () => null, spawnSubAgent: child, reapAgent: () => {} } as never,
@@ -295,6 +295,8 @@ describe('every governed workflow card counts against its flow\'s budget (#1039)
       const response = await routes['/api/webhooks/waitpoints/:id']!.POST!(
         Object.assign(new Request(`http://localhost/api/webhooks/waitpoints/${id}`, { method: 'POST', body: '{}' }), { params: { id } }));
       expect(response.status).toBe(403);
+      // Says why by its type, even for the DEFER its effect names: there is no approval request to resolve (#1152).
+      expect(((await response.json()) as { error: string }).error).toContain('until its workflow has room for another approval card');
       expect(getWaitpoint(id)!.resumedAt).toBeNull();
     }
     const listed = await routes['/api/workflow-runs/:runId/waitpoints']!.GET!(
@@ -390,7 +392,14 @@ describe('every governed workflow card counts against its flow\'s budget (#1039)
     wake(older.id);
     emergency.pause();
     setActiveEmergencyController(emergency);
-    expect((await notifyIn(s, older.id)).approval!.hold).toBe(PAUSED_REASON);
+    const held = (await notifyIn(s, older.id)).approval!;
+    expect(held.hold).toBe(PAUSED_REASON);
+    // Its record names the HOLD, but there is no approval request: the URL says why by type (#1152).
+    const routes = createWorkflowRoutes();
+    const refused = await routes['/api/webhooks/waitpoints/:id']!.POST!(Object.assign(
+      new Request(`http://localhost/api/webhooks/waitpoints/${held.waitpointId}`, { method: 'POST', body: '{}' }), { params: { id: held.waitpointId } }));
+    expect(refused.status).toBe(403);
+    expect(((await refused.json()) as { error: string }).error).toContain('holds a step while Jarvis is paused');
     getWorkflowDb().run("UPDATE workflow_job SET status = 'SUCCEEDED' WHERE flow_run_id = ?", [older.id]);
     park(older.id);
     emergency.resume();
@@ -399,6 +408,36 @@ describe('every governed workflow card counts against its flow\'s budget (#1039)
     expect(resumedRuns()).toEqual([older.id, older.id]);
     tick();
     expect(resumedRuns()).toEqual([older.id, older.id]);
+  });
+
+  test('a released step held by Pause creates its HOLD and names it in one transaction (#1152)', async () => {
+    const approvals = new ApprovalManager();
+    const emergency = new EmergencyController();
+    const s = services(approvals, DEFAULT_GOVERNED, undefined, new AuditTrail(), emergency);
+    const hook = notifyFlow();
+    const carded: string[] = [];
+    for (let i = 0; i < maxWaitingWorkflowCards(); i++) carded.push((await notifyIn(s, hook.newRun().id)).approval!.approvalId);
+    const older = hook.newRun();
+    expectDeferred(await notifyIn(s, older.id)); park(older.id);
+    approvals.deny(carded[0]!, 'dashboard');
+    tick();
+    expect(resumedRuns()).toEqual([older.id]);
+    wake(older.id);
+    emergency.pause();
+    setActiveEmergencyController(emergency);
+    // The write that names the HOLD fails, as a crash between the two would.
+    const holds = () => (getWorkflowDb().query(`SELECT COUNT(*) AS n FROM waitpoint WHERE flow_run_id = ? AND type = 'HOLD'`)
+      .get(older.id) as { n: number }).n;
+    getWorkflowDb().run(`CREATE TEMP TRIGGER fail_name_hold BEFORE UPDATE OF waitpoint_id ON workflow_effect
+      BEGIN SELECT RAISE(ABORT, 'simulated crash'); END`);
+    await expect(Promise.resolve().then(() => notifyIn(s, older.id))).rejects.toThrow('simulated crash');
+    getWorkflowDb().run('DROP TRIGGER fail_name_hold');
+    // No HOLD outlives the failed write: the step asks again and is held then.
+    expect(holds()).toBe(0);
+    expect((await notifyIn(s, older.id)).approval!.hold).toBe(PAUSED_REASON);
+    expect(holds()).toBe(1);
+    const [record] = listWorkflowEffects(older.id);
+    expect(getWaitpoint(record!.waitpointId!)!.type).toBe('HOLD');
   });
 
   test('a held step lends its place only to its own record, not to an earlier loop pass of the same step', async () => {
@@ -667,5 +706,49 @@ describe('a run that ends before it parks closes its cards (#1039)', () => {
     resumeCompletedChildRuns((id) => heard.push(id));
     expect(approvals.getRequest(card)!.status).toBe('denied');
     expect(heard).toEqual([card]);
+  });
+});
+
+describe('a step the boundary blocks closes its pending card (#1152)', () => {
+  test('a refusal on a step whose card is still pending denies the card with the effect', async () => {
+    const approvals = new ApprovalManager();
+    const authority = new AuthorityEngine({ default_level: 10, governed_categories: DEFAULT_GOVERNED as never, overrides: [],
+      context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
+    const s = services(approvals, DEFAULT_GOVERNED, undefined, new AuditTrail(), new EmergencyController(), authority);
+    const run = notifyFlow().newRun();
+    const asked = (await notifyIn(s, run.id)).approval!;
+    expect(approvals.getRequest(asked.approvalId)!.status).toBe('pending');
+    // While the card waits, the owner denies the category outright; the engine asks again and the step is refused.
+    authority.addOverride({ action: 'send_message' as never, allowed: false });
+    await expect(Promise.resolve().then(() => notifyIn(s, run.id))).rejects.toThrow('Authority denied');
+    const [record] = listWorkflowEffects(run.id);
+    expect(record!.status).toBe('blocked');
+    // The run is still live, so no sweep would reach it: the card closes with its effect,
+    // and approving it does nothing.
+    expect(approvals.getRequest(asked.approvalId)!.status).toBe('denied');
+    expect(approvals.approve(asked.approvalId, 'dashboard')).toBeNull();
+  });
+
+  test('a stale binding on a step whose card is still pending denies the card with the effect', async () => {
+    const approvals = new ApprovalManager();
+    const closed: string[] = [];
+    const boundary = new WorkflowEffectBoundary({ approvalManager: approvals, auditTrail: new AuditTrail(), emergencyController: new EmergencyController(),
+      authorityEngine: new AuthorityEngine({ default_level: 10, governed_categories: DEFAULT_GOVERNED as never, overrides: [],
+        context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }),
+      onWorkflowCardClosed: (approvalId) => closed.push(approvalId) });
+    let stale = false;
+    const send = (runId: string) => boundary.invoke({ context: ctx(runId, 'notify'), piece: '@jarvispieces/piece-jarvis-notify',
+      action: 'notify', route: 'synthetic', toolName: 'send_message', category: 'send_message', toolCategory: 'communication', request: {},
+      prepare: () => ({ arguments: {}, target: {} }), execute: async () => 'sent',
+      revalidate: () => { if (stale) throw new ActionOutcomeError({ status: 'blocked', code: 'BINDING_STALE', message: 'binding changed', effect: 'not_started' }); } });
+    const run = notifyFlow().newRun();
+    const asked = (await send(run.id)).approval!;
+    expect(approvals.getRequest(asked.approvalId)!.status).toBe('pending');
+    stale = true;
+    await expect(send(run.id)).rejects.toThrow('binding changed');
+    expect(listWorkflowEffects(run.id)[0]!.status).toBe('blocked');
+    expect(approvals.getRequest(asked.approvalId)!.status).toBe('denied');
+    // And the dashboard hears it, so it stops offering the card.
+    expect(closed).toEqual([asked.approvalId]);
   });
 });

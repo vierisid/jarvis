@@ -93,5 +93,9 @@ test("owner decision (#1106): an approved release explains a well-formed unknown
     "#/brief/-x", "#/brief/a b", "#/brief/" + "a".repeat(65), "#/brief//today", "#/brief?x"]) {
     expect(resolveReleaseEntry(`http://test/?brief=1${hash}`, "released").kind).toBe("legacy");
     expect(resolveReleaseEntry(`http://test/?brief=1${hash}`, "cohort").kind).toBe("legacy");
+    // #1162 (owner decision): the developer-tools path follows the same rule.
+    expect(resolveReleaseEntry(`http://test/?brief=1${hash}`, "off", true).kind).toBe("legacy");
   }
+  for (const hash of ["#/brief/inbox", "#/brief/old-room"])
+    expect(resolveReleaseEntry(`http://test/?brief=1${hash}`, "off", true)).toEqual({ kind: "moved" });
 });

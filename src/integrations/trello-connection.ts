@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { JarvisConfig } from "../config/types";
+import { hostedSetupFault } from "./hosted-setup";
 
 export const TRELLO_PIECE = "@activepieces/piece-trello";
 export const TRELLO_CONNECTION = "jarvis:trello";
@@ -52,7 +53,7 @@ export function trelloConnectUrl(config: JarvisConfig): string | null {
 }
 export function trelloStatus(config: JarvisConfig) {
   const connection = readTrelloConnection(config.daemon.data_dir);
-  return {configured: !!trelloConnectUrl(config), connect_url: trelloConnectUrl(config),
+  return {configured: !!trelloConnectUrl(config), connect_url: trelloConnectUrl(config), ...hostedSetupFault(config, trelloConnectUrl(config)),
     connected: !!connection, external_id: TRELLO_CONNECTION,
     account: connection?.account ?? null, workspaces: connection?.workspaces ?? [],
     generation: connection?.generation ?? null, connected_at: connection?.connected_at ?? null};
