@@ -1,7 +1,7 @@
 import {resumeSubflowCalls} from '../db/repos/subflow';
 import { getWorkflowDb } from '../db';
 import { getChildRun } from '../db/repos/child-run';
-import { cancelFlowRun, retireTerminalRunWaits } from '../db/repos/run-cancellation';
+import { cancelFlowRun, hasLiveSubflowWaiter, retireTerminalRunWaits } from '../db/repos/run-cancellation';
 import { getFlowRun } from '../db/repos/flow-run';
 import { stopTurnedOffRun, turnedOffReason } from '../db/repos/flow-turn-off';
 import { getWaitpoint } from '../db/repos/waitpoint';
@@ -25,7 +25,11 @@ export function resumeCompletedChildRuns(onCardClosed?: (approvalId: string) => 
     try { onCardClosed?.(approvalId); } catch (error) { console.error('[Workflow Authority] closed card update failed:', error); }
   };
   const structured = resumeSubflowCalls(Date.now(), report);
-  for (const child of abandoned) cancelFlowRun(child.id).closedApprovalIds.forEach(report);
+  for (const child of abandoned) {
+    // The original owner can stop while a later parent still awaits the same
+    // reusable invocation. The sweeper must respect the same ownership fence.
+    if (!hasLiveSubflowWaiter(child.id)) cancelFlowRun(child.id).closedApprovalIds.forEach(report);
+  }
   // A run can create an approval and then fail before publishing PAUSED.
   // Cancel refuses already-terminal runs, so retire their undispatched waits
   // separately: a required child's, including while the parent is still

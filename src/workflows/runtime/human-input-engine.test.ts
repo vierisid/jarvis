@@ -419,3 +419,27 @@ test('a reopened shared form is pending with no close time until it closes again
   expect(closedAt(reopened.id)).toBe(answeredAt);
   await finish();
 });
+
+for (const reference of ['{{loop}}', '{{loop.iterations}}']) test(`loop answers can be consumed as ${reference} after durable waits`, async () => {
+  const flow = createFlow();
+  const ask = step('ask', HUMAN_INPUT_PIECE, 'request_input', { title: 'Review item', prompt: 'Review {{loop.item}}', fields, requestKey: 'review', timeoutHours: 1 });
+  const trigger: any = { name: 'trigger', type: 'EMPTY', nextAction: {
+    name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.items}}' }, firstLoopAction: ask,
+    nextAction: step('returned', '@jarvispieces/piece-jarvis-subflow', 'return_result', { result: { collected: reference } }),
+  } };
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Collected reviews', trigger });
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id }); runs.push(run.id);
+  enqueue({ jobType: RUN_FLOW, payload: { runId: run.id, payload: { items: ['a', 'b'] } }, flowId: flow.id, flowRunId: run.id }); await worker.drain();
+  for (let i = 0; i < 2; i++) {
+    expect(getFlowRun(run.id)?.status).toBe('PAUSED');
+    const pending = listHumanInputs(DEFAULT_IDS.project).find(r => r.runId === run.id && r.status === 'pending')!;
+    expect(respond(pending, 'submit', { ...answers, count: i ? 2.25 : 0 }).status).toBe(200);
+    closeWorkflowDb(); initWorkflowDb(join(dir, 'fixture.db')); setEncryptionKey(Buffer.alloc(32, 81)); configureWorkflowReadiness({ pieces: catalog });
+    await finish();
+  }
+  const final = getFlowRun(run.id)!; expect(final.status).toBe('SUCCEEDED');
+  const result = (final.steps as any).returned.output.output.collected;
+  const iterations = reference === '{{loop}}' ? result.iterations : result;
+  expect(iterations.map((i: any) => i.ask.output.answers.count)).toEqual([0, 2.25]);
+  expect(iterations.every((i: any) => i.ask.output.answers.blocked === false)).toBe(true);
+}, 60000);
