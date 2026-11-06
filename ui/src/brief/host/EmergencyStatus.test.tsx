@@ -38,6 +38,8 @@ const text = () => host.textContent ?? '';
 test('a global pause shows after a reload', async () => {
   await render(); await until(() => text().includes('Jarvis is paused globally'));
   expect(text()).toContain('save input and approval responses');
+  // Rendered outside BriefHost: it carries the Brief tokens itself, and not the Needs-you banner's class.
+  expect(host.querySelector('aside')!.className).toBe('brief-root brief-emergency-banner');
   await React.act(async () => root.unmount()); root = createRoot(host);
   await render(); await until(() => text().includes('paused globally'));
 });
@@ -109,6 +111,26 @@ test('an unexpected state counts as a failed read', async () => {
   status = { enabled: true, emergency_state: 'unexpected' };
   await focus();
   expect(text()).toContain('paused globally');
+});
+
+test('a read slower than the triggers still commits, then reads once more', async () => {
+  await render(); await until(() => text().includes('paused globally'));
+  const slow: Array<() => void> = []; const json = http.json;
+  http.json = async (path: string, init?: RequestInit) => { await new Promise<void>(r => slow.push(r)); return json(path, init); };
+  try {
+    status = { enabled: true, emergency_state: 'killed' };
+    const before = reads;
+    for (let i = 0; i < 3; i++) await React.act(async () => window.dispatchEvent(new Event('focus')));
+    await until(() => slow.length === 1);
+    // Further triggers while it is in flight do not start or supersede it.
+    expect(slow.length).toBe(1);
+    await React.act(async () => slow.shift()!());
+    await until(() => text().includes('emergency stop is active'));
+    // The queued trigger runs once after it.
+    await until(() => slow.length === 1);
+    await React.act(async () => slow.shift()!());
+    await until(() => reads === before + 2);
+  } finally { http.json = json; }
 });
 
 test('a daemon without Authority wired shows nothing', async () => {

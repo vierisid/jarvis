@@ -15,20 +15,25 @@ export function useEmergencyStatus(http: HostTransport, changed?: unknown): Emer
   const [state, setState] = useState<EmergencyState>('loading');
   const readRef = useRef<() => void>(() => {});
   useEffect(() => {
-    const controller = new AbortController(); let sequence = 0, failures = 0, known = false;
+    // One read at a time: a request asked for while one is in flight runs once
+    // it settles, so a slow status route still commits a result.
+    const controller = new AbortController(); let reading = false, again = false, failures = 0, known = false;
     const failed = () => { failures++; if (!known || failures >= FAILURES_BEFORE_UNAVAILABLE) setState('unavailable'); };
-    const read = async () => {
-      const current = ++sequence;
+    const read = async (): Promise<void> => {
+      if (reading) { again = true; return; }
+      reading = true; again = false;
       try {
         const status = await http.json('/api/authority/status', { signal: controller.signal });
-        if (controller.signal.aborted || current !== sequence) return;
+        if (controller.signal.aborted) return;
         // `enabled: false` means this daemon has no Authority engine or
         // emergency controller wired, so there is no pause or stop to hold any
         // work: nothing is shown, as for normal operation (owner decision).
         const next: EmergencyState | null = status?.enabled === false ? 'normal'
           : status?.enabled === true && STATES.includes(status.emergency_state) ? status.emergency_state : null;
         if (next) { failures = 0; known = true; setState(next); } else failed();
-      } catch { if (!controller.signal.aborted && current === sequence) failed(); }
+      } catch { if (!controller.signal.aborted) failed(); }
+      finally { reading = false; }
+      if (again && !controller.signal.aborted) return read();
     };
     readRef.current = () => void read();
     void read(); const timer = window.setInterval(() => void read(), 5000);
@@ -52,7 +57,7 @@ export function EmergencyStatusBanner({ state, open }: { state: EmergencyState; 
       if (result && result.state === 'unavailable') setMessage('Emergency controls could not be opened. Try again.');
     } catch { setMessage('Emergency controls could not be opened. Try again.'); }
   };
-  return <aside className="brief-emergency-banner" data-state={state} role="status" aria-label="Emergency controls status">
+  return <aside className="brief-root brief-emergency-banner" data-state={state} role="status" aria-label="Emergency controls status">
     <p><strong>{state === 'paused' ? 'Jarvis is paused globally.' : state === 'killed' ? 'Jarvis emergency stop is active.' : 'Emergency status is unavailable.'}</strong>{' '}
     {state === 'paused' ? 'You can save input and approval responses, but waiting workflows cannot continue until you resume Jarvis.'
       : state === 'killed' ? 'Stopped runs will not restart automatically. Review Emergency controls before starting new work.'
