@@ -6,7 +6,7 @@ import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
 import { createGoal, getGoal, getProgressHistory, updateGoalStatus, updateGoal, deleteGoal } from '../vault/goals.ts';
 import { getGoalApplication } from '../goals/application-service.ts';
 import { assessJobHypotheses } from './job-hypotheses.ts';
-import { GOAL_CONTEXT_LIMIT, GOAL_FRESHNESS_MS, rankOpportunityGoals } from './goal-relevance.ts';
+import { GOAL_CLOCK_SKEW_MS, GOAL_CONTEXT_LIMIT, GOAL_FRESHNESS_MS, rankOpportunityGoals } from './goal-relevance.ts';
 import { fixtureGoal, fixtureSignals, goalRelevanceReport } from './evaluation/goal-relevance-evaluation.ts';
 import { EVALUATION_NOW } from './evaluation/routine-evaluation.ts';
 import { assessOpportunities, getOpportunity, listOpportunities, recordOpportunityFeedback, refreshOpportunity } from './opportunities.ts';
@@ -64,10 +64,12 @@ test('all inactive statuses, expired evidence and future or unreviewed goals fai
     expect(rank([{ ...goal, status }]).goalCandidates).toEqual([]);
   }
   for (const changes of [
-    { updated_at: now + 1 }, { updated_at: now - GOAL_FRESHNESS_MS - 1 },
+    { updated_at: now + GOAL_CLOCK_SKEW_MS + 1 }, { updated_at: now - GOAL_FRESHNESS_MS - 1 },
     { completed_at: now - 1 }, { deadline: now - 1 }, { deadline: NaN }, { updated_at: Infinity },
   ]) expect(rank([{ ...goal, ...changes }]).goalCandidates).toEqual([]);
   expect(rank([{ ...goal, updated_at: now - GOAL_FRESHNESS_MS }]).goalCandidates).toHaveLength(1);
+  // Rapid goal writes can leave updated_at a few ms ahead of the clock; that goal is still current.
+  expect(rank([{ ...goal, updated_at: now + 5 }]).goalCandidates).toHaveLength(1);
   expect(rankOpportunityGoals(hypothesis(), [goal], now + 14 * 86_400_000).goalRelevance.status).toBe('insufficient_evidence');
 });
 
