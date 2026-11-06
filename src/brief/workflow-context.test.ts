@@ -7,6 +7,7 @@ import { initWorkflowDb, getWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../
 import { createFlow, deleteFlow, setPublishedVersion } from '../workflows/db/repos/flow';
 import { createDraftVersion, lockVersion, updateDraftVersion } from '../workflows/db/repos/flow-version';
 import { createFlowRun, getFlowRun, updateRun } from '../workflows/db/repos/flow-run';
+import { runFailure } from '../workflows/runtime/run-failure';
 import { DefaultWorkerHandlers } from '../workflows/sandbox-api/worker-handlers';
 import { SandboxRegistry } from '../workflows/sandbox-api/sandbox-registry';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
@@ -575,4 +576,24 @@ test('failed step explains the safe failure and distinguishes spawn permission f
   expect(detail.effects.find(e => e.id === 'spawn-auth')).toMatchObject({ label: 'Agent dispatch authorization',
     description: 'This records permission to start the agent, not whether its task succeeded.' });
   expect(JSON.stringify(detail)).not.toContain('private browser detail');
+});
+
+test('failed expression inspection explains the repair without leaking expression values or stack paths', () => {
+  const r = run();
+  const errorMessage = 'engine executor: WorkflowExpressionError: Unsupported workflow expression: non-JSON object in {{ private_customer_email }}. token=secret-token at /private/path';
+  updateRun(r.id, { status: 'FAILED', failedStep: { name: 'finish', displayName: 'Finish', errorMessage },
+    steps: { finish: { type: 'PIECE', status: 'FAILED', input: {}, errorMessage } } });
+  const detail = service.selection(flowId, versionId, r.id).run!;
+  // Brief reads the shared projection that Runs and Today read.
+  expect(detail.failure!.next).toEqual(runFailure(getFlowRun(r.id)!)!.next);
+  expect(detail.failure!.next[0]).toMatchObject({ step: 'edit_and_run_again' });
+  expect(detail.failure!.next[0]!.label).toContain('not plain JSON data');
+  expect(detail.failure!.next.some(n => n.step === 'run_again')).toBe(false);
+  // The step says each next step once.
+  const description = detail.steps[0]!.description;
+  expect(description.split(detail.failure!.next[0]!.label).length).toBe(2);
+  expect(description.match(/run it again/gi)?.length ?? 0).toBeLessThanOrEqual(1);
+  expect(description).not.toContain('validate the draft');
+  const exposed = JSON.stringify(detail);
+  for (const secret of ['private_customer_email', 'secret-token', '/private/path', 'WorkflowExpressionError:']) expect(exposed).not.toContain(secret);
 });
