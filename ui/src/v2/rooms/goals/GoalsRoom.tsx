@@ -27,9 +27,10 @@ import {
   type GoalHealth,
   type GoalLevel,
   type GoalStatus,
+  type ScoreResult,
 } from "./useGoalsData";
 import "./GoalsRoom.css";
-import { GoalScoreEditor } from "./GoalScoreEditor";
+import { GoalScoreEditor, useGoalDraftScope, type GoalDraftScope } from "./GoalScoreEditor";
 import { isRoomTab, type RoomTab } from "../../../../../src/daemon/room-tabs";
 import { withRoomActionDefaults } from "../../../../../src/daemon/room-action-targets";
 
@@ -69,6 +70,7 @@ export type RoomBodyMode = "inline" | "expanded";
 
 export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
   const data = useGoalsData();
+  const draftScope = useGoalDraftScope(mode === "expanded");
   const [activeTab, setActiveTab] = useState<TabId>("constellation");
   const TAB_KEYS = useMemo(() => Object.keys(TAB_LABEL) as TabId[], []);
   const tabsApi = useRovingTabs<TabId>(TAB_KEYS, activeTab, setActiveTab, "v2-goals");
@@ -321,9 +323,11 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
           childrenByParent={data.childrenByParent}
           onClose={() => setSelectedId(null)}
           onDetails={(input) => data.updateDetails(selectedGoal.id, input)}
-          onScore={async (score, reason) => {
-            const r = await data.updateScore(selectedGoal.id, score, reason);
-            setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
+          draftScope={draftScope}
+          onScore={async (score, reason, expectedUpdatedAt) => {
+            const r = await data.updateScore(selectedGoal.id, score, reason, expectedUpdatedAt);
+            // A refused save is shown inline by the score editor, next to the kept draft.
+            if (r.ok) setToast({ text: r.message, tone: "ok" });
             return r;
           }}
           onStatus={async (status) => {
@@ -1020,6 +1024,7 @@ function DetailPanel({
   allGoals,
   childrenByParent,
   onClose,
+  draftScope,
   onScore,
   onDetails,
   onStatus,
@@ -1030,7 +1035,8 @@ function DetailPanel({
   childrenByParent: Map<string, Goal[]>;
   onClose: () => void;
   onDetails: (input: GoalDetailsUpdate) => Promise<{ ok: boolean; message: string }>;
-  onScore: (score: number, reason: string) => Promise<{ ok: boolean; message: string }>;
+  draftScope: GoalDraftScope | null;
+  onScore: (score: number, reason: string, expectedUpdatedAt: number) => Promise<ScoreResult>;
   onStatus: (status: GoalStatus) => void;
   onHealth: (health: GoalHealth) => void;
 }) {
@@ -1081,7 +1087,6 @@ function DetailPanel({
     finally { setSaving(false); }
   };
 
-
   return (
     <aside className="v2-goals__side">
       <header className="v2-goals__side-head">
@@ -1130,7 +1135,12 @@ function DetailPanel({
           </section>
         )}
 
-        <GoalScoreEditor goalId={goal.id} score={goal.score} onSave={onScore} />
+        {draftScope
+          ? <GoalScoreEditor key={goal.id} goal={goal} scope={draftScope} onSave={onScore} />
+          : <section className="v2-goals__side-section" aria-label="Goal score">
+            <div className="v2-goals__side-label">Score · {(goal.score * 100).toFixed(0)}%</div>
+            <p className="v2-goals__side-text">Loading the score editor…</p>
+          </section>}
 
         <section className="v2-goals__side-section">
           <div className="v2-goals__side-label">Status</div>

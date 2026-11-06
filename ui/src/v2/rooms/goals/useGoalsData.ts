@@ -44,6 +44,8 @@ export interface Goal {
   created_at: number;
   updated_at: number;
   completed_at: number | null;
+  /** Present (non-null) when progress comes from measurements; the score API refuses those goals. */
+  measurement?: unknown;
 }
 
 export interface GoalsMetrics {
@@ -64,6 +66,8 @@ interface ActionResult {
   ok: boolean;
   message: string;
 }
+/** `conflict` is the goal as the server holds it when the draft's base revision is stale. */
+export interface ScoreResult extends ActionResult { conflict?: Goal }
 
 /**
  * Goals Room hook — loads the full goal list, metrics, and overdue
@@ -166,13 +170,21 @@ export function useGoalsData() {
   );
 
   const updateScore = useCallback(
-    async (id: string, score: number, reason: string): Promise<ActionResult> => {
+    async (id: string, score: number, reason: string, expectedUpdatedAt: number): Promise<ScoreResult> => {
       try {
         const resp = await fetch(`/api/goals/${encodeURIComponent(id)}/score`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ score, reason, source: "user" }),
+          body: JSON.stringify({ score, reason, source: "user", expected_updated_at: expectedUpdatedAt }),
         });
+        if (resp.status === 409) {
+          const body = await resp.json().catch(() => null) as { code?: unknown; goal?: Goal } | null;
+          if (body?.code === "SCORE_CONFLICT" && body.goal && typeof body.goal.score === "number" && typeof body.goal.updated_at === "number") {
+            void refresh();
+            return { ok: false, message: "The score changed since your draft.", conflict: body.goal };
+          }
+          throw new Error(`Could not save goal (HTTP ${resp.status}).`);
+        }
         if (!resp.ok) throw new Error(await goalSaveError(resp));
         await refresh();
         return { ok: true, message: `Score updated to ${(score * 100).toFixed(0)}%.` };
