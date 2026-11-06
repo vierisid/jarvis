@@ -67,7 +67,8 @@ interface ActionResult {
   message: string;
 }
 /** `conflict` is the goal as the server holds it when the draft's base revision is stale. */
-export interface ScoreResult extends ActionResult { conflict?: Goal }
+export interface ScoreResult extends ActionResult { conflict?: Goal; goal?: Goal }
+const isScored = (goal: unknown): goal is Goal => !!goal && typeof (goal as Goal).score === "number" && typeof (goal as Goal).updated_at === "number";
 
 /**
  * Goals Room hook — loads the full goal list, metrics, and overdue
@@ -178,16 +179,16 @@ export function useGoalsData() {
           body: JSON.stringify({ score, reason, source: "user", expected_updated_at: expectedUpdatedAt }),
         });
         if (resp.status === 409) {
-          const body = await resp.json().catch(() => null) as { code?: unknown; goal?: Goal } | null;
-          if (body?.code === "SCORE_CONFLICT" && body.goal && typeof body.goal.score === "number" && typeof body.goal.updated_at === "number") {
+          const body = await resp.clone().json().catch(() => null) as { code?: unknown; goal?: Goal } | null;
+          if (body?.code === "SCORE_CONFLICT" && isScored(body.goal)) {
             void refresh();
             return { ok: false, message: "The score changed since your draft.", conflict: body.goal };
           }
-          throw new Error(`Could not save goal (HTTP ${resp.status}).`);
         }
         if (!resp.ok) throw new Error(await goalSaveError(resp));
+        const saved = await resp.json().catch(() => null) as Goal | null;
         await refresh();
-        return { ok: true, message: `Score updated to ${(score * 100).toFixed(0)}%.` };
+        return { ok: true, message: `Score updated to ${(score * 100).toFixed(0)}%.`, ...(isScored(saved) ? { goal: saved } : {}) };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };
       }

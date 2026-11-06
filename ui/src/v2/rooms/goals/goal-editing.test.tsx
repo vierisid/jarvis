@@ -4,7 +4,7 @@ import type { Root } from 'react-dom/client';
 import type { Goal } from './useGoalsData';
 let React: typeof import('react'), createRoot: typeof import('react-dom/client').createRoot,
   Room: typeof import('./GoalsRoom').GoalsRoomBody, root: Root, host: HTMLDivElement;
-let originalFetch: typeof fetch, goal: Goal, writes: Array<{method: string; body: any}>, fail: boolean, workspace: string;
+let originalFetch: typeof fetch, goal: Goal, writes: Array<{method: string; body: any}>, fail: boolean, workspace: string, hostStatus: number, staleRead: Goal | null;
 const wait = () => new Promise(r => setTimeout(r, 10));
 beforeAll(async () => {
   GlobalRegistrator.register();
@@ -19,7 +19,7 @@ beforeEach(() => {
     started_at:null, estimated_hours:null, actual_hours:0, authority_level:0, tags:[], dependencies:[], sort_order:0,
     created_at:1, updated_at:1, completed_at:null};
   sessionStorage.clear();
-  writes=[]; fail=false; workspace='ws-1';
+  writes=[]; fail=false; workspace='ws-1'; hostStatus=200; staleRead=null;
   globalThis.fetch = (async (url: any, init?: RequestInit) => {
     const path=String(url), method=init?.method ?? 'GET';
     if(method !== 'GET') {
@@ -39,8 +39,10 @@ beforeEach(() => {
       else if(method === 'POST') goal={...goal,...body};
       return Response.json(goal);
     }
+    if(path.endsWith('/api/brief/host') && hostStatus !== 200) return Response.json({state:'unsupported'}, {status:hostStatus});
     if(path.endsWith('/api/brief/host')) return Response.json({schemaVersion:1,scopeId:'project-1',workspaceId:workspace,generation:'boot-1',installMode:'self',capabilities:{contractVersion:1}});
     if(path.endsWith('/metrics')) return Response.json({total:1,active:1,completed:0,failed:0,killed:0,avg_score:0,on_track:1,at_risk:0,behind:0,critical:0,overdue:0});
+    if(staleRead && !path.endsWith('/overdue')) { const old=staleRead; staleRead=null; return Response.json([old]); }
     return Response.json(path.endsWith('/overdue')?[]:[goal]);
   }) as typeof fetch;
   host=document.createElement('div');document.body.append(host);root=createRoot(host);
@@ -204,9 +206,9 @@ test('failed score saves show a reason and preserve the draft for a successful r
 test('drafts are isolated by goal and a clean score follows refreshed server data', async () => {
   await render(); await select(); await fill(scoreInput(), '80'); await fill(reasonInput(), 'First goal only');
   await click('Close detail'); goal={...goal,id:'goal-2',title:'Other goal',score:0.2};
-  await React.act(async()=>{host.querySelector<HTMLButtonElement>('button[title="Refresh"]')!.click();await wait();}); await select(); expect(scoreInput().value).toBe('20'); expect(reasonInput().value).toBe('');
-  goal={...goal,score:0.4}; await React.act(async()=>{host.querySelector<HTMLButtonElement>('button[title="Refresh"]')!.click();await wait();}); expect(scoreInput().value).toBe('40');
-  await fill(scoreInput(), '60'); goal={...goal,score:0.5}; await React.act(async()=>{host.querySelector<HTMLButtonElement>('button[title="Refresh"]')!.click();await wait();}); expect(scoreInput().value).toBe('60');
+  await refreshRoom(); await select(); expect(scoreInput().value).toBe('20'); expect(reasonInput().value).toBe('');
+  goal={...goal,score:0.4}; await refreshRoom(); expect(scoreInput().value).toBe('40');
+  await fill(scoreInput(), '60'); goal={...goal,score:0.5}; await refreshRoom(); expect(scoreInput().value).toBe('60');
   await click('Discard score draft'); expect(scoreInput().value).toBe('50');
 });
 
@@ -257,6 +259,24 @@ test('a refresh that moves the score past the draft base shows the change; one t
   // A server score that reaches the draft (with no reason) leaves nothing to save.
   await fill(scoreInput(), '50'); goal={...goal,score:0.5,updated_at:6}; await refreshRoom();
   expect(storedDrafts()).toEqual([]); expect(host.querySelector('[data-score-conflict]')).toBeNull(); expect(button('Save score').disabled).toBe(true);
+  // A sub-percent score write elsewhere (an agent tool) is still a change to show.
+  await fill(scoreInput(), '80'); goal={...goal,score:0.503,updated_at:7}; await refreshRoom();
+  expect(host.querySelector('[data-score-conflict]')?.textContent).toContain('Score changed to 50% since your draft');
+});
+test('a refresh still in flight from before a save does not put the old score back', async () => {
+  await render(); await select(); await fill(scoreInput(), '50');
+  staleRead={...goal}; await click('Save score');
+  expect(goal.score).toBe(0.5); expect(scoreInput().value).toBe('50'); expect(host.textContent).not.toContain('Unsaved score draft');
+});
+test('a daemon without a host descriptor keeps drafts under one local owner', async () => {
+  hostStatus=501; await render(); await select(); await fill(scoreInput(), '30');
+  expect(storedDrafts()).toEqual([`jarvis:goal-score-draft:v2:local:goal-1`]);
+  await click('Discard score draft');
+});
+test('an unconfirmed workspace keeps the draft in memory only and says why', async () => {
+  hostStatus=503; await render(); await select(); await fill(scoreInput(), '30');
+  expect(storedDrafts()).toEqual([]); expect(host.textContent).toContain('This workspace could not be confirmed');
+  await click('Discard score draft');
 });
 test('measured goals show their score without an editor', async () => {
   goal={...goal,score:0.6,measurement:{basis:'value',revision:1}};
@@ -283,7 +303,12 @@ test('a failed storage write never lets an older stored draft come back', async 
   }, false);
   // When removal still works, the stale stored copy is removed so a reload cannot restore it.
   await withFailingWrites(async () => { await fill(scoreInput(), '70'); expect(sessionStorage.getItem(draftKey())).toBeNull(); });
-  await click('Discard score draft');
+  // Discarding while storage refuses both writes and removals must not let the stored copy return.
+  sessionStorage.setItem(draftKey(), JSON.stringify({score:0.2,reason:'Older draft',baseScore:0,baseUpdatedAt:1}));
+  await withFailingWrites(async () => {
+    await click('Discard score draft'); await click('Close detail'); await select();
+    expect(scoreInput().value).toBe('0'); expect(reasonInput().value).toBe('');
+  }, false);
 });
 test('drafts belong to one workspace and in-memory drafts are dropped when the owner changes', async () => {
   await render(); await select(); await fill(scoreInput(), '35'); await fill(reasonInput(), 'Workspace one');

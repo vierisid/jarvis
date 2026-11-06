@@ -7,14 +7,18 @@ type Basis = { score: number; updated_at: number };
 /** Which dashboard owner a draft belongs to. `persistent` is false when the owner could not be verified. */
 export type GoalDraftScope = { key: string; persistent: boolean };
 
-// Drafts kept here only when browser storage refuses a write. Never shared across owners.
-const memory = new Map<string, Draft>();
+// Drafts kept here only when browser storage refuses a write; null marks one cleared but
+// not removable from storage. Never shared across owners.
+const memory = new Map<string, Draft | null>();
 let memoryScope: string | null = null;
+const UNVERIFIED = "unverified";
+const keyFor = (scope: string, goalId: string) => `jarvis:goal-score-draft:v2:${encodeURIComponent(scope)}:${encodeURIComponent(goalId)}`;
+/** Called only with a verified owner: another owner's drafts and unverified drafts are dropped. */
 function adoptScope(scope: string) {
   if (memoryScope !== scope) memory.clear();
+  else for (const key of [...memory.keys()]) if (key.startsWith(keyFor(UNVERIFIED, ""))) memory.delete(key);
   memoryScope = scope;
 }
-const keyFor = (scope: string, goalId: string) => `jarvis:goal-score-draft:v2:${encodeURIComponent(scope)}:${encodeURIComponent(goalId)}`;
 const isDraft = (value: any): value is Draft => !!value && typeof value.reason === "string"
   && [value.score, value.baseScore].every(n => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1)
   && typeof value.baseUpdatedAt === "number" && Number.isFinite(value.baseUpdatedAt);
@@ -23,8 +27,8 @@ const percent = (score: number) => `${(score * 100).toFixed(0)}%`;
 
 /** The in-memory copy is newer than storage whenever it exists: it is only kept after a failed write. */
 function readDraft(scope: GoalDraftScope, goalId: string): Draft | null {
-  const key = keyFor(scope.key, goalId), held = memory.get(key);
-  if (held || !scope.persistent) return held ?? null;
+  const key = keyFor(scope.key, goalId);
+  if (memory.has(key) || !scope.persistent) return memory.get(key) ?? null;
   try {
     const value = JSON.parse(sessionStorage.getItem(key) ?? "null");
     if (isDraft(value)) return value;
@@ -33,7 +37,7 @@ function readDraft(scope: GoalDraftScope, goalId: string): Draft | null {
 }
 function storeDraft(scope: GoalDraftScope, goalId: string, value: Draft | null): boolean {
   const key = keyFor(scope.key, goalId);
-  if (value) memory.set(key, value); else memory.delete(key);
+  memory.set(key, value);
   if (!scope.persistent) return false;
   try {
     if (value) sessionStorage.setItem(key, JSON.stringify(value)); else sessionStorage.removeItem(key);
@@ -41,7 +45,7 @@ function storeDraft(scope: GoalDraftScope, goalId: string, value: Draft | null):
     return true;
   } catch {
     // A full store may still allow removal; an older stored draft must not return after a reload.
-    try { sessionStorage.removeItem(key); } catch { /* storage unavailable */ }
+    try { sessionStorage.removeItem(key); } catch { /* the memory entry still masks it in this tab */ }
     return false;
   }
 }
@@ -51,11 +55,13 @@ export function useGoalDraftScope(enabled: boolean): GoalDraftScope | null {
   const [scope, setScope] = useState<GoalDraftScope | null>(null);
   useEffect(() => {
     if (!enabled) return;
-    let live = true;
+    const abort = new AbortController();
+    let timedOut = false;
+    const timer = window.setTimeout(() => { timedOut = true; abort.abort(); }, 10000);
     void (async () => {
       let next: GoalDraftScope;
       try {
-        const response = await fetch("/api/brief/host", { cache: "no-store" });
+        const response = await fetch("/api/brief/host", { cache: "no-store", signal: abort.signal });
         // A daemon without a host descriptor serves a single local owner.
         if (response.status === 404 || response.status === 501) next = { key: "local", persistent: true };
         else {
@@ -65,11 +71,15 @@ export function useGoalDraftScope(enabled: boolean): GoalDraftScope | null {
           const workspace = typeof host.workspaceId === "string" && host.workspaceId ? host.workspaceId : String(host.generation ?? "");
           next = { key: JSON.stringify([host.scopeId, workspace]), persistent: true };
         }
-      } catch { next = { key: "unverified", persistent: false }; }
-      if (!live) return;
-      adoptScope(next.key); setScope(next);
+      } catch {
+        if (abort.signal.aborted && !timedOut) return; // unmounted
+        next = { key: UNVERIFIED, persistent: false };
+      }
+      window.clearTimeout(timer);
+      if (next.persistent) adoptScope(next.key);
+      setScope(next);
     })();
-    return () => { live = false; };
+    return () => { window.clearTimeout(timer); abort.abort(); };
   }, [enabled]);
   return scope;
 }
@@ -88,7 +98,8 @@ export function GoalScoreEditor({ goal, scope, onSave }: {
   const [error, setError] = useState<string | null>(null);
   const id = useId();
   const latest: Basis = reported && reported.updated_at > goal.updated_at ? reported : { score: goal.score, updated_at: goal.updated_at };
-  const conflict = !!draft && latest.updated_at !== draft.baseUpdatedAt && !sameScore(latest.score, draft.baseScore);
+  // Exact: any other score write (an agent's 0.403 against 0.4) is a change the user should see.
+  const conflict = !!draft && latest.updated_at !== draft.baseUpdatedAt && latest.score !== draft.baseScore;
   const keep = (next: Draft | null) => {
     setDraft(next);
     const stored = storeDraft(scope, goalId, next);
@@ -98,11 +109,12 @@ export function GoalScoreEditor({ goal, scope, onSave }: {
   useEffect(() => { if (draft) setPersisted(storeDraft(scope, goalId, draft)); }, [goalId]);
   useEffect(() => {
     if (!draft || saving) return;
+    if (goal.measurement) keep(null);
     // Equal to the saved score with no reason: nothing to save.
     if (sameScore(draft.score, latest.score) && !draft.reason.trim()) keep(null);
     // Something other than the score moved (status, health): follow it silently.
-    else if (latest.updated_at !== draft.baseUpdatedAt && sameScore(latest.score, draft.baseScore)) keep({ ...draft, baseUpdatedAt: latest.updated_at });
-  }, [latest.score, latest.updated_at, draft, saving]);
+    else if (latest.updated_at !== draft.baseUpdatedAt && latest.score === draft.baseScore) keep({ ...draft, baseUpdatedAt: latest.updated_at });
+  }, [latest.score, latest.updated_at, draft, saving, !!goal.measurement]);
   useEffect(() => {
     if (!draft || persisted) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
@@ -116,6 +128,8 @@ export function GoalScoreEditor({ goal, scope, onSave }: {
   </section>;
 
   const value = draft ?? { score: latest.score, reason: "" };
+  const unkept = scope.persistent ? "Browser storage is unavailable; save before refreshing."
+    : "This workspace could not be confirmed, so the draft is not kept across a refresh; save before refreshing.";
   const change = (next: { score: number; reason: string }) => {
     setError(null);
     if (sameScore(next.score, latest.score) && !next.reason.trim()) return keep(null);
@@ -130,11 +144,15 @@ export function GoalScoreEditor({ goal, scope, onSave }: {
     setSaving(true); setError(null);
     try {
       const result = await onSave(current.score, current.reason.trim() || "Updated via dashboard", current.baseUpdatedAt);
-      if (result.ok) discard();
+      if (result.ok) {
+        // A poll already in flight may still return the pre-save goal; the saved copy is newer.
+        if (result.goal) setReported({ score: result.goal.score, updated_at: result.goal.updated_at });
+        discard();
+      }
       else if (result.conflict) {
         setReported({ score: result.conflict.score, updated_at: result.conflict.updated_at });
         // Only something other than the score moved; the draft follows it, but the user still decides to save.
-        if (sameScore(result.conflict.score, current.baseScore))
+        if (result.conflict.score === current.baseScore)
           setError(`The goal changed since your draft; its score is still ${percent(result.conflict.score)}. Save again to apply your draft.`);
       }
       else setError(result.message);
@@ -152,8 +170,8 @@ export function GoalScoreEditor({ goal, scope, onSave }: {
     {draft && conflict && <p role="status" className="v2-goals__side-text" data-score-conflict>
       Score changed to {percent(latest.score)} since your draft (it was {percent(draft.baseScore)}). Your draft is kept: save it over the new score or discard it.
     </p>}
-    {draft && !conflict && <p role="status" className="v2-goals__side-text">{persisted ? "Unsaved score draft kept in this browser tab." : "Unsaved score draft. Browser storage is unavailable; save before refreshing."}</p>}
-    {draft && conflict && !persisted && <p role="status" className="v2-goals__side-text">Browser storage is unavailable; save before refreshing.</p>}
+    {draft && !conflict && <p role="status" className="v2-goals__side-text">{persisted ? "Unsaved score draft kept in this browser tab." : `Unsaved score draft. ${unkept}`}</p>}
+    {draft && conflict && !persisted && <p role="status" className="v2-goals__side-text">{unkept}</p>}
     {error && <p role="alert">{error}</p>}
     <div className="v2-goals__chip-row">
       <button type="button" className="v2-goals__btn v2-goals__btn--primary" disabled={!draft || saving} onClick={() => void save()}>{saving ? "Saving…" : conflict ? "Save over new score" : "Save score"}</button>
