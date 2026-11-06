@@ -1,4 +1,4 @@
-import { dismissHumanInput, getHumanInput, humanInputHistory, listHumanInputs, resolveHumanInput } from '../runtime/human-input';
+import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, listHumanInputs, resolveHumanInput } from '../runtime/human-input';
 import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import type { WorkflowContext } from '../../brief/workflow-context';
@@ -2390,7 +2390,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflow-inputs": {
       GET: req => trapErrors(() => {
         const project = callerProject(req), requests = listHumanInputs(project);
-        return ok({ requests, historyCursor: humanInputHistory(project).nextCursor });
+        // Polled every few seconds: the cursor is an ids-only indexed read, not a second outcome lookup.
+        return ok({ requests, historyCursor: humanInputHistoryCursor(project) });
       }),
     },
     "/api/workflow-inputs/history": {

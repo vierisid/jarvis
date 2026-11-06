@@ -36,7 +36,8 @@ export const ENDED_RUN_STATUSES_SQL =
 const STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS workflow_human_request (
     id TEXT PRIMARY KEY, project_id TEXT NOT NULL, flow_id TEXT NOT NULL REFERENCES flow(id) ON DELETE CASCADE,
-    fingerprint TEXT NOT NULL, record TEXT NOT NULL, deadline INTEGER NOT NULL, status TEXT NOT NULL
+    fingerprint TEXT NOT NULL, record TEXT NOT NULL, deadline INTEGER NOT NULL, status TEXT NOT NULL,
+    closed_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS idx_human_pending ON workflow_human_request(status,deadline)`,
   `CREATE TABLE IF NOT EXISTS workflow_human_wait (
@@ -479,9 +480,36 @@ export function createSchema(db: Database): void {
   db.exec("PRAGMA foreign_keys=ON");
   for (const stmt of STATEMENTS) db.exec(stmt);
   applyAdditiveColumnMigrations(db);
+  ensureHumanRequestClosedAt(db);
   backfillRunProjects(db);
   ensureWorkflowRemovalSchema(db);
   ensureWorkflowInspectionSchema(db);
+}
+
+/**
+ * Index and backfill `workflow_human_request.closed_at`.
+ *
+ * The index is created here, after the additive migrations, because on a store
+ * from before the column a CREATE INDEX in STATEMENTS would run before the
+ * ALTER that adds it. The Recent list and its keyset history page read
+ * (project_id, closed_at, id) through it in order, with no sort; closed_at is
+ * NULL exactly while a request is pending.
+ *
+ * Closed rows written before the column existed (or by an older build after a
+ * downgrade) get the best time the row itself records, never the boot time: an
+ * expired request closed at its deadline; any other closed request falls back
+ * to when it was created, the latest time known to precede its closure. The
+ * record is JSON written by this code, but json_valid guards the read so one
+ * corrupt record cannot fail schema init; it then falls back to the deadline.
+ * Writes only rows that need it, so a store with none is one scan at boot.
+ */
+function ensureHumanRequestClosedAt(db: Database): void {
+  db.run(`CREATE INDEX IF NOT EXISTS idx_human_closed ON workflow_human_request(project_id,closed_at,id)`);
+  db.run(`UPDATE workflow_human_request SET closed_at = COALESCE(
+      CASE WHEN status = 'expired' THEN deadline END,
+      CASE WHEN json_valid(record) THEN json_extract(record, '$.created') END,
+      deadline)
+    WHERE status <> 'pending' AND closed_at IS NULL`);
 }
 
 /**
@@ -555,6 +583,9 @@ function applyAdditiveColumnMigrations(db: Database): void {
     // Which instance of a request a run waited on: a shared form reopened after
     // it expired or was cancelled counts up, so earlier waits keep their outcome.
     { table: "workflow_human_wait", column: "generation", ddl: "ALTER TABLE workflow_human_wait ADD COLUMN generation INTEGER NOT NULL DEFAULT 0" },
+    // When a request instance closed (NULL while pending). Recent responses and
+    // their history are ordered by it; see ensureHumanRequestClosedAt.
+    { table: "workflow_human_request", column: "closed_at", ddl: "ALTER TABLE workflow_human_request ADD COLUMN closed_at INTEGER" },
     {
       table: "app_connection",
       column: "credential_generation",

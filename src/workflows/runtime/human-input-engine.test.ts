@@ -275,8 +275,8 @@ test('an undismissed failure stays listed however many requests close after it',
   const run = await f.run('crowded'), request = requestFor(run.id);
   expect(respond(request).status).toBe(200); await finish(); expect(getFlowRun(run.id)?.status).toBe('FAILED');
   const later = Date.now() + 10 * 86400000;
-  for (let i = 0; i < 21; i++) getWorkflowDb().run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status) VALUES (?,?,?,?,?,?,'expired')`,
-    [`crowd-${i}`, DEFAULT_IDS.project, f.flow.id, 'x', JSON.stringify({ ...request, id: `crowd-${i}`, runId: `crowd-run-${i}`, runs: undefined, created: later + i, deadline: later + i }), later + i]);
+  for (let i = 0; i < 21; i++) getWorkflowDb().run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status,closed_at) VALUES (?,?,?,?,?,?,'expired',?)`,
+    [`crowd-${i}`, DEFAULT_IDS.project, f.flow.id, 'x', JSON.stringify({ ...request, id: `crowd-${i}`, runId: `crowd-run-${i}`, runs: undefined, created: later + i, deadline: later + i }), later + i, later + i]);
   const { humanRequestNeedsAttention } = await import('./human-input-contract');
   expect(humanRequestNeedsAttention(requestFor(run.id))).toBe(true);
   expect(dismissHumanInput(DEFAULT_IDS.project, request.id).status).toBe(200);
@@ -318,24 +318,32 @@ test('a delayed dismissal cannot acknowledge the failed result of a reopened req
 });
 
 test('older closed requests remain directly accessible and history uses closure time, not deadline', async () => {
-  const f=fixture(), run=await f.run('history'), request=requestFor(run.id), db=getWorkflowDb();
+  const f = fixture(), run = await f.run('history'), request = requestFor(run.id), db = getWorkflowDb();
   cancelFlowRun(run.id); listHumanInputs(DEFAULT_IDS.project);
-  const closed=Date.now()+1000;
-  for(let i=0;i<25;i++) db.run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status) VALUES (?,?,?,?,?,?,'submitted')`,
-    [`history-${i}`,DEFAULT_IDS.project,f.flow.id,'x',JSON.stringify({...request,id:`history-${i}`,created:closed+i,closedAt:closed+i,deadline:closed+1000000-i,answers}),closed+1000000-i]);
-  const routes=createWorkflowRoutes();
-  const get=async(path:string,key:string,params={})=>routes[key]!.GET!(Object.assign(new Request('http://localhost'+path),{params}));
-  const listed=await (await get('/api/workflow-inputs','/api/workflow-inputs')).json();
-  expect(listed.requests.some((r:HumanRequest)=>r.id==='history-24')).toBe(true);
-  expect(listed.requests.some((r:HumanRequest)=>r.id===request.id)).toBe(false);
-  const direct=await get('/api/workflow-inputs/'+request.id,'/api/workflow-inputs/:id',{id:request.id});
-  expect(direct.status).toBe(200);expect((await direct.json()).request.status).toBe('cancelled');
-  const page=await (await get('/api/workflow-inputs/history?cursor='+encodeURIComponent(listed.historyCursor),'/api/workflow-inputs/history')).json();
-  expect(page.requests.some((r:HumanRequest)=>r.id===request.id)).toBe(true);
-  const all=[...listed.requests,...page.requests].filter((r:HumanRequest)=>r.id.startsWith('history-'));
-  expect(new Set(all.map((r:HumanRequest)=>r.id)).size).toBe(25);
-  expect((await get('/api/workflow-inputs/history?cursor=bad','/api/workflow-inputs/history')).status).toBe(400);
-  const {getHumanInput}=await import('./human-input'); expect(getHumanInput('other-project',request.id)).toBeNull();
+  const closed = Date.now() + 1000;
+  // Closed in creation order, with deadlines in the opposite order.
+  for (let i = 0; i < 25; i++) {
+    db.run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status,closed_at) VALUES (?,?,?,?,?,?,'submitted',?)`,
+      [`history-${i}`, DEFAULT_IDS.project, f.flow.id, 'x', JSON.stringify({ ...request, id: `history-${i}`, created: closed + i, deadline: closed + 1000000 - i, answers }), closed + 1000000 - i, closed + i]);
+  }
+  const routes = createWorkflowRoutes();
+  const get = async (path: string, key: string, params = {}) => routes[key]!.GET!(Object.assign(new Request('http://localhost' + path), { params }));
+  const listed = await (await get('/api/workflow-inputs', '/api/workflow-inputs')).json();
+  expect(listed.requests.some((r: HumanRequest) => r.id === 'history-24')).toBe(true);
+  expect(listed.requests.some((r: HumanRequest) => r.id === request.id)).toBe(false);
+  // The polled cursor is the one the first history page would hand back.
+  const { humanInputHistory } = await import('./human-input');
+  expect(listed.historyCursor).toBe(humanInputHistory(DEFAULT_IDS.project).nextCursor);
+  const direct = await get('/api/workflow-inputs/' + request.id, '/api/workflow-inputs/:id', { id: request.id });
+  expect(direct.status).toBe(200);
+  expect((await direct.json()).request.status).toBe('cancelled');
+  const page = await (await get('/api/workflow-inputs/history?cursor=' + encodeURIComponent(listed.historyCursor), '/api/workflow-inputs/history')).json();
+  expect(page.requests.some((r: HumanRequest) => r.id === request.id)).toBe(true);
+  const all = [...listed.requests, ...page.requests].filter((r: HumanRequest) => r.id.startsWith('history-'));
+  expect(new Set(all.map((r: HumanRequest) => r.id)).size).toBe(25);
+  expect((await get('/api/workflow-inputs/history?cursor=bad', '/api/workflow-inputs/history')).status).toBe(400);
+  const { getHumanInput } = await import('./human-input');
+  expect(getHumanInput('other-project', request.id)).toBeNull();
   db.run("DELETE FROM workflow_human_request WHERE id LIKE 'history-%'");
 });
 
@@ -361,4 +369,53 @@ test('response and dismissal bodies are capped while they stream, without a decl
   // Under the cap the same route reaches the lookup.
   const small = Object.assign(new Request('http://localhost/api/workflow-inputs/missing/dismiss', { method: 'POST', body: '{}' }), { params: { id: 'missing' } });
   expect((await routes['/api/workflow-inputs/:id/dismiss']!.POST!(small)).status).toBe(404);
+});
+
+test('close time is stamped once, when the request closes, and a later dismissal never moves it', async () => {
+  const f = fixture();
+  const graph = structuredClone(f.version.trigger);
+  graph.nextAction!.nextAction = step('failed', '@jarvispieces/piece-jarvis-subflow', 'require_success', { result: { status: 'failed', code: 'FIXTURE_FAILURE' } });
+  updateDraftVersion(f.version.id, { trigger: graph });
+  const run = await f.run('closed-at'), request = requestFor(run.id), db = getWorkflowDb();
+  const closedAt = () => db.query<{ closed_at: number | null }, [string]>('SELECT closed_at FROM workflow_human_request WHERE id=?').get(request.id)!.closed_at;
+  expect(closedAt()).toBeNull();
+  const answeredAt = Date.now() + 5000;
+  expect(resolveHumanInput(DEFAULT_IDS.project, request.id, { decision: 'submit', generation: 0, answers }, answeredAt).request?.closedAt).toBe(answeredAt);
+  await finish();
+  expect(getFlowRun(run.id)?.status).toBe('FAILED');
+  expect(closedAt()).toBe(answeredAt);
+  // A row closed long ago (as a backfilled legacy row would be) stays where it was when it is dismissed.
+  db.run('UPDATE workflow_human_request SET closed_at=? WHERE id=?', [1000, request.id]);
+  expect(dismissHumanInput(DEFAULT_IDS.project, request.id, Date.now() + 10000).status).toBe(200);
+  expect(closedAt()).toBe(1000);
+  expect(requestFor(run.id)?.closedAt ?? 1000).toBe(1000);
+  expect(JSON.parse(db.query<{ record: string }, [string]>('SELECT record FROM workflow_human_request WHERE id=?').get(request.id)!.record).closedAt).toBeUndefined();
+});
+
+test('an expired request closes at its deadline, not when the queue was next read', async () => {
+  const f = fixture(), run = await f.run('expired-closed-at'), request = requestFor(run.id);
+  listHumanInputs(DEFAULT_IDS.project, request.deadline + 3600000);
+  const closed = listHumanInputs(DEFAULT_IDS.project).find(r => r.id === request.id) ?? (await import('./human-input')).getHumanInput(DEFAULT_IDS.project, request.id)!;
+  expect(closed.status).toBe('expired');
+  expect(closed.closedAt).toBe(request.deadline);
+  cancelFlowRun(run.id);
+});
+
+test('a reopened shared form is pending with no close time until it closes again', async () => {
+  const f = fixture('input', false, false, true), first = await f.run('reopen-closed-at'), db = getWorkflowDb();
+  const closedAt = (id: string) => db.query<{ closed_at: number | null }, [string]>('SELECT closed_at FROM workflow_human_request WHERE id=?').get(id)!.closed_at;
+  const expired = requestFor(first.id);
+  listHumanInputs(DEFAULT_IDS.project, expired.deadline);
+  expect(closedAt(expired.id)).toBe(expired.deadline);
+  const second = await f.run('reopen-closed-at'), reopened = requestFor(second.id);
+  expect(reopened.status).toBe('pending');
+  expect(reopened.closedAt).toBeUndefined();
+  expect(closedAt(reopened.id)).toBeNull();
+  // Out of the closed history until it closes again.
+  const { humanInputHistory } = await import('./human-input');
+  expect(humanInputHistory(DEFAULT_IDS.project).requests.some(r => r.id === reopened.id)).toBe(false);
+  const answeredAt = Date.now() + 1000;
+  expect(resolveHumanInput(DEFAULT_IDS.project, reopened.id, { decision: 'submit', generation: 1, answers }, answeredAt).status).toBe(200);
+  expect(closedAt(reopened.id)).toBe(answeredAt);
+  await finish();
 });
