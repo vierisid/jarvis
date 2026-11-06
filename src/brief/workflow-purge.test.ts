@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from 'bun:sqlite';
@@ -347,4 +347,63 @@ test('payload files a purge could not remove stay listed on its receipt and reco
   for (const sql of ["UPDATE brief_workflow_purges SET actor = 'someone' WHERE flow_id = ?", 'UPDATE brief_workflow_purges SET completed_at = NULL WHERE flow_id = ?']) {
     expect(() => getWorkflowDb().run(sql, [flow.id])).toThrow('workflow_history_retained');
   }
+});
+
+test('purged payloads do not survive in the database files once the purge commits', () => {
+  // A purge is the one delete a person asks for so the data is gone. Without
+  // secure_delete, SQLite only unlinks the rows: their bytes stay readable in
+  // free pages of vault.db and in old WAL frames until something reuses them.
+  const { flow, version } = restored();
+  const marker = `purge-marker-${crypto.randomUUID()}`;
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'SUCCEEDED' });
+  // One payload small enough to share a page with other rows, one large
+  // enough for overflow pages, which a delete hands to the freelist.
+  getWorkflowDb().run(`INSERT INTO trigger_event (id, flow_id, project_id, payload, created) VALUES ('event', ?, ?, ?, 1)`,
+    [flow.id, DEFAULT_IDS.project, JSON.stringify({ secret: marker })]);
+  getWorkflowDb().run(`INSERT INTO workflow_file (id, project_id, flow_id, type, data, size, created) VALUES ('file', ?, ?, 'FLOW_RUN_LOG', ?, 1, 1)`,
+    [DEFAULT_IDS.project, flow.id, Buffer.from(`${marker} `.repeat(2000))]);
+  getWorkflowDb().run(`INSERT INTO store_entry (id, project_id, key, value, created, updated) VALUES (?, ?, ?, ?, 1, 1)`,
+    [crypto.randomUUID(), DEFAULT_IDS.project, `flow_${flow.id}/k`, JSON.stringify(marker)]);
+  expect(getFlowRun(run.id)).not.toBeNull();
+  const onDisk = () => [file, `${file}-wal`].filter(existsSync).some(f => readFileSync(f).includes(marker));
+  // Not vacuous: the marker is on disk before the purge.
+  expect(onDisk()).toBe(true);
+
+  // A reader on another connection (a `jarvis backup`) pins the WAL: the
+  // purge does not wait for it, and the next recovery pass finishes the wipe.
+  const reader = new Database(file, { readonly: true });
+  try {
+    reader.run('BEGIN'); reader.query('SELECT COUNT(*) FROM flow').get();
+    const began = performance.now();
+    expect(purge(purgeCommand(flow.id)).status).toBe('accepted');
+    // Not the 5 s busy_timeout.
+    expect(performance.now() - began).toBeLessThan(4000);
+    expect(getFlow(flow.id)).toBeNull();
+    expect(onDisk()).toBe(true);
+  } finally { reader.run('COMMIT'); reader.close(); }
+  expect((getWorkflowDb().query('PRAGMA busy_timeout').get() as { timeout: number }).timeout).toBe(5000);
+  (service as unknown as { recover(): void }).recover();
+  expect(onDisk()).toBe(false);
+  expect((getWorkflowDb().query('PRAGMA busy_timeout').get() as { timeout: number }).timeout).toBe(5000);
+  // The setting is for the purge alone: other deletes keep SQLite's default.
+  expect((getWorkflowDb().query('PRAGMA secure_delete').get() as { secure_delete: number }).secure_delete).toBe(0);
+});
+
+test('a purge the last process could not wipe is wiped on the first pass after a start', () => {
+  const { flow, version } = restored();
+  const marker = `purge-marker-${crypto.randomUUID()}`;
+  createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'SUCCEEDED' });
+  getWorkflowDb().run(`INSERT INTO trigger_event (id, flow_id, project_id, payload, created) VALUES ('event', ?, ?, ?, 1)`,
+    [flow.id, DEFAULT_IDS.project, JSON.stringify({ secret: marker })]);
+  const onDisk = () => [file, `${file}-wal`].filter(existsSync).some(f => readFileSync(f).includes(marker));
+  const reader = new Database(file, { readonly: true });
+  try {
+    reader.run('BEGIN'); reader.query('SELECT COUNT(*) FROM flow').get();
+    expect(purge(purgeCommand(flow.id)).status).toBe('accepted');
+    expect(onDisk()).toBe(true);
+  } finally { reader.run('COMMIT'); reader.close(); }
+  // The process ends before a recovery pass (its pending wipe is lost with
+  // it); a new service on the same database starts with nothing to recover.
+  service.stop(); start();
+  expect(onDisk()).toBe(false);
 });
