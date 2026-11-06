@@ -181,6 +181,45 @@ describe('runFailure (Q-19)', () => {
       next: [{ step: 'run_again' }, { step: 'open_details' }] });
   });
 
+  const expressionError = (reason: string) => 'engine executor: run r ended FAILED at step "notify": WorkflowExpressionError: '
+    + `Unsupported workflow expression: ${reason} in {{ private_customer_email }}. token=secret-token\n    at /private/path/engine.js:1`;
+
+  test('an input expression that failed on its data names the change first, on every surface', () => {
+    const { run, fail } = setup('RUNNING', 'jarvisOnly');
+    const failure = runFailure(fail({ name: 'notify', displayName: 'Tell me', errorMessage: expressionError('output size limit') }))!;
+    // What took effect is unchanged: a Jarvis piece with no effect record sent nothing.
+    expect(failure).toMatchObject({ category: 'internal', effect: 'none', headline: 'The step "Tell me" failed.', outcome: 'Nothing was done.' });
+    expect(failure.next.map(n => n.step)).toEqual(['edit_and_run_again', 'open_details']);
+    expect(failure.next[0]!.label).toContain("Narrow the earlier step's output");
+    // Today's notice reads the same next step.
+    expect(runFailureNotice(run.id)).toBe(`The step "Tell me" failed. Nothing was done. ${failure.next[0]!.label}`);
+    const shown = JSON.stringify({ ...failure, detail: '' });
+    for (const secret of ['private_customer_email', 'secret-token', '/private/path', 'WorkflowExpressionError']) expect(shown).not.toContain(secret);
+  });
+
+  test('expression guidance never makes a step that may have acted read as one that did nothing', () => {
+    const { fail } = setup();
+    const failure = runFailure(fail({ name: 'code', displayName: 'Post to the ledger', errorMessage: expressionError('non-JSON object') }))!;
+    expect(failure).toMatchObject({ category: 'internal', effect: 'unknown' });
+    expect(failure.next.map(n => n.step)).toEqual(['edit_and_run_again', 'check_before_running_again', 'open_details']);
+    expect(failure.next[0]!.label).toContain('not plain JSON data');
+  });
+
+  test('expression guidance keeps the warning about earlier steps that already ran', () => {
+    const { run, fail } = setup('RUNNING', 'codeThenNotify');
+    updateRun(run.id, { steps: { code: { status: 'SUCCEEDED', output: {} } } });
+    const failure = runFailure(fail({ name: 'notify', displayName: 'Tell me', errorMessage: expressionError('accessor property') }))!;
+    expect(failure.effect).toBe('partial');
+    expect(failure.next.map(n => n.step)).toEqual(['edit_and_run_again', 'check_earlier_steps', 'open_details']);
+  });
+
+  test('a typed outcome on the step decides the reading, not a message that quotes an expression failure', () => {
+    const { effect, fail } = setup('RUNNING', 'jarvisOnly');
+    effect('notify', { status: 'unknown', outcome: { status: 'unknown', code: 'DISPATCH_UNCERTAIN', message: 'x', effect: 'may_have_occurred' } });
+    const failure = runFailure(fail({ name: 'notify', displayName: 'Tell me', errorMessage: expressionError('non-JSON object') }))!;
+    expect(failure.next.some(n => n.step === 'edit_and_run_again')).toBe(false);
+  });
+
   test('a loop step that failed may follow untracked steps later in the same loop body', () => {
     const flow = createFlow({});
     const loop = { name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.items}}' },

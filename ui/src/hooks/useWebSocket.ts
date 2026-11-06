@@ -677,6 +677,8 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
   const [goalEvents, setGoalEvents] = useState<GoalEvent[]>([]);
   const [siteEvents, setSiteEvents] = useState<SiteEvent[]>([]);
   const [settingsEvents, setSettingsEvents] = useState<SettingsAppliedEvent[]>([]);
+  // Counts the daemon's emergency_state broadcasts; readers re-read the status on each change.
+  const [emergencyRevision, setEmergencyRevision] = useState(0);
   const [notices, setNotices] = useState<SystemNotice[]>([]);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [clarifiers, setClarifiers] = useState<PendingClarifier[]>([]);
@@ -1200,6 +1202,8 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
             timestamp: msg.timestamp,
           },
         ]);
+      } else if (payload.source === "emergency_state") {
+        setEmergencyRevision((n) => n + 1);
       } else if (payload.source === "approval_request") {
         const pending = pendingApprovalFrom(payload, msg.timestamp);
         if (pending) {
@@ -1503,7 +1507,7 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
   }, []);
 
   return {
-    messages, isConnected, sendMessage, cancelResponse, isResponding, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents, settingsEvents, notices, dismissNotice,
+    messages, isConnected, sendMessage, cancelResponse, isResponding, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents, settingsEvents, emergencyRevision, notices, dismissNotice,
     approvals,
     clarifiers,
     repeatBacks,
