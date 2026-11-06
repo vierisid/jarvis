@@ -831,3 +831,75 @@ describe('#1156: an assistant transcript names the utterance it answers', () => 
     expect(got).toEqual([{ role: 'assistant', text: 'Hello.', final: true }]);
   });
 });
+
+describe('#1156: isVoicing, which a restart waits on', () => {
+  const audio = (ms: number) => Buffer.alloc(ms * 48).toString('base64');
+
+  test('covers the restart call, its voiced answer, and that answer playing out', async () => {
+    let t = 1_000;
+    const { socket, session } = makeSession({ now: () => t });
+    // RealtimeVoiceSession always registers one; a call is only awaited then.
+    session.onFunctionCall(() => {});
+    await session.connect();
+    expect(session.isVoicing).toBe(false);
+    // The model asks for restart_daemon.
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_item.added', item: { type: 'function_call', name: 'navigate', call_id: 'c1' } });
+    socket.emit({ type: 'response.function_call_arguments.done', call_id: 'c1', arguments: '{}' });
+    socket.emit({ type: 'response.done', response: {} });
+    // The route runs here: the call has no result yet, so the answer is still to come.
+    expect(session.isVoicing).toBe(true);
+    session.sendFunctionResult('c1', 'Restarting Jarvis.');
+    expect(session.isVoicing).toBe(true);
+    socket.emit({ type: 'response.created' });
+    expect(session.isVoicing).toBe(true);
+    socket.emit({ type: 'response.output_audio.delta', item_id: 'a1', content_index: 0, delta: audio(3000) });
+    socket.emit({ type: 'response.done', response: {} });
+    // Sent whole, but 3s of it can still be playing.
+    t += 2_999;
+    expect(session.isVoicing).toBe(true);
+    t += 1;
+    expect(session.isVoicing).toBe(false);
+  });
+
+  test('an answer held back while the person talks is still to come', async () => {
+    const { socket, session } = makeSession();
+    session.onFunctionCall(() => {});
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.function_call_arguments.done', call_id: 'c1', name: 'navigate', arguments: '{}' });
+    socket.emit({ type: 'response.done', response: {} });
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'u2' });
+    session.sendFunctionResult('c1', 'Restarting Jarvis.');
+    // Not requested yet (the user has the turn), but it will be voiced.
+    expect(session.isVoicing).toBe(true);
+  });
+
+  test('a newer response does not hide a result still to come', async () => {
+    const { socket, session } = makeSession();
+    session.onFunctionCall(() => {});
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.function_call_arguments.done', call_id: 'c1', name: 'navigate', arguments: '{}' });
+    socket.emit({ type: 'response.done', response: {} });
+    // A response of its own (a barge-in, an echo) runs and ends while the
+    // room action is out; it clears the calls that gate response.create.
+    socket.emit({ type: 'input_audio_buffer.speech_started', item_id: 'u2' });
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.done', response: {} });
+    expect(session.isVoicing).toBe(true);
+    session.sendFunctionResult('c1', 'Restarting Jarvis.');
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.done', response: {} });
+    expect(session.isVoicing).toBe(false);
+  });
+
+  test('a closed session is never voicing', async () => {
+    const { socket, session } = makeSession();
+    await session.connect();
+    socket.emit({ type: 'response.created' });
+    expect(session.isVoicing).toBe(true);
+    socket.close();
+    expect(session.isVoicing).toBe(false);
+  });
+});
