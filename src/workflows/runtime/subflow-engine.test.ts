@@ -36,9 +36,12 @@ import {createManageWorkflowTool} from '../../actions/tools/manage-workflow';
 import {getWorkflowDb} from '../db';
 import {createWaitpoint} from '../db/repos/waitpoint';
 import {cancelFlowRun} from '../db/repos/run-cancellation';
+import {resumeCompletedChildRuns} from './child-run-scheduler';
 import {resumeSubflowCalls} from '../db/repos/subflow';
 import {parentTestGraph,childTestGraph} from './subflow-test-data';
 import {configuredSubflowGraphs,validateSubflowFixtures} from './subflow-fixtures';
+import {HUMAN_INPUT_PIECE} from './human-input-contract';
+import {listHumanInputs,resolveHumanInput,resumeHumanInputs} from './human-input';
 import {SUBFLOW_PIECE} from './subflow-contract';
 import {JarvisWorkflowRunnerAdapter} from '../adapters/workflow-runner';
 
@@ -49,6 +52,8 @@ let now=Date.now(),mode='success';
 beforeAll(async()=>{
  dir=mkdtempSync(join(tmpdir(),'jarvis-subflow-engine-'));initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,79));
  const bundle=await buildEngineBundle(),path=join(import.meta.dir,'../activepieces/packages/pieces/jarvis/subflow');await buildPiece(path);
+ const inputPath=join(import.meta.dir,'../activepieces/packages/pieces/jarvis/input');await buildPiece(inputPath);
+ const inputMeta=JSON.parse(readFileSync(join(inputPath,'package.json'),'utf8')),inputInstalled=join(dir,'node_modules',inputMeta.name);mkdirSync(dirname(inputInstalled),{recursive:true});symlinkSync(join(inputPath,'dist'),inputInstalled,'dir');
  const delayPath=join(import.meta.dir,'../activepieces/packages/pieces/core/delay');await buildPiece(delayPath);
  const delayMeta=JSON.parse(readFileSync(join(delayPath,'package.json'),'utf8')),delayInstalled=join(dir,'node_modules',delayMeta.name);mkdirSync(dirname(delayInstalled),{recursive:true});symlinkSync(join(delayPath,'dist'),delayInstalled,'dir');
  const meta=JSON.parse(readFileSync(join(path,'package.json'),'utf8')),installed=join(dir,'node_modules',meta.name);mkdirSync(dirname(installed),{recursive:true});symlinkSync(join(path,'dist'),installed,'dir');
@@ -60,7 +65,7 @@ beforeAll(async()=>{
   return returned(mode==='invalid'?{result:{unexpected:true}}:input,ctx);
  };
  api=new SandboxApi({services});await api.start({port:0});runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
- const handle=await runtime.acquire({runId:'subflow-metadata',projectId:DEFAULT_IDS.project});try{const entries=[metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName:meta.name,pieceVersion:meta.version})),metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName:delayMeta.name,pieceVersion:delayMeta.version}))];catalog=new PieceCatalog(entries);configureWorkflowReadiness({pieces:catalog});if(process.env.JARVIS_SUBFLOW_CATALOG_EXPORT)writeFileSync(process.env.JARVIS_SUBFLOW_CATALOG_EXPORT,JSON.stringify(entries));}finally{await handle.release();}
+ const handle=await runtime.acquire({runId:'subflow-metadata',projectId:DEFAULT_IDS.project});try{const entries=[metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName:inputMeta.name,pieceVersion:inputMeta.version})),metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName:meta.name,pieceVersion:meta.version})),metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName:delayMeta.name,pieceVersion:delayMeta.version}))];catalog=new PieceCatalog(entries);configureWorkflowReadiness({pieces:catalog});if(process.env.JARVIS_SUBFLOW_CATALOG_EXPORT)writeFileSync(process.env.JARVIS_SUBFLOW_CATALOG_EXPORT,JSON.stringify(entries));}finally{await handle.release();}
  worker=new Worker({log:()=>{},handlers:{[RUN_FLOW]:createRunFlowHandler({executor:new EngineFlowExecutor(runtime),now:()=>now})}});
 },120_000);
 afterAll(async()=>{await runtime?.shutdown();await api?.stop();closeWorkflowDb();setEncryptionKey(null);for(const id of runIds)rmSync(join(workflowLogsBase(),id+'.bin'),{force:true});if(dir)rmSync(dir,{recursive:true,force:true});});
@@ -238,4 +243,38 @@ for (const value of [
  closeWorkflowDb();initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,79));configureWorkflowReadiness({pieces:catalog});
  const final=await finish(first.id);expect(final.status).toBe('SUCCEEDED');expect(consume(final)).toEqual(value);
  const replay=await run(f.parent.id,pv.id);expect(replay.status).toBe('SUCCEEDED');expect(consume(replay)).toEqual(value);expect(f.children()).toHaveLength(1);
+});
+
+async function sharedApprovalFixture() {
+ const f=await fixture();
+ const graph=structuredClone(f.cv.trigger);
+ graph.nextAction={name:'review',type:'PIECE',settings:{pieceName:HUMAN_INPUT_PIECE,pieceVersion:'0.0.1',actionName:'request_approval',input:{title:'Shared child review',prompt:'Approve this synthetic child',requestKey:'review',timeoutHours:1}},nextAction:graph.nextAction};
+ const cv=createDraftVersion({flowId:f.child.id,displayName:'Shared child approval',trigger:graph});lockVersion(cv.id);setPublishedVersion(f.child.id,cv.id);
+ return f;
+}
+for(const canceledIndex of [0,1]) test(`cancel shared parent ${canceledIndex}: the surviving parent can approve after database reopen`,async()=>{
+ const f=await sharedApprovalFixture(),parents=[await f.run(),await f.run()],child=f.children()[0]!;
+ expect(parents.map(r=>r.status)).toEqual(['PAUSED','PAUSED']);expect(f.children()).toHaveLength(1);expect(child.status).toBe('PAUSED');
+ expect(cancelFlowRun(parents[canceledIndex]!.id).accepted).toBe(true);
+ resumeCompletedChildRuns();
+ expect(getFlowRun(child.id)?.status).toBe('PAUSED');
+ closeWorkflowDb();initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,79));configureWorkflowReadiness({pieces:catalog});
+ resumeCompletedChildRuns();
+ const request=listHumanInputs(DEFAULT_IDS.project).find(r=>r.runId===child.id)!;
+ expect(request.status).toBe('pending');expect(resolveHumanInput(DEFAULT_IDS.project,request.id,{decision:'approve',generation:request.generation??0}).status).toBe(200);
+ resumeHumanInputs();await worker.drain();expect(getFlowRun(child.id)?.status).toBe('SUCCEEDED');
+ expect((await finish(parents[1-canceledIndex]!.id)).status).toBe('SUCCEEDED');expect(getFlowRun(parents[canceledIndex]!.id)?.status).toBe('STOPPED');expect(f.children()).toHaveLength(1);
+});
+for(const order of [[0,1],[1,0]]) test(`last shared parent cancellation closes child and approval: ${order}`,async()=>{
+ const f=await sharedApprovalFixture(),parents=[await f.run(),await f.run()],child=f.children()[0]!;
+ cancelFlowRun(parents[order[0]!]!.id);expect(getFlowRun(child.id)?.status).toBe('PAUSED');
+ cancelFlowRun(parents[order[1]!]!.id);expect(getFlowRun(child.id)?.status).toBe('STOPPED');
+ expect(listHumanInputs(DEFAULT_IDS.project).find(r=>r.runId===child.id)?.status).toBe('cancelled');
+ resumeSubflowCalls(now);
+ for(const parent of parents)expect(getWorkflowDb().query("SELECT id FROM workflow_job WHERE flow_run_id=? AND status='QUEUED'").all(parent.id)).toHaveLength(0);
+});
+test('explicit child cancellation still stops a child shared by live parents',async()=>{
+ const f=await sharedApprovalFixture(),parents=[await f.run(),await f.run()],child=f.children()[0]!;
+ expect(cancelFlowRun(child.id).accepted).toBe(true);expect(getFlowRun(child.id)?.status).toBe('STOPPED');
+ for(const parent of parents)expect((await finish(parent.id)).status).toBe('FAILED');
 });
