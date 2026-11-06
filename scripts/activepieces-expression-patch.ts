@@ -1,5 +1,10 @@
 /** Exact replacements fail a vendor sync if the supported expression boundary drifts. */
 export const expressionPatches = {
+  "packages/server/engine/src/lib/handler/context/flow-execution-context.ts": [
+    ["import { StepExecutionPath } from './step-execution-path'", "import { StepExecutionPath } from './step-execution-path'\nimport { stepExpressionOutput } from '../../../../../../../../runtime/engine-expression-data'"],
+    ['acc[stepName] = step.output', 'acc[stepName] = stepExpressionOutput(step)'],
+  ],
+
   'packages/server/engine/src/lib/core/code/no-op-code-sandbox.ts': [
     ["import { CodeSandbox } from '../../core/code/code-sandbox-common'", "import type { CodeSandbox } from '../../core/code/code-sandbox-common'"],
     ["import { spawn } from 'node:child_process'", "import { spawn } from 'node:child_process'\nimport { evaluateWorkflowExpression } from '../../../../../../../../runtime/safe-expression'"],
