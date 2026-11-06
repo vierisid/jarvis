@@ -126,19 +126,27 @@ export function cancelFlowRun(runId: string, opts: { reason?: string; reasonLabe
   const result = db.transaction(() => {
     const result = stop(runId);
     if (!result.accepted) return result;
-    // Required descendants share the parent's stop decision. Independent
-    // fire-and-forget children retain their existing lifecycle.
+    // A reusable invocation can have several parents. Follow every subscriber,
+    // not just the original effect owner, and stop a child only after its last
+    // live waiter has stopped. Explicit cancellation of the root still wins.
+    // Only mark stopped children visited: a retained child must be reconsidered
+    // if another parent later in this traversal is stopped too.
     const visited = new Set([runId]);
     const descendants = [runId];
     for (let i = 0; i < descendants.length; i++) {
-      const children = db.query(`SELECT c.child_run_id FROM workflow_child_run c
-        JOIN workflow_effect e ON e.id=c.effect_id JOIN flow_run r ON r.id=c.child_run_id
-        WHERE e.run_id=? AND c.waitpoint_id IS NOT NULL`).all(descendants[i]!) as Array<{ child_run_id: string }>;
+      const children = db.query<{ child_run_id: string }, [string]>(`
+        SELECT c.child_run_id FROM workflow_child_run c
+        JOIN workflow_effect e ON e.id=c.effect_id JOIN flow_run child ON child.id=c.child_run_id
+        WHERE e.run_id=?1 AND c.waitpoint_id IS NOT NULL
+        UNION
+        SELECT c.child_run_id FROM workflow_subflow_call c
+        JOIN workflow_subflow_wait w ON w.call_id=c.id JOIN flow_run child ON child.id=c.child_run_id
+        WHERE w.parent_run_id=?1`).all(descendants[i]!);
       for (const child of children) {
         if (visited.has(child.child_run_id)) continue;
+        if (hasLiveSubflowWaiter(child.child_run_id)) continue;
         visited.add(child.child_run_id);
-        descendants.push(child.child_run_id);
-        stop(child.child_run_id);
+        if (stop(child.child_run_id).accepted) descendants.push(child.child_run_id);
       }
     }
     return result;
@@ -146,6 +154,18 @@ export function cancelFlowRun(runId: string, opts: { reason?: string; reasonLabe
   // Never announce cancellation until the entire tree transaction commits.
   for (const id of stopped) signalRunCanceled(id);
   return result;
+}
+
+/** Shared ownership used by explicit cancellation and the abandoned-child sweep. */
+export function hasLiveSubflowWaiter(childRunId: string): boolean {
+  return !!getWorkflowDb().query(`SELECT 1 FROM workflow_subflow_call c
+    JOIN workflow_subflow_wait w ON w.call_id=c.id
+    JOIN waitpoint p ON p.id=w.waitpoint_id
+    JOIN flow_run r ON r.id=w.parent_run_id JOIN flow f ON f.id=r.flow_id
+    WHERE c.child_run_id=? AND c.result_json IS NULL AND p.resumed_at IS NULL
+      AND r.status IN ('QUEUED','RUNNING','PAUSED')
+      AND NOT (f.disabled_at IS NOT NULL AND r.created<=f.disabled_at)
+    LIMIT 1`).get(childRunId);
 }
 
 /** Upgrade canceled jobs left by older daemons without reviving finished runs. */
