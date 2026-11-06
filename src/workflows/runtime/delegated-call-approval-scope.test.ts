@@ -5,12 +5,12 @@ import { join } from 'node:path';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb, DEFAULT_IDS } from '../db';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion, type FlowTriggerNode } from '../db/repos/flow-version';
-import { createFlowRun, updateRun } from '../db/repos/flow-run';
+import { createFlowRun, getFlowRun, updateRun } from '../db/repos/flow-run';
 import { cancelFlowRun } from '../db/repos/run-cancellation';
 import { deleteFlow } from '../db/repos/flow';
-import { stopRunsOfDeletedFlow } from '../db/repos/flow-turn-off';
+import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow } from '../db/repos/flow-turn-off';
 import { stopUnfinishedRunsForKill } from './emergency-hold';
-import { signalRunEnded } from './cancellation-signals';
+import { signalRunEnded, signalRunTurnedOff } from './cancellation-signals';
 import { withRunCancellation } from './cancellation';
 import { currentRunOwner } from '../../actions/run-owner-scope';
 import { listWorkflowEffects } from '../db/repos/workflow-effect';
@@ -23,7 +23,7 @@ import { approvalIntentFields } from '../../authority/approval-delivery';
 import { spendApproval } from '../../authority/approved-action-scope';
 import { checkpointExecution } from '../../actions/execution-scope';
 import { AgentOrchestrator } from '../../agents/orchestrator';
-import { AgentTaskManager, RUN_STOPPED_REASON } from '../../agents/task-manager';
+import { AgentTaskManager, RUN_STOPPED_REASON, RUN_TURNED_OFF_REASON } from '../../agents/task-manager';
 import { createManageAgentsTool, startPersistentAgent, type AgentToolDeps } from '../../actions/tools/agents';
 import { createDelegateTool } from '../../actions/tools/delegate';
 import type { RoleDefinition } from '../../roles/types';
@@ -220,6 +220,38 @@ describe('an approved workflow-delegated call is not asked again at the spawn si
     expect(stopRunsOfDeletedFlow(t.f.run.flowId)).toBe(1);
     deleteFlow(t.f.run.flowId);
     expect(await t.status()).toMatchObject({ status: 'cancelled', cancelRequested: RUN_STOPPED_REASON });
+  });
+
+  // Owner, 2026-11-06 (#1152): the run goes on (Q-06), what it started does not.
+  test('turning the workflow off while its run executes cancels the task the run started, and the run keeps executing (#1152)', async () => {
+    const t = await ownedTask();
+    getWorkflowDb().run("UPDATE flow SET status = 'DISABLED', disabled_at = ? WHERE id = ?", [Date.now() + 1, t.f.run.flowId]);
+    expect(stopRunsOfTurnedOffFlow(t.f.run.flowId)).toBe(0);
+    expect(await t.status()).toMatchObject({ status: 'cancelled', cancelRequested: RUN_TURNED_OFF_REASON });
+    expect(getFlowRun(t.f.run.id)!.status).toBe('RUNNING');
+  });
+
+  test('a run that ended on its own keeps its task running when its workflow is turned off later (#1152)', async () => {
+    const t = await ownedTask();
+    updateRun(t.f.run.id, { status: 'SUCCEEDED', finishTime: Date.now() });
+    signalRunEnded(t.f.run.id);
+    getWorkflowDb().run("UPDATE flow SET status = 'DISABLED', disabled_at = ? WHERE id = ?", [Date.now() + 1, t.f.run.flowId]);
+    stopRunsOfTurnedOffFlow(t.f.run.flowId);
+    // Even a turn-off signal that reached this run would find its task released.
+    signalRunTurnedOff(t.f.run.id);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(t.s.taskManager.getTask(t.task.id)!.status).toBe('running');
+    t.s.taskManager.cancel(t.task.id);
+  });
+
+  test('a run started after its workflow was turned off is not told, and its task keeps running (#1152)', async () => {
+    const t = await ownedTask();
+    // The run was created after the turn-off (a test run of a workflow that is off).
+    getWorkflowDb().run("UPDATE flow SET status = 'DISABLED', disabled_at = ? WHERE id = ?", [getFlowRun(t.f.run.id)!.created - 1, t.f.run.flowId]);
+    expect(stopRunsOfTurnedOffFlow(t.f.run.flowId)).toBe(0);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(t.s.taskManager.getTask(t.task.id)!.status).toBe('running');
+    t.s.taskManager.cancel(t.task.id);
   });
 
   test('Kill stops the run and cancels the task the run started (#1018, Q-08)', async () => {

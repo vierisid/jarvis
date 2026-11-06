@@ -34,6 +34,9 @@ import { TriggerManager } from "./manager";
 import { scheduleZoneWarning } from "./schedule-zone";
 import { getScheduleWatch, setScheduleWatch } from "../../db/repos/trigger-fire";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
+import { createWaitpoint } from "../../db/repos/waitpoint";
+import { saveWorkflowEffect } from "../../db/repos/workflow-effect";
+import { MAX_DEFERRED_STEPS_PER_FLOW } from "../../runtime/deferred-cards";
 
 const silent = () => undefined;
 const at = (iso: string) => Date.parse(iso);
@@ -819,6 +822,108 @@ describe("through the engine, as production runs triggers", () => {
     expect(enables()).toBe(1);
     await save({ ...trigger, settings: { ...trigger.settings, input: { eventType: "y" } } });
     expect(enables()).toBe(2);
+    await d.stop();
+  });
+});
+
+describe("a flow whose runs are parked behind its approval cards (#1152)", () => {
+  /** `n` runs of the flow, each parked on a DEFER waiting for a place in its card budget. */
+  function park(flowId: string, versionId: string, n: number, budget: "start" | "other" = "other") {
+    const ids: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const run = createFlowRun({ flowId, flowVersionId: versionId, status: "PAUSED" });
+      const wp = createWaitpoint({ flowRunId: run.id, projectId: run.projectId, stepName: "send", type: "DEFER" });
+      saveWorkflowEffect({ id: `wfe_${run.id}`, runId: run.id, projectId: run.projectId, flowId, versionId, versionDigest: "v",
+        stepName: "send", executionPath: [], route: "piece", toolName: "t", actionCategory: "send_message", requestDigest: "r",
+        arguments: {}, target: {}, provenance: {}, decision: "unresolved", reason: "", status: "pending", approvalId: null,
+        waitpointId: wp.id, createdAt: Date.now(), deferral: { budget, since: Date.now() - n + i } });
+      ids.push(run.id);
+    }
+    return ids;
+  }
+
+  test("a webhook is told to retry once the backlog is full, recorded as skipped; it runs again once a wait clears", async () => {
+    const { flowId, versionId } = webhook();
+    const d = await daemon(Date.now());
+    const parked = park(flowId, versionId, MAX_DEFERRED_STEPS_PER_FLOW - 1, "other");
+    expect(await (await post(d, flowId, "{}", { "Idempotency-Key": "a" })).json()).toMatchObject({ outcome: "started" });
+    // Both budgets count: the last place is a start waiting.
+    parked.push(...park(flowId, versionId, 1, "start"));
+    const before = runsOf(flowId).length;
+    const busy = await post(d, flowId, "{}", { "Idempotency-Key": "b" });
+    expect(busy.status).toBe(503);
+    expect(busy.headers.get("Retry-After")).toBe("60");
+    // The sender holds nothing but the URL: why stays in the delivery record.
+    expect(JSON.stringify(await busy.json())).not.toMatch(/approval|waiting/i);
+    expect(runsOf(flowId)).toHaveLength(before);
+    expect(listFlowFires(flowId)[0]).toMatchObject({ label: "skipped", detail: { code: "APPROVALS_BACKLOG",
+      reason: expect.stringMatching(/^100 or more steps of this workflow are already waiting .* The sender was asked to retry\.$/) } });
+    // A run that stops no longer holds a place; the sender's retry runs.
+    expect(cancelFlowRun(parked[0]!).accepted).toBe(true);
+    expect(await (await post(d, flowId, "{}", { "Idempotency-Key": "b" })).json()).toMatchObject({ outcome: "started" });
+    await d.stop();
+  });
+
+  test("a scheduled time is skipped and keyed, an event skipped, both recorded; a run started by hand is not refused", async () => {
+    setCronTimezone("UTC");
+    const timed = schedule("0 9 * * *");
+    park(timed.flowId, timed.versionId, MAX_DEFERRED_STEPS_PER_FLOW);
+    const evented = publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType: "commitment.overdue" } } });
+    park(evented.flowId, evented.versionId, MAX_DEFERRED_STEPS_PER_FLOW);
+    const d = await daemon(at("2026-10-07T08:59:50Z"));
+    const runs = (flowId: string) => runsOf(flowId).filter(r => r.status !== "PAUSED");
+    d.tick(timed.flowId, "2026-10-07T09:00:10Z");
+    d.bus.publish("commitment.overdue", { id: "c-1", what: "Call", when_due: 1000 });
+    expect(runs(timed.flowId)).toHaveLength(0);
+    expect(runs(evented.flowId)).toHaveLength(0);
+    expect(listFlowFires(timed.flowId)[0]).toMatchObject({ label: "skipped", dedupeKey: "2026-10-07T09:00", detail: { code: "APPROVALS_BACKLOG" } });
+    expect(listFlowFires(evented.flowId)[0]).toMatchObject({ label: "skipped", detail: { code: "APPROVALS_BACKLOG" } });
+    // Manual runs are the owner's own: not refused at trigger intake.
+    const manual = await createWorkflowRoutes({ triggerManager: d.manager })["/api/workflows/:id/run"]!.POST!(Object.assign(
+      new Request(`http://localhost/api/workflows/${timed.flowId}/run`, { method: "POST", body: "{}" }), { params: { id: timed.flowId } }));
+    expect(manual.status).toBeLessThan(300);
+    await d.stop();
+  });
+
+  test("an event source is not polled while the backlog is full, so it keeps its items; items a poll already took still run", async () => {
+    setCronTimezone("UTC");
+    let polls = 0;
+    let during: () => void = () => undefined;
+    let items: unknown[] = [];
+    const item = (n: string) => ({ id: n, eventType: "observer.email_received", payload: { id: `m-${n}`, _eventKey: `email:m-${n}` }, timestamp: 1, _dedupe_key: n });
+    const { engine } = stubEngine({ enable: { listeners: [], scheduleOptions: { cronExpression: "* * * * *" } }, poll: () => { polls++; during(); return items; } });
+    const { flowId, versionId } = publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType: "observer.email_received" } } });
+    const piece = publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "@activepieces/piece-schedule", triggerName: "cron_expression", input: { cronExpression: "* * * * *", timezone: "UTC" } } });
+    const parked = park(flowId, versionId, MAX_DEFERRED_STEPS_PER_FLOW);
+    park(piece.flowId, piece.versionId, MAX_DEFERRED_STEPS_PER_FLOW);
+    const d = await daemon(at("2026-10-07T09:00:00Z"), engine);
+    await d.poll(flowId, "2026-10-07T09:00:10Z");
+    await d.poll(piece.flowId, "2026-10-07T09:00:10Z");
+    expect(polls).toBe(0);
+    expect(listFlowFires(flowId)).toEqual([]);
+    expect(listFlowFires(piece.flowId)).toEqual([expect.objectContaining({ label: "skipped", detail: { reason: expect.stringContaining("are already waiting for a place") } })]);
+    // A wait clears: the source is polled again. The backlog fills again while
+    // that poll runs: what it already took is started, not dropped.
+    expect(cancelFlowRun(parked[0]!).accepted).toBe(true);
+    during = () => { park(flowId, versionId, 1); };
+    items = [item("1"), item("2")];
+    await d.poll(flowId, "2026-10-07T09:01:10Z");
+    expect(polls).toBe(1);
+    expect(listFlowFires(flowId).map(f => f.runId && getFlowRun(f.runId)!.status)).toEqual(["QUEUED", "QUEUED"]);
+    await d.stop();
+  });
+
+  test("waits of runs that ended, or whose DEFER was released and not woken, do not count", async () => {
+    const { flowId, versionId } = webhook();
+    const d = await daemon(Date.now());
+    const parked = park(flowId, versionId, MAX_DEFERRED_STEPS_PER_FLOW);
+    updateRun(parked[0]!, { status: "FAILED", finishTime: Date.now() });
+    expect(await (await post(d, flowId, "{}", { "Idempotency-Key": "a" })).json()).toMatchObject({ outcome: "started" });
+    getWorkflowDb().run("UPDATE waitpoint SET resumed_at = ? WHERE flow_run_id = ?", [Date.now(), parked[1]!]);
+    park(flowId, versionId, 1);
+    expect(await (await post(d, flowId, "{}", { "Idempotency-Key": "b" })).json()).toMatchObject({ outcome: "started" });
+    park(flowId, versionId, 1);
+    expect((await post(d, flowId, "{}", { "Idempotency-Key": "c" })).status).toBe(503);
     await d.stop();
   });
 });

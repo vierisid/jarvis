@@ -177,6 +177,7 @@ import { createPieceLibraryChangeHandler } from "../workflows/runtime/piece-libr
 import { resolveSharedRuntimePaths } from "../workflows/runtime/shared-runtime-paths.ts";
 import { DEFAULT_IDS } from "../workflows/db/schema.ts";
 import { buildSandboxServiceBackends } from "../workflows/runtime/service-backends.ts";
+import { HUMAN_INPUT_UNAVAILABLE_MESSAGE } from "../workflows/runtime/human-input-contract.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 import { createLimiter } from "../util/concurrency.ts";
 import { runWithOrigin } from "../llm/origin.ts";
@@ -5596,6 +5597,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const agentSpecialists = agentService.getSpecialists();
       const backends = buildSandboxServiceBackends({
         decisionDocumentsEnabled: briefCapabilities.snapshot().capabilities.decisionEdits.enabled,
+        // Input and approval requests are answered in Needs you (#1266): with
+        // decisions off nothing could answer one, so a step that asks fails now.
+        humanInputUnavailable: () => briefCapabilities.snapshot().capabilities.decisions.enabled ? null : HUMAN_INPUT_UNAVAILABLE_MESSAGE,
         credentialResolver: workflowSandboxApi.services.credentialResolver,
         llmManager: agentService.getLLMManager(),
         ...(toolRegistry ? { toolRegistry } : {}),

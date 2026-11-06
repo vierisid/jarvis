@@ -8,7 +8,8 @@ import { digest, resolveEffectContext, type WorkflowEffectContext } from './effe
 import { assertRunNotCanceled } from './cancellation';
 import { claimContinuation } from './continuation';
 import { emergencyHold } from './emergency-hold';
-import { HUMAN_INPUT_PIECE, answerErrors, formFields, humanRequestDismissable, type HumanRequest } from './human-input-contract';
+import { ActionOutcomeError } from '../../actions/action-outcome';
+import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_PENDING_LIMIT, HUMAN_INPUT_PIECE, HUMAN_INPUT_UNAVAILABLE_CODE, answerErrors, isHumanInputStep, formFields, humanRequestDismissable, type HumanRequest } from './human-input-contract';
 
 type Row = { id: string; project_id: string; flow_id: string; fingerprint: string; record: string; status: HumanRequest['status']; deadline: number; closed_at: number | null };
 const row = (id: string) => getWorkflowDb().query<Row, [string]>('SELECT * FROM workflow_human_request WHERE id=?').get(id);
@@ -48,14 +49,19 @@ function text(value: unknown, name: string, max: number): string {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw Error(`${name} is required (maximum ${max} characters)`);
   return value;
 }
-/** Only the actual pinned input/approval step may create or consume a request. */
-export async function requestHumanInput(input: Record<string, unknown>, ctx: WorkflowEffectContext, now = Date.now()) {
+/**
+ * Only the actual pinned input/approval step may create or consume a request.
+ * `unavailable` is why nothing on this Jarvis could answer a new request
+ * (Needs you is off, #1266): a step that would create one is refused, typed.
+ * A request that already exists is still read, so an answered one is used.
+ */
+export async function requestHumanInput(input: Record<string, unknown>, ctx: WorkflowEffectContext, now = Date.now(),
+  opts: { unavailable?: string | null } = {}) {
   const run = getFlowRun(ctx.runId), version = run && getFlowVersion(run.flowVersionId);
   const node = version && walkFlowNodes(version.trigger).find(n => n.name === ctx.stepName);
   const piece = node?.settings?.pieceName, action = node?.settings?.actionName;
   const legacy = piece === '@activepieces/piece-approval';
-  if (!(piece === HUMAN_INPUT_PIECE && ['request_input', 'request_approval'].includes(String(action)))
-    && !(legacy && ['create_approval_links', 'wait_for_approval'].includes(String(action)))) throw Error('Not a human input step');
+  if (!isHumanInputStep(piece, action)) throw Error('Not a human input step');
   const resolved = resolveEffectContext(ctx, String(piece), String(action));
   assertRunNotCanceled(ctx.runId);
   if (turnedOffReason(ctx.runId)) throw Error('Workflow was turned off');
@@ -108,8 +114,14 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
       // A reopened form is a new instance: earlier waits keep the outcome they had.
       const previous = existing ? unpack(existing) : null;
       const instance = previous ? { generation: generationOf(previous) + 1, reopenedFrom: previous.status } : {};
-      const pending = db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM workflow_human_request WHERE flow_id=? AND status='pending'").get(run!.flowId)!.count;
-      if (pending >= 20) throw Error('This workflow already has 20 unanswered requests. Respond or cancel them before creating more.');
+      // Typed refusals, so the failed run reads as what it is (run-failure.ts), not as an internal error to run again.
+      if (opts.unavailable) throw new ActionOutcomeError({ status: 'blocked', code: HUMAN_INPUT_UNAVAILABLE_CODE, effect: 'not_started', message: opts.unavailable });
+      // Only requests someone can still answer count: not one past its
+      // deadline or whose runs all ended, which the next sweep closes.
+      const pending = db.query<{ count: number }, [string, number]>(`SELECT COUNT(*) AS count FROM workflow_human_request h
+        WHERE h.flow_id=? AND h.status='pending' AND h.deadline > ? AND EXISTS (${LIVE_RUN} AND ${INSTANCE_RUN})`).get(run!.flowId, now)!.count;
+      if (pending >= HUMAN_INPUT_PENDING_LIMIT) throw new ActionOutcomeError({ status: 'blocked', code: HUMAN_INPUT_LIMIT_CODE, effect: 'not_started',
+        message: `This workflow already has ${pending} requests waiting for an answer in Needs you (the limit is ${HUMAN_INPUT_PENDING_LIMIT}). Answer, reject or cancel some of them in Needs you, or stop runs that are waiting on them, then run it again.` });
       const request: HumanRequest = { id, ...config, kind, workflowName: resolved.version.displayName, flowId: run!.flowId,
         runId: ctx.runId, created: now, deadline: now + timeoutHours * 3600000, status: 'pending', answers: null, ...instance };
       db.run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status) VALUES (?,?,?,?,?,?,?)

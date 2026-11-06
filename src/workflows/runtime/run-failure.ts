@@ -29,6 +29,7 @@ import { walkFlowNodes } from '../db/flow-graph';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import { nodeConnectionReferences, type RunConnectionBindingView } from '../db/repos/binding-pins';
 import { expressionFailureGuidance } from './expression-failure';
+import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, isHumanInputStep } from './human-input-contract';
 
 const ENDED_BADLY = new Set(['FAILED', 'TIMEOUT', 'INTERNAL_ERROR', 'QUOTA_EXCEEDED', 'MEMORY_LIMIT_EXCEEDED', 'SCHEDULE_FAILURE', 'STOPPED']);
 
@@ -125,6 +126,29 @@ function credentialFailureFor(run: FlowRun, node: FlowTriggerNode): RunConnectio
   return bindings.find(binding => binding.credentialFailure) ?? null;
 }
 
+/** The typed refusals of a human input step (#1266). */
+const HUMAN_INPUT_REFUSALS = [HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE];
+const HUMAN_INPUT_REFUSAL = new RegExp(`"outcome":\\s*\\{[^{}]*"code":\\s*"(${HUMAN_INPUT_REFUSALS.join('|')})"`);
+
+/**
+ * #1266: a human input step refused before it asked anyone: its workflow
+ * already has as many requests waiting as it may, or nothing on this Jarvis
+ * could answer one. The step leaves no effect record, so its typed refusal
+ * reaches the run only in the engine's step error, as the sandbox API's
+ * `{ error, outcome }` body; it is read from there for those steps and those
+ * codes only. The input piece's one call is to Jarvis's own human-input
+ * route, so the body carrying the code is Jarvis's.
+ */
+function humanInputRefusal(node: FlowTriggerNode | undefined, message: string | undefined): ActionFailure | null {
+  if (!node || !isHumanInputStep(node.settings?.pieceName, node.settings?.actionName) || message === undefined) return null;
+  const code = HUMAN_INPUT_REFUSAL.exec(message)?.[1];
+  if (!code) return null;
+  const said = /"error":\s*"((?:[^"\\]|\\.)*)"/.exec(message);
+  let text = code;
+  try { if (said) text = JSON.parse(`"${said[1]}"`); } catch { /* keep the code */ }
+  return { status: 'blocked', code, effect: 'not_started', message: text };
+}
+
 /**
  * The failure of a run that ended badly, or null for one that did not. Pass
  * `effects` and `nodes` when the caller already has them; nothing is read for
@@ -168,10 +192,10 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   const checkpoint = recorded ? null : latestDelegation(run.id, step.name);
   const delegated = checkpoint?.result?.outcome && checkpoint.versionDigest === digest(loadVersion()?.trigger)
     ? checkpoint.result.outcome : undefined;
-  const outcome = recorded ?? (delegated && delegated.status !== 'succeeded' ? delegated : null);
+  const node = graph.find(n => n.name === step.name);
+  const outcome = recorded ?? (delegated && delegated.status !== 'succeeded' ? delegated : null) ?? humanInputRefusal(node, step.errorMessage);
   let evidence: FailureEvidence;
   let sideEffects = true;
-  const node = graph.find(n => n.name === step.name);
   const binding = !outcome && node ? credentialFailureFor(run, node) : null;
   if (binding?.credentialFailure) {
     // A typed reason recorded by the connection fetch: that fetch handed nothing out.
