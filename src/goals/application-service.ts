@@ -103,10 +103,15 @@ export class GoalApplicationService {
       if (expectedUpdatedAt !== undefined && before.updated_at !== expectedUpdatedAt) throw new GoalScoreConflict(before);
       const progress = vault.addProgressEntry(id, 'manual', before.score, score, reason, source);
       // Every score write moves the revision, even within the same millisecond, so expected_updated_at cannot miss it.
-      this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?', [score, reason, Math.max(progress.created_at, before.updated_at + 1), id]);
+      const revision = Math.max(progress.created_at, before.updated_at + 1);
+      this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?', [score, reason, revision, id]);
       const goal = vault.getGoal(id)!;
       queueGoalEvent({ type: 'goal_scored', goalId: id, data: { score, reason, source, progressId: progress.id }, timestamp: progress.created_at });
-      return { goal: this.refreshHealth(goal), progress };
+      const refreshed = this.refreshHealth(goal);
+      // A health change stamps the wall clock, which can fall back behind that revision.
+      if (refreshed.updated_at >= revision) return { goal: refreshed, progress };
+      this.db.run('UPDATE goals SET updated_at = ? WHERE id = ?', [revision, id]);
+      return { goal: vault.getGoal(id)!, progress };
     });
   }
   /** A confirmed user report, never a model-inferred or provider-verified result. */

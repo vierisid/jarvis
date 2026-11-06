@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { closeDb, initDatabase } from '../vault/schema.ts';
 import * as goals from '../vault/goals.ts';
 import { DailyRhythm } from '../goals/rhythm.ts';
@@ -54,6 +54,19 @@ test('a score with a stale expected revision answers 409 with the current goal a
   expect((await score(goal.id, { score: 0.1, reason: 'Legacy client' })).status).toBe(200);
   expect(goals.getGoal(goal.id)!.score).toBe(0.1);
   expect((await score(goal.id, { score: 0.2, expected_updated_at: 'yesterday' })).status).toBe(400);
+});
+
+test('a score write moves the revision even when it and its health change share one millisecond', async () => {
+  const clock = spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+  try {
+    const goal = goals.createGoal('Goal', 'task', { status: 'active' });
+    const base = goals.getGoal(goal.id)!.updated_at;
+    // A low score also changes health, whose write stamps the (frozen) clock.
+    expect((await score(goal.id, { score: 0.1, reason: 'Same instant', expected_updated_at: base })).status).toBe(200);
+    expect(goals.getGoal(goal.id)!.health).not.toBe(goal.health);
+    expect(goals.getGoal(goal.id)!.updated_at).toBeGreaterThan(base);
+    expect((await score(goal.id, { score: 0.9, reason: 'Stale', expected_updated_at: base })).status).toBe(409);
+  } finally { clock.mockRestore(); }
 });
 
 test('check-in API exposes the stored evidence snapshot and rejected decisions', async () => {
