@@ -257,8 +257,11 @@ function exactMachine(selector: string, inventory: SidecarInfo[]): SidecarInfo |
  * it sleeps, as runs did before pins.
  */
 function computeMachinePin(trigger: unknown, unattended: boolean): MachinePin | null {
+  return machinePinFrom(trigger, unattended, workflowReadinessServices()?.machines?.());
+}
+/** `computeMachinePin` over an inventory already read, so a caller that also needs it reads it once. */
+function machinePinFrom(trigger: unknown, unattended: boolean, inventory: SidecarInfo[] | undefined): MachinePin | null {
   const services = workflowReadinessServices();
-  const inventory = services?.machines?.();
   if (!inventory) return null;
   const needs = machineNeeds(trigger);
   if (!needs.capability || needs.dynamic) return null;
@@ -289,7 +292,7 @@ function draftMachinePin(trigger: unknown, previous: MachinePin | null): Machine
   const capability = needs.capability;
   const inventory = workflowReadinessServices()?.machines?.();
   const pinned = inventory?.find(s => s.id === previous.sidecarId);
-  return !inventory || !pinned || pinned.capabilities?.includes(capability) ? previous : computeMachinePin(trigger, true);
+  return !inventory || !pinned || pinned.capabilities?.includes(capability) ? previous : machinePinFrom(trigger, true, inventory);
 }
 
 export function readBindingPins(flowId: string): BindingPins | null {
@@ -436,11 +439,12 @@ export function bindingDrift(flowId: string, versionId: string, { tolerateInvent
   }
   if (pins.machine) {
     try {
-      const next = computeMachinePin(trigger, false);
+      // One read: the next computer and whether it is determined come from the same inventory (#1162).
+      const inventory = workflowReadinessServices()?.machines?.();
+      const next = machinePinFrom(trigger, false, inventory);
       if (!next || next.sidecarId !== pins.machine.sidecarId) {
         const needs = machineNeeds(trigger);
-        drift.machine = { pinned: pins.machine, next,
-          determined: !!workflowReadinessServices()?.machines?.() && !!needs.capability && !needs.dynamic };
+        drift.machine = { pinned: pins.machine, next, determined: !!inventory && !!needs.capability && !needs.dynamic };
       }
     } catch (error) {
       if (!tolerateInventoryFailure) throw error;

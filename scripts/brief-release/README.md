@@ -16,7 +16,7 @@ Open `http://127.0.0.1:4433/`. This server binds loopback and serves only a synt
 
 1. Choose **Opt-in cohort**, then **Open test fact**. This exercises the actual `DashboardEntry` and shell against explicitly synthetic composition/evidence inputs.
 2. Edit **Fixture draft**, then **Simulate configuration rollback**. The open draft remains mounted; the next document's decision is off.
-3. Save the fixture draft, then **Reload with switch off**. The legacy Memory route opens, the fixture value remains, and `briefReturn` retains the fact ID. This fixture uses session storage; it does not claim to test actual database migration/rollback.
+3. Save the fixture draft, then **Reload with switch off**. The legacy Memory route opens and the fixture value remains. This fixture uses session storage; it does not claim to test actual database migration/rollback.
 4. **Cohort without opt-in**, **Unknown brain**, and **Missing Q22 proof** stay on legacy. **Sidecar panel** retains its native panel owner. **Released foreground** demonstrates the eventual default-on switch with synthetic inputs.
 
 ## Integration contract
@@ -76,6 +76,6 @@ first real release record exists (#1104); until then this list is the binding.
 
 The configuration and developer-tools setting are read once per document. Polling or a new config object cannot destroy open work. Feature action guards still respond to outages. For the hosted default, roll back with `JARVIS_HOSTED_DASHBOARD=legacy` and a restart (`docs/hosted-dashboard.md`). For this switch, rollback applies on the next load: set `rollout: off` in the same release configuration and reload after saving; ordinary `beforeunload` guards remain in force. An individual session can use `?brief=0` immediately on a fresh load. Never trigger a background reload to enforce the UI flag.
 
-A bookmarked Brief path under a disabled gate is replaced with its usable legacy parent **before** v2 mounts. Query connection parameters survive. `briefReturn` carries the normalized Brief route and selection IDs; v2 intentionally does not attempt to interpret those IDs. To revisit after reactivation, use that hash with an approved `brief=1` link. No writes, effect replay, schema downgrade, deletion or cleanup of the old implementation occurs.
+A bookmarked Brief path under a disabled gate is replaced with its usable legacy parent **before** v2 mounts. Query connection parameters survive. The Brief route and its selection IDs are dropped, since v2 cannot interpret them; to revisit after reactivation, open the original Brief link again with an approved `brief=1`. No writes, effect replay, schema downgrade, deletion or cleanup of the old implementation occurs.
 
 Internal per-room review requires the existing developer setting `localStorage.setItem("jarvis-devtools", "1")`, then reload, plus an explicit `?brief=preview&specimen=<room>#/_brief_preview` fixture URL or `?brief=1#/brief/<room>` live-adapter URL. A normal production document cannot enter fixtures from the URL alone. Internal review does not enable foreground aliases or providers. Remove that setting and reload to return to normal gate behavior.
