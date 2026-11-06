@@ -16,6 +16,7 @@ import type { LLMManager } from '../../llm/manager.ts';
 import { type TurnToolScope } from '../../actions/tools/tool-scope.ts';
 import type { TaskRequest, TaskRecord, TaskResultEnvelope, TaskTemplate } from './task-envelope.ts';
 import type { TaskRegistry } from './task-registry.ts';
+import { checkpointExecution } from '../../actions/execution-scope.ts';
 
 // Raised threshold: short task outputs (workflow creation results, code edit
 // summaries, etc.) are typically 1-3K chars and contain IDs/names the conv
@@ -130,6 +131,8 @@ export class TaskDispatcher {
     onCreated?: (record: TaskRecord) => void,
   ): Promise<TaskResultEnvelope> {
     turn.signal?.throwIfAborted();
+    // The calling turn's dispatch fence (#1155): starting a task is a dispatch.
+    checkpointExecution();
     const subsystem = `task_${request.template}`;
     // A scoped task must run on the USER's words. The fallback below
     // (`original_message ?? intent`) would otherwise hand the task tier the
@@ -376,6 +379,10 @@ export class TaskDispatcher {
         error: errorMsg,
       };
       this.registry.transition(record.id, 'failed', envelope);
+      // When the calling turn's own dispatch fence refuses now (a channel
+      // turn whose sender was removed mid-turn, #1155), the turn is over, not
+      // only this task: the conv loop must not pay for more model calls.
+      checkpointExecution();
       return envelope;
     } finally {
       callArgs.signal?.removeEventListener('abort', cancel);

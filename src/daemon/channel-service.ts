@@ -20,11 +20,67 @@ import { channelAllowList, channelOwnerId } from '../comms/channels/allow-list.t
 import { LITERAL_TEXT_CHANNELS } from '../authority/approval-delivery.ts';
 import { createSTTProvider } from '../comms/voice.ts';
 import { effectiveSttForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
-import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
+import { getOrCreateConversation, addMessage, markForwarded, FORWARD_WINDOW_MESSAGES } from '../vault/conversations.ts';
+import { getDb } from '../vault/schema.ts';
 import { getSettingsByPrefix, setSetting } from '../vault/settings.ts';
 import { NotSentError, partlySent, requestMayHaveArrived, sendMayHaveArrived, sendRetryable } from '../comms/delivery.ts';
 import { runWithOrigin } from '../llm/origin.ts';
-import { checkpointExecution } from '../actions/execution-scope.ts';
+import { checkpointExecution, withExecutionScope } from '../actions/execution-scope.ts';
+
+/**
+ * How many channel turns, every chat on every channel together, run at once
+ * (#1155). Telegram runs one turn per chat at a time but any number of chats
+ * at once, and Discord runs every message as it arrives, so a busy group or a
+ * few listed users could start as many model loops as they sent messages.
+ * The same number as background agent tasks (`MAX_RUNNING_TASKS`), on purpose
+ * but counted apart: each turn is a model loop of the same kind, five is past
+ * what one person follows, and a full task queue must not stop the channels.
+ * A turn waiting on an approval card keeps its slot meanwhile; approve and
+ * deny replies never need one.
+ */
+export const CHANNEL_MAX_CONCURRENT_TURNS = 5;
+
+/**
+ * How many channel turns may wait for a free slot (#1155). The bound Telegram
+ * already keeps per adapter on what waits in its lanes
+ * (`TELEGRAM_UPDATES_LIMIT`); past it the sender is told to send it again.
+ */
+export const CHANNEL_MAX_WAITING_TURNS = 100;
+
+/**
+ * How many turns one guest gets in `GUEST_TURN_WINDOW_MS` (#1155). A guest's
+ * turn is billed to the owner, and on the hosted platform it runs under the
+ * owner's account, so a listed guest must not be able to spend without
+ * bound. Thirty an hour is a message every two minutes, sustained: a real
+ * conversation, not a script. A policy choice, not a measurement.
+ */
+export const GUEST_TURNS_PER_WINDOW = 30;
+export const GUEST_TURN_WINDOW_MS = 60 * 60 * 1000;
+
+/** What a sender is told when every slot is taken and the queue is full. */
+export const CHANNEL_BUSY_REPLY = 'Jarvis is answering too many messages right now, so this one was not read. Send it again in a few minutes.';
+
+/** What a guest is told when they write again before their last message was answered. */
+export const GUEST_ONE_AT_A_TIME_REPLY = 'I am still answering your last message, so this one was not read. Send it again once I have replied.';
+
+/** What a guest is told past `GUEST_TURNS_PER_WINDOW`. */
+export const GUEST_CAP_REPLY = 'You have sent as many messages as a guest may in an hour, so this one was not answered. Try again later.';
+
+/**
+ * Raised at a dispatch checkpoint of a channel turn whose sender the
+ * allow-list no longer admits as they were admitted when it started (#1155):
+ * removed, or no longer the owner. The rest of the turn's tool calls are
+ * refused before any approval card is raised, nothing is learned from it, and
+ * its reply is not sent. A model call already in flight is not stopped, and a
+ * background agent task the turn started before then keeps running, as every
+ * background task does (#988); it can be stopped from the dashboard.
+ */
+export class ChannelSenderRevokedError extends Error {
+  constructor(channel: string) {
+    super(`The ${channel} sender of this turn is no longer allowed to use Jarvis as they were when it started, so nothing more is run for them.`);
+    this.name = 'ChannelSenderRevokedError';
+  }
+}
 
 /** Settings-table key prefix for persisted per-channel broadcast recipients. */
 const LAST_RECIPIENT_PREFIX = 'channel.lastRecipient.';
@@ -135,16 +191,34 @@ export class ChannelService implements Service {
   private telegramResume = new Map<string, TelegramResumePoint>();
   /** The Telegram adapter this service last built, and for which token. */
   private telegram: { adapter: TelegramAdapter; token: string } | null = null;
+  /**
+   * The last Telegram adapter built, kept while the channel is off too
+   * (#1155): its turns run on after it stops, and the next adapter, for this
+   * bot or another, must not start a chat's next message before that chat's
+   * turn ends. A chat's conversation is its sender's in that chat whichever
+   * bot carried it (#884).
+   */
+  private lastTelegramAdapter: TelegramAdapter | null = null;
   /** Handler for approval commands (approve/deny) from external channels */
   private approvalHandler: ApprovalCommandHandler | null = null;
   /** Notified when a send has exhausted its retries (e.g. to alert the dashboard). */
   private deliveryFailureHandler: DeliveryFailureHandler | null = null;
 
+  /** Channel turns running now, and the turns waiting for a slot, in order (#1155). */
+  private turnsRunning = 0;
+  private turnQueue: Array<() => void> = [];
+  /** When each guest's recent turns started, per `channel:userId` (#1155). */
+  private guestTurns = new Map<string, number[]>();
+  /** Guests with a turn running or waiting for a slot, per `channel:userId` (#1155). */
+  private guestInFlight = new Map<string, number>();
+  private now: () => number;
+
   /** Whether the daemon is shutting down rather than reloading settings (#911). */
   private shuttingDown: () => boolean;
 
-  constructor(config: JarvisConfig, agentService: AgentService, opts?: { shuttingDown?: () => boolean }) {
+  constructor(config: JarvisConfig, agentService: AgentService, opts?: { shuttingDown?: () => boolean; now?: () => number }) {
     this.config = config;
+    this.now = opts?.now ?? Date.now;
     this.agentService = agentService;
     this.manager = new ChannelManager();
     // A shutdown quiesces turns before it stops services; a settings save does not.
@@ -248,13 +322,19 @@ export class ChannelService implements Service {
         this.telegramResume.set(token, { ...point, waiting: [] });
       }
 
+      // Kept only while it still has turns a later adapter must wait for.
+      if (!telegramOn && this.lastTelegramAdapter && this.lastTelegramAdapter.runningLaneWork().size === 0) this.lastTelegramAdapter = null;
+
       if (telegramOn) {
         warnAllowListProblems('telegram', channels!.telegram!.allowed_users);
         const token = channels!.telegram!.bot_token!;
         const resume = this.telegramResume.get(token);
-        // A chat's next message waits for the turn the old adapter is still
-        // answering in that chat (#910): one turn at a time per chat.
-        const stillRunning = previous && previous.token === token ? previous.adapter.runningLaneWork() : new Map<string, Promise<void>>();
+        // A chat's next message waits for the turn an earlier adapter is
+        // still answering in that chat (#910): one turn at a time per chat.
+        // Whichever bot it was, and across the channel being off (#1155); the
+        // last adapter's work carries what it inherited, so a chain of saves
+        // keeps it.
+        const stillRunning = this.lastTelegramAdapter?.runningLaneWork() ?? new Map<string, Promise<void>>();
         const telegram = new TelegramAdapter(token, {
           sttProvider: this.sttProvider ?? undefined,
           allowedUsers: channels!.telegram!.allowed_users,
@@ -274,6 +354,7 @@ export class ChannelService implements Service {
             && this.isOwner('telegram', userId),
         });
         this.telegram = { adapter: telegram, token };
+        this.lastTelegramAdapter = telegram;
         this.manager.register(telegram);
       }
 
@@ -643,14 +724,94 @@ export class ChannelService implements Service {
       }
     }
 
+    const sender = conversationSender(msg);
+    if (!sender) return "Sorry, I can't tell who sent this message, so I can't answer it.";
+
+    // Only the owner, the first entry of the list, gets the owner's
+    // assistant (#909), and only in a private chat with the bot (owner
+    // decision, #1155); see step 2.
+    const who = owner ? (isPrivateChat(msg) ? 'owner' : 'shared') : 'guest';
+    // A guest has one turn running or waiting at a time (#1155), as one
+    // Telegram chat does, so a burst from one guest (Discord runs every
+    // message as it arrives) cannot fill the queue everyone else waits in;
+    // and one already past their cap does not wait at all. Counted below.
+    const guestKey = `${channelTag}:${String(userId)}`;
+    if (who === 'guest') {
+      if ((this.guestInFlight.get(guestKey) ?? 0) > 0) return GUEST_ONE_AT_A_TIME_REPLY;
+      if (this.guestRecentTurns(channelTag, userId).length >= GUEST_TURNS_PER_WINDOW) return GUEST_CAP_REPLY;
+      this.guestInFlight.set(guestKey, 1);
+    }
+    try {
+      return await this.runInSlot(msg, channelTag, sender, who, allowListed, userId);
+    } finally {
+      if (who === 'guest') this.guestInFlight.delete(guestKey);
+    }
+  }
+
+  /** A turn in a slot among every channel's turns, behind its dispatch fence (#1155). */
+  private async runInSlot(
+    msg: ChannelMessage,
+    channelTag: string,
+    sender: string,
+    who: 'owner' | 'shared' | 'guest',
+    allowListed: boolean,
+    userId: unknown,
+  ): Promise<string> {
+    // Waiting keeps arrival order, and Telegram's lanes already keep each chat's.
+    const release = await this.acquireTurnSlot();
+    if (!release) return CHANNEL_BUSY_REPLY;
+    try {
+      // The turn holds what it was started with only while the live list
+      // still admits its sender that way (#1155): removed from the list, or
+      // no longer its owner, every later dispatch the turn makes is refused,
+      // and its reply is not sent. A settings save cannot stop a model call
+      // in flight, but every tool call checks here first.
+      // A guest the list did not name when the turn started (only a stale
+      // adapter can deliver one, #860) has nothing to revoke: no tools, and
+      // the reply is the one it was always going to get.
+      const stillAdmitted = () => who === 'owner'
+        ? this.isOwner(channelTag, userId)
+        : !allowListed || this.allowListNames(channelTag, userId);
+      // Re-checked after the wait for a slot: the list may have changed.
+      if (!stillAdmitted()) return '';
+      // A guest's turns are billed to the owner, so they are capped (#1155).
+      // Counted only for a turn that runs: a busy refusal costs them nothing.
+      if (who === 'guest' && !this.takeGuestTurn(channelTag, userId)) return GUEST_CAP_REPLY;
+      return await withExecutionScope(() => {
+        if (!stillAdmitted()) throw new ChannelSenderRevokedError(channelTag);
+      }, () => this.runChannelTurn(msg, channelTag, sender, who, stillAdmitted));
+    } catch (err) {
+      // The turn ended at its first dispatch after the revocation; there is
+      // nobody to tell (#1155).
+      if (err instanceof ChannelSenderRevokedError) {
+        console.log(`[ChannelService] Ended a ${channelTag} turn: ${err.message}`);
+        return '';
+      }
+      throw err;
+    } finally {
+      release();
+    }
+  }
+
+  /** The turn itself, inside its slot and its dispatch fence (#1155). */
+  private async runChannelTurn(
+    msg: ChannelMessage,
+    channelTag: string,
+    sender: string,
+    who: 'owner' | 'shared' | 'guest',
+    stillAdmitted: () => boolean,
+  ): Promise<string> {
     // 1. Persist inbound user message to vault, in this sender's own
     //    conversation (#884). Every sender used to share the channel's one
     //    conversation, so on a channel anyone may message (an empty list,
     //    #811) a stranger could ask about the owner's earlier turns.
-    const sender = conversationSender(msg);
-    if (!sender) return "Sorry, I can't tell who sent this message, so I can't answer it.";
     const conversation = getOrCreateConversation(channelTag, { sender });
-    addMessage(conversation.id, { role: 'user', content: msg.text });
+    // A forward is marked in the same transaction (#1155): stored unmarked,
+    // it would read as the owner's own words on every later turn.
+    getDb().transaction(() => {
+      const stored = addMessage(conversation.id, { role: 'user', content: msg.text });
+      if (msg.forwarded === true) markForwarded(conversation.id, stored.id);
+    })();
 
     // 2. Route to AgentService (non-streaming — external channels are
     //    request/response), on that conversation's history alone. Only the
@@ -663,16 +824,75 @@ export class ChannelService implements Service {
     //    reply, so the owner's turn there gets a guest's treatment too.
     //    A guest's turn still runs under origin 'user': the owner chose to
     //    list them, the turn is foreground, and a separate origin would need
-    //    the hosted platform to weigh it. Filed as a follow-up (#909 review).
-    const who = owner ? (isPrivateChat(msg) ? 'owner' : 'shared') : 'guest';
+    //    the hosted platform to weigh it (owner decision, #1155). What bounds
+    //    a guest's spend instead: the cap above, a cap on the reply's length,
+    //    and no background compaction of their conversation.
+    //    A forward carries someone else's words (#1155): the owner's turn
+    //    reads it as quoted outside content, see handleThreadMessage.
     const response = await runWithOrigin('user', () => this.agentService.handleThreadMessage(
-      msg.text, channelTag, { conversationId: conversation.id, contextKey: `channel:${channelTag}:${sender}`, sender: who },
+      msg.text, channelTag, {
+        conversationId: conversation.id, contextKey: `channel:${channelTag}:${sender}`, sender: who,
+        ...(msg.forwarded === true ? { forwarded: true } : {}),
+      },
     ));
+
+    // The sender was removed, or stopped being the owner, while the turn ran
+    // (#1155): the reply was built for who they were, so it is not sent.
+    if (!stillAdmitted()) {
+      console.log(`[ChannelService] Not sending a ${channelTag} reply: its sender is no longer allowed to use Jarvis as they were when the turn started.`);
+      return '';
+    }
 
     // 3. Persist assistant response to vault
     addMessage(conversation.id, { role: 'assistant', content: response });
 
     return response;
+  }
+
+  /**
+   * A slot among every channel's running turns (#1155), waiting in arrival
+   * order for one when all are taken. Null when the wait is full too. The
+   * returned release frees the slot, or hands it to the next waiter, once.
+   */
+  private async acquireTurnSlot(): Promise<(() => void) | null> {
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      const next = this.turnQueue.shift();
+      if (next) next();
+      else this.turnsRunning--;
+    };
+    if (this.turnsRunning < CHANNEL_MAX_CONCURRENT_TURNS) {
+      this.turnsRunning++;
+      return release;
+    }
+    if (this.turnQueue.length >= CHANNEL_MAX_WAITING_TURNS) {
+      console.warn(`[ChannelService] ${CHANNEL_MAX_CONCURRENT_TURNS} channel turns are running and ${CHANNEL_MAX_WAITING_TURNS} wait; not reading another`);
+      return null;
+    }
+    await new Promise<void>((resolve) => this.turnQueue.push(resolve));
+    return release;
+  }
+
+  /** A guest's turns still inside the window, after dropping every guest's older ones (#1155). */
+  private guestRecentTurns(channel: string, userId: unknown): number[] {
+    const now = this.now();
+    for (const [key, times] of this.guestTurns) {
+      const recent = times.filter((t) => now - t < GUEST_TURN_WINDOW_MS);
+      if (recent.length === 0) this.guestTurns.delete(key);
+      else this.guestTurns.set(key, recent);
+    }
+    return this.guestTurns.get(`${channel}:${String(userId)}`) ?? [];
+  }
+
+  /** Count a guest's turn, or false when they are past `GUEST_TURNS_PER_WINDOW` (#1155). */
+  private takeGuestTurn(channel: string, userId: unknown): boolean {
+    const times = this.guestRecentTurns(channel, userId);
+    if (times.length >= GUEST_TURNS_PER_WINDOW) return false;
+    times.push(this.now());
+    this.guestTurns.set(`${channel}:${String(userId)}`, times);
+    return true;
   }
 }
 
@@ -967,4 +1187,50 @@ export async function sendWithRetry(
   }
   // Unreachable: the loop always returns on the last attempt.
   return { ok: false, attempts: maxAttempts, error: 'unreachable', mayHaveArrived: sentPart };
+}
+
+/** The untrusted-content source a dashboard turn on a channel guest's conversation is tainted with (#1155). */
+export const CHANNEL_GUEST_CONVERSATION_SOURCE = 'channel guest conversation';
+
+/**
+ * Whether a conversation holds words a channel's owner did not write (#1155):
+ * one a Telegram or Discord sender other than the channel's current owner
+ * had with the bot, one holding a message the owner forwarded, or a channel
+ * conversation saved before #884 without its sender, which every sender
+ * shared. The dashboard lists these, and the owner
+ * continuing one there runs a turn with their tools on that history.
+ */
+export function isChannelGuestConversation(conversationId: string, channels: JarvisConfig['channels']): boolean {
+  let row: { channel: string; sender: string | null; forwards: number } | null;
+  try {
+    row = getDb().query(`SELECT channel, sender,
+      EXISTS (SELECT 1 FROM conversation_forwards f JOIN (SELECT id FROM conversation_messages
+        WHERE conversation_id = c.id ORDER BY created_at DESC, rowid DESC LIMIT ${FORWARD_WINDOW_MESSAGES}) m ON m.id = f.message_id) AS forwards
+      FROM conversations c WHERE c.id = ?`).get(conversationId) as typeof row;
+  } catch (err) {
+    // Fail closed: tainting a turn only makes its gated actions ask first.
+    console.warn('[ChannelService] Could not read whose conversation this is; treating it as holding outside words:', err);
+    return true;
+  }
+  if (!row || (row.channel !== 'telegram' && row.channel !== 'discord')) return false;
+  // A message the owner forwarded is someone else's words too (#1155 review),
+  // while it is among the messages a turn reads back.
+  if (!row.sender || row.forwards) return true;
+  const userId = /^user:([^/]+)\//.exec(row.sender)?.[1];
+  const raw = row.channel === 'telegram' ? channels?.telegram?.allowed_users : channels?.discord?.allowed_users;
+  const owner = channelOwnerId(row.channel, raw);
+  return userId === undefined || owner === null || String(owner) !== userId;
+}
+
+/**
+ * A dashboard chat turn, tainted from the start when it continues a channel
+ * guest's conversation (owner decision on #1155): the owner keeps their tools,
+ * but what changes the machine or contacts someone stops for approval, as
+ * after reading a web page, since the history carries a guest's words.
+ */
+export function withChannelConversationTaint<T extends { conversationId: string; untrustedSources?: string[] }>(
+  input: T, channels: JarvisConfig['channels'],
+): T {
+  if (!isChannelGuestConversation(input.conversationId, channels)) return input;
+  return { ...input, untrustedSources: [...(input.untrustedSources ?? []), CHANNEL_GUEST_CONVERSATION_SOURCE] };
 }

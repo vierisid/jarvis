@@ -5,7 +5,7 @@ import type { BriefActivity, BriefChatEvent, BriefChatPayload, BriefSendTurn, Br
 import { ConversationRepository, ConversationRequestError } from './conversation-lifecycle.ts';
 import { ChatAttachmentRepository, attachmentIds } from './chat-attachments';
 import type { BriefAttachmentRef } from '../brief/attachment-contracts';
-import { insertConversationMessage } from './conversations.ts';
+import { frameForward, insertConversationMessage } from './conversations.ts';
 
 export interface ChatTurn extends BriefTurnRef {
   text: string;
@@ -148,9 +148,13 @@ export class ChatTurnRepository {
 
   history(ref: BriefTurnRef): LLMMessage[] {
     const turn = this.get(ref);
-    return this.db.query<{ role: 'user' | 'assistant'; content: string }, [string, string, string]>(`SELECT role, content FROM conversation_messages
+    // A message the owner forwarded from a channel is framed as someone
+    // else's words (#1155); the turn is tainted too (channel-service).
+    return this.db.query<{ role: 'user' | 'assistant'; content: string; forwarded: number }, [string, string, string]>(`SELECT role, content,
+      EXISTS (SELECT 1 FROM conversation_forwards f WHERE f.message_id = conversation_messages.id) AS forwarded FROM conversation_messages
       WHERE conversation_id = ? AND role IN ('user', 'assistant') AND id NOT IN (?, ?)
-      ORDER BY created_at DESC, id DESC LIMIT 80`).all(turn.conversationId, turn.userMessageId, turn.assistantMessageId).reverse();
+      ORDER BY created_at DESC, id DESC LIMIT 80`).all(turn.conversationId, turn.userMessageId, turn.assistantMessageId).reverse()
+      .map(({ role, content, forwarded }) => ({ role, content: forwarded ? frameForward(content) : content }));
   }
 
   snapshot(conversationId: string, afterSequence: number) {
