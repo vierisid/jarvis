@@ -215,6 +215,13 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
    * Production wiring passes `AgentService.buildFullSystemPromptParts`.
    */
   buildJarvisSystemPrompt?: (userMessage: string) => SystemPromptParts;
+  /**
+   * Why nothing on this Jarvis could answer a new workflow input or approval
+   * request, or null (#1266): they are answered in Needs you, which is the
+   * Brief decisions feature. Asked when a step would create one. Absent: asking
+   * is allowed, as before.
+   */
+  humanInputUnavailable?: () => string | null;
 }
 
 /**
@@ -1382,7 +1389,8 @@ export function buildSandboxServiceBackends(
   };
 
   const services: SandboxApiServices = {
-    humanInput: cancellableWorkflowService(requestHumanInput),
+    humanInput: cancellableWorkflowService((input: Record<string, unknown>, ctx: WorkflowEffectContext) =>
+      requestHumanInput(input, ctx, Date.now(), { unavailable: opts.humanInputUnavailable?.() ?? null })),
     subflowCall: cancellableWorkflowService(createSubflowService(effects,opts.subflowNow,(flowId,versionId,payload)=>({intent:workflowStartIntentOf({flowId,pinned:{versionId},waitForCompletion:true,payload}),
       channelIntent:workflowStartChannelIntentOf({flowId,pinned:{versionId},waitForCompletion:true,payload})}),workflowStartCardRefusal)),
     subflowResult: cancellableWorkflowService(returnSubflowResult),

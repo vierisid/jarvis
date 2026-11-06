@@ -836,6 +836,18 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
   // it after, or deleted, which the repo writes already answer as before.
   const scopedFlow = (req: Request, id: string) => getFlowInProject(callerProject(req), id);
   const scopedRun = (req: Request, runId: string) => getFlowRunInProject(callerProject(req), runId);
+  /**
+   * Workflow input requests are answered in Needs you, which is the Brief
+   * decisions feature: with decisions off the dashboard does not show them,
+   * so these routes refuse as `/api/brief/decisions` does (#1266), with the
+   * same status and code, rather than accept answers nothing shows.
+   */
+  const decisionsRefusal = (): Response | null => {
+    const decisions = opts.briefCapabilities?.snapshot().capabilities.decisions;
+    if (!decisions?.supported) return Response.json({ error: 'Decisions are unsupported', code: 'unsupported' }, { status: 501 });
+    if (!decisions.enabled) return Response.json({ error: 'Decisions are unavailable or disabled', code: 'unavailable' }, { status: 503 });
+    return null;
+  };
   // The version routes' answer for a flow outside the caller's project: the
   // message the ownership check gives a version that is not in the flow, which
   // is also what those routes answered for a flow that does not exist before
@@ -2389,6 +2401,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
 
     "/api/workflow-inputs": {
       GET: req => trapErrors(() => {
+        const refused = decisionsRefusal(); if (refused) return refused;
         const project = callerProject(req), requests = listHumanInputs(project);
         // Polled every few seconds: the cursor is an ids-only indexed read, not a second outcome lookup.
         return ok({ requests, historyCursor: humanInputHistoryCursor(project) });
@@ -2396,17 +2409,20 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     },
     "/api/workflow-inputs/history": {
       GET: req => trapErrors(() => {
+        const refused = decisionsRefusal(); if (refused) return refused;
         try { return ok(humanInputHistory(callerProject(req), new URL(req.url).searchParams.get('cursor'))); }
         catch (error) { if (error instanceof Error && error.message === 'Invalid history cursor') return err(error.message, 400); throw error; }
       }),
     },
     "/api/workflow-inputs/:id": {
       GET: req => trapErrors(() => {
+        const refused = decisionsRefusal(); if (refused) return refused;
         const { id } = (req as RequestWithParams<{ id: string }>).params;
         const request = getHumanInput(callerProject(req), id);
         return request ? ok({ request }) : err('Request not found', 404);
       }),
       POST: req => trapErrors(async () => {
+        const refused = decisionsRefusal(); if (refused) return refused;
         const { id } = (req as RequestWithParams<{ id: string }>).params;
         // This authenticated route is intentionally outside the public webhook prefix.
         // Counted in bytes while it streams in, so a chunked body cannot be buffered whole first.
@@ -2423,6 +2439,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     // signed-in, project-scoped route family and request generation as the response above.
     "/api/workflow-inputs/:id/dismiss": {
       POST: req => trapErrors(async () => {
+        const refused = decisionsRefusal(); if (refused) return refused;
         const { id } = (req as RequestWithParams<{ id: string }>).params;
         const read = await readBoundedText(req, HUMAN_INPUT_DISMISS_MAX_BODY_BYTES);
         if (!read.ok) return read.reason === 'too_large' ? err('Response too large', 413) : err('failed to read request body');
