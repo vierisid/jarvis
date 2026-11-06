@@ -22,6 +22,11 @@ export function getGoalApplication(): GoalApplicationService {
   return application;
 }
 
+/** A score write whose expected revision no longer matches; carries the goal as it is now. */
+export class GoalScoreConflict extends Error {
+  constructor(readonly goal: Goal) { super('Goal score changed since this draft; review the current score before saving'); this.name = 'GoalScoreConflict'; }
+}
+
 export class GoalApplicationService {
   private readonly delivery: GoalEventDelivery;
   constructor(private readonly db: Database) { this.delivery = new GoalEventDelivery(db); }
@@ -79,22 +84,27 @@ export class GoalApplicationService {
       return checked.deadline === undefined ? goal : this.refreshHealth(goal);
     });
   }
-  scoreGoal(id: string, score: number, reason = '', source = 'user'): Goal | null {
-    return this.recordScore(id, score, reason, source)?.goal ?? null;
+  /** `expectedUpdatedAt`, when given, refuses with GoalScoreConflict unless the goal is unchanged since then. */
+  scoreGoal(id: string, score: number, reason = '', source = 'user', expectedUpdatedAt?: number): Goal | null {
+    return this.recordScore(id, score, reason, source, expectedUpdatedAt)?.goal ?? null;
   }
   /** Returns the exact progress receipt needed by a checked work result's atomic write. */
-  recordScore(id: string, score: number, reason: string, source = 'user') {
+  recordScore(id: string, score: number, reason: string, source = 'user', expectedUpdatedAt?: number) {
     text(id, 'goal_id');
     number(score, 'score', 0, 1);
     text(reason, 'reason', false);
     text(source, 'source', true, 512);
+    if (expectedUpdatedAt !== undefined) number(expectedUpdatedAt, 'expected_updated_at', 0, Number.MAX_SAFE_INTEGER, true);
     if (source === 'daily_review') invalid('source', 'Automatic goal reviews require a verified measurement-to-score mapping');
     return this.transaction(() => {
       const before = vault.getGoal(id);
       if (!before) return null;
       if (before.measurement) invalid('score', 'Use a new measurement to update measured goal progress');
+      if (expectedUpdatedAt !== undefined && before.updated_at !== expectedUpdatedAt) throw new GoalScoreConflict(before);
       const progress = vault.addProgressEntry(id, 'manual', before.score, score, reason, source);
-      this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?', [score, reason, progress.created_at, id]);
+      // Goal writes only move updated_at forward (MAX(now, previous + 1)), so it serves as the expected revision.
+      const revision = Math.max(progress.created_at, before.updated_at + 1);
+      this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?', [score, reason, revision, id]);
       const goal = vault.getGoal(id)!;
       queueGoalEvent({ type: 'goal_scored', goalId: id, data: { score, reason, source, progressId: progress.id }, timestamp: progress.created_at });
       return { goal: this.refreshHealth(goal), progress };
@@ -267,8 +277,8 @@ export class GoalApplicationService {
     this.db.run(`INSERT INTO goal_measurement VALUES (?, ?, ?) ON CONFLICT(goal_id) DO UPDATE SET revision = excluded.revision, snapshot = excluded.snapshot`,
       [id, measurement.revision, JSON.stringify(measurement)]);
     const progress = score === null || !progressed ? null : vault.addProgressEntry(id, 'manual', before.score, score, reason, 'user_measurement');
-    if (score !== null) this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?', [score, reason, now, id]);
-    else this.db.run('UPDATE goals SET updated_at = ? WHERE id = ?', [now, id]);
+    if (score !== null) this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?', [score, reason, now, id]);
+    else this.db.run('UPDATE goals SET updated_at = MAX(?, updated_at + 1) WHERE id = ?', [now, id]);
     queueGoalEvent({ type: 'goal_measurement_recorded', goalId: id,
       data: { ...event, revision: measurement.revision, progressId: progress?.id ?? null, qualification: measurement.qualification }, timestamp: now });
     if (score !== null) {

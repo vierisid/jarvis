@@ -246,7 +246,7 @@ export function updateGoal(id: string, updates: GoalUpdate): Goal | null {
 
     if (sets.length === 0) return existing;
 
-    sets.push('updated_at = ?');
+    sets.push('updated_at = MAX(?, updated_at + 1)');
     params.push(Date.now());
     params.push(id);
 
@@ -273,7 +273,7 @@ export function updateGoalScore(id: string, score: number, reason: string, sourc
 
   // Update the goal
   db.prepare(
-    `UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?`
+    `UPDATE goals SET score = ?, score_reason = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?`
   ).run(clampedScore, reason, now, id);
 
   return getGoal(id);
@@ -287,7 +287,7 @@ export function updateGoalStatus(id: string, status: GoalStatus): Goal | null {
   const now = Date.now();
   const isTerminal = status === 'completed' || status === 'failed' || status === 'killed';
 
-  const sets: string[] = ['status = ?', 'updated_at = ?'];
+  const sets: string[] = ['status = ?', 'updated_at = MAX(?, updated_at + 1)'];
   const params: unknown[] = [status, now];
 
   if (status === 'active' && !existing.started_at) {
@@ -307,7 +307,7 @@ export function updateGoalStatus(id: string, status: GoalStatus): Goal | null {
 export function updateGoalHealth(id: string, health: GoalHealth): Goal | null {
   const db = getDb();
   const now = Date.now();
-  db.prepare(`UPDATE goals SET health = ?, updated_at = ? WHERE id = ?`).run(health, now, id);
+  db.prepare(`UPDATE goals SET health = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?`).run(health, now, id);
   return getGoal(id);
 }
 
@@ -316,14 +316,14 @@ export function updateGoalEscalation(id: string, stage: EscalationStage): Goal |
   const now = Date.now();
 
   if (stage === 'none') {
-    db.prepare(`UPDATE goals SET escalation_stage = 'none', escalation_started_at = NULL, updated_at = ? WHERE id = ?`).run(now, id);
+    db.prepare(`UPDATE goals SET escalation_stage = 'none', escalation_started_at = NULL, updated_at = MAX(?, updated_at + 1) WHERE id = ?`).run(now, id);
   } else {
     const existing = getGoal(id);
     if (!existing) return null;
     // Only set escalation_started_at if transitioning from 'none'
     const startedAt = existing.escalation_stage === 'none' ? now : existing.escalation_started_at;
     db.prepare(
-      `UPDATE goals SET escalation_stage = ?, escalation_started_at = ?, updated_at = ? WHERE id = ?`
+      `UPDATE goals SET escalation_stage = ?, escalation_started_at = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?`
     ).run(stage, startedAt, now, id);
   }
 
@@ -333,7 +333,7 @@ export function updateGoalEscalation(id: string, stage: EscalationStage): Goal |
 export function updateGoalActualHours(id: string, hours: number): Goal | null {
   const db = getDb();
   const now = Date.now();
-  db.prepare(`UPDATE goals SET actual_hours = ?, updated_at = ? WHERE id = ?`).run(hours, now, id);
+  db.prepare(`UPDATE goals SET actual_hours = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?`).run(hours, now, id);
   return getGoal(id);
 }
 
@@ -345,7 +345,7 @@ export function deleteGoal(id: string): boolean {
 
 export function reorderGoals(items: { id: string; sort_order: number }[]): void {
   const db = getDb();
-  const stmt = db.prepare('UPDATE goals SET sort_order = ?, updated_at = ? WHERE id = ?');
+  const stmt = db.prepare('UPDATE goals SET sort_order = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?');
   const now = Date.now();
 
   const tx = db.transaction(() => {

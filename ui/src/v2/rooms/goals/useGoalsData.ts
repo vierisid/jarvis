@@ -44,6 +44,8 @@ export interface Goal {
   created_at: number;
   updated_at: number;
   completed_at: number | null;
+  /** Present (non-null) when progress comes from measurements; the score API refuses those goals. */
+  measurement?: unknown;
 }
 
 export interface GoalsMetrics {
@@ -64,6 +66,9 @@ interface ActionResult {
   ok: boolean;
   message: string;
 }
+/** `conflict` is the goal as the server holds it when the draft's base revision is stale. */
+export interface ScoreResult extends ActionResult { conflict?: Goal; goal?: Goal }
+const isScored = (goal: unknown): goal is Goal => !!goal && typeof (goal as Goal).score === "number" && typeof (goal as Goal).updated_at === "number";
 
 /**
  * Goals Room hook — loads the full goal list, metrics, and overdue
@@ -166,16 +171,24 @@ export function useGoalsData() {
   );
 
   const updateScore = useCallback(
-    async (id: string, score: number, reason: string): Promise<ActionResult> => {
+    async (id: string, score: number, reason: string, expectedUpdatedAt: number): Promise<ScoreResult> => {
       try {
         const resp = await fetch(`/api/goals/${encodeURIComponent(id)}/score`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ score, reason, source: "dashboard" }),
+          body: JSON.stringify({ score, reason, source: "user", expected_updated_at: expectedUpdatedAt }),
         });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        refresh();
-        return { ok: true, message: `Score updated to ${(score * 100).toFixed(0)}%.` };
+        if (resp.status === 409) {
+          const body = await resp.clone().json().catch(() => null) as { code?: unknown; goal?: Goal } | null;
+          if (body?.code === "SCORE_CONFLICT" && isScored(body.goal)) {
+            void refresh();
+            return { ok: false, message: "The score changed since your draft.", conflict: body.goal };
+          }
+        }
+        if (!resp.ok) throw new Error(await goalSaveError(resp));
+        const saved = await resp.json().catch(() => null) as Goal | null;
+        await refresh();
+        return { ok: true, message: `Score updated to ${(score * 100).toFixed(0)}%.`, ...(isScored(saved) ? { goal: saved } : {}) };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };
       }
