@@ -21,6 +21,7 @@ import { getGoal } from '../vault/goals.ts';
 import { getWorkflowDb } from '../workflows/db/index.ts';
 import { walkFlowNodes } from '../workflows/db/flow-graph.ts';
 import { getFlow, parseFlowMetadata } from '../workflows/db/repos/flow.ts';
+import { getFlowReadHosts } from '../workflows/db/repos/flow-read-hosts.ts';
 import { getFlowVersion, type FlowTriggerNode } from '../workflows/db/repos/flow-version.ts';
 import { getFlowRun } from '../workflows/db/repos/flow-run.ts';
 import { versionReadiness } from '../workflows/db/repos/flow-readiness.ts';
@@ -29,7 +30,7 @@ import { listWorkflowEffects } from '../workflows/db/repos/workflow-effect.ts';
 import { managedConnectionMisuse, managedSourceFor, type CredentialResolver } from '../workflows/credentials/adapter.ts';
 import { digest } from '../workflows/runtime/effect-context.ts';
 import { BOUNDED_TOOL_NAMES, GATED_TOOL_NAMES, boundedToolCapability, toolEffectCapability } from '../workflows/runtime/effect-capabilities.ts';
-import { governedPieceToolDefinition, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR, PIECE_TOOL_CATEGORY, resolveGovernedPieceAction } from '../workflows/runtime/piece-effects.ts';
+import { governedPieceToolDefinition, HTTP_PIECE, httpReadHostListed, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR, PIECE_TOOL_CATEGORY, resolveGovernedPieceAction } from '../workflows/runtime/piece-effects.ts';
 import { IN_RUN_STEP_PIECES } from '../workflows/runtime/step-admission.ts';
 import type { WorkflowReadiness } from '../workflows/runtime/workflow-readiness.ts';
 import type { JobKind } from './opportunity-types.ts';
@@ -197,6 +198,8 @@ export interface QualificationServices {
   targets(): QualificationTarget[];
   tool(name: string): ToolDefinition | null;
   authority: AuthorityEngine | null;
+  /** #1153: the flow's read list (hosts an HTTP GET may reach without asking); none when absent. */
+  readHosts?(flowId: string): string[];
   /** A run's identity and outcome: effect records and each step's status, never step payloads. */
   run(runId: string): {
     flowId: string; versionId: string; status: string; created: number; partial: boolean;
@@ -424,7 +427,7 @@ function decide(authority: AuthorityEngine | null, effect: {
   return { decision: 'auto', reason: decision.reason, timed };
 }
 
-function judgeStep(node: FlowTriggerNode, services: Pick<QualificationServices, 'tool' | 'authority'>): StepFact | null {
+function judgeStep(node: FlowTriggerNode, services: Pick<QualificationServices, 'tool' | 'authority'>, readHosts: readonly string[] = []): StepFact | null {
   const step = node.name;
   if (node.type === 'CODE') return { step, piece: null, action: null, role: 'effect', category: null, categories: [],
     decision: 'ungoverned', reason: 'Code steps run without Authority', unreviewable: [], recipients: null, shared: null };
@@ -485,8 +488,12 @@ function judgeStep(node: FlowTriggerNode, services: Pick<QualificationServices, 
     return judged;
   }
   if (IN_RUN_STEP_PIECES.has(piece)) return null;
-  const resolved = resolveGovernedPieceAction(piece, action, input);
-  if (!resolved) return unjudged('ungoverned', `${piece} is not a governed piece; its actions run without Authority`);
+  const named = resolveGovernedPieceAction(piece, action, input);
+  if (!named) return unjudged('ungoverned', `${piece} is not a governed piece; its actions run without Authority`);
+  // #1153: as the daemon judges it (`pieceAuthorize`), an HTTP read runs
+  // without asking only to a host on the flow's read list.
+  const httpRead = piece === HTTP_PIECE && named.category === 'read_data';
+  const resolved = httpRead && !httpReadHostListed(input, [...readHosts]) ? { ...named, category: 'send_message' as const } : named;
   const tool = governedPieceToolDefinition(resolved);
   let category: ActionCategory;
   try { category = toolEffectCapability(tool).category; }
@@ -495,7 +502,7 @@ function judgeStep(node: FlowTriggerNode, services: Pick<QualificationServices, 
     aboveLevelFloor: PIECE_ABOVE_LEVEL_FLOOR, aboveLevelGovernedOnly: PIECE_ABOVE_LEVEL_ASKS }));
   // #961: the category was read from the configured input (an HTTP method);
   // one computed when the step runs can land anywhere up to the worst case.
-  if (resolved.byInput && (resolved.categoryProps ?? []).some(prop => hasExpression(input[prop]))) judged.unreviewable.push(`${action}'s Authority decision depends on values known only at run time`);
+  if (resolved.byInput && [...(resolved.categoryProps ?? []), ...(httpRead ? ['url'] : [])].some(prop => hasExpression(input[prop]))) judged.unreviewable.push(`${action}'s Authority decision depends on values known only at run time`);
   const service = resolved.adapter.catalogId, key = `${service}:${action}`;
   if (DELIVERY.has(category)) {
     const delivery = DELIVERIES[key];
@@ -514,7 +521,8 @@ export function observePreparedProposal(request: QualificationRequest, services:
   const live = request.workflow ? services.version(request.workflow.flowId, request.workflow.versionId) : null;
   if (!live) return { goal, composition, version: null, bindings: [], steps: [], run: null };
   const nodes = walkFlowNodes(live.trigger);
-  const steps = nodes.map(node => judgeStep(node, services)).filter((s): s is StepFact => s !== null);
+  const readHosts = request.workflow ? services.readHosts?.(request.workflow.flowId) ?? [] : [];
+  const steps = nodes.map(node => judgeStep(node, services, readHosts)).filter((s): s is StepFact => s !== null);
   const bindings = requiredBindings(live.trigger, live.projectId, services.targets(), services.connection);
   const current = versionDigest(live.trigger);
   let run: QualificationFacts['run'] = null;
@@ -749,6 +757,9 @@ export function liveQualificationServices(options: {
     flowMetadata(flowId) {
       const flow = getFlow(flowId);
       return flow ? parseFlowMetadata(flow) : null;
+    },
+    readHosts(flowId) {
+      return getFlowReadHosts(flowId)?.hosts ?? [];
     },
     version(flowId, versionId) {
       const flow = getFlow(flowId), version = getFlowVersion(versionId);
