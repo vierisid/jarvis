@@ -501,6 +501,8 @@ export function createSchema(db: Database): void {
  * to when it was created, the latest time known to precede its closure. The
  * record is JSON written by this code, but json_valid guards the read so one
  * corrupt record cannot fail schema init; it then falls back to the deadline.
+ * A pending row that still carries a close time (an older build reopened it)
+ * is cleared, so closed_at is NULL exactly while a request is pending.
  * Writes only rows that need it, so a store with none is one scan at boot.
  */
 function ensureHumanRequestClosedAt(db: Database): void {
@@ -510,6 +512,8 @@ function ensureHumanRequestClosedAt(db: Database): void {
       CASE WHEN json_valid(record) THEN json_extract(record, '$.created') END,
       deadline)
     WHERE status <> 'pending' AND closed_at IS NULL`);
+  // An older build reopening a shared form leaves the old close time on a pending row.
+  db.run(`UPDATE workflow_human_request SET closed_at = NULL WHERE status = 'pending' AND closed_at IS NOT NULL`);
 }
 
 /**

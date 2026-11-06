@@ -15,13 +15,13 @@ export function forgetDraft(request: HumanRequest) {
 export function localDraftRequests(): HumanRequest[] {
   const result: HumanRequest[] = [];
   try {
-    for (let i=0; i<sessionStorage.length; i++) {
-      const key=sessionStorage.key(i); if (!key?.startsWith(contextPrefix)) continue;
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const key = sessionStorage.key(i); if (!key?.startsWith(contextPrefix)) continue;
       try {
-        const request=JSON.parse(sessionStorage.getItem(key) ?? 'null');
+        const request = JSON.parse(sessionStorage.getItem(key) ?? 'null');
         if (!request || typeof request.id !== 'string' || !Array.isArray(request.fields)
           || !Number.isFinite(request.created) || !Number.isFinite(request.deadline)) continue;
-        const answers=JSON.parse(sessionStorage.getItem(draftKey(request)) ?? '{}');
+        const answers = JSON.parse(sessionStorage.getItem(draftKey(request)) ?? '{}');
         if (filled(answers).length) result.push(request);
       } catch { /* A corrupt entry cannot hide the other recoverable drafts. */ }
     }
@@ -37,8 +37,8 @@ export function filled(answers: unknown): string[] {
 export function localDraftIds(): string[] {
   const ids = new Set<string>();
   try {
-    for (let i=0; i<sessionStorage.length; i++) {
-      const key=sessionStorage.key(i); if (!key?.startsWith('jarvis:workflow-input:')) continue;
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const key = sessionStorage.key(i); if (!key?.startsWith('jarvis:workflow-input:')) continue;
       try { if (filled(JSON.parse(sessionStorage.getItem(key) ?? '{}')).length) ids.add(key.slice('jarvis:workflow-input:'.length).split(':')[0]!); }
       catch { /* Ignore a corrupt entry. */ }
     }
@@ -57,10 +57,10 @@ export function storedAnswers(request: HumanRequest): Record<string, unknown> {
 export function answerOnlyDrafts(id: string): Array<{ storageKey: string; answers: Record<string, unknown> }> {
   const result: Array<{ storageKey: string; answers: Record<string, unknown> }> = [];
   try {
-    for (let i=0; i<sessionStorage.length; i++) {
-      const key=sessionStorage.key(i);
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const key = sessionStorage.key(i);
       if (key !== `jarvis:workflow-input:${id}` && !key?.startsWith(`jarvis:workflow-input:${id}:`)) continue;
-      try { const answers=JSON.parse(sessionStorage.getItem(key!) ?? '{}'); if (filled(answers).length) result.push({ storageKey: key!, answers }); }
+      try { const answers = JSON.parse(sessionStorage.getItem(key!) ?? '{}'); if (filled(answers).length) result.push({ storageKey: key!, answers }); }
       catch { /* Ignore a corrupt entry. */ }
     }
   } catch { /* Browser storage is optional. */ }

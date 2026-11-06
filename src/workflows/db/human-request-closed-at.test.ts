@@ -52,6 +52,14 @@ test('an old store gains closed_at, its index, and close times from each closed 
   expect(index).toEqual(['project_id', 'closed_at', 'id']);
 });
 
+test('a pending row left with a close time by an older build is cleared', () => {
+  oldStore([{ id: 'reopened', status: 'pending', created: 300, deadline: 900 }]);
+  initWorkflowDb(path);
+  getWorkflowDb().run(`UPDATE workflow_human_request SET closed_at=250`);
+  closeWorkflowDb();
+  initWorkflowDb(path);
+  expect(closedAt()).toEqual({ reopened: null });
+});
 test('reopening the store does not move a close time', () => {
   oldStore([{ id: 'submitted', status: 'submitted', created: 300, deadline: 900 }]);
   initWorkflowDb(path);

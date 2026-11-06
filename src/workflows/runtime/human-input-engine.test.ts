@@ -388,7 +388,7 @@ test('close time is stamped once, when the request closes, and a later dismissal
   db.run('UPDATE workflow_human_request SET closed_at=? WHERE id=?', [1000, request.id]);
   expect(dismissHumanInput(DEFAULT_IDS.project, request.id, Date.now() + 10000).status).toBe(200);
   expect(closedAt()).toBe(1000);
-  expect(requestFor(run.id)?.closedAt ?? 1000).toBe(1000);
+  expect((await import('./human-input')).getHumanInput(DEFAULT_IDS.project, request.id)!.closedAt).toBe(1000);
   expect(JSON.parse(db.query<{ record: string }, [string]>('SELECT record FROM workflow_human_request WHERE id=?').get(request.id)!.record).closedAt).toBeUndefined();
 });
 

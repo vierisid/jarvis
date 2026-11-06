@@ -149,15 +149,15 @@ test('a dismissed request with a kept draft no longer counts, and an answered on
 
 test('reopening a shared request never prefills or submits the expired generation draft', async () => {
   const writes: any[] = [];
-  const http = createHostTransport((async (_url, init) => { writes.push(JSON.parse(String(init?.body))); return Response.json({request:{...request,status:'submitted'}}); }) as typeof fetch);
-  const render = (value: HumanRequest) => root.render(<Forms.HumanInputInbox queue={{requests:[value],error:'',refresh:async()=>{}}} http={http}/>);
-  await React.act(async()=>render(request)); await change('textarea','Old response');
-  await React.act(async()=>render({...request,status:'expired'}));
-  await React.act(async()=>render({...request,generation:1,runId:'next-run'}));
+  const http = createHostTransport((async (_url, init) => { writes.push(JSON.parse(String(init?.body))); return Response.json({ request: { ...request, status: 'submitted' } }); }) as typeof fetch);
+  const render = (value: HumanRequest) => root.render(<Forms.HumanInputInbox queue={{ requests: [value], error: '', refresh: async () => {} }} http={http} />);
+  await React.act(async () => render(request)); await change('textarea', 'Old response');
+  await React.act(async () => render({ ...request, status: 'expired' }));
+  await React.act(async () => render({ ...request, generation: 1, runId: 'next-run' }));
   expect((host.querySelector('textarea') as HTMLTextAreaElement).value).toBe('');
   expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toContain('Old response');
-  await change('textarea','New response'); await change('input[type="number"]','0'); await change('select','false');
-  await click('Submit update'); expect(writes).toEqual([{decision:'submit',generation:1,answers:{progress:'New response',count:0,blocked:false}}]);
+  await change('textarea', 'New response'); await change('input[type="number"]', '0'); await change('select', 'false');
+  await click('Submit update'); expect(writes).toEqual([{ decision: 'submit', generation: 1, answers: { progress: 'New response', count: 0, blocked: false } }]);
   expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toContain('Old response');
 });
 
@@ -278,4 +278,40 @@ test('a draft request read once beyond the page is not read again on each poll',
   for (let i = 0; i < 3; i++) await React.act(async () => { await queue.refresh(); });
   expect(urls.filter(url => url.endsWith('/test-request'))).toHaveLength(1);
   expect((host.querySelector('textarea') as HTMLTextAreaElement).value).toBe('Beyond page one');
+});
+test('a retained closed card leaves once its draft is discarded and the server stops listing it', async () => {
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const render = (requests: HumanRequest[]) => root.render(<Forms.HumanInputInbox queue={{ requests, error: '', refresh: async () => {} }} http={http} />);
+  await React.act(async () => render([request])); await change('textarea', 'Typed then discarded');
+  await React.act(async () => render([{ ...request, status: 'expired' }]));
+  await click('Discard unsent answers');
+  await React.act(async () => render([]));
+  expect(host.querySelector('article')).toBeNull();
+});
+test('a recovered card leaves as soon as its answers are discarded', async () => {
+  const { rememberDraft } = await import('./human-input-drafts'); rememberDraft({ ...request, status: 'expired' });
+  sessionStorage.setItem('jarvis:workflow-input:test-request', JSON.stringify({ progress: 'Recovered only' }));
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputInbox queue={{ requests: [], error: '', refresh: async () => {} }} http={http} />));
+  expect(host.textContent).toContain('Unsent answer');
+  await click('Discard unsent answers');
+  expect(host.querySelector('article')).toBeNull();
+});
+test('history keeps a response that a new close pushes off the recent page after older pages loaded', async () => {
+  const closed = (id: string, closedAt: number) => ({ ...request, id, status: 'submitted' as const, answers: { progress: id }, closedAt, runs: [{ runId: 'run', versionId: 'v', status: 'SUCCEEDED' }] });
+  const http = createHostTransport((async () => Response.json({ requests: [closed('c3', 3)], nextCursor: null })) as unknown as typeof fetch);
+  const render = (requests: HumanRequest[]) => root.render(<Forms.HumanInputInbox queue={{ requests, error: '', refresh: async () => {}, historyCursor: '[3,"c3"]' }} http={http} />);
+  await React.act(async () => render([closed('c5', 5), closed('c4', 4)]));
+  await click('Load older responses');
+  // c6 closes; the page now ends at c5 and c4 is neither on it nor on the loaded page.
+  await React.act(async () => render([closed('c6', 6), closed('c5', 5)]));
+  expect(host.querySelectorAll('article')).toHaveLength(4);
+  expect(host.textContent).toContain('Response history (4)');
+});
+test('a deep link that is not found says so, and Check again reads it again', async () => {
+  let reads = 0;
+  const http = createHostTransport((async () => { reads++; return Response.json({ error: 'Request not found' }, { status: 404 }); }) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputInbox queue={{ requests: [], error: '', refresh: async () => {} }} http={http} focusId="missing" />));
+  expect(host.textContent).toContain('was not found in this workspace'); expect(reads).toBe(1);
+  await click('Check again'); expect(reads).toBe(2);
 });

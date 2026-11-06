@@ -183,23 +183,33 @@ export function HumanInputInbox({ queue, http, focusId }: { queue: HumanInputQue
   const [focused, setFocused] = useState<HumanRequest | null>(null), [focusError, setFocusError] = useState('');
   const [older, setOlder] = useState<HumanRequest[]>([]), [cursor, setCursor] = useState<string | null | undefined>();
   const [loading, setLoading] = useState(false), [historyError, setHistoryError] = useState('');
+  const [focusAttempt, setFocusAttempt] = useState(0);
+  // Closed requests seen on the recent page once older pages are loaded: one that
+  // a new close pushes off page one is then on neither, and would drop out of history.
+  const leftPage = useRef(new Map<string, HumanRequest>());
   // Keyed on whether the queue has the request, not on each poll's new array.
   const focusListed = !!focusId && queue.requests.some(r => r.id === focusId);
   useEffect(() => {
     let live = true; setFocused(null); setFocusError('');
     if (focusId && !focusListed) {
-      void http.json(`/api/workflow-inputs/${encodeURIComponent(focusId)}`).then(value => {
+      void http.request(`/api/workflow-inputs/${encodeURIComponent(focusId)}`).then(async response => {
+        if (!live) return;
+        if (response.status === 404) { setFocusError('This request was not found in this workspace.'); return; }
+        if (!response.ok) throw Error();
+        const value = await response.json();
         if (live) setFocused(value.request);
       }).catch(() => { if (live) setFocusError('This request could not be loaded. Check your connection and try again.'); });
     }
     return () => { live = false; };
-  }, [focusId, focusListed, http]);
+  }, [focusId, focusListed, focusAttempt, http]);
+  if (cursor !== undefined) for (const request of queue.requests) if (request.status !== 'pending') leftPage.current.set(instanceKey(request), request);
   const all = new Map<string, HumanRequest>();
-  for (const request of [...older, ...(focused ? [focused] : []), ...queue.requests]) all.set(instanceKey(request), request);
+  for (const request of [...older, ...leftPage.current.values(), ...(focused ? [focused] : []), ...queue.requests]) all.set(instanceKey(request), request);
   for (const request of all.values()) {
     const key = instanceKey(request);
     if (humanRequestNeedsAttention(request) || hasLocalDraft(request) || request.id === focusId || retained.current.has(key)) retained.current.set(key, request);
-    if (request.dismissedAt && !hasLocalDraft(request)) retained.current.delete(key);
+    // hasLocalDraft is false once a request is dismissed: a dismissed card always leaves.
+    if (request.dismissedAt) retained.current.delete(key);
   }
   // Keep an in-memory card after it falls out of the recent page, even when
   // browser storage is full. On remount recover the persisted copy read-only.
@@ -208,7 +218,10 @@ export function HumanInputInbox({ queue, http, focusId }: { queue: HumanInputQue
   // be shown as an unsent answer. With nothing typed into it there is nothing to show.
   const recoveryOnly = (request: HumanRequest) => [...all.values()].some(r => r.id === request.id && (r.generation ?? 0) > (request.generation ?? 0))
     || (!all.has(instanceKey(request)) && request.status === 'pending');
-  for (const [key, request] of [...retained.current]) if (recoveryOnly(request) && !unsentDraft(request)) retained.current.delete(key);
+  // Nor does a card the server stopped listing, unless it holds an answer or the link names it.
+  for (const [key, request] of [...retained.current]) {
+    if ((recoveryOnly(request) || !all.has(key)) && !unsentDraft(request) && request.id !== focusId) retained.current.delete(key);
+  }
   const visible = [...retained.current.values()].sort((a,b) => Number(b.status === 'pending') - Number(a.status === 'pending') || b.created - a.created);
   // Saved answers whose request the server no longer has and whose labels were never stored.
   const known = new Set([...all.values(), ...retained.current.values(), ...recovered].map(r => r.id));
@@ -227,12 +240,13 @@ export function HumanInputInbox({ queue, http, focusId }: { queue: HumanInputQue
   if (!visible.length && !recent.length && !recovered.length && !orphaned.length && !queue.error && !focusError) return null;
   return <section className="brief-human-inbox" aria-label="Workflow requests">
     {queue.error && <p role="status">{queue.error} <button onClick={() => void queue.refresh()}>Check again</button></p>}
-    {focusError && <p role="status">{focusError} <button onClick={() => void queue.refresh()}>Check again</button></p>}
+    {focusError && <p role="status">{focusError} <button onClick={() => setFocusAttempt(n => n + 1)}>Check again</button></p>}
     {visible.map(request => {
       const recovery = recoveryOnly(request);
       return <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} focused={request.id === focusId && !recovery} recoveryOnly={recovery} onAnswers={remember(instanceKey(request))} />;
     })}
-    {recovered.map(request => <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} recoveryOnly />)}
+    {recovered.map(request => <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} recoveryOnly
+      onAnswers={answers => { if (!filled(answers).length) setEmptied(n => n + 1); }} />)}
     {orphaned.map(draft => <UnavailableDraft key={draft.storageKey} draft={draft} discarded={() => setEmptied(n => n + 1)} />)}
     {(!!recent.length || !!nextCursor) && <details className="brief-human-history"><summary>Response history ({recent.length})</summary>
       {recent.map(request => <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} />)}
