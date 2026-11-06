@@ -88,9 +88,9 @@ function RestoreLegacy({ href }: { href: string }) {
   return null;
 }
 
-export function BriefHost({ route, rooms, navigation, conversation, guardShell, visibility, children }: {
+export function BriefHost({ route, rooms, navigation, conversation, guardShell, visibility, children, notice }: {
   route: BriefRoute; rooms: BriefRoomRegistry; navigation?: BriefNavigationBinding; conversation?: BriefConversationBinding;
-  children?: ReactNode;
+  children?: ReactNode; notice?: ReactNode;
   guardShell?: (shell: BriefShellPort) => BriefShellPort; visibility?: { open: boolean; setOpen(value: boolean): void };
 }) {
   const [sidebar, setSidebar] = useState<"expanded" | "rail">("expanded");
@@ -108,6 +108,7 @@ export function BriefHost({ route, rooms, navigation, conversation, guardShell, 
   return (
     <div className={`brief-root${activated ? "" : " brief-foundation"}`} data-brief-room={route.room} data-brief-theme={theme}>
       <NavigationShell shell={shell} rooms={rooms} binding={navigation} conversation={conversation}>
+      {notice}
       {children ?? (Body ? <Body key={route.room} shell={shell} /> : (
         <section className="brief-foundation__notice" aria-labelledby="brief-unavailable-title">
           <p className="brief-foundation__label">Brief preview</p>
