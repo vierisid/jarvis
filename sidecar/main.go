@@ -15,6 +15,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/jarvis/sidecar/internal/notices"
 )
 
 func main() {
@@ -43,10 +45,16 @@ func main() {
 	showVersion := flag.Bool("version", false, "Print the sidecar version and exit")
 	testMode := flag.Bool("test", false, "Run built-in platform tests (requires build with -tags sidecartest)")
 	setupMode := flag.Bool("setup", false, "Run first-launch onboarding (permissions, autostart), then start")
+	showNotices := flag.Bool("third-party-notices", false, "Print the third-party license notices and exit")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println(sidecarVersion)
+		os.Exit(0)
+	}
+
+	if *showNotices {
+		fmt.Print(notices.Text)
 		os.Exit(0)
 	}
 
@@ -59,6 +67,7 @@ Usage:
   jarvis --setup          Run first-launch onboarding (permissions, autostart), then start
   jarvis --test <cmd>     Run a built-in platform test (test build only)
   jarvis --version        Print the sidecar version and exit
+  jarvis --third-party-notices  Print the third-party license notices and exit
   jarvis --help           Show this help`)
 		os.Exit(0)
 	}
