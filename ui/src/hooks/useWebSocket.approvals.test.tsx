@@ -29,7 +29,7 @@ class FakeSocket {
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((event: { data: unknown }) => void) | null = null;
-  constructor() { sockets.push(this); }
+  constructor(readonly url: string) { sockets.push(this); }
   send() {}
   close() { this.readyState = FakeSocket.CLOSED; }
 }
@@ -105,6 +105,10 @@ async function answerApprovals(rows: unknown[]) {
 async function deliver(socket: FakeSocket, event: { data: unknown }) {
   await act(async () => { socket.onmessage?.(event); });
 }
+
+test("the dashboard socket says it is a full dashboard, which answers only room actions addressed to it (#1157)", () => {
+  expect(sockets[0]!.url).toEndWith(`//${window.location.host}/ws?client=dashboard`);
+});
 
 describe("approval rehydrate on socket open merges with live events (#1087)", () => {
   test("an approval_request that lands while the pending list is in flight survives the answer", async () => {
