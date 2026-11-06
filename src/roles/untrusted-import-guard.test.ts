@@ -97,6 +97,12 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       'goals/rhythm.ts',
       'roles/prompt-builder.ts',
       'sites/prompt-context.ts',
+      // #1155: a forwarded channel message, framed into a turn's history or
+      // message. No cap follows the frame: the dialogue compactor, the one
+      // place that cuts history, is handed a stand-in (AgentService.loadDialogue),
+      // and a Brief turn whose history holds a forward is tainted, so it runs
+      // on the classic path, which does not compact.
+      'vault/conversations.ts',
       'vault/extractor.ts',
     ]);
   });

@@ -7,7 +7,7 @@
  * AgentService and orchestrator with a recording provider.
  */
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { AgentService } from './agent-service.ts';
+import { AgentService, FORWARD_STAND_IN } from './agent-service.ts';
 import { ChannelService } from './channel-service.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
@@ -65,7 +65,7 @@ function fixture(routerFirst: boolean, onFirstCall?: () => void, plain = false, 
   const svc = new ChannelService(config as never, service);
   const handle = (m: ChannelMessage) =>
     (svc as unknown as { handleChannelMessage(m: ChannelMessage): Promise<string> }).handleChannelMessage(m);
-  return { handle, config, seen, approvals, learned, convTurns, executions: () => executions };
+  return { handle, config, service, seen, approvals, learned, convTurns, executions: () => executions };
 }
 
 const message = (text: string, forwarded: boolean): ChannelMessage => ({
@@ -192,7 +192,34 @@ test('#1155 review: a forward older than every turn\'s history no longer taints 
     insertConversationMessage(getDb(), row.id, { role: 'user', content: `last ${i}` }, `last-${i}`, Date.now() + 100_000 + i);
   }
   expect(holdsRecentForward(row.id)).toBe(false);
+  // A Brief turn reads 80 messages besides its own two rows, so it stays
+  // tainted two messages longer, and only then is not.
+  expect(isChannelGuestConversation(row.id, f.config.channels as never)).toBe(true);
+  for (let i = 0; i < 2; i++) {
+    insertConversationMessage(getDb(), row.id, { role: 'user', content: `brief ${i}` }, `brief-${i}`, Date.now() + 200_000 + i);
+  }
   expect(isChannelGuestConversation(row.id, f.config.channels as never)).toBe(false);
+});
+
+test('#1155 CI pin: the dialogue compactor is handed a stand-in for a forward, never its framed text', async () => {
+  const f = fixture(false);
+  const compacted: LLMMessage[][] = [];
+  Object.assign(f.service as unknown as Record<string, unknown>, {
+    dialogueCompactor: { compact: async (_id: string, messages: LLMMessage[]) => { compacted.push(structuredClone(messages)); return messages; } },
+  });
+  await f.handle(message(FORWARDED, true));
+  f.seen.length = 0;
+  await f.handle(message('ok, do it', false));
+  const input = JSON.stringify(compacted.at(-1));
+  // It cuts what it summarizes, so a frame must never reach it, nor the forward's words.
+  expect(input).toContain(FORWARD_STAND_IN);
+  expect(input).not.toContain(FORWARDED);
+  expect(input).not.toContain('Someone else wrote it');
+  // What the model reads is the forward, framed, in place of the stand-in.
+  const sent = JSON.stringify(f.seen[0]);
+  expect(sent).toContain('Someone else wrote it');
+  expect(sent).toContain(FORWARDED);
+  expect(sent).not.toContain(FORWARD_STAND_IN);
 });
 
 test('#1155 review: a forward is never stored without its mark', async () => {

@@ -906,16 +906,26 @@ export class AgentService implements Service, IAgentService {
       // A message the owner forwarded is read back as someone else's words,
       // framed fresh each time (#1155 review). Not the trailing one when it
       // is this turn's: the caller drops that, and frames it itself.
+      //
+      // Framed AFTER compaction, never before: the compactor cuts each message
+      // it summarizes to 800 characters, and a cut frame is a block that never
+      // ends (roles/untrusted.ts, #582). It is handed a stand-in for each
+      // forward instead, so the forward's words never reach the summary,
+      // which every later turn reads as a system message; a stand-in kept in
+      // the verbatim tail is replaced by the framed forward.
       const forwards = forwardedMessageIds(conversationId);
-      const dialogue: LLMMessage[] = messages
-        .map((m, i) => ({
-          role: m.role as 'user' | 'assistant',
-          content: forwards.has(m.id) && !(i === messages.length - 1 && m.content === currentText)
-            ? frameForward(m.content) : m.content,
-        }));
+      const framedFor = new Map<LLMMessage, LLMMessage>();
+      const dialogue: LLMMessage[] = messages.map((m, i) => {
+        const role = m.role as 'user' | 'assistant';
+        if (!forwards.has(m.id) || (i === messages.length - 1 && m.content === currentText)) return { role, content: m.content };
+        const standIn: LLMMessage = { role, content: FORWARD_STAND_IN };
+        framedFor.set(standIn, { role, content: frameForward(m.content) });
+        return standIn;
+      });
+      const framed = (list: LLMMessage[]) => list.map((m) => framedFor.get(m) ?? m);
 
-      if (!this.dialogueCompactor) return dialogue.slice(-10);
-      return await this.dialogueCompactor.compact(conversationId, dialogue);
+      if (!this.dialogueCompactor) return framed(dialogue.slice(-10));
+      return framed(await this.dialogueCompactor.compact(conversationId, dialogue));
     } catch (err) {
       console.warn('[AgentService] Failed to load recent dialogue:', err);
       return [];
@@ -1429,6 +1439,9 @@ export class AgentService implements Service, IAgentService {
     this.personality = personality;
   }
 }
+
+/** What the dialogue compactor reads in place of a forward (#1155): see `loadDialogue`. */
+export const FORWARD_STAND_IN = '[A message I forwarded, written by someone else.]';
 
 /**
  * Most tokens a guest's reply may use (#1155): about one Telegram message.

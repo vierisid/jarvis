@@ -1205,7 +1205,7 @@ export function isChannelGuestConversation(conversationId: string, channels: Jar
   try {
     row = getDb().query(`SELECT channel, sender,
       EXISTS (SELECT 1 FROM conversation_forwards f JOIN (SELECT id FROM conversation_messages
-        WHERE conversation_id = c.id ORDER BY created_at DESC, rowid DESC LIMIT ${FORWARD_WINDOW_MESSAGES}) m ON m.id = f.message_id) AS forwards
+        WHERE conversation_id = c.id ORDER BY created_at DESC, rowid DESC LIMIT ${FORWARD_WINDOW_MESSAGES + 2}) m ON m.id = f.message_id) AS forwards
       FROM conversations c WHERE c.id = ?`).get(conversationId) as typeof row;
   } catch (err) {
     // Fail closed: tainting a turn only makes its gated actions ask first.
@@ -1214,7 +1214,10 @@ export function isChannelGuestConversation(conversationId: string, channels: Jar
   }
   if (!row || (row.channel !== 'telegram' && row.channel !== 'discord')) return false;
   // A message the owner forwarded is someone else's words too (#1155 review),
-  // while it is among the messages a turn reads back.
+  // while it is among the messages a turn reads back. Two more than the
+  // window: a Brief turn stores its own user and assistant rows first and
+  // then reads 80 others (ChatTurnRepository.history), so a framed forward
+  // never reaches the untainted conv path, whose compactor would cut it.
   if (!row.sender || row.forwards) return true;
   const userId = /^user:([^/]+)\//.exec(row.sender)?.[1];
   const raw = row.channel === 'telegram' ? channels?.telegram?.allowed_users : channels?.discord?.allowed_users;
