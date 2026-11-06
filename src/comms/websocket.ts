@@ -10,6 +10,7 @@ import { PANEL_SESSION_COOKIE } from '../sidecar/panel-sessions.ts';
 import { getCookie } from '../util/cookie.ts';
 import { rejectsCrossSiteWrite } from './cross-site-guard.ts';
 import { isServiceWorkerScriptRequest, serviceWorkerKillSwitch } from './service-worker-kill-switch.ts';
+import { limitUndeclaredBody, MAX_REQUEST_BODY_BYTES } from '../util/bounded-body.ts';
 
 /** Constant-time string comparison to prevent timing attacks */
 export type WSMessage = {
@@ -89,6 +90,9 @@ export type WSClientHandler = {
   onConnect: (ws: ServerWebSocket<unknown>) => void;
   onDisconnect: (ws: ServerWebSocket<unknown>) => void;
 };
+
+/** What a daemon socket carries from its upgrade. */
+type WsData = { sidecar_id?: string; channel?: string; proxy_target?: string; proxy_protocols?: string[]; panel_session?: string; _proxyUpstream?: WebSocket };
 
 type RouteHandler = (req: Request) => Response | Promise<Response>;
 type MethodRoutes = { [method: string]: RouteHandler };
@@ -204,6 +208,10 @@ export class WebSocketServer {
   private insecureOpenAccess = false;
   private corsOrigin: string | null = null;
   private proxyLimiter = new ProxyRateLimiter();
+  /** Request-body limit in bytes, declared or chunked; a test lowers it. */
+  private maxRequestBodyBytes = MAX_REQUEST_BODY_BYTES;
+  /** Bun's own limit when a test sets it apart from the backstop; null = the same. */
+  private nativeBodyLimitBytes: number | null = null;
 
   constructor(port: number = 3142, unixPath?: string, private readonly hostname?: string) {
     this.port = port;
@@ -213,6 +221,17 @@ export class WebSocketServer {
 
   setInsecureOpenAccess(enabled: boolean): void {
     this.insecureOpenAccess = enabled;
+  }
+
+  /**
+   * Lower the request-body limit (tests); takes effect at the next start().
+   * `nativeBytes` sets Bun's maxRequestBodySize apart from the backstop, so a
+   * test on Bun >= 1.4 (which applies it to chunked bodies itself) can still
+   * reach the backstop.
+   */
+  setMaxRequestBodyBytes(bytes: number, nativeBytes?: number): void {
+    this.maxRequestBodyBytes = bytes;
+    this.nativeBodyLimitBytes = nativeBytes ?? null;
   }
 
   setCorsOrigin(origin: string): void {
@@ -283,11 +302,12 @@ export class WebSocketServer {
     // one variant, so the pair is cast to the port variant; at runtime Bun
     // receives exactly one of the two keys.
     const listenOpts = (this.unixPath ? { unix: this.unixPath } : { port: this.port, ...(this.hostname ? { hostname: this.hostname } : {}) }) as { port: number };
-    this.server = Bun.serve<{ sidecar_id?: string; channel?: string; proxy_target?: string; proxy_protocols?: string[]; panel_session?: string; _proxyUpstream?: WebSocket }>({
-      ...listenOpts,
-      idleTimeout: 30, // seconds — prevent timeout during heavy processing (OCR, PowerShell)
-
-      async fetch(req, server) {
+    // The routing below, kept apart from Bun.serve so every request passes
+    // the body limit in `fetch` before it is routed.
+    const routing = {
+      // `native` is the request Bun handed in; `req` may be a rebuilt copy
+      // (limitUndeclaredBody), which server.timeout and requestIP do not know.
+      async fetch(req: Request, server: Server<WsData>, native: Request): Promise<Response | undefined> {
         const url = new URL(req.url);
         const pathname = url.pathname;
         /** Set by the auth block when this request carried a live panel
@@ -544,7 +564,7 @@ export class WebSocketServer {
             const handler = exactRoute[req.method];
             if (handler) {
               // Finishing onboarding prepares the OKR before the atomic dashboard handoff.
-              if (pathname === '/api/onboarding-next/v1/journey/transition' && req.method === 'POST') server.timeout(req, 120);
+              if (pathname === '/api/onboarding-next/v1/journey/transition' && req.method === 'POST') server.timeout(native, 120);
               return handler(req);
             }
             return new Response('Method Not Allowed', { status: 405 });
@@ -657,6 +677,34 @@ export class WebSocketServer {
         }
 
         return new Response('Not Found', { status: 404 });
+      },
+    };
+
+    this.server = Bun.serve<WsData>({
+      ...listenOpts,
+      idleTimeout: 30, // seconds - prevent timeout during heavy processing (OCR, PowerShell)
+      // One body limit for every route. Bun refuses a declared length past it;
+      // a chunked body is counted here, because Bun < 1.4 does not apply this
+      // option to one (util/bounded-body.ts).
+      maxRequestBodySize: self.nativeBodyLimitBytes ?? self.maxRequestBodyBytes,
+
+      async fetch(rawReq, server) {
+        const limited = limitUndeclaredBody(rawReq, self.maxRequestBodyBytes);
+        const tooLarge = () => Response.json({ error: 'Request body too large' }, { status: 413, headers: { Connection: 'close' } });
+        let res: Response | undefined;
+        try {
+          res = await routing.fetch(limited.req, server, rawReq);
+        } catch (err) {
+          // A route that let the failed read throw still gets the 413.
+          if (limited.exceeded()) return tooLarge();
+          throw err;
+        }
+        if (limited.exceeded()) {
+          // The route's answer is dropped; a proxied one may still be streaming.
+          res?.body?.cancel().catch(() => {});
+          return tooLarge();
+        }
+        return res;
       },
 
       websocket: {
