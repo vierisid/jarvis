@@ -28,7 +28,7 @@
 .brief-root .brief-host-pending .brief-decision-subtitle { margin: 4px 0 0; color: var(--brief-secondary); font-size: 14px; }
 
 /* Global emergency hold: a state of Jarvis itself, not a request waiting on the person, so it reads apart from the Needs-you banner.
-   It renders outside BriefHost, so it carries .brief-root itself for the tokens, as the toast does. */
+   It renders inside BriefHost so the fixed navigation shell cannot cover it. */
 .brief-root.brief-emergency-banner { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin:12px 24px; padding:12px 16px; border:1px solid var(--brief-error-text); border-left-width:4px; background:var(--brief-error-surface); color:var(--brief-ink); border-radius:var(--brief-corner-control); }
 .brief-emergency-banner > p { margin:0; flex:1 1 320px; line-height:1.5; overflow-wrap:anywhere; }
 .brief-emergency-banner strong { color:var(--brief-error-text); }
