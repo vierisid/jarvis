@@ -42,8 +42,10 @@
  * `unknownActionCategory`, because a category label cannot bound it.
  *
  * This file is imported BY THE ENGINE BUNDLE (see `PATCHED_VENDOR_SOURCES` in
- * `runner/engine-runtime/build.ts`). Keep it pure: type-only imports, no node
- * built-ins, no daemon singletons.
+ * `runner/engine-runtime/build.ts`). Keep it pure: type-only imports, and
+ * value imports only of other registered sources (`engine-bundle-purity.test.ts`);
+ * no daemon singletons. `./http-egress` is one (the egress guard and the #1153
+ * read-host scope, whose only state is that per-process scope).
  */
 
 import { isHubspotContact, HUBSPOT_PIECE, HUBSPOT_UPSERT } from './hubspot-contact';
