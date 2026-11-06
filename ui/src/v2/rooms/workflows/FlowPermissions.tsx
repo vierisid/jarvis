@@ -127,15 +127,35 @@ function ReadHosts({ flow, list: fromList, name, onChanged }: { flow: Flow; list
   const acting = useRef(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  /** The stored list, after a refused write: shown at once, and the room list refreshed too. */
+  const reload = async (): Promise<void> => {
+    try {
+      const res = await fetch(`/api/workflows/${encodeURIComponent(flow.id)}`);
+      const body = res.ok ? await res.json().catch(() => null) as { flow?: { readHosts?: ReadHostList } } | null : null;
+      const stored = body?.flow?.readHosts;
+      if (stored && Array.isArray(stored.hosts)) { setList(stored); current.current = stored; }
+    } catch { /* the room's next poll brings it */ }
+    onChanged();
+  };
+
   /** `next` is built after any confirmation, from the list as it is then. */
   const save = async (next: (hosts: string[]) => string[], ask?: { title: string; message: string }): Promise<boolean> => {
     if (acting.current) return false;
     acting.current = true; setBusy(true); setMessage(null);
     try {
       if (ask && !await confirmDialog(ask.message, { title: ask.title, confirmLabel: "Add host", danger: true })) return false;
+      // `expected`: the list this edit started from. The server refuses the write (409)
+      // when the stored list is no longer that one, so a stale view cannot re-add a
+      // host someone else removed.
+      const expected = current.current.hosts;
       const res = await fetch(`/api/workflows/${encodeURIComponent(flow.id)}/read-hosts`, {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hosts: next(current.current.hosts) }),
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hosts: next(expected), expected }),
       });
+      if (res.status === 409) {
+        setMessage(await errorText(res, "The read list changed since this edit started"));
+        await reload();
+        return false;
+      }
       if (!res.ok) { setMessage(await errorText(res, "Could not change the read list")); return false; }
       const saved = await res.json().catch(() => null) as { readHosts?: ReadHostList } | null;
       if (saved?.readHosts && Array.isArray(saved.readHosts.hosts)) { setList(saved.readHosts); current.current = saved.readHosts; }

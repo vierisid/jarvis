@@ -42,7 +42,8 @@ export interface Flow {
    * Hosts this flow's HTTP GET steps may read without an approval card.
    * `grantedBy` is `upgrade` when the list was seeded from what the flow
    * already read before the list existed. Set through
-   * `POST /api/workflows/:id/read-hosts` (`{ hosts }`, `[]` clears). Absent
+   * `POST /api/workflows/:id/read-hosts` (`{ hosts, expected }`, `[]` clears;
+   * 409 when the stored list is no longer `expected`). Absent
    * from a daemon without the list.
    */
   readHosts?: {

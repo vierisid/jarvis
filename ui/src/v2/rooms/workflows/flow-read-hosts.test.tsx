@@ -12,12 +12,15 @@ type Flow = import('./useWorkflowsData').Flow;
 const flow = (readHosts?: Flow['readHosts']): Flow => ({ id: 'flow-1', externalId: 'x', projectId: 'p', status: 'DISABLED', publishedVersionId: null,
   metadata: null, codeSteps: { enabled: false, grantedBy: null, grantedAt: null }, ...(readHosts ? { readHosts } : {}), created: 1, updated: 1, displayName: 'Nightly report' });
 
+let get: (url: string) => Response = () => new NativeResponse('', { status: 404 });
+afterEach(() => { get = () => new NativeResponse('', { status: 404 }); });
 async function mount(f: Flow, post: (body: any) => Response, check: (host: HTMLElement, posts: any[], changed: () => number, act: (fn: () => unknown) => Promise<void>) => Promise<void>) {
   const React = await import('react'), { createRoot } = await import('react-dom/client');
   const { FlowPermissions } = await import('./FlowPermissions');
   const posts: any[] = [];
   let changes = 0;
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (!init?.method || init.method === 'GET') return get(url);
     const body = JSON.parse(String(init!.body)); posts.push({ url, method: init?.method, body }); return post(body);
   }) as typeof fetch;
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
@@ -51,7 +54,7 @@ test('adding a host asks first, then sends the whole list', async () => {
     expect(posts).toEqual([]);
     window.confirm = () => true;
     await act(() => button(host, 'Add')!.click());
-    expect(posts).toEqual([{ url: '/api/workflows/flow-1/read-hosts', method: 'POST', body: { hosts: ['api.example.com', 'data.example.org'] } }]);
+    expect(posts).toEqual([{ url: '/api/workflows/flow-1/read-hosts', method: 'POST', body: { hosts: ['api.example.com', 'data.example.org'], expected: ['api.example.com'] } }]);
     expect(changed()).toBe(1);
     expect(field(host).value).toBe('');
   });
@@ -61,7 +64,7 @@ test('removing a host narrows the list without asking', async () => {
   await mount(flow({ hosts: ['a.example.com', 'b.example.com'], grantedBy: 'user', grantedAt: 1 }), () => NativeResponse.json({}), async (host, posts, changed, act) => {
     window.confirm = () => { throw new Error('no confirmation expected'); };
     await act(() => button(host, 'Remove a.example.com')!.click());
-    expect(posts).toEqual([{ url: '/api/workflows/flow-1/read-hosts', method: 'POST', body: { hosts: ['b.example.com'] } }]);
+    expect(posts).toEqual([{ url: '/api/workflows/flow-1/read-hosts', method: 'POST', body: { hosts: ['b.example.com'], expected: ['a.example.com', 'b.example.com'] } }]);
     expect(changed()).toBe(1);
   });
 });
@@ -101,6 +104,8 @@ test('each change starts from the list the last one left, not the one first show
     await act(() => type(field(host), 'd.example.com'));
     await act(() => button(host, 'Add')!.click());
     expect(posts.map(p => p.body.hosts)).toEqual([['b.example.com', 'c.example.com'], ['c.example.com'], ['c.example.com', 'd.example.com']]);
+    // Each write says which list it started from.
+    expect(posts.map(p => p.body.expected)).toEqual([['a.example.com', 'b.example.com', 'c.example.com'], ['b.example.com', 'c.example.com'], ['c.example.com']]);
     expect(button(host, 'Remove a.example.com')).toBeUndefined();
   });
 });
@@ -143,4 +148,21 @@ test('picking another flow does not carry a typed host or an error over to it', 
     await React.act(async () => root.render(detail(b)));
     expect(field(host).value).toBe('');
   } finally { await React.act(async () => root.unmount()); host.remove(); }
+});
+
+test('a list changed elsewhere refuses the write (409): the message shows and the stored list replaces the stale one', async () => {
+  const message = 'the read list changed since this edit started; reload it and try again';
+  get = (url) => {
+    expect(url).toBe('/api/workflows/flow-1');
+    return NativeResponse.json({ flow: { readHosts: { hosts: ['b.example.com'], grantedBy: 'user', grantedAt: 3 } } });
+  };
+  await mount(flow({ hosts: ['a.example.com', 'b.example.com'], grantedBy: 'user', grantedAt: 1 }), () => NativeResponse.json({ error: message }, { status: 409 }), async (host, posts, changed, act) => {
+    await act(() => button(host, 'Remove b.example.com')!.click());
+    expect(posts).toEqual([{ url: '/api/workflows/flow-1/read-hosts', method: 'POST', body: { hosts: ['a.example.com'], expected: ['a.example.com', 'b.example.com'] } }]);
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(message);
+    // Reloaded: a.example.com was removed elsewhere, so it is no longer offered.
+    expect(button(host, 'Remove a.example.com')).toBeUndefined();
+    expect(button(host, 'Remove b.example.com')).toBeDefined();
+    expect(changed()).toBe(1);
+  });
 });
