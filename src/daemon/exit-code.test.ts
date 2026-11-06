@@ -35,6 +35,14 @@ afterAll(() => {
  * its event loop. That is a runtime defect, not slowness under load: 0 of
  * 1500 hung on Bun 1.4.2 (what CI runs), and a trivial import never hung.
  * 10s is over 20 times the slowest import that finished.
+ *
+ * Re-measured on 2026-11-06 (#1168) on the same machine, 1500 imports at 16
+ * at a time each: Bun 1.3.8 11 hung, 1.3.11 0, 1.3.12 0 (p99 626ms and
+ * 452ms). 1.3.11 is the oldest Bun Jarvis supports (#1146), so on a supported
+ * Bun this guard should not fire; it stays for a developer still on 1.3.8,
+ * where the same spin also shows as a `bun test` run that never ends, one
+ * pool thread at 100% CPU. The 1.3.8 images on Docker Hub did not reproduce
+ * it (0 of 1500), so measure on the host binary.
  */
 const IMPORT_TIMEOUT_MS = 10_000;
 
