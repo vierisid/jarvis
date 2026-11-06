@@ -192,12 +192,6 @@ test('#1155 review: a forward older than every turn\'s history no longer taints 
     insertConversationMessage(getDb(), row.id, { role: 'user', content: `last ${i}` }, `last-${i}`, Date.now() + 100_000 + i);
   }
   expect(holdsRecentForward(row.id)).toBe(false);
-  // A Brief turn reads 80 messages besides its own two rows, so it stays
-  // tainted two messages longer, and only then is not.
-  expect(isChannelGuestConversation(row.id, f.config.channels as never)).toBe(true);
-  for (let i = 0; i < 2; i++) {
-    insertConversationMessage(getDb(), row.id, { role: 'user', content: `brief ${i}` }, `brief-${i}`, Date.now() + 200_000 + i);
-  }
   expect(isChannelGuestConversation(row.id, f.config.channels as never)).toBe(false);
 });
 

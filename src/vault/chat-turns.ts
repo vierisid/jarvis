@@ -5,7 +5,8 @@ import type { BriefActivity, BriefChatEvent, BriefChatPayload, BriefSendTurn, Br
 import { ConversationRepository, ConversationRequestError } from './conversation-lifecycle.ts';
 import { ChatAttachmentRepository, attachmentIds } from './chat-attachments';
 import type { BriefAttachmentRef } from '../brief/attachment-contracts';
-import { frameForward, insertConversationMessage } from './conversations.ts';
+import { FORWARDED_MESSAGE_SOURCE, frameForward, insertConversationMessage } from './conversations.ts';
+export { FORWARDED_MESSAGE_SOURCE };
 
 export interface ChatTurn extends BriefTurnRef {
   text: string;
@@ -147,14 +148,25 @@ export class ChatTurnRepository {
   }
 
   history(ref: BriefTurnRef): LLMMessage[] {
+    return this.historyWithForwards(ref).messages;
+  }
+
+  /**
+   * The turn's history, and whether it holds a message the owner forwarded
+   * from a channel (#1155). Each forward is framed as someone else's words,
+   * and the caller taints the turn from `holdsForward`: decided from the rows
+   * read here, so the frame and the taint can never disagree about the window.
+   */
+  historyWithForwards(ref: BriefTurnRef): { messages: LLMMessage[]; holdsForward: boolean } {
     const turn = this.get(ref);
-    // A message the owner forwarded from a channel is framed as someone
-    // else's words (#1155); the turn is tainted too (channel-service).
-    return this.db.query<{ role: 'user' | 'assistant'; content: string; forwarded: number }, [string, string, string]>(`SELECT role, content,
+    const rows = this.db.query<{ role: 'user' | 'assistant'; content: string; forwarded: number }, [string, string, string]>(`SELECT role, content,
       EXISTS (SELECT 1 FROM conversation_forwards f WHERE f.message_id = conversation_messages.id) AS forwarded FROM conversation_messages
       WHERE conversation_id = ? AND role IN ('user', 'assistant') AND id NOT IN (?, ?)
-      ORDER BY created_at DESC, id DESC LIMIT 80`).all(turn.conversationId, turn.userMessageId, turn.assistantMessageId).reverse()
-      .map(({ role, content, forwarded }) => ({ role, content: forwarded ? frameForward(content) : content }));
+      ORDER BY created_at DESC, id DESC LIMIT 80`).all(turn.conversationId, turn.userMessageId, turn.assistantMessageId).reverse();
+    return {
+      messages: rows.map(({ role, content, forwarded }) => ({ role, content: forwarded ? frameForward(content) : content })),
+      holdsForward: rows.some((row) => row.forwarded === 1),
+    };
   }
 
   snapshot(conversationId: string, afterSequence: number) {
