@@ -125,7 +125,9 @@ function RunOutcomes({ request }: { request: HumanRequest }) {
   return <ul className="brief-human-runs" aria-label="Workflow continuation">{runs.map(run => {
     const href = '/?brief=1' + briefHash({ room: 'workflow-runs', selection: { flowId: request.flowId, runId: run.runId, ...(run.versionId ? { versionId: run.versionId } : {}) } });
     const status = run.status === 'SUCCEEDED' ? 'Workflow completed.'
-      : run.status === 'PAUSED' ? emergency === 'paused' ? 'Global emergency pause is holding this workflow. Saved responses will continue after you resume Jarvis.' : 'Workflow is waiting.'
+      // Under a global pause a waiting or queued run does not continue: say why.
+      : emergency === 'paused' && ['PAUSED', 'QUEUED'].includes(run.status) ? 'Global emergency pause is holding this workflow. Saved responses will continue after you resume Jarvis.'
+      : run.status === 'PAUSED' ? 'Workflow is waiting.'
       : ['QUEUED', 'RUNNING'].includes(run.status) ? 'Workflow is continuing.'
       : run.status === 'STOPPED' ? 'Workflow was stopped.'
       : ['UNKNOWN', 'UNAVAILABLE'].includes(run.status) ? 'Run status is unavailable. Open the run to check.'
