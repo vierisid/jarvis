@@ -138,3 +138,12 @@ test('a daemon without Authority wired shows nothing', async () => {
   await render();
   expect(host.querySelector('aside')).toBeNull();
 });
+
+test('workspace notices are inside the themed navigation content, not behind its fixed shell', async () => {
+  const { BriefHost } = await import('../entry/DashboardEntry');
+  const rooms:any={today:{title:'Today',Body:()=> <h1>Today content</h1>}};
+  await React.act(async()=>{root.render(<BriefHost route={{room:'today',selection:{}}} rooms={rooms} notice={<Banner state="paused" open={()=>{opened++;}}/>}/>);});
+  const banner=host.querySelector('[aria-label="Emergency controls status"]')!;
+  expect(banner.closest('.brief-root')).not.toBeNull();
+  expect(banner.closest('main')).not.toBeNull();expect(host.textContent).toContain('Today content');
+});
