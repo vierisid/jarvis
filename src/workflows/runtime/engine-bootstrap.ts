@@ -34,7 +34,7 @@ import {
 } from "../runner/engine-runtime/engine-reaper";
 import { EngineRuntime } from "../runner/engine-runtime/engine-runtime";
 import { startCodeTreeRetention } from "../runner/engine-runtime/code-tree-prune";
-import { versionIdsNeedingCodeTrees } from "../db/repos/code-tree-retention";
+import { versionIdsNeedingCodeTrees, versionIdsPinnedByRuns } from "../db/repos/code-tree-retention";
 import {
   SandboxApi,
   type SandboxApiServices,
@@ -242,10 +242,10 @@ export async function bootstrapWorkflowEngine(
   // 4. Build the EngineRuntime against the bundle. One runtime is shared
   // across all RUN_FLOW jobs + trigger hook calls. Pooling is enabled so
   // cron-fired runs / fast event-bus polls reuse the warm engine rather
-  // than paying the ~3s cold-spawn cost on every fire. The catalog
-  // extraction below acquires + releases an engine; with pool=true the
-  // released engine ends up in the warm slot and is reused by the first
-  // real RUN_FLOW after bootstrap -- effectively "pre-warm for free".
+  // than paying the cold-spawn cost on every fire. The pool reuses an
+  // engine only for the same project and flow (#1154), so the engine the
+  // catalog extraction below parks is not handed to a flow: the first run
+  // of each flow spawns its own.
   //
   // customPiecesPaths includes the user pieces dir (`~/.jarvis/pieces`)
   // alongside the vendored Jarvis pieces. The engine's piece-loader walks
@@ -353,6 +353,7 @@ export async function bootstrapWorkflowEngine(
     : startCodeTreeRetention({
         baseCodeDir: runtime.codeBaseDir,
         needed: versionIdsNeedingCodeTrees,
+        pinned: versionIdsPinnedByRuns,
         log: (m) => log(m),
       });
 

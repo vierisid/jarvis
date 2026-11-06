@@ -42,7 +42,6 @@ import { dismissFailures, listOpenFailures } from '../runtime/open-failures';
 import type { AuthorityEngine } from '../../authority/engine';
 import {
   createFlow,
-  deleteFlowInProject,
   flowCodeStepsEnabled,
   getFlow,
   getFlowInProject,
@@ -93,8 +92,8 @@ import {
   listWaitpointsByFlowRun,
 } from "../db/repos/waitpoint";
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
-import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
-import { assertFlowDeletable } from "../db/repos/workflow-removal-state";
+import { stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
+import { deleteWorkflow } from "../db/repos/flow-deletion";
 import { claimContinuation } from "../runtime/continuation";
 import { flowBindingBlock } from "../runtime/binding-refusals";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
@@ -1667,18 +1666,30 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           return flow ? ok(serializeFlow(flow)) : err("flow not found", 404);
         }),
       DELETE: (req) =>
-        trapErrors(() => {
+        trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const project = callerProject(req);
-          if (!getFlowInProject(project, id)) return err("flow not found", 404);
-          assertFlowDeletable(id);
-          stopRunsOfDeletedFlow(id);
           // BEHAVIOUR CHANGE (#729): a flow that does not exist used to answer
           // 200 `{ ok: true }`. It is a 404 now, because a flow in another
           // project must get the same answer as a missing one and must not be
           // reported deleted when it was not -- the shape the connections
           // DELETE has had since #692.
-          if (!deleteFlowInProject(project, id)) return err("flow not found", 404);
+          //
+          // #1154: the delete stops the runs, waits for their in-flight
+          // effects to be recorded, and removes what the flow leaves (run
+          // logs, step files, store keys, the cards of ended runs). An effect
+          // still in flight after the wait answers 409 and the flow stays.
+          const outcome = await deleteWorkflow(project, id);
+          if (outcome.status === "not_found") return err("flow not found", 404);
+          if (outcome.status === "stopping") {
+            // Turned off by the delete: its triggers go now.
+            refreshTrigger(id);
+            // `error` is what the dashboard shows, so it is the sentence.
+            return ok({
+              error: "A stopped run is still finishing an action, so the workflow was turned off but not deleted yet. Try the delete again in a moment.",
+              code: "workflow_stopping",
+            }, 409);
+          }
           refreshTrigger(id);
           return ok({ ok: true });
         }),
