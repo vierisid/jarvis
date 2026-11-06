@@ -31,16 +31,29 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { lstat, opendir, rm } from "node:fs/promises";
+import {
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync,
+} from "node:fs";
+import { rm } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import type { UpstreamFlowVersion } from "./flow-version-adapter";
 import { collectCodeActions } from "./flow-version-adapter";
+import { DEFAULT_RECENTLY_USED_MS } from "./engine-reaper";
 import { sanitizedEnv } from "../../../util/subprocess-env";
 import { BUN_INSTALL_ARGS, SANITIZED_INSTALL_HINT } from "../../../util/sanitized-install";
 import { declaredDependencies } from "../../runtime/code-step-manifest";
+import { measureTree, overLimit, type TreeLimit, type TreeSize } from "./code-tree-measure";
+import {
+  boundCacheAfterInstall,
+  CODE_INSTALL_CACHE_LIMIT,
+  codeInstallCacheDir,
+  markInstalledPackagesUsed,
+  removeCacheEntriesAddedSince,
+  snapshotCache,
+} from "./code-install-cache";
 
 export { CODE_STEP_MAX_DEPENDENCIES, declaredDependencies, isRegistrySpec } from "../../runtime/code-step-manifest";
+export { measureTree, overLimit, type TreeLimit, type TreeSize } from "./code-tree-measure";
 
 export interface MaterializeResult {
   /** Number of CODE actions written. */
@@ -49,8 +62,11 @@ export interface MaterializeResult {
   paths: string[];
 }
 
-/** Runs `bun install` in `dir`. Injectable so tests need no registry. */
-export type DependencyInstaller = (dir: string) => Promise<void>;
+/**
+ * Runs `bun install` in `dir`, with `cacheDir` as Bun's install cache.
+ * Injectable so tests need no registry.
+ */
+export type DependencyInstaller = (dir: string, opts: { cacheDir: string; limit?: TreeLimit }) => Promise<void>;
 
 /**
  * Written into `node_modules` after a successful install, holding the manifest
@@ -85,7 +101,7 @@ export const CODE_INSTALL_TIMEOUT_MS = 5 * 60_000;
  * installs a multiple of the largest package anyone measured.
  *
  * Apparent, not on-disk, size on purpose. When Bun's install cache is on the
- * same filesystem (the default, ~/.bun/install/cache beside ~/.jarvis) the
+ * same filesystem (as the CODE-step cache in the code directory is, #1154) the
  * tree is hard links into it: installing googleapis and aws-sdk again with a
  * warm cache took 2.5 MB of new disk for 344.6 MiB of tree. The bytes are
  * real all the same, in the cache, the first time; and a cache on another
@@ -115,26 +131,24 @@ export const CODE_STEP_MAX_INSTALL_ENTRIES = 65_536;
  */
 export const INSTALL_SIZE_POLL_MS = 1_000;
 
-/** What a tree measured to. A walk stopped at a limit reports what it saw. */
-export interface TreeSize {
-  bytes: number;
-  entries: number;
-}
-
-/** The caps one step's tree is held to. */
-export interface TreeLimit {
-  maxBytes: number;
-  maxEntries: number;
-}
-
 export const CODE_STEP_TREE_LIMIT: TreeLimit = {
   maxBytes: CODE_STEP_MAX_INSTALL_BYTES,
   maxEntries: CODE_STEP_MAX_INSTALL_ENTRIES,
 };
 
-export function overLimit(size: TreeSize, limit: TreeLimit): boolean {
-  return size.bytes > limit.maxBytes || size.entries > limit.maxEntries;
-}
+/**
+ * Most one flow version's CODE steps may hold together (#1154), as the step
+ * caps measure: four steps at the step cap. The step caps alone left a
+ * version unbounded (a version may have any number of CODE steps); this is
+ * what keeps one version from filling the whole code directory budget
+ * (CODE_TREES_MAX_BYTES, twice this) on its own. For scale: eight steps of
+ * googleapis, the largest package measured (246.5 MiB, 1,972 MiB together),
+ * fit; a ninth does not.
+ */
+export const CODE_VERSION_TREE_LIMIT: TreeLimit = {
+  maxBytes: 4 * CODE_STEP_MAX_INSTALL_BYTES,
+  maxEntries: 4 * CODE_STEP_MAX_INSTALL_ENTRIES,
+};
 
 /** Refusal for a step whose packages install to more than a cap. */
 export class CodeInstallTooLargeError extends Error {
@@ -152,71 +166,23 @@ function describeLimit(limit: TreeLimit): string {
   return `${limit.maxBytes / (1024 * 1024)} MiB, ${limit.maxEntries} entries`;
 }
 
-/** lstat calls in flight at once during a walk. */
-const WALK_BATCH = 64;
-
-/**
- * Apparent size and entry count of everything under `dir`: `lstat` sizes,
- * directories included, symlinks never followed. Entries that vanish mid-walk
- * (an install still moving files) are skipped; a missing `dir` is empty.
- *
- * Directories are streamed and stat'ed WALK_BATCH at a time, so memory does
- * not grow with the size of one directory, and with `stopPast` the walk ends
- * as soon as the answer to "is it over?" is yes.
- */
-export async function measureTree(dir: string, stopPast?: TreeLimit): Promise<TreeSize> {
-  const size: TreeSize = { bytes: 0, entries: 0 };
-  const pending = [dir];
-  const statBatch = async (base: string, names: string[]) => {
-    const stats = await Promise.all(names.map((n) => lstat(resolve(base, n)).catch(() => null)));
-    for (let i = 0; i < names.length; i++) {
-      const st = stats[i];
-      if (!st) continue;
-      size.entries++;
-      size.bytes += st.size;
-      if (st.isDirectory()) pending.push(resolve(base, names[i]!));
-    }
-  };
-  while (pending.length > 0) {
-    const current = pending.pop()!;
-    let handle;
-    try {
-      handle = await opendir(current);
-    } catch {
-      continue;
-    }
-    let batch: string[] = [];
-    try {
-      for await (const entry of handle) {
-        batch.push(entry.name);
-        if (batch.length < WALK_BATCH) continue;
-        await statBatch(current, batch);
-        batch = [];
-        if (stopPast && overLimit(size, stopPast)) return size;
-      }
-    } catch {
-      // The directory went away mid-read; what was read is counted.
-    }
-    if (batch.length > 0) await statBatch(current, batch);
-    if (stopPast && overLimit(size, stopPast)) return size;
-  }
-  return size;
-}
-
 /**
  * `bun install` with the daemon's sanitized environment, no lifecycle scripts,
  * and the hoisted layout whatever a bunfig.toml says. Run by process.execPath,
  * the Bun running the daemon, never a `bun` found on PATH (#864). Killed once
  * its tree passes CODE_STEP_TREE_LIMIT (#865).
  */
-export const bunInstall: DependencyInstaller = (dir) =>
-  runInstall(dir, process.execPath, [...BUN_INSTALL_ARGS, "--linker=hoisted"], CODE_INSTALL_TIMEOUT_MS, CODE_STEP_TREE_LIMIT);
+export const bunInstall: DependencyInstaller = (dir, opts) =>
+  runInstall(dir, process.execPath, [...BUN_INSTALL_ARGS, "--linker=hoisted"], CODE_INSTALL_TIMEOUT_MS,
+    opts.limit ?? CODE_STEP_TREE_LIMIT, { cacheDir: opts.cacheDir });
 
 /**
  * Run `command` in `dir` with the daemon's sanitized environment, SIGKILLed
  * after `timeoutMs`, or as soon as `dir/node_modules` measures past `limit` (rejecting
- * with CodeInstallTooLargeError). Exported so the timeout and the limit can be
- * held on a real child.
+ * with CodeInstallTooLargeError). With `cacheDir`, that is Bun's install cache
+ * (BUN_INSTALL_CACHE_DIR, which wins over a user's own setting of it; see
+ * code-install-cache.ts). Exported so the timeout and the limit can be held on
+ * a real child.
  */
 export function runInstall(
   dir: string,
@@ -224,6 +190,7 @@ export function runInstall(
   args: readonly string[],
   timeoutMs: number,
   limit?: TreeLimit & { pollMs?: number },
+  opts: { cacheDir?: string } = {},
 ): Promise<void> {
   return new Promise<void>((res, rej) => {
     let stderr = "";
@@ -232,7 +199,7 @@ export function runInstall(
     const child = spawn(command, [...args], {
       cwd: dir,
       stdio: ["ignore", "ignore", "pipe"],
-      env: sanitizedEnv(),
+      env: sanitizedEnv(opts.cacheDir === undefined ? {} : { BUN_INSTALL_CACHE_DIR: opts.cacheDir }),
     });
     const timer = setTimeout(() => {
       stderr += `\n(killed after ${timeoutMs} ms)`;
@@ -317,6 +284,9 @@ async function syncDependencies(
   dir: string,
   deps: Record<string, string>,
   install: DependencyInstaller,
+  cache: { dir: string; limit: TreeLimit },
+  versionDir: string,
+  stepNames: ReadonlySet<string>,
 ): Promise<void> {
   // Asynchronously: a retired or refused tree can be hundreds of MiB in tens
   // of thousands of entries, and a synchronous delete of that holds the
@@ -348,24 +318,48 @@ async function syncDependencies(
   const work = mkdtempSync(resolve(dir, INSTALL_DIR_PREFIX));
   try {
     writeFileSync(resolve(work, "package.json"), manifest);
-    try {
-      await install(work);
-    } catch (e) {
-      if (e instanceof CodeInstallTooLargeError) throw tooLargeForStep(stepName, e.size);
-      throw e;
-    }
     const built = resolve(work, "node_modules");
-    if (!existsSync(resolve(work, "bun.lock")) || !existsSync(built)) {
-      throw new Error(
-        `bun install did not install a CODE step's dependencies where it was run (${work}); ` +
-          `a package.json with "workspaces" in a directory above the code directory takes the install over. ` +
-          `Refusing to run the step against another project's packages.`,
-      );
-    }
-    // Measured again whatever installed it: the watchdog above is only on
-    // bunInstall, and its last look can be up to a poll interval old.
-    const size = await measureTree(built, CODE_STEP_TREE_LIMIT);
-    if (overLimit(size, CODE_STEP_TREE_LIMIT)) throw tooLargeForStep(stepName, size);
+    // The install and everything that decides whether it is kept run as one
+    // turn of the install queue, so the cache entries that appear meanwhile
+    // are this install's: a refused one has them removed again (#1154).
+    await oneInstallAtATime(async () => {
+      // What this install may add: the step cap, or what the version's other
+      // steps leave of the version's, whichever is less. Read inside the
+      // queue's turn, so another install of this version cannot slip in
+      // between the reading and the install.
+      const others = await otherStepsSize(versionDir, dir, stepNames);
+      const limit: TreeLimit = {
+        maxBytes: Math.min(CODE_STEP_TREE_LIMIT.maxBytes, CODE_VERSION_TREE_LIMIT.maxBytes - others.bytes),
+        maxEntries: Math.min(CODE_STEP_TREE_LIMIT.maxEntries, CODE_VERSION_TREE_LIMIT.maxEntries - others.entries),
+      };
+      const refuse = (size: TreeSize | null) => tooLargeForStep(stepName, size, limit, others);
+      if (limit.maxBytes <= 0 || limit.maxEntries <= 0) throw refuse(null);
+      const before = await snapshotCache(cache.dir);
+      try {
+        try {
+          await install(work, { cacheDir: cache.dir, limit });
+        } catch (e) {
+          if (e instanceof CodeInstallTooLargeError) throw refuse(e.size);
+          throw e;
+        }
+        if (!existsSync(resolve(work, "bun.lock")) || !existsSync(built)) {
+          throw new Error(
+            `bun install did not install a CODE step's dependencies where it was run (${work}); ` +
+              `a package.json with "workspaces" in a directory above the code directory takes the install over. ` +
+              `Refusing to run the step against another project's packages.`,
+          );
+        }
+        // Measured again whatever installed it: the watchdog above is only on
+        // bunInstall, and its last look can be up to a poll interval old.
+        const size = await measureTree(built, limit);
+        if (overLimit(size, limit)) throw refuse(size);
+      } catch (e) {
+        await removeCacheEntriesAddedSince(cache.dir, before);
+        throw e;
+      }
+      await markInstalledPackagesUsed(cache.dir, built);
+      await boundCacheAfterInstall(cache.dir, before, cache.limit);
+    });
     writeFileSync(resolve(built, INSTALLED_MANIFEST_MARKER), manifest);
     retire();
     renameSync(built, nodeModules);
@@ -374,37 +368,122 @@ async function syncDependencies(
   }
 }
 
-function tooLargeForStep(stepName: string, size: TreeSize): Error {
+/**
+ * The refusal for a step over what it may install: the step cap when it alone
+ * is over that, the version's limit otherwise. `size` null: refused before
+ * installing, because the other steps already hold the version's limit.
+ */
+function tooLargeForStep(stepName: string, size: TreeSize | null, limit: TreeLimit, others: TreeSize): Error {
+  if (size && overLimit(size, CODE_STEP_TREE_LIMIT)) {
+    return new Error(
+      `CODE step ${JSON.stringify(stepName)}: its dependencies install to more than one step may take ` +
+        `(${describeLimit(CODE_STEP_TREE_LIMIT)}); measured at least ${describeSize(size)}. ` +
+        `Declare fewer or smaller packages.`,
+    );
+  }
   return new Error(
-    `CODE step ${JSON.stringify(stepName)}: its dependencies install to more than one step may take ` +
-      `(${describeLimit(CODE_STEP_TREE_LIMIT)}); measured at least ${describeSize(size)}. ` +
-      `Declare fewer or smaller packages.`,
+    `CODE step ${JSON.stringify(stepName)}: its dependencies would take this flow version's CODE steps together ` +
+      `past their limit (${describeLimit(CODE_VERSION_TREE_LIMIT)}); the other steps hold ${describeSize(others)}` +
+      (size ? ` and this one measured at least ${describeSize(size)}` : `, which leaves nothing for this one`) +
+      `. Declare fewer or smaller packages, or use fewer CODE steps.`,
   );
 }
 
 /**
- * Version trees an engine in THIS process may be reading right now (#865),
- * counted, keyed by the tree's absolute path. The engine `require`s a step's
- * index.js and packages from the tree while the flow runs, so the pruner
- * (code-tree-prune.ts) must not delete one under it. EngineHandle.executeFlow
- * takes a lease synchronously, before it materializes anything, and gives it
- * back only once the engine is done with the run (or has been killed); the
- * pruner checks leases and moves a tree away in one synchronous step, so no
- * run can start between the two.
+ * What the installed packages of the version's other current steps measure.
+ * Only current steps: a renamed or removed step's directory still waiting
+ * for the stale-step sweep is not something this version installs into.
+ */
+async function otherStepsSize(versionDir: string, stepDir: string, stepNames: ReadonlySet<string>): Promise<TreeSize> {
+  const total: TreeSize = { bytes: 0, entries: 0 };
+  let entries;
+  try {
+    entries = readdirSync(versionDir, { withFileTypes: true });
+  } catch {
+    return total;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !stepNames.has(entry.name)) continue;
+    const step = resolve(versionDir, entry.name);
+    if (step === stepDir) continue;
+    const size = await measureTree(resolve(step, "node_modules"));
+    total.bytes += size.bytes;
+    total.entries += size.entries;
+  }
+  return total;
+}
+
+/**
+ * Trees an engine in THIS process may be reading right now (#865), counted,
+ * keyed by absolute path: the version's directory and, since #1154, each of
+ * the steps the run will execute. The engine `require`s a step's index.js and
+ * packages from the tree while the flow runs, so neither the pruner
+ * (code-tree-prune.ts) nor the stale-step sweep below may delete one under
+ * it. EngineHandle.executeFlow takes a lease synchronously, before it
+ * materializes anything, and gives it back only once the engine is done with
+ * the run (or has been killed); the pruner checks leases and moves a tree
+ * away in one synchronous step, so no run can start between the two.
+ *
+ * Per step because a DRAFT version keeps its id while it is edited: a run of
+ * the draft as it was can still be executing a step that the draft as it is
+ * has renamed or removed.
  */
 const leases = new Map<string, number>();
 
-export function leaseCodeTree(baseCodeDir: string, versionId: string): () => void {
-  const key = resolve(baseCodeDir, versionId);
+/**
+ * How often a leased tree's mtime is refreshed (#1154). Another process
+ * sharing the code directory (an evaluation run) cannot see this process's
+ * leases, only mtimes; before, the mtime was set once at the start of a run,
+ * so a run longer than the pruner's 24h window lost its tree. Hourly is the
+ * pruner's own interval: a lease never looks older than one interval.
+ */
+export const CODE_TREE_LEASE_REFRESH_MS = 60 * 60_000;
+
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Touch every leased path now. Exported so the refresh can be held in a test. */
+export function refreshLeasedCodeTrees(now = new Date()): void {
+  for (const path of leases.keys()) {
+    try {
+      utimesSync(path, now, now);
+    } catch {
+      // Not materialized yet, or already gone.
+    }
+  }
+}
+
+function hold(key: string): void {
   leases.set(key, (leases.get(key) ?? 0) + 1);
+  if (!refreshTimer) {
+    refreshTimer = setInterval(() => refreshLeasedCodeTrees(), CODE_TREE_LEASE_REFRESH_MS);
+    refreshTimer.unref?.();
+  }
+}
+
+function letGo(key: string): void {
+  const left = (leases.get(key) ?? 1) - 1;
+  if (left <= 0) leases.delete(key);
+  else leases.set(key, left);
+  if (leases.size === 0 && refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+export function leaseCodeTree(baseCodeDir: string, versionId: string, stepNames: readonly string[] = []): () => void {
+  const keys = [resolve(baseCodeDir, versionId), ...stepNames.map((step) => resolve(baseCodeDir, versionId, step))];
+  for (const key of keys) hold(key);
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    const left = (leases.get(key) ?? 1) - 1;
-    if (left <= 0) leases.delete(key);
-    else leases.set(key, left);
+    for (const key of keys) letGo(key);
   };
+}
+
+/** Lease the tree of `version` and every CODE step it will execute. What EngineHandle.executeFlow takes. */
+export function leaseCodeTreeOf(baseCodeDir: string, version: UpstreamFlowVersion): () => void {
+  return leaseCodeTree(baseCodeDir, version.id, collectCodeActions(version).map((a) => a.stepName));
 }
 
 /** True while some run in this process holds a lease on the tree at `path`. */
@@ -412,24 +491,84 @@ export function codeTreeLeased(path: string): boolean {
   return leases.has(resolve(path));
 }
 
+/** Prefix a stale step directory is renamed to before it is deleted. */
+const STALE_STEP_PREFIX = ".stale-step-";
+
+/**
+ * Remove the step directories of `versionDir` that the version no longer has
+ * (#1154): a draft keeps its id while its CODE steps are renamed or removed,
+ * so each old name kept its whole `node_modules` for as long as the version
+ * was kept. A directory goes only when no run in this process leases it and
+ * it was not used within `recentlyUsedMs` (another process's run). As in the
+ * pruner, the lease check and the rename are one synchronous step.
+ */
+export async function sweepStaleSteps(
+  versionDir: string,
+  current: ReadonlySet<string>,
+  opts: { now?: number; recentlyUsedMs?: number } = {},
+): Promise<string[]> {
+  const now = opts.now ?? Date.now();
+  const recentlyUsedMs = opts.recentlyUsedMs ?? DEFAULT_RECENTLY_USED_MS;
+  let entries;
+  try {
+    entries = readdirSync(versionDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const doomed: string[] = [];
+  const removed: string[] = [];
+  for (const entry of entries) {
+    const path = resolve(versionDir, entry.name);
+    if (entry.name.startsWith(STALE_STEP_PREFIX)) {
+      if (entry.isDirectory()) doomed.push(path);
+      continue;
+    }
+    if (!entry.isDirectory() || entry.name.startsWith(".") || current.has(entry.name) || codeTreeLeased(path)) continue;
+    let mtimeMs: number;
+    try {
+      mtimeMs = lstatSync(path).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (now - mtimeMs < recentlyUsedMs) continue;
+    const away = resolve(versionDir, `${STALE_STEP_PREFIX}${randomBytes(4).toString("hex")}`);
+    try {
+      renameSync(path, away);
+    } catch {
+      continue;
+    }
+    doomed.push(away);
+    removed.push(entry.name);
+  }
+  await Promise.all(doomed.map((path) => rm(path, { recursive: true, force: true }).catch(() => {})));
+  return removed;
+}
+
 export async function materializeCodeActions(
   version: UpstreamFlowVersion,
   baseCodeDir: string,
-  opts?: { install?: DependencyInstaller },
+  opts?: { install?: DependencyInstaller; installCacheLimit?: TreeLimit },
 ): Promise<MaterializeResult> {
   const install = opts?.install ?? bunInstall;
+  const cache = { dir: codeInstallCacheDir(baseCodeDir), limit: opts?.installCacheLimit ?? CODE_INSTALL_CACHE_LIMIT };
   const actions = collectCodeActions(version);
   const base = resolve(baseCodeDir);
   // The version directory is leased, touched and pruned by this name, so it
   // must be one plain directory under the code directory (ids are apId()s).
   // Only a flow with CODE steps has one; any other flow writes nothing here.
-  if (actions.length > 0 && !/^[A-Za-z0-9_-]+$/.test(version.id)) {
+  const plainVersionId = /^[A-Za-z0-9_-]+$/.test(version.id);
+  if (actions.length > 0 && !plainVersionId) {
     throw new Error(`flow version id ${JSON.stringify(version.id)} is not a plain directory name`);
   }
   // Validate every step before writing any, so a refused manifest or step name
   // leaves no half-materialized flow behind.
   const planned = actions.map((action) => {
     const deps = declaredDependencies(action.stepName, action.packageJson ?? "");
+    // One plain path segment, as readiness requires of every step name: the
+    // leases, the stale-step sweep and the version's limit all key on it.
+    if (!/^[A-Za-z0-9_-]+$/.test(action.stepName)) {
+      throw new Error(`CODE step ${JSON.stringify(action.stepName)} is not a plain directory name`);
+    }
     const dir = resolve(base, version.id, action.stepName);
     // The directory is about to have entries removed from it, so it must be
     // the step's own and nowhere else.
@@ -438,22 +577,32 @@ export async function materializeCodeActions(
     }
     return { action, deps, dir };
   });
-  if (planned.length > 0) {
-    // Marks the tree as used now. The pruner keeps a recently used tree, which
-    // is what protects one that ANOTHER process (an evaluation run sharing the
-    // default code directory) is running from: leases are per process.
-    const versionDir = resolve(base, version.id);
-    mkdirSync(versionDir, { recursive: true });
+  const versionDir = resolve(base, version.id);
+  const stepNames = new Set(planned.map(({ action }) => action.stepName));
+  if (planned.length === 0) {
+    // A draft that removed its last CODE step still has its old steps' trees.
+    if (plainVersionId && existsSync(versionDir)) await sweepStaleSteps(versionDir, stepNames);
+  } else {
+    // Marks the tree, and each step of it, as used now. The pruner and the
+    // stale-step sweep keep what was used recently, which is what protects a
+    // tree that ANOTHER process (an evaluation run sharing the default code
+    // directory) is running from: leases are per process.
     const now = new Date();
+    for (const { dir } of planned) {
+      mkdirSync(dir, { recursive: true });
+      utimesSync(dir, now, now);
+    }
     utimesSync(versionDir, now, now);
+    // Before installing, so what the version's limit counts is only its
+    // current steps (and those still in use).
+    await sweepStaleSteps(versionDir, stepNames);
   }
   const paths: string[] = [];
   for (const { action, deps, dir } of planned) {
     mkdirSync(dir, { recursive: true });
     const filePath = resolve(dir, "index.js");
     writeFileSync(filePath, action.code);
-    await perDirectory(dir, () =>
-      syncDependencies(action.stepName, dir, deps, (work) => oneInstallAtATime(() => install(work))));
+    await perDirectory(dir, () => syncDependencies(action.stepName, dir, deps, install, cache, versionDir, stepNames));
     paths.push(filePath);
   }
   return { written: paths.length, paths };

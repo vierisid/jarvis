@@ -253,7 +253,9 @@ describe("EngineHandle operation lifecycle", () => {
       utimesSync(dir, old, old);
       return dir;
     };
-    const pruneAll = () => pruneCodeTrees({ baseCodeDir, needed: () => new Set() });
+    // A pass refreshes the mtime of leased trees (#1154), so it looks from two
+    // days on: only the lease, not that refresh, can keep a tree here.
+    const pruneAll = () => pruneCodeTrees({ baseCodeDir, needed: () => new Set(), now: Date.now() + 2 * 24 * 60 * 60_000 });
 
     test("while the engine is executing the flow", async () => {
       const dir = staleTree("v-running");
@@ -342,7 +344,7 @@ describe("EngineHandle operation lifecycle", () => {
           },
         },
       } as unknown as UpstreamFlowVersion;
-      await expect(handle.executeFlow({ flowVersion: refused })).rejects.toThrow(/outside the code directory/);
+      await expect(handle.executeFlow({ flowVersion: refused })).rejects.toThrow(/is not a plain directory name/);
       expect((await pruneAll()).removed).toEqual(["v-refused"]);
     });
   });

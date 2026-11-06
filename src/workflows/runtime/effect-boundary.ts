@@ -34,6 +34,7 @@ const WORKFLOW_NAME_LABEL_MAX_CHARS = 512;
 /** A step name on a card or an audit row: the 120 `auditRefusal` already uses. */
 export const WORKFLOW_STEP_LABEL_MAX_CHARS = 120;
 import { holdStep, PAUSED_REASON } from './emergency-hold';
+import { beginEffectDispatch } from './effect-inflight';
 
 export interface WorkflowAuthorityDependencies {
   authorityEngine?: AuthorityEngine; auditTrail?: AuditTrail; emergencyController?: EmergencyController;
@@ -639,6 +640,8 @@ export class WorkflowEffectBoundary {
       throw error;
     }
     if (!claimWorkflowEffect(record)) throw new Error('Workflow effect was already claimed; replay blocked');
+    // A delete of the flow waits until this effect is recorded (#1154).
+    const endDispatch = beginEffectDispatch(record.flowId);
     try {
       // Publish the same checkpoint into the ambient execution scope. Deep
       // dispatch points (TTS chunks, channel adapters) call
@@ -721,6 +724,6 @@ export class WorkflowEffectBoundary {
       // possibility that a remote effect happened before the failure.
       log(false);
       throw error;
-    }
+    } finally { endDispatch(); }
   }
 }

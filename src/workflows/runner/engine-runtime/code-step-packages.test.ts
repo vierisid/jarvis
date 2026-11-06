@@ -502,10 +502,16 @@ describe("materializeCodeActions installs exactly what was declared", () => {
     expect(readdirSync(base)).toEqual([]);
   });
 
-  test("a step name that escapes the code directory is refused", async () => {
+  // Since #1154 a step name must be one plain path segment (what readiness
+  // already requires), which refuses an escape before the containment check
+  // gets to it; both shapes are refused and nothing is written.
+  test("a step name that escapes the code directory, or is not one plain segment, is refused", async () => {
     const base = scratch();
-    await expect(materializeCodeActions(versionWithCode("{}", "../../escape"), base, { install: async () => {} }))
-      .rejects.toThrow(/outside the code directory/);
+    for (const name of ["../../escape", "a/b", ".hidden"]) {
+      await expect(materializeCodeActions(versionWithCode("{}", name), base, { install: async () => {} }))
+        .rejects.toThrow(/is not a plain directory name/);
+    }
+    expect(readdirSync(base)).toEqual([]);
   });
 });
 
@@ -563,7 +569,7 @@ describe("installs queue only behind installs (review)", () => {
         },
       },
     } as unknown as UpstreamFlowVersion;
-    await expect(materializeCodeActions(version, base, { install: fakeInstall() })).rejects.toThrow(/outside the code directory/);
+    await expect(materializeCodeActions(version, base, { install: fakeInstall() })).rejects.toThrow(/is not a plain directory name/);
     expect(existsSync(join(base, "v_1"))).toBe(false);
   });
 });
@@ -630,17 +636,21 @@ describe("the install is bounded", () => {
     mkdirSync(work);
     const log = join(root, "argv.txt");
     writeFileSync(join(bin, "bun"),
-      `#!/bin/sh\nprintf '%s\\n' "$PWD" "$@" "secret=$ANTHROPIC_API_KEY" > ${JSON.stringify(log)}\n`, { mode: 0o755 });
+      `#!/bin/sh\nprintf '%s\\n' "$PWD" "$@" "secret=$ANTHROPIC_API_KEY" "cache=$BUN_INSTALL_CACHE_DIR" > ${JSON.stringify(log)}\n`, { mode: 0o755 });
     const realExecPath = process.execPath;
     process.execPath = join(bin, "bun");
     try {
-      await withEnv({ ANTHROPIC_API_KEY: "sentinel-do-not-log" }, () => bunInstall(work));
+      // The user's own relocated cache does not reach it: the install's own does (#1154).
+      await withEnv({ ANTHROPIC_API_KEY: "sentinel-do-not-log", BUN_INSTALL_CACHE_DIR: join(root, "users-cache") },
+        () => bunInstall(work, { cacheDir: join(root, "codes", ".install-cache") }));
     } finally {
       process.execPath = realExecPath;
     }
     const [cwd, ...rest] = readFileSync(log, "utf8").trim().split("\n");
     expect(cwd).toBe(work);
-    expect(rest).toEqual(["install", "--silent", "--ignore-scripts", "--linker=hoisted", "secret="]);
+    expect(rest).toEqual([
+      "install", "--silent", "--ignore-scripts", "--linker=hoisted", "secret=", `cache=${join(root, "codes", ".install-cache")}`,
+    ]);
     expect(CODE_INSTALL_TIMEOUT_MS).toBe(5 * 60_000);
     expect(CODE_STEP_MAX_INSTALL_BYTES).toBe(512 * 1024 * 1024);
   });
@@ -663,7 +673,7 @@ describe("the install is bounded", () => {
     process.execPath = join(bin, "bun");
     let err: unknown;
     try {
-      err = await bunInstall(work).then(() => null, (e: unknown) => e);
+      err = await bunInstall(work, { cacheDir: join(root, "cache") }).then(() => null, (e: unknown) => e);
     } finally {
       process.execPath = realExecPath;
     }
