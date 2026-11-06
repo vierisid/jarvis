@@ -209,6 +209,16 @@ export class EngineHandle {
    * only once the process has been killed on release.
    */
   private abandonedLeases: Array<() => void> = [];
+  /**
+   * The tree leases of runs still executing on this engine (#1154). Given
+   * back when the engine has been killed, even if a run's RPC has not
+   * settled yet: a cancelled run's RPC can stay pending until its deadline
+   * (10 min or more), and the engine no longer reads the tree. Not airtight,
+   * as for abandoned leases: termination gives up 500 ms after SIGKILL, and
+   * a CODE step's own child can outlive the engine. The pruner's 24h window
+   * since the run last touched the tree still covers both.
+   */
+  private readonly runningLeases = new Set<() => void>();
 
   constructor(
     public readonly sandboxId: string,
@@ -330,6 +340,7 @@ export class EngineHandle {
     // Taken before the first await, so the pruner never sees this run as not
     // started yet (#865).
     const releaseTree = leaseCodeTreeOf(this.baseCodeDir, upstream);
+    this.runningLeases.add(releaseTree);
     let keepTree = false;
     try {
       return await this.executeFlowOnTree(upstream, opts);
@@ -345,6 +356,7 @@ export class EngineHandle {
       }
       throw e;
     } finally {
+      this.runningLeases.delete(releaseTree);
       if (!keepTree) releaseTree();
     }
   }
@@ -527,8 +539,11 @@ export class EngineHandle {
     if (!this.terminating) {
       this.registry.terminate(this.sandboxId);
       const releaseAbandoned = () => {
-        // The engine is gone, so nothing reads the trees of runs it abandoned.
+        // The engine is gone, so nothing reads the trees of runs it abandoned,
+        // or of runs whose RPC has not settled yet.
         for (const release of this.abandonedLeases.splice(0)) release();
+        for (const release of this.runningLeases) release();
+        this.runningLeases.clear();
       };
       this.terminating = this.terminateProcess();
       void this.terminating.then(releaseAbandoned, releaseAbandoned);

@@ -452,12 +452,26 @@ export function refreshLeasedCodeTrees(now = new Date()): void {
   }
 }
 
+function armRefresh(): void {
+  refreshTimer = setInterval(() => refreshLeasedCodeTrees(), CODE_TREE_LEASE_REFRESH_MS);
+  refreshTimer.unref?.();
+}
+
 function hold(key: string): void {
   leases.set(key, (leases.get(key) ?? 0) + 1);
-  if (!refreshTimer) {
-    refreshTimer = setInterval(() => refreshLeasedCodeTrees(), CODE_TREE_LEASE_REFRESH_MS);
-    refreshTimer.unref?.();
-  }
+  if (!refreshTimer) armRefresh();
+}
+
+/**
+ * Replace the refresh interval with a new one on the timers in effect now,
+ * if any lease is held. For tests that swap in fake timers: the interval is
+ * module-wide, so one armed earlier by another lease (on real timers) would
+ * never fire under the fake clock.
+ */
+export function rearmCodeTreeLeaseRefresh(): void {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = null;
+  if (leases.size > 0) armRefresh();
 }
 
 function letGo(key: string): void {

@@ -22,6 +22,7 @@ import {
   leaseCodeTree,
   leaseCodeTreeOf,
   materializeCodeActions,
+  rearmCodeTreeLeaseRefresh,
   refreshLeasedCodeTrees,
   sweepStaleSteps,
 } from "./code-materialize";
@@ -99,6 +100,10 @@ describe("leases cover the steps a run executes, and stay fresh (#1154)", () => 
     mkdirSync(join(base, "v_long", "step"), { recursive: true });
     const fresh = () => Date.now() - lstatSync(join(base, "v_long")).mtimeMs < 60_000;
     jest.useFakeTimers();
+    // The interval is module-wide: any lease still held when this test starts
+    // (another file's run, say) armed it on real timers, which the fake clock
+    // never fires. Arm it on the fake clock.
+    rearmCodeTreeLeaseRefresh();
     try {
       const release = leaseCodeTree(base, "v_long", ["step"]);
       age(join(base, "v_long"), 2 * DAY);
@@ -110,6 +115,7 @@ describe("leases cover the steps a run executes, and stay fresh (#1154)", () => 
       expect(fresh()).toBe(false);
     } finally {
       jest.useRealTimers();
+      rearmCodeTreeLeaseRefresh();
     }
   });
 });
