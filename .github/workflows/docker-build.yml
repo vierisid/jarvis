@@ -10,15 +10,14 @@ name: Docker Build
 # service actually bootstrapped. See .github/scripts/docker-smoke.sh.
 
 # `push` is main-only, matching test.yml. With `branches: ["**"]` a push to a
-# PR branch triggered this twice — push + pull_request — and since both runs
-# write `cache-to: type=gha,mode=max` into the SAME cache scope, the duplicate
-# pair raced over that scope on every push. The paths filter below includes
-# bun.lock and package.json, so dependency changes hit this most often.
+# PR branch triggered this twice -- push + pull_request -- and the duplicate
+# pair raced over one cache scope (the build no longer uses a cache, #1165,
+# but two runs of the same commit are still waste).
 on:
   # No `paths:` on the push trigger, unlike the PR one below. The smoke check
   # guards a runtime class -- a service that stops bootstrapping -- that no
   # build-time path filter can predict with certainty, so every merge to main
-  # runs it once, cache-warm. The PR filter below is wide but still a filter:
+  # runs it once. The PR filter below is wide but still a filter:
   # a merge of something it does not list would otherwise never be checked.
   push:
     branches: [main]
@@ -105,6 +104,13 @@ jobs:
 
       # PR check is single-arch for speed; release workflow validates linux/amd64 + linux/arm64.
       #
+      # Cold, with no BuildKit cache (#1165). It used to restore and save the
+      # gha cache, whose index is whatever run on main wrote last, not an
+      # exact key (#1047), and it bought little: on five main runs of
+      # 2026-11-06 this step took 61-98s with the cache, while the release
+      # guard step below does a cold build and a rebuild on a fresh builder
+      # in 35-57s. workflow-hardening.test.sh refuses type=gha here.
+      #
       # `load: true` is what lets the smoke step below actually run this image.
       # setup-buildx-action creates a `docker-container`-driver builder, whose
       # output otherwise stays in the BuildKit cache and never reaches dockerd's
@@ -133,8 +139,6 @@ jobs:
           load: true
           tags: ${{ env.IMAGE_TAG }}
           build-args: VERSION=0.0.0-ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       # Runs the image with a fresh volume, no config file and the default
       # command, then asserts: it reaches `healthy`; the endpoint its own
@@ -149,7 +153,7 @@ jobs:
           SMOKE_PREFIX: jarvis-smoke-${{ github.run_id }}-${{ github.run_attempt }}
         run: ./.github/scripts/docker-smoke.sh "$IMAGE_TAG"
 
-      # #647: a release must reuse this workflow's cache. A release commit
+      # #647: a version bump may re-run only the version-dependent steps. A release commit
       # changes only package.json's version (and passes a new VERSION), and
       # the Dockerfile keeps both away from the expensive steps: deps and the
       # workflow prebuild read a version-neutral package.json from the
@@ -164,6 +168,8 @@ jobs:
       # never materialised, so BuildKit could not match the bump build's
       # locally-computed layers and the guard red-flagged four correct PR
       # branches in a row. The cost is that the warm build is genuinely cold.
+      # The image build above imports no cache any more (#1165), so today the
+      # isolation guards against one coming back rather than a live problem.
       # Source assertions on the guard below, in the shape of
       # chromium-test-partition.test.sh (#648). Seconds, no Docker. It runs
       # FIRST so a disarmed guard is named here rather than passing vacuously
