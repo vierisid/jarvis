@@ -9,7 +9,9 @@
 #   GOOS, GOARCH          target
 #   SETUP                 linux | windows-cross | darwin
 #   OUT                   output file name (jarvis or jarvis.exe)
-#   SIGNING_PUBLISHER_CN  Authenticode publisher pin (windows-cross)
+#   SIGNING_PUBLISHER_CN  Authenticode publisher pin (windows-cross); with it
+#                         set, the signer key pin is read from the committed
+#                         chain by codesign-spki-pins.sh (#1165)
 #   APPLE_TEAM_ID         Developer ID team pin (darwin)
 #   ALLOW_UNPINNED_WINDOWS, ALLOW_UNPINNED_MACOS, DRY_RUN
 #                         read by require-signing-pin.sh: an empty pin fails
@@ -20,6 +22,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export CGO_ENABLED=1
 LDFLAGS="-s -w -X main.sidecarVersion=$(cat VERSION)"
 PIN=""
+SPKI=""
 case "$SETUP" in
 	windows-cross)
 		export CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++
@@ -33,6 +36,14 @@ case "$SETUP" in
 		# The go tool splits -ldflags on whitespace, so the CN (a company
 		# name, always with spaces) carries its own quotes to the linker.
 		LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedPublisherCN=${PIN}'"
+		# With the CN pinned, the signer key is pinned too (#1165), from the
+		# committed chain: the CN alone accepts any trusted certificate with
+		# that CN. A missing chain or an unreadable key fails the build, so a
+		# pinned build never ships without its key pin.
+		if [ -n "$PIN" ]; then
+			SPKI="$("${HERE}/codesign-spki-pins.sh" packaging/windows)"
+			LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedPublisherSPKI=${SPKI}'"
+		fi
 		;;
 	darwin)
 		if [ "$GOARCH" = "amd64" ]; then TARGET=x86_64-apple-macos11; else TARGET=arm64-apple-macos11; fi
@@ -57,6 +68,10 @@ if [ -n "${PIN}" ]; then
 	strings "$OUT" >/tmp/sidecar-strings.txt
 	if ! grep -qF "${PIN}" /tmp/sidecar-strings.txt; then
 		echo "::error::signing pin '${PIN}' is not present in the sidecar binary; check the -X path and the -ldflags quoting"
+		exit 1
+	fi
+	if [ -n "${SPKI}" ] && ! grep -qF "${SPKI}" /tmp/sidecar-strings.txt; then
+		echo "::error::signer key pin '${SPKI}' is not present in the sidecar binary; check the -X path"
 		exit 1
 	fi
 fi

@@ -77,26 +77,20 @@ on:
       digests:
         description: "the five sidecar-* artifact sha256 digests, by leg, for a later publish_only call; empty when nothing was built"
         value: ${{ jobs.resolve.outputs.build == 'true' && format('linux-x64={0} linux-arm64={1} darwin-arm64={2} darwin-x64={3} win32-x64={4}', jobs.build-sidecar-linux-x64.outputs.sha256, jobs.build-sidecar-linux-arm64.outputs.sha256, jobs.sign-sidecar-darwin.outputs.sha256_darwin_arm64, jobs.sign-sidecar-darwin.outputs.sha256_darwin_x64, jobs.sign-sidecar-windows.outputs.sha256) || '' }}
-    # Every secret this workflow reads, declared so the caller can pass exactly
-    # these instead of `secrets: inherit` (#682). Read only by sign-sidecar-
-    # darwin, which builds nothing (#870). Optional to GitHub, so a fork or
-    # a dry run without them still runs: absent, the macOS bundle is
-    # unsigned, which sign-sidecar-darwin allows on a dry run or with
-    # ALLOW_UNSIGNED_MACOS set to exactly true, and fails otherwise (#921).
-    # A secret read here but not declared would be silently empty when
-    # called, so .github/scripts/workflow-hardening.test.sh checks the two
-    # lists match.
-    secrets:
-      APPLE_CERT_P12:
-        required: false
-      APPLE_CERT_PASSWORD:
-        required: false
-      ASC_KEY_ID:
-        required: false
-      ASC_ISSUER_ID:
-        required: false
-      ASC_API_KEY_P8:
-        required: false
+    # No secrets are declared, and callers pass none (#1165). The only
+    # secrets this workflow reads are the five Apple signing secrets, read
+    # only by sign-sidecar-darwin, which builds nothing (#870), and they are
+    # secrets of the `signing` environment that job names: GitHub gives a
+    # called job its environment's secrets directly, without the caller
+    # passing them. So the publish_only call, which runs no signing job, is
+    # handed nothing either. Absent (a fork, or before the secrets are moved
+    # into the environment), the macOS bundle is unsigned, which
+    # sign-sidecar-darwin allows on a dry run or with ALLOW_UNSIGNED_MACOS set
+    # to exactly true, and fails otherwise (#921). A ref the environment
+    # refuses does not get that far: the job fails before it starts.
+    # .github/scripts/workflow-hardening.test.sh holds both: the Apple
+    # secrets are read only in a job of the `signing` environment, and every
+    # other secret a called job reads must be declared and passed.
   workflow_dispatch:
     inputs:
       dry_run:
@@ -393,7 +387,10 @@ jobs:
           name: unsigned-${{ matrix.npm_pkg }}
           path: sidecar/jarvis-app.tar.gz
           if-no-files-found: error
-          retention-days: 1
+          # A failed signer or verifier can be re-run up to 30 days after the
+          # run started, and it downloads this; a re-run of all jobs instead
+          # rebuilds other bytes (#958). A dry run keeps it a day (#1165).
+          retention-days: ${{ env.DRY_RUN == 'true' && 1 || 35 }}
 
       - name: Upload binary
         if: matrix.setup != 'darwin'
@@ -485,6 +482,9 @@ jobs:
     needs: [resolve, build-sidecar-darwin-arm64, build-sidecar-darwin-x64]
     if: needs.resolve.outputs.build == 'true'
     runs-on: macos-latest
+    # See "Who can sign" above sign-sidecar-windows: main and the v* / installer-v*
+    # tags only, no reviewers; static, so a dry run is gated as a real run is.
+    environment: signing
     permissions:
       contents: read
     outputs:
@@ -611,7 +611,7 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "::warning::macOS signing is not configured (${absent} unset). Shipping an UNSIGNED Jarvis.app because ALLOW_UNSIGNED_MACOS is true (Gatekeeper will refuse to open it on other machines, and the self-updater of every installed macOS sidecar will refuse to install it)."
           else
-            echo "::error::macOS signing is not configured (${absent} unset), so this release would ship an UNSIGNED Jarvis.app, which Gatekeeper refuses to open. Set the Apple signing secrets, or set the repository variable ALLOW_UNSIGNED_MACOS to true to ship unsigned on purpose."
+            echo "::error::macOS signing is not configured (${absent} unset), so this release would ship an UNSIGNED Jarvis.app, which Gatekeeper refuses to open. Set the Apple signing secrets as secrets of the signing environment, or set the repository variable ALLOW_UNSIGNED_MACOS to true to ship unsigned on purpose."
             exit 1
           fi
 
@@ -658,6 +658,10 @@ jobs:
           test -n "$IDENTITY" || { echo "::error::no 'Developer ID Application' identity in APPLE_CERT_P12"; exit 1; }
           echo "Signing as: $IDENTITY"
 
+          # Both legs are signed and submitted first, then waited for (#1165):
+          # Apple notarizes the two concurrently, so the job waits about one
+          # notarization instead of two in a row.
+          submitted=""
           for leg in darwin-arm64 darwin-x64; do
             app="${RUNNER_TEMP}/work/${leg}/Jarvis.app"
             if [ -f "${app}/Contents/MacOS/ocr-helper" ]; then
@@ -671,21 +675,36 @@ jobs:
 
             zip="${RUNNER_TEMP}/Jarvis-${leg}.zip"
             ditto -c -k --keepParent "$app" "$zip"
+            SUBMIT_JSON="$(xcrun notarytool submit "$zip" \
+              --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+              --output-format json)" || true
+            echo "$SUBMIT_JSON"
+            SUBMISSION_ID="$(echo "$SUBMIT_JSON" | jq -r '.id // empty' 2>/dev/null)" || SUBMISSION_ID=""
+            if ! [[ "$SUBMISSION_ID" =~ ^[0-9A-Fa-f-]{36}$ ]]; then
+              echo "::error::notarization of the ${leg} bundle could not be submitted"
+              exit 1
+            fi
+            submitted="${submitted} ${leg}:${SUBMISSION_ID}"
+          done
+
+          # Split on spaces: each entry is a leg name and an id of hex digits
+          # and dashes, both checked above.
+          for entry in $submitted; do
+            leg="${entry%%:*}"
+            SUBMISSION_ID="${entry#*:}"
+            app="${RUNNER_TEMP}/work/${leg}/Jarvis.app"
             # notarytool's exit code is not reliable on an Invalid verdict --
             # check the JSON status and dump the notarization log on failure
             # (the submission id is unrecoverable once this runner is gone).
-            SUBMIT_JSON="$(xcrun notarytool submit "$zip" \
+            WAIT_JSON="$(xcrun notarytool wait "$SUBMISSION_ID" \
               --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
-              --wait --timeout 30m --output-format json)" || true
-            echo "$SUBMIT_JSON"
-            SUBMISSION_ID="$(echo "$SUBMIT_JSON" | jq -r '.id // empty')"
-            NOTARY_STATUS="$(echo "$SUBMIT_JSON" | jq -r '.status // empty')"
+              --timeout 30m --output-format json)" || true
+            echo "$WAIT_JSON"
+            NOTARY_STATUS="$(echo "$WAIT_JSON" | jq -r '.status // empty' 2>/dev/null)" || NOTARY_STATUS=""
             if [ "$NOTARY_STATUS" != "Accepted" ]; then
-              echo "::error::notarization of the ${leg} bundle failed (status: ${NOTARY_STATUS:-unknown})"
-              if [ -n "$SUBMISSION_ID" ]; then
-                xcrun notarytool log "$SUBMISSION_ID" \
-                  --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
-              fi
+              echo "::error::notarization of the ${leg} bundle failed (status: ${NOTARY_STATUS:-unknown}, submission ${SUBMISSION_ID})"
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
               exit 1
             fi
             xcrun stapler staple "$app"
@@ -901,7 +920,10 @@ jobs:
           name: unsigned-win32-x64
           path: sidecar/${{ env.SIDECAR_BIN }}.exe
           if-no-files-found: error
-          retention-days: 1
+          # A failed signer or verifier can be re-run up to 30 days after the
+          # run started, and it downloads this; a re-run of all jobs instead
+          # rebuilds other bytes (#958). A dry run keeps it a day (#1165).
+          retention-days: ${{ env.DRY_RUN == 'true' && 1 || 35 }}
 
   # --- Windows: Authenticode-sign via Cloud KMS ---
   # The only job here besides publish-sidecar that holds id-token. It builds
@@ -913,47 +935,45 @@ jobs:
   # readiness step). The post-sign check runs in verify-sidecar-windows
   # (#817).
   #
-  # Who can sign (#819). The token this job mints is exchanged for the KMS
-  # signing identity only if the Workload Identity provider behind
-  # vars.GCP_WORKLOAD_IDENTITY_PROVIDER accepts it, and that provider, not
-  # this file, decides who signs. Its attribute condition lives in GCP, where
-  # no review or test here can see it; as set on 2026-10-09 it is:
-  #   assertion.repository=='vierisid/jarvis' && (
-  #     assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/sidecar-release.yml@refs/tags/v')
-  #     || assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/sidecar-release.yml@refs/heads/main')
-  #     || assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/installer-release.yml@refs/tags/installer-v')
-  #     || assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/installer-release.yml@refs/heads/main'))
-  # It admits this file when run from main or a v* tag (and the other signing
-  # workflow likewise; see there). By its text it refuses a dispatch from a
-  # branch such as throwaway, and another repository calling the public
-  # reusable sidecar-release.yml (assertion.repository is the caller). It does
-  # NOT close every branch path, so do not rely on it for that:
-  #   * the main clauses are startsWith prefix matches, so a branch whose
-  #     name starts with main (main-x, maint) passes them;
-  #   * a workflow on any branch of this repository can call
-  #     vierisid/jarvis/.github/workflows/sidecar-release.yml@main; the ref
-  #     then reads @refs/heads/main, while every checkout here (no ref:)
-  #     takes the caller commit, so the branch code is built and signed.
-  #     release-exec.yml calls this file by local path, so for it the ref
-  #     is the ref of its own run.
-  # Both need write access, like the tag path below. Exact equality for main
-  # in the condition would close the first; an environment gate keyed on
-  # github.ref, on BOTH signing jobs, would close both. Only the allow side
-  # has been exercised (every dry run); the deny side has not, and a test of
-  # it should try a main-prefixed branch and a remote-ref call as well as a
-  # plain branch. Renaming this file, moving this job or changing the tag
-  # prefix needs the condition changed with it, or signing fails (403).
-  #
-  # Deliberately NOT gated (owner decision on #819): this job has no
-  # environment:, and a dry run signs for real, because the dry run is the
-  # only proof before a release that signing works, and main is reviewed.
-  # Accepted while the only write collaborators are the two owners: the two
-  # branch paths above, and that a write collaborator can create a v* tag on
-  # any commit (tag creation is left open for release.yml, #679) and sign from
-  # it. When a third collaborator gets write, put both signing jobs behind the
-  # release environment, keyed on github.ref and not on dry_run: a dry
-  # dispatch on a fresh tag would otherwise land in release-dry-run, which has
-  # no rules, and sign.
+  # Who can sign (#819, #1165).
+  #   * The `signing` environment. This job and the macOS signer
+  #     (sign-sidecar-darwin) name it, statically, so a dry run lands in it as a real
+  #     run does. Its deployment rule, a repository setting no review or test
+  #     here can see, admits only the main branch and the v* and installer-v*
+  #     tags, and it has no required reviewers, so a dry run from main still
+  #     signs for real with no approval and the one-approval release graph is
+  #     unchanged. GitHub checks the rule against github.ref of the run, the
+  #     CALLER's ref when this file is called, so a run from any other ref
+  #     fails at this job before a runner starts (a dry run from a branch
+  #     included). The Apple signing secrets are secrets of this
+  #     environment, not of the repository, so only the jobs that name it can
+  #     read them, and no caller passes them. That holds once the environment
+  #     exists with that rule and the repository copies of the secrets are
+  #     deleted: GitHub creates a missing environment on first use with no
+  #     rule.
+  #   * The Workload Identity provider behind
+  #     vars.GCP_WORKLOAD_IDENTITY_PROVIDER, which exchanges this job's token
+  #     for the KMS signing identity. The environment does NOT bind that
+  #     exchange by itself: `environment:` is a line of this file, which a
+  #     branch can delete, so for KMS the provider's attribute condition is
+  #     the gate. It lives in GCP; as set on 2026-10-09 it is:
+  #       assertion.repository=='vierisid/jarvis' && (
+  #         assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/sidecar-release.yml@refs/tags/v')
+  #         || assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/sidecar-release.yml@refs/heads/main')
+  #         || assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/installer-release.yml@refs/tags/installer-v')
+  #         || assertion.job_workflow_ref.startsWith('vierisid/jarvis/.github/workflows/installer-release.yml@refs/heads/main'))
+  #     It refuses another repository calling the public reusable
+  #     sidecar-release.yml (assertion.repository is the caller). It still
+  #     admits a branch whose name starts with main (main-x) running a copy
+  #     of this file with the environment line removed, and any other job
+  #     of these two files holding id-token (publish-sidecar). The fix is in
+  #     GCP: require assertion.environment == 'signing' and compare the main
+  #     ref exactly (proposed in #1165).
+  # Not closed by either: a write collaborator can create a v* tag on
+  # any commit (tag creation is left open for release.yml, #679) and sign
+  # from it. Renaming this file, moving this job, renaming the environment or
+  # changing a tag prefix needs the GCP condition and the environment rule
+  # changed with it, or signing fails.
   sign-sidecar-windows:
     needs: [resolve, build-sidecar-windows]
     # build, not should_release (#952): on a publish_only call this job,
@@ -961,6 +981,9 @@ jobs:
     # later adds a status function that would carry it past its skipped need.
     if: needs.resolve.outputs.build == 'true'
     runs-on: ubuntu-latest
+    # See "Who can sign" above sign-sidecar-windows: main and the v* / installer-v*
+    # tags only, no reviewers; static, so a dry run is gated as a real run is.
+    environment: signing
     # OIDC, for google-github-actions/auth: Windows signing federates into
     # Google Cloud KMS with no stored credential at all. Declared here rather
     # than at the workflow level so no other job can mint a token. Windows
@@ -1168,6 +1191,9 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y osslsigncode
+          # Which osslsigncode checked this release, in its log (#1165): the
+          # verify script reads its output, which has changed between versions.
+          osslsigncode --version
 
       - name: Verify the Authenticode signature
         if: needs.sign-sidecar-windows.outputs.signed == 'true'
