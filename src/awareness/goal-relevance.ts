@@ -7,6 +7,8 @@ import { OPPORTUNITY_WINDOW_MS } from './routine-episodes.ts';
 export const GOAL_RELEVANCE_POLICY = 'goal-contribution-v1' as const;
 export const GOAL_FRESHNESS_MS = 90 * 86_400_000;
 export const GOAL_CONTEXT_LIMIT = 1000;
+/** Goal writes keep updated_at strictly increasing (#1290), so rapid writes can put it a few ms past the wall clock. */
+export const GOAL_CLOCK_SKEW_MS = 60_000;
 const NON_OPERATIONAL = /\b(?:research|tutorial|article|blog|guide|fiction|novel|example|training|learn|study|translate|demo|not|never|avoid|stop|without)\b|\bdon['’]t\b/i;
 type Evidence = Pick<JobHypothesis, 'kind' | 'routine' | 'evidence'>;
 
@@ -14,7 +16,7 @@ function current(goal: Goal, now: number): boolean {
   // These columns are nullable in older vaults despite the current TypeScript type.
   if (typeof goal.title !== 'string' || typeof goal.description !== 'string' || typeof goal.success_criteria !== 'string') return false;
   return goal.status === 'active' && goal.completed_at === null
-    && Number.isSafeInteger(goal.updated_at) && goal.updated_at <= now
+    && Number.isSafeInteger(goal.updated_at) && goal.updated_at <= now + GOAL_CLOCK_SKEW_MS
     && goal.updated_at >= now - GOAL_FRESHNESS_MS
     && (goal.deadline === null || Number.isSafeInteger(goal.deadline) && goal.deadline >= now)
     && goal.title.length <= 300 && goal.description.length <= 6000 && goal.success_criteria.length <= 300
