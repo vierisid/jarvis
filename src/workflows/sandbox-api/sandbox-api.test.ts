@@ -411,8 +411,18 @@ describe("SandboxApi routes (B2: connections, store, flows)", () => {
     expect(body.value.access_token).toBe("tok");
   });
 
-  test("GET /v1/worker/app-connections returns 404 for unknown id", async () => {
-    const r = await authedFetch("/v1/worker/app-connections/unknown-id");
+  test("GET /v1/worker/app-connections returns 404 for an unknown id the run names, 403 to an engine with no run (#1153)", async () => {
+    // This suite's token names no run, so it is handed no stored connection at all.
+    expect((await authedFetch("/v1/worker/app-connections/unknown-id")).status).toBe(403);
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Unknown account", trigger: { name: "trigger", type: "EMPTY",
+      nextAction: { name: "send", type: "PIECE", settings: { pieceName: "test-piece", actionName: "send", input: { auth: "{{connections.unknown-id}}" } } } } as any });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(version.trigger), run.id]);
+    const id = { ...sampleIdentity(), runId: run.id };
+    const { token } = await signer.mint(id);
+    registry.register({ ...id, engineToken: token, expiresAt: Date.now() + 60_000, terminatedAt: null });
+    const r = await fetch(`${api.baseUrl}/v1/worker/app-connections/unknown-id`, { headers: { Authorization: `Bearer ${token}` } });
     expect(r.status).toBe(404);
   });
 

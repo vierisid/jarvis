@@ -72,7 +72,8 @@ import { assertDesktopAllowed } from '../../actions/tools/desktop-guard.ts';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
-  resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR } from './piece-effects';
+  resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR,
+  HTTP_PIECE, httpReadHostListed } from './piece-effects';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
 import { captureProviderBinding, providerBindingHolds } from './provider-reconciliation';
 import { recordPieceCompletion } from './piece-completion';
@@ -84,6 +85,7 @@ import { isCommunityAction } from './step-admission';
 import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
 import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
 import { getFlowRun } from '../db/repos/flow-run';
+import { getFlowReadHosts } from '../db/repos/flow-read-hosts';
 import { boundedReceiptText } from '../../roles/untrusted';
 import { evaluateLlmOutput } from './llm-output-contract';
 import { withWorkflowMachineBinding } from './machine-binding';
@@ -1144,7 +1146,26 @@ export function buildSandboxServiceBackends(
     // #961: an action whose category depends on its input (an HTTP request's
     // method) is judged on the projection the card and the record carry; the
     // engine's digest of the whole input binds that projection to what runs.
-    const resolved = resolveGovernedPieceAction(req.piece, req.action, projected)!;
+    const judged = resolveGovernedPieceAction(req.piece, req.action, projected)!;
+    // #1153 (owner decision): an HTTP read runs without asking only to a host
+    // on the flow's read list. A body-less GET still carries what its URL and
+    // headers hold to the host it names, so to any other host it is a send
+    // and asks while sends are governed. The list goes back with the
+    // authorization, and the engine holds the request and every redirect to
+    // it (`withReadHosts`), so a listed host's redirect cannot carry it on.
+    const readHosts = req.piece === HTTP_PIECE && judged.category === 'read_data' ? (() => {
+      const flowRun = getFlowRun(ctx.runId);
+      return flowRun && flowRun.projectId === ctx.projectId ? getFlowReadHosts(flowRun.flowId)?.hosts ?? [] : [];
+    })() : null;
+    // A step already recorded keeps the category it was recorded under: a
+    // host listed while its card waits must not turn the approved send into
+    // a "changed" effect, nor a host removed since make a recorded read ask.
+    // Its retry as a read is still held to the list as it is now (the engine
+    // refuses an unlisted host), and an approved send is not held at all.
+    const recordedRead = readHosts !== null ? getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], 'piece'))?.actionCategory : undefined;
+    const listedRead = readHosts !== null && (recordedRead === 'read_data' || recordedRead === 'send_message'
+      ? recordedRead === 'read_data' : httpReadHostListed(projected, readHosts));
+    const resolved = readHosts !== null && !listedRead ? { ...judged, category: 'send_message' as const } : judged;
     // Q-05: an action that sends to or addresses someone memory knows keeps
     // the facts the address matched, and stops if they stop holding.
     const addressing = ['send_email', 'send_message', 'write_data', 'modify_settings'].includes(resolved.category);
@@ -1292,7 +1313,7 @@ export function buildSandboxServiceBackends(
         ? { governed: true, dispatch: 'completed', result: reply.result }
         : { governed: true, dispatch: 'authorized', effectId, ...approved() };
     }
-    return { governed: true, dispatch: 'authorized', ...approved() };
+    return { governed: true, dispatch: 'authorized', ...approved(), ...(listedRead ? { readHosts: readHosts! } : {}) };
   };
 
   const services: SandboxApiServices = {

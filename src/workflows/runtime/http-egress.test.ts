@@ -10,7 +10,7 @@ import type { LookupAddress } from 'node:dns';
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { MAX_RESPONSE_BYTES, ResponseTooLargeError, resolveGuardedAddress, addressAllowed, assertHostAllowed, canonicalAddress, classifyAddress, destinationAllowed, egressGuardedAxios, egressPolicyFromEnv,
-  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, EGRESS_POLICY_ENV, EgressRefusedError } from './http-egress';
+  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, EGRESS_POLICY_ENV, EgressRefusedError, readHostKey, withReadHosts } from './http-egress';
 
 describe('which addresses the HTTP step may reach', () => {
   const table: Array<[string, 'public' | 'private' | 'blocked']> = [
@@ -203,6 +203,29 @@ describe('the guarded client connects only where it checked', () => {
     expect((await client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/to-other-origin` })).data).toEqual({ ok: true, url: '/landing' });
   });
 
+  test('#1153: a read that ran without asking reaches listed hosts only, its redirects included', async () => {
+    seen.length = 0;
+    // Built inside the scope, as the HTTP piece builds its client inside the authorized run.
+    const listed = (hosts: string[], url: string) => withReadHosts(hosts, () => client(true, onlyLocal).request({ method: 'GET', url }));
+    // A listed host's redirect to an unlisted one is refused before it is followed.
+    await expect(listed(['ops.test'], `http://ops.test:${port}/to-other-origin`)).rejects.toThrow(/a redirect goes to other\.test, which is not on this flow's read list/);
+    // To a listed host it is followed, and a same-host redirect always is.
+    expect((await listed(['ops.test', 'OTHER.test'], `http://ops.test:${port}/to-other-origin`)).data).toEqual({ ok: true, url: '/landing' });
+    expect((await listed(['ops.test'], `http://ops.test:${port}/to-same-origin`)).data).toEqual({ ok: true, url: '/landing' });
+    // The first hop is held to the list too.
+    await expect(listed(['other.test'], `http://ops.test:${port}/plain`)).rejects.toBeInstanceOf(EgressRefusedError);
+    // An empty list reaches nothing.
+    await expect(listed([], `http://ops.test:${port}/plain`)).rejects.toThrow(/not on this flow's read list/);
+    expect(seen).toEqual([`GET ops.test:${port} /to-other-origin`, `GET ops.test:${port} /to-other-origin`, `GET other.test:${port} /landing`,
+      `GET ops.test:${port} /to-same-origin`, `GET ops.test:${port} /landing`]);
+    // A Host header naming another virtual host on the listed address is refused before sending.
+    await expect(withReadHosts(['ops.test'], () => client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/plain`, headers: { Host: 'tenant.example' } })))
+      .rejects.toThrow(/may not set its own Host header/);
+    expect(seen).toHaveLength(5);
+    // Outside the scope (an approved request, or any other step) a read still follows another origin.
+    expect((await client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/to-other-origin` })).data).toEqual({ ok: true, url: '/landing' });
+  });
+
   test('an agent, a socket path or a proxy on the request cannot route around the check', async () => {
     seen.length = 0;
     const { Agent } = await import('node:http');
@@ -285,3 +308,17 @@ describe('#961: a non-HTTP connection (SMTP, SFTP, FTP) is resolved once and con
     expect(seen).toEqual([]);
   });
 });
+
+describe('#1153: read-list host names', () => {
+  test('a bare host in URL hostname form; anything else is not one', () => {
+    expect(readHostKey('API.Example.com')).toBe('api.example.com');
+    expect(readHostKey('example.com.')).toBe('example.com');
+    expect(readHostKey('b\u00fccher.de')).toBe('xn--bcher-kva.de');
+    expect(readHostKey('[::1]')).toBe('::1');
+    expect(readHostKey('10.0.0.1')).toBe('10.0.0.1');
+    for (const bad of ['', ' ', 'a.com:443', 'a.com/x', 'https://a.com', '*.a.com', 'u@a.com', 'a b', 'a.com?x', 'a.com#x', 'a\\b', 7, null]) {
+      expect(readHostKey(bad)).toBeNull();
+    }
+  });
+});
+

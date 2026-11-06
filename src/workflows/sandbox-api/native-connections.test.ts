@@ -9,6 +9,7 @@ import { createDraftVersion } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
 import { SandboxApi } from "./server";
 import { graphDigest } from "../runtime/continuation";
+import { triggerHookRunId } from "../runner/triggers/hook-run-id";
 
 const TOKEN = "synthetic-native-lookup-token";
 let api: SandboxApi;
@@ -49,15 +50,32 @@ async function save(externalId: string, pieceName = "fixture-piece", token = TOK
   return result.id;
 }
 
-async function mint(projectId: string = DEFAULT_IDS.project, ttl = 60) {
-  const identity = { projectId, sandboxId: crypto.randomUUID(), runId: crypto.randomUUID() };
+/**
+ * A run in `projectId` whose graph names each of `names` as a step's auth, and
+ * an engine token for it. #1153: the route hands a stored connection only to
+ * an engine whose graph names it.
+ */
+function runNaming(projectId: string, names: readonly string[]): string {
+  const flow = createFlow({ projectId });
+  let next: Record<string, unknown> | undefined;
+  for (const [i, name] of [...names].reverse().entries()) {
+    next = { name: `step_${i}`, type: "PIECE", settings: { pieceName: "fixture-piece", actionName: "a", input: { auth: `{{connections['${name}']}}` } }, ...(next ? { nextAction: next } : {}) };
+  }
+  const version = createDraftVersion({ flowId: flow.id, displayName: "Fixture", trigger: { name: "trigger", type: "EMPTY", ...(next ? { nextAction: next } : {}) } as any });
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+  getWorkflowDb().run("UPDATE flow_run SET project_id = ?, graph_digest = ? WHERE id = ?", [projectId, graphDigest(version.trigger), run.id]);
+  return run.id;
+}
+
+async function mint(projectId: string = DEFAULT_IDS.project, ttl = 60, names: readonly string[] = ["native", "claims-only"]) {
+  const identity = { projectId, sandboxId: crypto.randomUUID(), runId: runNaming(projectId, names) };
   const { token, expiresAt } = await api.signer.mint(identity, ttl);
   api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });
   return { token, identity };
 }
 
 async function lookup(externalId: string, query: Record<string, string> = {}, projectId: string = DEFAULT_IDS.project) {
-  const { token } = await mint(projectId);
+  const { token } = await mint(projectId, 60, [externalId]);
   const params = new URLSearchParams({ projectId, ...query });
   return fetch(`${api.baseUrl}/v1/worker/app-connections/${encodeURIComponent(externalId)}?${params}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -68,8 +86,11 @@ describe("Q-05: a run keeps the connection identity it started with", () => {
   test("a credential replaced after the run first fetched it is refused, and the run records why", async () => {
     await save("account");
     const flow = createFlow({});
-    const version = createDraftVersion({ flowId: flow.id, displayName: "Run binding", trigger: { name: "trigger", type: "EMPTY" } as any });
+    // The version names the account, as a run's own version must (#1153).
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Run binding", trigger: { name: "trigger", type: "EMPTY",
+      nextAction: { name: "step_1", type: "PIECE", settings: { pieceName: "private-piece", actionName: "a", input: { auth: "{{connections.account}}" } } } } as any });
     const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(version.trigger), run.id]);
     const identity = { projectId: DEFAULT_IDS.project, sandboxId: crypto.randomUUID(), runId: run.id };
     const { token, expiresAt } = await api.signer.mint(identity, 60);
     api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });
@@ -263,10 +284,11 @@ describe("native connections through the authenticated engine endpoint", () => {
     // The response `id` used to echo `engine_run-retired_warm-victim`, which
     // is the server plainly still acting as the run that was handed off.
     expect(body).not.toContain("run-retired");
-    // The run that actually owns the sandbox is unaffected; it simply has no
-    // connection of its own in its own project.
+    // The run that actually owns the sandbox is unaffected, and is not handed
+    // the other project's row either: it has no workflow naming the
+    // connection, so #1153's scope refuses it before the lookup (was 404).
     expect((await fetch(url, { headers: { Authorization: `Bearer ${current.token}` } })).status)
-      .toBe(404);
+      .toBe(403);
   });
 
   test("preserves native error status and does not expose missing credentials", async () => {
@@ -281,3 +303,85 @@ describe("native connections through the authenticated engine endpoint", () => {
     expect(await missing.text()).not.toContain(TOKEN);
   });
 });
+
+describe("#1153: a run fetches only the stored connections its version names", () => {
+  test("an account the run's version does not name is refused before it is resolved, and binds nothing", async () => {
+    await save("account");
+    await save("other");
+    const flow = createFlow({});
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Scoped", trigger: { name: "trigger", type: "EMPTY",
+      nextAction: { name: "step_1", type: "PIECE", settings: { pieceName: "private-piece", actionName: "a", input: { auth: "{{connections.account}}" } } } } as any });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(version.trigger), run.id]);
+    const identity = { projectId: DEFAULT_IDS.project, sandboxId: crypto.randomUUID(), runId: run.id };
+    const { token, expiresAt } = await api.signer.mint(identity, 60);
+    api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });
+    const fetchAs = (id: string) => fetch(`${api.baseUrl}/v1/worker/app-connections/${id}?projectId=${DEFAULT_IDS.project}`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    const refused = await fetchAs("other");
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).toContain("Connection other was not handed out: no step of the workflow it runs names it");
+    expect(getWorkflowDb().query("SELECT 1 FROM workflow_run_connection_binding WHERE run_id = ? AND external_id = 'other'").get(run.id)).toBeNull();
+    expect((await fetchAs("account")).status).toBe(200);
+  });
+
+  const tokenFor = async (runId: string) => {
+    const identity = { projectId: DEFAULT_IDS.project, sandboxId: crypto.randomUUID(), runId };
+    const { token, expiresAt } = await api.signer.mint(identity, 60);
+    api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });
+    return (id: string) => fetch(`${api.baseUrl}/v1/worker/app-connections/${id}?projectId=${DEFAULT_IDS.project}`, { headers: { Authorization: `Bearer ${token}` } });
+  };
+  const graph = (triggerAuth: string | null, stepAuth: string) => ({ name: "trigger", type: "PIECE_TRIGGER",
+    settings: { pieceName: "fixture-piece", triggerName: "t", input: triggerAuth ? { auth: `{{connections.${triggerAuth}}}` } : {} },
+    nextAction: { name: "step_1", type: "PIECE", settings: { pieceName: "fixture-piece", actionName: "a", input: { auth: `{{connections.${stepAuth}}}` } } } });
+
+  test("a trigger hook gets its trigger's account only; an engine with no run (a piece loaded for its metadata) gets none", async () => {
+    await save("trigger-account");
+    await save("step-account");
+    const flow = createFlow({});
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Polling", trigger: graph("trigger-account", "step-account") as any });
+    const hook = await tokenFor(triggerHookRunId("poll", flow.id, version));
+    expect((await hook("trigger-account")).status).toBe(200);
+    expect((await hook("step-account")).status).toBe(403);
+    const metadata = await tokenFor("metadata-extract-runtime-install-x");
+    const refused = await metadata("step-account");
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).toContain("This engine is not running a workflow of this project");
+  });
+
+  test("a run is held to the graph it began on, with its sample input applied", async () => {
+    await save("configured");
+    await save("sampled");
+    const flow = createFlow({});
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Test step", trigger: graph(null, "configured") as any });
+    // A test run whose sample input replaces the step's input names another account.
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    getWorkflowDb().run("UPDATE flow_run SET graph_digest = ?, execution_config = ? WHERE id = ?", [graphDigest(version.trigger),
+      JSON.stringify({ sampleInputOverride: { step_1: { auth: "{{connections.sampled}}" } } }), run.id]);
+    const fetchAs = await tokenFor(run.id);
+    expect((await fetchAs("sampled")).status).toBe(200);
+    expect((await fetchAs("configured")).status).toBe(403);
+    // A run from before the digest was recorded (#806) is judged on its version as it is.
+    getWorkflowDb().run("UPDATE flow_run SET graph_digest = NULL WHERE id = ?", [run.id]);
+    expect((await fetchAs("sampled")).status).toBe(200);
+    getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(version.trigger), run.id]);
+    // The draft edited while the run goes: the run is refused rather than judged on the new graph.
+    getWorkflowDb().run("UPDATE flow_version SET trigger = ? WHERE id = ?", [JSON.stringify(graph("sampled", "configured")), version.id]);
+    const edited = await fetchAs("sampled");
+    expect(edited.status).toBe(403);
+    expect(await edited.text()).toContain("graph changed after it began");
+  });
+
+  test("what the engine is handed: no refresh secret anywhere in an OAuth2 value, and a legacy SECRET_TEXT row under the key it reads", async () => {
+    upsertConnection({ externalId: "exported", pieceName: "fixture-piece", pieceVersion: "1", displayName: "Exported", type: "OAUTH2",
+      value: { access_token: "at-1", refresh_token: "rt-top", client_secret: "cs-1", data: { refresh_token: "rt-nested", scope: "s" } } });
+    upsertConnection({ externalId: "legacy-secret", pieceName: "fixture-piece", pieceVersion: "1", displayName: "Legacy", type: "SECRET_TEXT", value: { secret: "bot-token" } });
+    const fetchAs = await tokenFor(runNaming(DEFAULT_IDS.project, ["exported", "legacy-secret"]));
+    const oauth = await (await fetchAs("exported")).json() as { value: Record<string, unknown> };
+    expect(oauth.value).toMatchObject({ access_token: "at-1", refresh_token: "", client_secret: "", data: { refresh_token: "", scope: "s" } });
+    expect(JSON.stringify(oauth)).not.toMatch(/rt-top|rt-nested|cs-1/);
+    const secret = await (await fetchAs("legacy-secret")).json() as { value: Record<string, unknown> };
+    expect(secret.value).toMatchObject({ type: "SECRET_TEXT", secret_text: "bot-token" });
+  });
+});
+
