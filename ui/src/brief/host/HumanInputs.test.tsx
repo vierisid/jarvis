@@ -79,6 +79,7 @@ test('failed continuation stays visible outside collapsed history after submissi
   expect(host.querySelector('button[type="submit"]')).toBeNull();
   expect(host.querySelector('a')?.href).toContain('runId=run');
 });
+
 test('expiry keeps the focused unsent form readable, copyable and recoverable after remount without another POST', async () => {
   let writes=0, copied='';
   Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>{copied=text;}}});
@@ -314,4 +315,26 @@ test('a deep link that is not found says so, and Check again reads it again', as
   await React.act(async () => root.render(<Forms.HumanInputInbox queue={{ requests: [], error: '', refresh: async () => {} }} http={http} focusId="missing" />));
   expect(host.textContent).toContain('was not found in this workspace'); expect(reads).toBe(1);
   await click('Check again'); expect(reads).toBe(2);
+});
+
+test('a submitted answer held by global pause explains why it has not continued', async () => {
+  const { EmergencyStatusContext } = await import('./EmergencyStatus');
+  const http = createHostTransport((async()=>{throw new Error('No write expected');}) as unknown as typeof fetch);
+  const held = { ...request, status:'submitted' as const, runs:[{runId:'run',versionId:'version',status:'PAUSED'}] };
+  await React.act(async()=>root.render(<EmergencyStatusContext.Provider value="paused"><Forms.HumanInputForm request={held} http={http} changed={async()=>{}} /></EmergencyStatusContext.Provider>));
+  expect(host.textContent).toContain('Global emergency pause is holding this workflow');
+  expect(host.textContent).toContain('Saved responses will continue');
+  expect(host.querySelector('a')?.href).toContain('runId=run');
+});
+
+test('a queued continuation held by global pause says so, and reads as continuing once resumed', async () => {
+  const { EmergencyStatusContext } = await import('./EmergencyStatus');
+  const http = createHostTransport((async()=>{throw new Error('No write expected');}) as unknown as typeof fetch);
+  const queued = { ...request, status:'submitted' as const, runs:[{runId:'run',versionId:'version',status:'QUEUED'}] };
+  await React.act(async()=>root.render(<EmergencyStatusContext.Provider value="paused"><Forms.HumanInputForm request={queued} http={http} changed={async()=>{}} /></EmergencyStatusContext.Provider>));
+  expect(host.textContent).toContain('Global emergency pause is holding this workflow');
+  expect(host.textContent).not.toContain('Workflow is continuing.');
+  await React.act(async()=>root.render(<EmergencyStatusContext.Provider value="normal"><Forms.HumanInputForm request={queued} http={http} changed={async()=>{}} /></EmergencyStatusContext.Provider>));
+  expect(host.textContent).toContain('Workflow is continuing.');
+  expect(host.textContent).not.toContain('Global emergency pause');
 });

@@ -144,7 +144,7 @@ import {
 import { readBoundedText } from '../util/bounded-body.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { runWithAdmission } from '../llm/background-budget.ts';
-import { getGoalApplication } from '../goals/application-service.ts';
+import { getGoalApplication, GoalScoreConflict } from '../goals/application-service.ts';
 import { readGoalEvents } from '../goals/event-delivery.ts';
 import { GoalValidationError, number as goalNumber, keys as goalKeys, record as goalRecord } from '../goals/validation.ts';
 
@@ -4839,13 +4839,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           const id = new URL(req.url).pathname.split('/').at(-2)!;
           const body = goalRecord(await req.json(), 'request');
-          goalKeys(body, ['score', 'reason', 'source'], 'request');
+          goalKeys(body, ['score', 'reason', 'source', 'expected_updated_at'], 'request');
           if (body.source === 'daily_review') throw new GoalValidationError('source', 'Automatic goal reviews require a verified measurement-to-score mapping');
           if (body.source !== undefined && body.source !== 'user') throw new GoalValidationError('source', 'Manual score requests must use source user');
-          const updated = getGoalApplication().scoreGoal(id, body.score as number, (body.reason === undefined ? '' : body.reason) as string);
+          // Optional so older clients keep last-write-wins; the dashboard always sends the revision its draft was based on.
+          const updated = getGoalApplication().scoreGoal(id, body.score as number, (body.reason === undefined ? '' : body.reason) as string,
+            'user', body.expected_updated_at as number | undefined);
           if (!updated) return error('Goal not found', 404);
           return json(updated);
         } catch (err) {
+          if (err instanceof GoalScoreConflict) return json({ error: err.message, code: 'SCORE_CONFLICT', goal: err.goal }, 409);
           if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
           return error(`${err}`, err instanceof SyntaxError ? 400 : 500);
         }
