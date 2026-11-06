@@ -1356,10 +1356,38 @@ func makeBrowserScrollHandler(cfg *SidecarConfig) RPCHandler {
 			pixels = -pixels
 		}
 
-		if _, err := cdp.send("Runtime.evaluate", map[string]any{
-			"expression": fmt.Sprintf("window.scrollBy(0, %d)", pixels),
-		}); err != nil {
+		// INSTANT, whatever the page's CSS says (#1161). Under
+		// `scroll-behavior: smooth` a plain scrollBy animates (measured on
+		// Chromium 156: ~430ms over 600px, ~1200ms over 5000px), so the forget
+		// below ran while the page was still moving and a snapshot taken
+		// before the motion ended got a fresh generation and coordinates that
+		// were about to change. Measured instant with this form, smooth CSS
+		// or not. Keep in step with `scroll()` in src/actions/browser/session.ts.
+		//
+		// Awaited and checked for an exception, as the daemon's evaluate is:
+		// Chromium 156 returns a promise from scrollBy, and a scroll the page
+		// refused (a throw, a rejection) must not read as "Scrolled down".
+		raw, err := cdp.send("Runtime.evaluate", map[string]any{
+			"expression":   fmt.Sprintf("window.scrollBy({top: %d, behavior: 'instant'})", pixels),
+			"awaitPromise": true,
+		})
+		if err != nil {
 			return nil, fmt.Errorf("scroll failed: %w", err)
+		}
+		var scrolled struct {
+			ExceptionDetails *struct {
+				Text      string `json:"text"`
+				Exception struct {
+					Description string `json:"description"`
+				} `json:"exception"`
+			} `json:"exceptionDetails"`
+		}
+		if json.Unmarshal(raw, &scrolled) == nil && scrolled.ExceptionDetails != nil {
+			detail := scrolled.ExceptionDetails.Exception.Description
+			if detail == "" {
+				detail = scrolled.ExceptionDetails.Text
+			}
+			return nil, fmt.Errorf("scroll failed: the page threw: %s", truncateMarked(detail, maxPageControlledReply))
 		}
 
 		// EVERY COORDINATE THE SNAPSHOT HANDED OUT NOW DESCRIBES WHERE AN
