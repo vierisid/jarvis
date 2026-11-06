@@ -112,29 +112,49 @@ class SequencedMarks extends Set<string> {
  * direction. ws-service's isVoiceAffirmative is narrow on purpose (a yes it
  * misses leaves a held room action unconfirmed); do not merge the two.
  * English and Italian, the languages known to be spoken to it; a yes in
- * another language still clears.
+ * another language still clears. Typed replies too (agents/turn-taint-carry.ts
+ * carries a text turn's taint across one): a stretched word ("yesss", "okk")
+ * is read with its repeats collapsed, and an emoji is agreement, so a reply of
+ * only emoji ("thumbs up") is a yes.
  */
 const AGREEMENT: ReadonlySet<string> = new Set([
   'yes', 'yeah', 'yea', 'yep', 'yup', 'ya', 'yah', 'ok', 'okay', 'k', 'kk', 'sure', 'alright', 'right', 'fine',
   'correct', 'affirmative', 'proceed', 'confirm', 'confirmed', 'approve', 'approved', 'absolutely', 'definitely',
   'certainly', 'mhm', 'agreed', 'do', 'ahead', 'si', 'sì', 'certo', 'procedi', 'bene', 'fallo', 'vai', 'perfetto', 'esatto',
+  'go', 'y', 'ye', 'yeh', 'okie', 'lgtm', 'course', 'good', 'sí', 'cool', 'great', 'perfect', 'nice', 'awesome',
 ]);
 const FILLER: ReadonlySet<string> = new Set([
-  'it', 'go', 'for', 'now', 'just', "let's", 'lets', 'please', 'thanks', 'thank', 'you', 'sir',
+  'it', 'for', 'on', 'of', 'with', 'looks', 'to', 'me', 'why', 'not', 'pls', 'plz', 'thx', 'ty', 'now', 'just', "let's", 'lets', 'please', 'thanks', 'thank', 'you', 'sir',
   'sounds', 'good', "that's", 'thats', 'that', 'this', 'one', 'all', 'is', 'so', 'then', 'o', 'and', 'again', 'thing',
   'uh', 'um', 'mm', 'hmm', 'huh', 'er', 'ah', 'oh', 'jarvis', 'hey', 'hi',
   'va', 'pure', 'grazie', 'per', 'favore', 'dai', 'ok',
 ]);
 
+/** An emoji, with its presentation selector and skin tone, read as agreement. */
+const PICTOGRAPH = /\p{Extended_Pictographic}/u;
+
 /** Whether `text` is only a yes to whatever was proposed (see AGREEMENT). */
 export function isBareAffirmation(text: string): boolean {
-  const said = words(text.normalize('NFKC'));
-  return said.some((w) => AGREEMENT.has(w)) && said.every((w) => AGREEMENT.has(w) || FILLER.has(w));
+  const normalized = text.normalize('NFKC');
+  const said = words(normalized);
+  const agrees = (w: string) => AGREEMENT.has(w) || AGREEMENT_COLLAPSED.has(collapsed(w));
+  const fills = (w: string) => FILLER.has(w) || FILLER_COLLAPSED.has(collapsed(w));
+  return (PICTOGRAPH.test(normalized) || said.some(agrees)) && said.every((w) => agrees(w) || fills(w));
 }
+
+/** `w` with each run of one letter shortened to one: "yesss" -> "yes". */
+function collapsed(w: string): string {
+  return w.replace(/(.)\1+/gu, '$1');
+}
+
+/** The lists collapsed the same way, so "goood" meets "good" and "hmmm" "hmm". */
+const AGREEMENT_COLLAPSED: ReadonlySet<string> = new Set([...AGREEMENT].map(collapsed));
+const FILLER_COLLAPSED: ReadonlySet<string> = new Set([...FILLER].map(collapsed));
 
 /** The words of `text`, lowercased, for comparing what was heard with what was said. */
 function words(text: string): string[] {
-  return text.toLowerCase().match(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu) ?? [];
+  // Typed apostrophes are often curly (smart punctuation): read them as `'`.
+  return text.replace(/[\u2018\u2019\u02bc\u02b9\u2032\uff07]/gu, "'").toLowerCase().match(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu) ?? [];
 }
 
 /**

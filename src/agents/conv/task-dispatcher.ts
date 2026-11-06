@@ -12,6 +12,7 @@
  * loop + tool-registry plumbing here.
  */
 
+import type { TurnTaintLink } from '../turn-taint-carry.ts';
 import type { LLMManager } from '../../llm/manager.ts';
 import { type TurnToolScope } from '../../actions/tools/tool-scope.ts';
 import type { TaskRequest, TaskRecord, TaskResultEnvelope, TaskTemplate } from './task-envelope.ts';
@@ -81,6 +82,8 @@ export type TaskRunner = (args: {
    * copy replayed onto a resume would describe a tree that has since moved.
    */
   siteContext?: string;
+  /** The dispatching turn's taint carry-over (agents/turn-taint-carry.ts). */
+  taintCarry?: TurnTaintLink | null;
 }) => Promise<TaskRunResult>;
 
 /**
@@ -106,6 +109,12 @@ export type TurnContext = {
   contextKey?: string;
   /** This turn's site prompt block, handed to the task tier that has the tools. */
   siteContext?: string;
+  /**
+   * This chat's taint carry-over (agents/turn-taint-carry.ts): each task the
+   * turn runs opens its taint set from it, and its reads count toward the
+   * turn's record. Absent, a task starts clean as before.
+   */
+  taintCarry?: TurnTaintLink | null;
 };
 
 export class TaskDispatcher {
@@ -170,6 +179,7 @@ export class TaskDispatcher {
       scope: turn.scope,
       signal: turn.signal,
       ...(turn.siteContext ? { siteContext: turn.siteContext } : {}),
+      ...(turn.taintCarry ? { taintCarry: turn.taintCarry } : {}),
     });
   }
 
@@ -258,6 +268,7 @@ export class TaskDispatcher {
       scope: turn.scope,
       signal: turn.signal,
       ...(turn.siteContext ? { siteContext: turn.siteContext } : {}),
+      ...(turn.taintCarry ? { taintCarry: turn.taintCarry } : {}),
     });
   }
 
@@ -277,6 +288,7 @@ export class TaskDispatcher {
       scope: TurnToolScope | null;
       siteContext?: string;
       signal?: AbortSignal;
+      taintCarry?: TurnTaintLink;
     },
   ): Promise<TaskResultEnvelope> {
     const cancel = () => abort.abort(callArgs.signal?.reason);
@@ -295,6 +307,7 @@ export class TaskDispatcher {
         history: callArgs.history,
         scope: callArgs.scope,
         ...(callArgs.siteContext ? { siteContext: callArgs.siteContext } : {}),
+        ...(callArgs.taintCarry ? { taintCarry: callArgs.taintCarry } : {}),
       });
 
       if (abort.signal.aborted) {
