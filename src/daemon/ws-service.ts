@@ -271,14 +271,21 @@ export function voiceApprovalGatedMessage(
 ): string {
   const nothing = decision === 'approve' ? "I haven't approved anything" : "I haven't cancelled anything";
   const label = voiceApprovalLabel(request);
+  const sayNo = isVoiceHeldStopCard(request)
+    ? 'Approve or deny it on its card.'
+    : 'Approve or deny it on its card, or, while it is still the only request waiting, say "no" plainly to deny it.';
   switch (reason) {
     case 'destructive':
       // Only a yes is gated on this (#887): a clear "no" denies a destructive
       // request, so the message says that is still open to them, on the same
-      // condition as the low-confidence offer below.
-      return `That request is marked destructive, and destructive requests are approved only with a click, never by voice, so ${nothing}. Waiting for you: ${label}. Approve or deny it on its card, or, while it is still the only request waiting, say "no" plainly to deny it.`;
+      // condition as the low-confidence offer below. Not on a stop card,
+      // where a no is held too (#887).
+      return `That request is marked destructive, and destructive requests are approved only with a click, never by voice, so ${nothing}. Waiting for you: ${label}. ${sayNo}`;
     case 'click_only':
-      return `That request has to be confirmed with a click, never by voice, so ${nothing}. Waiting for you: ${label}. Approve or deny it on its card.`;
+      // Only a yes is gated on this (owner decision 2026-11-06, #1158): a
+      // clear "no" denies a click-only card, so the message offers it, as the
+      // destructive one does, except on a stop card.
+      return `That request has to be confirmed with a click, never by voice, so ${nothing}. Waiting for you: ${label}. ${sayNo}`;
     case 'agent_stop':
       // Reached only for a "no" (#887): a yes is gated as destructive. Saying
       // no again will not help, so there is no offer to repeat it.
@@ -3219,15 +3226,15 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // pure helper so it's unit-testable without spinning up the
         // approval pipeline. See gateVoiceApprovalResolution.
         // A request whose tool marked it click-only (`confirm: 'always'`,
-        // `approvalNeedsClick`) is gated in both directions, a "no" included,
-        // since its card must be clicked (Q-08), and reported as click_only
-        // (#856): it may not be destructive at all. Checked first, so a
-        // request that is both is reported as click_only, and a "no" never
-        // reaches the destructive rule that would let it deny (#887).
-        // A "no" to a card that stops an agent is held too (#887, owner
-        // decision), after click-only and before the gate, whatever the
-        // confidence: denying it would leave the agent running.
-        const gate = approvalNeedsClick(latest)
+        // `approvalNeedsClick`) is approved on its card only (Q-08), and a yes
+        // to one is reported as click_only (#856): it may not be destructive
+        // at all. A confident "no" denies it, as a "no" from Telegram or
+        // Discord does (owner decision 2026-11-06, #1158: Q-08's
+        // "dashboard-only" is approve-only).
+        // A "no" to a card that stops an agent is held (#887, owner
+        // decision), click-only or not and whatever the confidence: denying
+        // it would leave the agent running.
+        const gate = decision === 'approve' && approvalNeedsClick(latest)
           ? { kind: 'clarify' as const, reason: 'click_only' as const }
           : decision === 'cancel' && isVoiceHeldStopCard(latest)
             ? { kind: 'clarify' as const, reason: 'agent_stop' as const }

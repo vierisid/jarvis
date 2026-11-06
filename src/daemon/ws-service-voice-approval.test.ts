@@ -646,29 +646,74 @@ describe('#887: a confident spoken no denies a destructive request', () => {
     expect(status(stop)).toBe('pending');
   });
 
-  test('a click-only card is not denied by a confident no through the voice pipeline either', async () => {
+  // Owner decision 2026-11-06 (#1158): Q-08's "dashboard-only" is approve-only.
+  // These pinned the opposite (a no left a click-only card pending); a spoken
+  // no now denies one, as a no from Telegram or Discord already does.
+  test('a click-only card is denied by a confident no through the voice pipeline, audited as voice', async () => {
+    const audit = new AuditTrail();
+    svc.setAuditTrail(audit);
     classifierReply = classified('cancel');
     const req = destructive({ context: JSON.stringify({ confirm: 'always' }) });
     await say('no', req.id);
-    expect(status(req)).toBe('pending');
-    expect(replies()).toEqual([voiceApprovalGatedMessage('cancel', 'click_only', mgr.getRequest(req.id)!)]);
+    expect(status(req)).toBe('denied');
+    expect(mgr.getRequest(req.id)!.decided_by).toBe('voice');
+    expect(replies()[0]).toStartWith('Cancelling ');
+    expect(audit.query({ limit: 5 })).toContainEqual(expect.objectContaining({
+      approval_id: req.id, authority_decision: 'denied', executed: 0, channel: 'voice' }));
   });
 
-  test('a click-only destructive card is not denied by a confident no', async () => {
+  test('a click-only destructive card is denied by a confident no', async () => {
     const req = destructive({ context: JSON.stringify({ confirm: 'always' }) });
     const resolved = await svc.resolveLatestPendingByVoice('cancel', 1, req.id);
-    expect(resolved?.kind === 'gated' && resolved.reason).toBe('click_only');
-    expect(status(req)).toBe('pending');
+    expect(resolved?.kind).toBe('approval');
+    expect(status(req)).toBe('denied');
   });
 
-  test('a click-only ordinary card is not denied by a confident no either', async () => {
+  test('a click-only ordinary card is denied by a confident no too', async () => {
     const req = mgr.createRequest({
       agentId: 'a1', agentName: 'PA', toolName: 'send_email', toolArguments: { to: 'alice@example.com', subject: 'Q3' },
       actionCategory: 'send_email', urgency: 'normal', reason: 'send_email requires user approval', context: JSON.stringify({ confirm: 'always' }),
     });
     const resolved = await svc.resolveLatestPendingByVoice('cancel', 1, req.id);
+    expect(resolved?.kind).toBe('approval');
+    expect(status(req)).toBe('denied');
+  });
+
+  test('a click-only card is still never approved by voice, and the reply offers a plain no', async () => {
+    const req = destructive({ context: JSON.stringify({ confirm: 'always' }) });
+    const resolved = await svc.resolveLatestPendingByVoice('approve', 1, req.id);
     expect(resolved?.kind === 'gated' && resolved.reason).toBe('click_only');
     expect(status(req)).toBe('pending');
+    expect(voiceApprovalGatedMessage('approve', 'click_only', req)).toContain('say "no" plainly to deny it');
+  });
+
+  test('an unsure no to a click-only card denies nothing', async () => {
+    const req = destructive({ context: JSON.stringify({ confirm: 'always' }) });
+    const resolved = await svc.resolveLatestPendingByVoice('cancel', 0.84, req.id);
+    expect(resolved?.kind === 'gated' && resolved.reason).toBe('low_confidence');
+    expect(status(req)).toBe('pending');
+  });
+
+  test('a no to a click-only stop card still leaves it pending (#887)', async () => {
+    const card = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'manage_agents', toolArguments: { action: 'terminate', agent_id: 'agent-7' },
+      actionCategory: 'terminate_agent', urgency: 'normal', reason: 'terminate_agent requires user approval', context: JSON.stringify({ confirm: 'always' }),
+    });
+    const resolved = await svc.resolveLatestPendingByVoice('cancel', 1, card.id);
+    expect(resolved?.kind === 'gated' && resolved.reason).toBe('agent_stop');
+    expect(status(card)).toBe('pending');
+  });
+
+  test('the gated yes on a stop card does not offer a no that would be held', () => {
+    const card = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'manage_agents', toolArguments: { action: 'terminate', agent_id: 'agent-7' },
+      actionCategory: 'terminate_agent', urgency: 'normal', reason: 'terminate_agent requires user approval', context: JSON.stringify({ confirm: 'always' }),
+    });
+    for (const reason of ['click_only', 'destructive'] as const) {
+      const message = voiceApprovalGatedMessage('approve', reason, card);
+      expect([reason, message.includes('say "no"')]).toEqual([reason, false]);
+      expect(message).toContain('Approve or deny it on its card.');
+    }
   });
 
   test('an unclear no is gated as unclear, and denies nothing', async () => {
@@ -1270,7 +1315,7 @@ describe('#889: a reply to a spoken yes or no is spoken to the asker and kept', 
     expect(spokenVoiceReply(voiceApprovalMismatch('approve', mgr.getRequest(b.id)!, a.id, latest)!))
       .toBe("A new request arrived while you were answering, so I haven't approved anything. The one you were looking at is still waiting. A new one is waiting too. Decide each on its card.");
     expect(spokenVoiceReply(voiceApprovalGatedMessage('approve', 'click_only', latest)))
-      .toBe("That request has to be confirmed with a click, never by voice, so I haven't approved anything. It is still waiting for you. Approve or deny it on its card.");
+      .toBe("That request has to be confirmed with a click, never by voice, so I haven't approved anything. It is still waiting for you. Approve or deny it on its card, or, while it is still the only request waiting, say \"no\" plainly to deny it.");
     expect(spokenVoiceReply(voiceApprovalGatedMessage('approve', 'destructive', latest)))
       .toBe("That request is marked destructive, and destructive requests are approved only with a click, never by voice, so I haven't approved anything. It is still waiting for you. Approve or deny it on its card, or, while it is still the only request waiting, say \"no\" plainly to deny it.");
     expect(spokenVoiceReply(voiceApprovalGatedMessage('cancel', 'low_confidence', latest)))
