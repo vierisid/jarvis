@@ -1514,8 +1514,15 @@ export class WebSocketService implements Service {
         // logged nor echoed back.
         const resultId = (msg.payload as { resultId?: unknown } | undefined)?.resultId;
         if (typeof resultId !== 'string' || resultId.length > ROOM_ACTION_ID_MAX) return undefined;
-        const granted = this.roomActionResults.claim(resultId, ws);
-        if (!granted) console.warn(`[WSService] refused a claim for room action ${resultId}: no longer waiting on it`);
+        // Pause and Kill are checked before an action is sent, and again here
+        // (owner decision 2026-11-06, #1158): one already on its way when
+        // Jarvis was paused or stopped does not run. Nothing is claimed, so
+        // the room drops it, and the wait ends now, as paused or killed, not
+        // as an unanswered action that may have run.
+        const halted = activeEmergencyState();
+        if (halted !== 'normal') this.roomActionResults.refuse(resultId, ws, halted);
+        const granted = halted === 'normal' && this.roomActionResults.claim(resultId, ws);
+        if (!granted) console.warn(`[WSService] refused a claim for room action ${resultId}: ${halted === 'normal' ? 'no longer waiting on it' : `Jarvis is ${halted}`}`);
         const told = this.wsServer.sendToClient(ws, { type: 'room_action_claim_result', payload: { resultId, granted }, timestamp: Date.now() });
         // A grant the dashboard never got runs nothing: the wait running out
         // is then no answer, not under way.
@@ -4150,6 +4157,9 @@ function roomActionReplyText(ra: HeldRoomAction, outcome: RoomActionOutcome): st
       return `I sent that to ${title}, but it didn't answer, so I can't tell whether it happened.`;
     case 'unreached':
       return `I couldn't reach ${title} on the dashboard, so nothing was done.`;
+    case 'paused':
+    case 'killed':
+      return `I didn't do that: actions are suspended while the system is ${outcome}. Ask again once it is resumed.`;
   }
 }
 

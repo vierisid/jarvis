@@ -109,7 +109,10 @@ its outcome. A card closed without a person (Kill, a cancelled task, the
 ## Limits
 
 - Voice cannot grant or revoke Authority permissions; those remain clicks.
-  Other room actions retain main's permission and confirmation checks.
+  Other room actions retain main's permission and confirmation checks, and
+  a side-effecting one already sent when Pause or Kill lands is refused at its
+  claim and does not run (one claimed just before still runs). View actions
+  only change the screen and are never claimed.
 - Community pieces run with Jarvis's own permissions and can read any saved
   connection: the Library's opt-in trust model, not changed here.
 - A delegated agent's allowed calls are checked but not listed as run effects
