@@ -24,7 +24,7 @@ test('form supplies visible labels, required validation, zero and false, keeps d
   await React.act(async () => root.render(null)); await React.act(async () => render());
   expect((host.querySelector('textarea') as HTMLTextAreaElement).value).toBe('Fixture update');
   await React.act(async () => { const button = host.querySelector('button[type="submit"]') as HTMLButtonElement; button.click(); button.click(); });
-  expect(writes).toEqual([{ decision: 'submit', answers: { progress: 'Fixture update', count: 0, blocked: false } }]); expect(refreshes).toBe(1);
+  expect(writes).toEqual([{ decision: 'submit', generation: 0, answers: { progress: 'Fixture update', count: 0, blocked: false } }]); expect(refreshes).toBe(1);
   expect(host.textContent).toContain('Response saved: submitted'); expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toBeNull();
 });
 test('unconfirmed transport retains typed answers and asks for status reconciliation', async () => {
@@ -39,7 +39,7 @@ test('approval exposes exact proposal, occurrence and explicit reject rather tha
   const http = createHostTransport((async (_url, init) => { writes.push(JSON.parse(String(init?.body))); return Response.json({ request: { ...request, status: 'rejected' } }); }) as typeof fetch);
   await React.act(async () => root.render(<Forms.HumanInputForm request={{ ...request, kind: 'approval', prompt: 'Approve the local plan for Wednesday. No external action.', fields: [] }} http={http} changed={async () => {}} />));
   expect(host.textContent).toContain('Approve the local plan for Wednesday'); expect(host.textContent).toContain('2026-11-04');
-  await click('Reject request'); expect(writes).toEqual([{ decision: 'reject' }]); expect(host.textContent).toContain('Response saved: rejected');
+  await click('Reject request'); expect(writes).toEqual([{ decision: 'reject', generation: 0 }]); expect(host.textContent).toContain('Response saved: rejected');
 });
 test('a required text answer of only whitespace is refused before anything is sent', async () => {
   const writes: unknown[] = [];
@@ -110,7 +110,7 @@ test('an emptied draft is no unsent answer, and an explicit cancel clears the dr
   const writes: unknown[] = [];
   const http = createHostTransport((async (_url, init) => { writes.push(JSON.parse(String(init?.body))); return Response.json({ request: { ...request, status: 'cancelled' } }); }) as typeof fetch);
   await React.act(async () => root.render(<Forms.HumanInputForm request={request} http={http} changed={async () => {}} />));
-  await click('Cancel this request'); expect(writes).toEqual([{ decision: 'cancel' }]);
+  await click('Cancel this request'); expect(writes).toEqual([{ decision: 'cancel', generation: 0 }]);
   expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toBeNull();
   await React.act(async () => root.render(<Forms.HumanInputForm request={{ ...request, status: 'cancelled' }} http={http} changed={async () => {}} />));
   expect(host.textContent).not.toContain('unsent answers');
@@ -146,6 +146,20 @@ test('a dismissed request with a kept draft no longer counts, and an answered on
   const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
   await React.act(async () => root.render(<Forms.HumanInputForm request={{ ...request, status: 'submitted', runs: [{ runId: 'run', versionId: 'v', status: 'SUCCEEDED' }] }} http={http} changed={async () => {}} />));
   expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toBeNull();
+});
+
+test('reopening a shared request never prefills or submits the expired generation draft', async () => {
+  const writes: any[] = [];
+  const http = createHostTransport((async (_url, init) => { writes.push(JSON.parse(String(init?.body))); return Response.json({request:{...request,status:'submitted'}}); }) as typeof fetch);
+  const render = (value: HumanRequest) => root.render(<Forms.HumanInputInbox queue={{requests:[value],error:'',refresh:async()=>{}}} http={http}/>);
+  await React.act(async()=>render(request)); await change('textarea','Old response');
+  await React.act(async()=>render({...request,status:'expired'}));
+  await React.act(async()=>render({...request,generation:1,runId:'next-run'}));
+  expect((host.querySelector('textarea') as HTMLTextAreaElement).value).toBe('');
+  expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toContain('Old response');
+  await change('textarea','New response'); await change('input[type="number"]','0'); await change('select','false');
+  await click('Submit update'); expect(writes).toEqual([{decision:'submit',generation:1,answers:{progress:'New response',count:0,blocked:false}}]);
+  expect(sessionStorage.getItem('jarvis:workflow-input:test-request')).toContain('Old response');
 });
 
 test('a submitted answer held by global pause explains why it has not continued', async () => {

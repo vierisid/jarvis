@@ -30,8 +30,11 @@ export function useHumanInputQueue(http: HostTransport, enabled = true) {
 }
 export const HumanInputsContext = createContext({ pending: 0 });
 export const useHumanInputCount = () => useContext(HumanInputsContext).pending;
+const instanceKey = (request: HumanRequest) => `${request.id}:${request.generation ?? 0}`;
+// Preserve existing drafts for generation zero, but never use them for a reopened form.
+const draftKey = (request: HumanRequest) => `jarvis:workflow-input:${request.id}${request.generation ? `:${request.generation}` : ''}`;
 export function HumanInputForm({ request, http, changed, focused = false }: { request: HumanRequest; http: HostTransport; changed(): Promise<void>; focused?: boolean }) {
-  const storageKey = `jarvis:workflow-input:${request.id}`;
+  const storageKey = draftKey(request);
   const [answers, setAnswers] = useState<Record<string, unknown>>(() => {
     try { const value = JSON.parse(sessionStorage.getItem(storageKey) ?? '{}'); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
   });
@@ -51,7 +54,7 @@ export function HumanInputForm({ request, http, changed, focused = false }: { re
     if (Object.keys(invalid).length) { setMessage('Check the highlighted answers.'); return; }
     lock.current = true; setBusy(true); setMessage('');
     try {
-      const response = await http.request(`/api/workflow-inputs/${encodeURIComponent(request.id)}`, post({ decision, ...(decision === 'submit' ? { answers } : {}) }));
+      const response = await http.request(`/api/workflow-inputs/${encodeURIComponent(request.id)}`, post({ decision, generation: request.generation ?? 0, ...(decision === 'submit' ? { answers } : {}) }));
       const result = await response.json();
       if (!response.ok) { setErrors(result.errors ?? {}); setMessage(result.error ?? 'Response could not be saved.'); await changed(); return; }
       // Any accepted decision, including an explicit cancel, ends this draft.
@@ -76,7 +79,7 @@ export function HumanInputForm({ request, http, changed, focused = false }: { re
     if (lock.current) return;
     lock.current = true; setBusy(true); setMessage('');
     try {
-      const response = await http.request(`/api/workflow-inputs/${encodeURIComponent(request.id)}/dismiss`, post({}));
+      const response = await http.request(`/api/workflow-inputs/${encodeURIComponent(request.id)}/dismiss`, post({ generation: request.generation ?? 0 }));
       const result = await response.json().catch(() => ({}));
       setMessage(response.ok ? 'Dismissed. This request no longer needs you.' : result.error ?? 'This request could not be dismissed.');
     } catch { setMessage('Dismiss could not be confirmed. Check again before retrying.'); }
@@ -144,24 +147,24 @@ function filled(answers: unknown): string[] {
 /** A draft that should keep the request in Needs you: not once it was answered or dismissed. */
 export function hasLocalDraft(request: HumanRequest): boolean {
   if (answered(request) || request.dismissedAt) return false;
-  try { return filled(JSON.parse(sessionStorage.getItem(`jarvis:workflow-input:${request.id}`) ?? '{}')).length > 0; } catch { return false; }
+  try { return filled(JSON.parse(sessionStorage.getItem(draftKey(request)) ?? '{}')).length > 0; } catch { return false; }
 }
 export function HumanInputInbox({ queue, http, focusId }: { queue: ReturnType<typeof useHumanInputQueue>; http: HostTransport; focusId?: string }) {
   // Retain mounted cards across terminal transitions, so expiry does not remove
   // the focused textarea or its in-memory draft when browser storage is full.
   const retained = useRef(new Set<string>());
   for (const request of queue.requests) {
-    if (humanRequestNeedsAttention(request) || hasLocalDraft(request) || request.id === focusId) retained.current.add(request.id);
+    if (humanRequestNeedsAttention(request) || hasLocalDraft(request) || request.id === focusId) retained.current.add(instanceKey(request));
     // A dismissed outcome moves to the history once nothing local is left on it.
-    else if (request.dismissedAt) retained.current.delete(request.id);
+    else if (request.dismissedAt) retained.current.delete(instanceKey(request));
   }
-  const visible = queue.requests.filter(r => retained.current.has(r.id));
-  const recent = queue.requests.filter(r => !retained.current.has(r.id)).sort((a, b) => b.created - a.created);
+  const visible = queue.requests.filter(r => retained.current.has(instanceKey(r)));
+  const recent = queue.requests.filter(r => !retained.current.has(instanceKey(r))).sort((a, b) => b.created - a.created);
   if (!visible.length && !recent.length && !queue.error) return null;
   return <section className="brief-human-inbox" aria-label="Workflow requests">
     {queue.error && <p role="status">{queue.error} <button onClick={() => void queue.refresh()}>Check again</button></p>}
-    {visible.map(request => <HumanInputForm key={request.id} request={request} http={http} changed={queue.refresh} focused={request.id === focusId} />)}
+    {visible.map(request => <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} focused={request.id === focusId} />)}
     {!!recent.length && <details className="brief-human-history"><summary>Recent responses ({recent.length})</summary>
-      {recent.map(request => <HumanInputForm key={request.id} request={request} http={http} changed={queue.refresh} />)}</details>}
+      {recent.map(request => <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} />)}</details>}
   </section>;
 }

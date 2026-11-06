@@ -73,7 +73,7 @@ function fixture(kind: 'input' | 'approval' = 'input', legacy = false, links: bo
 }
 const requestFor = (runId: string) => listHumanInputs(DEFAULT_IDS.project).find(r => r.runId === runId)!;
 async function finish() { resumeHumanInputs(); await worker.drain(); }
-function respond(request: HumanRequest, decision = 'submit', values: unknown = answers) { return resolveHumanInput(DEFAULT_IDS.project, request.id, { decision, ...(decision === 'submit' ? { answers: values } : {}) }); }
+function respond(request: HumanRequest, decision = 'submit', values: unknown = answers) { return resolveHumanInput(DEFAULT_IDS.project, request.id, { decision, generation: request.generation ?? 0, ...(decision === 'submit' ? { answers: values } : {}) }); }
 test('saved disabled graph runs, pauses for a typed form, rejects invalid answers, resumes with zero/false, and deduplicates response and occurrence', async () => {
   const f = fixture(); expect(getFlow(f.flow.id)?.status).toBe('DISABLED'); expect(getFlow(f.flow.id)?.published_version_id).toBeNull();
   expect(versionReadiness(f.flow.id, f.version.id).ready).toBe(true);
@@ -282,6 +282,63 @@ test('an undismissed failure stays listed however many requests close after it',
   expect(dismissHumanInput(DEFAULT_IDS.project, request.id).status).toBe(200);
   expect(requestFor(run.id)).toBeUndefined();
   getWorkflowDb().run("DELETE FROM workflow_human_request WHERE id LIKE 'crowd-%'");
+});
+
+for (const decision of ['submit', 'cancel']) test(`a delayed ${decision} cannot answer a reopened shared request`, async () => {
+  const f = fixture('input', false, false, true), first = await f.run('stale-' + decision);
+  const old = requestFor(first.id); listHumanInputs(DEFAULT_IDS.project, old.deadline);
+  const second = await f.run('stale-' + decision), current = requestFor(second.id);
+  expect(current.generation).toBe(1);
+  const routes = createWorkflowRoutes();
+  for (const generation of [undefined, 0, '1', -1, 1.5]) {
+    const body = { decision, generation, ...(decision === 'submit' ? { answers } : {}) };
+    const response = await routes['/api/workflow-inputs/:id']!.POST!(Object.assign(new Request('http://localhost/api/workflow-inputs/' + old.id,
+      { method: 'POST', body: JSON.stringify(body) }), { params: { id: old.id } }));
+    expect(response.status).toBe(409);
+    expect(requestFor(second.id).status).toBe('pending');
+  }
+  expect(respond(current).status).toBe(200); expect(respond(current).status).toBe(200);
+  expect(respond(old).status).toBe(409);
+  await finish(); expect(getFlowRun(first.id)?.status).toBe('FAILED'); expect(getFlowRun(second.id)?.status).toBe('SUCCEEDED');
+});
+
+test('a delayed dismissal cannot acknowledge the failed result of a reopened request', async () => {
+  const f = fixture('input', false, false, true);
+  const graph = structuredClone(f.version.trigger);
+  graph.nextAction!.nextAction = step('failed', '@jarvispieces/piece-jarvis-subflow', 'require_success', { result: { status: 'failed', code: 'FIXTURE_FAILURE' } });
+  updateDraftVersion(f.version.id, { trigger: graph });
+  const first = await f.run('dismiss-generation'), old = requestFor(first.id);
+  listHumanInputs(DEFAULT_IDS.project, old.deadline);
+  const second = await f.run('dismiss-generation'), current = requestFor(second.id);
+  expect(respond(current).status).toBe(200); await finish(); expect(getFlowRun(second.id)?.status).toBe('FAILED');
+  expect(dismissHumanInput(DEFAULT_IDS.project, current.id).status).toBe(409);
+  expect(dismissHumanInput(DEFAULT_IDS.project, current.id, Date.now(), 0).status).toBe(409);
+  expect(requestFor(second.id).dismissedAt).toBeUndefined();
+  expect(dismissHumanInput(DEFAULT_IDS.project, current.id, Date.now(), 1).status).toBe(200);
+});
+
+test('response and dismissal bodies are capped while they stream, without a declared length', async () => {
+  const routes = createWorkflowRoutes();
+  // 64 chunks of 16 KB, pulled one at a time, so the test sees how much of the body was read.
+  let pulled = 0;
+  const post = (path: string, id: string) => {
+    pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled++ === 64) controller.close(); else controller.enqueue(new Uint8Array(16_000).fill(32));
+      },
+    });
+    return Object.assign(new Request(`http://localhost${path}`, { method: 'POST', body, duplex: 'half' } as RequestInit), { params: { id } });
+  };
+  const response = await routes['/api/workflow-inputs/:id']!.POST!(post('/api/workflow-inputs/missing', 'missing'));
+  expect(response.status).toBe(413);
+  expect(pulled).toBeLessThan(10);
+  const dismissal = await routes['/api/workflow-inputs/:id/dismiss']!.POST!(post('/api/workflow-inputs/missing/dismiss', 'missing'));
+  expect(dismissal.status).toBe(413);
+  expect(pulled).toBeLessThan(4);
+  // Under the cap the same route reaches the lookup.
+  const small = Object.assign(new Request('http://localhost/api/workflow-inputs/missing/dismiss', { method: 'POST', body: '{}' }), { params: { id: 'missing' } });
+  expect((await routes['/api/workflow-inputs/:id/dismiss']!.POST!(small)).status).toBe(404);
 });
 
 for (const reference of ['{{loop}}', '{{loop.iterations}}']) test(`loop answers can be consumed as ${reference} after durable waits`, async () => {
