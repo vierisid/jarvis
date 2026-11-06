@@ -69,6 +69,25 @@ test('a score write moves the revision even when it and its health change share 
   } finally { clock.mockRestore(); }
 });
 
+test('no goal write in the same millisecond can move the revision back to one a stale draft holds', async () => {
+  const clock = spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+  try {
+    const goal = goals.createGoal('Goal', 'task', { status: 'active' });
+    const base = goals.getGoal(goal.id)!.updated_at;
+    expect((await score(goal.id, { score: 0.4, reason: 'Other tab', expected_updated_at: base })).status).toBe(200);
+    const status = routes()['/api/goals/:id/status']!.POST!;
+    expect((await status(new Request(`http://localhost/api/goals/${goal.id}/status`, { method: 'POST', body: JSON.stringify({ status: 'paused' }) }))).status).toBe(200);
+    goals.updateGoalHealth(goal.id, 'critical');
+    expect((await score(goal.id, { score: 0.9, reason: 'Stale draft', expected_updated_at: base })).status).toBe(409);
+    expect(goals.getGoal(goal.id)!.score).toBe(0.4);
+  } finally { clock.mockRestore(); }
+});
+
+test('the score route rejects a revision that is not a whole number', async () => {
+  const goal = goals.createGoal('Goal', 'task', { status: 'active' });
+  expect((await score(goal.id, { score: 0.2, expected_updated_at: 1.5 })).status).toBe(400);
+});
+
 test('check-in API exposes the stored evidence snapshot and rejected decisions', async () => {
   const goal = goals.createGoal('Goal', 'task', { status: 'active' });
   const review = await new DailyRhythm({ chatTier: async () => ({ content: JSON.stringify({

@@ -102,16 +102,12 @@ export class GoalApplicationService {
       if (before.measurement) invalid('score', 'Use a new measurement to update measured goal progress');
       if (expectedUpdatedAt !== undefined && before.updated_at !== expectedUpdatedAt) throw new GoalScoreConflict(before);
       const progress = vault.addProgressEntry(id, 'manual', before.score, score, reason, source);
-      // Every score write moves the revision, even within the same millisecond, so expected_updated_at cannot miss it.
+      // Goal writes only move updated_at forward (MAX(now, previous + 1)), so it serves as the expected revision.
       const revision = Math.max(progress.created_at, before.updated_at + 1);
       this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?', [score, reason, revision, id]);
       const goal = vault.getGoal(id)!;
       queueGoalEvent({ type: 'goal_scored', goalId: id, data: { score, reason, source, progressId: progress.id }, timestamp: progress.created_at });
-      const refreshed = this.refreshHealth(goal);
-      // A health change stamps the wall clock, which can fall back behind that revision.
-      if (refreshed.updated_at >= revision) return { goal: refreshed, progress };
-      this.db.run('UPDATE goals SET updated_at = ? WHERE id = ?', [revision, id]);
-      return { goal: vault.getGoal(id)!, progress };
+      return { goal: this.refreshHealth(goal), progress };
     });
   }
   /** A confirmed user report, never a model-inferred or provider-verified result. */
@@ -281,8 +277,8 @@ export class GoalApplicationService {
     this.db.run(`INSERT INTO goal_measurement VALUES (?, ?, ?) ON CONFLICT(goal_id) DO UPDATE SET revision = excluded.revision, snapshot = excluded.snapshot`,
       [id, measurement.revision, JSON.stringify(measurement)]);
     const progress = score === null || !progressed ? null : vault.addProgressEntry(id, 'manual', before.score, score, reason, 'user_measurement');
-    if (score !== null) this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?', [score, reason, now, id]);
-    else this.db.run('UPDATE goals SET updated_at = ? WHERE id = ?', [now, id]);
+    if (score !== null) this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?', [score, reason, now, id]);
+    else this.db.run('UPDATE goals SET updated_at = MAX(?, updated_at + 1) WHERE id = ?', [now, id]);
     queueGoalEvent({ type: 'goal_measurement_recorded', goalId: id,
       data: { ...event, revision: measurement.revision, progressId: progress?.id ?? null, qualification: measurement.qualification }, timestamp: now });
     if (score !== null) {
