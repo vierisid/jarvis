@@ -5,17 +5,43 @@ import { EmergencyStatusContext } from './EmergencyStatus';
 import { post } from './http';
 import { briefHash } from '../entry/route';
 import './human-inputs.css';
+import { draftKey, instanceKey, rememberDraft, forgetDraft, localDraftRequests, localDraftIds, filled, storedAnswers, answerOnlyDrafts, forgetStoredDraft } from './human-input-drafts';
+type HumanInputQueue = { requests: HumanRequest[]; error: string; refresh(): Promise<void>; historyCursor?: string | null; unavailable?: string[] };
 /** Polls only while the decisions capability is on, like the other Needs you lists. */
-export function useHumanInputQueue(http: HostTransport, enabled = true) {
+export function useHumanInputQueue(http: HostTransport, enabled = true): HumanInputQueue {
   const [requests, setRequests] = useState<HumanRequest[]>([]), [error, setError] = useState('');
+  const [historyCursor, setHistoryCursor] = useState<string | null>(null), [unavailable, setUnavailable] = useState<string[]>([]);
   const active = useRef(true), reading = useRef(false);
+  // Requests read for local drafts beyond the recent page, by id; null once the
+  // server said it has no such request. A request outside the page is closed (a
+  // pending one is always listed, and a reopen lists it again), so the copy read
+  // once stays right; it is read again only after it was listed in between.
+  const beyondPage = useRef(new Map<string, HumanRequest | null>());
   const refresh = async () => {
     if (reading.current || http.signal.aborted) return;
     reading.current = true;
     try {
       const value = await http.json('/api/workflow-inputs');
       if (!Array.isArray(value.requests)) throw Error();
-      if (active.current) { setRequests(value.requests); setError(''); }
+      // A browser draft must remain reachable even after it leaves the recent page.
+      const listed = new Set<string>(value.requests.map((r: HumanRequest) => r.id)), drafts = localDraftIds();
+      const cache = beyondPage.current;
+      for (const id of [...cache.keys()]) if (listed.has(id) || !drafts.includes(id)) cache.delete(id);
+      await Promise.all(drafts.filter(id => !listed.has(id) && !cache.has(id)).map(async id => {
+        try {
+          const response = await http.request(`/api/workflow-inputs/${encodeURIComponent(id)}`);
+          if (response.status === 404) { cache.set(id, null); return; }
+          if (!response.ok) return; // Asked again on the next refresh.
+          const request = (await response.json()).request as HumanRequest;
+          if (request?.id === id) cache.set(id, request);
+        } catch { /* Asked again on the next refresh; the local copy stays available meanwhile. */ }
+      }));
+      const recovered = [...cache.values()].filter((r): r is HumanRequest => !!r);
+      const gone = [...cache.entries()].filter(([, r]) => r === null).map(([id]) => id);
+      if (active.current) {
+        setRequests([...value.requests, ...recovered]); setHistoryCursor(value.historyCursor ?? null);
+        setUnavailable(previous => previous.length === gone.length && previous.every((id, i) => id === gone[i]) ? previous : gone); setError('');
+      }
     } catch { if (active.current && !http.signal.aborted) setError('Workflow requests could not be refreshed. Reconnect and check again.'); }
     finally { reading.current = false; }
   };
@@ -26,15 +52,16 @@ export function useHumanInputQueue(http: HostTransport, enabled = true) {
     const focus = () => void refresh(); window.addEventListener('focus', focus);
     return () => { active.current = false; clearInterval(timer); window.removeEventListener('focus', focus); };
   }, [http, enabled]);
-  return { requests, error, refresh };
+  return { requests, error, refresh, historyCursor, unavailable };
 }
 export const HumanInputsContext = createContext({ pending: 0 });
 export const useHumanInputCount = () => useContext(HumanInputsContext).pending;
-const instanceKey = (request: HumanRequest) => `${request.id}:${request.generation ?? 0}`;
-// Preserve existing drafts for generation zero, but never use them for a reopened form.
-const draftKey = (request: HumanRequest) => `jarvis:workflow-input:${request.id}${request.generation ? `:${request.generation}` : ''}`;
-export function HumanInputForm({ request, http, changed, focused = false }: { request: HumanRequest; http: HostTransport; changed(): Promise<void>; focused?: boolean }) {
-  const storageKey = draftKey(request);
+export function HumanInputForm({ request, http, changed, focused = false, recoveryOnly = false, onAnswers }: {
+  request: HumanRequest; http: HostTransport; changed(): Promise<void>; focused?: boolean; recoveryOnly?: boolean;
+  /** Told what this card holds in memory, so the inbox can tell an unsent answer from an empty card. */
+  onAnswers?(answers: Record<string, unknown>): void;
+}) {
+  const storageKey = draftKey(request), domId = request.generation ? `${request.id}-generation-${request.generation}` : request.id;
   const [answers, setAnswers] = useState<Record<string, unknown>>(() => {
     try { const value = JSON.parse(sessionStorage.getItem(storageKey) ?? '{}'); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
   });
@@ -43,12 +70,12 @@ export function HumanInputForm({ request, http, changed, focused = false }: { re
   // A link from Create Approval Links names its request: bring that card into view and focus.
   useEffect(() => { if (focused) { card.current?.scrollIntoView?.({ block: 'start' }); card.current?.focus(); } }, [focused]);
   const update = (key: string, value: unknown) => {
-    const next = { ...answers, [key]: value }; setAnswers(next);
+    const next = { ...answers, [key]: value }; setAnswers(next); onAnswers?.(next); rememberDraft(request);
     try { sessionStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* Form remains usable without browser storage. */ }
     setErrors(previous => ({ ...previous, [key]: '' }));
   };
   const respond = async (decision: string) => {
-    if (lock.current || request.status !== 'pending') return;
+    if (lock.current || recoveryOnly || request.status !== 'pending') return;
     const invalid = decision === 'submit' ? answerErrors(request.fields, answers) : {};
     setErrors(invalid);
     if (Object.keys(invalid).length) { setMessage('Check the highlighted answers.'); return; }
@@ -58,23 +85,26 @@ export function HumanInputForm({ request, http, changed, focused = false }: { re
       const result = await response.json();
       if (!response.ok) { setErrors(result.errors ?? {}); setMessage(result.error ?? 'Response could not be saved.'); await changed(); return; }
       // Any accepted decision, including an explicit cancel, ends this draft.
-      try { sessionStorage.removeItem(storageKey); } catch { /* Optional browser storage. */ } setAnswers({});
+      forgetDraft(request); setAnswers({}); onAnswers?.({});
       setMessage(`Response saved: ${result.request.status}.`);
       await changed();
     } catch { setMessage('Your response could not be confirmed. Your answers are kept here. Check the request status before retrying.'); await changed(); }
     finally { lock.current = false; setBusy(false); }
   };
   // Answered in another tab: this tab's copy is no longer a draft of anything.
-  useEffect(() => { if (answered(request)) { try { sessionStorage.removeItem(storageKey); } catch { /* Optional browser storage. */ } } }, [request.status, storageKey]);
-  const pending = request.status === 'pending';
+  useEffect(() => {
+    if (answered(request) && !recoveryOnly) forgetDraft(request);
+    else if (filled(answers).length) rememberDraft(request);
+  }, [request.status, storageKey, recoveryOnly]);
+  const pending = !recoveryOnly && request.status === 'pending';
   // Answered elsewhere (another tab): the local draft is no longer "unsent".
-  const unsent = !answered(request) && filled(answers).length > 0;
+  const unsent = (recoveryOnly || !answered(request)) && filled(answers).length > 0;
   const draftText = request.fields.filter(field => filled(answers).includes(field.key)).map(field => `${field.label}: ${String(answers[field.key])}`).join('\n');
   const copy = async () => {
     try { await navigator.clipboard.writeText(draftText); setMessage('Unsent answers copied.'); }
     catch { setMessage('Copy was unavailable. Select the text in the fields and copy it.'); }
   };
-  const discard = () => { try { sessionStorage.removeItem(storageKey); } catch { /* Optional browser storage. */ } setAnswers({}); setMessage('Unsent answers discarded.'); };
+  const discard = () => { forgetDraft(request); setAnswers({}); onAnswers?.({}); setMessage('Unsent answers discarded.'); };
   const dismiss = async () => {
     if (lock.current) return;
     lock.current = true; setBusy(true); setMessage('');
@@ -85,13 +115,13 @@ export function HumanInputForm({ request, http, changed, focused = false }: { re
     } catch { setMessage('Dismiss could not be confirmed. Check again before retrying.'); }
     finally { lock.current = false; setBusy(false); await changed(); }
   };
-  return <article ref={card} tabIndex={-1} className="brief-human-card" aria-current={focused || undefined} aria-labelledby={`human-title-${request.id}`}>
-    <header><span className="brief-human-kind">{pending ? request.kind === 'approval' ? 'Approval requested' : 'Your update is needed' : `Request ${request.status}`}</span>
-      <h2 id={`human-title-${request.id}`}>{request.title}</h2>
+  return <article ref={card} tabIndex={-1} className="brief-human-card" aria-current={focused || undefined} aria-labelledby={`human-title-${domId}`}>
+    <header><span className="brief-human-kind">{recoveryOnly ? 'Unsent answer' : pending ? request.kind === 'approval' ? 'Approval requested' : 'Your update is needed' : `Request ${request.status}`}</span>
+      <h2 id={`human-title-${domId}`}>{request.title}</h2>
       <p>{request.workflowName} · {request.requestKey}</p></header>
     <p className="brief-human-prompt">{request.prompt}</p>
     <p className="brief-human-deadline">Requested <time dateTime={new Date(request.created).toISOString()}>{new Date(request.created).toLocaleString()}</time>. Respond by <time dateTime={new Date(request.deadline).toISOString()}>{new Date(request.deadline).toLocaleString()}</time>.</p>
-    {!pending && <p role="status">{request.closureReason === 'workflow_changed'
+    {!pending && <p role="status">{recoveryOnly ? 'This saved answer belongs to an earlier or unavailable request. It has not been submitted. You can copy or discard it below.' : request.closureReason === 'workflow_changed'
       ? 'This workflow changed while waiting. Your answer was not accepted. Review the run and start a new request from the updated workflow.'
       : request.status === 'expired' ? 'The response deadline passed. This request cannot accept answers.'
       : request.status === 'cancelled' ? 'This request was cancelled and cannot accept answers.'
@@ -100,7 +130,7 @@ export function HumanInputForm({ request, http, changed, focused = false }: { re
     {(pending || unsent) && <form noValidate onSubmit={event => { event.preventDefault(); void respond(request.kind === 'approval' ? 'approve' : 'submit'); }}>
       <fieldset disabled={busy}><legend className="brief-human-sr">{request.kind === 'approval' ? 'Decision' : 'Your answers'}</legend>
         {request.fields.map(field => {
-          const id = `human-${request.id}-${field.key}`;
+          const id = `human-${domId}-${field.key}`;
           const props = { id, required: pending && field.required, 'aria-invalid': !!errors[field.key], 'aria-describedby': errors[field.key] ? `${id}-error` : undefined };
           return <div className="brief-human-field" key={field.key}><label htmlFor={id}>{field.label}{field.required ? ' (required)' : ' (optional)'}</label>
             {field.type === 'long_text' ? <textarea {...props} readOnly={!pending} rows={4} maxLength={10000} value={String(answers[field.key] ?? '')} onChange={e => update(field.key, e.target.value)} />
@@ -117,9 +147,10 @@ export function HumanInputForm({ request, http, changed, focused = false }: { re
       </fieldset>
     </form>}
     {!pending && unsent && <div className="brief-human-actions"><button type="button" onClick={() => void copy()}>Copy unsent answers</button><button type="button" onClick={discard}>Discard unsent answers</button></div>}
-    {humanRequestDismissable(request) && <div className="brief-human-actions"><button type="button" disabled={busy} onClick={() => void dismiss()}>Dismiss</button></div>}
+    {!recoveryOnly && humanRequestDismissable(request) && <div className="brief-human-actions"><button type="button" disabled={busy} onClick={() => void dismiss()}>Dismiss</button></div>}
     {message && <p role="status">{message}</p>}
-    <RunOutcomes request={request} />
+    {!recoveryOnly && request.status === 'submitted' && request.answers && <SubmittedAnswers request={request} />}
+    {!recoveryOnly && <RunOutcomes request={request} />}
   </article>;
 }
 function RunOutcomes({ request }: { request: HumanRequest }) {
@@ -139,32 +170,124 @@ function RunOutcomes({ request }: { request: HumanRequest }) {
   })}</ul>;
 }
 const answered = (request: HumanRequest) => request.status === 'submitted' || request.status === 'approved';
-/** Keys with a real value: an emptied field or whitespace is not an unsent answer. */
-function filled(answers: unknown): string[] {
-  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return [];
-  return Object.entries(answers).filter(([, v]) => v !== undefined && v !== null && !(typeof v === 'string' && !v.trim())).map(([k]) => k);
-}
 /** A draft that should keep the request in Needs you: not once it was answered or dismissed. */
 export function hasLocalDraft(request: HumanRequest): boolean {
   if (answered(request) || request.dismissedAt) return false;
   try { return filled(JSON.parse(sessionStorage.getItem(draftKey(request)) ?? '{}')).length > 0; } catch { return false; }
 }
-export function HumanInputInbox({ queue, http, focusId }: { queue: ReturnType<typeof useHumanInputQueue>; http: HostTransport; focusId?: string }) {
-  // Retain mounted cards across terminal transitions, so expiry does not remove
-  // the focused textarea or its in-memory draft when browser storage is full.
-  const retained = useRef(new Set<string>());
-  for (const request of queue.requests) {
-    if (humanRequestNeedsAttention(request) || hasLocalDraft(request) || request.id === focusId) retained.current.add(instanceKey(request));
-    // A dismissed outcome moves to the history once nothing local is left on it.
-    else if (request.dismissedAt) retained.current.delete(instanceKey(request));
+export function HumanInputInbox({ queue, http, focusId }: { queue: HumanInputQueue; http: HostTransport; focusId?: string }) {
+  const retained = useRef(new Map<string, HumanRequest>());
+  // Answers each mounted card holds, which may never have reached browser storage.
+  const memory = useRef(new Map<string, Record<string, unknown>>()), [, setEmptied] = useState(0);
+  const remember = (key: string) => (answers: Record<string, unknown>) => {
+    const had = filled(memory.current.get(key)).length > 0; memory.current.set(key, answers);
+    if (had && !filled(answers).length) setEmptied(n => n + 1); // A discarded recovery card can now go.
+  };
+  const unsentDraft = (request: HumanRequest) => filled(storedAnswers(request)).length > 0 || filled(memory.current.get(instanceKey(request))).length > 0;
+  const [focused, setFocused] = useState<HumanRequest | null>(null), [focusError, setFocusError] = useState('');
+  const [older, setOlder] = useState<HumanRequest[]>([]), [cursor, setCursor] = useState<string | null | undefined>();
+  const [loading, setLoading] = useState(false), [historyError, setHistoryError] = useState('');
+  const [focusAttempt, setFocusAttempt] = useState(0);
+  // Closed requests seen on the recent page once older pages are loaded: one that
+  // a new close pushes off page one is then on neither, and would drop out of history.
+  const leftPage = useRef(new Map<string, HumanRequest>());
+  // Keyed on whether the queue has the request, not on each poll's new array.
+  const focusListed = !!focusId && queue.requests.some(r => r.id === focusId);
+  useEffect(() => {
+    let live = true; setFocused(null); setFocusError('');
+    if (focusId && !focusListed) {
+      void http.request(`/api/workflow-inputs/${encodeURIComponent(focusId)}`).then(async response => {
+        if (!live) return;
+        if (response.status === 404) { setFocusError('This request was not found in this workspace.'); return; }
+        if (!response.ok) throw Error();
+        const value = await response.json();
+        if (live) setFocused(value.request);
+      }).catch(() => { if (live) setFocusError('This request could not be loaded. Check your connection and try again.'); });
+    }
+    return () => { live = false; };
+  }, [focusId, focusListed, focusAttempt, http]);
+  if (cursor !== undefined) for (const request of queue.requests) if (request.status !== 'pending') leftPage.current.set(instanceKey(request), request);
+  const all = new Map<string, HumanRequest>();
+  for (const request of [...older, ...leftPage.current.values(), ...(focused ? [focused] : []), ...queue.requests]) all.set(instanceKey(request), request);
+  for (const request of all.values()) {
+    const key = instanceKey(request);
+    if (humanRequestNeedsAttention(request) || hasLocalDraft(request) || request.id === focusId || retained.current.has(key)) retained.current.set(key, request);
+    // hasLocalDraft is false once a request is dismissed: a dismissed card always leaves.
+    if (request.dismissedAt) retained.current.delete(key);
   }
-  const visible = queue.requests.filter(r => retained.current.has(instanceKey(r)));
-  const recent = queue.requests.filter(r => !retained.current.has(instanceKey(r))).sort((a, b) => b.created - a.created);
-  if (!visible.length && !recent.length && !queue.error) return null;
+  // Keep an in-memory card after it falls out of the recent page, even when
+  // browser storage is full. On remount recover the persisted copy read-only.
+  const recovered = localDraftRequests().filter(r => !all.has(instanceKey(r)) && !retained.current.has(instanceKey(r)));
+  // A superseded instance, or a pending one the server no longer lists, can only
+  // be shown as an unsent answer. With nothing typed into it there is nothing to show.
+  const recoveryOnly = (request: HumanRequest) => [...all.values()].some(r => r.id === request.id && (r.generation ?? 0) > (request.generation ?? 0))
+    || (!all.has(instanceKey(request)) && request.status === 'pending');
+  // Nor does a card the server stopped listing, unless it holds an answer or the link names it.
+  for (const [key, request] of [...retained.current]) {
+    if ((recoveryOnly(request) || !all.has(key)) && !unsentDraft(request) && request.id !== focusId) retained.current.delete(key);
+  }
+  const visible = [...retained.current.values()].sort((a,b) => Number(b.status === 'pending') - Number(a.status === 'pending') || b.created - a.created);
+  // Saved answers whose request the server no longer has and whose labels were never stored.
+  const known = new Set([...all.values(), ...retained.current.values(), ...recovered].map(r => r.id));
+  const orphaned = (queue.unavailable ?? []).filter(id => !known.has(id)).flatMap(answerOnlyDrafts);
+  const recent = [...all.values()].filter(r => !retained.current.has(instanceKey(r))).sort((a,b) => (b.closedAt ?? b.created) - (a.closedAt ?? a.created));
+  const nextCursor = cursor === undefined ? queue.historyCursor : cursor;
+  const loadOlder = async () => {
+    if (loading || !nextCursor) return;
+    setLoading(true); setHistoryError('');
+    try {
+      const value = await http.json('/api/workflow-inputs/history?cursor=' + encodeURIComponent(nextCursor));
+      setOlder(previous => [...previous, ...value.requests]); setCursor(value.nextCursor);
+    } catch { setHistoryError('Older responses could not be loaded. Try again.'); }
+    finally { setLoading(false); }
+  };
+  if (!visible.length && !recent.length && !recovered.length && !orphaned.length && !queue.error && !focusError) return null;
   return <section className="brief-human-inbox" aria-label="Workflow requests">
     {queue.error && <p role="status">{queue.error} <button onClick={() => void queue.refresh()}>Check again</button></p>}
-    {visible.map(request => <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} focused={request.id === focusId} />)}
-    {!!recent.length && <details className="brief-human-history"><summary>Recent responses ({recent.length})</summary>
-      {recent.map(request => <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} />)}</details>}
+    {focusError && <p role="status">{focusError} <button onClick={() => setFocusAttempt(n => n + 1)}>Check again</button></p>}
+    {visible.map(request => {
+      const recovery = recoveryOnly(request);
+      return <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} focused={request.id === focusId && !recovery} recoveryOnly={recovery} onAnswers={remember(instanceKey(request))} />;
+    })}
+    {recovered.map(request => <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} recoveryOnly
+      onAnswers={answers => { if (!filled(answers).length) setEmptied(n => n + 1); }} />)}
+    {orphaned.map(draft => <UnavailableDraft key={draft.storageKey} draft={draft} discarded={() => setEmptied(n => n + 1)} />)}
+    {(!!recent.length || !!nextCursor) && <details className="brief-human-history"><summary>Response history ({recent.length})</summary>
+      {recent.map(request => <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} />)}
+      {historyError && <p role="status">{historyError}</p>}
+      {nextCursor && <div className="brief-human-actions"><button disabled={loading} onClick={() => void loadOlder()}>{loading ? 'Loading responses…' : 'Load older responses'}</button></div>}
+    </details>}
+  </section>;
+}
+/** A saved answer from before drafts kept their labels, whose request the server no longer has. */
+function UnavailableDraft({ draft, discarded }: { draft: { storageKey: string; answers: Record<string, unknown> }; discarded(): void }) {
+  const [message, setMessage] = useState('');
+  const text = filled(draft.answers).map(key => `${key}: ${String(draft.answers[key])}`).join('\n');
+  return <article className="brief-human-card" aria-label="Unsent answer">
+    <header><span className="brief-human-kind">Unsent answer</span></header>
+    <p role="status">The request for this saved answer is no longer available. It has not been submitted. You can copy or discard it below.</p>
+    <pre className="brief-human-prompt">{text}</pre>
+    <div className="brief-human-actions">
+      <button type="button" onClick={async () => {
+        try { await navigator.clipboard.writeText(text); setMessage('Unsent answers copied.'); }
+        catch { setMessage('Copy was unavailable. Select the text above and copy it.'); }
+      }}>Copy unsent answers</button>
+      <button type="button" onClick={() => { forgetStoredDraft(draft.storageKey); discarded(); }}>Discard unsent answers</button>
+    </div>
+    {message && <p role="status">{message}</p>}
+  </article>;
+}
+function SubmittedAnswers({ request }: { request: HumanRequest }) {
+  const [message, setMessage] = useState('');
+  const value = (key: string) => Object.hasOwn(request.answers!, key) ? String(request.answers![key]) : 'Not provided';
+  const text = request.fields.map(field => `${field.label}: ${value(field.key)}`).join('\n');
+  return <section className="brief-human-receipt" aria-label="Submitted answers">
+    <h3>Submitted answers</h3>
+    <dl>{request.fields.map(field => <div key={field.key}><dt>{field.label}</dt><dd>{value(field.key)}</dd></div>)}</dl>
+    <div className="brief-human-actions"><button type="button" onClick={async () => {
+      try { await navigator.clipboard.writeText(text); setMessage('Submitted answers copied.'); }
+      catch { setMessage('Copy was unavailable. Select the answer text and copy it.'); }
+    }}>Copy submitted answers</button></div>
+    {message && <p role="status">{message}</p>}
   </section>;
 }

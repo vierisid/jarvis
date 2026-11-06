@@ -1,4 +1,4 @@
-import { dismissHumanInput, listHumanInputs, resolveHumanInput } from '../runtime/human-input';
+import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, listHumanInputs, resolveHumanInput } from '../runtime/human-input';
 import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import type { WorkflowContext } from '../../brief/workflow-context';
@@ -2388,9 +2388,24 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     },
 
     "/api/workflow-inputs": {
-      GET: req => trapErrors(() => ok({ requests: listHumanInputs(callerProject(req)) })),
+      GET: req => trapErrors(() => {
+        const project = callerProject(req), requests = listHumanInputs(project);
+        // Polled every few seconds: the cursor is an ids-only indexed read, not a second outcome lookup.
+        return ok({ requests, historyCursor: humanInputHistoryCursor(project) });
+      }),
+    },
+    "/api/workflow-inputs/history": {
+      GET: req => trapErrors(() => {
+        try { return ok(humanInputHistory(callerProject(req), new URL(req.url).searchParams.get('cursor'))); }
+        catch (error) { if (error instanceof Error && error.message === 'Invalid history cursor') return err(error.message, 400); throw error; }
+      }),
     },
     "/api/workflow-inputs/:id": {
+      GET: req => trapErrors(() => {
+        const { id } = (req as RequestWithParams<{ id: string }>).params;
+        const request = getHumanInput(callerProject(req), id);
+        return request ? ok({ request }) : err('Request not found', 404);
+      }),
       POST: req => trapErrors(async () => {
         const { id } = (req as RequestWithParams<{ id: string }>).params;
         // This authenticated route is intentionally outside the public webhook prefix.

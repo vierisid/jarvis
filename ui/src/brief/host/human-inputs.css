@@ -28,3 +28,9 @@
 .brief-human-runs a { color: var(--brief-ink); text-underline-offset: 3px; }
 .brief-human-history > article { margin-top: 20px; }
 .brief-human-field [readonly] { background: var(--brief-paper); }
+
+.brief-human-receipt { margin: 24px 0; }
+.brief-human-receipt h3 { font-size: 16px; margin: 0 0 16px; }
+.brief-human-receipt dl { display: grid; gap: 16px; }
+.brief-human-receipt dt { font-size: 14px; color: var(--brief-secondary); }
+.brief-human-receipt dd { margin: 6px 0 0; white-space: pre-wrap; line-height: 1.6; overflow-wrap: anywhere; }
