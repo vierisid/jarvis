@@ -311,15 +311,17 @@ export class WorkflowEffectBoundary {
       // A recorded piece authorization is handed out again on the engine's own
       // retry, and the piece then calls the service again: recheck first. A
       // refusal is kept beside the result, which stays what it was.
+      // A tracked send whose receipt is recorded: its replay hands back the
+      // stored result and calls nothing, so nothing is rechecked, not its
+      // recipients' facts either (#1153: a fact changed after the send made
+      // the replay of a completed send fail as refused).
+      if (input.revalidateOnReplay && input.route === 'piece-dispatch') return { result: effect.result, ...(effect.outcome ? { outcome: effect.outcome } : {}) };
       if (input.revalidateOnReplay) {
         try {
           input.revalidate?.(effect);
           // Authority is asked again too: an override, a context rule or an
           // un-governed category added since the first dispatch stops the
-          // retry, as the checkpoint would have stopped the first one. Not for
-          // a tracked send whose receipt is recorded: its replay hands back
-          // the stored result and calls nothing.
-          if (input.route === 'piece-dispatch') return { result: effect.result, ...(effect.outcome ? { outcome: effect.outcome } : {}) };
+          // retry, as the checkpoint would have stopped the first one.
           const current = judgeEffect(authority, input, effect.runId);
           if (!current.allowed) throw new PolicyRefusal('AUTHORITY_DENIED', `Authority denied ${input.toolName}: ${current.reason}`);
           if ((current.requiresApproval || input.confirmation || input.approvalRequired) && !effect.approvalId) {

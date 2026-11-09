@@ -75,7 +75,7 @@ const blockers = (flowId: string) => {
 describe('pins are what a person accepted when publishing or enabling', () => {
   test.each([DEFAULT_IDS.project, 'proj_pins_other'])('the connection PATCH preserves pins until credentials change in project %s', async (projectId) => {
     const connection = upsertConnection({ projectId, externalId: 'account', pieceName: 'private-piece',
-      displayName: 'Account', pieceVersion: '1', type: 'SECRET_TEXT', value: { secret: 'first', scope: 'read' } });
+      displayName: 'Account', pieceVersion: '1', type: 'SECRET_TEXT', value: { secret_text: 'first', scope: 'read' } });
     const flow = createFlow({ projectId });
     const version = createDraftVersion({ flowId: flow.id, displayName: 'Pinned', trigger: graph(send()) });
     publishFlowVersion(flow.id);
@@ -92,10 +92,10 @@ describe('pins are what a person accepted when publishing or enabling', () => {
     await patch({ displayName: 'Renamed' });
     await patch({ status: 'ERROR' });
     await patch({ status: 'ACTIVE' });
-    await patch({ value: { scope: 'read', secret: 'first' } });
+    await patch({ value: { scope: 'read', secret_text: 'first' } });
     expect(getConnection(connection.id)!.credentialGeneration).toBe(0);
     expect(blockers(flow.id)).toEqual([]);
-    await patch({ value: { secret: 'different account', scope: 'read' } });
+    await patch({ value: { secret_text: 'different account', scope: 'read' } });
     expect(getConnection(connection.id)!.credentialGeneration).toBe(1);
     expect(blockers(flow.id)).toEqual([expect.stringContaining('was replaced since this workflow was enabled')]);
     const tool = createManageWorkflowTool({ callerProjectId: () => projectId });

@@ -68,6 +68,8 @@ import {
 import { publishFlowVersion } from "../db/repos/flow-publication";
 import { assertVersionReady, versionReadiness, WorkflowReadinessError } from '../db/repos/flow-readiness';
 import { assertCodeStepsAllowed, CodeStepsRefusedError } from "../db/repos/flow-code-steps";
+import { getFlowReadHosts, setFlowReadHosts } from "../db/repos/flow-read-hosts";
+import { normalizeReadHosts, readHostsOfRow } from "../db/read-hosts";
 import { FlowVersionRequestError, withOwnedFlowVersion } from "../db/repos/flow-version-ownership";
 import {
   getFlowVersionUiMeta,
@@ -2044,6 +2046,48 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // The per-flow read list (#1153): hosts an HTTP step's GET or HEAD may
+    // reach without asking; a GET to any other host asks as a send. Its own
+    // route taking only the list, for the reasons the CODE-step grant has
+    // one, and likewise NOT exposed through `manage_workflow`: a model that
+    // could list a host could carry data out in a query string to it, which
+    // is the whole thing the list exists to stop.
+    "/api/workflows/:id/read-hosts": {
+      POST: (req) =>
+        trapErrors(async () => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
+          const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES, { allowEmpty: true });
+          if ("error" in read) return read.error;
+          // Scope again after the body await (#846), as /code-steps does.
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
+          const body = read.body as { hosts?: unknown; expected?: unknown };
+          if (!Array.isArray(body.hosts)) {
+            return err('hosts must be an array of host names ({"hosts": ["api.example.com"]}; [] clears the list)', 400);
+          }
+          if (body.expected !== undefined && !Array.isArray(body.expected)) {
+            return err("expected must be the list the edit started from, as an array of host names", 400);
+          }
+          let hosts: string[];
+          let expected: string[] | null = null;
+          try {
+            hosts = normalizeReadHosts(body.hosts);
+            if (Array.isArray(body.expected)) expected = normalizeReadHosts(body.expected);
+          } catch (e) {
+            return err(e instanceof Error ? e.message : String(e), 400);
+          }
+          // Optional precondition: the list the editor started from. A tab
+          // opened before another change would otherwise put back a host
+          // someone removed meanwhile.
+          const current = getFlowReadHosts(id)?.hosts ?? [];
+          if (expected && JSON.stringify(expected) !== JSON.stringify(current)) {
+            return err("the read list changed since this edit started; reload it and try again", 409);
+          }
+          setFlowReadHosts(id, hosts, "user");
+          return ok(serializeFlow(getFlow(id)!));
+        }),
+    },
+
     "/api/workflows/:id/publish": {
       POST: (req) =>
         trapErrors(async () => {
@@ -2524,6 +2568,9 @@ function serializeFlow(row: ReturnType<typeof getFlow> | NonNullable<ReturnType<
       grantedBy: row.code_steps_grant,
       grantedAt: row.code_steps_granted_at,
     },
+    // #1153: the hosts this flow's HTTP reads may reach without asking, and
+    // whether a person or the upgrade wrote them.
+    readHosts: readHostsOfRow(row as unknown as Record<string, unknown>),
     created: row.created,
     updated: row.updated,
   };
@@ -2586,10 +2633,11 @@ function validateConnectionValueShape(
         return "BASIC_AUTH: value.username + value.password are required";
       return null;
     case "SECRET_TEXT":
-      // Engine reads either `secret` or `value` depending on the piece;
-      // accept both. Reject obvious empties.
-      if (!has("secret") && !has("value"))
-        return "SECRET_TEXT: value.secret (or value.value) is required";
+      // The engine hands a piece `value.secret_text` (upstream's shape,
+      // connection-resolver.ts); a `secret` or `value` key reached the piece as
+      // undefined (#1153).
+      if (!has("secret_text"))
+        return "SECRET_TEXT: value.secret_text is required";
       return null;
     case "CUSTOM_AUTH":
     case "NO_AUTH":
