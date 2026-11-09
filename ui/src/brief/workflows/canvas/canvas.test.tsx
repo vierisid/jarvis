@@ -656,3 +656,41 @@ test('CODE package errors are source setup errors, never missing connector actio
   await mount();
   expect(editor.validationGaps.map(g => g.fieldName)).toEqual(['sourceCode.code', 'sourceCode.packageJson']);
 });
+
+test('Brief grants CODE steps only after the full-access confirmation, through the scoped request, and refreshes the flow', async () => {
+  const { WorkflowCanvasRoom } = await import('./WorkflowCanvasRoom');
+  const version = fixture.snapshot().version;
+  version.trigger.nextAction = { name: 'calculate', type: 'CODE', settings: { sourceCode: { code: 'export const code = async () => 1;', packageJson: '{}' }, input: {} } };
+  await fixture.request(`/api/workflows/meeting/versions/${fixture.versionId}`, { method: 'PATCH', body: JSON.stringify({ trigger: version.trigger }) });
+  const posts: Array<{ path: string; body: unknown }> = [];
+  const request = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/workflows/meeting/code-steps') {
+      posts.push({ path: String(input), body: JSON.parse(String(init?.body)) });
+      return Response.json({ id: 'meeting', codeSteps: { enabled: true, grantedBy: 'user', grantedAt: 1 } });
+    }
+    return fixture.request(input, init);
+  }) as typeof fixture.request;
+  let refreshed = 0;
+  const asked: string[] = [];
+  const originalConfirm = window.confirm;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (() => { throw new Error('the grant must use the Brief transport'); }) as unknown as typeof fetch;
+  try {
+    const shell = { mode: 'preview', route: { room: 'workflow', selection: { flowId: 'meeting' } }, navigate() {} } as unknown as BriefShellPort;
+    const binding = { source: 'fixture' as const, scopeId: 'canvas-test', flowId: 'meeting', versionId: fixture.versionId, capabilities: caps, request,
+      permissions: { id: 'meeting', displayName: 'Code example', codeSteps: { enabled: false, grantedBy: null, grantedAt: null } } as any,
+      permissionsChanged: async () => { refreshed++; } };
+    await React.act(async () => root.render(<WorkflowCanvasRoom shell={shell} binding={binding} />));
+    const allow = () => [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Allow CODE steps')!;
+    window.confirm = (message?: string) => { asked.push(String(message)); return false; };
+    await React.act(async () => allow().click());
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain("full access to its files, network and shell");
+    expect(asked[0]).toContain('without an approval card');
+    expect(posts).toEqual([]); expect(refreshed).toBe(0);
+    window.confirm = () => true;
+    await React.act(async () => allow().click());
+    expect(posts).toEqual([{ path: '/api/workflows/meeting/code-steps', body: { enabled: true } }]);
+    expect(refreshed).toBe(1);
+  } finally { window.confirm = originalConfirm; globalThis.fetch = originalFetch; }
+});
