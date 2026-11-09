@@ -233,8 +233,20 @@ func makeBrowserPressKeyHandler(cfg *SidecarConfig) RPCHandler {
 			cdp.forgetSnapshotElements()
 		}
 
-		// Let the app react (menu open, mode switch, etc.)
-		time.Sleep(300 * time.Millisecond)
+		// Let the app react (menu open, mode switch, etc.), and let a paging
+		// key's scroll animation finish before the second forget below.
+		time.Sleep(pressKeySettle)
+
+		// AND AGAIN once the page has stopped moving (#1161). Chromium animates
+		// keyboard scrolling on its own, with or without smooth CSS (measured
+		// on Chromium 156: PageDown and End move for ~160-170ms, however far),
+		// and a key event cannot ask for an instant scroll. A snapshot another
+		// reader took after the forget above but inside that motion carries a
+		// fresh generation and mid-animation coordinates; this retires it.
+		// pressKeySettle outlasts the measured animation.
+		if retiredIDs {
+			cdp.forgetSnapshotElements()
+		}
 
 		// SAID, not just done, exactly as browser_scroll says it: the model is
 		// the one that has to take a fresh snapshot, and "Element [5] not
@@ -245,6 +257,14 @@ func makeBrowserPressKeyHandler(cfg *SidecarConfig) RPCHandler {
 		return &RPCResult{Result: fmt.Sprintf("Pressed %s", pk.Display)}, nil
 	}
 }
+
+// pressKeySettle is how long browser_press_key waits after the key before it
+// answers: for the app to react, and (#1161) for Chromium's keyboard scroll
+// animation to end, measured at ~160-170ms for PageDown and End on Chromium
+// 156. The second forget relies on it outlasting that animation, which
+// TestBrowserPagingKeySettlesIntegration pins against a real Chromium.
+// PRESS_KEY_SETTLE_MS in src/actions/browser/session.ts is the same number.
+const pressKeySettle = 300 * time.Millisecond
 
 // retiredIDsNotice is what every tool that drops the coordinate map tells the
 // model (#603). One string, so browser_scroll and browser_press_key cannot

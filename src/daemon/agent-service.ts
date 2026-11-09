@@ -83,7 +83,9 @@ import { TaskRegistry } from '../agents/conv/task-registry.ts';
 import { TaskDispatcher, type TaskRunner } from '../agents/conv/task-dispatcher.ts';
 import { DialogueCompactor } from '../agents/conv/dialogue-compactor.ts';
 import type { ConvTaskEvent } from '../agents/conv/conv-orchestrator.ts';
-import { getRecentConversation, getMessages } from '../vault/conversations.ts';
+import { getRecentConversation, getMessages, forwardedMessageIds, frameForward, holdsRecentForward, FORWARDED_MESSAGE_SOURCE } from '../vault/conversations.ts';
+import { checkpointExecution } from '../actions/execution-scope.ts';
+import { withChannelConversationTaint } from './channel-service.ts';
 import { PEBBLE_CHANNEL, PEBBLE_DIALOGUE_WINDOW_MS, recordPebbleExchange } from './pebble-dialogue.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import type { ScopedChatInput } from '../brief/chat-transport.ts';
@@ -320,6 +322,10 @@ export class AgentService implements Service, IAgentService {
     // Refuse new turns once draining; otherwise count this one in-flight so a
     // graceful drain can await it (released when the tracked stream settles).
     if (activeTurns.isDraining) throw new DrainingError();
+    // A Telegram or Discord conversation holding words the owner did not
+    // write (a guest's, a forward) starts tainted when continued here (owner
+    // decision on #1155). Read against the channels as configured now.
+    if (conversation) conversation = withChannelConversationTaint(conversation, this.config.channels);
     const endTurn = activeTurns.begin();
     const carry = this.taintCarry.begin(taintCarryKey(channel, contextKey ?? conversation?.contextKey), text);
     const settle = () => { carry.close(); endTurn(); };
@@ -346,8 +352,10 @@ export class AgentService implements Service, IAgentService {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
-    // The existing classic path supports multimodal blocks and scoped history.
-    if (this.convOrchestrator && !conversation?.attachmentContent?.length) {
+    // The existing classic path supports multimodal blocks and scoped history,
+    // and seeds the turn's taint from `untrustedSources`, which the conv path
+    // does not: a turn that starts on outside content runs there (#1155).
+    if (this.convOrchestrator && !conversation?.attachmentContent?.length && !conversation?.untrustedSources?.length) {
       // Both halves travel now (#571). This branch used to drop `siteContext`
       // AND `scope`, which made a project-scoped chat on every hosted install
       // the pre-#561 state exactly: the generic file and shell tools present,
@@ -668,43 +676,99 @@ export class AgentService implements Service, IAgentService {
    *
    * The caller has already stored `text` in the conversation; it is passed as
    * this turn's message and dropped from the history, so it is not sent twice.
+   *
+   * The owner's turn runs inside `withMemoryRecall` like every other dialogue
+   * entry (#1155), so memory forgotten while it is prepared is fenced here too.
+   *
+   * `forwarded` (owner decision on #1155): the owner forwarded someone else's
+   * message. The owner keeps their context and tools, but the forward is read
+   * as quoted outside content, the turn starts tainted (so what changes the
+   * machine or contacts someone stops for approval, as after reading a web
+   * page), and nothing is learned from it: it is not what the owner said.
    */
   async handleThreadMessage(
     text: string,
     channel: string,
-    thread: { conversationId: string; contextKey: string; sender: 'owner' | 'guest' | 'shared' },
+    thread: { conversationId: string; contextKey: string; sender: 'owner' | 'guest' | 'shared'; forwarded?: boolean },
   ): Promise<string> {
     if (activeTurns.isDraining) throw new DrainingError();
     const endTurn = activeTurns.begin();
     let carry: TurnTaintLink | null = null;
     try {
-      const history = withoutTrailingTurn(await this.loadDialogue(thread.conversationId), text);
-      if (thread.sender !== 'owner') return await this.handleGuestMessage(text, channel, history, thread.sender === 'shared');
+      if (thread.sender !== 'owner') {
+        const history = withoutTrailingTurn(this.loadGuestDialogue(thread.conversationId), text);
+        return await this.handleGuestMessage(text, channel, history, thread.sender === 'shared');
+      }
       // Opened only now: a guest's turn has no tools, so it neither reads
       // nor runs anything, and it neither carries nor records taint.
-      carry = this.taintCarry.begin(taintCarryKey(channel, thread.contextKey), text);
-      let response: string;
-      if (this.convOrchestrator) {
-        response = await this.handleMessageConv(text, channel, null, undefined, history, thread.contextKey, carry);
-      } else {
-        const systemPrompt = this.buildFullSystemPromptParts(channel, text);
-        response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, null, { history }, carry);
-      }
+      const link = this.taintCarry.begin(taintCarryKey(channel, thread.contextKey), text);
+      carry = link;
+      return await withMemoryRecall(async () => {
+        const history = withoutTrailingTurn(await this.loadDialogue(thread.conversationId, text), text);
+        // A forward stays someone else's words on every later turn too
+        // (#1155 review): loadDialogue framed it, and the turn is tainted.
+        // Its marks go into this chat's carry record, so a bare yes after it
+        // stays tainted.
+        if (thread.forwarded === true || this.holdsForward(thread.conversationId)) {
+          return await this.handleForwardedMessage(text, channel, history, thread.forwarded === true, link);
+        }
+        let response: string;
+        if (this.convOrchestrator) {
+          response = await this.handleMessageConv(text, channel, null, undefined, history, thread.contextKey, link);
+        } else {
+          const systemPrompt = this.buildFullSystemPromptParts(channel, text);
+          response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, null, { history }, link);
+        }
 
-      // Only the owner's turn teaches the assistant (#909); a guest's returned above.
-      void Promise.allSettled([
-        this.extractKnowledge(text, response).catch((err) =>
-          console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
-        ),
-        this.learnFromInteraction(text, response, channel).catch((err) =>
-          console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
-        ),
-      ]);
+        // Only the owner's turn teaches the assistant (#909); a guest's returned above.
+        // And only while its sender still may (#1155): the channel's dispatch
+        // fence refuses once they were removed, or stopped being the owner,
+        // mid-turn, and what they said then is not learned from.
+        try {
+          checkpointExecution();
+        } catch {
+          return response;
+        }
+        void Promise.allSettled([
+          this.extractKnowledge(text, response).catch((err) =>
+            console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
+          ),
+          this.learnFromInteraction(text, response, channel).catch((err) =>
+            console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
+          ),
+        ]);
 
-      return response;
+        return response;
+      });
     } finally {
       carry?.close();
       endTurn();
+    }
+  }
+
+  /**
+   * The owner's turn on a message they forwarded, or on a conversation that
+   * holds one (#1155). On the classic orchestrator at the medium tier, the
+   * path that seeds a turn's taint, as a dashboard turn with an attachment
+   * does. `forwarded`: this message is the forward, so it is framed. Nothing
+   * is learned from any of these turns: a reply can restate the forward, and
+   * extraction reads the reply.
+   */
+  private async handleForwardedMessage(text: string, channel: string, history: LLMMessage[], forwarded: boolean, carry: TurnTaintLink): Promise<string> {
+    const systemPrompt = this.buildFullSystemPromptParts(channel, text);
+    const message = forwarded ? frameForward(text) : text;
+    return await this.orchestrator.processMessage(systemPrompt, message, undefined, undefined, null,
+      { history, untrustedSources: [FORWARDED_MESSAGE_SOURCE] }, carry);
+  }
+
+  /** Whether a forward is still among the messages this conversation's turns read back (#1155). */
+  private holdsForward(conversationId: string): boolean {
+    try {
+      return holdsRecentForward(conversationId);
+    } catch (err) {
+      // Fail closed: an unreadable record taints the turn, which only asks first.
+      console.warn('[AgentService] Could not read forwarded messages:', err);
+      return true;
     }
   }
 
@@ -740,7 +804,7 @@ export class AgentService implements Service, IAgentService {
       { role: 'user', content: text },
     ];
     const tier = this.llmManager.hasConversationTier() ? 'conversation' : 'medium';
-    const response = await this.llmManager.chatTier(tier, 'channel_guest', messages);
+    const response = await this.llmManager.chatTier(tier, 'channel_guest', messages, { max_tokens: GUEST_REPLY_MAX_TOKENS });
     return response.finish_reason === 'length'
       ? `${response.content}\n\n[Response was truncated due to output token limits.]`
       : response.content;
@@ -844,23 +908,54 @@ export class AgentService implements Service, IAgentService {
     return this.loadDialogue(conversationId);
   }
 
+  /**
+   * A guest conversation's recent dialogue, verbatim (#1155). Never compacted:
+   * the compactor summarizes in the background under the owner's background
+   * budget, and a guest must not be able to spend that by talking at length.
+   */
+  private loadGuestDialogue(conversationId: string): LLMMessage[] {
+    try {
+      return getMessages(conversationId, { limit: GUEST_HISTORY_MESSAGES + 1 })
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+        .slice(-(GUEST_HISTORY_MESSAGES + 1));
+    } catch (err) {
+      console.warn('[AgentService] Failed to load guest dialogue:', err);
+      return [];
+    }
+  }
+
   /** One conversation's recent dialogue, compacted as `loadRecentDialogue` does. */
-  private async loadDialogue(conversationId: string): Promise<LLMMessage[]> {
+  private async loadDialogue(conversationId: string, currentText?: string): Promise<LLMMessage[]> {
     try {
       // Pull a wider window than we'll inject so the compactor has material
       // to summarize when the conversation is long. The compactor caps the
       // final list size (last 20 verbatim by default; older bucketed into a
       // background-built summary when conversation exceeds 40 messages).
-      const messages = getMessages(conversationId, { limit: 80 });
-      const dialogue: LLMMessage[] = messages
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-        }));
+      const messages = getMessages(conversationId, { limit: 80 }).filter(m => m.role === 'user' || m.role === 'assistant');
+      // A message the owner forwarded is read back as someone else's words,
+      // framed fresh each time (#1155 review). Not the trailing one when it
+      // is this turn's: the caller drops that, and frames it itself.
+      //
+      // Framed AFTER compaction, never before: the compactor cuts each message
+      // it summarizes to 800 characters, and a cut frame is a block that never
+      // ends (roles/untrusted.ts, #582). It is handed a stand-in for each
+      // forward instead, so the forward's words never reach the summary,
+      // which every later turn reads as a system message; a stand-in kept in
+      // the verbatim tail is replaced by the framed forward.
+      const forwards = forwardedMessageIds(conversationId);
+      const framedFor = new Map<LLMMessage, LLMMessage>();
+      const dialogue: LLMMessage[] = messages.map((m, i) => {
+        const role = m.role as 'user' | 'assistant';
+        if (!forwards.has(m.id) || (i === messages.length - 1 && m.content === currentText)) return { role, content: m.content };
+        const standIn: LLMMessage = { role, content: FORWARD_STAND_IN };
+        framedFor.set(standIn, { role, content: frameForward(m.content) });
+        return standIn;
+      });
+      const framed = (list: LLMMessage[]) => list.map((m) => framedFor.get(m) ?? m);
 
-      if (!this.dialogueCompactor) return dialogue.slice(-10);
-      return await this.dialogueCompactor.compact(conversationId, dialogue);
+      if (!this.dialogueCompactor) return framed(dialogue.slice(-10));
+      return framed(await this.dialogueCompactor.compact(conversationId, dialogue));
     } catch (err) {
       console.warn('[AgentService] Failed to load recent dialogue:', err);
       return [];
@@ -1384,6 +1479,28 @@ export class AgentService implements Service, IAgentService {
     this.personality = personality;
   }
 }
+
+/** What the dialogue compactor reads in place of a forward (#1155): see `loadDialogue`. */
+export const FORWARD_STAND_IN = '[A message I forwarded, written by someone else.]';
+
+/**
+ * Most tokens a guest's reply may use (#1155): about one Telegram message.
+ * Telegram splits a reply at 4096 characters; English prose measured 4.04 to
+ * 4.39 characters per token (js-tiktoken cl100k_base and o200k_base over
+ * README.md, docs/SELF_HOSTING.md and channel-service.ts, 2026-11-06), so
+ * 1024 tokens is 4100 to 4500 characters, two Discord messages (2000 each).
+ * A reply cut there says it was cut. On a reasoning model the bound counts its
+ * reasoning too, as for every other capped call (the compactor's 400).
+ */
+export const GUEST_REPLY_MAX_TOKENS = 1024;
+
+/**
+ * How many earlier messages a guest's turn reads, verbatim (#1155): what a
+ * classic install (no conversation tier) gives every turn (`loadDialogue`),
+ * and half what the dialogue compactor keeps verbatim on the conversation
+ * tier, so a guest never reads more than the owner does.
+ */
+export const GUEST_HISTORY_MESSAGES = 10;
 
 /**
  * The dialogue without its last entry when that entry is this turn's own

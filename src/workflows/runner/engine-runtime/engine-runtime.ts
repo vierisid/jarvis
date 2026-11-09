@@ -30,7 +30,7 @@ import { spawnEngine, type SpawnedEngine, type SpawnEngineOptions } from "./spaw
 import { ENGINE_BUILD_PATHS } from "./build";
 import { loadedCorePieceDirs } from "./build-pieces";
 import type { EgressPolicy } from "../../runtime/http-egress";
-import { leaseCodeTree, materializeCodeActions } from "./code-materialize";
+import { leaseCodeTreeOf, materializeCodeActions } from "./code-materialize";
 import {
   ackTimeoutMsForOperation,
   buildExecuteFlowOperation,
@@ -62,15 +62,18 @@ export interface EngineRuntimeOptions {
   expectedDigest: string | null;
   /**
    * When true, `release()` returns the engine to a single-slot warm pool
-   * instead of killing it. The next `acquire()` reuses the same process,
-   * mints a fresh engineToken, and rebinds the registry sandbox to the new
-   * (runId, projectId). Saves the ~1.5-3s cold-spawn cost on every cron
-   * tick / webhook fire. Defaults to `false` -- per-job spawn behaviour
-   * matches what tests expect.
+   * instead of killing it. The next `acquire()` for the same project and
+   * flow (#1154, `poolKey`) reuses the same process, mints a fresh
+   * engineToken, and rebinds the registry sandbox to the new (runId,
+   * projectId); one for another project or flow retires the parked engine
+   * and spawns its own. Saves the cold-spawn cost (measured about 180 ms on
+   * an idle desktop, more on a loaded small host) on every cron tick /
+   * webhook fire of the same flow. Defaults to `false` -- per-job spawn
+   * behaviour matches what tests expect.
    *
    * Concurrency = 1: a second concurrent `acquire()` while the warm engine
-   * is in use spawns a fresh one and that one is killed on release (the
-   * pool only holds the most-recently-released idle engine).
+   * is in use spawns a fresh one, and on release the engine parked first
+   * keeps the slot; the later one is killed.
    */
   pool?: boolean;
   /**
@@ -130,6 +133,18 @@ export interface EngineRuntimeOptions {
 export interface AcquireOptions {
   runId: string;
   projectId: string;
+  /**
+   * The flow the engine will run, when it runs one (#1154). A warm engine is
+   * reused only for the same project AND flow: the pieces a flow loads run
+   * inside the engine process, and module-level state one of them keeps
+   * (a cache, a client, a patched global) would otherwise carry over into
+   * the next flow's, or another project's, run. Accidental state only: same-
+   * user code is not contained by this (docs/WORKFLOW_AUTOMATION.md, "Trust
+   * model"). Leave it out for work that
+   * runs no flow (catalog extraction): that engine is reused only for the
+   * same kind of work in the same project.
+   */
+  flowId?: string;
   /** Per-run engineToken TTL in seconds. Default 1 hour. */
   tokenTtlSeconds?: number;
 }
@@ -194,6 +209,16 @@ export class EngineHandle {
    * only once the process has been killed on release.
    */
   private abandonedLeases: Array<() => void> = [];
+  /**
+   * The tree leases of runs still executing on this engine (#1154). Given
+   * back when the engine has been killed, even if a run's RPC has not
+   * settled yet: a cancelled run's RPC can stay pending until its deadline
+   * (10 min or more), and the engine no longer reads the tree. Not airtight,
+   * as for abandoned leases: termination gives up 500 ms after SIGKILL, and
+   * a CODE step's own child can outlive the engine. The pruner's 24h window
+   * since the run last touched the tree still covers both.
+   */
+  private readonly runningLeases = new Set<() => void>();
 
   constructor(
     public readonly sandboxId: string,
@@ -314,7 +339,8 @@ export class EngineHandle {
       : toUpstreamFlowVersion(opts.flowVersion);
     // Taken before the first await, so the pruner never sees this run as not
     // started yet (#865).
-    const releaseTree = leaseCodeTree(this.baseCodeDir, upstream.id);
+    const releaseTree = leaseCodeTreeOf(this.baseCodeDir, upstream);
+    this.runningLeases.add(releaseTree);
     let keepTree = false;
     try {
       return await this.executeFlowOnTree(upstream, opts);
@@ -330,6 +356,7 @@ export class EngineHandle {
       }
       throw e;
     } finally {
+      this.runningLeases.delete(releaseTree);
       if (!keepTree) releaseTree();
     }
   }
@@ -512,8 +539,11 @@ export class EngineHandle {
     if (!this.terminating) {
       this.registry.terminate(this.sandboxId);
       const releaseAbandoned = () => {
-        // The engine is gone, so nothing reads the trees of runs it abandoned.
+        // The engine is gone, so nothing reads the trees of runs it abandoned,
+        // or of runs whose RPC has not settled yet.
         for (const release of this.abandonedLeases.splice(0)) release();
+        for (const release of this.runningLeases) release();
+        this.runningLeases.clear();
       };
       this.terminating = this.terminateProcess();
       void this.terminating.then(releaseAbandoned, releaseAbandoned);
@@ -547,6 +577,13 @@ interface WarmEngine {
   sandboxId: string;
   proc: SpawnedEngine;
   engineClient: EngineContract;
+  /** What it may be reused for: poolKey() of the acquire that spawned it. */
+  key: string;
+}
+
+/** The warm pool reuses an engine only for the same project and flow (#1154). */
+export function poolKey(opts: Pick<AcquireOptions, "projectId" | "flowId">): string {
+  return JSON.stringify([opts.projectId, opts.flowId ?? null]);
 }
 
 /**
@@ -682,7 +719,8 @@ export class EngineRuntime {
     this.expectedDigest = opts.expectedDigest;
     this.warmTranspilerCache = opts.warmTranspilerCache === true;
     this.poolEnabled = opts.pool ?? false;
-    // 5 minutes by default. The engine cold-spawn is ~3s, so an idle TTL
+    // 5 minutes by default. The engine cold-spawn takes from about 180 ms
+    // (idle desktop) to seconds (loaded small host), so an idle TTL
     // shorter than the gap between cron fires defeats the pool's purpose;
     // 5 minutes covers the common "fire every minute or two" pattern with
     // headroom, while a long-idle daemon (overnight) reclaims memory.
@@ -737,6 +775,15 @@ export class EngineRuntime {
       this.api.registry.terminate(this.idleEngine.sandboxId);
       this.idleEngine = null;
       this.clearIdleEvictionTimer();
+    }
+    // Parked for another project or flow: never handed to this one (#1154).
+    // Retired now rather than left to its idle timer, since this acquire's
+    // engine takes the slot when it is released.
+    if (this.poolEnabled && this.idleEngine && this.idleEngine.key !== poolKey(opts)) {
+      const stale = this.idleEngine;
+      this.idleEngine = null;
+      this.clearIdleEvictionTimer();
+      this.retireEngine(stale);
     }
     if (this.poolEnabled && this.idleEngine) {
       const warm = this.idleEngine;
@@ -886,7 +933,7 @@ export class EngineRuntime {
             `JARVIS_ENGINE_HANDSHAKE_TIMEOUT_MS if acquires start timing out.`,
         );
       }
-      const warm: WarmEngine = { sandboxId, proc, engineClient };
+      const warm: WarmEngine = { sandboxId, proc, engineClient, key: poolKey(opts) };
       const releaseImpl = this.poolEnabled
         ? () => this.returnToPoolOrKill(warm)
         : undefined;
@@ -939,14 +986,7 @@ export class EngineRuntime {
     // engine: shutdown has already cancelled the eviction timer, so a parked
     // engine here would sit in the slot with nothing left to evict it.
     if (this.closed) {
-      engine.proc.kill("SIGTERM");
-      setTimeout(() => {
-      // Only if it is still running: signalling through a handle whose
-      // process has already been reaped is the one thing this module must
-      // never risk on a shared machine.
-      if (engine.proc.alive()) engine.proc.kill("SIGKILL");
-    }, this.killGraceMs).unref();
-      this.api.registry.terminate(engine.sandboxId);
+      this.retireEngine(engine);
       return;
     }
     if (this.idleEngine === null) {
@@ -955,6 +995,11 @@ export class EngineRuntime {
       return;
     }
     // Slot full -- kill the duplicate.
+    this.retireEngine(engine);
+  }
+
+  /** SIGTERM, then SIGKILL after the grace period if it is still running, and drop its sandbox. */
+  private retireEngine(engine: WarmEngine): void {
     engine.proc.kill("SIGTERM");
     setTimeout(() => {
       // Only if it is still running: signalling through a handle whose

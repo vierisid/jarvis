@@ -112,5 +112,17 @@ export function ensureWorkflowRemovalSchema(db: Database): void {
     db.run(`CREATE TRIGGER IF NOT EXISTS brief_purge_pending_enable BEFORE UPDATE OF status ON flow
       WHEN NEW.status = 'ENABLED' AND EXISTS(SELECT 1 FROM brief_workflow_purges WHERE flow_id = NEW.id AND completed_at IS NULL)
       BEGIN SELECT RAISE(ABORT, 'workflow_purging'); END`);
+    // #1154: a large history is deleted in batches of runs and trigger events
+    // before the flow row, so those rows are fenced too, not only reached
+    // through the fenced cascade from the flow. A purge's own grant lets its
+    // batches through. RAISE only.
+    db.run(`CREATE TRIGGER IF NOT EXISTS brief_removed_run_purge BEFORE DELETE ON flow_run
+      WHEN EXISTS(SELECT 1 FROM brief_workflow_removals WHERE flow_id = OLD.flow_id)
+        AND NOT EXISTS(SELECT 1 FROM brief_workflow_purges WHERE flow_id = OLD.flow_id AND granted = 1)
+      BEGIN SELECT RAISE(ABORT, 'workflow_history_retained'); END`);
+    db.run(`CREATE TRIGGER IF NOT EXISTS brief_removed_event_purge BEFORE DELETE ON trigger_event
+      WHEN EXISTS(SELECT 1 FROM brief_workflow_removals WHERE flow_id = OLD.flow_id)
+        AND NOT EXISTS(SELECT 1 FROM brief_workflow_purges WHERE flow_id = OLD.flow_id AND granted = 1)
+      BEGIN SELECT RAISE(ABORT, 'workflow_history_retained'); END`);
   }).immediate();
 }

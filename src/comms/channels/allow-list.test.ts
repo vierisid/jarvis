@@ -13,7 +13,7 @@ describe('#883: telegramAllowList', () => {
   });
 
   test('a list of user ids is read as it is, duplicates once', () => {
-    expect(telegramAllowList([42, 7, 42])).toEqual({ ids: [42, 7], restricted: true, problems: [], rejected: [], entries: ['42', '7', '42'] });
+    expect(telegramAllowList([42, 7, 42])).toEqual({ ids: [42, 7], restricted: true, problems: [], rejected: [], entries: ['42', '7'] });
   });
 
   test('a string restricts the channel to nobody instead of matching substrings, and says so', () => {
@@ -72,5 +72,13 @@ describe('#916 review: entries keep the saved order', () => {
   test('a bad first entry stays first, so the page does not show the second id as the owner', () => {
     expect(telegramAllowList(['42', 7]).entries).toEqual(['42', '7']);
     expect(telegramAllowList('12345').entries).toEqual(['12345']);
+  });
+
+  test('each entry is shown once, at its first place (#1155): a save writes the list without repeats', () => {
+    expect(telegramAllowList([42, 7, 42, 'x', 'x']).entries).toEqual(['42', '7', 'x']);
+    expect(discordAllowList(['123456789012345678', '223456789012345678', '123456789012345678']).entries)
+      .toEqual(['123456789012345678', '223456789012345678']);
+    // The owner, the first entry, keeps its place.
+    expect(telegramAllowList([7, 42, 7]).entries[0]).toBe('7');
   });
 });

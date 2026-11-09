@@ -352,6 +352,19 @@ function createTables(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_conv_msg_conv ON conversation_messages(conversation_id)
   `);
 
+  // Messages the owner forwarded from a channel (#1155): someone else's
+  // words, framed as outside content whenever a later turn reads them back.
+  // A table of its own, not a column: every message read stays the same shape.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS conversation_forwards (
+      message_id TEXT PRIMARY KEY REFERENCES conversation_messages(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE
+    )
+  `);
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_conv_forwards_conv ON conversation_forwards(conversation_id)
+  `);
+
   db.run(`
     CREATE INDEX IF NOT EXISTS idx_conv_msg_time ON conversation_messages(created_at)
   `);
