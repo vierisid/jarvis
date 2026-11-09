@@ -38,7 +38,7 @@ import { maintenanceRoom } from './maintenance';
 import { getRoomBody } from '../../v2/rooms/RoomBodyRegistry';
 import { LiveDataProvider } from '../../v2/shell/LiveDataContext';
 import type { RoomKey } from '../../v2/router';
-import { InputHost, inputDialog } from './InputDialog';
+import { InputHost, inputDialog, manualRunInput } from './InputDialog';
 import './host.css';
 import { resolveHostedEntry, useHostedEntry } from './hosted-entry';
 
@@ -115,9 +115,7 @@ function OwnedDashboard({ descriptor, route, retained, integration, legacy, inst
   const session = useRef<Session | null>(null), shell = useRef<BriefShellPort | null>(null), reveal = useRef<(id: string) => void>(() => { throw Error('Conversation unavailable'); });
   const [host] = useState(() => createDashboardOwner(descriptor, { storage: window.localStorage, changed: () => changed(n => n + 1),
     unauthorized: () => revoke(true), explain, confirm: text => confirmDialog(text),
-    runInput: async () => { const raw = await inputDialog('Input for this manual run (JSON object)', '{}'); if (raw === null) return null;
-      try { const value = JSON.parse(raw); if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error(); return value; }
-      catch { explain('Enter a valid JSON object. No run was started.'); return null; } },
+    runInput: () => manualRunInput(),
     revealConversationItem: id => reveal.current(id), replayTutorial: async () => {
       if (!session.current) return { state: 'unavailable' };
       try {
