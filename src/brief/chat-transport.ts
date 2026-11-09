@@ -5,7 +5,8 @@ import type { Database } from 'bun:sqlite';
 import type { ApprovalRequest } from '../authority/approval.ts';
 import type { WSMessage } from '../comms/websocket.ts';
 import type { TTSProvider } from '../comms/voice.ts';
-import type { ContentBlock, LLMMessage, LLMStreamEvent } from '../llm/provider.ts';
+import { getLLMErrorCode, LLMProviderError, type ContentBlock, type LLMMessage, type LLMStreamEvent } from '../llm/provider.ts';
+import { briefChatFailure } from './chat-failure';
 import { withExecutionScope } from '../actions/execution-scope.ts';
 import { withExecutionProgress, type ExecutionActivity } from '../actions/progress-context.ts';
 import { BriefProgressProjector } from './progress.ts';
@@ -226,6 +227,7 @@ export class BriefChatTransport implements BriefProvider {
   }
   private async execute(turn: ChatTurn, client: Client, controller: AbortController, progressEnabled: boolean): Promise<void> {
     const signal = controller.signal;
+    let toolsRan = false;
     const identity = { conversationId: turn.conversationId, turnId: turn.turnId, requestId: turn.requestId };
     const projector = progressEnabled ? new BriefProgressProjector(ref => {
       // Only canonical records in this authenticated vault may become links.
@@ -277,8 +279,8 @@ export class BriefChatTransport implements BriefProvider {
             afterTool = false;
             fullText += text;
             this.emit(this.repository.text(turn, text));
-          } else if (event.type === 'tool_call') { afterTool = true; progress('started'); }
-          else if (event.type === 'error') throw new Error('Model stream failed');
+          } else if (event.type === 'tool_call') { toolsRan = true; afterTool = true; progress('started'); }
+          else if (event.type === 'error') throw new LLMProviderError(event.error, event.code ?? getLLMErrorCode(event.error));
           else if (event.type === 'done') { done = true; break; }
         }
         signal.throwIfAborted();
@@ -303,9 +305,7 @@ export class BriefChatTransport implements BriefProvider {
       }, signal))));
     } catch (error) {
       this.endAudio(turn.turnId, signal.aborted);
-      for (const event of this.repository.finishEvents(turn, signal.aborted ? 'cancelled' : 'failed', signal.aborted ? undefined : error instanceof ConversationRequestError ? { code: 'attachment_unavailable', message: error.message } : {
-        code: 'generation_failed', message: 'This response could not finish. You can send a new message to try again.',
-      })) this.emit(event);
+      for (const event of this.repository.finishEvents(turn, signal.aborted ? 'cancelled' : 'failed', signal.aborted ? undefined : error instanceof ConversationRequestError ? { code: 'attachment_unavailable', message: error.message } : briefChatFailure(error, toolsRan))) this.emit(event);
     }
   }
 }

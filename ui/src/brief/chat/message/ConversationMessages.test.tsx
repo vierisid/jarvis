@@ -14,7 +14,7 @@ afterEach(async()=>{await React.act(async()=>root.unmount());host.remove();});
 afterAll(()=>GlobalRegistrator.unregister());
 async function render(mode:"preview"|"live"="preview") { await React.act(async()=>root.render(<div className="brief-root"><ConversationMessages mode={mode} binding={binding} panelId="thread" reducedMotion/></div>)); }
 const toggle=()=>host.querySelector<HTMLButtonElement>(".brief-activity-toggle")!;
-function setTurn(patch: Partial<ReplyTurn> & { error?: { message: string } }) { binding.chat!.turns = { ...binding.chat!.turns, t: { ...binding.chat!.turns.t!, ...patch } }; }
+function setTurn(patch: Partial<ReplyTurn>) { binding.chat!.turns = { ...binding.chat!.turns, t: { ...binding.chat!.turns.t!, ...patch } }; }
 async function click(node:HTMLElement){await React.act(async()=>node.click());}
 
 test("quiet user and unboxed answer share one scoped thread; activity starts collapsed",async()=>{
@@ -163,4 +163,15 @@ test("one persistent status region carries the latest turn's notice as it change
  // With no reply in progress or failed, a history failure is what the region says.
  setTurn({state:"completed"});binding.chat!.history={state:"error",cursor:null};await render();
  expect(regions().length===1&&regions()[0]===region).toBe(true);expect(region.textContent).toContain("could not be loaded");
+});
+
+test('provider recovery is visible, announced, and offers the existing AI settings route', async () => {
+  setTurn({state:'failed',error:{code:'provider_auth',message:'The AI provider did not accept its credentials. Reconnect it before trying again.'}});
+  await render();
+  expect(host.querySelector('.brief-message-notice[data-error]')?.textContent).toContain('credentials');
+  expect(host.querySelector('[role="status"]')?.textContent).toContain('credentials');
+  const settings = host.querySelector<HTMLAnchorElement>('a[data-provider-settings]');
+  expect(settings?.textContent).toBe('Open AI settings');
+  expect(settings?.getAttribute('href')).toContain('settingsTab=llm');
+  expect(host.querySelector('.brief-reply-prose')).not.toBeNull();
 });
