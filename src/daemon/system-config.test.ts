@@ -123,4 +123,62 @@ describe('parseArgs --system-config: fail-closed misinvocations', () => {
     expect(exitCode).toBe(1);
     expect(stderr).toContain('--system-config requires a path');
   }, 30_000);
+
+  test('--system-config=<path> (the = form) exits 1 rather than silently falling back', async () => {
+    // The main scan matches only the exact token `--system-config`, so
+    // `--system-config=/etc/foo.yaml` would slip through as undefined and
+    // let the daemon read ~/.jarvis/config.yaml -- the fail-open mode this
+    // whole flag exists to prevent. Loud refusal, named in the stderr line.
+    const { exitCode, stderr } = await runParse(['--system-config=/etc/jarvis-host/instances/u_42/config.yaml']);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('[Daemon] --system-config takes a space-separated path, not --system-config=<path>');
+  }, 30_000);
+});
+
+describe('bin/jarvis.ts start --system-config: fail-closed end-to-end', () => {
+  // Modelled on src/daemon/exit-code.test.ts: a subprocess proof that the
+  // fail-closed contract holds through the whole start path, not just at
+  // parseArgs. A future refactor that forgets to wire systemConfigPath into
+  // startDaemon, or moves the pre-check after loadConfig, must fail here.
+  const BIN_MODULE = join(import.meta.dir, '..', '..', 'bin', 'jarvis.ts');
+
+  async function runBinStart(extraArgs: string[]): Promise<{ exitCode: number | null; stderr: string; stdout: string }> {
+    const proc = Bun.spawn([process.execPath, BIN_MODULE, 'start', ...extraArgs], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      // JARVIS_HOME points at the per-test scratch dir so the child cannot
+      // touch the developer's real ~/.jarvis lock, log or database -- same
+      // guard exit-code.test.ts uses.
+      env: { ...process.env, JARVIS_HOME: TEST_DIR },
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { exitCode, stderr, stdout };
+  }
+
+  test('a missing --system-config file exits 1 at boot with the daemon error line', async () => {
+    // The fail-closed-at-boot proof. The pre-check at the top of startDaemon
+    // fires BEFORE loadConfig would get a chance to read
+    // ~/.jarvis/config.yaml, so the daemon exits 1 rather than quietly
+    // taking the tenant-owned fallback -- which is what Phase 2 of
+    // usejarvis #66 depends on for the hosting runbook.
+    const missing = join(TEST_DIR, `does-not-exist-${Math.random().toString(36).slice(2)}.yaml`);
+    const { exitCode, stderr } = await runBinStart(['--system-config', missing]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain(`[Daemon] --system-config <path>: cannot read ${missing}: file does not exist`);
+  }, 60_000);
+
+  test('--system-config=<path> (the = form) exits 1 before anything else runs', async () => {
+    // Same fail-closed property, but the guard that catches the = form lives
+    // in bin/jarvis.ts's own parser. Asserted end-to-end so a future tidy
+    // that removes the bin-side guard (leaving only the daemon one) fails
+    // here: the bin parser would otherwise drop the flag and the daemon,
+    // started with systemConfigPath=undefined, would open the tenant file.
+    const { exitCode, stderr } = await runBinStart(['--system-config=/etc/jarvis-host/instances/u_42/config.yaml']);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('Error: --system-config takes a space-separated path, not --system-config=<path>');
+  }, 60_000);
 });

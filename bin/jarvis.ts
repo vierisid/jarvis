@@ -148,6 +148,15 @@ async function cmdStart(args: string[]): Promise<void> {
     }
     systemConfigPath = value;
   }
+  // Reject --system-config=<path>: the main scan above matches only the
+  // exact token `--system-config`, so the `=` form would slip through as
+  // `undefined` and let the daemon fall back to ~/.jarvis/config.yaml --
+  // the fail-open mode the whole flag exists to prevent. No other flag in
+  // this parser supports `=`, so loud refusal keeps the shape uniform.
+  if (args.some(a => a.startsWith('--system-config='))) {
+    console.error(c.red('Error: --system-config takes a space-separated path, not --system-config=<path>'));
+    process.exit(1);
+  }
 
   // Where the dashboard will be, resolved ONCE for every place below that
   // prints or opens it: the hint, the detached summary, and openDashboard on
@@ -159,10 +168,15 @@ async function cmdStart(args: string[]): Promise<void> {
   // boots in "setup mode" and the dashboard's onboarding gate handles
   // LLM/TTS/profile/tutorial. Print a one-liner so the user knows where
   // to go (the browser auto-opens too unless --no-open is set).
+  //
+  // Skipped in hosted mode (--system-config set): the authoritative config
+  // lives at a root-owned path the tenant cannot edit, ~/.jarvis/config.yaml
+  // never exists on these installs, and every hosted brain's journal would
+  // otherwise carry an onboarding hint pointing at the wrong file.
   const { existsSync: _exists } = await import('node:fs');
   const { homedir } = await import('node:os');
   const cfgPath = join(homedir(), '.jarvis', 'config.yaml');
-  if (!_exists(cfgPath)) {
+  if (!systemConfigPath && !_exists(cfgPath)) {
     console.log(c.cyan('First-run detected. Jarvis is JWT-only by default:'));
     console.log(c.dim('  1. jarvis enroll "<device-name>"   mint your device token'));
     console.log(c.dim('  2. paste the token into the sidecar (desktop app) to connect'));

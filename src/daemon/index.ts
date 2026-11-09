@@ -338,6 +338,16 @@ Example:
     }
   }
 
+  // Reject --system-config=<path>: the main scan above matches only the
+  // exact token `--system-config`, so the `=` form would slip through as
+  // `undefined` and let the daemon fall back to ~/.jarvis/config.yaml --
+  // the fail-open mode the whole flag exists to prevent. No other flag in
+  // this parser supports `=`, so loud refusal keeps the shape uniform.
+  if (args.some(a => a.startsWith('--system-config='))) {
+    console.error('[Daemon] --system-config takes a space-separated path, not --system-config=<path>');
+    process.exit(1);
+  }
+
   return config;
 }
 
@@ -675,9 +685,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // it CAN parse but cannot honour, such as a daemon.port that is not a port
     // (#550), and "fix the YAML syntax or delete it" is bad advice for a working
     // config with one bad key. The message already says which one.
-    const effectivePath = systemConfigPath ?? '~/.jarvis/config.yaml';
     console.error(`\n[Daemon] Failed to load config file: ${message}`);
-    console.error(`[Daemon] Fix the reported value in ${effectivePath}, or delete the file to use defaults.\n`);
+    // Two advice lines: in hosted mode the file is root-owned and lives at
+    // /etc/jarvis-host/instances/u_<id>/config.yaml, so "delete the file to
+    // use defaults" names exactly the forgiving fallback this whole flag
+    // exists to prevent -- and the tenant could not delete it anyway.
+    if (systemConfigPath !== undefined) {
+      console.error(`[Daemon] Fix the reported value in ${systemConfigPath} and restart; this file is managed by the hosting platform.\n`);
+    } else {
+      console.error(`[Daemon] Fix the reported value in ~/.jarvis/config.yaml, or delete the file to use defaults.\n`);
+    }
     process.exit(1);
   }
 
