@@ -615,3 +615,44 @@ test('raw JSON is released when its field changes elsewhere, including an undo t
   expect(draftStep().settings!.input!.payload).toEqual({ mapped: true });
   expect(editor.hasInvalidJson).toBe(false);
 });
+
+
+test('CODE source survives edit, save and reopen with real fields, separate permissions and no connector setup', async () => {
+  const { WorkflowCanvasRoom } = await import('./WorkflowCanvasRoom');
+  const version = fixture.snapshot().version;
+  const source = { code: 'export const code = async (inputs) => ({ value: inputs.value });', packageJson: '{}' };
+  version.trigger.nextAction = { name: 'calculate', displayName: 'Calculate value', type: 'CODE', settings: { sourceCode: source, input: { value: 0 } } };
+  await fixture.request(`/api/workflows/meeting/versions/${fixture.versionId}`, { method: 'PATCH', body: JSON.stringify({ trigger: version.trigger }) });
+  const shell = { mode: 'preview', route: { room: 'workflow', selection: { flowId: 'meeting' } }, navigate() {} } as unknown as BriefShellPort;
+  const permissions = { id: 'meeting', displayName: 'Code example', codeSteps: { enabled: false, grantedBy: null, grantedAt: null } } as any;
+  const binding = { source: 'fixture' as const, scopeId: 'canvas-test', flowId: 'meeting', versionId: fixture.versionId, capabilities: caps,
+    request: fixture.request, permissions, publish: async () => {}, run: async () => ({ ok: true, message: '' }) };
+  const render = () => root.render(<WorkflowCanvasRoom shell={shell} binding={binding} />);
+  const button = (label: string) => [...host.querySelectorAll('button')].find(b => (b.querySelector('.brief-button__label')?.textContent ?? b.textContent)?.trim() === label)!;
+  await React.act(async () => render());
+  expect(host.textContent).toContain('Custom JavaScript'); expect(host.textContent).not.toContain('Action not selected');
+  expect(host.textContent).not.toContain('Unconfigured'); expect(host.textContent).toContain('CODE steps: not allowed');
+  expect(button('Publish version').disabled).toBe(true); expect(button('Run workflow').disabled).toBe(true);
+  await React.act(async () => host.querySelector<HTMLElement>('[data-id="calculate"]')!.click());
+  const area = host.querySelector<HTMLTextAreaElement>('#code-source-calculate')!; expect(area.value).toBe(source.code);
+  const next = 'export const code = async (inputs) => ({ value: inputs.value, active: false });';
+  await React.act(async () => { Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!.call(area, next); area.dispatchEvent(new Event('input', { bubbles: true })); });
+  await React.act(async () => button('Save changes').click());
+  expect(fixture.snapshot().version.trigger.nextAction?.settings?.sourceCode).toEqual({ code: next, packageJson: '{}' });
+  expect(fixture.snapshot().version.trigger.nextAction?.settings?.input).toEqual({ value: 0 });
+  expect(fixture.requests.filter(r => r.method === 'POST')).toEqual([]);
+  await React.act(async () => root.render(null)); await React.act(async () => render());
+  await React.act(async () => host.querySelector<HTMLElement>('[data-id="calculate"]')!.click());
+  expect(host.querySelector<HTMLTextAreaElement>('#code-source-calculate')!.value).toBe(next);
+  // A server-confirmed grant enables publishing without rewriting code or auto-running it.
+  permissions.codeSteps = { enabled: true, grantedBy: 'user', grantedAt: 1 };
+  await React.act(async () => render()); expect(button('Publish version').disabled).toBe(false);
+});
+
+test('CODE package errors are source setup errors, never missing connector actions', async () => {
+  const version = fixture.snapshot().version;
+  version.trigger.nextAction = { name: 'calculate', type: 'CODE', settings: { sourceCode: { code: '', packageJson: '[]' } } };
+  await fixture.request(`/api/workflows/meeting/versions/${fixture.versionId}`, { method: 'PATCH', body: JSON.stringify({ trigger: version.trigger }) });
+  await mount();
+  expect(editor.validationGaps.map(g => g.fieldName)).toEqual(['sourceCode.code', 'sourceCode.packageJson']);
+});

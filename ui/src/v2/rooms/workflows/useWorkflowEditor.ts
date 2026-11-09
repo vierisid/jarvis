@@ -57,9 +57,10 @@ export type FlowRouterBranch =
 
 export interface FlowStepNode {
   name: string;
-  type: "PIECE_TRIGGER" | "EMPTY" | "PIECE" | "LOOP_ON_ITEMS" | "ROUTER";
+  type: "PIECE_TRIGGER" | "EMPTY" | "PIECE" | "CODE" | "LOOP_ON_ITEMS" | "ROUTER";
   displayName?: string;
   settings?: {
+    sourceCode?: { code: string; packageJson: string };
     pieceName?: string;
     propertySettings?: Record<string, {schema?: unknown}>;
     triggerName?: string;
@@ -1079,10 +1080,10 @@ export function useWorkflowEditor(flowId: string | null) {
       patch: { continueOnFailure?: boolean; retryOnFailure?: boolean },
     ): void => {
       mutateAnyStep(stepName, (target) => {
-        // The engine consults `errorHandlingOptions` for PIECE (and CODE,
-        // which the editor doesn't model). Other types ignore them, so we
+        // The engine consults `errorHandlingOptions` for PIECE and CODE.
+        // Other types ignore them, so we
         // short-circuit rather than writing dead settings.
-        if (target.type !== "PIECE") return;
+        if (target.type !== "PIECE" && target.type !== "CODE") return;
         const prev = target.settings?.errorHandlingOptions ?? {};
         const next: NonNullable<NonNullable<FlowStepNode["settings"]>["errorHandlingOptions"]> = {
           ...prev,
@@ -1635,6 +1636,13 @@ export function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEn
       }
       try { validateCronDstPolicy(input.dst_policy); }
       catch (error) { add('dst_policy', (error as Error).message); }
+      continue;
+    }
+    if (step.type === 'CODE') {
+      if (empty(step.settings?.sourceCode?.code)) add('sourceCode.code', 'JavaScript source');
+      try { const manifest = JSON.parse(step.settings?.sourceCode?.packageJson ?? '');
+        if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) throw Error(); }
+      catch { add('sourceCode.packageJson', 'Valid package.json object'); }
       continue;
     }
     if (step.type === 'LOOP_ON_ITEMS' || step.type === 'ROUTER') continue;
