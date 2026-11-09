@@ -15,6 +15,8 @@ import { saveWorkflowEffect, type WorkflowEffect } from '../workflows/db/repos/w
 import { createWorkflowRoutes } from '../workflows/api/routes';
 import { createManageWorkflowTool } from '../actions/tools/manage-workflow';
 import { WorkflowRemoval, WORKFLOW_REMOVAL_LIMITS } from './workflow-removal';
+import { beginEffectDispatch } from '../workflows/runtime/effect-inflight';
+import { deleteFlowHistoryBatch, FLOW_DELETE_BATCH } from '../workflows/db/repos/flow-deletion';
 import type { WorkflowManageCommand, WorkflowPurgeCommand } from './workflow-removal-contracts';
 
 let dir: string, file: string, service: WorkflowRemoval, clock: number, saved: string | undefined, savedData: string | undefined, closed: string[];
@@ -298,6 +300,99 @@ test('a run set live again after its stop holds the delete until the next pass s
   getWorkflowDb().run('DROP TRIGGER temp.fixture_revive');
   service.stop(); start();
   expect(getFlow(flow.id)).toBeNull();
+});
+
+test('an effect still being dispatched holds the purge until it is recorded, then recovery finishes it (#1154)', () => {
+  const { flow, version } = restored(), run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+  updateRun(run.id, { status: 'RUNNING' });
+  const end = beginEffectDispatch(flow.id);
+  const warn = spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(purge(purgeCommand(flow.id))).toMatchObject({ status: 'accepted' });
+    // Stopped, and still there for the effect to record itself against.
+    expect(getFlowRun(run.id)?.status).toBe('STOPPED'); expect(getFlow(flow.id)).not.toBeNull();
+    expect(warn.mock.calls.some(c => String(c[0]).includes('an effect still being dispatched'))).toBe(true);
+    const approvalId = cardFor(run.id, flow.id, version.id);
+    expect(approvalStatus(approvalId)).toBe('pending');
+  } finally { warn.mockRestore(); end(); }
+  (service as unknown as { recover(): void }).recover();
+  expect(getFlow(flow.id)).toBeNull();
+});
+
+test('a large history is purged in batches, one per turn of the event loop, and the receipt counts all of it (#1154)', async () => {
+  const { flow, version } = restored();
+  const total = 2 * FLOW_DELETE_BATCH + 10;
+  const logs = join(dir, 'data', 'workflow-logs'); mkdirSync(logs, { recursive: true });
+  const ids: string[] = [];
+  getWorkflowDb().transaction(() => {
+    for (let i = 0; i < total; i++) ids.push(createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'SUCCEEDED' }).id);
+  })();
+  for (const id of [ids[0]!, ids[total - 1]!]) writeFileSync(join(logs, `${id}.bin`), 'state');
+  expect(purge(purgeCommand(flow.id))).toMatchObject({ status: 'accepted' });
+  // One batch went with the acceptance; the flow is still there.
+  expect(count('SELECT COUNT(*) AS n FROM flow_run WHERE flow_id = ?', flow.id)).toBe(total - FLOW_DELETE_BATCH);
+  expect(getFlow(flow.id)).not.toBeNull();
+  for (let i = 0; i < 10 && getFlow(flow.id); i++) await new Promise(r => setImmediate(r));
+  expect(getFlow(flow.id)).toBeNull();
+  const receipt = getWorkflowDb().query('SELECT counts, files_pending, completed_at FROM brief_workflow_purges WHERE flow_id = ?').get(flow.id) as
+    { counts: string; files_pending: string | null; completed_at: number | null };
+  expect(receipt.completed_at).not.toBeNull();
+  expect(JSON.parse(receipt.counts).runs).toBe(total);
+  expect(receipt.files_pending).toBeNull();
+  for (const id of [ids[0]!, ids[total - 1]!]) expect(existsSync(join(logs, `${id}.bin`))).toBe(false);
+});
+
+test('a removed workflow\'s runs and trigger events cannot be deleted outside its purge, batch by batch either (#1154)', () => {
+  const { flow, version } = restored();
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'SUCCEEDED' });
+  getWorkflowDb().run(`INSERT INTO trigger_event (id, flow_id, project_id, payload, created) VALUES ('event', ?, ?, '{}', 1)`, [flow.id, DEFAULT_IDS.project]);
+  expect(() => getWorkflowDb().run('DELETE FROM flow_run WHERE id = ?', [run.id])).toThrow('workflow_history_retained');
+  expect(() => deleteFlowHistoryBatch(flow.id)).toThrow('workflow_history_retained');
+  expect(() => getWorkflowDb().run('DELETE FROM trigger_event WHERE flow_id = ?', [flow.id])).toThrow('workflow_history_retained');
+  expect(getFlowRun(run.id)).not.toBeNull();
+  // A workflow never removed is not fenced.
+  const other = fixture('Other'), otherRun = createFlowRun({ flowId: other.flow.id, flowVersionId: other.version.id, status: 'SUCCEEDED' });
+  getWorkflowDb().run('DELETE FROM flow_run WHERE id = ?', [otherRun.id]);
+  expect(getFlowRun(otherRun.id)).toBeNull();
+});
+
+function bigRestored(extra = 10) {
+  const r = restored(), total = 2 * FLOW_DELETE_BATCH + extra;
+  const logs = join(dir, 'data', 'workflow-logs'); mkdirSync(logs, { recursive: true });
+  const ids: string[] = [];
+  getWorkflowDb().transaction(() => {
+    for (let i = 0; i < total; i++) ids.push(createFlowRun({ flowId: r.flow.id, flowVersionId: r.version.id, status: 'SUCCEEDED' }).id);
+  })();
+  for (const id of ids) writeFileSync(join(logs, `${id}.bin`), 'state');
+  return { ...r, total, ids, logs };
+}
+
+test('each batch removes its runs\' files at once and takes them off the pending receipt (#1154)', () => {
+  const { flow, ids, logs } = bigRestored();
+  expect(purge(purgeCommand(flow.id))).toMatchObject({ status: 'accepted' });
+  // One batch went with the acceptance, synchronously; its files are gone now, not at completion.
+  const gone = ids.filter(id => getFlowRun(id) === null);
+  expect(gone).toHaveLength(FLOW_DELETE_BATCH);
+  for (const id of gone) expect(existsSync(join(logs, `${id}.bin`))).toBe(false);
+  const pending = (getWorkflowDb().query('SELECT files_pending FROM brief_workflow_purges WHERE flow_id = ?').get(flow.id) as { files_pending: string }).files_pending;
+  expect(JSON.parse(pending)).toEqual([]);
+});
+
+test('a service stopped between batches leaves the purge pending, and the next one finishes it with the counts carried over (#1154)', async () => {
+  const { flow, total, ids, logs } = bigRestored();
+  expect(purge(purgeCommand(flow.id))).toMatchObject({ status: 'accepted' });
+  service.stop();
+  // The queued next batch does nothing (and throws nothing) once stopped.
+  await new Promise(r => setImmediate(r)); await new Promise(r => setImmediate(r));
+  expect(count('SELECT COUNT(*) AS n FROM flow_run WHERE flow_id = ?', flow.id)).toBe(total - FLOW_DELETE_BATCH);
+  // A restart: recovery runs the rest.
+  start();
+  for (let i = 0; i < 10 && getFlow(flow.id); i++) await new Promise(r => setImmediate(r));
+  expect(getFlow(flow.id)).toBeNull();
+  const receipt = getWorkflowDb().query('SELECT counts, files_pending FROM brief_workflow_purges WHERE flow_id = ?').get(flow.id) as { counts: string; files_pending: string | null };
+  expect(JSON.parse(receipt.counts).runs).toBe(total);
+  expect(receipt.files_pending).toBeNull();
+  for (const id of ids) expect(existsSync(join(logs, `${id}.bin`))).toBe(false);
 });
 
 test('a purge at command capacity is refused whole and stops nothing', () => {

@@ -192,6 +192,46 @@ describe("EngineRuntime pool", () => {
     60_000,
   );
 
+  // #1154: pieces run inside the engine, so module state one flow's pieces
+  // keep must not reach another flow's or another project's run.
+  test.skipIf(skipE2eTests)(
+    "a warm engine is reused only for the same project and flow",
+    async () => {
+      let cached = findCachedBundle();
+      if (!cached) cached = await buildEngineBundle();
+      const keyed = new EngineRuntime({ api, bundlePath: cached.bundlePath, expectedDigest: cached.digest, pool: true });
+      const timed = async (opts: { runId: string; projectId: string; flowId?: string }) => {
+        const t = performance.now();
+        const handle = await keyed.acquire(opts);
+        return { handle, ms: performance.now() - t };
+      };
+      try {
+        const a1 = await timed({ runId: "run_key_a1", projectId: "jrv_proj_default", flowId: "flow_a" });
+        const sandboxA = a1.handle.sandboxId;
+        await a1.handle.release();
+        const a2 = await timed({ runId: "run_key_a2", projectId: "jrv_proj_default", flowId: "flow_a" });
+        expect(a2.handle.sandboxId).toBe(sandboxA);
+        await a2.handle.release();
+        // Another flow: a fresh engine, and the parked one is retired.
+        const b = await timed({ runId: "run_key_b", projectId: "jrv_proj_default", flowId: "flow_b" });
+        expect(b.handle.sandboxId).not.toBe(sandboxA);
+        expect(api.registry.get(sandboxA)).toBeNull();
+        const sandboxB = b.handle.sandboxId;
+        await b.handle.release();
+        // The same flow id in another project: fresh as well.
+        const c = await timed({ runId: "run_key_c", projectId: "jrv_proj_other", flowId: "flow_b" });
+        expect(c.handle.sandboxId).not.toBe(sandboxB);
+        await c.handle.release();
+        // Measured for #1154 (idle WSL desktop, 5 runs): cold 176-187 ms,
+        // warm 0-7 ms, other flow and other project both cold.
+        expect(a2.ms).toBeLessThan(a1.ms);
+      } finally {
+        await keyed.shutdown();
+      }
+    },
+    60_000,
+  );
+
   // The engine PUTs its zstd run-log backup to a URL with the engineToken
   // baked into the query string, built at EXECUTE_FLOW time. Now that the
   // sandbox API refuses a token the sandbox is no longer running under, that
@@ -209,12 +249,13 @@ describe("EngineRuntime pool", () => {
       const trigger = { name: "trigger", type: "EMPTY" as const, settings: {} };
       const runIds: string[] = [];
       let sandbox: string | null = null;
+      // One flow, two runs: since #1154 a warm engine is reused only within a flow.
+      const flow = createFlow({ projectId: DEFAULT_IDS.project });
+      const v = createDraftVersion({ flowId: flow.id, displayName: "warm-logs", trigger });
+      updateDraftVersion(v.id, { trigger, valid: true });
+      lockVersion(v.id);
       try {
-        for (const label of ["warm-logs-1", "warm-logs-2"]) {
-          const flow = createFlow({ projectId: DEFAULT_IDS.project });
-          const v = createDraftVersion({ flowId: flow.id, displayName: label, trigger });
-          updateDraftVersion(v.id, { trigger, valid: true });
-          lockVersion(v.id);
+        for (let i = 0; i < 2; i++) {
           const run = createFlowRun({
             flowId: flow.id,
             flowVersionId: v.id,
@@ -224,6 +265,7 @@ describe("EngineRuntime pool", () => {
           const handle = await pooled.acquire({
             runId: run.id,
             projectId: DEFAULT_IDS.project,
+            flowId: flow.id,
           });
           // Same warm process across both runs -- otherwise this test is not
           // exercising the rebind at all.

@@ -250,18 +250,6 @@ export function deleteFlow(id: string): void {
 }
 
 /**
- * Delete the flow with this id in this project. Returns whether a row went, so
- * the route answers its 404 from the delete itself rather than from a read
- * before it (#729, the shape #692 gave `deleteConnectionInProject`).
- */
-export function deleteFlowInProject(projectId: string, id: string): boolean {
-  // `> 0`, not `=== 1`: bun:sqlite's `changes` counts the rows the ON DELETE
-  // CASCADE removes as well (a flow with one version reports 2), and it is 0
-  // exactly when no flow row matched, because nothing cascades from nothing.
-  return db().run(`DELETE FROM flow WHERE id = ? AND project_id = ?`, [id, projectId]).changes > 0;
-}
-
-/**
  * The column's invariant, enforced at the sink rather than trusted (#598).
  *
  * `metadata` reaches a chat prompt through `manage_workflow`'s `summarizeFlow`,

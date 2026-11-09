@@ -133,11 +133,10 @@ describe('extra additions', () => {
   });
 
   test('an extra is written even when the base supplies the same name (base entry is dropped first)', () => {
-    // Named for what it actually proves. A real base-vs-extra override is not
-    // reachable: no EXTRA_ENV_KEYS member is allowlisted, so the base value is
-    // dropped before the extras loop runs. The disjointness test below is what
-    // pins that, and tells the next maintainer to revisit ordering if they
-    // ever allowlist one of these names.
+    // Named for what it actually proves. For NODE_ENV a base-vs-extra override
+    // is not reachable: it is not allowlisted, so the base value is dropped
+    // before the extras loop runs. The one allowlisted extra
+    // (BUN_INSTALL_CACHE_DIR, #1154) has its own precedence test below.
     const out = filterEnv({ NODE_ENV: 'production' } as Record<string, string>, { NODE_ENV: 'development' });
     expect(out.NODE_ENV).toBe('development');
     expect(filterEnv({ NODE_ENV: 'production' } as Record<string, string>)).toEqual({});
@@ -327,8 +326,18 @@ describe('list consistency', () => {
     // precedence starts to matter and this test tells them to go look at it --
     // getting it backwards would let the daemon's own HOST override the
     // call site's explicit HOST=127.0.0.1 loopback bind.
+    // One reviewed exception (#1154): BUN_INSTALL_CACHE_DIR, where the call
+    // site's value replacing the daemon's is the point. The test below pins
+    // that the extra wins; any other overlap still fails here.
     const overlap = EXTRA_ENV_KEYS.filter(k => SUBPROCESS_ENV_ALLOWLIST.includes(k));
-    expect(overlap).toEqual([]);
+    expect(overlap).toEqual(['BUN_INSTALL_CACHE_DIR']);
+  });
+
+  test('the one overlapping extra wins over the base value (#1154)', () => {
+    const base = { PATH: '/usr/bin', BUN_INSTALL_CACHE_DIR: '/home/u/.bun-cache' };
+    expect(filterEnv(base).BUN_INSTALL_CACHE_DIR).toBe('/home/u/.bun-cache');
+    expect(filterEnv(base, { BUN_INSTALL_CACHE_DIR: '/jarvis/codes/.install-cache' }).BUN_INSTALL_CACHE_DIR)
+      .toBe('/jarvis/codes/.install-cache');
   });
 
   test('the backstop does not treat trust-anchor paths as secrets', () => {
