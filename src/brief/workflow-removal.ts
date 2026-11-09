@@ -44,6 +44,12 @@ export class WorkflowRemoval {
   private readonly pending = new Map<string, Promise<void>>();
   /** Purge failures already logged, so a stuck purge does not log every pass. */
   private readonly purgeFailures = new Map<string, string>();
+  /**
+   * A completed purge whose WAL frames are not yet truncated (wipeWal). True
+   * at start: a purge the last process completed but could not wipe (a crash,
+   * or a close while another connection held the file) left no other trace.
+   */
+  private walWipePending = true;
   constructor(readonly db: Database, readonly projectId: string = DEFAULT_IDS.project,
     private readonly now = Date.now, private readonly enabled = () => process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL === '1') {}
   /** `onCardClosed` hears each workflow card a purge closed, so the dashboard stops offering it (#1039). */
@@ -53,7 +59,35 @@ export class WorkflowRemoval {
     this.timer = setInterval(() => this.recover(), 5000); this.timer.unref();
   }
   stop(): void { if (this.timer) clearInterval(this.timer); this.timer = undefined; this.triggers = undefined; this.onCardClosed = undefined; this.pending.clear(); }
-  private recover(): void { this.recoverPurges(); this.recoverRegistration(); }
+  private recover(): void { this.recoverPurges(); this.recoverRegistration(); if (this.walWipePending && getWorkflowDb() === this.db) this.wipeWal(); }
+  /**
+   * secure_delete zeroes what a purge deletes, but the zeroed pages reach
+   * vault.db only at a checkpoint, and the WAL keeps the frames that wrote
+   * the rows until it is truncated. So a completed purge checkpoints and
+   * truncates the WAL. Another connection (a `jarvis backup` reading, an
+   * `enroll` writing) makes that busy; it is not waited for, as the daemon's
+   * busy_timeout would block the event loop, but retried on each recovery
+   * pass, and once on the first pass after every start.
+   */
+  private wipeWal(): void {
+    const db = this.db;
+    try {
+      const timeout = (db.query('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
+      db.run('PRAGMA busy_timeout = 0');
+      let busy = 1;
+      try { busy = (db.query('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number }).busy; }
+      finally { db.run(`PRAGMA busy_timeout = ${Math.trunc(timeout)}`); }
+      if (busy === 0) { this.walWipePending = false; this.purgeFailures.delete('wal'); return; }
+      this.walWipePending = true;
+      if (!this.purgeFailures.has('wal')) console.warn('[Workflow Removal] WAL checkpoint after a purge is pending while another connection holds the database; retrying');
+      this.purgeFailures.set('wal', 'busy');
+    } catch (error) {
+      this.walWipePending = true;
+      const message = error instanceof Error ? error.message : String(error);
+      if (this.purgeFailures.get('wal') !== message) console.error('[Workflow Removal] WAL checkpoint after a purge failed:', error);
+      this.purgeFailures.set('wal', message);
+    }
+  }
   readiness(): 'ready' | 'unavailable' {
     try { return this.enabled() && this.triggers && getWorkflowDb() === this.db
       && this.db.query("SELECT 1 FROM sqlite_master WHERE name = 'brief_workflow_commands'").get() ? 'ready' : 'unavailable'; }
@@ -254,7 +288,16 @@ export class WorkflowRemoval {
     };
     try {
       stopEverythingOfFlow(flowId, report, db);
-      db.transaction(() => {
+      // A purge is the delete a person asks for so the data is gone, so its
+      // rows are zeroed rather than unlinked into free pages (wipeWal does
+      // the WAL). Only the purge pays for it: a bulk delete under
+      // secure_delete writes every freed byte again. Not reached by this:
+      // bytes an EARLIER update of a row (an edited draft, a rewritten store
+      // value) left in page free space, and anything freed before this
+      // shipped. Only a VACUUM rewrites those away.
+      const secureDelete = (db.query('PRAGMA secure_delete').get() as { secure_delete: number }).secure_delete;
+      db.run('PRAGMA secure_delete = ON');
+      try { db.transaction(() => {
         const p = db.query<{ purge_id: string; counts: string | null; files_pending: string | null }, [string]>(
           'SELECT purge_id, counts, files_pending FROM brief_workflow_purges WHERE flow_id = ? AND completed_at IS NULL').get(flowId);
         if (!p) return;
@@ -279,7 +322,7 @@ export class WorkflowRemoval {
         db.run('UPDATE brief_workflow_purges SET granted = 0, completed_at = ?, counts = ?, files_pending = ? WHERE purge_id = ?',
           [this.now(), JSON.stringify(addCounts(carried, last.counts)), JSON.stringify(runIds), p.purge_id]);
         completed = p.purge_id;
-      }).immediate();
+      }).immediate(); } finally { db.run(`PRAGMA secure_delete = ${secureDelete === 2 ? 'FAST' : secureDelete ? 'ON' : 'OFF'}`); }
       if (held) {
         if (this.purgeFailures.get(`flow:${flowId}`) !== held) {
           console.warn(`[Workflow Removal] purge of ${flowId} waits for ${held === 'live_run' ? 'a run that is still live' : 'an effect still being dispatched'}`);
@@ -309,7 +352,8 @@ export class WorkflowRemoval {
     }
     // Run payloads kept beside the database: the engine's execution-state
     // backups and the disk copies of step files. Best effort once the rows are gone.
-    if (completed) this.removePurgedFiles(completed, flowId, runIds);
+    // A recovery pass that completes many purges wipes once, at its end.
+    if (completed) { this.walWipePending = true; if (accepting) this.wipeWal(); this.removePurgedFiles(completed, flowId, runIds); }
     // Unregister at acceptance (the flow is off) and once it is gone; a pass that changed nothing does not.
     if (completed || accepting) void this.triggers?.refresh(flowId).catch(() => { /* Local delivery is fenced by the missing flow. */ });
   }
