@@ -3,7 +3,7 @@
  * appropriate channels (WebSocket always, Telegram/Discord too).
  */
 
-import { APPROVAL_SHORT_ID_LENGTH, approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest } from './approval.ts';
+import { APPROVAL_SHORT_ID_LENGTH, approvalChannelIntentFromContext, approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest } from './approval.ts';
 import { boundedReceiptText } from '../roles/untrusted.ts';
 import { commandForCard } from '../util/card-text.ts';
 import { confusableSkeleton } from './ui-intent.ts';
@@ -150,11 +150,24 @@ export function approvalLabelAlteration(text: string): string | null {
  * a word longer than a line taking as many lines as it needs. A character
  * counts as one column only if it is a precomposed Latin, Greek or Cyrillic
  * letter, ASCII, Latin-1 or a common dash or quote; as two in East Asian wide
- * text and emoji; and any other character -- a ligature like U+FDFD that
- * renders a dozen cells wide, cuneiform, a Letterlike Symbol, a combining or
- * spacing mark, a variation selector, a right-to-left letter -- makes the toast
- * review-only: an unknown width fails closed. Accented Latin text arrives
- * precomposed (NFC) in practice, so it stays approvable.
+ * text; as three in the emoji and pictograph blocks; U+FE0F after an emoji as
+ * whatever brings the pair to an emoji's width (`toastColumns`); and any other character -- a ligature like U+FDFD
+ * that renders a dozen cells wide, cuneiform, a Letterlike Symbol, a combining
+ * or spacing mark, any other variation selector, a right-to-left letter --
+ * makes the toast review-only: an unknown width fails closed. Accented Latin
+ * text arrives precomposed (NFC) in practice, so it stays approvable.
+ *
+ * The class widths, though not the budget, are measured: on Windows 11
+ * (build 26300) with WPF FormattedText in Segoe UI Variable Text at 14px, the
+ * toast font, with its emoji fallback (#1158), the average lowercase Latin letter is 6.906px; CJK,
+ * Hangul, kana and fullwidth forms 14.000px at most (2.03 letters, kept at two:
+ * a column is an average letter, and the budget's slack absorbs 1.5%); an emoji
+ * in 2600-27BF, 1F300-1F64F, 1F680-1F6FF or 1F900-1F9FF up to 19.223px (2.78
+ * letters), so three columns, not the two they used to count; and U+FE0F
+ * after any of them adds 0.000px. 1FA70-1FAFF had no glyph in that build and
+ * stays at the emoji width unmeasured. A column is the average lowercase
+ * letter, so capitals and wide ASCII (W, M, @) run wider than they count, as
+ * before. macOS is not measured.
  *
  * It is the one dial for how often a toast can be approved directly: above
  * it the toast is review-only and approving needs the dashboard. To tighten
@@ -171,23 +184,44 @@ const TOAST_LINE_COLUMNS = TOAST_APPROVABLE_MAX_COLUMNS / TOAST_APPROVABLE_LINES
 
 /** Precomposed Latin, Greek and Cyrillic letters, ASCII, Latin-1 and the common dashes, quotes and the euro sign: one Latin cell each. Deliberately narrow (#791 review): Letterlike Symbols such as U+213B and per-mille signs render two or three cells wide, and right-to-left letters reorder the runs around them. U+2024 ONE DOT LEADER is left out (#812 re-review): it is the one punctuation mark here whose skeleton is exactly `.`, so `paypal․com` read as a domain; out of the list its width is unknown and the toast is review-only. */
 const ONE_COLUMN = /^[ -~\u00a0-\u024f\u0370-\u03ff\u0400-\u0482\u048a-\u04ff\u1e00-\u1eff\u2010-\u2023\u2025-\u2027\u20ac]$/u;
-/** East Asian Wide/Fullwidth text and the emoji and pictograph blocks: two columns. Less the two Hangul fillers inside those ranges, U+115F and U+3164 (#859), which render blank. Measured, the only other default-ignorable either list holds is U+00AD SOFT HYPHEN in the one-column list, which the label strips before any width is counted. */
-const TWO_COLUMNS = /^[\u1100-\u115e\u2600-\u27bf\u2e80-\u303e\u3041-\u3163\u3165-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f300}-\u{1f64f}\u{1f680}-\u{1f6ff}\u{1f900}-\u{1f9ff}\u{1fa70}-\u{1faff}\u{20000}-\u{3fffd}]$/u;
+/** East Asian Wide/Fullwidth text: two columns. Less the two Hangul fillers inside those ranges, U+115F and U+3164 (#859), which render blank. Measured, the only other default-ignorable either list holds is U+00AD SOFT HYPHEN in the one-column list, which the label strips before any width is counted. */
+const TWO_COLUMNS = /^[\u1100-\u115e\u2e80-\u303e\u3041-\u3163\u3165-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{20000}-\u{3fffd}]$/u;
+/** The emoji and pictograph blocks: three columns, measured at up to 2.78 Latin letters (see TOAST_APPROVABLE_MAX_COLUMNS). */
+const EMOJI_COLUMNS = 3;
+const EMOJI = /^[\u2600-\u27bf\u{1f300}-\u{1f64f}\u{1f680}-\u{1f6ff}\u{1f900}-\u{1f9ff}\u{1fa70}-\u{1faff}]$/u;
+const PICTOGRAPHIC = /^\p{Extended_Pictographic}$/u;
 
 /** One character's width in columns, or null when it is not known. */
 function charColumns(ch: string): number | null {
   if (ONE_COLUMN.test(ch)) return 1;
   if (TWO_COLUMNS.test(ch)) return 2;
+  if (EMOJI.test(ch)) return EMOJI_COLUMNS;
   return null;
 }
 
-/** Display columns of `text`, or null when any character's width is not known. */
+/**
+ * Display columns of `text`, or null when any character's width is not known.
+ *
+ * U+FE0F, the emoji presentation selector, is known only directly after an
+ * `\p{Extended_Pictographic}` character of known width, the one place the
+ * label keeps it (`LABEL_FORMAT`). It adds nothing itself (measured 0.000px on
+ * Windows 11 after every emoji in the tables, #1158), but it can turn a
+ * text-style symbol such as `©` into an emoji, so the pair counts at least an
+ * emoji's width. Anywhere else, and U+FE0E always, its width stays unknown.
+ */
 export function toastColumns(text: string): number | null {
   let columns = 0;
+  let previous: { ch: string; width: number } | null = null;
   for (const ch of text) {
+    if (ch === '\ufe0f' && previous && PICTOGRAPHIC.test(previous.ch)) {
+      columns += Math.max(0, EMOJI_COLUMNS - previous.width);
+      previous = null;
+      continue;
+    }
     const width = charColumns(ch);
     if (width === null) return null;
     columns += width;
+    previous = { ch, width };
   }
   return columns;
 }
@@ -1013,8 +1047,12 @@ function cardLine(text: string): { shown: string; cut: boolean } {
  */
 export function approvalChannelCard(request: ApprovalRequest): { text: string; approvable: boolean; refusal: ChannelCardRefusal | null } {
   const shortId = request.id.slice(0, APPROVAL_SHORT_ID_LENGTH);
-  const { action, reason } = approvalIntentParts(request);
-  const intent = cardLine(action);
+  const parts = approvalIntentParts(request);
+  const { reason } = parts;
+  // A chat history keeps what it is sent: a card that has a chat sentence
+  // shows that one (#1152), the same one-line reduction as any intent.
+  const channel = approvalChannelIntentFromContext(request);
+  const intent = cardLine(channel ?? parts.action);
   const tool = cardLine(request.tool_name);
   const agent = cardLine(request.agent_name);
   const why = cardLine(reason);

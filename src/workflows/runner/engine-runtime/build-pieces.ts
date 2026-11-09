@@ -44,12 +44,13 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { resolve, basename } from "node:path";
+import { resolve, basename, sep } from "node:path";
 import {
   ENGINE_BUILD_PATHS,
   LOADED_CORE_PIECES,
   bundleHash,
   ensureStagingInstalled as ensureEngineStagingInstalled,
+  stagingResolutionPlugin,
 } from "./build";
 
 const STAGING_NODE_MODULES = resolve(
@@ -74,10 +75,11 @@ export { LOADED_CORE_PIECES } from "./build";
 
 /**
  * Bump when the esbuild options in `buildPiece` change (#961: `*.node`
- * external, `import.meta.url`, the jsdom sync-XHR worker), so a cached piece
+ * external, `import.meta.url`, the jsdom sync-XHR worker; #1166: packages
+ * from the staging install only), so a cached piece
  * compiled under the old options is rebuilt rather than reused.
  */
-const PIECE_BUILD_OPTIONS_VERSION = "piece-build/v2";
+const PIECE_BUILD_OPTIONS_VERSION = "piece-build/v3";
 
 /**
  * jsdom (the core text helper's HTML parser) resolves the worker it spawns for
@@ -99,6 +101,24 @@ const jsdomNoSyncXhr = {
     });
   },
 };
+
+/**
+ * Refuse a piece bundle that compiled in a package from anywhere but the
+ * staging install (#1166). `inputs` are esbuild's names, relative to the
+ * working directory.
+ */
+export function assertPieceInputsFromStaging(pieceName: string, inputs: readonly string[], stagingModules: string = STAGING_NODE_MODULES): void {
+  const root = stagingModules.endsWith(sep) ? stagingModules : stagingModules + sep;
+  const stray = inputs
+    .filter((k) => /(^|[\\/])node_modules[\\/]/u.test(k))
+    .filter((k) => !resolve(process.cwd(), k).startsWith(root));
+  if (stray.length > 0) {
+    throw new Error(
+      `piece ${pieceName} REFUSED: ${stray.length} input(s) came from outside the engine staging install, ` +
+        `e.g. ${stray.slice(0, 5).map((k) => JSON.stringify(k)).join(", ")} -- THIRD_PARTY_NOTICES-engine.md would not cover them (#1166)`,
+    );
+  }
+}
 
 export interface BuildPieceResult {
   pieceDir: string;
@@ -270,7 +290,7 @@ export async function buildPiece(
     build(options: Record<string, unknown>): Promise<unknown>;
   };
 
-  await esbuild.build({
+  const built = await esbuild.build({
     entryPoints: [entry],
     bundle: true,
     platform: "node",
@@ -305,10 +325,18 @@ export async function buildPiece(
     // bundle file's own URL instead.
     define: { "import.meta.url": "__jarvisImportMetaUrl" },
     banner: { js: 'var __jarvisImportMetaUrl = require("node:url").pathToFileURL(__filename).href;' },
-    plugins: [jsdomNoSyncXhr],
-    nodePaths: [STAGING_NODE_MODULES],
+    // #1166: every package from the staging install, as the engine bundle's
+    // are (#836). `nodePaths` alone was only a fallback: esbuild walks up from
+    // the importing file first, so a repo with its own node_modules (the npm
+    // release builds these in a full checkout) compiled the brain's install
+    // in, at other versions (measured: nanoid 5.1.11 for staging's 3.3.8), and
+    // THIRD_PARTY_NOTICES-engine.md, built from the staging install, did not
+    // describe what shipped.
+    plugins: [jsdomNoSyncXhr, stagingResolutionPlugin(ENGINE_BUILD_PATHS.STAGING_DIR)],
+    metafile: true,
     logLevel: "warning",
-  });
+  }) as { metafile?: { inputs?: Record<string, unknown> } };
+  assertPieceInputsFromStaging(pkg.name, Object.keys(built.metafile?.inputs ?? {}));
 
   // Write a slimmed-down package.json into dist/. We preserve `name` and
   // `version` (the engine reads these); everything else is dropped because

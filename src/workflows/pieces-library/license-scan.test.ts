@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describeViolations, MAX_PACKAGE_DEPTH, renderNotices, scanInstalledTree } from "./license-scan";
+import { describeViolations, MAX_PACKAGE_DEPTH, packageLicenseTexts, readmeLicenseSection, renderNotices, scanInstalledTree } from "./license-scan";
 
 const made: string[] = [];
 afterEach(() => {
@@ -279,6 +279,22 @@ describe("renderNotices", () => {
     expect(text).toContain("````\nGNU LESSER ```\n````");
   });
 
+  test("an LGPL-3.0 package brings the GPL-3.0 text its license supplements, once; other trees do not get it (#1166)", () => {
+    const root = tree();
+    const nm = join(root, "node_modules");
+    pkg(join(nm, "lgpl"), { name: "lgpl", version: "2.0.0", license: "LGPL-3.0+" }, { LICENSE: "GNU LESSER GENERAL PUBLIC LICENSE" });
+    pkg(join(nm, "lgpl2"), { name: "lgpl2", version: "1.0.0", license: "LGPL-3.0-only" });
+    const text = renderNotices(root, scanInstalledTree(root, { reviewed: {} }), "Notices");
+    expect(text.match(/^## GNU General Public License, version 3$/gm)?.length).toBe(1);
+    expect(text.match(/^ {20}GNU GENERAL PUBLIC LICENSE$/gm)?.length).toBe(1);
+    expect(text).toContain("END OF TERMS AND CONDITIONS");
+
+    const plain = tree();
+    pkg(join(plain, "node_modules/mpl"), { name: "mpl", version: "1.0.0", license: "MPL-2.0" });
+    pkg(join(plain, "node_modules/lgpl21"), { name: "lgpl21", version: "1.0.0", license: "LGPL-2.1-only" });
+    expect(renderNotices(plain, scanInstalledTree(plain, { reviewed: {} }), "Notices")).not.toContain("GNU GENERAL PUBLIC LICENSE");
+  });
+
   test("a license file that is a link is not read into the notices", () => {
     const root = tree();
     const outside = tree();
@@ -349,3 +365,28 @@ describe("errorReachedFrom (#971)", () => {
     expect([...scan.errorReachedFrom.keys()].some((e) => e.includes(".hidden"))).toBe(false);
   });
 });
+
+describe("#1166: license texts for a package that ships no license file", () => {
+  test("a README License section counts when it carries a copyright or the terms, in either heading style", () => {
+    expect(readmeLicenseSection("# x\n\n## Licence\n\n(The MIT License)\n\nCopyright (c) 2020 B\n\n## Next\nno")).toBe("(The MIT License)\n\nCopyright (c) 2020 B");
+    expect(readmeLicenseSection("x\n\nLicense\n-------\n\nCopyright (c) 2013 N\n\nPermission is hereby granted\n\nOther\n-----\nno")).toBe("Copyright (c) 2013 N\n\nPermission is hereby granted");
+    // A pointer to a license is not its text.
+    expect(readmeLicenseSection("## License\n\nMIT, see [LICENSE.md](x) for details.\n")).toBeNull();
+    expect(readmeLicenseSection("no license heading here, Copyright (c) X")).toBeNull();
+  });
+
+  test("files first, then the README section, then the reviewed fallback; nothing when none has one", () => {
+    const root = tree();
+    pkg(join(root, "node_modules/a"), { name: "a", version: "1.0.0", license: "MIT" }, { LICENSE: "MIT A", "README.md": "## License\n\nCopyright (c) readme" });
+    pkg(join(root, "node_modules/b"), { name: "b", version: "1.0.0", license: "MIT" }, { "README.md": "## License\n\nCopyright (c) B" });
+    pkg(join(root, "node_modules/omggif"), { name: "omggif", version: "1.0.10", license: "MIT" }, { README: "no section" });
+    pkg(join(root, "node_modules/c"), { name: "c", version: "1.0.0", license: "MIT" }, { "README.md": "## License\n\nMIT" });
+    expect(packageLicenseTexts(root, "node_modules/a", "a")).toEqual([{ file: "LICENSE", text: "MIT A" }]);
+    expect(packageLicenseTexts(root, "node_modules/b", "b")).toEqual([{ file: "README.md (License section)", text: "Copyright (c) B" }]);
+    const fallback = packageLicenseTexts(root, "node_modules/omggif", "omggif");
+    expect(fallback).toHaveLength(1);
+    expect(fallback[0]!.text).toContain("Dean McNamee");
+    expect(packageLicenseTexts(root, "node_modules/c", "c")).toEqual([]);
+  });
+});
+

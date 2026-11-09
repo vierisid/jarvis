@@ -77,6 +77,22 @@ export const REQUIRED: Requirement[] = [
     why: "the shared build's license gate reads it by path and reproduces it in the hosted pieces notices (#971); without it scripts/build-shared-runtime.ts fails after installing the catalog",
   },
   {
+    path: "src/workflows/pieces-library/GPL-3.0.txt",
+    why: "renderNotices reads it by path when a tree holds an LGPL-3.0 package; without it scripts/build-shared-runtime.ts fails writing the hosted pieces notices (#1166)",
+  },
+  {
+    path: "THIRD_PARTY_NOTICES.md",
+    why: "the third-party notices for the vendored source and the ui/public assets the package ships (#1166); npm does not include it unless files names it",
+  },
+  {
+    path: "THIRD_PARTY_NOTICES-ui.md",
+    why: "the notices for the packages compiled into the shipped ui/dist bundle (#1166)",
+  },
+  {
+    path: "THIRD_PARTY_NOTICES-engine.md",
+    why: "the notices for the packages compiled into the shipped piece bundles, among them LGPL-3.0 openpgp and MPL-2.0 exifreader (#1166)",
+  },
+  {
     path: "src/workflows/runner/engine-runtime/engine-bunfig.toml",
     why: "spawnEngine reads it by path and refuses to start any engine without it (#863)",
   },

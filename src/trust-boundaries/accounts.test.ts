@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../workflows/db';
+import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS, getWorkflowDb } from '../workflows/db';
+import { graphDigest } from '../workflows/runtime/continuation';
 import { setEncryptionKey } from '../workflows/db/encryption';
 import { upsertConnection } from '../workflows/db/repos/app-connection';
 import { CredentialResolver } from '../workflows/credentials/adapter';
@@ -29,12 +30,21 @@ for (const attack of attacks) test(`${attack.id}: source-selected account cannot
   }
   let managedCalls = 0;
   const resolver = new CredentialResolver();
-  resolver.register({ id: 'fixture', pieceNames: [], canResolve: id => id === 'jarvis:fixture', resolve: async () => {
+  resolver.register({ id: 'fixture', pieceNames: ['fixture-piece'], canResolve: id => id === 'jarvis:fixture', resolve: async () => {
     managedCalls++; return { type: 'OAUTH2', value: { access_token: ownSecret } };
   } });
   api = new SandboxApi({ services: { credentialResolver: resolver } });
   await api.start({ port: 0 });
-  const identity = { projectId: DEFAULT_IDS.project, runId: 'q21-run', sandboxId: 'q21-sandbox' };
+  // #1153: a stored connection goes only to an engine whose graph names it,
+  // so the engine is a run whose step uses the account (an engine with no
+  // run gets nothing, which would make the own-project control below vacuous).
+  const flow = createFlow();
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Q21 account', trigger: { name: 'trigger', type: 'EMPTY',
+    nextAction: { name: 'use', type: 'PIECE', settings: { pieceName: 'fixture-piece', actionName: 'a', input: { auth: "{{connections['account-other']}}" } },
+      nextAction: { name: 'managed', type: 'PIECE', settings: { pieceName: 'fixture-piece', actionName: 'a', input: { auth: "{{connections['jarvis:fixture']}}" } } } } } });
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
+  getWorkflowDb().run('UPDATE flow_run SET graph_digest = ? WHERE id = ?', [graphDigest(version.trigger), run.id]);
+  const identity = { projectId: DEFAULT_IDS.project, runId: run.id, sandboxId: 'q21-sandbox' };
   const { token, expiresAt } = await api.signer.mint(identity, 60);
   api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });
   const headers = { Authorization: `Bearer ${token}` };
@@ -46,6 +56,9 @@ for (const attack of attacks) test(`${attack.id}: source-selected account cannot
     expect(body).not.toContain(ownSecret); expect(body).not.toContain(otherSecret);
   }
   expect(managedCalls).toBe(0);
+  // Both are this run's to fetch in its own project, so only the project check refused them above.
+  expect((await fetch(`${base}/${encodeURIComponent('jarvis:fixture')}?${new URLSearchParams({ note: attack.text })}`, { headers })).status).toBe(200);
+  expect(managedCalls).toBe(1);
   const own = await fetch(`${base}/account-other?${new URLSearchParams({ note: attack.text })}`, { headers });
   expect(own.status).toBe(200);
   expect(await own.json()).toMatchObject({ projectIds: [DEFAULT_IDS.project], value: { access_token: ownSecret } });

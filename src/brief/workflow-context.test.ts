@@ -543,6 +543,24 @@ test('configured context shows Q-05 pin drift for a connection and the computer,
   db.run("UPDATE flow_version SET state='LOCKED' WHERE id=?", [named.id]);
   const namedTarget = service.selection(flowId, named.id).context.groups.target;
   expect(namedTarget.status === 'ready' && namedTarget.data.map(e => [e.source, e.availability])).toEqual([[null, 'missing']]);
+  // A target naming the pinned computer by its exact name is that computer too: one entry, by id (#1162).
+  db.run("INSERT INTO sidecars (id, name, token_id) VALUES ('laptop', 'Private-Computer-Name-Laptop', 'fixture-token')");
+  const byName = createDraftVersion({ flowId, displayName: 'By name', trigger: { name: 'trigger', type: 'EMPTY', settings: { input: { target: 'private-computer-name-laptop' } },
+    nextAction: { name: 'read', type: 'PIECE', settings: { pieceName: TOOL, actionName: 'invoke', input: { toolName: 'read_file', params: { path: '/tmp/report.csv' } } } } } });
+  db.run("UPDATE flow_version SET state='LOCKED' WHERE id=?", [byName.id]);
+  const byNameTarget = service.selection(flowId, byName.id).context.groups.target;
+  expect(byNameTarget.status === 'ready' && byNameTarget.data.map(e => [e.source?.id, e.availability, e.value])).toEqual([
+    ['laptop', 'stale', 'Explicit configured target; current connection is not asserted.']]);
+  expect(JSON.stringify(byNameTarget).toLowerCase()).not.toContain('private-computer-name');
+  // A name with spaces and an apostrophe is a name all the same.
+  db.run("UPDATE sidecars SET name='Private Computer''s Name' WHERE id='laptop'");
+  const spaced = createDraftVersion({ flowId, displayName: 'Spaced', trigger: { name: 'trigger', type: 'EMPTY', settings: { input: { target: "private computer's name" } },
+    nextAction: { name: 'read', type: 'PIECE', settings: { pieceName: TOOL, actionName: 'invoke', input: { toolName: 'read_file', params: { path: '/tmp/report.csv' } } } } } });
+  db.run("UPDATE flow_version SET state='LOCKED' WHERE id=?", [spaced.id]);
+  const spacedTarget = service.selection(flowId, spaced.id).context.groups.target;
+  expect(spacedTarget.status === 'ready' && spacedTarget.data.map(e => [e.source?.id, e.availability, e.value])).toEqual([
+    ['laptop', 'stale', 'Explicit configured target; current connection is not asserted.']]);
+  expect(JSON.stringify(spacedTarget).toLowerCase()).not.toContain('private computer');
   // An inventory that cannot be read hides computer drift and never fails the inspection.
   configureWorkflowReadiness({ tool, machines: () => { throw Error('inventory down'); }, localTools: () => true });
   const inventoryDown = entries();

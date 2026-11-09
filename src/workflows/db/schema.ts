@@ -17,6 +17,7 @@ import { ensureWorkflowRemovalSchema } from './workflow-removal-schema';
 
 import type { Database } from "bun:sqlite";
 import { hasCodeStep } from "./flow-graph";
+import { literalReadHosts } from "./read-hosts";
 import type { FlowTriggerNode } from "./repos/flow-version";
 
 export const DEFAULT_IDS = {
@@ -160,6 +161,13 @@ const STATEMENTS: string[] = [
     -- the flow, never by an unrelated write such as a metadata PATCH; run
     -- admission and the engine's connection fetch compare against it.
     binding_pins TEXT,
+    -- #1153: the hosts an HTTP step's GET or HEAD may reach without asking
+    -- (JSON array, see read-hosts.ts), and who wrote it: 'user', or
+    -- 'upgrade' for the literal hosts grandfathered from existing steps. Its
+    -- own columns, like code_steps_*, so no metadata write can grant it.
+    read_hosts TEXT,
+    read_hosts_grant TEXT,
+    read_hosts_granted_at INTEGER,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
@@ -595,6 +603,12 @@ function applyAdditiveColumnMigrations(db: Database): void {
       column: "credential_generation",
       ddl: "ALTER TABLE app_connection ADD COLUMN credential_generation INTEGER NOT NULL DEFAULT 0",
     },
+    // #1153: the per-flow read list (see the flow table above). Added NULL:
+    // a flow with no list asks before every GET, except what the upgrade
+    // below grandfathers.
+    { table: "flow", column: "read_hosts", ddl: "ALTER TABLE flow ADD COLUMN read_hosts TEXT" },
+    { table: "flow", column: "read_hosts_grant", ddl: "ALTER TABLE flow ADD COLUMN read_hosts_grant TEXT" },
+    { table: "flow", column: "read_hosts_granted_at", ddl: "ALTER TABLE flow ADD COLUMN read_hosts_granted_at INTEGER" },
   ];
   // One transaction around the ALTERs AND the backfill they key. SQLite DDL is
   // transactional, and the coupling matters: the backfill is keyed on the
@@ -619,6 +633,8 @@ function applyAdditiveColumnMigrations(db: Database): void {
     // since it has no flows that predate the gate.
     const gateColumns = ["code_steps_enabled", "code_steps_grant", "code_steps_granted_at"];
     if (gateColumns.some((column) => added.has(`flow.${column}`))) grandfatherRunningCodeFlows(db);
+    // Likewise once, on the database that predates the read list.
+    if (added.has("flow.read_hosts")) grandfatherReadHosts(db);
   })();
 }
 
@@ -671,6 +687,48 @@ function grandfatherRunningCodeFlows(db: Database): void {
     }
     if (!hasCodeStep(trigger)) continue;
     db.run(`UPDATE flow SET code_steps_enabled = 1, code_steps_grant = 'upgrade', code_steps_granted_at = ? WHERE id = ?`, [
+      at,
+      candidate.id,
+    ]);
+  }
+}
+
+/**
+ * One-time grandfathering for the read list (#1153).
+ *
+ * Before it, every HTTP GET or HEAD ran without asking. A flow that has been
+ * reading the same API on a schedule must not start stopping at a card after
+ * an upgrade, so each flow with a published version gets the hosts that
+ * version's GET and HEAD steps name literally (`literalReadHosts`): hosts a
+ * person wrote into the flow. A host filled in at run time is never seeded,
+ * which is the case the list exists for. Stamped `upgrade`, so the dashboard
+ * can say where the list came from and the user can clear it. `updated` is
+ * not touched, as in `grandfatherRunningCodeFlows`.
+ */
+function grandfatherReadHosts(db: Database): void {
+  // Published versions only, not an ENABLED flow's latest draft: a draft can
+  // be written by the model and never reviewed, and seeding its hosts would
+  // list them for good (found in review). Such a flow's GETs ask instead.
+  const candidates = db
+    .query<{ id: string; version_id: string | null }, []>(
+      `SELECT f.id AS id, f.published_version_id AS version_id FROM flow f WHERE f.published_version_id IS NOT NULL`,
+    )
+    .all();
+  const at = Date.now();
+  for (const candidate of candidates) {
+    if (!candidate.version_id) continue;
+    const row = db.query<{ trigger: string }, [string]>(`SELECT trigger FROM flow_version WHERE id = ?`).get(candidate.version_id);
+    if (!row) continue;
+    let trigger: FlowTriggerNode | null = null;
+    try {
+      trigger = JSON.parse(row.trigger) as FlowTriggerNode;
+    } catch {
+      continue;
+    }
+    const hosts = literalReadHosts(trigger);
+    if (hosts.length === 0) continue;
+    db.run(`UPDATE flow SET read_hosts = ?, read_hosts_grant = 'upgrade', read_hosts_granted_at = ? WHERE id = ?`, [
+      JSON.stringify(hosts),
       at,
       candidate.id,
     ]);

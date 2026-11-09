@@ -92,7 +92,7 @@ export type WSClientHandler = {
 };
 
 /** What a daemon socket carries from its upgrade. */
-type WsData = { sidecar_id?: string; channel?: string; proxy_target?: string; proxy_protocols?: string[]; panel_session?: string; _proxyUpstream?: WebSocket };
+type WsData = { sidecar_id?: string; channel?: string; proxy_target?: string; proxy_protocols?: string[]; panel_session?: string; client?: 'dashboard'; _proxyUpstream?: WebSocket };
 
 type RouteHandler = (req: Request) => Response | Promise<Response>;
 type MethodRoutes = { [method: string]: RouteHandler };
@@ -479,7 +479,11 @@ export class WebSocketServer {
               return new Response('Forbidden: origin mismatch', { status: 403 });
             }
           }
-          const success = server.upgrade(req, { data: { panel_session: panelSessionId ?? undefined } });
+          // `client=dashboard`: a full dashboard's socket, which answers a room
+          // action only when it is addressed to it (#1157). Only narrows
+          // `socketAnswersBroadcastRoomActions`; it grants nothing.
+          const client = url.searchParams.get('client') === 'dashboard' ? 'dashboard' as const : undefined;
+          const success = server.upgrade(req, { data: { panel_session: panelSessionId ?? undefined, client } });
           if (success) return undefined;
           return new Response('WebSocket upgrade failed', { status: 500 });
         }
@@ -1005,6 +1009,17 @@ export class WebSocketServer {
 
   getClients(): Set<ServerWebSocket<unknown>> {
     return this.clients;
+  }
+
+  /**
+   * Whether this socket may answer a broadcast room action (one not addressed
+   * to a dashboard): a native panel's room-action bridge does, a full
+   * dashboard (the tray's window included) never does, so it does not count
+   * as reached (#1157). A dashboard bundle older than the `client` tag counts,
+   * as every socket did before.
+   */
+  socketAnswersBroadcastRoomActions(ws: unknown): boolean {
+    return (ws as { data?: { client?: unknown } } | null)?.data?.client !== 'dashboard';
   }
 
   /**

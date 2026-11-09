@@ -1,6 +1,7 @@
 /**
  * Daemon sources compiled INTO the engine bundle may only import values
- * from other registered, checked sources (#634).
+ * from other registered, checked sources, or from `node:` builtins, which the
+ * bundle leaves to the runtime (#634).
  *
  * WHY THIS IS A TEST AND NOT A COMMENT. `runner/engine-runtime/build.ts` holds
  * `PATCHED_VENDOR_SOURCES`, the explicit cache-invalidation registry for
@@ -28,13 +29,14 @@
  *
  * SCOPE, stated because it is narrower than "the bundle is pure": this checks
  * the governed-piece sources and permits imports only within that checked
- * set. A new dependency must be registered in `PATCHED_VENDOR_SOURCES` AND
+ * set, plus real `node:` builtins (not bundle inputs). A new dependency must be registered in `PATCHED_VENDOR_SOURCES` AND
  * included here, so its imports receive the same checks.
  */
 
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { builtinModules } from 'node:module';
 import ts from 'typescript';
 import { PATCHED_VENDOR_SOURCES } from '../runner/engine-runtime/build';
 
@@ -43,7 +45,7 @@ import { PATCHED_VENDOR_SOURCES } from '../runner/engine-runtime/build';
  * engine's fetch-only send adapters, and hubspot-contact is the HubSpot
  * contact input validation the adapter table uses; checking them here
  * prevents a future dependency from silently escaping the bundle hash. */
-const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'hubspot-contact.ts', 'managed-github.ts', 'managed-trello.ts', 'managed-mailchimp.ts', 'managed-slack.ts', 'managed-dropbox.ts', 'managed-asana.ts', 'managed-intercom.ts', 'managed-calendly.ts', 'managed-airtable.ts', 'managed-typeform.ts', 'managed-notion.ts', 'managed-linear.ts', 'managed-todoist.ts', 'managed-monday.ts', 'managed-monday-inputs.ts', 'managed-wrike.ts', 'managed-wrike-inputs.ts', 'managed-pipedrive.ts', 'managed-pipedrive-inputs.ts', 'managed-figma.ts', 'managed-zoom.ts', 'managed-zoom-inputs.ts', 'managed-help-scout.ts', 'managed-help-scout-inputs.ts', 'managed-gitlab.ts', 'managed-gitlab-inputs.ts', 'managed-webflow.ts', 'managed-webflow-inputs.ts'];
+const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts', 'hubspot-contact.ts', 'managed-github.ts', 'managed-trello.ts', 'managed-mailchimp.ts', 'managed-slack.ts', 'managed-dropbox.ts', 'managed-asana.ts', 'managed-intercom.ts', 'managed-calendly.ts', 'managed-airtable.ts', 'managed-typeform.ts', 'managed-notion.ts', 'managed-linear.ts', 'managed-todoist.ts', 'managed-monday.ts', 'managed-monday-inputs.ts', 'managed-wrike.ts', 'managed-wrike-inputs.ts', 'managed-pipedrive.ts', 'managed-pipedrive-inputs.ts', 'managed-figma.ts', 'managed-zoom.ts', 'managed-zoom-inputs.ts', 'managed-help-scout.ts', 'managed-help-scout-inputs.ts', 'managed-gitlab.ts', 'managed-gitlab-inputs.ts', 'managed-webflow.ts', 'managed-webflow-inputs.ts', 'http-egress.ts'];
 
 /**
  * A value import of ANOTHER registered source is fine, and is the one shape
@@ -54,8 +56,21 @@ const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'de
  */
 const REGISTERED_SPECIFIERS = new Set(BUNDLED_DAEMON_SOURCES.map(file => './' + file.replace(/\.ts$/u, '')));
 
-const reachesOutsideTheRegistry = (specifier: string): boolean =>
-  !REGISTERED_SPECIFIERS.has(specifier.replace(/^['"]|['"]$/gu, '').replace(/\.ts$/u, ''));
+/**
+ * A `node:` builtin is not a bundle input at all: the bundle targets node and
+ * leaves every builtin to the runtime, so it cannot carry stale daemon code
+ * into a cached engine. `http-egress.ts` (the egress guard and the #1153
+ * read-host scope) imports only builtins, and is registered here and in
+ * `PATCHED_VENDOR_SOURCES` because `piece-effects.ts` and
+ * `piece-effect-guard.ts` import values from it.
+ */
+const isNodeBuiltin = (specifier: string): boolean =>
+  /^node:[a-z_/]+$/u.test(specifier) && builtinModules.includes(specifier.slice('node:'.length));
+
+const reachesOutsideTheRegistry = (specifier: string): boolean => {
+  const bare = specifier.replace(/^['"]|['"]$/gu, '');
+  return !isNodeBuiltin(bare) && !REGISTERED_SPECIFIERS.has(bare.replace(/\.ts$/u, ''));
+};
 
 function valueImportsOf(file: string): string[] {
   const path = join(import.meta.dir, file);
@@ -126,6 +141,14 @@ describe('#634: the engine bundle\'s daemon sources stay within the checked regi
       } finally {
         rmSync(join(import.meta.dir, name));
       }
+    }
+    // A builtin is allowed only spelled as `node:`, the form the bundle leaves
+    // to the runtime; a bare name could be a package of the same name.
+    writeFileSync(join(import.meta.dir, 'builtin.ts'), `import { isIP } from 'node:net';\nimport { lookup } from 'dns';\nimport { x } from 'node:fss';\nvoid isIP; void lookup; void x;\n`);
+    try {
+      expect(valueImportsOf('builtin.ts')).toEqual(["'dns'", "'node:fss'"]);
+    } finally {
+      rmSync(join(import.meta.dir, 'builtin.ts'));
     }
     // A value import of the SIBLING registered source is allowed, because the
     // registry already carries that file's content into the bundle hash. This
