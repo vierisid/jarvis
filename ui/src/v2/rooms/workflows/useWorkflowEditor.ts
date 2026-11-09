@@ -1080,9 +1080,8 @@ export function useWorkflowEditor(flowId: string | null) {
       patch: { continueOnFailure?: boolean; retryOnFailure?: boolean },
     ): void => {
       mutateAnyStep(stepName, (target) => {
-        // The engine consults `errorHandlingOptions` for PIECE and CODE.
-        // Other types ignore them, so we
-        // short-circuit rather than writing dead settings.
+        // The engine consults `errorHandlingOptions` for PIECE and CODE. Other
+        // types ignore them, so we short-circuit rather than writing dead settings.
         if (target.type !== "PIECE" && target.type !== "CODE") return;
         const prev = target.settings?.errorHandlingOptions ?? {};
         const next: NonNullable<NonNullable<FlowStepNode["settings"]>["errorHandlingOptions"]> = {
