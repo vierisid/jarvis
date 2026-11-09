@@ -180,6 +180,9 @@ export function createWorkflowRooms(host: WorkflowHost) {
       } } : { publish: async () => {
         const { version } = await transport.json(`/api/workflows/${encodeURIComponent(selection.flowId)}/publish`, post({ versionId: selection.versionId }));
         if (!version || version.id !== selection.versionId || version.state !== 'LOCKED') throw Error('Publication unconfirmed');
+        // The selected IDs may not change when publishing from All workflows.
+        // Re-read the locked version before offering Run or further editing.
+        retry(value => value + 1);
         shell.navigate({ room: 'workflow', selection: { flowId: selection.flowId, versionId: selection.versionId } });
       } }),
       onDirtyChange: dirty => host.dirty(`workflow:${selection.flowId}:${selection.versionId}`, dirty) }} />;

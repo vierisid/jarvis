@@ -40,3 +40,8 @@ export function resolveIdentity(owner: string, resolution: 'mark_done' | 'releas
     ? 'UPDATE workflow_effect_identity SET completed=1 WHERE owner=? AND completed=0'
     : 'DELETE FROM workflow_effect_identity WHERE owner=? AND completed=0', [owner]).changes > 0;
 }
+
+/** A read-only completion check. An in-flight or uncertain claim is never a receipt. */
+export function identityCompleted(identity: string): boolean {
+  return !!getWorkflowDb().query('SELECT 1 FROM workflow_effect_identity WHERE identity=? AND completed=1').get(identity);
+}
