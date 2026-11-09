@@ -67,6 +67,10 @@ ${c.bold('Start options:')}
   --data-dir <path> Override data directory (default: ~/.jarvis)
   --no-local-tools  Run the general tools only on a sidecar (your machine), never
                     on this host (Docker/headless). The site builder still runs here.
+  --system-config <path>
+                    Read system config from an absolute, root-owned path (hosted
+                    mode). A missing or unreadable file is fatal; without the
+                    flag, the daemon reads ~/.jarvis/config.yaml as today.
 
 ${c.bold('Logs options:')}
   -f, --follow      Follow log output (like tail -f)
@@ -128,6 +132,23 @@ async function cmdStart(args: string[]): Promise<void> {
     dataDir = args[dataDirIdx + 1]!;
   }
 
+  // Parse --system-config (hosted-mode flag, usejarvis #66).
+  // Validation is intentionally strict: the loader's forgiving default is
+  // precisely what the hosting-platform fix exists to prevent, so a
+  // misinvocation fails the daemon here rather than reading the tenant's
+  // own ~/.jarvis/config.yaml by mistake. The fail-closed readability check
+  // lives in startDaemon, so we only validate shape here.
+  let systemConfigPath: string | undefined;
+  const sysCfgIdx = args.indexOf('--system-config');
+  if (sysCfgIdx !== -1) {
+    const value = args[sysCfgIdx + 1];
+    if (!value || value.startsWith('-')) {
+      console.error(c.red('Error: --system-config requires a path'));
+      process.exit(1);
+    }
+    systemConfigPath = value;
+  }
+
   // Where the dashboard will be, resolved ONCE for every place below that
   // prints or opens it: the hint, the detached summary, and openDashboard on
   // both paths. It follows the port startDaemon is about to bind rather than a
@@ -167,7 +188,7 @@ async function cmdStart(args: string[]): Promise<void> {
     process.on('exit', () => releaseLock());
 
     const { startDaemon } = await import('../src/daemon/index.ts');
-    await startDaemon({ port, dataDir, noLocalTools });
+    await startDaemon({ port, dataDir, noLocalTools, systemConfigPath });
 
     if (!noOpen && dashboard.openUrl) {
       openDashboard(dashboard.openUrl);
@@ -188,6 +209,11 @@ async function cmdStart(args: string[]): Promise<void> {
 
     const daemonArgs = [join(PACKAGE_ROOT, 'bin/jarvis.ts'), 'start', '--no-open'];
     if (port) daemonArgs.push('--port', String(port));
+    // Forward --system-config into the detached child: without this, a hosted
+    // `jarvis start -d` would re-enter cmdStart in the child with no flag,
+    // and the daemon would (silently) fall back to ~/.jarvis/config.yaml,
+    // defeating the whole point of the flag.
+    if (systemConfigPath) daemonArgs.push('--system-config', systemConfigPath);
 
     // We redirect the child's stdout AND stderr into logPath. If
     // daemon.log_file_path names this same file the child does NOT install its
