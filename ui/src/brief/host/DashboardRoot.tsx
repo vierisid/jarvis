@@ -38,7 +38,7 @@ import { maintenanceRoom } from './maintenance';
 import { getRoomBody } from '../../v2/rooms/RoomBodyRegistry';
 import { LiveDataProvider } from '../../v2/shell/LiveDataContext';
 import type { RoomKey } from '../../v2/router';
-import { InputHost, inputDialog, manualRunInput } from './InputDialog';
+import { InputHost, manualRunInput } from './InputDialog';
 import './host.css';
 import { resolveHostedEntry, useHostedEntry } from './hosted-entry';
 

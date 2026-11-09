@@ -50,7 +50,7 @@ export function InputHost() {
     onSubmit={event => { event.preventDefault(); if (!value.trim()) return; const invalid = prompt.validate?.(value); if (invalid) { setError(invalid); box.current?.querySelector('textarea')?.focus(); } else close(value); }}>
     <label className="jconfirm__title" htmlFor="brief-command-input">{prompt.label}</label>
     <textarea id="brief-command-input" autoFocus rows={4} value={value} aria-invalid={!!error} aria-describedby={error ? "brief-command-error" : undefined} onChange={event => { setValue(event.target.value); setError(''); }} />
-    {error && <p id="brief-command-error" role="alert">{error}</p>}
+    {error && <p id="brief-command-error" className="jconfirm__body" role="alert">{error}</p>}
     <div className="jconfirm__actions"><button type="button" className="jconfirm__btn jconfirm__btn--ghost" onClick={() => close(null)}>Cancel</button>
       <button type="submit" className="jconfirm__btn jconfirm__btn--pri" disabled={!value.trim()}>Continue</button></div>
   </form></div>, document.body);
