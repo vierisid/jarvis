@@ -101,6 +101,10 @@ export interface EffectInvocation {
   revalidate?: (record: WorkflowEffect) => void;
   /** For routes whose replay re-dispatches (a piece's own retry), recheck before handing out the recorded result. */
   revalidateOnReplay?: boolean;
+  /** Trusted backend-only receipt lookup. No dispatch or claim: reuse a durable
+   * completed result before creating a new approval. Context, policy and
+   * cancellation are still validated. Existing approvals retain their lifecycle. */
+  reuseCompleted?: (record: Readonly<WorkflowEffect>) => { result: unknown } | null;
   execute: (args: Record<string, unknown>, checkpoint: () => void) => Promise<unknown>;
   principal?: EffectPrincipal;
   /** The caller's gate already found this effect needs approval; the boundary never concludes otherwise. */
@@ -482,6 +486,13 @@ export class WorkflowEffectBoundary {
       throw outcome ? new ActionOutcomeError(outcome) : error;
     }
     record.reason = decision.reason;
+    const completed = !record.approvalId ? input.reuseCompleted?.(record) : null;
+    if (completed) {
+      record.result = completed.result; record.status = 'succeeded'; record.decision = 'allowed';
+      record.reason = 'Reused a completed identity; no action dispatched'; record.finishedAt = Date.now();
+      saveWorkflowEffect(record); log(false);
+      return { result: record.result };
+    }
     if (record.approvalId || decision.requiresApproval) {
       if (!approvals) throw new Error('Workflow approval service unavailable; execution denied');
       if (!record.approvalId) {
