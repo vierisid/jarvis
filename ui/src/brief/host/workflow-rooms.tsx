@@ -1,3 +1,4 @@
+import type { Flow } from '../../v2/rooms/workflows/useWorkflowsData';
 import React, { useEffect, useState } from 'react';
 import type { BriefRoomRegistry, BriefShellPort } from '../contracts';
 import { BRIEF_ROOMS } from '../rooms/registry';
@@ -125,7 +126,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
   }
   function Selected({ shell }: { shell: BriefShellPort }) {
     const { flowId, versionId, runId } = shell.route.selection;
-    const [selection, setSelection] = useState<{ flowId: string; versionId: string; title: string; editable: boolean; needsInput: boolean; inspection: InspectionSelection } | null>(null);
+    const [selection, setSelection] = useState<{ flowId: string; versionId: string; title: string; flow: Flow; editable: boolean; needsInput: boolean; inspection: InspectionSelection } | null>(null);
     const [error, setError] = useState(false), [revision, retry] = useState(0);
     useEffect(() => {
       const abort = new AbortController(); setSelection(null); setError(false);
@@ -140,7 +141,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
         const params = new URLSearchParams({ versionId: version.id }); if (runId) params.set('runId', runId);
         const value = await transport.json(`/api/brief/workflows/${encodeURIComponent(flowId)}/inspection?${params}`, { signal: abort.signal });
         if (value.status !== 'ready' || value.data?.scopeId !== scopeId || value.data.flowId !== flowId || value.data.versionId !== version.id) throw new Error('Inspection unavailable');
-        if (!abort.signal.aborted) setSelection({ flowId, versionId: version.id, title: version.displayName, editable: version.state === 'DRAFT', needsInput: needsManualRunInput(version.trigger), inspection: value.data });
+        if (!abort.signal.aborted) setSelection({ flowId, versionId: version.id, title: version.displayName, flow: detail.flow, editable: version.state === 'DRAFT', needsInput: needsManualRunInput(version.trigger), inspection: value.data });
       })().catch(() => { if (!abort.signal.aborted) setError(true); });
       return () => abort.abort();
     }, [flowId, versionId, runId, shell.route.room, revision]);
@@ -156,6 +157,13 @@ export function createWorkflowRooms(host: WorkflowHost) {
       } }} />;
     return <WorkflowCanvasRoom shell={shell} binding={{ ...binding, request: transport.request,
       readOnly: !selection.editable,
+      permissions: selection.flow,
+      permissionsChanged: async () => {
+        const detail = await transport.json(`/api/workflows/${encodeURIComponent(selection.flowId)}`);
+        if (detail.flow?.id !== selection.flowId) throw Error('Workflow changed');
+        setSelection(current => current?.flowId === selection.flowId && current.versionId === selection.versionId
+          ? { ...current, flow: detail.flow } : current);
+      },
       ...(!selection.editable ? { run: async () => {
         await runs.start(); const state = runs.getSnapshot();
         if (state.submission === 'accepted' && state.selectedId) shell.navigate({ room: 'workflow-runs', selection: { flowId: selection.flowId, versionId: selection.versionId, runId: state.selectedId } });
