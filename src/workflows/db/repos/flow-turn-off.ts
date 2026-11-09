@@ -3,13 +3,15 @@
  * or left waiting on a timer or an approval are stopped, each saying why, and
  * nothing can wake them later: every continuation path asks
  * `turnedOffReason` first. A run executing at that moment is not interrupted;
- * if it pauses, it does not continue. Runs started by hand on a workflow that
+ * if it pauses, it does not continue. The background tasks it already started
+ * are cancelled (#1152). Runs started by hand on a workflow that
  * is already off (a test run) are not affected: only runs created before it
  * was turned off are.
  */
 import { getWorkflowDb } from "../index";
 import { ActionOutcomeError } from "../../../actions/action-outcome";
 import { cancelFlowRun } from "./run-cancellation";
+import { signalRunTurnedOff } from "../../runtime/cancellation-signals";
 import { clearScheduleWatch, recordFire } from "./trigger-fire";
 
 export const TURNED_OFF_REASON = "The workflow was turned off, so this run was stopped.";
@@ -49,18 +51,23 @@ export function stopTurnedOffRun(flowId: string, runId: string): boolean {
 }
 
 /**
- * After a flow is turned off: stop its queued and waiting runs, and forget
- * what its schedule was owed. Returns how many runs were stopped.
+ * After a flow is turned off: stop its queued and waiting runs, cancel the
+ * background tasks its executing runs started (the runs themselves go on,
+ * #1152), and forget what its schedule was owed. Returns how many runs were
+ * stopped. Idempotent: telling an executing run again cancels nothing more.
  */
 export function stopRunsOfTurnedOffFlow(flowId: string): number {
   clearScheduleWatch(flowId);
-  const rows = getWorkflowDb().query<{ id: string }, [string]>(
-    `SELECT r.id FROM flow_run r JOIN flow f ON f.id = r.flow_id
+  const rows = getWorkflowDb().query<{ id: string; status: string }, [string]>(
+    `SELECT r.id, r.status FROM flow_run r JOIN flow f ON f.id = r.flow_id
       WHERE r.flow_id = ? AND f.disabled_at IS NOT NULL
-        AND r.created <= f.disabled_at AND r.status IN ('QUEUED', 'PAUSED')`,
+        AND r.created <= f.disabled_at AND r.status IN ('QUEUED', 'RUNNING', 'PAUSED')`,
   ).all(flowId);
   let stopped = 0;
-  for (const { id } of rows) if (stopTurnedOffRun(flowId, id)) stopped++;
+  for (const { id, status } of rows) {
+    if (status === 'RUNNING') signalRunTurnedOff(id);
+    else if (stopTurnedOffRun(flowId, id)) stopped++;
+  }
   return stopped;
 }
 

@@ -3,7 +3,7 @@
  * appropriate channels (WebSocket always, Telegram/Discord too).
  */
 
-import { APPROVAL_SHORT_ID_LENGTH, approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest } from './approval.ts';
+import { APPROVAL_SHORT_ID_LENGTH, approvalChannelIntentFromContext, approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest } from './approval.ts';
 import { boundedReceiptText } from '../roles/untrusted.ts';
 import { commandForCard } from '../util/card-text.ts';
 import { confusableSkeleton } from './ui-intent.ts';
@@ -1013,8 +1013,12 @@ function cardLine(text: string): { shown: string; cut: boolean } {
  */
 export function approvalChannelCard(request: ApprovalRequest): { text: string; approvable: boolean; refusal: ChannelCardRefusal | null } {
   const shortId = request.id.slice(0, APPROVAL_SHORT_ID_LENGTH);
-  const { action, reason } = approvalIntentParts(request);
-  const intent = cardLine(action);
+  const parts = approvalIntentParts(request);
+  const { reason } = parts;
+  // A chat history keeps what it is sent: a card that has a chat sentence
+  // shows that one (#1152), the same one-line reduction as any intent.
+  const channel = approvalChannelIntentFromContext(request);
+  const intent = cardLine(channel ?? parts.action);
   const tool = cardLine(request.tool_name);
   const agent = cardLine(request.agent_name);
   const why = cardLine(reason);

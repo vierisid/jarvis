@@ -13,6 +13,9 @@ import { AuditTrail } from '../../authority/audit';
 import { EmergencyController } from '../../authority/emergency';
 import { ApprovalManager } from '../../authority/approval';
 import { listWorkflowEffects } from '../db/repos/workflow-effect';
+import { runFailure } from './run-failure';
+import { flowBindingBlock, runtimeBindingNotice } from './binding-refusals';
+import { getFlow } from '../db/repos/flow';
 import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends } from './service-backends';
@@ -190,6 +193,25 @@ test('hosted runs with no capable sidecar fail before any local fallback', async
   await expect(f.invoke('first')).rejects.toThrow(/local execution is disabled/);
   expect(f.calls).toEqual([]);
   expect(getRunMachineBinding(f.run.id)).toBeNull();
+});
+
+test('a binding refusal thrown while the target resolves is recorded typed, so the run and the notice read its code (#1152)', async () => {
+  const f = fixture(); setNoLocalTools(true);
+  f.machines.forEach(s => { s.connected = false; });
+  getWorkflowDb().run("UPDATE flow SET status = 'ENABLED' WHERE id = ?", [f.flow.id]);
+  await expect(f.invoke('first')).rejects.toThrow(/local execution is disabled/);
+  expect(listWorkflowEffects(f.run.id)).toMatchObject([{ stepName: 'first', status: 'blocked', decision: 'denied',
+    outcome: { status: 'blocked', code: 'WORKFLOW_MACHINE_UNAVAILABLE', effect: 'not_started' } }]);
+  // The trail shows the refusal, as every refusal before dispatch.
+  expect(f.options.auditTrail.query({}).filter(r => r.authority_decision === 'denied' && r.executed === 0 && r.agent_id === `workflow:${f.run.id}`)).toHaveLength(1);
+  // Asked again, the step gets the recorded refusal; nothing is dispatched.
+  await expect(f.invoke('first')).rejects.toThrow(/local execution is disabled/);
+  expect(f.calls).toEqual([]);
+  updateRun(f.run.id, { status: 'FAILED', finishTime: Date.now(),
+    failedStep: { name: 'first', displayName: 'first', errorMessage: 'No capable sidecar is connected and local execution is disabled.' } });
+  expect(runFailure(getFlowRun(f.run.id)!)).toMatchObject({ code: 'WORKFLOW_MACHINE_UNAVAILABLE', effect: 'none' });
+  expect(flowBindingBlock(getFlow(f.flow.id)!)).toMatchObject({ code: 'WORKFLOW_MACHINE_UNAVAILABLE', kind: 'runtime', runId: f.run.id });
+  expect(runtimeBindingNotice(f.run.id)).toMatchObject({ code: 'WORKFLOW_MACHINE_UNAVAILABLE', subject: 'machine:*' });
 });
 
 test('old machine receipts cannot acquire a replacement session after upgrade', async () => {
