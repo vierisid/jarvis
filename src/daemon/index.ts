@@ -73,6 +73,7 @@ import { registerWorkflowComposition } from '../brief/registrations/workflow-com
 import { ProfileSettings } from '../brief/profile-settings';
 import { registerProfileSettings } from '../brief/registrations/profile-settings';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
+import { workflowToolDeclarationRefusal } from '../workflows/runtime/workflow-ui-tools';
 import { pinUnpinnedEnabledFlows } from '../workflows/db/repos/binding-pins';
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -5275,7 +5276,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentials: credentialResolver,
       tool: name => {
         const tool = agentService.getOrchestrator().getToolRegistry()?.list().find(t => t.name === name);
-        return tool ? { params: Object.entries(tool.parameters).map(([name, param]) => ({ name, ...param })) } : null;
+        return tool ? { params: Object.entries(tool.parameters).map(([name, param]) => ({ name, ...param })),
+          workflowRefusal: workflowToolDeclarationRefusal(tool) } : null;
       },
       roles: () => new Set(agentService.getSpecialists().keys()),
       // Q-05: the computers a workflow can be pinned to, and whether this one may run local tools.
@@ -5540,6 +5542,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               toolRegistry.list(cat).map((t) => ({
                 name: t.name,
                 description: t.description,
+                workflowRefusal: workflowToolDeclarationRefusal(t),
                 params: Object.entries(t.parameters).map(([name, p]) => ({
                   name,
                   type: p.type,

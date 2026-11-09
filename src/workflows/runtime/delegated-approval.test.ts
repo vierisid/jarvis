@@ -159,6 +159,11 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
     } });
   registry.register({ name: 'browser_snapshot', category: 'browser', description: 'Synthetic bounded browser read', parameters: {},
     execute: async () => { effects++; return 'Calendar snapshot'; } });
+  for (const name of ['desktop_launch_app', 'desktop_click']) registry.register({ name, category: 'desktop', description: 'Synthetic desktop action', parameters: {},
+    captureApprovalGuard: () => () => opts.browserGuard?.() ?? true,
+    execute: async () => { effects++; return 'Desktop action completed'; } });
+  registry.register({ name: 'desktop_snapshot', category: 'desktop', description: 'Synthetic editor readback', parameters: {},
+    execute: async () => { effects++; return 'Editor: Saved the note'; } });
   const authority = new AuthorityEngine({ default_level: opts.authority?.default_level ?? 10,
     governed_categories: (opts.authority?.governed_categories ?? ['write_data']) as any, overrides: (opts.authority?.overrides ?? []) as any,
     context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
@@ -184,7 +189,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
       // The next scripted turn is the one after as many answered tool calls as the log holds.
       const answered = messages.filter(m => m.role === 'tool').length;
       const turn = script[answered];
-      if (!turn || turn === 'finish') return { content: opts.finalReport ?? (script.some(t => t !== 'finish' && t.call.startsWith('browser_')) ? JSON.stringify({ taskStatus: 'completed', finalMessage: 'Saved the note' }) : 'Saved the note'), finish_reason: 'end_turn', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 } };
+      if (!turn || turn === 'finish') return { content: opts.finalReport ?? (script.some(t => t !== 'finish' && /^(browser|desktop)_/.test(t.call)) ? JSON.stringify({ taskStatus: 'completed', finalMessage: 'Saved the note' }) : 'Saved the note'), finish_reason: 'end_turn', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 } };
       return { content: '', finish_reason: 'tool_use', tool_calls: [{ id: `call-${answered + 1}`, name: turn.call, arguments: turn.args ?? {} }],
         usage: { input_tokens: 1, output_tokens: 1 } };
     } } as any,
@@ -1329,32 +1334,36 @@ test.skipIf(engineSkip)('parent failure retires a required child approval on the
 }, 60_000);
 
 
-describe('workflow browser review', () => {
-  const options = { authority: { governed_categories: [] }, script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/', target: 'test-computer' } }, 'finish'] as Turn[] };
+for (const tool of ['browser_navigate', 'desktop_launch_app', 'desktop_click']) describe(`workflow ${tool} review`, () => {
+  const args = tool === 'browser_navigate' ? { url: 'https://calendar.example/', target: 'test-computer' }
+    : tool === 'desktop_launch_app' ? { executable: 'notepad.exe', target: 'test-computer' }
+    : { element_id: 123, action: 'set_value', value: 'Synthetic note', target: 'test-computer' };
+  const options = { authority: { governed_categories: [] }, script: [{ call: tool, args }, 'finish'] as Turn[] };
   test('requires a dashboard click even with permissive Authority and dispatches only once', async () => {
     const ids = createRun(); const f = backends(ids, options);
-    const parked = await f.delegate({ requiredTools: ['browser_navigate'] });
+    const parked = await f.delegate({ requiredTools: [tool] });
     expect(parked.status).toBe('approval_required'); expect(f.effects()).toBe(0);
     const card = f.approvals.getRequest(parked.approval!.approvalId)!;
-    expect(JSON.parse(card.context)).toMatchObject({ confirm: 'always', reviewSubject: { origin: 'https://calendar.example' } });
+    expect(JSON.parse(card.context)).toMatchObject({ confirm: 'always' });
+    if (tool === 'browser_navigate') expect(JSON.parse(card.context).reviewSubject).toEqual({ origin: 'https://calendar.example' });
     expect(JSON.parse(card.tool_arguments)).toEqual(options.script[0] && (options.script[0] as any).args);
     f.approvals.approve(card.id, 'dashboard');
-    const done = await f.delegate({ requiredTools: ['browser_navigate'] });
+    const done = await f.delegate({ requiredTools: [tool] });
     expect(done.outcome).toEqual({ status: 'succeeded' }); expect(f.effects()).toBe(1);
-    await f.delegate({ requiredTools: ['browser_navigate'] }); expect(f.effects()).toBe(1);
+    await f.delegate({ requiredTools: [tool] }); expect(f.effects()).toBe(1);
   });
   test('stale browser guard blocks approved execution', async () => {
     let current = true; const ids = createRun();
     const f = backends(ids, { ...options, browserGuard: () => current });
     const parked = await f.delegate(); f.approvals.approve(parked.approval!.approvalId, 'dashboard'); current = false;
     await f.delegate(); expect(f.effects()).toBe(0);
-    expect(listWorkflowEffects(ids.run.id).at(-1)?.outcome).toMatchObject({ code: 'WORKFLOW_BROWSER_REVIEW_STALE', effect: 'not_started' });
+    expect(listWorkflowEffects(ids.run.id).at(-1)?.outcome).toMatchObject({ code: 'WORKFLOW_UI_REVIEW_STALE', effect: 'not_started' });
   });
   test('restart cannot reconstruct an approved live browser binding', async () => {
     const ids = createRun(); const f = backends(ids, options); const parked = await f.delegate();
     f.approvals.approve(parked.approval!.approvalId, 'dashboard');
     const resumed = backends(ids, options); await resumed.delegate(); expect(resumed.effects()).toBe(0);
-    expect(listWorkflowEffects(ids.run.id).at(-1)?.outcome).toMatchObject({ code: 'WORKFLOW_BROWSER_REVIEW_STALE' });
+    expect(listWorkflowEffects(ids.run.id).at(-1)?.outcome).toMatchObject({ code: 'WORKFLOW_UI_REVIEW_STALE' });
   });
   test('denying browser review never navigates', async () => {
     const ids = createRun(); const f = backends(ids, options); const parked = await f.delegate();
@@ -1384,6 +1393,29 @@ test.skipIf(engineSkip)('browser delegation pauses the real engine, then resumes
   } finally { await f.stop(); }
 }, 60_000);
 
+
+test.skipIf(engineSkip)('desktop writing pauses the real engine for each write, reads back, then completes once', async () => {
+  const names = ['desktop_launch_app', 'desktop_snapshot', 'desktop_click', 'desktop_snapshot'];
+  const ids = createRun({ requiredTools: 'desktop_launch_app,desktop_snapshot,desktop_click', requireSuccess: true, maxIterations: 6 });
+  updateRun(ids.run.id, { status: 'QUEUED' });
+  const f = await boot(ids, { childLevel: 3, authority: { default_level: 3, governed_categories: [] },
+    script: [...names.map(call => ({ call, args: { target: 'test-computer' } })), 'finish'] });
+  try {
+    enqueue({ jobType: 'RUN_FLOW', flowRunId: ids.run.id, maxAttempts: 1, payload: { runId: ids.run.id } });
+    await f.worker.drain();
+    for (const i of [0, 2]) {
+      expect(getFlowRun(ids.run.id)!.status).toBe('PAUSED'); expect(f.effects()).toBe(i);
+      const card = f.approvals.getPending()[0]!;
+      expect(card.tool_name).toBe(names[i]!);
+      f.approvals.approve(card.id, 'dashboard');
+      expect(resumeResolvedWorkflowEffects()).toBe(1);
+      await f.worker.drain();
+    }
+    expect(getFlowRun(ids.run.id)!.status).toBe('SUCCEEDED'); expect(f.effects()).toBe(4);
+    expect(getDelegation(delegationId(ids.run.id))?.result).toMatchObject({ finalMessage: 'Saved the note', outcome: { status: 'succeeded' } });
+    expect(resumeResolvedWorkflowEffects()).toBe(0);
+  } finally { await f.stop(); }
+}, 60_000);
 
 test('each browser action pauses independently, including after outside content', async () => {
   const ids = createRun();

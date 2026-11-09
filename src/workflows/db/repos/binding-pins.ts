@@ -28,6 +28,7 @@ import { walkFlowNodes } from '../flow-graph';
 import type { FlowTriggerNode } from './flow-version';
 import { CONNECTION_SOURCE, type ReadinessIssue } from '../../runtime/workflow-readiness';
 import { BOUNDED_TOOLS, boundedToolCapability } from '../../runtime/tool-capability';
+import { WORKFLOW_REVIEWED_UI_TOOLS } from '../../runtime/workflow-ui-tools';
 import { workflowReadinessServices } from './readiness-services';
 import type { SidecarCapability, SidecarInfo } from '../../../sidecar/types';
 import { servesCapability } from '../../../sidecar/capability-predicate';
@@ -220,7 +221,7 @@ function machineNeeds(trigger: unknown): { capability: SidecarCapability | null;
     const input = object(node.settings?.input) ? node.settings!.input : {};
     const toolName = input.toolName;
     if (typeof toolName !== 'string' || isExpression(toolName)) { dynamic = true; continue; }
-    if (!BOUNDED_TOOLS.has(toolName) && toolName !== 'run_skill') continue;
+    if (!BOUNDED_TOOLS.has(toolName) && !WORKFLOW_REVIEWED_UI_TOOLS.has(toolName) && toolName !== 'run_skill') continue;
     // A skill's surface is known only when it runs; a desktop-capable computer serves either.
     capability ??= toolName === 'run_skill' ? 'desktop' : boundedToolCapability(toolName);
     const target = paramsOf(input).target;

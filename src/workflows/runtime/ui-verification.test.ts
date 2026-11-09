@@ -92,9 +92,11 @@ for (const tool of [browserSnapshotTool]) {
 }
 
 for (const tool of [browserNavigateTool, browserClickTool, browserHoverTool, browserTypeTool, desktopLaunchAppTool]) {
-  test(`${tool.name}: direct workflow UI effects remain prohibited`, async () => {
-    const f = fixture(tool, {}, 'ok');
-    await expect(f.call()).rejects.toThrow('opaque code/UI effects');
+  test(`${tool.name}: a missing live review guard refuses direct workflow UI effects`, async () => {
+    const f = fixture({ ...tool, captureApprovalGuard: undefined }, {}, 'ok');
+    const response = await f.call();
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ outcome: { code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' } });
     expect(f.calls).toEqual([]);
   });
 }

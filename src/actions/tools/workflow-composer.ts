@@ -81,6 +81,7 @@ import {
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
 import { compileWorkflow } from '../../workflows/runtime/workflow-readiness';
+import { workflowToolRefusal, WORKFLOW_REVIEWED_UI_TOOLS } from '../../workflows/runtime/workflow-ui-tools';
 import { canonicalZone, CHOSEN_TIMEZONE_KEY, statedScheduleZone, withScheduleZoneDefault } from "../../workflows/runner/triggers/schedule-zone.ts";
 
 export interface ComposedFlow {
@@ -288,6 +289,7 @@ export interface ComposerToolSpec {
   name: string;
   description?: string;
   params: ComposerToolParam[];
+  workflowRefusal?: string | null;
 }
 
 export interface ComposeDeps {
@@ -1027,13 +1029,14 @@ function renderPieceIndex(deps: ComposeDeps): string {
   for (const meta of WORKFLOW_EVENT_TYPES) {
     lines.push(`- ${meta.type}: ${firstLine(meta.description)}`);
   }
-  const toolNames = deps.tools?.map((t) => ({ name: t.name, description: t.description }))
-    ?? deps.toolNames?.map((n) => ({ name: n, description: undefined as string | undefined }));
+  const toolNames = deps.tools?.map((t) => ({ name: t.name, description: t.description, workflowRefusal: t.workflowRefusal }))
+    ?? deps.toolNames?.map((n) => ({ name: n, description: undefined as string | undefined, workflowRefusal: undefined }));
   if (toolNames && toolNames.length > 0) {
     lines.push("");
-    lines.push("Available Jarvis tools (wire via the jarvis-tool piece's invoke action; params via get_tool_details):");
+    lines.push("Jarvis tool capabilities (check workflow restrictions below; params via get_tool_details):");
     for (const t of toolNames) {
       lines.push(`- ${t.name}${t.description ? `: ${firstLine(t.description)}` : ""}`);
+      lines.push(...workflowToolGuidance(t.name, t.workflowRefusal));
     }
   }
   return lines.join("\n");
@@ -1388,7 +1391,7 @@ function renderTools(
 ): string {
   if (tools && tools.length > 0) {
     const header =
-      "Available Jarvis tools (call via `jarvis-tool { toolName, params: { ... } }`; include EVERY param marked REQUIRED):";
+      "Jarvis tool capabilities (check workflow restrictions below; include EVERY param marked REQUIRED):";
     const lines = [header];
     for (const t of tools) {
       lines.push(...renderToolSpecLines(t).map((l) => `  ${l}`));
@@ -1397,8 +1400,8 @@ function renderTools(
   }
   if (toolNames && toolNames.length > 0) {
     return [
-      "Available Jarvis tools (call via `jarvis-tool { toolName, params }`):",
-      ...toolNames.map((n) => `  - ${n}`),
+      "Jarvis tool capabilities (check workflow restrictions below):",
+      ...toolNames.flatMap((n) => [`  - ${n}`, ...workflowToolGuidance(n)]),
     ].join("\n");
   }
   return "";
@@ -1429,6 +1432,7 @@ function renderSpecialistRoles(roles: ComposerSpecialistRole[] | undefined): str
  */
 export function renderToolSpecLines(t: ComposerToolSpec): string[] {
   const lines = [`- ${t.name}${t.description ? `: ${firstLine(t.description)}` : ""}`];
+  lines.push(...workflowToolGuidance(t.name, t.workflowRefusal));
   for (const p of t.params) {
     const req = p.required ? ", REQUIRED" : "";
     const choices = p.enum?.length ? `, one of: ${p.enum.join("|")}` : "";
@@ -1436,6 +1440,14 @@ export function renderToolSpecLines(t: ComposerToolSpec): string[] {
     lines.push(`    param ${p.name} (${p.type}${req}${choices})${desc}`);
   }
   return lines;
+}
+
+function workflowToolGuidance(name: string, declaredRefusal?: string | null): string[] {
+  const refusal = declaredRefusal ?? workflowToolRefusal(name);
+  if (refusal) return [`    NOT AVAILABLE as a workflow tool step: ${refusal}`];
+  if (!WORKFLOW_REVIEWED_UI_TOOLS.has(name)) return [];
+  return ['    Requires a separate user approval against the current app/browser for every action. Cannot run unattended. Restart or changed session invalidates an unanswered review.',
+    ...(name.startsWith('desktop_') ? ['    For desktop jobs, use jarvis-agent:delegate with a desktop-permitted role and the actual target machine. Open the app, observe its returned window/PID, take a fresh desktop_snapshot, use desktop_click action=set_value on the observed editable element, then read back with action=get_value and verify. A snapshot may omit field values. Never guess element IDs, use desktop_type/desktop_press_keys, type into the focused window, or claim completion without reading back the content. If set_value is unsupported, stop and report it.'] : [])];
 }
 
 /** First non-empty trimmed line of a (possibly multi-line) string. */
@@ -1978,6 +1990,7 @@ function validateStep(
           `step "${name}" invokes unknown tool "${toolName}". Valid toolName values: ${known}`,
         );
       } else {
+        if (spec.workflowRefusal) errors.push(`step "${name}": ${spec.workflowRefusal}`);
         const params =
           input.params && typeof input.params === "object" && !Array.isArray(input.params)
             ? (input.params as Record<string, unknown>)

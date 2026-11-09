@@ -28,7 +28,7 @@ import { documentInput, projectDocument } from './decision-document';
 import { HUBSPOT_CLAIM_WAIT_MS, HubspotNotStartedError, HubspotWriteRefusedError, hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
 import { getConnection } from '../db/repos/app-connection';
 import { claimIdentity, completeIdentity, IdentityUnresolvedError, releaseIdentity } from '../db/repos/effect-identity';
-import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
+import { workflowUiRead, workflowUiReview } from '../../authority/ui-intent';
 import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
 import type { ApprovalManager } from '../../authority/approval';
 
@@ -492,13 +492,17 @@ export function buildSandboxServiceBackends(
           }
         })();
         const gate = resolveToolGate(tool, req.toolName, req.params);
+        const uiReview = workflowUiReview(tool, req.toolName);
+        let uiExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
+        let dispatched = false;
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
           // The tool the step names, not only the step (#1152).
           pinnedInput: { toolName: req.toolName },
           ...(gate.confirm === 'always' ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review this UI effect' } } : {}),
+          ...(uiReview ? { reviewRegistry: opts.toolRegistry!, reviewSubject: tool.reviewSubject?.(req.params) ?? {} } : {}),
           // As at the chat gate: a gated call over the workflow's level asks
           // instead of failing the step.
-          ...(gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {}),
+          ...(gate.confirm ? { aboveLevelFloor: uiReview ? 'read_data' as const : gate.floorCategory } : {}),
           route: 'tool', toolName: tool.name, category: capability.category, categories: capability.categories, toolCategory: tool.category,
           // Spelled out rather than spread: the request is what the effect's
           // identity digest is taken over, so only the two fields that decide
@@ -511,8 +515,20 @@ export function buildSandboxServiceBackends(
           validateTarget: (args, target) => {
             if (digest(capability.target(args)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
             if (target.machineBinding) getMachineScope()?.assertDispatch(target.sidecarId as string | null, target.capability as SidecarCapability);
+            if (uiReview && !dispatched) {
+              const effect = getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], 'tool'));
+              const approval = effect?.approvalId ? opts.approvalManager?.getRequest(effect.approvalId) : null;
+              uiExecution = approval ? opts.approvalManager?.getUiExecution(approval) ?? null : null;
+              if (!uiExecution) throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_UI_REVIEW_STALE', effect: 'not_started',
+                message: 'The reviewed app or browser session changed, or Jarvis restarted. Start a new run and review the current screen.' });
+            }
           },
-          execute: async (args, checkpoint) => { checkpoint(); return toolAdapter.execute(req.toolName, args); } });
+          execute: async (args, checkpoint) => {
+            checkpoint(); dispatched = true;
+            return uiReview ? runAsReviewed(uiExecution!.reviewed,
+              () => new JarvisToolRegistryAdapter(uiExecution!.registry).execute(req.toolName, args))
+              : toolAdapter.execute(req.toolName, args);
+          } });
         return reply.approval ? { result: null, toolName: req.toolName, approval: reply.approval }
           : { result: reply.result, toolName: req.toolName, ...(reply.outcome ? { outcome: reply.outcome } : {}) };
       }
@@ -891,27 +907,27 @@ export function buildSandboxServiceBackends(
           blockParkedEffect(reason);
           return { kind: 'denied' as const, reason };
         };
-        // Browser navigation keeps the same click-only, live-surface review as
+        // Supported UI actions keep the same click-only, live-surface review as
         // chat. Other opaque code/UI capabilities remain unsupported here.
-        const browserReview = workflowBrowserReview(registry.get(call.toolCall.name), call.toolCall.name);
-        if (OPAQUE_TOOL_NAMES.has(call.toolCall.name) && !browserReview) {
+        const uiReview = workflowUiReview(registry.get(call.toolCall.name), call.toolCall.name);
+        if (OPAQUE_TOOL_NAMES.has(call.toolCall.name) && !uiReview) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} has opaque code/UI effects; use a typed governed adapter.`);
         }
         if (GATED_TOOL_NAMES.has(call.toolCall.name)) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} is only approvable through its typed adapter; call it as a flow step, not from a delegated agent.`);
         }
         const unboundable = surfaceBoundRefusal(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
-        if (unboundable && !browserReview) return refuse(unboundable);
-        if (gate.confirm === 'always' && !browserReview) {
+        if (unboundable && !uiReview) return refuse(unboundable);
+        if (gate.confirm === 'always' && !uiReview) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.`);
         }
-        let browserExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
+        let uiExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
         // Set once the call is dispatched; read by `validateTarget` below.
         let dispatched = false;
         try {
           const inner = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
             route: `agent-tool:${call.sequence}`, toolName: call.toolCall.name, category: call.actionCategory,
-            ...(browserReview || workflowBrowserRead(call.toolCall.name) ? { categories: gate.categories } : {}),
+            ...(uiReview || workflowUiRead(call.toolCall.name) ? { categories: gate.categories } : {}),
             toolCategory: call.toolCategory, request: { toolName: call.toolCall.name, arguments: call.toolCall.arguments },
             // Judged as the sub-agent the gate judged it for, and never
             // concluded to need less than the gate required.
@@ -920,12 +936,12 @@ export function buildSandboxServiceBackends(
             // level shortfall; judge it here the same way, or the approval it
             // asked for could never be granted.
             //
-            // Every browser action needs a dashboard click and the originating
+            // Every UI action needs a dashboard click and the originating
             // registry's live guard; Authority overrides cannot auto-approve it.
-            ...(browserReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review browser action' }, reviewRegistry: registry,
+            ...(uiReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review UI action' }, reviewRegistry: registry,
               reviewSubject: registry.get(call.toolCall.name)?.reviewSubject?.(call.toolCall.arguments) ?? {} } : {}),
-            ...(gate.confirm || workflowBrowserRead(call.toolCall.name)
-              ? { aboveLevelFloor: browserReview || workflowBrowserRead(call.toolCall.name) ? 'read_data' as const : gate.floorCategory } : {}),
+            ...(gate.confirm || workflowUiRead(call.toolCall.name)
+              ? { aboveLevelFloor: uiReview || workflowUiRead(call.toolCall.name) ? 'read_data' as const : gate.floorCategory } : {}),
             // The target names who asked, so the card and the record are bound
             // to the principal and not only to the tool.
             //
@@ -944,12 +960,12 @@ export function buildSandboxServiceBackends(
             // path under a different cwd, a file that became a shell rc or a
             // hook, #522) is not the call that was approved.
             validateTarget: (args, target) => {
-              if (browserReview && !dispatched) {
+              if (uiReview && !dispatched) {
                 const effect = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
                 const approval = effect?.approvalId ? opts.approvalManager?.getRequest(effect.approvalId) : null;
-                browserExecution = approval ? opts.approvalManager?.getUiExecution(approval) ?? null : null;
-                if (!browserExecution) throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_BROWSER_REVIEW_STALE', effect: 'not_started',
-                  message: 'The reviewed browser session changed or Jarvis restarted. Start a new run to review the current browser.' });
+                uiExecution = approval ? opts.approvalManager?.getUiExecution(approval) ?? null : null;
+                if (!uiExecution) throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_UI_REVIEW_STALE', effect: 'not_started',
+                  message: 'The reviewed app or browser session changed, or Jarvis restarted. Start a new run to review the current screen.' });
               }
               const now = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, args);
               if (severityRank(now.actionCategory) > severityRank(call.actionCategory)) {
@@ -981,8 +997,8 @@ export function buildSandboxServiceBackends(
                 // sub-agent's. Suppressing nests inside that scope, which is the
                 // right way round: the innermost caller knows what happens to
                 // the value.
-                const run = () => withoutTemplateDelivery(() => browserReview
-                  ? runAsReviewed(browserExecution!.reviewed, () => browserExecution!.registry.execute(call.toolCall.name, args))
+                const run = () => withoutTemplateDelivery(() => uiReview
+                  ? runAsReviewed(uiExecution!.reviewed, () => uiExecution!.registry.execute(call.toolCall.name, args))
                   : registry.execute(call.toolCall.name, args));
                 // Inside the approval this call was dispatched under (#988),
                 // as the deferred executor runs an approved card: a spawn or

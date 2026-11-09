@@ -22,7 +22,7 @@ import { ActionOutcomeError } from '../../actions/action-outcome';
 const TOOL = '@jarvispieces/piece-jarvis-tool';
 type Machine = { id: string; name: string; connected: boolean; capabilities: string[]; session: string };
 let machines: Machine[] = [];
-const computer = (id: string, connected = true): Machine => ({ id, name: `Computer ${id}`, connected, capabilities: ['desktop', 'filesystem'], session: `session-${id}` });
+const computer = (id: string, connected = true): Machine => ({ id, name: `Computer ${id}`, connected, capabilities: ['desktop', 'filesystem', 'browser'], session: `session-${id}` });
 const originalManager = getSidecarManager();
 const originalNoLocal = isNoLocalTools();
 
@@ -34,7 +34,7 @@ beforeEach(() => {
   setSidecarManagerRef(manager as any);
   configureWorkflowReadiness({
     pieces: new PieceCatalog([{ name: TOOL, displayName: '', description: '', actions: { invoke: { name: 'invoke', displayName: '', description: '' } } }] as any),
-    tool: name => name === 'desktop_list_windows' ? { params: [] } : null,
+    tool: name => ['desktop_list_windows', 'desktop_launch_app', 'desktop_click', 'browser_navigate'].includes(name) ? { params: [] } : null,
     machines: () => machines as any,
     localTools: () => !isNoLocalTools(),
   });
@@ -42,10 +42,10 @@ beforeEach(() => {
 afterEach(() => { setSidecarManagerRef(originalManager!); setNoLocalTools(originalNoLocal); closeWorkflowDb(); });
 
 /** An enabled flow whose step lists the desktop's windows, pinned as enabling pins it. */
-function enabledFlow() {
+function enabledFlow(toolName = 'desktop_list_windows') {
   const flow = createFlow({});
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Desktop routine', trigger: { name: 'trigger', type: 'EMPTY',
-    nextAction: { name: 'look', type: 'PIECE', settings: { pieceName: TOOL, actionName: 'invoke', input: { toolName: 'desktop_list_windows', params: {} } } } } as any });
+    nextAction: { name: 'look', type: 'PIECE', settings: { pieceName: TOOL, actionName: 'invoke', input: { toolName, params: {} } } } } as any });
   updateFlowStatus(flow.id, 'ENABLED');
   const run = () => createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' }).id;
   return { flowId: flow.id, run };
@@ -63,6 +63,13 @@ test('a computer enrolled after the flow was enabled does not take over its late
   const runId = flow.run();
   expect(resolve(runId)).toBe('a');
   expect(getRunMachineBinding(runId)).toMatchObject({ sidecarId: 'a', selectedBy: 'pinned' });
+});
+
+for (const tool of ['desktop_launch_app', 'desktop_click', 'browser_navigate']) test(`${tool} pins its machine when enabled, before its first run`, () => {
+  const flow = enabledFlow(tool);
+  expect(readBindingPins(flow.flowId)!.machine).toEqual({ sidecarId: 'a', name: 'Computer a' });
+  machines = [computer('new'), ...machines];
+  expect(resolve(flow.run())).toBe('a');
 });
 
 test('the pinned computer offline: the run waits on it and dispatch is blocked, no other computer does the work', () => {

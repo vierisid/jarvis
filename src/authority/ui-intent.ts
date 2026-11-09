@@ -287,15 +287,21 @@ export function rawUiGate(toolName: string, params: Record<string, unknown>): To
   };
 }
 
-/** Workflow browser navigation can pause only with a live review guard.
+export const WORKFLOW_REVIEWED_UI_TOOLS: ReadonlySet<string> = new Set([
+  'browser_navigate', 'browser_click', 'browser_type', 'browser_press_key',
+  'browser_hover', 'browser_scroll',
+  'desktop_launch_app', 'desktop_focus_window', 'desktop_click',
+]);
+
+/** Workflow UI actions can pause only with a live review guard.
  * No durable screen identity is invented: restart/stale guards refuse dispatch.
  */
-export function workflowBrowserReview(tool: { captureApprovalGuard?: unknown } | undefined, name: string): boolean {
-  return ['browser_navigate', 'browser_click', 'browser_scroll'].includes(name)
-    && typeof tool?.captureApprovalGuard === 'function';
+export function workflowUiReview(tool: { captureApprovalGuard?: unknown } | undefined, name: string): boolean {
+  return WORKFLOW_REVIEWED_UI_TOOLS.has(name) && typeof tool?.captureApprovalGuard === 'function';
 }
 
-/** Bounded browser reads can request permission above the agent's autonomous level. */
-export function workflowBrowserRead(name: string): boolean {
-  return name === 'browser_snapshot' || name === 'browser_screenshot';
+/** Bounded UI reads can request permission above the agent's autonomous level. */
+export function workflowUiRead(name: string): boolean {
+  return ['browser_snapshot', 'browser_screenshot', 'desktop_snapshot', 'desktop_screenshot',
+    'desktop_list_windows', 'desktop_find_element'].includes(name);
 }
