@@ -15,13 +15,24 @@ test('a normal hosted install enables the dashboard and its provider defaults wi
   expect(env.JARVIS_LOCAL_INTEGRATION).toBeUndefined();
 });
 
-test('self-hosted installs retain their existing defaults even with the hosted switch', () => {
-  for (const choice of [undefined, 'brief', 'legacy']) {
-    const env = { JARVIS_HOSTED_DASHBOARD: choice, JARVIS_BRIEF_MEMORY_USAGE: '1' };
-    const before = { ...env };
-    configureHostedDashboard(self, env);
-    expect(env).toEqual(before);
-    expect(hostedDashboardDefault(self, env)).toBe('legacy');
+test('self-hosted production enables Brief without integration or hosted flags', () => {
+  const env: Record<string, string | undefined> = {};
+  configureHostedDashboard(self, env);
+  expect(hostedDashboardDefault(self, env)).toBe('brief');
+  for (const feature of HOSTED_BRIEF_FEATURES) expect(env[`JARVIS_BRIEF_${feature}`]).toBe('1');
+  expect(env.JARVIS_LOCAL_INTEGRATION).toBeUndefined();
+  expect(env.JARVIS_HOSTED_DASHBOARD).toBeUndefined();
+});
+
+test('the dashboard override supports either installation and takes precedence over the hosted alias', () => {
+  for (const config of [self, hosted]) {
+    for (const choice of ['legacy', '0', '', 'unexpected']) {
+      const env = { JARVIS_DASHBOARD: choice, JARVIS_HOSTED_DASHBOARD: 'brief' };
+      configureHostedDashboard(config, env);
+      expect(hostedDashboardDefault(config, env)).toBe('legacy');
+      expect(Object.keys(env)).toHaveLength(2);
+    }
+    expect(hostedDashboardDefault(config, { JARVIS_DASHBOARD: 'brief', JARVIS_HOSTED_DASHBOARD: 'legacy' })).toBe('brief');
   }
 });
 

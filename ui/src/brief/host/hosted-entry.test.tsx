@@ -15,9 +15,8 @@ test('the hosted root and existing foreground bookmarks open Brief without URL o
     .toEqual({ kind: 'brief', route: { room: 'workflow', selection: { flowId: 'f1', versionId: 'v1' } } });
 });
 
-test('legacy rollback, self-hosting and older descriptors cannot be overridden by a URL', () => {
-  for (const descriptor of [null, { ...hosted, dashboard: undefined }, { ...hosted, dashboard: 'legacy' as const },
-    { ...hosted, installMode: 'self' as const }]) {
+test('legacy rollback and older descriptors cannot be overridden by a URL', () => {
+  for (const descriptor of [null, { ...hosted, dashboard: undefined }, { ...hosted, dashboard: 'legacy' as const }]) {
     for (const href of ['https://instance.test/', 'https://instance.test/?brief=1#/brief/today'])
       expect(resolveHostedEntry(href, descriptor).kind).toBe('legacy');
   }
@@ -76,4 +75,11 @@ test('older daemons are compatible but malformed descriptors are unavailable', a
   await render(); expect(current.state.status).toBe('unavailable');
   response = async () => new Response(null, { status: 404 });
   await React.act(async () => current.retry()); expect(current.state).toEqual({ status: 'ready', descriptor: null });
+});
+
+test('self-hosted Brief uses the authenticated descriptor and supports legacy opt-out', () => {
+  const self: HostDescriptor = { ...hosted, installMode: 'self' };
+  for (const href of ['http://localhost:3146/', 'http://localhost:3146/#/_room_workflows'])
+    expect(resolveHostedEntry(href, self).kind).toBe('brief');
+  expect(resolveHostedEntry('http://localhost:3146/?brief=0#/', self).kind).toBe('legacy');
 });

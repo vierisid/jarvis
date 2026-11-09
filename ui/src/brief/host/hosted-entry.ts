@@ -4,12 +4,12 @@ import { createHostTransport } from './http';
 import { readHost, type HostDescriptor } from './owner';
 
 export function resolveHostedEntry(href: string, host: HostDescriptor | null) {
-  return resolveReleaseEntry(href, host?.installMode === 'hosted' && host.dashboard === 'brief' ? 'released' : 'off');
+  return resolveReleaseEntry(href, host?.dashboard === 'brief' ? 'released' : 'off');
 }
 
 type HostState = { status: 'loading' | 'unavailable' } | { status: 'ready'; descriptor: HostDescriptor | null };
 
-/** Read only the authenticated host, never URL/storage, to select the hosted
+/** Read only the authenticated host, never URL/storage, to select the production
  * default. Keep that document-start choice through navigation and outages. */
 export function useHostedEntry(active: boolean) {
   const [state, setState] = useState<HostState>({ status: 'loading' });

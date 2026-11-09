@@ -1,7 +1,7 @@
 import type { JarvisConfig } from '../config/types';
 import { isHostedInstall } from './usejarvis-ai';
 
-/** The hosted dashboard uses the same registered providers as local acceptance.
+/** Production dashboards use the same registered providers as local acceptance.
  * These defaults request activation; each provider still owns its readiness,
  * dependencies and Authority checks. Explicit operator overrides are retained. */
 export const HOSTED_BRIEF_FEATURES = [
@@ -13,8 +13,9 @@ export const HOSTED_BRIEF_FEATURES = [
 
 type Environment = Record<string, string | undefined>;
 export function hostedDashboardDefault(config: JarvisConfig, env: Environment = process.env): 'brief' | 'legacy' {
-  if (!isHostedInstall(config)) return 'legacy';
-  const choice = env.JARVIS_HOSTED_DASHBOARD;
+  // One production default for either deployment. Keep the hosted-only alias
+  // compatible, with an explicit common rollback taking precedence.
+  const choice = env.JARVIS_DASHBOARD ?? (isHostedInstall(config) ? env.JARVIS_HOSTED_DASHBOARD : undefined);
   return choice === undefined || choice === 'brief' ? 'brief' : 'legacy';
 }
 

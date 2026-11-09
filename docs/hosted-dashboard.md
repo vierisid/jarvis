@@ -1,20 +1,20 @@
-# Hosted dashboard default
+# Production dashboard default
 
-Hosted installs now open the connected Brief dashboard at the ordinary root URL.
+Hosted and self-hosted installs open the connected Brief dashboard at the ordinary root URL.
 This supersedes the default-off hosted UI policy in v0.17.1. It requires a new brain build and rollout; updating the hosting
 website alone cannot change an instance's bundled dashboard.
 
 ## Runtime ownership
 
 After loading system configuration, `configureHostedDashboard` enables the existing
-Brief provider flags for a hosted install. Hosted identity uses the existing
+Brief provider flags for both installation modes. Hosted identity still uses the existing
 `isHostedInstall` predicate, including Unix-socket instances. Explicit feature flag
 values are preserved. Provider readiness, capability dependencies, authentication,
 Authority, approvals and workflow activation checks remain enforced.
 
 These defaults change backend behaviour, not only the UI. The full set is
 `HOSTED_BRIEF_FEATURES` in `src/daemon/hosted-dashboard.ts`; the ones an existing
-hosted user notices are:
+user notices are:
 
 - `QUIET_AWARENESS`: ambient awareness no longer triggers automatic research,
   proactive chat messages, voice, or the external-channel fallback. Durable
@@ -33,7 +33,7 @@ Set any `JARVIS_BRIEF_<FEATURE>=0` in the service environment to keep one off.
 `isHostedInstall` deliberately leans towards hosted. A self-hosted brain that
 listens on a `unix:` socket (for example behind a reverse proxy) or whose
 `config.yaml` carries a `usejarvis_ai` block is treated as hosted and gets this
-default and these features. Set `JARVIS_HOSTED_DASHBOARD=legacy` to opt out.
+same default and features as other self-hosted installs. Set `JARVIS_DASHBOARD=legacy` to opt out.
 
 The authenticated, uncached `/api/brief/host` descriptor supplies `dashboard: brief`.
 It also carries a `workspaceId`, created once and stored as `workspace-id` in the
@@ -55,27 +55,28 @@ did before this default.
 Network/authentication failures offer reconnect; an older daemon's missing endpoint
 or missing dashboard field retains the legacy UI.
 
-This is an explicit hosted product default, not an attestation that the historical
+This is an explicit production product default, not an attestation that the historical
 D32/F28/Q22 audit manifests passed. Those audit helpers and their evidence records
 remain unchanged. The optional onboarding-next release also remains separate;
-hosted users keep the existing onboarding wizard and its Brief draft handoff.
+users keep the existing onboarding wizard and its Brief draft handoff.
 
 ## Compatibility and rollback
 
-- Self-hosted installs retain their previous default, except the Unix-socket and
-  `usejarvis_ai` cases above.
+- Both hosted and self-hosted installs default to Brief; no development flags or
+  local-integration bundle are required.
 - Existing foreground bookmarks open their matching Brief rooms. Selected workflow,
   version, run and memory IDs are retained.
 - Native panels, result windows, onboarding/reset, advanced settings and device
   setup links keep their existing owners.
 - `?brief=0` opens the previous dashboard for that browser URL. It changes the UI
   only: the backend feature defaults above stay on.
-- Set `JARVIS_HOSTED_DASHBOARD=legacy` in the instance service environment and restart
+- Set `JARVIS_DASHBOARD=legacy` in the instance service environment and restart
   to restore the previous default and stop applying automatic feature defaults,
   including quiet awareness.
   No data is reset or downgraded. Explicit operator feature flags still apply.
-- Unset the variable, or set it to `brief`, and restart to use the hosted default.
-  Unknown values select legacy. Reload existing tabs after a server-side rollback.
+- Unset the variable, or set it to `brief`, and restart to use the Brief default.
+  `JARVIS_HOSTED_DASHBOARD` remains a hosted-only compatibility alias; the common
+  `JARVIS_DASHBOARD` override takes precedence. Unknown values select legacy. Reload existing tabs after a server-side rollback.
 
 ## Verification
 
