@@ -26,7 +26,7 @@ class InterviewSocket {
   onerror: (() => void) | null = null;
   onmessage: ((event: { data: unknown }) => void) | null = null;
   failSend = false;
-  constructor(_url: string) { InterviewSocket.latest = this; }
+  constructor(readonly url: string) { InterviewSocket.latest = this; }
   send(raw: string) {
     if (this.failSend) throw new Error("disconnected during send");
     this.sent.push(JSON.parse(raw));
@@ -98,6 +98,11 @@ async function typeAnswer(value: string) {
 }
 
 describe("written interview session", () => {
+  test("its socket says it is a dashboard, which never answers a broadcast room action (#1157)", async () => {
+    const socket = await mountHook();
+    expect(socket.url).toEndWith("/ws?client=dashboard");
+  });
+
   test("requests written replies and never listens to or plays legacy voice messages", async () => {
     const socket = await mountHook();
     expect(socket.sent).toEqual([{ type: "interview_start", payload: { speakReply: false }, timestamp: expect.any(Number) }]);

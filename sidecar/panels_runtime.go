@@ -389,6 +389,14 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 					showPanel()
 					return panelShown.Load()
 				})
+				if panelTracksReveal {
+					// Asked at document start, so a page reloaded in a window
+					// already shown is revealed at once rather than after `load`
+					// (#1157). Only reads: it never reveals the window.
+					_ = wv.Bind("__sidecar_panel_shown", func() bool {
+						return panelShown.Load()
+					})
+				}
 				// Timeout fallback, cancellable: stopReveal (joined by the defer
 				// above before Destroy) keeps the Dispatch CALL off a freed
 				// engine, and revealStopped keeps an already-queued closure off
@@ -871,6 +879,16 @@ func (s *panelService) SetClickThrough(id PanelID, clickThrough bool) error {
 	return nil
 }
 
+// created reports whether the window exists: ready is closed once it does.
+func (p *panelImpl) created() bool {
+	select {
+	case <-p.ready:
+		return true
+	default:
+		return false
+	}
+}
+
 // windowClosed reports whether the panel's window is already gone even though
 // its registry entry is still there.
 //
@@ -914,8 +932,18 @@ func (s *panelService) Focus(id PanelID) error {
 	return nil
 }
 
-func (s *panelService) List() []PanelID {
-	return s.reg.ids()
+func (s *panelService) List() []PanelInfo {
+	out := []PanelInfo{}
+	for _, e := range s.reg.inOrder() {
+		// A window already gone is not reported, as Focus refuses it. Nor is
+		// one still being created: its spawn's own answer tracks it, and one
+		// whose creation then fails would never be untracked (#1157).
+		if impl, ok := e.handle.(*panelImpl); ok && (impl.windowClosed() || !impl.created()) {
+			continue
+		}
+		out = append(out, PanelInfo{ID: e.spec.ID, URL: e.spec.URL, Title: e.spec.Title})
+	}
+	return out
 }
 
 func (s *panelService) SetWindowState(id PanelID, state PanelWindowState) error {

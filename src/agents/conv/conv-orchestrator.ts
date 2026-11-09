@@ -19,6 +19,7 @@
  * via the optional `onTaskEvent` hook (the daemon's WS service uses this).
  */
 
+import type { TurnTaintLink } from '../turn-taint-carry.ts';
 import type { LLMManager } from '../../llm/manager.ts';
 import type { TurnToolScope } from '../../actions/tools/tool-scope.ts';
 import type { LLMMessage, LLMResponse, LLMToolCall } from '../../llm/provider.ts';
@@ -187,6 +188,11 @@ export type ConvTurn = {
    * a flag is a field nobody can later widen into carrying text.
    */
   pebbleVoice?: boolean;
+  /**
+   * This chat's taint carry-over (agents/turn-taint-carry.ts), handed to
+   * every task the turn dispatches or resumes. The caller closes it.
+   */
+  taintCarry?: TurnTaintLink | null;
 };
 
 export type ConvTaskEvent =

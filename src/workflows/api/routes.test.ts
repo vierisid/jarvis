@@ -1386,7 +1386,7 @@ describe("#650: the connections PATCH updates the row it was asked about", () =>
       type: "SECRET_TEXT",
       pieceName: "@activepieces/piece-foo",
       pieceVersion: "0.0.1",
-      value: { secret: "only-in-other-project" },
+      value: { secret_text: "only-in-other-project" },
     });
   }
 
@@ -1421,18 +1421,18 @@ describe("#650: the connections PATCH updates the row it was asked about", () =>
     const fresh = getConnection(conn.id);
     expect(fresh?.displayName).toBe("Renamed");
     expect(fresh?.projectId).toBe(OTHER_PROJECT);
-    expect(fresh?.value).toEqual({ secret: "only-in-other-project" });
+    expect(fresh?.value).toEqual({ secret_text: "only-in-other-project" });
   });
 
   test("a value rotation lands on the same row", async () => {
     const { getConnection } = await import("../db/repos/app-connection");
     const conn = await seedInOtherProject();
 
-    const res = await patch(conn.id, { value: { secret: "rotated" } });
+    const res = await patch(conn.id, { value: { secret_text: "rotated" } });
     expect(res.status).toBe(200);
     expect((res.body as { id: string }).id).toBe(conn.id);
     expect(await allRows()).toEqual([{ id: conn.id, project_id: OTHER_PROJECT }]);
-    expect(getConnection(conn.id)?.value).toEqual({ secret: "rotated" });
+    expect(getConnection(conn.id)?.value).toEqual({ secret_text: "rotated" });
   });
 
   /**
@@ -1450,16 +1450,16 @@ describe("#650: the connections PATCH updates the row it was asked about", () =>
       type: "SECRET_TEXT",
       pieceName: "@activepieces/piece-foo",
       pieceVersion: "0.0.1",
-      value: { secret: "s" },
+      value: { secret_text: "s" },
       metadata: { region: "eu" },
     });
     expect(getConnection(conn.id)?.metadata).toEqual({ region: "eu" });
 
-    const res = await patch(conn.id, { value: { secret: "s2" } });
+    const res = await patch(conn.id, { value: { secret_text: "s2" } });
     expect(res.status).toBe(200);
     // On the row itself, or this would pass by missing it.
     expect((res.body as { id: string }).id).toBe(conn.id);
-    expect(getConnection(conn.id)?.value).toEqual({ secret: "s2" });
+    expect(getConnection(conn.id)?.value).toEqual({ secret_text: "s2" });
     expect(getConnection(conn.id)?.metadata).toEqual({ region: "eu" });
   });
 
@@ -1528,14 +1528,14 @@ describe("#650: the connections PATCH updates the row it was asked about", () =>
     const conn = await seedInOtherProject();
     const { pending, push } = streamingPatch(conn.id);
 
-    const rotated = await patch(conn.id, { value: { secret: "rotated-meanwhile" } });
+    const rotated = await patch(conn.id, { value: { secret_text: "rotated-meanwhile" } });
     expect(rotated.status).toBe(200);
 
     push({ displayName: "Renamed late" });
     expect((await pending).status).toBe(200);
     const fresh = getConnection(conn.id);
     expect(fresh?.displayName).toBe("Renamed late");
-    expect(fresh?.value).toEqual({ secret: "rotated-meanwhile" });
+    expect(fresh?.value).toEqual({ secret_text: "rotated-meanwhile" });
   });
 });
 
@@ -1558,7 +1558,7 @@ describe("#692: the connections routes share one project scope", () => {
       type: "SECRET_TEXT",
       pieceName: "@activepieces/piece-foo",
       pieceVersion: "0.0.1",
-      value: { secret: `in-${projectId}` },
+      value: { secret_text: `in-${projectId}` },
     });
   }
 
@@ -1576,7 +1576,7 @@ describe("#692: the connections routes share one project scope", () => {
     const before = await storedRow(foreign.id);
     expect(before?.project_id).toBe(OTHER_PROJECT);
 
-    for (const body of [{ displayName: "Hijacked" }, { value: { secret: "overwritten" } }]) {
+    for (const body of [{ displayName: "Hijacked" }, { value: { secret_text: "overwritten" } }]) {
       const res = await callJson(
         routes["/api/workflows/connections/:id"]?.PATCH,
         reqWithParams("PATCH", `http://x/api/workflows/connections/${foreign.id}`, { id: foreign.id }, body),
@@ -1647,7 +1647,7 @@ describe("#692: the connections routes share one project scope", () => {
         displayName: "Posted",
         type: "SECRET_TEXT",
         pieceName: "@activepieces/piece-foo",
-        value: { secret: "s" },
+        value: { secret_text: "s" },
       }),
     );
     expect(created.status).toBe(201);
@@ -3118,7 +3118,7 @@ describe("#635: the sample-data and connections routes bound their ingress", () 
       r["/api/workflows/connections"]?.POST,
       plainReq("POST", "http://x/api/workflows/connections", {
         externalId: "rotatable", displayName: "rotatable", type: "SECRET_TEXT",
-        pieceName: "gmail", value: { secret: "k" },
+        pieceName: "gmail", value: { secret_text: "k" },
       }),
     );
     const connectionId = (created.body as { id: string }).id;
@@ -3758,3 +3758,19 @@ describe("#971: Actual Budget is excluded from both Libraries and refused at ins
     });
   });
 });
+
+describe("#1153: a SECRET_TEXT connection carries the key the engine reads", () => {
+  test("value.secret_text is required; secret or value alone, which reached a piece as undefined, is refused", async () => {
+    const post = (value: Record<string, unknown>) => createWorkflowRoutes()["/api/workflows/connections"]!.POST!(new Request("http://localhost/api/workflows/connections", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ externalId: "bot", displayName: "Bot", type: "SECRET_TEXT", pieceName: "@activepieces/piece-telegram-bot", value }),
+    }));
+    for (const value of [{ secret: "t" }, { value: "t" }, { secret_text: "" }, {}]) {
+      const res = await post(value);
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain("value.secret_text is required");
+    }
+    expect((await post({ secret_text: "t" })).status).toBe(201);
+  });
+});
+
