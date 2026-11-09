@@ -49,6 +49,16 @@ export class BriefConversationClient {
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private patch(patch: Partial<ChatClientState>) { this.state = { ...this.state, ...patch }; for (const listener of this.listeners) listener(); }
+  async listClosed(cursor: string | null, signal: AbortSignal) {
+    const workspaceId = this.store.getSnapshot().workspaceId, generation = this.generation;
+    if (this.state.mode !== 'scoped' || !workspaceId || !this.api.closed) throw new Error('Closed chats are unavailable.');
+    const requestSignal = AbortSignal.any([signal, this.lifetime.signal]);
+    const page = await this.api.closed(cursor, requestSignal);
+    if (requestSignal.aborted || generation !== this.generation) throw new Error('Closed chat loading was interrupted.');
+    if (workspaceId !== this.store.getSnapshot().workspaceId || page.items.some(row => row.workspaceId !== workspaceId))
+      throw new Error('Closed chats belong to a different workspace.');
+    return page;
+  }
   async start() {
     this.stop();
     this.lifetime = new AbortController(); const generation = this.generation;
