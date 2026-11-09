@@ -17,9 +17,21 @@ Source: `src/workflows/runner/triggers/manager.ts` (live deliveries),
   runs waiting on a timer or an approval are stopped, each saying "The
   workflow was turned off". Nothing wakes them later, and turning the workflow
   back on or publishing it does not revive them. A run executing at that
-  moment is not interrupted; if it pauses, it is stopped. Runs started by hand
-  after it was turned off, and test runs of a workflow that was never on, are
-  not affected.
+  moment is not interrupted; if it pauses, it is stopped. The background agent
+  tasks that executing run already started are cancelled ("the workflow that
+  started it was turned off"); tasks of runs that ended on their own keep
+  running. Runs started by hand after it was turned off, and test runs of a
+  workflow that was never on, are not affected.
+- **A flow whose runs are parked behind its approval cards takes no new
+  trigger runs.** A step past its flow's approval-card budget waits for a place
+  instead of failing. Once 100 steps of one flow wait that way, its triggers
+  start nothing until someone answers: a webhook is answered 503 with
+  `Retry-After: 60`, a scheduled time is skipped and keyed (not run late), and
+  an event from the event bus is skipped, each recorded as skipped with code
+  `APPROVALS_BACKLOG`. A polled source (Gmail, a new row) is not polled, so it
+  keeps its items for the first poll after someone answers; an item a poll had
+  already taken when the backlog filled is still run. Runs started by hand or
+  by another workflow are not refused.
 - **A missed schedule is skipped and shown.** A time that came and went while
   Jarvis was off, asleep or stalled for more than two minutes is recorded as
   missed and never run late.
@@ -115,6 +127,7 @@ work again, rerun it in Jarvis.
 | Readiness refused | 200 `{ ok, outcome: "blocked", reason }`; the delivery is kept on a failed run for a person to decide, and its retries are repeats |
 | Workflow off, changed or gone | 404; a retry after it is turned back on runs |
 | Queue full | 503 with `Retry-After` |
+| 100 steps of the workflow already waiting behind its approval cards | 503 with `Retry-After: 60`, recorded as skipped |
 | Not recorded | 500 |
 
 ## Events
@@ -147,6 +160,14 @@ A parent run waiting on a required child workflow is continued by the child-run
 scheduler (`runtime/child-run-scheduler.ts`) once the child has finished. The
 child's waitpoint refuses a manual resume (403). A parent whose workflow was
 turned off is stopped instead of continued.
+
+When starting another workflow needs approval (run_workflow, or a reusable
+child), the dashboard card names the workflow and shows the input it is given,
+as one line of JSON with hidden characters escaped; an input longer than 600
+characters as shown is refused before any card. A Telegram or Discord card
+names only the input's top-level fields (at most ten, then how many more), or
+for a list or a single value only its kind, never the values; a card too long
+for one chat message can only be denied from chat.
 
 A workflow that was turned off cannot be started by another one, as a reusable
 child or through run_workflow (#1242). A workflow that calls it is not ready,

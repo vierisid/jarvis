@@ -26,7 +26,7 @@ test("every direct room retains selected source IDs when approved and restores a
     const rollback = new URL(rollbackHref(href)!);
     expect(rollback.pathname).toBe("/base"); expect(rollback.searchParams.get("access")).toBe("example");
     expect(rollback.searchParams.get("sidecar")).toBe("desktop");
-    expect(rollback.searchParams.get("briefReturn")).toBe(briefHash(route));
+    expect(rollback.searchParams.has("briefReturn")).toBe(false);
     expect(rollback.hash).toBe(LEGACY_ROOMS[room] ? `#/_room_${LEGACY_ROOMS[room]}` : "#/");
     expect(LEGACY_ROOMS[room]).toBe((BRIEF_ROOMS[room] as { legacyRoom?: RoomKey }).legacyRoom ?? null);
     expect(resolveReleaseEntry(rollback.toString(), "released").kind).toBe("legacy");

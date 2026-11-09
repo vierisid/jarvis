@@ -1276,3 +1276,26 @@ describe('Q-08 on-screen review retains main delivery safeguards', () => {
     expect(t.meta).toContain('requires on-screen review');
   });
 });
+
+// #1152 (owner, 2026-11-06): a workflow start card's chat sentence names its input's fields; values stay on the dashboard.
+describe('a chat card with a chat sentence from its trusted writer', () => {
+  const context = (fields: Record<string, unknown>) => JSON.stringify({ intent: 'Start the workflow f1 named "Sync", with the input {"email":"ana@example.com"}', ...fields });
+
+  test('shows the chat sentence, never the dashboard sentence with its values', () => {
+    const card = approvalChannelCard(makeRequest({ tool_name: 'workflow_start', action_category: 'spawn_agent',
+      context: context({ channelIntent: 'Start the workflow f1 named "Sync", passing the fields {email} (open the dashboard to see their values)' }) }));
+    expect(card.text).toContain('Intent: Start the workflow f1 named "Sync", passing the fields {email} (open the dashboard to see their values)');
+    expect(card.text).not.toContain('ana@example.com');
+    expect(card.approvable).toBe(true);
+  });
+
+  test('without one, or from a writer that is not trusted, the card is as before', () => {
+    expect(approvalChannelCard(makeRequest({ tool_name: 'workflow_start', context: context({}) })).text)
+      .toContain('Intent: Start the workflow f1 named "Sync", with the input {"email":"ana@example.com"}');
+    // request_approval's context is the model's own: neither sentence in it is a gate's.
+    const model = approvalChannelCard(makeRequest({ tool_name: 'request_approval', reason: 'Approve the sync', context: context({ channelIntent: 'Nothing to see' }) }));
+    expect(model.text).not.toContain('Nothing to see');
+    // A chat sentence with no intent beside it is not used.
+    expect(approvalChannelCard(makeRequest({ tool_name: 'workflow_start', context: JSON.stringify({ channelIntent: 'Orphan sentence' }) })).text).not.toContain('Orphan sentence');
+  });
+});

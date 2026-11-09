@@ -14,7 +14,9 @@
  *   - 404 when the connection doesn't exist or its source returns null.
  *   - 403 when the requested project differs from the verified engine token,
  *     or for a `jarvis:` id when the run's own graph names it anywhere but as
- *     the auth of a step of the source's pieces (managed-connection-scope.ts).
+ *     the auth of a step of the source's pieces, or for any id when the graph
+ *     the engine runs does not name it at all (#1153), or the engine runs no
+ *     workflow of this project (managed-connection-scope.ts).
  *   - 409 when an external ID without a piece name matches multiple rows, or
  *     when the connection no longer resolves to the identity the run started
  *     with or its workflow was enabled against (Q-05, repos/binding-pins.ts).
@@ -28,13 +30,14 @@
  *     is "connection (id) expired, reconnect again". Either way the run's
  *     binding records the typed reason (Q-19), and no credential is sent.
  *
- * Per CredentialResolver contract for Jarvis-managed Google connections, the
- * resolved value's `refresh_token` is intentionally empty; pieces that need a
- * fresh access token must call back into this endpoint to request one.
+ * An OAuth2 value is handed out with `refresh_token` and `client_secret`
+ * empty (#1153), as the Jarvis-managed sources always were: the daemon
+ * refreshes a token before handing it out, and a piece that needs a fresh
+ * access token calls back into this endpoint for one.
  */
 
 import { JARVIS_PREFIX, managedSourceFor, type CredentialResolver, type ResolvedConnection } from "../../credentials/adapter";
-import { managedConnectionScopeRefusal } from "../../db/repos/managed-connection-scope";
+import { managedConnectionScopeRefusal, storedConnectionScopeRefusal } from "../../db/repos/managed-connection-scope";
 import { AmbiguousConnectionError } from "../../db/repos/app-connection";
 import { enforceRunConnectionBinding, recordRunCredentialOutcome } from "../../db/repos/binding-pins";
 import { ConnectionCredentialError, OAUTH2_TYPES } from "../../credentials/pasted-oauth2";
@@ -82,6 +85,11 @@ export function createConnectionsRoute(deps: ConnectionsRouteDeps): RouteHandler
       const source = managedSourceFor(deps.credentialResolver.list(), externalId);
       const refusal = source ? managedConnectionScopeRefusal(ctx.claims.runId, projectId, externalId, source) : null;
       if (refusal) return err(refusal, 403);
+    } else {
+      // #1153: a stored connection likewise goes only to an engine whose
+      // graph names it, checked before anything is resolved or refreshed.
+      const refusal = storedConnectionScopeRefusal(ctx.claims.runId, projectId, externalId);
+      if (refusal) return err(refusal, 403);
     }
 
     let resolved: ResolvedConnection | null;
@@ -118,6 +126,25 @@ export function createConnectionsRoute(deps: ConnectionsRouteDeps): RouteHandler
       ...resolved.value,
       type: resolved.value["type"] ?? resolved.type,
     };
+    // #1153: the means to mint new tokens stay with the daemon, which
+    // refreshes a stored OAuth2 token before handing it out (#954). Piece
+    // code needs the access token only, so a pasted refresh token or client
+    // secret is not given to it, as Jarvis-managed Google's never was. Blanked
+    // rather than removed, the shape the managed sources hand out.
+    if (OAUTH2_TYPES.has(resolved.type)) {
+      for (const key of ["refresh_token", "client_secret"]) if (key in value) value[key] = "";
+      // Upstream's OAuth2 value keeps the raw token response under `data`,
+      // refresh token included; a value pasted from an export carries it.
+      const data = value["data"];
+      if (data && typeof data === "object" && !Array.isArray(data) && "refresh_token" in data) value["data"] = { ...(data as Record<string, unknown>), refresh_token: "" };
+    }
+    // #1153: SECRET_TEXT rows saved before the validator asked for
+    // `secret_text` hold `secret` or `value`, which the engine never read
+    // (the piece got undefined); hand the one secret on under the key it reads.
+    if (resolved.type === "SECRET_TEXT" && typeof value["secret_text"] !== "string") {
+      const legacy = [value["secret"], value["value"]].filter((v): v is string => typeof v === "string" && v !== "");
+      if (legacy.length === 1) value["secret_text"] = legacy[0];
+    }
 
     const claims: EngineTokenClaims = ctx.claims;
     const now = new Date().toISOString();

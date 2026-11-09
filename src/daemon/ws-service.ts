@@ -3627,8 +3627,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // Every panel still gets it, to stay in step (#974), but it reached
       // someone who could answer only if a socket of the asking sidecar is
       // connected (#1026). Otherwise say so now, not as no answer after the
-      // full wait (#1011).
-      if (reached && accepts) reached = [...this.wsServer.getClients()].some(accepts);
+      // full wait (#1011). A full dashboard of that sidecar (the tray's
+      // window) never answers a broadcast one, so it does not count (#1157).
+      if (reached && accepts) reached = [...this.wsServer.getClients()]
+        .some((c) => accepts(c) && this.wsServer.socketAnswersBroadcastRoomActions(c));
     }
     // Nobody took the frame: say so now rather than after the timeout, and
     // not as "sent but no answer" (#1011). That includes a dashboard whose

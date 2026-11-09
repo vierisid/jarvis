@@ -116,11 +116,45 @@ export function waitingWorkflowCards(flowId: string, budget: CardBudget): number
 }
 
 /**
+ * How many steps of one flow may wait for a place before the flow takes no
+ * new run from its triggers (#1152, owner 2026-11-06: "about 100"). A step
+ * waits only once its flow's card budget is full, and a run waits at one step
+ * at a time (the boundary retires a run's older DEFER), so this is also how
+ * many of the flow's runs are parked behind its cards. The same number the
+ * hold text already stops counting at (`deferredAheadLimit`), the point this
+ * file treats as a flood nobody is answering: at the webhook limit (60 a
+ * minute per flow) it is under two minutes of deliveries.
+ */
+export const MAX_DEFERRED_STEPS_PER_FLOW = 100;
+
+/**
  * Where `deferredAhead` stops counting: past the budget the number only goes
  * on the hold text. Never below the budget itself, so a larger cap could not
  * let a step through early.
  */
-export const deferredAheadLimit = (budget: CardBudget): number => Math.max(100, budgetCap(budget));
+export const deferredAheadLimit = (budget: CardBudget): number => Math.max(MAX_DEFERRED_STEPS_PER_FLOW, budgetCap(budget));
+
+/**
+ * Why a trigger of this flow must not start another run now, or null (#1152):
+ * `MAX_DEFERRED_STEPS_PER_FLOW` of its steps, in either budget, are already
+ * waiting for a place behind its approval cards. Each such run would only
+ * park behind them, so the backlog nobody answers would grow without bound
+ * (since #1144 a step past the budget waits rather than fails). Counted as
+ * `deferredAhead` counts (live runs, live waits) and stopped at the limit, so
+ * a flood costs one bounded index read per delivery, not a count of its queue.
+ * Runs started by hand and by another workflow are not refused here.
+ */
+export function deferredBacklogRefusal(flowId: string): string | null {
+  const row = getWorkflowDb().query<{ n: number }, [string, number]>(
+    `SELECT COUNT(*) AS n FROM (SELECT 1 FROM workflow_effect e INDEXED BY idx_workflow_effect_deferred_valid
+      JOIN flow_run r ON r.id = e.run_id
+      WHERE ${DEFERRED} AND ${FLOW} = ? AND r.status IN ${LIVE} AND ${LIVE_DEFERRAL} LIMIT ?)`,
+  ).get(flowId, MAX_DEFERRED_STEPS_PER_FLOW);
+  const waiting = row?.n ?? 0;
+  return waiting < MAX_DEFERRED_STEPS_PER_FLOW ? null
+    : `${waiting} or more steps of this workflow are already waiting for a place behind its approval requests, so no new run was started. `
+      + 'Approve or deny its waiting requests in the Authority room, or turn the workflow off.';
+}
 
 /**
  * Steps of live runs of the same flow already waiting for a place in
