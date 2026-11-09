@@ -1,10 +1,11 @@
 /**
  * #1166: the sidecar binary statically links Go modules whose licenses (BSD,
  * MIT, ISC, Apache) ask for their notices with any binary distribution.
- * THIRD_PARTY_NOTICES.md lists each one with its license text; this holds that
- * list to what sidecar/go.mod requires, so a new or bumped module cannot go in
- * without its license being reviewed there. (Shipping that text inside the
- * release artifacts is not done yet.)
+ * sidecar/internal/notices/THIRD_PARTY_NOTICES.md lists each one with its
+ * license text; this holds that list to what sidecar/go.mod requires, so a new
+ * or bumped module cannot go in without its license being reviewed there. The
+ * sidecar and the installer embed that file (`-third-party-notices`), so every
+ * artifact that ships either binary carries it.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -12,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
+const NOTICES = resolve(ROOT, "sidecar/internal/notices/THIRD_PARTY_NOTICES.md");
 
 /** `module version` for every require directive, single-line and block form. */
 function goModRequires(text: string): string[] {
@@ -54,7 +56,7 @@ function subsections(text: string): Map<string, string> {
   let fenced = false;
   const flush = () => { if (heading !== null) out.set(heading, body.join("\n")); };
   for (const line of sidecarSection(text).split("\n")) {
-    if (line === "```") fenced = !fenced;
+    if (/^`{3,}$/.test(line)) fenced = !fenced;
     if (!fenced && line.startsWith("### ")) {
       flush();
       heading = line.slice(4);
@@ -68,24 +70,27 @@ function subsections(text: string): Map<string, string> {
 }
 
 describe("sidecar Go module notices", () => {
-  test("THIRD_PARTY_NOTICES.md lists exactly the modules sidecar/go.mod requires, at those versions", () => {
+  test("the sidecar notices list exactly the modules sidecar/go.mod requires, at those versions", () => {
     const required = goModRequires(readFileSync(resolve(ROOT, "sidecar/go.mod"), "utf8"));
-    const notices = readFileSync(resolve(ROOT, "THIRD_PARTY_NOTICES.md"), "utf8");
+    const notices = readFileSync(NOTICES, "utf8");
     expect(required.length).toBeGreaterThan(0);
     expect(noticedModules(notices)).toEqual(required);
     // Every listed module, and the standard library, has its own section with a license text.
     const sections = subsections(notices);
-    for (const heading of [...required, "Go standard library and runtime"]) {
-      expect(sections.get(heading) ?? "").toMatch(/\n```\n[^`]{200,}\n```/);
+    const fixed = ["Go standard library and runtime", "MinGW-w64 runtime (Windows builds)"];
+    for (const heading of [...required, ...fixed]) {
+      // A fence of three or more backticks, longer than any run in the text
+      // (the MinGW-w64 notice quotes ``AS IS''), around at least 200 characters.
+      expect(sections.get(heading) ?? "").toMatch(/\n(`{3,})\n(?:(?!\n\1\n)[\s\S]){200,}\n\1\n/);
     }
     // Nothing else: a stray heading would mean a module the table does not list.
-    expect([...sections.keys()].sort()).toEqual([...required, "Go standard library and runtime"].sort());
+    expect([...sections.keys()].sort()).toEqual([...required, ...fixed].sort());
   });
 
   test("the vendored webview_go license texts are reproduced byte for byte", () => {
     // A replace directive points go.mod at the vendored copy, so re-vendoring it
     // does not move the version above: compare its files directly.
-    const section = subsections(readFileSync(resolve(ROOT, "THIRD_PARTY_NOTICES.md"), "utf8"))
+    const section = subsections(readFileSync(NOTICES, "utf8"))
       .get("github.com/webview/webview_go v0.0.0-20240831120633-6173450d4dd6") ?? "";
     for (const file of ["LICENSE", "libs/webview/LICENSE", "libs/mswebview2/LICENSE"]) {
       const text = readFileSync(resolve(ROOT, "sidecar/third_party/webview_go", file), "utf8").replace(/\s+$/, "");

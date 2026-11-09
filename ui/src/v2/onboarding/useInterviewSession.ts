@@ -31,7 +31,8 @@ export function useInterviewSession(onAnswerReturned?: (text: string) => void) {
 
   useEffect(() => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${window.location.host}/ws`);
+    // Not a panel: it never answers a broadcast room action (#1157, see useWebSocket).
+    const ws = new WebSocket(`${proto}://${window.location.host}/ws?client=dashboard`);
     wsRef.current = ws;
 
     ws.onopen = () => {

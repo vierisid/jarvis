@@ -365,6 +365,10 @@ COPY --from=build /app/ui/public ./ui/public
 # Copy version-stamped package.json from build stage (not the original)
 COPY --from=build /app/package.json ./
 COPY tsconfig.json ./
+# The license and the third-party notices for what the image ships: the
+# vendored source, the UI bundle and its assets, and the piece and engine
+# bundles the `workflows` stage compiled (#1166).
+COPY LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES-ui.md THIRD_PARTY_NOTICES-engine.md ./
 
 # Compiled piece bundles from the `workflows` stage. Only each piece's dist/
 # is overlaid, so every source file under src/ still comes from exactly one

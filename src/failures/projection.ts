@@ -20,6 +20,7 @@ import type { ActionFailure } from '../actions/action-outcome';
 import type { LLMErrorCode } from '../llm/provider';
 import { redactSecrets } from '../util/redact';
 import { boundedReceiptText } from '../roles/untrusted';
+import { HUMAN_INPUT_PENDING_LIMIT } from '../workflows/runtime/human-input-contract';
 
 export type FailureCategory =
   /** The input or definition is not valid; fixing it is the person's call. */
@@ -132,6 +133,10 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   CONNECTION_EXPIRED: { category: 'missing_binding', why: 'a connection it uses has expired and Jarvis could not refresh it', step: 'connect' },
   CONNECTION_REFRESH_UNREACHABLE: { category: 'target_offline', why: 'a connection it uses has expired and Jarvis could not reach the provider to refresh it', step: 'run_again' },
   CONNECTION_CHANGED: { category: 'missing_binding', why: 'a connection it uses was replaced while Jarvis refreshed it', step: 'run_again' },
+  // #1266: a workflow may have so many requests waiting in Needs you; this one would have been the next.
+  HUMAN_INPUT_LIMIT: { category: 'not_started', why: `this workflow already has ${HUMAN_INPUT_PENDING_LIMIT} requests waiting for an answer in Needs you. Answer, reject or cancel some of them there, or stop runs waiting on them, first`, step: 'run_again' },
+  // #1266: requests are answered in Needs you, the Brief decisions feature, and it is off here.
+  HUMAN_INPUT_UNAVAILABLE: { category: 'missing_binding', why: 'Needs you is off on this Jarvis, so nothing could answer it. Turn on decisions (JARVIS_BRIEF_DECISIONS=1)', step: 'run_again' },
 };
 /** Action codes whose meaning is invalid input or an invalid definition. */
 const INPUT_CODES = new Set(['DESKTOP_INVALID_KEYS', 'SKILL_BAD_PARAMS', 'SKILL_INVALID', 'INVALID_JSON_OUTPUT', 'OUTPUT_SCHEMA_MISMATCH',

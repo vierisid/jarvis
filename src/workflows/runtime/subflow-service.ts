@@ -17,8 +17,14 @@ function startChild(...args:Parameters<JarvisWorkflowRunnerAdapter['startNow']>)
  catch(e){if(e instanceof WorkflowRunnerError&&e.code==='FLOW_TURNED_OFF')throw childTurnedOffOutcome();throw e;}
 }
 
-/** `intentOf` names the child on the approval card (#1040): the flow ID and its pinned version's name. */
-export function createSubflowService(effects:WorkflowEffectBoundary,now=Date.now,intentOf?:(flowId:string,versionId:string)=>string){
+/**
+ * `intentOf` names the child on the approval card (#1040): the flow ID, its
+ * pinned version's name and the payload it is given (#1152), whole for the
+ * dashboard and described for a chat card. `cardRefusal` refuses a payload
+ * the card could not show whole.
+ */
+export function createSubflowService(effects:WorkflowEffectBoundary,now=Date.now,intentOf?:(flowId:string,versionId:string,payload:unknown)=>{intent:string;channelIntent:string},
+ cardRefusal?:(args:Record<string,unknown>)=>string|null){
  return async(input:Record<string,unknown>,ctx:WorkflowEffectContext)=>{
   const call=childCallInput(input),{run,stepName,executionPath}=resolveEffectContext(ctx,SUBFLOW_PIECE,'call');
   const id=digest(['subflow-v1',ctx.projectId,run.flowId,stepName,call.invocationKey]);
@@ -35,8 +41,9 @@ export function createSubflowService(effects:WorkflowEffectBoundary,now=Date.now
     if(!old&&isTurnedOff(flow))throw childTurnedOffOutcome();
     const versionId=old?.version_id??flow.published_version_id??getLatestDraft(flow.id)?.id;
     const version=versionId?getFlowVersion(versionId):null;if(!version&&!old?.result_json)throw Error('Reusable child version unavailable');
-    return {arguments:{...call,versionId,versionDigest:old?.version_digest??digest(version!.trigger)},target:{flowId:call.flow,versionId,invocationKey:call.invocationKey,...(intentOf&&versionId?{intent:intentOf(call.flow,versionId)}:{})}};
+    return {arguments:{...call,versionId,versionDigest:old?.version_digest??digest(version!.trigger)},target:{flowId:call.flow,versionId,invocationKey:call.invocationKey,...(intentOf&&versionId?intentOf(call.flow,versionId,call.payload):{})}};
    },
+   ...(cardRefusal?{cardRefusal}:{}),
    execute:async(args,checkpoint)=>db.transaction(()=>{
     checkpoint();const old=getSubflowCall(id);
     if(old){if(old.fingerprint!==fingerprint)throw Error('Invocation key was already used with different payload or configuration');return {callId:id};}

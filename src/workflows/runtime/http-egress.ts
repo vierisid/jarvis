@@ -42,6 +42,7 @@
  * `runner/engine-runtime/build.ts`, so an edit here rebuilds the engine).
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 import { isIP } from 'node:net';
 import { networkInterfaces } from 'node:os';
@@ -323,6 +324,58 @@ interface AxiosLike {
   };
 }
 
+/**
+ * The form a host takes in a flow's read list (#1153) and in the checks
+ * against it: what WHATWG URL parsing gives as `hostname` (lower case,
+ * punycode), without IPv6 brackets or a trailing dot. Null for anything that
+ * is not a bare host: a port, a path, userinfo, a wildcard, an empty string.
+ */
+export function readHostKey(host: unknown): string | null {
+  if (typeof host !== 'string') return null;
+  const trimmed = host.trim();
+  if (trimmed === '' || /[\s/?#@*\\]/u.test(trimmed)) return null;
+  let parsed: URL;
+  try { parsed = new URL(`http://${trimmed}/`); } catch { return null; }
+  if (parsed.port !== '' || parsed.username !== '' || parsed.password !== '' || parsed.pathname !== '/') return null;
+  const key = parsed.hostname.replace(/^\[(.*)\]$/u, '$1').replace(/\.$/u, '');
+  return key === '' ? null : key;
+}
+
+/**
+ * The hosts an HTTP read that ran without asking may reach (#1153). The
+ * daemon lets a GET or HEAD run without a card only when its URL's host is on
+ * the flow's read list, and hands that list back with the authorization;
+ * the piece runs inside `withReadHosts`, so every connection the request
+ * makes, the first hop and each redirect, must go to a listed host. Without
+ * it, a listed host's open redirect (`/url?q=https://elsewhere/?data=...`)
+ * would carry the data on to a host nobody approved.
+ */
+const READ_HOST_SCOPE_KEY = Symbol.for('jarvis.http-egress.read-host-scope');
+/**
+ * One store per process, whichever copy of this module asks: the engine
+ * bundle (which sets it, in `piece-effect-guard.ts`) and each piece bundle
+ * (whose client reads it) compile in their own copy of this file, and a
+ * module-level instance would give each copy its own empty store (found in
+ * review: the hold was inert in a built piece).
+ */
+const readHostScope: AsyncLocalStorage<ReadonlySet<string>> = ((globalThis as Record<symbol, unknown>)[READ_HOST_SCOPE_KEY] ??=
+  new AsyncLocalStorage<ReadonlySet<string>>()) as AsyncLocalStorage<ReadonlySet<string>>;
+
+/** Run `fn` with its HTTP reads held to `hosts` (see `readHostScope`). */
+export function withReadHosts<T>(hosts: readonly string[], fn: () => T): T {
+  const keys = new Set<string>();
+  for (const h of hosts) { const k = readHostKey(h); if (k) keys.add(k); }
+  return readHostScope.run(keys, fn);
+}
+
+function assertReadHostListed(hostname: string, hosts: ReadonlySet<string> | undefined, hop: string): void {
+  if (!hosts) return;
+  const key = readHostKey(hostname.replace(/^\[(.*)\]$/u, '$1').includes(':') ? `[${hostname.replace(/^\[(.*)\]$/u, '$1')}]` : hostname);
+  if (key === null || !hosts.has(key)) {
+    throw new EgressRefusedError(`HTTP request refused: ${hop} goes to ${hostname || '(no host)'}, which is not on this flow's read list; a request that ran without asking reaches listed hosts only`);
+  }
+}
+
 export interface GuardOptions {
   /** True for a GET or HEAD. A request that is not a read never follows a redirect to another origin. */
   read: boolean;
@@ -342,6 +395,8 @@ export interface GuardOptions {
 export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: EgressPolicy, options: GuardOptions): ReturnType<A['create']> {
   const allowed = options.allowAddress ?? ((address: string) => destinationAllowed(address, policy));
   const lookup = guardedLookup(policy, options.resolve, allowed);
+  // Taken when the instance is built, inside the piece's run (`withReadHosts`).
+  const readHosts = readHostScope.getStore();
   const instance = axios.create({
     // Only Node's http transport honours `lookup`; the fetch adapter would resolve on its own.
     adapter: 'http',
@@ -352,6 +407,7 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     beforeRedirect: (next: { hostname?: string; host?: string; protocol?: string; port?: string | number }, _response: unknown) => {
       const host = String(next.hostname ?? next.host ?? '');
       assertHostAllowed(host, policy, allowed);
+      assertReadHostListed(host, readHosts, 'a redirect');
       if (!options.read && redirectOrigin(next) !== firstOrigin) {
         throw new EgressRefusedError(`HTTP request redirected to another origin (${host}); only a GET or HEAD follows a redirect off the reviewed origin`);
       }
@@ -362,6 +418,16 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     const target = new URL(String(config.url ?? ''), typeof config.baseURL === 'string' ? config.baseURL : undefined);
     if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new EgressRefusedError(`HTTP request refused: ${target.protocol} is not http or https`);
     assertHostAllowed(target.hostname, policy, allowed);
+    assertReadHostListed(target.hostname, readHosts, 'the request');
+    // A Host header naming another host would reach that virtual host on the
+    // listed host's address (a shared front end routes by it), so a read held
+    // to the list may not carry one.
+    if (readHosts) {
+      const headers = (config.headers ?? {}) as Record<string, unknown>;
+      const named = Object.keys(typeof (headers as { toJSON?: unknown }).toJSON === 'function'
+        ? (headers as { toJSON(): Record<string, unknown> }).toJSON() : headers).filter((k) => k.toLowerCase() === 'host');
+      if (named.length > 0) throw new EgressRefusedError('HTTP request refused: a request that ran without asking may not set its own Host header');
+    }
     firstOrigin = `${target.protocol}//${target.hostname.replace(/^\[(.*)\]$/u, '$1').toLowerCase()}:${target.port || (target.protocol === 'https:' ? '443' : '80')}`;
     // Whatever the request config carries, the connection goes through this
     // instance's checked lookup: no socket path or transport of its own, and a
