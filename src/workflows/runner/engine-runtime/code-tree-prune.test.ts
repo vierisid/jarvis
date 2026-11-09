@@ -13,7 +13,7 @@ import { createDraftVersion, lockVersion } from "../../db/repos/flow-version";
 import { createFlowRun } from "../../db/repos/flow-run";
 import { createWaitpoint } from "../../db/repos/waitpoint";
 import { enqueue } from "../../db/repos/job-queue";
-import { versionIdsNeedingCodeTrees } from "../../db/repos/code-tree-retention";
+import { versionIdsNeedingCodeTrees, versionIdsPinnedByRuns } from "../../db/repos/code-tree-retention";
 import { DEFAULT_IDS } from "../../db/schema";
 import { leaseCodeTree } from "./code-materialize";
 import { pruneCodeTrees, startCodeTreeRetention } from "./code-tree-prune";
@@ -69,12 +69,25 @@ describe("pruneCodeTrees with the database's rules", () => {
     const stopped = locked(f.id);
     runWith(f.id, stopped.id, "STOPPED");
     const queued = locked(f.id);
-    runWith(f.id, queued.id, "QUEUED");
+    enqueue({ jobType: "RUN_FLOW", flowRunId: runWith(f.id, queued.id, "QUEUED"), payload: {} });
+    // #1154 review: QUEUED with its job never enqueued; nothing will start it.
+    const orphanQueued = locked(f.id);
+    runWith(f.id, orphanQueued.id, "QUEUED");
+    // #1154: RUNNING with a job that can still move it on, by run id only.
     const running = locked(f.id);
-    runWith(f.id, running.id, "RUNNING");
+    const runningRun = runWith(f.id, running.id, "RUNNING");
+    enqueue({ jobType: "RUN_FLOW", flowRunId: runningRun, payload: {} });
     const paused = locked(f.id);
     const pausedRun = runWith(f.id, paused.id, "PAUSED");
     createWaitpoint({ flowRunId: pausedRun, projectId: DEFAULT_IDS.project, stepName: "wait", type: "WEBHOOK" });
+    // #1154: stuck runs. RUNNING with no job left (a crash nothing recovers),
+    // and PAUSED with every waitpoint already resumed: neither can continue.
+    const stuckRunning = locked(f.id);
+    runWith(f.id, stuckRunning.id, "RUNNING");
+    const spentPause = locked(f.id);
+    const spentRun = runWith(f.id, spentPause.id, "PAUSED");
+    createWaitpoint({ flowRunId: spentRun, projectId: DEFAULT_IDS.project, stepName: "wait", type: "WEBHOOK" });
+    getWorkflowDb().run(`UPDATE waitpoint SET resumed_at = 1 WHERE flow_run_id = ?`, [spentRun]);
     const unknown = locked(f.id);
     runWith(f.id, unknown.id, "SOME_FUTURE_STATUS");
     const jobbed = locked(f.id);
@@ -82,7 +95,7 @@ describe("pruneCodeTrees with the database's rules", () => {
     enqueue({ jobType: "RUN_FLOW", flowId: f.id, flowVersionId: jobbed.id, payload: {} });
 
     const keep = [published.id, draft.id, queued.id, running.id, paused.id, unknown.id, jobbed.id];
-    const go = [replaced.id, finished.id, stopped.id, "deleted_flow_version"];
+    const go = [replaced.id, finished.id, stopped.id, stuckRunning.id, spentPause.id, orphanQueued.id, "deleted_flow_version"];
     for (const id of [...keep, ...go]) tree(id);
 
     const { removed } = await prune();
@@ -101,11 +114,22 @@ describe("pruneCodeTrees with the database's rules", () => {
     const published = locked(f.id);
     publish(f.id, published.id);
     const draft = createDraftVersion({ flowId: f.id, displayName: "draft" });
+    const queued = locked(f.id);
+    enqueue({ jobType: "RUN_FLOW", flowRunId: runWith(f.id, queued.id, "QUEUED"), payload: {} });
     const paused = locked(f.id);
-    runWith(f.id, paused.id, "PAUSED");
+    const pausedRun = runWith(f.id, paused.id, "PAUSED");
+    createWaitpoint({ flowRunId: pausedRun, projectId: DEFAULT_IDS.project, stepName: "wait", type: "WEBHOOK" });
+    const unknown = locked(f.id);
+    runWith(f.id, unknown.id, "SOME_FUTURE_STATUS");
+    const resuming = locked(f.id);
+    const resumingRun = runWith(f.id, resuming.id, "PAUSED");
+    enqueue({ jobType: "RUN_FLOW", payload: { runId: resumingRun } });
     const jobbed = locked(f.id);
     enqueue({ jobType: "RUN_FLOW", flowId: f.id, flowVersionId: jobbed.id, payload: {} });
-    expect([...versionIdsNeedingCodeTrees()].sort()).toEqual([published.id, draft.id, paused.id, jobbed.id].sort());
+    expect([...versionIdsNeedingCodeTrees()].sort()).toEqual(
+      [published.id, draft.id, queued.id, paused.id, unknown.id, resuming.id, jobbed.id].sort());
+    // Only the run rules pin a tree against the size budget.
+    expect([...versionIdsPinnedByRuns()].sort()).toEqual([queued.id, paused.id, unknown.id, resuming.id, jobbed.id].sort());
   });
 
   test("only a flow's current draft keeps its tree, not every draft it ever had", async () => {
@@ -155,13 +179,16 @@ describe("pruneCodeTrees with the database's rules", () => {
     expect(existsSync(join(base, "recent_version"))).toBe(true);
   });
 
+  // A pass refreshes the mtime of leased trees (#1154), so these passes look
+  // from two days on: only the lease, not that refresh, can keep the tree.
+  const later = () => Date.now() + 2 * DAY;
   test("a tree a run in this process holds is kept until it lets go", async () => {
     tree("leased_version");
     const release = leaseCodeTree(base, "leased_version");
-    expect((await prune()).removed).toEqual([]);
+    expect((await prune({ now: later() })).removed).toEqual([]);
     expect(existsSync(join(base, "leased_version", "step_1", "index.js"))).toBe(true);
     release();
-    expect((await prune()).removed).toEqual(["leased_version"]);
+    expect((await prune({ now: later() })).removed).toEqual(["leased_version"]);
   });
 
   test("leases are counted: one run finishing does not uncover another's tree", async () => {
@@ -170,9 +197,9 @@ describe("pruneCodeTrees with the database's rules", () => {
     const second = leaseCodeTree(base, "shared_version");
     first();
     first(); // releasing twice is a no-op, not a second release
-    expect((await prune()).removed).toEqual([]);
+    expect((await prune({ now: later() })).removed).toEqual([]);
     second();
-    expect((await prune()).removed).toEqual(["shared_version"]);
+    expect((await prune({ now: later() })).removed).toEqual(["shared_version"]);
   });
 
   test("leaves anything that is not a version tree alone, and finishes an interrupted prune", async () => {
@@ -219,7 +246,7 @@ describe("startCodeTreeRetention", () => {
   test("prunes at once, and a failing pass is logged rather than thrown", async () => {
     tree("old_version");
     const lines: string[] = [];
-    const ok = startCodeTreeRetention({ baseCodeDir: base, needed: () => new Set(), log: (l) => lines.push(l) });
+    const ok = startCodeTreeRetention({ baseCodeDir: base, needed: () => new Set(), pinned: () => new Set(), log: (l) => lines.push(l) });
     await ok.idle();
     ok.stop();
     expect(existsSync(join(base, "old_version"))).toBe(false);
@@ -229,6 +256,7 @@ describe("startCodeTreeRetention", () => {
     const failing = startCodeTreeRetention({
       baseCodeDir: base,
       needed: () => { throw new Error("database closed"); },
+      pinned: () => new Set(),
       log: (l) => lines.push(l),
     });
     await failing.idle();

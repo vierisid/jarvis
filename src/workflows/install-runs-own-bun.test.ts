@@ -81,7 +81,7 @@ describe.skipIf(process.platform === "win32")("installs run the daemon's own Bun
   }, 60_000);
 
   test("CODE-step dependencies: bunInstall", async () => {
-    const { fakeRan, dir } = await withFakeBunOnPath((d) => bunInstall(d));
+    const { fakeRan, dir } = await withFakeBunOnPath((d) => bunInstall(d, { cacheDir: join(d, ".install-cache") }));
     expect(fakeRan).toBe(false);
     expect(existsSync(join(dir, "node_modules", "local-dep", "package.json"))).toBe(true);
   }, 60_000);

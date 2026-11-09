@@ -178,6 +178,13 @@ export const EXTRA_ENV_KEYS = [
   // daemon environment, which the allowlist exists to prevent. Opt-in per call
   // site: only a spawn that names it receives it.
   'JARVIS_CAPTURE_PATH',
+  // The CODE-step install cache (#1154, engine-runtime/code-install-cache.ts).
+  // A directory path, not a credential. The ONE extra that is also on the
+  // allowlist: there it forwards a user's own relocated cache to every install,
+  // here a CODE-step install replaces it with a cache of its own. filterEnv
+  // writes extras after the base, so the call site's value wins;
+  // subprocess-env.test.ts pins both the overlap and that precedence.
+  'BUN_INSTALL_CACHE_DIR',
 ] as const;
 
 export type ExtraEnvKey = (typeof EXTRA_ENV_KEYS)[number];
