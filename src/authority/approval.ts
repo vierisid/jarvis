@@ -175,6 +175,23 @@ export function approvalIntentFromContext(request: Pick<ApprovalRequest, 'contex
 }
 
 /**
+ * The sentence a Telegram or Discord card shows instead of the context's
+ * `intent`, if the trusted writer gave one (#1152: a workflow start card's
+ * chat sentence names its input's fields, never their values, which stay on
+ * the dashboard). The same trust as `approvalIntentFromContext`, and only
+ * beside an intent, so it never stands in for a card that has none.
+ */
+export function approvalChannelIntentFromContext(request: Pick<ApprovalRequest, 'context' | 'tool_name'>): string | null {
+  if (approvalIntentFromContext(request) === null) return null;
+  try {
+    const channel = (JSON.parse(request.context!) as Record<string, unknown>).channelIntent;
+    return typeof channel === 'string' && channel.trim() ? channel.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * How much of a request id a Telegram/Discord card shows and a reply must
  * name: the first group of the UUID (`approvalChannelCard`).
  */

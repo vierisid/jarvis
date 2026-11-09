@@ -178,6 +178,24 @@ describe("the pebble's tab switch hears only its own sidecar's panels (#1026)", 
     for (const c of [foreign, anonymous]) expect(typeof idSentTo(c)).toBe('string');
   });
 
+  test("the asking sidecar's full dashboard (its tray window) never answers a broadcast action, so it alone is unreached at once (#1157)", async () => {
+    const { svc, internals } = setup();
+    internals.wsServer.getClients().clear();
+    const tray = socket(PEBBLE_SESSION);
+    (tray.ws.data as Record<string, unknown>).client = 'dashboard';
+    internals.wsServer.getClients().add(tray.ws);
+    const t0 = Date.now();
+    expect(await svc.requestRoomAction(switchTab, 60_000, { sidecar: PEBBLE })).toBe('unreached');
+    expect(Date.now() - t0).toBeLessThan(1000);
+    // With a panel of that sidecar beside it, it is reached and waits for the panel.
+    const panel = socket(PEBBLE_SESSION);
+    internals.wsServer.getClients().add(panel.ws);
+    const pending = svc.requestRoomAction(switchTab, 1000, { sidecar: PEBBLE });
+    const id = panel.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultId;
+    await internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, accepted: true }, timestamp: Date.now() }, panel.ws);
+    expect(await pending).toBe('accepted');
+  });
+
   test('under insecure_open_access no socket has an identity, so any may answer', async () => {
     const { svc, internals, anonymous, answer, idSentTo } = setup();
     internals.wsServer.setInsecureOpenAccess(true);

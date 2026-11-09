@@ -80,7 +80,7 @@ import { recordPieceCompletion } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
-import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
+import { canonicalJson, digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
 import { isCommunityAction } from './step-admission';
 import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
 import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
@@ -217,6 +217,13 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
    * Production wiring passes `AgentService.buildFullSystemPromptParts`.
    */
   buildJarvisSystemPrompt?: (userMessage: string) => SystemPromptParts;
+  /**
+   * Why nothing on this Jarvis could answer a new workflow input or approval
+   * request, or null (#1266): they are answered in Needs you, which is the
+   * Brief decisions feature. Asked when a step would create one. Absent: asking
+   * is allowed, as before.
+   */
+  humanInputUnavailable?: () => string | null;
 }
 
 /**
@@ -278,15 +285,99 @@ function workflowDelegateCardRefusal(args: Record<string, unknown>, specialists:
  * pinned the version found it in the caller's project); the name is the
  * pinned version's.
  */
-function workflowStartIntent(flowId: string, name: string, waitForCompletion: boolean): string {
-  return `${waitForCompletion ? 'Start and wait for' : 'Start'} the workflow ${forCard(flowId, 128)} named ${JSON.stringify(boundedApprovalLabel(name, START_CARD_NAME_MAX_CHARS))}`;
+function workflowStartIntent(flowId: string, name: string, waitForCompletion: boolean, input: string | null): string {
+  return `${waitForCompletion ? 'Start and wait for' : 'Start'} the workflow ${forCard(flowId, 128)} named ${JSON.stringify(boundedApprovalLabel(name, START_CARD_NAME_MAX_CHARS))}`
+    + (input === null ? '' : input);
 }
 
-/** A start card's sentence from its frozen arguments: the flow and the version it pinned. */
+/**
+ * What a start card cannot show as written (#1152): format and invisible
+ * characters (the set `forCard` drops from every card, `util/card-text.ts`),
+ * C1 controls and DEL, and any whitespace but a plain space (a no-break space
+ * or a line separator reads as a space and is not one). JSON already escapes
+ * C0 controls, line breaks and tabs.
+ */
+const START_INPUT_HIDDEN = /[\p{Cf}\p{Default_Ignorable_Code_Point}\x7f-\x9f]|[^\S ]/gu;
+const unitEscapes = (character: string) => [...Array(character.length).keys()]
+  .map((i) => `\\u${character.charCodeAt(i).toString(16).toUpperCase().padStart(4, '0')}`).join('');
+
+/**
+ * The input a started workflow is given, as a start card shows it (#1152), or
+ * null when the step passes none. One line of JSON with every character a
+ * card cannot show as written escaped, so the card holds exactly what the
+ * child receives: nothing dropped, collapsed or cut, and no string inside it
+ * can close its own quotes. Other text, Cyrillic or CJK say, is shown as it
+ * is. Last in the sentence, so nothing after it can be forged. A payload is
+ * often trigger data, which is why the person approving has to see it.
+ */
+function startInputJson(payload: unknown): string | null {
+  if (payload === undefined || payload === null) return null;
+  if (typeof payload === 'object' && !Array.isArray(payload) && Object.keys(payload).length === 0) return null;
+  return canonicalJson(payload).replace(START_INPUT_HIDDEN, unitEscapes);
+}
+function startInputForCard(payload: unknown): string | null {
+  const json = startInputJson(payload);
+  return json === null ? null : `, with the input ${json}`;
+}
+
+/** How many of a payload's field names a chat card lists before "and N more" (#1152). The card's own length budget still applies. */
+export const START_CHAT_FIELD_NAMES_MAX = 10;
+/** A field name a chat card shows; any other is only counted, since a key can itself be data (an address, an order id). */
+const PLAIN_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/;
+
+/**
+ * The input as a Telegram or Discord start card shows it (owner, 2026-11-06,
+ * #1152): never values, which are often trigger data and land in a chat
+ * history, only what the payload is. An object shows its top-level field
+ * names, sorted, at most `START_CHAT_FIELD_NAMES_MAX` and then how many more;
+ * a name that is not a plain identifier is only counted, never shown, so it
+ * can neither forge the list nor carry data a key holds. A list or a single value
+ * shows only its kind. The dashboard card shows the whole payload. A card
+ * this makes too long to show whole is deny-only in chat, with a pointer to
+ * the dashboard (`approvalChannelCard`).
+ */
+function startInputForChat(payload: unknown): string | null {
+  if (startInputJson(payload) === null) return null;
+  if (Array.isArray(payload)) return `, passing a list of ${payload.length} item${payload.length === 1 ? '' : 's'}`;
+  if (typeof payload === 'object') {
+    const keys = Object.keys(payload as object).sort();
+    const plain = keys.filter((name) => PLAIN_FIELD_NAME.test(name));
+    const shown = plain.slice(0, START_CHAT_FIELD_NAMES_MAX);
+    const more = keys.length - shown.length;
+    const list = shown.length ? `the fields {${shown.join(', ')}}${more > 0 ? ` and ${more} more` : ''}` : `${keys.length} field${keys.length === 1 ? '' : 's'}`;
+    return `, passing ${list} (open the dashboard to see ${shown.length ? 'their values' : 'them'})`;
+  }
+  const kind = typeof payload === 'string' ? 'a text value' : typeof payload === 'number' ? 'a number'
+    : typeof payload === 'boolean' ? 'a true/false value' : 'a value';
+  return `, passing ${kind} (open the dashboard to see it)`;
+}
+
+/** A start card's chat sentence: as `workflowStartIntentOf`, with the input described, never shown (#1152). */
+export function workflowStartChannelIntentOf(args: Record<string, unknown>): string {
+  const pinned = args.pinned as { versionId?: unknown } | undefined;
+  const name = typeof pinned?.versionId === 'string' ? getFlowVersion(pinned.versionId)?.displayName ?? '' : '';
+  return workflowStartIntent(String(args.flowId ?? ''), name, args.waitForCompletion === true, startInputForChat(args.payload));
+}
+
+/**
+ * Why a start card could not show its input in full (#1152), or null: past
+ * the budget a delegation's goal is held to (`AGENT_TASK_MAX_CHARS`), the one
+ * other trigger-fed value a start-of-work card shows whole. Measured on the
+ * text the card shows. Asked only when a card is needed, so a start nobody
+ * has to approve runs as it did.
+ */
+function workflowStartCardRefusal(args: Record<string, unknown>): string | null {
+  const input = startInputJson(args.payload);
+  return input !== null && input.length > AGENT_TASK_MAX_CHARS
+    ? `The input passed to the workflow is ${input.length} characters as the approval card shows it; the limit is ${AGENT_TASK_MAX_CHARS}, so the card can show all of it. Pass fewer or shorter fields, or let the started workflow read the rest itself.`
+    : null;
+}
+
+/** A start card's sentence from its frozen arguments: the flow, the version it pinned and the input it passes. */
 export function workflowStartIntentOf(args: Record<string, unknown>): string {
   const pinned = args.pinned as { versionId?: unknown } | undefined;
   const name = typeof pinned?.versionId === 'string' ? getFlowVersion(pinned.versionId)?.displayName ?? '' : '';
-  return workflowStartIntent(String(args.flowId ?? ''), name, args.waitForCompletion === true);
+  return workflowStartIntent(String(args.flowId ?? ''), name, args.waitForCompletion === true, startInputForCard(args.payload));
 }
 
 export function buildSandboxServiceBackends(
@@ -1027,9 +1118,11 @@ export function buildSandboxServiceBackends(
         // Named on the card (#1040). The name is kept out of `pinned`, whose
         // digest a paused run's execute compares against what it froze.
         const args = { ...req, pinned };
-        return { arguments: args, target: { flowId: req.flowId, ...pinned, intent: workflowStartIntentOf(args) } };
+        return { arguments: args, target: { flowId: req.flowId, ...pinned, intent: workflowStartIntentOf(args),
+          channelIntent: workflowStartChannelIntentOf(args) } };
       },
       intentFor: workflowStartIntentOf,
+      cardRefusal: workflowStartCardRefusal,
       execute: async (args, checkpoint) => {
         checkpoint();
         if (digest(childVersion(args.flowId as string, ctx.projectId)) !== digest(args.pinned)) throw new Error('Target workflow changed after approval; start a new run');
@@ -1317,8 +1410,10 @@ export function buildSandboxServiceBackends(
   };
 
   const services: SandboxApiServices = {
-    humanInput: cancellableWorkflowService(requestHumanInput),
-    subflowCall: cancellableWorkflowService(createSubflowService(effects,opts.subflowNow,(flowId,versionId)=>workflowStartIntentOf({flowId,pinned:{versionId},waitForCompletion:true}))),
+    humanInput: cancellableWorkflowService((input: Record<string, unknown>, ctx: WorkflowEffectContext) =>
+      requestHumanInput(input, ctx, Date.now(), { unavailable: opts.humanInputUnavailable?.() ?? null })),
+    subflowCall: cancellableWorkflowService(createSubflowService(effects,opts.subflowNow,(flowId,versionId,payload)=>({intent:workflowStartIntentOf({flowId,pinned:{versionId},waitForCompletion:true,payload}),
+      channelIntent:workflowStartChannelIntentOf({flowId,pinned:{versionId},waitForCompletion:true,payload})}),workflowStartCardRefusal)),
     subflowResult: cancellableWorkflowService(returnSubflowResult),
     credentialResolver: opts.credentialResolver,
     meetingBriefs: cancellableWorkflowService(meetingBriefs),

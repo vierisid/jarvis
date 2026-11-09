@@ -121,16 +121,18 @@ the next tick or delivery refused the same way adds its failed run (or its
 counted blocked row) but no second notice. A notice that reached no connected
 computer is not counted, so the next repeat tells it. A run refused while it
 executes because of what it is bound to (`WORKFLOW_MACHINE_OFFLINE`,
+`WORKFLOW_MACHINE_UNAVAILABLE`, `WORKFLOW_MACHINE_REPLACED`,
 `WORKFLOW_FACT_STALE`, `WORKFLOW_FACT_AMBIGUOUS`) notifies once per workflow,
 code and subject (the computer the refused step was bound to, or the step
 whose reviewed recipient no longer holds) until a later run shows that subject
 working (a step that succeeded on that computer, or that step succeeding with
 its reviewed recipients) or the workflow is enabled or published again. A run
 that took another branch, or let the refused step fail and went on, clears
-nothing. `WORKFLOW_MACHINE_REPLACED` and `WORKFLOW_MACHINE_UNAVAILABLE` are not
-among them: they are raised while a step's target is first resolved, before
-its effect record exists, so no run carries them as a code; a pinned computer
-no longer enrolled is refused before the run starts (`BINDING_STALE` above).
+nothing. `WORKFLOW_MACHINE_UNAVAILABLE` and `WORKFLOW_MACHINE_REPLACED` are
+raised while a step's target is first resolved, before anything is frozen, so
+their record names no computer and any computer seen working clears them
+(#1152). A pinned computer no longer enrolled is usually refused before the
+run starts (`BINDING_STALE` above); REPLACED is a run that started just before.
 The notice's title names the workflow. That memory is per daemon
 lifetime, so a restart may notify once more. Single-step test runs neither
 notify nor count. `GET /api/workflows` gives each enabled workflow a `blocked`

@@ -33,6 +33,8 @@ import { budgetCap, budgetOf, deferredAhead, deferredAheadLimit, waitingWorkflow
 const WORKFLOW_NAME_LABEL_MAX_CHARS = 512;
 /** A step name on a card or an audit row: the 120 `auditRefusal` already uses. */
 export const WORKFLOW_STEP_LABEL_MAX_CHARS = 120;
+/** Routes whose target the boundary takes a chat card sentence from: starting a workflow and calling a reusable child (#1152). */
+const CHANNEL_INTENT_ROUTES: ReadonlySet<string> = new Set(['workflow', 'subflow']);
 import { holdStep, PAUSED_REASON } from './emergency-hold';
 
 export interface WorkflowAuthorityDependencies {
@@ -353,7 +355,31 @@ export class WorkflowEffectBoundary {
     if (effect?.status === 'dispatching') throw new Error('Workflow effect outcome is uncertain or still in flight; automatic replay is blocked');
     if (effect && effect.status !== 'pending') throw new Error(effect.error ?? `Workflow effect is ${effect.status}`);
     if (!effect) {
-      const prepared = JSON.parse(canonicalJson(input.prepare()));
+      // A typed refusal raised while the call is frozen (#1152) is recorded
+      // like any other refusal before dispatch, so Q-19 and the #1080 notice
+      // read its code: the computer the run is bound to gone or unusable, a
+      // started workflow turned off, a recipient no longer current, a tool's
+      // own typed refusal of its arguments. Only `not_started` ones: nothing
+      // ran. The record has no arguments or target, since none could be
+      // frozen, and keeps the refusal for this step of this run, as a
+      // checkpoint refusal does. An untyped error is not recorded.
+      let prepared: ReturnType<EffectInvocation['prepare']>;
+      try { prepared = JSON.parse(canonicalJson(input.prepare())); } catch (error) {
+        if (!(error instanceof ActionOutcomeError) || error.outcome.effect !== 'not_started') throw error;
+        saveWorkflowEffect({ id, runId: resolved.run.id, projectId: resolved.run.projectId, flowId: resolved.run.flowId,
+          versionId: resolved.version.id, versionDigest: resolved.versionDigest, stepName: resolved.stepName,
+          executionPath: resolved.executionPath, route: input.route, toolName: input.toolName,
+          actionCategory: input.category, requestDigest: digest(input.request), arguments: {}, target: {},
+          provenance: { source: 'workflow-runtime', sandboxId: input.context.sandboxId ?? null, machineBindingVersion: 1,
+            triggeredBy: resolved.run.triggeredBy, environment: resolved.run.environment, piece: input.piece, action: input.action },
+          decision: 'denied', reason: error.message, error: error.message, status: 'blocked', outcome: error.outcome,
+          approvalId: null, waitpointId: null, createdAt: Date.now(), finishedAt: Date.now() });
+        // The trail shows it as every other refusal before dispatch.
+        audit.log({ agent_id: `workflow:${resolved.run.id}`,
+          agent_name: `Workflow ${boundedApprovalLabel(resolved.version.displayName, WORKFLOW_NAME_LABEL_MAX_CHARS)} / ${boundedApprovalLabel(resolved.stepName, WORKFLOW_STEP_LABEL_MAX_CHARS)} / ${id}`,
+          tool_name: input.toolName, action_category: input.category, authority_decision: 'denied', approval_id: null, executed: false });
+        throw error;
+      }
       effect = { id, runId: resolved.run.id, projectId: resolved.run.projectId, flowId: resolved.run.flowId,
         versionId: resolved.version.id, versionDigest: resolved.versionDigest, stepName: resolved.stepName,
         executionPath: resolved.executionPath, route: input.route, toolName: input.toolName,
@@ -550,6 +576,12 @@ export class WorkflowEffectBoundary {
               ...(input.confirmation ? { confirm: input.confirmation.confirm } : {}),
               ...(input.reviewSubject && Object.keys(input.reviewSubject).length ? { reviewSubject: input.reviewSubject } : {}),
               ...(intent ? { intent } : {}),
+              // What a Telegram or Discord card says instead (#1152): a start
+              // card's chat sentence names its input's fields, never values.
+              // Only the start routes write it; any other route's target can
+              // carry piece or gate keys, so it is not read there.
+              ...(CHANNEL_INTENT_ROUTES.has(input.route) && typeof record.target.channelIntent === 'string' && intent
+                ? { channelIntent: record.target.channelIntent } : {}),
               ...(input.approvalExpiresAt !== undefined ? { expiresAt: input.approvalExpiresAt } : {}) }), executionMode: 'workflow',
             ...(input.reviewRegistry ? { toolRegistry: input.reviewRegistry } : {}) });
           record.approvalId = request.id;

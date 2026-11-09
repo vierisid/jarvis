@@ -3,7 +3,7 @@ import { withRunOwner } from "../../actions/run-owner-scope";
 import { getWorkflowDb } from "../db";
 import { getRunCancellation } from "../db/repos/run-cancellation";
 import { turnedOffReason } from "../db/repos/flow-turn-off";
-import { onRunCanceled, onRunEnded } from "./cancellation-signals";
+import { onRunCanceled, onRunEnded, onRunTurnedOff } from "./cancellation-signals";
 import { WorkflowCancellationError } from "./cancellation-error";
 
 // Defined in a leaf module and re-exported here, so `ToolRegistry.execute` can
@@ -38,11 +38,13 @@ function runState(runId: string): "stopped" | "ended" | "live" {
 /**
  * Run `execute` for the run `runId`: its dispatches are fenced by the run's
  * cancellation, and a background task it starts belongs to the run (#1018,
- * `actions/run-owner-scope.ts`), so stopping the run cancels that task too.
+ * `actions/run-owner-scope.ts`), so stopping the run cancels that task too,
+ * and so does turning its workflow off while the run executes (#1152).
  */
 export function withRunCancellation<T>(runId: string, execute: () => T): T {
   return withRunOwner({ runId, stopped: () => runState(runId) === "stopped", ended: () => runState(runId) === "ended",
-    onStopped: (listener) => onRunCanceled(runId, listener), onEnded: (listener) => onRunEnded(runId, listener) },
+    onStopped: (listener) => onRunCanceled(runId, listener), onEnded: (listener) => onRunEnded(runId, listener),
+    onTurnedOff: (listener) => onRunTurnedOff(runId, listener) },
     () => withExecutionScope(() => assertRunNotCanceled(runId), execute));
 }
 

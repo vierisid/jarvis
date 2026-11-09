@@ -8,11 +8,11 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * waiting), it does not start once the run is stopped or its workflow was
  * turned off, and it keeps the run's machine binding and template-delivery
  * suppression. Turning a workflow off does not stop a run that is executing
- * (Q-06), and a run that ends on its own does not stop its task: neither
- * reaches a task already started. A run that ends on its own releases its
- * tasks (`released`): they keep running, and what they start from then on is
- * their own, so turning off or deleting the finished workflow later refuses
- * nothing.
+ * (Q-06), but it cancels the tasks that run already started (`onTurnedOff`,
+ * owner, 2026-11-06, #1152). A run that ends on its own does not stop its
+ * tasks and releases them (`released`): they keep running, and what they
+ * start from then on is their own, so turning off or deleting the finished
+ * workflow later cancels or refuses nothing.
  *
  * Kept apart from the dispatch fence (`execution-scope.ts`) on purpose. A
  * task leaves that fence, because the fence of the effect that started it
@@ -30,6 +30,12 @@ export interface RunOwner {
   onStopped(listener: () => void): () => void;
   /** Call `listener` once the run ends on its own. Returns the unsubscribe. */
   onEnded(listener: () => void): () => void;
+  /**
+   * Call `listener` once the run's workflow is turned off while the run still
+   * executes (#1152). The run goes on (Q-06); its tasks are cancelled. Returns
+   * the unsubscribe.
+   */
+  onTurnedOff(listener: () => void): () => void;
   /** Set on a task's own scope once its run ended on its own: it no longer belongs to the run. */
   released?: boolean;
 }

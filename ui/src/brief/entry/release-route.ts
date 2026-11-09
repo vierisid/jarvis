@@ -1,7 +1,7 @@
 import type { BriefRoomId, BriefRoute } from "../contracts";
 import type { RoomKey } from "../../v2/router";
 import type { BriefRollout } from "./release";
-import { briefHash, resolveBriefEntry, type BriefEntryRoute } from "./route";
+import { resolveBriefEntry, type BriefEntryRoute } from "./route";
 
 /** Only foreground destinations with equivalent Brief rooms are aliases.
  * Native panels, result windows, setup and advanced routes keep their owners. */
@@ -69,15 +69,15 @@ export function resolveReleaseEntry(href: string, rollout: BriefRollout, devtool
   return room ? { kind: "brief", route: { room, selection: {} } } : { kind: "legacy" };
 }
 
-/** v2 cannot parse Brief selection queries. Keep the exact typed return route in
- * a separate URL parameter, while its hash resolves to a usable legacy parent.
- * No storage, domain write, migration, or silent replay is involved. */
+/** v2 cannot parse Brief selection queries, so the hash resolves to a usable
+ * legacy parent and the Brief route is dropped: nothing would read it back
+ * (#1162, owner decision). No storage, domain write, migration, or silent
+ * replay is involved. */
 export function rollbackHref(href: string): string | null {
   const route = directRoute(href);
   if (!route) return null;
   const url = new URL(href, "http://localhost");
   url.searchParams.set("brief", "0");
-  url.searchParams.set("briefReturn", briefHash(route));
   const room = LEGACY_ROOMS[route.room];
   url.hash = room ? `#/_room_${room}` : "#/";
   return url.toString();
