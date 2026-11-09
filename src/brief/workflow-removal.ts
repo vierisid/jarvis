@@ -1,7 +1,4 @@
 import { createHash } from 'node:crypto';
-import { rmSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { workflowFileBase, workflowLogsBase } from '../workflows/sandbox-api/config';
 import { workflowTriggerLabel } from './workflow-trigger-label';
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_IDS, getWorkflowDb } from '../workflows/db';
@@ -10,8 +7,10 @@ import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-versi
 import { versionReadiness, WorkflowReadinessError } from '../workflows/db/repos/flow-readiness';
 import { CodeStepsRefusedError, ungrantedCodeSteps } from '../workflows/db/repos/flow-code-steps';
 import type { TriggerManager } from '../workflows/runner/triggers/manager';
-import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow } from '../workflows/db/repos/flow-turn-off';
-import { retireTerminalRunWaits } from '../workflows/db/repos/run-cancellation';
+import { stopRunsOfTurnedOffFlow } from '../workflows/db/repos/flow-turn-off';
+import { addCounts, deleteFlowHistoryBatch, deleteFlowRows, flowHasLiveRun, flowHistoryOverBatch, NO_COUNTS,
+  removeFlowFiles, removeRunFiles, stopEverythingOfFlow, type FlowDeleteCounts } from '../workflows/db/repos/flow-deletion';
+import { effectDispatchInFlight } from '../workflows/runtime/effect-inflight';
 import type { ManagedWorkflow, RemovalReceipt, WorkflowManageCommand, WorkflowManageResult,
   WorkflowPurgeCommand, WorkflowPurgeResult } from './workflow-removal-contracts';
 
@@ -27,6 +26,13 @@ export class WorkflowRemovalError extends Error {
 type StoredReceipt = { receipt_id: string; flow_id: string; project_id: string; version_id: string | null;
   before_revision: string; removed_at: number; expires_at: number; restored_at: number | null };
 const id = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(v);
+/** A pending purge's counts so far (#1154 batches); none before the first batch. */
+const parseCounts = (raw: string | null): FlowDeleteCounts => {
+  try { const v = raw ? JSON.parse(raw) : null; return v && typeof v === 'object' ? { ...NO_COUNTS, ...v } : { ...NO_COUNTS }; } catch { return { ...NO_COUNTS }; }
+};
+const parseIds = (raw: string | null): string[] => {
+  try { const v = raw ? JSON.parse(raw) : []; return Array.isArray(v) ? v.filter(id) : []; } catch { return []; }
+};
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const receipt = (r: StoredReceipt): RemovalReceipt => ({ scopeId: r.project_id, flowId: r.flow_id,
   versionId: r.version_id, receiptId: r.receipt_id, expiresAt: r.expires_at });
@@ -38,6 +44,12 @@ export class WorkflowRemoval {
   private readonly pending = new Map<string, Promise<void>>();
   /** Purge failures already logged, so a stuck purge does not log every pass. */
   private readonly purgeFailures = new Map<string, string>();
+  /**
+   * A completed purge whose WAL frames are not yet truncated (wipeWal). True
+   * at start: a purge the last process completed but could not wipe (a crash,
+   * or a close while another connection held the file) left no other trace.
+   */
+  private walWipePending = true;
   constructor(readonly db: Database, readonly projectId: string = DEFAULT_IDS.project,
     private readonly now = Date.now, private readonly enabled = () => process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL === '1') {}
   /** `onCardClosed` hears each workflow card a purge closed, so the dashboard stops offering it (#1039). */
@@ -47,7 +59,35 @@ export class WorkflowRemoval {
     this.timer = setInterval(() => this.recover(), 5000); this.timer.unref();
   }
   stop(): void { if (this.timer) clearInterval(this.timer); this.timer = undefined; this.triggers = undefined; this.onCardClosed = undefined; this.pending.clear(); }
-  private recover(): void { this.recoverPurges(); this.recoverRegistration(); }
+  private recover(): void { this.recoverPurges(); this.recoverRegistration(); if (this.walWipePending && getWorkflowDb() === this.db) this.wipeWal(); }
+  /**
+   * secure_delete zeroes what a purge deletes, but the zeroed pages reach
+   * vault.db only at a checkpoint, and the WAL keeps the frames that wrote
+   * the rows until it is truncated. So a completed purge checkpoints and
+   * truncates the WAL. Another connection (a `jarvis backup` reading, an
+   * `enroll` writing) makes that busy; it is not waited for, as the daemon's
+   * busy_timeout would block the event loop, but retried on each recovery
+   * pass, and once on the first pass after every start.
+   */
+  private wipeWal(): void {
+    const db = this.db;
+    try {
+      const timeout = (db.query('PRAGMA busy_timeout').get() as { timeout: number }).timeout;
+      db.run('PRAGMA busy_timeout = 0');
+      let busy = 1;
+      try { busy = (db.query('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number }).busy; }
+      finally { db.run(`PRAGMA busy_timeout = ${Math.trunc(timeout)}`); }
+      if (busy === 0) { this.walWipePending = false; this.purgeFailures.delete('wal'); return; }
+      this.walWipePending = true;
+      if (!this.purgeFailures.has('wal')) console.warn('[Workflow Removal] WAL checkpoint after a purge is pending while another connection holds the database; retrying');
+      this.purgeFailures.set('wal', 'busy');
+    } catch (error) {
+      this.walWipePending = true;
+      const message = error instanceof Error ? error.message : String(error);
+      if (this.purgeFailures.get('wal') !== message) console.error('[Workflow Removal] WAL checkpoint after a purge failed:', error);
+      this.purgeFailures.set('wal', message);
+    }
+  }
   readiness(): 'ready' | 'unavailable' {
     try { return this.enabled() && this.triggers && getWorkflowDb() === this.db
       && this.db.query("SELECT 1 FROM sqlite_master WHERE name = 'brief_workflow_commands'").get() ? 'ready' : 'unavailable'; }
@@ -226,81 +266,113 @@ export class WorkflowRemoval {
   }
   /**
    * Finish an accepted purge: stop its runs, close their cards, then delete
-   * the flow, its versions and its run payloads in one transaction. The
-   * receipt and the audit rows (command outcomes, trigger ledger, recovery
-   * receipts, approval records) stay. Idempotent; a failure leaves the purge
-   * pending for the next recovery pass.
+   * the flow, its versions and its run payloads (db/repos/flow-deletion.ts,
+   * shared with the ordinary delete). The receipt and the audit rows (command
+   * outcomes, trigger ledger, recovery receipts, approval records) stay.
+   * Idempotent; a failure leaves the purge pending for the next recovery pass.
+   *
+   * Held, deleting nothing, while a run is live again or an effect of the
+   * flow is still being dispatched in this process (#1154): its record and
+   * approval receipt are written when it returns. A large history goes in
+   * batches, one per event-loop turn (#1154); the receipt's counts and its
+   * leftover-file list carry over between them, so a crash between batches
+   * loses neither.
    */
   private finishPurge(flowId: string, accepting = false): void {
     const db = this.db;
     if (!db.query('SELECT 1 FROM brief_workflow_purges WHERE flow_id = ? AND completed_at IS NULL').get(flowId)) return;
-    let completed: string | null = null, held = false, runIds: string[] = [];
+    let completed: string | null = null, held: 'live_run' | 'dispatching' | null = null, runIds: string[] = [];
+    let batch: { purgeId: string; runIds: string[] } | null = null;
     const report = (approvalId: string) => {
       try { this.onCardClosed?.(approvalId); } catch (error) { console.error('[Workflow Removal] closed card update failed:', error); }
     };
     try {
-      stopRunsOfDeletedFlow(flowId, report);
-      // A run that ended before it parked can still hold a pending card or an
-      // open waitpoint (#1039); the cascade below would leave its card approvable.
-      for (const { id } of db.query<{ id: string }, [string]>(`SELECT r.id FROM flow_run r WHERE r.flow_id = ?
-        AND r.status NOT IN ('QUEUED','RUNNING','PAUSED') AND (
-          EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = r.id AND e.status = 'pending')
-          OR EXISTS (SELECT 1 FROM waitpoint w WHERE w.flow_run_id = r.id AND w.resumed_at IS NULL))`).all(flowId)) {
-        retireTerminalRunWaits(id).forEach(report);
-      }
-      db.transaction(() => {
-        const p = db.query<{ purge_id: string }, [string]>(
-          'SELECT purge_id FROM brief_workflow_purges WHERE flow_id = ? AND completed_at IS NULL').get(flowId);
+      stopEverythingOfFlow(flowId, report, db);
+      // A purge is the delete a person asks for so the data is gone, so its
+      // rows are zeroed rather than unlinked into free pages (wipeWal does
+      // the WAL). Only the purge pays for it: a bulk delete under
+      // secure_delete writes every freed byte again. Not reached by this:
+      // bytes an EARLIER update of a row (an edited draft, a rewritten store
+      // value) left in page free space, and anything freed before this
+      // shipped. Only a VACUUM rewrites those away.
+      const secureDelete = (db.query('PRAGMA secure_delete').get() as { secure_delete: number }).secure_delete;
+      db.run('PRAGMA secure_delete = ON');
+      try { db.transaction(() => {
+        const p = db.query<{ purge_id: string; counts: string | null; files_pending: string | null }, [string]>(
+          'SELECT purge_id, counts, files_pending FROM brief_workflow_purges WHERE flow_id = ? AND completed_at IS NULL').get(flowId);
         if (!p) return;
         // brief_purge_pending_run refuses new runs, but an engine can still set a
         // stopped run live again before it notices; the next pass stops it first.
-        if (db.query("SELECT 1 FROM flow_run WHERE flow_id = ? AND status IN ('QUEUED','RUNNING','PAUSED') LIMIT 1").get(flowId)) { held = true; return; }
-        const count = (sql: string, ...more: string[]) => (db.query(sql).get(flowId, ...more) as { n: number }).n;
-        const runs = `SELECT id FROM flow_run WHERE flow_id = ?1`;
-        // Every job of the flow or its runs: the runs are all stopped, so none can run.
-        const jobs = `FROM workflow_job WHERE (flow_id = ?1 OR flow_run_id IN (${runs})
-          OR (flow_run_id IS NULL AND CASE WHEN json_valid(payload) THEN json_extract(payload, '$.runId') END IN (${runs})))`;
-        // FLOW-scoped piece store keys, as the engine writes them (piece-context/store.ts).
-        const store = `FROM store_entry WHERE project_id = ?2 AND (substr(key, 1, length('flow_' || ?1 || '/')) = 'flow_' || ?1 || '/'
-          OR substr(key, 1, length('testflow_' || ?1 || '/')) = 'testflow_' || ?1 || '/')`;
-        const counts = {
-          versions: count('SELECT COUNT(*) AS n FROM flow_version WHERE flow_id = ?1'),
-          runs: count('SELECT COUNT(*) AS n FROM flow_run WHERE flow_id = ?1'),
-          removals: count('SELECT COUNT(*) AS n FROM brief_workflow_removals WHERE flow_id = ?1'),
-          triggerEvents: count('SELECT COUNT(*) AS n FROM trigger_event WHERE flow_id = ?1'),
-          files: count('SELECT COUNT(*) AS n FROM workflow_file WHERE flow_id = ?1'),
-          jobs: count(`SELECT COUNT(*) AS n ${jobs}`),
-          storeEntries: count(`SELECT COUNT(*) AS n ${store}`, this.projectId),
-        };
-        runIds = db.query<{ id: string }, [string]>('SELECT id FROM flow_run WHERE flow_id = ?').all(flowId).map(r => r.id);
+        if (flowHasLiveRun(flowId, db)) { held = 'live_run'; return; }
+        if (effectDispatchInFlight(flowId)) { held = 'dispatching'; return; }
+        const carried = parseCounts(p.counts), pending = parseIds(p.files_pending);
         db.run('UPDATE brief_workflow_purges SET granted = 1 WHERE purge_id = ?', [p.purge_id]);
-        db.run(`DELETE ${jobs}`, [flowId]);
-        db.run(`DELETE ${store}`, [flowId, this.projectId]);
-        db.run('DELETE FROM workflow_file WHERE flow_id = ?', [flowId]);
-        db.run('DELETE FROM open_failure WHERE flow_id = ?', [flowId]);
-        // The receipts' foreign key requires them gone before the flow.
-        db.run('DELETE FROM brief_workflow_removals WHERE flow_id = ?', [flowId]);
-        // Versions, runs, effects, waitpoints, trigger events and the slot cascade.
-        if (db.run('DELETE FROM flow WHERE id = ? AND project_id = ?', [flowId, this.projectId]).changes === 0) throw new Error('purge_flow_missing');
+        if (flowHistoryOverBatch(flowId, db)) {
+          const part = deleteFlowHistoryBatch(flowId, db);
+          // Still pending: the counts so far and the files to remove ride on the receipt.
+          db.run('UPDATE brief_workflow_purges SET granted = 0, counts = ?, files_pending = ? WHERE purge_id = ?',
+            [JSON.stringify(addCounts(carried, part.counts)), JSON.stringify([...pending, ...part.runIds]), p.purge_id]);
+          batch = { purgeId: p.purge_id, runIds: part.runIds };
+          return;
+        }
+        const last = deleteFlowRows(flowId, this.projectId, db);
+        if (!last.deleted) throw new Error('purge_flow_missing');
+        runIds = [...pending, ...last.runIds];
         // The run ids name the payload files kept beside the database, removed after commit.
         db.run('UPDATE brief_workflow_purges SET granted = 0, completed_at = ?, counts = ?, files_pending = ? WHERE purge_id = ?',
-          [this.now(), JSON.stringify(counts), JSON.stringify(runIds), p.purge_id]);
+          [this.now(), JSON.stringify(addCounts(carried, last.counts)), JSON.stringify(runIds), p.purge_id]);
         completed = p.purge_id;
-      }).immediate();
+      }).immediate(); } finally { db.run(`PRAGMA secure_delete = ${secureDelete === 2 ? 'FAST' : secureDelete ? 'ON' : 'OFF'}`); }
       if (held) {
-        if (this.purgeFailures.get(`flow:${flowId}`) !== 'live_run') console.warn(`[Workflow Removal] purge of ${flowId} waits for a run that is still live`);
-        this.purgeFailures.set(`flow:${flowId}`, 'live_run');
+        if (this.purgeFailures.get(`flow:${flowId}`) !== held) {
+          console.warn(`[Workflow Removal] purge of ${flowId} waits for ${held === 'live_run' ? 'a run that is still live' : 'an effect still being dispatched'}`);
+        }
+        this.purgeFailures.set(`flow:${flowId}`, held);
       } else this.purgeFailures.delete(`flow:${flowId}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (this.purgeFailures.get(`flow:${flowId}`) !== message) console.error('[Workflow Removal] purge left pending for retry:', error);
       this.purgeFailures.set(`flow:${flowId}`, message);
     }
+    if (batch) {
+      const { purgeId, runIds: done } = batch as { purgeId: string; runIds: string[] };
+      this.removeBatchFiles(purgeId, done);
+      // The next batch on the next turn of the event loop, not at the next recovery pass.
+      if (!this.batching.has(flowId)) {
+        this.batching.add(flowId);
+        setImmediate(() => {
+          this.batching.delete(flowId);
+          // Stopped meanwhile (shutdown): recovery finishes it when the service runs again.
+          try {
+            if (!this.triggers || getWorkflowDb() !== this.db) return;
+            this.finishPurge(flowId);
+          } catch (error) { console.error('[Workflow Removal] purge batch failed; recovery retries it:', error); }
+        });
+      }
+    }
     // Run payloads kept beside the database: the engine's execution-state
     // backups and the disk copies of step files. Best effort once the rows are gone.
-    if (completed) this.removePurgedFiles(completed, flowId, runIds);
+    // A recovery pass that completes many purges wipes once, at its end.
+    if (completed) { this.walWipePending = true; if (accepting) this.wipeWal(); this.removePurgedFiles(completed, flowId, runIds); }
     // Unregister at acceptance (the flow is off) and once it is gone; a pass that changed nothing does not.
     if (completed || accepting) void this.triggers?.refresh(flowId).catch(() => { /* Local delivery is fenced by the missing flow. */ });
+  }
+  private readonly batching = new Set<string>();
+  /** A batch's run files, removed now and taken off the still-pending receipt's list. */
+  private removeBatchFiles(purgeId: string, runIds: string[]): void {
+    try {
+      removeRunFiles(runIds);
+      const gone = new Set(runIds);
+      const p = this.db.query<{ files_pending: string | null }, [string]>(
+        'SELECT files_pending FROM brief_workflow_purges WHERE purge_id = ? AND completed_at IS NULL').get(purgeId);
+      if (p) this.db.run('UPDATE brief_workflow_purges SET files_pending = ? WHERE purge_id = ?',
+        [JSON.stringify(parseIds(p.files_pending).filter(r => !gone.has(r))), purgeId]);
+    } catch (error) {
+      // Left on the receipt's list; the purge's completion removes them.
+      const message = error instanceof Error ? error.message : String(error);
+      if (this.purgeFailures.get(`files:${purgeId}`) !== message) console.error('[Workflow Removal] purged run files could not all be removed:', error);
+      this.purgeFailures.set(`files:${purgeId}`, message);
+    }
   }
   /**
    * Run payloads kept beside the database: the engine's execution-state
@@ -309,8 +381,8 @@ export class WorkflowRemoval {
    */
   private removePurgedFiles(purgeId: string, flowId: string, runIds: string[]): void {
     try {
-      for (const runId of runIds) if (id(runId)) rmSync(resolve(workflowLogsBase(), `${runId}.bin`), { force: true });
-      if (id(flowId)) rmSync(resolve(workflowFileBase(), flowId), { recursive: true, force: true });
+      removeRunFiles(runIds.filter(id));
+      if (id(flowId)) removeFlowFiles(flowId);
       this.db.run('UPDATE brief_workflow_purges SET files_pending = NULL WHERE purge_id = ?', [purgeId]);
       this.purgeFailures.delete(`files:${purgeId}`);
     } catch (error) {

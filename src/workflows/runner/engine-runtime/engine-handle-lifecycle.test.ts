@@ -253,7 +253,9 @@ describe("EngineHandle operation lifecycle", () => {
       utimesSync(dir, old, old);
       return dir;
     };
-    const pruneAll = () => pruneCodeTrees({ baseCodeDir, needed: () => new Set() });
+    // A pass refreshes the mtime of leased trees (#1154), so it looks from two
+    // days on: only the lease, not that refresh, can keep a tree here.
+    const pruneAll = () => pruneCodeTrees({ baseCodeDir, needed: () => new Set(), now: Date.now() + 2 * 24 * 60 * 60_000 });
 
     test("while the engine is executing the flow", async () => {
       const dir = staleTree("v-running");
@@ -305,6 +307,40 @@ describe("EngineHandle operation lifecycle", () => {
       expect((await pruneAll()).removed).toEqual(["v-abandoned"]);
     });
 
+    // #1154: a cancelled run's RPC can stay pending for its whole deadline
+    // after its engine was killed; the tree goes back with the engine.
+    test("a run whose engine was killed gives its tree back though its RPC never settles", async () => {
+      const dir = staleTree("v-killed");
+      let sent!: () => void;
+      const engineHasIt = new Promise<void>((r) => (sent = r));
+      const engine = fakeEngine(() => {
+        sent();
+        return new Promise<EngineResponse<unknown>>(() => {});
+      });
+      // A process that exits only when the test says so: the lease must last
+      // until the engine has exited, not just until it was signalled.
+      const proc = fakeProc();
+      let exitNow!: () => void;
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((r) => {
+        exitNow = () => r({ code: null, signal: "SIGTERM" });
+      });
+      let alive = true;
+      const slowProc = { ...proc, exited, alive: () => alive, kill: (signal: NodeJS.Signals = "SIGTERM") => { proc.killed.push(signal); } };
+      const handle = makeHandle(engine, slowProc);
+      void handle.executeFlow({ flowVersion: flowVersion("v-killed") });
+      await engineHasIt;
+      expect((await pruneAll()).removed).toEqual([]);
+      const killing = handle.killAndTerminate();
+      expect(proc.killed).toEqual(["SIGTERM"]);
+      // Signalled, not exited: still leased.
+      expect((await pruneAll()).removed).toEqual([]);
+      alive = false;
+      exitNow();
+      await killing;
+      expect((await pruneAll()).removed).toEqual(["v-killed"]);
+      expect(existsSync(dir)).toBe(false);
+    });
+
     test("a run abandoned after its engine was already killed gives its tree back", async () => {
       const dir = staleTree("v-late");
       let fail!: () => void;
@@ -342,7 +378,7 @@ describe("EngineHandle operation lifecycle", () => {
           },
         },
       } as unknown as UpstreamFlowVersion;
-      await expect(handle.executeFlow({ flowVersion: refused })).rejects.toThrow(/outside the code directory/);
+      await expect(handle.executeFlow({ flowVersion: refused })).rejects.toThrow(/is not a plain directory name/);
       expect((await pruneAll()).removed).toEqual(["v-refused"]);
     });
   });

@@ -5,7 +5,7 @@ import type {
   SettingsHook,
   TTSProvider,
 } from "../useSettingsData";
-import { allowedFieldText, parseDiscordIds, parseTelegramIds } from "./channel-ids";
+import { allowedFieldText, allowedToSend, parseDiscordIds, parseTelegramIds } from "./channel-ids";
 import { ownerNotice, recipientNotice } from "./channel-recipient";
 
 import { UJ_VOICES, EDGE_VOICES } from "../../../../../../src/comms/voice-options";
@@ -229,7 +229,7 @@ export function ChannelsTab({
               }
               const r = await data.setTelegram({
                 bot_token: tgToken || undefined,
-                allowed_users: allowed.ids,
+                allowed_users: allowedToSend(allowed.ids, tgAllowed, !!channelCfg),
               });
               if (r.ok) setTgToken("");
               onToast(r.message, r.ok ? "ok" : "warn");
@@ -320,7 +320,7 @@ export function ChannelsTab({
               }
               const r = await data.setDiscord({
                 bot_token: dcToken || undefined,
-                allowed_users: allowed.ids,
+                allowed_users: allowedToSend(allowed.ids, dcAllowed, !!channelCfg),
                 // An emptied field sends null, which clears the saved guild;
                 // undefined is dropped by JSON and keeps it (#913). Before the
                 // config has loaded the field is empty unseen, so keep it then.

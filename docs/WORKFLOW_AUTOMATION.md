@@ -2,7 +2,7 @@
 
 A contributor-facing guide to the workflow system: what it is, how it runs, and where every moving part lives. Read this before touching anything under `src/workflows/`.
 
-> **Heads up:** this system was rewritten from scratch on the `feat/workflows` branch. The old in-process executor, the 50-node hand-rolled registry, and `src/vault/workflows.ts` are gone. The runtime now sits on a vendored copy of the [Activepieces](https://github.com/activepieces/activepieces) engine spawned as a sandboxed child process. If you find a doc or comment that still describes "topo sort + self-heal + NLBuilder", it's stale; refer to this file.
+> **Heads up:** this system was rewritten from scratch on the `feat/workflows` branch. The old in-process executor, the 50-node hand-rolled registry, and `src/vault/workflows.ts` are gone. The runtime now sits on a vendored copy of the [Activepieces](https://github.com/activepieces/activepieces) engine spawned as a child process (not an OS sandbox: see "Trust model"). If you find a doc or comment that still describes "topo sort + self-heal + NLBuilder", it's stale; refer to this file.
 
 ## Reading order
 
@@ -864,21 +864,60 @@ latest version and ran it. Now:
   16.5 MiB (512 / 16.5 gives the count cap); firebase-admin has the most
   entries at 6,080, the median 1,571, and 32 median packages make 50,272.
 - The caps are per step: a version with several CODE steps can hold that
-  much per step. They bound the step's TREE. Bun downloads into its own install cache
-  (`~/.bun/install/cache`) first and links from there, so a refused install
-  can leave what it already fetched in that cache, and the cache is not
-  pruned here (`bun pm cache rm` clears it).
+  much per step. They bound the step's TREE.
+- CODE-step installs use an install cache of their own,
+  `~/.jarvis/workflow-codes/.install-cache` (#1154), set through
+  `BUN_INSTALL_CACHE_DIR`, which wins over a user's own `BUN_INSTALL_CACHE_DIR`,
+  `--cache-dir` or bunfig cache setting (measured, bun 1.3.8); Bun's shared
+  `~/.bun/install/cache` is no longer used or filled by them. It sits beside
+  the trees, so packages are still hard-linked rather than copied. An install
+  that is refused or fails has the cache entries it added removed again, and
+  after each install the cache is trimmed to 1 GiB (apparent size) and
+  131,072 entries, least recently used first; an install marks the entries of
+  the packages it installed as used. A trimmed package is downloaded again by
+  the next install that needs it; existing trees keep their own links.
+  Installs from before #1154 may have left downloads in
+  `~/.bun/install/cache`; `bun pm cache rm` clears that cache.
+- One version's CODE steps together may hold at most 2 GiB and 262,144
+  entries, four steps at the step caps (#1154): an install that would take the
+  version past that is refused like one over the step cap, naming the step,
+  and the version's other steps keep their trees.
 - Every version that ran a CODE step has a tree under
   `~/.jarvis/workflow-codes/<versionId>/`. The daemon removes a tree at start
   and hourly unless its version is a flow's published version or current
-  draft, the version of a queued, running or paused run or of a queued or
+  draft, the version of a run that can still continue or of a queued or
   running job, a run in the daemon is using it, or it was used in the last 24
   hours (that last rule protects another process sharing the directory, such
   as an evaluation run). A tree is rebuilt from its version on every run, so
   a pruned version that runs again simply installs again.
-- With Bun's install cache on the same filesystem (the default), a tree is
+- A run that can still continue (#1154) is one paused on a waitpoint nobody
+  has resumed yet, or one a queued or running job names. A run left RUNNING
+  by a crash with no job to recover it, QUEUED with no job to start it, or
+  PAUSED with every waitpoint already consumed, no longer keeps its tree. A
+  run paused on a waitpoint that never fires keeps its tree for as long as it
+  waits, size budget or not.
+- After that, if the trees together hold more than 4 GiB (apparent size) or
+  524,288 entries (two versions at their limit), the least recently used are
+  removed until they fit, published versions and current drafts included; they install again on
+  their next run. No lockfile is kept, so a step that declares a range or a
+  dist-tag can then get a newer matching version than its earlier runs did;
+  pin exact versions where that matters. Never removed for size: the tree of
+  a run that can still continue, one the daemon is using, or one used within
+  the last 2 hours.
+- A run keeps its tree's mtime fresh every hour while it holds it, and at the
+  start of each prune, so a run longer than 24 hours in another process keeps
+  its tree too.
+- A CODE step that a draft renamed or removed has its directory removed from
+  the version's tree at the version's next run, unless a run still uses it or
+  it was used in the last 24 hours. Until then it does not count against the
+  version's 2 GiB.
+- With the install cache on the same filesystem, a tree is
   hard links into the cache: a second tree of googleapis and aws-sdk took
   2.5 MB of new disk.
+
+### Trust model
+
+The engine and the CODE-step child it spawns run as the daemon's own OS user, with no OS sandbox (#1154). The sanitized environment is defense in depth only: same-user code can read the daemon's own environment through `/proc`, read and write anything that user can (`~/.jarvis` included, and so other flows' files and store entries), and use the network. Treat a CODE step, and a third-party piece, as code you run on the host. A warm engine is reused only within one project and flow, which keeps accidental in-memory state apart, not hostile code.
 
 ### `{{ ... }}` expressions are data, not JavaScript
 
@@ -1290,7 +1329,7 @@ Following a single run from a user click to a SUCCEEDED row:
 1. User clicks **Run** in the editor. UI calls `POST /api/workflows/:id/run`.
 2. `createFlowRun()` writes a `flow_run` row in QUEUED state; `enqueue()` adds a `RUN_FLOW` job.
 3. The worker drains the job. `RUN_FLOW` resolves the flow version, materializes any CODE pieces onto disk, then calls `EngineFlowExecutor.executeFlow()`.
-4. `EngineRuntime.acquire()` either picks up the warm engine or spawns a fresh one. Spawn passes `AP_SANDBOX_WS_PORT` + an engine token in env.
+4. `EngineRuntime.acquire()` either picks up the warm engine or spawns a fresh one. Spawn passes `AP_SANDBOX_WS_PORT` + an engine token in env. A warm engine is reused only for the same project and flow (#1154): pieces run inside the engine process, so in-memory state one flow's pieces keep does not carry over into another flow's run. That separates accidental state, not hostile code (see below); switching flows costs a cold acquire (measured about 180 ms on an idle desktop; more on a loaded small host).
 5. The engine subprocess imports the populated flow's pieces (Jarvis pieces via dev-pieces resolution, community pieces via `node_modules`), runs the trigger payload through each step, and streams `WorkerContract.updateStepProgress` events back over the WS for every step boundary.
 6. The UI's runs panel polls `/api/workflows/:id/runs` adaptively (faster while a run is RUNNING). The overlay on the canvas reflects the latest step status.
 7. On terminal status, the engine sends `WorkerContract.updateRunProgress(SUCCEEDED|FAILED|PAUSED)` plus `uploadRunLog` (zstd execution-state). The handler updates the row and releases the engine back to the pool.
@@ -1404,7 +1443,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | GET | `/api/workflows/readiness` | Readiness of every ENABLED flow's executable version. `?limit` (default 100, max 100), `?offset`; answers `{ items, nextOffset }` |
 | GET | `/api/workflows/:id` | Flow + latest draft + published version + the editable version's `uiMeta` |
 | PATCH | `/api/workflows/:id` | Enable / disable (`status`) and set `metadata`. Renaming is a version write, not this |
-| DELETE | `/api/workflows/:id` | Delete flow + cascade |
+| DELETE | `/api/workflows/:id` | Delete the flow and what it leaves: runs, versions, jobs, trigger events, flow-scoped store keys, step-file rows and their disk copies, run state backups, and the cards of runs that already ended. Stops its runs first and waits up to 10 s for effects they already dispatched to be recorded; one still running answers 409 (`code: workflow_stopping`) and the workflow stays, turned off (part of a large history may already be gone; deleting again finishes it). The workflow is turned off as the delete starts, so no trigger starts a run meanwhile. A large history goes in batches of 1,000 runs. 409 `workflow_history_retained` for a workflow removed in Brief (its purge serves it). Same for `manage_workflow` `delete` |
 | GET | `/api/workflows/:id/versions` | Version history |
 | POST | `/api/workflows/:id/versions` | New draft version. `{ displayName, trigger?, uiMeta? }` |
 | GET | `/api/workflows/:id/versions/:vid` | Get version + its `uiMeta` |
@@ -1659,7 +1698,7 @@ The drift test (`runtime/test-fixtures-drift.test.ts`) compares the live engine-
 - **Flow run** -- one execution of a flow version. Has a status (QUEUED / RUNNING / SUCCEEDED / FAILED / PAUSED / TIMEOUT / INTERNAL_ERROR / QUOTA_EXCEEDED / STOPPED / MEMORY_LIMIT_EXCEEDED / SCHEDULE_FAILURE) and a checkpointed execution state. See "Run status lifecycle".
 - **Connection** -- a stored credential bound to a piece's auth shape. Encrypted at rest.
 - **Engine** -- the vendored Activepieces flow executor, built as a CJS bundle and spawned as a child Bun process.
-- **Engine subprocess** -- one instance of the engine, running with a unique sandbox id and engine token. Held in a single-slot warm pool with a 5min idle TTL.
+- **Engine subprocess** -- one instance of the engine, running with a unique sandbox id and engine token. Held in a single-slot warm pool with a 5min idle TTL, reused only for the same project and flow.
 - **`outputSample`** -- a literal sample object an action declares to describe its return shape. The variable picker reads from this; the LLM composer reads from this. Required on every action.
 - **`PATCHED_VENDOR_SOURCES`** -- the explicit list of vendored upstream files we patch in this fork. Editing any of them must flip the engine bundle hash.
 - **`CATALOG_SCHEMA_VERSION`** -- a string mixed into the piece-metadata cache key. Bump it whenever you change the catalog projection format.

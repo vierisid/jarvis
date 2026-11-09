@@ -12,6 +12,7 @@ import { createFact, correctFact, findFacts } from '../vault/facts';
 import { saveUserProfile } from '../vault/user-profile';
 import { withMemoryRecall } from '../vault/memory-use-context';
 import { MemoryForget } from '../brief/memory-forget';
+import { addMessage, getOrCreateConversation } from '../vault/conversations';
 import type { JarvisConfig } from '../config/types';
 import type { RoleDefinition } from '../roles/types';
 import type { LLMMessage, LLMProvider, LLMResponse } from '../llm/provider';
@@ -112,4 +113,32 @@ for (const mutation of ['correct', 'forget'] as const) test(`paused task refresh
   expect(JSON.stringify(seen.flat().filter(m => m.role === 'system'))).not.toContain('Original value');
   if (mutation === 'correct') expect(JSON.stringify(seen)).toContain('Current value');
   expect(JSON.stringify(seen)).toContain('Continue');
+});
+for (const router of [false, true]) test(`${router ? 'router' : 'classic'} owner channel turn fences a recall forgotten mid-turn (#1155)`, async () => {
+  // Every other dialogue entry runs inside withMemoryRecall; the owner's
+  // channel turn did not, so memory forgotten while it was being prepared
+  // still reached the provider.
+  const fact = createFact(createEntity('person', 'Ada Finch').id, 'editor', 'Original value', { confirmed: true });
+  const seen: LLMMessage[][] = [];
+  const provider: LLMProvider = { name: 'fixture', listModels: async () => [],
+    chat: async messages => { seen.push(structuredClone(messages)); return response; },
+    async *stream(messages) { seen.push(structuredClone(messages)); yield { type: 'done', response }; } };
+  const { service, manager } = stack(router, provider);
+  let pending = true;
+  for (const name of ['chat', 'chatTier', 'stream', 'streamTier'] as const) {
+    const original = manager[name].bind(manager);
+    (manager as any)[name] = (...args: any[]) => {
+      if (pending) { pending = false; change(fact.id, 'forget'); }
+      return (original as any)(...args);
+    };
+  }
+  const conversation = getOrCreateConversation('telegram', { sender: 'user:42/chat:42' });
+  addMessage(conversation.id, { role: 'user', content: 'Ada Finch editor interests' });
+  const turn = service.handleThreadMessage('Ada Finch editor interests', 'telegram',
+    { conversationId: conversation.id, contextKey: 'channel:telegram:user:42/chat:42', sender: 'owner' });
+  const outcome = await turn.then((text) => ({ text }), (err: unknown) => ({ err }));
+  // Refused before the provider, as the dashboard turn is, or answered
+  // without the forgotten value: never with it.
+  expect(JSON.stringify(seen)).not.toContain('Original value');
+  if ('text' in outcome) expect(outcome.text).not.toContain('Original value');
 });
