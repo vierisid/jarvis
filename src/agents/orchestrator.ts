@@ -1,4 +1,5 @@
 import type { RoleDefinition } from '../roles/types.ts';
+import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { SystemPromptParts } from '../roles/prompt-builder.ts';
 import type { LLMMessage, LLMResponse, LLMStreamEvent, LLMToolCall, LLMTool, ContentBlock } from '../llm/provider.ts';
 import { capTextBlocks, guardImageSize } from '../llm/provider.ts';
@@ -905,7 +906,9 @@ export class AgentOrchestrator {
     // the primary history is the one the dashboard chat writes, so a stranger
     // messaging the bot read the owner's dashboard conversation. The thread
     // is read, never written: the caller persists the turn itself.
-    thread?: { history: LLMMessage[] } | null,
+    // `untrustedSources` seed the turn's taint, as streamMessage's do: a
+    // message the owner forwarded is outside content from the start (#1155).
+    thread?: { history: LLMMessage[]; untrustedSources?: string[] } | null,
     // This chat's taint carry-over (agents/turn-taint-carry.ts): the turn's
     // taint set comes from it, so a bare "yes" after a tainted turn starts
     // tainted. The caller closes it when the turn ends.
@@ -920,7 +923,10 @@ export class AgentOrchestrator {
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else, unless the
     // message is a bare "yes" to a tainted turn (agents/turn-taint-carry.ts).
+    // The thread's untrusted sources join the same set, so they are recorded
+    // in the carry too: a bare yes after a forward stays tainted (#1155).
     const turnTaint = carry?.open() ?? new Set<string>();
+    for (const source of ownThread?.untrustedSources ?? []) turnTaint.add(source);
     // The browser snapshots THIS loop reads (remote #827, local #1161), entered around each of its tool
     // calls, so a browser card it raises binds the snapshot it read and not
     // the newest one another channel or the voice route took (#827,
@@ -1913,6 +1919,12 @@ export class AgentOrchestrator {
     scope: TurnToolScope | null,
   ): Promise<string | ContentBlock[]> {
     signal?.throwIfAborted();
+    // The caller's dispatch fence, before the gate (#1155): a channel turn
+    // whose sender was removed mid-turn must not raise an approval card for a
+    // call the registry would then refuse. The registry checks again. A
+    // refusal here ends the whole turn (it throws out of the loop), as an
+    // abort does, rather than coming back to the model as a tool error.
+    checkpointExecution();
     if (!this.toolRegistry) {
       return `Error: No tool registry configured`;
     }
