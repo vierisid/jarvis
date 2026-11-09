@@ -30,7 +30,10 @@ import { cancelFlowRun } from '../db/repos/run-cancellation';
 import { HUMAN_INPUT_PIECE, type HumanRequest } from './human-input-contract';
 import { dismissHumanInput, listHumanInputs, requestHumanInput, resolveHumanInput, resumeHumanInputs } from './human-input';
 import { createWorkflowRoutes } from '../api/routes';
+import { BriefCapabilities } from '../../brief/capabilities';
 import { listWaitpointsByFlowRun } from '../db/repos/waitpoint';
+/** Needs you is the Brief decisions feature: its answer routes refuse with it off (#1266). */
+const decisionsOn = new BriefCapabilities([{ id: 'decisions', provider: { readiness: () => 'ready' as const } }], ['decisions']);
 let dir: string, api: SandboxApi, runtime: EngineRuntime, worker: Worker, catalog: PieceCatalog;
 const runs: string[] = [];
 beforeAll(async () => {
@@ -143,7 +146,7 @@ for (const outcome of ['reject', 'cancel', 'expire']) test(`legacy Wait for Appr
 test('public waitpoint URL and wrong project cannot answer a human request; stopping closes it', async () => {
   const f = fixture(), run = await f.run(), request = requestFor(run.id);
   expect(resolveHumanInput('wrong-project', request.id, { decision: 'submit', answers }).status).toBe(404);
-  const routes = createWorkflowRoutes(); const wp = listWaitpointsByFlowRun(run.id)[0]!;
+  const routes = createWorkflowRoutes({ briefCapabilities: decisionsOn }); const wp = listWaitpointsByFlowRun(run.id)[0]!;
   const req = Object.assign(new Request('http://localhost/api/webhooks/waitpoints/' + wp.id, { method: 'POST', body: JSON.stringify({ answers }) }), { params: { id: wp.id } });
   expect((await routes['/api/webhooks/waitpoints/:id']!.POST!(req)).status).toBe(403);
   expect(cancelFlowRun(run.id).accepted).toBe(true); expect(requestFor(run.id).status).toBe('cancelled'); expect(respond(request).status).toBe(409);
@@ -201,7 +204,7 @@ test('accepted answer exposes failed continuation and its exact run after databa
   const receipt = requestFor(run.id); expect(receipt.status).toBe('submitted');
   expect(receipt.runs).toEqual([{ runId: run.id, versionId: f.version.id, status: 'FAILED' }]);
   const { humanRequestNeedsAttention } = await import('./human-input-contract'); expect(humanRequestNeedsAttention(receipt)).toBe(true);
-  const routes = createWorkflowRoutes();
+  const routes = createWorkflowRoutes({ briefCapabilities: decisionsOn });
   const response = await routes['/api/workflow-inputs']!.GET!(new Request('http://localhost/api/workflow-inputs'));
   expect((await response.json()).requests.find((r: HumanRequest) => r.id === receipt.id).runs).toEqual(receipt.runs);
 });
@@ -246,7 +249,7 @@ test('a failed continuation stays until dismissed in its own project, and dismis
   const graph = structuredClone(f.version.trigger);
   graph.nextAction!.nextAction = step('failed', '@jarvispieces/piece-jarvis-subflow', 'require_success', { result: { status: 'failed', code: 'FIXTURE_FAILURE' } });
   updateDraftVersion(f.version.id, { trigger: graph });
-  const run = await f.run(), request = requestFor(run.id), routes = createWorkflowRoutes();
+  const run = await f.run(), request = requestFor(run.id), routes = createWorkflowRoutes({ briefCapabilities: decisionsOn });
   const dismiss = (id: string) => routes['/api/workflow-inputs/:id/dismiss']!.POST!(Object.assign(
     new Request(`http://localhost/api/workflow-inputs/${id}/dismiss`, { method: 'POST' }), { params: { id } }));
   expect((await dismiss(request.id)).status).toBe(409);
@@ -289,7 +292,7 @@ for (const decision of ['submit', 'cancel']) test(`a delayed ${decision} cannot 
   const old = requestFor(first.id); listHumanInputs(DEFAULT_IDS.project, old.deadline);
   const second = await f.run('stale-' + decision), current = requestFor(second.id);
   expect(current.generation).toBe(1);
-  const routes = createWorkflowRoutes();
+  const routes = createWorkflowRoutes({ briefCapabilities: decisionsOn });
   for (const generation of [undefined, 0, '1', -1, 1.5]) {
     const body = { decision, generation, ...(decision === 'submit' ? { answers } : {}) };
     const response = await routes['/api/workflow-inputs/:id']!.POST!(Object.assign(new Request('http://localhost/api/workflow-inputs/' + old.id,
@@ -326,7 +329,7 @@ test('older closed requests remain directly accessible and history uses closure 
     db.run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status,closed_at) VALUES (?,?,?,?,?,?,'submitted',?)`,
       [`history-${i}`, DEFAULT_IDS.project, f.flow.id, 'x', JSON.stringify({ ...request, id: `history-${i}`, created: closed + i, deadline: closed + 1000000 - i, answers }), closed + 1000000 - i, closed + i]);
   }
-  const routes = createWorkflowRoutes();
+  const routes = createWorkflowRoutes({ briefCapabilities: decisionsOn });
   const get = async (path: string, key: string, params = {}) => routes[key]!.GET!(Object.assign(new Request('http://localhost' + path), { params }));
   const listed = await (await get('/api/workflow-inputs', '/api/workflow-inputs')).json();
   expect(listed.requests.some((r: HumanRequest) => r.id === 'history-24')).toBe(true);
@@ -348,7 +351,7 @@ test('older closed requests remain directly accessible and history uses closure 
 });
 
 test('response and dismissal bodies are capped while they stream, without a declared length', async () => {
-  const routes = createWorkflowRoutes();
+  const routes = createWorkflowRoutes({ briefCapabilities: decisionsOn });
   // 64 chunks of 16 KB, pulled one at a time, so the test sees how much of the body was read.
   let pulled = 0;
   const post = (path: string, id: string) => {
@@ -443,3 +446,30 @@ for (const reference of ['{{loop}}', '{{loop.iterations}}']) test(`loop answers 
   expect(iterations.map((i: any) => i.ask.output.answers.count)).toEqual([0, 2.25]);
   expect(iterations.every((i: any) => i.ask.output.answers.blocked === false)).toBe(true);
 }, 60000);
+
+// #1266 follow-up: the cap of 20 pending requests a flow may have stays; a run refused by it says why.
+test('a flow at its 20 unanswered requests fails the asking step with a reason a person can act on', async () => {
+  const f = fixture(), db = getWorkflowDb();
+  /** `n` requests still waiting, each for a run of the flow that is paused on it. */
+  const seed = (n: number) => { for (let i = 0; i < n; i++) {
+    const waiting = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id, status: 'PAUSED' }); runs.push(waiting.id);
+    db.run(`INSERT INTO workflow_human_request (id,project_id,flow_id,fingerprint,record,deadline,status) VALUES (?,?,?,?,?,?,'pending')`,
+      [`cap-${i}`, DEFAULT_IDS.project, f.flow.id, 'x', JSON.stringify({ id: `cap-${i}`, kind: 'input', title: 't', prompt: 'p', fields: [], flowId: f.flow.id, runId: waiting.id, created: Date.now(), deadline: Date.now() + 3_600_000, status: 'pending', answers: null }), Date.now() + 3_600_000]);
+  } };
+  seed(20);
+  const run = await f.run('cap');
+  expect(run.status).toBe('FAILED');
+  // The engine's step error carries Jarvis's own reason, not "internal error".
+  expect(run.failedStep?.errorMessage).toContain('This workflow already has 20 requests waiting for an answer in Needs you (the limit is 20). Answer, reject or cancel');
+  expect(run.failedStep?.errorMessage).not.toContain('internal error');
+  const { runFailure } = await import('./run-failure');
+  expect(runFailure(run)).toMatchObject({ category: 'not_started', effect: 'none', code: 'HUMAN_INPUT_LIMIT',
+    headline: 'The step "ask" did not run: this workflow already has 20 requests waiting for an answer in Needs you. Answer, reject or cancel some of them there, or stop runs waiting on them, first.',
+    detail: expect.stringContaining('or stop runs that are waiting on them, then run it again.') });
+  expect(listHumanInputs(DEFAULT_IDS.project).filter(r => r.runId === run.id)).toEqual([]);
+  db.run("DELETE FROM workflow_human_request WHERE id LIKE 'cap-%'");
+  // One under the limit, the step asks as before.
+  seed(19);
+  expect((await f.run('cap-under')).status).toBe('PAUSED');
+  db.run("DELETE FROM workflow_human_request WHERE id LIKE 'cap-%'");
+});

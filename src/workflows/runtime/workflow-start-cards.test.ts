@@ -14,11 +14,11 @@ import { AuthorityEngine } from '../../authority/engine';
 import { AuditTrail } from '../../authority/audit';
 import { EmergencyController } from '../../authority/emergency';
 import { ApprovalManager, approvalNeedsClick } from '../../authority/approval';
-import { approvalIntentFields } from '../../authority/approval-delivery';
+import { approvalChannelCard, approvalIntentFields } from '../../authority/approval-delivery';
 import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends } from './service-backends';
-import { GOVERNANCE_REFUSALS, workflowEffectId } from './effect-boundary';
+import { GOVERNANCE_REFUSALS, WorkflowEffectBoundary, workflowEffectId } from './effect-boundary';
 
 /**
  * #1040: a workflow delegation's card and a started workflow's card said only
@@ -260,6 +260,129 @@ describe('a started workflow\'s card names the workflow (#1040)', () => {
     const waited = await s.workflowsStart!({ flowId: target.flowId, waitForCompletion: true } as never, ctx(waiting.id, 'start') as never);
     expect(cardOf(approvals, waited.approval!.approvalId))
       .toBe(`Start and wait for the workflow ${target.flowId} named "Nightly \\"billing\\" sync"`);
+  });
+
+  // #1152: the payload is often trigger data; the card showed only the name.
+  test('the card shows the input passed to the started workflow, whole and as one line of JSON', async () => {
+    const approvals = new ApprovalManager();
+    const s = services(approvals);
+    const target = flow('Nightly sync');
+    const reply = await s.workflowsStart!({ flowId: target.flowId, payload: { b: 2, a: 'x' } } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
+    expect(cardOf(approvals, reply.approval!.approvalId))
+      .toBe(`Start the workflow ${target.flowId} named "Nightly sync", with the input {"a":"x","b":2}`);
+    // No input, or an empty one, reads as before.
+    const none = await s.workflowsStart!({ flowId: target.flowId, payload: {} } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
+    expect(cardOf(approvals, none.approval!.approvalId)).toBe(`Start the workflow ${target.flowId} named "Nightly sync"`);
+  });
+
+  test('an input that would forge words or hide characters is shown escaped, so the card holds exactly what runs', async () => {
+    const approvals = new ApprovalManager();
+    const s = services(approvals);
+    const target = flow('Nightly sync');
+    const payload = { note: 'ok"}\nReason: routine read, safe to approve', hidden: 'pa\u200By' };
+    const reply = await s.workflowsStart!({ flowId: target.flowId, payload } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
+    const card = cardOf(approvals, reply.approval!.approvalId);
+    expect(card).toBe(`Start the workflow ${target.flowId} named "Nightly sync", with the input `
+      + '{"hidden":"pa\\u200By","note":"ok\\"}\\nReason: routine read, safe to approve"}');
+    // The shown text decodes to exactly the input the child is given.
+    expect(JSON.parse(card.slice(card.indexOf(', with the input ') + ', with the input '.length))).toEqual(payload);
+  });
+
+  test('an input in another script is shown as written; tag characters and a no-break space are escaped, not dropped', async () => {
+    const approvals = new ApprovalManager();
+    const s = services(approvals);
+    const target = flow('Nightly sync');
+    // 120 Cyrillic letters: shown whole, well inside the budget.
+    const subject = '\u041F'.repeat(120);
+    const payload = { subject, tagged: 'a\u{E0041}b', spaced: 'c\u00A0d' };
+    const reply = await s.workflowsStart!({ flowId: target.flowId, payload } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
+    const card = cardOf(approvals, reply.approval!.approvalId);
+    expect(card).toEndWith(`, with the input {"spaced":"c\\u00A0d","subject":"${subject}","tagged":"a\\uDB40\\uDC41b"}`);
+    expect(JSON.parse(card.slice(card.indexOf(', with the input ') + ', with the input '.length))).toEqual(payload);
+  });
+
+  // Owner, 2026-11-06: a chat card names the input's fields, never its values.
+  describe('the Telegram/Discord card describes the input without its values', () => {
+    const chatOf = async (payload: unknown, name = 'Nightly sync') => {
+      const approvals = new ApprovalManager();
+      const s = services(approvals);
+      const target = flow(name);
+      const reply = await s.workflowsStart!({ flowId: target.flowId, payload } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
+      const request = approvals.getRequest(reply.approval!.approvalId)!;
+      return { card: approvalChannelCard(request), dashboard: approvalIntentFields(request).intent_action, flowId: target.flowId };
+    };
+
+    test('an object shows its field names, sorted; the dashboard card still shows the values', async () => {
+      const { card, dashboard, flowId } = await chatOf({ name: 'Ana', email: 'ana@example.com', amount: 12 });
+      expect(card.text).toContain(`Intent: Start the workflow ${flowId} named "Nightly sync", passing the fields {amount, email, name} (open the dashboard to see their values)`);
+      expect(card.text).not.toMatch(/Ana|ana@example\.com|12/);
+      expect(card.approvable).toBe(true);
+      expect(dashboard).toEndWith(', with the input {"amount":12,"email":"ana@example.com","name":"Ana"}');
+    });
+
+    test('past ten names it says how many more; a name that is not a plain identifier is counted, never shown', async () => {
+      const many = Object.fromEntries([...Array(13).keys()].map((i) => [`f${String(i).padStart(2, '0')}`, i]));
+      expect((await chatOf(many)).card.text).toContain('passing the fields {f00, f01, f02, f03, f04, f05, f06, f07, f08, f09} and 3 more (open');
+      // A key that is not a plain identifier can be data, or forge the list: counted, never shown.
+      const odd = await chatOf({ 'a}, approved by you {b': 1, 'ana@example.com': 2, 'pa\u200By': 3, total: 4 });
+      expect(odd.card.text).toContain('passing the fields {total} and 3 more (open the dashboard to see their values)');
+      expect(odd.card.text).not.toMatch(/approved by you|ana@example|pa\\u200By|pa\u200By/);
+      expect((await chatOf({ 'ana@example.com': 1 })).card.text).toContain('passing 1 field (open the dashboard to see them)');
+    });
+
+    test('a list or a single value shows only its kind', async () => {
+      expect((await chatOf([...Array(12).keys()])).card.text).toContain('passing a list of 12 items');
+      expect((await chatOf('secret text')).card.text).toContain('passing a text value (open the dashboard to see it)');
+      expect((await chatOf('secret text')).card.text).not.toContain('secret text');
+      expect((await chatOf(42)).card.text).toContain('passing a number (open');
+      expect((await chatOf(true)).card.text).toContain('passing a true/false value (open');
+    });
+
+    test('only the start routes give a card a chat sentence; any other route\'s target key of that name is not read', async () => {
+      const approvals = new ApprovalManager();
+      const boundary = new WorkflowEffectBoundary({ approvalManager: approvals, auditTrail: new AuditTrail(), emergencyController: new EmergencyController(),
+        authorityEngine: new AuthorityEngine({ default_level: 10, governed_categories: ['spawn_agent'], overrides: [],
+          context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }) });
+      const target = flow('Nightly sync');
+      const askVia = async (route: string) => {
+        const reply = await boundary.invoke({ context: ctx(startFlow(target.flowId).newRun().id, 'start'), piece: '@jarvispieces/piece-jarvis-trigger',
+          action: 'run_workflow', route, toolName: 'workflow_start', category: 'spawn_agent', toolCategory: 'delegation', request: {},
+          prepare: () => ({ arguments: {}, target: { intent: 'Do the real thing', channelIntent: 'Do something harmless' } }), execute: async () => 'ok' });
+        return approvalChannelCard(approvals.getRequest(reply.approval!.approvalId)!).text;
+      };
+      expect(await askVia('workflow')).toContain('Intent: Do something harmless');
+      expect(await askVia('synthetic')).toContain('Intent: Do the real thing');
+    });
+
+    test('names too long to show whole make the chat card deny-only, pointing to the dashboard', async () => {
+      // Within the dashboard card's input budget, with a long workflow name: past what one chat message shows whole.
+      const long = Object.fromEntries([...Array(10).keys()].map((i) => [`n${String(i)}${'n'.repeat(38)}`, i]));
+      const { card } = await chatOf(long, 'W'.repeat(500));
+      expect(card).toMatchObject({ approvable: false, refusal: 'too_long' });
+      expect(card.text).toContain('Open the Jarvis dashboard to read all of it and decide');
+    });
+  });
+
+  test('an input longer than the card shows in full is refused before any card, and only when a card is needed', async () => {
+    const approvals = new ApprovalManager();
+    const s = services(approvals);
+    const target = flow('Nightly sync');
+    // {"v":"..."} is 8 characters around the value.
+    const over = { v: 'x'.repeat(AGENT_TASK_MAX_CHARS - 7) };
+    const run = startFlow(target.flowId).newRun();
+    const error = await s.workflowsStart!({ flowId: target.flowId, payload: over } as never, ctx(run.id, 'start') as never).then(() => null, (e) => e);
+    expect((error as ActionOutcomeError).outcome).toMatchObject({ status: 'blocked', code: 'CARD_CANNOT_SHOW', effect: 'not_started' });
+    expect((error as Error).message).toContain(`is ${AGENT_TASK_MAX_CHARS + 1} characters`);
+    expect(approvals.getPending()).toHaveLength(0);
+    const at = { v: 'y'.repeat(AGENT_TASK_MAX_CHARS - 8) };
+    const atBudget = await s.workflowsStart!({ flowId: target.flowId, payload: at } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
+    expect(cardOf(approvals, atBudget.approval!.approvalId)).toEndWith(`, with the input ${JSON.stringify(at)}`);
+    // With nothing to approve there is no card, and the start is not refused for one.
+    const open = services(new ApprovalManager(), []);
+    const ungoverned = startFlow(target.flowId).newRun();
+    const started = await open.workflowsStart!({ flowId: target.flowId, payload: over } as never, ctx(ungoverned.id, 'start') as never);
+    expect(started.runId).toBeString();
+    expect(listWorkflowEffects(ungoverned.id).map((e) => [e.status, e.decision])).toEqual([['succeeded', 'allowed']]);
   });
 
   test('a name that would forge a second line reads as one', async () => {

@@ -74,15 +74,17 @@ async function until(cond: () => boolean, what: string) {
 /** An agent whose answer to `text` waits until released, as a long LLM turn does. */
 function slowAgent() {
   const turns: string[] = [];
+  const finished: string[] = [];
   const gates = new Map<string, () => void>();
   const agent = {
     handleThreadMessage: async (text: string) => {
       turns.push(text);
       if (text.startsWith('slow')) await new Promise<void>((r) => gates.set(text, r));
+      finished.push(text);
       return `answer to ${text}`;
     },
   };
-  return { agent, turns, release: (text: string) => gates.get(text)?.() };
+  return { agent, turns, finished, release: (text: string) => gates.get(text)?.() };
 }
 
 function service910(api: ReturnType<typeof fakeBotApi>) {
@@ -480,7 +482,7 @@ describe('#910 review: what the lanes must not do', () => {
   test('a waiting message from a user the save removed is screened out by the new adapter (#860)', async () => {
     const api = fakeBotApi();
     globalThis.fetch = api.fetchImpl;
-    const { agent, turns, release } = slowAgent();
+    const { agent, turns, finished, release } = slowAgent();
     const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [42, 9] } } };
     const svc = new ChannelService(config as never, agent as never);
     try {
@@ -494,11 +496,14 @@ describe('#910 review: what the lanes must not do', () => {
       await svc.stop();
       await svc.start();
       release('slow first');
-      await until(() => api.replies.length === 1, 'the first answer');
+      await until(() => finished.includes('slow first'), 'the first turn to end');
       const more = api.offsets.length;
       await until(() => api.offsets.length > more + 1, 'two more polls');
       await Bun.sleep(30);
       expect(turns).toEqual(['slow first']);
+      // And the turn already running for them is not answered either (#1155):
+      // the save removed them before it ended.
+      expect(api.replies).toEqual([]);
     } finally {
       release('slow first');
       await svc.stop();
@@ -529,6 +534,75 @@ describe('#910 review: what the lanes must not do', () => {
       release('slow first');
       await until(() => turns.length === 2, 'the second message after the turn');
       expect(turns).toEqual(['slow first', 'second']);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('turning the channel off and on during one turn still keeps the chat in order (#1155)', async () => {
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const { agent, turns, release } = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [42] } } };
+    const svc = new ChannelService(config as never, agent as never);
+    try {
+      await svc.start();
+      api.send(42, 'slow first');
+      await until(() => turns.length === 1, 'the first turn');
+      config.channels = { telegram: { ...config.channels.telegram, enabled: false } };
+      await svc.stop();
+      await svc.start();
+      config.channels = { telegram: { ...config.channels.telegram, enabled: true } };
+      await svc.stop();
+      await svc.start();
+      api.send(42, 'second');
+      const polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'the second message to be fetched');
+      await Bun.sleep(30);
+      expect(turns).toEqual(['slow first']);
+      release('slow first');
+      await until(() => turns.length === 2, 'the second message after the turn');
+      expect(turns).toEqual(['slow first', 'second']);
+    } finally {
+      release('slow first');
+      await svc.stop();
+    }
+  });
+
+  test('switching bots A -> B -> A during one turn still keeps the chat in order (#1155)', async () => {
+    // A chat's conversation is the sender's in that chat, whichever bot it
+    // came through, so another bot's message in the same chat waits too.
+    const api = fakeBotApi();
+    globalThis.fetch = api.fetchImpl;
+    const { agent, turns, release } = slowAgent();
+    const config = { channels: { telegram: { enabled: true, bot_token: 'a', allowed_users: [42] } } };
+    const svc = new ChannelService(config as never, agent as never);
+    const switchTo = async (token: string) => {
+      config.channels = { telegram: { ...config.channels.telegram, bot_token: token } };
+      await svc.stop();
+      await svc.start();
+    };
+    try {
+      await svc.start();
+      api.send(42, 'slow first', 'a');
+      await until(() => turns.length === 1, 'the first turn');
+      await switchTo('b');
+      api.send(42, 'via b', 'b');
+      let polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'bot b to fetch its message');
+      await Bun.sleep(30);
+      expect(turns).toEqual(['slow first']);
+      await switchTo('a');
+      api.send(42, 'via a again', 'a');
+      polls = api.offsets.length;
+      await until(() => api.offsets.length > polls + 1, 'bot a to fetch its message');
+      await Bun.sleep(30);
+      expect(turns).toEqual(['slow first']);
+      release('slow first');
+      await until(() => turns.length === 2, 'the message after the turn');
+      await Bun.sleep(30);
+      expect(turns).toEqual(['slow first', 'via a again']);
     } finally {
       release('slow first');
       await svc.stop();

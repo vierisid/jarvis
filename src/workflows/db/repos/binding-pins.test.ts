@@ -11,7 +11,7 @@ import { publishFlowVersion } from './flow-publication';
 import { assertFlowReady, assertVersionReady, configureWorkflowReadiness, versionReadiness, WorkflowReadinessError } from './flow-readiness';
 import { deleteConnection, getConnection, upsertConnection } from './app-connection';
 import { createFlowRun, getFlowRun } from './flow-run';
-import { connectionBindings, enforceRunConnectionBinding, listRunConnectionBindings, pinUnpinnedEnabledFlows, readBindingPins } from './binding-pins';
+import { bindingChangesToAccept, bindingDrift, connectionBindings, enforceRunConnectionBinding, listRunConnectionBindings, pinUnpinnedEnabledFlows, readBindingPins } from './binding-pins';
 import { createWorkflowRoutes } from '../../api/routes';
 import { PieceCatalog } from '../../runtime/piece-catalog';
 import { CredentialResolver, type JarvisConnectionSource } from '../../credentials/adapter';
@@ -28,10 +28,10 @@ const managed: JarvisConnectionSource = { id: 'google', pieceNames: ['private-pi
   resolve: async () => null, identity: () => grant };
 
 /** Readiness services belong to one database handle. */
-function configureServices() {
+function readinessFor(): Parameters<typeof configureWorkflowReadiness>[0] {
   const credentials = new CredentialResolver();
   credentials.register(managed);
-  configureWorkflowReadiness({
+  return {
     pieces: new PieceCatalog([
       { name: 'private-piece', displayName: '', description: '', auth: { type: 'SECRET_TEXT' }, actions: { send: { name: 'send', displayName: '', description: '' } } },
       { name: TOOL, displayName: '', description: '', actions: { invoke: { name: 'invoke', displayName: '', description: '' } } },
@@ -40,8 +40,9 @@ function configureServices() {
     tool: name => name === 'read_file' ? { params: [{ name: 'path', type: 'string', required: true }, { name: 'target', type: 'string', required: false }] } : null,
     machines: () => machines,
     localTools: () => localTools,
-  });
+  };
 }
+function configureServices() { configureWorkflowReadiness(readinessFor()); }
 
 beforeEach(() => {
   initWorkflowDb(':memory:');
@@ -74,7 +75,7 @@ const blockers = (flowId: string) => {
 describe('pins are what a person accepted when publishing or enabling', () => {
   test.each([DEFAULT_IDS.project, 'proj_pins_other'])('the connection PATCH preserves pins until credentials change in project %s', async (projectId) => {
     const connection = upsertConnection({ projectId, externalId: 'account', pieceName: 'private-piece',
-      displayName: 'Account', pieceVersion: '1', type: 'SECRET_TEXT', value: { secret: 'first', scope: 'read' } });
+      displayName: 'Account', pieceVersion: '1', type: 'SECRET_TEXT', value: { secret_text: 'first', scope: 'read' } });
     const flow = createFlow({ projectId });
     const version = createDraftVersion({ flowId: flow.id, displayName: 'Pinned', trigger: graph(send()) });
     publishFlowVersion(flow.id);
@@ -91,10 +92,10 @@ describe('pins are what a person accepted when publishing or enabling', () => {
     await patch({ displayName: 'Renamed' });
     await patch({ status: 'ERROR' });
     await patch({ status: 'ACTIVE' });
-    await patch({ value: { scope: 'read', secret: 'first' } });
+    await patch({ value: { scope: 'read', secret_text: 'first' } });
     expect(getConnection(connection.id)!.credentialGeneration).toBe(0);
     expect(blockers(flow.id)).toEqual([]);
-    await patch({ value: { secret: 'different account', scope: 'read' } });
+    await patch({ value: { secret_text: 'different account', scope: 'read' } });
     expect(getConnection(connection.id)!.credentialGeneration).toBe(1);
     expect(blockers(flow.id)).toEqual([expect.stringContaining('was replaced since this workflow was enabled')]);
     const tool = createManageWorkflowTool({ callerProjectId: () => projectId });
@@ -372,6 +373,19 @@ describe('the computer a flow is pinned to', () => {
     const daemon = readFileSync(join(import.meta.dir, '../../../daemon/index.ts'), 'utf8');
     const wiring = daemon.slice(daemon.indexOf('configureWorkflowReadiness({'), daemon.indexOf('pinUnpinnedEnabledFlows()'));
     expect(wiring).toContain('localTools: () => !config.noLocalTools && !isNoLocalTools()');
+  });
+
+  test('the approval gate reads the computer inventory once, so both halves of a computer change come from one read (#1162)', () => {
+    const { flowId, versionId } = published(readFile());
+    // The laptop is gone: the next run would choose this computer. A second read that fails, or
+    // answers differently, must not decide anything.
+    let reads = 0;
+    configureWorkflowReadiness({ ...readinessFor(), machines: () => { if (++reads > 1) throw new Error('inventory changed'); return []; } });
+    expect(bindingChangesToAccept(flowId, versionId)).toEqual(['The computer it runs on changes from Computer laptop to this computer.']);
+    expect(reads).toBe(1);
+    reads = 0;
+    expect(bindingDrift(flowId, versionId, { tolerateInventoryFailure: true }).machine).toMatchObject({ next: { sidecarId: null }, determined: true });
+    expect(reads).toBe(1);
   });
 
   test('a pinned computer that is no longer enrolled blocks admission', () => {

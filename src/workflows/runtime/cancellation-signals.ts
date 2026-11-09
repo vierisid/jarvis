@@ -34,3 +34,23 @@ export function onRunEnded(runId: string, listener: () => void): () => void {
 export function signalRunEnded(runId: string): void {
   for (const listener of [...(endedListeners.get(runId) ?? [])]) listener();
 }
+
+// #1152: a run still executing when its workflow was turned off. The run
+// itself is not interrupted (Q-06), so this is not `signalRunCanceled`, which
+// aborts the executor; it reaches only the background tasks the run started,
+// which are cancelled (owner, 2026-11-06).
+const turnedOffListeners = new Map<string, Set<() => void>>();
+
+export function onRunTurnedOff(runId: string, listener: () => void): () => void {
+  let set = turnedOffListeners.get(runId);
+  if (!set) turnedOffListeners.set(runId, set = new Set());
+  set.add(listener);
+  return () => {
+    set.delete(listener);
+    if (!set.size) turnedOffListeners.delete(runId);
+  };
+}
+
+export function signalRunTurnedOff(runId: string): void {
+  for (const listener of [...(turnedOffListeners.get(runId) ?? [])]) listener();
+}

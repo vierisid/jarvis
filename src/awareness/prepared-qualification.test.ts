@@ -1,3 +1,4 @@
+import { setFlowReadHosts } from '../workflows/db/repos/flow-read-hosts.ts';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { homedir } from 'node:os';
 import { initDatabase } from '../vault/schema.ts';
@@ -371,8 +372,16 @@ describe('prepared proposal qualification', () => {
     const computed = prepare(schedule(step('post', '@activepieces/piece-http', 'send_request', { method: '{{trigger.method}}', url: 'https://hooks.oak.test/invoices' })));
     expect(stepsOf(computed.version.trigger).post).toMatchObject({ category: 'delete_data', decision: 'denied',
       unreviewable: ["send_request's Authority decision depends on values known only at run time"] });
+    // #1153: a GET reads without asking only to a host on the flow's read
+    // list, so one whose URL is computed at run time is judged a send and
+    // said to depend on run-time values; one to a listed literal host reads.
     const fixed = prepare(schedule(step('post', '@activepieces/piece-http', 'send_request', { method: 'GET', url: '{{trigger.url}}' })));
-    expect(stepsOf(fixed.version.trigger).post).toMatchObject({ category: 'read_data', decision: 'auto', unreviewable: [] });
+    expect(stepsOf(fixed.version.trigger).post).toMatchObject({ category: 'send_message', decision: 'approval',
+      unreviewable: expect.arrayContaining(["send_request's Authority decision depends on values known only at run time"]) });
+    const listed = prepare(schedule(step('post', '@activepieces/piece-http', 'send_request', { method: 'GET', url: 'https://hooks.oak.test/invoices' })));
+    expect(observePreparedProposal(base(listed), services()).steps.find(x => x.step === 'post')).toMatchObject({ category: 'send_message', decision: 'approval' });
+    setFlowReadHosts(listed.flow.id, ['hooks.oak.test']);
+    expect(observePreparedProposal(base(listed), services()).steps.find(x => x.step === 'post')).toMatchObject({ category: 'read_data', decision: 'auto', unreviewable: [] });
     // An in-run core step acts on nothing outside the run, so it is not an effect to judge.
     const wait = prepare(schedule(step('wait', '@activepieces/piece-delay', 'delayFor', { delayFor: 1, unit: 'minutes' })));
     expect(stepsOf(wait.version.trigger).wait).toBeUndefined();

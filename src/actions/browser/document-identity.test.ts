@@ -39,6 +39,8 @@ type Fake = {
   presses(): Array<{ x: number; y: number }>;
   /** Did the in-page scroll actually run? */
   scrolled(): boolean;
+  /** The expression the scroll ran, if it did. */
+  scrollExpression(): string | null;
   /** Never answer the sentinel, as a blocked renderer would not. */
   stallSentinel(): void;
   stop(): void;
@@ -48,6 +50,7 @@ function fakeChrome(): Fake {
   let frameUrl = 'https://app.example/inbox';
   let generation = 'ok';
   let didScroll = false;
+  let scrollExpr: string | null = null;
   let stalled = false;
   const presses: Array<{ x: number; y: number }> = [];
 
@@ -68,7 +71,7 @@ function fakeChrome(): Fake {
         return { result: { value: generation } };
       }
       if (expr.includes('window.innerHeight')) return { result: { value: 800 } };
-      if (expr.includes('window.scrollBy')) { didScroll = true; return { result: { value: null } }; }
+      if (expr.includes('window.scrollBy')) { didScroll = true; scrollExpr = expr; return { result: { value: null } }; }
       if (expr.includes('__jarvis_elements =')) {
         return {
           result: {
@@ -129,6 +132,7 @@ function fakeChrome(): Fake {
     setGeneration: (value) => { generation = value; },
     presses: () => presses,
     scrolled: () => didScroll,
+    scrollExpression: () => scrollExpr,
     stallSentinel: () => { stalled = true; },
     stop: () => server.stop(true),
   };
@@ -272,6 +276,40 @@ describe('#603 what the document identity has to mean', () => {
     const enter = await ctrl.pressKey('Enter');
     expect(enter).not.toContain('no longer apply');
     expect(ctrl.snapshotElementPoint(2)).toEqual({ x: 10, y: 60 });
+  });
+
+  // #1161: Chromium animates both of these. Measured on Chromium 156:
+  // scrollBy under CSS `scroll-behavior: smooth` moves for ~430ms over 600px
+  // and ~1200ms over 5000px; PageDown/End move for ~160-170ms with or without
+  // that CSS. A snapshot taken after the forget but inside that motion got a
+  // fresh generation and coordinates that were still moving.
+  test('scroll() asks for an instant scroll, so nothing is left moving after the forget (#1161)', async () => {
+    const { fake, ctrl } = await connected();
+    await ctrl.scroll('down', 5000);
+    // Measured instant under smooth CSS in this form, and only this form: a
+    // plain scrollBy(0, px) animates.
+    expect(fake.scrollExpression()).toBe("window.scrollBy({top: 5000, behavior: 'instant'})");
+  });
+
+  test('a snapshot taken while a paging key is still scrolling is retired with it (#1161)', async () => {
+    const { ctrl } = await connected();
+    expect(ctrl.snapshotElementPoint(2)).toEqual({ x: 10, y: 60 });
+
+    let keyDone = false;
+    const pressed = ctrl.pressKey('PageDown').then((r) => { keyDone = true; return r; });
+    // The first forget, right after the key.
+    const deadline = Date.now() + 5000;
+    while (ctrl.snapshotElementPoint(2) !== null) {
+      if (Date.now() > deadline) throw new Error('the paging key never forgot the map');
+      await Bun.sleep(1);
+    }
+    // Another reader snapshots while the page would still be moving.
+    await ctrl.snapshot();
+    expect(keyDone).toBe(false); // it really landed inside the key's settle wait
+    expect(ctrl.snapshotElementPoint(2)).toEqual({ x: 10, y: 60 });
+
+    expect(await pressed).toContain('no longer apply');
+    expect(ctrl.snapshotElementPoint(2)).toBeNull();
   });
 
   test('a sentinel that cannot be read refuses rather than guessing', async () => {

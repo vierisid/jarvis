@@ -304,6 +304,10 @@ export function tabSwitchReply(title: string, tabRaw: string, outcome: RoomActio
       return `I asked ${title} to switch to ${tabRaw}, but it didn't answer.`;
     case 'unreached':
       return `I couldn't reach ${title} to switch it to ${tabRaw}.`;
+    // A tab switch is never claimed, so never refused at its claim (#1158).
+    case 'paused':
+    case 'killed':
+      return `I didn't switch ${title} to ${tabRaw}: actions are suspended while the system is ${outcome}.`;
   }
 }
 

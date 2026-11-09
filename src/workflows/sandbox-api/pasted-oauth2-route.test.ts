@@ -86,7 +86,12 @@ describe("#954 pasted OAuth2 connections through the engine endpoint", () => {
     const { run, fetchConnection } = await runOf();
     const first = await fetchConnection();
     expect(first.status).toBe(200);
-    expect(await first.json()).toMatchObject({ status: "ACTIVE", value: { type: "OAUTH2", access_token: "ya29.refreshed" } });
+    const handed = await first.json() as { value: Record<string, unknown> };
+    expect(handed).toMatchObject({ status: "ACTIVE", value: { type: "OAUTH2", access_token: "ya29.refreshed" } });
+    // #1153: the refresh token and client secret stay with the daemon.
+    expect(handed.value).toMatchObject({ refresh_token: "", client_secret: "" });
+    expect(JSON.stringify(handed)).not.toContain(SECRETS.client_secret);
+    expect(JSON.stringify(handed)).not.toContain(SECRETS.refresh_token);
     expect(tokenCalls).toBe(1);
     expect(getConnection(row.id)!.credentialGeneration).toBe(row.credentialGeneration);
     // The next step's fetch finds the refreshed token good for an hour, and the run's binding unchanged.

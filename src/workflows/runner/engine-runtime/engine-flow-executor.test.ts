@@ -98,8 +98,10 @@ describe("EngineFlowExecutor", () => {
     lockVersion(v.id);
     const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id, environment: "TESTING" });
     const acquired: string[] = [];
-    const runtime = { async acquire(args: { runId: string; projectId: string }) {
+    const flows: Array<string | undefined> = [];
+    const runtime = { async acquire(args: { runId: string; projectId: string; flowId?: string }) {
       acquired.push(args.projectId);
+      flows.push(args.flowId);
       throw new Error("stop after acquire");
     } } as unknown as EngineRuntime;
     const ctx = {
@@ -111,6 +113,8 @@ describe("EngineFlowExecutor", () => {
     await new EngineFlowExecutor(runtime).execute(ctx).catch(() => undefined);
     expect(acquired.length).toBeGreaterThan(0);
     expect(new Set(acquired)).toEqual(new Set([other]));
+    // And for the run's flow (#1154): a warm engine is reused only within it.
+    expect(new Set(flows)).toEqual(new Set([flow.id]));
   });
 
   test("cancellation interrupts a pending RPC and destroys rather than releases the handle", async () => {

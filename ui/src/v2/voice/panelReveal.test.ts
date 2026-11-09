@@ -52,7 +52,7 @@ type FakePage = {
   flush: () => Promise<void>;
 };
 
-function runInPage(script: string, binding: (() => unknown) | undefined, readyState = "loading"): FakePage {
+function runInPage(script: string, binding: (() => unknown) | undefined, readyState = "loading", shown?: () => unknown): FakePage {
   const loadHandlers: Array<() => void> = [];
   const timers: Array<() => void> = [];
   const win: Record<string, unknown> = {
@@ -62,6 +62,8 @@ function runInPage(script: string, binding: (() => unknown) | undefined, readySt
   const doc = { readyState };
   const setTimeoutFake = (fn: () => void) => { timers.push(fn); };
   new Function("window", "document", "setTimeout", script)(win, doc, setTimeoutFake);
+  // As in the panel, the binding's own document-start script defines it after this one ran.
+  if (shown) win.__sidecar_panel_shown = shown;
   return {
     window: win,
     fireLoad: () => { for (const h of loadHandlers) h(); },
@@ -118,6 +120,32 @@ describe("panel ready scripts (sidecar/panels_reveal.go)", () => {
     expect(page.window.__jarvis_panel_revealed).toBe(false);
     await page.flush();
     expect(page.window.__jarvis_panel_revealed).toBe(true);
+  });
+
+  test("a page reloaded in a window already shown is revealed before it loads, without the ready binding (#1157)", async () => {
+    let readyCalls = 0;
+    const page = runInPage(tracking, () => { readyCalls++; return Promise.resolve(true); }, "loading", () => Promise.resolve(true));
+    expect(page.window.__jarvis_panel_revealed).toBe(false);
+    await page.flush();
+    expect(page.window.__jarvis_panel_revealed).toBe(true);
+    expect(readyCalls).toBe(0);
+  });
+
+  test("on the first load the shown binding answers false, and only the ready path reveals it (#1157)", async () => {
+    const page = runInPage(tracking, () => Promise.resolve(true), "loading", () => Promise.resolve(false));
+    await page.flush();
+    expect(page.window.__jarvis_panel_revealed).toBe(false);
+    page.fireLoad();
+    await page.flush();
+    expect(page.window.__jarvis_panel_revealed).toBe(true);
+  });
+
+  test("a shown binding that fails, throws or answers anything but true reveals nothing (#1157)", async () => {
+    for (const shown of [() => Promise.reject(new Error("gone")), () => { throw new Error("boom"); }, () => Promise.resolve("true"), () => true]) {
+      const page = runInPage(tracking, undefined, "loading", shown);
+      await page.flush();
+      expect(page.window.__jarvis_panel_revealed).toBe(false);
+    }
   });
 
   test("the plain script (macOS, Linux) still calls the binding and sets no flag", async () => {

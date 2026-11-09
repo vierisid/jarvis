@@ -21,7 +21,7 @@ import { createEntity } from '../vault/entities.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { buildTaintGating } from '../authority/taint-gating.ts';
-import { EmergencyController } from '../authority/emergency.ts';
+import { EmergencyController, setActiveEmergencyController } from '../authority/emergency.ts';
 import type { Intent } from '../voice/intent.ts';
 import { RealtimeTaint } from '../agents/realtime-taint.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
@@ -176,6 +176,24 @@ describe("the pebble's tab switch hears only its own sidecar's panels (#1026)", 
     expect(await svc.requestRoomAction(switchTab, 60_000, { sidecar: PEBBLE })).toBe('unreached');
     expect(Date.now() - t0).toBeLessThan(1000);
     for (const c of [foreign, anonymous]) expect(typeof idSentTo(c)).toBe('string');
+  });
+
+  test("the asking sidecar's full dashboard (its tray window) never answers a broadcast action, so it alone is unreached at once (#1157)", async () => {
+    const { svc, internals } = setup();
+    internals.wsServer.getClients().clear();
+    const tray = socket(PEBBLE_SESSION);
+    (tray.ws.data as Record<string, unknown>).client = 'dashboard';
+    internals.wsServer.getClients().add(tray.ws);
+    const t0 = Date.now();
+    expect(await svc.requestRoomAction(switchTab, 60_000, { sidecar: PEBBLE })).toBe('unreached');
+    expect(Date.now() - t0).toBeLessThan(1000);
+    // With a panel of that sidecar beside it, it is reached and waits for the panel.
+    const panel = socket(PEBBLE_SESSION);
+    internals.wsServer.getClients().add(panel.ws);
+    const pending = svc.requestRoomAction(switchTab, 1000, { sidecar: PEBBLE });
+    const id = panel.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultId;
+    await internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, accepted: true }, timestamp: Date.now() }, panel.ws);
+    expect(await pending).toBe('accepted');
   });
 
   test('under insecure_open_access no socket has an identity, so any may answer', async () => {
@@ -404,6 +422,46 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     const before = speaker.sent.length;
     await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: 7 }, timestamp: Date.now() }, speaker.ws);
     expect(speaker.sent.length).toBe(before);
+  });
+
+  // Owner decision 2026-11-06 (#1158): an action already sent when Jarvis is
+  // paused or stopped is not claimed, so it never runs.
+  test('a claim is refused while Jarvis is paused or stopped, and granted again after Resume', async () => {
+    const controller = new EmergencyController();
+    setActiveEmergencyController(controller);
+    try {
+      for (const state of ['pause', 'kill'] as const) {
+        const { svc, internals, speaker, actionTo } = setup();
+        const p = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 30, { client: speaker.ws as never });
+        const id = actionTo(speaker)!.payload.resultId;
+        controller[state]();
+        await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: id }, timestamp: Date.now() }, speaker.ws);
+        expect([state, speaker.sent.filter((m) => m.type === 'room_action_claim_result').at(-1)?.payload])
+          .toEqual([state, { resultId: id, granted: false }]);
+        // Settled now, as what it is: nothing ran, not an unanswered action.
+        expect(await p).toBe(state === 'pause' ? 'paused' : 'killed');
+        if (state === 'pause') controller.resume(); else controller.reset();
+        // Not vacuous: the same claim after Resume is granted.
+        const q = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'y' } }, 30, { client: speaker.ws as never });
+        const next = speaker.sent.filter((m) => m.payload?.source === 'room_action').at(-1)!.payload.resultId;
+        await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: next }, timestamp: Date.now() }, speaker.ws);
+        expect(speaker.sent.filter((m) => m.type === 'room_action_claim_result').at(-1)?.payload).toEqual({ resultId: next, granted: true });
+        expect(await q).toBe('started');
+      }
+    } finally { setActiveEmergencyController(null); }
+  });
+
+  test('a claim refused under Pause from another socket does not end the wait', async () => {
+    const controller = new EmergencyController();
+    setActiveEmergencyController(controller);
+    try {
+      const { svc, internals, speaker, other, actionTo } = setup();
+      const p = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 30, { client: speaker.ws as never });
+      const id = actionTo(speaker)!.payload.resultId;
+      controller.pause();
+      await internals.routeMessage({ type: 'room_action_claim', payload: { resultId: id }, timestamp: Date.now() }, other.ws);
+      expect(await p).toBe('no_answer');
+    } finally { setActiveEmergencyController(null); }
   });
 
   test('a grant the dashboard never got is not taken as the action running', async () => {

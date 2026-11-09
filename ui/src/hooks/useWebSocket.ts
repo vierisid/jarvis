@@ -734,7 +734,9 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
     if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
     if (wsRef.current && (wsRef.current.readyState === WebSocket.CONNECTING || wsRef.current.readyState === WebSocket.OPEN)) return;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    // A full dashboard answers a room action only when it is addressed to it, so
+    // the daemon does not count this socket as a panel that could (#1157).
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws?client=dashboard`);
     ws.binaryType = "arraybuffer";
 
     ws.onopen = async () => {

@@ -144,7 +144,7 @@ describe('a governed send checks the facts its recipients matched', () => {
     expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'blocked', outcome: { code: 'WORKFLOW_FACT_STALE' } });
   });
 
-  test("the engine's own retry of an authorized send rechecks memory before the service is called again", async () => {
+  test("the replay of a send whose receipt is recorded hands back what was sent, whatever memory says now (#1153)", async () => {
     const f = fixture();
     const fact = createFact(ana(), 'email', 'ana@old.example', { confirmed: true });
     const authorized = await f.authorize('ana@old.example') as { dispatch: string; effectId: string };
@@ -153,8 +153,23 @@ describe('a governed send checks the facts its recipients matched', () => {
     await expect(f.authorize('ana@old.example')).rejects.toThrow(/replay is blocked/);
     f.backends.pieceReceipt!(f.context, authorized.effectId, { id: 'a123' });
     correctFact(fact.id, 'ana@new.example', 'Ana moved between attempts');
+    // Nothing is sent again, so a fact that changed since cannot refuse it:
+    // before #1153 this replay failed as WORKFLOW_FACT_STALE although the mail had gone.
+    expect(await f.authorize('ana@old.example')).toEqual({ governed: true, dispatch: 'completed', result: { id: 'a123' } });
+    const effect = listWorkflowEffects(f.run.id)[0]!;
+    expect(effect.status).toBe('succeeded');
+    expect(effect.replayRefusal).toBeUndefined();
+  });
+
+  test("the engine's retry of an untracked step addressing someone rechecks memory before the service is called again", async () => {
+    // A draft is not a tracked send: its recorded authorization is handed out
+    // again on the engine's retry, and the piece calls Gmail again, so the
+    // facts its recipients matched are rechecked first.
+    const f = fixture('gmail_create_draft');
+    const fact = createFact(ana(), 'email', 'ana@old.example', { confirmed: true });
+    expect(await f.authorize('ana@old.example')).toEqual({ governed: true, dispatch: 'authorized' });
+    correctFact(fact.id, 'ana@new.example', 'Ana moved between attempts');
     await expect(f.authorize('ana@old.example')).rejects.toThrow(/no longer current in memory/);
-    // The effect keeps what it did and records why the retry was refused.
     expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded',
       replayRefusal: { outcome: { code: 'WORKFLOW_FACT_STALE' }, at: expect.any(Number) } });
   });

@@ -19,14 +19,18 @@ const panelReadyScript = `(function(){try{var r=function(){if(window.__sidecar_p
 	`else{window.addEventListener('load',function(){setTimeout(r,120);});}}catch(e){}})();`
 
 // panelReadyTrackingScript is panelReadyScript plus the reveal flag: the page
-// starts out not revealed, and only becomes revealed once the binding answers
+// starts out not revealed, and only becomes revealed once a binding answers
 // true, meaning the host has shown the window. A reload after the reveal sets
-// the flag false again, and the binding (whose reveal already happened)
-// answers true once more after `load`. The dashboard reads the flag as hidden
-// only when it is exactly false, so a page with no flag is unaffected.
+// the flag false again; it then asks the side-effect-free
+// __sidecar_panel_shown at once (in a timer, so the binding's own
+// document-start script has defined it) rather than waiting for `load` and the
+// ready binding (#1157). The dashboard reads the flag as hidden only when it
+// is exactly false, so a page with no flag is unaffected.
 const panelReadyTrackingScript = `window.__jarvis_panel_revealed=false;` +
-	`(function(){try{var r=function(){var b=window.__sidecar_panel_ready;if(!b)return;var p=b();` +
+	`(function(){try{var a=function(b){if(!b)return;var p=b();` +
 	`if(p&&typeof p.then==='function'){p.then(function(shown){if(shown===true)window.__jarvis_panel_revealed=true;},function(){});}};` +
+	`setTimeout(function(){try{a(window.__sidecar_panel_shown);}catch(e){}},0);` +
+	`var r=function(){a(window.__sidecar_panel_ready);};` +
 	`if(document.readyState==='complete'){setTimeout(r,120);}` +
 	`else{window.addEventListener('load',function(){setTimeout(r,120);});}}catch(e){}})();`
 

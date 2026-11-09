@@ -1172,7 +1172,9 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     setTtsAudioPlaying(false);
     // The daemon cancels the realtime reply on the same message: stop playing it
     // without ending the session, then settle (listening if the mic streams).
-    if (realtimeSessionActiveRef.current) realtimeCtrlRef.current?.flushPlayback();
+    // Also a reply still playing out after its socket dropped (#1156): the
+    // session is over, but the person can still stop what they hear.
+    if (realtimeSessionActiveRef.current || realtimeCtrlRef.current?.isPlaying) realtimeCtrlRef.current?.flushPlayback();
     settleVoiceState();
   }, [wsRef, settleVoiceState]);
 
@@ -1195,7 +1197,13 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     if (reason === "plan" || reason === "unavailable") void refreshRealtimeAvailabilityRef.current();
     realtimeSessionActiveRef.current = false;
     realtimeCtrlRef.current?.stopStreaming();
-    realtimeCtrlRef.current?.flushPlayback();
+    // A dropped socket is not a request to stop talking: the audio that
+    // already arrived plays out (#1156). A voice restart_daemon answer is
+    // spoken right before the restart closes the socket, and flushing here
+    // cut it off. Nothing more can arrive for this session: it is marked
+    // inactive above, so late PCM is ignored. A stop or mute still flushes
+    // it (cancelTTS).
+    if (reason !== "disconnect") realtimeCtrlRef.current?.flushPlayback();
     if (!ttsRequestIdRef.current && !ttsPlayingRef.current) settleVoiceState();
   }, [settleVoiceState]);
 
@@ -1519,7 +1527,9 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     ttsRequestIdRef.current = null;
     ttsPlayingRequestIdRef.current = null;
     setTtsAudioPlaying(false);
-    setVoiceState("idle");
+    // Realtime audio playing out after a dropped socket (#1156) is still
+    // heard: show it, and let its end settle the orb.
+    setVoiceState(realtimeCtrlRef.current?.isPlaying ? "speaking" : "idle");
   }, []);
 
   useEffect(() => {

@@ -471,8 +471,9 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
       },
       async release() { /* noop */ },
     };
+    const acquiredFor: Array<string | undefined> = [];
     const fakeEngine = {
-      acquire: async () => fakeHandle,
+      acquire: async (opts: { flowId?: string }) => { acquiredFor.push(opts.flowId); return fakeHandle; },
     } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
     const fakeCron = new FakeCronScheduler();
 
@@ -505,6 +506,10 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
     expect(calls.some((c) => c.hookType === "ON_DISABLE")).toBe(true);
     const cleared = (await import("../../db/repos/flow-version")).getFlowVersion(versionId)!;
     expect(cleared.engineSchedule).toBeNull();
+    // Every hook (enable, poll, disable) asks for an engine of this flow: a
+    // warm engine is reused only within one flow (#1154).
+    expect(acquiredFor.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(acquiredFor)).toEqual(new Set([flowId]));
   });
 
   test("ON_ENABLE is idempotent: persisted schedule is reused, no re-call to engine", async () => {
