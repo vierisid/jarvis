@@ -97,6 +97,14 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       'goals/rhythm.ts',
       'roles/prompt-builder.ts',
       'sites/prompt-context.ts',
+      // #1155: a forwarded channel message, framed into a turn's history or
+      // message. No brain-side cut follows the frame: the dialogue compactor,
+      // which cuts what it summarizes, is handed a stand-in
+      // (AgentService.loadDialogue), and a Brief turn whose history holds a
+      // forward is tainted from those same rows, so it runs on the classic
+      // path, which does not compact. Provider per-message truncation (Groq)
+      // is a separate gap shared by every prompt framer here.
+      'vault/conversations.ts',
       'vault/extractor.ts',
     ]);
   });

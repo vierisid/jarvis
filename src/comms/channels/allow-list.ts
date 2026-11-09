@@ -29,7 +29,8 @@ export type AllowList<T extends number | string> = {
    * Every entry as text, valid or not, in the order saved (#916 review). The
    * first one is the owner, so the settings page must show the list in this
    * order: listing the valid ids first made a bad first entry look like the
-   * second id, and saving the page then made that id the owner.
+   * second id, and saving the page then made that id the owner. Repeats are
+   * shown once (#1155).
    */
   entries: string[];
 };
@@ -97,7 +98,9 @@ function parse<T extends number | string>(
     problems.push(`${describe(entry)} is ignored: ${why(entry)}`);
     rejected.push(asText(entry));
   }
-  return { ids, restricted: raw.length > 0, problems, rejected, entries: raw.map(asText) };
+  // Each entry once, at its first place (#1155): the page would show `42, 42`,
+  // and the daemon keeps one of them on the next save anyway.
+  return { ids, restricted: raw.length > 0, problems, rejected, entries: [...new Set(raw.map(asText))] };
 }
 
 /** `allowed_users` for Telegram: positive integer user ids. */

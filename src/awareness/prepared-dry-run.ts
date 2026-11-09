@@ -153,7 +153,7 @@ export class PreparedDryRunner {
       // An engine that cannot start is the runner's failure, not the
       // workflow's: it throws, so the caller can retry instead of recording a
       // failed sample against the proposal.
-      const handle = await this.runtime.acquire({ runId: run.id, projectId: flow.project_id });
+      const handle = await this.runtime.acquire({ runId: run.id, projectId: flow.project_id, flowId: scratch.id });
       this.active = active;
       try {
         // Streamed step progress is what records each step's output on the run.

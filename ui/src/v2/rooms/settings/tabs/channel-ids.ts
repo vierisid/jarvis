@@ -50,3 +50,15 @@ export function allowedFieldText(list: { allowed_users: Array<number | string>; 
   if (list.allowed_users_entries) return list.allowed_users_entries.join(", ");
   return [...list.allowed_users.map(String), ...(list.allowed_users_rejected ?? [])].join(", ");
 }
+
+/**
+ * What a Save sends as `allowed_users` (#1155). Before the config has loaded,
+ * an empty field is empty because nothing seeded it, not because the user
+ * cleared it, and the daemon takes an empty list for a disabled channel, so
+ * sending it wiped the saved list unseen. Then nothing is sent and the saved
+ * list is kept, as #913 keeps the Discord guild. A field the user typed into
+ * is sent either way.
+ */
+export function allowedToSend<T>(ids: T[], field: string, loaded: boolean): T[] | undefined {
+  return loaded || field.trim() !== "" ? ids : undefined;
+}

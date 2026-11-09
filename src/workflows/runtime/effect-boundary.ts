@@ -36,6 +36,7 @@ export const WORKFLOW_STEP_LABEL_MAX_CHARS = 120;
 /** Routes whose target the boundary takes a chat card sentence from: starting a workflow and calling a reusable child (#1152). */
 const CHANNEL_INTENT_ROUTES: ReadonlySet<string> = new Set(['workflow', 'subflow']);
 import { holdStep, PAUSED_REASON } from './emergency-hold';
+import { beginEffectDispatch } from './effect-inflight';
 
 export interface WorkflowAuthorityDependencies {
   authorityEngine?: AuthorityEngine; auditTrail?: AuditTrail; emergencyController?: EmergencyController;
@@ -684,6 +685,8 @@ export class WorkflowEffectBoundary {
       throw error;
     }
     if (!claimWorkflowEffect(record)) throw new Error('Workflow effect was already claimed; replay blocked');
+    // A delete of the flow waits until this effect is recorded (#1154).
+    const endDispatch = beginEffectDispatch(record.flowId);
     try {
       // Publish the same checkpoint into the ambient execution scope. Deep
       // dispatch points (TTS chunks, channel adapters) call
@@ -766,6 +769,6 @@ export class WorkflowEffectBoundary {
       // possibility that a remote effect happened before the failure.
       log(false);
       throw error;
-    }
+    } finally { endDispatch(); }
   }
 }

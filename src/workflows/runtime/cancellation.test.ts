@@ -104,9 +104,16 @@ test("deleting a workflow mid-run stops it without a spurious failure or retry",
   proceed.resolve();
   await draining;
   expect(effects).toBe(0);
-  // Deleting stops the workflow's in-flight runs first (Q-06), so the job is
-  // canceled: never failed, never retried.
-  expect(getJob(job.id)?.status).toBe("CANCELED");
+  // Deleting stops the workflow's in-flight runs first (Q-06): the stop is
+  // recorded in the trigger ledger, which outlives the flow, so the run was
+  // stopped, not just removed. Its job was canceled with it (never failed,
+  // never retried: the worker log shows neither). Since #1154 the delete also
+  // removes the flow's jobs, as the Brief purge always did: every reader of a
+  // job finds it through its run, which the delete removes, so a canceled job
+  // left behind was only an orphan row.
+  expect((getWorkflowDb().query("SELECT COUNT(*) AS n FROM workflow_trigger_fire WHERE run_id = ? AND outcome = 'stopped'")
+    .get(run.id) as { n: number }).n).toBe(1);
+  expect(getJob(job.id)).toBeNull();
   expect(logs.filter(line => /failed|requeued/.test(line))).toEqual([]);
 });
 

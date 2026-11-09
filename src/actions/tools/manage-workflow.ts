@@ -54,7 +54,6 @@ export interface ComposerToolRegistry {
 }
 import {
   createFlow,
-  deleteFlowInProject,
   getFlow,
   getFlowInProject,
   listFlows,
@@ -72,8 +71,8 @@ import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts
 import { compileWorkflow } from '../../workflows/runtime/workflow-readiness';
 import { workflowReadinessServices } from '../../workflows/db/repos/readiness-services';
 import { assertVersionReady, versionReadiness } from '../../workflows/db/repos/flow-readiness';
-import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow } from '../../workflows/db/repos/flow-turn-off';
-import { assertFlowDeletable } from '../../workflows/db/repos/workflow-removal-state';
+import { stopRunsOfTurnedOffFlow } from '../../workflows/db/repos/flow-turn-off';
+import { deleteWorkflow } from '../../workflows/db/repos/flow-deletion';
 import { listFlowFires } from '../../workflows/db/repos/trigger-fire';
 import { bindingChangesToAccept } from '../../workflows/db/repos/binding-pins';
 import { assertCodeStepsAllowed } from "../../workflows/db/repos/flow-code-steps.ts";
@@ -601,7 +600,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
             "a published workflow and its warnings",
           );
         case "delete":
-          return JSON.stringify(actDelete(requireFlowParam(params), deps, project));
+          return JSON.stringify(await actDelete(requireFlowParam(params), deps, project));
         case "list_runs":
           return framedForModel(
             actListRuns(project, params.flow as string | undefined, asLimit(params.limit)),
@@ -1367,13 +1366,17 @@ function publishOsWarnings(trigger: unknown, deps: ManageWorkflowDeps): string[]
   return ctx ? flowOsWarnings(trigger, ctx) : [];
 }
 
-function actDelete(flow: FlowRow, deps: ManageWorkflowDeps, project: string): Record<string, unknown> {
-  // The flow was resolved in the caller's project before stopping its runs.
-  assertFlowDeletable(flow.id);
-  stopRunsOfDeletedFlow(flow.id);
-  // Its own predicate rather than trusting the resolve above for its scope,
-  // as #692 made the connections UPDATE carry one.
-  if (!deleteFlowInProject(project, flow.id)) throw new Error(`workflow not found: ${flow.id}`);
+async function actDelete(flow: FlowRow, deps: ManageWorkflowDeps, project: string): Promise<Record<string, unknown>> {
+  // The flow was resolved in the caller's project; the delete scopes by it
+  // again itself, as #692 made the connections UPDATE carry one. It stops the
+  // runs, waits for their in-flight effects, and removes the run logs, step
+  // files, store keys and cards the flow leaves (#1154).
+  const outcome = await deleteWorkflow(project, flow.id);
+  if (outcome.status === "not_found") throw new Error(`workflow not found: ${flow.id}`);
+  if (outcome.status === "stopping") {
+    void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
+    throw new Error(`workflow ${flow.id} is still finishing an action its stopped run started, so it was turned off but not deleted yet. Try the delete again in a moment.`);
+  }
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
   return { id: flow.id, deleted: true };
 }
