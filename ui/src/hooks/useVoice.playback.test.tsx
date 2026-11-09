@@ -512,6 +512,55 @@ describe("socket drop and reconnect", () => {
     expect(voice.voiceState).toBe("idle");
   });
 
+  test("realtime audio that arrived before the socket dropped plays out (#1156)", async () => {
+    // A voice restart_daemon answer is spoken just before the restart closes
+    // the socket; flushing on the drop cut it off.
+    await mount();
+    await beginRealtime();
+    await act(async () => { voice.handleTTSBinary(realtimePcm()); });
+    const reply = sources().at(-1)!;
+    expect(reply.started).toBe(true);
+    await act(async () => { voice.handleDisconnect(); });
+    expect(reply.stopped).toBe(false);
+    expect(voice.voiceState).toBe("speaking");
+    // The mic is off and nothing more is taken for the dead session.
+    await act(async () => { voice.handleTTSBinary(realtimePcm()); });
+    expect(raw.length).toBe(1);
+    await act(async () => { reply.onended?.(); });
+    expect(voice.voiceState).toBe("idle");
+  });
+
+  test.each(["stop", "mute"])("%s silences realtime audio playing out after a drop", async how => {
+    await mount();
+    await beginRealtime();
+    await act(async () => { voice.handleTTSBinary(realtimePcm()); });
+    const reply = sources().at(-1)!;
+    await act(async () => { voice.handleDisconnect(); });
+    await act(async () => { if (how === "stop") voice.cancelTTS(); else voice.setMuted(true); });
+    expect(reply.stopped).toBe(true);
+    expect(voice.voiceState).toBe("idle");
+  });
+
+  test("forceIdle does not show idle over realtime audio playing out after a drop", async () => {
+    await mount();
+    await beginRealtime();
+    await act(async () => { voice.handleTTSBinary(realtimePcm()); });
+    const reply = sources().at(-1)!;
+    await act(async () => { voice.handleDisconnect(); voice.forceIdle(); });
+    expect(voice.voiceState).toBe("speaking");
+    await act(async () => { reply.onended?.(); });
+    expect(voice.voiceState).toBe("idle");
+  });
+
+  test("a server-side close still flushes realtime audio", async () => {
+    await mount();
+    await beginRealtime();
+    await act(async () => { voice.handleTTSBinary(realtimePcm()); });
+    const reply = sources().at(-1)!;
+    await act(async () => { voice.handleRealtimeClosed(); });
+    expect(reply.stopped).toBe(true);
+  });
+
   test("after a reconnect the next recording streams on the new socket", async () => {
     const wsRef = await mount();
     await beginRealtime();

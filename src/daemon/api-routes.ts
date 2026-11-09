@@ -138,9 +138,8 @@ import type { SuggestionType } from '../awareness/types.ts';
 import {
   getAutostartName,
   isAutostartInstalled,
-  scheduleAutostartRestart,
-  requestSystemdRestart,
 } from '../cli/autostart.ts';
+import { keepaliveRestart, keepaliveRestartDeps } from './restart-after-speech.ts';
 import { readBoundedText } from '../util/bounded-body.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { runWithAdmission } from '../llm/background-budget.ts';
@@ -1882,31 +1881,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     '/api/system/autostart/restart': {
+      // Answered now; the restart itself waits for live voice to finish
+      // speaking its answer (#1156, restart-after-speech.ts).
       POST: () => {
-        if (!(process.platform === 'darwin' || process.platform === 'linux')) {
-          return error('24/7 restart is not supported on this platform.', 400);
-        }
-        if (!isAutostartInstalled()) {
-          return error('JARVIS keepalive mode is not installed yet.', 400);
-        }
-        // An installed unit is not proof it runs THIS daemon: restarting it
-        // while the daemon was started by hand restarts nothing here.
-        if (process.platform === 'linux') {
-          const outcome = requestSystemdRestart();
-          if (outcome === 'not_this_daemon') {
-            return error('This JARVIS is not running under its keepalive service, so restarting the service would not restart it. Restart it the way it was started.', 409);
-          }
-          if (outcome !== 'scheduled') return error('Failed to schedule keepalive service restart.');
-          return json({ ok: true, message: `Restarting the JARVIS 24/7 ${getAutostartName()} service.` });
-        }
-        const scheduled = scheduleAutostartRestart();
-        if (!scheduled) {
-          return error('Failed to schedule keepalive service restart.');
-        }
-        return json({
-          ok: true,
-          message: `Restarting the JARVIS 24/7 ${getAutostartName()} service.`,
-        });
+        const answer = keepaliveRestart(keepaliveRestartDeps());
+        return answer.ok ? json({ ok: true, message: answer.message }) : error(answer.error, answer.status);
       },
     },
 
