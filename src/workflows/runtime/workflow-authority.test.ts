@@ -1237,3 +1237,16 @@ test('an uncertain identity is not a completed receipt and cannot skip approval 
   expect((await f.backends.notify!(request, { ...f.context, runId: next.id })).approval).toBeDefined();
   expect(f.calls).toHaveLength(1);
 });
+
+test('a reused notification receipt sends nothing, even when the message or channels changed under the same key', async () => {
+  const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
+  const request = { message: 'Reviewed text', channels: ['dashboard'] as any, priority: 'normal' as const, idempotencyKey: 'same' };
+  const first = await f.backends.notify!(request, f.context); f.approvals.approve(first.approval!.approvalId, 'user');
+  await f.backends.notify!(request, f.context); expect(f.calls).toHaveLength(1);
+  const run = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
+  const changed = await f.backends.notify!({ ...request, message: 'Different text', channels: ['dashboard', 'telegram'] as any }, { ...f.context, runId: run.id });
+  expect(changed).toMatchObject({ delivered: [], failed: [], unknown: [], deduplicated: true });
+  expect(changed.approval).toBeUndefined();
+  expect(f.calls).toHaveLength(1); expect(f.deliveredApprovals).toHaveLength(1);
+  expect(listWorkflowEffects(run.id)[0]).toMatchObject({ status: 'succeeded', approvalId: null, arguments: { message: 'Different text' } });
+});
