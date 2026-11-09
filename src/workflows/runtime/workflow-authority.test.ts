@@ -610,10 +610,10 @@ describe('workflow effect boundary', () => {
   test('a refused capability is audited, not silently rejected', async () => {
     const f = fixture();
     f.registry.register({ name: 'run_command', category: 'terminal', description: 'Synthetic shell', parameters: {},
-      execute: async () => 'ran' });
+      execute: async () => { f.calls.push('ran'); return 'ran'; } });
     f.useTool('run_command');
     await expect(f.backends.toolsInvoke!({ toolName: 'run_command', params: { command: 'id' } }, f.context))
-      .rejects.toThrow(/opaque code\/UI effects/);
+      .rejects.toMatchObject({ outcome: { status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' } });
     expect(f.calls).toHaveLength(0);
     // The refusal happens before any effect record exists, so the audit row is
     // the only trace of it. It records the tool's real category, not read_data.
@@ -862,7 +862,8 @@ describe('workflow effect boundary', () => {
     const f = fixture();
     f.registry.register({ name: tool, description: 'Opaque effect', category: 'browser', parameters: {}, execute: async () => { f.calls.push('unsafe'); } });
     f.useTool(tool);
-    await expect(f.backends.toolsInvoke!({ toolName: tool, params: {} }, f.context)).rejects.toThrow(/opaque/);
+    await expect(f.backends.toolsInvoke!({ toolName: tool, params: {} }, f.context))
+      .rejects.toMatchObject({ outcome: { status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' } });
     expect(f.calls).toHaveLength(0);
   });
 
@@ -1165,4 +1166,88 @@ describe('workflow effect boundary', () => {
       expect(listWorkflowEffects(f.run.id).map(effect => effect.executionPath)).toEqual([[['loop', 0]], [['loop', 1]]]);
     } finally { await runtime.shutdown(); await api.stop(); }
   }, 60_000);
+});
+
+
+test('a completed notification identity skips a fresh approval, but new keys and other flows still require it', async () => {
+  const f = fixture('notify');
+  f.authority.setGovernedCategories(['send_message']);
+  const request = { message: 'Reviewed notification', channels: ['dashboard'] as const, priority: 'normal' as const, idempotencyKey: 'daily:one' };
+  const send = (context = f.context, key = request.idempotencyKey, services = f.backends) => services.notify!({ ...request, channels: [...request.channels], idempotencyKey: key }, context);
+  const first = await send(); expect(first.approval).toBeDefined();
+  f.approvals.approve(first.approval!.approvalId, 'user'); await send(); expect(f.calls).toHaveLength(1);
+  const next = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
+  const context = { ...f.context, runId: next.id };
+  // Reconstruct the service to ensure completion is read from storage, not a process-local cache.
+  const restarted = buildSandboxServiceBackends(f.options);
+  const duplicate = await send(context, request.idempotencyKey, restarted);
+  expect(duplicate).toMatchObject({ delivered: [], deduplicated: true });
+  expect(f.deliveredApprovals).toHaveLength(1); expect(f.calls).toHaveLength(1);
+  expect(listWorkflowEffects(next.id)[0]).toMatchObject({ status: 'succeeded', approvalId: null, result: { deduplicated: true } });
+  const fresh = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
+  expect((await send({ ...context, runId: fresh.id }, 'daily:two')).approval).toBeDefined();
+  const other = fixture('notify'); other.authority.setGovernedCategories(['send_message']);
+  expect((await other.backends.notify!({ ...request, channels: [...request.channels] }, other.context)).approval).toBeDefined();
+  expect(other.calls).toHaveLength(0);
+});
+
+
+test('notification completion survives SQLite reopen and dedupes concurrently in new runs', async () => {
+  closeWorkflowDb(); const directory = mkdtempSync(join(tmpdir(), 'jarvis-notify-receipt-'));
+  const path = join(directory, 'test.db');
+  try {
+    initWorkflowDb(path); const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
+    const request = { message: 'Restart fixture', channels: ['dashboard'] as any, priority: 'normal' as const, idempotencyKey: 'once' };
+    const pending = await f.backends.notify!(request, f.context); f.approvals.approve(pending.approval!.approvalId, 'user');
+    await f.backends.notify!(request, f.context);
+    closeWorkflowDb(); initWorkflowDb(path);
+    const services = buildSandboxServiceBackends({ ...f.options, approvalManager: new ApprovalManager() });
+    const replies = await Promise.all(Array.from({ length: 5 }, async () => {
+      const run = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
+      return services.notify!(request, { ...f.context, runId: run.id });
+    }));
+    expect(replies.every(r => (r as any).deduplicated && !r.approval)).toBe(true);
+    expect(f.calls).toHaveLength(1); expect(f.deliveredApprovals).toHaveLength(1);
+  } finally { closeWorkflowDb(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const fence of ['canceled', 'killed', 'paused', 'denied', 'wrong-project'] as const)
+  test(`completed notification receipt still respects ${fence}`, async () => {
+    const f = fixture('notify');
+    const request = { message: 'Fence fixture', channels: ['dashboard'] as any, priority: 'normal' as const, idempotencyKey: 'once' };
+    await f.backends.notify!(request, f.context);
+    const run = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
+    const context = { ...f.context, runId: run.id };
+    if (fence === 'canceled') cancelFlowRun(run.id);
+    if (fence === 'killed') f.emergency.kill();
+    if (fence === 'paused') f.emergency.pause();
+    if (fence === 'denied') f.authority.addOverride({ action: 'send_message', allowed: false });
+    if (fence === 'wrong-project') context.projectId = 'foreign';
+    if (fence === 'paused') expect((await f.backends.notify!(request, context)).approval?.hold).toBeDefined();
+    else await expect(f.backends.notify!(request, context)).rejects.toThrow();
+    expect(f.calls).toHaveLength(1); expect(f.deliveredApprovals).toHaveLength(0);
+  });
+
+test('an uncertain identity is not a completed receipt and cannot skip approval or send again', async () => {
+  const f = fixture('notify');
+  f.options.wsService.broadcastNotificationToDashboard = (() => { f.calls.push('uncertain'); throw Error('lost reply'); }) as any;
+  const request = { message: 'Uncertain fixture', channels: ['dashboard'] as any, priority: 'normal' as const, idempotencyKey: 'uncertain' };
+  await expect(f.backends.notify!(request, f.context)).rejects.toThrow();
+  f.authority.setGovernedCategories(['send_message']);
+  const next = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
+  expect((await f.backends.notify!(request, { ...f.context, runId: next.id })).approval).toBeDefined();
+  expect(f.calls).toHaveLength(1);
+});
+
+test('a reused notification receipt sends nothing, even when the message or channels changed under the same key', async () => {
+  const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
+  const request = { message: 'Reviewed text', channels: ['dashboard'] as any, priority: 'normal' as const, idempotencyKey: 'same' };
+  const first = await f.backends.notify!(request, f.context); f.approvals.approve(first.approval!.approvalId, 'user');
+  await f.backends.notify!(request, f.context); expect(f.calls).toHaveLength(1);
+  const run = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
+  const changed = await f.backends.notify!({ ...request, message: 'Different text', channels: ['dashboard', 'telegram'] as any }, { ...f.context, runId: run.id });
+  expect(changed).toMatchObject({ delivered: [], failed: [], unknown: [], deduplicated: true });
+  expect(changed.approval).toBeUndefined();
+  expect(f.calls).toHaveLength(1); expect(f.deliveredApprovals).toHaveLength(1);
+  expect(listWorkflowEffects(run.id)[0]).toMatchObject({ status: 'succeeded', approvalId: null, arguments: { message: 'Different text' } });
 });
