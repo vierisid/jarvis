@@ -44,7 +44,7 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
 | Telegram or Discord message from a guest (a listed user who is not the channel's owner, #909), or from the owner in a group or server channel, where every member reads the reply (#1155) | No tools, so nothing to check and no approval can be raised; no owner context, nothing learned | | | |
 | Approval from Telegram or Discord | The channel's owner (first allowed id, #916), exact card id | As above; click-only cards refused | Approving waits for Resume | Work cards denied; Stop agent remains available |
 | Approval from a toast | Only whole, readable cards can be approved; click-only cards use the review-only notification kind | As above | Approving waits for Resume | Work cards denied; Stop agent remains available |
-| Spoken yes or no | Bound to the card shown at speech start; ambiguity, destructive and click-only cards refused | As above | Approving waits for Resume | Work cards denied; Stop agent remains available |
+| Spoken yes or no | Bound to the card shown at speech start; ambiguity refused; a yes to a destructive or click-only card refused, a confident no denies one (a no to a stop card is held) | As above | Approving waits for Resume | Work cards denied; Stop agent remains available |
 | Realtime voice | Authority per category; the spoken command is the approval; a tainted session's approval, a click-only card or a blocked category is refused | | Refused | Refused |
 | A denied `request_approval` | The category needs its own approval for the rest of the turn | | | |
 | Manual Run, `manage_workflow` run, work item | Readiness, CODE grant (work items too) | | Refused, saying why | Refused |
@@ -109,7 +109,10 @@ its outcome. A card closed without a person (Kill, a cancelled task, the
 ## Limits
 
 - Voice cannot grant or revoke Authority permissions; those remain clicks.
-  Other room actions retain main's permission and confirmation checks.
+  Other room actions retain main's permission and confirmation checks, and
+  a side-effecting one already sent when Pause or Kill lands is refused at its
+  claim and does not run (one claimed just before still runs). View actions
+  only change the screen and are never claimed.
 - Community pieces run with Jarvis's own permissions and can read any saved
   connection: the Library's opt-in trust model, not changed here.
 - A delegated agent's allowed calls are checked but not listed as run effects

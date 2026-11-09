@@ -101,11 +101,17 @@ describe('a bare yes after outside content clears nothing (owner decision, #1156
       "let's do it", 'proceed', 'yes proceed', 'affirmative', 'correct', 'right', 'fine', "that's fine",
       'Sure thing', 'yes thank you', 'ok thanks', 'approve it', 'confirm it', 'O.K.', 'Yes, Jarvis.', 'ok jarvis do it',
       '\uff59\uff45\uff53', "'yes'", 's\u00ec', 'si, procedi', 'va bene', 'certo', 'Yes\u2026', 'yes\u3002',
+      // Typed replies the voice list missed (security review of the text carry-over).
+      '\u{1f44d}', '\u{1f44d}\u{1f3fd}', '\u2705', '\u{1f44c}', '\u2714\ufe0f', 'yes \u{1f44d}', 'go', 'go for it', 'go on',
+      'sounds good', 'looks good', 'of course', 'y', 'yeh', 'ye', 'okie', 'lgtm', 'LGTM!', 'yess', 'yesss', 'okk', 'yeahhh',
+      's\u00ed', 'proceed with it',
+      'let\u2019s do it', 'that\u2019s fine', 'let\u2019s go', 'goood', 'sounds goood', 'hmmm ok', 'mmm yes', 'approvedd',
+      'ok cool', 'great', 'perfect', 'yes pls', 'ok thx', 'ok, sounds good to me', 'yeah sure why not',
     ]) {
       expect([t, isBareAffirmation(t)]).toEqual([t, true]);
     }
     for (const t of ['yes, run the build', 'run it', 'okay send the email to bob', 'no', 'yesterday', 'turn right',
-      'open settings', 'do it in the terminal', '']) {
+      'open settings', 'do it in the terminal', '', 'go home', 'good morning, read my mail', 'run it \u{1f680}', 'nope \u{1f44d}']) {
       expect([t, isBareAffirmation(t)]).toEqual([t, false]);
     }
   });
