@@ -30,7 +30,10 @@
     "ui/public/",
     "scripts/ensure-bun.cjs",
     "scripts/build-shared-runtime.ts",
-    "README.md"
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "THIRD_PARTY_NOTICES-ui.md",
+    "THIRD_PARTY_NOTICES-engine.md"
   ],
   "scripts": {
     "start": "bun run src/daemon/index.ts",

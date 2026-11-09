@@ -17,6 +17,7 @@ import { CONNECTION_SETUP_EVENT, hasPieceSetup } from './connection-setup-reques
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { OnboardingOutcomes } from "./OnboardingOutcomes";
+import { FlowPermissions } from "./FlowPermissions";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -278,6 +279,7 @@ export function WorkflowsRoomBody(): React.ReactElement {
               focusRunId={focusRunId}
               onRefreshRuns={() => void data.refreshRuns(data.selectedFlow!.id)}
               onCancelRun={(runId) => handleAction("Cancel", () => data.cancelRun(runId))}
+              onPermissionsChanged={() => void data.refresh()}
               onClose={() => data.setSelectedFlowId(null)}
             />
           ) : (
@@ -444,10 +446,12 @@ interface FlowDetailProps {
   focusRunId?: string | null;
   onRefreshRuns: () => void;
   onCancelRun: (runId: string) => void;
+  /** After a permission change: the flow list holds each flow's permissions. */
+  onPermissionsChanged: () => void;
   onClose: () => void;
 }
 
-function FlowDetail({ flow, runs, focusRunId, onRefreshRuns, onCancelRun, onClose }: FlowDetailProps): React.ReactElement {
+export function FlowDetail({ flow, runs, focusRunId, onRefreshRuns, onCancelRun, onPermissionsChanged, onClose }: FlowDetailProps): React.ReactElement {
   const [expandedRunId, setExpandedRunId] = useState<string | null>(focusRunId ?? null);
   useEffect(() => { if (focusRunId) setExpandedRunId(focusRunId); }, [focusRunId]);
   const succeeded = useMemo(() => runs.filter((r) => r.status === "SUCCEEDED").length, [runs]);
@@ -471,6 +475,8 @@ function FlowDetail({ flow, runs, focusRunId, onRefreshRuns, onCancelRun, onClos
         <Stat label="Succeeded" value={String(succeeded)} tone="ok" />
         <Stat label="Failed" value={String(failed)} tone={failed > 0 ? "accent" : "neutral"} />
       </div>
+
+      <FlowPermissions key={flow.id} flow={flow} onChanged={onPermissionsChanged} />
 
       <div className="wf-detail__runs-header">
         <h4>Run history</h4>

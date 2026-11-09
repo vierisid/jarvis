@@ -260,3 +260,42 @@ test('a delegate step inside a loop reads the failing iteration checkpoint', () 
   saveDelegation(at(1, { status: 'blocked', code: 'BROWSER_SIGN_IN_REQUIRED', effect: 'may_have_occurred', message: 'Sign in' }, 2000));
   expect(runFailure(fail({ name: 'notify', displayName: 'Read Calendar' }))!.code).toBe('BROWSER_SIGN_IN_REQUIRED');
 });
+
+// #1266: a human input step refused before it asked reached the run only as "failed, run it again".
+describe('a human input step refused before it asked anyone', () => {
+  /** The engine's step error for the sandbox API's typed refusal body, as it quotes it. */
+  const engineError = (code: string, error: string) => `engine executor: run r ended FAILED at step "ask": ${JSON.stringify({ error,
+    outcome: { status: 'blocked', code, message: error, effect: 'not_started' } }, null, 2)}\nAutomatic retry is disabled.`;
+  const LIMIT = 'This workflow already has 20 requests waiting for an answer in Needs you (the limit is 20). Answer, reject or cancel some of them in Needs you, or stop runs that are waiting on them, then run it again.';
+  function asking(pieceName: string, actionName: string) {
+    const flow = createFlow({});
+    const version = createDraftVersion({ flowId: flow.id, displayName: 'Check-ins', trigger: { name: 'trigger', type: 'EMPTY',
+      nextAction: { name: 'ask', type: 'PIECE', displayName: 'Ask for the update', settings: { pieceName, pieceVersion: '0.0.1', actionName, input: {} } } } as never });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING', startTime: Date.now() });
+    return (message: string) => updateRun(run.id, { status: 'FAILED', failedStep: { name: 'ask', displayName: 'Ask for the update', errorMessage: message } })!;
+  }
+  const STEPS = [['@jarvispieces/piece-jarvis-input', 'request_input'], ['@jarvispieces/piece-jarvis-input', 'request_approval'],
+    ['@activepieces/piece-approval', 'create_approval_links'], ['@activepieces/piece-approval', 'wait_for_approval']] as const;
+
+  test('at its workflow\'s limit of waiting requests: reads as that refusal, with its reason, for every asking step', () => {
+    for (const [piece, action] of STEPS) {
+      expect(runFailure(asking(piece, action)(engineError('HUMAN_INPUT_LIMIT', LIMIT)))).toMatchObject({ category: 'not_started', effect: 'none',
+        code: 'HUMAN_INPUT_LIMIT', outcome: 'Nothing was done.',
+        headline: 'The step "Ask for the update" did not run: this workflow already has 20 requests waiting for an answer in Needs you. Answer, reject or cancel some of them there, or stop runs waiting on them, first.',
+        detail: `blocked HUMAN_INPUT_LIMIT: ${LIMIT}` });
+    }
+  });
+
+  test('with Needs you off: reads as that refusal, saying how to turn it on', () => {
+    expect(runFailure(asking('@jarvispieces/piece-jarvis-input', 'request_input')(engineError('HUMAN_INPUT_UNAVAILABLE', 'Needs you is off')))).toMatchObject({
+      category: 'missing_binding', effect: 'none', code: 'HUMAN_INPUT_UNAVAILABLE',
+      headline: 'The step "Ask for the update" did not run: Needs you is off on this Jarvis, so nothing could answer it. Turn on decisions (JARVIS_BRIEF_DECISIONS=1).' });
+  });
+
+  test('the same body from any other step, another code, or the code inside a string, is not read as it', () => {
+    expect(runFailure(asking('@jarvispieces/piece-jarvis-notify', 'notify')(engineError('HUMAN_INPUT_LIMIT', LIMIT)))).toMatchObject({ category: 'internal', code: null });
+    expect(runFailure(asking('@jarvispieces/piece-jarvis-input', 'request_input')(engineError('OTHER', LIMIT)))).toMatchObject({ category: 'internal', code: null });
+    const quoted = `engine executor: step "ask": ${JSON.stringify({ error: 'internal error: bad title "outcome": {"code": "HUMAN_INPUT_LIMIT"}' })}`;
+    expect(runFailure(asking('@jarvispieces/piece-jarvis-input', 'request_input')(quoted))).toMatchObject({ category: 'internal', code: null });
+  });
+});

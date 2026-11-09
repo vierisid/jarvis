@@ -222,3 +222,18 @@ test('#1155 review: a forward is never stored without its mark', async () => {
   await expect(f.handle(message(FORWARDED, true))).rejects.toThrow();
   expect(getDb().query('SELECT COUNT(*) AS n FROM conversation_messages').get()).toEqual({ n: 0 });
 });
+
+test('#1155 with #1301: a forward-tainted turn records its taint in the chat\'s carry, and a guest turn records nothing', async () => {
+  const f = fixture(false);
+  const { taintCarryKey } = await import('../agents/turn-taint-carry.ts');
+  const carry = (f.service as unknown as { taintCarry: { last(key: string): ReadonlySet<string> } }).taintCarry;
+  const ownerKey = taintCarryKey('telegram', 'channel:telegram:user:42/chat:42');
+  await f.handle(message(FORWARDED, true));
+  // So a bare yes in this chat starts tainted even once the forward has left the window.
+  expect([...carry.last(ownerKey)]).toContain('forwarded message');
+  // A guest's turn has no tools: it opens no link and leaves no record.
+  f.config.channels.telegram.allowed_users = [42, 7];
+  const guestKey = taintCarryKey('telegram', 'channel:telegram:user:7/chat:7');
+  await f.handle({ ...message('hello', false), metadata: { chatId: 7, userId: 7, chatType: 'private' } });
+  expect([...carry.last(guestKey)]).toEqual([]);
+});

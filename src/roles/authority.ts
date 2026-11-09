@@ -81,8 +81,9 @@ export type VoiceApprovalGateOutcome =
  *   2. Every voice answer requires confidence >= 0.85, a "no" included.
  *      STT mishears, podcasts, third parties saying "yes" all hit this gate.
  *
- * A click-only card (`approvalNeedsClick`) is not this function's call: the
- * caller refuses it in both directions before asking (Q-08).
+ * A click-only card (`approvalNeedsClick`) is not this function's call for a
+ * yes: the caller refuses a yes to it before asking (Q-08). A no to one
+ * reaches this gate for the confidence floor (owner decision 2026-11-06, #1158).
  *
  * Returning `clarify` is intentionally not the same as falling through —
  * the caller posts a thread message saying the spoken answer was heard but

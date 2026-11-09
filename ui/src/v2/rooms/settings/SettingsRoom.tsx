@@ -278,8 +278,11 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
         // Answered from the route, so a restart it refuses (no keepalive
         // service installed) is a no (#1015). The restart itself comes a
         // moment after the route answers: on Linux from a systemd timer
-        // 2s out (#1037), on macOS from launchctl 1s out. A spoken answer
-        // longer than that can still be cut off by the restart.
+        // 2s out (#1037), on macOS from launchctl 1s out. While a live
+        // voice session still has this answer to speak, the daemon holds
+        // that schedule until it has played (up to a short cap,
+        // RESTART_SPEECH_WAIT_CAP_MS in the daemon), and audio already
+        // here plays out when the socket drops (#1156).
         return answerFrom(data.restartDaemon());
       }
 

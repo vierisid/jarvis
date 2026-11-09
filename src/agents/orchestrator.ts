@@ -17,6 +17,7 @@ import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } from '../authority/taint-gating.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { RealtimeTaint } from './realtime-taint.ts';
+import type { TurnTaintLink } from './turn-taint-carry.ts';
 
 /**
  * Whether a resumed task buffer holds a browser read whose element ids the
@@ -908,6 +909,10 @@ export class AgentOrchestrator {
     // `untrustedSources` seed the turn's taint, as streamMessage's do: a
     // message the owner forwarded is outside content from the start (#1155).
     thread?: { history: LLMMessage[]; untrustedSources?: string[] } | null,
+    // This chat's taint carry-over (agents/turn-taint-carry.ts): the turn's
+    // taint set comes from it, so a bare "yes" after a tainted turn starts
+    // tainted. The caller closes it when the turn ends.
+    carry?: TurnTaintLink | null,
   ): Promise<string> {
     const primary = this.getPrimary();
     if (!primary) {
@@ -916,8 +921,12 @@ export class AgentOrchestrator {
     const ownThread = thread ?? null;
 
     // A message from the user is the turn boundary for taint gating: this
-    // turn's reads gate this turn's later calls and nothing else.
-    const turnTaint = new Set<string>(ownThread?.untrustedSources);
+    // turn's reads gate this turn's later calls and nothing else, unless the
+    // message is a bare "yes" to a tainted turn (agents/turn-taint-carry.ts).
+    // The thread's untrusted sources join the same set, so they are recorded
+    // in the carry too: a bare yes after a forward stays tainted (#1155).
+    const turnTaint = carry?.open() ?? new Set<string>();
+    for (const source of ownThread?.untrustedSources ?? []) turnTaint.add(source);
     // The browser snapshots THIS loop reads (remote #827, local #1161), entered around each of its tool
     // calls, so a browser card it raises binds the snapshot it read and not
     // the newest one another channel or the voice route took (#827,
@@ -1073,6 +1082,13 @@ export class AgentOrchestrator {
      * registry. `null` is the explicit "this turn has no scope".
      */
     scope: TurnToolScope | null;
+    /**
+     * The dispatching turn's taint carry-over (agents/turn-taint-carry.ts):
+     * this task's taint set is opened from it, so a task a bare "yes"
+     * delegated starts with what the turn before it read, and what this task
+     * reads counts toward the turn's record.
+     */
+    taintCarry?: TurnTaintLink | null;
   }): Promise<TaskCallResult> {
     if (!this.llmManager) {
       return { kind: 'completed', text: '[No LLM configured]', conversation: [] };
@@ -1087,7 +1103,7 @@ export class AgentOrchestrator {
     // tool results are still in the history, and a page could have said
     // "ask first, then run it", so the taint is rebuilt from the history
     // instead of starting clean.
-    const turnTaint = new Set<string>();
+    const turnTaint = opts.taintCarry?.open() ?? new Set<string>();
     // The browser snapshots THIS loop reads (remote #827, local #1161), entered around each of its tool
     // calls, so a browser card it raises binds the snapshot it read and not
     // the newest one another channel or the voice route took (#827,
@@ -1384,6 +1400,8 @@ export class AgentOrchestrator {
     // clear a site turn's scope mid-loop (#561).
     scope?: TurnToolScope | null,
     conversation?: { history: LLMMessage[]; contextKey: string; signal: AbortSignal; untrustedSources?: string[] },
+    // This chat's taint carry-over, as on processMessage.
+    carry?: TurnTaintLink | null,
   ): AsyncIterable<LLMStreamEvent> {
     const primary = this.getPrimary();
     if (!primary) {
@@ -1391,8 +1409,10 @@ export class AgentOrchestrator {
     }
 
     // A message from the user is the turn boundary for taint gating: this
-    // turn's reads gate this turn's later calls and nothing else.
-    const turnTaint = new Set<string>(conversation?.untrustedSources);
+    // turn's reads gate this turn's later calls and nothing else, unless the
+    // message is a bare "yes" to a tainted turn (agents/turn-taint-carry.ts).
+    const turnTaint = carry?.open() ?? new Set<string>();
+    for (const source of conversation?.untrustedSources ?? []) turnTaint.add(source);
     // The browser snapshots THIS loop reads (remote #827, local #1161), entered around each of its tool
     // calls, so a browser card it raises binds the snapshot it read and not
     // the newest one another channel or the voice route took (#827,

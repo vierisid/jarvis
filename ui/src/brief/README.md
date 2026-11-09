@@ -32,7 +32,7 @@ Outside the hosted default (self-hosted installs, and hosted with `JARVIS_HOSTED
     chat WebSocket or voice connection and bypasses the onboarding gate.
 - Without the developer setting, `?brief=1#/brief/<room>` and `?brief=preview` stay on `AppShellV2`.
   A `#/brief/<room>` bookmark is rewritten before `AppShellV2` mounts: the hash becomes the matching
-  legacy room, `brief=0` is set and `briefReturn` keeps the Brief route.
+  legacy room and `brief=0` is set; the Brief route itself is not kept.
 - Anything else, including every existing room, panel, task, answer and developer hash, and any URL
   with an `onboarding` query, stays with `AppShellV2`.
 

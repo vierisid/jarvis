@@ -34,6 +34,7 @@ import { defangPieceProjection } from './piece-effect-receipt';
 import { digest } from './effect-context';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, wrapUntrusted } from '../../roles/untrusted';
 import { authorizePieceDispatch, CODE_STEP_PIECE, PIECE_RECEIPT_MAX_BYTES, pieceInputDigest, receiptBody } from './piece-effect-guard';
+import { setFlowReadHosts } from '../db/repos/flow-read-hosts';
 import { getWaitpoint } from '../db/repos/waitpoint';
 import { isCommunityAction, isCommunityPiece } from './step-admission';
 import { WebSocketService } from '../../daemon/ws-service';
@@ -1525,11 +1526,15 @@ describe('#955: a partly governed piece badges and audits its ungoverned actions
 
 describe('#961: the core HTTP piece is governed by method', () => {
   const HTTP = '@activepieces/piece-http';
-  const shipped = () => {
+  // #1153: a GET runs without a card only to a host on the flow's read
+  // list, so these tests list the one host they read from.
+  const shipped = (readHosts: string[] = ['ops.example.test']) => {
     const f = fixture(HTTP, 'send_request', DEFAULT_CONFIG.authority.default_level);
     f.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories] as ActionCategory[]);
+    setFlowReadHosts(f.run.flowId, readHosts);
     return f;
   };
+  const READ = { governed: true as const, dispatch: 'authorized' as const, readHosts: ['ops.example.test'] };
   // A read carries no body; anything else sends one, as a flow would.
   const request = (method: string, extra: Record<string, unknown> = {}) => ({ method, url: 'https://ops.example.test/api/logs',
     headers: { 'Content-Type': 'application/json' }, queryParams: {}, authType: 'NONE',
@@ -1545,7 +1550,7 @@ describe('#961: the core HTTP piece is governed by method', () => {
     expect(JSON.parse(card.context).target).toMatchObject({ piece: 'http', action: 'send_request', method: 'POST', url: 'https://ops.example.test/api/logs' });
     closeWorkflowDb(); initWorkflowDb(':memory:');
     const get = shipped();
-    expect(await get.authorize(request('GET'))).toEqual({ governed: true, dispatch: 'authorized' });
+    expect(await get.authorize(request('GET'))).toEqual(READ);
     expect(get.approvals.getPending()).toHaveLength(0);
     expect(listWorkflowEffects(get.run.id)[0]).toMatchObject({ actionCategory: 'read_data', status: 'succeeded' });
   });
@@ -1556,7 +1561,7 @@ describe('#961: the core HTTP piece is governed by method', () => {
       const f = shipped();
       const reply = f.authorize(request(method));
       if (outcome === 'card') expect(await reply).toMatchObject({ dispatch: 'approval_required' });
-      else if (outcome === 'run') expect(await reply).toEqual({ governed: true, dispatch: 'authorized' });
+      else if (outcome === 'run') expect(await reply).toEqual(READ);
       else await expect(reply).rejects.toThrow(/Authority level 3 is below required 9 for delete_data/);
       closeWorkflowDb(); initWorkflowDb(':memory:');
     }
@@ -1594,7 +1599,58 @@ describe('#961: the core HTTP piece is governed by method', () => {
 
   test('a GET is a read: the engine retry of a recorded authorization reads it again', async () => {
     const f = shipped();
-    expect(await f.authorize(request('GET'))).toEqual({ governed: true, dispatch: 'authorized' });
+    expect(await f.authorize(request('GET'))).toEqual(READ);
+    expect(await f.authorize(request('GET'))).toEqual(READ);
+  });
+
+  test('#1153: a GET or HEAD to a host not on the flow\'s read list asks as a send, naming the URL; on the list it runs', async () => {
+    for (const [hosts, url] of [
+      [[], 'https://ops.example.test/api/logs'],
+      [['ops.example.test'], 'https://exfil.example.test/c?d=secret'],
+      // Userinfo and a parent domain do not make another host a listed one.
+      [['ops.example.test'], 'https://ops.example.test@exfil.example.test/'],
+      [['example.test'], 'https://ops.example.test/api/logs'],
+      // A URL the projection cut, or one that does not parse, is never listed.
+      [['ops.example.test'], `https://ops.example.test/${'a'.repeat(600)}`],
+      [['ops.example.test'], '{{trigger.url}}'],
+    ] as const) {
+      for (const method of ['GET', 'HEAD']) {
+        const f = shipped([...hosts]);
+        const pending = await f.authorize(sanitizePieceInput(request(method, { url }), HTTP));
+        expect(pending).toMatchObject({ governed: true, dispatch: 'approval_required' });
+        const card = f.approvals.getRequest(approvalOf(pending))!;
+        expect(card).toMatchObject({ action_category: 'send_message', tool_name: 'piece:http/send_request' });
+        expect(JSON.parse(card.context).target).toMatchObject({ method });
+        closeWorkflowDb(); initWorkflowDb(':memory:');
+      }
+    }
+    // Listed, in any letter case, it runs, and the list goes back to the engine.
+    const f = shipped(['OPS.Example.test', 'other.example.test']);
+    expect(await f.authorize(request('GET', { url: 'https://Ops.Example.Test:8443/api/logs?x=1' })))
+      .toEqual({ governed: true, dispatch: 'authorized', readHosts: ['ops.example.test', 'other.example.test'] });
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ actionCategory: 'read_data' });
+  });
+
+  test('#1153: a list changed while a step is recorded keeps the step as it was recorded', async () => {
+    // Listed while its card waits: the approved card runs, as the send it was asked as.
+    const asked = shipped([]);
+    const pending = await asked.authorize(request('GET'));
+    setFlowReadHosts(asked.run.flowId, ['ops.example.test']);
+    asked.approvals.approve(approvalOf(pending), 'dashboard');
+    expect(await asked.authorize(request('GET'))).toEqual({ governed: true, dispatch: 'authorized' });
+    closeWorkflowDb(); initWorkflowDb(':memory:');
+    // Removed between a read and the engine's retry of it: the retry is still
+    // a read, held to the list as it is now, so the engine refuses the host.
+    const read = shipped(['ops.example.test']);
+    expect(await read.authorize(request('GET'))).toEqual(READ);
+    setFlowReadHosts(read.run.flowId, ['other.example.test']);
+    expect(await read.authorize(request('GET'))).toEqual({ governed: true, dispatch: 'authorized', readHosts: ['other.example.test'] });
+    expect(read.approvals.getPending()).toHaveLength(0);
+  });
+
+  test('#1153: an approved GET to an unlisted host runs without a read list, so its redirects are not held to one', async () => {
+    const f = shipped([]);
+    f.approvals.approve(approvalOf(await f.authorize(request('GET'))), 'dashboard');
     expect(await f.authorize(request('GET'))).toEqual({ governed: true, dispatch: 'authorized' });
   });
 

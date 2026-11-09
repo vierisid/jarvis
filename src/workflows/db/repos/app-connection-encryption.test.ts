@@ -33,7 +33,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function input(value = { secret: TOKEN }): UpsertConnectionInput {
+function input(value = { secret_text: TOKEN }): UpsertConnectionInput {
   return { externalId: "native-fixture", displayName: "Fixture", type: "SECRET_TEXT",
     pieceName: "test-piece", pieceVersion: "1.0.0", value };
 }
@@ -72,30 +72,30 @@ describe("native credential storage", () => {
     expect(isEncrypted(raw(created.id))).toBe(true);
     expect(raw(created.id)).not.toContain(TOKEN);
     expect(isRowBound(raw(created.id))).toBe(true);
-    expect(readRaw(created.id)).toEqual({ secret: TOKEN });
+    expect(readRaw(created.id)).toEqual({ secret_text: TOKEN });
     assertNoSecretsOnDisk();
 
-    const updated = upsertConnection(input({ secret: ROTATED }));
+    const updated = upsertConnection(input({ secret_text: ROTATED }));
     expect(updated.id).toBe(created.id);
     expect(isEncrypted(raw(created.id))).toBe(true);
     expect(raw(created.id)).not.toContain(ROTATED);
-    expect(updated.value).toEqual({ secret: ROTATED });
+    expect(updated.value).toEqual({ secret_text: ROTATED });
     assertNoSecretsOnDisk();
     closeWorkflowDb();
     initWorkflowDb(dbPath);
-    expect(getConnection(created.id)?.value).toEqual({ secret: ROTATED });
+    expect(getConnection(created.id)?.value).toEqual({ secret_text: ROTATED });
     assertNoSecretsOnDisk();
   });
 
   test("legacy rows stay readable and become encrypted when updated", () => {
     const created = upsertConnection(input());
     getWorkflowDb().run("UPDATE app_connection SET value = ? WHERE id = ?", [
-      JSON.stringify({ secret: TOKEN }), created.id,
+      JSON.stringify({ secret_text: TOKEN }), created.id,
     ]);
-    expect(getConnection(created.id)?.value).toEqual({ secret: TOKEN });
-    const updated = upsertConnection(input({ secret: ROTATED }));
+    expect(getConnection(created.id)?.value).toEqual({ secret_text: TOKEN });
+    const updated = upsertConnection(input({ secret_text: ROTATED }));
     expect(isEncrypted(raw(updated.id))).toBe(true);
-    expect(updated.value).toEqual({ secret: ROTATED });
+    expect(updated.value).toEqual({ secret_text: ROTATED });
   });
 
   test("a key failure never falls back to plaintext on insert or update", () => {
@@ -103,7 +103,7 @@ describe("native credential storage", () => {
     const before = raw(created.id);
     setEncryptionKey(Buffer.alloc(1));
     expect(() => upsertConnection({ ...input(), externalId: "bad-key-insert" })).toThrow();
-    expect(() => upsertConnection(input({ secret: ROTATED }))).toThrow();
+    expect(() => upsertConnection(input({ secret_text: ROTATED }))).toThrow();
     expect(raw(created.id)).toBe(before);
     expect(getWorkflowDb().query("SELECT id FROM app_connection").all()).toHaveLength(1);
   });
@@ -119,18 +119,18 @@ describe("native credential storage", () => {
     const body = await response.json() as { id: string };
     expect(JSON.stringify(body)).not.toContain(TOKEN);
     expect(isEncrypted(raw(body.id))).toBe(true);
-    expect(getConnection(body.id)?.value).toEqual({ secret: TOKEN });
+    expect(getConnection(body.id)?.value).toEqual({ secret_text: TOKEN });
 
-    const repeated = await post(request("POST", input({ secret: ROTATED })));
+    const repeated = await post(request("POST", input({ secret_text: ROTATED })));
     expect((await repeated.json() as { id: string }).id).toBe(body.id);
     const patch = routes["/api/workflows/connections/:id"]!.PATCH!;
-    const patchRequest = Object.assign(request("PATCH", { value: { secret: TOKEN } }), {
+    const patchRequest = Object.assign(request("PATCH", { value: { secret_text: TOKEN } }), {
       params: { id: body.id },
     });
     const patched = await patch(patchRequest);
     expect(patched.status).toBe(200);
     expect(await patched.text()).not.toContain(TOKEN);
-    expect(getConnection(body.id)?.value).toEqual({ secret: TOKEN });
+    expect(getConnection(body.id)?.value).toEqual({ secret_text: TOKEN });
     expect(isEncrypted(raw(body.id))).toBe(true);
     assertNoSecretsOnDisk();
   });
@@ -142,9 +142,9 @@ const LOW = "synthetic-low-privilege-credential-token";
 /** Two connections owned by different pieces, the #481 attacker's material. */
 function twoConnections() {
   const high = upsertConnection({ externalId: "high-privilege-conn", displayName: "High",
-    type: "SECRET_TEXT", pieceName: "fixture-admin-piece", pieceVersion: "1.0.0", value: { secret: HIGH } });
+    type: "SECRET_TEXT", pieceName: "fixture-admin-piece", pieceVersion: "1.0.0", value: { secret_text: HIGH } });
   const low = upsertConnection({ externalId: "low-privilege-conn", displayName: "Low",
-    type: "SECRET_TEXT", pieceName: "fixture-guest-piece", pieceVersion: "1.0.0", value: { secret: LOW } });
+    type: "SECRET_TEXT", pieceName: "fixture-guest-piece", pieceVersion: "1.0.0", value: { secret_text: LOW } });
   return { high, low };
 }
 
@@ -170,7 +170,7 @@ describe("credential ciphertext is bound to its row", () => {
       expect(message).not.toContain(LOW);
     }
     // The donor row is untouched and still reads.
-    expect(getConnection(high.id)?.value).toEqual({ secret: HIGH });
+    expect(getConnection(high.id)?.value).toEqual({ secret_text: HIGH });
   });
 
   test.each([
@@ -193,48 +193,48 @@ describe("credential ciphertext is bound to its row", () => {
       "UPDATE app_connection SET display_name = ?, piece_version = ?, status = ?, owner_id = ? WHERE id = ?",
       ["Renamed", "9.9.9", "ERROR", "someone-else", high.id],
     );
-    expect(getConnection(high.id)?.value).toEqual({ secret: HIGH });
+    expect(getConnection(high.id)?.value).toEqual({ secret_text: HIGH });
     // A re-upsert under the same lookup tuple keeps reading, so the binding
     // costs nothing during normal operation.
     const again = upsertConnection({ externalId: "high-privilege-conn", displayName: "High",
-      type: "SECRET_TEXT", pieceName: "fixture-admin-piece", pieceVersion: "2.0.0", value: { secret: LOW } });
+      type: "SECRET_TEXT", pieceName: "fixture-admin-piece", pieceVersion: "2.0.0", value: { secret_text: LOW } });
     expect(again.id).toBe(high.id);
     expect(getConnectionByExternalId("jrv_proj_default", "fixture-admin-piece", "high-privilege-conn")?.value)
-      .toEqual({ secret: LOW });
+      .toEqual({ secret_text: LOW });
   });
 
   test("a mixed table of plaintext, enc1: and enc1a: rows all read", () => {
     const { high, low } = twoConnections();
     const legacy = upsertConnection({ externalId: "legacy-conn", displayName: "Legacy",
-      type: "SECRET_TEXT", pieceName: "fixture-legacy-piece", pieceVersion: "1.0.0", value: { secret: LOW } });
-    setRaw(legacy.id, JSON.stringify({ secret: "synthetic-legacy-plaintext-token" }));
-    setRaw(low.id, encryptJson({ secret: "synthetic-unbound-envelope-token" }));
+      type: "SECRET_TEXT", pieceName: "fixture-legacy-piece", pieceVersion: "1.0.0", value: { secret_text: LOW } });
+    setRaw(legacy.id, JSON.stringify({ secret_text: "synthetic-legacy-plaintext-token" }));
+    setRaw(low.id, encryptJson({ secret_text: "synthetic-unbound-envelope-token" }));
     expect([isEncrypted(raw(legacy.id)), isRowBound(raw(low.id)), isRowBound(raw(high.id))])
       .toEqual([false, false, true]);
     // Ordered by piece_name: admin (enc1a:), guest (enc1:), legacy (plaintext).
     expect(listConnections("jrv_proj_default").map(c => c.value)).toEqual([
-      { secret: HIGH },
-      { secret: "synthetic-unbound-envelope-token" },
-      { secret: "synthetic-legacy-plaintext-token" },
+      { secret_text: HIGH },
+      { secret_text: "synthetic-unbound-envelope-token" },
+      { secret_text: "synthetic-legacy-plaintext-token" },
     ]);
   });
 
   test("strict mode refuses the plaintext row and keeps reading the un-converted enc1: row", () => {
     const { high, low } = twoConnections();
-    setRaw(low.id, encryptJson({ secret: "synthetic-unbound-envelope-token" }));
+    setRaw(low.id, encryptJson({ secret_text: "synthetic-unbound-envelope-token" }));
     const legacy = upsertConnection({ externalId: "legacy-conn", displayName: "Legacy",
-      type: "SECRET_TEXT", pieceName: "fixture-legacy-piece", pieceVersion: "1.0.0", value: { secret: LOW } });
-    setRaw(legacy.id, JSON.stringify({ secret: "synthetic-legacy-plaintext-token" }));
+      type: "SECRET_TEXT", pieceName: "fixture-legacy-piece", pieceVersion: "1.0.0", value: { secret_text: LOW } });
+    setRaw(legacy.id, JSON.stringify({ secret_text: "synthetic-legacy-plaintext-token" }));
     setRequireEncryptedCredentials(true);
     expect(() => getConnection(legacy.id)).toThrow(/plaintext credential refused/);
-    expect(getConnection(low.id)?.value).toEqual({ secret: "synthetic-unbound-envelope-token" });
-    expect(getConnection(high.id)?.value).toEqual({ secret: HIGH });
+    expect(getConnection(low.id)?.value).toEqual({ secret_text: "synthetic-unbound-envelope-token" });
+    expect(getConnection(high.id)?.value).toEqual({ secret_text: HIGH });
   });
 
   test("strict mode refuses a ciphertext swapped for attacker plaintext", () => {
     const { high } = twoConnections();
     setRequireEncryptedCredentials(true);
-    setRaw(high.id, JSON.stringify({ secret: "synthetic-attacker-supplied-token" }));
+    setRaw(high.id, JSON.stringify({ secret_text: "synthetic-attacker-supplied-token" }));
     expect(() => getConnection(high.id)).toThrow(/plaintext credential refused/);
   });
 });

@@ -56,6 +56,9 @@ func TestPanelSpawnWiresTheRevealAnswer(t *testing.T) {
 		"_ = platformFocusWindow(earlyHandle)\n\t\t\t\t\t\tif panelTracksReveal {",
 		"wv.Eval(panelRevealedScript)",
 		"_ = wv.Bind(\"__sidecar_panel_ready\", func() bool {\n\t\t\t\t\tshowPanel()\n\t\t\t\t\treturn panelShown.Load()\n\t\t\t\t})",
+		// #1157: the document-start question only reads; it never reveals.
+		"if panelTracksReveal {\n\t\t\t\t\t// Asked at document start",
+		"_ = wv.Bind(\"__sidecar_panel_shown\", func() bool {\n\t\t\t\t\t\treturn panelShown.Load()\n\t\t\t\t\t})",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("panels_runtime.go no longer contains %q", want)

@@ -42,7 +42,6 @@ import { dismissFailures, listOpenFailures } from '../runtime/open-failures';
 import type { AuthorityEngine } from '../../authority/engine';
 import {
   createFlow,
-  deleteFlowInProject,
   flowCodeStepsEnabled,
   getFlow,
   getFlowInProject,
@@ -68,6 +67,8 @@ import {
 import { publishFlowVersion } from "../db/repos/flow-publication";
 import { assertVersionReady, versionReadiness, WorkflowReadinessError } from '../db/repos/flow-readiness';
 import { assertCodeStepsAllowed, CodeStepsRefusedError } from "../db/repos/flow-code-steps";
+import { getFlowReadHosts, setFlowReadHosts } from "../db/repos/flow-read-hosts";
+import { normalizeReadHosts, readHostsOfRow } from "../db/read-hosts";
 import { FlowVersionRequestError, withOwnedFlowVersion } from "../db/repos/flow-version-ownership";
 import {
   getFlowVersionUiMeta,
@@ -93,8 +94,8 @@ import {
   listWaitpointsByFlowRun,
 } from "../db/repos/waitpoint";
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
-import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
-import { assertFlowDeletable } from "../db/repos/workflow-removal-state";
+import { stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
+import { deleteWorkflow } from "../db/repos/flow-deletion";
 import { claimContinuation } from "../runtime/continuation";
 import { flowBindingBlock } from "../runtime/binding-refusals";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
@@ -836,6 +837,18 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
   // it after, or deleted, which the repo writes already answer as before.
   const scopedFlow = (req: Request, id: string) => getFlowInProject(callerProject(req), id);
   const scopedRun = (req: Request, runId: string) => getFlowRunInProject(callerProject(req), runId);
+  /**
+   * Workflow input requests are answered in Needs you, which is the Brief
+   * decisions feature: with decisions off the dashboard does not show them,
+   * so these routes refuse as `/api/brief/decisions` does (#1266), with the
+   * same status and code, rather than accept answers nothing shows.
+   */
+  const decisionsRefusal = (): Response | null => {
+    const decisions = opts.briefCapabilities?.snapshot().capabilities.decisions;
+    if (!decisions?.supported) return Response.json({ error: 'Decisions are unsupported', code: 'unsupported' }, { status: 501 });
+    if (!decisions.enabled) return Response.json({ error: 'Decisions are unavailable or disabled', code: 'unavailable' }, { status: 503 });
+    return null;
+  };
   // The version routes' answer for a flow outside the caller's project: the
   // message the ownership check gives a version that is not in the flow, which
   // is also what those routes answered for a flow that does not exist before
@@ -1667,18 +1680,30 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           return flow ? ok(serializeFlow(flow)) : err("flow not found", 404);
         }),
       DELETE: (req) =>
-        trapErrors(() => {
+        trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const project = callerProject(req);
-          if (!getFlowInProject(project, id)) return err("flow not found", 404);
-          assertFlowDeletable(id);
-          stopRunsOfDeletedFlow(id);
           // BEHAVIOUR CHANGE (#729): a flow that does not exist used to answer
           // 200 `{ ok: true }`. It is a 404 now, because a flow in another
           // project must get the same answer as a missing one and must not be
           // reported deleted when it was not -- the shape the connections
           // DELETE has had since #692.
-          if (!deleteFlowInProject(project, id)) return err("flow not found", 404);
+          //
+          // #1154: the delete stops the runs, waits for their in-flight
+          // effects to be recorded, and removes what the flow leaves (run
+          // logs, step files, store keys, the cards of ended runs). An effect
+          // still in flight after the wait answers 409 and the flow stays.
+          const outcome = await deleteWorkflow(project, id);
+          if (outcome.status === "not_found") return err("flow not found", 404);
+          if (outcome.status === "stopping") {
+            // Turned off by the delete: its triggers go now.
+            refreshTrigger(id);
+            // `error` is what the dashboard shows, so it is the sentence.
+            return ok({
+              error: "A stopped run is still finishing an action, so the workflow was turned off but not deleted yet. Try the delete again in a moment.",
+              code: "workflow_stopping",
+            }, 409);
+          }
           refreshTrigger(id);
           return ok({ ok: true });
         }),
@@ -2029,6 +2054,48 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // enable or run, which is the same authoring-time boundary the
           // grant itself lives on.
           return ok(serializeFlow(setFlowCodeStepsEnabled(id, body.enabled, "user")));
+        }),
+    },
+
+    // The per-flow read list (#1153): hosts an HTTP step's GET or HEAD may
+    // reach without asking; a GET to any other host asks as a send. Its own
+    // route taking only the list, for the reasons the CODE-step grant has
+    // one, and likewise NOT exposed through `manage_workflow`: a model that
+    // could list a host could carry data out in a query string to it, which
+    // is the whole thing the list exists to stop.
+    "/api/workflows/:id/read-hosts": {
+      POST: (req) =>
+        trapErrors(async () => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
+          const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES, { allowEmpty: true });
+          if ("error" in read) return read.error;
+          // Scope again after the body await (#846), as /code-steps does.
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
+          const body = read.body as { hosts?: unknown; expected?: unknown };
+          if (!Array.isArray(body.hosts)) {
+            return err('hosts must be an array of host names ({"hosts": ["api.example.com"]}; [] clears the list)', 400);
+          }
+          if (body.expected !== undefined && !Array.isArray(body.expected)) {
+            return err("expected must be the list the edit started from, as an array of host names", 400);
+          }
+          let hosts: string[];
+          let expected: string[] | null = null;
+          try {
+            hosts = normalizeReadHosts(body.hosts);
+            if (Array.isArray(body.expected)) expected = normalizeReadHosts(body.expected);
+          } catch (e) {
+            return err(e instanceof Error ? e.message : String(e), 400);
+          }
+          // Optional precondition: the list the editor started from. A tab
+          // opened before another change would otherwise put back a host
+          // someone removed meanwhile.
+          const current = getFlowReadHosts(id)?.hosts ?? [];
+          if (expected && JSON.stringify(expected) !== JSON.stringify(current)) {
+            return err("the read list changed since this edit started; reload it and try again", 409);
+          }
+          setFlowReadHosts(id, hosts, "user");
+          return ok(serializeFlow(getFlow(id)!));
         }),
     },
 
@@ -2389,6 +2456,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
 
     "/api/workflow-inputs": {
       GET: req => trapErrors(() => {
+        const refused = decisionsRefusal(); if (refused) return refused;
         const project = callerProject(req), requests = listHumanInputs(project);
         // Polled every few seconds: the cursor is an ids-only indexed read, not a second outcome lookup.
         return ok({ requests, historyCursor: humanInputHistoryCursor(project) });
@@ -2396,17 +2464,20 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     },
     "/api/workflow-inputs/history": {
       GET: req => trapErrors(() => {
+        const refused = decisionsRefusal(); if (refused) return refused;
         try { return ok(humanInputHistory(callerProject(req), new URL(req.url).searchParams.get('cursor'))); }
         catch (error) { if (error instanceof Error && error.message === 'Invalid history cursor') return err(error.message, 400); throw error; }
       }),
     },
     "/api/workflow-inputs/:id": {
       GET: req => trapErrors(() => {
+        const refused = decisionsRefusal(); if (refused) return refused;
         const { id } = (req as RequestWithParams<{ id: string }>).params;
         const request = getHumanInput(callerProject(req), id);
         return request ? ok({ request }) : err('Request not found', 404);
       }),
       POST: req => trapErrors(async () => {
+        const refused = decisionsRefusal(); if (refused) return refused;
         const { id } = (req as RequestWithParams<{ id: string }>).params;
         // This authenticated route is intentionally outside the public webhook prefix.
         // Counted in bytes while it streams in, so a chunked body cannot be buffered whole first.
@@ -2423,6 +2494,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     // signed-in, project-scoped route family and request generation as the response above.
     "/api/workflow-inputs/:id/dismiss": {
       POST: req => trapErrors(async () => {
+        const refused = decisionsRefusal(); if (refused) return refused;
         const { id } = (req as RequestWithParams<{ id: string }>).params;
         const read = await readBoundedText(req, HUMAN_INPUT_DISMISS_MAX_BODY_BYTES);
         if (!read.ok) return read.reason === 'too_large' ? err('Response too large', 413) : err('failed to read request body');
@@ -2507,6 +2579,9 @@ function serializeFlow(row: ReturnType<typeof getFlow> | NonNullable<ReturnType<
       grantedBy: row.code_steps_grant,
       grantedAt: row.code_steps_granted_at,
     },
+    // #1153: the hosts this flow's HTTP reads may reach without asking, and
+    // whether a person or the upgrade wrote them.
+    readHosts: readHostsOfRow(row as unknown as Record<string, unknown>),
     created: row.created,
     updated: row.updated,
   };
@@ -2569,10 +2644,11 @@ function validateConnectionValueShape(
         return "BASIC_AUTH: value.username + value.password are required";
       return null;
     case "SECRET_TEXT":
-      // Engine reads either `secret` or `value` depending on the piece;
-      // accept both. Reject obvious empties.
-      if (!has("secret") && !has("value"))
-        return "SECRET_TEXT: value.secret (or value.value) is required";
+      // The engine hands a piece `value.secret_text` (upstream's shape,
+      // connection-resolver.ts); a `secret` or `value` key reached the piece as
+      // undefined (#1153).
+      if (!has("secret_text"))
+        return "SECRET_TEXT: value.secret_text is required";
       return null;
     case "CUSTOM_AUTH":
     case "NO_AUTH":

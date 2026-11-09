@@ -12,10 +12,14 @@
  * wants to do and clicks once.
  *
  * Taint is per user turn: a fresh message from the user clears it. That is
- * a deliberate trade-off between safety and friction, and it leaves one
- * known residual: a page can say "ask the user first, then run it"; the
- * user's "yes" is a new turn, so the command runs clean. Task resumes are
- * covered (the taint is rebuilt from the history); plain chat is not.
+ * a deliberate trade-off between safety and friction. The one exception is a
+ * bare affirmation: a page can say "ask the user first, then run it", so a
+ * turn whose message is only "yes" / "ok" / "do it" starts with the taint of
+ * the chat's previous turn (agents/turn-taint-carry.ts), as realtime voice
+ * keeps its session taint across a bare yes (#1156). Task resumes rebuild
+ * their taint from the history as well. Known residual: the carried record
+ * lives in memory only, so after a daemon restart the first bare yes runs
+ * clean.
  * Taint-gated approvals are not fed to the approval learner, because an
  * override cannot lift a profile gate and the suggestion would be dead.
  *

@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { RealtimeVoiceSession } from './realtime-voice.ts';
+import { anyRealtimeVoicing, liveRealtimeSessionCount, RealtimeVoiceSession } from './realtime-voice.ts';
 import type { RealtimeSession, RealtimeFunctionCall, RealtimeTranscript, RealtimeUsage, RealtimeTranscriptionUsage } from '../comms/realtime.ts';
 import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
@@ -23,6 +23,7 @@ class FakeRealtimeSession {
   results: Array<{ callId: string; result: unknown }> = [];
   connected = false;
   closed = false;
+  isVoicing = false;
   onAudio() {}
   onTranscript(cb: (t: RealtimeTranscript) => void) { this.transcriptCb = cb; }
   onFunctionCall(cb: (c: RealtimeFunctionCall) => void) { this.fnCb = cb; }
@@ -250,5 +251,26 @@ describe('RealtimeVoiceSession error copy', () => {
     const { fake, errors } = withErrors('openai');
     fake.errorCb!(UPSTREAM);
     expect(errors).toEqual([UPSTREAM]);
+  });
+});
+
+describe('anyRealtimeVoicing (#1156)', () => {
+  test('is true while any live session may be heard, and forgets closed ones', () => {
+    const held = liveRealtimeSessionCount();
+    const a = setup(async () => 'ok');
+    const b = setup(async () => 'ok');
+    expect(liveRealtimeSessionCount()).toBe(held + 2);
+    expect(anyRealtimeVoicing()).toBe(false);
+    b.fake.isVoicing = true;
+    expect(anyRealtimeVoicing()).toBe(true);
+    b.rv.close();
+    expect(anyRealtimeVoicing()).toBe(false);
+    a.fake.isVoicing = true;
+    expect(anyRealtimeVoicing()).toBe(true);
+    // A socket the server closed counts as closed too.
+    a.fake.closeCb!();
+    expect(anyRealtimeVoicing()).toBe(false);
+    // Neither is kept once closed.
+    expect(liveRealtimeSessionCount()).toBe(held);
   });
 });
