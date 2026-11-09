@@ -66,13 +66,29 @@ Practical consequences:
   none. The `toolName` must be written directly: a templated one (`{{...}}`)
   would let run data, such as a webhook body, choose the tool, so readiness
   refuses it and a run refuses it with `WORKFLOW_STEP_INPUT_NOT_FIXED`.
-- `jarvis-tool` only invokes tools with a bounded, declared Authority action (see
-  `BOUNDED_TOOLS` in `src/workflows/runtime/effect-capabilities.ts`). Tools whose
-  effect is a script or a click sequence -- `run_command`, `browser_click`,
-  `desktop_type` and friends -- need a typed `ToolDefinition.workflowEffect`
-  adapter first. A flow that called one of those directly now fails with
-  "Unsupported direct workflow capability".
-- `run_skill` is the one click sequence a flow may invoke, because a skill is
+- `jarvis-tool` invokes bounded tools, typed `ToolDefinition.workflowEffect`
+  adapters and the explicit reviewed UI set in `src/authority/ui-intent.ts`:
+  browser navigation, click, type, key press, hover and scroll; desktop app
+  launch, window focus and targeted `desktop_click` actions. Each UI action
+  requires a separate dashboard approval using its live guard, even at full
+  Authority. These actions cannot run unattended. The computer is pinned and
+  a restart, changed session or missing guard refuses dispatch.
+- Direct browser steps keep live snapshot generations per workflow run, across
+  snapshot, approval and execution, independently of chat and other runs. Local
+  and remote element actions use the snapshot that run actually read. Replaying
+  a saved snapshot receipt after restart or eviction of the live reader does not
+  restore a live binding: take a fresh snapshot in a new step/run. UI approvals
+  themselves remain process-bound and require a new run after restart.
+- Raw scripts (`run_command`, `browser_evaluate`), focused-window desktop input
+  (`desktop_type`, `desktop_press_keys`), `ui_act`, skill recording/management and
+  `browser_upload_file` remain unsupported as direct steps. Upload has no
+  computer-bound workflow adapter or sidecar route. Composition and activation
+  reject these with `WORKFLOW_TOOL_UNSUPPORTED`; use a supported connector or
+  reviewed adapter. For desktop text work, the `computer-operator` role uses a
+  fresh snapshot, targeted `desktop_click` with `set_value`, then `get_value`
+  readback. Those value actions require Windows and a compatible control; an
+  unsupported editor is a blocker, not permission to type into the focused app.
+- `run_skill` is the recorded click sequence a flow may invoke, because a skill is
   reviewed content with its own per-step classification (`GATED_TOOLS` in the
   same file). A step `{ toolName: "run_skill", params: { name, params } }` is
   gated on every category the skill's stored steps reach, worst case first (a
@@ -163,13 +179,13 @@ delegation row, and a taint-gated call in a workflow delegation becomes a durabl
 pause rather than a silent pass. So a workflow does have a framing-and-taint
 path; it is the agent path, and the unframed adapter path is the data path.
 
-**What a step CAN still do.** `browser_navigate` and `run_command` are refused as
-opaque, but `run_skill` is admitted as a governed adapter and a recorded skill
-step may `navigate` with a caller-supplied value. A flow can therefore point the
-browser somewhere and read the page with a following `browser_snapshot`; it is
-gated rather than refused -- by an approval card when the resolved category is
-above the run's authority floor, so a permissive configuration may dispatch it
-with no card. And the webhook trigger ingress is public and unauthenticated by
+**What a step CAN still do.** `browser_navigate` can run after individual live UI
+review; `run_command` remains refused. `run_skill` is a governed adapter and a
+recorded skill step may `navigate` with a caller-supplied value. Via that skill,
+a flow can point the browser somewhere and read the page with a following
+`browser_snapshot`. The skill path requires approval when its resolved category
+is above the run's authority floor, so a permissive configuration may dispatch
+the skill without a card. The webhook trigger ingress is public and unauthenticated by
 design, so `{{trigger.*}}` is attacker-influenceable and flows into tool
 parameters and prompts.
 
@@ -506,14 +522,20 @@ checkpointed in `workflow_delegation` after every turn and while it waits,
 dropped when it finishes or the run is cancelled; a step the engine runs
 again after that answers from the record. A declined approval becomes
 `[APPROVAL DENIED]` in the conversation and the tool never runs. A tool the
-direct tool piece refuses as opaque (`run_command`, browser clicks and
-typing) is refused here too when it would need approval; one the sub-agent's
-Authority allows outright runs inside the sub-agent as before.
+direct tool piece refuses as opaque (`run_command`, `browser_evaluate`,
+focused-window desktop typing) remains refused here. Supported browser and
+desktop UI actions instead pause for individual review through their originating
+registry's live guard. A restart or changed session invalidates that review.
+Other tools the sub-agent's Authority allows outright run inside it as before.
 
 The step's `outcome` is its business contract. `Required tools` names the
 tools that must complete; `succeeded` means the conversation finished and
-each of them has a result and no error. Without them, `succeeded` only says
-the agent finished cleanly. A failed outcome (`REQUIRED_TOOL_NOT_COMPLETED`,
+each of them has a result and no error. Browser and desktop tasks additionally
+require the agent's structured `taskStatus`/`finalMessage` completion report;
+missing, blocked or failed reports suppress downstream output. Launching an app
+or completing a transport call alone does not prove the requested task is done.
+Without UI tools or required tools, `succeeded` only says the agent finished
+cleanly. A failed outcome (`REQUIRED_TOOL_NOT_COMPLETED`,
 `AGENT_INCOMPLETE`, `AGENT_ERROR`) answers 422 and stops the step; turn
 `Require the declared outcome` off to route on `{{step.outcome.status}}`
 instead. The sub-agent's audit rows now record what happened: a call that

@@ -5,7 +5,6 @@ import { createDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun } from '../db/repos/flow-run';
 import { ToolRegistry } from '../../actions/tools/registry';
 import { desktopLaunchAppTool, desktopTypeTool, desktopClickTool } from '../../actions/tools/desktop';
-import { browserNavigateTool, browserClickTool, browserTypeTool, browserHoverTool, browserSnapshotTool } from '../../actions/tools/builtin';
 import { getSidecarManager, setSidecarManagerRef } from '../../actions/tools/sidecar-route';
 import { AuthorityEngine } from '../../authority/engine';
 import { ApprovalManager } from '../../authority/approval';
@@ -89,20 +88,6 @@ test('focused-window typing returns a typed refusal with no approval or dispatch
   const result = await f.call(); expect(result.status).toBe(409);
   expect(await result.json()).toMatchObject({ outcome: { code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' } });
   expect(f.calls).toHaveLength(0); expect(f.approvals.getPending()).toHaveLength(0);
-});
-
-for (const tool of [browserNavigateTool, browserClickTool, browserTypeTool, browserHoverTool]) test(`${tool.name} executes only after review and preserves the reviewed snapshot`, async () => {
-  const f = fixture(tool, { target: 'pc', url: 'https://example.test/', element_id: 1, text: 'Synthetic note' },
-    { text: 'Synthetic page', page_url: 'https://example.test/', loader_id: 'document-1', elem_gen: 'snapshot-1' });
-  await browserSnapshotTool.execute({ target: 'pc' });
-  f.calls.length = 0;
-  expect((await f.call()).status).toBe(202); expect(f.calls).toHaveLength(0);
-  f.approvals.approve(f.approvals.getPending()[0]!.id, 'dashboard');
-  const response = await f.call(); expect(response.status).toBe(200);
-  expect((await response.json()).outcome.status).toBe('succeeded');
-  expect(f.calls).toHaveLength(1);
-  if (tool !== browserNavigateTool) expect(f.calls[0]!.args.elem_gen).toBe('snapshot-1');
-  await f.call(); expect(f.calls).toHaveLength(1);
 });
 
 for (const change of ['denied', 'capability_lost'] as const) test(`desktop review refuses ${change} without dispatch`, async () => {

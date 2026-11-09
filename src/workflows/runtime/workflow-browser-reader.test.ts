@@ -1,0 +1,157 @@
+import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../db';
+import { createFlow } from '../db/repos/flow';
+import { createDraftVersion } from '../db/repos/flow-version';
+import { createFlowRun } from '../db/repos/flow-run';
+import { ToolRegistry } from '../../actions/tools/registry';
+import { browser, browserNavigateTool, browserSnapshotTool, browserClickTool, browserTypeTool, browserHoverTool } from '../../actions/tools/builtin';
+import { FakeRenderer, wireController } from '../../actions/browser/fixtures/fake-renderer';
+import { isNoLocalTools, setNoLocalTools } from '../../actions/tools/local-tools-guard';
+import { currentTemplateDeliveryScope } from '../../actions/tools/template-delivery-scope';
+import { getSidecarManager, setSidecarManagerRef, resetRemoteSnapshotGenerations } from '../../actions/tools/sidecar-route';
+import { SidecarRPCError } from '../../sidecar/rpc';
+import { AuthorityEngine } from '../../authority/engine';
+import { ApprovalManager } from '../../authority/approval';
+import { EmergencyController } from '../../authority/emergency';
+import { AuditTrail } from '../../authority/audit';
+import { CredentialResolver } from '../credentials/adapter';
+import { WorkflowEventBuffer } from './event-buffer';
+import { buildSandboxServiceBackends } from './service-backends';
+import { createJarvisToolsInvokeRoute } from '../sandbox-api/routes/jarvis-tools';
+
+const originalManager = getSidecarManager();
+const originalNoLocal = isNoLocalTools();
+let restore: (() => void) | undefined;
+beforeEach(() => { initWorkflowDb(':memory:'); resetRemoteSnapshotGenerations(); setNoLocalTools(false); });
+afterEach(() => { restore?.(); restore = undefined; setNoLocalTools(originalNoLocal);
+  setSidecarManagerRef(originalManager!); resetRemoteSnapshotGenerations(); closeWorkflowDb(); });
+
+function fixture(action = browserClickTool, local = false) {
+  let generation = 0;
+  const calls: Array<{ method: string; args: Record<string, unknown>; delivery: string | undefined }> = [];
+  const writes: Record<string, unknown>[] = [];
+  setSidecarManagerRef({ listSidecars: () => local ? [] : [{ id: 'pc', name: 'PC', connected: true, capabilities: ['browser'],
+    features: ['browser_elem_gen', 'browser_action_outcomes'] }], getConnectionSessionId: () => 'session',
+    dispatchRPC: async (_id: string, method: string, args: Record<string, unknown>) => {
+      calls.push({ method, args, delivery: currentTemplateDeliveryScope()?.kind });
+      if (method === 'browser_snapshot' || method === 'browser_navigate') return { text: '[1] Editor',
+        page_url: 'https://example.test/', loader_id: 'document', elem_gen: `snapshot-${++generation}` };
+      if (args.elem_gen !== `snapshot-${generation}`) throw new SidecarRPCError('BROWSER_SNAPSHOT_SUPERSEDED', 'Snapshot changed');
+      writes.push(args); return 'Action completed';
+    } } as any);
+  const target = local ? {} : { target: 'pc' };
+  const steps = {
+    navigate: { tool: browserNavigateTool, params: { ...target, url: 'https://example.test/' } },
+    snapshot: { tool: browserSnapshotTool, params: target },
+    action: { tool: action, params: { ...target, element_id: 1, ...(action === browserTypeTool ? { text: 'Synthetic note' } : {}) } },
+  };
+  const registry = new ToolRegistry();
+  for (const step of Object.values(steps)) registry.register(step.tool);
+  const flow = createFlow();
+  let nextAction: any;
+  for (const [name, step] of Object.entries(steps).reverse()) nextAction = { name, type: 'PIECE', nextAction,
+    settings: { pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1', actionName: 'invoke',
+      input: { toolName: step.tool.name, params: step.params } } };
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Browser steps', trigger: { name: 'trigger', type: 'EMPTY', nextAction } });
+  const run = () => createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
+  const approvals = new ApprovalManager();
+  const build = () => buildSandboxServiceBackends({ toolRegistry: registry, approvalManager: approvals,
+    authorityEngine: new AuthorityEngine({ default_level: 10, governed_categories: [], overrides: [], context_rules: [],
+      learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }),
+    emergencyController: new EmergencyController(), auditTrail: new AuditTrail(), credentialResolver: new CredentialResolver(),
+    eventBuffer: new WorkflowEventBuffer(), llmManager: {} as any, channelService: {} as any, wsService: {} as any });
+  const services = build();
+  const call = (id: string, name: keyof typeof steps, backend = services) => createJarvisToolsInvokeRoute(backend)({
+    req: new Request('http://local/v1/jarvis/tools/invoke', { method: 'POST',
+      headers: { 'X-Jarvis-Step-Name': name, 'X-Jarvis-Execution-Path': '[]' },
+      body: JSON.stringify({ toolName: steps[name].tool.name, params: steps[name].params }) }),
+    claims: { runId: id, projectId: DEFAULT_IDS.project, sandboxId: 'test' } as any, params: {},
+  });
+  const approve = async (id: string, name: keyof typeof steps, backend = services) => {
+    const parked = await call(id, name, backend); expect(parked.status).toBe(202);
+    approvals.approve((await parked.json()).approval.approvalId, 'dashboard');
+    return call(id, name, backend);
+  };
+  return { run, call, approve, build, calls, writes, approvals };
+}
+
+for (const action of [browserClickTool, browserTypeTool, browserHoverTool]) test(`${action.name} binds the snapshot taken through the workflow route`, async () => {
+  const f = fixture(action), run = f.run();
+  expect((await f.approve(run.id, 'navigate')).status).toBe(200);
+  expect((await f.call(run.id, 'snapshot')).status).toBe(200);
+  expect((await f.approve(run.id, 'action')).status).toBe(200);
+  expect(f.writes).toEqual([expect.objectContaining({ elem_gen: 'snapshot-2', action_outcome: true })]);
+  expect(f.calls.every(call => call.delivery === 'suppressed')).toBe(true);
+  expect((await f.call(run.id, 'action')).status).toBe(200);
+  expect(f.writes).toHaveLength(1);
+});
+
+test('an approved navigation records its snapshot for the next direct action', async () => {
+  const f = fixture(), run = f.run();
+  expect((await f.approve(run.id, 'navigate')).status).toBe(200);
+  expect((await f.approve(run.id, 'action')).status).toBe(200);
+  expect(f.writes[0]?.elem_gen).toBe('snapshot-1');
+});
+
+test('interleaved workflow runs cannot adopt each other\'s snapshot', async () => {
+  const f = fixture(), a = f.run(), b = f.run();
+  expect((await f.call(a.id, 'snapshot')).status).toBe(200);
+  expect((await f.call(b.id, 'snapshot')).status).toBe(200);
+  const stale = await f.approve(a.id, 'action');
+  expect((await stale.json()).outcome).toMatchObject({ code: 'BROWSER_SNAPSHOT_SUPERSEDED', effect: 'not_started' });
+  expect(f.writes).toHaveLength(0);
+  expect((await f.approve(b.id, 'action')).status).toBe(200);
+  expect(f.writes[0]?.elem_gen).toBe('snapshot-2');
+});
+
+test('a chat snapshot cannot replace the workflow snapshot before review', async () => {
+  const f = fixture(), run = f.run();
+  await f.call(run.id, 'snapshot');
+  await browserSnapshotTool.execute({ target: 'pc' });
+  const stale = await f.approve(run.id, 'action');
+  expect((await stale.json()).outcome).toMatchObject({ code: 'BROWSER_SNAPSHOT_SUPERSEDED', effect: 'not_started' });
+  expect(f.writes).toHaveLength(0);
+});
+
+test('a workflow with no browser read cannot borrow a chat snapshot', async () => {
+  const f = fixture(), run = f.run();
+  await browserSnapshotTool.execute({ target: 'pc' });
+  const response = await f.approve(run.id, 'action');
+  expect((await response.json()).outcome).toMatchObject({ code: 'BROWSER_SNAPSHOT_UNVERIFIED', effect: 'not_started' });
+  expect(f.writes).toHaveLength(0);
+});
+
+test('replaying a snapshot receipt after losing the reader does not restore a live binding', async () => {
+  const f = fixture(), run = f.run();
+  await f.call(run.id, 'snapshot');
+  const restarted = f.build();
+  await browserSnapshotTool.execute({ target: 'pc' });
+  const before = f.calls.length;
+  expect((await f.call(run.id, 'snapshot', restarted)).status).toBe(200);
+  expect(f.calls).toHaveLength(before);
+  const response = await f.approve(run.id, 'action', restarted);
+  expect((await response.json()).outcome).toMatchObject({ code: 'BROWSER_SNAPSHOT_UNVERIFIED', effect: 'not_started' });
+  expect(f.writes).toHaveLength(0);
+});
+
+test('a local workflow snapshot remains available through approval and the tool adapter', async () => {
+  const fake = new FakeRenderer([{ name: 'Editor', x: 50, y: 40 }]);
+  restore = wireController(browser, fake);
+  const f = fixture(browserTypeTool, true), run = f.run();
+  expect((await f.call(run.id, 'snapshot')).status).toBe(200);
+  expect((await f.approve(run.id, 'action')).status).toBe(200);
+  expect(fake.typed).toEqual([{ text: 'Synthetic note', into: 'Editor' }]);
+});
+
+for (const hasRead of [false, true]) test(`a local workflow cannot adopt a chat snapshot (own read: ${hasRead})`, async () => {
+  const fake = new FakeRenderer([{ name: 'Editor', x: 50, y: 40 }]);
+  restore = wireController(browser, fake);
+  const f = fixture(browserTypeTool, true), run = f.run();
+  if (hasRead) await f.call(run.id, 'snapshot');
+  fake.dom = [{ name: 'Another editor', x: 50, y: 40 }];
+  await browserSnapshotTool.execute({});
+  const response = await f.approve(run.id, 'action');
+  expect(response.status).not.toBe(200);
+  expect((await response.json()).outcome.effect).toBe('not_started');
+  expect(fake.typed).toEqual([]);
+});

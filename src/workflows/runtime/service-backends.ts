@@ -30,6 +30,7 @@ import { getConnection } from '../db/repos/app-connection';
 import { claimIdentity, completeIdentity, IdentityUnresolvedError, releaseIdentity } from '../db/repos/effect-identity';
 import { workflowUiRead, workflowUiReview } from '../../authority/ui-intent';
 import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
+import { newSnapshotReadLog, withSnapshotReadLog, type SnapshotReadLog } from '../../actions/tools/snapshot-read-log';
 import type { ApprovalManager } from '../../authority/approval';
 
 import type { LLMManager } from "../../llm/manager";
@@ -385,6 +386,18 @@ export function buildSandboxServiceBackends(
 ): SandboxApiServices {
   const llmClient = new JarvisLlmClient(opts.llmManager);
   const effects = new WorkflowEffectBoundary(opts);
+  // Browser reads and review capture must share a reader, independent of the
+  // adapter's playbook suppression. Keep live generations only, never restore
+  // them from durable receipts. A restart/eviction requires a fresh read.
+  // Bounded per backend so completed or abandoned runs cannot leak logs.
+  const toolSnapshotReads = new Map<string, SnapshotReadLog>();
+  const withToolSnapshots = <T>(runId: string, execute: () => T): T => {
+    const log = toolSnapshotReads.get(runId) ?? newSnapshotReadLog({ isolatedReader: `workflow-direct:${runId}` });
+    toolSnapshotReads.delete(runId);
+    toolSnapshotReads.set(runId, log);
+    while (toolSnapshotReads.size > 256) toolSnapshotReads.delete(toolSnapshotReads.keys().next().value!);
+    return withSnapshotReadLog(log, execute);
+  };
   const callLlm = async (req: LlmChatRequest): Promise<LlmChatResponse> => {
     // System-prompt composition:
     //   - overrideSystem=true       : use `req.system` only. Jarvis
@@ -1450,6 +1463,9 @@ export function buildSandboxServiceBackends(
     workflowsStart: cancellableWorkflowService(workflowsStart),
     ...(opts.resumeUrlPrefix !== undefined ? { resumeUrlPrefix: opts.resumeUrlPrefix } : {}),
   };
-  if (toolsInvoke) services.toolsInvoke = cancellableWorkflowService((req, ctx) => withWorkflowMachineBinding(ctx, () => toolsInvoke(req, ctx)));
+  if (toolsInvoke) services.toolsInvoke = cancellableWorkflowService((req, ctx) => withWorkflowMachineBinding(ctx,
+    () => req.toolName.startsWith('browser_')
+      ? withToolSnapshots(ctx.runId, () => toolsInvoke(req, ctx))
+      : toolsInvoke(req, ctx)));
   return services;
 }

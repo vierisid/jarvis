@@ -1392,20 +1392,22 @@ function browserCallGuard(
  * RESUMED with snapshot replies in its buffer and no local read of its own
  * binds nothing (undefined), so the approved action is refused as unbound
  * rather than held to whatever another caller snapshotted during the pause.
- * Otherwise -- no loop (a sub-agent's or a workflow's card, the voice route),
+ * An isolated workflow reader likewise requires its own live read. Otherwise
+ * -- no loop (a sub-agent's card, the voice route),
  * or a loop that read nothing locally -- the controller's current generation,
  * as before: the residual #827 states for remote cards, here too.
  */
 function reviewedLocalGeneration(log: SnapshotReadLog | undefined): number | undefined {
   if (log?.localGeneration !== undefined) return log.localGeneration;
-  if (log?.resumedWithReads) return undefined;
+  if (log?.resumedWithReads || log?.isolatedReader) return undefined;
   return browser.snapshotGeneration();
 }
 
 /**
  * Record a local snapshot as the current model loop's read (#1161). Outside a
  * loop, or for a reader that is not the loop's (`currentSnapshotReadLog`
- * answers undefined for a sub-agent or a workflow), there is nothing to write.
+ * answers undefined for a sub-agent), there is nothing to write. Direct
+ * workflow steps instead own an isolated run-local log.
  */
 function recordLocalRead(snap: PageSnapshot): void {
   const log = currentSnapshotReadLog();
