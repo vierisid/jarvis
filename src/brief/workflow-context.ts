@@ -150,6 +150,19 @@ export class WorkflowContext {
     const r = this.run(flowId, runId);
     return this.selection(flowId, r.flow_version_id, runId).run!;
   }
+  /** The enrolled computer a configured target names: its id, or the only computer with exactly that
+   * name, ignoring case, as a pin picks it (binding-pins `exactMachine`). Listed by id, so a target that
+   * names the pinned computer is one entry with its pin drift, whichever way it names it (#1162). */
+  private computer(target: unknown): string | null {
+    if (typeof target !== 'string' || !target || target.length > 200) return null;
+    const byId = this.db.query<{ id: string }, [string]>('SELECT id FROM sidecars WHERE id=?').get(target);
+    if (byId) return byId.id;
+    // Names may hold spaces or apostrophes ("Kuroi's MacBook Pro"), and fold case as JavaScript does.
+    const wanted = target.toLowerCase();
+    const named = this.db.query<{ id: string; name: string }, []>('SELECT id, name FROM sidecars LIMIT 1001').all()
+      .filter(s => s.name.toLowerCase() === wanted);
+    return named.length === 1 ? named[0]!.id : null;
+  }
   private context(flowId: string, versionId: string, r: RunRow | null, v: Version | null, nodes: Record<string, unknown>[] | null): InspectionContext {
     const rows: Record<ContextGroup, InspectionContextEntry[]> = { goal: [], memory: [], bindings: [], target: [], rules: [] };
     const add = (group: ContextGroup, kind: NonNullable<InspectionContextEntry['source']>['kind'], ref: unknown,
@@ -210,8 +223,8 @@ export class WorkflowContext {
         if (this.projectId === DEFAULT_IDS.project && inspectionId(input.factId)) add('memory', 'fact', input.factId,
           'Explicit configured fact reference; usage is not implied.', this.factAvailability(input.factId));
         const target = input.sidecarId ?? input.target;
-        const knownTarget = inspectionId(target) && this.projectId === DEFAULT_IDS.project && this.db.query('SELECT id FROM sidecars WHERE id=?').get(target);
-        add('target', 'device', target, knownTarget ? 'Explicit configured target; current connection is not asserted.' : 'Configured target is missing or inaccessible.', knownTarget ? 'stale' : 'missing');
+        const knownTarget = this.projectId === DEFAULT_IDS.project ? this.computer(target) : null;
+        add('target', 'device', knownTarget ?? target, knownTarget ? 'Explicit configured target; current connection is not asserted.' : 'Configured target is missing or inaccessible.', knownTarget ? 'stale' : 'missing');
         const auth = input.auth;
         if (typeof auth === 'string') {
           const match = /^\{\{connections\.([A-Za-z0-9_:.-]{1,200})\}\}$/.exec(auth)

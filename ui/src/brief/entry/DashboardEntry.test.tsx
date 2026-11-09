@@ -295,7 +295,7 @@ test("production default rejects opt-in bypass and restores the legacy parent be
   localStorage.setItem("saved-work", "canonical-existing-work");
   await production("http://localhost:4381/?brief=1&sidecar=desktop#/brief/workflow-runs?flowId=flow-1&runId=run-2");
   expect(getV2Route()).toEqual({ kind: "room", key: "workflows" });
-  expect(new URL(location.href).searchParams.get("briefReturn")).toBe("#/brief/workflow-runs?flowId=flow-1&runId=run-2");
+  expect(new URL(location.href).searchParams.has("briefReturn")).toBe(false);
   expect(new URL(location.href).searchParams.get("sidecar")).toBe("desktop");
   expect(host.textContent).toBe("Current dashboard"); expect(starts).toBe(1); expect(gates).toBe(0);
   expect(localStorage.getItem("saved-work")).toBe("canonical-existing-work"); expect(network).toEqual([]);
@@ -376,7 +376,7 @@ test("readiness and configuration updates do not discard an open draft; reload a
   await production(location.href, { ...props, release: BRIEF_RELEASE });
   expect(getV2Route()).toEqual({ kind: "room", key: "memory" });
   expect(host.textContent).toBe("Current dashboard"); expect(connections).toBe(1);
-  expect(new URL(location.href).searchParams.get("briefReturn")).toBe("#/brief/memory-detail?factId=kept");
+  expect(new URL(location.href).searchParams.has("briefReturn")).toBe(false);
   expect(localStorage.getItem("saved-work")).toBe("saved-fact"); expect(network).toEqual([]);
 });
 test("enabling a flag during a legacy session waits for reload instead of destroying legacy work", async () => {

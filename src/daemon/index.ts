@@ -194,6 +194,7 @@ import {
   backgroundRefusalReply, cancelCardReply, cancelRefusalReply, parseBackgroundTask, parseSettingsIntent, planInPanelAction, planSubPebbleClose, planWindowAction, tabSwitchReply,
   SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
 } from "./pebble-intents.ts";
+import { rebuildPanelInventory, trackPanelIn, untrackPanelIn, type PanelEntry } from "./panel-inventory.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
 import { runRoomPanelIntent, type RoomPanelDeps } from "./pebble-room-panel.ts";
 import { makeFastPathTurns, PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
@@ -2448,20 +2449,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // the last entry, and named commands ("expand the workflows
       // window") by searching back-to-front for a matching key — so
       // when two of the same room are open, the most-recent one wins.
-      type PanelEntry = { id: string; key: string; title: string };
       const panelsBySidecar = new Map<string, PanelEntry[]>();
-      const trackPanel = (sidecarId: string, entry: PanelEntry): void => {
-        const list = panelsBySidecar.get(sidecarId) ?? [];
-        list.push(entry);
-        panelsBySidecar.set(sidecarId, list);
-      };
-      const untrackPanel = (sidecarId: string, id: string): void => {
-        const list = panelsBySidecar.get(sidecarId);
-        if (!list) return;
-        const idx = list.findIndex(e => e.id === id);
-        if (idx >= 0) list.splice(idx, 1);
-        if (list.length === 0) panelsBySidecar.delete(sidecarId);
-      };
+      const trackPanel = (sidecarId: string, entry: PanelEntry): void => trackPanelIn(panelsBySidecar, sidecarId, entry);
+      const untrackPanel = (sidecarId: string, id: string): void => untrackPanelIn(panelsBySidecar, sidecarId, id);
 
       // W3-T2 — persist per-room window bounds to ~/.jarvis/window-state.json
       // so reopening a room lands it where the user last left it. Bounds
@@ -2500,6 +2490,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const palettePanelBySidecar = new Map<string, { id: string; sidecarId: string }>();
       const lastPaletteCloseAt = new Map<string, number>();
 
+      // A sidecar keeps its windows across a dropped link or a daemon restart,
+      // but the inventory is per connection: ask it what is open (#1157). A
+      // sidecar older than the `panels` field answers ids only and is left as
+      // before. One set per connection; replaced or dropped, the answer is stale.
+      const panelsClosedDuringRebuild = new Map<string, Set<string>>();
+      sidecarManager.onSidecarConnected((sidecar) => {
+        if (!sidecar.capabilities.includes('windows')) return;
+        const closed = new Set<string>();
+        panelsClosedDuringRebuild.set(sidecar.id, closed);
+        void rebuildPanelInventory(sidecar.id, panelsBySidecar,
+          (id) => sidecarManager.dispatchRPC(id, 'panel.list', {}),
+          () => panelsClosedDuringRebuild.get(sidecar.id) === closed ? closed : null)
+          .then((added) => { if (added) console.log(`[ambient-ui] Found ${added} open window(s) on ${sidecar.id} after it connected`); })
+          .catch((err) => console.warn(`[ambient-ui] panel.list on ${sidecar.id} failed:`, err instanceof Error ? err.message : err))
+          .finally(() => { if (panelsClosedDuringRebuild.get(sidecar.id) === closed) panelsClosedDuringRebuild.delete(sidecar.id); });
+      });
+
       // Untrack a panel as soon as its window closes (user close button or a
       // Close() RPC) so the inventory used for voice targeting, bounds
       // persistence, and LLM context never points at a window that's gone.
@@ -2508,6 +2515,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const payload = (event.payload ?? {}) as { panel_id?: string };
         if (!payload.panel_id) return;
         untrackPanel(sidecarId, payload.panel_id);
+        panelsClosedDuringRebuild.get(sidecarId)?.add(payload.panel_id);
         const pal = palettePanelBySidecar.get(sidecarId);
         if (pal && pal.id === payload.panel_id) palettePanelBySidecar.delete(sidecarId);
       });
@@ -2518,6 +2526,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // subPebbleSlots are cleared by the dedicated handlers above.)
       sidecarManager.onSidecarDisconnected((sidecarId) => {
         panelsBySidecar.delete(sidecarId);
+        panelsClosedDuringRebuild.delete(sidecarId);
         palettePanelBySidecar.delete(sidecarId);
         lastPaletteCloseAt.delete(sidecarId);
         const eyeTimer = eyeTimers.get(sidecarId);

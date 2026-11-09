@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -115,13 +117,14 @@ func (f *fakePanelService) SetClickThrough(id PanelID, ct bool) error {
 	return nil
 }
 
-func (f *fakePanelService) List() []PanelID {
+func (f *fakePanelService) List() []PanelInfo {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]PanelID, 0, len(f.spawned))
-	for id := range f.spawned {
-		out = append(out, id)
+	out := make([]PanelInfo, 0, len(f.spawned))
+	for id, spec := range f.spawned {
+		out = append(out, PanelInfo{ID: id, URL: spec.URL, Title: spec.Title})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
@@ -452,5 +455,64 @@ func TestPanelListHandler_WithPanels(t *testing.T) {
 	ids := res.Result.(map[string]any)["ids"].([]string)
 	if len(ids) != 2 {
 		t.Errorf("expected 2 ids, got %d: %v", len(ids), ids)
+	}
+}
+
+// A daemon that lost its inventory rebuilds it from what each panel was
+// spawned with, in the service's order (#1157). "ids" stays for older daemons.
+func TestPanelListHandler_DescribesEachPanel(t *testing.T) {
+	svc := newFakePanelService()
+	svc.spawned["a"] = PanelSpec{ID: "a", URL: "http://brain/?token=secret-access#/_panel_tasks", Title: "Tasks"}
+	svc.spawned["b"] = PanelSpec{ID: "b", URL: "http://brain/#/_answer_42", Title: "JARVIS answer"}
+
+	res, err := makePanelListHandler(svc)(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	result := res.Result.(map[string]any)
+	if got := result["ids"].([]string); !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Errorf("ids = %v", got)
+	}
+	want := []map[string]any{
+		// The access token sanitizePanelURL added never leaves the sidecar.
+		{"id": "a", "url": "http://brain/#/_panel_tasks", "title": "Tasks"},
+		{"id": "b", "url": "http://brain/#/_answer_42", "title": "JARVIS answer"},
+	}
+	if got := result["panels"].([]map[string]any); !reflect.DeepEqual(got, want) {
+		t.Errorf("panels = %v, want %v", got, want)
+	}
+}
+
+// The real service lists oldest first, whatever the map order, and leaves out
+// a window that is already gone or still being created (#1157).
+func TestPanelServiceList_OldestFirstWithoutClosedWindows(t *testing.T) {
+	svc := &panelService{reg: newPanelRegistry()}
+	closed := make(chan struct{})
+	close(closed)
+	for _, p := range []struct {
+		id      PanelID
+		uiGone  chan struct{}
+		created chan struct{}
+	}{
+		{"z", make(chan struct{}), closed},
+		{"gone", closed, closed},
+		// Still being created: its spawn answers for it, and it may yet fail.
+		{"creating", make(chan struct{}), make(chan struct{})},
+		{"m", make(chan struct{}), closed},
+		{"a", make(chan struct{}), closed},
+	} {
+		spec := PanelSpec{ID: p.id, URL: "http://brain/#/_panel_" + string(p.id), Title: "T " + string(p.id)}
+		svc.reg.put(p.id, &panelEntry{spec: spec, handle: &panelImpl{spec: spec, uiClosed: p.uiGone, ready: p.created}})
+	}
+	for i := 0; i < 20; i++ {
+		got := svc.List()
+		want := []PanelInfo{
+			{ID: "z", URL: "http://brain/#/_panel_z", Title: "T z"},
+			{ID: "m", URL: "http://brain/#/_panel_m", Title: "T m"},
+			{ID: "a", URL: "http://brain/#/_panel_a", Title: "T a"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("List() = %v, want %v", got, want)
+		}
 	}
 }
