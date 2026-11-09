@@ -21,6 +21,7 @@ import type { RunExecutionConfig } from './flow-run';
 import { managedConnectionMisuse, type JarvisConnectionSource } from '../../credentials/adapter';
 import { hookTriggerDigest, parseTriggerHookRunId } from '../../runner/triggers/hook-run-id';
 import { graphDigest } from '../../runtime/continuation';
+import { nodeConnectionReferences } from './binding-pins';
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 
@@ -77,44 +78,76 @@ function parse(json: string | null): unknown {
 }
 
 /**
- * Why the engine of `runId` may not be handed managed connection
- * `externalId`, or null when it may. A run is checked on the graph it began
- * on: the RUN_FLOW handler records that graph's digest before the engine
- * starts, and a draft edited since (or a run with no digest) is refused. A
- * trigger hook (enable, disable, poll) has no run row and runs only the
- * trigger of the one version its run id names, so that trigger, unchanged
- * since the hook was handed it, must pass on its own. Anything else that is
- * not a run of this project is refused.
+ * The graph the engine of `runId` executes, or why there is none it may be
+ * handed a connection for. A run is checked on the graph it began on: the
+ * RUN_FLOW handler records that graph's digest before the engine starts, and
+ * a draft edited since (or a run with no digest) is refused; its frozen sample
+ * input overrides are applied, as the worker applies them. A trigger hook
+ * (enable, disable, poll) has no run row and runs only the trigger of the one
+ * version its run id names, so that trigger, unchanged since the hook was
+ * handed it, is the whole graph. Anything else that is not a run of this
+ * project has none.
  */
-export function managedConnectionScopeRefusal(runId: string, projectId: string, externalId: string, source: JarvisConnectionSource): string | null {
+function engineGraph(runId: string, projectId: string, opts: { undigested?: 'refuse' | 'current' } = {}): { nodes: FlowTriggerNode[] } | { refusal: string } {
   const db = getWorkflowDb();
   const run = db.query<{ project_id: string; trigger: string | null; execution_config: string | null; graph_digest: string | null }, [string]>(
     `SELECT r.project_id, v.trigger, r.execution_config, r.graph_digest FROM flow_run r
       LEFT JOIN flow_version v ON v.id = r.flow_version_id WHERE r.id = ?`,
   ).get(runId);
   if (run) {
-    if (run.project_id !== projectId) return 'This run belongs to another project';
+    if (run.project_id !== projectId) return { refusal: 'This run belongs to another project' };
     const trigger = parse(run.trigger);
-    if (!object(trigger)) return 'This run has no readable workflow graph';
+    if (!object(trigger)) return { refusal: 'This run has no readable workflow graph' };
     // The engine was handed the graph as it was when the run began; a draft
     // can be edited while a test run of it is going.
-    if (!run.graph_digest || run.graph_digest !== graphDigest(trigger)) return 'This run\'s workflow graph changed after it began';
+    // A run created before the digest was recorded (#806) resumes on its
+    // version as it is (runner/handler.ts); `current` judges it on that.
+    const undigested = !run.graph_digest && opts.undigested === 'current';
+    if (!undigested && (!run.graph_digest || run.graph_digest !== graphDigest(trigger))) return { refusal: 'This run\'s workflow graph changed after it began' };
     const overrides = (parse(run.execution_config) as RunExecutionConfig | null)?.sampleInputOverride;
     const effective = overrides && Object.keys(overrides).length
       ? applyInputOverrides(trigger as unknown as FlowTriggerNode, overrides)
       : trigger as unknown as FlowTriggerNode;
-    return graphRefusal(walkFlowNodes(effective), externalId, source);
+    return { nodes: walkFlowNodes(effective) };
   }
   const hook = parseTriggerHookRunId(runId);
   if (hook) {
     const version = db.query<{ trigger: string | null }, [string, string, string]>(
       'SELECT v.trigger FROM flow_version v JOIN flow f ON f.id = v.flow_id WHERE v.id = ? AND f.id = ? AND f.project_id = ?',
     ).get(hook.versionId, hook.flowId, projectId);
-    if (!version) return 'This trigger hook does not run a workflow of this project';
+    if (!version) return { refusal: 'This trigger hook does not run a workflow of this project' };
     const trigger = parse(version.trigger);
-    if (!object(trigger)) return 'This trigger hook has no readable trigger';
-    if (hookTriggerDigest(trigger) !== hook.triggerDigest) return 'This workflow\'s trigger changed after the trigger hook began';
-    return graphRefusal([trigger as unknown as FlowTriggerNode], externalId, source);
+    if (!object(trigger)) return { refusal: 'This trigger hook has no readable trigger' };
+    if (hookTriggerDigest(trigger) !== hook.triggerDigest) return { refusal: 'This workflow\'s trigger changed after the trigger hook began' };
+    return { nodes: [trigger as unknown as FlowTriggerNode] };
   }
-  return 'This engine is not running a workflow of this project';
+  return { refusal: 'This engine is not running a workflow of this project' };
+}
+
+/**
+ * Why the engine of `runId` may not be handed managed connection
+ * `externalId`, or null when it may: the graph it executes (`engineGraph`)
+ * must name it, as the auth of a matching step only.
+ */
+export function managedConnectionScopeRefusal(runId: string, projectId: string, externalId: string, source: JarvisConnectionSource): string | null {
+  const graph = engineGraph(runId, projectId);
+  return 'refusal' in graph ? graph.refusal : graphRefusal(graph.nodes, externalId, source);
+}
+
+/**
+ * #1153: why the engine of `runId` may not be handed STORED connection
+ * `externalId`, or null when it may. The engine's connection route hands a
+ * credential to whatever asks with the run's token, piece code included, so
+ * without this a step (or a trigger hook, or a piece loaded for its metadata)
+ * could fetch any account in the project by id. The graph it executes must
+ * name the connection: a `{{connections...}}` anywhere in a step's settings,
+ * as the engine parses it, or a Jarvis step's account field
+ * (`nodeConnectionReferences`).
+ */
+export function storedConnectionScopeRefusal(runId: string, projectId: string, externalId: string): string | null {
+  const graph = engineGraph(runId, projectId, { undigested: 'current' });
+  const why = 'refusal' in graph ? graph.refusal
+    : graph.nodes.some((node) => references(node, externalId).length > 0 || nodeConnectionReferences(node).some(([id]) => id === externalId))
+      ? null : 'no step of the workflow it runs names it';
+  return why === null ? null : `Connection ${externalId} was not handed out: ${why}. Choose it as the account of a step in the workflow, then start a new run.`;
 }

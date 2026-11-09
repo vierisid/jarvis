@@ -344,6 +344,14 @@ type DomGeneration = 'ok' | 'dom' | 'moved' | 'gone' | 'busy';
 const DOM_SENTINEL_TIMEOUT_MS = 4000;
 
 /**
+ * How long pressKey waits after the key before it answers: for the app to
+ * react, and (#1161) for Chromium's keyboard scroll animation to end (~160-170ms
+ * for PageDown and End, measured on Chromium 156), which the second forget
+ * relies on. `pressKeySettle` in sidecar/browser_input.go is the same number.
+ */
+const PRESS_KEY_SETTLE_MS = 300;
+
+/**
  * Whether a key moves the viewport when the page has not taken it for something
  * else (#603). Keep in step with `scrollsThePage` in sidecar/browser_input.go.
  *
@@ -1859,8 +1867,19 @@ export class BrowserController {
     const retiredIDs = scrollsThePage(parsed.key);
     if (retiredIDs) this.forgetSnapshotElements();
 
-    // Let the app react (menu open, mode switch, etc.)
-    await Bun.sleep(300);
+    // Let the app react (menu open, mode switch, etc.), and let a paging key's
+    // scroll animation finish before the second forget below.
+    await Bun.sleep(PRESS_KEY_SETTLE_MS);
+
+    // AND AGAIN once the page has stopped moving (#1161). Chromium animates
+    // keyboard scrolling on its own, with or without smooth CSS (measured on
+    // Chromium 156: PageDown and End move for ~160-170ms, however far), and a
+    // key event cannot ask for an instant scroll. A snapshot another reader
+    // took after the forget above but inside that motion carries a fresh
+    // generation and mid-animation coordinates; this retires it.
+    // PRESS_KEY_SETTLE_MS outlasts the measured animation. Same in
+    // browser_input.go.
+    if (retiredIDs) this.forgetSnapshotElements();
     await this.noteCurrentPage();
 
     // SAID, not just done, exactly as scroll() says it: the model is the one
@@ -2186,7 +2205,16 @@ export class BrowserController {
 
     const pixels = direction === 'down' ? scrollAmount : -scrollAmount;
 
-    await this.evaluate(`window.scrollBy(0, ${pixels})`);
+    // INSTANT, whatever the page's CSS says (#1161). Under `scroll-behavior:
+    // smooth` a plain scrollBy animates (measured on Chromium 156: ~430ms over
+    // 600px, ~1200ms over 5000px), so the forget below could run while the
+    // page was still moving and a snapshot taken before the motion ended got a
+    // fresh generation and coordinates that were about to change. (Recent
+    // Chromium returns a promise from scrollBy that `evaluate` awaits, which
+    // hid this here but not on older builds or in the sidecar.) Measured
+    // instant with this form, smooth CSS or not. Keep in step with
+    // makeBrowserScrollHandler in sidecar/browser.go.
+    await this.evaluate(`window.scrollBy({top: ${pixels}, behavior: 'instant'})`);
 
     // EVERY COORDINATE THE SNAPSHOT HANDED OUT NOW DESCRIBES WHERE AN ELEMENT
     // USED TO BE (#603).

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/google/uuid"
@@ -89,7 +90,9 @@ type PanelService interface {
 	Spawn(spec PanelSpec) (PanelID, error)
 	Close(id PanelID) error
 	Focus(id PanelID) error
-	List() []PanelID
+	// List reports the open panels, oldest first, with the URL and title
+	// each was spawned with (#1157).
+	List() []PanelInfo
 	// SetFollow toggles the cursor-tracking goroutine for a panel that was
 	// spawned with FollowCursor=true. The page calls this to pause tracking
 	// when the bubble opens (so the window stops jittering while the user
@@ -142,15 +145,27 @@ const (
 	PanelWindowMaximized PanelWindowState = "maximized"
 )
 
+// PanelInfo is what panel.list reports for one open panel: the spec fields
+// a daemon that lost its inventory (a reconnect, a restart) needs to tell
+// its own windows apart and rebuild it (#1157).
+type PanelInfo struct {
+	ID    PanelID
+	URL   string
+	Title string
+}
+
 // panelRegistry is the cross-platform bookkeeping layer. Platform impls embed
 // this and add a platform-specific window handle per entry.
 type panelRegistry struct {
 	mu      sync.Mutex
 	entries map[PanelID]*panelEntry
+	seq     uint64
 }
 
 type panelEntry struct {
 	spec PanelSpec
+	// seq orders entries by when they were put, so List is oldest first.
+	seq uint64
 	// platform-specific handle is attached by the platform impl
 	handle any
 }
@@ -162,7 +177,21 @@ func newPanelRegistry() *panelRegistry {
 func (r *panelRegistry) put(id PanelID, e *panelEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.seq++
+	e.seq = r.seq
 	r.entries[id] = e
+}
+
+// inOrder returns the entries oldest first.
+func (r *panelRegistry) inOrder() []*panelEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*panelEntry, 0, len(r.entries))
+	for _, e := range r.entries {
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].seq < out[j].seq })
+	return out
 }
 
 func (r *panelRegistry) get(id PanelID) (*panelEntry, bool) {

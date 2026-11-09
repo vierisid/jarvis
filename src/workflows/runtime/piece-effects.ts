@@ -42,11 +42,14 @@
  * `unknownActionCategory`, because a category label cannot bound it.
  *
  * This file is imported BY THE ENGINE BUNDLE (see `PATCHED_VENDOR_SOURCES` in
- * `runner/engine-runtime/build.ts`). Keep it pure: type-only imports, no node
- * built-ins, no daemon singletons.
+ * `runner/engine-runtime/build.ts`). Keep it pure: type-only imports, and
+ * value imports only of other registered sources (`engine-bundle-purity.test.ts`);
+ * no daemon singletons. `./http-egress` is one (the egress guard and the #1153
+ * read-host scope, whose only state is that per-process scope).
  */
 
 import { isHubspotContact, HUBSPOT_PIECE, HUBSPOT_UPSERT } from './hubspot-contact';
+import { readHostKey } from './http-egress';
 import type { ActionCategory } from '../../roles/authority';
 import type { ToolDefinition } from '../../actions/tools/registry';
 
@@ -389,6 +392,31 @@ export function httpRequestIsRead(input: Record<string, unknown>): boolean {
   if (fields && (Object.hasOwn(fields, OMITTED_FIELDS) || Object.keys(fields).length > MAX_KEYS)) return false;
   const data = fields ? fields.data : body;
   return data === undefined || data === null || data === '';
+}
+
+/**
+ * The host an HTTP step's URL names, in `readHostKey` form, or null when it
+ * cannot be told for certain: not a string, not http(s), not a URL, or cut
+ * by the projection's bound (a cut can end inside the host, and a URL that
+ * long is better asked about anyway).
+ */
+export function httpRequestHost(url: unknown): string | null {
+  if (typeof url !== 'string' || /\.\.\. \[\d+ more characters\]$/u.test(url)) return null;
+  let parsed: URL;
+  try { parsed = new URL(url.trim()); } catch { return null; }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  return readHostKey(parsed.hostname.includes(':') && !parsed.hostname.startsWith('[') ? `[${parsed.hostname}]` : parsed.hostname);
+}
+
+/**
+ * #1153 (owner decision): an HTTP read runs without asking only when the
+ * flow's read list names its URL's host. A body-less GET still carries
+ * whatever its URL and headers hold to the host it names, so to any other
+ * host it is a send. `hosts` is the flow's list, already in `readHostKey` form.
+ */
+export function httpReadHostListed(input: Record<string, unknown>, hosts: readonly string[]): boolean {
+  const host = httpRequestHost(input.url);
+  return host !== null && hosts.includes(host);
 }
 
 function inputObject(input: unknown): Record<string, unknown> | null {

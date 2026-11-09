@@ -3,7 +3,7 @@ import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from '../db';
 import { createFlow, getFlow } from '../db/repos/flow';
 import { createDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun, updateRun, type FlowRun } from '../db/repos/flow-run';
-import { saveWorkflowEffect } from '../db/repos/workflow-effect';
+import { listWorkflowEffects, saveWorkflowEffect } from '../db/repos/workflow-effect';
 import type { ActionFailure } from '../../actions/action-outcome';
 import { _resetBindingNoticesForTests, bindingRefusalNotifier, flowBindingBlock, LATEST_ENDED_RUN_SQL, markBindingNoticeTold, runtimeBindingNotice, workflowRunNotice, type BindingNotification } from './binding-refusals';
 import { runFailureNotice } from './run-failure';
@@ -162,14 +162,18 @@ describe('runtimeBindingNotice (#1080)', () => {
     expect(told).toHaveLength(2);
   });
 
-  test('a computer refusal raised before the step has an effect record is not a binding code here', () => {
-    const f = setup();
-    // As if REPLACED had been recorded: it never is (thrown while the target
-    // is first resolved, before the record), and readiness covers it.
-    const run = f.refused({ status: 'blocked', code: 'WORKFLOW_MACHINE_REPLACED', effect: 'not_started', message: 'gone' });
-    expect(runtimeBindingNotice(run.id)).toBeNull();
-    expect(flowBindingBlock(f.row())).toBeNull();
-  });
+  // Thrown while the target is first resolved; the boundary records them since
+  // #1152, with no target (none was frozen), so about no one computer.
+  for (const code of ['WORKFLOW_MACHINE_REPLACED', 'WORKFLOW_MACHINE_UNAVAILABLE']) {
+    test(`a computer refusal raised before the step's target was frozen (${code}) is a binding code, about any computer`, () => {
+      const f = setup();
+      const run = f.refused({ status: 'blocked', code, effect: 'not_started', message: 'gone' });
+      const [record] = listWorkflowEffects(run.id);
+      saveWorkflowEffect({ ...record!, target: {} });
+      expect(runtimeBindingNotice(run.id)).toMatchObject({ code, kind: 'runtime', subject: 'machine:*' });
+      expect(flowBindingBlock(f.row())).toMatchObject({ code, kind: 'runtime', runId: run.id });
+    });
+  }
 
   test('a notice nobody could see is not counted: the next refusal tells it', () => {
     const f = setup();

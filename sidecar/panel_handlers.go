@@ -90,6 +90,21 @@ func sanitizePanelURL(rawURL, brainURL, accessToken string) (string, error) {
 	return u.String(), nil
 }
 
+// panelURLWithoutToken drops the access token sanitizePanelURL added, so
+// panel.list never hands the credential back out.
+func panelURLWithoutToken(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	q := u.Query()
+	if q.Has("token") {
+		q.Del("token")
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
+}
+
 // redactPanelURL replaces the access-token query value with a placeholder so a
 // panel URL can be logged without leaking the credential into the log file
 // (which the in-app Log Viewer can also export).
@@ -161,16 +176,20 @@ func makePanelSetFollowHandler(svc PanelService) RPCHandler {
 	}
 }
 
-// panel.list — return all currently-open panel ids.
-// Result: { "ids": ["a", "b", ...] }
+// panel.list - return all currently-open panels, oldest first.
+// Result: { "ids": ["a", "b", ...], "panels": [{ "id", "url", "title" }, ...] }
+// "ids" is what older daemons read; "panels" lets a daemon that lost its
+// inventory (a reconnect, a restart) rebuild it (#1157).
 func makePanelListHandler(svc PanelService) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
-		ids := svc.List()
-		out := make([]string, len(ids))
-		for i, id := range ids {
-			out[i] = string(id)
+		panels := svc.List()
+		ids := make([]string, len(panels))
+		described := make([]map[string]any, len(panels))
+		for i, p := range panels {
+			ids[i] = string(p.ID)
+			described[i] = map[string]any{"id": string(p.ID), "url": panelURLWithoutToken(p.URL), "title": p.Title}
 		}
-		return &RPCResult{Result: map[string]any{"ids": out}}, nil
+		return &RPCResult{Result: map[string]any{"ids": ids, "panels": described}}, nil
 	}
 }
 

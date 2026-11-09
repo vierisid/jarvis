@@ -81,6 +81,22 @@ describe('constants duplicated across the two browser halves', () => {
     expect(goJoined).toContain(sentence);
   });
 
+  test('the scroll is instant on both sides (#1161)', async () => {
+    const session = await Bun.file(join(import.meta.dir, 'session.ts')).text();
+    const go = await goSource('browser.go');
+    expect(session).toContain("await this.evaluate(`window.scrollBy({top: ${pixels}, behavior: 'instant'})`);");
+    expect(go).toContain(`fmt.Sprintf("window.scrollBy({top: %d, behavior: 'instant'})", pixels)`);
+  });
+
+  test('the press-key settle wait is the same on both sides (#1161)', async () => {
+    const session = await Bun.file(join(import.meta.dir, 'session.ts')).text();
+    expect(session).toContain('const PRESS_KEY_SETTLE_MS = 300;');
+    expect(session).toContain('await Bun.sleep(PRESS_KEY_SETTLE_MS);');
+    const go = await goSource('browser_input.go');
+    expect(go).toContain('const pressKeySettle = 300 * time.Millisecond');
+    expect(go).toContain('time.Sleep(pressKeySettle)');
+  });
+
   test('the keys that retire the ids are the same set on both sides', async () => {
     const session = await Bun.file(join(import.meta.dir, 'session.ts')).text();
     const go = await goSource('browser_input.go');

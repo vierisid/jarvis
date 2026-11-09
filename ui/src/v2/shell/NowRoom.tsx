@@ -286,6 +286,9 @@ export function WaitingWidget({ live, inbox, failures, connection, onApprove, on
   const { count, state } = inboxSummary(live, inbox, failures, connection);
   const liveIds = new Set(live.approvals.map(a => a.id));
   const saved = (inbox.pending.data ?? []).filter(a => !liveIds.has(a.id));
+  // The tile shows three of each; "Open Jarvis" on an approval notification
+  // lands here, so say how many more wait rather than hide them (#1160).
+  const hidden = Math.max(0, live.approvals.length - 3) + Math.max(0, saved.length - 3);
   return <>
     <WHeader label={`waiting on you · ${state === "ready" ? count : "—"}`} room="authority" tone="hold" />
     <RemoteNotice label="Pending approvals" resource={inbox.pending} />
@@ -299,6 +302,7 @@ export function WaitingWidget({ live, inbox, failures, connection, onApprove, on
       <div className="bs"><button className="b1" disabled={connection !== "live"} onClick={() => onApprove(a.id)}>Yes · approve</button><button className="b2" disabled={connection !== "live"} onClick={() => onCancel(a.id)}>Cancel</button></div>
     </div>)}
     {saved.slice(0, 3).map(a => <Row key={a.id} room="authority" dot="var(--hold)"><b>{a.tool_name}</b> · {a.reason}</Row>)}
+    {hidden > 0 && <Row room="authority" dot="var(--hold)">+{hidden} more {hidden === 1 ? "approval" : "approvals"} waiting - open Authority</Row>}
     {(inbox.unresolved.data?.length ?? 0) > 0 && <Row room="authority" dot="var(--hold)">{inbox.unresolved.data!.length} approved, not finished. Open Authority to resolve.</Row>}
     <FailureRows failures={failures} />
     {state === "ready" && count === 0 && <Empty>Approvals and failures that need you land here. <span className="dim">Nothing waits right now.</span></Empty>}

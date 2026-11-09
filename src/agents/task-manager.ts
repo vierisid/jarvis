@@ -94,6 +94,8 @@ export class TaskRunStoppedError extends Error {
 
 /** What a cancelled task says when its workflow run was stopped. */
 export const RUN_STOPPED_REASON = 'the workflow run that started it was stopped';
+/** What a cancelled task says when the workflow of the run that started it was turned off while that run executed (#1152). */
+export const RUN_TURNED_OFF_REASON = 'the workflow that started it was turned off';
 
 /** launch() refused because the emergency controller has paused or killed the system. */
 export class TaskHaltedError extends Error {
@@ -195,18 +197,25 @@ export class AgentTaskManager {
     if (emergency) this.watchEmergency(emergency, taskId);
     // Stopping the run cancels the task, as Kill does. Subscribed in the same
     // synchronous stretch as the check above, so no stop can fall between.
-    const unsubscribe = owner?.onStopped(() => {
-      try { this.cancel(taskId, RUN_STOPPED_REASON); }
-      catch (err) { console.error(`[TaskManager] stopping run ${owner.runId} could not cancel task ${taskId}:`, err instanceof Error ? err.message : err); }
-    });
+    const cancelFor = (reason: string) => () => {
+      try { this.cancel(taskId, reason); }
+      catch (err) { console.error(`[TaskManager] cancelling task ${taskId} of workflow run ${owner!.runId} (${reason}) failed:`, err instanceof Error ? err.message : err); }
+    };
+    const unsubscribeStopped = owner?.onStopped(cancelFor(RUN_STOPPED_REASON));
+    // Turning the workflow off lets the run itself finish (Q-06) but cancels
+    // what it started (owner, #1152). Until the run ends on its own: then the
+    // task is released and this is unsubscribed with the rest.
+    const unsubscribeTurnedOff = owner?.onTurnedOff(cancelFor(RUN_TURNED_OFF_REASON));
+    const unsubscribe = () => { unsubscribeStopped?.(); unsubscribeTurnedOff?.(); };
     // The task's own view of its run: what it starts is the run's until the
     // run ends on its own, and its own after that.
     const taskOwner: RunOwner | undefined = owner ? { runId: owner.runId, stopped: () => owner.stopped(), ended: () => owner.ended(),
-      onStopped: (listener) => owner.onStopped(listener), onEnded: (listener) => owner.onEnded(listener) } : undefined;
+      onStopped: (listener) => owner.onStopped(listener), onEnded: (listener) => owner.onEnded(listener),
+      onTurnedOff: (listener) => owner.onTurnedOff(listener) } : undefined;
     const unsubscribeEnded = owner?.onEnded(() => { taskOwner!.released = true; leaveRun(); });
     // Once: a completion handler that throws reaches the catch below too.
     let left = false;
-    const leaveRun = () => { if (!left) { left = true; unsubscribe?.(); unsubscribeEnded?.(); } };
+    const leaveRun = () => { if (!left) { left = true; unsubscribe(); unsubscribeEnded?.(); } };
     // Detached work has its own task lifecycle. Only the handoff belongs to the
     // calling turn; keeping its progress observer would mark a still-running
     // agent failed when that answer ends.
@@ -225,9 +234,10 @@ export class AgentTaskManager {
     // cancelled when the run is stopped through `cancelFlowRun` (`leaveRun`
     // above) and keeps the run's machine binding and the call's
     // template-delivery suppression, both of which fail closed (a sidecar call
-    // stays on the run's machine). A run that finishes on its own, or keeps
-    // executing after its workflow is turned off (Q-06), does not stop it;
-    // the latter starts no new task (`actions/run-owner-scope.ts`).
+    // stays on the run's machine). A run that keeps executing after its
+    // workflow is turned off (Q-06) starts no new task and cancels the ones it
+    // started (#1152); a run that finishes on its own does not stop it
+    // (`actions/run-owner-scope.ts`).
     // Outside the acting sub-agent that started it (#1014): the task's own
     // loop names its own agent on every dispatch, and its restrictions were
     // fixed into `authority.profile` by the caller.

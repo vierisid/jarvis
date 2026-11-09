@@ -18,6 +18,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"github.com/jarvis/sidecar/internal/notices"
 )
 
 // installerVersion is stamped by the build: -X main.installerVersion=$(VERSION).
@@ -48,10 +50,16 @@ func main() {
 	noAutostart := flag.Bool("no-autostart", false, "Do not register the sidecar to start at login (Windows; macOS decides in Jarvis's own setup)")
 	showVersion := flag.Bool("version", false, "Print the installer version and exit")
 	registryURL := flag.String("registry-url", defaultRegistryURL, "npm registry base URL (tests only)")
+	showNotices := flag.Bool("third-party-notices", false, "Print the third-party license notices and exit")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println(installerVersion)
+		os.Exit(exitOK)
+	}
+
+	if *showNotices {
+		fmt.Print(notices.Text)
 		os.Exit(exitOK)
 	}
 

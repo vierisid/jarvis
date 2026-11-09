@@ -629,7 +629,7 @@ third-party dependencies are part of the engine's committed staging install
 
 | Piece | How it is governed |
 |---|---|
-| `http` | Governed (`CORE_PIECE_ADAPTERS` in `runtime/piece-effects.ts`), by method. GET and HEAD with no body are `read_data`; a GET or HEAD that carries a body sends it (axios does) and is `send_message`. POST, PUT and PATCH are `send_message`: they carry content to an endpoint the flow names, which need not be the user's own account, so at the shipped defaults they raise a card naming the method and URL. DELETE, and any other method, is `delete_data`, denied below level 9. `parse_url` is `read_data` (pure). |
+| `http` | Governed (`CORE_PIECE_ADAPTERS` in `runtime/piece-effects.ts`), by method. GET and HEAD with no body are `read_data` when the URL's host is on the flow's read list (#1153), and `send_message` (a card at the shipped defaults) when it is not; a GET or HEAD that carries a body sends it (axios does) and is `send_message`. POST, PUT and PATCH are `send_message`: they carry content to an endpoint the flow names, which need not be the user's own account, so at the shipped defaults they raise a card naming the method and URL. DELETE, and any other method, is `delete_data`, denied below level 9. `parse_url` is `read_data` (pure). |
 | `graphql` | Governed like an HTTP request with a body, because the piece always sends its query as one: GET, POST, PUT and PATCH are `send_message`, anything else `delete_data`. Tracked (sent once), egress-guarded, a proxy is refused, and "Retry on failure" is off and hidden. Header, query, URL and variable credentials are redacted from the card. |
 | `smtp` | Governed: `send-email` is `send_email`, so it asks at the shipped defaults. Tracked (sent once): upstream's resend after a connection reset is removed, since a reset after the server took the message is a sent email. The mail server passes the egress guard; the connection's host name stays the TLS name. |
 | `sftp` | Governed by action: `read_file_content` and `listFolderContents` are `read_data`; `createFolder` is `write_data`; `upload_file` and `create_file` put content on the server and replace a file at that path, so they are `send_message`, as an HTTP PUT is (not tracked: a repeat writes the same bytes to the same path); `renameFileOrFolder` (which can replace the target), `deleteFile` and `deleteFolder` are `delete_data`. The server passes the egress guard for SFTP, FTP and FTPS, and an FTP data connection always goes to the checked control address, never to a host a PASV reply names. Its polling trigger (`new_file`) is not loaded: a trigger runs outside the effect boundary. |
@@ -699,8 +699,22 @@ HTTP request specifics:
   same guard (`guardedFileDownload`, patched into `processors/file.ts`). A
   file URL that answers 4xx or 5xx now yields no file, where upstream handed
   the error body on as the file.
-- **Not covered:** a GET's query string and headers still reach the host with
-  no card, as the owner decided GET is a read; CODE steps and community pieces
+- **Read list (#1153).** A body-less GET or HEAD still carries what its URL and
+  headers hold to the host it names, so it runs without a card only when that
+  host is on the flow's read list (`POST /api/workflows/:id/read-hosts`
+  `{"hosts": ["api.example.com"]}`, set by a person, never by `manage_workflow`
+  or a metadata PATCH). To any other host it asks as `send_message`. The
+  engine holds such a read, its redirects included, to the listed hosts, so a
+  listed host's open redirect cannot carry it on, and it may not set its own
+  `Host` header. A listed host is trusted for every path and port on it, so
+  do not list a host where anyone can receive what a GET carries (a chat
+  bot API, a form endpoint, a request bin). On upgrade each flow with a
+  published version gets the hosts that version's GET and HEAD steps name
+  literally (`grantedBy: "upgrade"`); a host filled in at run time, and a
+  draft's, is never seeded.
+- **Not covered:** a file property's URL is downloaded while the step's props
+  are resolved, before Authority is asked and outside the read list, so a URL
+  filled in at run time can still carry data to its host; CODE steps and community pieces
   make their own connections outside this guard; a response's size and a
   request's duration are bounded only by the run's own deadline.
 
@@ -938,6 +952,13 @@ Basic auth). With an expiry (`expires_in`, dated when saved as `claimed_at`,
 or `expiry_date` in ms) it refreshes 15 minutes before it (upstream's
 threshold); without one, including rows saved before #954, on first use.
 
+- The engine is handed the access token only: `refresh_token`,
+  `client_secret` and `data.refresh_token` are blanked in what piece code
+  receives (#1153), so the means to mint tokens stay in the daemon.
+- A stored connection goes only to an engine whose graph names it: a
+  `{{connections...}}` reference or a Jarvis step's account field in the
+  run's graph as it began (sample input applied), or in the trigger for a
+  trigger hook. Anything else gets a 403 (#1153).
 - One refresh at a time per connection, through the same egress rule as the
   HTTP step (public addresses only on hosted), with a 20 s deadline for the
   whole exchange (upstream's timeout). It is stored without advancing
@@ -1434,6 +1455,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | PATCH | `/api/workflows/:id/versions/:vid/sample-input/:step` | Set one step's sample input override, `{ input }` (a JSON object; absent or null removes it) |
 | POST | `/api/workflows/:id/publish` | Publish the latest draft, or `{ versionId }` (403 when the version has a CODE step and CODE is off for the flow) |
 | POST | `/api/workflows/:id/code-steps` | Grant or revoke this flow's CODE-step permission (`{"enabled": bool}`, required) |
+| POST | `/api/workflows/:id/read-hosts` | Replace this flow's read list, the hosts an HTTP GET or HEAD reaches without asking (`{"hosts": string[]}`, required; bare host names, at most 64; `[]` clears it). A host matches exactly: listing `example.com` does not list `api.example.com`. Optional `expected`: the list the edit started from; 409 when the list has changed since |
 | POST | `/api/workflows/:id/run` | Enqueue a run, 202. `{ environment?, triggeredBy?, stepNameToTest?, payload? }`, or `{ workItemId }` alone |
 | GET | `/api/workflows/:id/runs` | Run history, newest first. `?status`, `?limit` (default 50, max 100), `?offset`; answers `{ items, nextOffset }` |
 | GET | `/api/workflow-runs/:runId` | One run, including its machine binding and cancellation |
@@ -1457,6 +1479,8 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | GET | `/api/workflow-inputs/:id` | One request of the signed-in workspace, whatever its age: `{ request }`. 404 outside the workspace |
 | POST | `/api/workflow-inputs/:id` | Answer one request: `{ decision: "submit", answers, generation }` for a form, `"approve"` or `"reject"` for an approval, or `"cancel"`. `generation` is the one the request was read with (it may be left out only for generation 0). Body at most 64,000 bytes, counted as it arrives (413). 409 for an answer to an earlier instance of a reopened form, once it is answered differently, or when the run's draft workflow was edited since the request was asked (the request is then withdrawn); 422 for invalid answers |
 | POST | `/api/workflow-inputs/:id/dismiss` | Acknowledge a closed request whose run failed, whose run status is unavailable, or that was withdrawn because the workflow changed, so it stops counting in Needs you. Optional body `{ generation }`, at most 1,000 bytes; same generation rule and 409 as answering. 200 (also when already dismissed), 404 outside the signed-in workspace, 409 while it is pending or a run of it is still running |
+
+The `/api/workflow-inputs` routes are Needs you, which is the Brief decisions feature (on by default on hosted installs, `JARVIS_BRIEF_DECISIONS=1` elsewhere). With decisions off they refuse as `/api/brief/decisions` does: 501 `{ error, code: "unsupported" }` when no decisions provider is registered, 503 `{ error, code: "unavailable" }` when it is off or not ready. With decisions off nothing could answer a request, so a step that would create one fails at once with code `HUMAN_INPUT_UNAVAILABLE` (a request created earlier is still read). A workflow may have 20 requests waiting for an answer (requests past their deadline, or whose runs all ended, do not count); a step that would add another fails with code `HUMAN_INPUT_LIMIT`, and the run says to answer, reject or cancel some of them, or stop runs waiting on them, first.
 
 ### Pagination
 
@@ -1493,8 +1517,9 @@ empty or whitespace-only body reads as `{}`.
 | `PATCH .../sample-data/:step`, `PATCH .../sample-input/:step` | 2,000,000 bytes | `:step` at most 120 characters (413) and not `__proto__` / `prototype` / `constructor` (400). One entry at most 262,144 characters serialized (413). The whole map at most 100 entries and 4,194,304 characters serialized, keys included (413); a write that shrinks an over-limit map is always allowed. A LOCKED version is refused (409) |
 | `POST /api/workflows/:id/publish` | 262,144 bytes | Empty, `{}` or `{ versionId }` with a non-empty string (400 otherwise) |
 | `POST /api/workflows/:id/code-steps` | 262,144 bytes | `enabled` must be a boolean (400) |
+| `POST /api/workflows/:id/read-hosts` | 262,144 bytes | `hosts` must be an array of bare host names (400) |
 | `POST /api/workflows/:id/run` | 1,000,000 bytes | `environment` must be `PRODUCTION` or `TESTING` (400). `triggeredBy` a string of at most 200 characters (400). `workItemId` must come alone (400) |
-| `POST /api/workflows/connections` | 262,144 bytes | `externalId`, `displayName`, `type`, `pieceName` required; `value` an object; `value` must carry what its `type` needs (`access_token` for OAuth types, `username` + `password` for `BASIC_AUTH`, `secret` or `value` for `SECRET_TEXT`) (400) |
+| `POST /api/workflows/connections` | 262,144 bytes | `externalId`, `displayName`, `type`, `pieceName` required; `value` an object; `value` must carry what its `type` needs (`access_token` for OAuth types, `username` + `password` for `BASIC_AUTH`, `secret_text` for `SECRET_TEXT`, the key the engine hands a piece) (400) |
 | `PATCH /api/workflows/connections/:id` | 262,144 bytes | `status` must be `ACTIVE`, `MISSING` or `ERROR` (400). `displayName` a non-empty string, `value` an object that passes the same per-type check (400). The type cannot change. A rename leaves the stored ciphertext untouched |
 | `POST /api/webhooks/waitpoints/:id` | 1,000,000 bytes | Rate limited: 60 a minute per waitpoint, 30 a minute for unknown ids, 600 a minute overall |
 

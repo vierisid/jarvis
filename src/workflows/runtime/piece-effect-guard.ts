@@ -39,6 +39,7 @@ import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import {managedIntercomInput, runManagedIntercomAction} from './managed-intercom';
 import {managedCalendlyInput, runManagedCalendlyAction} from './managed-calendly';
+import { withReadHosts } from './http-egress';
 import { GRAPHQL_PIECE, HTTP_PIECE, isGovernedPiece, redactReceipt, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
@@ -99,7 +100,12 @@ export type PieceAuthorizeResponse =
   /** No adapter, and Jarvis is paused: the step parks on this waitpoint until Resume (Q-08). */
   | { governed: false; dispatch: 'held'; approval: PieceAuthorizePending }
   /** Authority allowed the dispatch; the effect is recorded and claimed. */
-  | { governed: true; dispatch: 'authorized'; effectId?: string; document?: DecisionDocument }
+  /**
+   * `readHosts` (#1153): an HTTP read that ran without asking because its host
+   * is on the flow's read list; the request and every redirect it follows
+   * must stay on that list (`withReadHosts`).
+   */
+  | { governed: true; dispatch: 'authorized'; effectId?: string; document?: DecisionDocument; readHosts?: string[] }
   | { governed: true; dispatch: 'completed'; result: unknown }
   /** Authority wants a human; the step parks on this waitpoint. */
   | { governed: true; dispatch: 'approval_required'; approval: PieceAuthorizePending };
@@ -217,6 +223,9 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   if (reply.dispatch === 'approval_required' && reply.approval?.waitpointId) return reply;
   if (reply.dispatch === 'completed' && tracked) return reply;
   if (reply.dispatch === 'authorized') {
+    if (reply.readHosts !== undefined && !(Array.isArray(reply.readHosts) && reply.readHosts.every((h) => typeof h === 'string'))) {
+      throw new Error(`${refused}: malformed read list`);
+    }
     if (isHubspotContact(params.piece, params.action)) throw new Error('HubSpot contact execution requires the qualified daemon adapter; legacy dispatch refused');
     if (tracked && !reply.effectId) throw new Error('Completion receipt protocol unavailable; send refused');
     if (reply.document !== undefined) {
@@ -351,7 +360,11 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
       try { raw = await execute(); }
       catch { throw new Error('Could not read Slack channel details. Check channel access or reconnect Slack.'); }
     }
-  } else raw = await execute();
+  } else {
+    // #1153: a read the daemon let run without asking stays on the flow's read list.
+    const readHosts = governance.governed && governance.dispatch === 'authorized' ? governance.readHosts : undefined;
+    raw = readHosts ? await withReadHosts(readHosts, execute) : await execute();
+  }
   // Gmail 0.17 returns a Gaxios response, including transport configuration.
   // Keep its data envelope for expressions, but never persist request headers
   // (which can contain the OAuth bearer) as a completion receipt or step output.

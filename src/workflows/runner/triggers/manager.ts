@@ -69,6 +69,7 @@ import type { EngineRuntime } from "../engine-runtime/engine-runtime";
 import { toUpstreamFlowVersion } from "../engine-runtime/flow-version-adapter";
 import { graphDigest } from "../../runtime/continuation";
 import { emergencyHold, PAUSED_REASON } from "../../runtime/emergency-hold";
+import { deferredBacklogRefusal } from "../../runtime/deferred-cards";
 import { triggerHookRunId } from "./hook-run-id";
 import { chosenScheduleZone, scheduleZoneWarning, statedScheduleZone } from "./schedule-zone";
 
@@ -938,6 +939,25 @@ export class TriggerManager {
     }
     this.liveRefusals.delete(flowId);
     this.untold.delete(flowId);
+    // A flow whose runs are already parked behind its approval cards takes no
+    // more from its triggers until someone answers them (#1152). As under
+    // Pause: a webhook sender is asked to retry, a scheduled time is skipped
+    // and keyed so it is not run late, anything else is skipped; all recorded.
+    // An item a poll already took from its source has nowhere else to wait,
+    // so it is started (a poll does not begin while the backlog is full, so
+    // only a poll the backlog filled under gets here).
+    const backlog = opts.takenFromSource ? null : deferredBacklogRefusal(flowId);
+    if (backlog) {
+      const fire = recordFire({ flowId, flowVersionId: versionId, source: opts.source,
+        dedupeKey: opts.source === "schedule" ? opts.dedupeKey : null, scheduledFor: opts.scheduledFor,
+        lateMs: opts.lateMs ?? null, outcome: "skipped",
+        detail: { reason: opts.source === "webhook" ? `${backlog} The sender was asked to retry.` : backlog, code: "APPROVALS_BACKLOG" } });
+      this.log(`flow ${flowId} (${opts.source}) not started: ${backlog}`);
+      return opts.source === "webhook"
+        // The sender may hold nothing but the URL: why stays in the delivery record.
+        ? { outcome: "skipped", fireId: fire?.id, reason: "Service busy, retry later", retryAfterSeconds: 60 }
+        : { outcome: "skipped", fireId: fire?.id, reason: backlog };
+    }
     const claimed = claimFire({ flowId, flowVersionId: versionId, source: opts.source, dedupeKey: opts.dedupeKey,
       duplicateSince: opts.duplicateSince, scheduledFor: opts.scheduledFor, lateMs: opts.lateMs, detail: opts.detail }, () => {
       const run = createFlowRun({ flowId, flowVersionId: versionId,
@@ -1146,6 +1166,15 @@ export class TriggerManager {
     const off = this.notAdmitted(flowId, versionId, generation);
     if (off) {
       unrun("blocked", off);
+      return;
+    }
+    // Runs parked behind its approval cards (#1152): no poll, as under Pause.
+    // An event source keeps its items for the first poll after someone
+    // answers; a time of the schedule piece is skipped and shown.
+    const backlog = deferredBacklogRefusal(flowId);
+    if (backlog) {
+      unrun("skipped", backlog);
+      this.log(`flow ${flowId} (engine-${source}) not polled: ${backlog}`);
       return;
     }
     const fireSource: FireSource = pureSchedule ? "schedule" : "poll";

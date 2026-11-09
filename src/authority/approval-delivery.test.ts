@@ -826,9 +826,47 @@ describe('#791 review: the toast budget fails closed on widths it cannot know', 
     expect(t.kind).toBe('approval_review');
   });
 
-  test('a rocket and a check mark count as two columns each', () => {
-    expect(toastColumns(cp(0x1f680))).toBe(2);
-    expect(toastColumns(cp(0x2705))).toBe(2);
+  // Three, not the two they used to count: measured on Windows 11 in the toast
+  // font, an emoji is up to 19.223px against 6.906px for an average Latin
+  // letter (2.78 letters), while CJK is 14.000px (#1158).
+  test('a rocket and a check mark count as three columns each', () => {
+    expect(toastColumns(cp(0x1f680))).toBe(3);
+    expect(toastColumns(cp(0x2705))).toBe(3);
+    expect(toastColumns(cp(0x4e00))).toBe(2);
+  });
+
+  test('#1158: emoji that fit at two columns each but not at three are review-only', () => {
+    // 26 rockets: 52 columns at two each fit the 40-column lines with the
+    // impact suffix; at three each they need 78 columns on one word, two lines,
+    // plus the suffix on a third.
+    const body = cp(0x1f680).repeat(26);
+    expect(toast(body).approvable).toBe(false);
+    expect(toast(cp(0x1f680).repeat(10)).approvable).toBe(true);
+  });
+
+  test('#1158: U+FE0F after an emoji adds nothing, so an emoji with VS16 is approvable', () => {
+    expect(toastColumns(`\u2764\ufe0f`)).toBe(3);
+    expect(toastColumns(`${cp(0x1f44d)}\ufe0f`)).toBe(3);
+    // A text-style symbol that VS16 makes an emoji counts as an emoji.
+    expect(toastColumns('\u00a9\ufe0f')).toBe(3);
+    // A two-column pictograph (U+3297) is brought up to three, not past it.
+    expect(toastColumns('\u3297\ufe0f')).toBe(3);
+    for (const body of ['Send \u2764\ufe0f to the team', `Reply ${cp(0x1f44d)}\ufe0f to Anna`]) {
+      const t = toast(body);
+      expect([body, t.approvable, t.kind]).toEqual([body, true, 'approval']);
+    }
+  });
+
+  test.each([
+    ['after a letter', 'a\ufe0f'],
+    ['at the start', '\ufe0f'],
+    ['twice after an emoji', '\u2764\ufe0f\ufe0f'],
+    ['U+FE0E after an emoji', '\u2764\ufe0e'],
+    ['after a symbol of unknown width', '\u2122\ufe0f'],
+    ['after a keycap base, which the label keeps but is not pictographic', '#\ufe0f'],
+    ['in a full keycap', '1\ufe0f\u20e3'],
+  ])('#1158: a presentation selector %s stays of unknown width', (_label, text) => {
+    expect(toastColumns(text)).toBeNull();
   });
 
   test('long words wrap: 65 columns of 21-character words need three lines, so no Approve', () => {
@@ -1236,5 +1274,28 @@ describe('Q-08 on-screen review retains main delivery safeguards', () => {
     expect(t).toMatchObject({ approvable: false, kind: 'approval_review', body: 'Click Send in Mail' });
     expect(t.actions.map((a) => a.id)).toEqual(['review', 'dismiss']);
     expect(t.meta).toContain('requires on-screen review');
+  });
+});
+
+// #1152 (owner, 2026-11-06): a workflow start card's chat sentence names its input's fields; values stay on the dashboard.
+describe('a chat card with a chat sentence from its trusted writer', () => {
+  const context = (fields: Record<string, unknown>) => JSON.stringify({ intent: 'Start the workflow f1 named "Sync", with the input {"email":"ana@example.com"}', ...fields });
+
+  test('shows the chat sentence, never the dashboard sentence with its values', () => {
+    const card = approvalChannelCard(makeRequest({ tool_name: 'workflow_start', action_category: 'spawn_agent',
+      context: context({ channelIntent: 'Start the workflow f1 named "Sync", passing the fields {email} (open the dashboard to see their values)' }) }));
+    expect(card.text).toContain('Intent: Start the workflow f1 named "Sync", passing the fields {email} (open the dashboard to see their values)');
+    expect(card.text).not.toContain('ana@example.com');
+    expect(card.approvable).toBe(true);
+  });
+
+  test('without one, or from a writer that is not trusted, the card is as before', () => {
+    expect(approvalChannelCard(makeRequest({ tool_name: 'workflow_start', context: context({}) })).text)
+      .toContain('Intent: Start the workflow f1 named "Sync", with the input {"email":"ana@example.com"}');
+    // request_approval's context is the model's own: neither sentence in it is a gate's.
+    const model = approvalChannelCard(makeRequest({ tool_name: 'request_approval', reason: 'Approve the sync', context: context({ channelIntent: 'Nothing to see' }) }));
+    expect(model.text).not.toContain('Nothing to see');
+    // A chat sentence with no intent beside it is not used.
+    expect(approvalChannelCard(makeRequest({ tool_name: 'workflow_start', context: JSON.stringify({ channelIntent: 'Orphan sentence' }) })).text).not.toContain('Orphan sentence');
   });
 });

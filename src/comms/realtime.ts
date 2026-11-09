@@ -268,6 +268,10 @@ export class RealtimeSession {
   private responsePending = false;
   // Calls handed to onFunctionCall whose result has not come back yet.
   private unansweredCalls = new Set<string>();
+  // The same calls for isVoicing, which only their result removes:
+  // unansweredCalls gates response.create and is cleared by a newer response
+  // or the grace timer while the result (to be voiced) is still to come.
+  private awaitedResults = new Set<string>();
   // Bounds the wait on unansweredCalls (TOOL_RESULT_GRACE_MS).
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
   // Set on barge-in until the VAD's response starts. That response sees every
@@ -311,6 +315,20 @@ export class RealtimeSession {
    */
   get isResponding(): boolean {
     return this.responseInFlight || this.responseRequested;
+  }
+
+  /**
+   * Whether this session may still be heard: a tool call waits on its
+   * result (whose answer will be voiced), a reply is requested, in flight or
+   * waiting to be asked for, or audio already sent can still be playing
+   * (`playEndAt`, the earliest it can have finished). A restart waits on
+   * this so it does not cut off its own spoken answer (#1156). A closed
+   * session is never voicing.
+   */
+  get isVoicing(): boolean {
+    if (this.closed) return false;
+    return this.awaitedResults.size > 0 || this.responsePending || this.responseInFlight
+      || this.responseRequested || this.playEndAt > this.now();
   }
 
   onAudio(cb: (chunk: Buffer) => void): void { this.audioCb = cb; }
@@ -456,6 +474,7 @@ export class RealtimeSession {
   sendFunctionResult(callId: string, result: unknown): void {
     if (this.closed) return;
     this.unansweredCalls.delete(callId);
+    this.awaitedResults.delete(callId);
     this.send({
       type: 'conversation.item.create',
       item: {
@@ -775,6 +794,7 @@ export class RealtimeSession {
         }
         if (name && this.functionCallCb) {
           this.unansweredCalls.add(callId);
+          this.awaitedResults.add(callId);
           this.functionCallCb({ callId, name, args });
         }
         break;

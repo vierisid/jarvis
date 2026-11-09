@@ -157,6 +157,24 @@ test('WebSocketServer - WebSocket connection', async () => {
   server.stop();
 });
 
+test('WebSocketServer - a full dashboard socket says so and never counts as answering a broadcast room action (#1157)', async () => {
+  const opened: unknown[] = [];
+  server.setHandler({ async onMessage() { return undefined as never; }, onConnect(ws) { opened.push(ws); }, onDisconnect() {} });
+  server.start();
+  const sockets: WebSocket[] = [];
+  for (const query of ['?client=dashboard', '', '?client=panel']) {
+    const ws = new WebSocket(`ws://localhost:3143/ws${query}`);
+    sockets.push(ws);
+    await new Promise<void>((resolve, reject) => { ws.onopen = () => resolve(); ws.onerror = () => reject(new Error('ws failed')); });
+    while (opened.length < sockets.length) await Bun.sleep(5);
+  }
+  try {
+    expect(opened.map((ws) => server.socketAnswersBroadcastRoomActions(ws))).toEqual([false, true, true]);
+  } finally {
+    for (const ws of sockets) ws.close();
+  }
+});
+
 test('WebSocketServer - broadcast', async () => {
   server.start();
 
