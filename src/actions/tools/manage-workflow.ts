@@ -1,7 +1,7 @@
 import { draftRevision, updateSavedDraft } from './workflow-draft-update';
 import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards';
 import { decideRunRecovery, getRunRecovery } from '../../workflows/runtime/recovery';
-import { redactRunSteps, redactVersionCredentials } from '../../workflows/runtime/step-credentials';
+import { redactFailedStepMessage, redactRunSteps, versionAsModelSees } from '../../workflows/runtime/step-credentials';
 import { resolveOnboardingOutcome } from '../../workflows/runtime/onboarding-service';
 import { onboardingResource } from '../../workflows/runtime/customer-onboarding';
 import { randomUUID } from 'node:crypto';
@@ -1147,14 +1147,9 @@ function actList(project: string): Record<string, unknown> {
  * is replaced, not shown. Everything else is the stored version.
  */
 export function versionForModel<V extends { trigger?: unknown } | null | undefined>(version: V): V {
-  if (!version) return version;
   // HTTP and GraphQL steps take tokens and passwords as plain props, and
   // their recorded sample data carries the input it ran with (#1153).
-  const redacted = redactVersionCredentials(version as NonNullable<V> & { sampleData?: unknown; sampleInput?: unknown }) as V;
-  const trigger = redacted!.trigger as { settings?: { input?: Record<string, unknown> } } | undefined;
-  const input = trigger?.settings?.input;
-  if (!input || typeof input !== "object" || !("secret" in input) || input.secret === undefined || input.secret === "") return redacted;
-  return { ...redacted, trigger: { ...trigger, settings: { ...trigger!.settings, input: { ...input, secret: "[redacted]" } } } };
+  return version ? versionAsModelSees(version as NonNullable<V> & { sampleData?: unknown; sampleInput?: unknown }) as V : version;
 }
 
 /** Recompute readiness on read; the stored valid bit is only a historical hint. No execution. */
@@ -1722,7 +1717,9 @@ function summarizeRun(run: FlowRun, includeSteps = false): Record<string, unknow
     finishTime: run.finishTime,
     durationMs: run.startTime && run.finishTime ? run.finishTime - run.startTime : null,
     stepsCount: run.stepsCount,
-    failedStep: run.failedStep,
+    failedStep: run.failedStep?.errorMessage
+      ? { ...run.failedStep, errorMessage: redactFailedStepMessage(run.failedStep.name, run.failedStep.errorMessage, getFlowVersion(run.flowVersionId)?.trigger) }
+      : run.failedStep,
     ...(bindingRefusals.length ? { bindingRefusals } : {}),
     // Rows recorded before the worker handler redacted step inputs still hold them (#1153).
     ...(includeSteps ? { steps: redactRunSteps(run.steps, getFlowVersion(run.flowVersionId)?.trigger) } : {}),

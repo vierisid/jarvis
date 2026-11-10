@@ -5,11 +5,15 @@ import { getFlowVersion, getLatestDraft, updateDraftVersion, type FlowVersion, t
 import { workflowRemovalState } from '../../workflows/db/repos/workflow-removal-state';
 import { compileWorkflow, type ReadinessContext } from '../../workflows/runtime/workflow-readiness';
 import { CODE_STEP_TYPE, walkFlowNodes } from '../../workflows/db/flow-graph';
-import { restoreRedactedCredentials, strandedRedaction } from '../../workflows/runtime/step-credentials';
+import { credentialEditRefusal, restoreRedactedCredentials, versionAsModelSees } from '../../workflows/runtime/step-credentials';
 
 /** Covers the persisted authoring snapshot, not a recomputed readiness report. */
 export function draftRevision(version: FlowVersion): string {
-  return createHash('sha256').update(JSON.stringify(version)).digest('hex');
+  // Over the version as the model reads it (#1153): a hash over the stored
+  // credentials would let the model test a guess at one. A change to a
+  // credential alone keeps the revision; the edit is applied to the saved
+  // draft, so it keeps the new credential.
+  return createHash('sha256').update(JSON.stringify(versionAsModelSees(version))).digest('hex');
 }
 
 const object = (value: unknown): value is Record<string, any> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -94,8 +98,8 @@ export function updateSavedDraft(input: {
     // a value it wrote back unchanged keeps the stored credential, and an edit
     // that would store the marker in its place is refused (#1153).
     const graph = restoreRedactedCredentials(version.trigger, patchDraftGraph(version.trigger, input.patches));
-    const stranded = strandedRedaction(version.trigger, graph);
-    if (stranded) fail(`step "${stranded}" would store [redacted] in place of a credential the assistant cannot see; keep that value unchanged, or ask the user to edit it in the workflow editor`);
+    const refusal = credentialEditRefusal(version.trigger, graph);
+    if (refusal) fail(refusal);
     assertNoAssistantCode(version.trigger, graph);
     const validation = compileWorkflow(graph, { ...input.context, phase: 'composition' });
     if (!validation.ready) fail('edited graph is invalid: ' + validation.issues.slice(0, 5).map(i => `${i.node} (${i.path}): ${i.message}`).join('; '));

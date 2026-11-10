@@ -933,8 +933,14 @@ function redactValue(value: string): string {
 }
 
 /** Credential-named fields, at any depth `bound()` keeps, inside objects and arrays. */
+/** A value that names its own scheme: `Bearer x`, `Basic x`, `Token x`, under whatever name it is stored. */
+const SCHEMED_CREDENTIAL = /^\s*(?:bearer|basic|token|digest)\s+\S/iu;
+
 function redactNamed(value: unknown, depth = 0): unknown {
-  if (depth > 6) return value;
+  // Past any depth `bound()` keeps; a stored input (#1153) can go deeper, and
+  // what lies beyond is hidden whole rather than shown unchecked.
+  if (depth > 32) return value === null || value === undefined || typeof value !== 'object' ? value : REDACTED;
+  if (typeof value === 'string') return SCHEMED_CREDENTIAL.test(value) ? redactValue(value) : value;
   if (Array.isArray(value)) return value.map((item) => redactNamed(item, depth + 1));
   const fields = inputObject(value);
   if (!fields) return value;

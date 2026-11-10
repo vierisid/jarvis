@@ -22,7 +22,7 @@ import type {
 import { getFlowRun, updateRun, type FlowRunStatus } from "../db/repos/flow-run";
 import { getRunCancellation } from "../db/repos/run-cancellation";
 import { getFlowVersion } from "../db/repos/flow-version";
-import { redactRunSteps } from "../runtime/step-credentials";
+import { redactFailedStepMessage, redactRunSteps } from "../runtime/step-credentials";
 
 const PER_RUN_LOG_BUFFER_MAX = 200;
 
@@ -173,7 +173,9 @@ export class DefaultWorkerHandlers
       // Without this mapping the detail is written under a key nothing reads
       // and the run history shows a bare step name with no reason.
       const { name, displayName, message } = input.failedStep;
-      patch.failedStep = message ? { name, displayName, errorMessage: message } : { name, displayName };
+      // A failed HTTP or GraphQL request echoes the body it sent (#1153).
+      const trigger = message ? getFlowVersion(getFlowRun(input.runId)?.flowVersionId ?? '')?.trigger : undefined;
+      patch.failedStep = message ? { name, displayName, errorMessage: redactFailedStepMessage(name, message, trigger) } : { name, displayName };
     }
     if (input.stepsCount !== undefined) patch.stepsCount = input.stepsCount;
     if (input.finishTime) patch.finishTime = Date.parse(input.finishTime);

@@ -413,6 +413,11 @@ describe("WorkerRpcServer (B4: socket.io engine <-> daemon)", () => {
       // Redacted, not dropped: the history still shows where the request went.
       expect(stored).toContain("https://api.example.com/x?api_key=[redacted]");
       expect((getFlowRun(sb.runId)?.steps as { call: { output: { output: unknown } } }).call.output.output).toEqual({ ok: true });
+      // A failed request echoes the body it sent in the run's failure.
+      await sb.workerClient.uploadRunLog({ runId: sb.runId, projectId: sb.projectId, status: "FAILED",
+        failedStep: { name: "call", displayName: "Call", message: JSON.stringify({ response: { status: 401 }, request: { body: { password: "pa55-in-body" } } }) } });
+      expect(getFlowRun(sb.runId)?.failedStep?.errorMessage).not.toContain("pa55-in-body");
+      expect(getFlowRun(sb.runId)?.failedStep?.errorMessage).toContain('"status":401');
     } finally {
       sb.client.close();
     }
