@@ -1,4 +1,5 @@
 import type { AwarenessEvent, Suggestion } from '../awareness/types.ts';
+import { awarenessHistoryVisible } from '../awareness/history-guard.ts';
 import type { BackgroundAgentService } from './background-agent-service.ts';
 import type { ChannelService } from './channel-service.ts';
 import type { WebSocketService } from './ws-service.ts';
@@ -240,7 +241,8 @@ export class AwarenessDeliveryPolicy {
       suggestion, this.deps.sockets.getServer(), this.deps.channels,
       this.deps.desktopWithReceipt, { quiet: this.quiet },
     );
-    if (channel === 'websocket' && !this.quiet) {
+    // No toast or spoken copy of a recording once awareness is off (#1314 review).
+    if (channel === 'websocket' && !this.quiet && awarenessHistoryVisible()) {
       (this.deps.desktop ?? defaultDesktop)(`JARVIS: ${suggestion.title}`, suggestion.body, { urgency: 'normal' });
       this.deps.sockets.broadcastProactiveVoice(suggestion.body).catch(err => console.error('[Daemon] Awareness TTS error:', err));
     }

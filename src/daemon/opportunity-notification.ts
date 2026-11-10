@@ -3,6 +3,7 @@ import type { WebSocketServer } from '../comms/websocket.ts';
 import type { ChannelService } from './channel-service.ts';
 import { sendDesktopNotificationReceipt, type DesktopReceipt } from '../comms/desktop-notify.ts';
 import { DeliveryUnconfirmedError } from '../comms/delivery.ts';
+import { awarenessHistoryVisible } from '../awareness/history-guard.ts';
 
 /**
  * Transport-only delivery. Never invoke the awareness/workflow event pipeline here.
@@ -44,6 +45,10 @@ export async function deliverOpportunityNotification(
   }
   if (result.delivered.length) return result.delivered.join(',');
   if (result.unknown.length) throw new DeliveryUnconfirmedError(result.unknown.map(u => u.channel));
+  // Awareness may have gone off while the channels were tried (#1314 review):
+  // no local toast of what it recorded. Left pending; the outbox retries once
+  // awareness is back on.
+  if (!awarenessHistoryVisible()) return null;
   // Nothing was sent anywhere, so the local desktop cannot duplicate it. A
   // toast that timed out may be up: unconfirmed, never shown a second time.
   const shown = await desktop(`JARVIS: ${title}`, body, { urgency: 'critical', expireMs: 30000 });
