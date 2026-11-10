@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { ENGINE_BUILD_PATHS } from './build';
 import { buildPiece } from './build-pieces';
-import { EGRESS_POLICY_ENV } from '../../runtime/http-egress';
+import { EGRESS_POLICY_ENV, refusedBeforeSend } from '../../runtime/http-egress';
 
 const dir = (name: string) => resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, 'pieces/core', name);
 const bundle = (name: string) => resolve(dir(name), 'dist/src/index.js');
@@ -106,6 +106,10 @@ describe.skipIf(skip)('the compiled core SMTP, GraphQL and FTP/SFTP pieces', () 
     const send = pieces.graphql!.getAction('send_request')!.run;
     await expect(send({ propsValue: graphqlProps({ url: 'https://api.example.com/graphql', use_proxy: true,
       proxy_settings: { proxy_host: '127.0.0.1', proxy_port: 3128 } }) })).rejects.toThrow(/does not send GraphQL steps through a proxy/);
+    // As a refusal before sending, so a tracked send is recorded as not sent (#1153).
+    const refused = await send({ propsValue: graphqlProps({ url: 'https://api.example.com/graphql', use_proxy: true,
+      proxy_settings: { proxy_host: '127.0.0.1', proxy_port: 3128 } }) }).catch((error: unknown) => error);
+    expect(refusedBeforeSend(refused)).toBe(true);
   });
 
   const sftpAuth = (protocol: string, host: string) => ({ protocol, host, port: protocol === 'sftp' ? 22 : 21, username: 'u', password: 'p' });

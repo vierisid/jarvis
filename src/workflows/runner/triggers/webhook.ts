@@ -3,11 +3,13 @@ import { prepareSubmission, type SubmissionConfig } from '../../runtime/form-sub
  * WebhookManager — manages inbound webhook endpoints for workflow triggers
  *
  * Each workflow can have a unique webhook path. Requests are validated
- * against an optional HMAC-SHA256 secret (X-Jarvis-Signature header).
+ * against an optional HMAC-SHA256 secret (X-Jarvis-Signature header, with
+ * X-Jarvis-Timestamp under the timestamped scheme: `webhook-secret.ts`).
  */
 
 import { KeyedRateLimiter } from './rate-limiter.ts';
 import { readBoundedText } from '../../../util/bounded-body.ts';
+import { TIMESTAMPED_REPEAT_WINDOW_MS, WEBHOOK_TIMESTAMP_TOLERANCE_S, type WebhookSignatureScheme } from './webhook-secret.ts';
 
 // ── Types ──
 
@@ -16,6 +18,8 @@ export type WebhookRoute = {
   submission?: SubmissionConfig;
   path: string;
   secret: string | null;
+  /** How a signature is made (#1153): over `<timestamp>.<body>`, or over the body alone (legacy). */
+  scheme: WebhookSignatureScheme;
   registeredAt: number;
   /** Captured by the runtime at registration, never taken from the HTTP payload. */
   generation?: number;
@@ -64,7 +68,7 @@ const DELIVERY_ID_HEADERS = ['idempotency-key', 'x-github-delivery', 'webhook-id
  * Without any of these the request is not deduplicated: identical bodies are
  * legitimate (pings, button presses).
  */
-export function webhookDelivery(headers: Headers, data: Record<string, unknown>, signature: string | null): WebhookDelivery {
+export function webhookDelivery(headers: Headers, data: Record<string, unknown>, signature: string | null, timestamped = false): WebhookDelivery {
   if (!signature) {
     for (const name of DELIVERY_ID_HEADERS) {
       const value = headers.get(name)?.trim();
@@ -80,7 +84,8 @@ export function webhookDelivery(headers: Headers, data: Record<string, unknown>,
     && (typeof data.team_id === 'string' || typeof data.api_app_id === 'string')) {
     return { key: `delivery:slack:${data.event_id.slice(0, 200)}`, label: 'event_id' };
   }
-  if (signature) return { key: `signature:${signature.toLowerCase()}`, windowMs: SIGNED_REPEAT_WINDOW_MS, label: 'signature' };
+  // A timestamped signature is a repeat for as long as its timestamp is accepted (#1153).
+  if (signature) return { key: `signature:${signature.toLowerCase()}`, windowMs: timestamped ? TIMESTAMPED_REPEAT_WINDOW_MS : SIGNED_REPEAT_WINDOW_MS, label: 'signature' };
   return {};
 }
 
@@ -174,13 +179,14 @@ export class WebhookManager {
    * Register a workflow webhook.
    * @returns the webhook path (e.g. "/webhooks/wf_abc123")
    */
-  register(workflowId: string, secret?: string, generation?: number, submission?: SubmissionConfig): string {
+  register(workflowId: string, secret?: string, generation?: number, submission?: SubmissionConfig, scheme: WebhookSignatureScheme = 'legacy'): string {
     const path = `/webhooks/${workflowId}`;
 
     this.routes.set(workflowId, {
       workflowId,
       path,
       secret: secret ?? null,
+      scheme,
       registeredAt: Date.now(),
       ...(submission ? { submission } : {}),
       ...(generation === undefined ? {} : { generation }),
@@ -254,6 +260,7 @@ export class WebhookManager {
 
     // Validate HMAC signature if a secret is configured
     let verifiedSignature: string | null = null;
+    let timestampedSignature = false;
     if (route.secret) {
       const signature = req.headers.get('x-jarvis-signature') ?? req.headers.get('X-Jarvis-Signature');
 
@@ -269,13 +276,32 @@ export class WebhookManager {
       // without spending a hash on it.
       if (!HEX_SHA256.test(signature)) return rejectUnsigned('Invalid signature');
 
-      const expected = await computeHmac(route.secret, rawBody);
+      // #1153: a timestamped signature covers `<timestamp>.<body>`, and a
+      // timestamp far from now is refused, so a captured request cannot run
+      // again once its repeat window has passed. A legacy webhook takes one
+      // too, so a sender can move first; a timestamped one takes nothing else.
+      const stamp = req.headers.get('x-jarvis-timestamp');
+      if (stamp === null && route.scheme === 'timestamped') return rejectUnsigned('Missing X-Jarvis-Timestamp header');
+      if (stamp !== null) {
+        if (!/^\d{1,12}$/u.test(stamp)) return rejectUnsigned('Invalid timestamp');
+        if (Math.abs(Date.now() / 1000 - Number(stamp)) > WEBHOOK_TIMESTAMP_TOLERANCE_S) {
+          return rejectUnsigned(`Timestamp is more than ${WEBHOOK_TIMESTAMP_TOLERANCE_S} seconds from now`);
+        }
+      }
+      // A body-only signature over `<digits>.<rest>` is also a timestamped
+      // signature of `<rest>`: refused, so a captured timestamped request
+      // cannot be replayed for ever as a body-only one on a legacy webhook.
+      // A 400 that does not draw on the bad-signature budget: no HMAC is spent, and a
+      // legacy sender whose body happens to start so is told why, not throttled.
+      if (stamp === null && /^\d{1,12}\./u.test(rawBody)) return json(400, { error: 'A body that starts with digits and a dot must be sent with X-Jarvis-Timestamp' });
+      const expected = await computeHmac(route.secret, stamp === null ? rawBody : `${stamp}.${rawBody}`);
 
       // Constant-time comparison to prevent timing attacks
       if (!timingSafeEqual(signature.toLowerCase(), expected.toLowerCase())) {
         return rejectUnsigned('Invalid signature');
       }
       verifiedSignature = signature;
+      timestampedSignature = stamp !== null;
 
       const limited = this.chargeBudgets(workflowId);
       if (limited) return limited;
@@ -303,7 +329,7 @@ export class WebhookManager {
       }
     }
 
-    let delivery = webhookDelivery(req.headers, data, verifiedSignature);
+    let delivery = webhookDelivery(req.headers, data, verifiedSignature, timestampedSignature);
     if (route.submission) {
       try {
         const prepared = prepareSubmission(data, route.submission);

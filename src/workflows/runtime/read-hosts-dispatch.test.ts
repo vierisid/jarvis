@@ -41,3 +41,11 @@ test('the piece runs inside the read list: its client refuses an unlisted host b
   await expect(run({ governed: true, dispatch: 'authorized' })).rejects.toThrow(/ENOTFOUND ops\.test/);
   expect(lookups).toEqual(['ops.test', 'ops.test']);
 });
+
+test('#1153 review: a failure the HTTP step continued past reaches later steps without the request body it sent', async () => {
+  const governance: PieceAuthorizeResponse = { governed: true, dispatch: 'authorized' };
+  const out = await executeAuthorizedPiece({ ...params(governance), input: { method: 'POST', url: 'http://ops.test/login' } }, governance,
+    async () => ({ response: { status: 401, body: 'no' }, request: { body: { username: 'me', password: 'hunter2-SECRET' } } }));
+  expect(JSON.stringify(out)).not.toContain('hunter2-SECRET');
+  expect(out).toEqual({ response: { status: 401, body: 'no' }, request: { body: null } });
+});

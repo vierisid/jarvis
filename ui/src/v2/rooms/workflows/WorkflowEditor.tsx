@@ -3674,6 +3674,8 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
               <WebhookTriggerFields
                 secret={step.settings?.input?.["secret"]}
                 onSetSecret={(value) => (value ? onSetInput("secret", value) : onRemoveInputKey("secret"))}
+                scheme={step.settings?.input?.["signature_scheme"]}
+                onRequireTimestamps={() => onSetInput("signature_scheme", "timestamped")}
               />
               {(formWebhook || requestWebhook) && schema ? <SchemaInputs schema={schema}
                 input={(step.settings?.input ?? {}) as Record<string, unknown>} onSetInput={onSetInput} /> : null}
@@ -4437,13 +4439,21 @@ export function SampleDataSection({
  * HMAC-SHA256 of the raw body; until now the editor offered no field for it.
  */
 export const WEBHOOK_SECRET_HINT =
-  "When set, each request must carry an X-Jarvis-Signature header holding the hex HMAC-SHA256 of the raw request body, keyed with this secret; other requests are refused. Without one, anyone who has this workflow's webhook URL can start it. Either way, what a request sends reaches the workflow as untrusted input.";
+  "When set (at least 32 characters), each request must carry an X-Jarvis-Timestamp header (Unix seconds) and an X-Jarvis-Signature header holding the hex HMAC-SHA256 of the timestamp, a dot, and the raw request body, keyed with this secret; other requests, and requests more than 5 minutes old, are refused. Without one, anyone who has this workflow's webhook URL can start it. Either way, what a request sends reaches the workflow as untrusted input.";
 
-export function WebhookTriggerFields({ secret, onSetSecret }: {
+/** #1153: a secret saved before timestamps also accepts a body-only signature, which a captured request can replay. */
+export const WEBHOOK_LEGACY_SIGNING_NOTE =
+  "Legacy signing: this webhook also accepts an X-Jarvis-Signature over the raw body alone, with no timestamp, so a captured request can be sent again later. Senders that already send X-Jarvis-Timestamp work either way; require timestamps once all of them do. Requiring them applies to the live webhook once the version that runs it includes the change.";
+
+export function WebhookTriggerFields({ secret, onSetSecret, scheme, onRequireTimestamps }: {
   secret: unknown;
   onSetSecret: (value: string) => void;
+  /** The trigger's `signature_scheme`; anything but "timestamped" is legacy. */
+  scheme?: unknown;
+  onRequireTimestamps?: () => void;
 }): React.ReactElement {
   const [shown, setShown] = useState(false);
+  const legacy = typeof secret === "string" && secret !== "" && scheme !== "timestamped";
   return (
     <>
       <Field label="Signing secret (optional)">
@@ -4460,6 +4470,14 @@ export function WebhookTriggerFields({ secret, onSetSecret }: {
         {shown ? "Hide secret" : "Show secret"}
       </Button>
       <p className="wf-props__hint">{WEBHOOK_SECRET_HINT}</p>
+      {legacy ? (
+        <>
+          <p className="wf-props__hint">{WEBHOOK_LEGACY_SIGNING_NOTE}</p>
+          {onRequireTimestamps ? (
+            <Button variant="ghost" size="sm" onClick={onRequireTimestamps}>Require timestamps</Button>
+          ) : null}
+        </>
+      ) : null}
     </>
   );
 }

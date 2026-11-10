@@ -15,6 +15,8 @@ import { literalReadHosts, MAX_READ_HOSTS, normalizeReadHosts, parseReadHosts } 
 import { createFlow, getFlow } from "./flow";
 import { createDraftVersion, type FlowTriggerNode } from "./flow-version";
 import { getFlowReadHosts, setFlowReadHosts } from "./flow-read-hosts";
+import { createFlowRun } from "./flow-run";
+import { createJarvisReadHostsRoute } from "../../sandbox-api/routes/jarvis-pieces";
 
 const HTTP = "@activepieces/piece-http";
 const step = (name: string, input: Record<string, unknown>, next?: FlowTriggerNode): FlowTriggerNode => ({
@@ -64,6 +66,18 @@ describe("the list itself", () => {
     const chain = steps.reduceRight<FlowTriggerNode | undefined>((next, [name, input]) => step(name, input, next), undefined);
     const trigger: FlowTriggerNode = { name: "trigger", type: "EMPTY", nextAction: chain };
     expect(literalReadHosts(trigger)).toEqual(["api.example.com", "default.example.com", "status.example.com"]);
+  });
+
+  test("#1153: it also seeds the literal host of a file URL in an HTTP step's form data, whatever the method; never a templated one", () => {
+    const form = (rows: Array<Record<string, unknown>>) => ({ method: "POST", url: "https://upload.example.com/", body_type: "form_data", body: { data: rows } });
+    const trigger: FlowTriggerNode = { name: "trigger", type: "EMPTY", nextAction: step("upload", form([
+      { fieldName: "doc", fieldType: "file", fileFieldValue: "https://Files.Example.com/report.pdf" },
+      { fieldName: "other", fieldType: "file", fileFieldValue: "https://{{trigger.host}}/x.pdf" },
+      { fieldName: "carried", fieldType: "file", fileFieldValue: "https://ok.example.com/?d={{trigger.body}}" },
+      { fieldName: "note", fieldType: "text", textFieldValue: "https://text.example.com/" },
+    ])) };
+    // The query is filled at run time but the host is the one a person wrote, as for a GET.
+    expect(literalReadHosts(trigger)).toEqual(["files.example.com", "ok.example.com"]);
   });
 });
 
@@ -120,6 +134,19 @@ describe("POST /api/workflows/:id/read-hosts", () => {
   });
 });
 
+describe("#1153: the engine reads the run's list for its file downloads", () => {
+  test("the route answers the list of the token's own run's flow, and nothing for a run it cannot find", async () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Files" });
+    setFlowReadHosts(flow.id, ["files.example.com"]);
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    const ask = async (claims: Record<string, unknown>) => (await createJarvisReadHostsRoute()({ req: new Request("http://x/v1/jarvis/read-hosts"), claims, params: {} } as never)).json();
+    expect(await ask({ runId: run.id, projectId: flow.project_id, sandboxId: "s" })).toEqual({ hosts: ["files.example.com"] });
+    expect(await ask({ runId: run.id, projectId: "another-project", sandboxId: "s" })).toEqual({ hosts: [] });
+    expect(await ask({ runId: "missing", projectId: flow.project_id, sandboxId: "s" })).toEqual({ hosts: [] });
+  });
+});
+
 describe("existing flows are grandfathered on upgrade", () => {
   test("a published flow gets its literal GET hosts, stamped upgrade, without touching updated; others get nothing", () => {
     closeWorkflowDb();
@@ -145,6 +172,8 @@ describe("existing flows are grandfathered on upgrade", () => {
       db.exec("ALTER TABLE flow DROP COLUMN read_hosts_granted_at");
       db.exec("ALTER TABLE flow DROP COLUMN read_hosts_grant");
       db.exec("ALTER TABLE flow DROP COLUMN read_hosts");
+      // And the file-host marker, as a database from before both had neither.
+      db.exec("ALTER TABLE flow DROP COLUMN read_hosts_files_seeded");
       closeWorkflowDb();
       initWorkflowDb(path);
       createSchema(getWorkflowDb());
@@ -157,6 +186,44 @@ describe("existing flows are grandfathered on upgrade", () => {
       setFlowReadHosts(live.id, []);
       createSchema(getWorkflowDb());
       expect(getFlowReadHosts(live.id)!.hosts).toEqual([]);
+    } finally {
+      closeWorkflowDb();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("#1153 review: a database that already had the list (v0.17.6+) gets its published flows' literal file hosts merged in, once", () => {
+    closeWorkflowDb();
+    const directory = mkdtempSync(join(tmpdir(), "jarvis-read-hosts-files-"));
+    const path = join(directory, "v0176.db");
+    try {
+      initWorkflowDb(path);
+      const upload = (url: string) => step("upload", { method: "POST", url: "https://upload.example.com/", body_type: "form_data",
+        body: { data: [{ fieldName: "doc", fieldType: "file", fileFieldValue: url }] } });
+      const publish = (trigger: FlowTriggerNode) => {
+        const flow = createFlow();
+        const v = createDraftVersion({ flowId: flow.id, displayName: "Live", trigger });
+        getWorkflowDb().run(`UPDATE flow_version SET state = 'LOCKED' WHERE id = ?`, [v.id]);
+        getWorkflowDb().run(`UPDATE flow SET published_version_id = ?, status = 'ENABLED' WHERE id = ?`, [v.id, flow.id]);
+        return flow.id;
+      };
+      const listed = publish({ name: "trigger", type: "EMPTY", nextAction: upload("https://files.example.com/a.pdf") });
+      setFlowReadHosts(listed, ["api.example.com"]);
+      const grantedAt = getFlowReadHosts(listed)!.grantedAt;
+      const unlisted = publish({ name: "trigger", type: "EMPTY", nextAction: upload("https://files.example.com/b.pdf") });
+      const templated = publish({ name: "trigger", type: "EMPTY", nextAction: upload("https://{{trigger.host}}/b.pdf") });
+      // Rewind to v0.17.6: the list is there, the file seed is not.
+      getWorkflowDb().exec("ALTER TABLE flow DROP COLUMN read_hosts_files_seeded");
+      closeWorkflowDb();
+      initWorkflowDb(path);
+      createSchema(getWorkflowDb());
+      expect(getFlowReadHosts(listed)).toMatchObject({ hosts: ["api.example.com", "files.example.com"], grantedBy: "user", grantedAt });
+      expect(getFlowReadHosts(unlisted)).toMatchObject({ hosts: ["files.example.com"], grantedBy: "upgrade" });
+      expect(getFlowReadHosts(templated)!.hosts).toEqual([]);
+      // Once: a person's later change survives the next boot.
+      setFlowReadHosts(unlisted, []);
+      createSchema(getWorkflowDb());
+      expect(getFlowReadHosts(unlisted)!.hosts).toEqual([]);
     } finally {
       closeWorkflowDb();
       rmSync(directory, { recursive: true, force: true });

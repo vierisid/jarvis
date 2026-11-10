@@ -15,7 +15,7 @@ import { assertNotNullOrUndefined } from '@activepieces/shared';
 import { httpMethodDropdown } from '../common/props';
 import axios from 'axios';
 // Jarvis (#961): the workflow egress guard.
-import { egressGuardedAxios, egressPolicyFromEnv, egressRefusalIn } from '../../../../../../../../runtime/http-egress';
+import { EgressRefusedError, egressGuardedAxios, egressPolicyFromEnv, egressRefusalIn } from '../../../../../../../../runtime/http-egress';
 
 export const query = createAction({
   name: 'send_request',
@@ -129,7 +129,7 @@ export const query = createAction({
     // another origin is refused (a GraphQL request is never a read), and a
     // proxy, which would pick the address itself, is refused.
     if (use_proxy) {
-      throw new Error('Jarvis does not send GraphQL steps through a proxy: the address check would not apply. Turn off "Use Proxy".');
+      throw new EgressRefusedError('Jarvis does not send GraphQL steps through a proxy: the address check would not apply. Turn off "Use Proxy".');
     }
     // === END JARVIS PATCH ===
     try {

@@ -10,7 +10,7 @@ import type { LookupAddress } from 'node:dns';
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { MAX_RESPONSE_BYTES, ResponseTooLargeError, resolveGuardedAddress, addressAllowed, assertHostAllowed, canonicalAddress, classifyAddress, destinationAllowed, egressGuardedAxios, egressPolicyFromEnv,
-  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, EGRESS_POLICY_ENV, EgressRefusedError, readHostKey, withReadHosts } from './http-egress';
+  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, defaultGateways, defaultGateways6, ownAddresses, HOST_ADDRESSES_ENV, EGRESS_POLICY_ENV, EgressRefusedError, readHostKey, refusedBeforeSend, REQUEST_TIMEOUT_ENV, requestTimeoutMs, withReadHosts } from './http-egress';
 
 describe('which addresses the HTTP step may reach', () => {
   const table: Array<[string, 'public' | 'private' | 'blocked']> = [
@@ -53,6 +53,39 @@ describe('which addresses the HTTP step may reach', () => {
     for (const address of real) expect(canonicalAddress(address)).toBe(address);
   });
 
+  test('#1153: inside a container the default gateway (the host end of the bridge) and the host addresses the operator names are this machine too', () => {
+    // A real Docker bridge table: the default route via 172.17.0.1, and the bridge subnet with no gateway.
+    const table = 'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n'
+      + 'eth0\t00000000\t010011AC\t0003\t0\t0\t0\t00000000\t0\t0\t0\n'
+      + 'eth0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n';
+    expect(defaultGateways(table)).toEqual(['172.17.0.1']);
+    const own = ownAddresses({ JARVIS_HOST_ADDRESSES: '192.168.1.20, ::ffff:10.0.0.9, not-an-address' }, () => table);
+    for (const address of ['172.17.0.1', '192.168.1.20', '10.0.0.9']) {
+      expect(`${address}: ${destinationAllowed(address, 'private-allowed', own)}`).toBe(`${address}: false`);
+    }
+    // #1153 review: on a compose network the default gateway is another bridge's; docker0's 172.17.0.1 is the host too.
+    const compose = ownAddresses({}, () => table.replace('010011AC', '010012AC'));
+    for (const address of ['172.18.0.1', '172.17.0.1']) expect(`${address}: ${compose.has(address)}`).toBe(`${address}: true`);
+    // A gateway outside the bridge pool is a LAN router (host or macvlan networking, Podman pasta): still reachable.
+    expect(ownAddresses({}, () => table.replace('010011AC', '0101A8C0')).has('192.168.1.1')).toBe(interfaceAddresses().has('192.168.1.1'));
+    // The IPv6 default route's next hop.
+    expect(defaultGateways6('00000000000000000000000000000000 00 00000000000000000000000000000000 00 fd000000000000000000000000000001 00000400 00000001 00000000 00000003 eth0\n')).toEqual(['fd00:0:0:0:0:0:0:1']);
+    for (const address of [] as string[]) {
+      expect(`${address}: ${destinationAllowed(address, 'private-allowed', own)}`).toBe(`${address}: false`);
+    }
+    expect(destinationAllowed('192.168.1.21', 'private-allowed', own)).toBe(true);
+    // The engine is handed the operator's list under its own name.
+    expect(ownAddresses({ [HOST_ADDRESSES_ENV]: '192.168.1.30' }, () => null).has('192.168.1.30')).toBe(true);
+    // Outside a container no route table is read: a LAN's router stays reachable for a self-hosted install.
+    expect(ownAddresses({}, () => null).has('172.17.0.1')).toBe(interfaceAddresses().has('172.17.0.1'));
+    // The default check every request makes reads them.
+    const before = process.env[HOST_ADDRESSES_ENV];
+    process.env[HOST_ADDRESSES_ENV] = '93.184.216.34';
+    try { expect(destinationAllowed('93.184.216.34', 'public-only')).toBe(false); }
+    finally { if (before === undefined) delete process.env[HOST_ADDRESSES_ENV]; else process.env[HOST_ADDRESSES_ENV] = before; }
+    expect(destinationAllowed('93.184.216.34', 'public-only')).toBe(true);
+  });
+
   test('an engine told nothing applies the hosted rule', () => {
     expect(egressPolicyFromEnv({})).toBe('public-only');
     expect(egressPolicyFromEnv({ [EGRESS_POLICY_ENV]: 'yes' })).toBe('public-only');
@@ -91,6 +124,8 @@ describe('the guarded client connects only where it checked', () => {
       if (req.url === '/to-blocked-name') { res.writeHead(302, { location: `http://internal.test:${port}/secret` }); res.end(); return; }
       if (req.url === '/to-other-origin') { res.writeHead(307, { location: `http://other.test:${port}/landing` }); res.end(); return; }
       if (req.url === '/to-same-origin') { res.writeHead(307, { location: '/landing' }); res.end(); return; }
+      // A byte every 500 ms for 4 s: never idle long enough for a socket idle timer.
+      if (req.url === '/drip') { res.writeHead(200); let n = 0; const t = setInterval(() => { if (res.destroyed) { clearInterval(t); return; } res.write('x'); if (++n === 8) { clearInterval(t); res.end(); } }, 500); return; }
       const big = /^\/big\?n=(\d+)(&chunked)?$/u.exec(req.url ?? '');
       if (big) {
         const n = Number(big[1]);
@@ -124,8 +159,10 @@ describe('the guarded client connects only where it checked', () => {
   // A short timeout: were the guard to regress, a refusal test would otherwise
   // wait minutes on an unroutable address instead of failing.
   const FAST = 3_000;
-  const client = (read: boolean, allowAddress?: (a: string) => boolean) =>
-    egressGuardedAxios(axios, 'public-only', { read, resolve, timeoutMs: FAST, ...(allowAddress ? { allowAddress } : {}) });
+  const client = (read: boolean, allowAddress?: (a: string) => boolean, timeoutMs = FAST) =>
+    egressGuardedAxios(axios, 'public-only', { read, resolve, timeoutMs, ...(allowAddress ? { allowAddress } : {}) });
+  // The timeout is a wall clock since #1153: a test moving 7 MiB bodies gets room for a loaded machine.
+  const BULK = 30_000;
 
   test('#1153: a response larger than a step can carry is refused, with or without a length; up to it is read', async () => {
     // The engine's run-data ceiling (logging-utils.ts: 10 MiB default, 256 KiB error offset), base64 for a binary body.
@@ -134,7 +171,7 @@ describe('the guarded client connects only where it checked', () => {
     expect(logging).toContain('const ERROR_OFFSET = 256 * 1024');
     expect(MAX_RESPONSE_BYTES).toBe(((10 * 1024 * 1024 - 256 * 1024) * 3) / 4);
     expect(Number.isInteger(MAX_RESPONSE_BYTES)).toBe(true);
-    const get = (n: number, chunked = false) => client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/big?n=${n}${chunked ? '&chunked' : ''}`, responseType: 'arraybuffer' });
+    const get = (n: number, chunked = false) => client(true, onlyLocal, BULK).request({ method: 'GET', url: `http://ops.test:${port}/big?n=${n}${chunked ? '&chunked' : ''}`, responseType: 'arraybuffer' });
     expect((await get(MAX_RESPONSE_BYTES)).data.byteLength).toBe(MAX_RESPONSE_BYTES);
     await expect(get(MAX_RESPONSE_BYTES + 1)).rejects.toBeInstanceOf(ResponseTooLargeError);
     await expect(get(MAX_RESPONSE_BYTES + 1, true)).rejects.toBeInstanceOf(ResponseTooLargeError);
@@ -143,7 +180,7 @@ describe('the guarded client connects only where it checked', () => {
     // Raised after the request went out, which a "refused, so not sent" reading must not miss.
     expect(new ResponseTooLargeError('x').afterSend).toBe(true);
     // A larger cap a request asks for is not honoured; a smaller one is.
-    await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/big?n=${MAX_RESPONSE_BYTES + 1}`, maxContentLength: -1 })).rejects.toThrow(/maxContentLength/);
+    await expect(client(true, onlyLocal, BULK).request({ method: 'GET', url: `http://ops.test:${port}/big?n=${MAX_RESPONSE_BYTES + 1}`, maxContentLength: -1 })).rejects.toThrow(/maxContentLength/);
     await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/big?n=2048`, maxContentLength: 1024 })).rejects.toThrow(/maxContentLength/);
     // A stream would escape the cap, so it is refused; redirects stay at follow-redirects' default or fewer.
     await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/ok`, responseType: 'stream' })).rejects.toBeInstanceOf(EgressRefusedError);
@@ -154,7 +191,7 @@ describe('the guarded client connects only where it checked', () => {
     await probe.request({ method: 'GET', url: `http://ops.test:${port}/ok`, maxRedirects: 1000 });
     expect(seenConfig.maxRedirects).toBe(21);
     // The engine's file download is held to the same size.
-    await expect(guardedFileDownload(axios, `http://ops.test:${port}/big?n=${MAX_RESPONSE_BYTES + 1}`, 'public-only', { resolve, allowAddress: onlyLocal, timeoutMs: FAST }))
+    await expect(guardedFileDownload(axios, `http://ops.test:${port}/big?n=${MAX_RESPONSE_BYTES + 1}`, 'public-only', { resolve, allowAddress: onlyLocal, timeoutMs: BULK }))
       .rejects.toBeInstanceOf(ResponseTooLargeError);
   }, 30_000);
 
@@ -201,6 +238,72 @@ describe('the guarded client connects only where it checked', () => {
     expect(seen).toEqual([`POST ops.test:${port} /to-same-origin`, `POST ops.test:${port} /landing`, `POST ops.test:${port} /to-other-origin`]);
     // A read may follow it.
     expect((await client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/to-other-origin` })).data).toEqual({ ok: true, url: '/landing' });
+  });
+
+  test('#1153: a file download held to the read list: an unlisted host is refused before any connection, naming the host and the list; a redirect off it too', async () => {
+    seen.length = 0;
+    const download = (url: string, readHosts: string[]) => guardedFileDownload(axios, url, 'public-only', { resolve, allowAddress: onlyLocal, timeoutMs: FAST, readHosts });
+    await expect(download(`http://ops.test:${port}/ok`, ['other.test'])).rejects.toThrow(/File download refused: ops\.test is not on this workflow's read list.*Hosts it may read without asking/);
+    await expect(download(`http://ops.test:${port}/ok`, [])).rejects.toBeInstanceOf(EgressRefusedError);
+    expect(seen).toEqual([]);
+    expect((await download(`http://ops.test:${port}/ok`, ['ops.test'])).data.toString()).toContain('"ok":true');
+    await expect(download(`http://ops.test:${port}/to-other-origin`, ['ops.test'])).rejects.toThrow(/a redirect goes to other\.test, which is not on this flow's read list/);
+    expect(seen).toEqual([`GET ops.test:${port} /ok`, `GET ops.test:${port} /to-other-origin`]);
+  });
+
+  test('#1153 review: a timed-out request is a refusal after sending, so the pieces fail the step on it and a file field is never sent empty', async () => {
+    const timedOut = await client(true, onlyLocal, 1000).request({ method: 'GET', url: `http://ops.test:${port}/drip` }).catch((e: unknown) => e);
+    expect(egressRefusalIn(timedOut)).toBeInstanceOf(EgressRefusedError);
+    expect(refusedBeforeSend(timedOut)).toBe(false);
+    const download = await guardedFileDownload(axios, `http://ops.test:${port}/drip`, 'public-only', { resolve, allowAddress: onlyLocal, timeoutMs: 1000, readHosts: ['ops.test'] }).catch((e: unknown) => e);
+    expect(String((download as Error).message)).toMatch(/did not finish within 1 seconds/);
+    expect(egressRefusalIn(download)).toBeInstanceOf(EgressRefusedError);
+  }, 20_000);
+
+  test('#1153: a request is held to a wall clock, which a server sending a byte at a time cannot hold open', async () => {
+    // axios's own timeout alone did not stop this response (an idle timer): measured, it completed after 4 s under timeout 1000.
+    const started = Date.now();
+    // The step's own shorter timeout fires as axios reports its own, so the step's failure mode still applies (#1153 review).
+    const own = await client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/drip`, timeout: 1000 }).catch((e: unknown) => e);
+    expect(own).toMatchObject({ code: 'ECONNABORTED', message: 'timeout of 1000ms exceeded' });
+    expect(egressRefusalIn(own)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(3000);
+    // With no timeout of its own, the flow budget the daemon passes caps it.
+    const before = process.env[REQUEST_TIMEOUT_ENV];
+    process.env[REQUEST_TIMEOUT_ENV] = '1000';
+    try {
+      await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/drip` })).rejects.toThrow(/did not finish within 1 seconds/);
+    } finally { if (before === undefined) delete process.env[REQUEST_TIMEOUT_ENV]; else process.env[REQUEST_TIMEOUT_ENV] = before; }
+    expect(requestTimeoutMs({})).toBe(600_000);
+    expect(requestTimeoutMs({ [REQUEST_TIMEOUT_ENV]: 'nonsense' })).toBe(600_000);
+  }, 20_000);
+
+  test('#1153: a refusal before sending reads as not sent; one after a request went out (a refused redirect) does not', async () => {
+    const reason = async (p: Promise<unknown>) => { try { await p; } catch (error) { return error; } throw new Error('expected a refusal'); };
+    // Before: the name resolves inward, an IP literal, a host off the read list. Nothing reached the server.
+    seen.length = 0;
+    for (const before of [
+      await reason(client(false).request({ method: 'POST', url: `http://ops.test:${port}/ok`, data: { a: 1 }, maxRedirects: 0 })),
+      await reason(client(false).request({ method: 'POST', url: `http://127.0.0.1:${port}/ok`, data: { a: 1 } })),
+      await reason(withReadHosts(['other.test'], () => client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/ok` }))),
+    ]) expect(refusedBeforeSend(before)).toBe(true);
+    expect(seen).toEqual([]);
+    // After: each of these requests reached the server, and only its redirect was refused,
+    // whether by the hop check (another origin, a metadata literal) or by the next hop's lookup.
+    for (const after of [
+      await reason(client(false, onlyLocal).request({ method: 'POST', url: `http://ops.test:${port}/to-other-origin`, data: { a: 1 } })),
+      await reason(client(false, onlyLocal).request({ method: 'POST', url: `http://ops.test:${port}/to-metadata`, data: { a: 1 } })),
+      await reason(client(false, onlyLocal).request({ method: 'POST', url: `http://ops.test:${port}/to-blocked-name`, data: { a: 1 } })),
+    ]) {
+      expect(after).toBeInstanceOf(EgressRefusedError);
+      expect(refusedBeforeSend(after)).toBe(false);
+    }
+    expect(seen.length).toBe(3);
+    // A transport error is not a refusal, and another bundle's copy keeps afterSend.
+    expect(refusedBeforeSend(Object.assign(new Error('ECONNRESET'), { code: 'ECONNRESET' }))).toBe(false);
+    expect(refusedBeforeSend({ cause: Object.assign(new Error('x'), { code: 'ERR_EGRESS_REFUSED', afterSend: true }) })).toBe(false);
+    expect(refusedBeforeSend({ cause: Object.assign(new Error('x'), { code: 'ERR_EGRESS_REFUSED' }) })).toBe(true);
+    expect(refusedBeforeSend(new ResponseTooLargeError('big'))).toBe(false);
   });
 
   test('#1153: a read that ran without asking reaches listed hosts only, its redirects included', async () => {
