@@ -168,9 +168,9 @@ const STATEMENTS: string[] = [
     read_hosts TEXT,
     read_hosts_grant TEXT,
     read_hosts_granted_at INTEGER,
-    -- #1153: set once the upgrade that holds file-field downloads to the read
-    -- list has added the literal file hosts (seedFileReadHosts). Its only job
-    -- is to mark that one-time step on databases that already had the list.
+    -- #1153: never written. Its being added marks the one-time seed of
+    -- literal file hosts into existing read lists (seedFileReadHosts) on a
+    -- database that already had the list.
     read_hosts_files_seeded INTEGER,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
@@ -675,14 +675,17 @@ function seedFileReadHosts(db: Database): void {
       continue;
     }
     const current = parseReadHosts(candidate.read_hosts);
-    const merged = [...new Set([...current, ...literalFileHosts(trigger)])].sort().slice(0, MAX_READ_HOSTS);
+    // Added after the existing hosts and cut there, so the seed never drops one.
+    const added = literalFileHosts(trigger).filter((h) => !current.includes(h));
+    const merged = [...current, ...added].slice(0, MAX_READ_HOSTS).sort();
     if (merged.length === current.length) continue;
-    db.run(`UPDATE flow SET read_hosts = ?, read_hosts_grant = ?, read_hosts_granted_at = ? WHERE id = ?`, [
-      JSON.stringify(merged),
-      candidate.read_hosts_grant === "user" || candidate.read_hosts_grant === "upgrade" ? candidate.read_hosts_grant : "upgrade",
-      at,
-      candidate.id,
-    ]);
+    if (current.length > 0) {
+      // A list that exists keeps its grant and the time it was granted.
+      db.run(`UPDATE flow SET read_hosts = ? WHERE id = ?`, [JSON.stringify(merged), candidate.id]);
+    } else {
+      db.run(`UPDATE flow SET read_hosts = ?, read_hosts_grant = 'upgrade', read_hosts_granted_at = ? WHERE id = ?`, [
+        JSON.stringify(merged), at, candidate.id]);
+    }
   }
 }
 

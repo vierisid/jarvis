@@ -939,8 +939,21 @@ function redactValue(value: string): string {
 }
 
 /** Credential-named fields, at any depth `bound()` keeps, inside objects and arrays. */
-/** A value that is a scheme and one token of 12+ characters with letters and digits (`Bearer x`, `Basic x`, `SSWS x`), under whatever name it is stored; not prose such as "Basic membership" or "Token expired.". */
-const SCHEMED_CREDENTIAL = /^\s*(?:bearer|basic|token|digest|apikey|api-key|ssws|oauth|key)\s+(?=[A-Za-z0-9._~+/=:-]*\d)(?=[A-Za-z0-9._~+/=:-]*[A-Za-z])[A-Za-z0-9._~+/=:-]{12,}\s*$/iu;
+/**
+ * A value that is a scheme and one token (`Bearer x`, `Basic x`, `SSWS x`),
+ * under whatever name it is stored. Prose is told apart by the token's shape:
+ * a credential has a digit, mixed case, a symbol inside it, or 20+ characters;
+ * "Basic membership", "Token expired." and "Key takeaways" have none.
+ */
+const SCHEMED_PREFIX = /^\s*(?:bearer|basic|token|digest|apikey|api-key|ssws|oauth|key)\s+([A-Za-z0-9._~+/=:-]{8,})\s*$/iu;
+const SCHEMED_CREDENTIAL = {
+  test(value: string): boolean {
+    const token = SCHEMED_PREFIX.exec(value)?.[1];
+    if (!token) return false;
+    return /\d/u.test(token) || (/[a-z]/u.test(token) && /[A-Z]/u.test(token))
+      || /[._~+/=:-]/u.test(token.slice(0, -1)) || token.length >= 20;
+  },
+};
 
 function redactNamed(value: unknown, depth = 0): unknown {
   // Past any depth `bound()` keeps; a stored input (#1153) can go deeper, and

@@ -66,6 +66,9 @@ describe('what the model reads', () => {
     const g = graph(step('call', { input: { ...input(), body_type: 'json', body: { data: { note: 'Basic plan upgrade', a: 'Key takeaways', b: 'Token expired.', c: 'Basic membership', other: 'SSWS 00abcdefghij' } } } }));
     const seen = JSON.stringify(versionAsModelSees({ trigger: g }));
     for (const prose of ['Basic plan upgrade', 'Key takeaways', 'Token expired.', 'Basic membership']) expect(seen).toContain(prose);
+    const tokens = { a: 'Basic dXNlcjpwYXNz', b: 'Bearer abcdefghijklmnopqrstuvwxyzABCDEF', c: 'Token 1234567890123456', d: 'Bearer abc12345' };
+    const hidden = JSON.stringify(versionAsModelSees({ trigger: graph(step('call', { input: { ...input(), body_type: 'json', body: { data: tokens } } })) }));
+    for (const value of Object.values(tokens)) expect(hidden).not.toContain(value.split(' ')[1]!);
     expect(seen).not.toContain('00abcdefghij');
   });
 

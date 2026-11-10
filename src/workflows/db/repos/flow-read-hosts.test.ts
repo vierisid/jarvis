@@ -172,6 +172,8 @@ describe("existing flows are grandfathered on upgrade", () => {
       db.exec("ALTER TABLE flow DROP COLUMN read_hosts_granted_at");
       db.exec("ALTER TABLE flow DROP COLUMN read_hosts_grant");
       db.exec("ALTER TABLE flow DROP COLUMN read_hosts");
+      // And the file-host marker, as a database from before both had neither.
+      db.exec("ALTER TABLE flow DROP COLUMN read_hosts_files_seeded");
       closeWorkflowDb();
       initWorkflowDb(path);
       createSchema(getWorkflowDb());
@@ -207,6 +209,7 @@ describe("existing flows are grandfathered on upgrade", () => {
       };
       const listed = publish({ name: "trigger", type: "EMPTY", nextAction: upload("https://files.example.com/a.pdf") });
       setFlowReadHosts(listed, ["api.example.com"]);
+      const grantedAt = getFlowReadHosts(listed)!.grantedAt;
       const unlisted = publish({ name: "trigger", type: "EMPTY", nextAction: upload("https://files.example.com/b.pdf") });
       const templated = publish({ name: "trigger", type: "EMPTY", nextAction: upload("https://{{trigger.host}}/b.pdf") });
       // Rewind to v0.17.6: the list is there, the file seed is not.
@@ -214,7 +217,7 @@ describe("existing flows are grandfathered on upgrade", () => {
       closeWorkflowDb();
       initWorkflowDb(path);
       createSchema(getWorkflowDb());
-      expect(getFlowReadHosts(listed)).toMatchObject({ hosts: ["api.example.com", "files.example.com"], grantedBy: "user" });
+      expect(getFlowReadHosts(listed)).toMatchObject({ hosts: ["api.example.com", "files.example.com"], grantedBy: "user", grantedAt });
       expect(getFlowReadHosts(unlisted)).toMatchObject({ hosts: ["files.example.com"], grantedBy: "upgrade" });
       expect(getFlowReadHosts(templated)!.hosts).toEqual([]);
       // Once: a person's later change survives the next boot.
