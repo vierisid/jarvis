@@ -1,7 +1,7 @@
 import type { ToolDefinition } from '../../actions/tools/registry';
 import type { ActionCategory } from '../../roles/authority';
 import { ActionOutcomeError } from '../../actions/action-outcome';
-import { desktopRefusal, isDesktopEnabled, isScreenCaptureEnabled, SCREEN_CAPTURE_TOOLS, toolAlwaysUsesDesktop } from '../../actions/tools/desktop-guard';
+import { desktopRefusal, isDesktopEnabled, isScreenCaptureEnabled, SCREEN_READ_TOOLS, toolAlwaysUsesDesktop } from '../../actions/tools/desktop-guard';
 import { BOUNDED_TOOLS } from './tool-capability';
 import { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview } from '../../authority/ui-intent';
 export { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview };
@@ -162,8 +162,8 @@ export function workflowToolSwitchRefusal(tool: ToolDefinition): { code: 'DESKTO
   if (!isDesktopEnabled() && toolAlwaysUsesDesktop(tool)) {
     return { code: 'DESKTOP_DISABLED', message: `${tool.name} is unavailable while desktop control is turned off (desktop.enabled: false). Turn it on in Settings > General > Desktop control first.` };
   }
-  if (SCREEN_CAPTURE_TOOLS.has(tool.name) && !isScreenCaptureEnabled()) {
-    return { code: 'SCREEN_CAPTURE_DISABLED', message: `${tool.name} is unavailable while screen awareness is turned off. Turn awareness on first.` };
+  if (SCREEN_READ_TOOLS.has(tool.name) && !isScreenCaptureEnabled()) {
+    return { code: 'SCREEN_CAPTURE_DISABLED', message: `${tool.name} reads the screen, so it is unavailable while screen awareness is turned off. Turn awareness on first.` };
   }
   return null;
 }
@@ -177,7 +177,7 @@ export function workflowToolSwitchRefusal(tool: ToolDefinition): { code: 'DESKTO
 export function switchedOffCard(registry: { get(name: string): ToolDefinition | undefined } | null | undefined) {
   return (request: { tool_name: string; tool_arguments: string | null }): boolean => {
     const tool = registry?.get(request.tool_name);
-    if (!tool) return /^desktop_/.test(request.tool_name) || SCREEN_CAPTURE_TOOLS.has(request.tool_name)
+    if (!tool) return /^desktop_/.test(request.tool_name) || SCREEN_READ_TOOLS.has(request.tool_name)
       ? !isDesktopEnabled() || !isScreenCaptureEnabled() : false;
     let args: Record<string, unknown>;
     try { args = JSON.parse(request.tool_arguments ?? '{}'); } catch { return true; }

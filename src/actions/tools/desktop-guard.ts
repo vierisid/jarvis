@@ -151,15 +151,32 @@ export function isScreenCaptureEnabled(): boolean {
 }
 /** The tools that capture the screen. */
 export const SCREEN_CAPTURE_TOOLS: ReadonlySet<string> = new Set(['desktop_screenshot', 'capture_screen', 'browser_screenshot']);
+/**
+ * Every tool that hands back what is on a screen (owner decision on #1314):
+ * the screenshots above and the reads that return the screen as TEXT -- a
+ * window's control tree, the window list, a found element, a page snapshot,
+ * the page a navigation lands on, the accessibility surface `ui_snapshot`
+ * reads and the surface diff `ui_act` returns. Turning awareness off stops
+ * all of them, on every path, as it stops the screenshots.
+ */
+export const SCREEN_READ_TOOLS: ReadonlySet<string> = new Set([...SCREEN_CAPTURE_TOOLS,
+  'desktop_snapshot', 'desktop_list_windows', 'desktop_find_element', 'browser_snapshot', 'browser_navigate', 'ui_snapshot', 'ui_act']);
+
+/** Whether this call hands back what is on a screen: a screen-read tool, or a desktop_click that reads a field's value. */
+export function callReadsScreen(name: string | undefined, params: Record<string, unknown>): boolean {
+  if (!name) return false;
+  return SCREEN_READ_TOOLS.has(name) || (name === 'desktop_click' && params.action === 'get_value');
+}
+
 export const SCREEN_CAPTURE_DISABLED_CODE = 'SCREEN_CAPTURE_DISABLED';
 export const SCREEN_CAPTURE_DISABLED_MESSAGE =
-  'Error: Screen awareness is turned off on this Jarvis, so this screenshot was not taken. '
-  + 'Jarvis will not capture the screen on any machine until the user turns awareness back on. Do NOT retry; tell the user awareness is off.';
+  'Error: Screen awareness is turned off on this Jarvis, so this was not run: Jarvis does not take screenshots or read what is on a screen '
+  + '(windows, controls, page text) on any machine until the user turns awareness back on. Do NOT retry; tell the user awareness is off.';
 
 /** The refusal text for this call, or null when it may run. */
 export function desktopRefusal(tool: Pick<ToolDefinition, 'category' | 'usesDesktop'> & { name?: string } | undefined, params: Record<string, unknown>): string | null {
   if (!tool) return null;
-  if (tool.name && SCREEN_CAPTURE_TOOLS.has(tool.name) && !isScreenCaptureEnabled()) return SCREEN_CAPTURE_DISABLED_MESSAGE;
+  if (callReadsScreen(tool.name, params) && !isScreenCaptureEnabled()) return SCREEN_CAPTURE_DISABLED_MESSAGE;
   if (isDesktopEnabled()) return null;
   return callUsesDesktop(tool, params) ? DESKTOP_DISABLED_MESSAGE : null;
 }
@@ -210,5 +227,5 @@ export function desktopOffSystemNote(): string | null {
 export function withoutDisabledDesktopTools<T extends Pick<ToolDefinition, 'category' | 'usesDesktop'> & { name?: string }>(tools: readonly T[]): readonly T[] {
   const screen = isScreenCaptureEnabled();
   if (isDesktopEnabled() && screen) return tools;
-  return tools.filter((tool) => !(!isDesktopEnabled() && toolAlwaysUsesDesktop(tool)) && !(!screen && tool.name && SCREEN_CAPTURE_TOOLS.has(tool.name)));
+  return tools.filter((tool) => !(!isDesktopEnabled() && toolAlwaysUsesDesktop(tool)) && !(!screen && tool.name && SCREEN_READ_TOOLS.has(tool.name)));
 }

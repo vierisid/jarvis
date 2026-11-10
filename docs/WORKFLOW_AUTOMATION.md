@@ -129,13 +129,17 @@ Practical consequences:
   card, like `ui_act` `get_value`; its `control_app` floor stays.
 - Desktop control off (`desktop.enabled: false`) refuses desktop tools when a
   workflow is composed or enabled, and closes desktop cards still waiting.
-  Screen awareness off refuses `desktop_screenshot`, `capture_screen` and
-  `browser_screenshot` on every path (the pebble's screen context and the
-  Brief's screenshot attachment included), and closes their waiting cards. A
-  run admitted while a switch is off says which switch, not that the action is
-  unsupported. The text reads of the screen (`desktop_snapshot`,
-  `desktop_list_windows`, `browser_snapshot`, `ui_snapshot`) follow desktop
-  control, not awareness.
+  Screen awareness off refuses everything that hands back what is on a
+  screen, in chat, delegations and direct steps alike, and hides it from the
+  model (owner decision on #1314): the screenshots (`desktop_screenshot`,
+  `capture_screen`, `browser_screenshot`) and the text reads
+  (`desktop_snapshot`, `desktop_list_windows`, `desktop_find_element`,
+  `browser_snapshot`, `browser_navigate`, which returns the page it lands on,
+  `ui_snapshot`, `ui_act`, which returns the surface it changed, and a
+  `desktop_click` with `action: get_value`), with `SCREEN_CAPTURE_DISABLED`.
+  The pebble's screen context and the Brief's screenshot attachment stop too,
+  and waiting cards for any of these are closed. A run admitted while a
+  switch is off says which switch, not that the action is unsupported.
 - Direct browser steps keep live snapshot generations per workflow run, across
   snapshot, approval and execution, independently of chat and other runs. Local
   and remote element actions use the snapshot that run actually read. Replaying
