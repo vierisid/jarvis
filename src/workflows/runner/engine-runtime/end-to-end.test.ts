@@ -35,7 +35,7 @@ import type { JarvisContextProvider } from "../../sandbox-api/routes/jarvis-cont
 import type { AgentDelegateFn } from "../../sandbox-api/routes/jarvis-agent";
 import type { WorkflowsStartFn } from "../../sandbox-api/routes/jarvis-workflows";
 import { findCachedBundle, buildEngineBundle, ENGINE_BUILD_PATHS } from "./build";
-import { buildAllJarvisPieces } from "./build-pieces";
+import { buildAllJarvisPieces, buildPiece } from "./build-pieces";
 import { EngineRuntime } from "./engine-runtime";
 import { EngineFlowExecutor } from './engine-flow-executor';
 import { Worker } from '../../queue/worker';
@@ -177,6 +177,27 @@ describe("Engine end-to-end (F gate)", () => {
       } finally { await handle.release(); }
     }
   }, 60_000);
+
+  // F-08: the default-value step takes a missing reference as empty; text around a reference does not.
+  for (const fixture of [
+    { label: 'a missing reference gets the default', value: '{{trigger.missing}}', payload: {}, expected: 'fb' },
+    { label: 'a missing reference inside text still fails', value: 'Hi {{trigger.missing}}', payload: {}, expected: null },
+  ]) {
+    test.skipIf(skipE2eTests)(`F-08: ${fixture.label}`, async () => {
+      const textHelper = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, 'pieces/core/text-helper');
+      if (buildOptIn) await buildPiece(textHelper);
+      const flow = createFlow();
+      const trigger: FlowTriggerNode = { name: 'trigger', type: 'EMPTY', nextAction: { name: 'fallback', type: 'PIECE', settings: { pieceName: '@activepieces/piece-text-helper', pieceVersion: '0.4.15', actionName: 'defaultValue', input: { value: fixture.value, defaultString: 'fb' } } } };
+      const version = createDraftVersion({ flowId: flow.id, displayName: fixture.label, trigger });
+      const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, environment: 'TESTING', payload: fixture.payload } as never);
+      const handle = await runtime!.acquire({ runId: run.id, projectId: DEFAULT_IDS.project });
+      try {
+        const result = await handle.executeFlow({ flowVersion: version, payload: fixture.payload } as never);
+        expect(result.status).toBe(fixture.expected ? 'SUCCEEDED' : 'FAILED');
+        if (!fixture.expected) expect(JSON.stringify(result.failedStep)).toContain('absent value');
+      } finally { await handle.release(); }
+    }, 60_000);
+  }
 
   const optional = '{{trigger.optional}}';
   const exists = { firstValue: optional, operator: 'EXISTS' };
