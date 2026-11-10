@@ -5,6 +5,9 @@ import "./explainer.css";
 /** Local structural projection. The optional host owns routing and persistence. */
 export interface ExplainerModel {
   theme: "light" | "dark";
+  /** Whether this install will propose routines ("on"), or not ("self" = off on a self-hosted install, "off" = off or unknown).
+   * Absent means unknown, which is shown as off: the explainer only promises what this install will do. */
+  suggestions?: "on" | "self" | "off";
   state: { kind: "ready" } | { kind: "pending"; message: string } | { kind: "error"; message: string };
 }
 
@@ -40,6 +43,25 @@ export const explainerCopy: Readonly<ExplainerCopy> = {
   alternativeDescription: "Describe it in Workflows. Jarvis builds the steps with you.",
 };
 
+/**
+ * Shown when prepared opportunities are off (self-hosted default, see
+ * docs/opportunity-routines.md) or not confirmed. Same layout, no promise that
+ * Jarvis will notice routines. Workflows is the path that works everywhere.
+ */
+export const explainerCopyWithoutSuggestions: Readonly<ExplainerCopy> = {
+  title: "Less repetition. More room to build.",
+  description: "Describe a recurring job in Workflows and Jarvis builds it with you. Nothing runs until you review it.",
+  steps: [
+    { title: "You describe the job", description: "The same lead follow-up you send every week." },
+    { title: "A workflow takes shape", description: "Jarvis drafts the steps for you to review." },
+    { title: "Your goal moves forward", description: "Less time on follow-ups, more on your next design partner." },
+  ],
+  alternativeTitle: "Want Jarvis to suggest routines?",
+  alternativeDescription: "Suggestions are off on this Jarvis for now.",
+};
+/** Small secondary detail for a self-hosted operator. */
+export const SELF_HOSTED_SUGGESTIONS_HINT = "To turn them on, set JARVIS_BRIEF_PREPARED_OPPORTUNITIES=1 and restart Jarvis.";
+
 export interface ExplainerViewProps {
   model: ExplainerModel;
   onBack: () => void;
@@ -48,7 +70,8 @@ export interface ExplainerViewProps {
 }
 
 /** A standalone, scrollable view. It neither requests permissions nor starts Awareness. */
-export function ExplainerView({ model, onBack, onContinue, copy = explainerCopy }: ExplainerViewProps) {
+export function ExplainerView({ model, onBack, onContinue, copy: copyOverride }: ExplainerViewProps) {
+  const copy = copyOverride ?? (model.suggestions === "on" ? explainerCopy : explainerCopyWithoutSuggestions);
   const headingId = useId();
   const pending = model.state.kind === "pending";
   return (
@@ -72,6 +95,7 @@ export function ExplainerView({ model, onBack, onContinue, copy = explainerCopy 
         <div className="on-explainer__alternative">
           <h2>{copy.alternativeTitle}</h2>
           <p>{copy.alternativeDescription}</p>
+          {!copyOverride && model.suggestions === "self" && <p className="on-explainer__hint">{SELF_HOSTED_SUGGESTIONS_HINT}</p>}
         </div>
 
         <div className="on-explainer__actions">

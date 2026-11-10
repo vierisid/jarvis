@@ -42,7 +42,7 @@ async function mount(model: Partial<ExplainerModel> = {}) {
   intents = [];
   networkCalls = 0;
   props = {
-    model: { theme: "light", state: { kind: "ready" }, ...model },
+    model: { theme: "light", suggestions: "on", state: { kind: "ready" }, ...model },
     onBack: () => intents.push("back"),
     onContinue: () => intents.push("continue"),
   };
@@ -75,6 +75,27 @@ describe("ON-U-02 optional explainer", () => {
     // Research/reading contexts are excluded by the routine classifier, so they cannot be the example.
     expect(text).not.toMatch(/\b(?:research|reading)\b/i);
     expect(text).not.toMatch(/\b(?:automatically|watches|records everything|saves you \d)/i);
+  });
+  test("with suggestions on, keeps the routine-proposal copy", async () => {
+    await mount({ suggestions: "on" });
+    expect(host.textContent).toContain("looks for multi-step routines you repeat on screen and asks whether to turn one into a workflow");
+    expect(host.textContent).not.toContain("JARVIS_BRIEF_PREPARED_OPPORTUNITIES");
+  });
+  test.each(["off", "self", undefined] as const)("with suggestions %p, does not promise Jarvis will ask to turn routines into workflows", async suggestions => {
+    await mount({ suggestions });
+    expect(host.textContent).not.toMatch(/asks whether to turn|looks for multi-step routines|Jarvis notices/);
+    expect(host.textContent).toContain("Describe a recurring job in Workflows and Jarvis builds it with you.");
+    expect(host.textContent).toContain("Suggestions are off on this Jarvis");
+    expect(Array.from(host.querySelectorAll("li h2")).map(el => el.textContent)).toEqual(["You describe the job", "A workflow takes shape", "Your goal moves forward"]);
+    expect(host.querySelectorAll("li").length).toBe(3);
+    expect(host.querySelectorAll("button").length).toBe(2);
+  });
+  test("names the operator setting only on a self-hosted install", async () => {
+    await mount({ suggestions: "self" });
+    expect(host.querySelector(".on-explainer__hint")?.textContent).toBe("To turn them on, set JARVIS_BRIEF_PREPARED_OPPORTUNITIES=1 and restart Jarvis.");
+    await mount({ suggestions: "off" });
+    expect(host.querySelector(".on-explainer__hint")).toBeNull();
+    expect(host.textContent).not.toContain("JARVIS_BRIEF_PREPARED_OPPORTUNITIES");
   });
   test.each(["Back", "Continue"])("%s emits exactly one intent without setup, permissions or theme writes", async label => {
     await mount();
