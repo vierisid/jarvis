@@ -9,11 +9,29 @@ import { FlowExecutorContext } from './context/flow-execution-context'
 import { flowExecutor } from './flow-executor'
 
 export const routerExecuter: BaseExecutor<RouterAction> = {
-    async handle({
-        action,
-        executionState,
-        constants,
-    }) {
+    async handle(params) {
+        try {
+            return await routeStep(params)
+        }
+        catch (error) {
+            // === JARVIS PATCH: a router that cannot resolve an operand fails as the router step ===
+            // Without this the error escaped as an engine error naming no step
+            // (a reference with no value ended the run on "<engine>").
+            const { action, executionState } = params
+            const message = utils.formatError(error as Error)
+            return executionState
+                .upsertStep(action.name, RouterStepOutput.init({ input: action.settings }).setStatus(StepOutputStatus.FAILED).setErrorMessage(message))
+                .setVerdict({ status: FlowRunStatus.FAILED, failedStep: { name: action.name, displayName: action.displayName, message } })
+            // === END JARVIS PATCH ===
+        }
+    },
+}
+
+const routeStep: BaseExecutor<RouterAction>['handle'] = async ({
+    action,
+    executionState,
+    constants,
+}) => {
         const resolver = constants.getPropsResolver(LATEST_CONTEXT_VERSION)
         const settings = withPresenceFallbacks(action.settings) as RouterActionSettings
         // Resolve metadata first, leaving condition operands untouched until
@@ -64,7 +82,6 @@ export const routerExecuter: BaseExecutor<RouterAction> = {
             default:
                 throw new EngineGenericError('RouterExecutionTypeNotSupportedError', `Router execution type ${resolvedInput.executionType} is not supported`)
         }
-    },
 }
 
 async function handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType }: {

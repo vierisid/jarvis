@@ -173,7 +173,9 @@ export const expressionPatches = {
     ['        return result ?? \'\'\n    }))',
       "        if (result === undefined) throw new Error('Workflow reference resolved to an absent value; supply a value or an explicit fallback')\n        return result\n    }))"],
     ["        console.warn('[evalInScope] Error evaluating variable', resultError)\n        return ''",
-      '        // Jarvis: an unsupported expression must stop the step before any effect.\n        throw resultError'],
+      '        // Jarvis: an unsupported expression must stop the step before any effect.\n        throw resultError'],    // A reference with no value is named in the error (absentReferenceError).
+    ["import { workflowInterpolationText } from", "import { absentReferenceError, workflowInterpolationText } from"],
+    ["throw new Error('Workflow reference resolved to an absent value; supply a value or an explicit fallback')", "throw absentReferenceError(js)"],
   ],
   'packages/server/engine/src/lib/variables/props-processor.ts': [
     ["import { getAuthPropertyForValue,",
@@ -263,6 +265,46 @@ export const expressionPatches = {
                     throw new EngineGenericError('UnsupportedOperatorError', \`Router condition operator \${String(operator)} is not supported\`)
                 // === END JARVIS PATCH ===
 `],
+    // Jarvis: a router that cannot resolve an operand fails as the router step, not as an engine error.
+    [`export const routerExecuter: BaseExecutor<RouterAction> = {
+    async handle({
+        action,
+        executionState,
+        constants,
+    }) {`,
+      `export const routerExecuter: BaseExecutor<RouterAction> = {
+    async handle(params) {
+        try {
+            return await routeStep(params)
+        }
+        catch (error) {
+            // === JARVIS PATCH: a router that cannot resolve an operand fails as the router step ===
+            // Without this the error escaped as an engine error naming no step
+            // (a reference with no value ended the run on "<engine>").
+            const { action, executionState } = params
+            const message = utils.formatError(error as Error)
+            return executionState
+                .upsertStep(action.name, RouterStepOutput.init({ input: action.settings }).setStatus(StepOutputStatus.FAILED).setErrorMessage(message))
+                .setVerdict({ status: FlowRunStatus.FAILED, failedStep: { name: action.name, displayName: action.displayName, message } })
+            // === END JARVIS PATCH ===
+        }
+    },
+}
+
+const routeStep: BaseExecutor<RouterAction>['handle'] = async ({
+    action,
+    executionState,
+    constants,
+}) => {`],
+    [`        }
+    },
+}
+
+async function handleRouterExecution`,
+      `        }
+}
+
+async function handleRouterExecution`],
   ],
   "packages/server/engine/src/lib/handler/piece-executor.ts": [
     ["import { ActionContext, backwardCompatabilityContextUtils, ", "import { helpScoutEngineProps } from \"../../../../../../../runtime/managed-help-scout-inputs\"\nimport { zoomEngineProps } from \"../../../../../../../runtime/managed-zoom-inputs\"\nimport { gitlabEngineProps } from \"../../../../../../../runtime/managed-gitlab-inputs\"\nimport { pipedriveEngineProps } from \"../../../../../../../runtime/managed-pipedrive-inputs\"\nimport { wrikeEngineProps } from \"../../../../../../../runtime/managed-wrike-inputs\"\nimport { mondayEngineProps } from \"../../../../../../../runtime/managed-monday-inputs\"\nimport { webflowEngineProps } from \"../../../../../../../runtime/managed-webflow-inputs\"\nimport { ActionContext, backwardCompatabilityContextUtils, "],

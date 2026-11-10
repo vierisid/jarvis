@@ -41,6 +41,7 @@ import { EngineFlowExecutor } from './engine-flow-executor';
 import { Worker } from '../../queue/worker';
 import { createRunFlowHandler } from '../handler';
 import { createWorkflowRoutes } from '../../api/routes';
+import { runFailure } from '../../runtime/run-failure';
 import { ActionOutcomeError } from "../../../actions/action-outcome";
 
 const buildOptIn = process.env.JARVIS_TEST_ENGINE_BUILD === "1";
@@ -171,7 +172,12 @@ describe("Engine end-to-end (F gate)", () => {
           const result = await handle.executeFlow({ flowVersion: version });
           expect(result.status).toBe('SUCCEEDED');
         } else {
-          await expect(handle.executeFlow({ flowVersion: version })).rejects.toThrow('absent value');
+          const result = await handle.executeFlow({ flowVersion: version });
+          expect(result.status).toBe('FAILED');
+          // The router step itself fails and says which reference, not an engine error naming no step.
+          expect(getFlowRun(run.id)).toMatchObject({ status: 'FAILED', failedStep: { name: 'router' } });
+          expect(runFailure(getFlowRun(run.id)!)).toMatchObject({ effect: 'none', headline: 'The step "router" failed.',
+            outcome: expect.stringContaining('"{{first.missing}}" has no value in this run.') });
         }
         expect(llmCalls.slice(before).map(c => c.prompt)).toEqual(expected ? ['inspect output', expected] : ['inspect output']);
       } finally { await handle.release(); }
@@ -326,7 +332,11 @@ describe("Engine end-to-end (F gate)", () => {
     const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, environment: 'TESTING' });
     const handle = await runtime!.acquire({ runId: run.id, projectId: DEFAULT_IDS.project });
     try {
-      await expect(handle.executeFlow({ flowVersion: version })).rejects.toThrow('TEXT_STARTSWITH is not supported');
+      // The router step itself fails (it used to escape as an engine error naming no step).
+      const result = await handle.executeFlow({ flowVersion: version });
+      expect(result.status).toBe('FAILED');
+      expect(result.failedStep?.name).toBe('router');
+      expect(result.failedStep?.errorMessage).toContain('TEXT_STARTSWITH is not supported');
     } finally { await handle.release(); }
     expect(llmCalls.slice(before)).toEqual([]);
   }, 45_000);

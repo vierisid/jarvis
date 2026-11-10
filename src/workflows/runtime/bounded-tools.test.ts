@@ -257,6 +257,10 @@ describe('gated tool classification (run_skill)', () => {
 
   test('an unknown skill is refused as an unsupported capability', () => withVault(() => {
     expect(() => toolEffectCapability(runSkillTool, { name: 'nope' })).toThrow(/Unsupported direct workflow capability: run_skill/);
+    // Typed, so the failed run says nothing ran and to change the step, not to run it again.
+    try { toolEffectCapability(runSkillTool, { name: 'nope' }); } catch (error) {
+      expect((error as { outcome?: unknown }).outcome).toMatchObject({ code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' });
+    }
   }));
 
   test('a subject key cannot shadow the target fields the dispatch fence reads', () => withVault(() => {

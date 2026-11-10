@@ -16,6 +16,8 @@
  * cannot make a step that acted read as one that did nothing.
  */
 
+import { failureCause } from '../../failures/cause';
+
 const MARKER = 'WorkflowExpressionError: Unsupported workflow expression: ';
 
 const CHECK_MAPPING = "Check the step's input mapping against the data the earlier step returns.";
@@ -55,4 +57,18 @@ export function expressionFailureGuidance(message: unknown): string | null {
   const end = rest.indexOf(' in {{');
   const reason = end < 0 ? null : rest.slice(0, end);
   return (reason !== null && Object.hasOwn(GUIDANCE, reason) ? GUIDANCE[reason] : undefined) ?? OTHER;
+}
+
+const MISSING_REFERENCE = /^"\{\{.+\}\}" has no value in this run\.$/su;
+
+/**
+ * Whether a step failed because an input reference had no value in this run
+ * (`absentReferenceError`). That is raised while the step's input is resolved,
+ * before the step runs, so nothing the step does took effect. Only a message
+ * whose own cause is exactly that sentence counts: a step that did something
+ * and then reported an error that merely quotes it does not.
+ */
+export function failedOnMissingReference(message: unknown): boolean {
+  const cause = failureCause(message, 1000);
+  return cause !== null && MISSING_REFERENCE.test(cause);
 }

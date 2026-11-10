@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolGate } from '../../actions/tools/registry';
+import { ActionOutcomeError } from '../../actions/action-outcome';
 import type { ActionCategory } from '../../roles/authority';
 import { AUTHORITY_REQUIREMENTS } from '../../roles/authority';
 import { TOOL_ACTION_MAP, severityRank } from '../../authority/tool-action-map';
@@ -177,6 +178,12 @@ function pinnedSidecar(capability: SidecarCapability, requested: unknown): { sid
     ...(scope ? { machineBinding: scope.binding() } : {}) };
 }
 
+/** The refusal of a tool no workflow step can run, typed so the failed run says what it is and that nothing ran. */
+export const WORKFLOW_TOOL_UNSUPPORTED_CODE = 'WORKFLOW_TOOL_UNSUPPORTED';
+function unsupportedCapability(message: string): ActionOutcomeError {
+  return new ActionOutcomeError({ status: 'blocked', code: WORKFLOW_TOOL_UNSUPPORTED_CODE, effect: 'not_started', message });
+}
+
 /**
  * Capability for a gated tool. The gate runs at review time with the frozen
  * arguments; what it returns is what the effect record, the approval card and
@@ -185,7 +192,7 @@ function pinnedSidecar(capability: SidecarCapability, requested: unknown): { sid
 function gatedCapability(tool: ToolDefinition, params: Record<string, unknown>) {
   const gate = tool.authorityGate?.(params);
   if (!gate) {
-    throw new Error(`Unsupported direct workflow capability: ${tool.name} cannot resolve what it would do for ${JSON.stringify(params).slice(0, 120)} (unknown skill?)`);
+    throw unsupportedCapability(`Unsupported direct workflow capability: ${tool.name} cannot resolve what it would do for ${JSON.stringify(params).slice(0, 120)} (unknown skill?)`);
   }
   const floor = TOOL_ACTION_MAP[tool.name] ?? 'execute_command';
   const known = (c: ActionCategory) => Object.hasOwn(AUTHORITY_REQUIREMENTS, c);
@@ -266,12 +273,12 @@ function boundedGate(tool: ToolDefinition, params: Record<string, unknown>): Too
 }
 
 export function toolEffectCapability(tool: ToolDefinition, params: Record<string, unknown> = {}) {
-  if (OPAQUE_TOOLS.has(tool.name)) throw new Error(`Unsupported direct workflow capability: ${tool.name} has opaque code/UI effects; use a typed governed adapter`);
+  if (OPAQUE_TOOLS.has(tool.name)) throw unsupportedCapability(`Unsupported direct workflow capability: ${tool.name} has opaque code/UI effects; use a typed governed adapter`);
   if (GATED_TOOLS.has(tool.name) && !tool.workflowEffect) return gatedCapability(tool, params);
   const floor = tool.workflowEffect?.category
     ?? (BOUNDED_TOOLS.has(tool.name) ? TOOL_ACTION_MAP[tool.name] : undefined);
   if (!floor || !Object.hasOwn(AUTHORITY_REQUIREMENTS, floor)) {
-    throw new Error(`Unsupported direct workflow capability: ${tool.name} has no declared Authority action`);
+    throw unsupportedCapability(`Unsupported direct workflow capability: ${tool.name} has no declared Authority action`);
   }
   const prepareArguments = (params: Record<string, unknown>) => {
     if (tool.workflowEffect) return params;
