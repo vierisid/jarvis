@@ -761,10 +761,13 @@ export function approvalToast(request: ApprovalRequest): ApprovalToast {
   }
   // Leave room for the `...` and the ` · <impact>` that follows the body. A
   // look-alike body already fits, so it is shown whole, with the reason.
+  // A body can be too long in lines yet fit in columns (a long word wraps
+  // early): then nothing is cut, and a `...` would claim that something was.
   const room = TOAST_APPROVABLE_MAX_COLUMNS - `... · ${impact}`.length;
+  const shown = fits ? body : fitColumns(body, room);
   return {
     id: request.id, kind: 'approval_review', title: `Review in Jarvis: ${tool}`,
-    body: fits ? body : `${fitColumns(body, room).trimEnd()}...`,
+    body: shown === body ? body : `${shown.trimEnd()}...`,
     meta: `${impact} · ${toolLabel} · ${clickOnly ? 'requires on-screen review in Jarvis' : lookAlike ? `${LOOK_ALIKE_REASON}, so check it in Jarvis` : 'too long to approve from a notification'}`, destructive,
     actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
     approvable,
