@@ -1,0 +1,12 @@
+.brief-closed-chats { flex: 0 0 auto; min-width: 0; font-size: 13px; }
+.brief-closed-chats button { min-height: 44px; padding: 8px 12px; color: inherit; background: transparent; border: 1px solid transparent; border-radius: var(--brief-corner-control); cursor: pointer; font: inherit; }
+.brief-closed-chats button:hover { background: var(--brief-soft); }
+.brief-closed-chats button:focus-visible { outline: 2px solid var(--brief-focus); outline-offset: -2px; }
+.brief-closed-chats button:disabled { opacity: .5; cursor: default; }
+.brief-closed-chats section { max-height: min(28vh, 260px); overflow: auto; padding: 0 8px 8px; border-bottom: 1px solid var(--brief-rule); }
+.brief-closed-chats p { margin: 4px; }
+.brief-closed-chats p:empty { display: none; }
+.brief-closed-chats ul { margin: 0; padding: 0; list-style: none; }
+.brief-closed-chats li button { width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 12px; }
+.brief-closed-chats li button span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.brief-closed-chats li button span:last-child { flex: 0 0 auto; }

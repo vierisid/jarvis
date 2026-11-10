@@ -51,7 +51,7 @@ function useLatest<T>(fromList: T): [T, (value: T) => void] {
   return [saved ?? fromList, setSaved];
 }
 
-export function FlowPermissions({ flow, onChanged }: { flow: Flow; onChanged: () => void }): React.ReactElement {
+export function FlowPermissions({ flow, onChanged, request = fetch }: { flow: Flow; onChanged: () => void; request?: typeof fetch }): React.ReactElement {
   const name = quotedName(flow.displayName ?? flow.id);
   const [code, setCode] = useLatest<CodeSteps | undefined>(flow.codeSteps);
   const [busy, setBusy] = useState(false);
@@ -67,7 +67,7 @@ export function FlowPermissions({ flow, onChanged }: { flow: Flow; onChanged: ()
         `Allow CODE steps in the workflow ${name}?\nA CODE step runs custom JavaScript on the computer Jarvis runs on, with your user's full access to its files, network and shell, and installs the packages it declares. It runs without an approval card. This covers any CODE step added to this workflow later. Allow it only for code you trust.`,
         { title: "Allow CODE steps?", confirmLabel: "Allow CODE steps", danger: true },
       )) return;
-      const res = await fetch(`/api/workflows/${encodeURIComponent(flow.id)}/code-steps`, {
+      const res = await request(`/api/workflows/${encodeURIComponent(flow.id)}/code-steps`, {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }),
       });
       if (!res.ok) { setMessage(await errorText(res, "Could not change CODE steps")); return; }
@@ -93,7 +93,7 @@ export function FlowPermissions({ flow, onChanged }: { flow: Flow; onChanged: ()
           : <Button size="sm" variant="ghost" disabled={busy} onClick={() => void setCodeSteps(true)}>Allow CODE steps</Button>) : null}
       </div>
       {message ? <p className="wf-detail__permission-err" role="alert">{message}</p> : null}
-      {flow.readHosts ? <ReadHosts flow={flow} list={flow.readHosts} name={name} onChanged={onChanged} /> : null}
+      {flow.readHosts ? <ReadHosts flow={flow} list={flow.readHosts} name={name} onChanged={onChanged} request={request} /> : null}
     </section>
   );
 }
@@ -118,7 +118,7 @@ function grantedForm(typed: string): string | null {
  * when the request goes out; the server checks each host and says why it
  * refuses one.
  */
-function ReadHosts({ flow, list: fromList, name, onChanged }: { flow: Flow; list: ReadHostList; name: string; onChanged: () => void }): React.ReactElement {
+function ReadHosts({ flow, list: fromList, name, onChanged, request }: { flow: Flow; list: ReadHostList; name: string; onChanged: () => void; request: typeof fetch }): React.ReactElement {
   const [list, setList] = useLatest<ReadHostList>(fromList);
   const current = useRef(list);
   current.current = list;
@@ -130,7 +130,7 @@ function ReadHosts({ flow, list: fromList, name, onChanged }: { flow: Flow; list
   /** The stored list, after a refused write: shown at once, and the room list refreshed too. */
   const reload = async (): Promise<void> => {
     try {
-      const res = await fetch(`/api/workflows/${encodeURIComponent(flow.id)}`);
+      const res = await request(`/api/workflows/${encodeURIComponent(flow.id)}`);
       const body = res.ok ? await res.json().catch(() => null) as { flow?: { readHosts?: ReadHostList } } | null : null;
       const stored = body?.flow?.readHosts;
       if (stored && Array.isArray(stored.hosts)) { setList(stored); current.current = stored; }
@@ -148,7 +148,7 @@ function ReadHosts({ flow, list: fromList, name, onChanged }: { flow: Flow; list
       // when the stored list is no longer that one, so a stale view cannot re-add a
       // host someone else removed.
       const expected = current.current.hosts;
-      const res = await fetch(`/api/workflows/${encodeURIComponent(flow.id)}/read-hosts`, {
+      const res = await request(`/api/workflows/${encodeURIComponent(flow.id)}/read-hosts`, {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hosts: next(expected), expected }),
       });
       if (res.status === 409) {

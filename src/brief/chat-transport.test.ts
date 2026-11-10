@@ -326,3 +326,36 @@ test('an approval its turn cannot take falls back to the dashboard instead of th
   expect(withBriefTurn(missing, () => transport.approval(request))).toBe(false);
   expect(transport.approval(request)).toBe(false);
 });
+
+for (const [code, expected] of [
+  ['rate_limit', 'rate limiting'], ['auth', 'credentials'], ['network', 'could not be reached'],
+  ['quota_exhausted', 'usage is used up'], ['not_found', 'does not exist'],
+] as const) test(`provider ${code} keeps safe recovery guidance through persisted replay`, async () => {
+  const f = fixture(); const owner = f.client(); const a = f.input(`typed-${code}`);
+  try {
+    await f.send(owner, 'brief_chat_send', a);
+    f.push(a.turnId, { type: 'text', text: 'Partial answer' });
+    f.push(a.turnId, { type: 'error', code, error: 'SECRET_PROVIDER_BODY and private prompt' });
+    await f.transport.idle();
+    const terminals = f.transport.repository.snapshot(a.conversationId, 0).events.filter(e => e.payload.kind === 'terminal');
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]!.payload).toMatchObject({ state: 'failed', error: { code: `provider_${code}` } });
+    expect(JSON.stringify(terminals)).toContain(expected);
+    expect(JSON.stringify([...f.frames.values()])).not.toContain('SECRET_PROVIDER_BODY');
+    expect(f.transport.repository.snapshot(a.conversationId, 0).messages.items.at(-1)?.content).toBe('Partial answer');
+  } finally { f.transport.stop(); await f.transport.idle(); }
+});
+
+test('provider failure after a tool warns to check effects before repeating work', async () => {
+  const f = fixture(); const owner = f.client(); const a = f.input('error-after-tool');
+  try {
+    await f.send(owner, 'brief_chat_send', a);
+    f.push(a.turnId, { type: 'tool_call', tool_call: { id: 'write', name: 'fixture', arguments: {} } });
+    f.push(a.turnId, { type: 'text', text: 'I started the work.' });
+    f.push(a.turnId, { type: 'error', code: 'network', error: 'private upstream details' });
+    await f.transport.idle();
+    const failure = f.transport.repository.snapshot(a.conversationId, 0).events.find(e => e.payload.kind === 'terminal')!.payload;
+    expect(JSON.stringify(failure)).toContain('Check whether it happened');
+    expect(JSON.stringify(failure)).not.toContain('Nothing was changed');
+  } finally { f.transport.stop(); await f.transport.idle(); }
+});

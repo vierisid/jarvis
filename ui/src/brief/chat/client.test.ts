@@ -22,6 +22,7 @@ function fixture(storage?: Pick<Storage, 'getItem' | 'setItem'>) {
   const capabilities = new BriefCapabilities(enabled.map(id => ({ id, provider: { readiness: () => 'ready' } })), enabled).snapshot();
   const api: ConversationApi = {
     capabilities: async () => capabilities, tabs: async () => repository.tabs(),
+    closed: async (cursor) => repository.list({ closed: true, cursor: cursor ?? undefined, limit: 50 }),
     create: async () => repository.create(), tab: async (id, open) => repository.setOpen(id, open),
     select: async id => repository.activate(id), history: async (id, cursor) => repository.messages(id, { cursor: cursor ?? undefined, limit: 50 }),
   };
@@ -391,4 +392,30 @@ test('proactive dashboard notices reach their owner while legacy chat stays out 
   expect(f.receive('stream', { text: 'Unscoped stream' })).toBe(true);
   expect(f.client.store.getSnapshot().conversations[id]?.messages).toEqual([]);
   expect(f.client.store.getSnapshot().conversations[id]?.draft).toBe('My unsent answer');
+});
+
+
+test('closed chats load after a new client starts and reopen with their retained drafts and history', async () => {
+  const saved = new Map<string, string>();
+  const storage = { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => { saved.set(key, value); } };
+  const f = fixture(storage); await f.client.start(); const id = await f.client.add(); await f.open();
+  answer(f, id, 'retained'); f.client.store.setDraft(id, 'Unsent draft'); await f.client.close(id); f.client.stop();
+  const next = new BriefConversationClient(f.api, storage); cleanups.push(() => next.stop()); await next.start();
+  const page = await next.listClosed(null, new AbortController().signal);
+  expect(page.items.map(row => row.conversationId)).toEqual([id]);
+  await next.reopen(id);
+  expect(next.store.getSnapshot().activeId).toBe(id);
+  expect(next.store.getSnapshot().conversations[id]?.draft).toBe('Unsent draft');
+  expect(f.repository.messages(id).items.map(row => row.content)).toEqual(['Question retained', 'Answer retained']);
+});
+
+test('closed chat discovery rejects cross-workspace and obsolete responses', async () => {
+  const f = fixture(); await f.client.start(); const id = await f.client.add(); await f.client.close(id);
+  const page = f.repository.list({ closed: true });
+  f.api.closed = async () => ({ ...page, items: page.items.map(row => ({ ...row, workspaceId: 'another-workspace' })) });
+  await expect(f.client.listClosed(null, new AbortController().signal)).rejects.toThrow('workspace');
+  let resolve!: (value: typeof page) => void;
+  f.api.closed = () => new Promise(r => { resolve = r; });
+  const pending = f.client.listClosed(null, new AbortController().signal); f.client.stop(); resolve(page);
+  await expect(pending).rejects.toThrow('interrupted');
 });
