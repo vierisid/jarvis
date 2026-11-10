@@ -32,10 +32,10 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync,
+  copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync,
 } from "node:fs";
 import { rm } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { basename, dirname, resolve, sep } from "node:path";
 import type { UpstreamFlowVersion } from "./flow-version-adapter";
 import { collectCodeActions } from "./flow-version-adapter";
 import { DEFAULT_RECENTLY_USED_MS } from "./engine-reaper";
@@ -256,6 +256,21 @@ export function runInstall(
   });
 }
 
+/**
+ * Where each step's `bun.lock` is kept (#1154 follow-up): `<code dir>/.locks/
+ * <version id>/<step>.bun.lock`. Beside the trees, not in them: the pruner
+ * removes or evicts a version's whole tree (code-tree-prune.ts), and an
+ * install after that would otherwise resolve a range like `^1.0.0` to
+ * whatever is newest by then, so the same published version would run
+ * different code. A dot name no version id can take, as the install cache's.
+ */
+export const CODE_LOCKS_DIR = ".locks";
+
+/** The kept `bun.lock` of step `stepName` of the version in `versionDir`. */
+export function codeStepLockPath(versionDir: string, stepName: string): string {
+  return resolve(dirname(versionDir), CODE_LOCKS_DIR, basename(versionDir), `${stepName}.bun.lock`);
+}
+
 /** Prefix of a directory an install runs in, beside the step. */
 const INSTALL_DIR_PREFIX = ".install-";
 /** Prefix of a replaced `node_modules`, removed at the NEXT sync. */
@@ -307,8 +322,10 @@ async function syncDependencies(
   const retire = () => {
     if (existsSync(nodeModules)) renameSync(nodeModules, resolve(dir, RETIRED_PREFIX + randomBytes(6).toString("hex")));
   };
+  const lockPath = codeStepLockPath(versionDir, stepName);
   if (Object.keys(deps).length === 0) {
     retire();
+    rmSync(lockPath, { force: true });
     return;
   }
   const manifest = synthesizedManifest(deps);
@@ -318,6 +335,10 @@ async function syncDependencies(
   const work = mkdtempSync(resolve(dir, INSTALL_DIR_PREFIX));
   try {
     writeFileSync(resolve(work, "package.json"), manifest);
+    // The versions this step resolved before, so an install after its tree
+    // was evicted gets the same ones. Bun keeps a locked version while the
+    // manifest still allows it, and resolves only what the manifest changed.
+    if (existsSync(lockPath)) copyFileSync(lockPath, resolve(work, "bun.lock"));
     const built = resolve(work, "node_modules");
     // The install and everything that decides whether it is kept run as one
     // turn of the install queue, so the cache entries that appear meanwhile
@@ -342,6 +363,8 @@ async function syncDependencies(
           if (e instanceof CodeInstallTooLargeError) throw refuse(e.size);
           throw e;
         }
+        // The lock may be the kept one copied in above, so the missing tree
+        // is what tells a taken-over install apart.
         if (!existsSync(resolve(work, "bun.lock")) || !existsSync(built)) {
           throw new Error(
             `bun install did not install a CODE step's dependencies where it was run (${work}); ` +
@@ -361,6 +384,11 @@ async function syncDependencies(
       await boundCacheAfterInstall(cache.dir, before, cache.limit);
     });
     writeFileSync(resolve(built, INSTALLED_MANIFEST_MARKER), manifest);
+    // Kept for the next install of this step; written whole or not at all.
+    mkdirSync(dirname(lockPath), { recursive: true });
+    const pendingLock = `${lockPath}.${randomBytes(6).toString("hex")}.tmp`;
+    copyFileSync(resolve(work, "bun.lock"), pendingLock);
+    renameSync(pendingLock, lockPath);
     retire();
     renameSync(built, nodeModules);
   } finally {

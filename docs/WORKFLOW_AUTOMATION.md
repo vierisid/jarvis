@@ -885,6 +885,14 @@ latest version and ran it. Now:
   the next install that needs it; existing trees keep their own links.
   Installs from before #1154 may have left downloads in
   `~/.bun/install/cache`; `bun pm cache rm` clears that cache.
+- Each step's `bun.lock` is kept at
+  `~/.jarvis/workflow-codes/.locks/<version id>/<step>.bun.lock`, beside the
+  trees, and every install of the step starts from it. A version whose tree
+  was pruned or evicted installs the versions it resolved before, not whatever
+  is newest by then (measured: a `^1.0.0` dependency stayed 1.0.0 after 1.1.0
+  was published); a changed declaration is resolved anew and its lock replaces
+  the old one. The locks of a version that is no longer needed and has no tree
+  are removed by the tree pruner.
 - One version's CODE steps together may hold at most 2 GiB and 262,144
   entries, four steps at the step caps (#1154): an install that would take the
   version past that is refused like one over the step cap, naming the step,

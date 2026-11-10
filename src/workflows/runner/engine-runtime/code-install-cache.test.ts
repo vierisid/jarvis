@@ -11,7 +11,8 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CODE_STEP_MAX_INSTALL_BYTES, materializeCodeActions } from "./code-materialize";
+import { CODE_STEP_MAX_INSTALL_BYTES, codeStepLockPath, materializeCodeActions } from "./code-materialize";
+import { pruneCodeTrees } from "./code-tree-prune";
 import {
   boundCacheAfterInstall,
   CODE_INSTALL_CACHE_MAX_BYTES,
@@ -295,6 +296,92 @@ describe("the CODE-step install cache (#1154)", () => {
       server.stop(true);
     }
   }, 60_000);
+});
+
+describe("a CODE step's lockfile (#1154 follow-up)", () => {
+  /**
+   * A loopback registry for `jarvis-lock-dep`; `publish` adds a version and
+   * makes it the latest, as a new release on npm would.
+   */
+  function registry() {
+    const versions = new Map<string, Uint8Array<ArrayBuffer>>();
+    const server: ReturnType<typeof Bun.serve> = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(req): Response {
+        const path = new URL(req.url).pathname;
+        if (path === "/jarvis-lock-dep") {
+          const all = [...versions.keys()];
+          return Response.json({ name: "jarvis-lock-dep", "dist-tags": { latest: all[all.length - 1] }, versions: Object.fromEntries(all.map((v) => {
+            const tgz = versions.get(v)!;
+            return [v, { name: "jarvis-lock-dep", version: v, dist: { tarball: `http://127.0.0.1:${server.port}/jarvis-lock-dep/-/jarvis-lock-dep-${v}.tgz`,
+              shasum: new Bun.CryptoHasher("sha1").update(tgz).digest("hex"), integrity: "sha512-" + new Bun.CryptoHasher("sha512").update(tgz).digest("base64") } }];
+          })) });
+        }
+        const m = /^\/jarvis-lock-dep\/-\/jarvis-lock-dep-(.+)\.tgz$/.exec(path);
+        if (m && versions.has(m[1]!)) return new Response(new Blob([versions.get(m[1]!)!]));
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const publish = (v: string) => versions.set(v, tarGz({ "package/package.json": JSON.stringify({ name: "jarvis-lock-dep", version: v, main: "index.js" }),
+      "package/index.js": `module.exports = ${JSON.stringify(v)};` }));
+    return { server, publish };
+  }
+  /**
+   * Bun keeps the registry's answer in the install cache (`<hash>.npm`) and
+   * reuses it for a while; an eviction happens long after, when it has gone
+   * stale. Removing it is that time passing.
+   */
+  const forgetManifests = (codes: string) => {
+    const cache = codeInstallCacheDir(codes);
+    for (const name of readdirSync(cache)) if (name.endsWith(".npm")) rmSync(join(cache, name), { force: true });
+  };
+  const installedVersion = (codes: string, versionId: string) =>
+    JSON.parse(require("node:fs").readFileSync(join(codes, versionId, "compute", "node_modules", "jarvis-lock-dep", "package.json"), "utf8")).version as string;
+
+  test.skipIf(process.platform === "win32")("an install after the tree was evicted gets the versions the step resolved before, not newer ones", async () => {
+    const { server, publish } = registry();
+    const saved = process.env.NPM_CONFIG_REGISTRY;
+    process.env.NPM_CONFIG_REGISTRY = `http://127.0.0.1:${server.port}/`;
+    try {
+      publish("1.0.0");
+      const codes = join(scratch(), "codes");
+      await materializeCodeActions(version("v_lock", { "jarvis-lock-dep": "^1.0.0" }), codes);
+      expect(installedVersion(codes, "v_lock")).toBe("1.0.0");
+      expect(existsSync(codeStepLockPath(join(codes, "v_lock"), "compute"))).toBe(true);
+      // A newer release the range allows; then the tree goes, as an eviction removes it.
+      publish("1.1.0");
+      rmSync(join(codes, "v_lock"), { recursive: true, force: true });
+      forgetManifests(codes);
+      await materializeCodeActions(version("v_lock", { "jarvis-lock-dep": "^1.0.0" }), codes);
+      expect(installedVersion(codes, "v_lock")).toBe("1.0.0");
+      // A changed declaration is resolved anew, and its lock replaces the old one.
+      forgetManifests(codes);
+      await materializeCodeActions(version("v_lock", { "jarvis-lock-dep": "^1.1.0" }), codes);
+      expect(installedVersion(codes, "v_lock")).toBe("1.1.0");
+      // Dropping every dependency drops the lock too.
+      await materializeCodeActions(version("v_lock", {}), codes);
+      expect(existsSync(codeStepLockPath(join(codes, "v_lock"), "compute"))).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.NPM_CONFIG_REGISTRY;
+      else process.env.NPM_CONFIG_REGISTRY = saved;
+      server.stop(true);
+    }
+  }, 60_000);
+
+  test("the pruner keeps a needed version's locks through an eviction and removes those of a version gone for good", async () => {
+    const codes = join(scratch(), "codes");
+    const lock = (id: string) => codeStepLockPath(join(codes, id), "compute");
+    for (const id of ["v_kept", "v_gone"]) {
+      mkdirSync(join(codes, ".locks", id), { recursive: true });
+      writeFileSync(lock(id), "{}");
+    }
+    // Neither has a tree any more (evicted, or pruned earlier); only v_kept is still needed.
+    await pruneCodeTrees({ baseCodeDir: codes, needed: () => new Set(["v_kept"]) });
+    expect(existsSync(lock("v_kept"))).toBe(true);
+    expect(existsSync(lock("v_gone"))).toBe(false);
+    expect(existsSync(join(codes, ".locks", "v_gone"))).toBe(false);
+  });
 });
 
 /** A gzipped ustar archive of `files` (path -> text). Enough for `bun install`. */
