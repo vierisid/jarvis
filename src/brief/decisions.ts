@@ -14,6 +14,7 @@ import type { BriefReadProviders } from './providers';
 import type { BriefWorkflowRef } from './contracts';
 import type { DecisionAction, DecisionQuery, DecisionResolution, QueuedDecision } from './decision-contracts';
 import { ensureDecisionSchema } from './decision-schema';
+import { HELD_RUN_EFFECT } from '../workflows/runtime/deferred-cards';
 import { WORKFLOW_REVIEWED_UI_TOOLS } from '../authority/ui-intent';
 
 export class DecisionError extends Error {
@@ -59,7 +60,13 @@ const DECISION_CANDIDATES = `
           SELECT 'effect:' || e.id, json_extract(e.record, '$.createdAt') FROM workflow_effect e
           JOIN flow_run sr ON sr.id = e.run_id JOIN flow sf ON sf.id = sr.flow_id AND sf.project_id = ?6
           WHERE e.status != 'succeeded' AND NOT EXISTS (SELECT 1 FROM approval_requests a WHERE a.id = e.approval_id)
+            AND NOT (${HELD_RUN_EFFECT})
             AND (?1 IS NULL OR e.run_id = ?1)
+          UNION ALL
+          SELECT 'held:' || sr.flow_id, min(json_extract(e.record, '$.createdAt')) FROM workflow_effect e
+          JOIN flow_run sr ON sr.id = e.run_id JOIN flow sf ON sf.id = sr.flow_id AND sf.project_id = ?6
+          WHERE ${HELD_RUN_EFFECT} AND (?1 IS NULL OR e.run_id = ?1)
+          GROUP BY sr.flow_id
         ), ordered AS (
           SELECT c.*, coalesce(p.position, 0) AS position FROM candidates c
           LEFT JOIN brief_decision_placement p ON p.decision_id = c.id
@@ -81,7 +88,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
   }
   private parseId(id: string): [string, string] {
     if (!text(id, 300)) throw new DecisionError('Invalid decision ID');
-    const match = /^(approval|work|effect):(.+)$/.exec(id);
+    const match = /^(approval|work|effect|held):(.+)$/.exec(id);
     if (!match || !text(match[2])) throw new DecisionError('Invalid decision ID');
     return [match[1]!, match[2]!];
   }
@@ -104,6 +111,31 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
     const unresolved = ['unknown', 'blocked', 'failed', 'dispatching', 'pending'].find(s => states.has(s as EffectStatus)) as EffectStatus | undefined;
     return { rows: rows.slice(0, 50), truncated: rows.length > 50, unresolved, counts };
   }
+  /**
+   * The runs of one workflow held behind its approval-card limit (#1039): one
+   * entry per workflow, never one per run. Nothing to decide, so inspect only.
+   */
+  private projectHeld(id: string, flowId: string): QueuedDecision {
+    const rows = this.db.query<{ n: number; created: number; run_id: string }, [string, string]>(
+      `SELECT count(DISTINCT e.run_id) AS n, min(json_extract(e.record, '$.createdAt')) AS created, min(e.run_id) AS run_id
+        FROM workflow_effect e JOIN flow_run sr ON sr.id = e.run_id JOIN flow sf ON sf.id = sr.flow_id AND sf.project_id = ?1
+        WHERE sr.flow_id = ?2 AND ${HELD_RUN_EFFECT}`).get(this.projectId, flowId);
+    if (!rows || !rows.n) throw new DecisionError('Decision not found', 404, 'not_found');
+    const run = getFlowRunInProject(this.projectId, rows.run_id);
+    const workflow = run ? this.workflow(run.flowId, run.flowVersionId) : null;
+    const workflowName = (run && getFlowVersion(run.flowVersionId)?.displayName) || 'this workflow';
+    const placement = this.db.query<{ position: number }, [string]>(
+      'SELECT position FROM brief_decision_placement WHERE decision_id = ?').get(id)?.position ?? 0;
+    const item: QueuedDecision = {
+      decisionId: id, revision: '', kind: 'held', state: 'pending',
+      title: `${rows.n} more ${rows.n === 1 ? 'run' : 'runs'} of ${workflowName} ${rows.n === 1 ? 'is' : 'are'} waiting. Answer a request above to let the next one ask.`,
+      refs: [], relatedTruncated: false, approval: null, workItemId: null, workStatus: null, workflow, run: null,
+      actions: ['inspect'], supportedActions: ['inspect'], placement, createdAt: rows.created ?? 0,
+      held: { workflowName, count: rows.n },
+    };
+    item.revision = hash({ item });
+    return item;
+  }
   private project(id: string): QueuedDecision {
     let [kind, sourceId] = this.parseId(id);
     let document: DocumentReviewRow | null = null;
@@ -120,6 +152,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       if (!row) throw new DecisionError('Decision not found', 404, 'not_found');
       if (row.approval_id && this.authority.approvalManager.getRequest(row.approval_id)) return this.project(`approval:${row.approval_id}`);
     }
+    if (kind === 'held') return this.projectHeld(id, sourceId);
     const placement = this.db.query<{ position: number }, [string]>(
       'SELECT position FROM brief_decision_placement WHERE decision_id = ?',
     ).get(id)?.position ?? 0;

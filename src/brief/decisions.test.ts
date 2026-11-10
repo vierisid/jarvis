@@ -15,6 +15,7 @@ import { createWorkItem, decideWorkItem, checkWorkResult, getWorkItem } from '..
 import { createFlow } from '../workflows/db/repos/flow';
 import { createDraftVersion, lockVersion, getFlowVersion } from '../workflows/db/repos/flow-version';
 import { createFlowRun, updateRun, getFlowRun } from '../workflows/db/repos/flow-run';
+import { createWaitpoint } from '../workflows/db/repos/waitpoint';
 import { saveWorkflowEffect, getWorkflowEffect, claimWorkflowEffect, type WorkflowEffect } from '../workflows/db/repos/workflow-effect';
 import { WorkflowEffectBoundary, type EffectInvocation } from '../workflows/runtime/effect-boundary';
 import { resumeResolvedWorkflowEffects } from '../workflows/runtime/effect-approval-scheduler';
@@ -461,4 +462,37 @@ test('malformed frozen notification arguments are not projected', () => {
   }
   saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify', arguments: { message: 'Hi', channels: ['dashboard', 7, null] } });
   expect(queue.get(`approval:${a.id}`).review?.channels).toEqual(['dashboard']);
+});
+
+test('runs held behind a workflow\'s card limit are one grouped entry, not one raw recovery card each', async () => {
+  const flow = createFlow();
+  const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'Morning reminder', trigger: { name: 'trigger', type: 'EMPTY' } }).id);
+  const raise = (run: { id: string; projectId: string }, approvalId: string | null, deferral?: WorkflowEffect['deferral'], waitpointId: string | null = null) =>
+    saveWorkflowEffect({ id: crypto.randomUUID(), runId: run.id, projectId: run.projectId, flowId: flow.id, versionId: version.id,
+      versionDigest: 'fixture', stepName: 'notify', executionPath: [], route: 'notify', toolName: 'workflow_notify', actionCategory: 'send_message',
+      requestDigest: 'fixture', arguments: {}, target: {}, provenance: {}, decision: 'approval_required', reason: 'fixture',
+      status: 'pending', approvalId, waitpointId, createdAt: Date.now(), ...(deferral ? { deferral } : {}) });
+  const cards: string[] = [];
+  for (let i = 0; i < 26; i++) {
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
+    if (i < 5) {
+      const a = manager.createRequest({ agentId: `workflow:${run.id}`, agentName: 'Workflow: Morning reminder', toolName: 'workflow_notify', toolArguments: {},
+        actionCategory: 'send_message', urgency: 'normal', reason: 'Notify', context: '', executionMode: 'workflow' });
+      raise(run, a.id); cards.push(`approval:${a.id}`);
+    } else {
+      const wait = createWaitpoint({ flowRunId: run.id, projectId: run.projectId, stepName: 'notify', type: 'DEFER' });
+      raise(run, null, { budget: 'other', since: Date.now() }, wait.id);
+      updateRun(run.id, { status: 'PAUSED' });
+    }
+  }
+  const { items } = (await read());
+  const held = items.filter(item => item.kind === 'held');
+  expect(items.filter(item => item.kind === 'permission').map(item => item.decisionId).sort()).toEqual(cards.sort());
+  expect(items.filter(item => item.kind === 'recovery')).toEqual([]);
+  expect(held).toHaveLength(1);
+  expect(held[0]).toMatchObject({ decisionId: `held:${flow.id}`, held: { workflowName: 'Morning reminder', count: 21 }, supportedActions: ['inspect'],
+    title: '21 more runs of Morning reminder are waiting. Answer a request above to let the next one ask.' });
+  // The count rule: only the entries that ask the owner for something count; a held group never does.
+  expect(items.filter(item => item.kind !== 'held')).toHaveLength(5);
+  expect(queue.get(`held:${flow.id}`).held?.count).toBe(21);
 });
