@@ -42,7 +42,9 @@ export interface OpenFailure {
   at: number;
 }
 
-const LIMIT = 20;
+/** The most open failures listed at once, newest first. Home says when it may have cut some. */
+export const OPEN_FAILURES_LIMIT = 20;
+const LIMIT = OPEN_FAILURES_LIMIT;
 const ENDED_BADLY = ['FAILED', 'TIMEOUT', 'INTERNAL_ERROR', 'QUOTA_EXCEEDED', 'MEMORY_LIMIT_EXCEEDED', 'SCHEDULE_FAILURE', 'STOPPED'];
 const FINISHED = ['SUCCEEDED', ...ENDED_BADLY];
 const KEY = /^[0-9a-f]{32}$/u;
