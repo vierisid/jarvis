@@ -512,7 +512,7 @@ async function executeTool(
     const actionCategory = gate.actionCategory;
 
     // Mandatory confirmation is refused unless a workflow can park this guarded browser call for review.
-    if (gate.confirm === 'always' && !(governedTools && workflowUiReview(tool, toolCall.name))) {
+    if (gate.confirm === 'always' && !(governedTools && workflowUiReview(tool, toolCall.name, toolCall.arguments))) {
       auditTrail?.log({
         agent_id: agent.id,
         agent_name: agent.agent.role.name,
@@ -542,7 +542,7 @@ async function executeTool(
     // A guarded workflow UI action can ask the person for permission
     // above its autonomous level. Hard denials/profile caps still stand;
     // the dispatch requires an explicit click and a current live guard.
-    const reviewUi = governedTools && (workflowUiReview(tool, toolCall.name) || workflowUiRead(toolCall.name));
+    const reviewUi = governedTools && (workflowUiReview(tool, toolCall.name, toolCall.arguments) || workflowUiRead(toolCall.name, toolCall.arguments));
     const decision = substituteAboveLevel(combineDecisions(gate.categories.map(check)),
       reviewUi ? { ...gate, confirm: gate.confirm ?? 'above_level', floorCategory: 'read_data' } : gate, check);
 

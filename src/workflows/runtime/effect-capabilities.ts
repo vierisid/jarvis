@@ -174,7 +174,7 @@ function boundedGate(tool: ToolDefinition, params: Record<string, unknown>): Too
 }
 
 export function toolEffectCapability(tool: ToolDefinition, params: Record<string, unknown> = {}) {
-  if (workflowUiReview(tool, tool.name)) {
+  if (workflowUiReview(tool, tool.name, params)) {
     const gate = resolveToolGate(tool, tool.name, params);
     const capability: SidecarCapability = tool.name.startsWith('browser_') ? 'browser' : 'desktop';
     return { category: gate.actionCategory, categories: gate.categories,

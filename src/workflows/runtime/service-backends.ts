@@ -491,7 +491,7 @@ export function buildSandboxServiceBackends(
         // the step-name header alone would let any holder of the run's token
         // raise this step's card with params of its own. The computer is never
         // run data's to choose.
-        const fromRunData = workflowUiReview(tool, req.toolName) ? pinnedStepParams(ctx, req.params, ['target']) : new Set<string>();
+        const fromRunData = workflowUiReview(tool, req.toolName, req.params) ? pinnedStepParams(ctx, req.params, ['target']) : new Set<string>();
         // desktop.enabled: false (#905). Typed and not started, before any
         // effect record or approval card exists for the step; audited like a
         // capability refusal.
@@ -510,7 +510,7 @@ export function buildSandboxServiceBackends(
           }
         })();
         const gate = resolveToolGate(tool, req.toolName, req.params);
-        const uiReview = workflowUiReview(tool, req.toolName);
+        const uiReview = workflowUiReview(tool, req.toolName, req.params);
         let uiExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
         let dispatched = false;
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
@@ -936,8 +936,8 @@ export function buildSandboxServiceBackends(
         };
         // Supported UI actions keep the same click-only, live-surface review as
         // chat. Other opaque code/UI capabilities remain unsupported here.
-        const uiReview = workflowUiReview(registry.get(call.toolCall.name), call.toolCall.name);
-        if (OPAQUE_TOOL_NAMES.has(call.toolCall.name) && !uiReview) {
+        const uiReview = workflowUiReview(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
+        if (OPAQUE_TOOL_NAMES.has(call.toolCall.name) && !uiReview && !workflowUiRead(call.toolCall.name, call.toolCall.arguments)) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} has opaque code/UI effects; use a typed governed adapter.`);
         }
         if (GATED_TOOL_NAMES.has(call.toolCall.name)) {
@@ -954,7 +954,7 @@ export function buildSandboxServiceBackends(
         try {
           const inner = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
             route: `agent-tool:${call.sequence}`, toolName: call.toolCall.name, category: call.actionCategory,
-            ...(uiReview || workflowUiRead(call.toolCall.name) ? { categories: gate.categories } : {}),
+            ...(uiReview || workflowUiRead(call.toolCall.name, call.toolCall.arguments) ? { categories: gate.categories } : {}),
             toolCategory: call.toolCategory, request: { toolName: call.toolCall.name, arguments: call.toolCall.arguments },
             // Judged as the sub-agent the gate judged it for, and never
             // concluded to need less than the gate required.
@@ -967,8 +967,8 @@ export function buildSandboxServiceBackends(
             // registry's live guard; Authority overrides cannot auto-approve it.
             ...(uiReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review UI action' }, reviewRegistry: registry,
               reviewSubject: registry.get(call.toolCall.name)?.reviewSubject?.(call.toolCall.arguments) ?? {} } : {}),
-            ...(gate.confirm || workflowUiRead(call.toolCall.name)
-              ? { aboveLevelFloor: uiReview || workflowUiRead(call.toolCall.name) ? 'read_data' as const : gate.floorCategory } : {}),
+            ...(gate.confirm || workflowUiRead(call.toolCall.name, call.toolCall.arguments)
+              ? { aboveLevelFloor: uiReview || workflowUiRead(call.toolCall.name, call.toolCall.arguments) ? 'read_data' as const : gate.floorCategory } : {}),
             // The target names who asked, so the card and the record are bound
             // to the principal and not only to the tool.
             //

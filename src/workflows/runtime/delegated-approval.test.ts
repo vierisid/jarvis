@@ -1486,3 +1486,20 @@ test.skipIf(engineSkip)('a completed browser agenda reaches the real notificatio
     await f.worker.drain(); expect(f.notifications).toEqual(['No meetings today']);
   } finally { await f.stop(); }
 }, 60_000);
+
+test('a delegated desktop_click get_value needs no mandatory review, like ui_act get_value (#1314 m11)', async () => {
+  // Permissive Authority: the read runs with no card, as ui_act get_value would.
+  const ids = createRun();
+  const f = backends(ids, { authority: { governed_categories: [] },
+    script: [{ call: 'desktop_click', args: { element_id: 7, action: 'get_value', target: 'test-computer' } }, 'finish'] });
+  const done = await f.delegate({ requiredTools: ['desktop_click'] });
+  expect(done.approval).toBeUndefined();
+  expect(f.approvals.getPending()).toHaveLength(0);
+  expect(f.effects()).toBe(1);
+  // A value write by the same tool still waits for a dashboard click.
+  const write = createRun();
+  const g = backends(write, { authority: { governed_categories: [] },
+    script: [{ call: 'desktop_click', args: { element_id: 7, action: 'set_value', value: 'x', target: 'test-computer' } }, 'finish'] });
+  expect((await g.delegate({ requiredTools: ['desktop_click'] })).status).toBe('approval_required');
+  expect(g.effects()).toBe(0);
+});
