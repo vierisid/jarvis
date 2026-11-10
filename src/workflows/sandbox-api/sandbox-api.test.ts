@@ -865,6 +865,16 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     expect(r.status).toBe(403);
   });
 
+  test("POST /v1/waitpoints refuses a projectId other than the token's", async () => {
+    const r = await authedFetchForRun("/v1/waitpoints", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flowRunId: testRunId, projectId: "proj_elsewhere", stepName: "x", type: "WEBHOOK", version: "V1" }),
+    });
+    expect(r.status).toBe(403);
+    expect(getWorkflowDb().query("SELECT COUNT(*) AS n FROM waitpoint WHERE project_id = ?").get("proj_elsewhere")).toEqual({ n: 0 });
+  });
+
   test("POST /v1/waitpoints accepts DELAY (stored as TIMER) and normalizes RFC-1123 -> ISO", async () => {
     // delay-for pieces send type 'DELAY' with an RFC-1123 (toUTCString) time.
     const rfc1123 = new Date("2026-07-07T03:00:00Z").toUTCString();
