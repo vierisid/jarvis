@@ -316,6 +316,17 @@ describe('a started workflow\'s card names the workflow (#1040)', () => {
     expect(decoded(card)).toEqual(payload);
   });
 
+  test('a value ending in a backslash or holding an escaped quote is isolated as one string, not split at its escape', async () => {
+    const approvals = new ApprovalManager();
+    const s = services(approvals);
+    const target = flow('Nightly sync');
+    const payload = { a: 'x\\', b: 'say "hi"', c: '\\"' };
+    const reply = await s.workflowsStart!({ flowId: target.flowId, payload } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
+    const card = cardOf(approvals, reply.approval!.approvalId);
+    expect(card).toEndWith(`, with the input {${q('a')}:${q('x\\\\')},${q('b')}:${q('say \\"hi\\"')},${q('c')}:${q('\\\\\\"')}}`);
+    expect(decoded(card)).toEqual(payload);
+  });
+
   test('an input in another script is shown as written; tag characters and a no-break space are escaped, not dropped', async () => {
     const approvals = new ApprovalManager();
     const s = services(approvals);
