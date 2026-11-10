@@ -126,8 +126,8 @@ function credentialFailureFor(run: FlowRun, node: FlowTriggerNode): RunConnectio
   return bindings.find(binding => binding.credentialFailure) ?? null;
 }
 
-/** The typed refusals of a human input step (#1266). */
-const HUMAN_INPUT_REFUSALS = [HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE];
+/** The typed refusals of a human input step (#1266), and the denial of a Wait for Approval step that was not approved. */
+const HUMAN_INPUT_REFUSALS = [HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, 'APPROVAL_DENIED', 'APPROVAL_EXPIRED'];
 const HUMAN_INPUT_REFUSAL = new RegExp(`"outcome":\\s*\\{[^{}]*"code":\\s*"(${HUMAN_INPUT_REFUSALS.join('|')})"`);
 
 /**
