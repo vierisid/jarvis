@@ -1,8 +1,8 @@
 /**
  * Instance export/restore CLIs:
  *
- *   jarvis export [--out <path>|-] [--full]   consistent archive of user data
- *   jarvis restore <archive|->                validate + replace data from an archive
+ *   jarvis export [--out <path>|-] [--no-secrets]   consistent archive of user data
+ *   jarvis restore <archive|-> [--allow-missing-keys]   validate + replace data from an archive
  *
  * Export produces a PLAIN tar (compression/encryption are the caller's job —
  * the hosting pipeline pipes through `zstd | age`, a self-hoster can redirect
@@ -16,14 +16,18 @@
  * Ephemeral state (logs, caches, browser profiles, pidfile) and the
  * server-authored config.yaml are never included.
  *
- * `--full` additionally includes the plaintext secrets: google-tokens.json,
- * the sidecar signing keys, workflow-encryption.key (the only thing that can
- * read the encrypted app_connection rows the DB snapshot already carries),
- * and the keychain pair (.secrets.enc/.secrets.key)
- * that holds the LLM provider credentials and the STT/TTS API keys — so a
- * restore works without re-connecting anything. That is the variant hosting
- * backups use; the default keeps the archive far less sensitive for
- * user-facing downloads (the DB it carries has no API key in it).
+ * The default archive is COMPLETE: it also carries the plaintext secrets
+ * (google-tokens.json, the sidecar signing keys, workflow-encryption.key (the
+ * only thing that can read the encrypted app_connection rows the DB snapshot
+ * already carries), and the keychain pair (.secrets.enc/.secrets.key) that
+ * holds the LLM provider credentials and the STT/TTS API keys) plus the
+ * installed-pieces manifest (`pieces/installed.json`; the daemon reinstalls
+ * the packages from it on boot), so a restore gives a working install. Because
+ * it holds secrets the archive file is written 0600. `--full` is accepted and
+ * means the same as the default. `--no-secrets` leaves the secrets out for an
+ * archive that is meant to be shared; restoring one that has encrypted
+ * workflow connections is refused unless the key is supplied some other way
+ * (`restore --allow-missing-keys`).
  *
  * The keychain pair is staged from wherever `keychainDir()` resolves — the
  * data dir on a JARVIS_HOME install the daemon has migrated, ~/.jarvis
@@ -66,6 +70,8 @@ import {
   chmodSync,
   cpSync,
   statSync,
+  writeFileSync,
+  readFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { Database } from 'bun:sqlite';
@@ -73,11 +79,16 @@ import { loadConfig } from '../config/loader.ts';
 import { acquireLockAt, lockPathFor } from '../daemon/pid.ts';
 import { keychainDir, migrateKeychain } from '../vault/keychain.ts';
 import {
+  ENCRYPTED_VALUE_SQL,
   KEY_FILE_NAME as WORKFLOW_KEY_FILE,
+  decryptBoundJson,
   migrateWorkflowEncryptionKey,
+  setEncryptionKey,
   resolveKeyFile as resolveWorkflowKeyFile,
   workflowKeyTarget,
 } from '../workflows/db/encryption.ts';
+import { piecesBaseDir } from '../workflows/pieces-library/installer.ts';
+import { catalogById } from '../workflows/pieces-library/catalog.ts';
 import { getInstalledVersion } from './version.ts';
 
 interface CliIo {
@@ -108,7 +119,17 @@ export interface ExportManifest {
  * server-authored on hosting (write-config regenerates it on the restore
  * target) and machine-specific on self-host.
  */
-const BASE_ENTRIES = ['pieces', 'content', 'realtime-budget.json'];
+const BASE_ENTRIES = ['content', 'realtime-budget.json'];
+
+/**
+ * Installed library pieces. The packages live under piecesBaseDir() (which is
+ * `~/.jarvis/pieces` and NOT necessarily under data_dir), so the archive
+ * carries only the manifest, `pieces/installed.json`; the daemon runs
+ * `bun install` from it on the next boot. Restore puts it back at
+ * piecesBaseDir(), never into data_dir.
+ */
+const PIECES_ENTRY = 'pieces';
+const PIECES_MANIFEST = 'installed.json';
 const SECRET_ENTRIES = [
   'google-tokens.json',
   'sidecar-keys',
@@ -190,13 +211,14 @@ function isNewerVersion(candidate: string, baseline: string): boolean {
 }
 
 export async function cmdExport(args: string[], io: CliIo = defaultIo): Promise<number> {
-  const full = args.includes('--full');
+  // Complete by default. `--full` is the old spelling of the default.
+  const full = !args.includes('--no-secrets');
   let out: string | undefined;
   const outIdx = args.indexOf('--out');
   if (outIdx !== -1) {
     out = args[outIdx + 1];
     if (!out || (out.startsWith('--') && out !== '-')) {
-      io.err('usage: jarvis export [--out <path>|-] [--full]');
+      io.err('usage: jarvis export [--out <path>|-] [--no-secrets]');
       return 2;
     }
   }
@@ -245,6 +267,9 @@ export async function cmdExport(args: string[], io: CliIo = defaultIo): Promise<
       const entries = [...BASE_ENTRIES, ...(full ? SECRET_ENTRIES : [])].filter((e) =>
         existsSync(join(sourceDir(e), e)),
       );
+      const piecesManifest = join(piecesBaseDir(), PIECES_MANIFEST);
+      const hasPieces = existsSync(piecesManifest);
+      if (hasPieces) entries.unshift(PIECES_ENTRY);
 
       // The remaining secrets (google tokens, sidecar keys) are still written
       // to the legacy `~/.jarvis` root even when data_dir points elsewhere.
@@ -264,7 +289,13 @@ export async function cmdExport(args: string[], io: CliIo = defaultIo): Promise<
         }
       }
 
+      if (hasPieces) {
+        mkdirSync(join(staging, PIECES_ENTRY));
+        cpSync(piecesManifest, join(staging, PIECES_ENTRY, PIECES_MANIFEST), { dereference: true });
+      }
+
       for (const entry of entries) {
+        if (entry === PIECES_ENTRY) continue;
         try {
           cpSync(join(sourceDir(entry), entry), join(staging, entry), { recursive: true, dereference: true });
         } catch (e) {
@@ -284,10 +315,21 @@ export async function cmdExport(args: string[], io: CliIo = defaultIo): Promise<
       await Bun.write(join(staging, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 
       const tarArgs = ['-cf', toStdout ? '-' : outPath!, '-C', staging, ...manifest.files];
-      io.err(`Archiving ${manifest.files.length} entries${full ? ' (full: secrets included)' : ''}...`);
+      io.err(`Archiving ${manifest.files.length} entries${full ? ' (secrets included)' : ' (no secrets: cannot restore saved keys)'}...`);
+      if (!toStdout) {
+        // The archive can hold plaintext keys: it must never exist with the
+        // default 0644. Create it 0600 BEFORE tar writes to it (tar keeps the
+        // mode of an existing file) and set the mode again afterwards, so a
+        // pre-existing looser file is tightened too. A directory made for it
+        // is 0700.
+        mkdirSync(dirname(outPath!), { recursive: true, mode: 0o700 });
+        writeFileSync(outPath!, '', { mode: 0o600 });
+        chmodSync(outPath!, 0o600);
+      }
       await runTar(tarArgs, io, toStdout ? { stdout: 'inherit' } : {});
 
       if (!toStdout) {
+        chmodSync(outPath!, 0o600);
         const sizeBytes = statSync(outPath!).size;
         io.out(JSON.stringify({ path: outPath, sizeBytes, full, files: manifest.files }));
       }
@@ -384,6 +426,98 @@ function tightenModes(path: string, modes: { dir?: number; file: number }): void
   }
 }
 
+
+interface ArchiveCheck {
+  encryptedConnections: number;
+  /** Library apps used by workflows that the archive's manifest does not list. */
+  missingPieces: string[];
+  /** Library apps the restored install will reinstall on its next start. */
+  piecesToInstall: number;
+}
+
+/**
+ * Read the staged database and the staged key material to decide what the
+ * restore can and cannot deliver. Throws a plain-English refusal when the
+ * restore could never start; returns counts for the summary otherwise.
+ */
+function checkArchive(staging: string, snapPath: string, hasPieces: boolean, allowMissingKeys: boolean): ArchiveCheck {
+  const db = new Database(snapPath, { readonly: true });
+  let rows: Array<{ id: string; project_id: string; piece_name: string; external_id: string; value: string }> = [];
+  const used = new Set<string>();
+  try {
+    const hasTable = (name: string) =>
+      db.query("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null;
+    if (hasTable('app_connection')) {
+      rows = db
+        .query(`SELECT id, project_id, piece_name, external_id, value FROM app_connection WHERE ${ENCRYPTED_VALUE_SQL}`)
+        .all() as typeof rows;
+    }
+    if (hasTable('flow_version')) {
+      for (const { trigger } of db.query('SELECT trigger FROM flow_version').all() as Array<{ trigger: string }>) {
+        for (const m of String(trigger).matchAll(/"pieceName"\s*:\s*"([^"]+)"/g)) used.add(m[1]!);
+      }
+    }
+  } finally {
+    db.close();
+  }
+
+  if (rows.length > 0 && !allowMissingKeys) {
+    const keyFile = join(staging, WORKFLOW_KEY_FILE);
+    const noun = rows.length === 1 ? 'saved connection' : 'saved connections';
+    if (!existsSync(keyFile)) {
+      throw new Error(
+        `this archive has ${rows.length} ${noun} but not the key that unlocks them, so restoring it would give you a Jarvis that cannot start. `
+        + 'Nothing was changed. Make a new backup with "jarvis export" (it includes the key), or if you keep the key somewhere else, restore again with --allow-missing-keys.',
+      );
+    }
+    const hex = readFileSyncText(keyFile).trim();
+    let failed = 0;
+    if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+      failed = rows.length;
+    } else {
+      setEncryptionKey(Buffer.from(hex, 'hex'));
+      try {
+        for (const r of rows) {
+          try {
+            decryptBoundJson(r.value, { id: r.id, projectId: r.project_id, pieceName: r.piece_name, externalId: r.external_id });
+          } catch {
+            failed++;
+          }
+        }
+      } finally {
+        setEncryptionKey(null);
+      }
+    }
+    if (failed > 0) {
+      throw new Error(
+        `the key in this archive does not unlock ${failed} of its ${rows.length} ${noun}. Nothing was changed. `
+        + 'The archive is damaged or mixes files from two backups. Use a different backup, or restore again with --allow-missing-keys to continue without those connections working.',
+      );
+    }
+  }
+
+  let installed = new Set<string>();
+  let piecesToInstall = 0;
+  const manifestFile = join(staging, PIECES_ENTRY, PIECES_MANIFEST);
+  if (hasPieces && existsSync(manifestFile)) {
+    try {
+      const parsed = JSON.parse(readFileSyncText(manifestFile)) as { pieces?: Array<{ npmPackage?: string }> };
+      const list = Array.isArray(parsed.pieces) ? parsed.pieces : [];
+      piecesToInstall = list.length;
+      installed = new Set(list.map((p) => String(p.npmPackage)));
+    } catch {
+      throw new Error("the archive's list of installed apps is unreadable. Nothing was changed. Use a different backup.");
+    }
+  }
+  const library = new Set([...catalogById().values()].map((e) => e.npmPackage));
+  const missingPieces = [...used].filter((name) => library.has(name) && !installed.has(name)).sort();
+  return { encryptedConnections: rows.length, missingPieces, piecesToInstall };
+}
+
+function readFileSyncText(path: string): string {
+  return readFileSync(path, 'utf8');
+}
+
 export async function cmdRestore(
   args: string[],
   io: CliIo = defaultIo,
@@ -394,10 +528,11 @@ export async function cmdRestore(
 ): Promise<number> {
   const archive = args.filter((a) => !a.startsWith('--'))[0];
   if (!archive) {
-    io.err('usage: jarvis restore <archive|->');
+    io.err('usage: jarvis restore <archive|-> [--allow-missing-keys]');
     return 2;
   }
   const fromStdin = archive === '-';
+  const allowMissingKeys = args.includes('--allow-missing-keys');
 
   try {
     const config = await loadConfig();
@@ -473,6 +608,17 @@ export async function cmdRestore(
           assertPlainEntry(source, entry);
           return true;
         });
+        // `pieces` is handled apart: only its manifest, and into piecesBaseDir().
+        const piecesSource = join(staging, PIECES_ENTRY);
+        let hasPieces = false;
+        if (existsSync(piecesSource)) {
+          assertPlainEntry(piecesSource, PIECES_ENTRY);
+          if (lstatSync(piecesSource).isDirectory() && existsSync(join(piecesSource, PIECES_MANIFEST))) {
+            assertPlainEntry(join(piecesSource, PIECES_MANIFEST), `${PIECES_ENTRY}/${PIECES_MANIFEST}`);
+            hasPieces = true;
+          }
+        }
+        const check = checkArchive(staging, snapPath, hasPieces, allowMissingKeys);
 
         // All validation passed — swap in. Only KNOWN entry names are ever
         // moved (a crafted archive can't plant arbitrary files).
@@ -493,6 +639,17 @@ export async function cmdRestore(
           swaps.push(retireEntry(`${dbPath}-shm`, join(asideDir, 'jarvis.db-shm')));
           swaps.push(swapIn(snapPath, dbPath, join(asideDir, 'jarvis.db')));
           failPoint('jarvis.db');
+          // The restored database is private to its owner, like the original.
+          chmodSync(dbPath, 0o600);
+          if (hasPieces) {
+            const piecesBase = piecesBaseDir();
+            mkdirSync(piecesBase, { recursive: true });
+            swaps.push(
+              swapIn(join(piecesSource, PIECES_MANIFEST), join(piecesBase, PIECES_MANIFEST), join(asideDir, 'pieces-installed.json')),
+            );
+            restored.push(PIECES_ENTRY);
+            failPoint(PIECES_ENTRY);
+          }
           for (const entry of present) {
             swaps.push(swapIn(join(staging, entry), join(dataDir, entry), join(asideDir, entry)));
             const modes = SECRET_MODES[entry];
@@ -576,8 +733,42 @@ export async function cmdRestore(
           }
         }
 
-        io.out(JSON.stringify({ restored: true, brainVersion: manifest.brainVersion, files: restored }));
-        io.err('Restore complete. Start the daemon with: jarvis start');
+        // Say what came back and what did not. Anything the founder has to do
+        // is a numbered-free plain line; "complete" is only claimed when the
+        // install can start.
+        const todo: string[] = [];
+        if (!existsSync(join(dataDir, '.secrets.enc')) && !existsSync(join(secretsTarget, '.secrets.enc'))) {
+          todo.push('No saved AI provider keys came with this backup. Add them again in Settings.');
+        }
+        if (!restored.includes('sidecar-keys')) {
+          todo.push('Connected devices did not come with this backup. Connect them again.');
+        }
+        if (check.missingPieces.length > 0) {
+          todo.push(
+            `${check.missingPieces.length} app(s) used by your workflows are not in this backup's app list `
+            + `(${check.missingPieces.join(', ')}). Install them again from the Library.`,
+          );
+        }
+        io.out(
+          JSON.stringify({
+            restored: true,
+            brainVersion: manifest.brainVersion,
+            files: restored,
+            connections: check.encryptedConnections,
+            apps: check.piecesToInstall,
+            todo,
+          }),
+        );
+        io.err(
+          `Restored: ${check.encryptedConnections} saved connection(s) with their key, ${check.piecesToInstall} installed app(s) `
+          + '(they reinstall when Jarvis starts, which needs internet).',
+        );
+        for (const line of todo) io.err(`Still to do: ${line}`);
+        io.err(
+          todo.length > 0
+            ? 'Restore complete, with the items above still to do. Start the daemon with: jarvis start'
+            : 'Restore complete. Start the daemon with: jarvis start',
+        );
         return 0;
       } finally {
         rmSync(staging, { recursive: true, force: true });

@@ -55,8 +55,8 @@ ${c.bold('Commands:')}
   ${c.cyan('enroll')}    Enroll a sidecar device: mint + store its JWT (no daemon needed)
   ${c.cyan('sidecars')}  List enrolled devices (sidecars list [--json])
   ${c.cyan('revoke')}    Revoke an enrolled device by sid
-  ${c.cyan('export')}    Export user data as a tar archive (export [--out <path>|-] [--full])
-  ${c.cyan('restore')}   Restore user data from an export archive (restore <archive|->)
+  ${c.cyan('export')}    Export a complete backup as a tar archive (export [--out <path>|-] [--no-secrets])
+  ${c.cyan('restore')}   Restore from an export archive (restore <archive|-> [--allow-missing-keys])
   ${c.cyan('version')}   Print version number
   ${c.cyan('help')}      Show this help message
 
