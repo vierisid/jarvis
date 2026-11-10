@@ -350,6 +350,12 @@ function dropboxTracked(action: unknown): boolean {
 export const GRAPHQL_PIECE = '@activepieces/piece-graphql';
 /** The vendored core SMTP piece (#961). */
 export const SMTP_PIECE = '@activepieces/piece-smtp';
+/**
+ * The pieces whose egress refusals were each checked to come before anything
+ * is sent (#1153): their tracked send refused so is recorded as not sent. Any
+ * other piece's refusal stays uncertain, since it may have made an earlier call.
+ */
+export const NOT_SENT_PIECES: ReadonlySet<string> = new Set(['@activepieces/piece-http', '@activepieces/piece-graphql', SMTP_PIECE]);
 /** The vendored core FTP/SFTP piece (#961). */
 export const SFTP_PIECE = '@activepieces/piece-sftp';
 

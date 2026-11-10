@@ -40,7 +40,7 @@ import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import {managedIntercomInput, runManagedIntercomAction} from './managed-intercom';
 import {managedCalendlyInput, runManagedCalendlyAction} from './managed-calendly';
 import { refusedBeforeSend, withReadHosts } from './http-egress';
-import { GRAPHQL_PIECE, HTTP_PIECE, isGovernedPiece, redactReceipt, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
+import { GRAPHQL_PIECE, HTTP_PIECE, NOT_SENT_PIECES, isGovernedPiece, redactReceipt, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
 import {managedGitHubInput, managedGitHubIssue, runManagedGitHubAction} from './managed-github';
@@ -371,7 +371,7 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
       // tracked send is recorded as not sent instead of left uncertain. Best
       // effort: if the note does not arrive the send stays uncertain, the
       // safe reading. A refusal after sending is not one of these.
-      if (governance.governed && governance.dispatch === 'authorized' && governance.effectId && refusedBeforeSend(error)) {
+      if (governance.governed && governance.dispatch === 'authorized' && governance.effectId && NOT_SENT_PIECES.has(String(params.piece)) && refusedBeforeSend(error)) {
         await (params.fetchImpl ?? fetch)(`${params.apiUrl.replace(/\/+$/u, '')}${PIECE_RECEIPT_PATH}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${params.engineToken}`,
             'X-Jarvis-Step-Name': params.stepName, 'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath) },

@@ -116,7 +116,9 @@ test('provider failure during work remains dispatching/unknown and no retry can 
 });
 
 test('#1153: a send the egress guard refused before it went out is recorded as not sent, not uncertain', async () => {
-  const f = fixture(); const authorized = await authorizePieceDispatch(f.params);
+  const f = fixture('@activepieces/piece-http', 'send_request'); f.params.input = { method: 'POST', url: 'https://ops.test/x', body: { data: { a: 1 } } } as never;
+  const authorized = await authorizePieceDispatch(f.params);
+  expect(authorized).toMatchObject({ dispatch: 'authorized' });
   await expect(executeAuthorizedPiece(f.params, authorized, async () => { throw new EgressRefusedError('HTTP request to ops.test refused: it resolves to 127.0.0.1'); }))
     .rejects.toThrow('refused');
   const effect = listWorkflowEffects(f.run.id)[0]!;
@@ -124,7 +126,25 @@ test('#1153: a send the egress guard refused before it went out is recorded as n
   // A late completion cannot overwrite it, and a retry in this run is refused, not sent.
   expect(() => recordPieceCompletion(f.ctx, effect.id, f.result)).toThrow('not awaiting');
   await expect(f.invoke()).rejects.toThrow('refused'); expect(f.sends()).toBe(0);
-  f.fail(); expect(getRunRecovery(f.run.id)?.state ?? 'none').not.toBe('unknown');
+  f.fail(); expect(getRunRecovery(f.run.id)).toMatchObject({ state: 'blocked', effects: [{ status: 'not_started' }] });
+});
+test('#1153: the receipt route takes a not-sent note only on its own, with a bounded message', async () => {
+  const f = fixture(); const permit = await authorizePieceDispatch(f.params) as { effectId: string };
+  const post = (body: unknown) => createJarvisPieceReceiptRoute(f.backends)({ req: new Request('http://fixture.test/v1/jarvis/pieces/receipt',
+    { method: 'POST', body: JSON.stringify(body), headers: { 'X-Jarvis-Step-Name': 'send', 'X-Jarvis-Execution-Path': '[]' } }),
+    claims: { runId: f.run.id, projectId: DEFAULT_IDS.project, sandboxId: 'fixture' } as never, params: {} });
+  for (const body of [{ effectId: permit.effectId, notSent: { message: 'x' }, result: {} }, { effectId: permit.effectId, notSent: { message: 'x'.repeat(2001) } },
+    { effectId: permit.effectId, notSent: { message: 1 } }, { effectId: permit.effectId, notSent: null }]) {
+    expect((await post(body)).status).toBe(400);
+  }
+  expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('dispatching');
+});
+test('#1153: a piece whose refusals were not checked to come before sending stays uncertain', async () => {
+  const f = fixture(); const authorized = await authorizePieceDispatch(f.params);
+  await expect(executeAuthorizedPiece(f.params, authorized, async () => { throw new EgressRefusedError('refused'); })).rejects.toThrow('refused');
+  expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('dispatching');
+  // And the daemon refuses a not-sent receipt for it whatever the engine says.
+  expect(() => f.backends.pieceNotSent!(f.ctx, listWorkflowEffects(f.run.id)[0]!.id, 'refused')).toThrow('only to a piece');
 });
 test('#1153: a refusal after the request went out (a refused redirect) stays uncertain', async () => {
   const f = fixture(); const authorized = await authorizePieceDispatch(f.params);

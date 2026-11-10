@@ -80,6 +80,20 @@ describe.skipIf(skip)('the compiled core HTTP piece', () => {
     expect(lookups[0]).toBe('listed.invalid');
   });
 
+  test('#1153: a refusal on a retry follows an attempt that may have reached the server, so it does not read as not sent', async () => {
+    lookups = [];
+    dns.lookup = ((host: string, _opts: unknown, cb: (e: Error | null, a?: unknown) => void) => {
+      lookups.push(host);
+      // First attempt: an error after which the piece tries again; then the name turns inward.
+      if (lookups.length === 1) cb(Object.assign(new Error(`connect ECONNRESET ${host}`), { code: 'ECONNRESET' }));
+      else cb(null, [{ address: '127.0.0.1', family: 4 }]);
+    }) as never;
+    const refused = await run({ propsValue: props('GET') }).catch((error: unknown) => error);
+    expect(String((refused as Error).message)).toMatch(/refused/);
+    expect(lookups.length).toBe(2);
+    expect(refusedBeforeSend(refused)).toBe(false);
+  });
+
   test('loopback and metadata are refused by name or literal, under either policy, and a refusal is not retried', async () => {
     for (const policy of [undefined, 'private-allowed']) {
       if (policy) process.env[EGRESS_POLICY_ENV] = policy; else delete process.env[EGRESS_POLICY_ENV];

@@ -136,6 +136,8 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   // #1266: a workflow may have so many requests waiting in Needs you; this one would have been the next.
   HUMAN_INPUT_LIMIT: { category: 'not_started', why: `this workflow already has ${HUMAN_INPUT_PENDING_LIMIT} requests waiting for an answer in Needs you. Answer, reject or cancel some of them there, or stop runs waiting on them, first`, step: 'run_again' },
   // #1266: requests are answered in Needs you, the Brief decisions feature, and it is off here.
+  // #1153: the HTTP, GraphQL or SMTP step's address is outside this Jarvis's network policy, or it asked for a proxy; nothing was sent, and a rerun is refused the same way.
+  EGRESS_REFUSED: { category: 'invalid_input', why: "the address it sends to is outside this Jarvis's network policy (or it asked for a proxy), so nothing was sent. Change the address in the step", step: 'edit_and_run_again' },
   HUMAN_INPUT_UNAVAILABLE: { category: 'missing_binding', why: 'Needs you is off on this Jarvis, so nothing could answer it. Turn on decisions (JARVIS_BRIEF_DECISIONS=1)', step: 'run_again' },
 };
 /** Action codes whose meaning is invalid input or an invalid definition. */

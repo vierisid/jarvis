@@ -1,6 +1,7 @@
 import { getWorkflowDb } from '../db';
 import { getWorkflowEffect, saveWorkflowEffect } from '../db/repos/workflow-effect';
 import { canonicalJson, digest, type WorkflowEffectContext } from './effect-context';
+import { NOT_SENT_PIECES } from './piece-effects';
 import { closeEffectApproval, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
 import { boundedReceiptText } from '../../roles/untrusted';
 import { RECEIPT_MAX_CHARS } from '../../authority/deferred-executor';
@@ -47,6 +48,7 @@ export function recordPieceNotSent(ctx: WorkflowEffectContext, effectId: string,
       throw new Error('Provider receipt identity does not match the dispatch');
     }
     if (effect.status !== 'dispatching') throw new Error('Provider dispatch is not awaiting a receipt');
+    if (!NOT_SENT_PIECES.has(String(effect.provenance?.piece))) throw new Error('A not-sent receipt applies only to a piece whose refusals come before sending');
     const text = `Not sent: ${message}`;
     effect.status = 'blocked'; effect.error = text; effect.finishedAt = Date.now();
     effect.outcome = { status: 'blocked', code: 'EGRESS_REFUSED', message: text, effect: 'not_started' };

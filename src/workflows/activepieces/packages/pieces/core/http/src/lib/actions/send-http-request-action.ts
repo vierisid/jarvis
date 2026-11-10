@@ -381,7 +381,8 @@ export const httpSendRequestAction = createAction({
         // Jarvis (#961): a refused address fails the step as itself; it is
         // never retried or continued past as if the server had answered.
         const refused = egressRefusalIn(error);
-        if (refused) throw refused;
+        // An earlier attempt reached the server, so a refusal now is not a request never sent (#1153).
+        if (refused) throw attempts > 0 && !refused.afterSend ? new EgressRefusedError(refused.message, { afterSend: true }) : refused;
         attempts++;
 
         switch (failureMode) {
