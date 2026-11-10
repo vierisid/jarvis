@@ -28,12 +28,58 @@ export interface SettingsValue {
   replay: ("profile" | "tutorial")[];
 }
 export const DESTINATIONS = [
+  "credentials",
   "authority",
   "connections",
   "voice-settings",
   "advanced-settings",
 ] as const;
 export type SettingsDestination = (typeof DESTINATIONS)[number];
+/** What the AI provider row says. Never carries a key, only whether one is stored. */
+export type AiProvider =
+  | { state: "managed"; model: string | null }
+  | { state: "ready"; provider: string; model: string }
+  | { state: "missing"; provider: string | null };
+export type AiProviderRead =
+  | { state: "ready"; data: AiProvider }
+  | { state: "error" | "unavailable" | "unsupported" };
+const KEYED_KINDS = ["anthropic", "openai", "groq", "gemini", "openrouter", "nvidia"];
+const PROVIDER_NAMES: Record<string, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  groq: "Groq",
+  gemini: "Gemini",
+  ollama: "Ollama",
+  openrouter: "OpenRouter",
+  nvidia: "NVIDIA",
+  usejarvis_ai: "Usejarvis AI",
+  litellm: "LiteLLM",
+  omniroute: "OmniRoute",
+};
+export const providerName = (name: string) => PROVIDER_NAMES[name] ?? name;
+/** Reads GET /api/config/llm, the response the AI settings page already uses. */
+export function readAiProvider(value: unknown): AiProvider | null {
+  if (!record(value) || !record(value.providers)) return null;
+  const effective = record(value.effective) && record(value.effective.tiers)
+      ? value.effective.tiers.conversation?.ref
+      : undefined,
+    ref = [effective, value.default, record(value.tiers) ? value.tiers.conversation : null].find(
+      (r) => typeof r === "string" && r.includes(":"),
+    ) as string | undefined;
+  const name = ref?.slice(0, ref.indexOf(":")) ?? null,
+    model = ref ? ref.slice(ref.indexOf(":") + 1) : null;
+  if (name === "usejarvis_ai" || (!ref && value.hosted_llm === true))
+    return { state: "managed", model: model && name === "usejarvis_ai" ? model : null };
+  if (!name || !model) return { state: "missing", provider: null };
+  const entry = value.providers[name];
+  if (
+    !record(entry) ||
+    (entry.has_api_key !== true &&
+      KEYED_KINDS.includes(String(entry.kind ?? name)))
+  )
+    return { state: "missing", provider: providerName(name) };
+  return { state: "ready", provider: providerName(name), model };
+}
 export type SettingsRead =
   | { state: "ready"; data: SettingsValue }
   | { state: "error" | "unavailable" | "unsupported" };
@@ -49,6 +95,7 @@ export interface SettingsPort {
   destinations: Readonly<Record<SettingsDestination, boolean>>;
   canReplayTutorial: boolean;
   read(signal: AbortSignal): Promise<SettingsRead>;
+  readAiProvider(signal: AbortSignal): Promise<AiProviderRead>;
   saveVoice(
     revision: string,
     voice: string,
