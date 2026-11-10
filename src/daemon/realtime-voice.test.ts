@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { anyRealtimeVoicing, liveRealtimeSessionCount, RealtimeVoiceSession } from './realtime-voice.ts';
+import { anyRealtimeVoicing, forgetRealtimeSessionsForTests, liveRealtimeSessionCount, RealtimeVoiceSession } from './realtime-voice.ts';
 import type { RealtimeSession, RealtimeFunctionCall, RealtimeTranscript, RealtimeUsage, RealtimeTranscriptionUsage } from '../comms/realtime.ts';
 import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
@@ -255,8 +255,12 @@ describe('RealtimeVoiceSession error copy', () => {
 });
 
 describe('anyRealtimeVoicing (#1156)', () => {
+  // Sessions other test files left open share this process-wide registry.
+  beforeEach(() => forgetRealtimeSessionsForTests());
+
   test('is true while any live session may be heard, and forgets closed ones', () => {
     const held = liveRealtimeSessionCount();
+    expect(held).toBe(0);
     const a = setup(async () => 'ok');
     const b = setup(async () => 'ok');
     expect(liveRealtimeSessionCount()).toBe(held + 2);
