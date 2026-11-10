@@ -137,8 +137,9 @@ export class SuggestionComposer {
           failSuggestionComposition(job, result.errors.join('\n') + (installs ? `\nRequired pieces: ${installs}` : ''));
         }
       } catch (error) {
-        if (this.running && this.active === active && (error instanceof AwarenessHeldError || !awarenessHistoryVisible())) {
-          holdCompositionLease(getDb(), 'suggestion_composition_jobs', job.id, job.lease_token);
+        // Held while the switch is off, and refunded, only when the hold took (#1314 review): a job dismissed or taken over fails as before.
+        if (this.running && this.active === active && (error instanceof AwarenessHeldError || !awarenessHistoryVisible())
+          && holdCompositionLease(getDb(), 'suggestion_composition_jobs', job.id, job.lease_token)) {
           getDb().run(`DELETE FROM suggestion_composition_attempts WHERE rowid = (SELECT rowid FROM suggestion_composition_attempts
             WHERE job_id = ? ORDER BY started_at DESC LIMIT 1)`, [job.id]);
           return;

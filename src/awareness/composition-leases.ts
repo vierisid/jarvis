@@ -47,9 +47,10 @@ export function claimCompositionLease<T extends CompositionLease>(db: Database, 
  * because screen awareness turned off, not tried and failed. Only the lease
  * holder can.
  */
-export function holdCompositionLease(db: Database, table: CompositionTable, id: string, token: string | null, now = Date.now()): void {
-  db.run(`UPDATE ${tableName(table)} SET state = 'queued', attempts = MAX(attempts - 1, 0), lease_token = NULL, lease_until = 0, updated_at = ?
-    WHERE id = ? AND state = 'running' AND lease_token = ?`, [now, id, token]);
+/** Returns whether the job was held: false when it was no longer this lease's (dismissed, failed, taken over). */
+export function holdCompositionLease(db: Database, table: CompositionTable, id: string, token: string | null, now = Date.now()): boolean {
+  return db.run(`UPDATE ${tableName(table)} SET state = 'queued', attempts = MAX(attempts - 1, 0), lease_token = NULL, lease_until = 0, updated_at = ?
+    WHERE id = ? AND state = 'running' AND lease_token = ?`, [now, id, token]).changes === 1;
 }
 
 type CompositionOwner = { owner: 'legacy' | 'prepared'; job_id: string };

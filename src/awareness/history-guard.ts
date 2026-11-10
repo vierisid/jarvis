@@ -30,13 +30,28 @@ export class AwarenessHeldError extends Error {
  * job already running sends nothing more once the switch goes off: the loop
  * head stops the next job, this stops the rest of this one.
  */
-export function awarenessHeldLlm<T extends object>(llm: T): T {
+export function awarenessHeldLlm<T extends object>(llm: T, state?: { held: boolean }): T {
+  const hold = () => { if (state) state.held = true; return new AwarenessHeldError(); };
   return new Proxy(llm, {
     get(target, key, receiver) {
       const value = Reflect.get(target, key, receiver);
       if (typeof value !== 'function') return value;
       return (...args: unknown[]) => {
-        if (!awarenessHistoryVisible()) throw new AwarenessHeldError();
+        if (!awarenessHistoryVisible()) throw hold();
+        // Inside one call the provider layer retries and falls back to other
+        // providers, asking the deadline hook before each attempt (#1314
+        // review): the hook asks the switch too, so no retry or fallback
+        // sends the prompt once awareness is off.
+        const held = (deadline: unknown) => () => {
+          if (!awarenessHistoryVisible()) throw hold();
+          if (typeof deadline === 'function') (deadline as () => void)();
+        };
+        if (key === 'chat' && args[0] && typeof args[0] === 'object') {
+          const input = args[0] as { checkDeadline?: unknown };
+          args = [{ ...input, checkDeadline: held(input.checkDeadline) }, ...args.slice(1)];
+        } else if (key === 'chatTools') {
+          const next = [...args]; next[3] = held(args[3]); args = next;
+        }
         return (value as (...a: unknown[]) => unknown).apply(target, args);
       };
     },

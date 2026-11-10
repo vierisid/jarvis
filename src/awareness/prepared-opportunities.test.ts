@@ -477,3 +477,55 @@ test('a job running when awareness turns off sends nothing more and goes back to
     void s;
   } finally { setScreenCaptureEnabledSource(null); }
 });
+
+test('a qualification that fails after the flow is attached, with awareness off, fails as before: no second flow, no refund (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  let on = true, calls = 0, prepares = 0;
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    source('a');
+    const g: PreparedQualificationGate = { ...gate(), prepare: async identity => { prepares++; if (prepares === 1) { on = false; throw Error('sandbox broke'); } return qualified(identity); } };
+    const p = provider({ async chat() { calls++; return { text: JSON.stringify(graph()) }; } }, g);
+    p.kick(); await p.idle();
+    expect(getDb().query('SELECT state FROM prepared_opportunities').get()).toMatchObject({ state: 'failed' });
+    expect(getDb().query('SELECT id FROM prepared_opportunity_attempts').all()).toHaveLength(1);
+    on = true; p.kick(); await p.idle();
+    expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(1);
+    expect(calls).toBe(1);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test('a job no longer this lease\'s when awareness turns off keeps its spent attempt (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  let on = true;
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    source('a');
+    const p = provider({ async chat() {
+      // Dismissed elsewhere mid-run, then awareness goes off: there is nothing to hold.
+      getDb().run("UPDATE prepared_opportunities SET state = 'failed', lease_token = NULL");
+      on = false; return { text: JSON.stringify(graph()) };
+    } });
+    p.kick(); await p.idle();
+    expect(getDb().query('SELECT state FROM prepared_opportunities').get()).toMatchObject({ state: 'failed' });
+    expect(getDb().query('SELECT id FROM prepared_opportunity_attempts').all()).toHaveLength(1);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test('a model call refused by the switch holds the job even if awareness is back on when the composer returns (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  let on = true, calls = 0;
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    source('a');
+    const p = provider({ async chat(input: { checkDeadline?: () => void }) {
+      calls++;
+      // Off at the retry boundary, then on again before the composer gives up.
+      on = false; try { input.checkDeadline?.(); } finally { on = true; }
+      return { text: JSON.stringify(graph()) };
+    } } as never);
+    p.kick(); await p.idle();
+    expect(getDb().query('SELECT state FROM prepared_opportunities').get()).toMatchObject({ state: 'queued' });
+    expect(getDb().query('SELECT id FROM prepared_opportunity_attempts').all()).toHaveLength(0);
+  } finally { setScreenCaptureEnabledSource(null); }
+});

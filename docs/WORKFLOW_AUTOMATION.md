@@ -159,14 +159,17 @@ Practical consequences:
   Brief's Today stack, the Opportunities room (a proposal with an action in
   flight included; it comes back when awareness is on) and the Routines panel
   (an open routine whose save is refused included) show "awareness is off" and
-  clear what they showed before;
+  clear what they showed before, as soon as a read or an action is refused;
   screen-capture observations are left out of every observation read (the
   Logs room, the palette search, the agents' prompts); the awareness
   service's own read methods, the live context and the current session
   included, return nothing; the background composers that turn recorded
   evidence into drafts wait until awareness is on: one that is draining when
   it turns off stops before its next job, a composition already running is
-  held before its next model call and goes back to the queue unspent, and
+  held before its next model call, including a provider retry or fallback
+  inside one call, and goes back to the queue unspent (a prepared job only
+  until its draft workflow is attached: after that a failure fails as before,
+  and a job dismissed meanwhile keeps its spent attempt), and
   prepared-opportunity discovery and the opportunity notification outbox
   hold on the switch itself, so nothing queued is lost; and a flow's
   `awarenessRecent` context returns no activity. Vault entities and goal notes once written from awareness are
