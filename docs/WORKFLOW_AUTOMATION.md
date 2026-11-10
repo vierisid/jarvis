@@ -735,6 +735,13 @@ is visible to the Authority boundary above. That is the whole reason for the
 gate: a flow is not always hand-authored, `manage_workflow compose` builds a
 `FlowVersion` out of an LLM plan, and LLM output is untrusted here.
 
+The step's process does not outlive its engine. On macOS and Linux the engine
+leads a process group of its own and the daemon signals the whole group when it
+stops the engine (only while the engine has not exited, so a reused group id is
+never signalled); a step whose engine died by itself exits when its IPC channel
+closes. Code that leaves its process group on purpose (`setsid`, a detached
+grandchild) is not contained by this: it is same-user code (see "Trust model").
+
 So CODE is off by default, and the permission is granted PER FLOW:
 
 ```

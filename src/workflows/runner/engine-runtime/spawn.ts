@@ -533,6 +533,11 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
     env,
     cwd: opts.cwd,
     stdio: ["ignore", "pipe", "pipe"],
+    // Its own process group (POSIX), so the processes a CODE step starts
+    // (no-op-code-sandbox.ts) are signalled with it: they are in its group,
+    // and a SIGKILL to the engine's pid alone left them running with the
+    // daemon's init as their parent. See `signalEngine`.
+    detached: ENGINE_PROCESS_GROUPS,
   });
 
   // Mark the bundle as in use so the cache pruner leaves it alone. A daemon
@@ -605,7 +610,7 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
     child,
     exited,
     spawnFailed,
-    kill: (signal = "SIGTERM") => child.kill(signal),
+    kill: (signal = "SIGTERM") => signalEngine(child, isAlive, signal),
     alive: () => isAlive,
   };
 }
@@ -669,7 +674,7 @@ export async function killLiveEngines(opts?: {
 
   for (const e of victims) {
     try {
-      e.child.kill("SIGTERM");
+      signalEngine(e.child, LIVE_ENGINES.has(e), "SIGTERM");
     } catch {
       /* already gone */
     }
@@ -683,7 +688,7 @@ export async function killLiveEngines(opts?: {
   for (const e of victims) {
     if (!LIVE_ENGINES.has(e)) continue;
     try {
-      e.child.kill("SIGKILL");
+      signalEngine(e.child, LIVE_ENGINES.has(e), "SIGKILL");
     } catch {
       /* raced with its own exit */
     }
@@ -719,12 +724,36 @@ function installExitNet(): void {
   process.on("exit", () => {
     for (const e of [...LIVE_ENGINES]) {
       try {
-        e.child.kill("SIGKILL");
+        signalEngine(e.child, true, "SIGKILL");
       } catch {
         /* already gone */
       }
     }
   });
+}
+
+/** An engine leads a process group of its own wherever there are process groups. */
+const ENGINE_PROCESS_GROUPS = process.platform !== "win32";
+
+/**
+ * Signal an engine, and with it every process in its group: the children a
+ * CODE step started, which would otherwise outlive it. Only while the engine
+ * has not exited (`alive`, which follows its `exit`): until it is reaped its
+ * pid, and so its group id, cannot be handed to another process, but once it
+ * has been a group signal could reach a stranger's group. After that only the
+ * handle is signalled, which Node turns into nothing for an exited child.
+ * Windows has no process groups: the engine alone, as before.
+ */
+function signalEngine(child: ChildProcess, alive: boolean, signal: NodeJS.Signals): boolean {
+  if (ENGINE_PROCESS_GROUPS && alive && child.pid !== undefined && child.pid > 0) {
+    try {
+      process.kill(-child.pid, signal);
+      return true;
+    } catch {
+      // No such group any more: fall back to the handle.
+    }
+  }
+  return child.kill(signal);
 }
 
 /**
