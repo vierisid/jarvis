@@ -26,6 +26,7 @@ import { getSettingsByPrefix, setSetting } from '../vault/settings.ts';
 import { NotSentError, partlySent, requestMayHaveArrived, sendMayHaveArrived, sendRetryable } from '../comms/delivery.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { checkpointExecution, withExecutionScope } from '../actions/execution-scope.ts';
+import { channelThreadTitle } from '../brief/conversation-title.ts';
 
 /**
  * How many channel turns, every chat on every channel together, run at once
@@ -805,7 +806,9 @@ export class ChannelService implements Service {
     //    conversation (#884). Every sender used to share the channel's one
     //    conversation, so on a channel anyone may message (an empty list,
     //    #811) a stranger could ask about the owner's earlier turns.
-    const conversation = getOrCreateConversation(channelTag, { sender });
+    // Titled after its sender (#1313 follow-up), so closed threads can be told apart.
+    const label = channelThreadTitle(channelTag, msg.from);
+    const conversation = getOrCreateConversation(channelTag, { sender, ...(label ? { label } : {}) });
     // A forward is marked in the same transaction (#1155): stored unmarked,
     // it would read as the owner's own words on every later turn.
     getDb().transaction(() => {

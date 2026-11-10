@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { conversationTitle } from './conversation-title';
+import { channelThreadTitle, conversationTitle } from './conversation-title';
 
 test('an empty or whitespace-only first message keeps the default title', () => {
   for (const text of ['', '   ', '\n\t', '\u0000\u001f\u007f']) expect(conversationTitle(text)).toBe('New chat');
@@ -29,4 +29,21 @@ test('a topic of 61 characters is shortened', () => {
 test('a topic of exactly 60 characters is kept whole', () => {
   const text = 'a'.repeat(60);
   expect(conversationTitle(text)).toBe('A' + 'a'.repeat(59));
+});
+
+// #1313 follow-up: Telegram and Discord threads were all "Chat history".
+test('a channel thread is titled with its channel and sender', () => {
+  expect(channelThreadTitle('telegram', 'alice_b')).toBe('Telegram - alice_b');
+  expect(channelThreadTitle('discord', 'Bob')).toBe('Discord - Bob');
+});
+test('a sender name is untrusted: format and control characters go, and it is capped', () => {
+  // A right-to-left override would reorder what follows it in the tab strip.
+  expect(channelThreadTitle('telegram', `ali‮ce\u0000\n​x`)).toBe('Telegram - alice x');
+  const long = channelThreadTitle('telegram', 'x'.repeat(500))!;
+  expect(long).toBe(`Telegram - ${'x'.repeat(40)}...`);
+  expect(channelThreadTitle('telegram', '<img src=x onerror=alert(1)>')).toBe('Telegram - <img src=x onerror=alert(1)>');
+});
+test('no usable name, or a channel without a label, keeps the default title', () => {
+  for (const name of ['', '   ', '‮​', undefined, 42, null]) expect(channelThreadTitle('telegram', name)).toBeUndefined();
+  expect(channelThreadTitle('websocket', 'alice')).toBeUndefined();
 });

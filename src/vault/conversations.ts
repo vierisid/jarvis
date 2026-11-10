@@ -73,7 +73,11 @@ function parseMessage(row: MessageRow): ConversationMessage {
  * before #884) is never handed to a sender, nor a sender's to a caller that
  * names none.
  */
-export type ConversationOwner = { sender?: string };
+export type ConversationOwner = {
+  sender?: string;
+  /** The title a new conversation's tab gets (channelThreadTitle); an existing one keeps its own. */
+  label?: string;
+};
 
 /**
  * Get or create the active conversation for a channel, or for one sender on
@@ -105,7 +109,7 @@ export function getOrCreateConversation(channel: string, owner?: ConversationOwn
   db.prepare(
     'INSERT INTO conversations (id, channel, started_at, last_message_at, message_count, sender) VALUES (?, ?, ?, ?, 0, ?)'
   ).run(id, channel, now, now, sender ?? null);
-  ensureConversationTab(db, id);
+  ensureConversationTab(db, id, owner?.label);
 
   return {
     id,

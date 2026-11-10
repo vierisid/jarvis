@@ -97,6 +97,15 @@ describe('#884: each channel sender has a conversation of their own', () => {
   beforeEach(() => initDatabase(':memory:'));
   afterEach(() => closeDb());
 
+  // #1313 follow-up: closed channel threads were all "Chat history".
+  test('a sender\'s thread is titled with the channel and the name they chose, as text', async () => {
+    const { agent } = classicAgent();
+    await service(agent)({ ...telegram(3003, 'hi', false), from: 'eve\u202Egnp.exe' });
+    const row = getDb().query(`SELECT t.title FROM conversations c JOIN conversation_tabs t ON t.conversation_id = c.id
+      WHERE c.sender = ?`).get(conversationSender(telegram(3003, '', false))!) as { title: string };
+    expect(row.title).toBe('Telegram - evegnp.exe');
+  });
+
   test('classic mode: a stranger is not answered from the owner\'s dashboard or channel history', async () => {
     const { agent, orch, provider } = classicAgent();
     // The owner's dashboard chat writes the primary agent's history.

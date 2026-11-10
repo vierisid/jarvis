@@ -220,3 +220,23 @@ test('the Pebble voice dialogue is not a Brief chat: not listed, not opened', ()
   expect(repo.list({ closed: true }).items.map(c => c.conversationId)).not.toContain(pebble.id);
   expect(() => repo.get(pebble.id)).toThrow('Conversation not found');
 });
+
+// #1313 follow-up: closed Telegram and Discord threads all read "Chat history".
+test('a channel thread is titled with its channel and sender, and an older one with its channel and start date', () => {
+  const repo = memory();
+  const alice = getOrCreateConversation('telegram', { sender: 'user:1/chat:1', label: 'Telegram - alice' });
+  const bob = getOrCreateConversation('discord', { sender: 'user:2/chat:2', label: 'Discord - Bob' });
+  expect(repo.get(alice.id).title).toBe('Telegram - alice');
+  expect(repo.get(bob.id).title).toBe('Discord - Bob');
+  // The same sender's thread is found again, and keeps its title.
+  expect(getOrCreateConversation('telegram', { sender: 'user:1/chat:1', label: 'Telegram - alice2' }).id).toBe(alice.id);
+  expect(repo.get(alice.id).title).toBe('Telegram - alice');
+  // A thread saved before labels (or with no usable name) keeps its stored default.
+  const old = getOrCreateConversation('telegram', { sender: 'user:3/chat:3' });
+  getDb().run('UPDATE conversations SET started_at = ? WHERE id = ?', [Date.UTC(2026, 10, 3, 12), old.id]);
+  expect(repo.get(old.id).title).toBe('Telegram chat from 2026-11-03');
+  // The dashboard's own legacy conversation is unchanged.
+  expect(repo.get(getOrCreateConversation('websocket').id).title).toBe('Chat history');
+  // A rename is the person's and wins.
+  expect(repo.rename(old.id, 'Mum').title).toBe('Mum');
+});
