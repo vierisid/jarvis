@@ -13,14 +13,21 @@ export const HUMAN_INPUT_LIMIT_CODE = 'HUMAN_INPUT_LIMIT';
  */
 export const HUMAN_INPUT_UNAVAILABLE_CODE = 'HUMAN_INPUT_UNAVAILABLE';
 /**
- * Why nothing could answer, for the dashboard this Jarvis uses. Requests are
- * answered only in Brief, so under JARVIS_DASHBOARD=legacy turning decisions on
- * alone would leave them waiting where the person cannot see them.
+ * Why nothing could answer a request on this Jarvis, or null when Needs you
+ * (the Brief decisions capability) can take it. It names the cause that
+ * applies: decisions turned off under the Brief dashboard, the previous
+ * dashboard (requests are answered only in Brief, so the flag alone is not the
+ * remedy there), or a decisions provider that is not ready.
  */
-export function humanInputUnavailableMessage(dashboard: 'brief' | 'legacy'): string {
+export function humanInputRefusal(decisions: { enabled: boolean; reason: string | null }, dashboard: 'brief' | 'legacy'): string | null {
+  if (decisions.enabled) return null;
+  const why = 'so nothing could answer this request.';
+  if (decisions.reason !== 'disabled') {
+    return `Needs you is not ready on this Jarvis, ${why} Run it again once Jarvis has finished starting; if it keeps failing, check the Jarvis log.`;
+  }
   return dashboard === 'legacy'
-    ? 'Needs you is off on this Jarvis, so nothing could answer this request. Requests for input or approval are answered only in Brief, and this Jarvis uses the previous dashboard (JARVIS_DASHBOARD=legacy). Switch to Brief (unset JARVIS_DASHBOARD) to let workflows ask for input or approval.'
-    : 'Needs you is off on this Jarvis, so nothing could answer this request. Turn on decisions (JARVIS_BRIEF_DECISIONS=1) to let workflows ask for input or approval.';
+    ? `Needs you is off on this Jarvis, ${why} Requests for input or approval are answered only in Brief, and this Jarvis uses the previous dashboard. Switch to Brief (JARVIS_DASHBOARD=brief, with JARVIS_HOSTED_DASHBOARD unset) with decisions on to let workflows ask for input or approval.`
+    : `Needs you is off on this Jarvis, ${why} Turn on decisions (JARVIS_BRIEF_DECISIONS=1) to let workflows ask for input or approval.`;
 }
 /** A step that asks a person: the input piece's two actions, and the legacy approval piece's. */
 export function isHumanInputStep(piece: unknown, action: unknown): boolean {
