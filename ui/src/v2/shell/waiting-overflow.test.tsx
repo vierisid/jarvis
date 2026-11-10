@@ -97,3 +97,41 @@ describe("#1303 follow-up: the home tile says when failures are not shown, and s
     expect(failureOverflow(Array.from({ length: SERVER_LIMIT }, (_, i) => i), true).capped).toBe(true);
   });
 });
+
+describe("the overflow toggle", () => {
+  test("one button expands and collapses in place, keeping focus, and goes once three or fewer remain", async () => {
+    const { GlobalRegistrator } = await import("@happy-dom/global-registrator");
+    GlobalRegistrator.register();
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    try {
+      const { createRoot } = await import("react-dom/client");
+      const host = document.createElement("div"); document.body.append(host);
+      const root = createRoot(host);
+      const live = { approvals: [], clarifiers: [], repeatBacks: [] } as unknown as LiveData;
+      const draw = (n: number) => React.act(async () => root.render(<WaitingWidget live={live}
+        inbox={{ pending: ready([]), unresolved: ready([]) } as never}
+        failures={ready(Array.from({ length: n }, (_, i) => failure(i))) as never} connection="live" onApprove={() => {}} onCancel={() => {}} />));
+      const toggle = () => host.querySelector<HTMLButtonElement>("button[aria-expanded]");
+      await draw(5);
+      const button = toggle()!;
+      expect(button.getAttribute("aria-expanded")).toBe("false");
+      expect(host.textContent).not.toContain("Run 4 stopped.");
+      button.focus();
+      await React.act(async () => button.click());
+      expect(toggle()).toBe(button);
+      expect(document.activeElement).toBe(button);
+      expect(button.getAttribute("aria-expanded")).toBe("true");
+      expect(host.textContent).toContain("Run 4 stopped.");
+      expect(button.textContent).toContain("Show fewer");
+      await React.act(async () => button.click());
+      expect(button.getAttribute("aria-expanded")).toBe("false");
+      expect(host.textContent).not.toContain("Run 4 stopped.");
+      // Dismissals bring it to three: no lone "Show fewer".
+      await React.act(async () => button.click());
+      await draw(3);
+      expect(toggle()).toBeNull();
+      expect(host.textContent).not.toContain("Show fewer");
+      await React.act(async () => root.unmount()); host.remove();
+    } finally { GlobalRegistrator.unregister(); }
+  });
+});
