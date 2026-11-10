@@ -154,17 +154,21 @@ export const SCREEN_CAPTURE_TOOLS: ReadonlySet<string> = new Set(['desktop_scree
 /**
  * Every tool that hands back what is on a screen (owner decision on #1314):
  * the screenshots above and the reads that return the screen as TEXT -- a
- * window's control tree, the window list, a found element, a page snapshot,
- * the page a navigation lands on, the accessibility surface `ui_snapshot`
- * reads and the surface diff `ui_act` returns. Turning awareness off stops
- * all of them, on every path, as it stops the screenshots.
+ * window's control tree, the window list, a found element, the accessibility
+ * surface `ui_snapshot` reads and the surface diff `ui_act` returns. Turning
+ * awareness off stops all of them, on every path, as it stops the screenshots.
+ *
+ * NOT here, by owner decision: `browser_navigate`, `browser_snapshot` and
+ * `browser_evaluate`. They read pages Jarvis opened itself in its own
+ * browser, not what the person has on their screen, so they keep working with
+ * awareness off. (`browser_screenshot` stays a screenshot and stays off.)
  */
+export const BROWSER_PAGE_READS: ReadonlySet<string> = new Set(['browser_navigate', 'browser_snapshot', 'browser_evaluate']);
 export const SCREEN_READ_TOOLS: ReadonlySet<string> = new Set([...SCREEN_CAPTURE_TOOLS,
-  'desktop_snapshot', 'desktop_list_windows', 'desktop_find_element', 'browser_snapshot', 'browser_navigate', 'ui_snapshot', 'ui_act',
-  // Reads by another name (#1314 review): a page expression returns whatever
-  // the page holds, and a skill replay reads each surface it acts on and
-  // reports what it saw (titles, new content, field values).
-  'browser_evaluate', 'run_skill']);
+  'desktop_snapshot', 'desktop_list_windows', 'desktop_find_element', 'ui_snapshot', 'ui_act',
+  // A read by another name (#1314 review): a skill replay reads each surface
+  // it acts on and reports what it saw (titles, new content, field values).
+  'run_skill']);
 
 /**
  * Whether this call hands back what is on a screen: a screen-read tool, a
@@ -245,6 +249,7 @@ export function screenAwarenessOffSystemNote(): string | null {
     'The user has turned screen awareness off. The tool guide above documents tools that read the screen, '
     + 'but on this install you cannot take screenshots or read what is on any screen: '
     + `${[...SCREEN_READ_TOOLS].join(', ')} and desktop_click with action get_value are not available, and record_skill cannot start a recording. `
+    + `Pages you open yourself in the Jarvis browser stay readable: ${[...BROWSER_PAGE_READS].join(', ')} still work. `
     + 'Do not read the screen another way, for example through shell commands. '
     + 'If the user asks about what is on their screen, say that screen awareness is off and that they can turn it back on.',
   ].join('\n');
@@ -257,7 +262,7 @@ export function desktopOffSystemNote(): string | null {
     '',
     'The user has turned desktop control off (desktop.enabled: false). The tool guide above documents the desktop tools, '
     + 'but on this install you cannot list windows, read the screen, read or write the clipboard, or click, type, press keys, launch or focus apps on any machine: '
-    + `the desktop_* tools, capture_screen, get_clipboard and set_clipboard are not available, ${isScreenCaptureEnabled() ? 'ui_snapshot, ui_act and run_skill work only on the browser' : 'and with screen awareness off ui_snapshot, ui_act, run_skill and the browser reads are not available either'}, `
+    + `the desktop_* tools, capture_screen, get_clipboard and set_clipboard are not available, ${isScreenCaptureEnabled() ? 'ui_snapshot, ui_act and run_skill work only on the browser' : 'and with screen awareness off ui_snapshot, ui_act, run_skill and browser_screenshot are not available either (browser_navigate, browser_snapshot and browser_evaluate still work)'}, `
     + 'and record_skill cannot start a recording. '
     + 'Do not try to reach the desktop another way, for example through shell commands. '
     + 'If the user asks for something on their desktop, say that desktop control is off and that they can turn it back on '
