@@ -17,6 +17,7 @@ import { saveUserProfile, getUserProfile, getUserProfileForPrompt } from '../vau
 import { formatUserProfileForPrompt } from '../user/profile';
 import { extractAndStore, extractGoalCompletion } from '../vault/extractor';
 import { LLMManager } from '../llm/manager';
+import { JarvisContextProviderAdapter } from '../workflows/adapters/context-provider';
 
 let dir: string, file: string, service: MemoryForget, flags: Record<string, string | undefined>;
 beforeEach(() => {
@@ -341,4 +342,28 @@ test('re-ingestion enriches existing scoped evidence with its durable replay ali
   expect(getFact(fact.id)?.evidence).toHaveLength(1);
   forget(fact.id); await extract();
   expect(findFacts({ predicate: 'preferred_editor' })).toEqual([]);
+});
+test('D-12: Forget removes every earlier version of a corrected fact from each read path', async () => {
+  const entity = createEntity('person', 'Ada');
+  const first = createFact(entity.id, 'pricing_note', 'Discount ZEBRAONE', { source: 'dashboard', confirmed: true });
+  const second = correctFact(first.id, 'Discount ZEBRATWO', 'Changed once');
+  const third = correctFact(second.id, 'Discount ZEBRATHREE', 'Changed twice');
+  const other = createFact(entity.id, 'works_at', 'Other company', { source: 'dashboard', confirmed: true });
+  const stream = new MemoryStream(getDb());
+  forget(third.id);
+  expect(findFacts({ subject_id: entity.id, includeSuperseded: true }).map(f => f.id)).toEqual([other.id]);
+  expect(getDb().query('SELECT * FROM fact_evidence WHERE fact_id IN (?, ?, ?)').all(first.id, second.id, third.id)).toEqual([]);
+  for (const id of [first.id, second.id]) {
+    expect(getFact(id)).toBeNull();
+    expect(JSON.stringify(stream.detail(id, true))).not.toContain('ZEBRA');
+    expect(stream.detail(id)).toEqual({ state: 'not_found' });
+  }
+  expect(JSON.stringify(await stream.read({ limit: 50 }))).not.toContain('ZEBRA');
+  expect(getKnowledgeForMessage('Ada Discount ZEBRAONE ZEBRATWO ZEBRATHREE')).not.toContain('ZEBRA');
+  const context = new JarvisContextProviderAdapter();
+  expect(JSON.stringify(await context.vaultSearch({ query: 'Ada' }))).not.toContain('ZEBRA');
+  expect(JSON.stringify(await context.vaultGetEntity(entity.id))).not.toContain('ZEBRA');
+  expect(getFact(other.id)?.object).toBe('Other company');
+  // The older versions' automatic sources stay suppressed too.
+  expect(JSON.stringify(getDb().query('SELECT * FROM memory_forget_suppressions').all())).not.toContain('ZEBRA');
 });
