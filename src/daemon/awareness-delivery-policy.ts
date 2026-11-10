@@ -134,7 +134,7 @@ export class AwarenessDeliveryPolicy {
           'awareness'
         ).then(solution => {
           // Awareness turned off while the research ran (#1314): its result is screen-derived, so nothing is shown, sent or spoken.
-          if (!awarenessHistoryVisible()) return;
+          if (!awarenessHistoryVisible()) { screenAlerts.researchEnded(errorKey); return; }
           if (solution && solution.length > 10) {
             // A turn that stopped on an approval request is not a fix yet.
             const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
@@ -201,7 +201,7 @@ export class AwarenessDeliveryPolicy {
           'awareness'
         ).then(solution => {
           // Awareness turned off while the research ran (#1314): its result is screen-derived, so nothing is shown, sent or spoken.
-          if (!awarenessHistoryVisible()) return;
+          if (!awarenessHistoryVisible()) { screenAlerts.researchEnded(struggleKey); return; }
           if (solution && solution.length > 10) {
             const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
             const heading = awaiting ? `Needs your approval (${sAppName})` : `Help for ${sAppName}`;

@@ -294,3 +294,23 @@ test('researched help that finishes after awareness is turned off is not shown, 
     } finally { setScreenCaptureEnabledSource(null); }
   }
 });
+
+test('a dropped research result does not leave its issue muted when awareness comes back on (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  const { screenIssueKey } = await import('../failures/interruptions');
+  const f = fixture('0');
+  const priorities: string[] = [];
+  let finish!: (text: string) => void;
+  f.deps.sockets = { ...f.deps.sockets, getServer: () => ({ getClientCount: () => 1, broadcastWithReceipt: () => 1 }),
+    broadcastNotification: (_text: string, priority?: string) => { priorities.push(priority ?? 'normal'); } } as typeof f.deps.sockets;
+  f.deps.agent = () => ({ handleMessage: () => new Promise<string>(resolve => { finish = resolve; }), lastTurnRequestedApproval: () => false });
+  const policy = new AwarenessDeliveryPolicy(f.deps, '0');
+  policy.handleEvent({ type: 'error_detected', data: { appName: 'Terminal', errorText: 'Synthetic screen error', appCategory: 'terminal' }, timestamp: 1 });
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    finish('A synthetic solution long enough to announce.'); await Bun.sleep(0); await Bun.sleep(0);
+  } finally { setScreenCaptureEnabledSource(null); }
+  // Back on: the same issue's suggestion interrupts as it would have, no research is coming.
+  policy.handleEvent({ type: 'suggestion_ready', data: { title: 'Error', body: 'Synthetic', issueKey: screenIssueKey('error', 'Terminal', 'Synthetic screen error') }, timestamp: 2 });
+  expect(priorities).toEqual(['urgent']);
+});
