@@ -11,7 +11,6 @@ import type { BriefRoomModule, BriefShellPort } from "../../contracts";
 import {
   BriefButton,
   BriefSelect,
-  BriefSegments,
 } from "../../components/controls";
 import { AppearanceSelector } from "./AppearanceSelector";
 import { SettingsController } from "./controller";
@@ -143,6 +142,10 @@ function SettingsBody({ controller }: { controller: SettingsController }) {
         <h1 className="brief-type-room-title">Settings</h1>
         <AppearanceSelector />
       </header>
+      <section aria-labelledby={`${id}-permissions`}>
+        <h2 id={`${id}-permissions`}>Permissions and approvals</h2>
+        {link("authority", "Authority", "What Jarvis may do and when it asks")}
+      </section>
       <section aria-labelledby={`${id}-conversation`}>
         <h2 id={`${id}-conversation`}>Conversation</h2>
         <div className="brief-settings-row">
@@ -229,30 +232,8 @@ function SettingsBody({ controller }: { controller: SettingsController }) {
           </div>
         </div>
       </section>
-      <section aria-labelledby={`${id}-checkins`}>
-        <h2 id={`${id}-checkins`}>Check-ins</h2>
-        <p>How often Jarvis brings you a useful next step.</p>
-        <BriefSegments
-          label="Check-in frequency — unavailable"
-          value=""
-          options={[
-            { value: "less", label: "Less often", disabled: true },
-            { value: "balanced", label: "Balanced", disabled: true },
-            { value: "more", label: "More often", disabled: true },
-          ]}
-          onValueChange={() => {}}
-        />
-        <p className="brief-settings-unavailable">
-          Check-in preferences are not supported yet.
-        </p>
-        <div className="brief-settings-row">
-          <h3>Active hours</h3>
-          <span className="brief-settings-unavailable">Unavailable</span>
-        </div>
-      </section>
       <section aria-labelledby={`${id}-workspace`}>
         <h2 id={`${id}-workspace`}>Workspace controls</h2>
-        {link("authority", "Authority", "Permissions & approvals")}
         {link("connections", "Connected workspace", "Devices & services")}
         {link(
           "advanced-settings",

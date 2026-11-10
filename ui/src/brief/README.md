@@ -861,8 +861,8 @@ actions only change local fixture state.
 
 ## Settings and Appearance
 
-- `account/settings/` is the D-30 Settings room: Appearance, Conversation (voice), Check-ins and
-  Workspace controls. Appearance is the existing `useTheme()` owner (`ui/src/v2/shell/useTheme.ts`,
+- `account/settings/` is the D-30 Settings room: Permissions and approvals (the Authority link, first), Appearance, Conversation (voice) and
+  Workspace controls. Check-in preferences and active hours are not shown: no provider supports them. Appearance is the existing `useTheme()` owner (`ui/src/v2/shell/useTheme.ts`,
   `jarvis-theme` in localStorage, `data-theme` on `<html>`); every mounted selector and the v2
   top-bar toggle follow the root attribute, and a change in another tab is picked up from its
   `storage` event by re-reading the stored value.

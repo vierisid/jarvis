@@ -13,6 +13,8 @@ import {
   type AuthorityValues,
 } from "./model";
 
+const SAVED_VISIBLE_MS = 10_000;
+
 export interface AuthorityState {
   availability:
     "loading" | "ready" | "stale" | "error" | "unavailable" | "unsupported";
@@ -190,6 +192,15 @@ export class AuthorityController {
           phase: "dirty",
           message: RETRY_MESSAGE,
         });
+      else if (
+        data &&
+        previous.phase === "saved" &&
+        Date.now() - this.savedAt < SAVED_VISIBLE_MS &&
+        previous.saved &&
+        sameValues(data, previous.saved)
+      )
+        // The background poll must not erase "Saved" the moment after a save.
+        this.publish({ saved: data, availability: "ready" });
       else if (data)
         this.publish({
           saved: data,
@@ -239,6 +250,7 @@ export class AuthorityController {
       if (!op.current()) return;
       const data = "data" in result ? readSettings(result.data) : null;
       if (result.state === "confirmed" && data && matchesPatch(data, patch)) {
+        this.savedAt = Date.now();
         this.publish({
           saved: data,
           draft: structuredClone(data),
@@ -261,6 +273,8 @@ export class AuthorityController {
       if (op.current()) this.unknown(attemptedFields);
     }
   }
+  /** When the last save was confirmed; background reads keep the confirmation visible briefly. */
+  private savedAt = 0;
   private unknown(retryFields: AuthorityField[]) {
     this.publish({
       phase: "unknown",

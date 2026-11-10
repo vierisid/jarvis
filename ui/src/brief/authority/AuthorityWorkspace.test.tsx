@@ -164,6 +164,18 @@ test("keyboard steps and Home/End agree with restored canonical values after exp
   await render({}, binding(), "remounted");
   expect(slider().value).toBe("10");
 });
+test("the Saved confirmation survives the background refresh that follows a save", async () => {
+  await render();
+  await key("ArrowRight");
+  await click("Save changes");
+  expect(button("Saved")).toBeTruthy();
+  await React.act(async () => {
+    await fixture.controller.refresh();
+    await settle();
+  });
+  expect(host.textContent).toContain("Changes saved and checked.");
+  expect(button("Saved")).toBeTruthy();
+});
 test("pointer position stays continuous until release and focus refresh cannot interrupt a clean drag", async () => {
   await render();
   await pointer("pointerdown");
