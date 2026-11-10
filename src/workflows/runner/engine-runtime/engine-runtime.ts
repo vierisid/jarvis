@@ -989,7 +989,14 @@ export class EngineRuntime {
       this.retireEngine(engine);
       return;
     }
+    // Already the parked one: a second release of the same handle must not
+    // retire the engine while it stays in the slot.
+    if (this.idleEngine === engine) return;
     if (this.idleEngine === null) {
+      // Its token is revoked while it waits (`SandboxRegistry.park`): the
+      // finished run's token would otherwise stay valid until the next
+      // rebind, retirement or idle eviction.
+      this.api.registry.park(engine.sandboxId);
       this.idleEngine = engine;
       this.armIdleEvictionTimer();
       return;

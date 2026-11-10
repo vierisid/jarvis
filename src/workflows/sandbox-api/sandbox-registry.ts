@@ -61,6 +61,22 @@ export class SandboxRegistry {
     record.projectId = patch.projectId;
     record.engineToken = patch.engineToken;
     record.expiresAt = patch.expiresAt;
+    record.parkedAt = null;
+  }
+
+  /**
+   * The engine behind this sandbox finished its run and waits in the warm
+   * pool. Its token stays signature-valid for the rest of its TTL, and the
+   * process (with whatever piece code left in it) stays up, so the token is
+   * revoked here rather than at the next rebind, retirement or idle eviction:
+   * the API refuses it on every route but its run's own log upload, which the
+   * engine may still be sending (`EngineFlowExecutor` releases the engine as
+   * soon as the run's RPC returns, before its log has necessarily landed).
+   */
+  park(sandboxId: string, now = Date.now()): void {
+    const record = this.sandboxes.get(sandboxId);
+    if (!record || record.terminatedAt !== null) return;
+    record.parkedAt = now;
   }
 
   /** Mark the sandbox as terminated; subsequent get/byRunId will return null. */
