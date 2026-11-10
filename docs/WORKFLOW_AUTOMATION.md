@@ -146,8 +146,14 @@ Practical consequences:
   screen context, its region capture and the Brief's screenshot attachment
   stop too, the prompt says awareness is off, a live voice session's tool
   list is re-sent when either switch changes, and waiting cards for any of
-  these are closed. Not covered: shell commands (`run_command`) that read the
-  screen (owner decision: left as is) and the operator-only debug RPC. A run admitted while a
+  these are closed. What awareness recorded before is hidden too while it is
+  off: the `/api/awareness` history routes (captures, a capture and its image,
+  sessions, stats, the daily and weekly reports, insights and the live
+  context) answer `409 AWARENESS_OFF` with no data, and a flow's
+  `awarenessRecent` context returns no activity. Nothing is deleted; it shows
+  again when awareness is turned back on. Not covered: shell commands
+  (`run_command`) that read the screen (owner decision: left as is) and the
+  operator-only debug RPC. A run admitted while a
   switch is off says which switch, not that the action is unsupported.
 - Direct browser steps keep live snapshot generations per workflow run, across
   snapshot, approval and execution, independently of chat and other runs. Local
