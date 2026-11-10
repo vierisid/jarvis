@@ -53,9 +53,9 @@ test('a sender name is untrusted: format, control and invisible characters go, m
   expect(name('\uFF41\uFF4C\uFF49')).toBe('ali');
   expect(name('<img src=x onerror=alert(1)>')).toBe('<img src=x onerror=alert(1)>');
 });
-test('no visible name, or a channel without a label, keeps the default title', () => {
+test('a guest with no visible name is still marked a guest; a channel without a label keeps the default title', () => {
   for (const raw of ['', '   ', '\u202E\u200B', '\u3164\u2800\u115F', '\u0301\u0301', undefined, 42, null]) {
-    expect(channelThreadTitle('telegram', raw, 'guest', DM)).toBeUndefined();
+    expect(channelThreadTitle('telegram', raw, 'guest', DM)).toBe('Telegram guest, 2026-11-10');
   }
   expect(channelThreadTitle('websocket', 'alice', 'guest', DM)).toBeUndefined();
   expect(channelThreadTitle('websocket', 'alice', 'owner', DM)).toBeUndefined();

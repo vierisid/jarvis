@@ -5,7 +5,7 @@ import type { BriefActivity, BriefChatEvent, BriefChatPayload, BriefSendTurn, Br
 import { ConversationRepository, ConversationRequestError } from './conversation-lifecycle.ts';
 import { ChatAttachmentRepository, attachmentIds } from './chat-attachments';
 import type { BriefAttachmentRef } from '../brief/attachment-contracts';
-import { FORWARDED_MESSAGE_SOURCE, GUEST_MESSAGE_SOURCE, frameForward, frameGuestMessage, insertConversationMessage } from './conversations.ts';
+import { FORWARDED_MESSAGE_SOURCE, GUEST_MESSAGE_SOURCE, frameForward, frameGuestMessage, frameGuestReply, insertConversationMessage } from './conversations.ts';
 export { FORWARDED_MESSAGE_SOURCE, GUEST_MESSAGE_SOURCE };
 
 export interface ChatTurn extends BriefTurnRef {
@@ -159,21 +159,25 @@ export class ChatTurnRepository {
    * the frame and the taint can never disagree about the window.
    *
    * `guestConversation`: whether this is a channel thread holding a guest's
-   * words (the caller knows the channel owner). In one, a user row is the
-   * guest's unless it is a Brief turn's own message, which the owner typed
-   * here after reopening it.
+   * words (the caller knows the channel owner). In one, a row is the guest's
+   * exchange unless a Brief turn wrote it: the owner's message typed here
+   * after reopening the thread, or their assistant's reply.
    */
   historyWithForwards(ref: BriefTurnRef, guestConversation = false): { messages: LLMMessage[]; holdsForward: boolean; holdsGuest: boolean } {
     const turn = this.get(ref);
     const rows = this.db.query<{ role: 'user' | 'assistant'; content: string; forwarded: number; brief: number }, [string, string, string]>(`SELECT role, content,
       EXISTS (SELECT 1 FROM conversation_forwards f WHERE f.message_id = conversation_messages.id) AS forwarded,
-      EXISTS (SELECT 1 FROM brief_chat_turns b WHERE b.user_message_id = conversation_messages.id) AS brief FROM conversation_messages
+      EXISTS (SELECT 1 FROM brief_chat_turns b WHERE b.user_message_id = conversation_messages.id
+        OR b.assistant_message_id = conversation_messages.id) AS brief FROM conversation_messages
       WHERE conversation_id = ? AND role IN ('user', 'assistant') AND id NOT IN (?, ?)
       ORDER BY created_at DESC, id DESC LIMIT 80`).all(turn.conversationId, turn.userMessageId, turn.assistantMessageId).reverse();
-    const guest = (row: typeof rows[number]) => guestConversation && row.role === 'user' && row.forwarded !== 1 && row.brief !== 1;
+    // The guest's turns in their channel thread: what they wrote, and the
+    // replies a tool-less model they could steer gave them.
+    const guest = (row: typeof rows[number]) => guestConversation && row.forwarded !== 1 && row.brief !== 1;
     return {
       messages: rows.map((row) => ({ role: row.role,
-        content: row.forwarded ? frameForward(row.content) : guest(row) ? frameGuestMessage(row.content) : row.content })),
+        content: row.forwarded ? frameForward(row.content)
+          : guest(row) ? (row.role === 'user' ? frameGuestMessage(row.content) : frameGuestReply(row.content)) : row.content })),
       holdsForward: rows.some((row) => row.forwarded === 1),
       holdsGuest: rows.some(guest),
     };

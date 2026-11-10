@@ -26,7 +26,7 @@ const INVISIBLE_LETTERS = /[\u115F\u1160\u3164\uFFA0\u2800]/g;
  * The name is what the sender chose: untrusted. It is normalised (NFKC),
  * loses control, format and invisible characters and stacked combining
  * marks, collapses whitespace and is capped; it is only ever rendered as
- * text. Undefined keeps the default title.
+ * text. Undefined (a channel without threads of its own) keeps the default title.
  */
 export function channelThreadTitle(channel: string, sender: unknown, who: 'owner' | 'shared' | 'guest',
   where: { privateChat: boolean; startedAt: number }): string | undefined {
@@ -37,11 +37,14 @@ export function channelThreadTitle(channel: string, sender: unknown, who: 'owner
   const place = where.privateChat ? label : `${label} group`;
   const day = `, ${new Date(where.startedAt).toISOString().slice(0, 10)}`;
   if (who !== 'guest') return `${place} - you${day}`;
-  if (typeof sender !== 'string') return undefined;
+  // A guest with no usable name is still marked a guest, never left on the
+  // neutral default an owner's older thread shows.
+  const nameless = `${place} guest${day}`;
+  if (typeof sender !== 'string') return nameless;
   const clean = sender.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(INVISIBLE_LETTERS, '')
     .replace(/(\p{M}{2})\p{M}+/gu, '$1')
     .replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ').replace(/\s+/g, ' ').trim();
-  if (!/[\p{L}\p{N}\p{S}\p{P}]/u.test(clean)) return undefined;
+  if (!/[\p{L}\p{N}\p{S}\p{P}]/u.test(clean)) return nameless;
   const chars = [...clean];
   return `${place} guest - ${chars.length > SENDER_NAME_MAX ? `${chars.slice(0, SENDER_NAME_MAX).join('').trimEnd()}...` : clean}${day}`;
 }

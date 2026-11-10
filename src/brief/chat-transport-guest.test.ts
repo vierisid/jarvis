@@ -59,9 +59,13 @@ test('a reopened guest thread: the guest\'s words are framed, the owner\'s Brief
     expect(guest).toContain('not my instruction');
     expect(input.untrustedSources).toContain(GUEST_MESSAGE_SOURCE);
   }
-  // The owner's own first Brief turn reads back as theirs; the bot's reply stays as written.
+  // The owner's own first Brief turn, and their assistant's reply, read back as written.
   expect(inputs[1]!.history.map(m => m.content)).toContain('what did they want?');
-  expect(inputs[1]!.history.map(m => m.content)).toContain('I cannot do that.');
+  expect(inputs[1]!.history.map(m => m.content)).toContain('ok');
+  // The reply the guest's tool-less turn gave is framed too: the guest could steer it.
+  const reply = inputs[1]!.history.find(m => m.role === 'assistant' && String(m.content).includes('I cannot do that.'))!;
+  expect(String(reply.content)).not.toBe('I cannot do that.');
+  expect(String(reply.content)).toContain('The guest could steer it');
 });
 
 test('without an owner check, a channel thread is treated as a guest\'s (fail closed)', async () => {
