@@ -141,18 +141,19 @@ export async function pruneCodeTrees(opts: PruneCodeTreesOptions): Promise<Prune
   if (removed.length > 0) {
     opts.log?.(`removed ${removed.length} unused CODE-step tree(s) from ${base}`);
   }
-  await pruneLocks(base, needed);
+  await pruneLocks(base, needed, now, recentlyUsedMs);
   const evicted = opts.pinned ? await evictOverBudget(base, opts.pinned, opts, now) : [];
   return { removed: [...removed, ...evicted], evicted };
 }
 
 /**
  * The kept lockfiles (`CODE_LOCKS_DIR`) of versions that are neither needed
- * nor have a tree: nothing installs them again. A needed version's locks stay
+ * nor have a tree, and were not written within the recent-use window: nothing
+ * installs them again. A needed version's locks stay
  * when its tree is evicted for size, which is what they are kept for, and so
  * does any version with a tree (the sweep above has not removed it yet).
  */
-async function pruneLocks(base: string, needed: ReadonlySet<string>): Promise<void> {
+async function pruneLocks(base: string, needed: ReadonlySet<string>, now: number, recentlyUsedMs: number): Promise<void> {
   const locks = resolve(base, CODE_LOCKS_DIR);
   let entries;
   try {
@@ -167,7 +168,15 @@ async function pruneLocks(base: string, needed: ReadonlySet<string>): Promise<vo
         lstatSync(resolve(base, entry.name));
         return false;
       } catch {
-        return true;
+        // No tree. Kept anyway while written to recently (each install
+        // writes its lock by a rename into the directory): another process
+        // sharing the directory, whose needed versions this one cannot see,
+        // may have just installed it, as the trees' own window allows for.
+        try {
+          return now - lstatSync(resolve(locks, entry.name)).mtimeMs >= recentlyUsedMs;
+        } catch {
+          return false;
+        }
       }
     })
     .map((entry) => resolve(locks, entry.name));

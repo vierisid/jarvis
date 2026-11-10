@@ -34,7 +34,7 @@ import { randomBytes } from "node:crypto";
 import {
   copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync,
 } from "node:fs";
-import { rm } from "node:fs/promises";
+import { readdir as readdirAsync, readlink as readlinkAsync, rm } from "node:fs/promises";
 import { basename, dirname, resolve, sep } from "node:path";
 import type { UpstreamFlowVersion } from "./flow-version-adapter";
 import { collectCodeActions } from "./flow-version-adapter";
@@ -271,6 +271,27 @@ export function codeStepLockPath(versionDir: string, stepName: string): string {
   return resolve(dirname(versionDir), CODE_LOCKS_DIR, basename(versionDir), `${stepName}.bun.lock`);
 }
 
+/**
+ * Remove the kept locks of steps the version no longer has and whose tree is
+ * gone, so a draft edited many times does not collect them and a step name
+ * used again later starts from nothing.
+ */
+function forgetLocksOfGoneSteps(versionDir: string, stepNames: ReadonlySet<string>): void {
+  const dir = dirname(codeStepLockPath(versionDir, "x"));
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.endsWith(".bun.lock")) continue;
+    const step = name.slice(0, -".bun.lock".length);
+    if (stepNames.has(step) || existsSync(resolve(versionDir, step))) continue;
+    rmSync(resolve(dir, name), { force: true });
+  }
+}
+
 /** Prefix of a directory an install runs in, beside the step. */
 const INSTALL_DIR_PREFIX = ".install-";
 /** Prefix of a replaced `node_modules`, removed at the NEXT sync. */
@@ -338,7 +359,8 @@ async function syncDependencies(
     // The versions this step resolved before, so an install after its tree
     // was evicted gets the same ones. Bun keeps a locked version while the
     // manifest still allows it, and resolves only what the manifest changed.
-    if (existsSync(lockPath)) copyFileSync(lockPath, resolve(work, "bun.lock"));
+    const seeded = existsSync(lockPath);
+    if (seeded) copyFileSync(lockPath, resolve(work, "bun.lock"));
     const built = resolve(work, "node_modules");
     // The install and everything that decides whether it is kept run as one
     // turn of the install queue, so the cache entries that appear meanwhile
@@ -361,11 +383,19 @@ async function syncDependencies(
           await install(work, { cacheDir: cache.dir, limit });
         } catch (e) {
           if (e instanceof CodeInstallTooLargeError) throw refuse(e.size);
+          // A kept lock naming a version the registry no longer has fails
+          // every install from it: say which file, so it can be removed.
+          if (seeded) {
+            throw new Error(`${(e as Error).message} (installed from this step's kept lockfile ${lockPath}; ` +
+              `delete it to resolve the step's dependencies again)`, { cause: e });
+          }
           throw e;
         }
-        // The lock may be the kept one copied in above, so the missing tree
-        // is what tells a taken-over install apart.
-        if (!existsSync(resolve(work, "bun.lock")) || !existsSync(built)) {
+        // A taken-over install leaves no tree here (an ancestor using the
+        // hoisted layout) or a tree of links into the ancestor's packages
+        // (one using the isolated layout; measured in review). The lock may
+        // be the kept one copied in above, so it alone tells nothing.
+        if (!existsSync(resolve(work, "bun.lock")) || !existsSync(built) || await linksOutside(built, work)) {
           throw new Error(
             `bun install did not install a CODE step's dependencies where it was run (${work}); ` +
               `a package.json with "workspaces" in a directory above the code directory takes the install over. ` +
@@ -384,16 +414,51 @@ async function syncDependencies(
       await boundCacheAfterInstall(cache.dir, before, cache.limit);
     });
     writeFileSync(resolve(built, INSTALLED_MANIFEST_MARKER), manifest);
-    // Kept for the next install of this step; written whole or not at all.
-    mkdirSync(dirname(lockPath), { recursive: true });
-    const pendingLock = `${lockPath}.${randomBytes(6).toString("hex")}.tmp`;
-    copyFileSync(resolve(work, "bun.lock"), pendingLock);
-    renameSync(pendingLock, lockPath);
     retire();
     renameSync(built, nodeModules);
+    // Kept for the next install of this step; written whole or not at all,
+    // and after the tree is in place, so failing to keep it (a full disk)
+    // costs only the pinning of a later install, never this step.
+    const pendingLock = `${lockPath}.${randomBytes(6).toString("hex")}.tmp`;
+    try {
+      mkdirSync(dirname(lockPath), { recursive: true });
+      copyFileSync(resolve(work, "bun.lock"), pendingLock);
+      renameSync(pendingLock, lockPath);
+    } catch (e) {
+      rmSync(pendingLock, { force: true });
+      console.warn(`[code-materialize] could not keep the lockfile of CODE step ${JSON.stringify(stepName)}: ${(e as Error).message}`);
+    }
   } finally {
     await rm(work, { recursive: true, force: true });
   }
+}
+
+/**
+ * Whether any symlink in the tree `root` resolves outside `within`. This
+ * install's own layout is hoisted (`--linker=hoisted`): its links (`.bin`
+ * entries) point inside its tree. A link elsewhere is a tree some other
+ * project's install made.
+ */
+async function linksOutside(root: string, within: string): Promise<boolean> {
+  const base = resolve(within) + sep;
+  let entries;
+  try {
+    entries = await readdirAsync(root, { recursive: true, withFileTypes: true });
+  } catch {
+    return true;
+  }
+  for (const entry of entries) {
+    if (!entry.isSymbolicLink()) continue;
+    const path = resolve(entry.parentPath, entry.name);
+    let target: string;
+    try {
+      target = resolve(dirname(path), await readlinkAsync(path));
+    } catch {
+      return true;
+    }
+    if (!target.startsWith(base)) return true;
+  }
+  return false;
 }
 
 /**
@@ -638,6 +703,7 @@ export async function materializeCodeActions(
     // Before installing, so what the version's limit counts is only its
     // current steps (and those still in use).
     await sweepStaleSteps(versionDir, stepNames);
+    forgetLocksOfGoneSteps(versionDir, stepNames);
   }
   const paths: string[] = [];
   for (const { action, deps, dir } of planned) {

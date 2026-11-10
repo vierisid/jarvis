@@ -735,12 +735,14 @@ is visible to the Authority boundary above. That is the whole reason for the
 gate: a flow is not always hand-authored, `manage_workflow compose` builds a
 `FlowVersion` out of an LLM plan, and LLM output is untrusted here.
 
-The step's process does not outlive its engine. On macOS and Linux the engine
-leads a process group of its own and the daemon signals the whole group when it
-stops the engine (only while the engine has not exited, so a reused group id is
-never signalled); a step whose engine died by itself exits when its IPC channel
-closes. Code that leaves its process group on purpose (`setsid`, a detached
-grandchild) is not contained by this: it is same-user code (see "Trust model").
+An ordinary step's process does not outlive its engine. On macOS and Linux the
+engine leads a process group of its own and the daemon signals the whole group
+when it stops the engine (only while the engine has not exited, so a reused
+group id is never signalled); a step whose engine died by itself exits when its
+IPC channel closes. This is cleanup, not containment: code that handles or
+ignores SIGTERM while its engine exits on it, removes the disconnect handler,
+or starts processes of its own (in its group or out of it with `setsid`) can
+outlive the engine. It is same-user code (see "Trust model").
 
 So CODE is off by default, and the permission is granted PER FLOW:
 
@@ -891,8 +893,15 @@ latest version and ran it. Now:
   was pruned or evicted installs the versions it resolved before, not whatever
   is newest by then (measured: a `^1.0.0` dependency stayed 1.0.0 after 1.1.0
   was published); a changed declaration is resolved anew and its lock replaces
-  the old one. The locks of a version that is no longer needed and has no tree
-  are removed by the tree pruner.
+  the old one. A lock that can no longer install (its version withdrawn from
+  the registry) fails the install with its path named; deleting it lets the
+  step resolve again. The locks of a version that is no longer needed, has no
+  tree and was not installed within the pruner's 24h window are removed by the
+  tree pruner, and a step's lock goes with its tree when the step is removed.
+  A tree installed before locks were kept has none until its next install, so
+  its first reinstall after an eviction still resolves anew. An install
+  directory whose tree links outside itself is refused (a workspace above the
+  code directory took the install over).
 - One version's CODE steps together may hold at most 2 GiB and 262,144
   entries, four steps at the step caps (#1154): an install that would take the
   version past that is refused like one over the step cap, naming the step,

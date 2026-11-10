@@ -377,7 +377,11 @@ describe("a CODE step's lockfile (#1154 follow-up)", () => {
       writeFileSync(lock(id), "{}");
     }
     // Neither has a tree any more (evicted, or pruned earlier); only v_kept is still needed.
+    // Written just now: kept, as another process sharing the directory may need it.
     await pruneCodeTrees({ baseCodeDir: codes, needed: () => new Set(["v_kept"]) });
+    expect(existsSync(lock("v_gone"))).toBe(true);
+    // Past the recent-use window.
+    await pruneCodeTrees({ baseCodeDir: codes, needed: () => new Set(["v_kept"]), now: Date.now() + 25 * 60 * 60_000 });
     expect(existsSync(lock("v_kept"))).toBe(true);
     expect(existsSync(lock("v_gone"))).toBe(false);
     expect(existsSync(join(codes, ".locks", "v_gone"))).toBe(false);
