@@ -1150,6 +1150,7 @@ ternaries, and `flattenNestedKeys(data, path)`.
 
 Not supported: method calls (`.map`, `.split`, `.toUpperCase`), constructors
 (`new Date()`), `JSON.parse`, assignment, spread, globals, and prototype access.
+A written property name (`a.constructor` or `a['constructor']`) is refused when the flow is saved. A property name taken from run data (`a[b.key]`) is checked when the flow runs.
 
 An unsupported expression now **fails the step loudly** instead of silently
 resolving to an empty string, and the error quotes the expression that failed.

@@ -118,6 +118,25 @@ test('manual invoke graphs require known tool identities and their actual parame
   action.settings.input = { toolName: 'list' };
   expect(compileWorkflow(graph(action), { pieces: catalog, tool: () => ({ params: [] }) }).ready).toBe(true);
 });
+test('bracket access to a forbidden key is refused at publish and a computed key is a runtime check', () => {
+  const catalog = new PieceCatalog([...pieces.list(), { name: 'jarvis-tool', displayName: '', description: '', actions: { invoke: { name: 'invoke', displayName: '', description: '' } } }]);
+  const action = step(); action.settings = { pieceName: 'jarvis-tool', actionName: 'invoke', input: { toolName: 'send', params: { recipient: "{{trigger['__proto__']}}" } } };
+  const context = { pieces: catalog, tool: () => ({ params: [{ name: 'recipient', type: 'string', required: true }] }) };
+  const refused = compileWorkflow(graph(action), context);
+  expect(refused.ready).toBe(false);
+  expect(refused.issues.some(i => i.code === 'EXPRESSION' && i.message.includes('prototype access'))).toBe(true);
+  action.settings.input.params.recipient = '{{trigger[trigger.key]}}';
+  const computed = compileWorkflow(graph(action), context);
+  expect(computed.ready).toBe(true);
+  expect(computed.runtimeChecks.some(c => c.guard === 'expression' && c.message.includes('property name taken from run data'))).toBe(true);
+});
+test('a skill name taken from run data is a runtime check with a plain explanation', () => {
+  const catalog = new PieceCatalog([...pieces.list(), { name: 'jarvis-tool', displayName: '', description: '', actions: { invoke: { name: 'invoke', displayName: '', description: '' } } }]);
+  const action = step(); action.settings = { pieceName: 'jarvis-tool', actionName: 'invoke', input: { toolName: 'run_skill', params: { name: '{{trigger.skill}}' } } };
+  const context = { pieces: catalog, tool: () => ({ params: [{ name: 'name', type: 'string', required: true }] }) };
+  const result = compileWorkflow(graph(action), context);
+  expect(result.runtimeChecks.some(c => c.guard === 'tool-input' && c.path.endsWith('params.name') && c.message.includes('skill name is taken from run data'))).toBe(true);
+});
 test('native cron triggers receive the same schedule check as the built-in primitive', () => {
   const catalog = new PieceCatalog([{ name: '@activepieces/piece-schedule', displayName: '', description: '', actions: {}, triggers: { cron_expression: { name: 'cron_expression', displayName: '', description: '' } } }]);
   const trigger = { name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: '@activepieces/piece-schedule', triggerName: 'cron_expression', input: { cronExpression: '61 * * * *', timezone: 'UTC' } } };

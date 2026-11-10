@@ -98,6 +98,11 @@ export function getWorkflowFile(id: string): WorkflowFile | null {
   };
 }
 
+/** Remove one file row, used to undo a row whose disk copy could not be written. */
+export function deleteWorkflowFile(id: string): void {
+  db().prepare(`DELETE FROM workflow_file WHERE id = ?`).run(id);
+}
+
 export function _clearWorkflowFilesForTests(): void {
   db().exec(`DELETE FROM workflow_file`);
 }

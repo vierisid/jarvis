@@ -787,6 +787,37 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     } finally { chmodSync(flowDir, 0o700); }
   });
 
+  test("POST /v1/step-files accepts a very long file name and keeps its type", async () => {
+    const name = `${"a".repeat(5000)}.csv`;
+    const form = stepFileForm(testFlowId, "step_long");
+    form.set("fileName", name);
+    const r = await authedFetchForRun("/v1/step-files", { method: "POST", body: form });
+    expect(r.status).toBe(200);
+    const url = ((await r.json()) as { url: string }).url;
+    const [onDisk] = readdirSync(workflowFileDir(testFlowId, "step_long"));
+    expect(onDisk!.length).toBeLessThan(200);
+    expect(onDisk!.endsWith(".csv")).toBe(true);
+    const get = await authedFetchForRun(url);
+    expect(get.status).toBe(200);
+    expect(get.headers.get("content-disposition")!.length).toBeLessThan(200);
+  });
+
+  test("POST /v1/step-files leaves no stored file behind when the disk write fails, and names no path", async () => {
+    const count = () => getWorkflowDb().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM workflow_file").get()!.n;
+    const before = count();
+    const flowDir = join(process.env.JARVIS_WORKFLOW_DATA_DIR!, "workflow-files", testFlowId, "step_rollback");
+    mkdirSync(flowDir, { recursive: true });
+    chmodSync(flowDir, 0o500);
+    try {
+      const r = await authedFetchForRun("/v1/step-files", { method: "POST", body: stepFileForm(testFlowId, "step_rollback") });
+      expect(r.status).toBe(500);
+      const text = await r.text();
+      expect(text).not.toContain(process.env.JARVIS_WORKFLOW_DATA_DIR!);
+      expect(text).not.toContain("EACCES");
+      expect(count()).toBe(before);
+    } finally { chmodSync(flowDir, 0o700); }
+  });
+
   test("POST /v1/step-files refuses a flowId the token's run does not belong to", async () => {
     // A real flow in the same project: without the binding a sandbox could
     // write into any flow's step files.

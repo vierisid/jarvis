@@ -32,7 +32,7 @@ import {managedTrelloIssue} from './managed-trello';
 import {managedSlackIssue} from './managed-slack';
 import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
-import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
+import { evaluateWorkflowExpression, workflowExpressionHasComputedKey, workflowExpressionReferences } from './safe-expression';
 import { emptyInput, inputIssue } from './input-validation';
 import { declaredDependencies } from './code-step-manifest';
 import { canonicalZone, chosenScheduleZone, effectiveScheduleZone, statedScheduleZone } from '../runner/triggers/schedule-zone';
@@ -102,6 +102,9 @@ const ROW_SCHEMA_TYPES = new Set(['SHORT_TEXT', 'LONG_TEXT', 'NUMBER', 'CHECKBOX
 const UNKNOWN_INPUT = Symbol('runtime input');
 export const CONNECTION_SOURCE = /^connections(?:\.([\w:-]+)|\['([^']+)'\])$/;
 const UNARY = new Set(['BOOLEAN_IS_TRUE', 'BOOLEAN_IS_FALSE', 'LIST_IS_EMPTY', 'LIST_IS_NOT_EMPTY', 'EXISTS', 'DOES_NOT_EXIST']);
+
+const COMPUTED_KEY_CHECK = 'A property name taken from run data is checked when the flow runs. Names that reach into object internals are refused then.';
+const RUN_SKILL_NAME_CHECK = 'The skill name is taken from run data. Jarvis can only show you what the skill will do once the run has a name, so it is checked and reviewed then. Writing the name in the step lets you review it before the flow runs.';
 
 /** Constant expressions are known inputs, not runtime unknowns. */
 function staticInput(value: unknown): { known: boolean; value: unknown } {
@@ -180,6 +183,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         if (refs.has('connections')) issue(node, path, 'CONNECTION_BINDING', "Use a complete {{connections.id}} or {{connections['id']}} binding");
         else if (refs.size) runtime(node, path, 'expression', 'Resolve data at runtime; an absent value must fail before dispatch (use an explicit fallback for optional data)');
         else evaluateWorkflowExpression(source, {}); // Catch invalid literal computations too.
+        if (workflowExpressionHasComputedKey(source)) runtime(node, path, 'expression', COMPUTED_KEY_CHECK);
       } catch (error) { issue(node, path, 'EXPRESSION', (error as Error).message); }
     }
     return true;
@@ -495,7 +499,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           else for (const field of tool.params) {
             const resolved = staticInput(params.value[field.name]);
             const path = `settings.input.params.${field.name}`;
-            if (!resolved.known) { runtime(node, path, 'tool-input', 'Tool registry validates this parameter before execution'); continue; }
+            if (!resolved.known) { runtime(node, path, 'tool-input', input.toolName === 'run_skill' && field.name === 'name' ? RUN_SKILL_NAME_CHECK : 'Tool registry validates this parameter before execution'); continue; }
             const value = resolved.value;
             if (value == null) { if (field.required) issue(node, path, 'INPUT_TYPE', 'Required tool parameter is missing'); continue; }
             const type = field.type.toLowerCase();

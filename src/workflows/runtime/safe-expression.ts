@@ -117,6 +117,13 @@ class Parser {
     return left;
   }
 
+  /** `[key]`: a literal key gets the same forbidden-name check as the dot form. */
+  private bracketKey(): Node {
+    const key = this.expression(); this.require(']');
+    if (key.kind === 'literal' && typeof key.value === 'string') checkKey(key.value);
+    return key;
+  }
+
   private primary(): Node {
     const token = this.tokens[this.index++];
     if (!token) return fail('missing value');
@@ -158,10 +165,10 @@ class Parser {
     } else return fail('unsupported value');
     while (true) {
       if (this.take('[')) {
-        const key = this.expression(); this.require(']'); node = { kind: 'member', object: node, key };
+        node = { kind: 'member', object: node, key: this.bracketKey() };
       } else if (this.take('.') || this.take('?.')) {
         if (this.take('[')) {
-          const key = this.expression(); this.require(']'); node = { kind: 'member', object: node, key };
+          node = { kind: 'member', object: node, key: this.bracketKey() };
         } else {
           const key = this.tokens[this.index++];
           if (!key || key.kind !== 'identifier') fail('expected property name');
@@ -193,6 +200,27 @@ export function workflowExpressionReferences(script: string): Set<string> {
     }
   }
   return references;
+}
+
+/** True when a property name is computed from data (`a[b.c]`) rather than written
+ * out. Such a name can only be checked against the forbidden list when it runs. */
+export function workflowExpressionHasComputedKey(script: string): boolean {
+  const pending = [new Parser(tokenize(script)).parse()];
+  while (pending.length) {
+    const node = pending.pop()!;
+    switch (node.kind) {
+      case 'member':
+        if (node.key.kind !== 'literal') return true;
+        pending.push(node.object); break;
+      case 'array': pending.push(...node.items); break;
+      case 'object': pending.push(...node.entries.map(([, value]) => value)); break;
+      case 'unary': pending.push(node.value); break;
+      case 'binary': pending.push(node.left, node.right); break;
+      case 'conditional': pending.push(node.condition, node.yes, node.no); break;
+      case 'flatten': pending.push(node.data, node.path); break;
+    }
+  }
+  return false;
 }
 
 /** Shared budget bounds evaluation, flatten traversal and materialized output. */
