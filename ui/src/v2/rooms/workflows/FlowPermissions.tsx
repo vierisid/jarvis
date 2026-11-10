@@ -112,7 +112,8 @@ function grantedForm(typed: string): string | null {
 }
 
 /**
- * The hosts this flow's HTTP GET steps may read without an approval card. Adding
+ * The hosts this flow's HTTP GET steps may read without an approval card, and
+ * the only hosts a file field may download from (#1153). Adding
  * one widens what runs unasked, so it is confirmed; removing one narrows it.
  * The whole list is sent each time, built from the latest list this view knows
  * when the request goes out; the server checks each host and says why it
@@ -176,7 +177,7 @@ function ReadHosts({ flow, list: fromList, name, onChanged, request }: { flow: F
     const shown = host === typed ? host : `${host} (typed as ${typed})`;
     const ok = await save(hosts => hosts.includes(host) ? hosts : [...hosts, host], {
       title: "Read this host without asking?",
-      message: `Let the workflow ${name} send HTTP GET requests to ${shown} without asking?\nThey run without an approval card, including whatever the workflow puts in their address or headers. Requests that send, change or delete still ask.`,
+      message: `Let the workflow ${name} send HTTP GET requests to ${shown} without asking?\nThey run without an approval card, including whatever the workflow puts in their address or headers, and a file field may download from it. Requests that send, change or delete still ask.`,
     });
     if (ok) setDraft("");
   };
@@ -186,7 +187,7 @@ function ReadHosts({ flow, list: fromList, name, onChanged, request }: { flow: F
   return (
     <div className="wf-detail__permission wf-detail__read-hosts">
       <p>
-        <strong>Hosts it may read without asking</strong>: {list.hosts.length ? `${list.hosts.length}.` : "none. Each HTTP GET step asks first."}
+        <strong>Hosts it may read without asking</strong>: {list.hosts.length ? `${list.hosts.length}.` : "none. Each HTTP GET step asks first, and a file field cannot download from a URL."}
         {list.hosts.length ? grantNote(list.grantedBy, list.grantedAt) : null}
       </p>
       {list.hosts.length ? (

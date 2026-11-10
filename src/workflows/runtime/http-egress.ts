@@ -566,10 +566,30 @@ function redirectOrigin(next: { hostname?: string; host?: string; protocol?: str
  * redirects it follows are checked one by one.
  */
 export async function guardedFileDownload<A extends AxiosLike>(axios: A, url: string, policy: EgressPolicy,
-  options: Omit<GuardOptions, 'read'> = {}): Promise<{ data: Buffer; headers: Record<string, unknown> }> {
-  const client = egressGuardedAxios(axios, policy, { ...options, read: true }) as unknown as {
-    request(config: Record<string, unknown>): Promise<{ data: ArrayBuffer | Buffer; headers: Record<string, unknown> }>;
+  options: Omit<GuardOptions, 'read'> & {
+    /**
+     * The flow's read list (#1153). A file field is fetched while its step's
+     * props are resolved, before Authority is asked, so with a list the
+     * download, and each redirect it follows, reaches listed hosts only.
+     */
+    readHosts?: readonly string[];
+  } = {}): Promise<{ data: Buffer; headers: Record<string, unknown> }> {
+  const { readHosts, ...guard } = options;
+  const download = async () => {
+    const client = egressGuardedAxios(axios, policy, { ...guard, read: true }) as unknown as {
+      request(config: Record<string, unknown>): Promise<{ data: ArrayBuffer | Buffer; headers: Record<string, unknown> }>;
+    };
+    const response = await client.request({ method: 'GET', url, responseType: 'arraybuffer' });
+    return { data: Buffer.from(response.data as ArrayBuffer), headers: response.headers };
   };
-  const response = await client.request({ method: 'GET', url, responseType: 'arraybuffer' });
-  return { data: Buffer.from(response.data as ArrayBuffer), headers: response.headers };
+  if (!readHosts) return download();
+  let host: string;
+  // Not a URL: nothing to fetch, and not a refusal (the processor gives no file, as upstream).
+  try { host = new URL(url).hostname; } catch { throw new Error('File download failed: not a URL'); }
+  const key = readHostKey(host.replace(/^\[(.*)\]$/u, '$1').includes(':') ? `[${host.replace(/^\[(.*)\]$/u, '$1')}]` : host);
+  const listed = new Set(readHosts.map((h) => readHostKey(h)).filter((h): h is string => h !== null));
+  if (key === null || !listed.has(key)) {
+    throw new EgressRefusedError(`File download refused: ${host || url} is not on this workflow's read list. A file field is fetched before its step is approved, so it may only come from a listed host; add ${host || 'the host'} under the workflow's permissions ("Hosts it may read without asking") if it should`);
+  }
+  return withReadHosts(readHosts, download);
 }

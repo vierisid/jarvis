@@ -50,6 +50,8 @@ test('adding a host asks first, then sends the whole list', async () => {
     window.confirm = (m?: string) => { asked.push(String(m)); return false; };
     await act(() => button(host, 'Add')!.click());
     expect(asked[0]).toContain('Let the workflow "Nightly report" send HTTP GET requests to data.example.org without asking?');
+    // #1153: the same list holds file-field downloads.
+    expect(asked[0]).toContain('a file field may download from it');
     expect(asked[0]).toContain('including whatever the workflow puts in their address or headers');
     expect(posts).toEqual([]);
     window.confirm = () => true;
@@ -71,7 +73,7 @@ test('removing a host narrows the list without asking', async () => {
 
 test("the server's refusal is shown inline and the typed host is kept", async () => {
   await mount(flow({ hosts: [], grantedBy: null, grantedAt: null }), () => NativeResponse.json({ error: 'hosts[0] must be a bare host name, not "https://x.example"' }, { status: 400 }), async (host, posts, changed, act) => {
-    expect(host.textContent).toContain('none. Each HTTP GET step asks first.');
+    expect(host.textContent).toContain('none. Each HTTP GET step asks first, and a file field cannot download from a URL.');
     window.confirm = () => true;
     await act(() => type(field(host), 'https://x.example'));
     await act(() => button(host, 'Add')!.click());

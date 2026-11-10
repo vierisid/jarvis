@@ -126,8 +126,10 @@ describe('the guarded client connects only where it checked', () => {
   // A short timeout: were the guard to regress, a refusal test would otherwise
   // wait minutes on an unroutable address instead of failing.
   const FAST = 3_000;
-  const client = (read: boolean, allowAddress?: (a: string) => boolean) =>
-    egressGuardedAxios(axios, 'public-only', { read, resolve, timeoutMs: FAST, ...(allowAddress ? { allowAddress } : {}) });
+  const client = (read: boolean, allowAddress?: (a: string) => boolean, timeoutMs = FAST) =>
+    egressGuardedAxios(axios, 'public-only', { read, resolve, timeoutMs, ...(allowAddress ? { allowAddress } : {}) });
+  // The timeout is a wall clock since #1153: a test moving 7 MiB bodies gets room for a loaded machine.
+  const BULK = 30_000;
 
   test('#1153: a response larger than a step can carry is refused, with or without a length; up to it is read', async () => {
     // The engine's run-data ceiling (logging-utils.ts: 10 MiB default, 256 KiB error offset), base64 for a binary body.
@@ -136,7 +138,7 @@ describe('the guarded client connects only where it checked', () => {
     expect(logging).toContain('const ERROR_OFFSET = 256 * 1024');
     expect(MAX_RESPONSE_BYTES).toBe(((10 * 1024 * 1024 - 256 * 1024) * 3) / 4);
     expect(Number.isInteger(MAX_RESPONSE_BYTES)).toBe(true);
-    const get = (n: number, chunked = false) => client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/big?n=${n}${chunked ? '&chunked' : ''}`, responseType: 'arraybuffer' });
+    const get = (n: number, chunked = false) => client(true, onlyLocal, BULK).request({ method: 'GET', url: `http://ops.test:${port}/big?n=${n}${chunked ? '&chunked' : ''}`, responseType: 'arraybuffer' });
     expect((await get(MAX_RESPONSE_BYTES)).data.byteLength).toBe(MAX_RESPONSE_BYTES);
     await expect(get(MAX_RESPONSE_BYTES + 1)).rejects.toBeInstanceOf(ResponseTooLargeError);
     await expect(get(MAX_RESPONSE_BYTES + 1, true)).rejects.toBeInstanceOf(ResponseTooLargeError);
@@ -145,7 +147,7 @@ describe('the guarded client connects only where it checked', () => {
     // Raised after the request went out, which a "refused, so not sent" reading must not miss.
     expect(new ResponseTooLargeError('x').afterSend).toBe(true);
     // A larger cap a request asks for is not honoured; a smaller one is.
-    await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/big?n=${MAX_RESPONSE_BYTES + 1}`, maxContentLength: -1 })).rejects.toThrow(/maxContentLength/);
+    await expect(client(true, onlyLocal, BULK).request({ method: 'GET', url: `http://ops.test:${port}/big?n=${MAX_RESPONSE_BYTES + 1}`, maxContentLength: -1 })).rejects.toThrow(/maxContentLength/);
     await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/big?n=2048`, maxContentLength: 1024 })).rejects.toThrow(/maxContentLength/);
     // A stream would escape the cap, so it is refused; redirects stay at follow-redirects' default or fewer.
     await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/ok`, responseType: 'stream' })).rejects.toBeInstanceOf(EgressRefusedError);
@@ -156,7 +158,7 @@ describe('the guarded client connects only where it checked', () => {
     await probe.request({ method: 'GET', url: `http://ops.test:${port}/ok`, maxRedirects: 1000 });
     expect(seenConfig.maxRedirects).toBe(21);
     // The engine's file download is held to the same size.
-    await expect(guardedFileDownload(axios, `http://ops.test:${port}/big?n=${MAX_RESPONSE_BYTES + 1}`, 'public-only', { resolve, allowAddress: onlyLocal, timeoutMs: FAST }))
+    await expect(guardedFileDownload(axios, `http://ops.test:${port}/big?n=${MAX_RESPONSE_BYTES + 1}`, 'public-only', { resolve, allowAddress: onlyLocal, timeoutMs: BULK }))
       .rejects.toBeInstanceOf(ResponseTooLargeError);
   }, 30_000);
 
@@ -203,6 +205,17 @@ describe('the guarded client connects only where it checked', () => {
     expect(seen).toEqual([`POST ops.test:${port} /to-same-origin`, `POST ops.test:${port} /landing`, `POST ops.test:${port} /to-other-origin`]);
     // A read may follow it.
     expect((await client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/to-other-origin` })).data).toEqual({ ok: true, url: '/landing' });
+  });
+
+  test('#1153: a file download held to the read list: an unlisted host is refused before any connection, naming the host and the list; a redirect off it too', async () => {
+    seen.length = 0;
+    const download = (url: string, readHosts: string[]) => guardedFileDownload(axios, url, 'public-only', { resolve, allowAddress: onlyLocal, timeoutMs: FAST, readHosts });
+    await expect(download(`http://ops.test:${port}/ok`, ['other.test'])).rejects.toThrow(/File download refused: ops\.test is not on this workflow's read list.*Hosts it may read without asking/);
+    await expect(download(`http://ops.test:${port}/ok`, [])).rejects.toBeInstanceOf(EgressRefusedError);
+    expect(seen).toEqual([]);
+    expect((await download(`http://ops.test:${port}/ok`, ['ops.test'])).data.toString()).toContain('"ok":true');
+    await expect(download(`http://ops.test:${port}/to-other-origin`, ['ops.test'])).rejects.toThrow(/a redirect goes to other\.test, which is not on this flow's read list/);
+    expect(seen).toEqual([`GET ops.test:${port} /ok`, `GET ops.test:${port} /to-other-origin`]);
   });
 
   test('#1153: a request is held to a wall clock, which a server sending a byte at a time cannot hold open', async () => {

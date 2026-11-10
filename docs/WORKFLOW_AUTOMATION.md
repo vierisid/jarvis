@@ -704,7 +704,11 @@ HTTP request specifics:
   step's props, before Authority is asked. That download now goes through the
   same guard (`guardedFileDownload`, patched into `processors/file.ts`). A
   file URL that answers 4xx or 5xx now yields no file, where upstream handed
-  the error body on as the file.
+  the error body on as the file. Because it runs before the step is approved,
+  it is held to the flow's read list too (#1153): the engine asks the daemon
+  for the run's list (`GET /v1/jarvis/read-hosts`, engine token) and a file
+  URL whose host is not listed, or a redirect off the list, fails the step
+  naming the host and the list.
 - **Read list (#1153).** A body-less GET or HEAD still carries what its URL and
   headers hold to the host it names, so it runs without a card only when that
   host is on the flow's read list (`POST /api/workflows/:id/read-hosts`
@@ -716,13 +720,12 @@ HTTP request specifics:
   do not list a host where anyone can receive what a GET carries (a chat
   bot API, a form endpoint, a request bin). On upgrade each flow with a
   published version gets the hosts that version's GET and HEAD steps name
-  literally (`grantedBy: "upgrade"`); a host filled in at run time, and a
-  draft's, is never seeded.
-- **Not covered:** a file property's URL is downloaded while the step's props
-  are resolved, before Authority is asked and outside the read list, so a URL
-  filled in at run time can still carry data to its host; CODE steps and community pieces
-  make their own connections outside this guard; a response's size and a
-  request's duration are bounded only by the run's own deadline.
+  literally, and the hosts of literal file URLs in its HTTP steps' form data
+  (`grantedBy: "upgrade"`); a host filled in at run time, and a draft's, is
+  never seeded. Other pieces' file props are not seeded: a flow that
+  downloads one from a URL needs its host listed.
+- **Not covered:** CODE steps and community pieces make their own
+  connections outside this guard.
 
 The Webhook trigger has an optional signing secret, now a field in the editor.
 With one set, `/api/webhooks/<flowId>` refuses a request unless it carries

@@ -22,6 +22,10 @@ import { workflowEffectContext } from './effect-context';
 import type { WorkflowEffectContext } from '../../runtime/effect-context';
 import { PIECE_RECEIPT_MAX_BYTES, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from '../../runtime/piece-effect-guard';
 import { resolveGovernedPieceAction } from '../../runtime/piece-effects';
+import { getFlowRunInProject } from '../../db/repos/flow-run';
+import { getFlowInProject } from '../../db/repos/flow';
+import { getFlowReadHosts } from '../../db/repos/flow-read-hosts';
+import { flowIdOfTriggerHookRunId } from '../../runner/triggers/hook-run-id';
 
 export type PieceAuthorizeFn = (
   req: PieceAuthorizeRequest,
@@ -101,5 +105,20 @@ export function createJarvisPieceReceiptRoute(deps: JarvisPiecesRouteDeps): Rout
     if (!Object.hasOwn(raw, 'result')) return err('Invalid completion receipt', 400);
     deps.pieceReceipt(workflowEffectContext(ctx), raw.effectId, raw.result);
     return json({ recorded: true });
+  };
+}
+
+/**
+ * `GET /v1/jarvis/read-hosts` (#1153): the read list of the flow this engine
+ * token's run belongs to, for the engine's file processor, which fetches a
+ * file field before its step is authorized and holds that download to the
+ * list. A token that serves no flow gets an empty list, so nothing is fetched.
+ */
+export function createJarvisReadHostsRoute(): RouteHandler {
+  return async ctx => {
+    const run = getFlowRunInProject(ctx.claims.projectId, ctx.claims.runId);
+    const hookFlowId = run ? null : flowIdOfTriggerHookRunId(ctx.claims.runId);
+    const flowId = run?.flowId ?? (hookFlowId && getFlowInProject(ctx.claims.projectId, hookFlowId) ? hookFlowId : null);
+    return json({ hosts: flowId ? getFlowReadHosts(flowId)?.hosts ?? [] : [] });
   };
 }

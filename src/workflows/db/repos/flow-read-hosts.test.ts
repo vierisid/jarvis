@@ -15,6 +15,8 @@ import { literalReadHosts, MAX_READ_HOSTS, normalizeReadHosts, parseReadHosts } 
 import { createFlow, getFlow } from "./flow";
 import { createDraftVersion, type FlowTriggerNode } from "./flow-version";
 import { getFlowReadHosts, setFlowReadHosts } from "./flow-read-hosts";
+import { createFlowRun } from "./flow-run";
+import { createJarvisReadHostsRoute } from "../../sandbox-api/routes/jarvis-pieces";
 
 const HTTP = "@activepieces/piece-http";
 const step = (name: string, input: Record<string, unknown>, next?: FlowTriggerNode): FlowTriggerNode => ({
@@ -64,6 +66,18 @@ describe("the list itself", () => {
     const chain = steps.reduceRight<FlowTriggerNode | undefined>((next, [name, input]) => step(name, input, next), undefined);
     const trigger: FlowTriggerNode = { name: "trigger", type: "EMPTY", nextAction: chain };
     expect(literalReadHosts(trigger)).toEqual(["api.example.com", "default.example.com", "status.example.com"]);
+  });
+
+  test("#1153: it also seeds the literal host of a file URL in an HTTP step's form data, whatever the method; never a templated one", () => {
+    const form = (rows: Array<Record<string, unknown>>) => ({ method: "POST", url: "https://upload.example.com/", body_type: "form_data", body: { data: rows } });
+    const trigger: FlowTriggerNode = { name: "trigger", type: "EMPTY", nextAction: step("upload", form([
+      { fieldName: "doc", fieldType: "file", fileFieldValue: "https://Files.Example.com/report.pdf" },
+      { fieldName: "other", fieldType: "file", fileFieldValue: "https://{{trigger.host}}/x.pdf" },
+      { fieldName: "carried", fieldType: "file", fileFieldValue: "https://ok.example.com/?d={{trigger.body}}" },
+      { fieldName: "note", fieldType: "text", textFieldValue: "https://text.example.com/" },
+    ])) };
+    // The query is filled at run time but the host is the one a person wrote, as for a GET.
+    expect(literalReadHosts(trigger)).toEqual(["files.example.com", "ok.example.com"]);
   });
 });
 
@@ -117,6 +131,19 @@ describe("POST /api/workflows/:id/read-hosts", () => {
     const tool = createManageWorkflowTool();
     expect(tool.description).not.toMatch(/read-hosts|read_hosts|readHosts|read list/i);
     expect(JSON.stringify(tool.parameters)).not.toMatch(/read-hosts|read_hosts|readHosts/i);
+  });
+});
+
+describe("#1153: the engine reads the run's list for its file downloads", () => {
+  test("the route answers the list of the token's own run's flow, and nothing for a run it cannot find", async () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Files" });
+    setFlowReadHosts(flow.id, ["files.example.com"]);
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    const ask = async (claims: Record<string, unknown>) => (await createJarvisReadHostsRoute()({ req: new Request("http://x/v1/jarvis/read-hosts"), claims, params: {} } as never)).json();
+    expect(await ask({ runId: run.id, projectId: flow.project_id, sandboxId: "s" })).toEqual({ hosts: ["files.example.com"] });
+    expect(await ask({ runId: run.id, projectId: "another-project", sandboxId: "s" })).toEqual({ hosts: [] });
+    expect(await ask({ runId: "missing", projectId: flow.project_id, sandboxId: "s" })).toEqual({ hosts: [] });
   });
 });
 

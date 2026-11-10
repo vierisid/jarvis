@@ -4,7 +4,7 @@ import mime from 'mime-types'
 import { ProcessorFn } from './types'
 import axios from 'axios'
 // Jarvis (#961): a file URL is fetched through the HTTP step's egress guard.
-import { egressPolicyFromEnv, egressRefusalIn, guardedFileDownload } from '../../../../../../../../runtime/http-egress'
+import { EgressRefusedError, egressPolicyFromEnv, egressRefusalIn, guardedFileDownload } from '../../../../../../../../runtime/http-egress'
 
 export const fileProcessor: ProcessorFn = async (_property, urlOrBase64, fileContext) => {
     if (isNil(urlOrBase64) || !isString(urlOrBase64)) {
@@ -57,7 +57,14 @@ async function handleUrlFile(path: string, context?: { apiUrl: string; engineTok
         header = (name) => response.headers.get(name)
     } else {
         // Caller URLs retain main's checked DNS, connection and redirect policy.
-        const response = await guardedFileDownload(axios, path, egressPolicyFromEnv())
+        // Jarvis (#1153): a file field is fetched while the step's props are
+        // resolved, before Authority is asked, so it reaches only the hosts on
+        // the flow's read list, redirects included.
+        if (!context) throw new EgressRefusedError('File download refused: there is no workflow to check its read list against')
+        const list = await fetch(new URL('v1/jarvis/read-hosts', context.apiUrl).toString(), { headers: { Authorization: 'Bearer ' + context.engineToken }, redirect: 'error' })
+        const hosts = list.ok ? ((await list.json()) as { hosts?: unknown }).hosts : undefined
+        if (!Array.isArray(hosts) || !hosts.every((h) => typeof h === 'string')) throw new EgressRefusedError('File download refused: the workflow read list could not be read (' + list.status + ')')
+        const response = await guardedFileDownload(axios, path, egressPolicyFromEnv(), { readHosts: hosts as string[] })
         data = response.data
         header = (name) => typeof response.headers[name] === 'string' ? response.headers[name] : null
     }

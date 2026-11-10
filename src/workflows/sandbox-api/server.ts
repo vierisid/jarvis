@@ -67,6 +67,7 @@ import {
 import {
   createJarvisPieceAuthorizeRoute,
   createJarvisPieceReceiptRoute,
+  createJarvisReadHostsRoute,
   type JarvisPiecesRouteDeps,
   type PieceAuthorizeFn,
 } from "./routes/jarvis-pieces";
@@ -298,6 +299,7 @@ export class SandboxApi {
         handler: createJarvisPieceAuthorizeRoute(this.services),
       },
       { path: '/v1/jarvis/pieces/receipt', method: 'POST', handler: createJarvisPieceReceiptRoute(this.services) },
+      { path: '/v1/jarvis/read-hosts', method: 'GET', handler: createJarvisReadHostsRoute() },
       {
         path: "/v1/jarvis/notify",
         method: "POST",
