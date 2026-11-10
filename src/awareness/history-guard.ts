@@ -57,3 +57,12 @@ export function awarenessHeldLlm<T extends object>(llm: T, state?: { held: boole
     },
   });
 }
+
+/**
+ * A composition whose every model call is held by the switch (#1314 review):
+ * the routine composer is built through this, so its wiring is tested.
+ */
+export function heldComposition<D extends { llm: object }, R, O>(depsOf: () => D,
+  compose: (deps: D, request: R) => Promise<O>): (request: R) => Promise<O> {
+  return (request) => { const deps = depsOf(); return compose({ ...deps, llm: awarenessHeldLlm(deps.llm) }, request); };
+}

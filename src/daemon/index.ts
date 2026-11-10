@@ -1,5 +1,5 @@
 import { dropboxStatus } from "../integrations/dropbox-connection";
-import { awarenessHeldLlm } from '../awareness/history-guard.ts';
+import { heldComposition } from '../awareness/history-guard.ts';
 import { registerNavigationCompatibility } from '../brief/registrations/navigation-compatibility';
 import { registerReconciliation } from '../brief/registrations/reconciliation';
 import { registerOnboarding } from '../brief/registrations/onboarding';
@@ -5646,7 +5646,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
         suggestionComposer = new SuggestionComposer(
           // Every model call of a composition stops once awareness is off (#1314 review).
-          request => { const deps = compositionDependencies(); return composePersistedFlow({ ...deps, llm: awarenessHeldLlm(deps.llm) }, request); },
+          heldComposition(compositionDependencies, composePersistedFlow),
           undefined,
           () => backgroundBudgetStatus().state === 'ready',
         );

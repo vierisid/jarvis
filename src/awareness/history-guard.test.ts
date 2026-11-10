@@ -23,3 +23,20 @@ test('the caller deadline still applies under the hold', async () => {
   await expect(llm.chat({ checkDeadline: () => { throw new Error('deadline'); } })).rejects.toThrow('deadline');
   expect(await llm.chat({})).toEqual({ text: 'ok' });
 });
+
+test('the routine composer the daemon builds holds every model call while awareness is off (#1314 review)', async () => {
+  const { heldComposition, AwarenessHeldError } = await import('./history-guard.ts');
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  const sent: string[] = [];
+  const compose = heldComposition(() => ({ llm: { chat: async (prompt: string) => { sent.push(prompt); return 'ok'; } } }),
+    async (deps, request: string) => deps.llm.chat(request));
+  try {
+    expect(await compose('while on')).toBe('ok');
+    setScreenCaptureEnabledSource(() => false);
+    await expect(compose('while off')).rejects.toBeInstanceOf(AwarenessHeldError);
+    expect(sent).toEqual(['while on']);
+  } finally { setScreenCaptureEnabledSource(null); }
+  // And the daemon builds the routine composer through it, not around it.
+  const daemon = await Bun.file(new URL('../daemon/index.ts', import.meta.url)).text();
+  expect(daemon).toContain('new SuggestionComposer(\n          // Every model call of a composition stops once awareness is off (#1314 review).\n          heldComposition(compositionDependencies, composePersistedFlow),');
+});
