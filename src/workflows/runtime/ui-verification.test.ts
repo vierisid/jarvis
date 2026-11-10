@@ -79,14 +79,20 @@ for (const tool of [browserSnapshotTool]) {
     const f = fixture(tool, tool === browserNavigateTool ? { url: 'https://example.test/requested' } : {}, result);
     const response = await f.execute(); expect(response.status).toBe(200);
     const { outcome } = await response.json();
-    expect(outcome.verification).toEqual(verified
+    const recorded: Record<string, unknown> = verified
       ? { status: 'verified', postcondition: 'page_observed', pageUrl: 'https://example.test/redirected', documentId: 'doc-1' }
-      : { status: 'unverified', reason: 'page_identity_missing' });
-    expect(listWorkflowEffects(f.run.id)[0]?.outcome).toEqual(outcome);
+      : { status: 'unverified', reason: 'page_identity_missing' };
+    // The receipt keeps the page's own URL; the flow receives it framed as
+    // untrusted content, since the page chooses it (#1314). Framing carries a
+    // fresh nonce each time, so a replay is compared by what it frames.
+    const asFlowSeesIt = (o: any) => verified ? { ...o, verification: { ...o.verification,
+      pageUrl: expect.stringMatching(/^\[Content from browser_snapshot[\s\S]*<<<UNTRUSTED_CONTENT[\s\S]*\nhttps:\/\/example\.test\/redirected\n[\s\S]*UNTRUSTED_CONTENT>>>$/) } } : o;
+    expect(outcome).toEqual(asFlowSeesIt({ status: 'succeeded', verification: recorded }));
+    expect(listWorkflowEffects(f.run.id)[0]?.outcome as unknown).toEqual({ status: 'succeeded', verification: recorded });
     expect(f.calls[0]?.params.page_identity).toBe(true);
     closeWorkflowDb(); initWorkflowDb(dbPath);
     f.machines.reverse(); f.machines.find(m => m.id === 'a')!.connected = false;
-    expect((await (await f.call()).json()).outcome).toEqual(outcome);
+    expect((await (await f.call()).json()).outcome).toEqual(asFlowSeesIt({ status: 'succeeded', verification: recorded }));
     expect(f.calls.map(c => c.id)).toEqual(['a']);
   });
 }
