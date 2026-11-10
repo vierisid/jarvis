@@ -96,9 +96,6 @@ export class DefaultWorkerHandlers
     this.opts = { ...this.opts, onLogLine: cb };
   }
 
-  /** Sandboxes whose one late run log was taken since they were parked, by the park time it was taken under. */
-  private readonly parkedLogTaken = new Map<string, number>();
-
   /**
    * The run this sandbox serves, or null. A parked engine (between runs in
    * the warm pool, `SandboxRegistry.park`) serves none: its finished run is
@@ -110,8 +107,8 @@ export class DefaultWorkerHandlers
     const record = this.opts.registry.get(sandboxId);
     if (!record) return null;
     if (record.parkedAt == null) return record.runId;
-    if (!lateRunLog || this.parkedLogTaken.get(sandboxId) === record.parkedAt) return null;
-    this.parkedLogTaken.set(sandboxId, record.parkedAt);
+    if (!lateRunLog || record.parkedRunLog) return null;
+    record.parkedRunLog = true;
     return record.runId;
   }
 
@@ -119,7 +116,6 @@ export class DefaultWorkerHandlers
   forget(sandboxId: string): void {
     this.logBuffer.delete(sandboxId);
     this.lastProgress.delete(sandboxId);
-    this.parkedLogTaken.delete(sandboxId);
   }
 
   /**

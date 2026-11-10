@@ -100,8 +100,10 @@ describe("a parked warm engine", () => {
     expect(await parked.json()).toMatchObject({ error: "sandbox parked" });
     expect((await call(first, "/v1/store-entries", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ key: "k", value: 1 }) })).status).toBe(401);
-    // A late execution-state backup of that run still lands.
+    // A late execution-state backup of that run still lands, once: piece code
+    // left running cannot keep rewriting the state a RESUME restores from.
     expect((await call(first, "/v1/logs/run-1", { method: "PUT", body: "x" })).status).toBe(200);
+    expect((await call(first, "/v1/logs/run-1", { method: "PUT", body: "forged" })).status).toBe(401);
     // Rebound to the next run: its token works, the old one stays refused.
     const second = await acquire("run-2");
     expect(second.sandboxId).toBe(first.sandboxId);

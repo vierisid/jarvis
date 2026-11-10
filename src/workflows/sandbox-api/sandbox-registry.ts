@@ -62,6 +62,8 @@ export class SandboxRegistry {
     record.engineToken = patch.engineToken;
     record.expiresAt = patch.expiresAt;
     record.parkedAt = null;
+    record.parkedLogPut = false;
+    record.parkedRunLog = false;
   }
 
   /**
@@ -77,6 +79,8 @@ export class SandboxRegistry {
     const record = this.sandboxes.get(sandboxId);
     if (!record || record.terminatedAt !== null) return;
     record.parkedAt = now;
+    record.parkedLogPut = false;
+    record.parkedRunLog = false;
   }
 
   /** Mark the sandbox as terminated; subsequent get/byRunId will return null. */

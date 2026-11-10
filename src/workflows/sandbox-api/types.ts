@@ -29,6 +29,10 @@ export interface SandboxRecord extends SandboxIdentity {
    * nothing but its last run's own log upload (server.ts).
    */
   parkedAt?: number | null;
+  /** While parked: its run's one late log upload has come, over HTTP (`server.ts`). */
+  parkedLogPut?: boolean;
+  /** While parked: its run's one late run log has come, over the worker socket (`worker-handlers.ts`). */
+  parkedRunLog?: boolean;
 }
 
 export interface EngineTokenClaims extends SandboxIdentity {
