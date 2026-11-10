@@ -908,6 +908,17 @@ describe("#852: only a sender the allow-list names becomes the broadcast recipie
     expect(svc.getBroadcastRecipient("telegram")).toBeNull();
   });
 
+  test("the service passes a sender's stop check on to the channel loop (#1314 review)", async () => {
+    initDatabase(":memory:");
+    const { svc, telegram, handle } = await setup({ telegram: [42] });
+    await handle(msg("telegram", 42, "42", true));
+    const routed = await svc.tryBroadcastToChannels(["telegram"], "held", { shouldContinue: () => false });
+    expect(telegram.sent).toEqual([]);
+    expect(routed.delivered).toEqual([]);
+    await svc.tryBroadcastToChannels(["telegram"], "sent");
+    expect(telegram.sent).toEqual([{ to: "42", text: "sent" }]);
+  });
+
   test("#852 review: a listed user writing in a group or server channel does not send the cards there", async () => {
     initDatabase(":memory:");
     const { svc, telegram, discord, handle } = await setup({ telegram: [42], discord: [OWNER] });
