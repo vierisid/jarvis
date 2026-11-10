@@ -271,6 +271,36 @@ export const expressionPatches = {
   "packages/server/engine/src/lib/variables/processors/types.ts": [
     ["export type ProcessorFn<INPUT = any, OUTPUT = any> = (\n    property: PieceProperty,\n    value: INPUT,\n) => OUTPUT\n", "export type ProcessorFn<INPUT = any, OUTPUT = any> = (\n    property: PieceProperty,\n    value: INPUT,\n    fileContext?: { apiUrl: string; engineToken: string },\n) => OUTPUT\n"],
   ],
+  // F-06: date-helper rejects an expression it cannot read, and "Use Current Time"
+  // needs no time. `core-date-helper-piece.test.ts` covers both.
+  "packages/pieces/core/date-helper/src/lib/actions/next-day-of-week.ts": [
+    ['    await propsValidation.validateZod(context.propsValue, {\n      time: z.string().regex(/^\\d\\d:\\d\\d$/),\n    });',
+      '    // === JARVIS PATCH: "Use Current Time" does not need a time to be given ===\n    await propsValidation.validateZod(context.propsValue, {\n      ...(context.propsValue.currentTime === true ? {} : { time: z.string().regex(/^\\d\\d:\\d\\d$/) }),\n    });\n    // === END JARVIS PATCH ==='],
+    ['\'The time that you would like to get the date and time of. This must be in 24h format.\',',
+      '\'The time that you would like to get the date and time of, as HH:mm in 24h format, for example 09:30. Not used when "Use Current Time" is checked.\','],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/next-day-of-year.ts": [
+    ['    await propsValidation.validateZod(context.propsValue, {\n      day: z.number().min(1).max(31),\n      time: z.string().regex(/^\\d\\d:\\d\\d$/),\n    });',
+      '    // === JARVIS PATCH: "Use Current Time" does not need a time to be given ===\n    await propsValidation.validateZod(context.propsValue, {\n      day: z.number().min(1).max(31),\n      ...(context.propsValue.currentTime === true ? {} : { time: z.string().regex(/^\\d\\d:\\d\\d$/) }),\n    });\n    // === END JARVIS PATCH ==='],
+    ['\'The time that you would like to get the date and time of. This must be in 24h format.\',',
+      '\'The time that you would like to get the date and time of, as HH:mm in 24h format, for example 09:30. Not used when "Use Current Time" is checked.\','],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/first-day-of-prior-month.ts": [
+    ['    await propsValidation.validateZod(context.propsValue, {\n      time: z.string().regex(/^\\d\\d:\\d\\d$/),\n    });',
+      '    // === JARVIS PATCH: "Use Current Time" does not need a time to be given ===\n    await propsValidation.validateZod(context.propsValue, {\n      ...(context.propsValue.currentTime === true ? {} : { time: z.string().regex(/^\\d\\d:\\d\\d$/) }),\n    });\n    // === END JARVIS PATCH ==='],
+    ['\'The time that you would like to get the date and time of. This must be in 24h format.\',',
+      '\'The time that you would like to get the date and time of, as HH:mm in 24h format, for example 09:30. Not used when "Use Current Time" is checked.\','],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/last-day-of-prior-month.ts": [
+    ['    await propsValidation.validateZod(context.propsValue, {\n      time: z.string().regex(/^\\d\\d:\\d\\d$/),\n    });',
+      '    // === JARVIS PATCH: "Use Current Time" does not need a time to be given ===\n    await propsValidation.validateZod(context.propsValue, {\n      ...(context.propsValue.currentTime === true ? {} : { time: z.string().regex(/^\\d\\d:\\d\\d$/) }),\n    });\n    // === END JARVIS PATCH ==='],
+    ['\'The time that you would like to get the date and time of. This must be in 24h format.\',',
+      '\'The time that you would like to get the date and time of, as HH:mm in 24h format, for example 09:30. Not used when "Use Current Time" is checked.\','],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/add-subtract-date.ts": [
+    ['  expression = expression.replace(/(\\r\\n|\\n|\\r)/gm, \'\').replace(/ /g, \'\');\n',
+      '  expression = expression.replace(/(\\r\\n|\\n|\\r)/gm, \'\').replace(/ /g, \'\');\n  // === JARVIS PATCH: an expression that is not one or more "+/- number unit" terms fails ===\n  // Anything else used to be skipped term by term, so "banana" changed nothing\n  // and a misspelt unit was ignored, while the step reported success.\n  if (!/^(?:[+-]?\\d+(?:year|month|day|hour|minute|second)s?)+$/i.test(expression)) {\n    throw new Error(\n      `Invalid expression "${String(expression).slice(0, 60)}". Use terms of a sign, a number and a unit, such as "+ 1 day" or "+ 1 year - 3 month". The units are year, month, day, hour, minute and second.`\n    );\n  }\n  // === END JARVIS PATCH ===\n'],
+  ],
 } as const;
 
 export function applyExpressionPatch(source: string, replacements: readonly (readonly [string, string])[]): string {

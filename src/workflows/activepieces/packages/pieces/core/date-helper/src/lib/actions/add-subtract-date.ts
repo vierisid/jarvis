@@ -128,6 +128,15 @@ export const addSubtractDateAction = createAction({
 function addSubtractTime(date: Date, expression: string, timeZone?: string): dayjs.Dayjs {
   // remove all the spaces and line breaks from the expression
   expression = expression.replace(/(\r\n|\n|\r)/gm, '').replace(/ /g, '');
+  // === JARVIS PATCH: an expression that is not one or more "+/- number unit" terms fails ===
+  // Anything else used to be skipped term by term, so "banana" changed nothing
+  // and a misspelt unit was ignored, while the step reported success.
+  if (!/^(?:[+-]?\d+(?:year|month|day|hour|minute|second)s?)+$/i.test(expression)) {
+    throw new Error(
+      `Invalid expression "${String(expression).slice(0, 60)}". Use terms of a sign, a number and a unit, such as "+ 1 day" or "+ 1 year - 3 month". The units are year, month, day, hour, minute and second.`
+    );
+  }
+  // === END JARVIS PATCH ===
   const parts = expression.split(/(\+|-)/);
   let sign = 1;
   const numbers = [];
