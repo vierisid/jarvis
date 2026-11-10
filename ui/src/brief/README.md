@@ -13,10 +13,12 @@ precedence. `docs/hosted-dashboard.md` describes backend feature defaults and ro
 
 ## Entry points
 
-The D33 release record (`entry/release.ts`, `BRIEF_RELEASE`) is off and does not select the production
-default: `BRIEF_RELEASE` has `rollout: "off"`, and `DashboardEntry` gets no release runtime or live
-composition, so it would stay off even with a filled record. `scripts/brief-release/README.md` holds
-the integration contract, the release checklist and the rollback table.
+The production default does not come from the D33 release record. It comes from the host descriptor
+(see the top of this file), which `resolveHostedEntry` maps to rollout `released`. The record
+(`entry/release.ts`, `BRIEF_RELEASE`) still has `rollout: "off"`, and `DashboardEntry` gets no release
+runtime or live composition, so filling the record in would not change the default.
+`scripts/brief-release/README.md` holds the integration contract, the release checklist and the
+rollback table.
 
 When the operator explicitly selects the legacy default:
 
