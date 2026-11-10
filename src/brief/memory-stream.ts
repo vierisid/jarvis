@@ -4,6 +4,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import type { Database } from 'bun:sqlite';
 import { getDb } from '../vault/schema';
 import { notInternalEntitySql } from '../vault/entities';
+import { isOperationalFact, isWorkflowSubjectName, looksLikeId } from '../vault/operational-facts';
 import type { FactRow } from '../vault/fact-policy';
 import type { FactEvidence } from '../vault/facts';
 import type { BriefMemoryUse } from './contracts';
@@ -14,16 +15,13 @@ export const MEMORY_STREAM_LIMITS = { facts: 10000, evidence: 50000, uses: 50000
 export class MemoryQueryError extends Error {}
 class CapacityError extends Error {}
 type Row = FactRow & { subject_name: string; subject_type: string };
-type Collection = { items: Map<string, MemoryStreamItem>; usedIn: MemoryStreamPage['usedIn']; usageCoverage?: MemoryUsageCoverage };
+type Collection = { items: Map<string, MemoryStreamItem>; hidden: Set<string>; usedIn: MemoryStreamPage['usedIn']; usageCoverage?: MemoryUsageCoverage };
 type Snapshot = { queryKey: string; asOf: number; expiresAt: number; members: [string, string][];
   matches: string[]; total: number; usedIn: MemoryStreamPage['usedIn'] };
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const compareText = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const idValid = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 200 && !/[\\/\u0000-\u001f\u007f]/.test(v) && v !== '.' && v !== '..';
 const timestamp = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && Math.abs(v) <= 8.64e15;
-/** A name that is a generated id (a flow id, a UUID), not something a person would call a thing. */
-const looksLikeId = (name: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name)
-  || (/^[A-Za-z0-9_-]{16,}$/.test(name) && /\d/.test(name) && /[a-z]/.test(name) && /[A-Z]/.test(name));
 const SOURCE_PHRASE: Record<string, string> = { llm_extraction: 'noted from a chat', user_profile: 'from your profile', dashboard: 'added by you' };
 /** The subject as a person reads it: its name, or a type and source phrase when the name is only an id. */
 export function readableSubject(name: string, type: string, source: string | null): string {
@@ -134,7 +132,31 @@ export class MemoryStream {
         permissions: { canRead: true, canCorrect: row.status !== 'superseded' && this.correctionAvailable(), canForget: this.forget?.readiness() === 'ready' },
         detailHref: href, historyHref: `${href}/history`, supersededBy: row.superseded_by });
     }
-    return { items, usedIn, ...(usageCoverage ? { usageCoverage } : {}) };
+    // Hidden from the stream, never deleted (detail, history and forget still resolve them).
+    const workflowNames = this.workflowNames(), hidden = new Set<string>(), latest = new Map<string, Row>();
+    for (const row of rows) {
+      const item = items.get(row.id)!;
+      if (item.status === 'superseded') continue;
+      if (workflowNames.has(row.subject_name.trim().toLowerCase()) || isWorkflowSubjectName(row.subject_name)
+        || isOperationalFact({ predicate: row.predicate, object: row.object, userQuoted: item.basis !== 'inferred' })) { hidden.add(row.id); continue; }
+      // The extractor re-learns the same attribute on every turn: show the most recent per subject, predicate and scope.
+      // Facts a person entered themselves are never collapsed (a predicate like "likes" holds many values).
+      if (row.source !== 'llm_extraction') continue;
+      const key = JSON.stringify([row.subject_id, row.predicate, row.scope]), prior = latest.get(key);
+      if (!prior) { latest.set(key, row); continue; }
+      const a = items.get(prior.id)!, newer = item.updatedAt > a.updatedAt || (item.updatedAt === a.updatedAt && compareText(row.id, prior.id) < 0);
+      hidden.add(newer ? prior.id : row.id); if (newer) latest.set(key, row);
+    }
+    return { items, hidden, usedIn, ...(usageCoverage ? { usageCoverage } : {}) };
+  }
+  /** Display names of saved workflows, lowercased. Empty when the workflow tables do not exist. */
+  private workflowNames(): Set<string> {
+    const names = new Set<string>();
+    const has = (t: string) => !!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+    if (has('flow_version')) for (const r of this.db.query<{ n: string }, []>('SELECT DISTINCT display_name AS n FROM flow_version').all()) names.add(r.n.trim().toLowerCase());
+    if (has('workflows')) for (const r of this.db.query<{ n: string }, []>('SELECT DISTINCT name AS n FROM workflows').all()) names.add(r.n.trim().toLowerCase());
+    names.delete('');
+    return names;
   }
   private encode(id: string, offset: number): string {
     const body = `${id}.${offset}`;
@@ -169,7 +191,7 @@ export class MemoryStream {
             this.snapshots.delete(id!); return { state: 'stale', reason: 'source_changed' };
           }
         } else {
-          const visible = [...collection.items.values()].filter(f => f.status !== 'superseded');
+          const visible = [...collection.items.values()].filter(f => f.status !== 'superseded' && !collection.hidden.has(f.factId));
           const matches = visible.filter(f => (!query.q || f.sentence.toLowerCase().includes(query.q.toLowerCase()))
             && (!query.source || f.sourceSummary.labels.includes(query.source))
             && (query.updatedFrom === undefined || f.updatedAt >= query.updatedFrom)

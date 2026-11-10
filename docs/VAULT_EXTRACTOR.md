@@ -20,6 +20,13 @@ The Vault Extractor is an LLM-powered knowledge extraction system that automatic
   out of the Memory room and of workflow `vault_search`. Source and basis read in
   plain words ("Learned from a chat", "Inferred"); a subject whose name is only a
   generated id shows as its type and source, never the id.
+- **Workflow bookkeeping is not memory**: The extractor does not store facts whose
+  object is an id or a cron string, facts about a workflow itself, or the
+  assistant's own status reports (`assistant_` / `reported_` predicates without a
+  user quote). The Memory room applies the same rules at read time to facts stored
+  earlier, and also hides facts about saved workflows by display name. Hidden
+  facts are kept. Repeated extracted facts with the same subject, predicate and
+  scope show once, the most recent; facts a person entered are never collapsed.
 
 ## Architecture
 

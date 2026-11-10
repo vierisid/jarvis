@@ -542,3 +542,37 @@ describe('Vault Extractor', () => {
     });
   });
 });
+
+describe('Vault Extractor: workflow bookkeeping', () => {
+  beforeEach(() => { initDatabase(':memory:'); });
+  test('does not store ids, cron strings or the assistant\'s own status reports as facts', async () => {
+    const provider: LLMProvider = {
+      name: 'mock',
+      async chat(): Promise<LLMResponse> {
+        return {
+          content: JSON.stringify({
+            entities: [{ name: 'Morloven', type: 'project' }, { name: 'Order ingestion workflow', type: 'project' }],
+            facts: [
+              { subject: 'Morloven', predicate: 'sells', object: 'surf apparel', confidence: 1, user_quote: 'We sell surf apparel' },
+              { subject: 'Morloven', predicate: 'reported_workflow_id', object: 'lbk0h4QNrT2dLz9oEdSQQ', confidence: 0.9, user_quote: 'We sell surf apparel' },
+              { subject: 'Morloven', predicate: 'reminder_schedule', object: '0 9 * * 1-5', confidence: 0.9 },
+              { subject: 'Order ingestion workflow', predicate: 'required_output', object: 'One row per order', confidence: 0.9, user_quote: 'We sell surf apparel' },
+              { subject: 'Morloven', predicate: 'assistant_reported_save_status', object: 'Saved as a disabled draft', confidence: 0.9 },
+            ],
+            relationships: [],
+            commitments: [],
+          }),
+          tool_calls: [],
+          usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'mock-model',
+          finish_reason: 'stop',
+        };
+      },
+      async *stream() { yield { type: 'done', response: {} as any }; },
+      async listModels() { return ['mock-model']; },
+    };
+    await extractAndStore('We sell surf apparel', 'Saved the workflow lbk0h4QNrT2dLz9oEdSQQ as a disabled draft.', makeManager(provider));
+    const subject = findEntities({ name: 'Morloven' })[0]!;
+    expect(findFacts({ subject_id: subject.id }).map(f => f.predicate)).toEqual(['sells']);
+  });
+});

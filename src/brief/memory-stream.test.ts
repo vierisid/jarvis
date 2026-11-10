@@ -181,14 +181,46 @@ test('workflow bookkeeping entities are left out of the stream and counts, and i
   createFact(flow.id, 'reported_schedule', 'daily', { source: 'llm_extraction' });
   createFact(draft.id, 'requested_state', 'disabled draft', { source: 'llm_extraction' });
   const bare = createEntity('project', 'qwErTy0123456789AbCdEf');
-  const kept = createFact(bare.id, 'reported_schedule', 'weekly', { source: 'llm_extraction' });
+  const kept = createFact(bare.id, 'launch_plan', 'weekly', { source: 'llm_extraction' });
   fact('tea');
   const view = await page();
   expect(view.count.total).toBe(2);
   expect(view.items.map(i => i.sentence).join('\n')).not.toContain('lbk0h4QNrT2dLz9oEdSQQ');
   const row = view.items.find(i => i.factId === kept.id)!;
-  expect(row.sentence).toBe('A project noted from a chat reported schedule weekly');
+  expect(row.sentence).toBe('A project noted from a chat launch plan weekly');
   expect(row.sentence).not.toContain('qwErTy0123456789AbCdEf');
   expect(view.items.some(i => i.sentence === 'Ada likes tea')).toBe(true);
   expect(getDb().query('SELECT COUNT(*) c FROM facts').get()).toEqual({ c: 3 + 1 });
+});
+test('operational facts stored earlier are hidden at read time and counted consistently; data is kept', async () => {
+  getDb().run("CREATE TABLE IF NOT EXISTS flow_version (id TEXT PRIMARY KEY, flow_id TEXT, display_name TEXT)");
+  getDb().run("INSERT INTO flow_version (id, flow_id, display_name) VALUES ('v1', 'f1', 'Weekly Reminder')");
+  const wf = createEntity('project', 'Weekly Reminder', undefined, 'llm_extraction');
+  const biz = createEntity('project', 'Morloven', undefined, 'llm_extraction');
+  const llm = { source: 'llm_extraction' };
+  createFact(wf.id, 'requested_schedule', 'Every weekday at 09:00', { ...llm, basis: 'reported', quote: 'q' });
+  createFact(biz.id, 'reported_workflow_id', 'lbk0h4QNrT2dLz9oEdSQQ', { ...llm, basis: 'reported', quote: 'q' });
+  createFact(biz.id, 'reported_saved_cron', '0 9 * * 1-5', { ...llm, basis: 'reported', quote: 'q' });
+  createFact(biz.id, 'assistant_reported_status', 'Saved as disabled draft', { ...llm, basis: 'inferred' });
+  const real = createFact(biz.id, 'sells', 'surf apparel', { ...llm, basis: 'reported', quote: 'q' });
+  const view = await page();
+  expect(view.items.map(i => i.factId)).toEqual([real.id]);
+  expect(view.count).toEqual({ total: 1, matched: 1, returned: 1 });
+  expect(await page({ q: 'cron' })).toMatchObject({ count: { total: 1, matched: 0 } });
+  expect(getDb().query('SELECT COUNT(*) c FROM facts').get()).toEqual({ c: 5 });
+});
+test('repeated extracted facts with the same subject and predicate collapse to the latest; user-entered ones do not', async () => {
+  const biz = createEntity('project', 'Morloven', undefined, 'llm_extraction');
+  createFact(biz.id, 'status', 'planning', { source: 'llm_extraction' }); now += 1000;
+  const latest = createFact(biz.id, 'status', 'shipping', { source: 'llm_extraction' });
+  const a = fact('tea'), b = fact('coffee');
+  const view = await page();
+  expect(view.items.map(i => i.factId).sort()).toEqual([latest.id, a.id, b.id].sort());
+  expect(view.count.total).toBe(3);
+});
+test('facts about a workflow itself are hidden, not facts about the business', async () => {
+  const wf = createEntity('project', 'Order ingestion workflow', undefined, 'llm_extraction');
+  createFact(wf.id, 'required_output', 'One row per order', { source: 'llm_extraction', basis: 'reported', quote: 'q' });
+  const view = await page();
+  expect(view.count.total).toBe(0);
 });
