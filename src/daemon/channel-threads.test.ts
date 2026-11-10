@@ -162,6 +162,36 @@ describe('#884: each channel sender has a conversation of their own', () => {
     expect(primary.getMessages().map((m) => m.content)).toEqual([]);
   });
 
+  // #1313 follow-up (security): the owner can reopen a guest's (or a group's)
+  // thread in Brief. What they say there, and the full-tool reply, is written
+  // into that conversation; the guest's next turn must neither see it nor be
+  // answered from it.
+  for (const [label, userId, chatId, list] of [['guest', 2002, 2002, [] as number[]], ['group', 1001, -100, [1001]]] as const) {
+    const allowList = [...list];
+    test(`a ${label} thread's next turn is not fed the owner's Brief turns in it`, async () => {
+      const { agent, provider } = classicAgent();
+      const handle = service(agent, allowList);
+      const message = (text: string) => label === 'guest' ? telegram(userId, text, false) : telegramGroup(userId, chatId, text);
+      await handle(message('hello'));
+      const conversation = getDb().query(`SELECT id FROM conversations WHERE sender = ?`).get(conversationSender(message(''))!) as { id: string };
+      // As ChatTurnRepository.accept writes a Brief turn: both rows, and the turn naming them.
+      addMessage(conversation.id, { role: 'user', content: OWNER_DASHBOARD_SECRET });
+      const [ownerRow, replyRow] = ['brief-user', 'brief-reply'];
+      getDb().run('UPDATE conversation_messages SET id = ? WHERE content = ?', [ownerRow, OWNER_DASHBOARD_SECRET]);
+      addMessage(conversation.id, { role: 'assistant', content: OWNER_TELEGRAM_SECRET });
+      getDb().run('UPDATE conversation_messages SET id = ? WHERE content = ?', [replyRow, OWNER_TELEGRAM_SECRET]);
+      getDb().run(`INSERT INTO brief_chat_turns (turn_id, workspace_id, conversation_id, request_id, input, state, user_message_id, assistant_message_id, created_at)
+        VALUES ('t', 'w', ?, 'r', 'x', 'completed', ?, ?, 1)`, [conversation.id, ownerRow, replyRow]);
+      provider.seen = [];
+      await handle(message('what was said above?'));
+      expect(provider.seen).toHaveLength(1);
+      const sent = everything(provider.seen[0]!);
+      expect(sent).toContain('hello');
+      expect(sent).not.toContain(OWNER_DASHBOARD_SECRET);
+      expect(sent).not.toContain(OWNER_TELEGRAM_SECRET);
+    });
+  }
+
   test('classic mode: a sender keeps their own history from one turn to the next, sent once', async () => {
     const { agent, provider } = classicAgent();
     const handle = service(agent);

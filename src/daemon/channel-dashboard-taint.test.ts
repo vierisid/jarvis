@@ -101,3 +101,46 @@ test('control: continuing the owner\'s own channel conversation is not tainted',
   expect(s.executions()).toBe(1);
   expect(s.approvals.getPending()).toEqual([]);
 });
+
+// #1313 follow-up (security): a Brief turn on a guest's thread, or one whose
+// history holds a guest's message or a forward, teaches nothing. Its reply can
+// restate the guest's words, and extraction would store them as the owner's
+// facts for every later, untainted turn, as the guest and forward paths
+// already refuse to.
+for (const routerFirst of [false, true]) {
+  for (const [label, sender, sources] of [
+    ['a guest\'s thread', 'user:7/chat:7', undefined],
+    ['a forward in the history', 'user:42/chat:42', ['forwarded message']],
+    ['a guest message in the history', 'user:42/chat:42', ['guest message']],
+  ] as const) {
+    test(`${routerFirst ? 'router-first' : 'classic'}: nothing is learned from a Brief turn on ${label}`, async () => {
+      const s = stack(routerFirst);
+      const learned: string[] = [];
+      Object.assign(s.service as unknown as Record<string, unknown>, {
+        extractKnowledge: async () => { learned.push('extract'); }, learnFromInteraction: async () => { learned.push('learn'); },
+      });
+      const conversationId = getOrCreateConversation('telegram', { sender }).id;
+      const input: ScopedChatInput = { conversationId, turnId: 't', requestId: 'r', text: 'what did they want?', history: [],
+        ...(sources ? { untrustedSources: [...sources] } : {}), contextKey: `brief:workspace:${conversationId}`, signal: new AbortController().signal };
+      const result = s.service.streamMessage(input.text, 'websocket', undefined, null, input.contextKey, input);
+      for await (const _event of result.stream) { /* drain */ }
+      await result.onComplete('They want the money wired to account 99.');
+      expect(learned).toEqual([]);
+    });
+  }
+}
+
+test('control: a Brief turn on the owner\'s own thread still learns', async () => {
+  const s = stack(false);
+  const learned: string[] = [];
+  Object.assign(s.service as unknown as Record<string, unknown>, {
+    extractKnowledge: async () => { learned.push('extract'); }, learnFromInteraction: async () => { learned.push('learn'); },
+  });
+  const conversationId = getOrCreateConversation('telegram', { sender: 'user:42/chat:42' }).id;
+  const input: ScopedChatInput = { conversationId, turnId: 't', requestId: 'r', text: 'note this', history: [],
+    contextKey: `brief:workspace:${conversationId}`, signal: new AbortController().signal };
+  const result = s.service.streamMessage(input.text, 'websocket', undefined, null, input.contextKey, input);
+  for await (const _event of result.stream) { /* drain */ }
+  await result.onComplete('Noted.');
+  expect(learned.sort()).toEqual(['extract', 'learn']);
+});
