@@ -167,8 +167,8 @@ export class ChatTurnRepository {
     const turn = this.get(ref);
     const rows = this.db.query<{ role: 'user' | 'assistant'; content: string; forwarded: number; brief: number }, [string, string, string]>(`SELECT role, content,
       EXISTS (SELECT 1 FROM conversation_forwards f WHERE f.message_id = conversation_messages.id) AS forwarded,
-      EXISTS (SELECT 1 FROM brief_chat_turns b WHERE b.user_message_id = conversation_messages.id
-        OR b.assistant_message_id = conversation_messages.id) AS brief FROM conversation_messages
+      EXISTS (SELECT 1 FROM brief_chat_turns b WHERE b.conversation_id = conversation_messages.conversation_id
+        AND (b.user_message_id = conversation_messages.id OR b.assistant_message_id = conversation_messages.id)) AS brief FROM conversation_messages
       WHERE conversation_id = ? AND role IN ('user', 'assistant') AND id NOT IN (?, ?)
       ORDER BY created_at DESC, id DESC LIMIT 80`).all(turn.conversationId, turn.userMessageId, turn.assistantMessageId).reverse();
     // The guest's turns in their channel thread: what they wrote, and the

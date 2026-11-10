@@ -25,6 +25,7 @@ const LEGACY_DEFAULT_TITLE = 'Chat history';
 function shownTitle(row: Row): string {
   if (row.title === 'New chat' && row.first_message) return conversationTitle(row.first_message);
   const channel = row.title === LEGACY_DEFAULT_TITLE ? threadChannelName(row.channel) : null;
+  // UTC, as channelThreadTitle: the daemon does not know the viewer's time zone.
   return channel ? `${channel} chat from ${new Date(row.started_at).toISOString().slice(0, 10)}` : row.title;
 }
 type Cursor = { v: 1; kind: string; workspace: string; scope: string; time: number; id: string };

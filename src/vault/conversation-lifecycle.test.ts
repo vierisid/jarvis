@@ -224,14 +224,14 @@ test('the Pebble voice dialogue is not a Brief chat: not listed, not opened', ()
 // #1313 follow-up: closed Telegram and Discord threads all read "Chat history".
 test('a channel thread is titled with its channel and sender, and an older one with its channel and start date', () => {
   const repo = memory();
-  const alice = getOrCreateConversation('telegram', { sender: 'user:1/chat:1', label: 'Telegram - alice' });
-  const bob = getOrCreateConversation('discord', { sender: 'user:2/chat:2', label: 'Discord - Bob' });
-  expect(repo.get(alice.id).title).toBe('Telegram - alice');
-  expect(repo.get(bob.id).title).toBe('Discord - Bob');
+  const alice = getOrCreateConversation('telegram', { sender: 'user:1/chat:1', label: 'Telegram guest - alice, 2026-11-10' });
+  const bob = getOrCreateConversation('discord', { sender: 'user:2/chat:2', label: 'Discord guest - Bob, 2026-11-10' });
+  expect(repo.get(alice.id).title).toBe('Telegram guest - alice, 2026-11-10');
+  expect(repo.get(bob.id).title).toBe('Discord guest - Bob, 2026-11-10');
   // The same sender's thread is found again, and keeps its title.
-  expect(getOrCreateConversation('telegram', { sender: 'user:1/chat:1', label: 'Telegram - alice2' }).id).toBe(alice.id);
-  expect(repo.get(alice.id).title).toBe('Telegram - alice');
-  // A thread saved before labels (or with no usable name) keeps its stored default.
+  expect(getOrCreateConversation('telegram', { sender: 'user:1/chat:1', label: 'Telegram guest - alice2, 2026-11-10' }).id).toBe(alice.id);
+  expect(repo.get(alice.id).title).toBe('Telegram guest - alice, 2026-11-10');
+  // A thread saved before labels keeps its stored default, shown with its channel and day.
   const old = getOrCreateConversation('telegram', { sender: 'user:3/chat:3' });
   getDb().run('UPDATE conversations SET started_at = ? WHERE id = ?', [Date.UTC(2026, 10, 3, 12), old.id]);
   expect(repo.get(old.id).title).toBe('Telegram chat from 2026-11-03');

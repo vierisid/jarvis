@@ -35,6 +35,7 @@ export function channelThreadTitle(channel: string, sender: unknown, who: 'owner
   // A sender has a thread per chat and a new one after a quiet spell: the kind
   // of chat and the day it started tell them apart.
   const place = where.privateChat ? label : `${label} group`;
+  // UTC: the daemon does not know the viewer's time zone.
   const day = `, ${new Date(where.startedAt).toISOString().slice(0, 10)}`;
   if (who !== 'guest') return `${place} - you${day}`;
   // A guest with no usable name is still marked a guest, never left on the
