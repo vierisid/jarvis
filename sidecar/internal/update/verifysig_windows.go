@@ -22,6 +22,16 @@ import (
 // Empty (dev builds) verifies the chain only, with a loud warning.
 var expectedPublisherCN = ""
 
+// expectedPublisherSPKI pins the signer certificate's key (#1165): a
+// comma-separated list of lower-case hex SHA-256 digests of its
+// SubjectPublicKeyInfo, stamped at release from the committed chain with
+// -X 'github.com/jarvis/sidecar/internal/update.expectedPublisherSPKI=<list>'.
+// The CN pin alone accepts any publicly trusted certificate whose CN matches;
+// a key cannot be had that way. Empty with the CN empty too (dev builds)
+// skips both pins, with a warning; empty beside a CN pin, or malformed,
+// refuses every payload (signerpin.go).
+var expectedPublisherSPKI = ""
+
 var (
 	wintrust                = windows.NewLazySystemDLL("wintrust.dll")
 	procWinVerifyTrust      = wintrust.NewProc("WinVerifyTrust")
@@ -98,8 +108,27 @@ func VerifyPayloadSignature(stagedBin string) error {
 		return fmt.Errorf("WinVerifyTrust refused the signature (0x%x)", ret)
 	}
 
-	if expectedPublisherCN == "" {
+	checkSPKI, checkCN, err := windowsPinChecks(expectedPublisherCN, expectedPublisherSPKI)
+	if err != nil {
+		return err
+	}
+	if !checkSPKI && !checkCN {
 		Logf("warning: no pinned publisher in this build; verifying the signature chain only")
+		return nil
+	}
+	if checkSPKI {
+		ps := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
+			signerCertScript(exe))
+		hideSubprocessWindow(ps)
+		out, err := ps.Output()
+		if err != nil {
+			return fmt.Errorf("could not read signer certificate: %v", err)
+		}
+		if err := checkSignerSPKI(string(out), expectedPublisherSPKI); err != nil {
+			return err
+		}
+	}
+	if !checkCN {
 		return nil
 	}
 	// Publisher pin: chain validity alone would accept ANY signed executable,

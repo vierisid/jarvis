@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
   diffCatalogs,
   hasChanges,
+  REPORT_MAX_CHARS,
   renderReport,
+  SPAN_MAX_CHARS,
   verdictFor,
   type GeneratedEntryLike,
 } from "./catalog-diff";
@@ -436,5 +438,73 @@ describe("renderReport keeps upstream text inside code spans (#985)", () => {
     expect(markdown).not.toContain("@owner-held-error");
     expect(markdown).not.toContain("@owner-held-desc");
     expect(markdown).toContain("- `meta`: displayName, description");
+  });
+});
+
+// #1165: the PR body is cut by create-pull-request at GitHub's 65536
+// characters, wherever that falls, and a cut inside a code span leaves the
+// rest of an upstream string as live markdown (a closing keyword, an
+// @mention). So no span is longer than SPAN_MAX_CHARS, and the report stops
+// at whole lines, under the budget that leaves room for the license problems
+// the workflow puts in front of it.
+describe("report size (#1165)", () => {
+  // Every span on a line is closed: an even number of backticks.
+  const spansClosed = (md: string) => md.split("\n").every((l) => (l.match(/`/g) ?? []).length % 2 === 0);
+
+  test("one huge upstream string is cut inside its span, which stays closed", () => {
+    const huge = "MIT " + "x".repeat(100_000) + " fixes #1 @owner";
+    const oldE = [entry({ id: "gmail" })];
+    const newE = [entry({ id: "gmail" }), entry({ id: "evil", licenseSpdx: huge })];
+    const { markdown } = renderReport(diffCatalogs(oldE, newE, meta), reportOpts);
+    const line = markdown.split("\n").find((l) => l.startsWith("- `evil`"))!;
+    const span = /license `([^`]*)`/.exec(line)![1]!;
+    expect(span.length).toBe(SPAN_MAX_CHARS);
+    expect(span.endsWith("...")).toBe(true);
+    expect(markdown).not.toContain("@owner");
+    expect(markdown.length).toBeLessThan(5_000);
+    expect(spansClosed(markdown)).toBe(true);
+  });
+
+  test("the cut never splits a surrogate pair", () => {
+    const oldE = [entry({ id: "gmail" })];
+    const newE = [entry({ id: "gmail" }), entry({ id: "emoji", licenseSpdx: "\u{1F600}".repeat(SPAN_MAX_CHARS * 2) })];
+    const { markdown } = renderReport(diffCatalogs(oldE, newE, meta), reportOpts);
+    expect(markdown).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
+  });
+
+  test("a report too long for the PR body stops at a whole line, with its details closed and a pointer to the rest", () => {
+    // Enough added pieces and version bumps, each with long fields, to pass
+    // the budget several times over; the bumps sit in a <details> block.
+    const n = 3_000;
+    const oldE = Array.from({ length: n }, (_, i) => entry({ id: `bump-${i}`, latestVersion: "1.0.0-" + "a".repeat(150) }));
+    const newE = [
+      ...Array.from({ length: n }, (_, i) => entry({ id: `bump-${i}`, latestVersion: "2.0.0-" + "b".repeat(150) })),
+      ...Array.from({ length: n }, (_, i) => entry({ id: `added-${i}`, licenseSpdx: "L".repeat(150) })),
+    ];
+    const diff = diffCatalogs(oldE, newE, meta);
+    const { markdown, verdict, full } = renderReport(diff, reportOpts);
+    expect(verdict).toBe("review");
+    expect(markdown.length).toBeLessThanOrEqual(REPORT_MAX_CHARS + 1);
+    expect(markdown.length).toBeGreaterThan(REPORT_MAX_CHARS - 1_000);
+    expect(spansClosed(markdown)).toBe(true);
+    expect((markdown.match(/<details>/g) ?? []).length).toBe((markdown.match(/<\/details>/g) ?? []).length);
+    expect(markdown).toMatch(/_The report is cut here: \d+ more line\(s\) are in the `catalog-sync` artifact of the run, as `catalog-pr-report-full.md`\._/);
+    // The footer warning survives the cut, and the full report holds every line.
+    expect(markdown.trimEnd().endsWith("force-pushes it, so a commit made here is lost.")).toBe(true);
+    expect(full.length).toBeGreaterThan(REPORT_MAX_CHARS * 2);
+    expect(full).toContain("`added-2999`");
+    expect(markdown).not.toContain("`added-2999`");
+    // The verdict callout and the summary come first, so they survive.
+    expect(markdown).toContain("**Manual review required**");
+    expect(markdown).toContain("| Added | 3000 |");
+  });
+
+  test("the budget leaves room for the license problems in front of the report", () => {
+    // What the workflow prepends at most: its header and paragraph (with a
+    // run link) and 50 problem lines of 300 characters, one code span each.
+    const para = "The license scan of the shared pieces tree did not pass (licenses job: cancelled). A denied package makes the next hosted shared build refuse the whole tree, so review it (a reviewed entry in src/workflows/pieces-library/license-policy.ts, or hold the piece back) before merging. Run: https://github.com/vierisid/jarvis/actions/runs/99999999999";
+    const prelude = ["## License check failed (#971): not safe to merge", "", para, "",
+      ...Array.from({ length: 50 }, () => "- `" + "p".repeat(300) + "`"), ""].join("\n") + "\n";
+    expect(prelude.length + REPORT_MAX_CHARS + 1).toBeLessThanOrEqual(65_536);
   });
 });

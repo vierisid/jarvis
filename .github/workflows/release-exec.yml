@@ -733,23 +733,15 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/sidecar-release.yml
-    # Exactly the Apple signing credentials, not `secrets: inherit` (#682):
-    # inherit made every repository secret -- DISCORD_WEBHOOK_URL, NPM_TOKEN,
-    # and any added later -- referenceable from the called workflow, whose
-    # publish-sidecar job holds id-token. These five must reach it or a real
-    # run fails at its macOS signing readiness step (#921; a dry run warns
-    # and builds unsigned); sidecar-release.yml declares the
-    # same five under workflow_call, and workflow-hardening.test.sh checks
-    # that the two lists match.
-    # Windows signing needs no secret at all: it federates into Google Cloud
-    # with the id-token granted above (repository *variables* are visible to
-    # called workflows without passing anything).
-    secrets:
-      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
-      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+    # No secrets passed, and never `secrets: inherit` (#682): inherit made
+    # every repository secret -- DISCORD_WEBHOOK_URL, NPM_TOKEN, and any added
+    # later -- referenceable from the called workflow, whose publish-sidecar
+    # job holds id-token. The Apple signing secrets are secrets of the
+    # `signing` environment, which sign-sidecar-darwin names, so GitHub hands
+    # them to that job and to nothing else (#1165). Windows signing needs no
+    # secret at all: it federates into Google Cloud with the id-token granted
+    # above (repository *variables* are visible to called workflows without
+    # passing anything).
     with:
       dry_run: ${{ inputs.dry_run == true }}
       publish: false
@@ -773,12 +765,9 @@ jobs:
   # byte-identical: until sidecar/VERSION is bumped, every later release
   # fails at publish-sidecar and skips github-release.
   #
-  # id-token for publish-sidecar's Trusted Publishing. The signing secrets
-  # are passed because workflow-hardening.test.sh requires a call to pass
-  # exactly what the called workflow declares; on this call the only job
-  # that reads them, sign-sidecar-darwin (#870), is skipped. The single
-  # call before #952 passed the same five to the same workflow, so nothing
-  # new can read them.
+  # id-token for publish-sidecar's Trusted Publishing. No secrets: the
+  # signing secrets live in the `signing` environment, and this call runs no
+  # job that names it (#1165).
   #
   # Its outputs (released, version, sums) are the ones github-release reads,
   # all three set by its publish-sidecar job, which runs exactly when
@@ -790,12 +779,6 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/sidecar-release.yml
-    secrets:
-      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
-      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
     with:
       dry_run: ${{ inputs.dry_run == true }}
       publish_only: true
