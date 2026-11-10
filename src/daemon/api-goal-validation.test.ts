@@ -27,7 +27,8 @@ async function request(body: unknown, id?: string) {
 beforeEach(() => { initDatabase(':memory:', { quiet: true }); modelReply = proposal(); });
 afterEach(() => closeDb());
 
-test.each([null, Date.parse('2026-10-01T12:00:00Z')])('dashboard quick-create payload persists with deadline %j', async deadline => {
+const FUTURE = Date.now() + 400 * 86_400_000;
+test.each([null, FUTURE])('dashboard quick-create payload persists with deadline %j', async deadline => {
   // Match useGoalsData.createQuick, including its explicit mode and null defaults.
   const body = { mode: 'quick', title: 'Dashboard goal', level: 'task', parent_id: null, deadline, description: '' };
   const response = await request(body);
@@ -56,9 +57,9 @@ test.each([null, [], 4, { mode: 'typo', title: 'Goal' }, { title: [] }, { title:
 });
 
 test('quick-create and patch enforce the same shape and hierarchy as proposal writes', async () => {
-  const parent = vault.createGoal('Root', 'objective', { deadline: 20000 });
+  const parent = vault.createGoal('Root', 'objective', { deadline: FUTURE + 20000 });
   expect((await request({ title: 'Wrong', level: 'task', parent_id: parent.id })).status).toBe(400);
-  const created = await request({ title: 'Child', level: 'key_result', parent_id: parent.id, deadline: 10000 });
+  const created = await request({ title: 'Child', level: 'key_result', parent_id: parent.id, deadline: FUTURE + 10000 });
   expect(created.status).toBe(201);
   const child = await created.json() as { id: string };
   const before = vault.getGoal(child.id);
@@ -67,10 +68,34 @@ test('quick-create and patch enforce the same shape and hierarchy as proposal wr
   expect((await bad.json() as { path: string }).path).toBe('goal.deadline');
   expect(vault.getGoal(child.id)).toEqual(before);
   expect((await request({ level: 'objective' }, child.id)).status).toBe(400);
-  expect((await request({ deadline: 30000 }, child.id)).status).toBe(400);
-  expect((await request({ deadline: 5000 }, parent.id)).status).toBe(400);
+  expect((await request({ deadline: FUTURE + 30000 }, child.id)).status).toBe(400);
+  expect((await request({ deadline: FUTURE + 5000 }, parent.id)).status).toBe(400);
   expect((await request({ deadline: null }, child.id)).status).toBe(200);
   expect(vault.getGoal(child.id)!.deadline).toBeNull();
+});
+
+test('a deadline that has passed and a title over 200 characters are refused with plain reasons', async () => {
+  for (const deadline of [Date.now() - 86_400_000, 1000]) {
+    const past = await request({ mode: 'quick', title: 'Late', level: 'task', deadline });
+    expect(past.status).toBe(400);
+    expect(await past.json()).toMatchObject({ code: 'INVALID_GOAL', path: 'goal.deadline' });
+  }
+  const long = await request({ mode: 'quick', title: 'x'.repeat(201), level: 'task' });
+  expect(long.status).toBe(400);
+  expect(await long.json()).toMatchObject({ code: 'INVALID_GOAL', path: 'goal.title' });
+  expect(vault.findGoals()).toEqual([]);
+  const ok = await request({ mode: 'quick', title: 'x'.repeat(200), level: 'task', deadline: Date.now() + 60_000 });
+  expect(ok.status).toBe(201);
+  const goal = await ok.json() as { id: string };
+  expect((await request({ title: 'x'.repeat(201) }, goal.id)).status).toBe(400);
+  expect((await request({ deadline: 1000 }, goal.id)).status).toBe(400);
+});
+
+test('an overdue goal can still be edited without moving its deadline', async () => {
+  const overdue = vault.createGoal('Overdue', 'task', { deadline: Date.now() - 86_400_000 });
+  const same = await request({ title: 'Renamed', deadline: overdue.deadline }, overdue.id);
+  expect(same.status).toBe(200);
+  expect(vault.getGoal(overdue.id)!.title).toBe('Renamed');
 });
 
 test('API proposal validation and an insert failure leave no partial tree', async () => {

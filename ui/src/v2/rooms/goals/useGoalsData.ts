@@ -143,12 +143,12 @@ export function useGoalsData() {
             description: input.description ?? "",
           }),
         });
-        if (!resp.ok) throw new Error(await resp.text() || `HTTP ${resp.status}`);
+        if (!resp.ok) return { ok: false, message: await goalSaveError(resp) };
         const goal = (await resp.json()) as Goal;
         refresh();
         return { ok: true, goal };
-      } catch (err) {
-        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      } catch {
+        return { ok: false, message: "Could not create the goal. Try again." };
       }
     },
     [refresh],
@@ -252,10 +252,16 @@ export function useGoalsData() {
 }
 
 const EMPTY_GOALS: Goal[] = [];
+/** The longest goal title the server keeps, and the words for a refused title or deadline. */
+export const MAX_GOAL_TITLE = 200;
+export const TITLE_TOO_LONG_TEXT = `Titles can be up to ${MAX_GOAL_TITLE} characters. Shorten it and try again.`;
+export const PAST_DEADLINE_TEXT = "That date has passed. Pick today or a later date.";
 /** The server's reason for a refused goal edit, in plain words where it is known. */
 async function goalSaveError(resp: Response): Promise<string> {
   let reason = "";
   try { const body = await resp.json() as { error?: unknown }; if (typeof body?.error === "string") reason = body.error; } catch { /* no JSON body */ }
+  if (/deadline: has already passed/.test(reason)) return PAST_DEADLINE_TEXT;
+  if (/title: must be \d+ characters or fewer/.test(reason)) return TITLE_TOO_LONG_TEXT;
   if (/deadline: cannot be after its ancestor deadline/.test(reason)) return "The deadline cannot be later than its parent goal's deadline. Pick an earlier date.";
   if (/deadline: cannot precede an existing descendant deadline/.test(reason)) return "The deadline cannot be earlier than a sub-goal's deadline. Pick a later date.";
   return reason ? `Could not save goal: ${reason} (HTTP ${resp.status}).` : `Could not save goal (HTTP ${resp.status}).`;

@@ -1,4 +1,5 @@
-import type { GoalsPort, GoalPath, GoalDatum } from '../goals/model';
+import type { GoalsPort, GoalPath, GoalDatum, GoalWrite, GoalWritesPort } from '../goals/model';
+import { GOAL_CONFLICT_TEXT, GOAL_SAVE_FAILED_TEXT } from '../goals/model';
 import type { OpportunitiesPort, FinishedOpportunity } from '../opportunities/model';
 import type { DecisionsPort, DecisionView } from '../decisions/model';
 import type { MemoryPort } from '../memory/stream/model';
@@ -27,7 +28,53 @@ export function createDomainPorts(scopeId: string, http: HostTransport, storage:
     } while (cursor);
     return result;
   }
-  const goals: GoalsPort = { source: 'live', scopeId, read: async () => {
+  /** Plain words for a refused goal write. The server's own text names fields and revisions, so it is never shown. */
+  function refusal(status: number, error: unknown): GoalWrite {
+    const reason = typeof error === 'string' ? error : '';
+    if (status === 409) {
+      if (/already counted/.test(reason)) return { ok: false, message: 'That is already counted. Use a different name.' };
+      if (/later measurement time/.test(reason)) return { ok: false, message: 'Pick a time after your last update.' };
+      return { ok: false, message: GOAL_CONFLICT_TEXT };
+    }
+    if (/title: must be/.test(reason)) return { ok: false, message: 'Titles can be up to 200 characters. Shorten it and try again.' };
+    if (status === 400) return { ok: false, message: 'That did not save. Check what you entered and try again.' };
+    return { ok: false, message: GOAL_SAVE_FAILED_TEXT };
+  }
+  async function send(path: string, body: unknown): Promise<GoalWrite> {
+    try {
+      const response = await http.request(path, post(body));
+      if (response.ok) return { ok: true };
+      const reply = await response.json().catch(() => null) as { error?: unknown } | null;
+      return refusal(response.status, reply?.error);
+    } catch { return { ok: false, message: GOAL_SAVE_FAILED_TEXT }; }
+  }
+  const goalPath = (goal: GoalDatum) => `/api/brief/goals/${encodeURIComponent(goal.goalId)}`;
+  /** A person typing a number is the source: one evidence version per request, so no two saves collide. */
+  const typed = (requestId: string) => ({ id: 'entered-in-jarvis', revision: requestId });
+  const write: GoalWritesPort = {
+    logValue(goal, { requestId, value, measuredAt }) {
+      const definition = goal.measurementDefinition;
+      if (!definition) return Promise.resolve({ ok: false, message: GOAL_SAVE_FAILED_TEXT });
+      remember('goal-measurement', { requestId });
+      return send(`${goalPath(goal)}/measurement`, { requestId, revision: goal.measurementRevision ?? 0,
+        measurement: { unit: definition.unit, baseline: definition.baseline, target: definition.target, value, measuredAt, evidence: typed(requestId) } });
+    },
+    addEntry(goal, { requestId, note, link }) {
+      remember('goal-entry', { requestId });
+      return send(`${goalPath(goal)}/observations`, { requestId,
+        entry: { kind: 'counted', subject: note, observedAt: Date.now(), source: { id: link || typed(requestId).id, revision: requestId }, corrects: null } });
+    },
+    defineMeasure(goal, { requestId, kind, unit, baseline, target }) {
+      remember('goal-define', { requestId });
+      const revision = goal.measurementRevision ?? 0;
+      return kind === 'count'
+        ? send(`${goalPath(goal)}/measurement/counted`, { requestId, revision, definition: { unit, baseline, target } })
+        : send(`${goalPath(goal)}/measurement`, { requestId, revision,
+          measurement: { unit, baseline, target, value: null, measuredAt: null, evidence: null } });
+    },
+    activate: goal => send(`/api/goals/${encodeURIComponent(goal.goalId)}/status`, { status: 'active' }),
+  };
+  const goals: GoalsPort = { source: 'live', scopeId, write, read: async () => {
     const value = await get('/api/brief/goals');
     if (!['ready', 'empty'].includes(value.state) || !Array.isArray(value.data)) throw new Error('Goals unavailable');
     const all = value.data as Array<GoalDatum & { parentId: string | null; pathTitle: string }>;

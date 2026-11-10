@@ -14,6 +14,9 @@ Proposal confirmation reuses the C5 validation from PR #599.
   Score, status and health commands also validate runtime values. Scores must be
   finite numbers from 0 to 1; public writes reject out-of-range values rather than
   silently clamping them. A manual API score accepts only source `user`.
+- A goal title is at most 200 characters on every write path. The dashboard create and edit
+  routes also refuse a deadline that has already passed when it is new or moved; an overdue goal
+  keeps its date through other edits. Proposal and chat writes keep their own deadline rules.
 - Score history, the new score, derived health and their events commit together.
   A checked Today result includes its progress receipt in that same transaction.
   Reorder and proposal batches either commit completely or write nothing.

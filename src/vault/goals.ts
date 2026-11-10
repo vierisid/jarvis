@@ -6,7 +6,7 @@ import type { SQLQueryBindings } from 'bun:sqlite';
 import { getDb, generateId } from './schema.ts';
 import { getGoalReviewRecord } from '../goals/review-evidence.ts';
 import { clearInitialGoalUnplanned } from '../goals/initial-goal-notice.ts';
-import { enumeration, GOAL_LEVELS, invalid, nextGoalLevel, text, validateGoalFields } from '../goals/validation.ts';
+import { enumeration, goalTitle, GOAL_LEVELS, invalid, nextGoalLevel, validateGoalFields } from '../goals/validation.ts';
 import type {
   Goal, GoalProgressEntry, GoalCheckIn,
   GoalLevel, GoalStatus, GoalHealth, EscalationStage,
@@ -92,7 +92,7 @@ export function createGoal(
     sort_order?: number;
   },
 ): Goal {
-  text(title, 'goal.title');
+  goalTitle(title);
   enumeration(level, GOAL_LEVELS, 'goal.level');
   opts = validateGoalFields(opts ?? {}, 'create') as typeof opts;
   const db = getDb();
