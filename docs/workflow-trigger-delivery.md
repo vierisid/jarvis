@@ -224,10 +224,13 @@ after Reset starts a run then, as any delivery after Reset would.
 due, when it was handled, how late, its run, when that run actually began, and
 why it did not start. A repeat adds no row: it is counted on the original
 (`repeats`). A delivery skipped for a reason that lasts (Pause or Kill, a full
-approvals backlog, a full queue) is folded the same way: while the reason holds,
-webhook retries and events of one flow are one skipped row that counts them,
-rather than a row each (the ingress allows 60 a minute per flow, up to 86,400
-rows a day). A scheduled time stays a keyed row of its own. A waitpoint is stored only as a digest: its id is a bearer
+approvals backlog, a full queue) is folded the same way: webhook retries and
+events of one flow skipped for the same reason are counted on the latest row of
+that source when it is a skip for that reason, rather than a row each (the
+ingress allows 60 a minute per flow, up to 86,400 rows a day). A delivery that
+started in between begins a new row; a second Pause with nothing started since
+the first counts on the first one's row. A scheduled time stays a keyed row of
+its own. A waitpoint is stored only as a digest: its id is a bearer
 capability. Rows are pruned after 30 days; no foreign key, so the record
 outlives a deleted workflow.
 

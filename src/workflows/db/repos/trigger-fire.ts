@@ -35,7 +35,11 @@ export interface TriggerFire {
   lateMs: number | null;
   /** When the run it started began executing; the gap before it is time spent waiting in the queue. */
   startedAt: number | null;
-  /** How many more times the same delivery arrived and was not run again. */
+  /**
+   * How many more times the same delivery arrived and was not run again; on a
+   * folded blocked or skipped row (`recordBlocked`, `recordSkippedRepeat`),
+   * how many more deliveries met the same condition.
+   */
   repeats: number;
   lastRepeatAt: number | null;
   detail: Record<string, unknown> | null;

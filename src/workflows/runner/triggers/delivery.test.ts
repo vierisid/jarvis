@@ -1029,6 +1029,22 @@ describe("Pause and Kill (Q-08)", () => {
     await d.stop();
   });
 
+  test("events under Kill fold into one counted row per reason; Pause and Kill never share one", async () => {
+    const { flowId } = publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType: "x" } } });
+    const controller = emergency();
+    const d = await daemon(Date.now());
+    controller.kill();
+    for (const id of ["e-1", "e-2", "e-3"]) d.bus.publish("x", { id });
+    expect(listFlowFires(flowId).map(f => [f.outcome, f.repeats, f.detail?.reason])).toEqual([
+      ["skipped", 2, "Jarvis was stopped with Kill, so this did not run."]]);
+    // A fresh controller, paused (Kill is not left with a plain Resume).
+    emergency().pause();
+    d.bus.publish("x", { id: "e-4" });
+    expect(listFlowFires(flowId).map(f => [f.repeats, f.detail?.reason])).toEqual([
+      [0, "Jarvis was paused, so this did not run."], [2, "Jarvis was stopped with Kill, so this did not run."]]);
+    await d.stop();
+  });
+
   test("an event source is not polled while paused, so its items wait for Resume; a schedule piece time is skipped", async () => {
     setCronTimezone("UTC");
     let polls = 0;
