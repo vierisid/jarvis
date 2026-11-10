@@ -185,6 +185,17 @@ describe("unavailableCopy", () => {
     }
   });
 
+  test("a missing desktop app is optional for now, never a reason to stop", () => {
+    // A browser user is looking at Jarvis, so "Jarvis isn't running" is wrong,
+    // and a self-hosted person with no desktop app must read that they can go on.
+    for (const reason of ["no_sidecar", "offline"] as const) {
+      const { title, body } = unavailableCopy(reason);
+      expect(`${title} ${body}`).not.toContain("isn't running");
+      expect(`${title} ${body}`.toLowerCase()).toContain("optional");
+      expect(body).toContain("later");
+    }
+  });
+
   test("offline and no_sidecar do not say the same thing", () => {
     // "your app is not running" and "there is no app here" send the user to
     // completely different places; collapsing them is what the fallback bug

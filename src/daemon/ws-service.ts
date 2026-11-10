@@ -6,6 +6,7 @@
  */
 
 import type { ServerWebSocket } from 'bun';
+import { AI_PROVIDER_NEEDED_CODE, AI_PROVIDER_NEEDED_MESSAGE } from '../brief/ai-provider-needed.ts';
 import { withMemoryRecall } from '../vault/memory-use-context.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { Service, ServiceStatus } from './services.ts';
@@ -696,6 +697,12 @@ export class WebSocketService implements Service {
    * restart. The cost is one yaml read per chat send — negligible
    * vs the LLM round-trip that follows.
    */
+  /** True when no AI provider is saved at all, e.g. the AI step was skipped.
+   * Unreadable state counts as "has one" so a glitch never blocks chat. */
+  private hasNoAiProvider(): boolean {
+    try { return this.agentService.getLLMManager().getProviderNames().length === 0; } catch { return false; }
+  }
+
   private isSetupMode(): boolean {
     try {
       const cfg = this.agentService.getConfig();
@@ -1350,7 +1357,8 @@ export class WebSocketService implements Service {
   private async routeMessage(msg: WSMessage, ws: ServerWebSocket<unknown>): Promise<WSMessage | void> {
     if (['brief_chat_send', 'brief_chat_cancel', 'brief_chat_subscribe', 'brief_chat_unsubscribe'].includes(msg.type)) {
       if (!this.briefChat) return { type: 'brief_chat_error', payload: { ...safeChatIdentity(msg.payload), code: 'unsupported', message: 'Conversation chat is unsupported.' }, id: msg.id, timestamp: Date.now() };
-      if (this.isSetupMode() && msg.type === 'brief_chat_send') return { type: 'brief_chat_error', payload: { ...safeChatIdentity(msg.payload), code: 'setup_required', message: 'Finish first-run setup before chatting.' }, id: msg.id, timestamp: Date.now() };
+      if (this.isSetupMode() && msg.type === 'brief_chat_send') return { type: 'brief_chat_error', payload: { ...safeChatIdentity(msg.payload), code: 'setup_required', message: 'Setup is not finished. Reload this page to finish it, then try again.' }, id: msg.id, timestamp: Date.now() };
+      if (this.hasNoAiProvider() && msg.type === 'brief_chat_send') return { type: 'brief_chat_error', payload: { ...safeChatIdentity(msg.payload), code: AI_PROVIDER_NEEDED_CODE, message: AI_PROVIDER_NEEDED_MESSAGE }, id: msg.id, timestamp: Date.now() };
       const wasScoped = this.briefChat.transport.hasClient(ws);
       await this.briefChat.transport.handle(msg, ws, this.briefChat.capabilities);
       if (!wasScoped && this.briefChat.transport.hasClient(ws)) {

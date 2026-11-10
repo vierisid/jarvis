@@ -47,6 +47,9 @@ function ClassicOnboardingGate({ children }: { children: React.ReactNode }) {
   const { status, loading, refresh } = useOnboardingStatus();
   const [prompt, setPrompt] = React.useState<string | null>(null);
   const consume = React.useCallback(() => setPrompt(null), []);
+  // "Finish later": the dashboard opens for this mount only. Nothing is saved,
+  // so setup is still incomplete and returns on the next load.
+  const [left, setLeft] = React.useState(false);
   const draftContext = React.useMemo(() => ({ prompt, consume }), [prompt, consume]);
 
   // Tell the cold-start splash the app has booted, the first time the status
@@ -68,8 +71,8 @@ function ClassicOnboardingGate({ children }: { children: React.ReactNode }) {
     !status.setup_completed ||
     (!status.profile_completed && !status.setup_skipped_profile) ||
     (!status.tutorial_completed && !status.tutorial_dismissed);
-  if (needsOnboarding) {
-    return <OnboardingWizard status={status} onComplete={async (request) => {
+  if (needsOnboarding && !left) {
+    return <OnboardingWizard status={status} onLeave={async () => { setLeft(true); await refresh(); }} onComplete={async (request) => {
       setPrompt(request ?? null);
       if (!await refresh()) throw new Error("Could not refresh onboarding status");
     }} />;
@@ -95,14 +98,16 @@ function BriefOnboardingGate({ children, draft }: { children: React.ReactNode; d
   const { status, loading, refresh } = useOnboardingStatus();
   const saved = React.useSyncExternalStore(draft.subscribe, draft.getSnapshot, draft.getSnapshot);
   const [active, setActive] = React.useState(false);
+  // "Finish later": see ClassicOnboardingGate. Wins over every reason to stay in the wizard.
+  const [left, setLeft] = React.useState(false);
   const needsOnboarding = !!status && incomplete(status);
   React.useEffect(() => {
     if (needsOnboarding) setActive(true);
     if (!loading && status) window.dispatchEvent(new Event("jarvis:boot-ready"));
   }, [loading, status, needsOnboarding]);
   if (!status) return null;
-  if (needsOnboarding || active || saved.routine || saved.request || saved.storageFailed) return <OnboardingWizard
-    key={status.last_reset_at ?? 'initial'} status={status} brief={draft} onComplete={async () => {
+  if (!left && (needsOnboarding || active || saved.routine || saved.request || saved.storageFailed)) return <OnboardingWizard
+    key={status.last_reset_at ?? 'initial'} status={status} brief={draft} onLeave={async () => { setLeft(true); await refresh(); }} onComplete={async () => {
       const fresh = await refresh();
       if (!fresh || incomplete(fresh)) throw Error("Onboarding is not complete");
       // Clearing must succeed before releasing the wizard; otherwise its saved request remains recoverable.

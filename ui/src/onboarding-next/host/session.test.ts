@@ -158,6 +158,21 @@ test('Welcome Explore before setup only leaves this mount, so welcome and setup 
   expect(f.calls).not.toContain('journey.transition'); s.dispose();
   const again = createSession(f.config); await again.start(); expect(again.state().view).toBe('welcome'); again.dispose();
 });
+test('Finish later from self setup leaves the mount without completing setup, and a refresh does not pull the person back', async () => {
+  const f = fixture(); f.status.installMode = 'self'; f.setJourney({ stepId: 'legacy-provider-setup' });
+  const s = createSession(f.config); await s.start(); expect(s.state().view).toBe('legacy-provider-setup');
+  const before = f.journey();
+  await s.act(s.key(), 'leave'); expect(s.state().mode).toBe('complete');
+  expect(f.journey()).toEqual(before); expect(f.calls).not.toContain('setup.complete'); expect(f.calls).not.toContain('journey.transition');
+  await s.refresh(); expect(s.state().mode).toBe('complete'); s.dispose();
+  const again = createSession(f.config); await again.start();
+  expect(again.state().view).toBe('legacy-provider-setup'); again.dispose();
+});
+test('Back from self setup returns to the explainer through the setup port', async () => {
+  const f = fixture(); f.status.installMode = 'self'; f.setJourney({ stepId: 'legacy-provider-setup' });
+  const s = createSession(f.config); await s.start();
+  await s.act(s.key(), 'back'); expect(f.calls).toContain('legacy-provider-setup:back'); s.dispose();
+});
 test('Welcome Explore after setup persists an explored exit, so the welcome screen does not return (#1070)', async () => {
   const f = fixture(); f.setJourney({ setupState: 'completed' });
   const s = createSession(f.config); await s.start(); expect(s.state().view).toBe('welcome');
