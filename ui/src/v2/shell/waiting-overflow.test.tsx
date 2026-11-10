@@ -62,7 +62,7 @@ describe("#1160: the home tile says when approvals are not shown", () => {
   });
 });
 
-const MORE_FAILURES = /\+(\d+) more failures?(?:, and older ones not listed)? - show/;
+const MORE_FAILURES = /\+(\d+) more failures?(?:, and older ones may not be listed)? - show/;
 
 describe("#1303 follow-up: the home tile says when failures are not shown, and shows them in place", () => {
   test("three failures fit: no overflow row", () => {
@@ -92,7 +92,7 @@ describe("#1303 follow-up: the home tile says when failures are not shown, and s
   test("a full list may have been cut by the server, so it says older ones are not listed", () => {
     expect(OPEN_FAILURES_LIMIT).toBe(SERVER_LIMIT);
     const html = render(0, [], SERVER_LIMIT);
-    expect(html).toContain(`+${SERVER_LIMIT - 3} more failures, and older ones not listed - show`);
+    expect(html).toContain(`+${SERVER_LIMIT - 3} more failures, and older ones may not be listed - show`);
     expect(render(0, [], SERVER_LIMIT - 1)).toContain(`+${SERVER_LIMIT - 4} more failures - show`);
     expect(failureOverflow(Array.from({ length: SERVER_LIMIT }, (_, i) => i), true).capped).toBe(true);
   });

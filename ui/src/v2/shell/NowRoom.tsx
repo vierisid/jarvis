@@ -282,12 +282,12 @@ function FailureRows({ failures }: { failures: RemoteData<OpenFailure[]> }) {
         <button className="b2" disabled={dismissing === row.keys[0]} onClick={() => void dismiss(row)}>Dismiss</button>
       </div>
     </div>))}
-    {hidden > 0 && <button className="rs-row" aria-expanded={false} onClick={() => setExpanded(true)}>
-      <span className="rs-dot" style={{ background: "var(--hold)" }} />
-      <span className="tx">+{hidden} more {hidden === 1 ? "failure" : "failures"}{capped ? ", and older ones not listed" : ""} - show</span></button>}
-    {expanded && <button className="rs-row" aria-expanded onClick={() => setExpanded(false)}>
-      <span className="rs-dot" style={{ background: "var(--faint)" }} />
-      <span className="tx">{capped ? `Only the newest ${OPEN_FAILURES_LIMIT} are listed; resolve or dismiss some to see older ones. ` : ""}Show fewer</span></button>}</>;
+    {/* One toggle, so focus stays on it; it goes once three or fewer remain. */}
+    {(failures.data?.length ?? 0) > 3 && <button className="rs-row" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+      <span className="rs-dot" style={{ background: expanded ? "var(--faint)" : "var(--hold)" }} />
+      <span className="tx">{expanded
+        ? `${capped ? `Only the newest ${OPEN_FAILURES_LIMIT} may be listed; resolve or dismiss some to see older ones. ` : ""}Show fewer`
+        : `+${hidden} more ${hidden === 1 ? "failure" : "failures"}${capped ? ", and older ones may not be listed" : ""} - show`}</span></button>}</>;
 }
 
 /** The open-failures list holds at most this many rows (OPEN_FAILURES_LIMIT in src/workflows/runtime/open-failures.ts). */
