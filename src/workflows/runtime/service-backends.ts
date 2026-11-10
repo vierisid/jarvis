@@ -307,7 +307,8 @@ const START_INPUT_SHOWN_MAX_CHARS = ', with the input '.length + AGENT_TASK_MAX_
  * escaping of quotes and backslashes and the bidi isolates count.
  */
 function startCardName(name: string, budget: number): string {
-  let max = START_CARD_NAME_MAX_CHARS;
+  // A name shorter than the cap is not cut by the label above it, so start there.
+  let max = Math.min(START_CARD_NAME_MAX_CHARS, Math.max(1, name.length));
   for (;;) {
     const shown = isolateJsonStrings(JSON.stringify(boundedApprovalLabel(name, max)));
     if (shown.length <= budget || max <= 1) return shown;
