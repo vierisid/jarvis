@@ -145,6 +145,7 @@ export interface SandboxApiServices {
    */
   pieceAuthorize?: PieceAuthorizeFn;
   pieceReceipt?: JarvisPiecesRouteDeps['pieceReceipt'];
+  pieceNotSent?: JarvisPiecesRouteDeps['pieceNotSent'];
   /**
    * Notification backend for the `jarvis-notify` piece. If unset, returns 503.
    */

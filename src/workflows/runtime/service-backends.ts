@@ -76,7 +76,7 @@ import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceAc
   HTTP_PIECE, httpReadHostListed } from './piece-effects';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
 import { captureProviderBinding, providerBindingHolds } from './provider-reconciliation';
-import { recordPieceCompletion } from './piece-completion';
+import { recordPieceCompletion, recordPieceNotSent } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
@@ -1432,6 +1432,7 @@ export function buildSandboxServiceBackends(
     salesFollowups: cancellableWorkflowService(createSalesFollowupsService({effects,credentials:opts.credentialResolver,fetchImpl:opts.salesFetch,now:opts.salesNow})),
     pieceAuthorize: cancellableWorkflowService(pieceAuthorize),
     pieceReceipt: (ctx, id, result) => recordPieceCompletion(ctx, id, result, opts),
+    pieceNotSent: (ctx, id, message) => recordPieceNotSent(ctx, id, message, opts),
     llmChat: cancellableWorkflowService(llmChat),
     notify: cancellableWorkflowService(notify),
     contextProvider,

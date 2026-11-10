@@ -18,7 +18,7 @@ import FormData from 'form-data';
 import { httpMethodDropdown } from '../common/props';
 import axios from 'axios';
 // Jarvis (#961): the egress guard and the one method rule the daemon judges by.
-import { egressGuardedAxios, egressPolicyFromEnv, egressRefusalIn } from '../../../../../../../../runtime/http-egress';
+import { EgressRefusedError, egressGuardedAxios, egressPolicyFromEnv, egressRefusalIn } from '../../../../../../../../runtime/http-egress';
 import { httpRequestIsRead } from '../../../../../../../../runtime/piece-effects';
 
 enum AuthType {
@@ -354,7 +354,7 @@ export const httpSendRequestAction = createAction({
     // unguarded.
     const apiRequest = async () => {
       if (use_proxy) {
-        throw new Error('Jarvis does not send HTTP steps through a proxy: the address check would not apply. Turn off "Use Proxy".');
+        throw new EgressRefusedError('Jarvis does not send HTTP steps through a proxy: the address check would not apply. Turn off "Use Proxy".');
       }
       return await httpClient.sendRequest(request, egressGuardedAxios(axios, egressPolicyFromEnv(), { read: httpRequestIsRead({ method, body }) }) as never);
     };

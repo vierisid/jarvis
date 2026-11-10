@@ -23,6 +23,7 @@ import { createJarvisPieceAuthorizeRoute, createJarvisPieceReceiptRoute } from '
 import { decideRunRecovery, getRunRecovery, listRunRecoveries } from './recovery';
 import { createWorkflowRoutes } from '../api/routes';
 import { recordPieceCompletion } from './piece-completion';
+import { EgressRefusedError } from './http-egress';
 import { WorkflowEffectBoundary, workflowEffectId } from './effect-boundary';
 import { UNTRUSTED_OPEN, UNTRUSTED_CLOSE, wrapUntrusted } from '../../roles/untrusted';
 
@@ -114,6 +115,24 @@ test('provider failure during work remains dispatching/unknown and no retry can 
   f.fail(); expect(getRunRecovery(f.run.id)!.effects[0]!.status).toBe('unknown'); expect(sends).toBe(1);
 });
 
+test('#1153: a send the egress guard refused before it went out is recorded as not sent, not uncertain', async () => {
+  const f = fixture(); const authorized = await authorizePieceDispatch(f.params);
+  await expect(executeAuthorizedPiece(f.params, authorized, async () => { throw new EgressRefusedError('HTTP request to ops.test refused: it resolves to 127.0.0.1'); }))
+    .rejects.toThrow('refused');
+  const effect = listWorkflowEffects(f.run.id)[0]!;
+  expect(effect).toMatchObject({ status: 'blocked', outcome: { status: 'blocked', code: 'EGRESS_REFUSED', effect: 'not_started' } });
+  // A late completion cannot overwrite it, and a retry in this run is refused, not sent.
+  expect(() => recordPieceCompletion(f.ctx, effect.id, f.result)).toThrow('not awaiting');
+  await expect(f.invoke()).rejects.toThrow('refused'); expect(f.sends()).toBe(0);
+  f.fail(); expect(getRunRecovery(f.run.id)?.state ?? 'none').not.toBe('unknown');
+});
+test('#1153: a refusal after the request went out (a refused redirect) stays uncertain', async () => {
+  const f = fixture(); const authorized = await authorizePieceDispatch(f.params);
+  await expect(executeAuthorizedPiece(f.params, authorized, async () => { throw new EgressRefusedError('HTTP request redirected to another origin', { afterSend: true }); }))
+    .rejects.toThrow('redirected');
+  expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('dispatching');
+  f.fail(); expect(getRunRecovery(f.run.id)!.effects[0]!.status).toBe('unknown');
+});
 test('before dispatch: approval, changed inputs/version and current policy all fail closed', async () => {
   const f = fixture(); f.authority.setGovernedCategories(['send_email']);
   const pending = await authorizePieceDispatch(f.params);

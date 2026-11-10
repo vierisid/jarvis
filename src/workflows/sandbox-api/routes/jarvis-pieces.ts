@@ -31,6 +31,8 @@ export type PieceAuthorizeFn = (
 export interface JarvisPiecesRouteDeps {
   pieceAuthorize?: PieceAuthorizeFn;
   pieceReceipt?: (ctx: WorkflowEffectContext, id: string, result: unknown) => void;
+  /** A tracked send the engine's egress guard refused before sending (#1153). */
+  pieceNotSent?: (ctx: WorkflowEffectContext, id: string, message: string) => void;
 }
 
 export function createJarvisPieceAuthorizeRoute(
@@ -87,7 +89,16 @@ export function createJarvisPieceReceiptRoute(deps: JarvisPiecesRouteDeps): Rout
     try { raw = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
     catch { return err('Invalid completion receipt JSON', 400); }
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return err('Invalid completion receipt', 400);
-    if (typeof raw.effectId !== 'string' || !/^wfe_[a-f0-9]{64}$/.test(raw.effectId) || !Object.hasOwn(raw, 'result')) return err('Invalid completion receipt', 400);
+    if (typeof raw.effectId !== 'string' || !/^wfe_[a-f0-9]{64}$/.test(raw.effectId)) return err('Invalid completion receipt', 400);
+    // #1153: the engine's egress guard refused the request before sending it.
+    if (Object.hasOwn(raw, 'notSent')) {
+      const note = raw.notSent as { message?: unknown } | null;
+      if (Object.hasOwn(raw, 'result') || !note || typeof note !== 'object' || typeof note.message !== 'string' || note.message.length > 2000) return err('Invalid completion receipt', 400);
+      if (!deps.pieceNotSent) return err('Not-sent receipts unavailable', 503);
+      deps.pieceNotSent(workflowEffectContext(ctx), raw.effectId, note.message);
+      return json({ recorded: true });
+    }
+    if (!Object.hasOwn(raw, 'result')) return err('Invalid completion receipt', 400);
     deps.pieceReceipt(workflowEffectContext(ctx), raw.effectId, raw.result);
     return json({ recorded: true });
   };

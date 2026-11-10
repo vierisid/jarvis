@@ -39,7 +39,7 @@ import {managedAsanaInput, runManagedAsanaAction} from './managed-asana';
 import {managedDropboxInput, runManagedDropboxAction} from './managed-dropbox';
 import {managedIntercomInput, runManagedIntercomAction} from './managed-intercom';
 import {managedCalendlyInput, runManagedCalendlyAction} from './managed-calendly';
-import { withReadHosts } from './http-egress';
+import { refusedBeforeSend, withReadHosts } from './http-egress';
 import { GRAPHQL_PIECE, HTTP_PIECE, isGovernedPiece, redactReceipt, sanitizePieceInput, tracksPieceCompletion } from './piece-effects';
 import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 import {managedMailchimpInput, managedMailchimpIssue, runManagedMailchimpAction} from './managed-mailchimp';
@@ -363,7 +363,24 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   } else {
     // #1153: a read the daemon let run without asking stays on the flow's read list.
     const readHosts = governance.governed && governance.dispatch === 'authorized' ? governance.readHosts : undefined;
-    raw = readHosts ? await withReadHosts(readHosts, execute) : await execute();
+    try {
+      raw = readHosts ? await withReadHosts(readHosts, execute) : await execute();
+    } catch (error) {
+      // #1153: the egress guard refused the request before it went out (an
+      // address outside the policy, a proxy, a host off the read list), so a
+      // tracked send is recorded as not sent instead of left uncertain. Best
+      // effort: if the note does not arrive the send stays uncertain, the
+      // safe reading. A refusal after sending is not one of these.
+      if (governance.governed && governance.dispatch === 'authorized' && governance.effectId && refusedBeforeSend(error)) {
+        await (params.fetchImpl ?? fetch)(`${params.apiUrl.replace(/\/+$/u, '')}${PIECE_RECEIPT_PATH}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${params.engineToken}`,
+            'X-Jarvis-Step-Name': params.stepName, 'X-Jarvis-Execution-Path': JSON.stringify(params.executionPath) },
+          body: JSON.stringify({ effectId: governance.effectId, notSent: { message: String((error as Error).message ?? error).slice(0, 2000) } }),
+          signal: AbortSignal.timeout(10_000),
+        }).catch(() => undefined);
+      }
+      throw error;
+    }
   }
   // Gmail 0.17 returns a Gaxios response, including transport configuration.
   // Keep its data envelope for expressions, but never persist request headers

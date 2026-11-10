@@ -203,6 +203,17 @@ export function destinationAllowed(address: string, policy: EgressPolicy, own: R
 const REFUSED_CODE = 'ERR_EGRESS_REFUSED';
 export class EgressRefusedError extends Error {
   readonly code = REFUSED_CODE;
+  /**
+   * True when the refusal came after the request went out: a redirect the
+   * guard would not follow, a response too large. Every other refusal is
+   * raised before a byte is sent, and a tracked send refused so is recorded
+   * as not sent (#1153); one refused after sending stays uncertain.
+   */
+  readonly afterSend: boolean;
+  constructor(message: string, options: { afterSend?: boolean } = {}) {
+    super(message);
+    this.afterSend = options.afterSend === true;
+  }
 }
 
 function refusal(host: string, address: string, policy: EgressPolicy, label = 'HTTP request'): EgressRefusedError {
@@ -219,11 +230,13 @@ function refusal(host: string, address: string, policy: EgressPolicy, label = 'H
  */
 export class ResponseTooLargeError extends EgressRefusedError {
   /**
-   * Unlike every other refusal, this one comes after the request went out: a
-   * caller that records refusals as "not sent" must not record this one so,
-   * or a retry would send a non-read request twice.
+   * This one always comes after the request went out: a caller that records
+   * refusals as "not sent" must not record this one so, or a retry would send
+   * a non-read request twice.
    */
-  readonly afterSend = true;
+  constructor(message: string) {
+    super(message, { afterSend: true });
+  }
 }
 
 /** Refuse an IP-literal host outside the policy. A name is checked by `guardedLookup` instead. */
@@ -405,6 +418,9 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     proxy: false,
     ...(options.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
     beforeRedirect: (next: { hostname?: string; host?: string; protocol?: string; port?: string | number }, _response: unknown) => {
+      // A redirect answers a request that was sent: whatever is refused from
+      // here on (this hop's checks, or its lookup) comes after sending.
+      redirected = true;
       const host = String(next.hostname ?? next.host ?? '');
       assertHostAllowed(host, policy, allowed);
       assertReadHostListed(host, readHosts, 'a redirect');
@@ -414,6 +430,7 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     },
   });
   let firstOrigin = '';
+  let redirected = false;
   instance.interceptors.request.use((config: Record<string, unknown>) => {
     const target = new URL(String(config.url ?? ''), typeof config.baseURL === 'string' ? config.baseURL : undefined);
     if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new EgressRefusedError(`HTTP request refused: ${target.protocol} is not http or https`);
@@ -453,7 +470,7 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
   // "status 500". Hand it back as itself, so the step fails naming the rule.
   instance.interceptors.response.use(undefined, (error: unknown) => {
     const refused = egressRefusalIn(error);
-    if (refused) throw refused;
+    if (refused) throw redirected && !refused.afterSend ? new EgressRefusedError(refused.message, { afterSend: true }) : refused;
     // axios's own wording for a body past maxContentLength.
     const message = (error as { message?: unknown } | null)?.message;
     if (typeof message === 'string' && /^maxContentLength size of \d+ exceeded$/u.test(message)) {
@@ -472,10 +489,25 @@ export function egressRefusalIn(error: unknown): EgressRefusedError | null {
   let current: unknown = error;
   for (let depth = 0; depth < 5 && current !== null && typeof current === 'object'; depth++) {
     if (current instanceof EgressRefusedError) return current;
-    if ((current as { code?: unknown }).code === REFUSED_CODE) return new EgressRefusedError((current as Error).message);
+    // Another bundle's copy of this module: same code, another class. Its
+    // `afterSend` is carried over, so a refusal after sending stays one.
+    if ((current as { code?: unknown }).code === REFUSED_CODE) {
+      return new EgressRefusedError((current as Error).message, { afterSend: (current as { afterSend?: unknown }).afterSend === true });
+    }
     current = (current as { cause?: unknown }).cause;
   }
   return null;
+}
+
+/**
+ * True when the error is a refusal the guard raised before the request went
+ * out (#1153): nothing reached the server, so a tracked send is recorded as
+ * not sent rather than as uncertain. False for anything else, including a
+ * refusal after sending and every transport error, which stay uncertain.
+ */
+export function refusedBeforeSend(error: unknown): boolean {
+  const refused = egressRefusalIn(error);
+  return refused !== null && !refused.afterSend;
 }
 
 function redirectOrigin(next: { hostname?: string; host?: string; protocol?: string; port?: string | number }): string {

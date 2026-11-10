@@ -10,7 +10,7 @@ import type { LookupAddress } from 'node:dns';
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { MAX_RESPONSE_BYTES, ResponseTooLargeError, resolveGuardedAddress, addressAllowed, assertHostAllowed, canonicalAddress, classifyAddress, destinationAllowed, egressGuardedAxios, egressPolicyFromEnv,
-  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, EGRESS_POLICY_ENV, EgressRefusedError, readHostKey, withReadHosts } from './http-egress';
+  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, EGRESS_POLICY_ENV, EgressRefusedError, readHostKey, refusedBeforeSend, withReadHosts } from './http-egress';
 
 describe('which addresses the HTTP step may reach', () => {
   const table: Array<[string, 'public' | 'private' | 'blocked']> = [
@@ -201,6 +201,34 @@ describe('the guarded client connects only where it checked', () => {
     expect(seen).toEqual([`POST ops.test:${port} /to-same-origin`, `POST ops.test:${port} /landing`, `POST ops.test:${port} /to-other-origin`]);
     // A read may follow it.
     expect((await client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/to-other-origin` })).data).toEqual({ ok: true, url: '/landing' });
+  });
+
+  test('#1153: a refusal before sending reads as not sent; one after a request went out (a refused redirect) does not', async () => {
+    const reason = async (p: Promise<unknown>) => { try { await p; } catch (error) { return error; } throw new Error('expected a refusal'); };
+    // Before: the name resolves inward, an IP literal, a host off the read list. Nothing reached the server.
+    seen.length = 0;
+    for (const before of [
+      await reason(client(false).request({ method: 'POST', url: `http://ops.test:${port}/ok`, data: { a: 1 }, maxRedirects: 0 })),
+      await reason(client(false).request({ method: 'POST', url: `http://127.0.0.1:${port}/ok`, data: { a: 1 } })),
+      await reason(withReadHosts(['other.test'], () => client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/ok` }))),
+    ]) expect(refusedBeforeSend(before)).toBe(true);
+    expect(seen).toEqual([]);
+    // After: each of these requests reached the server, and only its redirect was refused,
+    // whether by the hop check (another origin, a metadata literal) or by the next hop's lookup.
+    for (const after of [
+      await reason(client(false, onlyLocal).request({ method: 'POST', url: `http://ops.test:${port}/to-other-origin`, data: { a: 1 } })),
+      await reason(client(false, onlyLocal).request({ method: 'POST', url: `http://ops.test:${port}/to-metadata`, data: { a: 1 } })),
+      await reason(client(false, onlyLocal).request({ method: 'POST', url: `http://ops.test:${port}/to-blocked-name`, data: { a: 1 } })),
+    ]) {
+      expect(after).toBeInstanceOf(EgressRefusedError);
+      expect(refusedBeforeSend(after)).toBe(false);
+    }
+    expect(seen.length).toBe(3);
+    // A transport error is not a refusal, and another bundle's copy keeps afterSend.
+    expect(refusedBeforeSend(Object.assign(new Error('ECONNRESET'), { code: 'ECONNRESET' }))).toBe(false);
+    expect(refusedBeforeSend({ cause: Object.assign(new Error('x'), { code: 'ERR_EGRESS_REFUSED', afterSend: true }) })).toBe(false);
+    expect(refusedBeforeSend({ cause: Object.assign(new Error('x'), { code: 'ERR_EGRESS_REFUSED' }) })).toBe(true);
+    expect(refusedBeforeSend(new ResponseTooLargeError('big'))).toBe(false);
   });
 
   test('#1153: a read that ran without asking reaches listed hosts only, its redirects included', async () => {
