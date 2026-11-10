@@ -111,6 +111,7 @@ export function makeManagementFixture(
       readiness: {
         state: "blocked",
         reason: "Connect Notion before enabling.",
+        fix: { kind: "connections", label: "Open Connected workspace" },
       },
     });
   const tombstones = new Map<

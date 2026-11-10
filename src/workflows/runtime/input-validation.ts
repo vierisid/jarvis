@@ -45,3 +45,25 @@ export function inputIssue(field: PieceInputField, value: unknown): string | nul
     }
   }
 }
+
+/**
+ * The same finding as `inputIssue`, worded for a person and naming the field.
+ * Readiness shows this; the validator's own phrases stay for the run-time guard.
+ */
+export function plainInputReason(reason: string, label: string): string {
+  switch (reason) {
+    case 'required input is missing': return `${label}: fill in this required input`;
+    case 'expected a finite number': return `Enter a number for ${label}`;
+    case 'expected a boolean': return `Choose Yes or No for ${label}`;
+    case 'expected a valid date/time string': return `Enter a valid date and time for ${label}`;
+    case 'expected text': return `Enter text for ${label}`;
+    case 'value is not one of the declared choices':
+    case 'expected a list of declared choices': return `Choose one of the listed options for ${label}`;
+    case 'expected valid JSON': return `Enter valid JSON for ${label}`;
+    case 'expected a JSON object or array':
+    case 'expected a JSON object':
+    case 'expected a dynamic property object': return `${label} needs a set of named values`;
+    case 'expected an array': return `${label} needs a list`;
+    default: return `${label}: ${reason}`;
+  }
+}
