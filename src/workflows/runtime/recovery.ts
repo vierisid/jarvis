@@ -12,6 +12,7 @@ import { activeEmergencyState } from '../../authority/emergency';
 import type { AuthorityEngine } from '../../authority/engine';
 import type { CredentialResolver } from '../credentials/adapter';
 import { boundedReceiptText } from '../../roles/untrusted';
+import { otherSteps, untracked as reachesOutsideUntracked } from './run-failure';
 import { ownsUnresolvedIdentity, resolveIdentity } from '../db/repos/effect-identity';
 
 export class RecoveryError extends Error {
@@ -34,7 +35,7 @@ export type RecoveryReceipt = {
 };
 export type RecoveryProjection = {
   runId: string; flowId: string; versionId: string; revision: string;
-  state: 'unknown' | 'blocked' | 'recoverable'; needsAttention: boolean;
+  state: 'unknown' | 'blocked' | 'recoverable' | 'nothing_happened'; needsAttention: boolean;
   canReplay: false; newRunRequired: true; reason: string;
   effects: Array<{ effectId: string; stepName: string; status: 'unknown' | 'not_started' | 'completed'; lookupSupported: boolean; providerEvidence?: ProviderEvidence;
     /** This uncertain effect still holds a cross-run identity that fences later items; resolve it with mark_done or release. */
@@ -101,7 +102,8 @@ function untrackedSteps(run: FlowRun, effects: WorkflowEffect[]): RecoveryProjec
           }
         });
       }
-      if (node?.type !== 'PIECE' && node?.type !== 'CODE') continue;
+      // Jarvis's own pieces (store, delay, ...) leave an effect record when they dispatch; without one nothing left Jarvis.
+      if ((node?.type !== 'PIECE' && node?.type !== 'CODE') || !reachesOutsideUntracked(node)) continue;
       if (step.status === 'FAILED') failedInstances.add(stepName);
       if (step.status === 'SUCCEEDED') continue;
       if (!coveredInstances.has(digest([stepName, path]))) result.push({ stepName, executionPath: path, status: 'unknown' });
@@ -112,7 +114,7 @@ function untrackedSteps(run: FlowRun, effects: WorkflowEffect[]): RecoveryProjec
   // failedStep has no loop path. Without an exact failed instance in the
   // retained log, a completed earlier iteration cannot account for it.
   // Queue recovery's synthetic failure marker is not an executed graph step.
-  if (failed && (failedNode?.type === 'PIECE' || failedNode?.type === 'CODE')
+  if (failed && failedNode && (failedNode.type === 'PIECE' || failedNode.type === 'CODE') && reachesOutsideUntracked(failedNode)
     && !failedInstances.has(failed) && !result.some(step => step.stepName === failed)
     && !effects.some(effect => effect.stepName === failed && effect.executionPath.length === 0)) {
     result.push({ stepName: failed, executionPath: null, status: 'unknown' });
@@ -136,12 +138,25 @@ export function getRunRecovery(runId: string): RecoveryProjection | null {
       ...(ownsUnresolvedIdentity(effect.id) ? { identityUnresolved: true as const } : {}) };
   });
   const untracked = untrackedSteps(run, effects);
-  const uncertain = !effects.length || untracked.length > 0 || projected.some(e => e.status === 'unknown');
-  const state = uncertain ? 'unknown' : projected.every(e => e.status === 'not_started') ? 'blocked' : 'recoverable';
+  const uncertain = untracked.length > 0 || projected.some(e => e.status === 'unknown');
+  // Stopped before anything that reaches outside Jarvis ran: no effect left
+  // Jarvis and no step that could have, so there is nothing to inspect. A run
+  // that began is only cleared by a readable graph that accounts for every
+  // recorded step and has no external step that could have run unrecorded.
+  const trace = Object.keys(run.steps ?? {}).filter(name => !name.startsWith('<'));
+  const began = run.startTime !== null || trace.length > 0 || run.cancellation?.inFlightMayHaveCompleted === true
+    || (!!run.failedStep && run.failedStep.name !== '<lifecycle>' && run.failedStep.name !== '<readiness>');
+  const graph = began ? walkFlowNodes(getFlowVersion(run.flowVersionId)?.trigger) : [];
+  const nothingHappened = !uncertain && !effects.length
+    && (!began || (graph.length > 0 && trace.every(name => graph.some(node => node.name === name)) && otherSteps(run, effects, graph) === 'no'));
+  const state = uncertain || (!effects.length && !nothingHappened) ? 'unknown' : nothingHappened ? 'nothing_happened'
+    : projected.every(e => e.status === 'not_started') ? 'blocked' : 'recoverable';
   return { runId, flowId: run.flowId, versionId: run.flowVersionId,
     revision: digest([evidenceVersion, history.at(-1)?.id ?? null]), state,
-    needsAttention: !current.some(r => r.action === 'inspect'), canReplay: false, newRunRequired: true,
-    reason: state === 'unknown'
+    needsAttention: state !== 'nothing_happened' && !current.some(r => r.action === 'inspect'), canReplay: false, newRunRequired: true,
+    reason: state === 'nothing_happened'
+      ? 'The run was stopped before any step that reaches outside Jarvis started. Nothing happened.'
+      : state === 'unknown'
       ? 'Some external outcomes are unknown. Inspect the provider and retained partial results before a new intentional run.'
       : state === 'blocked'
         ? 'Recorded effects did not dispatch. Inspect the blocker, then request a new run through the normal approval checks.'

@@ -54,7 +54,7 @@ function failure(effect: WorkflowEffect): ActionFailure | null {
 }
 
 /** A step that can reach the outside world without an effect record: CODE, or a piece that is not Jarvis's own. */
-function untracked(node: FlowTriggerNode): boolean {
+export function untracked(node: FlowTriggerNode): boolean {
   return node.type === 'CODE' || (node.type === 'PIECE' && !node.settings?.pieceName?.startsWith(JARVIS_PIECE_PREFIX));
 }
 
