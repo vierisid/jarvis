@@ -750,7 +750,9 @@ Webhooks whose secret was saved before #1153 are LEGACY (no
 `signature_scheme: "timestamped"` in the trigger input): they keep accepting
 the old signature over the raw body alone, which a captured request can
 replay after the 10-minute repeat window, and they also accept a timestamped
-request, so senders can move first. The editor marks such a webhook as legacy
+request, so senders can move first. A legacy webhook refuses a body-only
+request whose body starts with `<digits>.`, the shape a captured timestamped
+request would take if re-sent without its header. The editor marks such a webhook as legacy
 and offers "Require timestamps", which sets the scheme; a webhook never goes
 back to legacy while it keeps its secret, and setting a new secret makes it
 timestamped. Short legacy secrets keep working until they are changed.

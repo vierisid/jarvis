@@ -288,6 +288,10 @@ export class WebhookManager {
           return rejectUnsigned(`Timestamp is more than ${WEBHOOK_TIMESTAMP_TOLERANCE_S} seconds from now`);
         }
       }
+      // A body-only signature over `<digits>.<rest>` is also a timestamped
+      // signature of `<rest>`: refused, so a captured timestamped request
+      // cannot be replayed for ever as a body-only one on a legacy webhook.
+      if (stamp === null && /^\d{1,12}\./u.test(rawBody)) return rejectUnsigned('A body that starts with a timestamp must be sent with X-Jarvis-Timestamp');
       const expected = await computeHmac(route.secret, stamp === null ? rawBody : `${stamp}.${rawBody}`);
 
       // Constant-time comparison to prevent timing attacks

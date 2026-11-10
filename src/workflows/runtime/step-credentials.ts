@@ -169,7 +169,10 @@ export function versionAsModelSees<V extends { trigger?: unknown; sampleData?: u
   const graph = redactGraphCredentials(trigger);
   const input = graph.settings?.input;
   if (input && typeof input === 'object' && 'secret' in input && input.secret !== undefined && input.secret !== '') {
-    graph.settings!.input = { ...input, secret: REDACTED };
+    // The scheme too: the save rules derive it from whether the secret is
+    // already stored, so showing it would let a written guess be tested.
+    const { signature_scheme: _scheme, ...rest } = input as Record<string, unknown>;
+    graph.settings!.input = { ...rest, secret: REDACTED };
   }
   const out: V = { ...version, trigger: graph };
   if (object(version.sampleData)) (out as { sampleData: unknown }).sampleData = redactStepMap(version.sampleData, redactors, 0);

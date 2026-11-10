@@ -512,6 +512,17 @@ describe("manage_workflow tool", () => {
   });
 });
 
+describe("manage_workflow: compose (#1153 webhook secret floor)", () => {
+  test("a composed webhook secret under the floor is refused and leaves no empty workflow behind", async () => {
+    const llm = new StubLlm(JSON.stringify({ displayName: "Hooked", trigger: { name: "trigger", type: "PIECE_TRIGGER",
+      settings: { pieceName: "webhook", input: { secret: "short" } },
+      nextAction: { name: "step_1", type: "PIECE", settings: { pieceName: "jarvis-ask", actionName: "ask", input: { prompt: "hi" } } } } }));
+    const t = createManageWorkflowTool({ llm, pieceRegistry: sampleCatalog() });
+    await expect(callFrom(t, "create", { name: "Hooked", description: "run when my form posts" })).rejects.toThrow(/at least 32 characters/);
+    expect((await callFrom(tool, "list", {}) as { total: number }).total).toBe(0);
+  });
+});
+
 describe("manage_workflow: compose", () => {
   const makeReg = () => sampleCatalog();
 

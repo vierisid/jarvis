@@ -121,3 +121,8 @@ describe('a draft edit (credentialEditRefusal after restore)', () => {
     expect(edit(saved, (g) => { g.nextAction!.settings = { pieceName: 'jarvis-notify', actionName: 'notify', input: { message: 'hi' } }; })).toBeNull();
   });
 });
+
+test('#1153 review: the model reads neither a webhook secret nor its scheme, which the save rules derive from whether the secret is stored', () => {
+  const seen = versionAsModelSees({ trigger: { name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input: { secret: 'whsec-x', signature_scheme: 'timestamped', other: 1 } } } });
+  expect((seen.trigger as FlowTriggerNode).settings!.input).toEqual({ secret: '[redacted]', other: 1 });
+});

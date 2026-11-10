@@ -258,14 +258,26 @@ function rowToFlowVersion(row: FlowVersionRow): FlowVersion {
 
 /**
  * A Webhook trigger's signing secret as it may be saved (#1153): a created or
- * changed secret meets the length floor and is timestamped; one already
- * stored, here or in any version (a copy of an existing webhook), keeps
- * working as it is. Every writer of a version passes through here.
+ * changed secret meets the length floor and is timestamped; one a Webhook
+ * trigger in the same project already holds (an older version after a
+ * rollback, a copy) keeps working as it is. Every writer of a version passes
+ * through here.
  */
-function webhookSecretRules<T>(previous: unknown, trigger: T): T {
+function webhookSecretRules<T>(flowId: string, previous: unknown, trigger: T): T {
   try {
-    return applyWebhookSecretRules(previous, trigger, (secret) => db().query<{ one: number }, [string]>(
-      "SELECT 1 AS one FROM flow_version WHERE instr(trigger, ?) > 0 LIMIT 1").get(`"secret":${JSON.stringify(secret)}`) !== null);
+    // Only a Webhook trigger's own secret, and only in this flow's project:
+    // a step field named `secret`, or another project's webhook, says nothing
+    // about whether this one is new (#1153 review).
+    return applyWebhookSecretRules(previous, trigger, (secret) => {
+      const row = db().query<{ found: number; timestamped: number | null }, [string, string]>(
+        `SELECT COUNT(*) AS found,
+                MAX(json_extract(v.trigger, '$.settings.input.signature_scheme') = 'timestamped') AS timestamped
+           FROM flow_version v JOIN flow f ON f.id = v.flow_id
+          WHERE f.project_id = (SELECT project_id FROM flow WHERE id = ?)
+            AND json_extract(v.trigger, '$.settings.pieceName') = 'webhook'
+            AND json_extract(v.trigger, '$.settings.input.secret') = ?`).get(flowId, secret);
+      return { found: (row?.found ?? 0) > 0, timestamped: row?.timestamped === 1 };
+    });
   } catch (error) {
     if (error instanceof WebhookSecretError) throw new FlowVersionRequestError(error.message, 400);
     throw error;
@@ -282,7 +294,7 @@ function latestTrigger(flowId: string): unknown {
 export function createDraftVersion(input: CreateDraftVersionInput): FlowVersion {
   const id = apId();
   const ts = now();
-  const trigger = webhookSecretRules(latestTrigger(input.flowId), input.trigger ?? {});
+  const trigger = webhookSecretRules(input.flowId, latestTrigger(input.flowId), input.trigger ?? {});
   // A new draft becomes the LATEST draft, which is the version an ENABLED
   // flow with nothing published actually runs. See the gate's own comment.
   assertCodeStepsAllowedForLiveDraft(input.flowId, trigger);
@@ -352,7 +364,7 @@ export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): 
     throw new FlowVersionRequestError(
       `version ${id} is LOCKED and cannot be edited; create a new draft to change it`, 409);
   }
-  if (patch.trigger !== undefined) patch = { ...patch, trigger: webhookSecretRules(JSON.parse(existing.trigger), patch.trigger) };
+  if (patch.trigger !== undefined) patch = { ...patch, trigger: webhookSecretRules(existing.flow_id, JSON.parse(existing.trigger), patch.trigger) };
   // A draft is mutated in place, so writing a CODE step into the draft an
   // ENABLED flow is already running would deploy it without passing publish.
   if (patch.trigger !== undefined) assertCodeStepsAllowedForLiveDraft(existing.flow_id, patch.trigger);

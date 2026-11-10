@@ -57,15 +57,19 @@ export function webhookScheme(input: unknown): WebhookSignatureScheme {
   return object(input) && input[SIGNATURE_SCHEME_FIELD] === 'timestamped' ? 'timestamped' : 'legacy';
 }
 
+/** What the store holds of a secret: whether a webhook trigger in this project has it, and whether any such one is timestamped. */
+export interface KnownSecret { found: boolean; timestamped: boolean }
+
 /**
  * A trigger about to be saved, with the secret rules applied: a created or
  * changed secret is held to the floor and made timestamped; an unchanged one
- * keeps its scheme, which may move to timestamped but not back. `known` says
- * whether a secret is already stored (in any version), so a copy of an
- * existing webhook keeps working. Throws `WebhookSecretError` for a short
- * new secret.
+ * keeps its scheme, which may move to timestamped but never back. "Unchanged"
+ * is the previous version's secret, or one a Webhook trigger in the same
+ * project already holds (`known`: a draft from an older version after a
+ * rollback, a copy the dry runner makes); it is timestamped when any version
+ * holding it is. Throws `WebhookSecretError` for a short new secret.
  */
-export function applyWebhookSecretRules<T>(previous: unknown, next: T, known: (secret: string) => boolean): T {
+export function applyWebhookSecretRules<T>(previous: unknown, next: T, known: (secret: string) => KnownSecret): T {
   const input = webhookInput(next);
   const secret = secretOf(input);
   if (!input || secret === null) {
@@ -74,18 +78,19 @@ export function applyWebhookSecretRules<T>(previous: unknown, next: T, known: (s
     return next;
   }
   const before = webhookInput(previous);
-  const unchanged = secretOf(before) === secret || (secretOf(before) === null && known(secret));
-  if (!unchanged) {
+  const same = secretOf(before) === secret;
+  const stored = same ? { found: true, timestamped: webhookScheme(before) === 'timestamped' } : known(secret);
+  if (!stored.found) {
     if (secret.length < WEBHOOK_SECRET_MIN_LENGTH) {
       throw new WebhookSecretError(`Webhook signing secret must be at least ${WEBHOOK_SECRET_MIN_LENGTH} characters; generate a random one`);
     }
     return input[SIGNATURE_SCHEME_FIELD] === 'timestamped' ? next : withInput(next, { ...input, [SIGNATURE_SCHEME_FIELD]: 'timestamped' });
   }
-  // Unchanged: timestamped stays timestamped.
-  if (secretOf(before) === secret && webhookScheme(before) === 'timestamped' && webhookScheme(input) !== 'timestamped') {
-    return withInput(next, { ...input, [SIGNATURE_SCHEME_FIELD]: 'timestamped' });
+  // Unchanged: timestamped stays timestamped, and a legacy one may opt in.
+  if (stored.timestamped || webhookScheme(input) === 'timestamped') {
+    return input[SIGNATURE_SCHEME_FIELD] === 'timestamped' ? next : withInput(next, { ...input, [SIGNATURE_SCHEME_FIELD]: 'timestamped' });
   }
-  if (SIGNATURE_SCHEME_FIELD in input && input[SIGNATURE_SCHEME_FIELD] !== 'timestamped') {
+  if (SIGNATURE_SCHEME_FIELD in input) {
     return withInput(next, Object.fromEntries(Object.entries(input).filter(([k]) => k !== SIGNATURE_SCHEME_FIELD)));
   }
   return next;

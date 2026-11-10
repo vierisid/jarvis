@@ -32,7 +32,8 @@ import { Worker } from "../../queue/worker";
 import { createRunFlowHandler, RUN_FLOW } from "../handler";
 import { TriggerManager } from "./manager";
 import { scheduleZoneWarning } from "./schedule-zone";
-import { WEBHOOK_TIMESTAMP_TOLERANCE_S } from "./webhook-secret";
+import { TIMESTAMPED_REPEAT_WINDOW_MS, WEBHOOK_TIMESTAMP_TOLERANCE_S } from "./webhook-secret";
+import { webhookDelivery } from "./webhook";
 import { getScheduleWatch, setScheduleWatch } from "../../db/repos/trigger-fire";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
 import { createWaitpoint } from "../../db/repos/waitpoint";
@@ -593,6 +594,28 @@ describe("webhooks", () => {
     const fresh = await timestamped(SECRET, body);
     expect((await post(d, flowId, body, { ...fresh, "X-Jarvis-Timestamp": String(Number(fresh["X-Jarvis-Timestamp"]) - 1) })).status).toBe(401);
     expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test("#1153 review: timestamps are refused outside the tolerance either way and in any other form; a stamped body cannot pass as body-only", async () => {
+    const { flowId } = webhook({ secret: SECRET });
+    const legacy = legacyWebhook("s3cret");
+    const d = await daemon(Date.now());
+    const body = '{"n":1}';
+    const now = Math.floor(Date.now() / 1000);
+    const at = async (ts: string) => ({ "X-Jarvis-Timestamp": ts, "X-Jarvis-Signature": await hmacHex(SECRET, `${ts}.${body}`) });
+    for (const ts of [String(now + WEBHOOK_TIMESTAMP_TOLERANCE_S + 2), String(now - WEBHOOK_TIMESTAMP_TOLERANCE_S - 2), `0${now}`.padStart(13, "0"),
+      String(now * 1000), `-${now}`, `${now}.5`, ` ${now}`]) {
+      expect(`${ts}: ${(await post(d, flowId, body, await at(ts))).status}`).toBe(`${ts}: 401`);
+    }
+    expect((await post(d, flowId, body, await at(String(now + WEBHOOK_TIMESTAMP_TOLERANCE_S - 2)))).status).toBe(200);
+    // On a legacy webhook, a captured timestamped request re-sent as a body-only one (`<ts>.<body>` as the body) is refused.
+    const captured = await timestamped("s3cret", body);
+    expect((await post(d, legacy.flowId, `${captured["X-Jarvis-Timestamp"]}.${body}`, { "X-Jarvis-Signature": captured["X-Jarvis-Signature"]! })).status).toBe(401);
+    expect(runsOf(legacy.flowId)).toHaveLength(0);
+    // The repeat window a timestamped signature gets is the one that covers its tolerance.
+    expect(webhookDelivery(new Headers(), {}, "ab", true).windowMs).toBe(TIMESTAMPED_REPEAT_WINDOW_MS);
+    expect(webhookDelivery(new Headers(), {}, "ab").windowMs).toBe(10 * 60_000);
     await d.stop();
   });
 

@@ -1,6 +1,7 @@
 import { draftRevision, updateSavedDraft } from './workflow-draft-update';
 import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards';
 import { decideRunRecovery, getRunRecovery } from '../../workflows/runtime/recovery';
+import { getWorkflowDb } from '../../workflows/db';
 import { redactFailedStepMessage, redactRunSteps, versionAsModelSees } from '../../workflows/runtime/step-credentials';
 import { resolveOnboardingOutcome } from '../../workflows/runtime/onboarding-service';
 import { onboardingResource } from '../../workflows/runtime/customer-onboarding';
@@ -1510,13 +1511,13 @@ async function actCompose(
 
   // Persist as a fresh flow + draft version. The flow is created DISABLED;
   // the user must publish + enable explicitly.
-  const flow = createFlow({ projectId: project, metadata: { compositionRecordId: result.compositionRecordId } });
+  // One transaction: a draft the save rules refuse (a webhook secret under
+  // the floor, #1153) leaves no empty flow behind.
   const flowName = result.flow.displayName.trim() || name;
-  const version = createDraftVersion({
-    flowId: flow.id,
-    displayName: flowName,
-    trigger: result.flow.trigger,
-  });
+  const { flow, version } = getWorkflowDb().transaction(() => {
+    const flow = createFlow({ projectId: project, metadata: { compositionRecordId: result.compositionRecordId } });
+    return { flow, version: createDraftVersion({ flowId: flow.id, displayName: flowName, trigger: result.flow.trigger }) };
+  })();
   return {
     ok: true,
     // What the contract check proved, and what the user should confirm. First,
