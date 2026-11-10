@@ -2,6 +2,7 @@ import type { ToolDefinition } from '../../actions/tools/registry';
 import type { ActionCategory } from '../../roles/authority';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { resolveToolTarget } from '../../actions/tools/sidecar-route';
+import { isDesktopEnabled, isScreenCaptureEnabled, SCREEN_CAPTURE_TOOLS, toolAlwaysUsesDesktop } from '../../actions/tools/desktop-guard';
 import { BOUNDED_TOOLS } from './tool-capability';
 import { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview } from '../../authority/ui-intent';
 export { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview };
@@ -24,6 +25,14 @@ export function workflowToolRefusal(name: string): string | null {
 export function workflowToolDeclarationRefusal(tool: ToolDefinition): string | null {
   const refusal = workflowToolRefusal(tool.name);
   if (refusal) return refusal;
+  // The switches, read live (#1314 m6): composing or enabling a flow around a
+  // tool that is turned off would only fail at its first run.
+  if (!isDesktopEnabled() && toolAlwaysUsesDesktop(tool)) {
+    return `${tool.name} is unavailable while desktop control is turned off (desktop.enabled: false). Turn it on in Settings > General > Desktop control first.`;
+  }
+  if (SCREEN_CAPTURE_TOOLS.has(tool.name) && !isScreenCaptureEnabled()) {
+    return `${tool.name} is unavailable while screen awareness is turned off. Turn awareness on first.`;
+  }
   if (WORKFLOW_REVIEWED_UI_TOOLS.has(tool.name)) return workflowUiReview(tool, tool.name) ? null
     : `${tool.name} is unavailable in workflows because its live approval guard is missing.`;
   if (BOUNDED_TOOLS.has(tool.name) || tool.name === 'run_skill' || tool.workflowEffect) return null;

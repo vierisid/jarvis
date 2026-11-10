@@ -229,3 +229,22 @@ test('a step with a template at both ends still keeps the text between them (#13
   const f = fixture(desktopLaunchAppTool, { target: 'pc', executable: 'a{{ba{{b' }, undefined, { target: 'pc', executable: 'a{{b' });
   await expect(Promise.resolve(f.call())).rejects.toMatchObject({ outcome: { code: 'WORKFLOW_STEP_INPUT_MISMATCH' } });
 });
+
+test('turning desktop control off closes a waiting desktop card, and the step runs nothing (#1314 m6)', async () => {
+  const { setDesktopEnabledSource, desktopRefusal } = await import('../../actions/tools/desktop-guard');
+  const f = fixture();
+  expect((await f.call()).status).toBe(202);
+  const card = f.approvals.getPending()[0]!;
+  try {
+    setDesktopEnabledSource(() => false);
+    const closed = f.approvals.closeWorkflowCards(r => desktopRefusal(desktopLaunchAppTool, JSON.parse(r.tool_arguments ?? '{}')) !== null, 'switched-off');
+    expect(closed.map(r => r.id)).toEqual([card.id]);
+    expect(f.approvals.getRequest(card.id)?.status).toBe('expired');
+    expect(f.approvals.approve(card.id, 'dashboard')).toBeNull();
+    setDesktopEnabledSource(null);
+    const response = await Promise.resolve(f.call()).catch(error => error);
+    const outcome = response instanceof Response ? (await response.json()).outcome : response.outcome;
+    expect(outcome).toMatchObject({ code: 'APPROVAL_EXPIRED', effect: 'not_started' });
+    expect(f.calls).toHaveLength(0);
+  } finally { setDesktopEnabledSource(null); }
+});

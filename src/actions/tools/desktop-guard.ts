@@ -132,9 +132,35 @@ export function toolAlwaysUsesDesktop(tool: Pick<ToolDefinition, 'category' | 'u
   return tool.category === 'desktop' || tool.usesDesktop === true;
 }
 
+/**
+ * Screen awareness (#1314 m6). Turning it off blinds the pebble and pauses
+ * the sidecar's own capture, so a tool that captures the screen is refused
+ * too: the person's "stop looking" covers every way Jarvis looks.
+ */
+let screenSource: () => boolean = () => true;
+export function setScreenCaptureEnabledSource(source: (() => boolean) | null): void {
+  screenSource = source ?? (() => true);
+}
+/** Bind the switch to the daemon's live config (`awareness.enabled`), read through on every check. */
+export function bindScreenCaptureSwitch(config: { awareness?: unknown }): void {
+  setScreenCaptureEnabledSource(() => (config.awareness as { enabled?: unknown } | undefined)?.enabled !== false);
+}
+/** Whether screen capture is allowed. A reader that throws counts as OFF. */
+export function isScreenCaptureEnabled(): boolean {
+  try { return screenSource() !== false; } catch { return false; }
+}
+/** The tools that capture the screen. */
+export const SCREEN_CAPTURE_TOOLS: ReadonlySet<string> = new Set(['desktop_screenshot', 'capture_screen']);
+export const SCREEN_CAPTURE_DISABLED_CODE = 'SCREEN_CAPTURE_DISABLED';
+export const SCREEN_CAPTURE_DISABLED_MESSAGE =
+  'Error: Screen awareness is turned off on this Jarvis, so this screenshot was not taken. '
+  + 'Jarvis will not capture the screen on any machine until the user turns awareness back on. Do NOT retry; tell the user awareness is off.';
+
 /** The refusal text for this call, or null when it may run. */
-export function desktopRefusal(tool: Pick<ToolDefinition, 'category' | 'usesDesktop'> | undefined, params: Record<string, unknown>): string | null {
-  if (!tool || isDesktopEnabled()) return null;
+export function desktopRefusal(tool: Pick<ToolDefinition, 'category' | 'usesDesktop'> & { name?: string } | undefined, params: Record<string, unknown>): string | null {
+  if (!tool) return null;
+  if (tool.name && SCREEN_CAPTURE_TOOLS.has(tool.name) && !isScreenCaptureEnabled()) return SCREEN_CAPTURE_DISABLED_MESSAGE;
+  if (isDesktopEnabled()) return null;
   return callUsesDesktop(tool, params) ? DESKTOP_DISABLED_MESSAGE : null;
 }
 
@@ -153,10 +179,11 @@ export function isDesktopDisabledError(error: unknown): boolean {
 }
 
 /** Throw the typed refusal when this call may not run. Nothing was started. */
-export function assertDesktopAllowed(tool: Pick<ToolDefinition, 'category' | 'usesDesktop'>, params: Record<string, unknown>): void {
+export function assertDesktopAllowed(tool: Pick<ToolDefinition, 'category' | 'usesDesktop'> & { name?: string }, params: Record<string, unknown>): void {
   const refusal = desktopRefusal(tool, params);
   if (refusal === null) return;
-  throw new ActionOutcomeError({ status: 'blocked', code: DESKTOP_DISABLED_CODE, effect: 'not_started', message: refusal });
+  throw new ActionOutcomeError({ status: 'blocked', code: refusal === SCREEN_CAPTURE_DISABLED_MESSAGE ? SCREEN_CAPTURE_DISABLED_CODE : DESKTOP_DISABLED_CODE,
+    effect: 'not_started', message: refusal });
 }
 
 /**
@@ -180,7 +207,8 @@ export function desktopOffSystemNote(): string | null {
 }
 
 /** The tools to offer: drops the always-desktop ones while the switch is off. */
-export function withoutDisabledDesktopTools<T extends Pick<ToolDefinition, 'category' | 'usesDesktop'>>(tools: readonly T[]): readonly T[] {
-  if (isDesktopEnabled()) return tools;
-  return tools.filter((tool) => !toolAlwaysUsesDesktop(tool));
+export function withoutDisabledDesktopTools<T extends Pick<ToolDefinition, 'category' | 'usesDesktop'> & { name?: string }>(tools: readonly T[]): readonly T[] {
+  const screen = isScreenCaptureEnabled();
+  if (isDesktopEnabled() && screen) return tools;
+  return tools.filter((tool) => !(!isDesktopEnabled() && toolAlwaysUsesDesktop(tool)) && !(!screen && tool.name && SCREEN_CAPTURE_TOOLS.has(tool.name)));
 }

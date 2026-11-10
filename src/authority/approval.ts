@@ -415,6 +415,29 @@ export class ApprovalManager {
   }
 
   /**
+   * Close pending workflow cards a switch just turned off (#1314 m6): each one
+   * matching is expired, its live UI binding dropped, and the deadline
+   * listener told so the dashboard drops it. The step it holds then resumes
+   * to a typed APPROVAL_EXPIRED and runs nothing. Returns the closed rows.
+   */
+  closeWorkflowCards(matches: (request: ApprovalRequest) => boolean, closedBy: string, now = Date.now()): ApprovalRequest[] {
+    const db = getDb(); const closed: ApprovalRequest[] = [];
+    const ids = (db.query("SELECT id FROM approval_requests WHERE status='pending' AND execution_mode='workflow'").all() as Array<{ id: string }>).map(r => r.id);
+    for (const id of ids) {
+      const request = this.getRequest(id);
+      if (!request || !matches(request)) continue;
+      if (db.run("UPDATE approval_requests SET status='expired',decided_at=?,decided_by=? WHERE id=? AND status='pending'", [now, closedBy, id]).changes === 0) continue;
+      this.uiExecutions.delete(id);
+      const row = this.getRequest(id);
+      if (row) closed.push(row);
+    }
+    for (const request of closed) {
+      try { deadlineExpiredListener?.(request); } catch (error) { console.error('[Approvals] deadline listener failed:', error); }
+    }
+    return closed;
+  }
+
+  /**
    * Deny a pending request.
    */
   deny(requestId: string, decidedBy: string): ApprovalRequest | null {

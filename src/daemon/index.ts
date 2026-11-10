@@ -205,7 +205,7 @@ import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded } fr
 import { createSidecarOfflineNotifier } from "./sidecar-offline-notice.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
 import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
-import { bindDesktopSwitch, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled } from "../actions/tools/desktop-guard.ts";
+import { bindDesktopSwitch, bindScreenCaptureSwitch, desktopRefusal, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled } from "../actions/tools/desktop-guard.ts";
 import { osFamily } from "../util/execution-environment.ts";
 import { isLocalBrowserDisabled, isNoLocalTools } from "../actions/tools/local-tools-guard.ts";
 
@@ -2140,6 +2140,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           persistAwarenessChoice(nextEnabled);
           // Toggle live awareness service if it exists.
           if (awarenessService) awarenessService.toggle(nextEnabled);
+          if (!nextEnabled) closeSwitchedOffWorkflowCards();
           // Push visual: blinded = !enabled.
           // Awareness drops every capture while desktop.enabled is off (#905),
           // so turning it on then still leaves the pebble blind, and says so.
@@ -4402,6 +4403,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       emergency_state: authorityConfig.emergency_state ?? 'normal',
     });
     const approvalManager = new ApprovalManager();
+    // A workflow card for a tool a switch just turned off (desktop control,
+    // or screen awareness for the screenshot tools) is closed, not left
+    // waiting to be approved into a refusal (#1314 m6).
+    const closeSwitchedOffWorkflowCards = () => {
+      const registry = agentService?.getOrchestrator().getToolRegistry();
+      approvalManager.closeWorkflowCards((request) => {
+        const tool = registry?.get(request.tool_name);
+        let args: Record<string, unknown> = {};
+        try { args = JSON.parse(request.tool_arguments ?? '{}'); } catch { /* judged on the tool alone */ }
+        return !!tool && desktopRefusal(tool, args) !== null;
+      }, 'switched-off');
+    };
     const auditTrail = new AuditTrail();
     const learner = new AuthorityLearner(authorityConfig.learning?.suggest_threshold ?? 5);
     const emergencyController = new EmergencyController();
@@ -4582,6 +4595,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // enabled flag is the one knob with a live setter today.
     settingsReload.registerApplier('awareness', async (cfg) => {
       awarenessService?.toggle(cfg.awareness?.enabled !== false);
+      if (cfg.awareness?.enabled === false) closeSwitchedOffWorkflowCards();
       // The glyph follows the stored choice too, on every pebble (#1157).
       // Not awaited: appliers run in one serialized queue, and a sidecar RPC can take 30s to give up.
       void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
@@ -4592,6 +4606,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // already running is stopped here: a skill recording's input hooks on the
     // sidecar. The pebble glyph follows too, as it does for awareness.
     settingsReload.registerApplier('desktop', async (cfg) => {
+      if (!isDesktopEnabled()) closeSwitchedOffWorkflowCards();
       if (!isDesktopEnabled() && endRecordingForDesktopOff()) {
         console.log('[Tools] desktop.enabled turned off: the running skill recording was stopped and discarded.');
       }
@@ -5404,6 +5419,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 9b-ter. desktop.enabled (#905). Bound to the live config object, which
     // Settings changes in place (#1159): see desktop-guard.ts.
     bindDesktopSwitch(jarvisConfig);
+    // Screen awareness covers the screenshot tools too (#1314 m6): read live, like the desktop switch.
+    bindScreenCaptureSwitch(jarvisConfig as { awareness?: unknown });
     {
       const stored: unknown = jarvisConfig.desktop;
       if (desktopValueNeedsWarning(stored)) {
