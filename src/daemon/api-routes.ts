@@ -38,6 +38,7 @@ import type { EmergencyController } from '../authority/emergency.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import { applyQuickOverride } from '../authority/quick-override.ts';
 import { desktopEnabledFromSection, isScreenCaptureEnabled } from '../actions/tools/desktop-guard.ts';
+import { awarenessHistoryHidden as awarenessHistoryHiddenAs } from '../awareness/history-guard.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { authorityConfigPatchError, isActionCategory } from '../authority/config-validation.ts';
 
@@ -292,15 +293,8 @@ function error(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
-/**
- * Screen awareness off hides what it recorded (owner decision on #1314):
- * every reader of stored captures, sessions and what is derived from them
- * answers that awareness is off, with no data. Nothing is deleted; it shows
- * again when awareness is turned back on.
- */
 function awarenessHistoryHidden(): Response | null {
-  return isScreenCaptureEnabled() ? null
-    : json({ error: 'Screen awareness is off, so its recorded history is hidden until it is turned back on.', code: 'AWARENESS_OFF' }, 409);
+  return awarenessHistoryHiddenAs(json);
 }
 
 /**
@@ -4547,6 +4541,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/awareness/suggestions': {
       GET: (req: Request) => {
+        const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         if (!ctx.awarenessService) return error('Awareness service not running', 503);
         const params = getSearchParams(req);
         const limit = parseInt(params.get('limit') ?? '20', 10);

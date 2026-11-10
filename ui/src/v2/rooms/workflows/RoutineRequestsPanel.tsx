@@ -79,7 +79,8 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
     </div>
     {pause && <p role="status">{pause}</p>}
     {background && <p>{background.composition.queued} waiting · {background.composition.running} preparing</p>}
-    {error && <p role="alert">{error}</p>}
+    {/* Awareness off hides routines built from what it recorded (#1314): a status, not a failure. */}
+    {error && (error.startsWith("Screen awareness is off") ? <p role="status">{error}</p> : <p role="alert">{error}</p>)}
     {!page ? !error && <p role="status">Loading routine requests…</p> : page.suggestions.length === 0 ?
       <div><p>{offset > 0 ? "No older requests." : "No routine requests yet. Proposals appear here when Jarvis notices recurring work."}</p>
         {offset > 0 && <Button size="sm" onClick={() => changePage(Math.max(0, offset - 100))}>Newer requests</Button>}
@@ -206,7 +207,8 @@ function RoutineDetail({ learning, onSaved, onReview }: {
         </fieldset>
       </form>}
     </>}
-    {error && <p role="alert">{error}</p>}
+    {/* Awareness off hides routines built from what it recorded (#1314): a status, not a failure. */}
+    {error && (error.startsWith("Screen awareness is off") ? <p role="status">{error}</p> : <p role="alert">{error}</p>)}
     {learning.feedback.length > 0 && <details><summary>Feedback history</summary><ul>
       {learning.feedback.map(item => <li key={item.id}>{item.reason} <small>{new Date(item.created_at).toLocaleString()}</small></li>)}
     </ul></details>}

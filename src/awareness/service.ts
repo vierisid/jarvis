@@ -8,6 +8,7 @@
  * inline on the event.
  */
 
+import { AWARENESS_OFF_MESSAGE, awarenessHistoryVisible } from './history-guard.ts';
 import type { Service, ServiceStatus } from '../daemon/services.ts';
 import type { JarvisConfig, AwarenessConfig } from '../config/types.ts';
 import type { LLMManager } from '../llm/manager.ts';
@@ -214,7 +215,11 @@ export class AwarenessService implements Service {
     return this.contextTracker.getCurrentSession();
   }
 
+  // The read methods hold recorded awareness back while it is off (#1314),
+  // under the routes' own "awareness is off" answers: a list reads empty and
+  // a report refuses, so a caller added later cannot read around the switch.
   getRecentSuggestionsList(limit?: number, type?: SuggestionType): SuggestionRow[] {
+    if (!awarenessHistoryVisible()) return [];
     return getRecentSuggestions(limit, type);
   }
 
@@ -227,18 +232,22 @@ export class AwarenessService implements Service {
   }
 
   async generateReport(date?: string): Promise<DailyReport> {
+    if (!awarenessHistoryVisible()) throw new Error(AWARENESS_OFF_MESSAGE);
     return this.analytics.generateDailyReport(date);
   }
 
   getSessionHistory(limit?: number): SessionSummary[] {
+    if (!awarenessHistoryVisible()) return [];
     return this.analytics.getSessionHistory(limit);
   }
 
   async generateWeeklyReport(weekStart?: string): Promise<WeeklyReport> {
+    if (!awarenessHistoryVisible()) throw new Error(AWARENESS_OFF_MESSAGE);
     return this.analytics.generateWeeklyReport(weekStart);
   }
 
   getBehavioralInsights(days?: number): BehavioralInsight[] {
+    if (!awarenessHistoryVisible()) return [];
     return this.analytics.getBehavioralInsights(days);
   }
 

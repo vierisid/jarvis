@@ -159,7 +159,7 @@ export const SCREEN_CAPTURE_TOOLS: ReadonlySet<string> = new Set(['desktop_scree
  * awareness off stops all of them, on every path, as it stops the screenshots.
  *
  * NOT here, by owner decision: `browser_navigate`, `browser_snapshot` and
- * `browser_evaluate`. They read pages Jarvis opened itself in its own
+ * `browser_evaluate`. They read the Jarvis browser's own tabs, in its own
  * browser, not what the person has on their screen, so they keep working with
  * awareness off. (`browser_screenshot` stays a screenshot and stays off.)
  */
@@ -249,7 +249,7 @@ export function screenAwarenessOffSystemNote(): string | null {
     'The user has turned screen awareness off. The tool guide above documents tools that read the screen, '
     + 'but on this install you cannot take screenshots or read what is on any screen: '
     + `${[...SCREEN_READ_TOOLS].join(', ')} and desktop_click with action get_value are not available, and record_skill cannot start a recording. `
-    + `Pages you open yourself in the Jarvis browser stay readable: ${[...BROWSER_PAGE_READS].join(', ')} still work. `
+    + `The Jarvis browser's own tabs stay readable: ${[...BROWSER_PAGE_READS].join(', ')} still work. `
     + 'Do not read the screen another way, for example through shell commands. '
     + 'If the user asks about what is on their screen, say that screen awareness is off and that they can turn it back on.',
   ].join('\n');

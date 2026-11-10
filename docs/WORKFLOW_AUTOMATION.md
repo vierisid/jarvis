@@ -138,9 +138,10 @@ Practical consequences:
   `desktop_click` with `action: get_value` in any case, `run_skill`, whose
   replay reads each surface it acts on, and starting a `record_skill`
   recording), with `SCREEN_CAPTURE_DISABLED`. `browser_navigate`,
-  `browser_snapshot` and `browser_evaluate` keep working: they read pages
-  Jarvis opened itself in its own browser, not the person's screen (owner
-  decision on #1314). The structural surface reader refuses on its
+  `browser_snapshot` and `browser_evaluate` keep working: they read the Jarvis
+  browser's own tabs (its own profile, never the person's Chrome), not the
+  person's screen (owner decision on #1314). A person can browse in that
+  visible browser too, and those tabs are readable the same way. The structural surface reader refuses on its
   own, so no other caller reads past the switch. Launching or focusing an app
   still works, with the window title it would report hidden. The pebble's
   screen context, its region capture and the Brief's screenshot attachment
@@ -149,8 +150,15 @@ Practical consequences:
   these are closed. What awareness recorded before is hidden too while it is
   off: the `/api/awareness` history routes (captures, a capture and its image,
   sessions, stats, the daily and weekly reports, insights and the live
-  context) answer `409 AWARENESS_OFF` with no data, and a flow's
-  `awarenessRecent` context returns no activity. Nothing is deleted; it shows
+  context), what is derived from captures (suggestions, routines,
+  compositions, a suggestion's learning, opportunities and the Brief's
+  prepared opportunities) answer `409 AWARENESS_OFF` with no data, which the
+  Brief and the Routines panel show as "awareness is off"; screen-capture
+  observations are left out of every observation read (the Logs room, the
+  palette search, the agents' prompts); the awareness service's own read
+  methods return nothing; and a flow's `awarenessRecent` context returns no
+  activity. Vault entities and goal notes once written from awareness are
+  ordinary data and stay visible (owner decision). Nothing is deleted; it shows
   again when awareness is turned back on. Not covered: shell commands
   (`run_command`) that read the screen (owner decision: left as is) and the
   operator-only debug RPC. A run admitted while a
