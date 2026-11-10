@@ -380,3 +380,12 @@ test('the tool-loop model call is held at its retry boundary too (#1314 review)'
     expect(sends).toEqual(['a']); expect(state.held).toBe(true);
   } finally { setScreenCaptureEnabledSource(null); }
 });
+
+test('a held call that comes back as a thrown error still goes back to the queue unspent, even if awareness is back on (#1314 review)', async () => {
+  acceptSuggestion(proposal().id, acceptance);
+  // The manager re-wraps the switch's refusal as a provider error; awareness is on again by the catch.
+  worker = new SuggestionComposer(async (_request, held) => { held!.held = true; throw new Error('LLMProviderError: Screen awareness is off'); });
+  worker.start(); await worker.idle();
+  const job = getDb().query('SELECT state, attempts FROM suggestion_composition_jobs').get() as { state: string; attempts: number };
+  expect(job).toMatchObject({ state: 'queued', attempts: 0 });
+});
