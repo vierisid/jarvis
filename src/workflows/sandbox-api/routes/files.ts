@@ -39,10 +39,7 @@ import {
   createWorkflowFile,
   getWorkflowFile,
 } from "../../db/repos/workflow-file";
-import { getFlowRunInProject } from "../../db/repos/flow-run";
-import { getFlowInProject } from "../../db/repos/flow";
-import { flowIdOfTriggerHookRunId } from "../../runner/triggers/hook-run-id";
-import type { EngineTokenClaims } from "../types";
+import { flowOfClaims } from "./run-flow";
 
 /**
  * One safe path segment. Not the readiness rule for flow step names
@@ -54,14 +51,6 @@ import type { EngineTokenClaims } from "../types";
  */
 const STEP_NAME = /^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,127}$/;
 
-/** The flow this token's run belongs to, or null when it serves none. */
-function flowOfClaims(claims: EngineTokenClaims): string | null {
-  const run = getFlowRunInProject(claims.projectId, claims.runId);
-  if (run) return run.flowId;
-  const hookFlowId = flowIdOfTriggerHookRunId(claims.runId);
-  if (hookFlowId && getFlowInProject(claims.projectId, hookFlowId)) return hookFlowId;
-  return null;
-}
 
 function isStrictlyWithin(child: string, parent: string): boolean {
   const rel = relative(parent, child);

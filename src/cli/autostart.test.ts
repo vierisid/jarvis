@@ -400,7 +400,11 @@ describe('service definitions propagate JARVIS_HOME', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'jarvis-unit-')), 'jarvis-verify.service');
     writeFileSync(path, unit, 'utf-8');
     const r = Bun.spawnSync([SYSTEMD_ANALYZE!, 'verify', path], { stdout: 'pipe', stderr: 'pipe' });
-    const out = `${r.stdout.toString()}${r.stderr.toString()}`.trim();
+    // verify also loads the host's own units and warns about them (a runner
+    // image's xfs_scrub or walinuxagent units); only lines about ours count.
+    const out = `${r.stdout.toString()}${r.stderr.toString()}`.split('\n')
+      .filter((line) => line.trim() !== '' && !/^\/(usr|etc|run|lib)\/\S+:\d+: /.test(line))
+      .join('\n');
     expect({ code: r.exitCode, out }).toEqual({ code: 0, out: '' });
   });
 

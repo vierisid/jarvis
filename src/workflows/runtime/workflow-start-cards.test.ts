@@ -74,6 +74,15 @@ const ctx = (runId: string, stepName: string) => ({ runId, projectId: DEFAULT_ID
 const delegateIn = (s: ReturnType<typeof services>, runId: string, req: { goal: string; role?: string }) =>
   s.agentDelegate!(req, ctx(runId, 'delegate'));
 const cardOf = (approvals: ApprovalManager, id: string) => approvalIntentFields(approvals.getRequest(id)!).intent_action;
+/**
+ * A quoted string holding a character outside ASCII as a start card shows it:
+ * its text in a bidi isolate (U+2068 ... U+2069) inside the quotes, so
+ * right-to-left text cannot reorder the punctuation around it. Written out
+ * here rather than imported, so these tests pin the exact characters.
+ */
+const q = (text: string) => `"\u2068${text}\u2069"`;
+/** The card's JSON with the display isolates removed: what must decode to the payload. */
+const decoded = (card: string) => JSON.parse(card.slice(card.indexOf(', with the input ') + ', with the input '.length).replace(/[\u2068\u2069]/g, ''));
 
 describe('a workflow delegation card names the specialist and the goal (#1040)', () => {
   test('the card says which specialist runs, with what goal', async () => {
@@ -288,6 +297,75 @@ describe('a started workflow\'s card names the workflow (#1040)', () => {
     expect(JSON.parse(card.slice(card.indexOf(', with the input ') + ', with the input '.length))).toEqual(payload);
   });
 
+  test('right-to-left text is isolated per string, so a key and its value cannot read swapped; a value cannot carry its own isolate', async () => {
+    const approvals = new ApprovalManager();
+    const s = services(approvals);
+    const target = flow('\u05E1\u05E0\u05DB\u05E8\u05D5\u05DF');
+    // An RTL key with an RTL value: without isolates the colon between them
+    // takes their direction and the pair renders value-first. The other value
+    // tries to close the card's isolate and open its own.
+    const payload = { '\u05E9\u05DC\u05D5\u05DD': '\u0645\u0631\u062D\u0628\u0627', x: 'a\u2069b\u2066c\u2068' };
+    const reply = await s.workflowsStart!({ flowId: target.flowId, payload } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
+    const card = cardOf(approvals, reply.approval!.approvalId);
+    expect(card).toBe(`Start the workflow ${target.flowId} named ${q('\u05E1\u05E0\u05DB\u05E8\u05D5\u05DF')}, with the input `
+      + `{"x":"a\\u2069b\\u2066c\\u2068",${q('\u05E9\u05DC\u05D5\u05DD')}:${q('\u0645\u0631\u062D\u0628\u0627')}}`);
+    // Every isolate the card opens it closes, and only the card's own are raw.
+    expect(card.match(/\u2068/g)).toHaveLength(3);
+    expect(card.match(/\u2069/g)).toHaveLength(3);
+    expect(card).not.toMatch(/[\u2066\u2067]/);
+    expect(decoded(card)).toEqual(payload);
+  });
+
+  test('a value ending in a backslash or holding an escaped quote is isolated as one string, not split at its escape', async () => {
+    const approvals = new ApprovalManager();
+    const s = services(approvals);
+    const target = flow('Nightly sync');
+    const payload = { a: '\u05D0\\', b: '\u05D0 "hi"', c: '\\"\u05D0' };
+    const reply = await s.workflowsStart!({ flowId: target.flowId, payload } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
+    const card = cardOf(approvals, reply.approval!.approvalId);
+    expect(card).toEndWith(`, with the input {"a":${q('\u05D0\\\\')},"b":${q('\u05D0 \\"hi\\"')},"c":${q('\\\\\\"\u05D0')}}`);
+    expect(decoded(card)).toEqual(payload);
+  });
+
+  test('the isolates count toward what a card may show: an input that fits only without them is refused', async () => {
+    const approvals = new ApprovalManager();
+    const s = services(approvals);
+    const target = flow('Nightly sync');
+    // {"v":"..."} is 8 characters around the value; isolated, 10.
+    const over = { v: '\u05D0'.repeat(AGENT_TASK_MAX_CHARS - 9) };
+    const error = await s.workflowsStart!({ flowId: target.flowId, payload: over } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never).then(() => null, (e) => e);
+    expect((error as ActionOutcomeError).outcome).toMatchObject({ status: 'blocked', code: 'CARD_CANNOT_SHOW' });
+    expect((error as Error).message).toContain(`is ${AGENT_TASK_MAX_CHARS + 1} characters`);
+    const at = { v: '\u05D0'.repeat(AGENT_TASK_MAX_CHARS - 10) };
+    const fits = await s.workflowsStart!({ flowId: target.flowId, payload: at } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
+    expect(cardOf(approvals, fits.approval!.approvalId)).toEndWith(`, with the input {"v":${q(at.v)}}`);
+  });
+
+  test('the longest card a start can ask (longest name, most input, quote-heavy or right-to-left) fits the 1000 characters the Needs you title shows', async () => {
+    const approvals = new ApprovalManager();
+    const s = services(approvals);
+    // `{"v":"..."}` around the value is 8 characters; isolated, 10. Each input is exactly at the shown limit.
+    const inputs = [{ v: 'y'.repeat(AGENT_TASK_MAX_CHARS - 8) }, { v: '\u05D0'.repeat(AGENT_TASK_MAX_CHARS - 10) }];
+    // Names at the 512 the routes allow: plain, all quotes or backslashes (JSON doubles each), right-to-left.
+    const names = ['n'.repeat(512), '"'.repeat(512), '\\'.repeat(512), '\u05E9'.repeat(512)];
+    let longest = 0;
+    for (const name of names) {
+      const target = flow(name);
+      for (const payload of inputs) {
+        const reply = await s.workflowsStart!({ flowId: target.flowId, payload, waitForCompletion: true } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
+        const card = cardOf(approvals, reply.approval!.approvalId);
+        longest = Math.max(longest, card.length);
+        expect(card.length).toBeLessThanOrEqual(1000);
+        // The name is cut visibly, the id still names the flow, and the input is whole.
+        expect(card).toStartWith(`Start and wait for the workflow ${target.flowId} named "`);
+        expect(card).toMatch(/\.\.\.\u2069?", with the input /);
+        expect(decoded(card)).toEqual(payload);
+      }
+    }
+    // Not vacuous: the bound is used up, not undershot by a wide margin.
+    expect(longest).toBeGreaterThan(990);
+  });
+
   test('an input in another script is shown as written; tag characters and a no-break space are escaped, not dropped', async () => {
     const approvals = new ApprovalManager();
     const s = services(approvals);
@@ -297,8 +375,9 @@ describe('a started workflow\'s card names the workflow (#1040)', () => {
     const payload = { subject, tagged: 'a\u{E0041}b', spaced: 'c\u00A0d' };
     const reply = await s.workflowsStart!({ flowId: target.flowId, payload } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
     const card = cardOf(approvals, reply.approval!.approvalId);
-    expect(card).toEndWith(`, with the input {"spaced":"c\\u00A0d","subject":"${subject}","tagged":"a\\uDB40\\uDC41b"}`);
-    expect(JSON.parse(card.slice(card.indexOf(', with the input ') + ', with the input '.length))).toEqual(payload);
+    // The Cyrillic value is isolated (any string outside ASCII is); the escaped ones are ASCII as shown.
+    expect(card).toEndWith(`, with the input {"spaced":"c\\u00A0d","subject":${q(subject)},"tagged":"a\\uDB40\\uDC41b"}`);
+    expect(decoded(card)).toEqual(payload);
   });
 
   // Owner, 2026-11-06: a chat card names the input's fields, never its values.

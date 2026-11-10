@@ -35,7 +35,11 @@ export interface TriggerFire {
   lateMs: number | null;
   /** When the run it started began executing; the gap before it is time spent waiting in the queue. */
   startedAt: number | null;
-  /** How many more times the same delivery arrived and was not run again. */
+  /**
+   * How many more times the same delivery arrived and was not run again; on a
+   * folded blocked or skipped row (`recordBlocked`, `recordSkippedRepeat`),
+   * how many more deliveries met the same condition.
+   */
   repeats: number;
   lastRepeatAt: number | null;
   detail: Record<string, unknown> | null;
@@ -180,13 +184,34 @@ export function recordFire(input: FireInput & { outcome: Exclude<FireOutcome, "s
  * its blocked occurrences, not 1,440 rows a day.
  */
 export function recordBlocked(input: FireInput & { signature: string; runId?: string | null }): TriggerFire {
+  return recordFolded({ ...input, outcome: "blocked" });
+}
+
+/**
+ * The same for a delivery skipped for a reason that holds for a while: Pause
+ * or Kill, a full approvals backlog, a full queue. A webhook sender retrying
+ * into it (60 a minute per flow, the ingress rate limit) or a burst of events
+ * is one row that counts them, not up to 86,400 rows a day. Only for a
+ * delivery that keeps no key: a schedule's skipped time is keyed and stays a
+ * row of its own, so it is never run late.
+ */
+export function recordSkippedRepeat(input: FireInput & { signature: string }): TriggerFire {
+  return recordFolded({ ...input, dedupeKey: null, outcome: "skipped" });
+}
+
+/**
+ * Count a repeat on the flow's latest row of this source when that row has
+ * the same outcome and signature; otherwise add a row. Only the latest, so
+ * the ledger still reads in order: a start in between begins a new row.
+ */
+function recordFolded(input: FireInput & { signature: string; runId?: string | null; outcome: "blocked" | "skipped" }): TriggerFire {
   const now = input.observedAt ?? Date.now();
   return db().transaction(() => {
     const latest = db().query<FireRow, [string, string]>(
       `SELECT * FROM workflow_trigger_fire WHERE flow_id = ? AND source = ? ORDER BY observed_at DESC, rowid DESC LIMIT 1`,
     ).get(input.flowId, input.source);
     const latestFire = latest ? rowToFire(latest) : null;
-    if (latestFire?.outcome === "blocked" && latestFire.detail?.signature === input.signature) {
+    if (latestFire?.outcome === input.outcome && latestFire.detail?.signature === input.signature) {
       db().run(`UPDATE workflow_trigger_fire SET repeats = repeats + 1, last_repeat_at = ?, scheduled_for = COALESCE(?, scheduled_for)
         WHERE id = ?`, [now, input.scheduledFor ?? null, latestFire.id]);
       return getFire(latestFire.id)!;
@@ -194,8 +219,8 @@ export function recordBlocked(input: FireInput & { signature: string; runId?: st
     const id = apId();
     db().run(
       `INSERT INTO workflow_trigger_fire (id, flow_id, flow_version_id, source, dedupe_key, scheduled_for, observed_at,
-        outcome, run_id, late_ms, detail) VALUES (?, ?, ?, ?, NULL, ?, ?, 'blocked', ?, ?, ?)`,
-      [id, input.flowId, input.flowVersionId ?? null, input.source, input.scheduledFor ?? null, now, input.runId ?? null,
+        outcome, run_id, late_ms, detail) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
+      [id, input.flowId, input.flowVersionId ?? null, input.source, input.scheduledFor ?? null, now, input.outcome, input.runId ?? null,
         input.lateMs ?? null, detailJson({ ...(input.detail ?? {}), signature: input.signature })],
     );
     return getFire(id)!;

@@ -49,6 +49,8 @@ export interface WorkerContractHandlers {
   updateStepProgress(sandboxId: string, input: Parameters<WorkerContract["updateStepProgress"]>[0]): Promise<void>;
   uploadRunLog(sandboxId: string, input: Parameters<WorkerContract["uploadRunLog"]>[0]): Promise<void>;
   sendFlowResponse(sandboxId: string, input: Parameters<WorkerContract["sendFlowResponse"]>[0]): Promise<void>;
+  /** Drop anything kept for a sandbox whose engine disconnected. */
+  forget?(sandboxId: string): void;
 }
 
 export interface NotifyContractHandlers {
@@ -362,6 +364,9 @@ export class WorkerRpcServer {
       // re-resolves per send, would destroy that engine instead.
       if (this.connections.get(sandboxId)?.socket !== socket) return;
       this.connections.delete(sandboxId);
+      // What the handlers kept for it (recent output, last progress) goes
+      // with it; nothing else ever removed it.
+      this.workerHandlers.forget?.(sandboxId);
     });
   }
 }

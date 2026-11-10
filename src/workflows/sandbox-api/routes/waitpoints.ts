@@ -68,9 +68,13 @@ export function createWaitpointsRoute(deps: WaitpointRouteDeps): RouteHandler {
     if (body.flowRunId !== ctx.claims.runId) {
       return err("flowRunId does not match this sandbox", 403);
     }
+    // The waitpoint belongs to the token's project, never one the body names.
+    if (body.projectId !== undefined && body.projectId !== ctx.claims.projectId) {
+      return err("projectId does not match this sandbox", 403);
+    }
     const wp = createWaitpoint({
       flowRunId: body.flowRunId,
-      projectId: body.projectId ?? ctx.claims.projectId,
+      projectId: ctx.claims.projectId,
       stepName: body.stepName,
       type: normalizeType(body.type),
       version: body.version,
