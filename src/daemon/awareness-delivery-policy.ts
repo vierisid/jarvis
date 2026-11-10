@@ -133,6 +133,8 @@ export class AwarenessDeliveryPolicy {
           `Start your response with the fix, not a question.`,
           'awareness'
         ).then(solution => {
+          // Awareness turned off while the research ran (#1314): its result is screen-derived, so nothing is shown, sent or spoken.
+          if (!awarenessHistoryVisible()) return;
           if (solution && solution.length > 10) {
             // A turn that stopped on an approval request is not a fix yet.
             const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
@@ -198,6 +200,8 @@ export class AwarenessDeliveryPolicy {
           `Provide a specific, actionable fix. Start with the solution, not a question.`,
           'awareness'
         ).then(solution => {
+          // Awareness turned off while the research ran (#1314): its result is screen-derived, so nothing is shown, sent or spoken.
+          if (!awarenessHistoryVisible()) return;
           if (solution && solution.length > 10) {
             const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
             const heading = awaiting ? `Needs your approval (${sAppName})` : `Help for ${sAppName}`;

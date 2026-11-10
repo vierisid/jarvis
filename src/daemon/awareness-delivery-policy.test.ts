@@ -274,3 +274,23 @@ for (const accepted of [true, false]) test(`F11 review R2: injected desktop rece
   expect(result.receiptArgs).toEqual([`JARVIS: ${suggestion.title}`, suggestion.body, { urgency: 'critical', expireMs: 30000 }]);
   expect(result.result).toBe(accepted ? 'desktop' : null);
 });
+
+test('researched help that finishes after awareness is turned off is not shown, toasted or spoken (#1314)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  for (const type of ['error_detected', 'struggle_detected'] as const) {
+    const f = fixture('0');
+    const priorities: string[] = [];
+    let finish!: (text: string) => void;
+    f.deps.sockets = { ...f.deps.sockets, broadcastNotification: (_text: string, priority?: string) => { priorities.push(priority ?? 'normal'); } } as typeof f.deps.sockets;
+    f.deps.agent = () => ({ handleMessage: () => new Promise<string>(resolve => { finish = resolve; }), lastTurnRequestedApproval: () => false });
+    const policy = new AwarenessDeliveryPolicy(f.deps, '0');
+    policy.handleEvent({ type, data: { appName: 'Terminal', errorText: 'Synthetic screen error', appCategory: 'terminal', compositeScore: 0.9, ocrPreview: 'Synthetic screen content' }, timestamp: 1 });
+    expect(typeof finish).toBe('function');
+    const before = [...priorities], desktop = f.calls.desktop, voice = f.calls.voice;
+    try {
+      setScreenCaptureEnabledSource(() => false);
+      finish('A synthetic solution long enough to announce.'); await Bun.sleep(0); await Bun.sleep(0);
+      expect({ type, priorities, desktop: f.calls.desktop, voice: f.calls.voice }).toEqual({ type, priorities: before, desktop, voice });
+    } finally { setScreenCaptureEnabledSource(null); }
+  }
+});
