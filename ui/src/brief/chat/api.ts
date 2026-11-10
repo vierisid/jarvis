@@ -8,6 +8,7 @@ export class ChatApiError extends Error {
 export interface ConversationApi {
   capabilities(signal: AbortSignal): Promise<unknown>;
   tabs(signal: AbortSignal): Promise<ConversationTabs>;
+  closed?(cursor: string | null, signal: AbortSignal): Promise<BriefPage<BriefConversation>>;
   ensureActive?(signal: AbortSignal): Promise<BriefConversation>;
   create(signal: AbortSignal): Promise<BriefConversation>;
   tab(id: string, open: boolean, signal: AbortSignal): Promise<BriefConversation>;
@@ -38,6 +39,14 @@ export function conversationApi(fetcher: (input: string, init: RequestInit) => P
   return {
     capabilities: signal => request('/api/brief/capabilities', signal),
     tabs: async signal => tabs(await request(`${base}/tabs`, signal)),
+    closed: async (cursor, signal) => {
+      const page = await request(`${base}?closed=true&limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, signal);
+      if (!page || !(page.nextCursor === null || typeof page.nextCursor === 'string') || !Array.isArray(page.items)
+        || page.items.length > 50 || !page.items.every((row: unknown) => isConversation(row) && !row.tab.open)
+        || new Set(page.items.map((row: BriefConversation) => row.conversationId)).size !== page.items.length)
+        throw new Error('Invalid closed conversations response.');
+      return page;
+    },
     ensureActive: async signal => conversation(await request(base, signal, 'POST', { ensureActive: true })),
     create: async signal => conversation(await request(base, signal, 'POST', {})),
     tab: async (id, open, signal) => conversation(await request(`${base}/${encodeURIComponent(id)}/tab`, signal, 'PATCH', { open })),
