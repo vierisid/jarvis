@@ -167,6 +167,18 @@ function typedStepRefusal(node: FlowTriggerNode | undefined, message: string | u
   return { status: 'blocked', code, effect: 'not_started', message: text };
 }
 
+/** Older direct UI refusals were recorded as untyped 500s. Match the exact saved tool and known daemon refusal. */
+function unsupportedToolRefusal(node: FlowTriggerNode | undefined, message: string | undefined): ActionFailure | null {
+  if (!node || node.settings?.pieceName !== '@jarvispieces/piece-jarvis-tool'
+    || node.settings.actionName !== 'invoke' || !message) return null;
+  const tool = node.settings.input?.toolName;
+  if (typeof tool !== 'string' || !/^[a-z_]+$/.test(tool)) return null;
+  if (!message.includes('WORKFLOW_TOOL_UNSUPPORTED:')
+    && !message.includes(`Unsupported direct workflow capability: ${tool} has opaque code/UI effects`)) return null;
+  return { status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started',
+    message: 'This tool was not supported by the workflow execution path used by this run.' };
+}
+
 /** A step that makes no call outside Jarvis: its piece only works on data inside the run. */
 function makesNoOutsideCall(node: FlowTriggerNode): boolean {
   return node.type === 'PIECE' && IN_RUN_STEP_PIECES.has(node.settings?.pieceName ?? '');
@@ -216,7 +228,8 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   const delegated = checkpoint?.result?.outcome && checkpoint.versionDigest === digest(loadVersion()?.trigger)
     ? checkpoint.result.outcome : undefined;
   const node = graph.find(n => n.name === step.name);
-  const outcome = recorded ?? (delegated && delegated.status !== 'succeeded' ? delegated : null) ?? typedStepRefusal(node, step.errorMessage);
+  const outcome = recorded ?? (delegated && delegated.status !== 'succeeded' ? delegated : null) ?? typedStepRefusal(node, step.errorMessage)
+    ?? (own.length === 0 ? unsupportedToolRefusal(node, step.errorMessage) : null);
   let evidence: FailureEvidence;
   let sideEffects = true;
   const binding = !outcome && node ? credentialFailureFor(run, node) : null;

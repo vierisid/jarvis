@@ -43,7 +43,7 @@ describe('bounded tool classification', () => {
 
   test('opaque tools are refused but still audit under their real category', () => {
     for (const name of OPAQUE_TOOL_NAMES) {
-      expect(() => toolEffectCapability(tool(name))).toThrow(/opaque code\/UI effects/);
+      expect(() => toolEffectCapability(tool(name))).toThrow(/WORKFLOW_TOOL_UNSUPPORTED/);
       expect(refusedEffectCategory(tool(name))).toBe(TOOL_ACTION_MAP[name]!);
     }
   });
@@ -183,11 +183,17 @@ describe('a call that binds a live UI surface cannot be approved by the boundary
     }
   });
 
-  test('the toolsInvoke route stays closed for all of them, by its own means', () => {
+  test('direct UI actions require a supported live review guard', () => {
     for (const t of surfaceBound) {
-      expect(() => toolEffectCapability(t, {})).toThrow(
-        /Unsupported direct workflow capability|no declared Authority action/u,
-      );
+      // An actual guard enables only the explicit reviewed action set. Missing
+      // guards and opaque code/focused-window input still cannot dispatch.
+      if (['browser_navigate', 'browser_click', 'browser_type', 'browser_press_key', 'browser_hover', 'browser_scroll',
+        'desktop_launch_app', 'desktop_focus_window', 'desktop_click'].includes(t.name)
+        && typeof t.captureApprovalGuard === 'function') {
+        expect(toolEffectCapability(t, {}).category).not.toBe('read_data');
+      } else expect(() => toolEffectCapability(t, {})).toThrow(/WORKFLOW_TOOL_UNSUPPORTED|no declared Authority action/u);
+      expect(() => toolEffectCapability({ ...t, captureApprovalGuard: undefined }, {}))
+        .toThrow(/WORKFLOW_TOOL_UNSUPPORTED|no declared Authority action/u);
       // And the refusal is still a governance event with the tool's real
       // category, never a read.
       expect(refusedEffectCategory(t)).not.toBe('read_data');

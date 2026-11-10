@@ -158,8 +158,9 @@ describe('a tool no workflow can run', () => {
       outcome: { status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', message: 'Unsupported', effect: 'not_started' } })}`;
     const failure = runFailure(failedRun(piece('@jarvispieces/piece-jarvis-tool', 'invoke', 'Run a command'), body))!;
     expect(failure).toMatchObject({ category: 'invalid_input', effect: 'none', code: 'WORKFLOW_TOOL_UNSUPPORTED' });
-    expect(failure.headline).toContain('Jarvis workflows cannot use that tool');
-    expect(failure.next.map(n => n.step)).toEqual(['fix_step', 'open_details']);
+    // #1314 owns this code's wording: it did not run, and the step must change before running again.
+    expect(failure.headline).toContain('did not run: this action is not supported');
+    expect(failure.next.map(n => n.step)).not.toContain('run_again');
   });
 });
 
