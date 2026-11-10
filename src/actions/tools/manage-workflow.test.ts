@@ -513,6 +513,20 @@ describe("manage_workflow tool", () => {
 });
 
 describe("manage_workflow: compose (#1153 webhook secret floor)", () => {
+  test("an update may not set a short webhook secret even when another webhook in the project holds it, so a refusal answers no guess", async () => {
+    const created = (await call("create", { name: "probe", empty: true })) as { id: string };
+    const other = (await call("create", { name: "legacy", empty: true })) as { id: string };
+    const { getWorkflowDb } = await import("../../workflows/db/index.ts");
+    getWorkflowDb().run("UPDATE flow_version SET trigger = ? WHERE id = ?", [JSON.stringify({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: { secret: "s3cret" } } }), getLatestDraft(other.id)!.id]);
+    configureWorkflowReadiness({ pieces: new PieceCatalog(sampleCatalog().list()) });
+    const read = await call("get", { flow: created.id, view: "definition" }) as { content: string };
+    const draft = JSON.parse(read.content) as { id: string; revision: string };
+    for (const guess of ["s3cret", "wrong"]) {
+      await expect(call("update", { flow: created.id, version_id: draft.id, expected_revision: draft.revision,
+        patches: [{ op: "replace", path: "", value: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: { secret: guess } } } }] }))
+        .rejects.toThrow(/at least 32 characters/);
+    }
+  });
   test("a composed webhook secret under the floor is refused and leaves no empty workflow behind", async () => {
     const llm = new StubLlm(JSON.stringify({ displayName: "Hooked", trigger: { name: "trigger", type: "PIECE_TRIGGER",
       settings: { pieceName: "webhook", input: { secret: "short" } },

@@ -100,3 +100,16 @@ function withInput<T>(trigger: T, input: Record<string, unknown>): T {
   const node = trigger as unknown as FlowTriggerNode;
   return { ...node, settings: { ...node.settings, input } } as unknown as T;
 }
+
+/**
+ * For a write the assistant makes (#1153 review): a webhook secret it sets,
+ * other than the one already saved on this draft, meets the floor whatever
+ * else is stored. The save rules let a stored secret keep working below it
+ * (a copy, a rollback); offered to the assistant, that exemption would answer
+ * whether a short guess is some webhook's secret.
+ */
+export function assistantWebhookSecretRefusal(saved: unknown, next: unknown): string | null {
+  const secret = secretOf(webhookInput(next));
+  if (secret === null || secret === secretOf(webhookInput(saved)) || secret.length >= WEBHOOK_SECRET_MIN_LENGTH) return null;
+  return `Webhook signing secret must be at least ${WEBHOOK_SECRET_MIN_LENGTH} characters; generate a random one`;
+}

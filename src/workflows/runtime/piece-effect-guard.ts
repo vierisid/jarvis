@@ -385,6 +385,14 @@ export async function executeAuthorizedPiece(params: AuthorizePieceDispatchParam
   // Gmail 0.17 returns a Gaxios response, including transport configuration.
   // Keep its data envelope for expressions, but never persist request headers
   // (which can contain the OAuth bearer) as a completion receipt or step output.
+  // #1153: a failure an HTTP or GraphQL step continued past hands later steps
+  // `{ response, request: { body } }`, and the body holds whatever the step
+  // sent, its credentials included; a later step could carry them into run
+  // history or a model prompt. The flow keeps the response, not the body.
+  if ((params.piece === HTTP_PIECE || params.piece === GRAPHQL_PIECE) && raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+    const request = (raw as { request?: unknown }).request;
+    if (request !== null && typeof request === 'object' && !Array.isArray(request) && 'body' in request) raw = { ...(raw as object), request: { ...request, body: null } };
+  }
   const response = raw as { data?: unknown; status?: unknown; statusText?: unknown } | null;
   const result = tracksPieceCompletion(params.piece, params.action, params.input) && params.piece === '@activepieces/piece-gmail' && response?.data !== undefined
     ? { data: response.data, ...(typeof response.status === 'number' ? { status: response.status } : {}),

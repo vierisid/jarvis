@@ -611,7 +611,8 @@ describe("webhooks", () => {
     expect((await post(d, flowId, body, await at(String(now + WEBHOOK_TIMESTAMP_TOLERANCE_S - 2)))).status).toBe(200);
     // On a legacy webhook, a captured timestamped request re-sent as a body-only one (`<ts>.<body>` as the body) is refused.
     const captured = await timestamped("s3cret", body);
-    expect((await post(d, legacy.flowId, `${captured["X-Jarvis-Timestamp"]}.${body}`, { "X-Jarvis-Signature": captured["X-Jarvis-Signature"]! })).status).toBe(401);
+    // Refused as a bad request (400), which draws nothing from the bad-signature budget.
+    expect((await post(d, legacy.flowId, `${captured["X-Jarvis-Timestamp"]}.${body}`, { "X-Jarvis-Signature": captured["X-Jarvis-Signature"]! })).status).toBe(400);
     expect(runsOf(legacy.flowId)).toHaveLength(0);
     // The repeat window a timestamped signature gets is the one that covers its tolerance.
     expect(webhookDelivery(new Headers(), {}, "ab", true).windowMs).toBe(TIMESTAMPED_REPEAT_WINDOW_MS);

@@ -21,17 +21,18 @@ const input = () => ({
 const step = (name: string, extra: Record<string, unknown> = {}): FlowTriggerNode => ({ name, type: 'PIECE',
   settings: { pieceName: HTTP, actionName: 'send_request', input: input(), ...extra } } as FlowTriggerNode);
 const graph = (...steps: FlowTriggerNode[]): FlowTriggerNode => {
+  steps = steps.map((x) => structuredClone(x));
   const root: FlowTriggerNode = { name: 'trigger', type: 'EMPTY', settings: {} } as FlowTriggerNode;
   let at = root;
   for (const s of steps) { at.nextAction = s; at = s; }
   return root;
 };
 const shows = (value: unknown) => SECRETS.filter((secret) => JSON.stringify(value).includes(secret));
-/** A JSON-patch edit: applied to the saved draft, so what it leaves untouched keeps its stored value. */
+/** An edit as the update path makes it: applied to the draft as the model reads it, then the stored credentials put back. */
 const edit = (saved: FlowTriggerNode, change: (g: FlowTriggerNode) => void) => {
-  const g = structuredClone(saved);
+  const g = versionAsModelSees({ trigger: saved }).trigger as FlowTriggerNode;
   change(g);
-  return credentialEditRefusal(saved, restoreRedactedCredentials(saved, g));
+  return credentialEditRefusal(saved, g, restoreRedactedCredentials(saved, g));
 };
 
 describe('what the model reads', () => {
@@ -52,6 +53,20 @@ describe('what the model reads', () => {
     const recorded = { call_old: { output: { type: 'PIECE', status: 'SUCCEEDED', input: input(), output: {} } } };
     expect(shows(redactRunSteps(recorded, graph(step('call_new'))))).toEqual([]);
     expect(shows(versionAsModelSees({ trigger: graph(step('call_new')), sampleData: { call_old: recorded.call_old.output } }))).toEqual([]);
+  });
+
+  test('#1153 review: a form-data body a failed request echoes is hidden whole', () => {
+    const echoed = JSON.stringify({ response: { status: 401 }, request: { body: { _boundary: 'b', _streams: ['name=\"password\"\r\n\r\n', 'hunter2-SECRET', null] } } });
+    expect(redactFailedStepMessage('call', echoed, graph(step('call')))).not.toContain('hunter2-SECRET');
+    const out = redactRunSteps({ call: { output: { type: 'PIECE', status: 'SUCCEEDED', input: input(), output: JSON.parse(echoed) } } }, graph(step('call')));
+    expect(JSON.stringify(out)).not.toContain('hunter2-SECRET');
+  });
+
+  test('#1153 review: a value is a scheme credential only as a scheme and one token, not as prose', () => {
+    const g = graph(step('call', { input: { ...input(), body_type: 'json', body: { data: { note: 'Basic plan upgrade', other: 'SSWS 00abcdefghij' } } } }));
+    const seen = JSON.stringify(versionAsModelSees({ trigger: g }));
+    expect(seen).toContain('Basic plan upgrade');
+    expect(seen).not.toContain('00abcdefghij');
   });
 
   test('a failed request echoes the body it sent: redacted in the output, the step error and the run failure', () => {
@@ -89,16 +104,16 @@ describe('a draft edit (credentialEditRefusal after restore)', () => {
     (g.nextAction!.settings!.input!.headers as Record<string, string>).Accept = 'text/plain';
     (g.nextAction!.settings!.input as Record<string, unknown>).url = 'https://api.example.com/y?api_key=[redacted]';
     // A changed URL holding the marker is refused; the same URL is restored.
-    expect(credentialEditRefusal(saved, restoreRedactedCredentials(saved, g))).toMatch(/would store \[redacted\]/);
+    expect(credentialEditRefusal(saved, g, restoreRedactedCredentials(saved, g))).toMatch(/would store \[redacted\]/);
     (g.nextAction!.settings!.input as Record<string, unknown>).url = 'https://api.example.com/x?api_key=[redacted]';
     const restored = restoreRedactedCredentials(saved, g);
-    expect(credentialEditRefusal(saved, restored)).toBeNull();
+    expect(credentialEditRefusal(saved, g, restored)).toBeNull();
     expect(restored.nextAction!.settings!.input).toEqual({ ...input(), headers: { Authorization: 'Bearer t0ken-in-header', Accept: 'text/plain' } });
   });
 
-  test('changing the piece would show the stored input: refused', () => {
+  test('changing the piece while keeping the credential fields: refused, since nothing can put them back', () => {
     expect(edit(saved, (g) => { g.nextAction!.settings!.pieceName = 'jarvis-notify'; g.nextAction!.settings!.actionName = 'notify'; }))
-      .toMatch(/would show a stored credential/);
+      .toMatch(/would store \[redacted\]/);
   });
 
   test('changing the action to parse_url would show the URL in its output: refused', () => {
@@ -111,10 +126,28 @@ describe('a draft edit (credentialEditRefusal after restore)', () => {
   });
 
   test('pointing a step that keeps its credentials at another host: refused; the same host on another path is allowed', () => {
-    expect(edit(saved, (g) => { g.nextAction!.settings!.input!.url = 'https://attacker.example/x'; })).toMatch(/to another host/);
+    expect(edit(saved, (g) => { g.nextAction!.settings!.input!.url = 'https://attacker.example/x'; })).toMatch(/to another address/);
+    // #1153 review: the scheme counts, and a URL filled in at run time may not change at all.
+    expect(edit(saved, (g) => { g.nextAction!.settings!.input!.url = 'http://api.example.com/x?api_key=[redacted]'; })).not.toBeNull();
+    expect(edit(saved, (g) => { g.nextAction!.settings!.input!.url = '{{trigger.body.callback}}'; })).toMatch(/to another address/);
+    const templated = graph(step('call', { input: { ...input(), url: '{{step_1.base}}/me' } }));
+    expect(edit(templated, (g) => { g.nextAction!.settings!.input!.url = '{{trigger.body.callback}}'; })).toMatch(/to another address/);
+    expect(edit(templated, (g) => { g.nextAction!.settings!.input!.method = 'PUT'; })).toBeNull();
     expect(edit(saved, (g) => { g.nextAction!.settings!.input!.url = 'https://api.example.com/other?api_key=[redacted]'; }))
       .toMatch(/would store \[redacted\]/);
     expect(edit(saved, (g) => { g.nextAction!.settings!.input!.method = 'PUT'; })).toBeNull();
+  });
+
+  test('#1153 review: text the model writes itself is never judged, so a refusal cannot confirm a guessed credential', () => {
+    const two = graph(step('call'), { name: 'note', type: 'PIECE', settings: { pieceName: 'jarvis-notify', actionName: 'notify', input: { message: 'hi' } } } as FlowTriggerNode);
+    for (const guess of ['wrong-guess', 'pa55-in-auth', 'Basic pa55-in-auth']) {
+      expect(edit(two, (g) => { g.nextAction!.nextAction!.settings!.input!.message = guess; })).toBeNull();
+    }
+  });
+
+  test('#1153 review: a step left as saved is not judged, so an existing parse_url step does not block other edits', () => {
+    const withParse = graph(step('parse', { actionName: 'parse_url', input: { url: 'https://api.example.com/x?api_key=k3y-in-url' } }), step('call'));
+    expect(edit(withParse, (g) => { g.nextAction!.nextAction!.settings!.input!.method = 'PUT'; })).toBeNull();
   });
 
   test('replacing the step with one that holds none of the credentials is allowed', () => {

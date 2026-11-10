@@ -2,6 +2,7 @@ import { draftRevision, updateSavedDraft } from './workflow-draft-update';
 import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards';
 import { decideRunRecovery, getRunRecovery } from '../../workflows/runtime/recovery';
 import { getWorkflowDb } from '../../workflows/db';
+import { assistantWebhookSecretRefusal } from '../../workflows/runner/triggers/webhook-secret';
 import { redactFailedStepMessage, redactRunSteps, versionAsModelSees } from '../../workflows/runtime/step-credentials';
 import { resolveOnboardingOutcome } from '../../workflows/runtime/onboarding-service';
 import { onboardingResource } from '../../workflows/runtime/customer-onboarding';
@@ -1514,6 +1515,9 @@ async function actCompose(
   // One transaction: a draft the save rules refuse (a webhook secret under
   // the floor, #1153) leaves no empty flow behind.
   const flowName = result.flow.displayName.trim() || name;
+  // A secret the composer wrote meets the floor however the store would treat it (#1153).
+  const secretRefusal = assistantWebhookSecretRefusal(null, result.flow.trigger);
+  if (secretRefusal) throw new Error(secretRefusal);
   const { flow, version } = getWorkflowDb().transaction(() => {
     const flow = createFlow({ projectId: project, metadata: { compositionRecordId: result.compositionRecordId } });
     return { flow, version: createDraftVersion({ flowId: flow.id, displayName: flowName, trigger: result.flow.trigger }) };

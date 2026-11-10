@@ -939,8 +939,8 @@ function redactValue(value: string): string {
 }
 
 /** Credential-named fields, at any depth `bound()` keeps, inside objects and arrays. */
-/** A value that names its own scheme: `Bearer x`, `Basic x`, `Token x`, under whatever name it is stored. */
-const SCHEMED_CREDENTIAL = /^\s*(?:bearer|basic|token|digest)\s+\S/iu;
+/** A value that is a scheme and one token (`Bearer x`, `Basic x`, `SSWS x`), under whatever name it is stored; not prose such as "Basic plan upgrade". */
+const SCHEMED_CREDENTIAL = /^\s*(?:bearer|basic|token|digest|apikey|api-key|ssws|oauth|key)\s+[A-Za-z0-9._~+/=:-]{8,}\s*$/iu;
 
 function redactNamed(value: unknown, depth = 0): unknown {
   // Past any depth `bound()` keeps; a stored input (#1153) can go deeper, and

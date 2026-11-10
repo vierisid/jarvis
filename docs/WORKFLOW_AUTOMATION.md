@@ -661,7 +661,8 @@ HTTP request specifics:
   `Set-Cookie`, redacts token-named fields and headers at any depth
   (`access_token`, `refresh_token`, `client_secret`, `X-Auth-Token`, ...; not
   `key` or `token_type`) and keeps no request body from a failure the step
-  continued past. A redacted receipt carries `receiptRedacted: true`. The step
+  continued past, and neither does the output later steps read (#1153). A
+  redacted receipt carries `receiptRedacted: true`. The step
   itself still hands the flow the whole response; only a replay of a recorded
   step reads the receipt.
 - **Size.** A response (and an engine file download) is read up to 7.3 MiB,
@@ -759,9 +760,12 @@ Webhooks whose secret was saved before #1153 are LEGACY (no
 `signature_scheme: "timestamped"` in the trigger input): they keep accepting
 the old signature over the raw body alone, which a captured request can
 replay after the 10-minute repeat window, and they also accept a timestamped
-request, so senders can move first. A legacy webhook refuses a body-only
-request whose body starts with `<digits>.`, the shape a captured timestamped
-request would take if re-sent without its header. The editor marks such a webhook as legacy
+request, so senders can move first. A legacy webhook answers 400 to a
+body-only request whose body starts with `<digits>.`, the shape a captured
+timestamped request would take if re-sent without its header. A secret the
+assistant sets (`manage_workflow` update or compose) always meets the
+32-character floor, so a refusal never tells it whether a short guess is
+another webhook's stored secret. The editor marks such a webhook as legacy
 and offers "Require timestamps", which sets the scheme; a webhook never goes
 back to legacy while it keeps its secret, and setting a new secret makes it
 timestamped. Short legacy secrets keep working until they are changed.

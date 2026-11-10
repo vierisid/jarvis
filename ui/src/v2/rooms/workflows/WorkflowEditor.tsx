@@ -4443,7 +4443,7 @@ export const WEBHOOK_SECRET_HINT =
 
 /** #1153: a secret saved before timestamps also accepts a body-only signature, which a captured request can replay. */
 export const WEBHOOK_LEGACY_SIGNING_NOTE =
-  "Legacy signing: this webhook also accepts an X-Jarvis-Signature over the raw body alone, with no timestamp, so a captured request can be sent again later. Senders that already send X-Jarvis-Timestamp work either way; require timestamps once all of them do. Requiring them applies to the live webhook when this version is published.";
+  "Legacy signing: this webhook also accepts an X-Jarvis-Signature over the raw body alone, with no timestamp, so a captured request can be sent again later. Senders that already send X-Jarvis-Timestamp work either way; require timestamps once all of them do. Requiring them applies to the live webhook once the version that runs it includes the change.";
 
 export function WebhookTriggerFields({ secret, onSetSecret, scheme, onRequireTimestamps }: {
   secret: unknown;

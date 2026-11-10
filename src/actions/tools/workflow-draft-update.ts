@@ -6,6 +6,7 @@ import { workflowRemovalState } from '../../workflows/db/repos/workflow-removal-
 import { compileWorkflow, type ReadinessContext } from '../../workflows/runtime/workflow-readiness';
 import { CODE_STEP_TYPE, walkFlowNodes } from '../../workflows/db/flow-graph';
 import { credentialEditRefusal, restoreRedactedCredentials, versionAsModelSees } from '../../workflows/runtime/step-credentials';
+import { assistantWebhookSecretRefusal } from '../../workflows/runner/triggers/webhook-secret';
 
 /** Covers the persisted authoring snapshot, not a recomputed readiness report. */
 export function draftRevision(version: FlowVersion): string {
@@ -97,8 +98,12 @@ export function updateSavedDraft(input: {
     // The model reads credential-taking steps redacted (`versionForModel`):
     // a value it wrote back unchanged keeps the stored credential, and an edit
     // that would store the marker in its place is refused (#1153).
-    const graph = restoreRedactedCredentials(version.trigger, patchDraftGraph(version.trigger, input.patches));
-    const refusal = credentialEditRefusal(version.trigger, graph);
+    // Applied to the draft as the model reads it, so only what it wrote and
+    // the markers it read are in it; the stored credentials are then put back
+    // where it left their markers, and what that put back is judged (#1153).
+    const written = patchDraftGraph(versionAsModelSees(version).trigger, input.patches);
+    const graph = restoreRedactedCredentials(version.trigger, written);
+    const refusal = credentialEditRefusal(version.trigger, written, graph) ?? assistantWebhookSecretRefusal(version.trigger, graph);
     if (refusal) fail(refusal);
     assertNoAssistantCode(version.trigger, graph);
     const validation = compileWorkflow(graph, { ...input.context, phase: 'composition' });

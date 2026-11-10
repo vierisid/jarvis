@@ -76,6 +76,16 @@ function redactorFor(name: string, input: unknown, redactors: Redactors): Redact
 }
 
 /**
+ * A request body a failed request echoes: a form-data body (serialized as the
+ * `form-data` stream, field values under `_streams`) hidden whole, since its
+ * values carry no names a redactor can read; any other by its field names.
+ */
+function redactRequestBody(body: unknown): unknown {
+  if (object(body) && ('_streams' in body || '_boundary' in body)) return REDACTED;
+  return redactCredentials(body);
+}
+
+/**
  * The text a failed request leaves (`HttpError`: its message is the JSON of
  * `{ response, request: { body } }`): the request body's credential fields
  * redacted, parsed when it parses, as text otherwise.
@@ -84,7 +94,7 @@ function redactErrorText(text: string): string {
   try {
     const parsed = JSON.parse(text) as unknown;
     if (object(parsed) && object(parsed.request) && 'body' in parsed.request) {
-      return JSON.stringify({ ...parsed, request: { ...parsed.request, body: redactCredentials(parsed.request.body) } });
+      return JSON.stringify({ ...parsed, request: { ...parsed.request, body: redactRequestBody(parsed.request.body) } });
     }
   } catch { /* not JSON: redact as text */ }
   return redactCredentials(text) as string;
@@ -100,7 +110,7 @@ function redactStepOutput(name: string, step: Record<string, unknown>, redactors
     // and a failure it stopped on keeps the same as its error message.
     const output = step.output;
     if (object(output) && object(output.request) && 'body' in output.request) {
-      out = { ...out, output: { ...output, request: { ...output.request, body: redactCredentials(output.request.body) } } };
+      out = { ...out, output: { ...output, request: { ...output.request, body: redactRequestBody(output.request.body) } } };
     }
     if (typeof step.errorMessage === 'string') out = { ...out, errorMessage: redactErrorText(step.errorMessage) };
   }
@@ -214,8 +224,13 @@ function restoreValue(edited: unknown, saved: unknown, shown: unknown, depth: nu
 export function restoreRedactedCredentials(saved: FlowTriggerNode, edited: FlowTriggerNode): FlowTriggerNode {
   const before = new Map<string, FlowTriggerNode>();
   for (const node of walkFlowNodes(saved)) if (credentialRedactor(node.settings?.pieceName)) before.set(node.name, node);
-  if (before.size === 0) return edited;
   const graph = structuredClone(edited);
+  // The Webhook trigger's secret, which the model reads as the marker.
+  const secret = saved.settings?.pieceName === 'webhook' ? saved.settings.input?.secret : undefined;
+  if (typeof secret === 'string' && secret !== '' && graph.settings?.pieceName === 'webhook' && graph.settings.input?.secret === REDACTED) {
+    graph.settings.input = { ...graph.settings.input, secret };
+  }
+  if (before.size === 0) return graph;
   for (const node of walkFlowNodes(graph)) {
     const redact = credentialRedactor(node.settings?.pieceName);
     const prior = before.get(node.name);
@@ -270,10 +285,6 @@ function storedCredentials(saved: FlowTriggerNode): Map<string, Set<string>> {
   return out;
 }
 
-const urlHost = (url: unknown): string | null => {
-  if (typeof url !== 'string') return null;
-  try { return new URL(url.trim()).host.toLowerCase(); } catch { return null; }
-};
 
 /** A node without its subgraph links, with its input as the model would see it. */
 function visibleNode(node: FlowTriggerNode): string {
@@ -286,41 +297,61 @@ function visibleNode(node: FlowTriggerNode): string {
 
 const markers = (value: unknown): number => (JSON.stringify(value ?? null).match(/\[redacted\]/gu) ?? []).length;
 
+/** A node without its subgraph links, as JSON. */
+const nodeText = (node: FlowTriggerNode | undefined): string => {
+  if (!node) return '';
+  const { nextAction: _n, children: _c, firstLoopAction: _l, ...rest } = node as FlowTriggerNode & { firstLoopAction?: unknown; children?: unknown };
+  return JSON.stringify(rest);
+};
+
+const urlParts = (url: unknown): { origin: string | null; text: unknown } => {
+  if (typeof url !== 'string') return { origin: null, text: url };
+  try { const u = new URL(url.trim()); return { origin: `${u.protocol}//${u.host.toLowerCase()}`, text: url }; } catch { return { origin: null, text: url }; }
+};
+
 /**
- * Why a draft edit may not be saved, or null (#1153). The model reads
- * credential-taking steps redacted, and its edit is checked against the saved
- * draft's stored credentials:
- *   - none may end up where the model would see it: in a step that no longer
- *     takes credentials (its piece changed), in a parse_url step (its output
- *     shows the URL), or in a field redaction no longer covers (a form field
- *     renamed away from a credential name);
- *   - a step still holding one may not be pointed at another host, which would
- *     send a credential set up for one service to another;
- *   - no step may keep the marker where the saved draft held a credential
- *     (an edit that kept `[redacted]` inside a changed URL or header value),
- *     which would replace the credential with the marker.
- * Credentials shorter than four characters are matched only in the step that
- * held them, since a short string recurs by chance anywhere else.
+ * Why a draft edit may not be saved, or null (#1153). The model's patches are
+ * applied to the draft as it reads it (`versionAsModelSees`), so `written`
+ * holds only what it wrote and the markers it read; `restored` is that with
+ * the stored credentials put back (`restoreRedactedCredentials`). Only what
+ * the restore put back is judged, never text the model wrote itself, so a
+ * refusal cannot tell the model whether a guess of its own is a stored
+ * credential. A step left exactly as saved is not judged at all.
+ *   - A credential the restore put back may not end up where the model would
+ *     see it: a field redaction no longer covers (a form field renamed away
+ *     from a credential name), or a parse_url step, whose output shows its URL.
+ *   - A step holding a restored credential may not change the scheme or host
+ *     its request goes to, and a URL with no readable host (filled in at run
+ *     time) may not change at all: a credential set up for one service is not
+ *     sent to another.
+ *   - No step may keep a marker the restore could not put back (in a changed
+ *     URL or header value, or after the piece changed), which would store the
+ *     marker in place of the credential.
  */
-export function credentialEditRefusal(saved: FlowTriggerNode, edited: FlowTriggerNode): string | null {
+export function credentialEditRefusal(saved: FlowTriggerNode, written: FlowTriggerNode, restored: FlowTriggerNode): string | null {
   const stored = storedCredentials(saved);
+  const json = (secret: string) => JSON.stringify(secret).slice(1, -1);
   const savedByName = new Map<string, FlowTriggerNode>();
   for (const node of walkFlowNodes(saved)) savedByName.set(node.name, node);
-  // Matched as they appear inside JSON text.
-  const json = (secret: string) => JSON.stringify(secret).slice(1, -1);
+  const writtenByName = new Map<string, FlowTriggerNode>();
+  for (const node of walkFlowNodes(written)) writtenByName.set(node.name, node);
   const all = [...stored.values()].flatMap((parts) => [...parts]);
-  for (const node of walkFlowNodes(edited)) {
-    const own = stored.get(node.name) ?? new Set<string>();
-    const visible = visibleNode(node);
-    if (all.some((secret) => (secret.length >= 4 || own.has(secret)) && visible.includes(json(secret)))) {
-      return `step "${node.name}" would show a stored credential the assistant may not see; leave its piece, action and credential fields unchanged, or ask the user to make this change in the workflow editor`;
-    }
-    const input = JSON.stringify(node.settings?.input ?? null);
+  for (const node of walkFlowNodes(restored)) {
     const prior = savedByName.get(node.name);
-    if ([...own].some((secret) => input.includes(json(secret))) && urlHost(node.settings?.input?.url) !== urlHost(prior?.settings?.input?.url)) {
-      return `step "${node.name}" would send its stored credentials to another host; ask the user to change the address in the workflow editor`;
+    if (prior && nodeText(prior) === nodeText(node)) continue;
+    const mine = writtenByName.get(node.name);
+    const visible = visibleNode(node), wrote = mine ? visibleNode(mine) : '';
+    if (all.some((secret) => visible.includes(json(secret)) && !wrote.includes(json(secret)))) {
+      return `step "${node.name}" would show a stored credential the assistant may not see; leave its credential fields as they are, or ask the user to make this change in the workflow editor`;
     }
-    if (credentialRedactor(node.settings?.pieceName) && markers(node.settings?.input) > markers(prior?.settings?.input)) {
+    const input = JSON.stringify(node.settings?.input ?? null), wroteInput = JSON.stringify(mine?.settings?.input ?? null);
+    if (all.some((secret) => input.includes(json(secret)) && !wroteInput.includes(json(secret)))) {
+      const now = urlParts(node.settings?.input?.url), before = urlParts(prior?.settings?.input?.url);
+      if (now.origin === null || before.origin === null ? now.text !== before.text : now.origin !== before.origin) {
+        return `step "${node.name}" would send its stored credentials to another address; ask the user to change the address in the workflow editor`;
+      }
+    }
+    if (markers(node.settings?.input) > markers(prior?.settings?.input)) {
       return `step "${node.name}" would store ${REDACTED} in place of a credential the assistant cannot see; keep that value unchanged, or ask the user to edit it in the workflow editor`;
     }
   }
