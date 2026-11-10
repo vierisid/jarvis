@@ -718,7 +718,8 @@ export type ApprovalToast = {
  * (`toastLookAlike`, #812), shown whole with that reason in the meta.
  *
  * Above the budget the toast is review-only: no Approve, no Deny, an "Open
- * Jarvis" action, the body cut here with a visible `...`, and its own kind,
+ * Jarvis" action, the body cut here (with a visible `...` when anything was
+ * cut: a body can wrap past the lines yet fit the columns), and its own kind,
  * `approval_review`. The kind matters, not just the action list: the macOS
  * sidecar takes a notification's buttons from a category registered per kind,
  * and the `approval` category always has Approve and Deny, whatever actions
