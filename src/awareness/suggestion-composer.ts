@@ -103,7 +103,8 @@ export class SuggestionComposer {
   async idle(): Promise<void> { await this.pending; }
 
   private async drain(): Promise<void> {
-    while (this.running) {
+    // Re-read each job (#1314 review): awareness turned off mid-drain holds the rest of the queue.
+    while (this.running && awarenessHistoryVisible()) {
       // Recovery consumes no model allowance. A lease surviving a restart must
       // still become retryable when it expires during a resource pause.
       recoverExpiredCompositions();

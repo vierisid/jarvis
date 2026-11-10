@@ -424,3 +424,23 @@ test('preparation waits for the shared background admission and never inherits a
 test('the dry runner is never started without the verified bundle digest', async () => {
   expect(await loadPreparedQualityGate({ authority: null, tool: () => null, targets: () => [] }, join(dir, 'engine.js'))).toBeNull();
 });
+
+test('nothing is prepared while awareness is off, a drain stops at the next job when it turns off, and it resumes when on (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  let on = false, calls = 0;
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    const a = source('a'), b = source('b');
+    const p = provider({ async chat() { calls++; on = false; return { text: JSON.stringify(graph()) }; } });
+    p.kick(); await p.idle();
+    expect(calls).toBe(0);
+    expect(getDb().query('SELECT id FROM prepared_opportunities').all()).toHaveLength(0);
+    // On: the first job composes and turns awareness off; the second stays queued, with no attempt spent.
+    on = true; p.kick(); await p.idle();
+    expect(calls).toBe(1);
+    const states = (getDb().query('SELECT state FROM prepared_opportunities ORDER BY created_at').all() as Array<{ state: string }>).map(r => r.state);
+    expect(states.filter(s => s === 'queued')).toHaveLength(1);
+    expect(getDb().query('SELECT id FROM prepared_opportunity_attempts').all()).toHaveLength(1);
+    void a; void b;
+  } finally { setScreenCaptureEnabledSource(null); }
+});

@@ -292,7 +292,8 @@ export class PreparedOpportunities {
       WHERE NOT EXISTS (SELECT 1 FROM prepared_opportunities p WHERE p.opportunity_id = h.suggestion_id)
       ORDER BY h.created_at, h.suggestion_id LIMIT 10`).all();
     for (const source of sources) { try { this.ensure(source.suggestion_id); } catch (e) { if (!(e instanceof PreparedRequestError)) throw e; } }
-    while (this.readiness() === 'ready' && this.admission()) {
+    // Re-read before each job (#1314 review): awareness turned off mid-drain holds the rest, queued and unspent.
+    while (awarenessHistoryVisible() && this.readiness() === 'ready' && this.admission()) {
       const job = this.claim(); if (!job) return;
       const active = { job, abort: new AbortController() }; this.active = active;
       const timer = setTimeout(() => active.abort.abort(), this.timeoutMs);

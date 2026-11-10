@@ -296,3 +296,21 @@ test('routine discovery pages canonical proposals and decisions without a notifi
   expect(all.find(row => row.opportunityId === old.id).status).toBe('dismissed');
   expect((await list(-1)).status).toBe(400);
 });
+
+test('a composer drain stops at the next job when awareness turns off, and the rest stays queued (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  let on = true, calls = 0;
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    acceptSuggestion(proposal().id, acceptance);
+    const other = createSuggestion({ type: 'automation', title: 'Review receipts', body: 'Receipt review repeats.',
+      triggerCaptureId: 'capture-other', context: { opportunity: { patternKey: 'job-v1:receipt_review',
+        evidence: [{ captureId: 'observed-2', observedAt: 100, app: 'Mail', cue: 'receipt' }], goalCandidates: [] } } });
+    acceptSuggestion(other.id, { ...acceptance, requestId: 'accept-2', name: 'Receipt check' });
+    worker = new SuggestionComposer(async () => { calls++; on = false; return result; });
+    worker.start(); await worker.idle();
+    expect(calls).toBe(1);
+    on = true;
+    expect(claimSuggestionComposition()).not.toBeNull();
+  } finally { setScreenCaptureEnabledSource(null); }
+});
