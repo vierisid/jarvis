@@ -86,3 +86,40 @@ describe("CronScheduler occurrences", () => {
     expect(missed).toEqual([{ at: at("2026-10-07T09:00:00Z"), key: "2026-10-07T09:00", lateMs: 150_000 }]);
   });
 });
+
+describe("CronScheduler tick cadence", () => {
+  // Runs the scheduler's real interval on a simulated clock: whatever period it
+  // asked setInterval for is the period the clock advances by.
+  function simulate(expression: string, startIso: string, endIso: string, startOffsetMs = 0) {
+    let clock = at(startIso) + startOffsetMs;
+    const realSetInterval = globalThis.setInterval;
+    let periodMs = 0;
+    let beat: (() => void) | null = null;
+    (globalThis as any).setInterval = (fn: () => void, ms: number) => { periodMs = ms; beat = fn; return 0 as any; };
+    const fired: CronOccurrence[] = [];
+    try {
+      scheduler = new CronScheduler(() => clock);
+      scheduler.schedule("j", expression, (o) => fired.push(o));
+    } finally { globalThis.setInterval = realSetInterval; }
+    for (const end = at(endIso); clock < end; clock += periodMs) beat!();
+    return { fired, periodMs };
+  }
+
+  test("a time starts within two seconds of its minute whatever the registration offset", () => {
+    setCronTimezone("UTC");
+    for (const offset of [0, 7_000, 25_000, 29_000]) {
+      const { fired } = simulate("0 9 * * *", "2026-10-07T08:59:00Z", "2026-10-07T09:01:00Z", offset);
+      expect(fired.map(o => o.key)).toEqual(["2026-10-07T09:00"]);
+      expect(fired[0]!.lateMs).toBeLessThanOrEqual(2_000);
+    }
+  });
+
+  test("consecutive minute fires do not drift", () => {
+    setCronTimezone("UTC");
+    const { fired } = simulate("*/1 * * * *", "2026-10-07T08:59:00Z", "2026-10-07T09:20:00Z", 17_000);
+    // The first is the registration minute, run on registration by design.
+    const after = fired.slice(1);
+    expect(after.length).toBeGreaterThanOrEqual(20);
+    expect(Math.max(...after.map(o => o.lateMs))).toBeLessThanOrEqual(2_000);
+  });
+});

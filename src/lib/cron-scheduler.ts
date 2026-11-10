@@ -64,6 +64,13 @@ export type CronScheduleOptions = {
   dueAfter?: number;
 };
 
+/**
+ * How often a cron job checks whether a minute has come due. A tick costs one
+ * integer compare unless the minute changed, so a time fires within this long
+ * of its minute, not within a coarse poll's worth of it.
+ */
+export const CRON_TICK_MS = 1_000;
+
 /** A tick this late after its minute still fires; later than this, the occurrence was missed. */
 export const CRON_GRACE_MS = 2 * 60_000;
 /** Missed occurrences are looked for this far back. */
@@ -588,7 +595,7 @@ export class CronScheduler {
 
   /**
    * Schedule a recurring callback based on a cron expression.
-   * Uses setInterval to check every 30 seconds which occurrences have come due.
+   * Uses setInterval to check every `CRON_TICK_MS` which occurrences have come due.
    *
    * Each occurrence fires once: a tick up to `CRON_GRACE_MS` late still fires
    * it (with its lateness); older ones are reported to `onMissed` and never
@@ -723,7 +730,7 @@ export class CronScheduler {
       if (job && (due.length || job.nextRun <= nowMs)) job.nextRun = CronScheduler.nextRun(expression, new Date(nowMs), undefined, zone, dstPolicy)?.getTime() ?? nowMs;
     };
 
-    const handle = setInterval(() => tick(this.now()), 30_000);
+    const handle = setInterval(() => tick(this.now()), CRON_TICK_MS);
 
     this.jobs.set(id, {
       id,
