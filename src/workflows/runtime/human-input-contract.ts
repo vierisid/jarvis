@@ -12,7 +12,16 @@ export const HUMAN_INPUT_LIMIT_CODE = 'HUMAN_INPUT_LIMIT';
  * answered in Needs you, the Brief decisions feature, and it is off (#1266).
  */
 export const HUMAN_INPUT_UNAVAILABLE_CODE = 'HUMAN_INPUT_UNAVAILABLE';
-export const HUMAN_INPUT_UNAVAILABLE_MESSAGE = 'Needs you is off on this Jarvis, so nothing could answer this request. Turn on decisions (JARVIS_BRIEF_DECISIONS=1) to let workflows ask for input or approval.';
+/**
+ * Why nothing could answer, for the dashboard this Jarvis uses. Requests are
+ * answered only in Brief, so under JARVIS_DASHBOARD=legacy turning decisions on
+ * alone would leave them waiting where the person cannot see them.
+ */
+export function humanInputUnavailableMessage(dashboard: 'brief' | 'legacy'): string {
+  return dashboard === 'legacy'
+    ? 'Needs you is off on this Jarvis, so nothing could answer this request. Requests for input or approval are answered only in Brief, and this Jarvis uses the previous dashboard (JARVIS_DASHBOARD=legacy). Switch to Brief (unset JARVIS_DASHBOARD) to let workflows ask for input or approval.'
+    : 'Needs you is off on this Jarvis, so nothing could answer this request. Turn on decisions (JARVIS_BRIEF_DECISIONS=1) to let workflows ask for input or approval.';
+}
 /** A step that asks a person: the input piece's two actions, and the legacy approval piece's. */
 export function isHumanInputStep(piece: unknown, action: unknown): boolean {
   return (piece === HUMAN_INPUT_PIECE && (action === 'request_input' || action === 'request_approval'))

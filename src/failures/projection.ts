@@ -136,7 +136,9 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   // #1266: a workflow may have so many requests waiting in Needs you; this one would have been the next.
   HUMAN_INPUT_LIMIT: { category: 'not_started', why: `this workflow already has ${HUMAN_INPUT_PENDING_LIMIT} requests waiting for an answer in Needs you. Answer, reject or cancel some of them there, or stop runs waiting on them, first`, step: 'run_again' },
   // #1266: requests are answered in Needs you, the Brief decisions feature, and it is off here.
-  HUMAN_INPUT_UNAVAILABLE: { category: 'missing_binding', why: 'Needs you is off on this Jarvis, so nothing could answer it. Turn on decisions (JARVIS_BRIEF_DECISIONS=1)', step: 'run_again' },
+  // Brief is the only place they are answered, so under JARVIS_DASHBOARD=legacy the flag alone is not enough;
+  // the run's detail names the one that applies here.
+  HUMAN_INPUT_UNAVAILABLE: { category: 'missing_binding', why: 'Needs you is off on this Jarvis, so nothing could answer it. Requests are answered only in Brief: use the Brief dashboard (not JARVIS_DASHBOARD=legacy) with decisions on (JARVIS_BRIEF_DECISIONS=1)', step: 'run_again' },
 };
 /** Action codes whose meaning is invalid input or an invalid definition. */
 const INPUT_CODES = new Set(['DESKTOP_INVALID_KEYS', 'SKILL_BAD_PARAMS', 'SKILL_INVALID', 'INVALID_JSON_OUTPUT', 'OUTPUT_SCHEMA_MISMATCH',
