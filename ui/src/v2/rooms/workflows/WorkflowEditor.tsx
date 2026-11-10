@@ -110,10 +110,10 @@ import { useLibrary, type LibraryEntry as InstallableLibraryEntry } from "./useL
 import type { ConnectionMeta } from "./useConnections";
 import { useFlowRuns } from "./useFlowRuns";
 import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
-import { CANCELED_EFFECT_WARNING } from "./useWorkflowsData";
+import { CANCELED_EFFECT_WARNING, continuedFailureLabel } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
 import { modKey } from "../../ui/platform";
-import { NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, stepNotApprovalGated } from "./approval-gate";
+import { NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, RETRY_UNAVAILABLE_MESSAGE, stepNotApprovalGated } from "./approval-gate";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
 // cursor rightward by NODE_X_STEP; nested branches (loop body / router
@@ -3733,6 +3733,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         showErrorHandling={(step.type === "PIECE" || step.type === "CODE") && !isTriggerStep}
         continueOnFailure={!!step.settings?.errorHandlingOptions?.continueOnFailure?.value}
         retryOnFailure={!!step.settings?.errorHandlingOptions?.retryOnFailure?.value}
+        retryAvailable={step.type === "PIECE" && piece?.retrySafe === true}
         onSetErrorHandling={onSetErrorHandling}
         stepName={step.name}
         sampleData={props.sampleData}
@@ -3792,6 +3793,7 @@ function AdvancedSettings(props: {
   showErrorHandling: boolean;
   continueOnFailure: boolean;
   retryOnFailure: boolean;
+  retryAvailable: boolean;
   onSetErrorHandling: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
   stepName: string;
   sampleData: unknown | undefined;
@@ -3821,6 +3823,7 @@ function AdvancedSettings(props: {
             <ErrorHandlingSection
               continueOnFailure={props.continueOnFailure}
               retryOnFailure={props.retryOnFailure}
+              retryAvailable={props.retryAvailable}
               onChange={props.onSetErrorHandling}
             />
           ) : null}
@@ -4031,10 +4034,12 @@ function ConnectionPicker({
 function ErrorHandlingSection({
   continueOnFailure,
   retryOnFailure,
+  retryAvailable,
   onChange,
 }: {
   continueOnFailure: boolean;
   retryOnFailure: boolean;
+  retryAvailable: boolean;
   onChange: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
 }): React.ReactElement {
   return (
@@ -4049,20 +4054,23 @@ function ErrorHandlingSection({
         <span className="wf-props__field-label">Continue on failure</span>
       </label>
       <p className="wf-props__hint">
-        Treat this step's failure as success. Downstream steps still run; the
-        failure shows up in the step's output for routers to branch on.
+        If this step fails, the steps after it still run. The step shows as
+        failed and the run shows as finished with a failed step. A step that
+        Jarvis refused to run is never continued past.
       </p>
       <label className="wf-props__field wf-props__field--inline">
         <input
           type="checkbox"
-          checked={retryOnFailure}
+          checked={retryOnFailure && retryAvailable}
+          disabled={!retryAvailable}
           onChange={(e) => onChange({ retryOnFailure: e.target.checked })}
         />
         <span className="wf-props__field-label">Retry on failure</span>
       </label>
       <p className="wf-props__hint">
-        Retry up to 4 times with exponential backoff (~14s total) before
-        giving up. Final failure still respects "Continue on failure".
+        {retryAvailable
+          ? "Try again up to 4 times, waiting a little longer each time (about 14 seconds in all), before giving up."
+          : `${RETRY_UNAVAILABLE_MESSAGE}${retryOnFailure ? " This step has it turned on, but it is ignored." : ""}`}
       </p>
     </section>
   );
@@ -6003,6 +6011,11 @@ function RunRow({
         {run.failedStep ? (
           <span className="wf-editor__run-failed">@ {run.failedStep.displayName}</span>
         ) : null}
+        {continuedFailureLabel(run) ? (
+          <span className="wf-editor__run-failed">
+            {continuedFailureLabel(run)}: {(run.continuedFailures ?? []).map((s) => s.displayName).join(", ")}
+          </span>
+        ) : null}
         <span className="wf-editor__run-time">{startedAt}</span>
         <span className="wf-editor__run-duration">{duration}</span>
       </button>
@@ -6099,6 +6112,7 @@ function OverlayBanner({
         Viewing run {startedAt} -- <strong>{run.status}</strong>
         {!run.failure && run.cancellation?.inFlightMayHaveCompleted ? <span className="wf-editor__overlay-banner-reason">{CANCELED_EFFECT_WARNING}</span> : null}
         {run.failedStep ? <> at <code>{run.failedStep.displayName}</code></> : null}
+        {continuedFailureLabel(run) ? <> -- {continuedFailureLabel(run)}: <code>{(run.continuedFailures ?? []).map((s) => s.displayName).join(", ")}</code></> : null}
         {!hasOverlayData ? (
           <em className="wf-editor__overlay-banner-note">
             {" "}-- no per-step trace recorded for this run

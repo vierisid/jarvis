@@ -93,9 +93,18 @@ export interface FlowRun {
   failedStep: { name: string; displayName: string; errorMessage?: string } | null;
   /** Q-19: how a run that ended badly reads, the same sentence Today shows. */
   failure?: UserFailure | null;
+  /** Steps that failed in a run that still finished: each had "Continue on failure" on. */
+  continuedFailures?: Array<{ name: string; displayName: string }>;
   triggeredBy: string | null;
   created: number;
   updated: number;
+}
+
+/** What Runs says about a run that finished although a step failed, or null for any other run. */
+export function continuedFailureLabel(run: Pick<FlowRun, "status" | "continuedFailures">): string | null {
+  const failed = run.status === "SUCCEEDED" ? run.continuedFailures ?? [] : [];
+  if (failed.length === 0) return null;
+  return failed.length === 1 ? "Finished with a failed step" : `Finished with ${failed.length} failed steps`;
 }
 
 /**

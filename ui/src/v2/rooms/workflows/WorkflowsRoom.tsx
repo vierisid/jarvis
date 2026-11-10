@@ -44,6 +44,7 @@ import {
   type FlowBlock,
   type FlowRun,
   type FlowRunStatus,
+  continuedFailureLabel,
   type FlowStatus,
 } from "./useWorkflowsData";
 import "./WorkflowsRoom.css";
@@ -522,6 +523,11 @@ function RunRow({ run, expanded, onToggle, onCancel }: RunRowProps): React.React
         <div className="wf-runs__head-left">
           <RunStatusIcon status={run.status} />
           <Chip tone={RUN_STATUS_TONE[run.status]} dot={false}>{run.status}</Chip>
+          {continuedFailureLabel(run) ? (
+            <span className="wf-runs__failed-step" title={(run.continuedFailures ?? []).map((s) => s.displayName).join(", ")}>
+              {continuedFailureLabel(run)}: {(run.continuedFailures ?? []).map((s) => s.displayName).join(", ")}
+            </span>
+          ) : null}
           {run.failure ? <span className="wf-runs__failed-step" title={run.failure.headline}>{run.failure.headline}</span>
             : run.failedStep ? <span className="wf-runs__failed-step">@ {run.failedStep.displayName}</span> : null}
         </div>

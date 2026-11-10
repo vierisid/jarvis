@@ -56,6 +56,27 @@ export const IN_RUN_STEP_PIECES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The built-in steps whose "Retry on failure" is honoured: they only compute
+ * on data already inside the run, so trying one again repeats nothing that
+ * happened outside Jarvis. The rest of `IN_RUN_STEP_PIECES` is left out
+ * because a second try would repeat something: approval creates another
+ * request, delay waits again, store can append twice, schedule has no actions.
+ * Every other step, a CODE step included, may act outside Jarvis and is never
+ * retried, so a request is never sent twice (docs/WORKFLOW_AUTOMATION.md).
+ */
+export const RETRY_SAFE_PIECES: ReadonlySet<string> = new Set([...IN_RUN_STEP_PIECES].filter((name) => ![
+  '@activepieces/piece-approval', '@activepieces/piece-delay', '@activepieces/piece-schedule', '@activepieces/piece-store',
+].includes(name)));
+
+/** Whether a failed step of this piece may be tried again by "Retry on failure". */
+export function canRetryStep(pieceName: unknown): boolean {
+  return typeof pieceName === 'string' && RETRY_SAFE_PIECES.has(pieceName);
+}
+
+/** What the editor and readiness say when the option is on for a step that cannot honour it. */
+export const RETRY_UNAVAILABLE_MESSAGE = 'Retry is not available for steps that act outside Jarvis, so a request is never sent twice.';
+
+/**
  * A community piece: no governed adapter, not one of Jarvis's own pieces and
  * not an in-run core step. Its actions run without approval, whatever the
  * governed categories say; each dispatch is audited and obeys Pause and Kill.

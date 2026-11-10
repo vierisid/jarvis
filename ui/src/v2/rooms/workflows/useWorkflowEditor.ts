@@ -90,12 +90,15 @@ export interface FlowStepNode {
      * PIECE / CODE: per-step error-handling toggles consumed by the engine
      * at `src/workflows/activepieces/.../helper/error-handling.ts`.
      *   - `continueOnFailure.value === true`: a FAILED step is treated as
-     *     RUNNING for verdict purposes -- downstream steps execute, and
+     *     RUNNING for verdict purposes -- downstream steps execute (the run
+     *     ends SUCCEEDED and Runs shows it finished with a failed step), and
      *     this step's `output` stays undefined so a downstream Router can
      *     branch on `{{<step>}}` with DOES_NOT_EXIST.
      *   - `retryOnFailure.value === true`: the engine retries up to 4
-     *     attempts with exponential backoff (engine-wide constants). Final
-     *     failure still respects `continueOnFailure`.
+     *     attempts with exponential backoff (engine-wide constants), but only
+     *     for built-in steps that act inside the run (`retrySafe` on the
+     *     piece); any other step is run once. Final failure still respects
+     *     `continueOnFailure`.
      * Both fields nest in their own `{ value: boolean }` wrapper to match
      * the activepieces shared schema. Setting `value: false` (or omitting)
      * disables the feature.
@@ -230,6 +233,8 @@ export interface PieceCatalogEntry {
   auth?: PieceCatalogAuth;
   /** Set by the daemon on a community piece: its actions run without approval (#955). */
   notApprovalGated?: boolean;
+  /** Set by the daemon on a built-in step that only works on data inside the run: "Retry on failure" applies to it. */
+  retrySafe?: boolean;
 }
 
 interface ActionResult {

@@ -20,6 +20,7 @@ import type {
   FlowTriggerNode,
   FlowVersion as JarvisFlowVersion,
 } from "../../db/repos/flow-version";
+import { canRetryStep } from "../../runtime/step-admission";
 
 interface UpstreamCommonNode {
   name: string;
@@ -48,12 +49,19 @@ interface UpstreamPieceTrigger extends UpstreamCommonNode {
 
 type UpstreamFlowTrigger = UpstreamEmptyTrigger | UpstreamPieceTrigger;
 
+/** The engine's per-step failure options (helper/error-handling.ts). */
+interface UpstreamErrorHandling {
+  continueOnFailure?: { value: boolean };
+  retryOnFailure?: { value: boolean };
+}
+
 interface UpstreamCodeAction extends UpstreamCommonNode {
   type: "CODE";
   skip?: boolean;
   settings: {
     sourceCode: { packageJson: string; code: string };
     input: Record<string, unknown>;
+    errorHandlingOptions?: UpstreamErrorHandling;
   };
   nextAction?: UpstreamFlowAction;
 }
@@ -67,6 +75,7 @@ interface UpstreamPieceAction extends UpstreamCommonNode {
     actionName?: string;
     input: Record<string, unknown>;
     propertySettings: Record<string, unknown>;
+    errorHandlingOptions?: UpstreamErrorHandling;
   };
   nextAction?: UpstreamFlowAction;
 }
@@ -167,6 +176,20 @@ function adaptTrigger(
   throw new Error(`unsupported trigger type: ${trigger.type}`);
 }
 
+/**
+ * "Continue on failure" is passed on for every piece and CODE step. "Retry on
+ * failure" only for a step that cannot act outside Jarvis (`canRetryStep`):
+ * anything else would send a request twice, so it is dropped here, and
+ * readiness and the editor say so.
+ */
+function adaptErrorHandling(settings: Record<string, any>, retrySafe: boolean): { errorHandlingOptions?: UpstreamErrorHandling } {
+  const options = settings.errorHandlingOptions;
+  const out: UpstreamErrorHandling = {};
+  if (options?.continueOnFailure?.value === true) out.continueOnFailure = { value: true };
+  if (options?.retryOnFailure?.value === true && retrySafe) out.retryOnFailure = { value: true };
+  return Object.keys(out).length ? { errorHandlingOptions: out } : {};
+}
+
 function adaptAction(
   node: FlowTriggerNode,
   fallbackTimestamp: string,
@@ -192,6 +215,7 @@ function adaptAction(
         actionName: settings.actionName,
         input: settings.input ?? {},
         propertySettings: settings.propertySettings ?? {},
+        ...adaptErrorHandling(settings, canRetryStep(settings.pieceName)),
       },
       nextAction: next,
     };
@@ -212,6 +236,7 @@ function adaptAction(
           code: sourceCode?.code ?? "",
         },
         input: (looseSettings["input"] as Record<string, unknown> | undefined) ?? {},
+        ...adaptErrorHandling(looseSettings, false),
       },
       nextAction: next,
     };
