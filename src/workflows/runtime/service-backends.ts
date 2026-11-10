@@ -43,7 +43,7 @@ import type { AuditTrail } from "../../authority/audit";
 import type { EmergencyController } from "../../authority/emergency";
 import type { RoleDefinition } from "../../roles/types";
 import { JarvisLlmClient } from "../adapters/llm-client";
-import { JarvisToolRegistryAdapter } from "../adapters/tool-registry";
+import { JarvisToolRegistryAdapter, frameComputerStepResult } from "../adapters/tool-registry";
 import { JarvisNotifierAdapter, type NotifierDeps } from "../adapters/notifier";
 import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
@@ -542,8 +542,11 @@ export function buildSandboxServiceBackends(
               () => new JarvisToolRegistryAdapter(uiExecution!.registry).execute(req.toolName, args))
               : toolAdapter.execute(req.toolName, args);
           } });
+        // Computer reads and navigation reach the flow framed (#1314), never as raw page or window text.
+        const computer = /^(browser|desktop)_/.test(tool.name);
         return reply.approval ? { result: null, toolName: req.toolName, approval: reply.approval }
-          : { result: reply.result, toolName: req.toolName, ...(reply.outcome ? { outcome: reply.outcome } : {}) };
+          : { result: computer ? frameComputerStepResult(tool.name, tool.category, reply.result) : reply.result,
+            toolName: req.toolName, ...(reply.outcome ? { outcome: reply.outcome } : {}) };
       }
     : undefined;
 

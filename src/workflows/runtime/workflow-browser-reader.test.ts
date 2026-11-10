@@ -155,3 +155,14 @@ for (const hasRead of [false, true]) test(`a local workflow cannot adopt a chat 
   expect((await response.json()).outcome.effect).toBe('not_started');
   expect(fake.typed).toEqual([]);
 });
+
+test('a direct browser read and an approved navigate reach the flow framed as untrusted content (#1314)', async () => {
+  const f = fixture(), run = f.run();
+  const navigated = await f.approve(run.id, 'navigate');
+  const read = await f.call(run.id, 'snapshot');
+  for (const response of [navigated, read]) {
+    const body = await response.json();
+    expect(String(body.result)).toContain('<<<UNTRUSTED_CONTENT');
+    expect(String(body.result)).toContain('[1] Editor');
+  }
+});

@@ -179,6 +179,15 @@ delegation row, and a taint-gated call in a workflow delegation becomes a durabl
 pause rather than a silent pass. So a workflow does have a framing-and-taint
 path; it is the agent path, and the unframed adapter path is the data path.
 
+**The computer is the exception (#1314).** A DIRECT `browser_*` or `desktop_*`
+step's result -- `browser_navigate`'s page and every browser or desktop read --
+reaches the flow framed as untrusted content, exactly as the chat model would
+see it (`frameComputerStepResult`). The trade above is accepted for these: a
+screen is written by whoever controls it, and a flow reads one to hand it to
+something that decides. The effect receipt keeps the tool's own value; only what
+the step receives is framed. Values a later card shows that came from run data
+are marked as such on the card, which is the workflow form of taint.
+
 **What a step CAN still do.** `browser_navigate` can run after individual live UI
 review; `run_command` remains refused. `run_skill` is a governed adapter and a
 recorded skill step may `navigate` with a caller-supplied value. Via that skill,
@@ -195,8 +204,11 @@ hit all four:
 - `ui_snapshot` is listed there as reachable. It is not -- nor is `ui_act`, which
   is an untrusted source in chat and would be the obvious next request. Neither is
   in `BOUNDED_TOOLS` or `GATED_TOOLS` and neither declares a `workflowEffect`, so
-  `toolEffectCapability` refuses both. The reachable set is the 14 names in
-  `untrusted-reach.test.ts`, of which 8 are untrusted sources.
+  `toolEffectCapability` refuses both. The reachable set is the 23 names in
+  `untrusted-reach.test.ts`, measured by putting every production tool to
+  `toolEffectCapability`: 14 bounded or gated names, of which 8 are untrusted
+  sources kept byte-exact, plus the 9 reviewed computer actions, whose
+  results are untrusted and framed (below).
 - "Nothing in `src/workflows/` imports from `src/roles/untrusted.ts` at all" is
   stale: #567 added two importers, `adapters/tool-registry.ts` and
   `runtime/service-backends.ts`.
