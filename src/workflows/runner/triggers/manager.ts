@@ -64,7 +64,6 @@ import {
   recordFire, recordSkippedRepeat, repeatOf, repeatOfRefusal, setScheduleWatch, type FireSource, type TriggerFire,
 } from "../../db/repos/trigger-fire";
 import { RUN_FLOW } from "../handler";
-import { DEFAULT_IDS } from "../../db/schema";
 import type { EngineRuntime } from "../engine-runtime/engine-runtime";
 import { toUpstreamFlowVersion } from "../engine-runtime/flow-version-adapter";
 import { graphDigest } from "../../runtime/continuation";
@@ -755,10 +754,16 @@ export class TriggerManager {
     const flow = getFlow(flowId);
     const version = getFlowVersion(versionId);
     if (!version) return;
+    // The hook runs as the flow's project, with that project's connections.
+    // With no flow row there is no project to run it as: never another one.
+    if (!flow) {
+      this.log(`flow ${flowId}: engine ON_DISABLE skipped: the workflow no longer exists`);
+      return;
+    }
     try {
       const handle = await this.engineRuntime.acquire({
         runId: triggerHookRunId('disable', flowId, version),
-        projectId: flow?.project_id ?? DEFAULT_IDS.project,
+        projectId: flow.project_id,
         flowId,
       });
       try {
@@ -1205,12 +1210,18 @@ export class TriggerManager {
       this.refuseLive({ flowId, versionId, kind: "engine", source: fireSource, scheduledFor: occurrence?.at, lateMs: occurrence?.lateMs }, error);
       return;
     }
+    // The poll runs as the flow's project; with no flow row, it does not run.
+    const flow = getFlow(flowId);
+    if (!flow) {
+      unrun("blocked", "The workflow no longer exists.");
+      return;
+    }
     this.pollingInFlight.add(flowId);
     let items: unknown[];
     try {
       const handle = await engine.acquire({
         runId: triggerHookRunId('poll', flowId, version),
-        projectId: getFlow(flowId)?.project_id ?? DEFAULT_IDS.project,
+        projectId: flow.project_id,
         flowId,
       });
       try {

@@ -646,6 +646,30 @@ describe("events", () => {
     expect(after.poll({ eventType: "x", since: savedCursor }).events).toHaveLength(1);
   });
 
+  test("an engine hook never runs as some other project when its workflow row is gone", async () => {
+    const acquired: Array<{ runId: string; projectId: string }> = [];
+    const engine = {
+      acquire: async (opts: { runId: string; projectId: string }) => {
+        acquired.push(opts);
+        return { executeTriggerHook: async (hook: string) => hook === "ON_ENABLE"
+          ? { listeners: [], scheduleOptions: { cronExpression: "* * * * *" } } : { output: [] }, release: async () => undefined };
+      },
+    } as unknown as EngineRuntime;
+    const { flowId } = onEvent("x");
+    const d = await daemon(Date.now(), engine);
+    expect(acquired.map(a => a.runId.split("-")[0])).toEqual(["enable"]);
+    // A flow row gone while its version stays (foreign keys normally cascade
+    // the version away too): neither the poll nor the ON_DISABLE hook may
+    // fall back to minting a token for a default project.
+    getWorkflowDb().run("PRAGMA foreign_keys=OFF");
+    getWorkflowDb().run("DELETE FROM flow WHERE id = ?", [flowId]);
+    getWorkflowDb().run("PRAGMA foreign_keys=ON");
+    await d.manager.refresh(flowId);
+    await settle();
+    expect(acquired.map(a => a.runId.split("-")[0])).toEqual(["enable"]);
+    await d.stop();
+  });
+
   test("a workflow deleted while its source is being polled does not take the daemon down", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
