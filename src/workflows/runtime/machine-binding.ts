@@ -153,7 +153,14 @@ export function withWorkflowMachineBinding<T>(ctx: { runId: string; projectId: s
       }
       const manager = getSidecarManager();
       const sidecar = manager?.listSidecars().find(s => s.id === sidecarId);
-      if (!sidecar?.connected) machineBindingBlocked('WORKFLOW_MACHINE_OFFLINE', `Bound computer ${sidecarId} is offline or no longer enrolled.`);
+      if (!sidecar?.connected) {
+        // Say which computer by its name; the id means nothing to a person.
+        const label = sidecar?.name ?? machinePinForRun(ctx.runId)?.name;
+        machineBindingBlocked('WORKFLOW_MACHINE_OFFLINE', sidecar
+          ? `The computer this step uses is offline. Open the desktop app on ${label}.`
+          : label ? `The computer this step uses (${label}) is no longer enrolled. Enroll it again or choose another computer.`
+            : 'The computer this step uses is no longer enrolled. Enroll it again or choose another computer.');
+      }
       if (!binding.sessionId || manager?.getConnectionSessionId(sidecarId) !== binding.sessionId) {
         machineBindingBlocked('WORKFLOW_SESSION_CHANGED', `The connection session for bound computer ${sidecarId} changed or cannot be verified.`);
       }

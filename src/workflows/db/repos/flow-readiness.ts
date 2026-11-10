@@ -103,6 +103,11 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
     pieces: configured?.pieces,
     tool: configured?.tool,
     roles: configured?.roles,
+    // Only when the daemon reports its computers: with none reported, nothing is claimed.
+    computerOnline: configured?.machines ? () => {
+      const inventory = configured.machines!();
+      return inventory.some(s => s.connected) || (inventory.length === 0 && (configured.localTools?.() ?? true));
+    } : undefined,
     connection(externalId, pieceName, path, settings, nodeType) {
       if (externalId.startsWith('jarvis:')) {
         const source = managedSourceFor(configured?.credentials?.list(), externalId);

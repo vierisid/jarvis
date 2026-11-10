@@ -298,3 +298,19 @@ export function toolEffectCapability(tool: ToolDefinition, params: Record<string
   });
   return { category: categories[0]!, categories, target, prepareArguments };
 }
+
+/**
+ * Why a workflow step cannot run this tool, in plain words, or null when it
+ * can. The same rule `toolEffectCapability` enforces when the step runs, asked
+ * early so a step that can never run is not called ready. `params` is null when
+ * run data decides them: what depends on them (which skill) is then left to the run.
+ */
+export function workflowToolRefusal(tool: ToolDefinition, params: Record<string, unknown> | null): string | null {
+  const supported = [...BOUNDED_TOOLS, ...GATED_TOOLS].join(', ');
+  if (GATED_TOOLS.has(tool.name) && !tool.workflowEffect && params === null) return null;
+  try { toolEffectCapability(tool, params ?? {}); return null; } catch { /* described below */ }
+  if (GATED_TOOLS.has(tool.name) && !tool.workflowEffect) {
+    return `${tool.name} needs the name of a skill saved on this Jarvis, and that skill was not found. Check the skill name in the step's parameters.`;
+  }
+  return `A workflow step cannot run ${tool.name}, because Jarvis cannot show you beforehand what it would do. Workflow steps can use these tools: ${supported}.`;
+}

@@ -92,6 +92,17 @@ test('disconnect between steps blocks desktop dispatch instead of selecting anot
   ]);
 });
 
+test('an offline computer is named by its device name, never its id, and says what to do', async () => {
+  const f = fixture();
+  await f.invoke('first');
+  f.machines[0]!.connected = false;
+  await f.invoke('second').catch(() => {});
+  const blocked = listWorkflowEffects(f.run.id)[1]!;
+  const message = String((blocked.outcome as any).message);
+  expect(message.startsWith('The computer this step uses is offline. Open the desktop app on Computer a.')).toBe(true);
+  expect(message).not.toContain('Bound computer');
+});
+
 test('reconnecting the same machine cannot reuse approval for its old session', async () => {
   const f = fixture();
   f.authority.setGovernedCategories(['read_data']);
