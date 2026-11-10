@@ -507,6 +507,9 @@ export class EngineHandle {
     return reply.response as import("../../runtime/piece-catalog").RawPieceMetadata;
   }
 
+  /** Set by the first `release()`; see there. */
+  private released = false;
+
   /**
    * Per-acquire teardown. Default: kill the subprocess and terminate the
    * sandbox in the registry so subsequent calls from a zombie engine are
@@ -523,6 +526,10 @@ export class EngineHandle {
    */
   async release(): Promise<void> {
     if (this.terminating) return this.terminating;
+    // A handle releases its engine once. A second release of a stale handle
+    // would otherwise park an engine the next run has already taken.
+    if (this.released) return;
+    this.released = true;
     if (this.abandoned || this.inFlight > 0) {
       return this.killAndTerminate();
     }

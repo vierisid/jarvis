@@ -120,6 +120,20 @@ describe("a parked warm engine", () => {
     await second.release();
   });
 
+  test("a stale handle released again never parks the engine the next run is using", async () => {
+    const first = await acquire("run-1");
+    await first.release();
+    const second = await acquire("run-2");
+    expect(second.sandboxId).toBe(first.sandboxId);
+    await first.release();
+    // The second run's token still works, and a third run gets an engine of its own.
+    expect((await call(second, "/v1/store-entries?key=k")).status).toBe(404);
+    const third = await acquire("run-3");
+    expect(third.sandboxId).not.toBe(second.sandboxId);
+    await third.release();
+    await second.release();
+  });
+
   test("a rebind failing on an engine that exited meanwhile signals nothing through the dead handle", async () => {
     const first = await acquire("run-1");
     const { proc } = first._internals();
