@@ -92,7 +92,7 @@ command -v bun >/dev/null || {
 # YAML parser.
 yq() {
 	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
-	WORKFLOW="${YQ_FILE:-$WORKFLOW}" bun -e '
+	WORKFLOW="${YQ_FILE:-$WORKFLOW}" SCRIPTS_DIR="${BUILD_SCRIPTS_DIR:-$HERE}" bun -e '
 const mode = process.argv[1];
 const doc = Bun.YAML.parse(await Bun.file(process.env.WORKFLOW).text());
 const jobs = doc.jobs ?? {};
@@ -525,9 +525,14 @@ if (mode === "sidecar-digests") {
     if (/\b(?:always|failure|cancelled|success)\s*\(/.test(String(job.if ?? "")))
       out.push(name + ": has a status function in its if, so on a publish_only call it can run past the skipped resolve, ahead of the gated publish");
   }
+  // The two signers name the signing environment (#1165), which has a
+  // deployment rule and no reviewers, so no approval comes due there; they
+  // need resolve, so on a publish_only call they skip with it and name
+  // nothing. Exactly that name, on exactly those two.
   for (const [name, job] of Object.entries(jobs))
-    if (job.environment !== undefined && name !== "publish-sidecar")
-      out.push(name + ": names an environment; publish-sidecar must be the one gated job");
+    if (job.environment !== undefined && name !== "publish-sidecar" &&
+        !((name === "sign-sidecar-darwin" || name === "sign-sidecar-windows") && job.environment === "signing"))
+      out.push(name + ": names an environment; publish-sidecar must be the one gated job, and the two signers name only signing");
   // publish-sidecar learns its version in its first step, from resolve or,
   // on a publish_only call, from the version input; nothing else in it reads
   // resolve outputs but its if.
@@ -550,6 +555,30 @@ if (mode === "sidecar-digests") {
   for (const [k, want] of [["released", "${{ jobs.publish-sidecar.outputs.released || jobs.resolve.outputs.should_release }}"], ["version", "${{ jobs.publish-sidecar.outputs.version || jobs.resolve.outputs.version }}"]])
     if (wc.outputs?.[k]?.value !== want)
       out.push("the " + k + " output must be exactly " + want + " (got " + JSON.stringify(wc.outputs?.[k]?.value) + ")");
+  if (out.length) console.log(out.join("\n"));
+  process.exit(0);
+}
+if (mode === "retention") {
+  // #1165: the unsigned-* artifacts are what a re-run of a failed signer or
+  // verifier downloads, and a failed job can be re-run up to 30 days after
+  // the run started, so on a real run they are kept as long as the archive
+  // publish-docker reads after the approvals (35 days, release-exec.yml).
+  // A dry run keeps them a day: it is cheap to run again. Kept for 1 day
+  // on every run, as before, a re-run after 24 hours found nothing to sign
+  // and needed a full re-run, which rebuilds different bytes (#958).
+  const out = [];
+  const WANT = "${{ env.DRY_RUN == \x27true\x27 && 1 || 35 }}";
+  let n = 0;
+  for (const [name, job] of Object.entries(jobs))
+    for (const st of job.steps ?? []) {
+      if (!String(st.uses ?? "").toLowerCase().startsWith("actions/upload-artifact@")) continue;
+      if (!String(st.with?.name ?? "").startsWith("unsigned-")) continue;
+      n++;
+      if (st.with?.["retention-days"] !== WANT)
+        out.push(name + ": uploads " + st.with.name + " with retention-days " + JSON.stringify(st.with?.["retention-days"] ?? null) + ", not " + WANT);
+    }
+  if (doc.env?.DRY_RUN !== "${{ inputs.dry_run == true }}") out.push("the workflow env DRY_RUN, which the retention reads, is not ${{ inputs.dry_run == true }}");
+  if (n === 0) out.push("no unsigned-* upload found");
   if (out.length) console.log(out.join("\n"));
   process.exit(0);
 }
@@ -1172,7 +1201,7 @@ if (mode === "pins") {
   // Windows signature must be a listed site, in these two workflows and in
   // every other one (#922 review): a new job, such as the macOS split
   // #870 plans, cannot link a pin past the gate unnoticed.
-  const PINNED = /expectedPublisherCN=|expectedTeamID=|build-sidecar\.sh|sign-windows\.sh\s+--verify-only|verify-macos-signature\.sh|subject\.OU/;
+  const PINNED = /expectedPublisherCN=|expectedPublisherSPKI=|expectedTeamID=|build-sidecar\.sh|sign-windows\.sh\s+--verify-only|verify-macos-signature\.sh|subject\.OU/;
   const listed = new Set((sites ?? []).map(([j, n]) => j + "\u0000" + n));
   // The linux legs share the build step and link no pin; build-sidecar.sh
   // gates by SETUP, so they are known only while their setup is linux.
@@ -1187,6 +1216,28 @@ if (mode === "pins") {
         out.push(file + ": " + j + ": step " + JSON.stringify(st.name ?? st.id ?? "") + " links a signer pin or checks a signature but is not a pin gate site this rule knows");
   if (!sites) { if (out.length) console.log(out.join("\n")); process.exit(0); }
   if (doc.env?.DRY_RUN !== "${{ inputs.dry_run == true }}") out.push("the workflow env DRY_RUN is " + JSON.stringify(doc.env?.DRY_RUN) + ", not the one dry-run decision the pin gate reads");
+  // #1165: a build that links the publisher CN links the signer key pin
+  // too, read from the committed chain by codesign-spki-pins.sh, whenever
+  // the CN is set, and checks that the pin reached the binary. build-sidecar.sh
+  // for the sidecar, the Build installer step for Jarvis-Setup.
+  const keyPin = (label, text, cnVar) => {
+    const L = text.split("\n").map((l) => l.trim());
+    const take = L.findIndex((l) => /^SPKI="\$\(.*codesign-spki-pins\.sh"? packaging\/windows\)"$/.test(l));
+    const link = L.findIndex((l) => l === "LDFLAGS=\"$LDFLAGS -X \x27github.com/jarvis/sidecar/internal/update.expectedPublisherSPKI=${SPKI}\x27\"");
+    const guard = L.lastIndexOf("if [ -n \"" + cnVar + "\" ]; then", take);
+    const check = L.findIndex((l) => l.startsWith("if [ -n \"${SPKI}\" ] && ! grep -qF \"${SPKI}\""));
+    if (take < 0 || link < 0 || link < take) out.push(label + " does not read the signer key pin from codesign-spki-pins.sh packaging/windows and link it as expectedPublisherSPKI (#1165)");
+    else if (guard < 0 || L.slice(guard + 1, take).length !== 0 || L[link + 1] !== "fi") out.push(label + " does not link the signer key pin exactly when " + cnVar + " is set (#1165)");
+    if (check < 0) out.push(label + " does not check that the signer key pin reached the binary (#1165)");
+  };
+  if (file === "installer-release.yml") {
+    const st = (jobs["build-windows"]?.steps ?? []).find((x) => x.name === "Build installer");
+    keyPin("build-windows: step \"Build installer\"", String(st?.run ?? ""), "${SIGNING_PUBLISHER_CN}");
+  } else {
+    let text = "";
+    try { text = require("node:fs").readFileSync(process.env.SCRIPTS_DIR + "/build-sidecar.sh", "utf8"); } catch {}
+    keyPin("build-sidecar.sh", text, "$PIN");
+  }
   for (const [j, name, pair, how, work] of sites) {
     const job = jobs[j];
     if (!job) { out.push("no " + j + " job"); continue; }
@@ -2689,6 +2740,9 @@ fi
 	mutant 'a second gated job in the workflow (#952 follow-up)' \
 		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n' $'  verify-sidecar-windows:\n    environment: release\n    needs: [resolve, sign-sidecar-windows]\n' \
 		'verify-sidecar-windows: names an environment; publish-sidecar must be the one gated job'
+	mutant 'a signer gated on release, whose approval would come due on the build call (#1165)' \
+		$'    environment: signing\n    permissions:\n' $'    environment: release\n    permissions:\n' \
+		'sign-sidecar-darwin: names an environment; publish-sidecar must be the one gated job'
 	mutant 'a publish step reading the version from resolve, empty on a publish_only call (#952 follow-up)' \
 		$'          VERSION: ${{ steps.version.outputs.version }}\n        run: |\n          flags=()\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi\n          if [[ "$VERSION" == *-* ]]; then flags+=(--tag next); fi\n          pkg="@usejarvis/sidecar"' $'          VERSION: ${{ needs.resolve.outputs.version }}\n        run: |\n          flags=()\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi\n          if [[ "$VERSION" == *-* ]]; then flags+=(--tag next); fi\n          pkg="@usejarvis/sidecar"' \
 		'publish-sidecar: step Publish wrapper package reads resolve outputs'
@@ -2986,6 +3040,39 @@ if [ -z "$found" ]; then
 else
 	no "installer artifact digests" "$found"
 fi
+echo
+echo "unsigned artifacts outlive the window for re-running a failed signer (#1165)"
+for wf in "$SIDECAR_WORKFLOW" "$INSTALLER_WORKFLOW"; do
+	found="$(YQ_FILE="$wf" yq retention)" || {
+		no "retention check ran on $(basename "$wf")" "the bun helper failed"
+		continue
+	}
+	if [ -z "$found" ]; then
+		ok "$(basename "$wf"): every unsigned-* artifact is kept 35 days on a real run, 1 on a dry run"
+	else
+		no "$(basename "$wf"): unsigned artifact retention" "$found"
+	fi
+done
+# shellcheck disable=SC2016 # every mutant is literal workflow text.
+{
+	MUTANT_MODE=retention
+	MUTANT_FROM="$SIDECAR_WORKFLOW"
+	mutant 'the unsigned Windows sidecar kept 1 day again (#1165)' \
+		$'          name: unsigned-win32-x64\n          path: sidecar/${{ env.SIDECAR_BIN }}.exe\n          if-no-files-found: error\n          # A failed signer or verifier can be re-run up to 30 days after the\n          # run started, and it downloads this; a re-run of all jobs instead\n          # rebuilds other bytes (#958). A dry run keeps it a day (#1165).\n          retention-days: ${{ env.DRY_RUN == \'true\' && 1 || 35 }}\n' \
+		$'          name: unsigned-win32-x64\n          path: sidecar/${{ env.SIDECAR_BIN }}.exe\n          if-no-files-found: error\n          retention-days: 1\n' \
+		'build-sidecar-windows: uploads unsigned-win32-x64 with retention-days'
+	mutant 'the unsigned darwin bundles kept the repository default, whatever it is (#1165)' \
+		$'          path: sidecar/jarvis-app.tar.gz\n          if-no-files-found: error\n          # A failed signer or verifier can be re-run up to 30 days after the\n          # run started, and it downloads this; a re-run of all jobs instead\n          # rebuilds other bytes (#958). A dry run keeps it a day (#1165).\n          retention-days: ${{ env.DRY_RUN == \'true\' && 1 || 35 }}\n' \
+		$'          path: sidecar/jarvis-app.tar.gz\n          if-no-files-found: error\n' \
+		'with retention-days null'
+	MUTANT_FROM="$INSTALLER_WORKFLOW"
+	mutant 'the unsigned installer app kept 1 day again (#1165)' \
+		$'          name: unsigned-installer-darwin\n          path: sidecar/install-jarvis-app.tar.gz\n          if-no-files-found: error\n          # A failed signer or verifier can be re-run up to 30 days after the\n          # run started, and it downloads this; a re-run of all jobs instead\n          # rebuilds other bytes (#958). A dry run keeps it a day (#1165).\n          retention-days: ${{ env.DRY_RUN == \'true\' && 1 || 35 }}\n' \
+		$'          name: unsigned-installer-darwin\n          path: sidecar/install-jarvis-app.tar.gz\n          if-no-files-found: error\n          retention-days: 1\n' \
+		'build-macos: uploads unsigned-installer-darwin with retention-days'
+	unset MUTANT_MODE MUTANT_FROM
+}
+
 # shellcheck disable=SC2016 # every mutant is literal workflow text.
 {
 	MUTANT_MODE=installer-digests
@@ -3442,10 +3529,88 @@ for f in "${pin_files[@]}"; do
 		no "$(basename "$f"): pin gate sites" "$found"
 	fi
 done
+echo
+echo "the signer key pin list comes from the committed chain, and nothing else (#1165)"
+# spki_of <pem>: the SHA-256 of the first certificate key, by node:crypto,
+# not openssl, so the script and this agree on the bytes and not on a tool.
+spki_of() {
+	PEM="$1" bun -e '
+const { X509Certificate, createHash } = require("node:crypto");
+const pem = require("node:fs").readFileSync(process.env.PEM, "utf8").match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)[0];
+const der = new X509Certificate(pem).publicKey.export({ type: "spki", format: "der" });
+process.stdout.write(createHash("sha256").update(der).digest("hex"));
+'
+}
+SPKI_SH="${HERE}/codesign-spki-pins.sh"
+pdir="${WORK}/spki"
+mkdir -p "$pdir"
+real="${HERE}/../../sidecar/packaging/windows"
+got="$("$SPKI_SH" "$real" 2>/dev/null)"
+want="$(spki_of "${real}/codesign-chain.pem")"
+if [[ "$want" =~ ^[0-9a-f]{64}$ ]] && [ "$got" = "$want" ]; then ok "the committed chain gives one pin, its leaf key (${want})"; else no "the committed chain gives one pin, its leaf key" "got '${got}', want '${want}'"; fi
+if [ -e "${real}/codesign-next-leaf.pem" ]; then no "no key rotation is under way (codesign-next-leaf.pem is committed)" "remove it once the rotation is done, or update this test"; fi
+cp "${real}/codesign-chain.pem" "${pdir}/codesign-chain.pem"
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "${pdir}/next.key" -out "${pdir}/codesign-next-leaf.pem" -days 1 -subj "/CN=Next" >/dev/null 2>&1
+next="$(spki_of "${pdir}/codesign-next-leaf.pem")"
+got="$("$SPKI_SH" "$pdir" 2>/dev/null)"
+if [ "$got" = "${want},${next}" ]; then ok "a rotation pins the current and the next key, in that order"; else no "a rotation pins the current and the next key, in that order" "got '${got}'"; fi
+cp "${real}/codesign-chain.pem" "${pdir}/codesign-next-leaf.pem"
+got="$("$SPKI_SH" "$pdir" 2>/dev/null)"
+if [ "$got" = "$want" ]; then ok "a next leaf on the same key adds no second pin"; else no "a next leaf on the same key adds no second pin" "got '${got}'"; fi
+printf 'not a certificate\n' >"${pdir}/codesign-next-leaf.pem"
+if got="$("$SPKI_SH" "$pdir" 2>/dev/null)" || [ -n "$got" ]; then no "an unreadable next leaf fails, printing no pin" "exit 0 or printed '${got}'"; else ok "an unreadable next leaf fails, printing no pin"; fi
+rm -f "${pdir}/codesign-next-leaf.pem" "${pdir}/codesign-chain.pem"
+if got="$("$SPKI_SH" "$pdir" 2>/dev/null)" || [ -n "$got" ]; then no "a missing chain fails, printing no pin" "exit 0 or printed '${got}'"; else ok "a missing chain fails, printing no pin"; fi
+printf 'not a certificate\n' >"${pdir}/codesign-chain.pem"
+if got="$("$SPKI_SH" "$pdir" 2>/dev/null)" || [ -n "$got" ]; then no "an unreadable chain fails, printing no pin" "exit 0 or printed '${got}'"; else ok "an unreadable chain fails, printing no pin"; fi
+rm -rf "$pdir"
+
+# (#1165) build-sidecar.sh is read from the scripts directory, so its mutants
+# are copies of that directory.
+bs_mutant() {
+	local label="$1" reason="$4" d="${WORK}/bs-mutant"
+	rm -rf "$d" && mkdir -p "$d"
+	if ! FROM="${HERE}/build-sidecar.sh" TO="${d}/build-sidecar.sh" OLD="$2" NEW="$3" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (s.split(process.env.OLD).length !== 2) process.exit(2);
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
+'; then
+		no "mutant '${label}' could be applied (build-sidecar.sh no longer has the text it mutates)"
+		return
+	fi
+	local found
+	found="$(YQ_FILE="$SIDECAR_WORKFLOW" BUILD_SCRIPTS_DIR="$d" yq pins)"
+	if grep -qF -- "$reason" <<<"$found"; then ok "reports: ${label}"; else no "reports: ${label}" "wanted '${reason}', got: ${found}"; fi
+	rm -rf "$d"
+}
+# shellcheck disable=SC2016 # literal script text.
+{
+	bs_mutant 'the sidecar linking the publisher CN but no signer key pin (#1165)' \
+		$'\t\t\tLDFLAGS="$LDFLAGS -X \'github.com/jarvis/sidecar/internal/update.expectedPublisherSPKI=${SPKI}\'"\n' '' \
+		'build-sidecar.sh does not read the signer key pin from codesign-spki-pins.sh'
+	bs_mutant 'the sidecar key pin taken whatever the CN (#1165)' \
+		$'\t\tif [ -n "$PIN" ]; then\n\t\t\tSPKI=' $'\t\tif true; then\n\t\t\tSPKI=' \
+		'build-sidecar.sh does not link the signer key pin exactly when $PIN is set'
+	bs_mutant 'the sidecar not checking the key pin reached the binary (#1165)' \
+		'	if [ -n "${SPKI}" ] && ! grep -qF "${SPKI}" /tmp/sidecar-strings.txt; then' '	if false; then' \
+		'build-sidecar.sh does not check that the signer key pin reached the binary'
+}
 # shellcheck disable=SC2016 # every mutant is literal workflow text.
 {
 	MUTANT_MODE=pins
 	MUTANT_FROM="$INSTALLER_WORKFLOW"
+	mutant 'the installer linking the publisher CN but no signer key pin (#1165)' \
+		$'            LDFLAGS="$LDFLAGS -X \'github.com/jarvis/sidecar/internal/update.expectedPublisherSPKI=${SPKI}\'"\n' '' \
+		'build-windows: step "Build installer" does not read the signer key pin from codesign-spki-pins.sh'
+	mutant 'the installer key pin read from elsewhere than the committed chain (#1165)' \
+		'            SPKI="$(../.github/scripts/codesign-spki-pins.sh packaging/windows)"' '            SPKI="${SIGNING_SPKI:-}"' \
+		'build-windows: step "Build installer" does not read the signer key pin from codesign-spki-pins.sh'
+	mutant 'the installer key pin read only on a dry run (#1165)' \
+		$'          if [ -n "${SIGNING_PUBLISHER_CN}" ]; then\n            SPKI=' $'          if [ "${DRY_RUN}" = "true" ]; then\n            SPKI=' \
+		'build-windows: step "Build installer" does not link the signer key pin exactly when ${SIGNING_PUBLISHER_CN} is set'
+	mutant 'the installer not checking the key pin reached Jarvis-Setup.exe (#1165)' \
+		'          if [ -n "${SPKI}" ] && ! grep -qF "${SPKI}" /tmp/installer-strings.txt; then' '          if false; then' \
+		'build-windows: step "Build installer" does not check that the signer key pin reached the binary'
 	mutant 'the installer Windows build back to warning on an empty pin (#922)' \
 		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS Jarvis-Setup.exe\n          export CC=' $'          [ -n "${SIGNING_PUBLISHER_CN}" ] || echo "::warning::unpinned"\n          export CC=' \
 		'build-windows: step "Build installer" does not run require-signing-pin.sh'
@@ -3611,11 +3776,20 @@ bs_case() {
 		ok "build-sidecar.sh: $label"
 	fi
 }
+# #1165: a pinned Windows build reads the signer key pin from the chain the
+# sidecar commits, so the fixture has none until the cases that need it.
+bs_case 1 no "refuses a pinned Windows build with no committed chain, before compiling (#1165)" GOOS=windows SETUP=windows-cross "SIGNING_PUBLISHER_CN=Usejarvis Inc." DRY_RUN=false
+mkdir -p "${WORK}/bs/sidecar/packaging/windows"
+cp "${HERE}/../../sidecar/packaging/windows/codesign-chain.pem" "${WORK}/bs/sidecar/packaging/windows/"
 bs_case 1 no "refuses a real Windows build with no publisher pin, before compiling" GOOS=windows SETUP=windows-cross SIGNING_PUBLISHER_CN= DRY_RUN=false
 bs_case 0 yes "builds Windows unpinned on a dry run" GOOS=windows SETUP=windows-cross SIGNING_PUBLISHER_CN= DRY_RUN=true
 bs_case 0 yes "builds Windows unpinned with ALLOW_UNPINNED_WINDOWS=true" GOOS=windows SETUP=windows-cross SIGNING_PUBLISHER_CN= ALLOW_UNPINNED_WINDOWS=true DRY_RUN=false
 bs_case 0 yes "builds Windows with the publisher pin" GOOS=windows SETUP=windows-cross "SIGNING_PUBLISHER_CN=Usejarvis Inc." DRY_RUN=false
 if grep -qF "expectedPublisherCN=Usejarvis Inc." "${WORK}/bs/sidecar/out" 2>/dev/null; then ok "build-sidecar.sh: links the publisher pin"; else no "build-sidecar.sh: links the publisher pin" "$(cat "${WORK}/bs/sidecar/out" 2>/dev/null)"; fi
+bs_spki="$(spki_of "${HERE}/../../sidecar/packaging/windows/codesign-chain.pem")"
+if [[ "$bs_spki" =~ ^[0-9a-f]{64}$ ]] && grep -qF "expectedPublisherSPKI=${bs_spki}'" "${WORK}/bs/sidecar/out" 2>/dev/null; then ok "build-sidecar.sh: links the signer key pin of the committed leaf (#1165)"; else no "build-sidecar.sh: links the signer key pin of the committed leaf (#1165)" "$(cat "${WORK}/bs/sidecar/out" 2>/dev/null)"; fi
+bs_case 0 yes "builds Windows unpinned on a dry run, with no key pin either (#1165)" GOOS=windows SETUP=windows-cross SIGNING_PUBLISHER_CN= DRY_RUN=true
+if grep -qF "expectedPublisherSPKI" "${WORK}/bs/sidecar/out" 2>/dev/null; then no "build-sidecar.sh: an unpinned build links no key pin (#1165)" "$(cat "${WORK}/bs/sidecar/out")"; else ok "build-sidecar.sh: an unpinned build links no key pin (#1165)"; fi
 bs_case 1 no "refuses a real macOS build with no team pin, before compiling" GOOS=darwin SETUP=darwin APPLE_TEAM_ID= DRY_RUN=false
 bs_case 1 no "refuses a real macOS build with only the Windows hatch set" GOOS=darwin SETUP=darwin APPLE_TEAM_ID= ALLOW_UNPINNED_WINDOWS=true DRY_RUN=false
 bs_case 0 yes "builds macOS unpinned with ALLOW_UNPINNED_MACOS=true" GOOS=darwin SETUP=darwin APPLE_TEAM_ID= ALLOW_UNPINNED_MACOS=true DRY_RUN=false

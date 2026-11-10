@@ -376,7 +376,8 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config build-essential \
             libx11-dev libx11-xcb-dev libxcb1-dev \
             xvfb x11-utils \
-            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+            osslsigncode
           for d in /usr/lib/*/pkgconfig; do
             [ -f "$d/webkit2gtk-4.1.pc" ] && sudo ln -sf "$d/webkit2gtk-4.1.pc" "$d/webkit2gtk-4.0.pc" || true
             [ -f "$d/javascriptcoregtk-4.1.pc" ] && sudo ln -sf "$d/javascriptcoregtk-4.1.pc" "$d/javascriptcoregtk-4.0.pc" || true
@@ -388,6 +389,17 @@ jobs:
       - name: Test the Windows signing script
         working-directory: sidecar
         run: scripts/sign-windows.test.sh
+
+      # The stubs above print what osslsigncode prints; this holds those
+      # strings to the real tool (#1165): signatures made and verified by the
+      # osslsigncode the verify jobs install (2.8 from ubuntu 24.04 apt on
+      # 2026-11-06), with a throwaway CA and
+      # timestamp authority, on a mingw-built PE.
+      - name: Test the Windows signing script against a real osslsigncode
+        working-directory: sidecar
+        env:
+          SIGN_WINDOWS_REAL_OSSLSIGNCODE: "1"
+        run: scripts/sign-windows-osslsigncode.test.sh
 
       # The guard that keeps a Chromium test out of the un-retried step agrees
       # with the real sidecar whether or not it works, so it gets fixtures of

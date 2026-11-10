@@ -44,6 +44,34 @@ change, because installers and sidecars built from then on pin it, and the
 post-sign check compares it exactly. Clients already shipped keep the old CN
 pin and will refuse updates signed under the new name.
 
+## The key pin, and rotating the key (#1165)
+
+Installers and sidecars also pin the signer's **key**: the SHA-256 of the
+leaf's SubjectPublicKeyInfo, which `.github/scripts/codesign-spki-pins.sh`
+reads from this file at build time and the build links in
+(`internal/update.expectedPublisherSPKI`). A CN alone is not an identity, and
+a key is one no other publisher can hold. Today's pin is
+`08fa0491fa2eb11b471e1f1e133b7989ab3a34d724251414aa4c66ac11b447e5`.
+
+A **renewal on the same Cloud KMS key** keeps the key, so the pin does not
+move and installed clients accept the renewed certificate.
+
+A **new key** (a new KMS key or key version) changes the pin, and every
+installed client refuses anything the new key signs. So a key rotation ships
+in two releases:
+
+1. Get the new certificate on the new key. Commit its leaf alone as
+   `sidecar/packaging/windows/codesign-next-leaf.pem`, leaving
+   `codesign-chain.pem` and the signing key as they are, and release. Builds
+   now pin both keys, and clients that update to this release accept either.
+   `.github/scripts/release-exec.test.sh` fails while that file is committed
+   (it checks no rotation is left half done): update its expectation in the
+   same change.
+2. Once enough installs have that release, make the new chain
+   `codesign-chain.pem`, delete `codesign-next-leaf.pem`, point
+   `GCP_KMS_KEY_ALIAS` at the new key, and release. Clients older than step
+   1 refuse this release and need a fresh install.
+
 **Renewal is due before 2027-08-11.** See code-signing/renewal.md in
 usejarvis-docs; the key stays put, so renewal replaces only this file.
 

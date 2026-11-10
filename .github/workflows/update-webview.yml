@@ -278,7 +278,11 @@ jobs:
       #     jarvis.patch, .gitattributes) and the UPSTREAM_VERSION it writes.
       #     A name only starting LICENSE is refused: Go builds LICENSE.syso
       #     or LICENSE.S by their extension (security review). libs/ holds
-      #     only headers, Go files, text and licenses, as upstream ships it.
+      #     only headers (.h, and .hh, which webview 0.12 and later ship),
+      #     C++ sources (.cc, as webview ships its library), Go files, text
+      #     and licenses (#1165). Measured on webview master f244320 of
+      #     2026-11-06: core/ is 63 .hh, 7 .h, 3 .cc and 2 CMakeLists.txt,
+      #     75 files and 18 directories, inside the caps below.
       #   * the kept files are main's, byte for byte (the script restores
       #     them from main), and no other .git* file sits anywhere: a changed
       #     .gitattributes could mark the bumped code -diff and hide it from
@@ -355,8 +359,8 @@ jobs:
           while read -r name; do
             case "$name" in
               "" | libs/*_test.go) [ -z "$name" ] || { echo "::error::the vendored tree holds ${name}, a test file (#1049)"; exit 1; } ;;
-              libs/*.h | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;
-              *) echo "::error::the vendored tree holds ${name}, which is not a header, Go file, text or license under libs/ (#1049)"; exit 1 ;;
+              libs/*.h | libs/*.hh | libs/*.cc | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;
+              *) echo "::error::the vendored tree holds ${name}, which is not a header, C++ source, Go file, text or license under libs/ (#1049)"; exit 1 ;;
             esac
           done <<<"$libs"
           for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do
