@@ -162,7 +162,9 @@ renders it, so the room's ancestors stay mounted; only the navigation chrome is 
 - Navigation data (`BriefNavigationData` in `shell/navigation/model.ts`) is read-only. Loading,
   unavailable and stale reads show "unavailable", never a healthy connection, a plan or zero counts.
   `planFromBilling` adapts the existing `/api/billing` snapshot (`v2/billing/useBilling`) to a plan
-  name; do not fetch billing again or add a plan tier.
+  name; do not fetch billing again or add a plan tier. A self-hosted install never requests
+  `/api/billing` (the daemon answers 503): the shell reads billing with `enabled: false` there and
+  shows "Self-hosted".
 - The account menu only navigates to the Profile, Settings and Billing rooms. It performs no account
   action and puts no email or token in the DOM.
 - Changing rooms resets the content scroll to the top; sidebar, theme, chat and same-room selection

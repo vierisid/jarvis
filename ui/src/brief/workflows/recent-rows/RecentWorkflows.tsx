@@ -13,15 +13,13 @@ export function RecentWorkflows({ mode, binding, selectedRunId, onOpen, onAll }:
     <h2 id="brief-recent-workflows-title" className="brief-type-section-heading">Recently run</h2>
     {state.status === "stale" && <p className="brief-workflow-notice" role="status">Recent results may be incomplete or out of date. {binding?.refresh && <BriefButton variant="text" size="sm" onClick={binding.refresh}>Refresh</BriefButton>}</p>}
     {rows.length > 0 ? <>
-      <div className="brief-recent-head" aria-hidden="true"><span>Workflow<span className="brief-recent-compact-label"> &amp; result</span></span><span className="brief-recent-result-heading">Latest result</span><span>Status</span><span>Last run</span></div>
+      <div className="brief-recent-head" aria-hidden="true"><span>Workflow</span><span>Status</span><span>Last run</span></div>
       <ul>{rows.map(row => {
         const status = runPresentation(row.status);
-        // Only successful runs may carry an owner-supplied result summary.
-        const result = row.status === "SUCCEEDED" ? row.result : status.result;
         return <li key={row.runId}><button type="button" className="brief-recent-row" data-selected={row.runId === selectedRunId}
           data-run-id={row.runId} aria-label={`Open ${row.name}, ${status.label.toLowerCase()}`} onClick={() => onOpen(row)}>
           <span className="brief-recent-name"><GitBranch size={19} strokeWidth={1.5} aria-hidden="true" /><strong>{row.name}</strong></span>
-          <span className="brief-recent-result">{row.environment === "TESTING" ? "Test run · " : ""}{result}</span>
+          {row.environment === "TESTING" && <span className="brief-recent-result">Test run</span>}
           <span className="brief-recent-status" data-tone={status.tone}><i aria-hidden="true" />{status.label}</span>
           <time dateTime={new Date(row.at).toISOString()} title={new Date(row.at).toLocaleString()}>{new Intl.DateTimeFormat(undefined, { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" }).format(row.at)}</time>
         </button></li>;
