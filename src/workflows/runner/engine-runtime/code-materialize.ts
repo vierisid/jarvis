@@ -688,7 +688,10 @@ export async function materializeCodeActions(
   const stepNames = new Set(planned.map(({ action }) => action.stepName));
   if (planned.length === 0) {
     // A draft that removed its last CODE step still has its old steps' trees.
-    if (plainVersionId && existsSync(versionDir)) await sweepStaleSteps(versionDir, stepNames);
+    if (plainVersionId && existsSync(versionDir)) {
+      await sweepStaleSteps(versionDir, stepNames);
+      forgetLocksOfGoneSteps(versionDir, stepNames);
+    }
   } else {
     // Marks the tree, and each step of it, as used now. The pruner and the
     // stale-step sweep keep what was used recently, which is what protects a

@@ -359,6 +359,10 @@ describe("materializeCodeActions installs exactly what was declared", () => {
     await materializeCodeActions(versionWithCode(pj, "renamed"), base, { install: fakeInstall(["is-number"]) });
     expect(existsSync(lock)).toBe(false);
     expect(existsSync(codeStepLockPath(join(base, "v_1"), "renamed"))).toBe(true);
+    // The draft drops its last CODE step: once that tree is gone, its lock goes too.
+    rmSync(join(base, "v_1", "renamed"), { recursive: true, force: true });
+    await materializeCodeActions({ id: "v_1", trigger: { name: "trigger", type: "EMPTY" } } as unknown as UpstreamFlowVersion, base);
+    expect(existsSync(codeStepLockPath(join(base, "v_1"), "renamed"))).toBe(false);
   });
 
   test("skips an install already done for the same manifest, redoes it when the manifest changes", async () => {
