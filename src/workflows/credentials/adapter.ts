@@ -223,6 +223,20 @@ export interface CredentialResolverOptions {
   now?: () => number;
 }
 
+/**
+ * A SECRET_TEXT value as every reader takes it: `secret_text` (#1153). Rows
+ * saved before the validator asked for `secret_text` hold the secret under
+ * `secret` or `value`; the one such secret is handed on under `secret_text`,
+ * so the engine's connection route and the daemon's own readers (the report
+ * and refund services) read the same credential. Two different legacy values
+ * are ambiguous and are not guessed between. The stored row is not changed.
+ */
+export function secretTextValue(type: string, value: Record<string, unknown>): Record<string, unknown> {
+  if (type !== "SECRET_TEXT" || typeof value["secret_text"] === "string") return value;
+  const legacy = [...new Set([value["secret"], value["value"]].filter((v): v is string => typeof v === "string" && v !== ""))];
+  return legacy.length === 1 ? { ...value, secret_text: legacy[0] } : value;
+}
+
 /** Composite resolver: Jarvis sources first, then the workflow DB. */
 export class CredentialResolver {
   private sources: JarvisConnectionSource[] = [];
@@ -264,7 +278,7 @@ export class CredentialResolver {
       ? getUniqueConnectionByExternalId(input.projectId, input.externalId)
       : getConnectionByExternalId(input.projectId, input.pieceName, input.externalId);
     if (!conn) return null;
-    return { type: conn.type, value: conn.value, pieceName: conn.pieceName, status: conn.status,
+    return { type: conn.type, value: secretTextValue(conn.type, conn.value), pieceName: conn.pieceName, status: conn.status,
       stored: { id: conn.id, projectId: conn.projectId, externalId: conn.externalId, generation: conn.credentialGeneration } };
   }
 

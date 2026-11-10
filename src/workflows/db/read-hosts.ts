@@ -84,7 +84,8 @@ function literalHost(url: unknown): string | null {
 
 /**
  * Hosts the grandfathering seeds for a flow: the literal host of every HTTP
- * request step whose method is a literal GET or HEAD, or not set. A step whose
+ * request step whose method is a literal GET or HEAD, or not set, and of every
+ * literal file URL in an HTTP step's form data (`literalFileHosts`). A step whose
  * method or host is filled at run time seeds nothing, so a host an attacker
  * could choose is never listed by the upgrade.
  */
@@ -101,5 +102,33 @@ export function literalReadHosts(root: FlowTriggerNode | null | undefined): stri
     const host = literalHost(input.url);
     if (host) out.add(host);
   }
+  for (const host of literalFileHosts(root)) out.add(host);
   return [...out].sort().slice(0, MAX_READ_HOSTS);
+}
+
+/**
+ * Hosts of the literal URLs in HTTP steps' form-data file fields (#1153). The
+ * engine fetches a file field before its step is approved, holding it to the
+ * read list; a flow that already attached a file from a URL a person wrote
+ * keeps doing so after the upgrade. Any method: the download is a GET
+ * whatever the step then sends. Other pieces' file properties are not known
+ * to the schema migration and are not seeded.
+ */
+export function literalFileHosts(root: FlowTriggerNode | null | undefined): string[] {
+  const out = new Set<string>();
+  for (const node of walkFlowNodes(root)) {
+    const s = (node as { settings?: { pieceName?: unknown; actionName?: unknown; input?: unknown } }).settings;
+    if (!s || s.pieceName !== HTTP_PIECE || s.actionName !== HTTP_ACTION) continue;
+    const body = s.input && typeof s.input === "object" ? (s.input as { body?: unknown }).body : undefined;
+    const rows = body && typeof body === "object" ? (body as { data?: unknown }).data : undefined;
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const field = row as { fieldType?: unknown; fileFieldValue?: unknown };
+      if (field.fieldType !== "file") continue;
+      const host = literalHost(field.fileFieldValue);
+      if (host) out.add(host);
+    }
+  }
+  return [...out].sort();
 }

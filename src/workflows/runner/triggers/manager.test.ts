@@ -223,7 +223,7 @@ describe("TriggerManager: webhook", () => {
     const { flowId } = publishFlowWithTrigger("signed flow", {
       name: "trigger",
       type: "PIECE_TRIGGER",
-      settings: { pieceName: "webhook", input: { secret: "topsecret" } },
+      settings: { pieceName: "webhook", input: { secret: "topsecret-topsecret-topsecret-topsecret" } },
     });
     const tm = new TriggerManager({
       eventBus: new WorkflowEventBus(),

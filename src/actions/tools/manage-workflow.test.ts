@@ -13,7 +13,7 @@ import { createRunFlowHandler, FlowExecutionError, RUN_FLOW } from "../../workfl
 import { asLimit, createManageWorkflowTool } from "./manage-workflow.ts";
 import type { ToolDefinition } from "./registry.ts";
 import { createDraftVersion, getFlowVersion, getLatestDraft, setSampleDataEntry, updateDraftVersion } from "../../workflows/db/repos/flow-version.ts";
-import { updateRun } from "../../workflows/db/repos/flow-run.ts";
+import { createFlowRun, updateRun } from "../../workflows/db/repos/flow-run.ts";
 import {
   UNTRUSTED_CLOSE,
   UNTRUSTED_OPEN,
@@ -156,10 +156,10 @@ describe("manage_workflow tool", () => {
     const { updateDraftVersion } = await import("../../workflows/db/repos/flow-version.ts");
     const created = (await call("create", { name: "hooked", empty: true })) as { id: string };
     updateDraftVersion(getLatestDraft(created.id)!.id, {
-      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: { secret: "whsec-s3cret-value" } } } as never,
+      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: { secret: "whsec-s3cret-value-of-at-least-32-chars" } } } as never,
     });
     const got = await call("get", { flow: "hooked" }) as { latestDraft: { trigger: { settings: { input: { secret: string } } } } };
-    expect(JSON.stringify(got)).not.toContain("whsec-s3cret-value");
+    expect(JSON.stringify(got)).not.toContain("s3cret-value");
     expect(got.latestDraft.trigger.settings.input.secret).toBe("[redacted]");
     for (const view of ['definition', 'validation']) {
       let text = '', cursor: string | null = null;
@@ -167,11 +167,75 @@ describe("manage_workflow tool", () => {
         const page = await call('get', { flow: created.id, view, ...(cursor ? { cursor } : {}) }) as { content: string; nextCursor: string | null };
         text += page.content; cursor = page.nextCursor;
       } while (cursor);
-      expect(text).not.toContain('whsec-s3cret-value');
+      expect(text).not.toContain("s3cret-value");
       if (view === 'definition') expect(JSON.parse(text).trigger.settings.input.secret).toBe('[redacted]');
     }
     // The stored version keeps it: the ingress still checks against it.
-    expect((getLatestDraft(created.id)!.trigger as unknown as { settings: { input: { secret: string } } }).settings.input.secret).toBe("whsec-s3cret-value");
+    expect((getLatestDraft(created.id)!.trigger as unknown as { settings: { input: { secret: string } } }).settings.input.secret).toBe("whsec-s3cret-value-of-at-least-32-chars");
+  });
+
+  describe("HTTP-step inline credentials (#1153)", () => {
+    const SECRETS = ["k3y-in-url", "t0ken-in-header", "pa55-in-auth"];
+    const httpInput = () => ({ method: "GET", url: "https://api.example.com/x?api_key=k3y-in-url",
+      headers: { Authorization: "Bearer t0ken-in-header", Accept: "application/json" }, authType: "BASIC",
+      authFields: { username: "me", password: "pa55-in-auth" } });
+    const graph = () => ({ name: "trigger", type: "EMPTY", displayName: "Start", settings: {}, valid: true,
+      nextAction: { name: "call", type: "PIECE", displayName: "Call", valid: true,
+        settings: { pieceName: "@activepieces/piece-http", pieceVersion: "0.1.0", actionName: "send_request", input: httpInput() } } });
+    async function seeded() {
+      const created = (await call("create", { name: "caller", empty: true })) as { id: string };
+      const draft = getLatestDraft(created.id)!;
+      updateDraftVersion(draft.id, { trigger: graph() as never });
+      setSampleDataEntry(draft.id, "call", { type: "PIECE", status: "SUCCEEDED", input: httpInput(), output: { ok: true } });
+      return created.id;
+    }
+    async function definition(flow: string): Promise<string> {
+      let text = "", cursor: string | null = null;
+      do {
+        const page = await call("get", { flow, view: "definition", ...(cursor ? { cursor } : {}) }) as { content: string; nextCursor: string | null };
+        text += page.content; cursor = page.nextCursor;
+      } while (cursor);
+      return text;
+    }
+
+    test("get never shows the model a step's token, password or key, in its input or its sample data", async () => {
+      const flow = await seeded();
+      const got = JSON.stringify(await call("get", { flow }));
+      const paged = await definition(flow);
+      for (const secret of SECRETS) { expect(got).not.toContain(secret); expect(paged).not.toContain(secret); }
+      // Redacted in place: the model still sees where the request goes and that it is authenticated.
+      expect(got).toContain("api_key=[redacted]");
+      expect(JSON.parse(paged).sampleData.call.input.headers).toEqual({ Authorization: "[redacted]", Accept: "application/json" });
+      // The stored draft keeps them: the step still runs with them.
+      expect(JSON.stringify(getLatestDraft(flow)!.trigger)).toContain("t0ken-in-header");
+    });
+
+    test("get_run redacts a run recorded before step inputs were redacted on the way in", async () => {
+      const flow = await seeded();
+      const queued = { run_id: createFlowRun({ flowId: flow, flowVersionId: getLatestDraft(flow)!.id }).id };
+      updateRun(queued.run_id, { steps: { call: { output: { type: "PIECE", status: "SUCCEEDED", input: httpInput(), output: { ok: true } } } } });
+      const detail = JSON.stringify(await call("get_run", { run_id: queued.run_id }));
+      for (const secret of SECRETS) expect(detail).not.toContain(secret);
+      expect(detail).toContain('"ok":true');
+    });
+
+    test("an update that writes the redacted view back keeps the stored credentials; one that strands the marker is refused", async () => {
+      configureWorkflowReadiness({ pieces: new PieceCatalog([...sampleCatalog().list(),
+        { name: "@activepieces/piece-http", displayName: "HTTP", description: "", actions: { send_request: { name: "send_request", displayName: "Send", description: "" } } }]) });
+      const flow = await seeded();
+      const read = JSON.parse(await definition(flow)) as { id: string; revision: string; trigger: { nextAction: { settings: { input: Record<string, unknown> } } } };
+      const shown = read.trigger.nextAction.settings.input;
+      // Writes back the whole input as read, changing only Accept.
+      await call("update", { flow, version_id: read.id, expected_revision: read.revision,
+        patches: [{ op: "replace", path: "/nextAction/settings/input", value: { ...shown, headers: { ...(shown.headers as object), Accept: "text/plain" } } }] });
+      const saved = getLatestDraft(flow)!.trigger.nextAction!.settings!.input!;
+      expect(saved).toEqual({ ...httpInput(), headers: { Authorization: "Bearer t0ken-in-header", Accept: "text/plain" } });
+      // A changed URL that keeps `api_key=[redacted]` would store the marker as the key.
+      const again = JSON.parse(await definition(flow)) as { id: string; revision: string };
+      await expect(call("update", { flow, version_id: again.id, expected_revision: again.revision,
+        patches: [{ op: "replace", path: "/nextAction/settings/input/url", value: "https://api.example.com/y?api_key=[redacted]" }] })).rejects.toThrow(/would store \[redacted\]/);
+      expect(getLatestDraft(flow)!.trigger.nextAction!.settings!.input!.url).toBe("https://api.example.com/x?api_key=k3y-in-url");
+    });
   });
 
   test("run enqueues a RUN_FLOW job and returns run_id", async () => {
@@ -445,6 +509,31 @@ describe("manage_workflow tool", () => {
     })) as { ok: boolean; routedFrom: string };
     expect(out.ok).toBe(true);
     expect(out.routedFrom).toBe("create");
+  });
+});
+
+describe("manage_workflow: compose (#1153 webhook secret floor)", () => {
+  test("an update may not set a short webhook secret even when another webhook in the project holds it, so a refusal answers no guess", async () => {
+    const created = (await call("create", { name: "probe", empty: true })) as { id: string };
+    const other = (await call("create", { name: "legacy", empty: true })) as { id: string };
+    const { getWorkflowDb } = await import("../../workflows/db/index.ts");
+    getWorkflowDb().run("UPDATE flow_version SET trigger = ? WHERE id = ?", [JSON.stringify({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: { secret: "s3cret" } } }), getLatestDraft(other.id)!.id]);
+    configureWorkflowReadiness({ pieces: new PieceCatalog(sampleCatalog().list()) });
+    const read = await call("get", { flow: created.id, view: "definition" }) as { content: string };
+    const draft = JSON.parse(read.content) as { id: string; revision: string };
+    for (const guess of ["s3cret", "wrong"]) {
+      await expect(call("update", { flow: created.id, version_id: draft.id, expected_revision: draft.revision,
+        patches: [{ op: "replace", path: "", value: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: { secret: guess } } } }] }))
+        .rejects.toThrow(/at least 32 characters/);
+    }
+  });
+  test("a composed webhook secret under the floor is refused and leaves no empty workflow behind", async () => {
+    const llm = new StubLlm(JSON.stringify({ displayName: "Hooked", trigger: { name: "trigger", type: "PIECE_TRIGGER",
+      settings: { pieceName: "webhook", input: { secret: "short" } },
+      nextAction: { name: "step_1", type: "PIECE", settings: { pieceName: "jarvis-ask", actionName: "ask", input: { prompt: "hi" } } } } }));
+    const t = createManageWorkflowTool({ llm, pieceRegistry: sampleCatalog() });
+    await expect(callFrom(t, "create", { name: "Hooked", description: "run when my form posts" })).rejects.toThrow(/at least 32 characters/);
+    expect((await callFrom(tool, "list", {}) as { total: number }).total).toBe(0);
   });
 });
 

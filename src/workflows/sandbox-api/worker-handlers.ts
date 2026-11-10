@@ -21,6 +21,8 @@ import type {
 } from "./contracts";
 import { getFlowRun, updateRun, type FlowRunStatus } from "../db/repos/flow-run";
 import { getRunCancellation } from "../db/repos/run-cancellation";
+import { getFlowVersion } from "../db/repos/flow-version";
+import { redactFailedStepMessage, redactRunSteps } from "../runtime/step-credentials";
 
 const PER_RUN_LOG_BUFFER_MAX = 200;
 /**
@@ -162,9 +164,13 @@ export class DefaultWorkerHandlers
       if (input.step) {
         const existingRow = getFlowRun(input.flowRun.id);
         const existingSteps = (existingRow?.steps ?? {}) as Record<string, unknown>;
+        // An HTTP or GraphQL step's recorded input holds the token or password
+        // it was given inline; run history keeps it redacted (#1153). The
+        // graph is the run's own version, from the run row, not the engine.
+        const trigger = existingRow ? getFlowVersion(existingRow.flowVersionId)?.trigger : undefined;
         patch.steps = {
           ...existingSteps,
-          [input.step.name]: { output: input.step.output },
+          ...redactRunSteps({ [input.step.name]: { output: input.step.output } }, trigger),
         };
       }
       updateRun(input.flowRun.id, patch);
@@ -192,7 +198,9 @@ export class DefaultWorkerHandlers
       // Without this mapping the detail is written under a key nothing reads
       // and the run history shows a bare step name with no reason.
       const { name, displayName, message } = input.failedStep;
-      patch.failedStep = message ? { name, displayName, errorMessage: message } : { name, displayName };
+      // A failed HTTP or GraphQL request echoes the body it sent (#1153).
+      const trigger = message ? getFlowVersion(getFlowRun(input.runId)?.flowVersionId ?? '')?.trigger : undefined;
+      patch.failedStep = message ? { name, displayName, errorMessage: redactFailedStepMessage(name, message, trigger) } : { name, displayName };
     }
     if (input.stepsCount !== undefined) patch.stepsCount = input.stepsCount;
     if (input.finishTime) patch.finishTime = Date.parse(input.finishTime);

@@ -350,6 +350,12 @@ function dropboxTracked(action: unknown): boolean {
 export const GRAPHQL_PIECE = '@activepieces/piece-graphql';
 /** The vendored core SMTP piece (#961). */
 export const SMTP_PIECE = '@activepieces/piece-smtp';
+/**
+ * The pieces whose egress refusals were each checked to come before anything
+ * is sent (#1153): their tracked send refused so is recorded as not sent. Any
+ * other piece's refusal stays uncertain, since it may have made an earlier call.
+ */
+export const NOT_SENT_PIECES: ReadonlySet<string> = new Set(['@activepieces/piece-http', '@activepieces/piece-graphql', SMTP_PIECE]);
 /** The vendored core FTP/SFTP piece (#961). */
 export const SFTP_PIECE = '@activepieces/piece-sftp';
 
@@ -933,8 +939,27 @@ function redactValue(value: string): string {
 }
 
 /** Credential-named fields, at any depth `bound()` keeps, inside objects and arrays. */
+/**
+ * A value that is a scheme and one token (`Bearer x`, `Basic x`, `SSWS x`),
+ * under whatever name it is stored. Prose is told apart by the token's shape:
+ * a credential has a digit, mixed case, a symbol inside it, or 20+ characters;
+ * "Basic membership", "Token expired." and "Key takeaways" have none.
+ */
+const SCHEMED_PREFIX = /^\s*(?:bearer|basic|token|digest|apikey|api-key|ssws|oauth|key)\s+([A-Za-z0-9._~+/=:-]{8,})\s*$/iu;
+const SCHEMED_CREDENTIAL = {
+  test(value: string): boolean {
+    const token = SCHEMED_PREFIX.exec(value)?.[1];
+    if (!token) return false;
+    return /\d/u.test(token) || (/[a-z]/u.test(token) && /[A-Z]/u.test(token))
+      || /[._~+/=:-]/u.test(token.slice(0, -1)) || token.length >= 20;
+  },
+};
+
 function redactNamed(value: unknown, depth = 0): unknown {
-  if (depth > 6) return value;
+  // Past any depth `bound()` keeps; a stored input (#1153) can go deeper, and
+  // what lies beyond is hidden whole rather than shown unchecked.
+  if (depth > 32) return value === null || value === undefined || typeof value !== 'object' ? value : REDACTED;
+  if (typeof value === 'string') return SCHEMED_CREDENTIAL.test(value) ? redactValue(value) : value;
   if (Array.isArray(value)) return value.map((item) => redactNamed(item, depth + 1));
   const fields = inputObject(value);
   if (!fields) return value;

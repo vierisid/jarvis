@@ -134,6 +134,8 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   CONNECTION_EXPIRED: { category: 'missing_binding', why: 'a connection it uses has expired and Jarvis could not refresh it', step: 'connect' },
   CONNECTION_REFRESH_UNREACHABLE: { category: 'target_offline', why: 'a connection it uses has expired and Jarvis could not reach the provider to refresh it', step: 'run_again' },
   CONNECTION_CHANGED: { category: 'missing_binding', why: 'a connection it uses was replaced while Jarvis refreshed it', step: 'run_again' },
+  // #1153: the HTTP, GraphQL or SMTP step's address is outside this Jarvis's network policy, or it asked for a proxy; nothing was sent, and a rerun is refused the same way.
+  EGRESS_REFUSED: { category: 'invalid_input', why: "the address it sends to is outside this Jarvis's network policy (or it asked for a proxy), so nothing was sent. Change the address in the step", step: 'edit_and_run_again' },
   // #1266: a workflow may have so many requests waiting in Needs you; this one would have been the next.
   HUMAN_INPUT_LIMIT: { category: 'not_started', why: `this workflow already has ${HUMAN_INPUT_PENDING_LIMIT} requests waiting for an answer in Needs you. Answer, reject or cancel some of them there, or stop runs waiting on them, first`, step: 'run_again' },
   // #1266: requests are answered in Needs you, the Brief decisions feature, and it is off here.

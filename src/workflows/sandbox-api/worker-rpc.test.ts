@@ -42,9 +42,10 @@ describe("WorkerRpcServer (B4: socket.io engine <-> daemon)", () => {
 
   async function makeSandbox(opts?: {
     transports?: Array<"polling" | "websocket">;
+    trigger?: Record<string, unknown>;
   }): Promise<TestSandbox> {
     const flow = createFlow({ projectId: DEFAULT_IDS.project });
-    const v = createDraftVersion({ flowId: flow.id, displayName: "wsf" });
+    const v = createDraftVersion({ flowId: flow.id, displayName: "wsf", ...(opts?.trigger ? { trigger: opts.trigger as never } : {}) });
     lockVersion(v.id);
     const run = createFlowRun({
       flowId: flow.id,
@@ -426,6 +427,37 @@ describe("WorkerRpcServer (B4: socket.io engine <-> daemon)", () => {
         status: "RUNNING",
       });
       expect(getFlowRun(sb.runId)?.status).toBe("RUNNING");
+    } finally {
+      sb.client.close();
+    }
+  });
+
+  test("run history keeps an HTTP step's inline credentials redacted (#1153)", async () => {
+    const http = (name: string) => ({ name, type: "PIECE", settings: { pieceName: "@activepieces/piece-http", actionName: "send_request", input: {} } });
+    const sb = await makeSandbox({ trigger: { name: "trigger", type: "EMPTY", settings: {},
+      nextAction: { name: "loop", type: "LOOP_ON_ITEMS", settings: { items: "{{trigger.items}}" }, firstLoopAction: http("inner"), nextAction: http("call") } } });
+    const input = { method: "GET", url: "https://api.example.com/x?api_key=k3y-in-url", headers: { Authorization: "Bearer t0ken-in-header" },
+      authFields: { password: "pa55-in-auth" } };
+    try {
+      for (const [name, output] of [
+        ["call", { type: "PIECE", status: "SUCCEEDED", input, output: { ok: true } }],
+        ["loop", { type: "LOOP_ON_ITEMS", status: "SUCCEEDED", input: {}, output: { iterations: [{ inner: { type: "PIECE", status: "SUCCEEDED", input, output: {} } }] } }],
+      ] as const) {
+        await sb.workerClient.updateRunProgress({
+          flowRun: { id: sb.runId, status: "RUNNING", flowId: sb.flowId, flowVersionId: sb.flowVersionId, projectId: sb.projectId },
+          step: { name, path: [], output: output as unknown as Record<string, unknown> },
+        });
+      }
+      const stored = JSON.stringify(getFlowRun(sb.runId)?.steps);
+      for (const secret of ["k3y-in-url", "t0ken-in-header", "pa55-in-auth"]) expect(stored).not.toContain(secret);
+      // Redacted, not dropped: the history still shows where the request went.
+      expect(stored).toContain("https://api.example.com/x?api_key=[redacted]");
+      expect((getFlowRun(sb.runId)?.steps as { call: { output: { output: unknown } } }).call.output.output).toEqual({ ok: true });
+      // A failed request echoes the body it sent in the run's failure.
+      await sb.workerClient.uploadRunLog({ runId: sb.runId, projectId: sb.projectId, status: "FAILED",
+        failedStep: { name: "call", displayName: "Call", message: JSON.stringify({ response: { status: 401 }, request: { body: { password: "pa55-in-body" } } }) } });
+      expect(getFlowRun(sb.runId)?.failedStep?.errorMessage).not.toContain("pa55-in-body");
+      expect(getFlowRun(sb.runId)?.failedStep?.errorMessage).toContain('"status":401');
     } finally {
       sb.client.close();
     }
