@@ -71,8 +71,54 @@ Practical consequences:
   browser navigation, click, type, key press, hover and scroll; desktop app
   launch, window focus and targeted `desktop_click` actions. Each UI action
   requires a separate dashboard approval using its live guard, even at full
-  Authority. These actions cannot run unattended. The computer is pinned and
-  a restart, changed session or missing guard refuses dispatch.
+  Authority. These actions cannot run unattended. A restart, changed session
+  or missing guard refuses dispatch.
+- **The card shows what will run** (#1314). Every frozen argument is on it as
+  one line of escaped JSON (the full URL for `browser_navigate`), each marked
+  when run data chose it (a templated param of a direct step) or when a
+  delegated agent did; the computer it runs on by name and id; and the page,
+  element or window as Jarvis last saw them (display only, never a binding;
+  a desktop label comes only from this run's own structured snapshot). A value
+  over 600 characters, a card over 1000, a parameter the tool does not take
+  or more than 20 values is refused with `CARD_CANNOT_SHOW`: never shown cut.
+- **The computer is one a person chose** (#1314). A browser or desktop action
+  runs only on the computer the workflow was enabled against (its pin) or,
+  for a direct step, the computer the step names literally, by exact id or
+  name. A templated `target` (or templated params as a whole) is refused at
+  composition and activation. A delegation whose role has browser or desktop
+  tools counts as a computer step when the pin is chosen, so it is pinned at
+  enable; it never runs on a computer the agent names. Without a pin the
+  action is refused with `WORKFLOW_MACHINE_UNPINNED`, which shows on the
+  Workflows list and in a "Workflow needs attention" notice: enable the
+  workflow to pin its computer, or name the computer in the step. On upgrade,
+  an enabled flow pinned with no computer is pinned when exactly one computer
+  serves it; otherwise it waits for a person to enable it again.
+- **A direct step is held to its step** (#1314). The tool route trusts the
+  step-name header, so a reviewed UI call must send exactly the params its
+  step states: literal values as written, the text around a template kept, no
+  extra keys (`WORKFLOW_STEP_INPUT_MISMATCH`, audited).
+- **Cards that are not element-bound expire** (#1314). A workflow card for
+  `browser_navigate`, `browser_scroll` or `browser_press_key` expires five
+  minutes after it was raised, the wait an inline chat approval gives; an
+  approval dispatched after that is refused (`APPROVAL_EXPIRED`), never run.
+  A workflow key press runs only in the browser on the Jarvis computer itself,
+  bound to the document reviewed (checked against the live page before the
+  key is sent); a key press bound for another computer is refused at
+  composition, activation and dispatch, since the sidecar cannot compare the
+  document. Use `browser_type` with `submit` to press Enter in a field there.
+  Same-document navigation (pushState, hash) keeps the document, so it does
+  not retire a key-press card.
+- A direct `desktop_click` takes its element id from run data; a desktop
+  element id written into a workflow names nothing and is refused, as is a
+  direct `get_value` read. Desktop work belongs in a delegation with the
+  `computer-operator` role, whose tools are listed one by one (browser and
+  desktop only: no clipboard, screen capture or system info). A delegated
+  `desktop_click` with `action: get_value` is a read and needs no mandatory
+  card, like `ui_act` `get_value`; its `control_app` floor stays.
+- Desktop control off (`desktop.enabled: false`) refuses desktop tools when a
+  workflow is composed or enabled, and closes desktop cards still waiting.
+  Screen awareness off refuses `desktop_screenshot` and `capture_screen` on
+  every path (and the pebble's screen context), and closes their waiting cards.
 - Direct browser steps keep live snapshot generations per workflow run, across
   snapshot, approval and execution, independently of chat and other runs. Local
   and remote element actions use the snapshot that run actually read. Replaying
@@ -1054,6 +1100,10 @@ a silent switch is now a typed `blocked` outcome with `effect: 'not_started'`:
 - `WORKFLOW_TARGET_AMBIGUOUS` -- an explicit name matched no device or several.
 - `WORKFLOW_MACHINE_UNAVAILABLE` -- nothing capable is connected and local
   execution is disabled.
+- `WORKFLOW_MACHINE_UNPINNED` -- a browser or desktop action with no pinned
+  computer and, for a direct step, no computer named in the step (#1314).
+  A browser or desktop action matches a named computer exactly: part of a
+  name is ambiguous.
 - `WORKFLOW_BINDING_LEGACY` -- the run already did machine work under an older
   binary, so it has no verifiable connection generation to adopt.
 
