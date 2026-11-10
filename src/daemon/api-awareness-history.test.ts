@@ -77,8 +77,9 @@ test('a workflow reading recent activity gets none while awareness is off, and i
 
 test('recorded screen observations are left out of every observation read while awareness is off (#1314 review)', async () => {
   const { createObservation, getRecentObservations } = await import('../vault/observations');
-  createObservation('screen_capture', { appName: 'Outlook', windowTitle: 'Inbox - ana@x', ocrPreview: 'secret' });
+  // The screen row is the newest, so a filter applied after the limit would come back empty.
   createObservation('file_change', { path: '/tmp/a' });
+  createObservation('screen_capture', { appName: 'Outlook', windowTitle: 'Inbox - ana@x', ocrPreview: 'secret' });
   const routes = createApiRoutes({ awarenessService } as ApiContext) as Record<string, any>;
   const read = async (url: string) => (await call(routes, '/api/vault/observations', url)).json();
   setScreenCaptureEnabledSource(() => false);
@@ -96,6 +97,9 @@ test('the awareness service itself holds recorded history back while awareness i
   const fake = { analytics: { getSessionHistory: () => [{ id: 's1' }], getBehavioralInsights: () => [{ insight: 'x' }],
     generateDailyReport: async () => ({ date: 'd' }), generateWeeklyReport: async () => ({ week: 'w' }) } };
   const proto = AwarenessService.prototype as any;
+  const { createSuggestion } = await import('../vault/awareness');
+  createSuggestion({ type: 'error', title: 'Error detected in Outlook', body: 'Outlook crashed' });
+  expect(proto.getRecentSuggestionsList.call(fake)).toHaveLength(1);
   setScreenCaptureEnabledSource(() => false);
   expect(proto.getSessionHistory.call(fake)).toEqual([]);
   expect(proto.getBehavioralInsights.call(fake)).toEqual([]);
@@ -120,4 +124,55 @@ test('prepared opportunities answer that awareness is off (#1314 review)', async
   }
   setScreenCaptureEnabledSource(null);
   expect((await routes['/api/brief/prepared-opportunities'].GET(new Request('http://local/api/brief/prepared-opportunities'))).status).toBe(200);
+});
+
+
+test('writes that answer with capture-derived content are refused while awareness is off, and run nothing (#1314 review)', async () => {
+  const { createSuggestionFeedbackRoutes } = await import('../awareness/suggestion-feedback-routes');
+  const { createOpportunityRoutes } = await import('../awareness/opportunity-routes');
+  const { createPreparedOpportunityRoutes } = await import('../brief/prepared-opportunity-routes');
+  const json = (body: unknown, status = 200) => Response.json(body, { status });
+  let ran = 0;
+  const provider = { ensure: async () => { ran++; return { evidence: 'Outlook' }; }, dismiss: async () => { ran++; return {}; },
+    retry: async () => { ran++; return {}; } } as any;
+  const capabilities = { hasProvider: () => true, snapshot: () => ({ capabilities: { preparedOpportunities: { enabled: true } } }) } as any;
+  const routes = { ...createSuggestionFeedbackRoutes(() => ({ kick: () => { ran++; } })), ...createOpportunityRoutes(json),
+    ...createPreparedOpportunityRoutes(capabilities, json, provider) } as Record<string, any>;
+  const writes: Array<[string, 'POST' | 'PATCH']> = [
+    ['/api/awareness/suggestions/:id/accept', 'POST'], ['/api/awareness/suggestions/:id/retry', 'POST'],
+    ['/api/awareness/suggestions/:id/dismiss', 'PATCH'], ['/api/awareness/suggestions/:id/act', 'PATCH'],
+    ['/api/opportunities/:id/feedback', 'POST'], ['/api/brief/prepared-opportunities', 'POST'],
+    ['/api/brief/prepared-opportunities/:id/dismiss', 'POST'], ['/api/brief/prepared-opportunities/:id/retry', 'POST'],
+  ];
+  const request = () => Object.assign(new Request('http://local/x', { method: 'POST', body: JSON.stringify({ requestId: 'r1', opportunityId: 'o1', revision: 'v' }) }), { params: { id: 'ID' } });
+  setScreenCaptureEnabledSource(() => false);
+  for (const [path, method] of writes) {
+    const response = await routes[path][method](request());
+    expect(`${path}: ${response.status} ${(await response.json()).code}`).toBe(`${path}: 409 AWARENESS_OFF`);
+  }
+  expect(ran).toBe(0);
+  // On again, the same calls reach their handlers (no such suggestion here, so not a 409 from the switch).
+  setScreenCaptureEnabledSource(null);
+  for (const [path, method] of writes) expect(`${path}: ${(await routes[path][method](request())).status}`).not.toBe(`${path}: 409`);
+});
+
+test('the live screen and the background composers stay dark while awareness is off (#1314 review)', async () => {
+  const { AwarenessService } = await import('../awareness/service');
+  const { SuggestionComposer } = await import('../awareness/suggestion-composer');
+  const proto = AwarenessService.prototype as any;
+  const fake = { _status: 'running', analytics: { getLiveContext: () => ({ currentApp: 'Outlook', currentWindow: 'Inbox - ana@x' }) },
+    contextTracker: { getCurrentSession: () => ({ id: 's1', topic: null, startedAt: 1 }) } };
+  let composed = 0;
+  const composer = new SuggestionComposer(async () => { composed++; return null as never; });
+  (composer as any).running = true;
+  (composer as any).drain = async () => { composed++; };
+  setScreenCaptureEnabledSource(() => false);
+  expect(proto.getLiveContext.call(fake)).toMatchObject({ currentApp: null, currentWindow: null, currentSession: null, recentApps: [] });
+  expect(proto.getCurrentSession.call(fake)).toBeNull();
+  composer.kick(); await (composer as any).pending;
+  expect(composed).toBe(0);
+  setScreenCaptureEnabledSource(null);
+  expect(proto.getLiveContext.call(fake).currentApp).toBe('Outlook');
+  composer.kick(); await (composer as any).pending;
+  expect(composed).toBe(1);
 });

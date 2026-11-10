@@ -1,4 +1,5 @@
 import { compositionQueueStatus, COMPOSITION_LIMITS } from './composition-budget';
+import { awarenessHistoryVisible } from './history-guard.ts';
 import { claimOpportunityComposition, nextOwnedQueuedJob } from './composition-leases';
 import { runWithOrigin } from '../llm/origin';
 import { getDb, generateId } from '../vault/schema.ts';
@@ -93,7 +94,8 @@ export class SuggestionComposer {
   }
 
   kick(): void {
-    if (!this.running || this.pending) return;
+    // Compositions send captured evidence to a model: held while awareness is off, picked up when it is on (#1314 review).
+    if (!this.running || this.pending || !awarenessHistoryVisible()) return;
     this.pending = this.drain().catch(error => console.error('[SuggestionComposer]', error)).finally(() => { this.pending = null; });
   }
 

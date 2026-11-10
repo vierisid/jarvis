@@ -28,7 +28,8 @@ export function createPreparedOpportunityRoutes(capabilities: BriefCapabilities,
     } catch (e) { response = e instanceof PreparedRequestError ? json({ error: e.message }, e.status) : json({ error: 'Prepared opportunities are unavailable' }, 503); }
     response.headers.set('Cache-Control', 'no-store'); return response;
   };
-  // Prepared opportunities cite recorded captures: hidden while awareness is off (#1314).
+  // Prepared opportunities cite recorded captures: hidden while awareness is off (#1314), and so are the
+  // writes, which answer with the view they changed (#1314 review).
   const hiddenWhenOff = <R extends Request>(read: (req: R) => Promise<Response>) => async (req: R): Promise<Response> => {
     const hidden = awarenessHistoryHidden(json);
     if (hidden) { hidden.headers.set('Cache-Control', 'no-store'); return hidden; }
@@ -39,9 +40,9 @@ export function createPreparedOpportunityRoutes(capabilities: BriefCapabilities,
     [base]: { GET: hiddenWhenOff(wrap(req => { const url = new URL(req.url); return provider!.read({
       ...(url.searchParams.has('cursor') ? { cursor: url.searchParams.get('cursor')! } : {}),
       ...(url.searchParams.has('limit') ? { limit: Number(url.searchParams.get('limit')) } : {}),
-    }); })), POST: wrap(async req => provider!.ensure(await field(req, 'opportunityId')), 202) },
+    }); })), POST: hiddenWhenOff(wrap(async req => provider!.ensure(await field(req, 'opportunityId')), 202)) },
     [`${base}/:id`]: { GET: hiddenWhenOff(wrap<Params>(req => provider!.get(req.params.id))) },
-    [`${base}/:id/dismiss`]: { POST: wrap<Params>(async req => provider!.dismiss(req.params.id, await field(req, 'revision'))) },
-    [`${base}/:id/retry`]: { POST: wrap<Params>(async req => provider!.retry(req.params.id, await field(req, 'revision')), 202) },
+    [`${base}/:id/dismiss`]: { POST: hiddenWhenOff(wrap<Params>(async req => provider!.dismiss(req.params.id, await field(req, 'revision')))) },
+    [`${base}/:id/retry`]: { POST: hiddenWhenOff(wrap<Params>(async req => provider!.retry(req.params.id, await field(req, 'revision')), 202)) },
   };
 }

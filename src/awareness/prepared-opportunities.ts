@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import { awarenessHistoryVisible } from './history-guard.ts';
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../vault/schema';
 import { getGoal } from '../vault/goals';
@@ -255,7 +256,8 @@ export class PreparedOpportunities {
       nextCursor: rows.length > limit ? String(Number(query.cursor ?? 0) + limit) : null } };
   }
   kick(): void {
-    if (this.stopped || this.pending || !this.currentDatabase()) return;
+    // Preparation sends recorded evidence to a model: held while awareness is off, resumed when it is on (#1314 review).
+    if (this.stopped || this.pending || !this.currentDatabase() || !awarenessHistoryVisible()) return;
     try { recoverCompositionLeases(this.db, 'prepared_opportunities'); this.healthy = true; }
     catch { this.healthy = false; return; }
     if (this.readiness() !== 'ready') return;

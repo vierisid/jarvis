@@ -177,6 +177,11 @@ export class AwarenessService implements Service {
   // ── Public API ──
 
   getLiveContext(): LiveContext {
+    // What is on screen now is screen history too (#1314 review): empty while awareness is off.
+    if (!awarenessHistoryVisible()) {
+      return { currentApp: null, currentWindow: null, currentSession: null, recentApps: [], capturesLastHour: 0,
+        suggestionsToday: 0, isRunning: this._status === 'running' };
+    }
     return this.analytics.getLiveContext(this.contextTracker, this._status === 'running');
   }
 
@@ -212,6 +217,7 @@ export class AwarenessService implements Service {
   }
 
   getCurrentSession() {
+    if (!awarenessHistoryVisible()) return null;
     return this.contextTracker.getCurrentSession();
   }
 

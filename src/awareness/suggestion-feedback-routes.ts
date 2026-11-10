@@ -50,31 +50,32 @@ export function createSuggestionFeedbackRoutes(composer: () => Pick<SuggestionCo
       GET: (req: RequestWithId) => hiddenOr(() => handle(() => getSuggestionLearning(req.params.id))),
     },
     '/api/awareness/suggestions/:id/accept': {
-      POST: (req: RequestWithId) => handle(async () => {
+      // A write answers with the learning it changed, which cites captures: refused while off (#1314 review).
+      POST: (req: RequestWithId) => hiddenOr(() => handle(async () => {
         const result = acceptSuggestion(req.params.id, await body(req));
         composer()?.kick();
         return result;
-      }),
+      })),
     },
     '/api/awareness/suggestions/:id/retry': {
-      POST: (req: RequestWithId) => handle(async () => {
+      POST: (req: RequestWithId) => hiddenOr(() => handle(async () => {
         const result = retrySuggestionComposition(req.params.id, await body(req));
         composer()?.kick();
         return result;
-      }),
+      })),
     },
     '/api/awareness/suggestions/:id/dismiss': {
-      PATCH: (req: RequestWithId) => handle(async () => {
+      PATCH: (req: RequestWithId) => hiddenOr(() => handle(async () => {
         const input = await req.text();
         let data: unknown = { requestId: 'legacy-dismiss', reason: 'Dismissed without a reason' };
         if (input.length > 2000) throw new SuggestionFeedbackError('Feedback is too large', 413);
         if (input.trim()) { try { data = JSON.parse(input); } catch { throw new SuggestionFeedbackError('Expected valid JSON'); } }
         return { ok: true, learning: recordSuggestionDecision(req.params.id, 'dismiss', data) };
-      }),
+      })),
     },
     '/api/awareness/suggestions/:id/act': {
-      PATCH: (req: RequestWithId) => handle(() => ({ ok: true, learning: recordSuggestionDecision(req.params.id, 'interest',
-        { requestId: 'legacy-interest', reason: 'Requested more information' }) })),
+      PATCH: (req: RequestWithId) => hiddenOr(() => handle(() => ({ ok: true, learning: recordSuggestionDecision(req.params.id, 'interest',
+        { requestId: 'legacy-interest', reason: 'Requested more information' }) }))),
     },
   };
 }
