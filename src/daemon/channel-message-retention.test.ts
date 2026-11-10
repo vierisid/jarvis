@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
-import { addMessage, getMessages, getOrCreateConversation, PRUNE_BATCH } from '../vault/conversations.ts';
+import { addMessage, briefTurnMessageIds, getMessages, getOrCreateConversation, PRUNE_BATCH } from '../vault/conversations.ts';
 import { loadConfig } from '../config/loader.ts';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -110,6 +110,26 @@ describe('what goes with the messages', () => {
     sweepChannelMessages(90);
     expect(getDb().query<{ turn_id: string }, []>('SELECT turn_id FROM brief_chat_turns').all().map((r) => r.turn_id)).toEqual(['live']);
     expect(getDb().query<{ event_id: string }, []>('SELECT event_id FROM brief_chat_events').all().map((r) => r.event_id)).toEqual(['e-live']);
+  });
+
+  // #1313 follow-up (security): a guest's next turn leaves out the rows a
+  // Brief turn wrote (briefTurnMessageIds). A turn whose reply came after the
+  // cutoff keeps its record while that reply is stored, or the reply would be
+  // read back to the guest as the guest's own conversation.
+  test('a finished turn whose reply is newer than the cutoff stays until the reply goes', () => {
+    const tg = seed('telegram', 'tg:1');
+    const started = Date.now() - 91 * DAY, replied = Date.now() - 89 * DAY;
+    getDb().run("INSERT INTO conversation_messages (id, conversation_id, role, content, created_at) VALUES ('bu', ?, 'user', 'owner asks', ?)", [tg, started]);
+    getDb().run("INSERT INTO conversation_messages (id, conversation_id, role, content, created_at) VALUES ('ba', ?, 'assistant', 'OWNER SECRET REPLY', ?)", [tg, replied]);
+    getDb().run(`INSERT INTO brief_chat_turns (turn_id, workspace_id, conversation_id, request_id, input, state, user_message_id, assistant_message_id, created_at)
+      VALUES ('t', 'w', ?, 'r', 'owner asks', 'completed', 'bu', 'ba', ?)`, [tg, started]);
+    sweepChannelMessages(90);
+    expect(getMessages(tg).map((m) => m.id)).toContain('ba');
+    expect(briefTurnMessageIds(tg).has('ba')).toBe(true);
+    // Once the reply is past the retention too, both go.
+    sweepChannelMessages(88);
+    expect(getMessages(tg).map((m) => m.id)).not.toContain('ba');
+    expect(getDb().query('SELECT 1 FROM brief_chat_turns').all()).toEqual([]);
   });
 
   test('an attachment sent with such a turn is let go of, not a reason for the sweep to fail', () => {

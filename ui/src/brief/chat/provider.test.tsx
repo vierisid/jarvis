@@ -203,8 +203,9 @@ test('an accepted failed response exposes its explanation and never projects par
     socket.receive('brief_chat_event', { ...ref, eventId: 'partial', sequence: 1, payload: { kind: 'delta', messageId: 'answer', text: 'Partial response' } });
     socket.receive('brief_chat_event', { ...ref, eventId: 'failure', sequence: 2, payload: { kind: 'terminal', state: 'failed', error: { code: 'generation_failed', message: 'Please try again.' } } });
   });
-  expect(observed.current?.error).toBe('Please try again.');
-  expect(observed.items.find(item => item.id === 'answer')).toMatchObject({ text: 'Partial response', status: 'failed' });
+  // The explanation rides on the failed reply, not on the composer error.
+  expect(observed.current?.error).toBeNull();
+  expect(observed.items.find(item => item.id === 'answer')).toMatchObject({ text: 'Partial response', status: 'failed', error: 'Please try again.' });
   expect(observed.isResponding).toBe(false);
 });
 

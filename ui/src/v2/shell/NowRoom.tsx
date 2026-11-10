@@ -265,7 +265,9 @@ function FailureRows({ failures }: { failures: RemoteData<OpenFailure[]> }) {
     } catch { /* the next refresh shows whether it was recorded */ }
     finally { setDismissing(null); void failures.refresh(); }
   };
-  return <>{(failures.data ?? []).slice(0, 3).map(row => (
+  const [expanded, setExpanded] = useState(false);
+  const { visible, hidden, capped } = failureOverflow(failures.data ?? [], expanded);
+  return <>{visible.map(row => (
     <div className="rs-apr" key={row.keys[0]} data-effect={row.failure.effect}>
       <div className="t1"><span className="rs-dot" style={{ background: row.failure.effect === "none" ? "var(--listen)" : "var(--hold)" }} />
         {row.title}{row.repeats > 0 ? ` · ${row.repeats + 1} times` : ""}</div>
@@ -279,7 +281,26 @@ function FailureRows({ failures }: { failures: RemoteData<OpenFailure[]> }) {
         }}>Open</button>
         <button className="b2" disabled={dismissing === row.keys[0]} onClick={() => void dismiss(row)}>Dismiss</button>
       </div>
-    </div>))}</>;
+    </div>))}
+    {/* One toggle, so focus stays on it; it goes once three or fewer remain. */}
+    {(failures.data?.length ?? 0) > 3 && <button className="rs-row" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+      <span className="rs-dot" style={{ background: expanded ? "var(--faint)" : "var(--hold)" }} />
+      <span className="tx">{expanded
+        ? `${capped ? `Only the newest ${OPEN_FAILURES_LIMIT} may be listed; resolve or dismiss some to see older ones. ` : ""}Show fewer`
+        : `+${hidden} more ${hidden === 1 ? "failure" : "failures"}${capped ? ", and older ones may not be listed" : ""} - show`}</span></button>}</>;
+}
+
+/** The open-failures list holds at most this many rows (OPEN_FAILURES_LIMIT in src/workflows/runtime/open-failures.ts). */
+export const OPEN_FAILURES_LIMIT = 20;
+/**
+ * The tile shows three failures. Past three it says how many more wait and
+ * shows them in place: this tile is the only list of open failures, and the
+ * rows come from runs, deliveries and chat, so no one room holds them all.
+ * A full list may have been cut by the server, so it says older ones are not listed.
+ */
+export function failureOverflow<T>(rows: readonly T[], expanded: boolean) {
+  const capped = rows.length >= OPEN_FAILURES_LIMIT;
+  return expanded ? { visible: rows, hidden: 0, capped } : { visible: rows.slice(0, 3), hidden: Math.max(0, rows.length - 3), capped };
 }
 
 export function WaitingWidget({ live, inbox, failures, connection, onApprove, onCancel }: RenderCtx) {

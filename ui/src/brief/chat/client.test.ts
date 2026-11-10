@@ -308,16 +308,16 @@ test('failed turn details survive live delivery, reconnect and a daemon restart'
   const failure = { code: 'generation_failed', message: 'This response could not finish.' };
   f.emit(f.turns.finish(ref, 'failed', failure));
   expect(f.client.store.getSnapshot().conversations[a]?.turns[ref.turnId]).toMatchObject({ state: 'failed', error: failure });
-  expect(f.client.store.getSnapshot().conversations[a]?.error).toBe(failure.message);
+  // Shown in the thread from the turn; the composer error is for request errors only.
+  expect(f.client.store.getSnapshot().conversations[a]?.error).toBeNull();
   f.client.adapter.onClose(); await f.open();
-  expect(f.client.store.getSnapshot().conversations[a]?.error).toBe(failure.message);
+  expect(f.client.store.getSnapshot().conversations[a]?.turns[ref.turnId]).toMatchObject({ state: 'failed', error: failure });
   const interrupted = f.client.send(a, 'Restart');
   f.turns.accept({ ...interrupted, text: 'Restart' }).events.forEach(f.emit);
   f.emit(f.turns.start(interrupted));
   expect(f.client.store.getSnapshot().conversations[a]?.error).toBeNull();
   f.client.adapter.onClose(); f.turns.recover(); await f.open();
-  expect(f.client.store.getSnapshot().conversations[a]?.turns[interrupted.turnId]).toMatchObject({ state: 'failed', error: { code: 'interrupted' } });
-  expect(f.client.store.getSnapshot().conversations[a]?.error).toContain('restarted');
+  expect(f.client.store.getSnapshot().conversations[a]?.turns[interrupted.turnId]).toMatchObject({ state: 'failed', error: { code: 'interrupted', message: expect.stringContaining('restarted') } });
   expect(f.client.store.getSnapshot().conversations[a]?.messages.some(m => m.content === 'Partial')).toBe(true);
   // Fresh client must reconstruct the errors too, including those only in replay events.
   await f.client.start(); await f.open();
@@ -326,7 +326,7 @@ test('failed turn details survive live delivery, reconnect and a daemon restart'
   const request = f.sent.at(-1)!;
   reloaded.adapter.onMessage({ type: 'brief_chat_sync', id: request.id, timestamp: 10, payload: { ...f.turns.snapshot(a, 0), subscribed: true } });
   expect(reloaded.store.getSnapshot().conversations[a]?.turns[ref.turnId]).toMatchObject({ error: failure });
-  expect(reloaded.store.getSnapshot().conversations[a]?.error).toContain('restarted');
+  expect(reloaded.store.getSnapshot().conversations[a]?.turns[interrupted.turnId]?.error?.message).toContain('restarted');
 });
 
 test('history loaded before subscription is not appended again by older replay pages', async () => {

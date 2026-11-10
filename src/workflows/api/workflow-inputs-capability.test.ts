@@ -4,12 +4,13 @@ import { createFlow } from '../db/repos/flow';
 import { createDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun, updateRun } from '../db/repos/flow-run';
 import { BriefCapabilities } from '../../brief/capabilities';
-import { HUMAN_INPUT_PIECE, HUMAN_INPUT_UNAVAILABLE_MESSAGE } from '../runtime/human-input-contract';
+import { HUMAN_INPUT_PIECE, humanInputRefusal } from '../runtime/human-input-contract';
 import { getHumanInput, requestHumanInput } from '../runtime/human-input';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { createWorkflowRoutes } from './routes';
 import { assertRunIngredientsReady, configureWorkflowReadiness, graphReadiness, versionReadiness } from '../db/repos/flow-readiness';
 import { PieceCatalog } from '../runtime/piece-catalog';
+const HUMAN_INPUT_UNAVAILABLE_MESSAGE = humanInputRefusal({ enabled: false, reason: 'disabled' }, 'brief')!;
 
 /**
  * #1266 follow-up (owner, 2026-11-06): workflow input requests are answered in

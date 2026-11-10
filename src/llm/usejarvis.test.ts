@@ -306,6 +306,40 @@ describe('UsejarvisAIProvider', () => {
     expect(unreadable.message).toMatch(/active plan is required/);
   });
 
+  // #1312 follow-up: surfaces that never show a raw error (Brief chat) may show
+  // this authored sentence, with the account's appeal contact, and only it.
+  it('a restriction carries its authored sentence as hosted detail, thrown and streamed, without the status marker or body', async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(401, { error: { message: 'Authentication Error: key sk-uj-abc is blocked' } })) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc', {
+      restriction: async () => ({ reason: 'content_policy', contact: 'support@usejarvis.test' }),
+    });
+    const thrown = await provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' }).catch((e) => e);
+    expect(thrown.hostedDetail).toBe('Usejarvis AI is restricted on this account for a usage-policy violation. To appeal, contact support@usejarvis.test.');
+    const events: Array<{ type: string; code?: string; hosted_detail?: string }> = [];
+    for await (const ev of provider.stream([{ role: 'user', content: 'hi' }], { model: 'uj-chat' })) events.push(ev as never);
+    const err = events.find((e) => e.type === 'error');
+    expect(err).toMatchObject({ code: 'restricted', hosted_detail: thrown.hostedDetail });
+    expect(err?.hosted_detail).not.toMatch(/\(401\)|blocked|sk-uj/);
+  });
+
+  it('a model outside the plan is forbidden with its detail, whatever status it came with, never a credential failure', async () => {
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc', { restriction: async () => null });
+    for (const [status, message] of [[403, 'team_model_access_denied'], [401, 'model uj-x not allowed for this key']] as const) {
+      globalThis.fetch = (async () => jsonResponse(status, { error: { message } })) as unknown as typeof fetch;
+      const thrown = await provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-x' }).catch((e) => e);
+      expect(thrown).toMatchObject({ code: 'forbidden', hostedDetail: 'That model is not included in your plan.' });
+    }
+  });
+
+  it('a generic hosted failure carries no hosted detail', async () => {
+    globalThis.fetch = (async () => jsonResponse(500, { error: { message: 'upstream exploded at llm.internal' } })) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    const events: Array<{ type: string; hosted_detail?: string }> = [];
+    for await (const ev of provider.stream([{ role: 'user', content: 'hi' }], { model: 'uj-chat' })) events.push(ev as never);
+    expect(events.find((e) => e.type === 'error')?.hosted_detail).toBeUndefined();
+  });
+
   it('budget exhaustion is quota_exhausted, while a plain 429 keeps the Retry-After it came with', async () => {
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ error: { message: 'ExceededBudget: budget has been exceeded' } }), {

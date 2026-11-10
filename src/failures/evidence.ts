@@ -13,7 +13,8 @@ import type { FailureEvidence } from './projection';
 
 const HOSTED: Record<HostedErrorKind, LLMErrorCode> = {
   quota_exhausted: 'quota_exhausted', content_policy: 'content_policy', restricted: 'restricted',
-  model_not_in_plan: 'forbidden', inactive: 'restricted', generic: 'unknown',
+  // inactive is what UsejarvisAIProvider reports as auth (a 401 with no restriction): no plan, nothing to appeal.
+  model_not_in_plan: 'forbidden', inactive: 'auth', generic: 'unknown',
 };
 
 /** An AI step keeps its provider's error code on its effect record as `PROVIDER_<CODE>`. */

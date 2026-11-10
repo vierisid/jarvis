@@ -89,6 +89,13 @@ export const DIAGNOSIS_FIXTURES: DiagnosisFixture[] = [
   { name: 'Kill: refused before dispatch while Jarvis is stopped',
     evidence: { source: 'action', outcome: { status: 'blocked', code: 'EMERGENCY_STOPPED', message: 'Workflow effect blocked: system killed', effect: 'not_started' } },
     subject: step, expect: { category: 'cancelled', effect: 'none', next: ['run_again_when_resumed', 'open_details'] } },
+  // Waiting does not lift these two, so they are not told to wait for a limit to reset.
+  { name: 'content policy: the hosted platform blocked the request',
+    evidence: { source: 'provider', code: 'content_policy', message: 'blocked by the Usejarvis AI content policy' },
+    subject: chat, expect: { category: 'provider_limit', effect: 'none', next: ['change_request', 'open_details'] } },
+  { name: 'restricted: hosted AI is restricted on this account, from a workflow step',
+    evidence: { source: 'provider', code: 'restricted', message: 'restricted for a usage-policy violation' },
+    subject: step, expect: { category: 'provider_limit', effect: 'unknown', next: ['appeal_restriction', 'check_before_running_again', 'open_details'] } },
   { name: 'untyped failure of a chat reply',
     evidence: { source: 'unknown', message: 'Error: unexpected end of stream' },
     subject: chat, expect: { category: 'internal', effect: 'none', next: ['run_again', 'open_details'] } },

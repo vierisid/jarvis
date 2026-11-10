@@ -93,7 +93,9 @@ users keep the existing onboarding wizard and its Brief draft handoff.
   only: the backend feature defaults above stay on.
 - Set `JARVIS_DASHBOARD=legacy` in the instance service environment and restart
   to restore the previous default and stop applying automatic feature defaults
-  (Needs you, and on hosted quiet awareness).
+  (Needs you, and on hosted quiet awareness). Needs you requests are answered only
+  in Brief, so with the legacy dashboard a workflow step that asks for input or
+  approval fails with `HUMAN_INPUT_UNAVAILABLE`, whatever `JARVIS_BRIEF_DECISIONS` says.
   No data is reset or downgraded. Explicit operator feature flags still apply.
 - Unset the variable, or set it to `brief`, and restart to use the Brief default.
   `JARVIS_HOSTED_DASHBOARD` remains a compatibility alias on every install; the

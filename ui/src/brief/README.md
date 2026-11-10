@@ -359,7 +359,8 @@ fixture owner (add, select, close, reopen, failing writes and each status mode).
   that the provider's value satisfies the port and drives the real `BriefConversationClient`.
 - The draft is kept until the owner accepts the send; a rejected or failed send keeps it. Stop cancels
   the exact selected turn (conversation, turn and request ids) and shows "Stopping response..." until
-  the owner reports the turn ended or an error, so a terminal failure after Stop stays visible.
+  the owner reports the turn ended or an error. A turn's failure is shown once, in the thread; the
+  composer's status line carries only its own request errors and never repeats it.
   Enter sends (not during IME composition); Shift+Enter adds a line. Drafts over 65,536 bytes are
   refused locally, matching the client.
 - Attachments: the composer only reserves the 44px slot (`attachmentControl`). Attachments must go
@@ -413,7 +414,10 @@ fixture binding (Screenshot availability and failure toggles). It picks, uploads
   data. Only the newest live start animates; replayed rows never move. Reduced motion stops it.
 - Reply text is untrusted and renders through `components/SafeMarkdown` (#1065): no raw HTML, no image
   loads, restricted URL schemes. Never add a second markdown renderer or `dangerouslySetInnerHTML`.
-- Failed or cancelled turns keep the partial answer and show a fixed notice; the raw error is not shown.
+- Failed or cancelled turns keep the partial answer and show a notice. A failure the daemon classified
+  (`generation_failed`, `attachment_unavailable`, `interrupted`, `provider_*`) shows the daemon's own
+  authored message, with a link to where it is fixed (AI settings, Usage or Billing) when there is one;
+  any other code shows a fixed notice. The raw error is never shown.
 - Reading position is kept by semantic anchors (`reading.ts`) across activity toggles, history
   prepend, width changes and tab switches, and only a reader already at the bottom follows new content.
 - A running turn with a pending approval shows "Waiting for your approval before continuing." and,

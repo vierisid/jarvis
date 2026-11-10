@@ -103,7 +103,7 @@ import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts'
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } from "../config/pebble-hotkeys.ts";
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
-import { configureHostedDashboard } from './hosted-dashboard';
+import { configureHostedDashboard, hostedDashboardDefault } from './hosted-dashboard';
 import { REALTIME_NAV_TOOLS } from "./realtime-nav-tools.ts";
 import { RealtimeBudgetTracker, realtimeBudgetFile } from "./realtime-budget.ts";
 import { EventReactor } from "./event-reactor.ts";
@@ -128,7 +128,7 @@ import { ResearchQueue } from "./research-queue.ts";
 import { researchQueueTool, setResearchQueueRef } from "../actions/tools/research.ts";
 import { startPersistentAgent, stopCall } from "../actions/tools/agents.ts";
 import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
-import { ChannelService } from "./channel-service.ts";
+import { ChannelService, isChannelGuestThread } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
 import { ApprovalManager, approvalNeedsClick, executionState, onApprovalDeadlineExpired, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
@@ -180,7 +180,7 @@ import { createPieceLibraryChangeHandler } from "../workflows/runtime/piece-libr
 import { resolveSharedRuntimePaths } from "../workflows/runtime/shared-runtime-paths.ts";
 import { DEFAULT_IDS } from "../workflows/db/schema.ts";
 import { buildSandboxServiceBackends } from "../workflows/runtime/service-backends.ts";
-import { HUMAN_INPUT_UNAVAILABLE_MESSAGE } from "../workflows/runtime/human-input-contract.ts";
+import { humanInputRefusal } from "../workflows/runtime/human-input-contract.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 import { createLimiter } from "../util/concurrency.ts";
 import { runWithOrigin } from "../llm/origin.ts";
@@ -4928,6 +4928,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       },
       send: (client, message) => wsService.getServer().sendToClient(client, message),
       tts: () => wsService.getTTSProvider(),
+      // Which Telegram or Discord threads are a guest's, against the channel
+      // owner as configured now (#1313 follow-up): their rows are framed. A
+      // forward in the owner's own thread is framed on its own (holdsForward).
+      isGuestConversation: id => isChannelGuestThread(id, agentService.getConfig().channels),
     });
     const briefAttachments = new BriefAttachmentProvider(getDb(), sidecarManager);
     briefWorkflowComposition = new BriefCompositionProvider(getDb());
@@ -5302,8 +5306,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       machines: () => sidecarManager.listSidecars(),
       localTools: () => !config.noLocalTools && !isNoLocalTools(),
       // A step that asks a person cannot be answered while Brief decisions is
-      // off, so such a workflow is not ready (the step's own refusal, earlier).
-      humanInputUnavailable: () => briefCapabilities.snapshot().capabilities.decisions.enabled ? null : HUMAN_INPUT_UNAVAILABLE_MESSAGE,
+      // off or the legacy dashboard is chosen, so such a workflow is not ready;
+      // the same refusal the step itself gives at run time.
+      humanInputUnavailable: () => humanInputRefusal(briefCapabilities.snapshot().capabilities.decisions, hostedDashboardDefault(jarvisConfig)),
     });
     // Q-05: an enabled flow without pins (one enabled before this build) is
     // pinned to the bindings it runs against now, before any trigger fires.
@@ -5696,7 +5701,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         decisionDocumentsEnabled: briefCapabilities.snapshot().capabilities.decisionEdits.enabled,
         // Input and approval requests are answered in Needs you (#1266): with
         // decisions off nothing could answer one, so a step that asks fails now.
-        humanInputUnavailable: () => briefCapabilities.snapshot().capabilities.decisions.enabled ? null : HUMAN_INPUT_UNAVAILABLE_MESSAGE,
+        humanInputUnavailable: () => humanInputRefusal(briefCapabilities.snapshot().capabilities.decisions, hostedDashboardDefault(jarvisConfig)),
         credentialResolver: workflowSandboxApi.services.credentialResolver,
         llmManager: agentService.getLLMManager(),
         ...(toolRegistry ? { toolRegistry } : {}),

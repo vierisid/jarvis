@@ -305,8 +305,9 @@ describe('a human input step refused before it asked anyone', () => {
   test('with Needs you off: reads as that refusal, saying how to turn it on', () => {
     expect(runFailure(asking('@jarvispieces/piece-jarvis-input', 'request_input')(engineError('HUMAN_INPUT_UNAVAILABLE', 'Needs you is off')))).toMatchObject({
       category: 'missing_binding', effect: 'none', code: 'HUMAN_INPUT_UNAVAILABLE',
-      headline: 'The step "Ask for the update" did not run: Needs you is off on this Jarvis, so nothing could answer it. Turn on decisions (JARVIS_BRIEF_DECISIONS=1).' });
+      headline: 'The step "Ask for the update" did not run: Needs you is off or not ready on this Jarvis, so nothing could answer it. It needs the Brief dashboard (not JARVIS_DASHBOARD=legacy) with decisions on (JARVIS_BRIEF_DECISIONS=1); the details say which applies.' });
   });
+
 
   test('the same body from any other step, another code, or the code inside a string, is not read as it', () => {
     expect(runFailure(asking('@jarvispieces/piece-jarvis-notify', 'notify')(engineError('HUMAN_INPUT_LIMIT', LIMIT)))).toMatchObject({ category: 'internal', code: null });
