@@ -1,4 +1,5 @@
 import type { ToolDefinition } from '../../actions/tools/registry';
+import type { ActionCategory } from '../../roles/authority';
 import { BOUNDED_TOOLS } from './tool-capability';
 import { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview } from '../../authority/ui-intent';
 export { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview };
@@ -25,4 +26,17 @@ export function workflowToolDeclarationRefusal(tool: ToolDefinition): string | n
     : `${tool.name} is unavailable in workflows because its live approval guard is missing.`;
   if (BOUNDED_TOOLS.has(tool.name) || tool.name === 'run_skill' || tool.workflowEffect) return null;
   return `${tool.name} has no supported direct workflow adapter. Use its dedicated workflow piece or an allowed agent task.`;
+}
+
+/**
+ * The floor a direct `jarvis-tool` step's above-level card asks from, or
+ * undefined when a shortfall denies. One function for the runtime route and
+ * the awareness prediction, so the two cannot disagree again (#1314 m7): a
+ * reviewed UI action asks from read_data, any other gated call from its own
+ * floor.
+ */
+export function directToolAboveLevelFloor(tool: ToolDefinition, params: Record<string, unknown>,
+  gate: { confirm?: unknown; floorCategory: ActionCategory }): ActionCategory | undefined {
+  if (!gate.confirm) return undefined;
+  return workflowUiReview(tool, tool.name, params) ? 'read_data' : gate.floorCategory;
 }

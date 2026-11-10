@@ -43,6 +43,7 @@ import type { AuditTrail } from "../../authority/audit";
 import type { EmergencyController } from "../../authority/emergency";
 import type { RoleDefinition } from "../../roles/types";
 import { JarvisLlmClient } from "../adapters/llm-client";
+import { directToolAboveLevelFloor } from './workflow-ui-tools';
 import { JarvisToolRegistryAdapter, frameComputerStepResult } from "../adapters/tool-registry";
 import { JarvisNotifierAdapter, type NotifierDeps } from "../adapters/notifier";
 import { JarvisContextProviderAdapter } from "../adapters/context-provider";
@@ -520,7 +521,7 @@ export function buildSandboxServiceBackends(
           ...(uiReview ? { reviewRegistry: opts.toolRegistry!, reviewSubject: tool.reviewSubject?.(req.params) ?? {} } : {}),
           // As at the chat gate: a gated call over the workflow's level asks
           // instead of failing the step.
-          ...(gate.confirm ? { aboveLevelFloor: uiReview ? 'read_data' as const : gate.floorCategory } : {}),
+          ...(gate.confirm ? { aboveLevelFloor: directToolAboveLevelFloor(tool, req.params, gate) } : {}),
           route: 'tool', toolName: tool.name, category: capability.category, categories: capability.categories, toolCategory: tool.category,
           // Spelled out rather than spread: the request is what the effect's
           // identity digest is taken over, so only the two fields that decide
