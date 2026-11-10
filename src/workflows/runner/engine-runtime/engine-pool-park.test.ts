@@ -119,4 +119,28 @@ describe("a parked warm engine", () => {
     expect((await call(second, "/v1/store-entries?key=k")).status).toBe(404);
     await second.release();
   });
+
+  test("a rebind failing on an engine that exited meanwhile signals nothing through the dead handle", async () => {
+    const first = await acquire("run-1");
+    const { proc } = first._internals();
+    const signalsAfterExit: string[] = [];
+    const kill = proc.kill;
+    proc.kill = (signal) => {
+      if (!proc.alive()) signalsAfterExit.push(String(signal));
+      return kill(signal);
+    };
+    await first.release();
+    // Between the pool's alive check and its rebind: the engine dies and
+    // its sandbox is revoked out of band, so the rebind throws.
+    duringMint = async () => {
+      proc.child.kill("SIGKILL");
+      await proc.exited;
+      api.registry.terminate(first.sandboxId);
+    };
+    const next = await acquire("run-2");
+    expect(next.sandboxId).not.toBe(first.sandboxId);
+    expect(signalsAfterExit).toEqual([]);
+    expect(api.registry.get(first.sandboxId)).toBeNull();
+    await next.release();
+  });
 });

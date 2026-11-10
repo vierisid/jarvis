@@ -804,8 +804,12 @@ export class EngineRuntime {
         });
       } catch (e) {
         // Sandbox was unexpectedly terminated (e.g. proc died and registry
-        // was cleaned up out-of-band). Fall through to a fresh spawn.
-        warm.proc.kill("SIGKILL");
+        // was cleaned up out-of-band). Fall through to a fresh spawn. The
+        // engine may have exited during the mint above: signalling through
+        // a handle whose process was reaped is never risked (as in
+        // `retireEngine`), and its sandbox is revoked whatever state it is in.
+        if (warm.proc.alive()) warm.proc.kill("SIGKILL");
+        this.api.registry.terminate(warm.sandboxId);
         return this.spawnFresh(opts);
       }
       return new EngineHandle(
