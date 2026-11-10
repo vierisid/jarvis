@@ -6,9 +6,27 @@ import { ReplyMarkdown } from "./ReplyMarkdown";
 import { running, threadItems, type MessageBinding } from "./model";
 import { useReadingPosition, type ThreadMemory } from "./reading";
 import { useBriefReducedMotion } from "../../motion";
+import { DESTINATIONS, targetHref } from "../../navigation/destinations";
 // The .brief-sr-only helper on the approval waiting line (#1092).
 import "../../components/controls/controls.css";
 import "./messages.css";
+
+const providerFailureCodes = new Set([
+  'provider_background_throttled', 'provider_auth', 'provider_forbidden', 'provider_rate_limit',
+  'provider_network', 'provider_bad_request', 'provider_unsupported_tools', 'provider_not_found',
+  'provider_server', 'provider_quota_exhausted', 'provider_content_policy', 'provider_restricted',
+]);
+// Failures the user fixes in the AI provider settings (credentials, model, plan).
+const providerSettingsCodes = new Set([
+  'provider_auth', 'provider_forbidden', 'provider_rate_limit', 'provider_quota_exhausted',
+  'provider_not_found', 'provider_unsupported_tools', 'provider_restricted',
+]);
+// Only the new classified contract contains authored recovery copy. Older or
+// untyped errors may contain raw upstream detail and keep the safe fallback.
+function failureNotice(error?: { code?: string; message?: string }) {
+  return error?.code && providerFailureCodes.has(error.code) && error.message
+    ? error.message : 'This response could not finish.';
+}
 
 export function ConversationMessages({ mode, binding, panelId, labelledBy, reducedMotion = false }: {
   mode: "preview" | "live"; binding?: MessageBinding; panelId: string; labelledBy?: string; reducedMotion?: boolean;
@@ -96,7 +114,9 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
           </div>}
             {message?.content && <ReplyMarkdown text={message.content}/>}
             {(failed || cancelled) && <p className="brief-message-notice" data-error={failed} data-reading-anchor="terminal">
-              {failed ? "This response could not finish." : "Response stopped."}{message?.content ? " The partial answer is kept above." : ""}</p>}
+              {failed ? failureNotice(turn.error) : "Response stopped."}{message?.content ? " The partial answer is kept above." : ""}</p>}
+            {failed && providerSettingsCodes.has(turn.error?.code ?? '') &&
+              <a data-provider-settings href={targetHref(window.location.href, DESTINATIONS.credentials.legacy)}>Open AI settings</a>}
             {turn?.state === "completed" && !message?.content && <p className="brief-message-notice" data-reading-anchor="terminal">Finished without a text reply.</p>}
           </article>;
         })}
@@ -115,7 +135,7 @@ function liveNotice(items: ReturnType<typeof threadItems>, binding: MessageBindi
   if (latest?.kind === "reply") {
     const turn = latest.turn;
     if (latest.awaitingApproval) return `Waiting for your approval before continuing. ${waitingDetail(latest.pendingApprovalIds, binding.approvalCards)}`.trim();
-    if (turn?.state === "failed") return `This response could not finish.${latest.message?.content ? " The partial answer is kept above." : ""}`;
+    if (turn?.state === "failed") return `${failureNotice(turn.error)}${latest.message?.content ? " The partial answer is kept above." : ""}`;
     if (turn?.state === "cancelled") return `Response stopped.${latest.message?.content ? " The partial answer is kept above." : ""}`;
     if (running(turn) && !latest.activities.length)
       return binding.connected ? (turn?.state === "queued" ? "Waiting to respond…" : "Preparing your response…") : "Reconnecting…";

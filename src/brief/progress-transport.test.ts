@@ -10,6 +10,7 @@ import type { LLMStreamEvent } from '../llm/provider';
 import type { WSMessage } from '../comms/websocket';
 import { BriefConversationProvider } from './conversations';
 import { BriefChatTransport, type ScopedChatInput } from './chat-transport';
+import { currentBriefTurn } from './chat-context';
 import { BriefCapabilities } from './capabilities';
 import { registerConversations } from './registrations/conversations';
 import { registerChatTransport } from './registrations/chat-transport';
@@ -189,4 +190,34 @@ test('restart settles unfinished activities once without claiming an interrupted
     expect(repository.get(input).state).toBe('failed');
     expect(repository.activity(input, { kind: 'activity', activity: { ...activity, phase: 'completed' } })).toBeNull();
   } finally { closeDb(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+// The production stream carries no tool_call events (agent-service yields text,
+// done and error only), so a task that ran before a provider failure is known
+// only through the execution observer or, with progress off, turn.progress().
+for (const enabled of [true, false]) test(`a provider failure after a delegated task does not say nothing was done (progress ${enabled ? 'on' : 'off'})`, async () => {
+  const f = fixture(async function* () {
+    // Same shape as ws-service broadcastTaskEvent for a task started in this turn.
+    if (!reportExecutionActivity({ kind: 'task', executionId: 'task-1', phase: 'started' })) currentBriefTurn()!.progress('started');
+    yield { type: 'text', text: 'Sending it now.' };
+    yield { type: 'error', error: 'HTTP 429 upstream body', code: 'rate_limit' };
+  }, enabled);
+  const socket = f.client(), input = f.input(`task-then-limit-${enabled}`);
+  await f.send(socket, input);
+  await f.transport.idle();
+  const terminal = f.events(socket).find(e => e.payload.kind === 'terminal')!.payload as { error?: { code: string; message: string } };
+  expect(terminal.error?.code).toBe('provider_rate_limit');
+  expect(terminal.error?.message).toContain('may have gone through');
+  expect(terminal.error?.message).not.toContain('Nothing was done');
+  f.transport.stop(); await f.transport.idle();
+});
+
+test('a provider failure with no work started still says nothing was done', async () => {
+  const f = fixture(async function* () { yield { type: 'error', error: 'HTTP 429 upstream body', code: 'rate_limit' }; });
+  const socket = f.client(), input = f.input('limit-only');
+  await f.send(socket, input);
+  await f.transport.idle();
+  const terminal = f.events(socket).find(e => e.payload.kind === 'terminal')!.payload as { error?: { message: string } };
+  expect(terminal.error?.message).toContain('Nothing was done');
+  f.transport.stop(); await f.transport.idle();
 });
