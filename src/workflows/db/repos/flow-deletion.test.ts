@@ -102,12 +102,16 @@ test("the dashboard delete removes run logs, step files, file rows, store keys, 
 test("manage_workflow delete removes the same and tells the dashboard; a failing listener does not stop it", async () => {
   const { flow, version } = fixture();
   const left = leftovers(flow.id, version.id);
+  // A live run's card too: the delete stops the run and closes it.
+  const live = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+  const liveCard = cardFor(live.id, flow.id, version.id);
   const closed: string[] = [];
   setDeletedWorkflowCardListener((id) => { closed.push(id); throw new Error("socket gone"); });
   const out = JSON.parse(await createManageWorkflowTool().execute({ action: "delete", flow: flow.id }) as string);
   expect(out).toEqual({ id: flow.id, deleted: true });
   left.check();
-  expect(closed).toEqual([left.card]);
+  // Every card is reported, the later one too after the listener threw on the first.
+  expect(closed.sort()).toEqual([left.card, liveCard].sort());
 });
 
 test("a missing or foreign flow is not found and nothing is touched", async () => {
