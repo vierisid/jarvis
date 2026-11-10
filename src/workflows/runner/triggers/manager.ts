@@ -225,6 +225,11 @@ export class TriggerManager {
         return true; // a probe failure must not close the ingress
       }
     });
+    // A flow that exists but is off answers "turned off", not "not found".
+    this.webhooks.setTurnedOffCheck((flowId) => {
+      const flow = getFlow(flowId);
+      return !!flow && flow.status !== 'ENABLED' && !workflowRemovalState(flowId).receipt_id;
+    });
     this.engineRuntime = deps.engineRuntime;
     this.log = deps.log ?? ((line) => console.log(`[trigger-manager] ${line}`));
     // 5s / 15s / 1m / 5m / 15m -- covers a brief engine hiccup within seconds

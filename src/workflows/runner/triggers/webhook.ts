@@ -131,6 +131,42 @@ export const WEBHOOK_MAX_BODY_BYTES = 1_000_000;
 
 const HEX_SHA256 = /^[0-9a-f]{64}$/i;
 
+/** What a sender is told when the flow exists but is turned off. */
+export const WORKFLOW_OFF_MESSAGE = 'This workflow is turned off. Turn it on in Jarvis to receive webhooks.';
+
+/** Fields of a form or query string: repeated names become arrays. Own properties only, so a field named `__proto__` is data. */
+export function fieldsOf(pairs: Iterable<[string, unknown]>): Record<string, unknown> {
+  const fields = new Map<string, unknown>();
+  for (const [name, value] of pairs) {
+    if (!fields.has(name)) fields.set(name, value);
+    else {
+      const seen = fields.get(name);
+      fields.set(name, Array.isArray(seen) ? [...seen, value] : [seen, value]);
+    }
+  }
+  return Object.fromEntries(fields);
+}
+
+/**
+ * A form body's fields, or null when the body is not a form. A urlencoded
+ * body is parsed as the browser sent it; a multipart one keeps its text
+ * fields (a file part is dropped: files are not carried in the trigger).
+ * Runs on the text that was verified, after the signature check.
+ */
+async function formFields(contentType: string | null, rawBody: string): Promise<Record<string, unknown> | null> {
+  const type = (contentType ?? '').split(';')[0]!.trim().toLowerCase();
+  if (type === 'application/x-www-form-urlencoded') return fieldsOf(new URLSearchParams(rawBody));
+  if (type === 'multipart/form-data') {
+    try {
+      const form = await new Response(rawBody, { headers: { 'content-type': contentType! } }).formData();
+      return fieldsOf([...form.entries()].filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+    } catch {
+      return null; // malformed: kept as the raw body text, like any other unparsed body
+    }
+  }
+  return null;
+}
+
 const json = (status: number, body: Record<string, unknown>, extra: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...extra } });
 
@@ -141,6 +177,12 @@ export class WebhookManager {
   private global = new KeyedRateLimiter(60_000, WEBHOOK_GLOBAL_PER_MINUTE);
   private badSignature = new KeyedRateLimiter(60_000, WEBHOOK_BAD_SIGNATURE_PER_MINUTE);
   private canAccept: (() => boolean) | null = null;
+  private isTurnedOff: ((workflowId: string) => boolean) | null = null;
+
+  /** Tells a flow that exists but is turned off from an id that is unknown. */
+  setTurnedOffCheck(fn: ((workflowId: string) => boolean) | null): void {
+    this.isTurnedOff = fn;
+  }
 
   /** Test hook: swap the limiters (e.g. with a fake clock). */
   setRateLimiters(perFlow: KeyedRateLimiter, global: KeyedRateLimiter, badSignature?: KeyedRateLimiter): void {
@@ -215,6 +257,9 @@ export class WebhookManager {
     const route = this.routes.get(workflowId);
 
     if (!route) {
+      let off = false;
+      try { off = this.isTurnedOff?.(workflowId) ?? false; } catch { /* unknown id */ }
+      if (off) return json(404, { error: WORKFLOW_OFF_MESSAGE });
       return new Response(JSON.stringify({ error: 'Webhook not found' }), {
         status: 404,
         headers: { 'Content-Type': 'application/json' },
@@ -316,16 +361,21 @@ export class WebhookManager {
     // Parse body
     let data: Record<string, unknown> = {};
     if (rawBody.trim()) {
-      try {
-        const parsed = JSON.parse(rawBody);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          data = parsed as Record<string, unknown>;
-        } else {
-          data = { body: parsed };
+      const form = await formFields(req.headers.get('content-type'), rawBody);
+      if (form) {
+        data = form;
+      } else {
+        try {
+          const parsed = JSON.parse(rawBody);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            data = parsed as Record<string, unknown>;
+          } else {
+            data = { body: parsed };
+          }
+        } catch {
+          // Not JSON — pass as raw string
+          data = { body: rawBody };
         }
-      } catch {
-        // Not JSON — pass as raw string
-        data = { body: rawBody };
       }
     }
 
@@ -345,6 +395,7 @@ export class WebhookManager {
     data._webhook = {
       method: req.method,
       url: req.url,
+      query: fieldsOf(new URL(req.url).searchParams),
       timestamp: Date.now(),
       headers: Object.fromEntries(req.headers.entries()),
     };
@@ -398,7 +449,7 @@ function webhookReply(workflowId: string, result: unknown): Response {
         ...(result.runId ? { runId: result.runId } : {}) });
     case 'blocked':
       return result.disabled
-        ? json(404, { error: 'Workflow is not active', ...(result.fireId ? { fireId: result.fireId } : {}) })
+        ? json(404, { error: WORKFLOW_OFF_MESSAGE, ...(result.fireId ? { fireId: result.fireId } : {}) })
         // The refusal's reason names the workflow's steps and connections:
         // it stays in the owner's delivery record, not in a reply to a sender
         // who may hold nothing but the URL.

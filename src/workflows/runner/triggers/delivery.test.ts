@@ -653,6 +653,85 @@ describe("webhooks", () => {
     await d.stop();
   });
 
+  test("a workflow turned off says so, and an unknown id stays not found", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    await d.manager.stop();
+    updateFlowStatus(flowId, "DISABLED");
+    const off = await post(d, flowId, "{}");
+    expect(off.status).toBe(404);
+    expect(await off.json()).toEqual({ error: expect.stringContaining("turned off") });
+    const unknown = await post(d, "no-such-flow", "{}");
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toEqual({ error: "Webhook not found" });
+    await d.stop();
+  });
+
+  describe("body shapes", () => {
+    const FORM = { "Content-Type": "application/x-www-form-urlencoded" };
+    const capture = async (flowId: string, body: string, headers: Record<string, string>, query = "") => {
+      const d = await daemon(Date.now());
+      const seen: Record<string, any>[] = [];
+      d.manager.webhookManager().setTriggerCallback((_id, data) => { seen.push(data); return { outcome: "started", fireId: "f", runId: "r" }; });
+      const res = await d.manager.webhookManager().handleRequest(flowId, new Request(`http://localhost/api/webhooks/${flowId}${query}`, { method: "POST", body, headers }));
+      await d.stop();
+      return { res, data: seen[0] };
+    };
+
+    test("a form post's fields are top-level fields, repeated names are arrays", async () => {
+      const { flowId } = webhook();
+      const { data } = await capture(flowId, "name=Ada+Lovelace&email=a%40b.co&tag=x&tag=y&tag=z", FORM);
+      expect(data).toMatchObject({ name: "Ada Lovelace", email: "a@b.co", tag: ["x", "y", "z"] });
+      expect(data!.body).toBeUndefined();
+      expect(data!._webhook.method).toBe("POST");
+    });
+
+    test("a multipart form's text fields are top-level fields", async () => {
+      const { flowId } = webhook();
+      const part = (name: string, value: string, file = "") => `--B\r\nContent-Disposition: form-data; name="${name}"${file ? `; filename="${file}"` : ""}\r\n\r\n${value}\r\n`;
+      const body = part("name", "Ada") + part("tag", "x") + part("tag", "y") + part("upload", "bytes", "a.txt") + "--B--\r\n";
+      const { data } = await capture(flowId, body, { "Content-Type": "multipart/form-data; boundary=B" });
+      expect(data).toMatchObject({ name: "Ada", tag: ["x", "y"] });
+      expect(data!.upload).toBeUndefined();
+    });
+
+    test("query parameters are parsed under _webhook.query, repeats as arrays", async () => {
+      const { flowId } = webhook();
+      const { data } = await capture(flowId, '{"n":1}', { "Content-Type": "application/json" }, "?source=ad&id=1&id=2&empty=");
+      expect(data!.n).toBe(1);
+      expect(data!._webhook.query).toEqual({ source: "ad", id: ["1", "2"], empty: "" });
+      const none = await capture(flowId, "{}", {});
+      expect(none.data!._webhook.query).toEqual({});
+    });
+
+    test("JSON objects, arrays and plain text keep their shapes", async () => {
+      const { flowId } = webhook();
+      expect((await capture(flowId, "[1,2]", { "Content-Type": "application/json" })).data!.body).toEqual([1, 2]);
+      expect((await capture(flowId, "hello", { "Content-Type": "text/plain" })).data!.body).toBe("hello");
+      expect((await capture(flowId, "a=1", { "Content-Type": "text/plain" })).data!.body).toBe("a=1");
+    });
+
+    test("a field named __proto__ is data, not a prototype", async () => {
+      const { flowId } = webhook();
+      const { data } = await capture(flowId, "__proto__=x&a=1", FORM);
+      expect(Object.getPrototypeOf(data)).toBe(Object.prototype);
+      expect(Object.keys(data!)).toContain("__proto__");
+    });
+
+    test("a signed form post verifies over the raw body, and a changed body does not", async () => {
+      const { flowId } = webhook({ secret: SECRET });
+      const body = "name=Ada+Lovelace&tag=x&tag=y";
+      const d = await daemon(Date.now());
+      const seen: Record<string, any>[] = [];
+      d.manager.webhookManager().setTriggerCallback((_id, data) => { seen.push(data); return { outcome: "started", fireId: "f", runId: "r" }; });
+      const send = async (text: string, signedText: string) => d.manager.webhookManager().handleRequest(flowId, new Request(`http://localhost/api/webhooks/${flowId}`, { method: "POST", body: text, headers: { ...FORM, ...(await timestamped(SECRET, signedText)) } }));
+      expect((await send(body, body)).status).toBe(200);
+      expect(seen[0]).toMatchObject({ name: "Ada Lovelace", tag: ["x", "y"] });
+      expect((await send("name=Eve", body)).status).toBe(401);
+      await d.stop();
+    });
+  });
+
   test("a delivery refused by readiness is kept for a person, and its retries do not pile up failed runs", async () => {
     setEncryptionKey(Buffer.alloc(32, 0x62));
     const connection = upsertConnection({ externalId: "account", pieceName: "private-piece", displayName: "S", pieceVersion: "1", type: "SECRET_TEXT", value: { secret_text: "x" } });
