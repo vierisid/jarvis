@@ -115,6 +115,12 @@ export const expressionPatches = {
     ["import { httpMethodDropdown } from '../common/props';\nimport { HttpsProxyAgent } from 'https-proxy-agent';\nimport axios from 'axios';",
       "import { httpMethodDropdown } from '../common/props';\nimport axios from 'axios';"],
   ],
+  // Convert JSON to CSV keeps every column, not only the first row's. Registered so a
+  // vendor sync re-applies it; `core-csv-piece.test.ts` covers it.
+  "packages/pieces/core/csv/src/lib/actions/convert-json-to-csv.ts": [
+    ["    return stringify(flattened, {\n      header: true,\n      delimiter: delimiter_type,\n    });",
+      "    // === JARVIS PATCH: the header is every key of every row ===\n    // Upstream took the header from the first row, so a column only a later row\n    // had was dropped, with its values, and the step still succeeded. Keys are\n    // listed in first-seen order; a row without a key gets an empty cell.\n    const columns = [...new Set(flattened.flatMap((row) => Object.keys(row ?? {})))];\n    return stringify(flattened, {\n      header: true,\n      delimiter: delimiter_type,\n      ...(columns.length > 0 ? { columns } : {}),\n    });\n    // === END JARVIS PATCH ==="],
+  ],
   "packages/pieces/core/sftp/src/lib/common.ts": [
     ["        rejectUnauthorized: !(allow_unauthorized_certificates ?? false),\n      }",
       "        rejectUnauthorized: !(allow_unauthorized_certificates ?? false),\n        ...servername,\n      }"],

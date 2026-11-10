@@ -65,9 +65,16 @@ export const jsonToCsvAction = createAction({
     }
     const flattened = json_array.map((item) => flatten(item) as Record<string, string>);
 
+    // === JARVIS PATCH: the header is every key of every row ===
+    // Upstream took the header from the first row, so a column only a later row
+    // had was dropped, with its values, and the step still succeeded. Keys are
+    // listed in first-seen order; a row without a key gets an empty cell.
+    const columns = [...new Set(flattened.flatMap((row) => Object.keys(row ?? {})))];
     return stringify(flattened, {
       header: true,
       delimiter: delimiter_type,
+      ...(columns.length > 0 ? { columns } : {}),
     });
+    // === END JARVIS PATCH ===
   },
 });
