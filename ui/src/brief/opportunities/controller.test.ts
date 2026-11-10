@@ -444,3 +444,32 @@ test("awareness off clears every proposal, an action in flight included, and bri
   off = false; await c.refresh();
   expect(c.snapshot().rows.some(x => x.proposal.proposalId === id)).toBe(true);
 });
+
+test("an action refused because awareness is off is a refusal: the row can be acted on again when awareness is back (#1314 review)", async () => {
+  const { AWARENESS_OFF_TEXT, AwarenessOffError } = await import("../host/http");
+  const f = makeOpportunitiesFixture();
+  let off = false;
+  const c = owner({ ...f.port,
+    read: async () => off ? { status: "unavailable", reason: AWARENESS_OFF_TEXT } as OpportunityCollection : f.port.read(),
+    act: async () => { throw new AwarenessOffError(); } });
+  await c.refresh();
+  const id = c.snapshot().rows[0]!.proposal.proposalId;
+  await c.act(id, "approve");
+  expect(c.snapshot().attempts.get(id)?.state).toBe("refused");
+  off = true; await c.refresh();
+  off = false; await c.refresh();
+  expect(c.snapshot().attempts.has(id)).toBe(false);
+  expect(c.canAct(id, "approve")).toBe(true);
+});
+
+test("awareness off ends a transition, so the next proposal is shown when it is back (#1314 review)", async () => {
+  const { AWARENESS_OFF_TEXT } = await import("../host/http");
+  const f = makeOpportunitiesFixture();
+  let off = false;
+  const c = owner({ ...f.port,
+    read: async () => off ? { status: "unavailable", reason: AWARENESS_OFF_TEXT } as OpportunityCollection : f.port.read() });
+  await c.refresh();
+  (c as unknown as { publish(p: object): void }).publish({ phase: "exit" });
+  off = true; await c.refresh();
+  expect(c.snapshot().phase).toBe("rest");
+});

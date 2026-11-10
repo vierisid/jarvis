@@ -1,4 +1,4 @@
-import { AWARENESS_OFF_TEXT } from "../host/http";
+import { AWARENESS_OFF_TEXT, AwarenessOffError } from "../host/http";
 import {
   activeProposal,
   approvalBlock,
@@ -128,7 +128,8 @@ export class OpportunitiesController {
       // not even a proposal with an action in flight. Its attempt is kept and
       // its row comes back with the next read once awareness is on again.
       if (read.status === "unavailable" && read.reason === AWARENESS_OFF_TEXT) {
-        this.publish({ read, rows: [], selectedId: null, refreshing: false });
+        // A transition in progress would hide the next selection (#1314 review).
+        this.publish({ read, rows: [], selectedId: null, refreshing: false, phase: "rest" });
         return;
       }
       this.state.rows.forEach((row, index) => {
@@ -213,9 +214,13 @@ export class OpportunitiesController {
     this.updateAttempt(id, attempt);
     try {
       this.receive(attempt, await this.port.act(attempt.request));
-    } catch {
-      if (!this.retired)
-        this.updateAttempt(id, { ...attempt, state: "unknown" });
+    } catch (error) {
+      if (this.retired) return;
+      // Refused before anything was applied (#1314 review): a definite
+      // refusal, which the next ready read clears, never an unknown outcome.
+      if (error instanceof AwarenessOffError)
+        this.updateAttempt(id, { ...attempt, state: "refused", reason: AWARENESS_OFF_TEXT });
+      else this.updateAttempt(id, { ...attempt, state: "unknown" });
     }
   }
   async recover(id: string) {
