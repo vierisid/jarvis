@@ -73,6 +73,7 @@ import { registerWorkflowComposition } from '../brief/registrations/workflow-com
 import { ProfileSettings } from '../brief/profile-settings';
 import { registerProfileSettings } from '../brief/registrations/profile-settings';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
+import { setDeletedWorkflowCardListener } from '../workflows/db/repos/flow-deletion';
 import { pinUnpinnedEnabledFlows } from '../workflows/db/repos/binding-pins';
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -5283,6 +5284,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // the pin pass below, so the flag is read here as well.
       machines: () => sidecarManager.listSidecars(),
       localTools: () => !config.noLocalTools && !isNoLocalTools(),
+      // A step that asks a person cannot be answered while Brief decisions is
+      // off, so such a workflow is not ready (the step's own refusal, earlier).
+      humanInputUnavailable: () => briefCapabilities.snapshot().capabilities.decisions.enabled ? null : HUMAN_INPUT_UNAVAILABLE_MESSAGE,
     });
     // Q-05: an enabled flow without pins (one enabled before this build) is
     // pinned to the bindings it runs against now, before any trigger fires.
@@ -5737,11 +5741,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // status flips ENABLED via the v2 API gets reconciled by the route
     // hooks calling `triggerManager.refresh(flowId)`.
     await triggerManager.start();
-    // A purge (#1096) drops the cards of the runs it stopped from the dashboard.
-    briefWorkflowRemoval.start(triggerManager, { onCardClosed: (approvalId) => {
+    // A purge (#1096) and an ordinary delete drop the cards of the runs they
+    // stopped from the dashboard.
+    const broadcastClosedCard = (approvalId: string) => {
       const request = approvalManager.getRequest(approvalId);
       if (request) wsService.broadcastApprovalUpdate(request);
-    } });
+    };
+    briefWorkflowRemoval.start(triggerManager, { onCardClosed: broadcastClosedCard });
+    setDeletedWorkflowCardListener(broadcastClosedCard);
     if (process.env.JARVIS_BRIEF_OPPORTUNITY_ACTIVATION === '1' && process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') {
       briefOpportunityActivation?.configure(briefPreparedOpportunities!, triggerManager);
       briefOpportunityActivation?.start();

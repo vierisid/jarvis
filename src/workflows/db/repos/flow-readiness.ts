@@ -7,7 +7,8 @@ import { bindingPinIssues } from './binding-pins';
 import { flowIngredientIssues, hasFlowIngredients } from './composition-ingredients';
 import { managedConnectionMisuse, managedSourceFor } from '../../credentials/adapter';
 import { ensureRunExecutionConfig, type FlowRun, type RunExecutionConfig } from './flow-run';
-import { applyInputOverrides } from '../flow-graph';
+import { applyInputOverrides, walkFlowNodes } from '../flow-graph';
+import { HUMAN_INPUT_UNAVAILABLE_CODE, isHumanInputStep } from '../../runtime/human-input-contract';
 import type { FlowTriggerNode } from './flow-version';
 
 export { configureWorkflowReadiness, type ReadinessServices } from './readiness-services';
@@ -147,7 +148,7 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
       if (!version) return 'Target workflow has no executable version';
       let trigger: unknown;
       try { trigger = JSON.parse(version.trigger); } catch { return 'Target workflow graph is unreadable'; }
-      const readiness = withIngredients(id, trigger, compileWorkflow(trigger, contextFor(id, [...ancestors, flowId], cache, budget)));
+      const readiness = withHumanInput(trigger, withIngredients(id, trigger, compileWorkflow(trigger, contextFor(id, [...ancestors, flowId], cache, budget))));
       cache.set(id, readiness);
       const first = readiness.issues[0];
       // Bounded with the same cuts the thrown message uses (#633), because this
@@ -177,8 +178,39 @@ function withIngredients(flowId: string, trigger: unknown, readiness: WorkflowRe
   return { ...readiness, ready: readiness.ready && issues.length === 0, issues: [...readiness.issues, ...issues].slice(0, 100) };
 }
 
+/**
+ * `readiness` with the steps that would ask a person while nothing can answer
+ * (`humanInputIssues`). Activation readiness only: publish, enable, a run's
+ * start and its triggers. Never the dispatch recheck of a run already under
+ * way (`assertRunIngredientsReady`, which a RESUME also passes): its ask step
+ * may have run already, or sit on a branch it never takes, and the step
+ * itself still answers a request it already made. A single-step preview is
+ * refused only for the step it runs.
+ */
+function withHumanInput(trigger: unknown, readiness: WorkflowReadiness, previewStep?: string): WorkflowReadiness {
+  if (readiness.issues.some(i => i.code === 'LIMIT')) return readiness;
+  const issues = humanInputIssues(trigger).filter(issue => previewStep === undefined || issue.node === previewStep);
+  return issues.length ? { ...readiness, ready: false, issues: [...readiness.issues, ...issues].slice(0, 100) } : readiness;
+}
+
+/**
+ * A step that asks a person (an input form or an approval) cannot be answered
+ * while Brief decisions is off: the step would fail with
+ * HUMAN_INPUT_UNAVAILABLE after the steps before it had already run. So the
+ * workflow is not ready, with the same message, before anything starts.
+ * Asked of the live setting each time, so turning decisions on is enough.
+ */
+function humanInputIssues(trigger: unknown): Array<{ node: string; path: string; code: string; message: string }> {
+  const unavailable = workflowReadinessServices()?.humanInputUnavailable?.() ?? null;
+  if (unavailable === null) return [];
+  return walkFlowNodes(trigger as FlowTriggerNode)
+    .filter(node => node.type === 'PIECE' && isHumanInputStep(node.settings?.pieceName, node.settings?.actionName))
+    .map(node => ({ node: typeof node.name === 'string' ? node.name : '<unnamed>', path: 'settings.actionName',
+      code: HUMAN_INPUT_UNAVAILABLE_CODE, message: unavailable }));
+}
+
 export function graphReadiness(flowId: string, trigger: unknown): WorkflowReadiness {
-  return withIngredients(flowId, trigger, compileWorkflow(trigger, contextFor(flowId)));
+  return withHumanInput(trigger, withIngredients(flowId, trigger, compileWorkflow(trigger, contextFor(flowId))));
 }
 export function versionReadiness(flowId: string, versionId: string, preview?: ReadinessContext['preview'], mode: BindingPinMode = {}): WorkflowReadiness {
   assertFlowVersionOwnership(flowId, versionId);
@@ -193,7 +225,7 @@ export function versionReadiness(flowId: string, versionId: string, preview?: Re
     : trigger;
   // Selected-ingredient pins (F-08) hold on every path, including the ones
   // where a person accepts new binding pins.
-  const result = withIngredients(flowId, effective, compiled);
+  const result = withHumanInput(effective, withIngredients(flowId, effective, compiled), preview?.stepName);
   if (mode.acceptBindings) return result;
   // A binding that changed since a person enabled the flow is a blocker, never
   // a silent switch to whatever now answers to the same name.

@@ -20,6 +20,12 @@ export interface ReadinessServices {
   machines?: () => SidecarInfo[];
   /** False when local tools are disabled, so no step may run on this computer. */
   localTools?: () => boolean;
+  /**
+   * Why nothing on this Jarvis can answer a step that asks a person (Brief
+   * decisions is off), or null when something can. The message the step
+   * itself would fail with (human-input-contract.ts).
+   */
+  humanInputUnavailable?: () => string | null;
 }
 
 // Scoped to the live database, not a process-wide test flag. A missing catalog
