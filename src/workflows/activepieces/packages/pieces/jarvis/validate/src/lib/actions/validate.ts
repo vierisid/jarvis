@@ -13,6 +13,12 @@ export const validateAction = createAction({
   name: "validate",
   displayName: "Validate plumbing",
   description: "Read connection auth + round-trip a value through context.store.",
+  // The piece declares OAuth2 so the plumbing smoke can round-trip a
+  // connection, but the action only reads `context.auth` when one is given
+  // (`accessToken` is null otherwise). Without this, every step of this action
+  // is refused for lacking a saved connection, and no connection can be saved
+  // for it: the node was unusable from the editor.
+  requireAuth: false,
   // Plumbing-smoke action: the response is always these four keys.
   // `accessToken` is null when the connection has no `access_token`
   // claim; `storeReadBack` should equal `storeValue` on a clean
