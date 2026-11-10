@@ -215,3 +215,17 @@ test('a direct computer step with no written computer on an unpinned flow raises
   expect((await response.json()).outcome).toMatchObject({ code: 'WORKFLOW_MACHINE_UNPINNED', effect: 'not_started' });
   expect(f.approvals.getPending()).toHaveLength(0); expect(f.calls).toHaveLength(0);
 });
+
+
+test('a step with a template at both ends still keeps the text between them (#1314 review)', async () => {
+  const graphParams = { target: 'pc', executable: '{{trigger.body.dir}}\\Apps\\{{trigger.body.app}}' };
+  for (const [executable, ok] of [['C:\\Apps\\notepad.exe', true], ['C:\\Windows\\cmd.exe', false]] as const) {
+    const f = fixture(desktopLaunchAppTool, { target: 'pc', executable }, undefined, graphParams);
+    const reply = await Promise.resolve(f.call()).catch(error => error);
+    if (ok) expect((reply as Response).status).toBe(202);
+    else expect(reply).toMatchObject({ outcome: { code: 'WORKFLOW_STEP_INPUT_MISMATCH' } });
+  }
+  // An unclosed brace is literal text: only exactly it is accepted.
+  const f = fixture(desktopLaunchAppTool, { target: 'pc', executable: 'a{{ba{{b' }, undefined, { target: 'pc', executable: 'a{{b' });
+  await expect(Promise.resolve(f.call())).rejects.toMatchObject({ outcome: { code: 'WORKFLOW_STEP_INPUT_MISMATCH' } });
+});

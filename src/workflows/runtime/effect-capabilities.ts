@@ -15,6 +15,7 @@ import { RESERVED_TARGET_KEYS } from './piece-effects';
 import { BOUNDED_TOOLS, boundedToolCapability } from './tool-capability';
 import { workflowUiReview, workflowToolRefusal } from './workflow-ui-tools';
 import { ActionOutcomeError } from '../../actions/action-outcome';
+import { forCard } from '../../util/card-text';
 
 /** The capability a bounded tool needs on the machine it runs on; dispatch checks it. */
 export { boundedToolCapability };
@@ -233,5 +234,6 @@ export function uiCallComputer(toolName: string, requested: unknown): { sidecarI
   const { sidecarId } = pinnedSidecar(capability, requested);
   if (sidecarId === null) return { sidecarId, name: 'this computer (the Jarvis host)' };
   const sidecar = getSidecarManager()?.listSidecars().find(s => s.id === sidecarId);
-  return { sidecarId, name: sidecar ? `${sidecar.name} (${sidecarId})` : sidecarId };
+  // The name is cut, never the id that tells two similar names apart (#1314 review).
+  return { sidecarId, name: sidecar ? `${forCard(sidecar.name, 80) || 'unnamed'} (${sidecarId})` : sidecarId };
 }

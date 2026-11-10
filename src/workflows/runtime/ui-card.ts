@@ -22,6 +22,8 @@ import type { WorkflowEffect } from '../db/repos/workflow-effect';
 
 /** The longest one value may be on a card, as rendered. */
 export const UI_CARD_VALUE_MAX_CHARS = 600;
+/** The most values one card lists; the Brief shows every one of them. */
+export const UI_CARD_MAX_VALUES = 20;
 /** The longest card sentence: the Brief title holds 1000 and delivery 1024. */
 export const UI_CARD_MAX_CHARS = 1000;
 
@@ -38,6 +40,8 @@ export type UiCardValue = { name: string; value: string; source: 'workflow' | 'r
 /** The structured card the Brief renders; the sentence carries the same. */
 export type UiCard = {
   tool: string; computer: string; values: UiCardValue[];
+  /** Keys the tool does not declare: the card refuses them, never shows them as names. */
+  undeclared?: string[];
   page?: string; element?: string; window?: string;
 };
 
@@ -56,13 +60,16 @@ const SOURCE_NOTE: Record<UiCardValue['source'], string> = { workflow: '', run_d
 export function workflowUiCard(tool: string, args: Record<string, unknown>, opts: {
   computer: string; source: (name: string) => UiCardValue['source'];
   page?: string; element?: string; window?: string;
+  /** The tool's declared parameter names; any other key is refused (`uiCardRefusal`). */
+  declared?: readonly string[];
 }): UiCard {
   const values = Object.keys(args).filter((name) => name !== 'target').sort()
     .map((name) => ({ name, value: cardValue(args[name]), source: opts.source(name) }));
   // Screen text is display only and cut to a line; the values above never are.
   const shown = (text: string | undefined) => text ? forCard(text, 160) || undefined : undefined;
   const page = shown(opts.page), element = shown(opts.element), window = shown(opts.window);
-  return { tool, computer: forCard(opts.computer, 120) || 'an unnamed computer', values,
+  const undeclared = opts.declared ? Object.keys(args).filter(name => name !== 'target' && !opts.declared!.includes(name)) : [];
+  return { tool, computer: opts.computer, values, ...(undeclared.length ? { undeclared } : {}),
     ...(page ? { page } : {}), ...(element ? { element } : {}), ...(window ? { window } : {}) };
 }
 
@@ -82,6 +89,11 @@ export function uiCardSentence(card: UiCard): string {
 
 /** Why this card cannot show the call as it would run, or null (#1040). */
 export function uiCardRefusal(card: UiCard): string | null {
+  // A key is a label the card shows as written, so it is one the tool declares (#1314 review).
+  if (card.undeclared?.length || card.values.some(v => !/^[a-z][a-z0-9_]{0,63}$/.test(v.name))) {
+    return `This call sends a parameter ${cardValue((card.undeclared ?? card.values.map(v => v.name))[0])} that ${card.tool} does not take, so no card is raised for it.`;
+  }
+  if (card.values.length > UI_CARD_MAX_VALUES) return `This call sends ${card.values.length} values; a card shows at most ${UI_CARD_MAX_VALUES}.`;
   const long = card.values.find((v) => v.value.length > UI_CARD_VALUE_MAX_CHARS);
   if (long) {
     return `The ${long.name} is ${long.value.length} characters as the approval card shows it; the limit is ${UI_CARD_VALUE_MAX_CHARS}, so the card can show all of it. Shorten it.`;
@@ -113,10 +125,8 @@ function parseDesktopSnapshot(result: unknown): Snapshot | null {
     walk(tree.elements, 0);
     return { ...(typeof tree.window_title === 'string' ? { window: tree.window_title } : {}),
       ...(typeof tree.pid === 'number' ? { pid: tree.pid } : {}), labels };
-  } catch { /* the local text form */ }
-  const window = /^Window: (.*)$/m.exec(result)?.[1];
-  for (const match of result.matchAll(/^\s*\[(\d+)\] \S+ "((?:[^"\\]|\\.)*)"/gm)) labels.set(Number(match[1]), match[2]!);
-  return window === undefined && labels.size === 0 ? null : { ...(window ? { window } : {}), labels };
+  } catch { /* The host's text form: its names and values are written raw, so a window could forge a line. No labels from it. */ }
+  return null;
 }
 
 /** Window titles by pid from a desktop_list_windows receipt, remote or local. */
@@ -132,7 +142,7 @@ function parseWindowList(result: unknown): Map<number, string> {
     }
     return titles;
   } catch { /* the local text form */ }
-  for (const match of result.matchAll(/^PID (\d+)(?: \[focused\])? \| (.*?) \| class=/gm)) titles.set(Number(match[1]), match[2]!);
+  // The host's text form writes titles raw: a title could forge another line, so none are read from it.
   return titles;
 }
 
@@ -144,13 +154,15 @@ function parseWindowList(result: unknown): Map<number, string> {
  */
 export function desktopSubjectFromRun(effects: readonly WorkflowEffect[], toolName: string,
   args: Record<string, unknown>): { window?: string; element?: string } {
-  const sameComputer = (e: WorkflowEffect) => (e.arguments?.target ?? null) === (args.target ?? null) && e.status === 'succeeded';
+  // A run is bound to one computer (machine-binding.ts), so every read in it is a read of that computer.
+  const sameComputer = (e: WorkflowEffect) => e.status === 'succeeded';
   const newest = (name: string) => [...effects].reverse().find(e => e.toolName === name && sameComputer(e));
   if (toolName === 'desktop_click' && typeof args.element_id === 'number') {
     const snap = parseDesktopSnapshot(newest('desktop_snapshot')?.result);
     const label = snap?.labels.get(args.element_id);
     return { ...(snap?.window ? { window: snap.window } : {}),
-      element: label ? `"${label}" [${args.element_id}]` : `[${args.element_id}], not named in this run's latest desktop snapshot` };
+      // Display only: anything else that reads this computer's screen renumbers its elements, so the label is what this run last saw.
+      element: label ? `"${label}" [${args.element_id}] as this run's latest desktop snapshot named it` : `[${args.element_id}], not named in this run's latest desktop snapshot` };
   }
   if (toolName === 'desktop_focus_window' && typeof args.pid === 'number') {
     const title = parseWindowList(newest('desktop_list_windows')?.result).get(args.pid)

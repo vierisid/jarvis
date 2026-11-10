@@ -92,6 +92,7 @@ export const STEP_INPUT_MISMATCH = 'WORKFLOW_STEP_INPUT_MISMATCH';
  */
 function keepsLiteralText(stated: string, value: string): boolean {
   const parts = stated.split(/\{\{[^]*?\}\}/);
+  if (parts.length === 1) return value === stated;
   const first = parts[0]!, last = parts[parts.length - 1]!;
   if (!value.startsWith(first) || value.length < first.length + last.length || !value.endsWith(last)) return false;
   let at = first.length;
@@ -149,7 +150,9 @@ export function pinnedStepParams(ctx: WorkflowEffectContext, params: Record<stri
       // must keep it (#1314 review), so `https://intranet/?q={{x}}` cannot
       // arrive as `https://anywhere`.
       const written = graph[key];
-      if (typeof written === 'string' && !/^\{\{[^]*?\}\}$/.test(written)
+      // A value that is one template and nothing else may resolve to any type.
+      const literal = typeof written === 'string' ? written.split(/\{\{[^]*?\}\}/) : [];
+      if (typeof written === 'string' && !(literal.length === 2 && literal.every(part => part === ''))
         && (typeof params[key] !== 'string' || !keepsLiteralText(written, params[key] as string))) {
         throw new ActionOutcomeError({ status: 'blocked', code: STEP_INPUT_MISMATCH, effect: 'not_started',
           message: `This call's ${JSON.stringify(key.slice(0, 64))} does not keep the text its step states around its template. Nothing was done.` });

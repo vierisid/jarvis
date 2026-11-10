@@ -537,7 +537,7 @@ export function buildSandboxServiceBackends(
           try {
             uiCard = workflowUiCard(tool.name, req.params, {
               computer: uiCallComputer(tool.name, req.params.target).name,
-              source: name => fromRunData.has(name) ? 'run_data' : 'workflow',
+              source: name => fromRunData.has(name) ? 'run_data' : 'workflow', declared: Object.keys(tool.parameters ?? {}),
               page: subject.origin, element: subject.element, ...desktopSubjectFromRun(listWorkflowEffects(ctx.runId), tool.name, req.params) });
           } catch { uiCard = null; }
         }
@@ -999,6 +999,7 @@ export function buildSandboxServiceBackends(
           try {
             uiCard = workflowUiCard(call.toolCall.name, call.toolCall.arguments, {
               computer: uiCallComputer(call.toolCall.name, call.toolCall.arguments.target).name, source: () => 'agent',
+              declared: Object.keys(registry.get(call.toolCall.name)?.parameters ?? {}),
               page: subject.origin, element: subject.element,
               ...desktopSubjectFromRun(listWorkflowEffects(resolved.run.id), call.toolCall.name, call.toolCall.arguments) });
           } catch { uiCard = null; /* `prepare` refuses it typed and recorded; no card is raised without a computer. */ }

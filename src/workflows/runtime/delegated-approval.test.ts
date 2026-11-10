@@ -92,6 +92,9 @@ function createPinnedRun(...args: Parameters<typeof createRun>) {
     pinnedAt: Date.now(), connections: {}, machine: { sidecarId: 'test-computer', name: 'Test computer' } }), ids.flow.id]);
   return ids;
 }
+/** The parameters the real UI tools declare: a card refuses any key its tool does not take (#1314). */
+const UI_PARAMS = Object.fromEntries(['url', 'target', 'element_id', 'direction', 'amount', 'executable', 'args', 'action', 'value']
+  .map(name => [name, { type: name === 'element_id' || name === 'amount' ? 'number' : 'string', description: name, required: false }])) as Record<string, any>;
 const delegationId = (runId: string, path: Array<[string, number]> = []) => 'wfd_' + digest([runId, 'delegate', path]);
 
 type Options = {
@@ -167,7 +170,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
     authorityGate: () => ({ actionCategory: 'control_app', intent: 'tap a widget' }),
     captureApprovalGuard: () => () => true,
     execute: async () => { effects++; return 'tapped'; } });
-  for (const name of ['browser_navigate', 'browser_click', 'browser_scroll']) registry.register({ name, category: 'browser', description: 'Synthetic browser navigation', parameters: {},
+  for (const name of ['browser_navigate', 'browser_click', 'browser_scroll']) registry.register({ name, category: 'browser', description: 'Synthetic browser navigation', parameters: UI_PARAMS,
     reviewSubject: () => ({ origin: 'https://calendar.example' }),
     captureApprovalGuard: () => Object.assign(() => opts.browserGuard?.() ?? true, { reviewed: { remoteBrowserSnapshot: { sidecarId: 'test-computer', elemGen: 'reviewed-generation' } } }),
     execute: async () => {
@@ -176,7 +179,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
     } });
   registry.register({ name: 'browser_snapshot', category: 'browser', description: 'Synthetic bounded browser read', parameters: {},
     execute: async () => { effects++; return 'Calendar snapshot'; } });
-  for (const name of ['desktop_launch_app', 'desktop_click']) registry.register({ name, category: 'desktop', description: 'Synthetic desktop action', parameters: {},
+  for (const name of ['desktop_launch_app', 'desktop_click']) registry.register({ name, category: 'desktop', description: 'Synthetic desktop action', parameters: UI_PARAMS,
     captureApprovalGuard: () => () => opts.browserGuard?.() ?? true,
     execute: async () => { effects++; return 'Desktop action completed'; } });
   registry.register({ name: 'desktop_snapshot', category: 'desktop', description: 'Synthetic editor readback', parameters: {},

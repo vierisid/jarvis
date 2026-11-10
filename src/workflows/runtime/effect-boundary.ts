@@ -578,8 +578,9 @@ export class WorkflowEffectBoundary {
           // A tool with no adapter target of its own still names its review
           // sentence through `confirmation`.
           // A reviewed UI call's card is its own sentence, with every value
-          // and the computer (#1314); the gate's generic sentence stays in the
-          // target, where the dispatch fence compares it.
+          // and the computer (#1314). On the delegated route the gate's
+          // generic sentence stays in the target, where its dispatch fence
+          // compares it; the direct route's target carries none.
           const intent = input.uiCard ? uiCardSentence(input.uiCard)
             : typeof record.target.intent === 'string' ? record.target.intent : input.confirmation?.intent;
           request = approvals.createRequest({ agentId: `workflow:${record.runId}`,
