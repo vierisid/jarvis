@@ -18,10 +18,14 @@ function approval(id: string): PendingApproval {
 }
 const ready = <T,>(data: T[]) => ({ data, availability: "ready" as const, error: null, updatedAt: 0, refresh: async () => {} });
 
-function render(liveCount: number, saved: Array<{ id: string; tool_name: string; reason: string }> = []): string {
+function render(liveCount: number, saved: Array<{ id: string; tool_name: string; reason: string }> = [], failureCount = 0): string {
   const live = { approvals: Array.from({ length: liveCount }, (_, i) => approval(`a${i}`)), clarifiers: [], repeatBacks: [] } as unknown as LiveData;
   return renderToStaticMarkup(<WaitingWidget live={live} inbox={{ pending: ready(saved), unresolved: ready([]) } as never}
-    failures={ready([]) as never} connection="live" onApprove={() => {}} onCancel={() => {}} />);
+    failures={ready(Array.from({ length: failureCount }, (_, i) => failure(i))) as never} connection="live" onApprove={() => {}} onCancel={() => {}} />);
+}
+function failure(i: number) {
+  return { keys: [`k${i}`], repeats: 0, source: "run", title: `Flow ${i}`, flowId: `f${i}`, runId: `r${i}`, at: 0,
+    failure: { category: "not_started", effect: "none", headline: `Run ${i} stopped.`, outcome: "Nothing was done.", next: [], links: {}, code: null, detail: "", key: `k${i}` } };
 }
 
 const MORE = /\+(\d+) more approvals? waiting - open Authority/;
@@ -54,5 +58,25 @@ describe("#1160: the home tile says when approvals are not shown", () => {
     const saved = [...Array.from({ length: 5 }, (_, i) => ({ id: `a${i}`, tool_name: "run_command", reason: "r" })),
       { id: "s0", tool_name: "send_email", reason: "r" }];
     expect(render(5, saved).match(MORE)?.[1]).toBe("2");
+  });
+});
+
+const MORE_FAILURES = /\+(\d+) more failures? - open Workflows/;
+
+describe("#1303 follow-up: the home tile says when failures are not shown", () => {
+  test("three failures fit: no overflow row", () => {
+    const html = render(0, [], 3);
+    expect(html).toContain("Run 2 stopped.");
+    expect(html).not.toMatch(MORE_FAILURES);
+  });
+
+  test("five failures: three rows and a row naming the other two, linking to Workflows", () => {
+    const html = render(0, [], 5);
+    expect(html).not.toContain("Run 3 stopped.");
+    expect(html.match(MORE_FAILURES)?.[1]).toBe("2");
+  });
+
+  test("one hidden failure reads in the singular", () => {
+    expect(render(0, [], 4)).toContain("+1 more failure - open Workflows");
   });
 });

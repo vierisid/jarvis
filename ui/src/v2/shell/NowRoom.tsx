@@ -265,7 +265,11 @@ function FailureRows({ failures }: { failures: RemoteData<OpenFailure[]> }) {
     } catch { /* the next refresh shows whether it was recorded */ }
     finally { setDismissing(null); void failures.refresh(); }
   };
-  return <>{(failures.data ?? []).slice(0, 3).map(row => (
+  const rows = failures.data ?? [];
+  // The tile shows three; say how many more wait rather than hide them. Every
+  // open failure is a workflow run's or one of its deliveries, resolved there.
+  const hidden = Math.max(0, rows.length - 3);
+  return <>{rows.slice(0, 3).map(row => (
     <div className="rs-apr" key={row.keys[0]} data-effect={row.failure.effect}>
       <div className="t1"><span className="rs-dot" style={{ background: row.failure.effect === "none" ? "var(--listen)" : "var(--hold)" }} />
         {row.title}{row.repeats > 0 ? ` · ${row.repeats + 1} times` : ""}</div>
@@ -279,7 +283,8 @@ function FailureRows({ failures }: { failures: RemoteData<OpenFailure[]> }) {
         }}>Open</button>
         <button className="b2" disabled={dismissing === row.keys[0]} onClick={() => void dismiss(row)}>Dismiss</button>
       </div>
-    </div>))}</>;
+    </div>))}
+    {hidden > 0 && <Row room="workflows" dot="var(--hold)">+{hidden} more {hidden === 1 ? "failure" : "failures"} - open Workflows</Row>}</>;
 }
 
 export function WaitingWidget({ live, inbox, failures, connection, onApprove, onCancel }: RenderCtx) {
