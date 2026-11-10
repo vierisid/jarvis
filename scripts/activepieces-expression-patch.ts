@@ -145,6 +145,32 @@ export const expressionPatches = {
     ["import {\n  Property,",
       "import { randomInt } from 'node:crypto';\nimport {\n  Property,"],
   ],
+  "packages/pieces/core/pdf/src/lib/actions/add-text-to-pdf.ts": [
+    ["          displayName: 'Font Size',\n          required: true,\n          defaultValue: 11,\n",
+      "          displayName: 'Font Size',\n          // Jarvis (F-18): optional; 11 when left empty (see run).\n          required: false,\n          defaultValue: 11,\n"],
+    ["        font: StandardFonts;\n        fontSize: number;\n        lineSpacing?: number;\n",
+      "        font: StandardFonts;\n        fontSize?: number;\n        lineSpacing?: number;\n"],
+    ["        const lineSpacing = item.lineSpacing ?? 1.15;\n\n",
+      "        const lineSpacing = item.lineSpacing ?? 1.15;\n        // Jarvis (F-18): the Font Size is not required; it is 11 when left empty, as its default says.\n        const fontSize = item.fontSize ?? 11;\n\n"],
+    ["\n\t\t\t\tif (item.fontSize <= 0) {\n\t\t\t\t\tthrow new Error(\n\t\t\t\t\t\t`Font Size must be a positive number greater than 0. You provided ${item.fontSize} for text \"${cleanTextSample}...\"`\n\t\t\t\t\t);\n",
+      "\n\t\t\t\tif (fontSize <= 0) {\n\t\t\t\t\tthrow new Error(\n\t\t\t\t\t\t`Font Size must be a positive number greater than 0. You provided ${fontSize} for text \"${cleanTextSample}...\"`\n\t\t\t\t\t);\n"],
+    ["\n        const actualLineHeight = item.fontSize * lineSpacing;\n\n",
+      "\n        const actualLineHeight = fontSize * lineSpacing;\n\n"],
+    ["\n        const maxTextWidth = Math.max(\n          ...lines.map(line => font.widthOfTextAtSize(line, item.fontSize))\n        );\n",
+      "\n        // Jarvis (F-18): the built-in PDF fonts cover Latin text only.\n        const supported = new Set(font.getCharacterSet());\n        const unsupported = Array.from(new Set(Array.from(cleanText.replace(/\\n/g, '')).filter((ch) => !supported.has(ch.codePointAt(0)!))));\n        if (unsupported.length > 0) {\n          throw new Error(\n            `This PDF font cannot show emoji or some non-Latin characters (found ${unsupported.slice(0, 5).map((c) => `\"${c}\"`).join(', ')}) in \"${cleanTextSample}...\". Remove them.`\n          );\n        }\n\n        const maxTextWidth = Math.max(\n          ...lines.map(line => font.widthOfTextAtSize(line, fontSize))\n        );\n"],
+    ["            y: iY,\n            size: item.fontSize,\n            font: font,\n",
+      "            y: iY,\n            size: fontSize,\n            font: font,\n"],
+  ],
+  "packages/pieces/core/pdf/src/lib/actions/text-to-pdf.ts": [
+    ["import { createAction, Property } from '@activepieces/pieces-framework';\nimport { PDFDocument, StandardFonts } from 'pdf-lib';\n\n",
+      "import { createAction, Property } from '@activepieces/pieces-framework';\nimport { PDFDocument, PDFFont, StandardFonts } from 'pdf-lib';\n\n// === JARVIS PATCH (F-18): characters the PDF font cannot show ===\n// The built-in PDF fonts cover Latin text only. An emoji or Chinese or Japanese\n// text used to fail with \"WinAnsi cannot encode ...\" from the PDF library. Now\n// it fails in plain words, or, when the author opts in, each such character is\n// printed as \"?\".\nfunction unsupportedCharacters(font: PDFFont, text: string): string[] {\n  const supported = new Set(font.getCharacterSet());\n  return Array.from(new Set(Array.from(text).filter((ch) => !supported.has(ch.codePointAt(0)!))));\n}\n// === END JARVIS PATCH ===\n\n"],
+    ["    }),\n  },\n",
+      "    }),\n    // Jarvis (F-18)\n    replaceUnsupportedCharacters: Property.Checkbox({\n      displayName: 'Replace characters the PDF cannot show',\n      description:\n        'The PDF font cannot show emoji or some non-Latin text (for example Chinese or Japanese). Off: the step fails. On: each such character is printed as a ?.',\n      required: false,\n      defaultValue: false,\n    }),\n  },\n"],
+    ["  async run(context) {\n    const text = context.propsValue.text;\n\n",
+      "  async run(context) {\n    // Jarvis (F-18): line breaks and tabs the font cannot draw become plain ones.\n    let text = context.propsValue.text.replace(/\\r\\n?/g, '\\n').replace(/\\t/g, '    ');\n\n"],
+    ["      const font = await pdfDoc.embedFont(fontType);\n\n",
+      "      const font = await pdfDoc.embedFont(fontType);\n\n      // Jarvis (F-18)\n      const unsupported = unsupportedCharacters(font, text.replace(/\\n/g, ''));\n      if (unsupported.length > 0) {\n        if (!context.propsValue.replaceUnsupportedCharacters) {\n          throw new Error(\n            `This PDF font cannot show emoji or some non-Latin characters (found ${unsupported.slice(0, 5).map((c) => `\"${c}\"`).join(', ')}). Remove them, or turn on \"Replace characters the PDF cannot show\" to print a ? in their place.`\n          );\n        }\n        const bad = new Set(unsupported);\n        text = Array.from(text).map((ch) => (bad.has(ch) ? '?' : ch)).join('');\n      }\n\n"],
+  ],
   // #961: a file property's URL is fetched through the egress guard, before
   // Authority is asked, rather than by a plain fetch of a flow-chosen URL.
   "packages/server/engine/src/lib/variables/processors/file.ts": [

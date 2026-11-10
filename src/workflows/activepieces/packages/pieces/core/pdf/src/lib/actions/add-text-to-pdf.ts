@@ -57,7 +57,8 @@ export const addTextToPdf = createAction({
         }),
         fontSize: Property.Number({
           displayName: 'Font Size',
-          required: true,
+          // Jarvis (F-18): optional; 11 when left empty (see run).
+          required: false,
           defaultValue: 11,
         }),
         lineSpacing: Property.Number({
@@ -87,7 +88,7 @@ export const addTextToPdf = createAction({
         distanceFromLeft: number;
         distanceFromTop: number;
         font: StandardFonts;
-        fontSize: number;
+        fontSize?: number;
         lineSpacing?: number;
       }>;
 
@@ -102,6 +103,8 @@ export const addTextToPdf = createAction({
         const lines = cleanText.split('\n');
         const cleanTextSample = cleanText.substring(0, 15);
         const lineSpacing = item.lineSpacing ?? 1.15;
+        // Jarvis (F-18): the Font Size is not required; it is 11 when left empty, as its default says.
+        const fontSize = item.fontSize ?? 11;
 
         if (lineSpacing <= 0) {
           throw new Error(
@@ -109,13 +112,13 @@ export const addTextToPdf = createAction({
           );
         }
 
-				if (item.fontSize <= 0) {
+				if (fontSize <= 0) {
 					throw new Error(
-						`Font Size must be a positive number greater than 0. You provided ${item.fontSize} for text "${cleanTextSample}..."`
+						`Font Size must be a positive number greater than 0. You provided ${fontSize} for text "${cleanTextSample}..."`
 					);
 				}
 
-        const actualLineHeight = item.fontSize * lineSpacing;
+        const actualLineHeight = fontSize * lineSpacing;
 
         const fontEnum = item.font;
         if (!embeddedFonts[fontEnum]) {
@@ -123,8 +126,17 @@ export const addTextToPdf = createAction({
         }
         const font = embeddedFonts[fontEnum];
 
+        // Jarvis (F-18): the built-in PDF fonts cover Latin text only.
+        const supported = new Set(font.getCharacterSet());
+        const unsupported = Array.from(new Set(Array.from(cleanText.replace(/\n/g, '')).filter((ch) => !supported.has(ch.codePointAt(0)!))));
+        if (unsupported.length > 0) {
+          throw new Error(
+            `This PDF font cannot show emoji or some non-Latin characters (found ${unsupported.slice(0, 5).map((c) => `"${c}"`).join(', ')}) in "${cleanTextSample}...". Remove them.`
+          );
+        }
+
         const maxTextWidth = Math.max(
-          ...lines.map(line => font.widthOfTextAtSize(line, item.fontSize))
+          ...lines.map(line => font.widthOfTextAtSize(line, fontSize))
         );
 
         const targetPages = [];
@@ -234,7 +246,7 @@ export const addTextToPdf = createAction({
           targetPage.drawText(cleanText, {
             x: iX,
             y: iY,
-            size: item.fontSize,
+            size: fontSize,
             font: font,
             color: rgb(0, 0, 0),
             lineHeight: actualLineHeight,
