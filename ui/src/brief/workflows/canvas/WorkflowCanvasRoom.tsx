@@ -1,3 +1,5 @@
+import { FlowPermissions } from '../../../v2/rooms/workflows/FlowPermissions';
+import type { Flow } from '../../../v2/rooms/workflows/useWorkflowsData';
 import React, { useMemo, useRef, useState } from "react";
 import { ArrowLeft, LayoutGrid, RotateCcw, Undo2 } from "lucide-react";
 import type { BriefShellPort, BriefRoomModule } from "../../contracts";
@@ -29,6 +31,8 @@ export interface WorkflowCanvasBinding {
   /** Explicit, owner-bounded manual-run command. No automatic retry. */
   run?: () => Promise<{ ok: boolean; message: string }>;
   readOnly?: boolean;
+  permissions?: Flow;
+  permissionsChanged?: () => Promise<void>;
   publish?: () => Promise<void>;
   edit?: () => Promise<void>;
 }
@@ -147,9 +151,11 @@ function CanvasHeader({
     name, gaps: editor.validationGaps.filter(gap => gap.stepName === name),
   }));
   const needsSetup = setupSteps.length > 0;
+  const hasCode = editor.allSteps.some(({ step }) => step.type === 'CODE');
+  const codeBlocked = hasCode && binding.permissions?.codeSteps?.enabled !== true;
   const versionMatches = editor.version?.id === binding.versionId;
   async function run() {
-    if (busy.current || !binding.run || editor.dirty || !versionMatches) return;
+    if (busy.current || !binding.run || codeBlocked || editor.dirty || !versionMatches) return;
     busy.current = true;
     setRunning(true);
     setRunMessage("");
@@ -189,7 +195,7 @@ function CanvasHeader({
         <BriefButton
           variant="primary"
           disabled={
-            !binding.run || needsSetup ||
+            codeBlocked || !binding.run || needsSetup ||
             running ||
             editor.dirty ||
             !versionMatches ||
@@ -197,7 +203,7 @@ function CanvasHeader({
           }
           onClick={() => void run()}
           title={
-            needsSetup ? "Complete setup before running" : editor.dirty
+            codeBlocked ? "Review Flow permissions to allow CODE steps" : needsSetup ? "Complete setup before running" : editor.dirty
               ? "Save your changes before running"
               : !binding.run
                 ? binding.publish ? "Publish this saved draft before running" : "Run is not available"
@@ -209,7 +215,7 @@ function CanvasHeader({
       }
     >
       <div className="brief-canvas-tools" aria-label="Draft tools">
-        {binding.publish && <BriefButton size="sm" disabled={needsSetup || changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!)}>Publish version</BriefButton>}
+        {binding.publish && <BriefButton size="sm" disabled={codeBlocked || needsSetup || changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!)}>Publish version</BriefButton>}
         {binding.edit && <BriefButton size="sm" disabled={changing} onClick={() => void change(binding.edit!)}>Edit a new draft</BriefButton>}
         <BriefButton
           size="sm"
@@ -268,6 +274,11 @@ function CanvasHeader({
                       : needsSetup ? "Saved draft · Setup required" : "Saved draft")}
         </span>
       </div>
+      {binding.permissions && <details className="brief-canvas-setup" open={hasCode || undefined}>
+        <summary>Flow permissions{codeBlocked ? ' · CODE steps not allowed' : ''}</summary>
+        <FlowPermissions key={binding.flowId} flow={binding.permissions} request={binding.request as typeof fetch}
+          onChanged={() => { void binding.permissionsChanged?.().catch(() => setRunMessage('Permission state could not be refreshed. Reopen this workflow to check.')); }} />
+      </details>}
       {needsSetup && <details className="brief-canvas-setup" open>
         <summary>Setup required</summary>
         <p>Fill in these details when you're ready. Save your progress at any time. Running and publishing stay unavailable until setup is complete.</p>

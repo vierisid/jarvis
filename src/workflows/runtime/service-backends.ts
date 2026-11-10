@@ -27,7 +27,7 @@ import { documentInput, projectDocument } from './decision-document';
  */
 import { HUBSPOT_CLAIM_WAIT_MS, HubspotNotStartedError, HubspotWriteRefusedError, hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
 import { getConnection } from '../db/repos/app-connection';
-import { claimIdentity, completeIdentity, IdentityUnresolvedError, releaseIdentity } from '../db/repos/effect-identity';
+import { claimIdentity, completeIdentity, identityCompleted, IdentityUnresolvedError, releaseIdentity } from '../db/repos/effect-identity';
 import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
 import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
 import type { ApprovalManager } from '../../authority/approval';
@@ -620,6 +620,12 @@ export function buildSandboxServiceBackends(
     }
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-notify', action: 'notify',
       route: 'notify', toolName: 'workflow_notify', category: 'send_message', ...(guard ? {categories:['read_data','send_message'] as ActionCategory[]} : {}), toolCategory: 'notification', request: { ...req },
+      reuseCompleted: record => {
+        const key = record.arguments.idempotencyKey;
+        const identity = typeof key === 'string' && key ? digest(['workflow-notify-v1', record.projectId, record.flowId, key]) : null;
+        return identity && identityCompleted(identity)
+          ? { result: { delivered: [], failed: [], unknown: [], deduplicated: true } } : null;
+      },
       prepare: () => {
         const requested = req.channels.length ? req.channels : ['auto'];
         const channels = new Set<string>();
