@@ -4,23 +4,21 @@
 Brief routes and otherwise `DashboardEntry` (with no release record, runtime, navigation or
 conversation) around `AppShellV2`.
 
-Installs the daemon treats as hosted (`isHostedInstall`, which includes self-hosted brains on a Unix
-socket or with a `usejarvis_ai` block) open the Brief dashboard at `/` (#1185). The authenticated host
-descriptor (`GET /api/brief/host`, read by `host/hosted-entry.ts`) selects it, and the routing is D33's
-`resolveReleaseEntry` (`entry/release-route.ts`) with the rollout forced to `released`, so the entry
-table in `scripts/brief-release/README.md` describes hosted routing too, except that hosted Brief keeps
-maintenance links inside the Brief host (`host/DashboardRoot.tsx`). `?brief=0` on a fresh load, or
-`JARVIS_HOSTED_DASHBOARD=legacy` plus a restart, returns to `AppShellV2`; `docs/hosted-dashboard.md`
-describes that path. Everywhere else the Brief dashboard is opt-in.
+Hosted and self-hosted installs open the Brief dashboard at `/`. The authenticated host
+descriptor (`GET /api/brief/host`, read by `host/hosted-entry.ts`) selects it using
+`resolveReleaseEntry` with rollout `released`. Maintenance links remain inside the Brief owner.
+`?brief=0` on a fresh load, or `JARVIS_DASHBOARD=legacy` plus a restart, returns to `AppShellV2`.
+The older `JARVIS_HOSTED_DASHBOARD` alias remains supported; the common override takes
+precedence. `docs/hosted-dashboard.md` describes backend feature defaults and rollback.
 
 ## Entry points
 
-The D33 release record (`entry/release.ts`, `BRIEF_RELEASE`) is off and does not select the hosted
+The D33 release record (`entry/release.ts`, `BRIEF_RELEASE`) is off and does not select the production
 default: `BRIEF_RELEASE` has `rollout: "off"`, and `DashboardEntry` gets no release runtime or live
 composition, so it would stay off even with a filled record. `scripts/brief-release/README.md` holds
 the integration contract, the release checklist and the rollback table.
 
-Outside the hosted default (self-hosted installs, and hosted with `JARVIS_HOSTED_DASHBOARD=legacy`):
+When the operator explicitly selects the legacy default:
 
 - Internal review needs the existing developer setting: run
   `localStorage.setItem("jarvis-devtools", "1")` in the dashboard's origin, then reload. The setting is
@@ -32,12 +30,12 @@ Outside the hosted default (self-hosted installs, and hosted with `JARVIS_HOSTED
     chat WebSocket or voice connection and bypasses the onboarding gate.
 - Without the developer setting, `?brief=1#/brief/<room>` and `?brief=preview` stay on `AppShellV2`.
   A `#/brief/<room>` bookmark is rewritten before `AppShellV2` mounts: the hash becomes the matching
-  legacy room, `brief=0` is set and `briefReturn` keeps the Brief route.
+  legacy room and `brief=0` is set; the Brief route itself is not kept.
 - Anything else, including every existing room, panel, task, answer and developer hash, and any URL
   with an `onboarding` query, stays with `AppShellV2`.
 
 Rollback: `?brief=0` on a fresh load always opens `AppShellV2`. The "Return to current dashboard"
-links set `brief=0` rather than removing the parameter, so they also override the hosted default-on
+links set `brief=0` rather than removing the parameter, so they also override the production default-on
 release.
 
 ## Layout

@@ -38,7 +38,7 @@ import { maintenanceRoom } from './maintenance';
 import { getRoomBody } from '../../v2/rooms/RoomBodyRegistry';
 import { LiveDataProvider } from '../../v2/shell/LiveDataContext';
 import type { RoomKey } from '../../v2/router';
-import { InputHost, inputDialog } from './InputDialog';
+import { InputHost, manualRunInput } from './InputDialog';
 import './host.css';
 import { resolveHostedEntry, useHostedEntry } from './hosted-entry';
 
@@ -77,9 +77,9 @@ export function DashboardRoot({ integration = false }: { integration?: boolean }
   const legacy = <AppShellV2 sharedRoomActions />;
   const lastRoute = useRef<BriefRoute>({ room: 'today', selection: {} });
   if (entry.kind === 'brief') lastRoute.current = entry.route;
-  const hostedBrief = initialDescriptor?.installMode === 'hosted' && initialDescriptor.dashboard === 'brief';
+  const productionBrief = initialDescriptor?.dashboard === 'brief';
   // Brief's maintenance links keep the Brief owner mounted, as in local integration.
-  const retained = integration || devtools || hostedBrief ? maintenanceRoom(href) : null;
+  const retained = integration || devtools || productionBrief ? maintenanceRoom(href) : null;
   // A maintenance link already rendered legacy before the hosted default; a failed
   // read keeps that rather than blocking a self-hosted maintenance room on reconnect.
   const fallback = startsInMaintenance && hosted.state.status === 'unavailable';
@@ -115,9 +115,7 @@ function OwnedDashboard({ descriptor, route, retained, integration, legacy, inst
   const session = useRef<Session | null>(null), shell = useRef<BriefShellPort | null>(null), reveal = useRef<(id: string) => void>(() => { throw Error('Conversation unavailable'); });
   const [host] = useState(() => createDashboardOwner(descriptor, { storage: window.localStorage, changed: () => changed(n => n + 1),
     unauthorized: () => revoke(true), explain, confirm: text => confirmDialog(text),
-    runInput: async () => { const raw = await inputDialog('Input for this manual run (JSON object)', '{}'); if (raw === null) return null;
-      try { const value = JSON.parse(raw); if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error(); return value; }
-      catch { explain('Enter a valid JSON object. No run was started.'); return null; } },
+    runInput: () => manualRunInput(),
     revealConversationItem: id => reveal.current(id), replayTutorial: async () => {
       if (!session.current) return { state: 'unavailable' };
       try {

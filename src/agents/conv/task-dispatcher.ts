@@ -12,10 +12,12 @@
  * loop + tool-registry plumbing here.
  */
 
+import type { TurnTaintLink } from '../turn-taint-carry.ts';
 import type { LLMManager } from '../../llm/manager.ts';
 import { type TurnToolScope } from '../../actions/tools/tool-scope.ts';
 import type { TaskRequest, TaskRecord, TaskResultEnvelope, TaskTemplate } from './task-envelope.ts';
 import type { TaskRegistry } from './task-registry.ts';
+import { checkpointExecution } from '../../actions/execution-scope.ts';
 
 // Raised threshold: short task outputs (workflow creation results, code edit
 // summaries, etc.) are typically 1-3K chars and contain IDs/names the conv
@@ -81,6 +83,8 @@ export type TaskRunner = (args: {
    * copy replayed onto a resume would describe a tree that has since moved.
    */
   siteContext?: string;
+  /** The dispatching turn's taint carry-over (agents/turn-taint-carry.ts). */
+  taintCarry?: TurnTaintLink | null;
 }) => Promise<TaskRunResult>;
 
 /**
@@ -106,6 +110,12 @@ export type TurnContext = {
   contextKey?: string;
   /** This turn's site prompt block, handed to the task tier that has the tools. */
   siteContext?: string;
+  /**
+   * This chat's taint carry-over (agents/turn-taint-carry.ts): each task the
+   * turn runs opens its taint set from it, and its reads count toward the
+   * turn's record. Absent, a task starts clean as before.
+   */
+  taintCarry?: TurnTaintLink | null;
 };
 
 export class TaskDispatcher {
@@ -130,6 +140,8 @@ export class TaskDispatcher {
     onCreated?: (record: TaskRecord) => void,
   ): Promise<TaskResultEnvelope> {
     turn.signal?.throwIfAborted();
+    // The calling turn's dispatch fence (#1155): starting a task is a dispatch.
+    checkpointExecution();
     const subsystem = `task_${request.template}`;
     // A scoped task must run on the USER's words. The fallback below
     // (`original_message ?? intent`) would otherwise hand the task tier the
@@ -170,6 +182,7 @@ export class TaskDispatcher {
       scope: turn.scope,
       signal: turn.signal,
       ...(turn.siteContext ? { siteContext: turn.siteContext } : {}),
+      ...(turn.taintCarry ? { taintCarry: turn.taintCarry } : {}),
     });
   }
 
@@ -258,6 +271,7 @@ export class TaskDispatcher {
       scope: turn.scope,
       signal: turn.signal,
       ...(turn.siteContext ? { siteContext: turn.siteContext } : {}),
+      ...(turn.taintCarry ? { taintCarry: turn.taintCarry } : {}),
     });
   }
 
@@ -277,6 +291,7 @@ export class TaskDispatcher {
       scope: TurnToolScope | null;
       siteContext?: string;
       signal?: AbortSignal;
+      taintCarry?: TurnTaintLink;
     },
   ): Promise<TaskResultEnvelope> {
     const cancel = () => abort.abort(callArgs.signal?.reason);
@@ -295,6 +310,7 @@ export class TaskDispatcher {
         history: callArgs.history,
         scope: callArgs.scope,
         ...(callArgs.siteContext ? { siteContext: callArgs.siteContext } : {}),
+        ...(callArgs.taintCarry ? { taintCarry: callArgs.taintCarry } : {}),
       });
 
       if (abort.signal.aborted) {
@@ -376,6 +392,10 @@ export class TaskDispatcher {
         error: errorMsg,
       };
       this.registry.transition(record.id, 'failed', envelope);
+      // When the calling turn's own dispatch fence refuses now (a channel
+      // turn whose sender was removed mid-turn, #1155), the turn is over, not
+      // only this task: the conv loop must not pay for more model calls.
+      checkpointExecution();
       return envelope;
     } finally {
       callArgs.signal?.removeEventListener('abort', cancel);

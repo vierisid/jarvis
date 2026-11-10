@@ -55,6 +55,28 @@ export type RealtimeVoiceDeps = {
 };
 
 /**
+ * Every realtime voice session not yet closed, on any surface (the
+ * dashboard's and each pebble's), so a restart can wait for them to finish
+ * speaking (anyRealtimeVoicing).
+ */
+const liveSessions = new Set<RealtimeVoiceSession>();
+
+/**
+ * True while any live realtime session may still be heard: its answer to a
+ * tool call is still to come, or its audio is still being sent or played
+ * (RealtimeSession.isVoicing). The restart route reads it (#1156).
+ */
+export function anyRealtimeVoicing(): boolean {
+  for (const s of liveSessions) if (s.isVoicing) return true;
+  return false;
+}
+
+/** Tests only: how many sessions are held (a closed one must not be). */
+export function liveRealtimeSessionCount(): number {
+  return liveSessions.size;
+}
+
+/**
  * Create + wire a realtime voice session. The returned object owns the session
  * lifecycle; the caller pushes mic audio via the transport and calls `close()`
  * on disconnect / session timeout.
@@ -93,6 +115,7 @@ export class RealtimeVoiceSession {
       safetyIdentifier: deps.safetyIdentifier,
     };
     this.session = deps.sessionFactory ? deps.sessionFactory(opts) : new RealtimeSession(opts);
+    liveSessions.add(this);
 
     this.session.onTranscript((t) => {
       if (t.role === 'assistant') this.noteAssistantSpeech(t);
@@ -146,6 +169,7 @@ export class RealtimeVoiceSession {
     this.session.onError((e) => this.deps.onError?.(hosted ? hostedRealtimeError(e) : e));
     this.session.onClose((detail) => {
       this.closed = true;
+      liveSessions.delete(this);
       this.deps.onClose?.(detail);
     });
 
@@ -228,6 +252,11 @@ export class RealtimeVoiceSession {
     return Boolean(this.session.isResponding);
   }
 
+  /** See RealtimeSession.isVoicing. A test fake may not implement it. */
+  get isVoicing(): boolean {
+    return !this.closed && Boolean(this.session.isVoicing);
+  }
+
   /** Stop the current spoken response without closing the conversation. */
   interrupt(): void {
     if (!this.closed) this.session.interrupt();
@@ -246,6 +275,7 @@ export class RealtimeVoiceSession {
 
   close(): void {
     this.closed = true;
+    liveSessions.delete(this);
     this.session.close();
   }
 }

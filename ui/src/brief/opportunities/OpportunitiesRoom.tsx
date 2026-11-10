@@ -17,6 +17,7 @@ import type { BriefRoomModule, BriefShellPort } from "../contracts";
 import { BriefButton, BriefIconButton } from "../components/controls";
 import { useBriefReducedMotion } from "../motion/hooks";
 import { OpportunitiesController } from "./controller";
+import { OPPORTUNITIES_OFF_REASON, opportunitiesOff } from "../today/opportunity-stack/model";
 import {
   APPROVE_LABEL,
   approvalBlock,
@@ -64,7 +65,7 @@ export function OpportunitiesRoom({
     return (
       <section className="brief-opportunities">
         <h1 className="brief-type-room-title">Opportunities</h1>
-        <p role="status">Prepared opportunities are unavailable.</p>
+        <p role="status">{shell.mode !== "preview" && opportunitiesOff(binding?.capabilities) ? OPPORTUNITIES_OFF_REASON : "Prepared opportunities are unavailable."}</p>
       </section>
     );
   return (

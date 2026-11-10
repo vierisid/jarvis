@@ -217,3 +217,58 @@ test('an allowed permission card whose outcome is unknown shows its state, not a
   expect(host.textContent).not.toContain('Allowing this request'); expect(host.textContent).toContain('unknown');
   http.stop();
 });
+
+
+test('manual run JSON stays open with the exact text until corrected; cancellation never dispatches', async () => {
+  await React.act(async () => root.render(<Input.InputHost />));
+  let result: Record<string, unknown> | null | undefined;
+  await React.act(async () => { void Input.manualRunInput().then(value => { result = value; }); });
+  const enter = async (text: string) => { const area = document.querySelector('textarea')!;
+    await React.act(async () => { Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!.call(area, text); area.dispatchEvent(new Event('input', { bubbles: true })); }); };
+  for (const invalid of ['{"customer":', '[]', 'null', 'false', '42', '"text"']) {
+    await enter(invalid); await click('Continue');
+    expect(result).toBeUndefined(); expect(document.querySelector('textarea')?.value).toBe(invalid);
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('JSON object');
+    expect(document.querySelector('textarea')?.getAttribute('aria-invalid')).toBe('true');
+  }
+  await enter('{"price":0,"active":false,"nested":{"id":"customer"}}'); await click('Continue');
+  expect(result).toEqual({ price: 0, active: false, nested: { id: 'customer' } });
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  for (const cancel of ['Cancel', 'Escape']) {
+    result = undefined;
+    await React.act(async () => { void Input.manualRunInput().then(value => { result = value; }); });
+    await enter('{broken'); await click('Continue');
+    if (cancel === 'Cancel') await click('Cancel');
+    else await React.act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(result).toBeNull(); expect(document.querySelector('[role="dialog"]')).toBeNull();
+  }
+});
+
+test('publishing from the existing canvas route reloads authoritative state and enables Run without navigation', async () => {
+  const { createWorkflowRooms } = await import('./workflow-rooms');
+  const { makeCanvasFixture } = await import('../workflows/canvas/fixtures');
+  const { RUN_CAPABILITY } = await import('../workflows/runs/fixtures');
+  const fixture = makeCanvasFixture(); let published = false, reads = 0, publications = 0;
+  const flowId = 'meeting', versionId = fixture.versionId, scopeId = 'scope';
+  const transport = createHostTransport((async (input: any, init: any = {}) => {
+    const path = String(input), version = { ...fixture.snapshot().version, state: published ? 'LOCKED' : 'DRAFT' };
+    if (path.endsWith('/publish')) { publications++; published = true; return Response.json({ version: { ...version, state: 'LOCKED' } }); }
+    if (path === '/api/workflows/meeting') { reads++; return Response.json({ flow: { id: flowId }, latestDraft: published ? null : version, published: published ? version : null, uiMeta: fixture.snapshot().uiMeta }); }
+    if (path.endsWith('/versions/' + versionId)) return Response.json(version);
+    if (path.includes('/inspection?')) return Response.json({ status: 'ready', data: { scopeId, flowId, versionId } });
+    return fixture.request(input, init);
+  }) as typeof fetch);
+  const rooms = createWorkflowRooms({ scopeId, transport, capabilities: () => RUN_CAPABILITY,
+    storage: localStorage, dirty() {}, runInput: async () => null });
+  const shell = { mode: 'live', route: { room: 'workflow', selection: { flowId, versionId } },
+    theme: 'dark', sidebar: 'expanded', chatOpen: false, navigate() {}, setTheme() {}, setSidebar() {}, setChatOpen() {} } as any;
+  const Room = rooms.rooms.workflow!.Body!;
+  try {
+    await React.act(async () => root.render(<Room shell={shell} />));
+    expect(button('Run workflow').disabled).toBe(true); const before = reads;
+    await click('Publish version');
+    expect(publications).toBe(1); expect(reads).toBeGreaterThan(before);
+    expect(button('Run workflow').disabled).toBe(false);
+    expect(button('Publish version')).toBeUndefined(); expect(button('Edit a new draft')).toBeTruthy();
+  } finally { rooms.retire(); transport.stop(); }
+});

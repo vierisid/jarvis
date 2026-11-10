@@ -177,6 +177,7 @@ import { createPieceLibraryChangeHandler } from "../workflows/runtime/piece-libr
 import { resolveSharedRuntimePaths } from "../workflows/runtime/shared-runtime-paths.ts";
 import { DEFAULT_IDS } from "../workflows/db/schema.ts";
 import { buildSandboxServiceBackends } from "../workflows/runtime/service-backends.ts";
+import { HUMAN_INPUT_UNAVAILABLE_MESSAGE } from "../workflows/runtime/human-input-contract.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 import { createLimiter } from "../util/concurrency.ts";
 import { runWithOrigin } from "../llm/origin.ts";
@@ -193,6 +194,7 @@ import {
   backgroundRefusalReply, cancelCardReply, cancelRefusalReply, parseBackgroundTask, parseSettingsIntent, planInPanelAction, planSubPebbleClose, planWindowAction, tabSwitchReply,
   SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
 } from "./pebble-intents.ts";
+import { rebuildPanelInventory, trackPanelIn, untrackPanelIn, type PanelEntry } from "./panel-inventory.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
 import { runRoomPanelIntent, type RoomPanelDeps } from "./pebble-room-panel.ts";
 import { makeFastPathTurns, PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
@@ -234,6 +236,14 @@ export interface DaemonConfig {
   dataDir: string;
   healthCheckInterval?: number;  // ms
   noLocalTools?: boolean;        // disable local tool execution
+  /**
+   * Absolute path to a root-owned system config file (hosted mode, Phase 1
+   * of usejarvis #66). When set, the loader reads EXCLUSIVELY from this
+   * path - a missing/unreadable file is fatal (see validateSystemConfigPath)
+   * rather than falling back to ~/.jarvis/config.yaml. Undefined for
+   * self-host installs, which keep the forgiving loader defaults.
+   */
+  systemConfigPath?: string;
 }
 
 let shutdownInProgress = false;
@@ -263,8 +273,8 @@ let drainDeadlineMs = 75_000;
 /**
  * Parse command line arguments
  */
-function parseArgs(): Partial<DaemonConfig> {
-  const args = process.argv.slice(2);
+export function parseArgs(argv: string[] = process.argv.slice(2)): Partial<DaemonConfig> {
+  const args = argv;
   const config: Partial<DaemonConfig> = {};
 
   for (let i = 0; i < args.length; i++) {
@@ -285,6 +295,21 @@ function parseArgs(): Partial<DaemonConfig> {
       case '--no-local-tools':
         config.noLocalTools = true;
         break;
+      case '--system-config': {
+        // Hosted-mode flag (usejarvis #66): pin the config read to a
+        // root-owned path. A missing value, or one that looks like another
+        // flag, is a misinvocation - the loader's forgiving fallback is
+        // exactly what must NOT engage here, so refuse the daemon rather
+        // than quietly reading ~/.jarvis/config.yaml. startDaemon does the
+        // fail-closed readability check once the value is in hand.
+        const value = args[++i];
+        if (!value || value.startsWith('-')) {
+          console.error('[Daemon] --system-config requires a path');
+          process.exit(1);
+        }
+        config.systemConfigPath = value;
+        break;
+      }
       case '--help':
       case '-h':
         console.log(`
@@ -301,6 +326,9 @@ Options:
   --no-local-tools         Keep the general tools (run_command, read_file, desktop, browser...) off
                            this host: they only run on a connected sidecar, i.e. your machine.
                            The site builder still builds and runs projects on this host.
+  --system-config <path>   Read system config from an absolute, root-owned path
+                           (hosted mode). A missing/unreadable file is fatal;
+                           without the flag, the daemon reads ~/.jarvis/config.yaml.
   --help, -h               Show this help message
 
 Example:
@@ -308,6 +336,16 @@ Example:
         `);
         process.exit(0);
     }
+  }
+
+  // Reject --system-config=<path>: the main scan above matches only the
+  // exact token `--system-config`, so the `=` form would slip through as
+  // `undefined` and let the daemon fall back to ~/.jarvis/config.yaml --
+  // the fail-open mode the whole flag exists to prevent. No other flag in
+  // this parser supports `=`, so loud refusal keeps the shape uniform.
+  if (args.some(a => a.startsWith('--system-config='))) {
+    console.error('[Daemon] --system-config takes a space-separated path, not --system-config=<path>');
+    process.exit(1);
   }
 
   return config;
@@ -622,10 +660,25 @@ Just A Rather Very Intelligent System
  * Start the JARVIS daemon
  */
 export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<void> {
+  // Hosted-mode (usejarvis #66): when --system-config is set, the file at
+  // that path is the sole authority. Fail-closed here BEFORE loadConfig runs:
+  // a missing/unreadable file must NOT engage the loader's forgiving
+  // ~/.jarvis/config.yaml fallback (that is what Phase 1 exists to prevent).
+  // Self-host installs pass no flag and keep today's behavior.
+  const systemConfigPath = userConfig?.systemConfigPath;
+  if (systemConfigPath !== undefined) {
+    const { validateSystemConfigPath } = await import('./system-config.ts');
+    const check = await validateSystemConfigPath(systemConfigPath);
+    if (!check.ok) {
+      console.error(check.message);
+      process.exit(1);
+    }
+  }
+
   // Load config from YAML (with defaults)
   let jarvisConfig;
   try {
-    jarvisConfig = await loadConfig();
+    jarvisConfig = await loadConfig(systemConfigPath);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // "Failed to load", not "Failed to parse": loadConfig also rejects a value
@@ -633,7 +686,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // (#550), and "fix the YAML syntax or delete it" is bad advice for a working
     // config with one bad key. The message already says which one.
     console.error(`\n[Daemon] Failed to load config file: ${message}`);
-    console.error('[Daemon] Fix the reported value in ~/.jarvis/config.yaml, or delete the file to use defaults.\n');
+    // Two advice lines: in hosted mode the file is root-owned and lives at
+    // /etc/jarvis-host/instances/u_<id>/config.yaml, so "delete the file to
+    // use defaults" names exactly the forgiving fallback this whole flag
+    // exists to prevent -- and the tenant could not delete it anyway.
+    if (systemConfigPath !== undefined) {
+      console.error(`[Daemon] Fix the reported value in ${systemConfigPath} and restart; this file is managed by the hosting platform.\n`);
+    } else {
+      console.error(`[Daemon] Fix the reported value in ~/.jarvis/config.yaml, or delete the file to use defaults.\n`);
+    }
     process.exit(1);
   }
 
@@ -727,6 +788,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     dbPath,
     healthCheckInterval: userConfig?.healthCheckInterval ?? 30000,
     noLocalTools: userConfig?.noLocalTools ?? false,
+    systemConfigPath,
   };
 
   if (localIntegration && (dataDir !== jarvisConfig.daemon.data_dir || dbPath !== jarvisConfig.daemon.db_path || port !== jarvisConfig.daemon.port)) {
@@ -856,7 +918,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // once, then env overrides are re-applied so JARVIS_* still wins.
     const { importLegacyUserSettings, mergeUserSettingsIntoConfig } = await import('./user-settings.ts');
     const { readRawConfigFile, applyEnvOverrides } = await import('../config/loader.ts');
-    const rawConfigFile = await readRawConfigFile().catch(() => null);
+    const rawConfigFile = await readRawConfigFile(systemConfigPath).catch(() => null);
     const importedSections = importLegacyUserSettings(rawConfigFile);
     if (importedSections.length > 0) {
       logWithTimestamp(`Imported legacy config.yaml sections into the DB: ${importedSections.join(', ')}`);
@@ -894,9 +956,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // effect on SIGHUP / POST /api/config/reload without a restart. Same
       // for the billing read's block and the hosted integrations link.
       reloadSystemSections: async (cfg) => {
-        await reloadUsejarvisAiBlock(cfg);
-        await reloadUsejarvisBillingBlock(cfg);
-        await reloadUsejarvisIntegrationsBlock(cfg);
+        // Thread the --system-config path through: SIGHUP and POST
+        // /api/config/reload must re-read the SAME root-owned file the boot
+        // path read, never fall back to ~/.jarvis/config.yaml.
+        await reloadUsejarvisAiBlock(cfg, systemConfigPath);
+        await reloadUsejarvisBillingBlock(cfg, systemConfigPath);
+        await reloadUsejarvisIntegrationsBlock(cfg, systemConfigPath);
       },
     });
     setSectionSavedListener((section) => settingsReload?.sectionChanged(section));
@@ -2447,20 +2512,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // the last entry, and named commands ("expand the workflows
       // window") by searching back-to-front for a matching key — so
       // when two of the same room are open, the most-recent one wins.
-      type PanelEntry = { id: string; key: string; title: string };
       const panelsBySidecar = new Map<string, PanelEntry[]>();
-      const trackPanel = (sidecarId: string, entry: PanelEntry): void => {
-        const list = panelsBySidecar.get(sidecarId) ?? [];
-        list.push(entry);
-        panelsBySidecar.set(sidecarId, list);
-      };
-      const untrackPanel = (sidecarId: string, id: string): void => {
-        const list = panelsBySidecar.get(sidecarId);
-        if (!list) return;
-        const idx = list.findIndex(e => e.id === id);
-        if (idx >= 0) list.splice(idx, 1);
-        if (list.length === 0) panelsBySidecar.delete(sidecarId);
-      };
+      const trackPanel = (sidecarId: string, entry: PanelEntry): void => trackPanelIn(panelsBySidecar, sidecarId, entry);
+      const untrackPanel = (sidecarId: string, id: string): void => untrackPanelIn(panelsBySidecar, sidecarId, id);
 
       // W3-T2 — persist per-room window bounds to ~/.jarvis/window-state.json
       // so reopening a room lands it where the user last left it. Bounds
@@ -2499,6 +2553,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const palettePanelBySidecar = new Map<string, { id: string; sidecarId: string }>();
       const lastPaletteCloseAt = new Map<string, number>();
 
+      // A sidecar keeps its windows across a dropped link or a daemon restart,
+      // but the inventory is per connection: ask it what is open (#1157). A
+      // sidecar older than the `panels` field answers ids only and is left as
+      // before. One set per connection; replaced or dropped, the answer is stale.
+      const panelsClosedDuringRebuild = new Map<string, Set<string>>();
+      sidecarManager.onSidecarConnected((sidecar) => {
+        if (!sidecar.capabilities.includes('windows')) return;
+        const closed = new Set<string>();
+        panelsClosedDuringRebuild.set(sidecar.id, closed);
+        void rebuildPanelInventory(sidecar.id, panelsBySidecar,
+          (id) => sidecarManager.dispatchRPC(id, 'panel.list', {}),
+          () => panelsClosedDuringRebuild.get(sidecar.id) === closed ? closed : null)
+          .then((added) => { if (added) console.log(`[ambient-ui] Found ${added} open window(s) on ${sidecar.id} after it connected`); })
+          .catch((err) => console.warn(`[ambient-ui] panel.list on ${sidecar.id} failed:`, err instanceof Error ? err.message : err))
+          .finally(() => { if (panelsClosedDuringRebuild.get(sidecar.id) === closed) panelsClosedDuringRebuild.delete(sidecar.id); });
+      });
+
       // Untrack a panel as soon as its window closes (user close button or a
       // Close() RPC) so the inventory used for voice targeting, bounds
       // persistence, and LLM context never points at a window that's gone.
@@ -2507,6 +2578,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const payload = (event.payload ?? {}) as { panel_id?: string };
         if (!payload.panel_id) return;
         untrackPanel(sidecarId, payload.panel_id);
+        panelsClosedDuringRebuild.get(sidecarId)?.add(payload.panel_id);
         const pal = palettePanelBySidecar.get(sidecarId);
         if (pal && pal.id === payload.panel_id) palettePanelBySidecar.delete(sidecarId);
       });
@@ -2517,6 +2589,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // subPebbleSlots are cleared by the dedicated handlers above.)
       sidecarManager.onSidecarDisconnected((sidecarId) => {
         panelsBySidecar.delete(sidecarId);
+        panelsClosedDuringRebuild.delete(sidecarId);
         palettePanelBySidecar.delete(sidecarId);
         lastPaletteCloseAt.delete(sidecarId);
         const eyeTimer = eyeTimers.get(sidecarId);
@@ -5596,6 +5669,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const agentSpecialists = agentService.getSpecialists();
       const backends = buildSandboxServiceBackends({
         decisionDocumentsEnabled: briefCapabilities.snapshot().capabilities.decisionEdits.enabled,
+        // Input and approval requests are answered in Needs you (#1266): with
+        // decisions off nothing could answer one, so a step that asks fails now.
+        humanInputUnavailable: () => briefCapabilities.snapshot().capabilities.decisions.enabled ? null : HUMAN_INPUT_UNAVAILABLE_MESSAGE,
         credentialResolver: workflowSandboxApi.services.credentialResolver,
         llmManager: agentService.getLLMManager(),
         ...(toolRegistry ? { toolRegistry } : {}),

@@ -32,14 +32,16 @@ import { runFailure } from './run-failure';
 
 /**
  * Step failures that are about what the run is bound to, not about the step's
- * own work, and that leave a typed effect record to read them from. Not here:
- * WORKFLOW_MACHINE_REPLACED and WORKFLOW_MACHINE_UNAVAILABLE. Those are thrown
- * while the step's target is first resolved, before its effect record is
- * written, so no run shows them as a code; a pinned computer no longer
- * enrolled is refused before the run starts instead (readiness, BINDING_STALE).
+ * own work, and that leave a typed effect record to read them from.
+ * WORKFLOW_MACHINE_REPLACED and WORKFLOW_MACHINE_UNAVAILABLE are thrown while
+ * the step's target is first resolved; the boundary records them as a blocked
+ * effect since #1152, so a run shows them as a code too. A pinned computer no
+ * longer enrolled is usually refused before the run starts (readiness,
+ * BINDING_STALE); REPLACED is the run that started just before that.
  */
 export const BINDING_FAILURE_CODES: ReadonlySet<string> = new Set([
-  'WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_FACT_STALE', 'WORKFLOW_FACT_AMBIGUOUS',
+  'WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_MACHINE_UNAVAILABLE', 'WORKFLOW_MACHINE_REPLACED',
+  'WORKFLOW_FACT_STALE', 'WORKFLOW_FACT_AMBIGUOUS',
 ]);
 
 const READINESS_STEP = '<readiness>';
@@ -110,7 +112,7 @@ export function flowBindingBlock(flow: { id: string; project_id: string; status:
   return run ? blockOf(run) : null;
 }
 
-const MACHINE_CODES = new Set(['WORKFLOW_MACHINE_OFFLINE']);
+const MACHINE_CODES = new Set(['WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_MACHINE_UNAVAILABLE', 'WORKFLOW_MACHINE_REPLACED']);
 /** A refusal whose computer or step its record does not name: any working computer, or any working recipient step, clears it. */
 const ANY_MACHINE = 'machine:*';
 const ANY_RECIPIENT = 'fact:*';

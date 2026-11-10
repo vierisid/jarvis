@@ -10,6 +10,7 @@ import { ConversationMessages } from '../chat/message/ConversationMessages';
 import { bindConversationMessages } from '../chat/message/model';
 import { AttachmentFan } from '../chat/attachment-fan/AttachmentFan';
 import { bindAttachmentFan } from '../chat/attachment-fan/model';
+import { ClosedChats } from './ClosedChats';
 import type { DashboardOwner } from './owner';
 
 function pickFile(kind: 'document' | 'image', signal: AbortSignal): Promise<File | null> {
@@ -23,8 +24,33 @@ function pickFile(kind: 'document' | 'image', signal: AbortSignal): Promise<File
   });
 }
 export function HostConversation({ host }: { host: DashboardOwner }) {
-  const owner = useBriefConversation(), id = useId(), [message, setMessage] = useState('');
-  const tabs = bindConversationTabs(owner, 'live'), composer = bindConversationComposer(owner, 'live');
+  const owner = useBriefConversation(), id = useId();
+  const tabs = bindConversationTabs(owner, 'live');
+  return <div className="brief-host-conversation">
+    <ConversationTabStrip mode="live" panelId={id} binding={tabs} />
+    {owner.status.mode === 'scoped' && <ClosedChats key={owner.state.workspaceId} client={owner.client}
+      openIds={owner.state.order} busy={owner.status.pending > 0} />}
+    {owner.status.mode === 'scoped' && !owner.state.activeId ? <>
+      <p className="brief-message-unavailable" role="status">{owner.status.error ? 'Your chat could not be opened.' : 'Opening your chat…'}</p>
+      {owner.status.error && <button type="button" disabled={owner.status.pending > 0} onClick={() => void owner.client.ensureActive().catch(() => {})}>Try again</button>}
+    </> : <>
+      <ConversationMessages mode="live" panelId={id} labelledBy={tabs.activeId ? chatTabId(id, tabs.activeId) : undefined} binding={bindConversationMessages(owner, 'live')} />
+      <ConversationDraft owner={owner} host={host} />
+    </>}
+  </div>;
+}
+
+/** Feedback belongs to the mounted workspace/chat, including late upload completions. */
+interface DraftProps {
+  owner: Pick<ReturnType<typeof useBriefConversation>, 'client' | 'state' | 'status' | 'current'>;
+  host: Pick<DashboardOwner, 'devices'>;
+}
+export function ConversationDraft(props: DraftProps) {
+  return <ScopedConversationDraft key={JSON.stringify([props.owner.state.workspaceId, props.owner.state.activeId])} {...props} />;
+}
+function ScopedConversationDraft({ owner, host }: DraftProps) {
+  const [message, setMessage] = useState('');
+  const composer = bindConversationComposer(owner, 'live');
   const fan = bindAttachmentFan(owner.client, { file: pickFile,
     screenshotAvailability: { available: host.devices().length > 0, reason: 'Connect a computer to capture its screen.' },
     screenshot: async signal => {
@@ -36,13 +62,7 @@ export function HostConversation({ host }: { host: DashboardOwner }) {
       return { deviceId: device.id, confirmed: true };
     } }, 'live');
   const action = async (run: () => Promise<unknown>) => { try { await run(); setMessage(''); } catch { setMessage('The attachment change could not be confirmed.'); } };
-  if (owner.status.mode === 'scoped' && !owner.state.activeId) return <div className="brief-host-conversation">
-    <p className="brief-message-unavailable" role="status">{owner.status.error ? 'Your chat could not be opened.' : 'Opening your chat…'}</p>
-    {owner.status.error && <button type="button" disabled={owner.status.pending > 0} onClick={() => void owner.client.ensureActive().catch(() => {})}>Try again</button>}
-  </div>;
-  return <div className="brief-host-conversation">
-    <ConversationTabStrip mode="live" panelId={id} binding={tabs} />
-    <ConversationMessages mode="live" panelId={id} labelledBy={tabs.activeId ? chatTabId(id, tabs.activeId) : undefined} binding={bindConversationMessages(owner, 'live')} />
+  return <>
     {!!owner.current?.attachments.length && <ul aria-label="Draft attachments">{owner.current.attachments.map(file => <li key={file.attachmentId}>
       <span>{file.name} · {file.state}</span>
       {file.state === 'failed' && <button onClick={() => void action(() => owner.client.attachments.retry(owner.state.activeId!, file.attachmentId))}>Retry</button>}
@@ -50,5 +70,5 @@ export function HostConversation({ host }: { host: DashboardOwner }) {
     </li>)}</ul>}
     <p role="status">{message}</p>
     <ConversationComposer mode="live" binding={composer} attachmentControl={<AttachmentFan mode="live" binding={fan} onFeedback={setMessage} />} />
-  </div>;
+  </>;
 }

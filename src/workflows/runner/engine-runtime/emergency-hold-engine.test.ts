@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { closeWorkflowDb, DEFAULT_IDS, initWorkflowDb } from "../../db";
 import { createWorkflowRoutes } from "../../api/routes";
+import { BriefCapabilities } from '../../../brief/capabilities';
 import { listHumanInputs } from "../../runtime/human-input";
 import { createFlow, setFlowCodeStepsEnabled } from "../../db/repos/flow";
 import { createFlowRun, getFlowRun } from "../../db/repos/flow-run";
@@ -41,6 +42,8 @@ import { AuditTrail } from "../../../authority/audit";
 import { AuthorityEngine } from "../../../authority/engine";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
 import { maxWaitingWorkflowCards } from "../../runtime/deferred-cards";
+/** Needs you is the Brief decisions feature: its answer routes refuse with it off (#1266). */
+const decisionsOn = new BriefCapabilities([{ id: 'decisions', provider: { readiness: () => 'ready' as const } }], ['decisions']);
 
 const buildOptIn = process.env.JARVIS_TEST_ENGINE_BUILD === "1";
 const initialCached = findCachedBundle();
@@ -209,7 +212,7 @@ describe("Pause against the real engine: a held step runs as it was about to (Q-
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({ kind: "approval", status: "pending" });
 
-    const routes = createWorkflowRoutes();
+    const routes = createWorkflowRoutes({ briefCapabilities: decisionsOn });
     const publicCallback = Object.assign(new Request(`http://localhost/api/webhooks/waitpoints/${waitpoint!.id}?action=approve`, {
       method: "POST", body: JSON.stringify({ decision: "approve" }),
     }), { params: { id: waitpoint!.id } });

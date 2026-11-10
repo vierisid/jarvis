@@ -80,14 +80,17 @@ import { collectExecutionTargets } from '../actions/tools/sidecar-route.ts';
 import type { ToolGuideMachine } from '../roles/tool-guide.ts';
 import { ConvOrchestrator } from '../agents/conv/conv-orchestrator.ts';
 import { TaskRegistry } from '../agents/conv/task-registry.ts';
-import { TaskDispatcher } from '../agents/conv/task-dispatcher.ts';
+import { TaskDispatcher, type TaskRunner } from '../agents/conv/task-dispatcher.ts';
 import { DialogueCompactor } from '../agents/conv/dialogue-compactor.ts';
 import type { ConvTaskEvent } from '../agents/conv/conv-orchestrator.ts';
-import { getRecentConversation, getMessages } from '../vault/conversations.ts';
+import { getRecentConversation, getMessages, forwardedMessageIds, frameForward, holdsRecentForward, FORWARDED_MESSAGE_SOURCE } from '../vault/conversations.ts';
+import { checkpointExecution } from '../actions/execution-scope.ts';
+import { withChannelConversationTaint } from './channel-service.ts';
 import { PEBBLE_CHANNEL, PEBBLE_DIALOGUE_WINDOW_MS, recordPebbleExchange } from './pebble-dialogue.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import type { ScopedChatInput } from '../brief/chat-transport.ts';
 import { commitmentPromptLine } from '../vault/commitment-text.ts';
+import { TurnTaintCarry, taintCarryKey, type TurnTaintLink } from '../agents/turn-taint-carry.ts';
 
 export class AgentService implements Service, IAgentService {
   name = 'agent';
@@ -111,6 +114,12 @@ export class AgentService implements Service, IAgentService {
   private convOrchestrator: ConvOrchestrator | null = null;
   private convTaskEventListener: ((event: ConvTaskEvent) => void) | null = null;
   private dialogueCompactor: DialogueCompactor | null = null;
+  /**
+   * What each chat's last turn read, so a bare "yes" after a tainted turn
+   * starts tainted (agents/turn-taint-carry.ts). Every owner turn entry
+   * below opens a link on it and closes the link when the turn ends.
+   */
+  private readonly taintCarry = new TurnTaintCarry();
 
   constructor(config: JarvisConfig) {
     this.config = config;
@@ -313,14 +322,20 @@ export class AgentService implements Service, IAgentService {
     // Refuse new turns once draining; otherwise count this one in-flight so a
     // graceful drain can await it (released when the tracked stream settles).
     if (activeTurns.isDraining) throw new DrainingError();
+    // A Telegram or Discord conversation holding words the owner did not
+    // write (a guest's, a forward) starts tainted when continued here (owner
+    // decision on #1155). Read against the channels as configured now.
+    if (conversation) conversation = withChannelConversationTaint(conversation, this.config.channels);
     const endTurn = activeTurns.begin();
+    const carry = this.taintCarry.begin(taintCarryKey(channel, contextKey ?? conversation?.contextKey), text);
+    const settle = () => { carry.close(); endTurn(); };
     try {
       return withMemoryRecall(() => {
-        const inner = this.streamMessageInner(text, channel, siteContext, scope, contextKey, conversation);
-        return { stream: bindMemoryRecallStream(trackTurnStream(inner.stream, endTurn)), onComplete: inner.onComplete };
+        const inner = this.streamMessageInner(text, channel, siteContext, scope, contextKey, conversation, carry);
+        return { stream: bindMemoryRecallStream(trackTurnStream(inner.stream, settle)), onComplete: inner.onComplete };
       });
     } catch (err) {
-      endTurn();
+      settle();
       throw err;
     }
   }
@@ -332,17 +347,20 @@ export class AgentService implements Service, IAgentService {
     scope?: TurnToolScope | null,
     contextKey?: string,
     conversation?: ScopedChatInput,
+    carry?: TurnTaintLink,
   ): {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
-    // The existing classic path supports multimodal blocks and scoped history.
-    if (this.convOrchestrator && !conversation?.attachmentContent?.length) {
+    // The existing classic path supports multimodal blocks and scoped history,
+    // and seeds the turn's taint from `untrustedSources`, which the conv path
+    // does not: a turn that starts on outside content runs there (#1155).
+    if (this.convOrchestrator && !conversation?.attachmentContent?.length && !conversation?.untrustedSources?.length) {
       // Both halves travel now (#571). This branch used to drop `siteContext`
       // AND `scope`, which made a project-scoped chat on every hosted install
       // the pre-#561 state exactly: the generic file and shell tools present,
       // and not even the prompt line that used to be their only restraint.
-      return this.streamMessageConv(text, channel, siteContext, scope, contextKey, conversation);
+      return this.streamMessageConv(text, channel, siteContext, scope, contextKey, conversation, carry);
     }
 
     const systemPrompt = this.buildFullSystemPromptParts(channel, text);
@@ -359,7 +377,7 @@ export class AgentService implements Service, IAgentService {
     const attachmentTier = conversation?.attachmentContent?.length && this.llmManager.hasConversationTier();
     const stream = this.orchestrator.streamMessage(systemPrompt, conversation?.attachmentContent?.length
       ? [...conversation.attachmentContent, { type: 'text', text: text || 'Please examine the attached source material.' }]
-      : text, attachmentTier ? 'conversation' : undefined, conversation?.attachmentContent?.length ? 'chat_orchestrator_image' : undefined, attachmentTier ? 'medium' : undefined, scope, conversation);
+      : text, attachmentTier ? 'conversation' : undefined, conversation?.attachmentContent?.length ? 'chat_orchestrator_image' : undefined, attachmentTier ? 'medium' : undefined, scope, conversation, carry);
 
     const onComplete = async (fullText: string): Promise<void> => {
       // Note: orchestrator already adds assistant response to history
@@ -391,6 +409,7 @@ export class AgentService implements Service, IAgentService {
     scope?: TurnToolScope | null,
     contextKey?: string,
     conversation?: ScopedChatInput,
+    carry?: TurnTaintLink,
   ): {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
@@ -432,6 +451,7 @@ export class AgentService implements Service, IAgentService {
           // The router's own "execute, don't ask" (#927); the panel context
           // above goes to the task tier only.
           ...(channel === PEBBLE_CHANNEL ? { pebbleVoice: true } : {}),
+          ...(carry ? { taintCarry: carry } : {}),
         }, taskListener)) {
           if (event.type === 'text') {
             // Insert a separator so the acknowledgment text doesn't blur into
@@ -513,6 +533,10 @@ export class AgentService implements Service, IAgentService {
     // turn is a real turn — must not start mid-drain or run uncounted).
     if (activeTurns.isDraining) throw new DrainingError();
     const endTurn = activeTurns.begin();
+    // The same chat as the Pebble's text turns: an image turn after a
+    // tainted text turn, or the reverse, is the next turn of one dialogue.
+    const carry = this.taintCarry.begin(taintCarryKey(channel), text);
+    const settle = () => { carry.close(); endTurn(); };
     try {
       return withMemoryRecall(() => {
         const systemPrompt = this.buildFullSystemPromptParts(channel, text);
@@ -540,6 +564,8 @@ export class AgentService implements Service, IAgentService {
           'chat_orchestrator_image',
           useConvTier ? 'medium' : undefined,
           scope ?? null,
+          undefined,
+          carry,
         );
 
         const onComplete = async (fullText: string): Promise<void> => {
@@ -553,10 +579,10 @@ export class AgentService implements Service, IAgentService {
           ]);
         };
 
-        return { stream: bindMemoryRecallStream(trackTurnStream(stream, endTurn)), onComplete };
+        return { stream: bindMemoryRecallStream(trackTurnStream(stream, settle)), onComplete };
       });
     } catch (err) {
-      endTurn();
+      settle();
       throw err;
     }
   }
@@ -587,17 +613,18 @@ export class AgentService implements Service, IAgentService {
     // through BackgroundAgentService.handleMessage, which is gated separately.
     if (activeTurns.isDraining) throw new DrainingError();
     const endTurn = activeTurns.begin();
+    const carry = this.taintCarry.begin(taintCarryKey(channel), text);
     try {
       return await withMemoryRecall(async () => {
         let response: string;
 
         if (this.convOrchestrator) {
-          response = await this.handleMessageConv(text, channel, scope, siteContext);
+          response = await this.handleMessageConv(text, channel, scope, siteContext, undefined, undefined, carry);
         } else {
           const systemPrompt = this.buildFullSystemPromptParts(channel, text);
           if (siteContext) systemPrompt.dynamic += '\n\n' + siteContext;
           if (scope) systemPrompt.dynamic += '\n\n' + scopeSystemNote(scope);
-          response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, scope ?? null);
+          response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, scope ?? null, null, carry);
         }
 
         // Run extraction and learning in parallel (non-blocking but tracked)
@@ -613,6 +640,7 @@ export class AgentService implements Service, IAgentService {
         return response;
       });
     } finally {
+      carry.close();
       endTurn();
     }
   }
@@ -648,38 +676,99 @@ export class AgentService implements Service, IAgentService {
    *
    * The caller has already stored `text` in the conversation; it is passed as
    * this turn's message and dropped from the history, so it is not sent twice.
+   *
+   * The owner's turn runs inside `withMemoryRecall` like every other dialogue
+   * entry (#1155), so memory forgotten while it is prepared is fenced here too.
+   *
+   * `forwarded` (owner decision on #1155): the owner forwarded someone else's
+   * message. The owner keeps their context and tools, but the forward is read
+   * as quoted outside content, the turn starts tainted (so what changes the
+   * machine or contacts someone stops for approval, as after reading a web
+   * page), and nothing is learned from it: it is not what the owner said.
    */
   async handleThreadMessage(
     text: string,
     channel: string,
-    thread: { conversationId: string; contextKey: string; sender: 'owner' | 'guest' | 'shared' },
+    thread: { conversationId: string; contextKey: string; sender: 'owner' | 'guest' | 'shared'; forwarded?: boolean },
   ): Promise<string> {
     if (activeTurns.isDraining) throw new DrainingError();
     const endTurn = activeTurns.begin();
+    let carry: TurnTaintLink | null = null;
     try {
-      const history = withoutTrailingTurn(await this.loadDialogue(thread.conversationId), text);
-      if (thread.sender !== 'owner') return await this.handleGuestMessage(text, channel, history, thread.sender === 'shared');
-      let response: string;
-      if (this.convOrchestrator) {
-        response = await this.handleMessageConv(text, channel, null, undefined, history, thread.contextKey);
-      } else {
-        const systemPrompt = this.buildFullSystemPromptParts(channel, text);
-        response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, null, { history });
+      if (thread.sender !== 'owner') {
+        const history = withoutTrailingTurn(this.loadGuestDialogue(thread.conversationId), text);
+        return await this.handleGuestMessage(text, channel, history, thread.sender === 'shared');
       }
+      // Opened only now: a guest's turn has no tools, so it neither reads
+      // nor runs anything, and it neither carries nor records taint.
+      const link = this.taintCarry.begin(taintCarryKey(channel, thread.contextKey), text);
+      carry = link;
+      return await withMemoryRecall(async () => {
+        const history = withoutTrailingTurn(await this.loadDialogue(thread.conversationId, text), text);
+        // A forward stays someone else's words on every later turn too
+        // (#1155 review): loadDialogue framed it, and the turn is tainted.
+        // Its marks go into this chat's carry record, so a bare yes after it
+        // stays tainted.
+        if (thread.forwarded === true || this.holdsForward(thread.conversationId)) {
+          return await this.handleForwardedMessage(text, channel, history, thread.forwarded === true, link);
+        }
+        let response: string;
+        if (this.convOrchestrator) {
+          response = await this.handleMessageConv(text, channel, null, undefined, history, thread.contextKey, link);
+        } else {
+          const systemPrompt = this.buildFullSystemPromptParts(channel, text);
+          response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, null, { history }, link);
+        }
 
-      // Only the owner's turn teaches the assistant (#909); a guest's returned above.
-      void Promise.allSettled([
-        this.extractKnowledge(text, response).catch((err) =>
-          console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
-        ),
-        this.learnFromInteraction(text, response, channel).catch((err) =>
-          console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
-        ),
-      ]);
+        // Only the owner's turn teaches the assistant (#909); a guest's returned above.
+        // And only while its sender still may (#1155): the channel's dispatch
+        // fence refuses once they were removed, or stopped being the owner,
+        // mid-turn, and what they said then is not learned from.
+        try {
+          checkpointExecution();
+        } catch {
+          return response;
+        }
+        void Promise.allSettled([
+          this.extractKnowledge(text, response).catch((err) =>
+            console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
+          ),
+          this.learnFromInteraction(text, response, channel).catch((err) =>
+            console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
+          ),
+        ]);
 
-      return response;
+        return response;
+      });
     } finally {
+      carry?.close();
       endTurn();
+    }
+  }
+
+  /**
+   * The owner's turn on a message they forwarded, or on a conversation that
+   * holds one (#1155). On the classic orchestrator at the medium tier, the
+   * path that seeds a turn's taint, as a dashboard turn with an attachment
+   * does. `forwarded`: this message is the forward, so it is framed. Nothing
+   * is learned from any of these turns: a reply can restate the forward, and
+   * extraction reads the reply.
+   */
+  private async handleForwardedMessage(text: string, channel: string, history: LLMMessage[], forwarded: boolean, carry: TurnTaintLink): Promise<string> {
+    const systemPrompt = this.buildFullSystemPromptParts(channel, text);
+    const message = forwarded ? frameForward(text) : text;
+    return await this.orchestrator.processMessage(systemPrompt, message, undefined, undefined, null,
+      { history, untrustedSources: [FORWARDED_MESSAGE_SOURCE] }, carry);
+  }
+
+  /** Whether a forward is still among the messages this conversation's turns read back (#1155). */
+  private holdsForward(conversationId: string): boolean {
+    try {
+      return holdsRecentForward(conversationId);
+    } catch (err) {
+      // Fail closed: an unreadable record taints the turn, which only asks first.
+      console.warn('[AgentService] Could not read forwarded messages:', err);
+      return true;
     }
   }
 
@@ -715,7 +804,7 @@ export class AgentService implements Service, IAgentService {
       { role: 'user', content: text },
     ];
     const tier = this.llmManager.hasConversationTier() ? 'conversation' : 'medium';
-    const response = await this.llmManager.chatTier(tier, 'channel_guest', messages);
+    const response = await this.llmManager.chatTier(tier, 'channel_guest', messages, { max_tokens: GUEST_REPLY_MAX_TOKENS });
     return response.finish_reason === 'length'
       ? `${response.content}\n\n[Response was truncated due to output token limits.]`
       : response.content;
@@ -759,6 +848,8 @@ export class AgentService implements Service, IAgentService {
     dialogue?: LLMMessage[],
     // Which chat this is, for matching tasks to it; absent is the main chat.
     contextKey?: string,
+    // The turn's taint carry-over, handed to every task it runs.
+    carry?: TurnTaintLink | null,
   ): Promise<string> {
     if (!this.convOrchestrator) {
       // Should be unreachable - caller checks this.convOrchestrator first.
@@ -778,7 +869,7 @@ export class AgentService implements Service, IAgentService {
         recentDialogue,
         ambientFacts: this.buildAmbientFactsBlock(text),
       },
-      { scope: scope ?? null, ...(contextKey ? { contextKey } : {}), ...(siteContext ? { siteContext } : {}) },
+      { scope: scope ?? null, ...(contextKey ? { contextKey } : {}), ...(siteContext ? { siteContext } : {}), ...(carry ? { taintCarry: carry } : {}) },
       this.convTaskEventListener ?? undefined,
     );
     return result.text;
@@ -817,23 +908,54 @@ export class AgentService implements Service, IAgentService {
     return this.loadDialogue(conversationId);
   }
 
+  /**
+   * A guest conversation's recent dialogue, verbatim (#1155). Never compacted:
+   * the compactor summarizes in the background under the owner's background
+   * budget, and a guest must not be able to spend that by talking at length.
+   */
+  private loadGuestDialogue(conversationId: string): LLMMessage[] {
+    try {
+      return getMessages(conversationId, { limit: GUEST_HISTORY_MESSAGES + 1 })
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+        .slice(-(GUEST_HISTORY_MESSAGES + 1));
+    } catch (err) {
+      console.warn('[AgentService] Failed to load guest dialogue:', err);
+      return [];
+    }
+  }
+
   /** One conversation's recent dialogue, compacted as `loadRecentDialogue` does. */
-  private async loadDialogue(conversationId: string): Promise<LLMMessage[]> {
+  private async loadDialogue(conversationId: string, currentText?: string): Promise<LLMMessage[]> {
     try {
       // Pull a wider window than we'll inject so the compactor has material
       // to summarize when the conversation is long. The compactor caps the
       // final list size (last 20 verbatim by default; older bucketed into a
       // background-built summary when conversation exceeds 40 messages).
-      const messages = getMessages(conversationId, { limit: 80 });
-      const dialogue: LLMMessage[] = messages
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-        }));
+      const messages = getMessages(conversationId, { limit: 80 }).filter(m => m.role === 'user' || m.role === 'assistant');
+      // A message the owner forwarded is read back as someone else's words,
+      // framed fresh each time (#1155 review). Not the trailing one when it
+      // is this turn's: the caller drops that, and frames it itself.
+      //
+      // Framed AFTER compaction, never before: the compactor cuts each message
+      // it summarizes to 800 characters, and a cut frame is a block that never
+      // ends (roles/untrusted.ts, #582). It is handed a stand-in for each
+      // forward instead, so the forward's words never reach the summary,
+      // which every later turn reads as a system message; a stand-in kept in
+      // the verbatim tail is replaced by the framed forward.
+      const forwards = forwardedMessageIds(conversationId);
+      const framedFor = new Map<LLMMessage, LLMMessage>();
+      const dialogue: LLMMessage[] = messages.map((m, i) => {
+        const role = m.role as 'user' | 'assistant';
+        if (!forwards.has(m.id) || (i === messages.length - 1 && m.content === currentText)) return { role, content: m.content };
+        const standIn: LLMMessage = { role, content: FORWARD_STAND_IN };
+        framedFor.set(standIn, { role, content: frameForward(m.content) });
+        return standIn;
+      });
+      const framed = (list: LLMMessage[]) => list.map((m) => framedFor.get(m) ?? m);
 
-      if (!this.dialogueCompactor) return dialogue.slice(-10);
-      return await this.dialogueCompactor.compact(conversationId, dialogue);
+      if (!this.dialogueCompactor) return framed(dialogue.slice(-10));
+      return framed(await this.dialogueCompactor.compact(conversationId, dialogue));
     } catch (err) {
       console.warn('[AgentService] Failed to load recent dialogue:', err);
       return [];
@@ -906,6 +1028,69 @@ export class AgentService implements Service, IAgentService {
 
   // --- Private methods ---
 
+  /**
+   * The conv tier's task runner: delegated tasks run through the primary
+   * orchestrator's processTaskCall. A method so tests drive the real wiring.
+   */
+  private taskRunner(): TaskRunner {
+    return async ({
+      tier,
+      subsystem,
+      template,
+      intent,
+      originalMessage,
+      signal,
+      history,
+      scope,
+      siteContext,
+      contextKey,
+      taintCarry,
+    }) => {
+      const baseSystem = this.buildFullSystemPromptParts('conv', originalMessage);
+      const templateNote = TaskDispatcher.templatePromptFor(template);
+      // Attach the conv LLM's routing intent as system context so the task
+      // tier sees both the user's verbatim ask AND the conv's framing -
+      // but the user's words are the primary signal. Both are per-task
+      // volatile, so they ride on the dynamic half of the prompt.
+      //
+      // The site block and the scope notice ride there too, and only here:
+      // this is the tier that holds the tool registry, so it is the one
+      // that needs to be told which project it is working in and which
+      // tools this kind of turn does not have (#571). Keeping both out of
+      // the STATIC half matters - that half is the provider's cache prefix,
+      // and a per-chat variation in it would miss the cache on every
+      // hosted turn.
+      const dynamicParts = [
+        baseSystem.dynamic,
+        templateNote,
+        `Conversation routing note: ${intent}`,
+        ...(siteContext ? [siteContext] : []),
+        ...(scope ? [scopeSystemNote(scope)] : []),
+      ];
+      const systemPrompt: SystemPromptParts = {
+        static: baseSystem.static,
+        dynamic: dynamicParts.join('\n\n'),
+      };
+      const result = await this.orchestrator.processTaskCall({
+        systemPrompt,
+        userMessage: originalMessage,
+        tier,
+        subsystem,
+        history: history as import('../llm/provider.ts').LLMMessage[] | undefined,
+        signal,
+        ...(contextKey?.startsWith('brief:') ? { contextKey } : {}),
+        scope,
+        taintCarry: taintCarry ?? null,
+        // Every template but `write` exists to DO something, so a final
+        // answer that ran no tools is a model that announced its plan and
+        // stopped - push back once rather than storing the announcement as
+        // the result. `write` drafts prose and legitimately needs no tools.
+        requireToolUse: template !== 'write',
+      });
+      return result;
+    };
+  }
+
   private registerProviders(): void {
     // Bind through the effective view: hosted tier defaults live only in this
     // per-bind copy (explicit ref → llm.default → plan alias), never in
@@ -941,60 +1126,7 @@ export class AgentService implements Service, IAgentService {
       // `ask_for_clarification` tool for pause/resume and the conversation
       // buffer is scoped to one task (not polluting the primary agent's
       // global history).
-      const runner: import('../agents/conv/task-dispatcher.ts').TaskRunner = async ({
-        tier,
-        subsystem,
-        template,
-        intent,
-        originalMessage,
-        signal,
-        history,
-        scope,
-        siteContext,
-        contextKey,
-      }) => {
-        const baseSystem = this.buildFullSystemPromptParts('conv', originalMessage);
-        const templateNote = TaskDispatcher.templatePromptFor(template);
-        // Attach the conv LLM's routing intent as system context so the task
-        // tier sees both the user's verbatim ask AND the conv's framing -
-        // but the user's words are the primary signal. Both are per-task
-        // volatile, so they ride on the dynamic half of the prompt.
-        //
-        // The site block and the scope notice ride there too, and only here:
-        // this is the tier that holds the tool registry, so it is the one
-        // that needs to be told which project it is working in and which
-        // tools this kind of turn does not have (#571). Keeping both out of
-        // the STATIC half matters - that half is the provider's cache prefix,
-        // and a per-chat variation in it would miss the cache on every
-        // hosted turn.
-        const dynamicParts = [
-          baseSystem.dynamic,
-          templateNote,
-          `Conversation routing note: ${intent}`,
-          ...(siteContext ? [siteContext] : []),
-          ...(scope ? [scopeSystemNote(scope)] : []),
-        ];
-        const systemPrompt: SystemPromptParts = {
-          static: baseSystem.static,
-          dynamic: dynamicParts.join('\n\n'),
-        };
-        const result = await this.orchestrator.processTaskCall({
-          systemPrompt,
-          userMessage: originalMessage,
-          tier,
-          subsystem,
-          history: history as import('../llm/provider.ts').LLMMessage[] | undefined,
-          signal,
-          ...(contextKey?.startsWith('brief:') ? { contextKey } : {}),
-          scope,
-          // Every template but `write` exists to DO something, so a final
-          // answer that ran no tools is a model that announced its plan and
-          // stopped - push back once rather than storing the announcement as
-          // the result. `write` drafts prose and legitimately needs no tools.
-          requireToolUse: template !== 'write',
-        });
-        return result;
-      };
+      const runner = this.taskRunner();
       this.taskDispatcher = new TaskDispatcher(this.llmManager, this.taskRegistry, runner);
       this.dialogueCompactor = new DialogueCompactor(this.llmManager);
       const persona = this.buildPersona();
@@ -1347,6 +1479,28 @@ export class AgentService implements Service, IAgentService {
     this.personality = personality;
   }
 }
+
+/** What the dialogue compactor reads in place of a forward (#1155): see `loadDialogue`. */
+export const FORWARD_STAND_IN = '[A message I forwarded, written by someone else.]';
+
+/**
+ * Most tokens a guest's reply may use (#1155): about one Telegram message.
+ * Telegram splits a reply at 4096 characters; English prose measured 4.04 to
+ * 4.39 characters per token (js-tiktoken cl100k_base and o200k_base over
+ * README.md, docs/SELF_HOSTING.md and channel-service.ts, 2026-11-06), so
+ * 1024 tokens is 4100 to 4500 characters, two Discord messages (2000 each).
+ * A reply cut there says it was cut. On a reasoning model the bound counts its
+ * reasoning too, as for every other capped call (the compactor's 400).
+ */
+export const GUEST_REPLY_MAX_TOKENS = 1024;
+
+/**
+ * How many earlier messages a guest's turn reads, verbatim (#1155): what a
+ * classic install (no conversation tier) gives every turn (`loadDialogue`),
+ * and half what the dialogue compactor keeps verbatim on the conversation
+ * tier, so a guest never reads more than the owner does.
+ */
+export const GUEST_HISTORY_MESSAGES = 10;
 
 /**
  * The dialogue without its last entry when that entry is this turn's own

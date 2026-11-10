@@ -18,7 +18,7 @@ import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { commitmentsTool } from '../actions/tools/commitments.ts';
 import type { RoleDefinition } from '../roles/types.ts';
-import { AgentService } from './agent-service.ts';
+import { AgentService, GUEST_HISTORY_MESSAGES, GUEST_REPLY_MAX_TOKENS } from './agent-service.ts';
 import { ChannelService } from './channel-service.ts';
 import type { ChannelMessage } from '../comms/channels/telegram.ts';
 
@@ -244,5 +244,42 @@ describe('#1155: the owner writing in a group or server channel is answered as a
     provider.seen = [];
     await handle(dc(true));
     expect(text(provider.seen[0]!.messages)).toContain(OWNER_COMMITMENT);
+  });
+});
+
+describe('#1155: what bounds a guest\'s spend', () => {
+  beforeEach(() => initDatabase(':memory:'));
+  afterEach(() => closeDb());
+
+  test(`a guest's reply is capped at ${GUEST_REPLY_MAX_TOKENS} tokens; the owner's is not`, async () => {
+    const { agent, provider } = agentFixture();
+    const handle = service(agent, [42, 7]);
+    await handle(dm(7, 'tell me a long story'));
+    expect(provider.seen[0]!.options?.max_tokens).toBe(GUEST_REPLY_MAX_TOKENS);
+    provider.seen = [];
+    await handle(dm(42, 'tell me a long story'));
+    expect(provider.seen[0]!.options?.max_tokens).not.toBe(GUEST_REPLY_MAX_TOKENS);
+  });
+
+  test('a guest\'s conversation is never compacted, so it never spends the owner\'s background budget', async () => {
+    const { agent, provider } = agentFixture();
+    const compacted: string[] = [];
+    Object.assign(agent as unknown as Record<string, unknown>, {
+      dialogueCompactor: { compact: async (id: string, messages: LLMMessage[]) => { compacted.push(id); return messages; } },
+    });
+    const handle = service(agent, [42, 7]);
+    // 15 turns: 29 messages stored when the last starts, past the bound.
+    for (let i = 0; i < 15; i++) await handle(dm(7, `guest message ${i}`));
+    expect(compacted).toEqual([]);
+    // It still reads its recent history verbatim, the last
+    // GUEST_HISTORY_MESSAGES (10) of it: from guest message 9 on.
+    const sent = provider.seen.at(-1)!.messages;
+    expect(sent.filter((m) => m.role !== 'system')).toHaveLength(GUEST_HISTORY_MESSAGES + 1);
+    expect(text(sent)).toContain('guest message 9');
+    expect(text(sent)).not.toContain('guest message 8');
+    expect(sent.at(-1)!.content).toBe('guest message 14');
+    // Control: the owner's conversation still goes through the compactor.
+    await handle(dm(42, 'hello'));
+    expect(compacted).toHaveLength(1);
   });
 });

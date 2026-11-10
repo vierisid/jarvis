@@ -11,7 +11,7 @@ export interface Activity {
 export interface Message { id: string; conversation_id: string; role: string; content: string; created_at: number }
 export interface ReplyTurn {
   conversationId: string; turnId: string; requestId: string; createdAt: number;
-  state: string; assistantMessageId?: string;
+  state: string; assistantMessageId?: string; error?: { code?: string; message: string };
 }
 export interface MessageChat {
   messages: readonly Message[]; turns: Readonly<Record<string, ReplyTurn>>;

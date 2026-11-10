@@ -1,5 +1,23 @@
 /** Shared, credential-free form contract used by the runtime and dashboard. */
 export const HUMAN_INPUT_PIECE = '@jarvispieces/piece-jarvis-input';
+/**
+ * How many requests one workflow may have waiting for an answer at once
+ * (#1266, kept by the owner 2026-11-06). A step that would add one more is
+ * refused, typed with `HUMAN_INPUT_LIMIT_CODE`, so the run says why.
+ */
+export const HUMAN_INPUT_PENDING_LIMIT = 20;
+export const HUMAN_INPUT_LIMIT_CODE = 'HUMAN_INPUT_LIMIT';
+/**
+ * A step refused because nothing on this Jarvis can answer it: requests are
+ * answered in Needs you, the Brief decisions feature, and it is off (#1266).
+ */
+export const HUMAN_INPUT_UNAVAILABLE_CODE = 'HUMAN_INPUT_UNAVAILABLE';
+export const HUMAN_INPUT_UNAVAILABLE_MESSAGE = 'Needs you is off on this Jarvis, so nothing could answer this request. Turn on decisions (JARVIS_BRIEF_DECISIONS=1) to let workflows ask for input or approval.';
+/** A step that asks a person: the input piece's two actions, and the legacy approval piece's. */
+export function isHumanInputStep(piece: unknown, action: unknown): boolean {
+  return (piece === HUMAN_INPUT_PIECE && (action === 'request_input' || action === 'request_approval'))
+    || (piece === '@activepieces/piece-approval' && (action === 'create_approval_links' || action === 'wait_for_approval'));
+}
 export type InputField = { key: string; label: string; type: 'text' | 'long_text' | 'number' | 'boolean' | 'select'; required: boolean; options?: string[] };
 export type HumanRequest = {
   id: string; kind: 'input' | 'approval'; title: string; prompt: string; fields: InputField[];

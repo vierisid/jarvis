@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Database } from 'bun:sqlite';
@@ -15,6 +15,8 @@ import { saveWorkflowEffect, type WorkflowEffect } from '../workflows/db/repos/w
 import { createWorkflowRoutes } from '../workflows/api/routes';
 import { createManageWorkflowTool } from '../actions/tools/manage-workflow';
 import { WorkflowRemoval, WORKFLOW_REMOVAL_LIMITS } from './workflow-removal';
+import { beginEffectDispatch } from '../workflows/runtime/effect-inflight';
+import { deleteFlowHistoryBatch, FLOW_DELETE_BATCH } from '../workflows/db/repos/flow-deletion';
 import type { WorkflowManageCommand, WorkflowPurgeCommand } from './workflow-removal-contracts';
 
 let dir: string, file: string, service: WorkflowRemoval, clock: number, saved: string | undefined, savedData: string | undefined, closed: string[];
@@ -300,6 +302,99 @@ test('a run set live again after its stop holds the delete until the next pass s
   expect(getFlow(flow.id)).toBeNull();
 });
 
+test('an effect still being dispatched holds the purge until it is recorded, then recovery finishes it (#1154)', () => {
+  const { flow, version } = restored(), run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+  updateRun(run.id, { status: 'RUNNING' });
+  const end = beginEffectDispatch(flow.id);
+  const warn = spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    expect(purge(purgeCommand(flow.id))).toMatchObject({ status: 'accepted' });
+    // Stopped, and still there for the effect to record itself against.
+    expect(getFlowRun(run.id)?.status).toBe('STOPPED'); expect(getFlow(flow.id)).not.toBeNull();
+    expect(warn.mock.calls.some(c => String(c[0]).includes('an effect still being dispatched'))).toBe(true);
+    const approvalId = cardFor(run.id, flow.id, version.id);
+    expect(approvalStatus(approvalId)).toBe('pending');
+  } finally { warn.mockRestore(); end(); }
+  (service as unknown as { recover(): void }).recover();
+  expect(getFlow(flow.id)).toBeNull();
+});
+
+test('a large history is purged in batches, one per turn of the event loop, and the receipt counts all of it (#1154)', async () => {
+  const { flow, version } = restored();
+  const total = 2 * FLOW_DELETE_BATCH + 10;
+  const logs = join(dir, 'data', 'workflow-logs'); mkdirSync(logs, { recursive: true });
+  const ids: string[] = [];
+  getWorkflowDb().transaction(() => {
+    for (let i = 0; i < total; i++) ids.push(createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'SUCCEEDED' }).id);
+  })();
+  for (const id of [ids[0]!, ids[total - 1]!]) writeFileSync(join(logs, `${id}.bin`), 'state');
+  expect(purge(purgeCommand(flow.id))).toMatchObject({ status: 'accepted' });
+  // One batch went with the acceptance; the flow is still there.
+  expect(count('SELECT COUNT(*) AS n FROM flow_run WHERE flow_id = ?', flow.id)).toBe(total - FLOW_DELETE_BATCH);
+  expect(getFlow(flow.id)).not.toBeNull();
+  for (let i = 0; i < 10 && getFlow(flow.id); i++) await new Promise(r => setImmediate(r));
+  expect(getFlow(flow.id)).toBeNull();
+  const receipt = getWorkflowDb().query('SELECT counts, files_pending, completed_at FROM brief_workflow_purges WHERE flow_id = ?').get(flow.id) as
+    { counts: string; files_pending: string | null; completed_at: number | null };
+  expect(receipt.completed_at).not.toBeNull();
+  expect(JSON.parse(receipt.counts).runs).toBe(total);
+  expect(receipt.files_pending).toBeNull();
+  for (const id of [ids[0]!, ids[total - 1]!]) expect(existsSync(join(logs, `${id}.bin`))).toBe(false);
+});
+
+test('a removed workflow\'s runs and trigger events cannot be deleted outside its purge, batch by batch either (#1154)', () => {
+  const { flow, version } = restored();
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'SUCCEEDED' });
+  getWorkflowDb().run(`INSERT INTO trigger_event (id, flow_id, project_id, payload, created) VALUES ('event', ?, ?, '{}', 1)`, [flow.id, DEFAULT_IDS.project]);
+  expect(() => getWorkflowDb().run('DELETE FROM flow_run WHERE id = ?', [run.id])).toThrow('workflow_history_retained');
+  expect(() => deleteFlowHistoryBatch(flow.id)).toThrow('workflow_history_retained');
+  expect(() => getWorkflowDb().run('DELETE FROM trigger_event WHERE flow_id = ?', [flow.id])).toThrow('workflow_history_retained');
+  expect(getFlowRun(run.id)).not.toBeNull();
+  // A workflow never removed is not fenced.
+  const other = fixture('Other'), otherRun = createFlowRun({ flowId: other.flow.id, flowVersionId: other.version.id, status: 'SUCCEEDED' });
+  getWorkflowDb().run('DELETE FROM flow_run WHERE id = ?', [otherRun.id]);
+  expect(getFlowRun(otherRun.id)).toBeNull();
+});
+
+function bigRestored(extra = 10) {
+  const r = restored(), total = 2 * FLOW_DELETE_BATCH + extra;
+  const logs = join(dir, 'data', 'workflow-logs'); mkdirSync(logs, { recursive: true });
+  const ids: string[] = [];
+  getWorkflowDb().transaction(() => {
+    for (let i = 0; i < total; i++) ids.push(createFlowRun({ flowId: r.flow.id, flowVersionId: r.version.id, status: 'SUCCEEDED' }).id);
+  })();
+  for (const id of ids) writeFileSync(join(logs, `${id}.bin`), 'state');
+  return { ...r, total, ids, logs };
+}
+
+test('each batch removes its runs\' files at once and takes them off the pending receipt (#1154)', () => {
+  const { flow, ids, logs } = bigRestored();
+  expect(purge(purgeCommand(flow.id))).toMatchObject({ status: 'accepted' });
+  // One batch went with the acceptance, synchronously; its files are gone now, not at completion.
+  const gone = ids.filter(id => getFlowRun(id) === null);
+  expect(gone).toHaveLength(FLOW_DELETE_BATCH);
+  for (const id of gone) expect(existsSync(join(logs, `${id}.bin`))).toBe(false);
+  const pending = (getWorkflowDb().query('SELECT files_pending FROM brief_workflow_purges WHERE flow_id = ?').get(flow.id) as { files_pending: string }).files_pending;
+  expect(JSON.parse(pending)).toEqual([]);
+});
+
+test('a service stopped between batches leaves the purge pending, and the next one finishes it with the counts carried over (#1154)', async () => {
+  const { flow, total, ids, logs } = bigRestored();
+  expect(purge(purgeCommand(flow.id))).toMatchObject({ status: 'accepted' });
+  service.stop();
+  // The queued next batch does nothing (and throws nothing) once stopped.
+  await new Promise(r => setImmediate(r)); await new Promise(r => setImmediate(r));
+  expect(count('SELECT COUNT(*) AS n FROM flow_run WHERE flow_id = ?', flow.id)).toBe(total - FLOW_DELETE_BATCH);
+  // A restart: recovery runs the rest.
+  start();
+  for (let i = 0; i < 10 && getFlow(flow.id); i++) await new Promise(r => setImmediate(r));
+  expect(getFlow(flow.id)).toBeNull();
+  const receipt = getWorkflowDb().query('SELECT counts, files_pending FROM brief_workflow_purges WHERE flow_id = ?').get(flow.id) as { counts: string; files_pending: string | null };
+  expect(JSON.parse(receipt.counts).runs).toBe(total);
+  expect(receipt.files_pending).toBeNull();
+  for (const id of ids) expect(existsSync(join(logs, `${id}.bin`))).toBe(false);
+});
+
 test('a purge at command capacity is refused whole and stops nothing', () => {
   const { flow, version } = restored(), run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
   // Ordinary outcomes only: the accepted Undo used its receipt's reserved place.
@@ -347,4 +442,63 @@ test('payload files a purge could not remove stay listed on its receipt and reco
   for (const sql of ["UPDATE brief_workflow_purges SET actor = 'someone' WHERE flow_id = ?", 'UPDATE brief_workflow_purges SET completed_at = NULL WHERE flow_id = ?']) {
     expect(() => getWorkflowDb().run(sql, [flow.id])).toThrow('workflow_history_retained');
   }
+});
+
+test('purged payloads do not survive in the database files once the purge commits', () => {
+  // A purge is the one delete a person asks for so the data is gone. Without
+  // secure_delete, SQLite only unlinks the rows: their bytes stay readable in
+  // free pages of vault.db and in old WAL frames until something reuses them.
+  const { flow, version } = restored();
+  const marker = `purge-marker-${crypto.randomUUID()}`;
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'SUCCEEDED' });
+  // One payload small enough to share a page with other rows, one large
+  // enough for overflow pages, which a delete hands to the freelist.
+  getWorkflowDb().run(`INSERT INTO trigger_event (id, flow_id, project_id, payload, created) VALUES ('event', ?, ?, ?, 1)`,
+    [flow.id, DEFAULT_IDS.project, JSON.stringify({ secret: marker })]);
+  getWorkflowDb().run(`INSERT INTO workflow_file (id, project_id, flow_id, type, data, size, created) VALUES ('file', ?, ?, 'FLOW_RUN_LOG', ?, 1, 1)`,
+    [DEFAULT_IDS.project, flow.id, Buffer.from(`${marker} `.repeat(2000))]);
+  getWorkflowDb().run(`INSERT INTO store_entry (id, project_id, key, value, created, updated) VALUES (?, ?, ?, ?, 1, 1)`,
+    [crypto.randomUUID(), DEFAULT_IDS.project, `flow_${flow.id}/k`, JSON.stringify(marker)]);
+  expect(getFlowRun(run.id)).not.toBeNull();
+  const onDisk = () => [file, `${file}-wal`].filter(existsSync).some(f => readFileSync(f).includes(marker));
+  // Not vacuous: the marker is on disk before the purge.
+  expect(onDisk()).toBe(true);
+
+  // A reader on another connection (a `jarvis backup`) pins the WAL: the
+  // purge does not wait for it, and the next recovery pass finishes the wipe.
+  const reader = new Database(file, { readonly: true });
+  try {
+    reader.run('BEGIN'); reader.query('SELECT COUNT(*) FROM flow').get();
+    const began = performance.now();
+    expect(purge(purgeCommand(flow.id)).status).toBe('accepted');
+    // Not the 5 s busy_timeout.
+    expect(performance.now() - began).toBeLessThan(4000);
+    expect(getFlow(flow.id)).toBeNull();
+    expect(onDisk()).toBe(true);
+  } finally { reader.run('COMMIT'); reader.close(); }
+  expect((getWorkflowDb().query('PRAGMA busy_timeout').get() as { timeout: number }).timeout).toBe(5000);
+  (service as unknown as { recover(): void }).recover();
+  expect(onDisk()).toBe(false);
+  expect((getWorkflowDb().query('PRAGMA busy_timeout').get() as { timeout: number }).timeout).toBe(5000);
+  // The setting is for the purge alone: other deletes keep SQLite's default.
+  expect((getWorkflowDb().query('PRAGMA secure_delete').get() as { secure_delete: number }).secure_delete).toBe(0);
+});
+
+test('a purge the last process could not wipe is wiped on the first pass after a start', () => {
+  const { flow, version } = restored();
+  const marker = `purge-marker-${crypto.randomUUID()}`;
+  createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'SUCCEEDED' });
+  getWorkflowDb().run(`INSERT INTO trigger_event (id, flow_id, project_id, payload, created) VALUES ('event', ?, ?, ?, 1)`,
+    [flow.id, DEFAULT_IDS.project, JSON.stringify({ secret: marker })]);
+  const onDisk = () => [file, `${file}-wal`].filter(existsSync).some(f => readFileSync(f).includes(marker));
+  const reader = new Database(file, { readonly: true });
+  try {
+    reader.run('BEGIN'); reader.query('SELECT COUNT(*) FROM flow').get();
+    expect(purge(purgeCommand(flow.id)).status).toBe('accepted');
+    expect(onDisk()).toBe(true);
+  } finally { reader.run('COMMIT'); reader.close(); }
+  // The process ends before a recovery pass (its pending wipe is lost with
+  // it); a new service on the same database starts with nothing to recover.
+  service.stop(); start();
+  expect(onDisk()).toBe(false);
 });

@@ -95,7 +95,11 @@ export function roomAnswerOf(accepted: unknown, outcome?: unknown): RoomAnswer |
  * socket closing as it was sent takes no frame, and "I sent that" was
  * untrue).
  */
-export type RoomActionOutcome = RoomAnswer | 'started' | 'no_answer' | 'unreached';
+/**
+ * `paused` / `killed`: its claim came while Jarvis was paused or stopped, so
+ * it was refused and the room dropped it (#1158).
+ */
+export type RoomActionOutcome = RoomAnswer | 'started' | 'no_answer' | 'unreached' | 'paused' | 'killed';
 
 /**
  * Told the room's answer to an action whose wait had already run out (#1034),
@@ -236,6 +240,20 @@ export class RoomActionResults {
     const entry = this.pending.get(id);
     if (!entry || entry.answerer === undefined || entry.answerer !== from) return false;
     entry.claimed = true;
+    return true;
+  }
+
+  /**
+   * Refuse the answerer's claim because Jarvis is paused or stopped (#1158),
+   * and stop waiting now with that as the outcome: the room drops an action
+   * whose claim is refused, so nothing ran. Only the answerer the action was
+   * sent to can end its wait this way.
+   */
+  refuse(id: unknown, from: unknown, state: 'paused' | 'killed'): boolean {
+    if (typeof id !== 'string') return false;
+    const entry = this.pending.get(id);
+    if (!entry || entry.answerer === undefined || entry.answerer !== from) return false;
+    this.finish(id, state);
     return true;
   }
 
