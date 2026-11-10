@@ -36,7 +36,9 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
   const [error, setError] = useState("");
   const [off, setOff] = useState("");
   // Awareness off (#1314): what it recorded leaves the screen, whoever learns it first.
-  const awarenessOff = (message: string) => { setPage(null); setSelected(null); setOff(message); setError(""); };
+  // A read started before awareness went off answers from before it: dropped (#1314 review).
+  const offGeneration = useRef(0);
+  const awarenessOff = (message: string) => { offGeneration.current++; setPage(null); setSelected(null); setOff(message); setError(""); };
   const [revision, setRevision] = useState(0);
   const refresh = () => setRevision(value => value + 1);
 
@@ -46,9 +48,10 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
     const load = async () => {
       if (fetching || document.hidden) return;
       fetching = true;
+      const generation = offGeneration.current;
       try {
         const result = await readJson<Page>(`/api/awareness/routines?offset=${offset}`, { signal: controller.signal });
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || generation !== offGeneration.current) return;
         setPage(result);
         setSelected(id => id ?? result.suggestions[0]?.opportunityId ?? null);
         setError(""); setOff("");
