@@ -7,33 +7,54 @@ website alone cannot change an instance's bundled dashboard.
 ## Runtime ownership
 
 After loading system configuration, `configureHostedDashboard` enables the existing
-Brief provider flags for both installation modes. Hosted identity still uses the existing
-`isHostedInstall` predicate, including Unix-socket instances. Explicit feature flag
-values are preserved. Provider readiness, capability dependencies, authentication,
-Authority, approvals and workflow activation checks remain enforced.
+Brief provider flags. Explicit feature flag values are preserved. Provider readiness,
+capability dependencies, authentication, Authority, approvals and workflow activation
+checks remain enforced.
 
 These defaults change backend behaviour, not only the UI. The full set is
 `HOSTED_BRIEF_FEATURES` in `src/daemon/hosted-dashboard.ts`; the ones an existing
 user notices are:
 
-- `QUIET_AWARENESS`: ambient awareness no longer triggers automatic research,
-  proactive chat messages, voice, or the external-channel fallback. Durable
-  opportunities still arrive as cards; other suggestions (for example an error
-  suggestion) are listed by `GET /api/awareness/suggestions`. Explicit chat,
-  research, Authority requests and enabled workflow subscriptions keep their
-  existing delivery.
-- `PREPARED_OPPORTUNITIES`: a background worker composes prepared opportunities,
-  spending model calls within the background budget (on hosted, the hosted
-  LLM allowance).
-- `MEMORY_USAGE`: every memory recall records a usage-ledger entry.
-- `RECOMMENDATIONS`: the next-action planner is wired.
+- `DECISIONS` (Needs you): workflows can ask for input or approval, answered in
+  Brief. With it off, such a step fails with `HUMAN_INPUT_UNAVAILABLE`.
+- `QUIET_AWARENESS` (hosted only by default): ambient awareness no longer triggers
+  automatic research, proactive chat messages, voice, or the external-channel
+  fallback. Durable opportunities still arrive as cards; other suggestions (for
+  example an error suggestion) are listed by `GET /api/awareness/suggestions`.
+  Explicit chat, research, Authority requests and enabled workflow subscriptions
+  keep their existing delivery.
+- `PREPARED_OPPORTUNITIES` (hosted only by default): a background worker composes
+  prepared opportunities, spending model calls within the background budget (on
+  hosted, the hosted LLM allowance). `OPPORTUNITY_ACTIVATION` depends on it and
+  stays closed while it is off.
+- `MEMORY_USAGE`: every memory recall records a usage-ledger entry (no model call).
+- `RECOMMENDATIONS`: the next-action planner is wired. It reads local goals and
+  work items and makes no model call.
 
-Set any `JARVIS_BRIEF_<FEATURE>=0` in the service environment to keep one off.
+Hosted installs (`isHostedInstall`, which deliberately leans towards hosted: a
+`unix:` socket or a `usejarvis_ai` block counts) get the whole set. Self-hosted
+installs get every default except `QUIET_AWARENESS` and `PREPARED_OPPORTUNITIES`
+(`HOSTED_ONLY_BRIEF_FEATURES`), because those change how awareness reaches the user
+or spend the operator's own provider keys in the background. Set
+`JARVIS_BRIEF_QUIET_AWARENESS=1` or `JARVIS_BRIEF_PREPARED_OPPORTUNITIES=1` to turn
+one on; while preparation is off, Today and Opportunities say how. Set any
+`JARVIS_BRIEF_<FEATURE>=0` in the service environment to keep one off.
 
-`isHostedInstall` deliberately leans towards hosted. A self-hosted brain that
-listens on a `unix:` socket (for example behind a reverse proxy) or whose
-`config.yaml` carries a `usejarvis_ai` block is treated as hosted and gets this
-same default and features as other self-hosted installs. Set `JARVIS_DASHBOARD=legacy` to opt out.
+### Upgrading a self-hosted install
+
+On the first restart after upgrading:
+
+- `/` and the foreground bookmarks open Brief instead of the previous dashboard.
+- Needs you is on, so workflows that ask for input or approval work instead of
+  failing with `HUMAN_INPUT_UNAVAILABLE`.
+- Awareness keeps its existing delivery (proactive chat notices, voice, channel
+  fallback) and no new background model spend starts. In Brief, proactive notices
+  show as notifications.
+- Browser push-to-talk is only in the previous dashboard: Settings, "Advanced settings and support", "Current
+  dashboard and Arrange", or `/?brief=0`. Native panels, result windows, logs,
+  device setup and the other retained controls open from the same list.
+- To go back for good, set `JARVIS_DASHBOARD=legacy` in the service environment
+  and restart. No data is reset.
 
 The authenticated, uncached `/api/brief/host` descriptor supplies `dashboard: brief`.
 It also carries a `workspaceId`, created once and stored as `workspace-id` in the
@@ -71,12 +92,12 @@ users keep the existing onboarding wizard and its Brief draft handoff.
 - `?brief=0` opens the previous dashboard for that browser URL. It changes the UI
   only: the backend feature defaults above stay on.
 - Set `JARVIS_DASHBOARD=legacy` in the instance service environment and restart
-  to restore the previous default and stop applying automatic feature defaults,
-  including quiet awareness.
+  to restore the previous default and stop applying automatic feature defaults
+  (Needs you, and on hosted quiet awareness).
   No data is reset or downgraded. Explicit operator feature flags still apply.
 - Unset the variable, or set it to `brief`, and restart to use the Brief default.
-  `JARVIS_HOSTED_DASHBOARD` remains a hosted-only compatibility alias; the common
-  `JARVIS_DASHBOARD` override takes precedence. Unknown values select legacy. Reload existing tabs after a server-side rollback.
+  `JARVIS_HOSTED_DASHBOARD` remains a compatibility alias on every install; the
+  common `JARVIS_DASHBOARD` override takes precedence. Unknown values select legacy. Reload existing tabs after a server-side rollback.
 
 ## Verification
 
