@@ -125,7 +125,7 @@ import { ResearchQueue } from "./research-queue.ts";
 import { researchQueueTool, setResearchQueueRef } from "../actions/tools/research.ts";
 import { startPersistentAgent, stopCall } from "../actions/tools/agents.ts";
 import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
-import { ChannelService } from "./channel-service.ts";
+import { ChannelService, isChannelGuestConversation } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
 import { ApprovalManager, approvalNeedsClick, executionState, onApprovalDeadlineExpired, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
@@ -4912,6 +4912,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       },
       send: (client, message) => wsService.getServer().sendToClient(client, message),
       tts: () => wsService.getTTSProvider(),
+      // Which Telegram or Discord threads hold a guest's words, against the
+      // channel owner as configured now (#1313 follow-up): their rows are framed.
+      isGuestConversation: id => isChannelGuestConversation(id, agentService.getConfig().channels),
     });
     const briefAttachments = new BriefAttachmentProvider(getDb(), sidecarManager);
     briefWorkflowComposition = new BriefCompositionProvider(getDb());
