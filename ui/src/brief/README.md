@@ -521,6 +521,22 @@ ingredients (ready, loading, unavailable). It sends no request.
   `workflowCanvasRegistration(useBinding)`, not in the production registry; F-21 supplies the scoped,
   redacted request before it is mounted live.
 - `workflows/canvas/figma-reference.json` records the UI-23 source values and bounded deviations.
+- The page reads as a job Jarvis does, not a node graph. `WorkflowSummary` shows one plain-English
+  sentence above the tools, generated deterministically from the draft graph by `summarizeWorkflow`
+  (`v2/rooms/workflows/workflow-summary.ts`): the trigger in words, then each step as a short phrase,
+  routers as "if ... otherwise ...", loops as "for each ...". It makes no model call, is capped near
+  280 characters (the rest is counted as "and N more steps"), and falls back to the step's display name,
+  then a humanized piece name, for anything it does not know. It follows unsaved edits.
+- Schedules read as words everywhere (`schedule-words.ts`): the trigger card subtitle, the trigger panel
+  and the summary. A zone is shown only when a person chose it (`settings.chosenTimezone`), as the
+  scheduler uses it. `ScheduleEditor` covers every day, weekdays and chosen days at a time in a
+  timezone, and writes the existing `cron_expression` and `timezone` fields; the stored format and the
+  schedule piece are unchanged. An expression it cannot express opens as "Custom (cron)" with the raw
+  text, and the daylight-saving policy sits under Advanced.
+- Step labels use no developer terms: a plain piece step carries no label chip (AI judgment steps keep
+  theirs), the panel header says "Trigger", and a piece missing from the catalog shows a humanized name.
+  `advanced-fields.ts` lists the fields a step's panel keeps under a collapsed "Advanced" (the notify
+  step's meeting freshness guard and notification identity), so the message and channels come first.
 
 `?brief=preview&specimen=workflow-canvas#/_brief_preview` opens the page over an in-memory fixture flow
 (with branches, loops and a detached chain). Save stays in memory; anything else answers 403.

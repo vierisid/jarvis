@@ -17,6 +17,7 @@ import {
 import { versionBoundRequest } from "./request";
 import "./canvas.css";
 import { WorkflowViewHeader } from "../runs/WorkflowViewHeader";
+import { WorkflowSummary } from "./WorkflowSummary";
 
 export interface WorkflowCanvasBinding {
   source: "live" | "fixture";
@@ -214,6 +215,7 @@ function CanvasHeader({
         </BriefButton>
       }
     >
+      <WorkflowSummary trigger={editor.draftTrigger} catalog={editor.catalog} />
       <div className="brief-canvas-tools" aria-label="Draft tools">
         {binding.publish && <BriefButton size="sm" disabled={codeBlocked || needsSetup || changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!)}>Publish version</BriefButton>}
         {binding.edit && <BriefButton size="sm" disabled={changing} onClick={() => void change(binding.edit!)}>Edit a new draft</BriefButton>}
