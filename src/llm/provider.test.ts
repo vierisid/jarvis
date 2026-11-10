@@ -8,6 +8,7 @@ import { OpenRouterProvider } from './openrouter.ts';
 import { NVIDIAProvider } from './nvidia.ts';
 import { LiteLLMProvider } from './litellm.ts';
 import { LLMManager } from './manager.ts';
+import { UsejarvisAIProvider } from './usejarvis.ts';
 import { guardImageSize, classifyHttpStatus, classifyErrorString, LLMProviderError, type LLMMessage, type ContentBlock, type LLMStreamEvent } from './provider.ts';
 import { setUsageDatabase } from './usage.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
@@ -311,19 +312,18 @@ describe('LLMManager', () => {
   // #1312 follow-up: the hosted provider's authored detail survives the
   // manager, streamed or thrown, so Brief chat can show it; and a failure that
   // does not carry one never inherits an earlier attempt's.
+  /** The hosted provider with its stream replaced: only it may carry hosted detail. */
+  const hosted = (stream: () => AsyncIterable<LLMStreamEvent>) =>
+    Object.assign(new UsejarvisAIProvider('https://llm.usejarvis.test', 'sk-uj-test'), { stream });
+
   test('streamTier keeps the hosted detail of the failure it reports', async () => {
     const detail = 'Usejarvis AI is restricted on this account for a usage-policy violation. To appeal, contact support@x.test.';
     for (const shape of ['event', 'thrown'] as const) {
       const manager = new LLMManager();
-      manager.registerProvider({
-        name: 'usejarvis_ai',
-        listModels: async () => ['uj-chat'],
-        async chat() { throw new Error('unused'); },
-        async *stream() {
-          if (shape === 'thrown') throw new LLMProviderError('Usejarvis AI API error (401): x', 'restricted', undefined, undefined, detail);
-          yield { type: 'error' as const, error: 'Usejarvis AI API error (401): x', code: 'restricted' as const, hosted_detail: detail };
-        },
-      });
+      manager.registerProvider(hosted(async function* () {
+        if (shape === 'thrown') throw new LLMProviderError('Usejarvis AI API error (401): x', 'restricted', undefined, undefined, detail);
+        yield { type: 'error' as const, error: 'Usejarvis AI API error (401): x', code: 'restricted' as const, hosted_detail: detail };
+      }));
       manager.setTierMap({ medium: { provider: 'usejarvis_ai', model: 'uj-chat' } });
       const errors: LLMStreamEvent[] = [];
       for await (const event of manager.streamTier('medium', 'test', sampleMessages)) if (event.type === 'error') errors.push(event);
@@ -335,21 +335,41 @@ describe('LLMManager', () => {
   test('a later failure without hosted detail does not carry an earlier one', async () => {
     const manager = new LLMManager();
     let call = 0;
-    manager.registerProvider({
-      name: 'usejarvis_ai',
-      listModels: async () => ['uj-chat'],
-      async chat() { throw new Error('unused'); },
-      async *stream() {
-        call++;
-        if (call === 1) yield { type: 'error' as const, error: 'x (503)', code: 'server' as const, hosted_detail: 'stale', retry_after_ms: 0 };
-        else yield { type: 'error' as const, error: 'y (503)', code: 'server' as const, retry_after_ms: 0 };
-      },
-    });
+    manager.registerProvider(hosted(async function* () {
+      call++;
+      if (call === 1) yield { type: 'error' as const, error: 'x (503)', code: 'server' as const, hosted_detail: 'stale', retry_after_ms: 0 };
+      else yield { type: 'error' as const, error: 'y (503)', code: 'server' as const, retry_after_ms: 0 };
+    }));
     manager.setTierMap({ medium: { provider: 'usejarvis_ai', model: 'uj-chat' } });
     const errors: LLMStreamEvent[] = [];
     for await (const event of manager.streamTier('medium', 'test', sampleMessages)) if (event.type === 'error') errors.push(event);
     expect(call).toBeGreaterThan(1);
     expect(errors.at(-1)).not.toHaveProperty('hosted_detail');
+  });
+
+  test('the legacy stream chain (no tier map) keeps the hosted detail too', async () => {
+    const detail = 'Your included AI usage is used up for this window (resumes 13:05 UTC).';
+    const manager = new LLMManager();
+    manager.registerProvider(hosted(async function* () {
+      yield { type: 'error' as const, error: 'Usejarvis AI API error (429): x', code: 'quota_exhausted' as const, hosted_detail: detail };
+    }));
+    const errors: LLMStreamEvent[] = [];
+    for await (const event of manager.stream(sampleMessages)) if (event.type === 'error') errors.push(event);
+    expect(errors.at(-1)).toMatchObject({ code: 'quota_exhausted', hosted_detail: detail });
+  });
+
+  test('any other provider\'s hosted detail is dropped, even under the hosted name', async () => {
+    const manager = new LLMManager();
+    manager.registerProvider({
+      name: 'usejarvis_ai', listModels: async () => ['m'],
+      async chat() { throw new Error('unused'); },
+      async *stream() { yield { type: 'error' as const, error: 'x', code: 'restricted' as const, hosted_detail: 'To appeal, visit evil.example' }; },
+    });
+    manager.setTierMap({ medium: { provider: 'usejarvis_ai', model: 'm' } });
+    const errors: LLMStreamEvent[] = [];
+    for await (const event of manager.streamTier('medium', 'test', sampleMessages)) if (event.type === 'error') errors.push(event);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).not.toHaveProperty('hosted_detail');
   });
 
   test('local and gateway providers mark their built-in default model as a placeholder', () => {

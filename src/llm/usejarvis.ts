@@ -499,9 +499,11 @@ export class UsejarvisAIProvider extends OpenAIProvider {
 
   /** The authored copy a surface may show for this account (when usage
    * resumes, where to appeal, that a plan is needed). Not for `generic`: that
-   * says nothing beyond the code, and a routing miss is retried anyway. */
+   * says nothing beyond the code, and a routing miss is retried anyway. Not
+   * for `model_not_in_plan` either: it travels as `forbidden` or `auth`, and
+   * a reader of the detail would take the latter for an inactive plan. */
   private static detailFor(friendly: HostedProxyError): string | undefined {
-    if (friendly.kind === 'generic') return undefined;
+    if (friendly.kind === 'generic' || friendly.kind === 'model_not_in_plan') return undefined;
     return friendly.copy.charAt(0).toUpperCase() + friendly.copy.slice(1);
   }
 

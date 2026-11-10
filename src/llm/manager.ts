@@ -20,6 +20,16 @@ import {
   resolveTier,
 } from './tiers.ts';
 import { recordUsage } from './usage.ts';
+import { UsejarvisAIProvider } from './usejarvis.ts';
+
+/**
+ * A failure's hosted detail is shown as authored copy (Brief chat), so it is
+ * taken only from the hosted provider, which builds it from fixed sentences
+ * (src/util/hosted-error.ts). Any other provider's is dropped.
+ */
+function hostedDetailOf(provider: LLMProvider, detail: string | undefined): string | undefined {
+  return provider instanceof UsejarvisAIProvider ? detail : undefined;
+}
 
 /**
  * F18: record the packed memory this request carries at the moment the adapter
@@ -614,7 +624,7 @@ export class LLMManager {
             if (spent) addUsage(spent, event.usage);
             errors.push(`attempt ${attempt}: ${event.error}`);
             lastErrorCode = event.code ?? classifyErrorString(event.error);
-            lastHostedDetail = event.hosted_detail;
+            lastHostedDetail = hostedDetailOf(provider, event.hosted_detail);
             retryableEvent = this.shouldRetryCode(lastErrorCode);
             eventRetryAfterMs = event.retry_after_ms;
             lastRetryAfterMs = event.retry_after_ms;
@@ -647,7 +657,7 @@ export class LLMManager {
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
         lastErrorCode = err instanceof LLMProviderError ? err.code : classifyErrorString(errorMsg);
-        lastHostedDetail = err instanceof LLMProviderError ? err.hostedDetail : undefined;
+        lastHostedDetail = hostedDetailOf(provider, err instanceof LLMProviderError ? err.hostedDetail : undefined);
         const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
         lastRetryAfterMs = retryAfterMs;
         const shouldRetry = this.shouldRetry(err);
@@ -789,7 +799,7 @@ export class LLMManager {
               hasError = true;
               errors.push(`attempt ${attempt}: ${event.error}`);
               lastErrorCode = event.code ?? classifyErrorString(event.error);
-              lastHostedDetail = event.hosted_detail;
+              lastHostedDetail = hostedDetailOf(provider, event.hosted_detail);
               retryableEvent = this.shouldRetryCode(lastErrorCode);
               eventRetryAfterMs = event.retry_after_ms;
               lastRetryAfterMs = event.retry_after_ms;
@@ -823,7 +833,7 @@ export class LLMManager {
           const errorMsg = err instanceof Error ? err.message : String(err);
           errors.push(`attempt ${attempt}: ${errorMsg}`);
           lastErrorCode = err instanceof LLMProviderError ? err.code : classifyErrorString(errorMsg);
-          lastHostedDetail = err instanceof LLMProviderError ? err.hostedDetail : undefined;
+          lastHostedDetail = hostedDetailOf(provider, err instanceof LLMProviderError ? err.hostedDetail : undefined);
           const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
           lastRetryAfterMs = retryAfterMs;
 

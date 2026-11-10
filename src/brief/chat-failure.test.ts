@@ -25,7 +25,11 @@ test('a hosted failure keeps its authored detail, and its next step fits what ha
     'Usejarvis AI is restricted on this account for a usage-policy violation. To appeal, contact appeals@x.example.'), false);
   expect(restricted.code).toBe('provider_restricted');
   expect(restricted.message).toContain('To appeal, contact appeals@x.example.');
-  expect(restricted.message).toContain('Contact support to appeal');
+  // One place to appeal: the generic "contact support" step would name a second.
+  expect(restricted.message).not.toContain('Contact support');
+  expect(restricted.message).toContain('use your own AI provider');
+  // Without the detail the generic step stands.
+  expect(briefChatFailure(new LLMProviderError('x', 'restricted'), false).message).toContain('Contact support to appeal');
   expect(restricted.message).not.toContain('Wait for the limit to reset');
 
   const blocked = briefChatFailure(new LLMProviderError('x', 'content_policy', undefined, undefined, 'This request was blocked by the Usejarvis AI content policy and was not processed.'), false);

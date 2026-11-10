@@ -481,8 +481,10 @@ export class AgentService implements Service, IAgentService {
         const code = err && typeof err === 'object'
           ? (err as { code?: LLMErrorCode }).code
           : undefined;
+        // Only the hosted provider sets it: its own sentence, never a body (#1312 follow-up).
+        const hostedDetail = err && typeof err === 'object' ? (err as { hostedDetail?: unknown }).hostedDetail : undefined;
         console.error('[AgentService] Conv stream error:', errorMsg);
-        yield { type: 'error', error: errorMsg, code };
+        yield { type: 'error', error: errorMsg, code, ...(typeof hostedDetail === 'string' && hostedDetail ? { hosted_detail: hostedDetail } : {}) };
       }
     })();
 
