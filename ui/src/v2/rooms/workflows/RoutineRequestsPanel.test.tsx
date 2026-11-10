@@ -175,3 +175,16 @@ test("turning awareness off clears routines already on screen and says so (#1314
     expect(host.textContent).toContain("Invoice review");
   } finally { setScreenCaptureEnabledSource(null); }
 });
+
+test("a save refused because awareness went off clears the open routine too (#1314 review)", async () => {
+  const { setScreenCaptureEnabledSource } = await import("../../../../../src/actions/tools/desktop-guard");
+  await mount(); await act(async () => button("Dismiss proposal").click());
+  (host.querySelector('[name="reason"]') as HTMLTextAreaElement).value = "Already automated";
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(host.textContent).not.toContain("Invoice review");
+    expect(host.textContent).not.toContain("capture-1");
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("Screen awareness is off");
+  } finally { setScreenCaptureEnabledSource(null); }
+});

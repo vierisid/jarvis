@@ -35,6 +35,8 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [off, setOff] = useState("");
+  // Awareness off (#1314): what it recorded leaves the screen, whoever learns it first.
+  const awarenessOff = (message: string) => { setPage(null); setSelected(null); setOff(message); setError(""); };
   const [revision, setRevision] = useState(0);
   const refresh = () => setRevision(value => value + 1);
 
@@ -53,7 +55,7 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
       } catch (err) {
         if (controller.signal.aborted) return;
         // Awareness turned off: what it recorded leaves the screen too, not only the next poll (#1314 review).
-        if (err instanceof AwarenessOff) { setPage(null); setSelected(null); setOff(err.message); setError(""); return; }
+        if (err instanceof AwarenessOff) { awarenessOff(err.message); return; }
         setError(err instanceof Error ? err.message : "Could not load routine requests.");
       } finally { fetching = false; }
     };
@@ -110,13 +112,14 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
             {page.nextOffset !== null && <Button size="sm" onClick={() => changePage(page.nextOffset!)}>Older requests</Button>}
           </div>
         </div>
-        {learning ? <RoutineDetail key={learning.opportunityId} learning={learning} onSaved={update} onReview={onReview} /> :
+        {learning ? <RoutineDetail key={learning.opportunityId} learning={learning} onSaved={update} onReview={onReview} onAwarenessOff={awarenessOff} /> :
           <p>Select a request to inspect it.</p>}
       </div>}
   </section>;
 }
 
-function RoutineDetail({ learning, onSaved, onReview }: {
+function RoutineDetail({ learning, onSaved, onReview, onAwarenessOff }: {
+  onAwarenessOff?: (message: string) => void;
   learning: SuggestionLearning; onSaved: (item: SuggestionLearning) => void; onReview: (flowId: string) => void;
 }): React.ReactElement {
   const [mode, setMode] = useState<"draft" | "dismiss" | null>(null);
@@ -152,7 +155,10 @@ function RoutineDetail({ learning, onSaved, onReview }: {
         });
       request.current = null; setMode(null);
       onSaved("learning" in result ? result.learning : result);
-    } catch (err) { setOffError(err instanceof AwarenessOff); setError(err instanceof Error ? err.message : "Could not save. Please retry."); }
+    } catch (err) {
+      if (err instanceof AwarenessOff && onAwarenessOff) { onAwarenessOff(err.message); return; }
+      setOffError(err instanceof AwarenessOff); setError(err instanceof Error ? err.message : "Could not save. Please retry.");
+    }
     finally { saving.current = false; setBusy(false); }
   };
 
