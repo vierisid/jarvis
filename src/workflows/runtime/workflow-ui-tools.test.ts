@@ -102,7 +102,9 @@ for (const change of ['denied', 'capability_lost'] as const) test(`desktop revie
 });
 
 test('an element-bound value write is reviewed and dispatched once', async () => {
-  const f = fixture(desktopClickTool, { target: 'pc', element_id: 42, action: 'set_value', value: 'A poem' });
+  // The id comes from run data (#1314 m8): a written one names nothing.
+  const f = fixture(desktopClickTool, { target: 'pc', element_id: 42, action: 'set_value', value: 'A poem' }, undefined,
+    { target: 'pc', element_id: '{{snapshot.element}}', action: 'set_value', value: 'A poem' });
   expect((await f.call()).status).toBe(202);
   f.approvals.approve(f.approvals.getPending()[0]!.id, 'dashboard');
   expect((await f.call()).status).toBe(200); expect(f.calls).toHaveLength(1);
@@ -177,4 +179,18 @@ test('a hidden character in a value is shown escaped, never dropped (#1314 M1)',
   const f = fixture(desktopLaunchAppTool, { target: 'pc', executable: 'note\u202epad.exe' });
   expect((await f.call()).status).toBe(202);
   expect(JSON.parse(f.approvals.getPending()[0]!.context!).intent).toContain('executable="note\\u202Epad.exe"');
+});
+
+
+test('a desktop element id written into a workflow is refused at composition and at run time (#1314 m8)', async () => {
+  const params = { target: 'pc', element_id: 42, action: 'set_value', value: 'A poem' };
+  expect(compileWorkflow(graph('desktop_click', params), { pieces: catalog, phase: 'composition' }).issues)
+    .toContainEqual(expect.objectContaining({ code: 'WORKFLOW_TOOL_UNSUPPORTED', path: 'settings.input.params.element_id' }));
+  expect(compileWorkflow(graph('desktop_click', { ...params, element_id: '{{snapshot.element}}', action: 'get_value' }), { pieces: catalog, phase: 'composition' }).issues)
+    .toContainEqual(expect.objectContaining({ code: 'WORKFLOW_TOOL_UNSUPPORTED', path: 'settings.input.params.action' }));
+  const f = fixture(desktopClickTool, params);
+  const response = await f.call();
+  expect(response.status).toBe(409);
+  expect((await response.json()).outcome).toMatchObject({ code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' });
+  expect(f.approvals.getPending()).toHaveLength(0); expect(f.calls).toHaveLength(0);
 });

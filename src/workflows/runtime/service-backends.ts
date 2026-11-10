@@ -43,7 +43,7 @@ import type { AuditTrail } from "../../authority/audit";
 import type { EmergencyController } from "../../authority/emergency";
 import type { RoleDefinition } from "../../roles/types";
 import { JarvisLlmClient } from "../adapters/llm-client";
-import { assertWorkflowUiCardCurrent, directToolAboveLevelFloor, remoteKeyPressRefusal, workflowUiCardDeadline } from './workflow-ui-tools';
+import { assertWorkflowUiCardCurrent, directToolAboveLevelFloor, DESKTOP_ELEMENT_ID_REFUSAL, remoteKeyPressRefusal, workflowUiCardDeadline } from './workflow-ui-tools';
 import { JarvisToolRegistryAdapter, frameComputerStepResult } from "../adapters/tool-registry";
 import { JarvisNotifierAdapter, type NotifierDeps } from "../adapters/notifier";
 import { JarvisContextProviderAdapter } from "../adapters/context-provider";
@@ -513,7 +513,8 @@ export function buildSandboxServiceBackends(
         })();
         const gate = resolveToolGate(tool, req.toolName, req.params);
         const uiReview = workflowUiReview(tool, req.toolName, req.params);
-        const remoteKey = uiReview ? remoteKeyPressRefusal(tool.name, req.params) : null;
+        const remoteKey = !uiReview ? null : remoteKeyPressRefusal(tool.name, req.params)
+          ?? (tool.name === 'desktop_click' && !fromRunData.has('element_id') ? DESKTOP_ELEMENT_ID_REFUSAL : null);
         if (remoteKey) {
           effects.auditRefusal({ context: ctx, toolName: tool.name, category: refusedEffectCategory(tool) });
           throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started', message: `WORKFLOW_TOOL_UNSUPPORTED: ${remoteKey}` });

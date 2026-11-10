@@ -112,6 +112,14 @@ export function workflowUiStepRefusals(toolName: string, rawParams: unknown,
   if (!WORKFLOW_REVIEWED_UI_TOOLS.has(toolName)) return [];
   const out: Array<{ path: string; message: string }> = [];
   const params = statedStepParams(rawParams);
+  if (toolName === 'desktop_click' && params) {
+    if (params.element_id !== undefined && !isTemplate(params.element_id)) {
+      out.push({ path: 'settings.input.params.element_id', message: DESKTOP_ELEMENT_ID_REFUSAL });
+    }
+    if (params.action === 'get_value') {
+      out.push({ path: 'settings.input.params.action', message: 'desktop_click with action get_value is a read a desktop agent makes after its own desktop_snapshot; it is not a workflow step. Use jarvis-agent:delegate with a desktop role.' });
+    }
+  }
   if (toolName === 'browser_press_key' && params && !isTemplate(params.target)) {
     const target = typeof params.target === 'string' ? params.target.trim() : '';
     // No target: the computer pinned at enable is the most recent one that
@@ -122,3 +130,13 @@ export function workflowUiStepRefusals(toolName: string, rawParams: unknown,
   }
   return out;
 }
+
+/**
+ * A desktop element id is a number the sidecar handed out in one snapshot of
+ * one window (#1314 m8): written into a workflow, it names whatever control
+ * holds that number in some later run's snapshot, or nothing. So a direct
+ * desktop_click must take its id from this run's data; the card then names
+ * the element as this run's latest desktop snapshot did.
+ */
+export const DESKTOP_ELEMENT_ID_REFUSAL = 'A desktop element id written into a workflow names nothing: ids come from a desktop_snapshot taken in the same run, and change between runs. '
+  + 'Use jarvis-agent:delegate with a desktop role (computer-operator), which observes the app and picks the element itself.';
