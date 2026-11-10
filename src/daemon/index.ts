@@ -205,7 +205,7 @@ import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded } fr
 import { createSidecarOfflineNotifier } from "./sidecar-offline-notice.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
 import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
-import { bindDesktopSwitch, bindScreenCaptureSwitch, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled } from "../actions/tools/desktop-guard.ts";
+import { bindDesktopSwitch, bindScreenCaptureSwitch, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled, isScreenCaptureEnabled } from "../actions/tools/desktop-guard.ts";
 import { osFamily } from "../util/execution-environment.ts";
 import { isLocalBrowserDisabled, isNoLocalTools } from "../actions/tools/local-tools-guard.ts";
 
@@ -2365,7 +2365,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!re.test(t)) return false;
         // No region capture while desktop.enabled is off (#905): the turn goes
         // on without one, and the pebble's directives say why.
-        if (!isDesktopEnabled()) return false;
+        // Nor while screen awareness is off (#1314): a region is a screenshot.
+        if (!isDesktopEnabled() || !isScreenCaptureEnabled()) return false;
 
         // The runResponseCycle caller already claimed the pendingSummons
         // slot for this turn (summon hotkey → listening → audio.session_end
@@ -4283,7 +4284,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!pending) return;
         // The switch was turned off while the overlay was up (#905): the image
         // is dropped unread and the flow ends as a cancel would.
-        if (!isDesktopEnabled()) {
+        if (!isDesktopEnabled() || !isScreenCaptureEnabled()) {
           pendingRegionByPebble.delete(sidecarId);
           pending.ctrl.cancelled = true;
           await setState(sidecarId, 'idle', '');

@@ -160,12 +160,41 @@ export const SCREEN_CAPTURE_TOOLS: ReadonlySet<string> = new Set(['desktop_scree
  * all of them, on every path, as it stops the screenshots.
  */
 export const SCREEN_READ_TOOLS: ReadonlySet<string> = new Set([...SCREEN_CAPTURE_TOOLS,
-  'desktop_snapshot', 'desktop_list_windows', 'desktop_find_element', 'browser_snapshot', 'browser_navigate', 'ui_snapshot', 'ui_act']);
+  'desktop_snapshot', 'desktop_list_windows', 'desktop_find_element', 'browser_snapshot', 'browser_navigate', 'ui_snapshot', 'ui_act',
+  // Reads by another name (#1314 review): a page expression returns whatever
+  // the page holds, and a skill replay reads each surface it acts on and
+  // reports what it saw (titles, new content, field values).
+  'browser_evaluate', 'run_skill']);
 
-/** Whether this call hands back what is on a screen: a screen-read tool, or a desktop_click that reads a field's value. */
+/**
+ * Whether this call hands back what is on a screen: a screen-read tool, a
+ * desktop_click that reads a field's value (matched as the registry's enum
+ * check matches, case-insensitively), or a skill recording, whose result
+ * names the controls the person used.
+ */
 export function callReadsScreen(name: string | undefined, params: Record<string, unknown>): boolean {
   if (!name) return false;
-  return SCREEN_READ_TOOLS.has(name) || (name === 'desktop_click' && params.action === 'get_value');
+  const action = typeof params.action === 'string' ? params.action.toLowerCase() : params.action;
+  return SCREEN_READ_TOOLS.has(name) || (name === 'desktop_click' && action === 'get_value')
+    || (name === 'record_skill' && action === 'start');
+}
+
+/** A refusal for a screen read made by a path that is not a tool call (a surface capture, a region). */
+export function assertScreenReadAllowed(): void {
+  if (isScreenCaptureEnabled()) return;
+  throw new ActionOutcomeError({ status: 'blocked', code: SCREEN_CAPTURE_DISABLED_CODE, effect: 'not_started', message: SCREEN_CAPTURE_DISABLED_MESSAGE });
+}
+
+/**
+ * An action's reply with the window titles it carries removed while
+ * awareness is off (#1314 review): launching or focusing an app is allowed,
+ * reading what its window says is not.
+ */
+export function withoutScreenText<T>(reply: T): T {
+  if (isScreenCaptureEnabled() || !reply || typeof reply !== 'object') return reply;
+  const copy: Record<string, unknown> = { ...(reply as Record<string, unknown>) };
+  for (const key of ['title', 'window_title', 'note', 'toggle_state']) if (key in copy) copy[key] = '(hidden: screen awareness is off)';
+  return copy as T;
 }
 
 export const SCREEN_CAPTURE_DISABLED_CODE = 'SCREEN_CAPTURE_DISABLED';
@@ -208,6 +237,19 @@ export function assertDesktopAllowed(tool: Pick<ToolDefinition, 'category' | 'us
  * States absence, like scopeSystemNote, because the cached tool guide still
  * documents the desktop tools.
  */
+export function screenAwarenessOffSystemNote(): string | null {
+  if (isScreenCaptureEnabled()) return null;
+  return [
+    '# Screen awareness is off',
+    '',
+    'The user has turned screen awareness off. The tool guide above documents tools that read the screen, '
+    + 'but on this install you cannot take screenshots or read what is on any screen: '
+    + `${[...SCREEN_READ_TOOLS].join(', ')} and desktop_click with action get_value are not available, and record_skill cannot start a recording. `
+    + 'Do not read the screen another way, for example through shell commands. '
+    + 'If the user asks about what is on their screen, say that screen awareness is off and that they can turn it back on.',
+  ].join('\n');
+}
+
 export function desktopOffSystemNote(): string | null {
   if (isDesktopEnabled()) return null;
   return [
@@ -215,7 +257,7 @@ export function desktopOffSystemNote(): string | null {
     '',
     'The user has turned desktop control off (desktop.enabled: false). The tool guide above documents the desktop tools, '
     + 'but on this install you cannot list windows, read the screen, read or write the clipboard, or click, type, press keys, launch or focus apps on any machine: '
-    + 'the desktop_* tools, capture_screen, get_clipboard and set_clipboard are not available, ui_snapshot, ui_act and run_skill work only on the browser, '
+    + `the desktop_* tools, capture_screen, get_clipboard and set_clipboard are not available, ${isScreenCaptureEnabled() ? 'ui_snapshot, ui_act and run_skill work only on the browser' : 'and with screen awareness off ui_snapshot, ui_act, run_skill and the browser reads are not available either'}, `
     + 'and record_skill cannot start a recording. '
     + 'Do not try to reach the desktop another way, for example through shell commands. '
     + 'If the user asks for something on their desktop, say that desktop control is off and that they can turn it back on '

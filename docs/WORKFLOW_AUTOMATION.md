@@ -135,10 +135,18 @@ Practical consequences:
   `capture_screen`, `browser_screenshot`) and the text reads
   (`desktop_snapshot`, `desktop_list_windows`, `desktop_find_element`,
   `browser_snapshot`, `browser_navigate`, which returns the page it lands on,
-  `ui_snapshot`, `ui_act`, which returns the surface it changed, and a
-  `desktop_click` with `action: get_value`), with `SCREEN_CAPTURE_DISABLED`.
-  The pebble's screen context and the Brief's screenshot attachment stop too,
-  and waiting cards for any of these are closed. A run admitted while a
+  `ui_snapshot`, `ui_act`, which returns the surface it changed, a
+  `desktop_click` with `action: get_value` in any case, `browser_evaluate`,
+  whose expression can return the page, `run_skill`, whose replay reads each
+  surface it acts on, and starting a `record_skill` recording), with
+  `SCREEN_CAPTURE_DISABLED`. The structural surface reader refuses on its
+  own, so no other caller reads past the switch. Launching or focusing an app
+  still works, with the window title it would report hidden. The pebble's
+  screen context, its region capture and the Brief's screenshot attachment
+  stop too, the prompt says awareness is off, a live voice session's tool
+  list is re-sent when either switch changes, and waiting cards for any of
+  these are closed. Not covered: shell commands (`run_command`) that read the
+  screen, the stored awareness history, and the operator-only debug RPC. A run admitted while a
   switch is off says which switch, not that the action is unsupported.
 - Direct browser steps keep live snapshot generations per workflow run, across
   snapshot, approval and execution, independently of chat and other runs. Local

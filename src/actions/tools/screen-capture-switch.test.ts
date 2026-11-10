@@ -10,7 +10,7 @@ import { BUILTIN_TOOLS } from './builtin.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
 import { UI_TOOLS } from './ui.ts';
 import { bindScreenCaptureSwitch, setDesktopEnabledSource, setScreenCaptureEnabledSource, withoutDisabledDesktopTools,
-  SCREEN_CAPTURE_DISABLED_CODE } from './desktop-guard.ts';
+  SCREEN_CAPTURE_DISABLED_CODE, SCREEN_CAPTURE_DISABLED_MESSAGE, desktopRefusal, screenAwarenessOffSystemNote, withoutScreenText } from './desktop-guard.ts';
 import { switchedOffCard, workflowToolSwitchRefusal } from '../../workflows/runtime/workflow-ui-tools.ts';
 import { fetchPebbleScreenshot } from '../../daemon/pebble-desktop-context.ts';
 
@@ -18,7 +18,7 @@ afterEach(() => { setScreenCaptureEnabledSource(null); setDesktopEnabledSource(n
 const all = [...BUILTIN_TOOLS, ...[...DESKTOP_TOOLS, ...UI_TOOLS].filter(t => !BUILTIN_TOOLS.some(b => b.name === t.name))];
 const byName = (name: string) => all.find(t => t.name === name)!;
 
-test('awareness off refuses and hides the screenshot tools, and only those', async () => {
+test('awareness off refuses and hides the screenshot tools, and keeps actions that read nothing', async () => {
   const config = { awareness: { enabled: false } };
   bindScreenCaptureSwitch(config);
   const registry = new ToolRegistry();
@@ -75,4 +75,30 @@ test('awareness off refuses and hides the on-screen text reads too, with the swi
   expect(switchedOffCard(registry)({ tool_name: 'desktop_click', tool_arguments: JSON.stringify({ element_id: 3, action: 'get_value' }) })).toBe(true);
   expect(switchedOffCard(registry)({ tool_name: 'desktop_click', tool_arguments: JSON.stringify({ element_id: 3, action: 'set_value', value: 'x' }) })).toBe(false);
   expect(switchedOffCard(registry)({ tool_name: 'browser_navigate', tool_arguments: JSON.stringify({ url: 'https://a.example/' }) })).toBe(true);
+});
+
+
+test('reads by another name are off too: page expressions, skill replays, recordings and a get_value in any case (#1314 review)', () => {
+  setScreenCaptureEnabledSource(() => false);
+  for (const [name, params] of [['browser_evaluate', { expression: 'document.body.innerText' }], ['run_skill', { name: 'x' }],
+    ['record_skill', { action: 'start' }], ['desktop_click', { element_id: 1, action: 'GET_VALUE' }]] as const) {
+    expect(desktopRefusal(byName(name), params)).toBe(SCREEN_CAPTURE_DISABLED_MESSAGE);
+  }
+  // Acting still works: a click and stopping a recording read nothing new.
+  expect(desktopRefusal(byName('desktop_click'), { element_id: 1, action: 'click' })).toBeNull();
+  expect(desktopRefusal(byName('record_skill'), { action: 'stop' })).toBeNull();
+  const offered = withoutDisabledDesktopTools(all).map(t => t.name);
+  for (const name of ['browser_evaluate', 'run_skill']) expect(offered).not.toContain(name);
+});
+
+test('the surface reader, app replies and the prompt follow the switch (#1314 review)', async () => {
+  setScreenCaptureEnabledSource(() => false);
+  const { captureSurface } = await import('../../structural/surface.ts');
+  await expect(captureSurface({ kind: 'desktop' } as never)).rejects.toMatchObject({ outcome: { code: SCREEN_CAPTURE_DISABLED_CODE, effect: 'not_started' } });
+  expect(withoutScreenText({ success: true, pid: 7, window_title: 'Inbox - ana@x - Outlook', note: 'window "Inbox" opened' }))
+    .toEqual({ success: true, pid: 7, window_title: '(hidden: screen awareness is off)', note: '(hidden: screen awareness is off)' });
+  expect(screenAwarenessOffSystemNote()).toContain('browser_evaluate');
+  setScreenCaptureEnabledSource(null);
+  expect(screenAwarenessOffSystemNote()).toBeNull();
+  expect(withoutScreenText({ window_title: 'Inbox' })).toEqual({ window_title: 'Inbox' });
 });
