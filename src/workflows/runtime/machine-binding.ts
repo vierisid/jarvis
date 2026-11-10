@@ -5,7 +5,7 @@ import { isNoLocalTools } from '../../actions/tools/local-tools-guard';
 import { withMachineScope, type MachineScope } from '../../actions/machine-scope';
 import type { SidecarCapability, SidecarInfo } from '../../sidecar/types';
 import { ensureRunMachineBinding, getRunMachineBinding, machineBindingBlocked } from '../db/repos/run-machine-binding';
-import { machinePinForRun, UNPINNED_COMPUTER_TEXT } from '../db/repos/binding-pins';
+import { machinePinForRun, unchosenComputerReason, unchosenComputerText, UNPINNED_COMPUTER_TEXT } from '../db/repos/binding-pins';
 import { assertRunNotCanceled } from './cancellation';
 import { getWorkflowDb } from '../db';
 import { getFlowVersion } from '../db/repos/flow-version';
@@ -107,9 +107,10 @@ export function withWorkflowMachineBinding<T>(ctx: { runId: string; projectId: s
       // computer a person pinned (#1314 review), never one it names itself.
       // Checked before anything binds, so a refused call binds the run to none.
       if (opts.delegated && capability && PERCEPTION_CAPABILITIES.includes(capability)) {
-        const pin = machinePinForRun(ctx.runId);
-        if (!pin || pin.unattended) machineBindingBlocked('WORKFLOW_MACHINE_UNPINNED',
-          `This workflow's agent may use a browser or desktop only on a computer a person chose. ${UNPINNED_COMPUTER_TEXT}`);
+        const reason = unchosenComputerReason(ctx.runId);
+        if (reason) machineBindingBlocked('WORKFLOW_MACHINE_UNPINNED',
+          `This workflow's agent may use a browser, desktop or screenshot only on a computer a person chose. ${unchosenComputerText(reason, capability)}`,
+          'Do not replay completed work.');
       }
       const selector = typeof explicit === 'string' && explicit.trim() ? explicit.trim() : null;
       const manager = getSidecarManager();
@@ -191,8 +192,8 @@ export const UNPINNED_COMPUTER_MESSAGE = UNPINNED_COMPUTER_TEXT;
 export function assertUiComputerPinned(runId: string, literalTarget: boolean): void {
   // Read from the pin, not the run's binding, so a refused call binds nothing
   // (#1314 review): the check comes before anything resolves a computer.
-  const pin = machinePinForRun(runId);
-  if ((pin && !pin.unattended) || literalTarget) return;
+  const reason = literalTarget ? null : unchosenComputerReason(runId);
+  if (!reason) return;
   throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_MACHINE_UNPINNED', effect: 'not_started',
-    message: `This workflow's browser or desktop step has no computer a person chose. ${UNPINNED_COMPUTER_MESSAGE}` });
+    message: `This workflow's browser or desktop step has no computer a person chose. ${unchosenComputerText(reason)}` });
 }

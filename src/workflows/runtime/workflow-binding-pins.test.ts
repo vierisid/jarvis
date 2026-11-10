@@ -146,21 +146,52 @@ test('a computer pinned with nobody choosing runs no computer action (#1314 revi
   machines = [computer('a')];
   pinUnpinnedEnabledFlows();
   expect(readBindingPins(flow.flowId)!.machine).toEqual({ sidecarId: 'a', name: 'Computer a', unattended: true });
-  expect(bindingPinIssues(flow.flowId, flow.versionId, getFlowVersion(flow.versionId)!.trigger)).toEqual([expect.objectContaining({ code: 'WORKFLOW_MACHINE_UNPINNED' })]);
+  // A delegation is not refused whole: its agent may never touch a screen. Its screen calls are.
+  expect(bindingPinIssues(flow.flowId, flow.versionId, getFlowVersion(flow.versionId)!.trigger)).toEqual([]);
+  const runId = createFlowRun({ flowId: flow.flowId, flowVersionId: flow.versionId, status: 'RUNNING' }).id;
+  const delegated = <T>(act: () => T) => withWorkflowMachineBinding({ runId, projectId: DEFAULT_IDS.project }, act, { delegated: true });
+  expect(blockedCode(() => delegated(() => getMachineScope()!.resolveTarget(undefined, 'browser'))))
+    .toMatchObject({ code: 'WORKFLOW_MACHINE_UNPINNED', message: expect.stringContaining('pinned with nobody choosing') });
+  expect(getRunMachineBinding(runId)).toBeNull();
   // A person enabling it chooses: the same computer, no longer unattended.
   const { pinFlowBindings } = await import('../db/repos/binding-pins');
   pinFlowBindings(flow.flowId);
   expect(readBindingPins(flow.flowId)!.machine).toEqual({ sidecarId: 'a', name: 'Computer a' });
-  expect(bindingPinIssues(flow.flowId, flow.versionId, getFlowVersion(flow.versionId)!.trigger)).toEqual([]);
+  expect(delegated(() => getMachineScope()!.resolveTarget(undefined, 'browser'))).toBe('a');
 });
 
-test('an enabled screen flow with no pinned computer is blocked before it runs, saying how to fix it (#1314 M2)', async () => {
+test('a delegation to a browser role is not blocked whole when no computer could be pinned, only its browser calls (#1314 review)', async () => {
+  withRoles();
+  machines = [];
+  setNoLocalTools(true);
+  const flow = delegatingFlow('computer-operator');
+  expect(readBindingPins(flow.flowId)!.machine).toBeNull();
+  const { bindingPinIssues } = await import('../db/repos/binding-pins');
+  const { getFlowVersion } = await import('../db/repos/flow-version');
+  expect(bindingPinIssues(flow.flowId, flow.versionId, getFlowVersion(flow.versionId)!.trigger)).toEqual([]);
+  const runId = createFlowRun({ flowId: flow.flowId, flowVersionId: flow.versionId, status: 'RUNNING' }).id;
+  const delegated = <T>(act: () => T) => withWorkflowMachineBinding({ runId, projectId: DEFAULT_IDS.project }, act, { delegated: true });
+  expect(blockedCode(() => delegated(() => getMachineScope()!.resolveTarget(undefined, 'browser'))))
+    .toMatchObject({ code: 'WORKFLOW_MACHINE_UNPINNED', message: expect.stringContaining('No computer could be pinned') });
+});
+
+test('a default-role screenshot is refused with a remedy that works: the role, not enabling again (#1314 review)', async () => {
+  withRoles();
+  const flow = delegatingFlow('writer');
+  expect(readBindingPins(flow.flowId)!.machine).toBeNull();
+  const runId = createFlowRun({ flowId: flow.flowId, flowVersionId: flow.versionId, status: 'RUNNING' }).id;
+  expect(blockedCode(() => withWorkflowMachineBinding({ runId, projectId: DEFAULT_IDS.project },
+    () => getMachineScope()!.resolveTarget(undefined, 'screenshot'), { delegated: true })))
+    .toMatchObject({ code: 'WORKFLOW_MACHINE_UNPINNED', message: expect.stringContaining('computer-operator') });
+});
+
+test('an enabled flow with a direct screen step and no pinned computer is blocked before it runs, saying how to fix it (#1314 M2)', async () => {
   const { bindingPinIssues } = await import('../db/repos/binding-pins');
   const { getWorkflowDb } = await import('../db');
-  withRoles();
-  const flow = delegatingFlow('computer-operator');
+  const flow = enabledFlow('browser_navigate');
   getWorkflowDb().run(`UPDATE flow SET binding_pins = json_set(binding_pins, '$.machine', json('null')) WHERE id = ?`, [flow.flowId]);
   const { getFlowVersion } = await import('../db/repos/flow-version');
-  expect(bindingPinIssues(flow.flowId, flow.versionId, getFlowVersion(flow.versionId)!.trigger)).toEqual([expect.objectContaining({
+  const versionId = readBindingPins(flow.flowId)!.versionId;
+  expect(bindingPinIssues(flow.flowId, versionId, getFlowVersion(versionId)!.trigger)).toEqual([expect.objectContaining({
     code: 'WORKFLOW_MACHINE_UNPINNED', message: expect.stringContaining('Enable the workflow to pin its computer, or name the computer in the step.') })]);
 });

@@ -92,10 +92,18 @@ Practical consequences:
   Workflows list and in a "Workflow needs attention" notice: enable the
   workflow to pin its computer, or name the computer in the step. A pin made
   with nobody choosing (the startup pass, a saved draft) keeps the run on one
-  computer but does not count: its browser and desktop actions wait for a
-  person to enable the flow. The check reads the pin before anything resolves
-  a computer, so a refused call binds the run to none. The same rule covers a
-  delegated agent's screen reads (screenshots, snapshots, window lists) and a
+  computer but does not count, and pins made that way before #1314 carry no
+  mark and still count. A flow whose own steps act on the screen is refused
+  whole at admission; a delegation is not, since its agent may never touch a
+  screen: only the agent's browser, desktop and screenshot calls are refused,
+  with a sentence saying why (enable again; no computer could serve it when
+  enabled; or, for a screenshot from a role with no browser or desktop tools,
+  use a role such as `computer-operator`). Upgrade note: an enabled flow that
+  delegates to a role with browser tools was pinned with no computer before
+  #1314, so its agent's browser calls are refused until the flow is enabled
+  again. The check reads the pin before anything resolves a computer, so a
+  refused call binds the run to none. The same rule covers a delegated
+  agent's screen reads (screenshots, snapshots, window lists) and a
   `run_skill` step, which replays recorded clicks and typing.
 - **A direct step is held to its step** (#1314). The tool route trusts the
   step-name header, so a reviewed UI call must send exactly the params its
