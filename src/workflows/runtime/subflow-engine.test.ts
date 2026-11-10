@@ -1,4 +1,3 @@
-import { canonicalJson } from './effect-context';
 import {TimerWaitpointScheduler} from '../timer-scheduler';
 import {listWaitpointsByFlowRun} from '../db/repos/waitpoint';
 /** The saved builder graph runs through the real worker/engine with synthetic providers only. */
@@ -182,7 +181,10 @@ test('the approval card names the child workflow it starts',async()=>{
  const f=await fixture();authority.setGovernedCategories(['spawn_agent']);const r=createFlowRun({flowId:f.parent.id,flowVersionId:f.pv.id,status:'RUNNING'});runIds.push(r.id);
  const node:any=f.pv.trigger.nextAction,ctx={runId:r.id,projectId:DEFAULT_IDS.project,stepName:node.name,executionPath:[] as Array<[string,number]>};
  const pending=await services.subflowCall!({...node.settings.input,invocationKey:'card-request',payload},ctx) as any;
- expect(JSON.parse(approvals.getRequest(pending.approval.approvalId)!.context).intent).toBe('Start and wait for the workflow '+f.child.id+' named "Fixture child", with the input '+canonicalJson(payload));
+ // Each quoted string sits in a bidi isolate (U+2068 ... U+2069) inside its quotes.
+ const q=(t:string)=>'"\u2068'+t+'\u2069"';
+ expect(JSON.parse(approvals.getRequest(pending.approval.approvalId)!.context).intent).toBe('Start and wait for the workflow '+f.child.id+' named '+q('Fixture child')+', with the input {'
+   +q('email')+':'+q(' CUSTOMER@EXAMPLE.INVALID ')+','+q('id')+':'+q(' customer-1 ')+','+q('name')+':'+q(' Fixture Customer ')+','+q('request_id')+':'+q('fixture-request')+'}');
 });
 // #1242: a child a person turned off is not started by a parent; one saved off and never turned on still is.
 test('a turned-off child fails the parent step with a clear message before any approval card and starts nothing',async()=>{

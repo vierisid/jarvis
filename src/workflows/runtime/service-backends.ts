@@ -286,8 +286,31 @@ function workflowDelegateCardRefusal(args: Record<string, unknown>, specialists:
  * pinned version's.
  */
 function workflowStartIntent(flowId: string, name: string, waitForCompletion: boolean, input: string | null): string {
-  return `${waitForCompletion ? 'Start and wait for' : 'Start'} the workflow ${forCard(flowId, 128)} named ${JSON.stringify(boundedApprovalLabel(name, START_CARD_NAME_MAX_CHARS))}`
+  return `${waitForCompletion ? 'Start and wait for' : 'Start'} the workflow ${forCard(flowId, 128)} named ${isolateJsonStrings(JSON.stringify(boundedApprovalLabel(name, START_CARD_NAME_MAX_CHARS)))}`
     + (input === null ? '' : input);
+}
+
+/** FIRST STRONG ISOLATE and POP DIRECTIONAL ISOLATE (Unicode bidi isolates). */
+const FSI = '\u2068';
+const PDI = '\u2069';
+/** A JSON string token: its quotes and everything between, escapes included. */
+const JSON_STRING = /"(?:[^"\\]|\\.)*"/g;
+
+/**
+ * `json` with the text of every string in it (keys and values) wrapped in a
+ * bidi isolate, inside its quotes. Right-to-left text in a value otherwise
+ * reorders the punctuation around it on the dashboard: in `{"<rtl key>":"<rtl
+ * value>"}` the colon between two right-to-left runs takes their direction,
+ * and the pair reads with key and value swapped. An isolate keeps each string
+ * to itself, so the card reads in the order it is written, in any script,
+ * without escaping anyone's language. Only for text whose own format
+ * characters are already gone or escaped (`START_INPUT_HIDDEN`, a label's
+ * reduction), so a string cannot close or open an isolate of its own. The
+ * isolates are display only: what the child receives is the payload, and
+ * the length budget counts the JSON without them.
+ */
+function isolateJsonStrings(json: string): string {
+  return json.replace(JSON_STRING, (token) => `"${FSI}${token.slice(1, -1)}${PDI}"`);
 }
 
 /**
@@ -317,7 +340,7 @@ function startInputJson(payload: unknown): string | null {
 }
 function startInputForCard(payload: unknown): string | null {
   const json = startInputJson(payload);
-  return json === null ? null : `, with the input ${json}`;
+  return json === null ? null : `, with the input ${isolateJsonStrings(json)}`;
 }
 
 /** How many of a payload's field names a chat card lists before "and N more" (#1152). The card's own length budget still applies. */

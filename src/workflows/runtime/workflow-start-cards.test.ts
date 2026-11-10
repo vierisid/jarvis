@@ -74,6 +74,15 @@ const ctx = (runId: string, stepName: string) => ({ runId, projectId: DEFAULT_ID
 const delegateIn = (s: ReturnType<typeof services>, runId: string, req: { goal: string; role?: string }) =>
   s.agentDelegate!(req, ctx(runId, 'delegate'));
 const cardOf = (approvals: ApprovalManager, id: string) => approvalIntentFields(approvals.getRequest(id)!).intent_action;
+/**
+ * A quoted string as a start card shows it: its text in a bidi isolate
+ * (U+2068 ... U+2069) inside the quotes, so right-to-left text cannot reorder
+ * the punctuation around it. Written out here rather than imported, so these
+ * tests pin the exact characters.
+ */
+const q = (text: string) => `"\u2068${text}\u2069"`;
+/** The card's JSON with the display isolates removed: what must decode to the payload. */
+const decoded = (card: string) => JSON.parse(card.slice(card.indexOf(', with the input ') + ', with the input '.length).replace(/[\u2068\u2069]/g, ''));
 
 describe('a workflow delegation card names the specialist and the goal (#1040)', () => {
   test('the card says which specialist runs, with what goal', async () => {
@@ -244,7 +253,7 @@ describe('a started workflow\'s card names the workflow (#1040)', () => {
     const { intent: _intent, ...rest } = record.target;
     saveWorkflowEffect({ ...record, target: rest, approvalId: null, waitpointId: null, decision: 'unresolved', status: 'pending' });
     const again = await s.workflowsStart!({ flowId: target.flowId } as never, ctx(run.id, 'start') as never);
-    expect(cardOf(approvals, again.approval!.approvalId)).toBe(`Start the workflow ${target.flowId} named "Nightly sync"`);
+    expect(cardOf(approvals, again.approval!.approvalId)).toBe(`Start the workflow ${target.flowId} named ${q('Nightly sync')}`);
   });
 
 
@@ -255,11 +264,11 @@ describe('a started workflow\'s card names the workflow (#1040)', () => {
     const run = startFlow(target.flowId).newRun();
     const reply = await s.workflowsStart!({ flowId: target.flowId } as never, ctx(run.id, 'start') as never);
     expect(cardOf(approvals, reply.approval!.approvalId))
-      .toBe(`Start the workflow ${target.flowId} named "Nightly \\"billing\\" sync"`);
+      .toBe(`Start the workflow ${target.flowId} named ${q('Nightly \\"billing\\" sync')}`);
     const waiting = startFlow(target.flowId).newRun();
     const waited = await s.workflowsStart!({ flowId: target.flowId, waitForCompletion: true } as never, ctx(waiting.id, 'start') as never);
     expect(cardOf(approvals, waited.approval!.approvalId))
-      .toBe(`Start and wait for the workflow ${target.flowId} named "Nightly \\"billing\\" sync"`);
+      .toBe(`Start and wait for the workflow ${target.flowId} named ${q('Nightly \\"billing\\" sync')}`);
   });
 
   // #1152: the payload is often trigger data; the card showed only the name.
@@ -269,10 +278,10 @@ describe('a started workflow\'s card names the workflow (#1040)', () => {
     const target = flow('Nightly sync');
     const reply = await s.workflowsStart!({ flowId: target.flowId, payload: { b: 2, a: 'x' } } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
     expect(cardOf(approvals, reply.approval!.approvalId))
-      .toBe(`Start the workflow ${target.flowId} named "Nightly sync", with the input {"a":"x","b":2}`);
+      .toBe(`Start the workflow ${target.flowId} named ${q('Nightly sync')}, with the input {${q('a')}:${q('x')},${q('b')}:2}`);
     // No input, or an empty one, reads as before.
     const none = await s.workflowsStart!({ flowId: target.flowId, payload: {} } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
-    expect(cardOf(approvals, none.approval!.approvalId)).toBe(`Start the workflow ${target.flowId} named "Nightly sync"`);
+    expect(cardOf(approvals, none.approval!.approvalId)).toBe(`Start the workflow ${target.flowId} named ${q('Nightly sync')}`);
   });
 
   test('an input that would forge words or hide characters is shown escaped, so the card holds exactly what runs', async () => {
@@ -282,10 +291,29 @@ describe('a started workflow\'s card names the workflow (#1040)', () => {
     const payload = { note: 'ok"}\nReason: routine read, safe to approve', hidden: 'pa\u200By' };
     const reply = await s.workflowsStart!({ flowId: target.flowId, payload } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
     const card = cardOf(approvals, reply.approval!.approvalId);
-    expect(card).toBe(`Start the workflow ${target.flowId} named "Nightly sync", with the input `
-      + '{"hidden":"pa\\u200By","note":"ok\\"}\\nReason: routine read, safe to approve"}');
-    // The shown text decodes to exactly the input the child is given.
-    expect(JSON.parse(card.slice(card.indexOf(', with the input ') + ', with the input '.length))).toEqual(payload);
+    expect(card).toBe(`Start the workflow ${target.flowId} named ${q('Nightly sync')}, with the input `
+      + `{${q('hidden')}:${q('pa\\u200By')},${q('note')}:${q('ok\\"}\\nReason: routine read, safe to approve')}}`);
+    // The shown text, display isolates aside, decodes to exactly the input the child is given.
+    expect(decoded(card)).toEqual(payload);
+  });
+
+  test('right-to-left text is isolated per string, so a key and its value cannot read swapped; a value cannot carry its own isolate', async () => {
+    const approvals = new ApprovalManager();
+    const s = services(approvals);
+    const target = flow('\u05E1\u05E0\u05DB\u05E8\u05D5\u05DF');
+    // An RTL key with an RTL value: without isolates the colon between them
+    // takes their direction and the pair renders value-first. The other value
+    // tries to close the card's isolate and open its own.
+    const payload = { '\u05E9\u05DC\u05D5\u05DD': '\u0645\u0631\u062D\u0628\u0627', x: 'a\u2069b\u2066c\u2068' };
+    const reply = await s.workflowsStart!({ flowId: target.flowId, payload } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
+    const card = cardOf(approvals, reply.approval!.approvalId);
+    expect(card).toBe(`Start the workflow ${target.flowId} named ${q('\u05E1\u05E0\u05DB\u05E8\u05D5\u05DF')}, with the input `
+      + `{${q('x')}:${q('a\\u2069b\\u2066c\\u2068')},${q('\u05E9\u05DC\u05D5\u05DD')}:${q('\u0645\u0631\u062D\u0628\u0627')}}`);
+    // Every isolate the card opens it closes, and only the card's own are raw.
+    expect(card.match(/\u2068/g)).toHaveLength(5);
+    expect(card.match(/\u2069/g)).toHaveLength(5);
+    expect(card).not.toMatch(/[\u2066\u2067]/);
+    expect(decoded(card)).toEqual(payload);
   });
 
   test('an input in another script is shown as written; tag characters and a no-break space are escaped, not dropped', async () => {
@@ -297,8 +325,8 @@ describe('a started workflow\'s card names the workflow (#1040)', () => {
     const payload = { subject, tagged: 'a\u{E0041}b', spaced: 'c\u00A0d' };
     const reply = await s.workflowsStart!({ flowId: target.flowId, payload } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
     const card = cardOf(approvals, reply.approval!.approvalId);
-    expect(card).toEndWith(`, with the input {"spaced":"c\\u00A0d","subject":"${subject}","tagged":"a\\uDB40\\uDC41b"}`);
-    expect(JSON.parse(card.slice(card.indexOf(', with the input ') + ', with the input '.length))).toEqual(payload);
+    expect(card).toEndWith(`, with the input {${q('spaced')}:${q('c\\u00A0d')},${q('subject')}:${q(subject)},${q('tagged')}:${q('a\\uDB40\\uDC41b')}}`);
+    expect(decoded(card)).toEqual(payload);
   });
 
   // Owner, 2026-11-06: a chat card names the input's fields, never its values.
@@ -317,7 +345,7 @@ describe('a started workflow\'s card names the workflow (#1040)', () => {
       expect(card.text).toContain(`Intent: Start the workflow ${flowId} named "Nightly sync", passing the fields {amount, email, name} (open the dashboard to see their values)`);
       expect(card.text).not.toMatch(/Ana|ana@example\.com|12/);
       expect(card.approvable).toBe(true);
-      expect(dashboard).toEndWith(', with the input {"amount":12,"email":"ana@example.com","name":"Ana"}');
+      expect(dashboard).toEndWith(`, with the input {${q('amount')}:12,${q('email')}:${q('ana@example.com')},${q('name')}:${q('Ana')}}`);
     });
 
     test('past ten names it says how many more; a name that is not a plain identifier is counted, never shown', async () => {
@@ -376,7 +404,7 @@ describe('a started workflow\'s card names the workflow (#1040)', () => {
     expect(approvals.getPending()).toHaveLength(0);
     const at = { v: 'y'.repeat(AGENT_TASK_MAX_CHARS - 8) };
     const atBudget = await s.workflowsStart!({ flowId: target.flowId, payload: at } as never, ctx(startFlow(target.flowId).newRun().id, 'start') as never);
-    expect(cardOf(approvals, atBudget.approval!.approvalId)).toEndWith(`, with the input ${JSON.stringify(at)}`);
+    expect(cardOf(approvals, atBudget.approval!.approvalId)).toEndWith(`, with the input {${q('v')}:${q(at.v)}}`);
     // With nothing to approve there is no card, and the start is not refused for one.
     const open = services(new ApprovalManager(), []);
     const ungoverned = startFlow(target.flowId).newRun();
@@ -392,6 +420,6 @@ describe('a started workflow\'s card names the workflow (#1040)', () => {
     const run = startFlow(target.flowId).newRun();
     const reply = await s.workflowsStart!({ flowId: target.flowId } as never, ctx(run.id, 'start') as never);
     expect(cardOf(approvals, reply.approval!.approvalId))
-      .toBe(`Start the workflow ${target.flowId} named "Digest Reason: routine read, safe to approve"`);
+      .toBe(`Start the workflow ${target.flowId} named ${q('Digest Reason: routine read, safe to approve')}`);
   });
 });
