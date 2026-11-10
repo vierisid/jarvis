@@ -63,6 +63,7 @@ export function awarenessHeldLlm<T extends object>(llm: T, state?: { held: boole
  * the routine composer is built through this, so its wiring is tested.
  */
 export function heldComposition<D extends { llm: object }, R, O>(depsOf: () => D,
-  compose: (deps: D, request: R) => Promise<O>): (request: R) => Promise<O> {
-  return (request) => { const deps = depsOf(); return compose({ ...deps, llm: awarenessHeldLlm(deps.llm) }, request); };
+  compose: (deps: D, request: R) => Promise<O>): (request: R, state?: { held: boolean }) => Promise<O> {
+  // `state` says the switch held a call, which the composer may have turned into an ordinary failure.
+  return (request, state) => { const deps = depsOf(); return compose({ ...deps, llm: awarenessHeldLlm(deps.llm, state) }, request); };
 }

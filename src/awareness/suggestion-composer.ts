@@ -9,7 +9,8 @@ import type { ComposeResult, ComposeRequest } from '../actions/tools/workflow-co
 import { canonicalSuggestion, type CompositionRequest, type CompositionRow } from './suggestion-feedback.ts';
 
 const COMPOSITION_TIMEOUT_MS = 5 * 60_000;
-export type ComposeSuggestion = (request: ComposeRequest) => Promise<ComposeResult>;
+/** `held` is set when the awareness switch refused one of the job's model calls (#1314 review). */
+export type ComposeSuggestion = (request: ComposeRequest, held?: { held: boolean }) => Promise<ComposeResult>;
 
 export function recoverExpiredCompositions(now = Date.now()): void {
   getDb().run(`UPDATE suggestion_composition_jobs SET state = 'failed', lease_token = NULL, lease_until = 0,
@@ -112,6 +113,8 @@ export class SuggestionComposer {
       const job = claimSuggestionComposition(this.timeoutMs);
       if (!job) return;
       const active = { job, abort: new AbortController() };
+      // Per job: the composer turns a held call into an ordinary failure, so the switch says so here (#1314 review).
+      const held = { held: false };
       this.active = active;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -120,7 +123,7 @@ export class SuggestionComposer {
         const request = JSON.parse(job.request) as CompositionRequest;
         const result = await Promise.race([
           runWithOrigin('background', () => this.compose({ name: request.name, description: `${request.description}\n\nExpected result: ${request.expectedOutcome}`,
-            signal: active.abort.signal })),
+            signal: active.abort.signal }, held)),
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => active.abort.abort(new Error('Composition timed out. Review the request and retry.')), this.timeoutMs);
             active.abort.signal.addEventListener('abort', () => reject(active.abort.signal.reason), { once: true });
@@ -129,7 +132,7 @@ export class SuggestionComposer {
         // A stopped/replaced worker must never write into a reopened database.
         if (!this.running || this.active !== active) return;
         // Awareness went off mid-job (#1314 review): nothing derived is attached; the job waits, unspent.
-        if (!awarenessHistoryVisible()) throw new AwarenessHeldError();
+        if (!awarenessHistoryVisible() || held.held) throw new AwarenessHeldError();
         if (result.ok) {
           if (!attachSuggestionDraft(job, result)) failSuggestionComposition(job, 'Composition lease expired. Review the request and retry.');
         } else {

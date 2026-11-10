@@ -342,3 +342,41 @@ test('the model client a composition uses refuses every call once awareness is o
     expect(sent).toBe(1);
   } finally { setScreenCaptureEnabledSource(null); }
 });
+
+test('a held call the composer reported as a failure still goes back to the queue unspent, even if awareness is back on (#1314 review)', async () => {
+  acceptSuggestion(proposal().id, acceptance);
+  // The switch refused a call (held), the composer turned it into ok:false, and awareness was on again by the check.
+  worker = new SuggestionComposer(async (_request, held) => { held!.held = true; return { ok: false, errors: ['LLM call failed: Screen awareness is off'] } as never; });
+  worker.start(); await worker.idle();
+  const job = getDb().query('SELECT state, attempts FROM suggestion_composition_jobs').get() as { state: string; attempts: number };
+  expect(job).toMatchObject({ state: 'queued', attempts: 0 });
+  expect(getDb().query('SELECT job_id FROM suggestion_composition_attempts').all()).toHaveLength(0);
+});
+
+test('a hold that holds nothing refunds nothing (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  let on = true;
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    acceptSuggestion(proposal().id, acceptance);
+    // The job stops being this lease's (dismissed elsewhere) while awareness goes off mid-compose.
+    worker = new SuggestionComposer(async () => { on = false;
+      getDb().run("UPDATE suggestion_composition_jobs SET state = 'failed', lease_token = NULL"); throw new Error('provider error'); });
+    worker.start(); await worker.idle();
+    expect(getDb().query('SELECT job_id FROM suggestion_composition_attempts').all()).toHaveLength(1);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test('the tool-loop model call is held at its retry boundary too (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  const { awarenessHeldLlm, AwarenessHeldError } = await import('./history-guard.ts');
+  let on = true; const sends: string[] = [];
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    const state = { held: false };
+    const llm = awarenessHeldLlm({ async chatTools(_m: unknown, _t: unknown, _o: unknown, checkDeadline?: () => void) {
+      checkDeadline?.(); sends.push('a'); on = false; checkDeadline?.(); sends.push('b'); return {}; } }, state);
+    await expect(llm.chatTools([], [], {})).rejects.toBeInstanceOf(AwarenessHeldError);
+    expect(sends).toEqual(['a']); expect(state.held).toBe(true);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
