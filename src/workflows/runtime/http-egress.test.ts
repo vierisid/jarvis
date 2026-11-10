@@ -10,7 +10,7 @@ import type { LookupAddress } from 'node:dns';
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { MAX_RESPONSE_BYTES, ResponseTooLargeError, resolveGuardedAddress, addressAllowed, assertHostAllowed, canonicalAddress, classifyAddress, destinationAllowed, egressGuardedAxios, egressPolicyFromEnv,
-  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, defaultGateways, ownAddresses, HOST_ADDRESSES_ENV, EGRESS_POLICY_ENV, EgressRefusedError, readHostKey, refusedBeforeSend, REQUEST_TIMEOUT_ENV, requestTimeoutMs, withReadHosts } from './http-egress';
+  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, defaultGateways, defaultGateways6, ownAddresses, HOST_ADDRESSES_ENV, EGRESS_POLICY_ENV, EgressRefusedError, readHostKey, refusedBeforeSend, REQUEST_TIMEOUT_ENV, requestTimeoutMs, withReadHosts } from './http-egress';
 
 describe('which addresses the HTTP step may reach', () => {
   const table: Array<[string, 'public' | 'private' | 'blocked']> = [
@@ -61,6 +61,16 @@ describe('which addresses the HTTP step may reach', () => {
     expect(defaultGateways(table)).toEqual(['172.17.0.1']);
     const own = ownAddresses({ JARVIS_HOST_ADDRESSES: '192.168.1.20, ::ffff:10.0.0.9, not-an-address' }, () => table);
     for (const address of ['172.17.0.1', '192.168.1.20', '10.0.0.9']) {
+      expect(`${address}: ${destinationAllowed(address, 'private-allowed', own)}`).toBe(`${address}: false`);
+    }
+    // #1153 review: on a compose network the default gateway is another bridge's; docker0's 172.17.0.1 is the host too.
+    const compose = ownAddresses({}, () => table.replace('010011AC', '010012AC'));
+    for (const address of ['172.18.0.1', '172.17.0.1']) expect(`${address}: ${compose.has(address)}`).toBe(`${address}: true`);
+    // A gateway outside the bridge pool is a LAN router (host or macvlan networking, Podman pasta): still reachable.
+    expect(ownAddresses({}, () => table.replace('010011AC', '0101A8C0')).has('192.168.1.1')).toBe(interfaceAddresses().has('192.168.1.1'));
+    // The IPv6 default route's next hop.
+    expect(defaultGateways6('00000000000000000000000000000000 00 00000000000000000000000000000000 00 fd000000000000000000000000000001 00000400 00000001 00000000 00000003 eth0\n')).toEqual(['fd00:0:0:0:0:0:0:1']);
+    for (const address of [] as string[]) {
       expect(`${address}: ${destinationAllowed(address, 'private-allowed', own)}`).toBe(`${address}: false`);
     }
     expect(destinationAllowed('192.168.1.21', 'private-allowed', own)).toBe(true);
@@ -240,6 +250,15 @@ describe('the guarded client connects only where it checked', () => {
     await expect(download(`http://ops.test:${port}/to-other-origin`, ['ops.test'])).rejects.toThrow(/a redirect goes to other\.test, which is not on this flow's read list/);
     expect(seen).toEqual([`GET ops.test:${port} /ok`, `GET ops.test:${port} /to-other-origin`]);
   });
+
+  test('#1153 review: a timed-out request is a refusal after sending, so the pieces fail the step on it and a file field is never sent empty', async () => {
+    const timedOut = await client(true, onlyLocal, 1000).request({ method: 'GET', url: `http://ops.test:${port}/drip` }).catch((e: unknown) => e);
+    expect(egressRefusalIn(timedOut)).toBeInstanceOf(EgressRefusedError);
+    expect(refusedBeforeSend(timedOut)).toBe(false);
+    const download = await guardedFileDownload(axios, `http://ops.test:${port}/drip`, 'public-only', { resolve, allowAddress: onlyLocal, timeoutMs: 1000, readHosts: ['ops.test'] }).catch((e: unknown) => e);
+    expect(String((download as Error).message)).toMatch(/did not finish within 1 seconds/);
+    expect(egressRefusalIn(download)).toBeInstanceOf(EgressRefusedError);
+  }, 20_000);
 
   test('#1153: a request is held to a wall clock, which a server sending a byte at a time cannot hold open', async () => {
     // axios's own timeout alone did not stop this response (an idle timer): measured, it completed after 4 s under timeout 1000.

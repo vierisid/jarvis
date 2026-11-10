@@ -208,6 +208,22 @@ export function defaultGateways(routeTable: string): string[] {
   return out;
 }
 
+/** The IPv6 default gateways in a `/proc/net/ipv6_route` table: destination ::/0 with a next hop. */
+export function defaultGateways6(routeTable: string | null): string[] {
+  const out: string[] = [];
+  for (const line of (routeTable ?? '').split('\n')) {
+    const f = line.trim().split(/\s+/u);
+    if (f.length < 10 || f[0] !== '0'.repeat(32) || f[1] !== '00' || !/^[0-9a-f]{32}$/iu.test(f[4]!) || /^0+$/u.test(f[4]!)) continue;
+    const canonical = canonicalAddress(f[4]!.match(/.{4}/gu)!.join(':'));
+    if (canonical) out.push(canonical);
+  }
+  return out;
+}
+
+function ipv6Table(): string | null {
+  try { return readFileSync('/proc/net/ipv6_route', 'utf8'); } catch { return null; }
+}
+
 /** True inside a Docker or Podman container (their marker files). */
 function inContainer(): boolean {
   return existsSync('/.dockerenv') || existsSync('/run/.containerenv');
@@ -225,7 +241,16 @@ export function ownAddresses(env: Record<string, string | undefined> = process.e
   routeTable: () => string | null = () => { try { return inContainer() ? readFileSync('/proc/net/route', 'utf8') : null; } catch { return null; } }): Set<string> {
   const out = interfaceAddresses();
   const table = routeTable();
-  if (table) for (const gateway of defaultGateways(table)) out.add(gateway);
+  if (table) {
+    // The host's end of a Docker or Podman bridge: the default bridge's
+    // 172.17.0.1, and the default gateway when it is in the bridges' default
+    // pool (172.16.0.0/12). A gateway outside it is a LAN router (host or
+    // macvlan networking, Podman's pasta), which a self-hosted install may
+    // reach; a compose network's other bridges are named in JARVIS_HOST_ADDRESSES.
+    out.add('172.17.0.1');
+    for (const gateway of defaultGateways(table)) if (inRange(v4Bytes(gateway)!, v4Bytes('172.16.0.0')!, 12, 8)) out.add(gateway);
+    for (const gateway of defaultGateways6(ipv6Table())) out.add(gateway);
+  }
   for (const raw of `${env[HOST_ADDRESSES_ENV] ?? ''},${env.JARVIS_HOST_ADDRESSES ?? ''}`.split(',')) {
     const canonical = raw.trim() === '' ? null : canonicalAddress(raw.trim());
     if (canonical) out.add(canonical);
@@ -552,7 +577,11 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     if (refused) throw redirected && !refused.afterSend ? new EgressRefusedError(refused.message, { afterSend: true }) : refused;
     if (wall?.aborted) {
       // Whatever axios made of the abort ("canceled"): the step fails naming the cap. It may have been sent.
-      throw new Error(`HTTP request did not finish within ${Math.round(wallMs / 1000)} seconds, the most a workflow request may take; it may have reached the server`);
+      // A refusal after sending: the pieces fail the step on it (never retried,
+      // continued past or read as a server answer), the file processor fails
+      // the step rather than send it without its file, and a tracked send
+      // stays uncertain (#1153 review).
+      throw new EgressRefusedError(`HTTP request did not finish within ${Math.round(wallMs / 1000)} seconds, the most a workflow request may take; it may have reached the server`, { afterSend: true });
     }
     // axios's own wording for a body past maxContentLength.
     const message = (error as { message?: unknown } | null)?.message;

@@ -54,6 +54,9 @@ test('#1153: a file field is fetched only from a host on the flow read list, whi
   } finally { d.stop(); }
   // No workflow to ask, or a list that cannot be read: nothing is fetched.
   await expect(fileProcessor({}, 'https://files.example.com/x.pdf')).rejects.toThrow(/no workflow to check its read list against/);
+  // The daemon unreachable: refused, not an empty file the step would send without it (#1153 review).
+  const gone = daemon([]); gone.stop();
+  await expect(fileProcessor({}, 'https://files.example.com/x.pdf', gone.context)).rejects.toThrow(/read list could not be read \(unreachable\)/);
   const broken = daemon(null, 500);
   try { await expect(fileProcessor({}, 'https://files.example.com/x.pdf', broken.context)).rejects.toThrow(/read list could not be read \(500\)/); }
   finally { broken.stop(); }

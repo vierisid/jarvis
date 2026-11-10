@@ -61,9 +61,15 @@ async function handleUrlFile(path: string, context?: { apiUrl: string; engineTok
         // resolved, before Authority is asked, so it reaches only the hosts on
         // the flow's read list, redirects included.
         if (!context) throw new EgressRefusedError('File download refused: there is no workflow to check its read list against')
-        const list = await fetch(new URL('v1/jarvis/read-hosts', context.apiUrl).toString(), { headers: { Authorization: 'Bearer ' + context.engineToken }, redirect: 'error' })
-        const hosts = list.ok ? ((await list.json()) as { hosts?: unknown }).hosts : undefined
-        if (!Array.isArray(hosts) || !hosts.every((h) => typeof h === 'string')) throw new EgressRefusedError('File download refused: the workflow read list could not be read (' + list.status + ')')
+        let hosts: unknown
+        let status = 'unreachable'
+        try {
+            const list = await fetch(new URL('v1/jarvis/read-hosts', context.apiUrl).toString(), { headers: { Authorization: 'Bearer ' + context.engineToken }, redirect: 'error' })
+            status = String(list.status)
+            hosts = list.ok ? ((await list.json()) as { hosts?: unknown }).hosts : undefined
+        }
+        catch { hosts = undefined }
+        if (!Array.isArray(hosts) || !hosts.every((h) => typeof h === 'string')) throw new EgressRefusedError('File download refused: the workflow read list could not be read (' + status + ')')
         const response = await guardedFileDownload(axios, path, egressPolicyFromEnv(), { readHosts: hosts as string[] })
         data = response.data
         header = (name) => typeof response.headers[name] === 'string' ? response.headers[name] : null

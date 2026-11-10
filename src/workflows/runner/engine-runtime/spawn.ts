@@ -257,7 +257,8 @@ export function engineEnv(opts: Omit<SpawnEngineOptions, "expectedDigest">): Rec
   // #1153: the host's own addresses an operator names (its LAN address, which
   // a container cannot see): workflow steps never reach them.
   const hostAddresses = process.env["JARVIS_HOST_ADDRESSES"]?.trim();
-  if (hostAddresses) env[HOST_ADDRESSES_ENV] = hostAddresses.slice(0, 4096);
+  // Whole entries only, at most 64, so a cut never leaves a different address.
+  if (hostAddresses) env[HOST_ADDRESSES_ENV] = hostAddresses.split(",").map((a) => a.trim()).filter(Boolean).slice(0, 64).join(",");
   if (opts.customPiecesPaths?.length) {
     env["AP_CUSTOM_PIECES_PATHS"] = opts.customPiecesPaths.join(":");
   }
