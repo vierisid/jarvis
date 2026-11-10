@@ -98,8 +98,12 @@ export type LLMStreamEvent =
    * `usage` is what the provider already reported before the failure (for
    * example a stream cut off after message_start), so the tokens it already
    * reported are not recorded as zero (#1258).
+   *
+   * `hosted_detail` is set only by the hosted (usejarvis_ai) provider: its own
+   * authored sentence for this account (when usage resumes, where to appeal),
+   * never an upstream body, so a surface that shows no raw error may show it.
    */
-  | { type: 'error'; error: string; code?: LLMErrorCode; retry_after_ms?: number; usage?: LLMUsage };
+  | { type: 'error'; error: string; code?: LLMErrorCode; retry_after_ms?: number; usage?: LLMUsage; hosted_detail?: string };
 
 /** HTTP-aware provider failure used to carry Retry-After into the router. */
 export class LLMProviderError extends Error {
@@ -109,6 +113,8 @@ export class LLMProviderError extends Error {
     readonly retryAfterMs?: number,
     /** Usage the provider reported before failing (#1258). */
     readonly usage?: LLMUsage,
+    /** The hosted provider's authored copy for this account; see the stream event's `hosted_detail`. */
+    readonly hostedDetail?: string,
   ) {
     super(message);
     this.name = 'LLMProviderError';

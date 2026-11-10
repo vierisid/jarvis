@@ -342,6 +342,7 @@ export class UsejarvisAIProvider extends OpenAIProvider {
           yield {
             ...base,
             error: rewritten.message,
+            ...(rewritten.hostedDetail ? { hosted_detail: rewritten.hostedDetail } : {}),
             ...(UsejarvisAIProvider.isRoutingMiss(event.error) ? UsejarvisAIProvider.ROUTING_MISS_RETRY : {}),
           };
         } else {
@@ -445,6 +446,10 @@ export class UsejarvisAIProvider extends OpenAIProvider {
         return 'content_policy';
       case 'restricted':
         return 'restricted';
+      // A model outside the plan is that, whether the proxy answered 403 or
+      // 401: never the credentials (auth), which are the platform's here.
+      case 'model_not_in_plan':
+        return 'forbidden';
       default:
         return null;
     }
@@ -489,11 +494,19 @@ export class UsejarvisAIProvider extends OpenAIProvider {
 
   /** Returns the copy plus the code the event must carry when the kind
    * demands one (null = keep the event's own code and Retry-After). */
-  private async rewriteText(text: string): Promise<{ message: string; code: LLMErrorCode | null }> {
+  private async rewriteText(text: string): Promise<{ message: string; code: LLMErrorCode | null; hostedDetail?: string }> {
     const match = text.match(UsejarvisAIProvider.BASE_ERROR_RE);
     if (!match) return { message: text, code: null };
     const friendly = await this.friendly(Number(match[1] ?? match[2]), match[3] ?? '');
-    return { message: friendly.message, code: UsejarvisAIProvider.codeForKind(friendly.kind) };
+    return { message: friendly.message, code: UsejarvisAIProvider.codeForKind(friendly.kind), hostedDetail: UsejarvisAIProvider.detailFor(friendly) };
+  }
+
+  /** The authored copy a surface may show for this account (when usage
+   * resumes, where to appeal, that a plan is needed). Not for `generic`: that
+   * says nothing beyond the code, and a routing miss is retried anyway. */
+  private static detailFor(friendly: HostedProxyError): string | undefined {
+    if (friendly.kind === 'generic') return undefined;
+    return friendly.copy.charAt(0).toUpperCase() + friendly.copy.slice(1);
   }
 
   private async rewrite(error: unknown): Promise<unknown> {
@@ -511,12 +524,13 @@ export class UsejarvisAIProvider extends OpenAIProvider {
       return new LLMProviderError(friendly.message, code, retry_after_ms);
     }
     const kindCode = UsejarvisAIProvider.codeForKind(friendly.kind);
-    if (kindCode) return new LLMProviderError(friendly.message, kindCode);
+    const detail = UsejarvisAIProvider.detailFor(friendly);
+    if (kindCode) return new LLMProviderError(friendly.message, kindCode, undefined, undefined, detail);
     // Everything else keeps the code and Retry-After the base class read off
     // the response: rewriting the COPY must not cost the manager its pause.
     return error instanceof LLMProviderError
-      ? new LLMProviderError(friendly.message, error.code, error.retryAfterMs)
-      : new LLMProviderError(friendly.message, classifyHttpStatus(status));
+      ? new LLMProviderError(friendly.message, error.code, error.retryAfterMs, undefined, detail)
+      : new LLMProviderError(friendly.message, classifyHttpStatus(status), undefined, undefined, detail);
   }
 }
 

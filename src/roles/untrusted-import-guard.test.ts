@@ -104,6 +104,11 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       // forward is tainted from those same rows, so it runs on the classic
       // path, which does not compact. Provider per-message truncation (Groq)
       // is a separate gap shared by every prompt framer here.
+      // #1313 follow-up: frameGuestMessage, a channel guest's message in a
+      // thread the owner reopened in Brief, on the same terms: framed at read
+      // time in ChatTurnRepository.historyWithForwards from the whole stored
+      // row, and the turn is tainted from those same rows (GUEST_MESSAGE_SOURCE),
+      // so it takes the classic path, which does not compact.
       'vault/conversations.ts',
       'vault/extractor.ts',
     ]);

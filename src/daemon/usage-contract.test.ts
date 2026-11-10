@@ -53,7 +53,7 @@ describe('the daemon and the Usage room agree', () => {
     const { bannerFor } = await import('../../ui/src/v2/rooms/usage/hosted-budget.ts');
     const { restrictionCopy } = await import('../util/hosted-error.ts');
     for (const reason of ['content_policy', 'account_suspended', 'account_banned'] as const) {
-      for (const contact of ['support@usejarvis.test', null, ' x\n<y> ']) {
+      for (const contact of ['support@usejarvis.test', null, ' x\n<y> ', 'a@ex\u202Eample.test\u200B\u0007 z']) {
         const restricted = { reason, contact };
         const room = bannerFor({
           entitled: false,
@@ -68,4 +68,13 @@ describe('the daemon and the Usage room agree', () => {
       }
     }
   });
+});
+
+// #1312 follow-up: the contact now also reaches Brief chat as a failure's
+// headline. Format characters (a bidi override, zero-width) would make the
+// shown address read differently from the one copied, so they go too.
+test('the appeal contact keeps no control or format characters', async () => {
+  const { restrictionCopy } = await import('../util/hosted-error.ts');
+  const copy = restrictionCopy({ reason: 'content_policy', contact: `appeals@ex\u202Eample.test\u200B\u0007 <x>` });
+  expect(copy).toBe('Usejarvis AI is restricted on this account for a usage-policy violation. To appeal, contact appeals@example.test x.');
 });

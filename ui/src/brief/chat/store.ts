@@ -75,7 +75,6 @@ export class ConversationStore {
   private unsaved = new Set<string>();
   private storageKey = '';
   private requestErrors = new Map<string, string>();
-  private dismissedFailures = new Map<string, string>();
   private consumedAttachments = new Map<string, Set<string>>();
   constructor(private readonly storage?: StoragePort) {}
   getSnapshot = () => this.state;
@@ -192,7 +191,7 @@ export class ConversationStore {
     let sweep = false;
     if (this.state.workspaceId !== tabs.workspaceId) {
       this.replay.clear(); this.saved = dictionary(); this.legacy = dictionary(); this.present.clear(); this.unsaved.clear(); sweep = true;
-      this.requestErrors.clear(); this.dismissedFailures.clear();
+      this.requestErrors.clear();
       this.consumedAttachments.clear();
       this.state = { ...this.state, workspaceId: tabs.workspaceId, conversations: dictionary(), persistenceError: null };
       this.storageKey = `jarvis.brief.chat.v1.${encodeURIComponent(tabs.workspaceId)}`;
@@ -267,11 +266,7 @@ export class ConversationStore {
     if (error === null) this.requestErrors.delete(id); else this.requestErrors.set(id, error);
     this.update(id, {}, false);
   }
-  dismissError(id: string) {
-    const turn = latestTurn(this.state.conversations[id]?.turns ?? {});
-    if (turn) this.dismissedFailures.set(id, turn.turnId);
-    this.setError(id, null);
-  }
+  dismissError(id: string) { this.setError(id, null); }
   acceptAttachments(id: string, ids: string[]) {
     const chat = this.state.conversations[id]; if (!chat || !ids.length) return;
     const consumed = this.consumedAttachments.get(id) ?? new Set<string>();
@@ -303,9 +298,10 @@ export class ConversationStore {
   setScroll(id: string, scroll: ChatScroll) { this.update(id, { scroll: { top: Math.max(0, Number.isFinite(scroll.top) ? scroll.top : 0), atBottom: scroll.atBottom } }); }
   private update(id: string, patch: Partial<ConversationState>, persist = true) {
     const chat = this.state.conversations[id]; if (!chat) return;
-    const updated = { ...chat, ...patch }, turn = latestTurn(updated.turns);
-    updated.error = this.requestErrors.get(id) ?? (turn?.state === 'failed' && this.dismissedFailures.get(id) !== turn.turnId
-      ? turn.error?.message ?? 'This response could not finish. You can send a new message to try again.' : null);
+    const updated = { ...chat, ...patch };
+    // Only this window's request errors. A failed turn's message is shown in
+    // its thread (ConversationMessages); repeating it here said it twice.
+    updated.error = this.requestErrors.get(id) ?? null;
     this.state = { ...this.state, conversations: { ...this.state.conversations, [id]: updated } };
     this.markViewed(); this.publish(persist);
   }
@@ -432,11 +428,6 @@ function project(replay: Replay, timestamp: number): Projection {
     else if (payload.kind === 'terminal') turns[turnId] = { ...turn, state: payload.state, error: payload.error };
   }
   return { messages: [...messages.values()].sort(compareMessages), turns, messageSequences, historyIds };
-}
-
-function latestTurn(turns: Record<string, ChatTurn>) {
-  return Object.values(turns).reduce<ChatTurn | undefined>((latest, turn) => !latest || turn.createdAt > latest.createdAt
-    || (turn.createdAt === latest.createdAt && turn.turnId > latest.turnId) ? turn : latest, undefined);
 }
 
 function readLocal(value: unknown): LocalState | null {

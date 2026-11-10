@@ -320,6 +320,15 @@ describe('#791: a toast too long to read whole cannot be approved from the toast
     expect(toast(wide.repeat(Math.floor(fits.length / 2) + 1)).approvable).toBe(false);
   });
 
+  test('a body too long in lines but not in columns is shown whole, without a "..." that cuts nothing', () => {
+    // Two 30-column words wrap onto three lines with the impact, yet the body
+    // is 63 columns, inside the 66 the review body leaves for "... · external".
+    const body = `${'a'.repeat(30)} ${'b'.repeat(30)} cc`;
+    const t = toast(body);
+    expect(t.kind).toBe('approval_review');
+    expect(t.body).toBe(body);
+  });
+
   test('a destructive request is review-only by length too, and keeps its destructive flag', () => {
     const t = approvalToast(makeRequest({ action_category: 'delete_data', context: JSON.stringify({ intent: `Delete ${'x'.repeat(200)}` }) }));
     expect(t.approvable).toBe(false);

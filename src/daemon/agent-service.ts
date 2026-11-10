@@ -83,14 +83,17 @@ import { TaskRegistry } from '../agents/conv/task-registry.ts';
 import { TaskDispatcher, type TaskRunner } from '../agents/conv/task-dispatcher.ts';
 import { DialogueCompactor } from '../agents/conv/dialogue-compactor.ts';
 import type { ConvTaskEvent } from '../agents/conv/conv-orchestrator.ts';
-import { getRecentConversation, getMessages, forwardedMessageIds, frameForward, holdsRecentForward, FORWARDED_MESSAGE_SOURCE } from '../vault/conversations.ts';
+import { getRecentConversation, getMessages, forwardedMessageIds, frameForward, holdsRecentForward, FORWARDED_MESSAGE_SOURCE, GUEST_MESSAGE_SOURCE, briefTurnMessageIds } from '../vault/conversations.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
-import { withChannelConversationTaint } from './channel-service.ts';
+import { CHANNEL_GUEST_CONVERSATION_SOURCE, withChannelConversationTaint } from './channel-service.ts';
 import { PEBBLE_CHANNEL, PEBBLE_DIALOGUE_WINDOW_MS, recordPebbleExchange } from './pebble-dialogue.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import type { ScopedChatInput } from '../brief/chat-transport.ts';
 import { commitmentPromptLine } from '../vault/commitment-text.ts';
 import { TurnTaintCarry, taintCarryKey, type TurnTaintLink } from '../agents/turn-taint-carry.ts';
+
+/** Untrusted sources that are someone else's words in the conversation itself: a turn on them teaches nothing. */
+const OTHERS_WORDS = new Set([CHANNEL_GUEST_CONVERSATION_SOURCE, GUEST_MESSAGE_SOURCE, FORWARDED_MESSAGE_SOURCE]);
 
 export class AgentService implements Service, IAgentService {
   name = 'agent';
@@ -332,7 +335,13 @@ export class AgentService implements Service, IAgentService {
     try {
       return withMemoryRecall(() => {
         const inner = this.streamMessageInner(text, channel, siteContext, scope, contextKey, conversation, carry);
-        return { stream: bindMemoryRecallStream(trackTurnStream(inner.stream, settle)), onComplete: inner.onComplete };
+        // Nothing is learned from a turn on someone else's words (#1313
+        // follow-up): a guest's thread, a guest's message or a forward in the
+        // history. The reply can restate them, and extraction would store them
+        // as the owner's facts for every later turn; the guest and forward
+        // paths already learn nothing. Decided here, before either path runs.
+        const learns = !conversation?.untrustedSources?.some(source => OTHERS_WORDS.has(source));
+        return { stream: bindMemoryRecallStream(trackTurnStream(inner.stream, settle)), onComplete: learns ? inner.onComplete : async () => {} };
       });
     } catch (err) {
       settle();
@@ -481,8 +490,10 @@ export class AgentService implements Service, IAgentService {
         const code = err && typeof err === 'object'
           ? (err as { code?: LLMErrorCode }).code
           : undefined;
+        // Only the hosted provider sets it: its own sentence, never a body (#1312 follow-up).
+        const hostedDetail = err && typeof err === 'object' ? (err as { hostedDetail?: unknown }).hostedDetail : undefined;
         console.error('[AgentService] Conv stream error:', errorMsg);
-        yield { type: 'error', error: errorMsg, code };
+        yield { type: 'error', error: errorMsg, code, ...(typeof hostedDetail === 'string' && hostedDetail ? { hosted_detail: hostedDetail } : {}) };
       }
     })();
 
@@ -915,8 +926,12 @@ export class AgentService implements Service, IAgentService {
    */
   private loadGuestDialogue(conversationId: string): LLMMessage[] {
     try {
-      return getMessages(conversationId, { limit: GUEST_HISTORY_MESSAGES + 1 })
-        .filter(m => m.role === 'user' || m.role === 'assistant')
+      // What the owner said in this thread in Brief, and the reply their
+      // assistant gave with their context and tools, is not the guest's or the
+      // group's to read (#1313 follow-up). An unreadable record reads nothing.
+      const brief = briefTurnMessageIds(conversationId);
+      return getMessages(conversationId, { limit: GUEST_HISTORY_MESSAGES + 1 + brief.size })
+        .filter(m => (m.role === 'user' || m.role === 'assistant') && !brief.has(m.id))
         .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
         .slice(-(GUEST_HISTORY_MESSAGES + 1));
     } catch (err) {

@@ -52,7 +52,8 @@ export type FailureEffect = 'none' | 'unknown' | 'partial';
 export type RecoveryStep =
   | 'edit_and_run_again' | 'connect' | 'wait_or_switch_model' | 'bring_online' | 'ask_again' | 'review_authority'
   | 'check_before_running_again' | 'check_earlier_steps' | 'run_again' | 'resend' | 'check_before_resending' | 'open_details'
-  | 'wait_and_run_again' | 'run_again_when_resumed' | 'accept_binding_change' | 'update_recipient' | 'update_desktop_app';
+  | 'wait_and_run_again' | 'run_again_when_resumed' | 'accept_binding_change' | 'update_recipient' | 'update_desktop_app'
+  | 'change_request' | 'appeal_restriction';
 
 export interface FailureLinks {
   runId?: string; flowId?: string; stepName?: string; effectId?: string;
@@ -138,7 +139,9 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   // #1266: a workflow may have so many requests waiting in Needs you; this one would have been the next.
   HUMAN_INPUT_LIMIT: { category: 'not_started', why: `this workflow already has ${HUMAN_INPUT_PENDING_LIMIT} requests waiting for an answer in Needs you. Answer, reject or cancel some of them there, or stop runs waiting on them, first`, step: 'run_again' },
   // #1266: requests are answered in Needs you, the Brief decisions feature, and it is off here.
-  HUMAN_INPUT_UNAVAILABLE: { category: 'missing_binding', why: 'Needs you is off on this Jarvis, so nothing could answer it. Turn on decisions (JARVIS_BRIEF_DECISIONS=1)', step: 'run_again' },
+  // Brief is the only place they are answered, so under JARVIS_DASHBOARD=legacy the flag alone is not enough;
+  // the run's detail (humanInputRefusal) names the cause that applies here.
+  HUMAN_INPUT_UNAVAILABLE: { category: 'missing_binding', why: 'Needs you is off or not ready on this Jarvis, so nothing could answer it. It needs the Brief dashboard (not JARVIS_DASHBOARD=legacy) with decisions on (JARVIS_BRIEF_DECISIONS=1); the details say which applies', step: 'run_again' },
 };
 /** Action codes whose meaning is invalid input or an invalid definition. */
 const INPUT_CODES = new Set(['DESKTOP_INVALID_KEYS', 'SKILL_BAD_PARAMS', 'SKILL_INVALID', 'INVALID_JSON_OUTPUT', 'OUTPUT_SCHEMA_MISMATCH',
@@ -192,6 +195,9 @@ const NEXT: Record<RecoveryStep, string> = {
   accept_binding_change: 'Check the change, then enable or publish the workflow again to accept it.',
   update_recipient: 'Update the recipient in the workflow or in memory, then run it again.',
   update_desktop_app: 'Update Jarvis on that computer, then run it again.',
+  // Waiting does not lift a content policy block or an account restriction.
+  change_request: 'Change what it asks, then try again. If you think it was blocked by mistake, contact support.',
+  appeal_restriction: 'Contact support to appeal, or use your own AI provider.',
 };
 const next = (...steps: RecoveryStep[]) => steps.map(step => ({ step, label: NEXT[step] }));
 /** Recovery steps with their labels, for a reading that adjusts a projected failure. */
@@ -329,7 +335,9 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
           effect === 'none' ? NOTHING : 'Actions it had already taken may have gone through.',
           effect === 'none' ? ['wait_and_run_again'] : ['check_before_running_again'], links, evidence.code, evidence.message ?? evidence.code);
       }
-      const steps: RecoveryStep[] = mapped.category === 'provider_limit' ? ['wait_or_switch_model']
+      const steps: RecoveryStep[] = evidence.code === 'content_policy' ? ['change_request']
+        : evidence.code === 'restricted' ? ['appeal_restriction']
+        : mapped.category === 'provider_limit' ? ['wait_or_switch_model']
         : mapped.category === 'missing_binding' ? ['connect']
         : mapped.category === 'target_offline' ? (effect === 'none' ? ['run_again'] : [])
         : mapped.category === 'invalid_input' ? ['edit_and_run_again'] : [];

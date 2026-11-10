@@ -104,7 +104,9 @@ export function bannerFor(meter: HostedMeter | null): MeterBanner | null {
         : meter.restricted.reason === "account_suspended"
           ? "Usejarvis AI is unavailable while this account is suspended."
           : "Usejarvis AI is restricted on this account for a usage-policy violation.";
-    const contact = (meter.restricted.contact ?? "").replace(/[\r\n\t<>]/g, " ").trim().slice(0, 200);
+    // Same cleaning as restrictionCopy (src/util/hosted-error.ts); usage-contract.test.ts pins the two together.
+    const contact = (meter.restricted.contact ?? "").replace(/\p{Cf}/gu, "").replace(/[\p{Cc}\p{Zl}\p{Zp}<>]/gu, " ")
+      .replace(/\s+/g, " ").trim().slice(0, 200);
     return { tone: "fail", text: `${why} To appeal, contact ${contact || "support"}.` };
   }
   if (!meter.entitled) return null;
