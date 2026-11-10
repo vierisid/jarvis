@@ -287,6 +287,8 @@ export class PreparedOpportunities {
       WHERE id = ? AND state = 'running' AND lease_token = ?`, [message.slice(0, 1000), Date.now(), job.id, job.lease_token]);
   }
   private async drain(): Promise<void> {
+    // The admission wait can outlast the switch (#1314 review): nothing derived is written while awareness is off.
+    if (!awarenessHistoryVisible()) return;
     // Discover a bounded set of retained opportunities without writing legacy feedback.
     const sources = this.db.query<{ suggestion_id: string }, []>(`SELECT h.suggestion_id FROM opportunity_hypotheses h
       WHERE NOT EXISTS (SELECT 1 FROM prepared_opportunities p WHERE p.opportunity_id = h.suggestion_id)

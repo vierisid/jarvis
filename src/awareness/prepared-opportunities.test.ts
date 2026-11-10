@@ -444,3 +444,16 @@ test('nothing is prepared while awareness is off, a drain stops at the next job 
     void a; void b;
   } finally { setScreenCaptureEnabledSource(null); }
 });
+
+test('a drain that starts after awareness turned off writes nothing derived (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  let on = true, calls = 0;
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    source('a');
+    const p = provider({ async chat() { calls++; return { text: JSON.stringify(graph()) }; } });
+    p.kick(); on = false; await p.idle();
+    expect(calls).toBe(0);
+    expect(getDb().query('SELECT id FROM prepared_opportunities').all()).toHaveLength(0);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
