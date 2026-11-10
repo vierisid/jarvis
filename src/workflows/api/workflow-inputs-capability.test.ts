@@ -8,6 +8,7 @@ import { HUMAN_INPUT_PIECE, HUMAN_INPUT_UNAVAILABLE_MESSAGE } from '../runtime/h
 import { getHumanInput, requestHumanInput } from '../runtime/human-input';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { createWorkflowRoutes } from './routes';
+import { configureWorkflowReadiness, graphReadiness } from '../db/repos/flow-readiness';
 
 /**
  * #1266 follow-up (owner, 2026-11-06): workflow input requests are answered in
@@ -110,5 +111,33 @@ describe('asking for input (#1266)', () => {
     // One past its deadline no longer counts either.
     getWorkflowDb().run("UPDATE workflow_human_request SET deadline = ? WHERE id = ?", [Date.now() - 1, second]);
     expect((await ask({ flowId: first.flowId, key: 'k23' })).requestId).toBeString();
+  });
+});
+
+describe('readiness while Needs you is off', () => {
+  const asking = (actionName: string, pieceName = HUMAN_INPUT_PIECE) => ({ name: 'ask', type: 'PIECE', displayName: 'ask',
+    settings: { pieceName, pieceVersion: '0.0.1', actionName, input: {} } });
+  /** The ask sits inside a loop body, so the whole graph is searched, not only the chain. */
+  const graph = (step: ReturnType<typeof asking>) => ({ name: 'trigger', type: 'EMPTY',
+    nextAction: { name: 'each', type: 'LOOP_ON_ITEMS', displayName: 'each', settings: { items: '{{trigger}}' }, firstLoopAction: step } });
+  const humanIssues = (trigger: unknown) => graphReadiness(createFlow({}).id, trigger).issues.filter(i => i.code === 'HUMAN_INPUT_UNAVAILABLE');
+
+  test('a step that asks a person makes the workflow not ready, with the refusal the step would fail with', () => {
+    configureWorkflowReadiness({ humanInputUnavailable: () => HUMAN_INPUT_UNAVAILABLE_MESSAGE });
+    for (const [action, piece] of [['request_input'], ['request_approval'], ['wait_for_approval', '@activepieces/piece-approval']] as const) {
+      const readiness = graphReadiness(createFlow({}).id, graph(asking(action, piece)));
+      expect(readiness.ready).toBe(false);
+      expect(readiness.issues.filter(i => i.code === 'HUMAN_INPUT_UNAVAILABLE')).toEqual([
+        { node: 'ask', path: 'settings.actionName', code: 'HUMAN_INPUT_UNAVAILABLE', message: HUMAN_INPUT_UNAVAILABLE_MESSAGE }]);
+    }
+    // Another action of the same piece asks nobody.
+    expect(humanIssues(graph(asking('something_else')))).toEqual([]);
+  });
+
+  test('with Needs you on, or nothing configured, the same step is no issue', () => {
+    configureWorkflowReadiness({ humanInputUnavailable: () => null });
+    expect(humanIssues(graph(asking('request_input')))).toEqual([]);
+    configureWorkflowReadiness({});
+    expect(humanIssues(graph(asking('request_input')))).toEqual([]);
   });
 });

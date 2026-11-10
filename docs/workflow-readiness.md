@@ -14,6 +14,12 @@ flow again, which pins the current bindings; saving a draft does not. In chat,
 that acceptance needs a person's approval. See
 `docs/workflow-binding-pins.md`.
 
+A step that asks a person (the input piece's `request_input` or
+`request_approval`, or the legacy approval piece) is a `HUMAN_INPUT_UNAVAILABLE`
+issue while Brief decisions (Needs you) is off, with the message the step would
+otherwise fail with mid-run. Turning decisions on clears it; nothing else needs
+to change.
+
 Single-step previews validate the selected node using its saved sample input
 override. Other unfinished nodes retain identity/scope checks but do not need
 activation-ready inputs or bindings. Whole-workflow runs and publication still

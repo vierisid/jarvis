@@ -5283,6 +5283,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // the pin pass below, so the flag is read here as well.
       machines: () => sidecarManager.listSidecars(),
       localTools: () => !config.noLocalTools && !isNoLocalTools(),
+      // A step that asks a person cannot be answered while Brief decisions is
+      // off, so such a workflow is not ready (the step's own refusal, earlier).
+      humanInputUnavailable: () => briefCapabilities.snapshot().capabilities.decisions.enabled ? null : HUMAN_INPUT_UNAVAILABLE_MESSAGE,
     });
     // Q-05: an enabled flow without pins (one enabled before this build) is
     // pinned to the bindings it runs against now, before any trigger fires.

@@ -7,7 +7,8 @@ import { bindingPinIssues } from './binding-pins';
 import { flowIngredientIssues, hasFlowIngredients } from './composition-ingredients';
 import { managedConnectionMisuse, managedSourceFor } from '../../credentials/adapter';
 import { ensureRunExecutionConfig, type FlowRun, type RunExecutionConfig } from './flow-run';
-import { applyInputOverrides } from '../flow-graph';
+import { applyInputOverrides, walkFlowNodes } from '../flow-graph';
+import { HUMAN_INPUT_UNAVAILABLE_CODE, isHumanInputStep } from '../../runtime/human-input-contract';
 import type { FlowTriggerNode } from './flow-version';
 
 export { configureWorkflowReadiness, type ReadinessServices } from './readiness-services';
@@ -172,9 +173,28 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
 function withIngredients(flowId: string, trigger: unknown, readiness: WorkflowReadiness): WorkflowReadiness {
   // Avoid traversing malformed/oversized graphs a second time.
   if (readiness.issues.some(i => i.code === 'LIMIT')) return readiness;
-  const issues = flowIngredientIssues(flowId, trigger, workflowReadinessServices()?.pieces)
-    .map(message => ({ node: 'trigger', path: 'ingredients', code: 'INGREDIENT', message }));
+  const issues = [
+    ...flowIngredientIssues(flowId, trigger, workflowReadinessServices()?.pieces)
+      .map(message => ({ node: 'trigger', path: 'ingredients', code: 'INGREDIENT', message })),
+    ...humanInputIssues(trigger),
+  ];
   return { ...readiness, ready: readiness.ready && issues.length === 0, issues: [...readiness.issues, ...issues].slice(0, 100) };
+}
+
+/**
+ * A step that asks a person (an input form or an approval) cannot be answered
+ * while Brief decisions is off: the step would fail with
+ * HUMAN_INPUT_UNAVAILABLE after the steps before it had already run. So the
+ * workflow is not ready, with the same message, before anything starts.
+ * Asked of the live setting each time, so turning decisions on is enough.
+ */
+function humanInputIssues(trigger: unknown): Array<{ node: string; path: string; code: string; message: string }> {
+  const unavailable = workflowReadinessServices()?.humanInputUnavailable?.() ?? null;
+  if (unavailable === null) return [];
+  return walkFlowNodes(trigger as FlowTriggerNode)
+    .filter(node => node.type === 'PIECE' && isHumanInputStep(node.settings?.pieceName, node.settings?.actionName))
+    .map(node => ({ node: typeof node.name === 'string' ? node.name : '<unnamed>', path: 'settings.actionName',
+      code: HUMAN_INPUT_UNAVAILABLE_CODE, message: unavailable }));
 }
 
 export function graphReadiness(flowId: string, trigger: unknown): WorkflowReadiness {
