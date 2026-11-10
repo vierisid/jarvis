@@ -323,13 +323,12 @@ describe('UsejarvisAIProvider', () => {
     expect(err?.hosted_detail).not.toMatch(/\(401\)|blocked|sk-uj/);
   });
 
-  it('a model outside the plan carries no hosted detail, whatever status it came with', async () => {
+  it('a model outside the plan is forbidden with its detail, whatever status it came with, never a credential failure', async () => {
     const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc', { restriction: async () => null });
     for (const [status, message] of [[403, 'team_model_access_denied'], [401, 'model uj-x not allowed for this key']] as const) {
       globalThis.fetch = (async () => jsonResponse(status, { error: { message } })) as unknown as typeof fetch;
       const thrown = await provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-x' }).catch((e) => e);
-      expect(thrown.message).toMatch(/not included in your plan/);
-      expect(thrown.hostedDetail).toBeUndefined();
+      expect(thrown).toMatchObject({ code: 'forbidden', hostedDetail: 'That model is not included in your plan.' });
     }
   });
 

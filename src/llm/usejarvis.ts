@@ -446,6 +446,10 @@ export class UsejarvisAIProvider extends OpenAIProvider {
         return 'content_policy';
       case 'restricted':
         return 'restricted';
+      // A model outside the plan is that, whether the proxy answered 403 or
+      // 401: never the credentials (auth), which are the platform's here.
+      case 'model_not_in_plan':
+        return 'forbidden';
       default:
         return null;
     }
@@ -499,11 +503,9 @@ export class UsejarvisAIProvider extends OpenAIProvider {
 
   /** The authored copy a surface may show for this account (when usage
    * resumes, where to appeal, that a plan is needed). Not for `generic`: that
-   * says nothing beyond the code, and a routing miss is retried anyway. Not
-   * for `model_not_in_plan` either: it travels as `forbidden` or `auth`, and
-   * a reader of the detail would take the latter for an inactive plan. */
+   * says nothing beyond the code, and a routing miss is retried anyway. */
   private static detailFor(friendly: HostedProxyError): string | undefined {
-    if (friendly.kind === 'generic' || friendly.kind === 'model_not_in_plan') return undefined;
+    if (friendly.kind === 'generic') return undefined;
     return friendly.copy.charAt(0).toUpperCase() + friendly.copy.slice(1);
   }
 

@@ -31,6 +31,10 @@ export function briefChatFailure(error: unknown, toolsRan: boolean): { code: str
       ? 'Actions it had already taken may have gone through.' : 'Nothing was done.'} Check your plan in Billing.` };
   }
   const failure = projectFailure({ source: 'provider', code }, { label: 'Your request', sideEffects: toolsRan });
+  // A model outside the hosted plan: waiting does not help.
+  if (hosted && code === 'forbidden') {
+    return { code: 'provider_forbidden', message: `Your request failed. ${hosted} ${failure.outcome} Choose another model, or check your plan in Billing.` };
+  }
   // The detail already names where to appeal; the generic step would name a second place.
   if (hosted && code === 'restricted') {
     return { code: 'provider_restricted', message: `Your request failed. ${hosted} ${failure.outcome} You can also use your own AI provider.` };

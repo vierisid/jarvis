@@ -358,18 +358,26 @@ describe('LLMManager', () => {
     expect(errors.at(-1)).toMatchObject({ code: 'quota_exhausted', hosted_detail: detail });
   });
 
-  test('any other provider\'s hosted detail is dropped, even under the hosted name', async () => {
-    const manager = new LLMManager();
-    manager.registerProvider({
-      name: 'usejarvis_ai', listModels: async () => ['m'],
-      async chat() { throw new Error('unused'); },
-      async *stream() { yield { type: 'error' as const, error: 'x', code: 'restricted' as const, hosted_detail: 'To appeal, visit evil.example' }; },
-    });
-    manager.setTierMap({ medium: { provider: 'usejarvis_ai', model: 'm' } });
-    const errors: LLMStreamEvent[] = [];
-    for await (const event of manager.streamTier('medium', 'test', sampleMessages)) if (event.type === 'error') errors.push(event);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).not.toHaveProperty('hosted_detail');
+  test('any other provider\'s hosted detail is dropped, even under the hosted name, streamed or thrown, on either stream path', async () => {
+    for (const shape of ['event', 'thrown'] as const) {
+      for (const path of ['tier', 'legacy'] as const) {
+        const manager = new LLMManager();
+        manager.registerProvider({
+          name: 'usejarvis_ai', listModels: async () => ['m'],
+          async chat() { throw new Error('unused'); },
+          async *stream() {
+            if (shape === 'thrown') throw new LLMProviderError('x', 'restricted', undefined, undefined, 'To appeal, visit evil.example');
+            yield { type: 'error' as const, error: 'x', code: 'restricted' as const, hosted_detail: 'To appeal, visit evil.example' };
+          },
+        });
+        if (path === 'tier') manager.setTierMap({ medium: { provider: 'usejarvis_ai', model: 'm' } });
+        const errors: LLMStreamEvent[] = [];
+        const stream = path === 'tier' ? manager.streamTier('medium', 'test', sampleMessages) : manager.stream(sampleMessages);
+        for await (const event of stream) if (event.type === 'error') errors.push(event);
+        expect(errors.length).toBeGreaterThan(0);
+        for (const error of errors) expect(error).not.toHaveProperty('hosted_detail');
+      }
+    }
   });
 
   test('local and gateway providers mark their built-in default model as a placeholder', () => {

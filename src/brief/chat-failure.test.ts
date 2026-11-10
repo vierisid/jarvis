@@ -39,6 +39,11 @@ test('a hosted failure keeps its authored detail, and its next step fits what ha
   const quota = briefChatFailure(new LLMProviderError('x', 'quota_exhausted', undefined, undefined, 'Your included AI usage is used up for this window (resumes 13:05 UTC).'), false);
   expect(quota.message).toContain('resumes 13:05 UTC');
 
+  const model = briefChatFailure(new LLMProviderError('x', 'forbidden', undefined, undefined, 'That model is not included in your plan.'), false);
+  expect(model).toMatchObject({ code: 'provider_forbidden' });
+  expect(model.message).toContain('That model is not included in your plan. Nothing was done. Choose another model');
+  expect(model.message).not.toContain('Wait for the limit');
+
   // No active hosted plan is not an AI-settings credential problem.
   const inactive = briefChatFailure(new LLMProviderError('x', 'auth', undefined, undefined, 'Usejarvis AI is not active on this account - an active plan is required.'), false);
   expect(inactive.code).toBe('provider_plan_inactive');
