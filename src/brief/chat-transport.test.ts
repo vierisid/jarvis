@@ -359,3 +359,19 @@ test('provider failure after a tool warns to check effects before repeating work
     expect(JSON.stringify(failure)).not.toContain('Nothing was changed');
   } finally { f.transport.stop(); await f.transport.idle(); }
 });
+
+// #1312 follow-up: the hosted provider's authored sentence (where to appeal)
+// reaches the persisted failure; the raw body still never does.
+test('a hosted restriction keeps its appeal contact through persisted replay', async () => {
+  const f = fixture(); const owner = f.client(); const a = f.input('hosted-restricted');
+  try {
+    await f.send(owner, 'brief_chat_send', a);
+    f.push(a.turnId, { type: 'error', code: 'restricted', error: 'SECRET_PROVIDER_BODY',
+      hosted_detail: 'Usejarvis AI is restricted on this account for a usage-policy violation. To appeal, contact appeals@x.test.' });
+    await f.transport.idle();
+    const terminal = f.transport.repository.snapshot(a.conversationId, 0).events.find(e => e.payload.kind === 'terminal')!.payload;
+    expect(terminal).toMatchObject({ state: 'failed', error: { code: 'provider_restricted' } });
+    expect(JSON.stringify(terminal)).toContain('To appeal, contact appeals@x.test.');
+    expect(JSON.stringify([...f.frames.values()])).not.toContain('SECRET_PROVIDER_BODY');
+  } finally { f.transport.stop(); await f.transport.idle(); }
+});

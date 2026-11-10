@@ -15,12 +15,22 @@ const providerFailureCodes = new Set([
   'provider_background_throttled', 'provider_auth', 'provider_forbidden', 'provider_rate_limit',
   'provider_network', 'provider_bad_request', 'provider_unsupported_tools', 'provider_not_found',
   'provider_server', 'provider_quota_exhausted', 'provider_content_policy', 'provider_restricted',
+  'provider_plan_inactive',
 ]);
-// Failures the user fixes in the AI provider settings (credentials, model, plan).
-const providerSettingsCodes = new Set([
-  'provider_auth', 'provider_forbidden', 'provider_rate_limit', 'provider_quota_exhausted',
-  'provider_not_found', 'provider_unsupported_tools', 'provider_restricted',
-]);
+// Where the person fixes each failure (src/brief/chat-failure.ts). Credentials
+// and models are AI settings. Hosted usage and plans are Usage and Billing:
+// the managed Usejarvis AI row in AI settings is read-only. A restriction is
+// appealed to the contact its message names and a content policy block is
+// changed in the request, so neither links anywhere.
+const failureLinks: Record<string, { label: string; target: (typeof DESTINATIONS)[keyof typeof DESTINATIONS]["legacy"] }> = {
+  provider_auth: { label: "Open AI settings", target: DESTINATIONS.credentials.legacy },
+  provider_forbidden: { label: "Open AI settings", target: DESTINATIONS.credentials.legacy },
+  provider_rate_limit: { label: "Open AI settings", target: DESTINATIONS.credentials.legacy },
+  provider_not_found: { label: "Open AI settings", target: DESTINATIONS.credentials.legacy },
+  provider_unsupported_tools: { label: "Open AI settings", target: DESTINATIONS.credentials.legacy },
+  provider_quota_exhausted: { label: "Open usage", target: DESTINATIONS.usage.legacy },
+  provider_plan_inactive: { label: "Open billing", target: DESTINATIONS.billing.legacy },
+};
 // The daemon's other turn failures, each with copy it wrote itself (src/brief/chat-transport.ts,
 // src/brief/chat-failure.ts, src/vault/chat-turns.ts): never an upstream body.
 const authoredFailureCodes = new Set(['generation_failed', 'attachment_unavailable', 'interrupted']);
@@ -118,8 +128,8 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
             {message?.content && <ReplyMarkdown text={message.content}/>}
             {(failed || cancelled) && <p className="brief-message-notice" data-error={failed} data-reading-anchor="terminal">
               {failed ? failureNotice(turn.error) : "Response stopped."}{message?.content ? " The partial answer is kept above." : ""}</p>}
-            {failed && providerSettingsCodes.has(turn.error?.code ?? '') &&
-              <a data-provider-settings href={targetHref(window.location.href, DESTINATIONS.credentials.legacy)}>Open AI settings</a>}
+            {failed && Object.hasOwn(failureLinks, turn.error?.code ?? '') &&
+              <a data-provider-settings href={targetHref(window.location.href, failureLinks[turn.error!.code!]!.target)}>{failureLinks[turn.error!.code!]!.label}</a>}
             {turn?.state === "completed" && !message?.content && <p className="brief-message-notice" data-reading-anchor="terminal">Finished without a text reply.</p>}
           </article>;
         })}

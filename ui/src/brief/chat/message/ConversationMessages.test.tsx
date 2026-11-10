@@ -195,3 +195,21 @@ test('every failure the daemon authors is shown in the thread, where the compose
   expect(host.textContent).not.toContain('PRIVATE_DETAIL');
   expect(host.querySelector('.brief-message-notice[data-error]')?.textContent).toContain('This response could not finish.');
 });
+
+test('hosted failures link to where they are fixed, and a restriction or policy block links nowhere', async () => {
+  const link = async (code: string) => {
+    setTurn({state:'failed',error:{code,message:`Your request failed. Detail for ${code}.`}});
+    await render();
+    const anchor = host.querySelector<HTMLAnchorElement>('a[data-provider-settings]');
+    if (!anchor) return null;
+    const href = new URL(anchor.getAttribute('href')!);
+    return { label: anchor.textContent, tab: href.searchParams.get('settingsTab'), hash: href.hash };
+  };
+  expect(await link('provider_restricted')).toBeNull();
+  expect(await link('provider_content_policy')).toBeNull();
+  expect(await link('provider_quota_exhausted')).toEqual({ label: 'Open usage', tab: null, hash: '#/_room_usage' });
+  expect(await link('provider_plan_inactive')).toEqual({ label: 'Open billing', tab: 'billing', hash: '#/_room_settings' });
+  expect(host.querySelector('.brief-message-notice[data-error]')?.textContent).toContain('Detail for provider_plan_inactive.');
+  expect(await link('provider_auth')).toEqual({ label: 'Open AI settings', tab: 'llm', hash: '#/_room_settings' });
+  expect(await link('provider_network')).toBeNull();
+});

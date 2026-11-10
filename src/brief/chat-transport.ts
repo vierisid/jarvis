@@ -286,7 +286,7 @@ export class BriefChatTransport implements BriefProvider {
             fullText += text;
             this.emit(this.repository.text(turn, text));
           } else if (event.type === 'tool_call') { toolsRan = true; afterTool = true; progress('started'); }
-          else if (event.type === 'error') throw new LLMProviderError(event.error, event.code ?? 'unknown');
+          else if (event.type === 'error') throw new LLMProviderError(event.error, event.code ?? 'unknown', undefined, undefined, event.hosted_detail);
           else if (event.type === 'done') { done = true; break; }
         }
         signal.throwIfAborted();

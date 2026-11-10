@@ -1,5 +1,5 @@
 import { getLLMErrorCode, LLMProviderError } from '../llm/provider';
-import { failureText, projectFailure } from '../failures/projection';
+import { failureDetail, failureText, projectFailure } from '../failures/projection';
 
 const providerCodes = new Set([
   'background_throttled', 'auth', 'forbidden', 'rate_limit', 'network', 'bad_request',
@@ -11,6 +11,11 @@ const providerCodes = new Set([
  * Only a model stream's typed error is a provider failure: anything else the
  * turn throws (speech, storage, a task) would otherwise be read for words like
  * "401" or "not found" and blamed on the AI provider.
+ *
+ * The hosted provider's own sentence for this account (`hostedDetail`: when
+ * usage resumes, where to appeal, that a plan is needed) is authored copy too,
+ * so it says what happened in place of the generic headline. A hosted `auth` is no active plan, not a
+ * credential to fix in AI settings, so it gets a code of its own.
  */
 export function briefChatFailure(error: unknown, toolsRan: boolean): { code: string; message: string } {
   const code = error instanceof LLMProviderError ? getLLMErrorCode(error) : 'unknown';
@@ -20,6 +25,11 @@ export function briefChatFailure(error: unknown, toolsRan: boolean): { code: str
       ? 'This response could not finish. Check what earlier actions did before sending another request.'
       : 'This response could not finish. You can send a new message to try again.',
   };
+  const hosted = error instanceof LLMProviderError && error.hostedDetail ? failureDetail(error.hostedDetail) : '';
+  if (hosted && code === 'auth') {
+    return { code: 'provider_plan_inactive', message: `Your request failed. ${hosted} ${toolsRan
+      ? 'Actions it had already taken may have gone through.' : 'Nothing was done.'} Check your plan in Billing.` };
+  }
   const failure = projectFailure({ source: 'provider', code }, { label: 'Your request', sideEffects: toolsRan });
-  return { code: `provider_${code}`, message: failureText(failure) };
+  return { code: `provider_${code}`, message: failureText(hosted ? { ...failure, headline: `Your request failed. ${hosted}` } : failure) };
 }

@@ -527,6 +527,7 @@ export class LLMManager {
       type: 'error',
       error,
       code: finalFailure?.code ?? classifyErrorString(error),
+      ...(finalFailure?.hosted_detail ? { hosted_detail: finalFailure.hosted_detail } : {}),
       ...(finalFailure?.retry_after_ms !== undefined
         ? { retry_after_ms: finalFailure.retry_after_ms }
         : {}),
@@ -596,6 +597,8 @@ export class LLMManager {
   ): AsyncIterable<LLMStreamEvent> {
     const errors: string[] = [];
     let lastErrorCode: LLMErrorCode | undefined;
+    // The hosted provider's authored copy for the failure lastErrorCode names, if any.
+    let lastHostedDetail: string | undefined;
     let lastRetryAfterMs: number | undefined;
     const retryBudget = this.newRetryBudget();
     for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
@@ -611,6 +614,7 @@ export class LLMManager {
             if (spent) addUsage(spent, event.usage);
             errors.push(`attempt ${attempt}: ${event.error}`);
             lastErrorCode = event.code ?? classifyErrorString(event.error);
+            lastHostedDetail = event.hosted_detail;
             retryableEvent = this.shouldRetryCode(lastErrorCode);
             eventRetryAfterMs = event.retry_after_ms;
             lastRetryAfterMs = event.retry_after_ms;
@@ -622,6 +626,7 @@ export class LLMManager {
                 type: 'error',
                 error: this.formatFailure(provider.name, errors),
                 code: lastErrorCode,
+                ...(lastHostedDetail ? { hosted_detail: lastHostedDetail } : {}),
                 ...(lastRetryAfterMs !== undefined ? { retry_after_ms: lastRetryAfterMs } : {}),
               };
               return;
@@ -642,6 +647,7 @@ export class LLMManager {
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
         lastErrorCode = err instanceof LLMProviderError ? err.code : classifyErrorString(errorMsg);
+        lastHostedDetail = err instanceof LLMProviderError ? err.hostedDetail : undefined;
         const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
         lastRetryAfterMs = retryAfterMs;
         const shouldRetry = this.shouldRetry(err);
@@ -653,6 +659,7 @@ export class LLMManager {
             type: 'error',
             error: this.formatFailure(provider.name, errors),
             code: lastErrorCode,
+            ...(lastHostedDetail ? { hosted_detail: lastHostedDetail } : {}),
             ...(lastRetryAfterMs !== undefined ? { retry_after_ms: lastRetryAfterMs } : {}),
           };
           return;
@@ -666,6 +673,7 @@ export class LLMManager {
       type: 'error',
       error: this.formatFailure(provider.name, errors),
       code: lastErrorCode ?? classifyErrorString(errors.join('\n')),
+      ...(lastHostedDetail ? { hosted_detail: lastHostedDetail } : {}),
       ...(lastRetryAfterMs !== undefined ? { retry_after_ms: lastRetryAfterMs } : {}),
     };
   }
@@ -756,6 +764,8 @@ export class LLMManager {
     // Legacy multi-provider fallback stream (no tier map configured).
     const failures: string[] = [];
     let lastErrorCode: LLMErrorCode | undefined;
+    // The hosted provider's authored copy for the failure lastErrorCode names, if any.
+    let lastHostedDetail: string | undefined;
     let lastRetryAfterMs: number | undefined;
 
     for (const providerName of this.getProviderSequence()) {
@@ -779,6 +789,7 @@ export class LLMManager {
               hasError = true;
               errors.push(`attempt ${attempt}: ${event.error}`);
               lastErrorCode = event.code ?? classifyErrorString(event.error);
+              lastHostedDetail = event.hosted_detail;
               retryableEvent = this.shouldRetryCode(lastErrorCode);
               eventRetryAfterMs = event.retry_after_ms;
               lastRetryAfterMs = event.retry_after_ms;
@@ -790,6 +801,7 @@ export class LLMManager {
                   type: 'error',
                   error: this.formatFailure(providerName, errors),
                   code: lastErrorCode,
+                  ...(lastHostedDetail ? { hosted_detail: lastHostedDetail } : {}),
                   ...(lastRetryAfterMs !== undefined ? { retry_after_ms: lastRetryAfterMs } : {}),
                 };
                 return;
@@ -811,6 +823,7 @@ export class LLMManager {
           const errorMsg = err instanceof Error ? err.message : String(err);
           errors.push(`attempt ${attempt}: ${errorMsg}`);
           lastErrorCode = err instanceof LLMProviderError ? err.code : classifyErrorString(errorMsg);
+          lastHostedDetail = err instanceof LLMProviderError ? err.hostedDetail : undefined;
           const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
           lastRetryAfterMs = retryAfterMs;
 
@@ -824,6 +837,7 @@ export class LLMManager {
               type: 'error',
               error: this.formatFailure(providerName, errors),
               code: lastErrorCode,
+              ...(lastHostedDetail ? { hosted_detail: lastHostedDetail } : {}),
               ...(lastRetryAfterMs !== undefined ? { retry_after_ms: lastRetryAfterMs } : {}),
             };
             return;
@@ -842,6 +856,7 @@ export class LLMManager {
       type: 'error',
       error: aggregated,
       code: lastErrorCode ?? classifyErrorString(aggregated),
+      ...(lastHostedDetail ? { hosted_detail: lastHostedDetail } : {}),
       ...(lastRetryAfterMs !== undefined ? { retry_after_ms: lastRetryAfterMs } : {}),
     };
   }

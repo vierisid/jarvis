@@ -17,3 +17,33 @@ test('untyped errors are never blamed on the provider and unknown codes remain g
   expect(briefChatFailure(new LLMProviderError('secret', 'invalid' as never), false).code).toBe('generation_failed');
   expect(briefChatFailure(new Error('secret'), true).message).toContain('Check what earlier actions did');
 });
+
+// #1312 follow-up: the hosted provider's own sentence for this account (when
+// usage resumes, where to appeal) reaches Brief chat; the raw body never does.
+test('a hosted failure keeps its authored detail, and its next step fits what happened', () => {
+  const restricted = briefChatFailure(new LLMProviderError('Usejarvis AI API error (401): raw', 'restricted', undefined, undefined,
+    'Usejarvis AI is restricted on this account for a usage-policy violation. To appeal, contact appeals@x.example.'), false);
+  expect(restricted.code).toBe('provider_restricted');
+  expect(restricted.message).toContain('To appeal, contact appeals@x.example.');
+  expect(restricted.message).toContain('Contact support to appeal');
+  expect(restricted.message).not.toContain('Wait for the limit to reset');
+
+  const blocked = briefChatFailure(new LLMProviderError('x', 'content_policy', undefined, undefined, 'This request was blocked by the Usejarvis AI content policy and was not processed.'), false);
+  expect(blocked.message).toContain('Change what it asks');
+  expect(blocked.message).not.toContain('Wait for the limit to reset');
+
+  const quota = briefChatFailure(new LLMProviderError('x', 'quota_exhausted', undefined, undefined, 'Your included AI usage is used up for this window (resumes 13:05 UTC).'), false);
+  expect(quota.message).toContain('resumes 13:05 UTC');
+
+  // No active hosted plan is not an AI-settings credential problem.
+  const inactive = briefChatFailure(new LLMProviderError('x', 'auth', undefined, undefined, 'Usejarvis AI is not active on this account - an active plan is required.'), false);
+  expect(inactive.code).toBe('provider_plan_inactive');
+  expect(inactive.message).toContain('an active plan is required');
+  expect(inactive.message).not.toContain('Reconnect');
+});
+
+test('without hosted detail nothing extra is added, and the detail is bounded and redacted', () => {
+  expect(briefChatFailure(new LLMProviderError('raw body', 'restricted'), false).message).not.toContain('raw body');
+  const long = briefChatFailure(new LLMProviderError('x', 'restricted', undefined, undefined, `To appeal, contact ${'a'.repeat(5000)}`), false);
+  expect(long.message.length).toBeLessThan(1600);
+});

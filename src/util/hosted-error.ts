@@ -57,6 +57,8 @@ export interface HostedRestriction {
 }
 
 export class HostedProxyError extends Error {
+  /** The authored sentence alone, without the `<label> error (NNN): ` marker (see invariant 2). */
+  readonly copy: string;
   constructor(
     message: string,
     readonly kind: HostedErrorKind,
@@ -64,6 +66,7 @@ export class HostedProxyError extends Error {
   ) {
     super(message);
     this.name = 'HostedProxyError';
+    this.copy = message.replace(/^.*? error \(\d+\): /, '');
   }
 }
 
