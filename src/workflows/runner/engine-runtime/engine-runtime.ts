@@ -507,6 +507,9 @@ export class EngineHandle {
     return reply.response as import("../../runtime/piece-catalog").RawPieceMetadata;
   }
 
+  /** Set by the first `release()`; see there. */
+  private released = false;
+
   /**
    * Per-acquire teardown. Default: kill the subprocess and terminate the
    * sandbox in the registry so subsequent calls from a zombie engine are
@@ -523,6 +526,10 @@ export class EngineHandle {
    */
   async release(): Promise<void> {
     if (this.terminating) return this.terminating;
+    // A handle releases its engine once. A second release of a stale handle
+    // would otherwise park an engine the next run has already taken.
+    if (this.released) return;
+    this.released = true;
     if (this.abandoned || this.inFlight > 0) {
       return this.killAndTerminate();
     }
@@ -791,10 +798,18 @@ export class EngineRuntime {
       // Reusing the warm engine -- cancel its pending eviction; the next
       // release will arm a fresh one.
       this.clearIdleEvictionTimer();
-      const { token, expiresAt } = await this.api.signer.mint(
-        { sandboxId: warm.sandboxId, runId: opts.runId, projectId: opts.projectId },
-        opts.tokenTtlSeconds,
-      );
+      let minted: Awaited<ReturnType<typeof this.api.signer.mint>>;
+      try {
+        minted = await this.api.signer.mint(
+          { sandboxId: warm.sandboxId, runId: opts.runId, projectId: opts.projectId },
+          opts.tokenTtlSeconds,
+        );
+      } catch (e) {
+        // Out of the slot already: retired, or nothing would ever stop it.
+        this.retireEngine(warm);
+        throw e;
+      }
+      const { token, expiresAt } = minted;
       try {
         this.api.registry.rebind(warm.sandboxId, {
           runId: opts.runId,
@@ -804,8 +819,12 @@ export class EngineRuntime {
         });
       } catch (e) {
         // Sandbox was unexpectedly terminated (e.g. proc died and registry
-        // was cleaned up out-of-band). Fall through to a fresh spawn.
-        warm.proc.kill("SIGKILL");
+        // was cleaned up out-of-band). Fall through to a fresh spawn. The
+        // engine may have exited during the mint above: signalling through
+        // a handle whose process was reaped is never risked (as in
+        // `retireEngine`), and its sandbox is revoked whatever state it is in.
+        if (warm.proc.alive()) warm.proc.kill("SIGKILL");
+        this.api.registry.terminate(warm.sandboxId);
         return this.spawnFresh(opts);
       }
       return new EngineHandle(
@@ -989,7 +1008,14 @@ export class EngineRuntime {
       this.retireEngine(engine);
       return;
     }
+    // Already the parked one: a second release of the same handle must not
+    // retire the engine while it stays in the slot.
+    if (this.idleEngine === engine) return;
     if (this.idleEngine === null) {
+      // Its token is revoked while it waits (`SandboxRegistry.park`): the
+      // finished run's token would otherwise stay valid until the next
+      // rebind, retirement or idle eviction.
+      this.api.registry.park(engine.sandboxId);
       this.idleEngine = engine;
       this.armIdleEvictionTimer();
       return;

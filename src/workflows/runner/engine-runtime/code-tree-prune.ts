@@ -36,7 +36,7 @@ import { lstatSync, readdirSync, renameSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
-import { CODE_TREE_LEASE_REFRESH_MS, CODE_VERSION_TREE_LIMIT, codeTreeLeased, refreshLeasedCodeTrees } from "./code-materialize";
+import { CODE_LOCKS_DIR, CODE_TREE_LEASE_REFRESH_MS, CODE_VERSION_TREE_LIMIT, codeTreeLeased, refreshLeasedCodeTrees } from "./code-materialize";
 import { measureTree } from "./code-tree-measure";
 import { DEFAULT_RECENTLY_USED_MS } from "./engine-reaper";
 
@@ -141,8 +141,46 @@ export async function pruneCodeTrees(opts: PruneCodeTreesOptions): Promise<Prune
   if (removed.length > 0) {
     opts.log?.(`removed ${removed.length} unused CODE-step tree(s) from ${base}`);
   }
+  await pruneLocks(base, needed, now, recentlyUsedMs);
   const evicted = opts.pinned ? await evictOverBudget(base, opts.pinned, opts, now) : [];
   return { removed: [...removed, ...evicted], evicted };
+}
+
+/**
+ * The kept lockfiles (`CODE_LOCKS_DIR`) of versions that are neither needed
+ * nor have a tree, and were not written within the recent-use window: nothing
+ * installs them again. A needed version's locks stay
+ * when its tree is evicted for size, which is what they are kept for, and so
+ * does any version with a tree (the sweep above has not removed it yet).
+ */
+async function pruneLocks(base: string, needed: ReadonlySet<string>, now: number, recentlyUsedMs: number): Promise<void> {
+  const locks = resolve(base, CODE_LOCKS_DIR);
+  let entries;
+  try {
+    entries = readdirSync(locks, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const doomed = entries
+    .filter((entry) => entry.isDirectory() && VERSION_DIR.test(entry.name) && !needed.has(entry.name))
+    .filter((entry) => {
+      try {
+        lstatSync(resolve(base, entry.name));
+        return false;
+      } catch {
+        // No tree. Kept anyway while written to recently (each install
+        // writes its lock by a rename into the directory): another process
+        // sharing the directory, whose needed versions this one cannot see,
+        // may have just installed it, as the trees' own window allows for.
+        try {
+          return now - lstatSync(resolve(locks, entry.name)).mtimeMs >= recentlyUsedMs;
+        } catch {
+          return false;
+        }
+      }
+    })
+    .map((entry) => resolve(locks, entry.name));
+  await Promise.all(doomed.map((path) => rm(path, { recursive: true, force: true }).catch(() => {})));
 }
 
 async function evictOverBudget(

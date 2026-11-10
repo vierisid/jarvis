@@ -646,6 +646,30 @@ describe("events", () => {
     expect(after.poll({ eventType: "x", since: savedCursor }).events).toHaveLength(1);
   });
 
+  test("an engine hook never runs as some other project when its workflow row is gone", async () => {
+    const acquired: Array<{ runId: string; projectId: string }> = [];
+    const engine = {
+      acquire: async (opts: { runId: string; projectId: string }) => {
+        acquired.push(opts);
+        return { executeTriggerHook: async (hook: string) => hook === "ON_ENABLE"
+          ? { listeners: [], scheduleOptions: { cronExpression: "* * * * *" } } : { output: [] }, release: async () => undefined };
+      },
+    } as unknown as EngineRuntime;
+    const { flowId } = onEvent("x");
+    const d = await daemon(Date.now(), engine);
+    expect(acquired.map(a => a.runId.split("-")[0])).toEqual(["enable"]);
+    // A flow row gone while its version stays (foreign keys normally cascade
+    // the version away too): neither the poll nor the ON_DISABLE hook may
+    // fall back to minting a token for a default project.
+    getWorkflowDb().run("PRAGMA foreign_keys=OFF");
+    getWorkflowDb().run("DELETE FROM flow WHERE id = ?", [flowId]);
+    getWorkflowDb().run("PRAGMA foreign_keys=ON");
+    await d.manager.refresh(flowId);
+    await settle();
+    expect(acquired.map(a => a.runId.split("-")[0])).toEqual(["enable"]);
+    await d.stop();
+  });
+
   test("a workflow deleted while its source is being polled does not take the daemon down", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -913,6 +937,26 @@ describe("a flow whose runs are parked behind its approval cards (#1152)", () =>
     await d.stop();
   });
 
+  test("a sender retrying into the full backlog is one counted row, not a row per retry; a scheduled time stays a row of its own", async () => {
+    const { flowId, versionId } = webhook();
+    const d = await daemon(Date.now());
+    park(flowId, versionId, MAX_DEFERRED_STEPS_PER_FLOW);
+    for (const key of ["r-1", "r-2", "r-3", "r-4", "r-5"]) expect((await post(d, flowId, "{}", { "Idempotency-Key": key })).status).toBe(503);
+    expect(listFlowFires(flowId)).toEqual([expect.objectContaining({ label: "skipped", repeats: 4, dedupeKey: null,
+      detail: expect.objectContaining({ code: "APPROVALS_BACKLOG" }) })]);
+    await d.stop();
+    setCronTimezone("UTC");
+    const timed = schedule("* * * * *");
+    park(timed.flowId, timed.versionId, MAX_DEFERRED_STEPS_PER_FLOW);
+    const s = await daemon(at("2026-10-07T08:59:50Z"));
+    s.tick(timed.flowId, "2026-10-07T09:00:10Z");
+    s.tick(timed.flowId, "2026-10-07T09:01:10Z");
+    // Each time its own keyed row (the daemon's start may also record 08:59).
+    expect(listFlowFires(timed.flowId).slice(0, 2).map(f => [f.label, f.dedupeKey, f.repeats])).toEqual([
+      ["skipped", "2026-10-07T09:01", 0], ["skipped", "2026-10-07T09:00", 0]]);
+    await s.stop();
+  });
+
   test("waits of runs that ended, or whose DEFER was released and not woken, do not count", async () => {
     const { flowId, versionId } = webhook();
     const d = await daemon(Date.now());
@@ -970,6 +1014,37 @@ describe("Pause and Kill (Q-08)", () => {
     await d.stop();
   });
 
+  test("webhook retries while paused fold into one counted row; a delivery started in between begins a new one", async () => {
+    const { flowId } = webhook();
+    const controller = emergency();
+    const d = await daemon(Date.now());
+    controller.pause();
+    for (const key of ["p-1", "p-2", "p-3"]) expect((await post(d, flowId, "{}", { "Idempotency-Key": key })).status).toBe(503);
+    controller.resume();
+    expect(await (await post(d, flowId, "{}", { "Idempotency-Key": "p-4" })).json()).toMatchObject({ outcome: "started" });
+    controller.pause();
+    expect((await post(d, flowId, "{}", { "Idempotency-Key": "p-5" })).status).toBe(503);
+    expect(listFlowFires(flowId).map(f => [f.outcome, f.repeats])).toEqual([["skipped", 0], ["started", 0], ["skipped", 2]]);
+    controller.resume();
+    await d.stop();
+  });
+
+  test("events under Kill fold into one counted row per reason; Pause and Kill never share one", async () => {
+    const { flowId } = publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType: "x" } } });
+    const controller = emergency();
+    const d = await daemon(Date.now());
+    controller.kill();
+    for (const id of ["e-1", "e-2", "e-3"]) d.bus.publish("x", { id });
+    expect(listFlowFires(flowId).map(f => [f.outcome, f.repeats, f.detail?.reason])).toEqual([
+      ["skipped", 2, "Jarvis was stopped with Kill, so this did not run."]]);
+    // A fresh controller, paused (Kill is not left with a plain Resume).
+    emergency().pause();
+    d.bus.publish("x", { id: "e-4" });
+    expect(listFlowFires(flowId).map(f => [f.repeats, f.detail?.reason])).toEqual([
+      [0, "Jarvis was paused, so this did not run."], [2, "Jarvis was stopped with Kill, so this did not run."]]);
+    await d.stop();
+  });
+
   test("an event source is not polled while paused, so its items wait for Resume; a schedule piece time is skipped", async () => {
     setCronTimezone("UTC");
     let polls = 0;
@@ -1010,7 +1085,7 @@ describe("Pause and Kill (Q-08)", () => {
     await d.poll(flowId, "2026-10-07T09:01:10Z");
     expect(runsOf(flowId)).toHaveLength(2);
     expect(listFlowFires(flowId).filter(fire => fire.label === "skipped"))
-      .toEqual([expect.objectContaining({ source: "poll", detail: { reason: "Jarvis was stopped with Kill, so this did not run." } })]);
+      .toEqual([expect.objectContaining({ source: "poll", detail: expect.objectContaining({ reason: "Jarvis was stopped with Kill, so this did not run." }) })]);
     await d.stop();
   });
 

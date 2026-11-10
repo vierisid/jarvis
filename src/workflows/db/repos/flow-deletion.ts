@@ -167,6 +167,18 @@ export function stopEverythingOfFlow(flowId: string, onCardClosed?: (approvalId:
 
 const yieldToEventLoop = () => new Promise<void>((r) => setImmediate(r));
 
+/**
+ * Who hears each workflow card a delete closes, so the dashboard stops
+ * offering it, as the Brief purge's `onCardClosed` does (#1039). Set once by
+ * the daemon for the live database, so every caller of `deleteWorkflow` (the
+ * dashboard route, manage_workflow) is covered without passing it.
+ */
+const cardClosedListeners = new WeakMap<Database, (approvalId: string) => void>();
+export function setDeletedWorkflowCardListener(listener: ((approvalId: string) => void) | null, db: Database = getWorkflowDb()): void {
+  if (listener) cardClosedListeners.set(db, listener);
+  else cardClosedListeners.delete(db);
+}
+
 export type FlowDeleteOutcome =
   | { status: "deleted"; counts: FlowDeleteCounts }
   | { status: "not_found" }
@@ -200,6 +212,11 @@ export async function deleteWorkflow(
   const db = getWorkflowDb();
   const inProject = () => !!db.query("SELECT 1 FROM flow WHERE id = ? AND project_id = ?").get(flowId, projectId);
   if (!inProject()) return { status: "not_found" };
+  const listener = opts.onCardClosed ?? cardClosedListeners.get(db);
+  // A listener that fails must not stop the delete half way.
+  const onCardClosed = listener && ((approvalId: string) => {
+    try { listener(approvalId); } catch (error) { console.error("[Workflow Delete] closed card update failed:", error); }
+  });
   assertFlowDeletable(flowId);
   // Turned off first, as the purge does at acceptance: no trigger starts a
   // run while the delete waits or works through batches, and a delete that
@@ -211,7 +228,7 @@ export async function deleteWorkflow(
   const deadline = Date.now() + (opts.waitMs ?? FLOW_DELETE_WAIT_MS);
   let counts = { ...NO_COUNTS };
   for (;;) {
-    stopEverythingOfFlow(flowId, opts.onCardClosed, db);
+    stopEverythingOfFlow(flowId, onCardClosed, db);
     if (!(await waitForEffectDispatches(flowId, deadline - Date.now()))) return { status: "stopping" };
     // Batches while the history is large. Each is its own transaction, and
     // nothing is deleted while an effect is in flight (one may have started
