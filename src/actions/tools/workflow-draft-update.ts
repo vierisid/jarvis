@@ -5,6 +5,7 @@ import { getFlowVersion, getLatestDraft, updateDraftVersion, type FlowVersion, t
 import { workflowRemovalState } from '../../workflows/db/repos/workflow-removal-state';
 import { compileWorkflow, type ReadinessContext } from '../../workflows/runtime/workflow-readiness';
 import { CODE_STEP_TYPE, walkFlowNodes } from '../../workflows/db/flow-graph';
+import { restoreRedactedCredentials, strandedRedaction } from '../../workflows/runtime/step-credentials';
 
 /** Covers the persisted authoring snapshot, not a recomputed readiness report. */
 export function draftRevision(version: FlowVersion): string {
@@ -89,7 +90,12 @@ export function updateSavedDraft(input: {
     if (!/^[a-f0-9]{64}$/.test(input.expectedRevision) || draftRevision(version) !== input.expectedRevision) fail('draft changed since readback; get the definition again before editing');
     if (!input.context.pieces) fail('installed action schemas are unavailable');
     if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200)) fail('name must be a nonempty string of at most 200 characters');
-    const graph = patchDraftGraph(version.trigger, input.patches);
+    // The model reads credential-taking steps redacted (`versionForModel`):
+    // a value it wrote back unchanged keeps the stored credential, and an edit
+    // that would store the marker in its place is refused (#1153).
+    const graph = restoreRedactedCredentials(version.trigger, patchDraftGraph(version.trigger, input.patches));
+    const stranded = strandedRedaction(version.trigger, graph);
+    if (stranded) fail(`step "${stranded}" would store [redacted] in place of a credential the assistant cannot see; keep that value unchanged, or ask the user to edit it in the workflow editor`);
     assertNoAssistantCode(version.trigger, graph);
     const validation = compileWorkflow(graph, { ...input.context, phase: 'composition' });
     if (!validation.ready) fail('edited graph is invalid: ' + validation.issues.slice(0, 5).map(i => `${i.node} (${i.path}): ${i.message}`).join('; '));

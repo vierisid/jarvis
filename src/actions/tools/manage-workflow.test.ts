@@ -13,7 +13,7 @@ import { createRunFlowHandler, FlowExecutionError, RUN_FLOW } from "../../workfl
 import { asLimit, createManageWorkflowTool } from "./manage-workflow.ts";
 import type { ToolDefinition } from "./registry.ts";
 import { createDraftVersion, getFlowVersion, getLatestDraft, setSampleDataEntry, updateDraftVersion } from "../../workflows/db/repos/flow-version.ts";
-import { updateRun } from "../../workflows/db/repos/flow-run.ts";
+import { createFlowRun, updateRun } from "../../workflows/db/repos/flow-run.ts";
 import {
   UNTRUSTED_CLOSE,
   UNTRUSTED_OPEN,
@@ -172,6 +172,70 @@ describe("manage_workflow tool", () => {
     }
     // The stored version keeps it: the ingress still checks against it.
     expect((getLatestDraft(created.id)!.trigger as unknown as { settings: { input: { secret: string } } }).settings.input.secret).toBe("whsec-s3cret-value");
+  });
+
+  describe("HTTP-step inline credentials (#1153)", () => {
+    const SECRETS = ["k3y-in-url", "t0ken-in-header", "pa55-in-auth"];
+    const httpInput = () => ({ method: "GET", url: "https://api.example.com/x?api_key=k3y-in-url",
+      headers: { Authorization: "Bearer t0ken-in-header", Accept: "application/json" }, authType: "BASIC",
+      authFields: { username: "me", password: "pa55-in-auth" } });
+    const graph = () => ({ name: "trigger", type: "EMPTY", displayName: "Start", settings: {}, valid: true,
+      nextAction: { name: "call", type: "PIECE", displayName: "Call", valid: true,
+        settings: { pieceName: "@activepieces/piece-http", pieceVersion: "0.1.0", actionName: "send_request", input: httpInput() } } });
+    async function seeded() {
+      const created = (await call("create", { name: "caller", empty: true })) as { id: string };
+      const draft = getLatestDraft(created.id)!;
+      updateDraftVersion(draft.id, { trigger: graph() as never });
+      setSampleDataEntry(draft.id, "call", { type: "PIECE", status: "SUCCEEDED", input: httpInput(), output: { ok: true } });
+      return created.id;
+    }
+    async function definition(flow: string): Promise<string> {
+      let text = "", cursor: string | null = null;
+      do {
+        const page = await call("get", { flow, view: "definition", ...(cursor ? { cursor } : {}) }) as { content: string; nextCursor: string | null };
+        text += page.content; cursor = page.nextCursor;
+      } while (cursor);
+      return text;
+    }
+
+    test("get never shows the model a step's token, password or key, in its input or its sample data", async () => {
+      const flow = await seeded();
+      const got = JSON.stringify(await call("get", { flow }));
+      const paged = await definition(flow);
+      for (const secret of SECRETS) { expect(got).not.toContain(secret); expect(paged).not.toContain(secret); }
+      // Redacted in place: the model still sees where the request goes and that it is authenticated.
+      expect(got).toContain("api_key=[redacted]");
+      expect(JSON.parse(paged).sampleData.call.input.headers).toEqual({ Authorization: "[redacted]", Accept: "application/json" });
+      // The stored draft keeps them: the step still runs with them.
+      expect(JSON.stringify(getLatestDraft(flow)!.trigger)).toContain("t0ken-in-header");
+    });
+
+    test("get_run redacts a run recorded before step inputs were redacted on the way in", async () => {
+      const flow = await seeded();
+      const queued = { run_id: createFlowRun({ flowId: flow, flowVersionId: getLatestDraft(flow)!.id }).id };
+      updateRun(queued.run_id, { steps: { call: { output: { type: "PIECE", status: "SUCCEEDED", input: httpInput(), output: { ok: true } } } } });
+      const detail = JSON.stringify(await call("get_run", { run_id: queued.run_id }));
+      for (const secret of SECRETS) expect(detail).not.toContain(secret);
+      expect(detail).toContain('"ok":true');
+    });
+
+    test("an update that writes the redacted view back keeps the stored credentials; one that strands the marker is refused", async () => {
+      configureWorkflowReadiness({ pieces: new PieceCatalog([...sampleCatalog().list(),
+        { name: "@activepieces/piece-http", displayName: "HTTP", description: "", actions: { send_request: { name: "send_request", displayName: "Send", description: "" } } }]) });
+      const flow = await seeded();
+      const read = JSON.parse(await definition(flow)) as { id: string; revision: string; trigger: { nextAction: { settings: { input: Record<string, unknown> } } } };
+      const shown = read.trigger.nextAction.settings.input;
+      // Writes back the whole input as read, changing only Accept.
+      await call("update", { flow, version_id: read.id, expected_revision: read.revision,
+        patches: [{ op: "replace", path: "/nextAction/settings/input", value: { ...shown, headers: { ...(shown.headers as object), Accept: "text/plain" } } }] });
+      const saved = getLatestDraft(flow)!.trigger.nextAction!.settings!.input!;
+      expect(saved).toEqual({ ...httpInput(), headers: { Authorization: "Bearer t0ken-in-header", Accept: "text/plain" } });
+      // A changed URL that keeps `api_key=[redacted]` would store the marker as the key.
+      const again = JSON.parse(await definition(flow)) as { id: string; revision: string };
+      await expect(call("update", { flow, version_id: again.id, expected_revision: again.revision,
+        patches: [{ op: "replace", path: "/nextAction/settings/input/url", value: "https://api.example.com/y?api_key=[redacted]" }] })).rejects.toThrow(/would store \[redacted\]/);
+      expect(getLatestDraft(flow)!.trigger.nextAction!.settings!.input!.url).toBe("https://api.example.com/x?api_key=k3y-in-url");
+    });
   });
 
   test("run enqueues a RUN_FLOW job and returns run_id", async () => {

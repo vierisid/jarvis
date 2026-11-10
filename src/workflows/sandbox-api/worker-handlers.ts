@@ -21,6 +21,8 @@ import type {
 } from "./contracts";
 import { getFlowRun, updateRun, type FlowRunStatus } from "../db/repos/flow-run";
 import { getRunCancellation } from "../db/repos/run-cancellation";
+import { getFlowVersion } from "../db/repos/flow-version";
+import { redactRunSteps } from "../runtime/step-credentials";
 
 const PER_RUN_LOG_BUFFER_MAX = 200;
 
@@ -137,9 +139,13 @@ export class DefaultWorkerHandlers
       if (input.step) {
         const existingRow = getFlowRun(input.flowRun.id);
         const existingSteps = (existingRow?.steps ?? {}) as Record<string, unknown>;
+        // An HTTP or GraphQL step's recorded input holds the token or password
+        // it was given inline; run history keeps it redacted (#1153). The
+        // graph is the run's own version, from the run row, not the engine.
+        const trigger = existingRow ? getFlowVersion(existingRow.flowVersionId)?.trigger : undefined;
         patch.steps = {
           ...existingSteps,
-          [input.step.name]: { output: input.step.output },
+          ...redactRunSteps({ [input.step.name]: { output: input.step.output } }, trigger),
         };
       }
       updateRun(input.flowRun.id, patch);
