@@ -77,9 +77,9 @@ export function DashboardRoot({ integration = false }: { integration?: boolean }
   const legacy = <AppShellV2 sharedRoomActions />;
   const lastRoute = useRef<BriefRoute>({ room: 'today', selection: {} });
   if (entry.kind === 'brief') lastRoute.current = entry.route;
-  const hostedBrief = initialDescriptor?.installMode === 'hosted' && initialDescriptor.dashboard === 'brief';
+  const productionBrief = initialDescriptor?.dashboard === 'brief';
   // Brief's maintenance links keep the Brief owner mounted, as in local integration.
-  const retained = integration || devtools || hostedBrief ? maintenanceRoom(href) : null;
+  const retained = integration || devtools || productionBrief ? maintenanceRoom(href) : null;
   // A maintenance link already rendered legacy before the hosted default; a failed
   // read keeps that rather than blocking a self-hosted maintenance room on reconnect.
   const fallback = startsInMaintenance && hosted.state.status === 'unavailable';

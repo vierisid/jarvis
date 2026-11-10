@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { BriefCapabilities } from "../../../../../src/brief/capabilities";
-import { activationBlock, confirmedResult, opportunityView, type OpportunityBinding, type OpportunityRequest, type OpportunityResult } from "./model";
+import { activationBlock, confirmedResult, OPPORTUNITIES_OFF_REASON, opportunityView, type OpportunityBinding, type OpportunityRequest, type OpportunityResult } from "./model";
 import { opportunityFixture, opportunityReceipt } from "../preview/opportunityFixtures";
 
 GlobalRegistrator.register({url:"http://localhost:4391/"});
@@ -34,6 +34,12 @@ test("preview/live sources and preparation/activation gates remain separate",()=
   expect(opportunityView("preview",live).state.status).toBe("unsupported");
   const both=new BriefCapabilities([{id:"preparedOpportunities",provider},{id:"opportunityActivation",provider}],["preparedOpportunities","opportunityActivation"]).snapshot();
   expect(opportunityView("live",{...live,capabilities:both}).onAction).toBe(binding.onAction);
+  // A self-hosted operator who has not turned preparation on is told how, not shown a fault.
+  const off=new BriefCapabilities([{id:"preparedOpportunities",provider},{id:"opportunityActivation",provider}],["opportunityActivation"]).snapshot();
+  const offView=opportunityView("live",{...live,capabilities:off});
+  expect(offView.state).toEqual({status:"unsupported",reason:OPPORTUNITIES_OFF_REASON});
+  expect(offView.onAction).toBeUndefined();
+  expect((opportunityView("live",binding).state as {reason:string}).reason).toBe("Prepared opportunities are not available yet.");
 });
 test("acceptance requires the exact receipt, action and immutable workflow version",()=>{
   const req:OpportunityRequest={requestId:"req",proposalId:"p",revision:"r",action:"approve_enable",flowId:"f",versionId:"v"};

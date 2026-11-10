@@ -78,11 +78,11 @@ const maintenance = '?brief=0&briefMaintenance=1#/_room_settings';
 const hostReads = () => calls.filter(path => path === '/api/brief/host').length;
 /** The real Brief tree renders under happy-dom; only its socket and the host routes are stubbed. */
 class QuietSocket extends EventTarget { readyState = 0; send() {} close() {} }
-function serveHosted() {
+function serveHosted(descriptor = hosted) {
   globalThis.WebSocket = QuietSocket as never;
   globalThis.fetch = (async (path: RequestInfo | URL) => {
     calls.push(String(path));
-    return String(path) === '/api/brief/host' ? Response.json(hosted)
+    return String(path) === '/api/brief/host' ? Response.json(descriptor)
       : String(path) === '/api/onboarding/status' ? Response.json({ setup_completed: true, profile_completed: true, tutorial_completed: true })
       : new Response(null, { status: 404 });
   }) as typeof fetch;
@@ -124,4 +124,12 @@ test('a failed read on a maintenance link keeps the legacy shell instead of bloc
   expect(element.textContent).toBe('legacy shell');
   expect(shell).toEqual({ mounts: 1, unmounts: 0 });
   expect(calls).toEqual(['/api/brief/host']);
+});
+
+for (const hash of ['#/', maintenance]) test(`self-hosted Brief preserves its owner at ${hash}`, async () => {
+  serveHosted({ ...self, dashboard: 'brief' });
+  await open(hash);
+  await navigate(maintenance);
+  expect(element.querySelector('.brief-maintenance')?.textContent).toContain('Back to workspace');
+  expect(shell).toEqual({ mounts: 0, unmounts: 0 });
 });
