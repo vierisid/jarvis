@@ -23,6 +23,16 @@ export interface SandboxRecord extends SandboxIdentity {
   expiresAt: number;
   /** Set when the sandbox is terminated (engine exited or we killed it). */
   terminatedAt: number | null;
+  /**
+   * Set while the engine is parked in the warm pool between runs, cleared
+   * when it is rebound to the next one. A parked sandbox's token serves
+   * nothing but its last run's own log upload (server.ts).
+   */
+  parkedAt?: number | null;
+  /** While parked: its run's one late log upload has come, over HTTP (`server.ts`). */
+  parkedLogPut?: boolean;
+  /** While parked: its run's one late run log has come, over the worker socket (`worker-handlers.ts`). */
+  parkedRunLog?: boolean;
 }
 
 export interface EngineTokenClaims extends SandboxIdentity {

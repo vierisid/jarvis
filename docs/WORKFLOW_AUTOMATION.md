@@ -789,6 +789,17 @@ is visible to the Authority boundary above. That is the whole reason for the
 gate: a flow is not always hand-authored, `manage_workflow compose` builds a
 `FlowVersion` out of an LLM plan, and LLM output is untrusted here.
 
+An ordinary step's process does not outlive its engine. On macOS and Linux the
+engine leads a process group of its own and the daemon signals the whole group
+when it stops the engine (only while the engine has not exited, so a reused
+group id is never signalled); a step whose engine died by itself exits when its
+IPC channel closes. The engine's group is a session of its own (`setsid`), so
+Ctrl-C on a daemon run in a terminal reaches the daemon only, which stops its
+engines on shutdown. This is cleanup, not containment: code that handles or
+ignores SIGTERM while its engine exits on it, removes the disconnect handler,
+or starts processes of its own (in its group or out of it with `setsid`) can
+outlive the engine. It is same-user code (see "Trust model").
+
 So CODE is off by default, and the permission is granted PER FLOW:
 
 ```
@@ -932,6 +943,21 @@ latest version and ran it. Now:
   the next install that needs it; existing trees keep their own links.
   Installs from before #1154 may have left downloads in
   `~/.bun/install/cache`; `bun pm cache rm` clears that cache.
+- Each step's `bun.lock` is kept at
+  `~/.jarvis/workflow-codes/.locks/<version id>/<step>.bun.lock`, beside the
+  trees, and every install of the step starts from it. A version whose tree
+  was pruned or evicted installs the versions it resolved before, not whatever
+  is newest by then (measured: a `^1.0.0` dependency stayed 1.0.0 after 1.1.0
+  was published); a changed declaration is resolved anew and its lock replaces
+  the old one. A lock that can no longer install (its version withdrawn from
+  the registry) fails the install with its path named; deleting it lets the
+  step resolve again. The locks of a version that is no longer needed, has no
+  tree and was not installed within the pruner's 24h window are removed by the
+  tree pruner, and a step's lock goes with its tree when the step is removed.
+  A tree installed before locks were kept has none until its next install, so
+  its first reinstall after an eviction still resolves anew. An install
+  directory whose tree links outside itself is refused (a workspace above the
+  code directory took the install over).
 - One version's CODE steps together may hold at most 2 GiB and 262,144
   entries, four steps at the step caps (#1154): an install that would take the
   version past that is refused like one over the step cap, naming the step,
@@ -1237,7 +1263,10 @@ src/workflows/
       jarvis-tools.ts           /v1/jarvis/tools  -> ToolRegistry.invoke
       jarvis-workflows.ts       /v1/jarvis/workflows -> workflow runner
       logs.ts                   /v1/logs/:runId zstd execution-state backup
-      store.ts                  /v1/store-entries (engine's KV store)
+      store.ts                  /v1/store-entries (engine's KV store); a
+                                FLOW-scoped key ([test]flow_<id>/...) only
+                                for a run or trigger hook of that flow
+      run-flow.ts               (helper, no route) the flow a token's run serves
       waitpoints.ts             `/v1/waitpoints` (the public resume route,
                                 `/api/webhooks/waitpoints/:id`, is in api/routes.ts)
 

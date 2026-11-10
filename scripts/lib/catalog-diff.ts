@@ -221,7 +221,65 @@ const COLLAPSE_THRESHOLD = 12;
  * @mention in upstream text from acting as the owner (#985).
  */
 function codeSafe(s: string): string {
-  return s.replace(/`/g, "'").replace(/\s+/g, " ").trim();
+  const flat = s.replace(/`/g, "'").replace(/\s+/g, " ").trim();
+  // Capped (#1165), by code point so no surrogate pair is split: one huge
+  // upstream string could otherwise fill the whole PR body on its own.
+  const points = [...flat];
+  return points.length > SPAN_MAX_CHARS ? points.slice(0, SPAN_MAX_CHARS - 3).join("") + "..." : flat;
+}
+
+/**
+ * The longest upstream string a code span shows. Measured on the catalog
+ * of 2026-11-06: the longest npm package name is 59 characters, piece ids
+ * 39, action names 46, versions 7; an SPDX expression is shorter still. So
+ * 200 cuts nothing real and only bounds a hostile one.
+ */
+export const SPAN_MAX_CHARS = 200;
+
+/**
+ * The longest report this renders (#1165). GitHub refuses a PR body over
+ * 65536 characters, and create-pull-request cuts a longer one wherever the
+ * limit falls, possibly inside a code span, which then leaves the rest of
+ * an upstream string live markdown. The workflow puts the license problems
+ * in front of the report: at most 15648 characters (50 lines of at most 300
+ * characters, each as a bullet code span, plus the header and run link). So
+ * the report stops at whole lines within 65536 - 15648 = 49888, rounded down
+ * to 48 KiB for the line that says where the rest is.
+ */
+export const REPORT_MAX_CHARS = 49152;
+
+/**
+ * Where the sync writes the uncut report, beside the PR body, in the
+ * catalog-sync artifact: the note at a cut names it.
+ */
+export const REPORT_FULL_FILE = "catalog-pr-report-full.md";
+
+/**
+ * Cut a report to REPORT_MAX_CHARS at a line boundary, so every code span
+ * it keeps is closed, closing a <details> block the cut leaves open, saying
+ * where the full report is, and keeping the footer.
+ */
+function capReport(lines: string[], footer: string[]): string {
+  const full = [...lines, ...footer].join("\n");
+  if (full.length <= REPORT_MAX_CHARS) return full;
+  const note = (n: number) =>
+    `_The report is cut here: ${n} more line(s) are in the \`catalog-sync\` artifact of the run, as \`${REPORT_FULL_FILE}\`._`;
+  const kept: string[] = [];
+  let open = false;
+  let size = 0;
+  // Room for the closing tag, the note and the footer, whatever is left.
+  const reserve = "</details>".length + note(lines.length).length + footer.join("\n").length + 6;
+  for (const line of lines) {
+    if (size + line.length + 1 > REPORT_MAX_CHARS - reserve) break;
+    kept.push(line);
+    size += line.length + 1;
+    if (line.startsWith("<details>")) open = true;
+    if (line === "</details>") open = false;
+  }
+  const dropped = lines.length - kept.length;
+  if (open) kept.push("", "</details>");
+  kept.push("", note(dropped), "", ...footer);
+  return kept.join("\n");
 }
 
 /**
@@ -241,7 +299,7 @@ function fmtLicense(spdx: string): string {
 export function renderReport(
   diff: CatalogDiff,
   opts: ReportOptions,
-): { verdict: Verdict; markdown: string } {
+): { verdict: Verdict; markdown: string; full: string } {
   const verdict = verdictFor(diff);
   const out: string[] = [];
   const p = (line = "") => out.push(line);
@@ -458,6 +516,7 @@ export function renderReport(
     p();
   }
 
+  const body = out.splice(0);
   p("---");
   p();
   p(
@@ -468,7 +527,8 @@ export function renderReport(
       "force-pushes it, so a commit made here is lost.",
   );
 
-  return { verdict, markdown: out.join("\n") + "\n" };
+  // The footer is a warning to the reviewer, so it survives a cut.
+  return { verdict, markdown: capReport(body, out) + "\n", full: [...body, ...out].join("\n") + "\n" };
 }
 
 /** One-line summary of why review is needed, for the warning callout. */

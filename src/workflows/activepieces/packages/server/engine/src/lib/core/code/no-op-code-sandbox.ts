@@ -4,6 +4,13 @@ import { sanitizedEnv } from '../../../../../../../../../util/subprocess-env'
 import type { CodeSandbox } from '../../core/code/code-sandbox-common'
 
 const CODE_RUNNER_SCRIPT = `
+// Jarvis: the engine that started this step is its only reader. When it is
+// gone (killed, out of memory, crashed) the IPC channel closes, and the step
+// goes with it rather than running on with init as its parent. The runtime
+// also signals the engine's whole process group (spawn.ts), which covers a
+// kill; this covers an engine that died by itself.
+process.on('disconnect', () => process.exit(1))
+
 process.once('message', async function(msg) {
     let settled = false
 

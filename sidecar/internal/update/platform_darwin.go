@@ -46,11 +46,11 @@ func CheckPayloadLayout(stagedBin, version string) error {
 // Developer ID team, so a valid-but-foreign signature is refused.
 func VerifyPayloadSignature(stagedBin string) error {
 	app := filepath.Join(stagedBin, AppBundleName)
-	args := []string{"--verify", "--deep", "--strict", app}
-	if expectedTeamID != "" {
-		req := fmt.Sprintf(`anchor apple generic and certificate leaf[subject.OU] = "%s"`, expectedTeamID)
-		args = []string{"--verify", "--deep", "--strict", "-R=" + req, app}
-	} else {
+	args, err := codesignVerifyArgs(app, expectedTeamID)
+	if err != nil {
+		return err
+	}
+	if expectedTeamID == "" {
 		Logf("warning: no pinned team id in this build; verifying the signature chain only")
 	}
 	if out, err := exec.Command("codesign", args...).CombinedOutput(); err != nil {

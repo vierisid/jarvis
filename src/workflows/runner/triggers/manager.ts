@@ -62,10 +62,9 @@ import { createFlowRun, updateRun } from "../../db/repos/flow-run";
 import { enqueue, countQueued } from "../../db/repos/job-queue";
 import {
   claimFire, clearScheduleWatch, DELAYED_AFTER_MS, fireDigest, getScheduleWatch, isRetainedKey, latestScheduledFire, pruneFires, recordBlocked,
-  recordFire, repeatOf, repeatOfRefusal, setScheduleWatch, type FireSource,
+  recordFire, recordSkippedRepeat, repeatOf, repeatOfRefusal, setScheduleWatch, type FireSource, type TriggerFire,
 } from "../../db/repos/trigger-fire";
 import { RUN_FLOW } from "../handler";
-import { DEFAULT_IDS } from "../../db/schema";
 import type { EngineRuntime } from "../engine-runtime/engine-runtime";
 import { toUpstreamFlowVersion } from "../engine-runtime/flow-version-adapter";
 import { graphDigest } from "../../runtime/continuation";
@@ -756,10 +755,16 @@ export class TriggerManager {
     const flow = getFlow(flowId);
     const version = getFlowVersion(versionId);
     if (!version) return;
+    // The hook runs as the flow's project, with that project's connections.
+    // With no flow row there is no project to run it as: never another one.
+    if (!flow) {
+      this.log(`flow ${flowId}: engine ON_DISABLE skipped: the workflow no longer exists`);
+      return;
+    }
     try {
       const handle = await this.engineRuntime.acquire({
         runId: triggerHookRunId('disable', flowId, version),
-        projectId: flow?.project_id ?? DEFAULT_IDS.project,
+        projectId: flow.project_id,
         flowId,
       });
       try {
@@ -917,10 +922,8 @@ export class TriggerManager {
     const held = emergencyHold();
     if (held && !(opts.takenFromSource && held === PAUSED_REASON)) {
       const reason = held === PAUSED_REASON ? "Jarvis was paused, so this did not run." : "Jarvis was stopped with Kill, so this did not run.";
-      const fire = recordFire({ flowId, flowVersionId: versionId, source: opts.source,
-        dedupeKey: opts.source === "schedule" ? opts.dedupeKey : null, scheduledFor: opts.scheduledFor,
-        lateMs: opts.lateMs ?? null, outcome: "skipped",
-        detail: { reason: opts.source === "webhook" ? `${reason} The sender was asked to retry.` : reason } });
+      const fire = this.recordSkip(opts, JSON.stringify([versionId, "held", held]),
+        { reason: opts.source === "webhook" ? `${reason} The sender was asked to retry.` : reason });
       this.log(`flow ${flowId} (${opts.source}) not started: ${reason}`);
       return opts.source === "webhook"
         // The sender may hold nothing but the URL: it is told to retry, not
@@ -949,10 +952,8 @@ export class TriggerManager {
     // only a poll the backlog filled under gets here).
     const backlog = opts.takenFromSource ? null : deferredBacklogRefusal(flowId);
     if (backlog) {
-      const fire = recordFire({ flowId, flowVersionId: versionId, source: opts.source,
-        dedupeKey: opts.source === "schedule" ? opts.dedupeKey : null, scheduledFor: opts.scheduledFor,
-        lateMs: opts.lateMs ?? null, outcome: "skipped",
-        detail: { reason: opts.source === "webhook" ? `${backlog} The sender was asked to retry.` : backlog, code: "APPROVALS_BACKLOG" } });
+      const fire = this.recordSkip(opts, JSON.stringify([versionId, "APPROVALS_BACKLOG"]),
+        { reason: opts.source === "webhook" ? `${backlog} The sender was asked to retry.` : backlog, code: "APPROVALS_BACKLOG" });
       this.log(`flow ${flowId} (${opts.source}) not started: ${backlog}`);
       return opts.source === "webhook"
         // The sender may hold nothing but the URL: why stays in the delivery record.
@@ -980,6 +981,23 @@ export class TriggerManager {
     if (claimed.outcome === "started") return { outcome: "started", fireId: claimed.fire.id, runId: claimed.runId };
     if (claimed.outcome === "duplicate") return { outcome: "duplicate", fireId: claimed.fire.id, runId: claimed.fire.runId ?? undefined };
     return { outcome: "blocked", fireId: claimed.fire.id, reason: claimed.reason };
+  }
+
+  /**
+   * Record a delivery skipped for a condition that lasts (Pause or Kill, a
+   * full approvals backlog). A scheduled time keeps its key and a row of its
+   * own, so it is never run late after the condition clears; anything else
+   * folds into the flow's latest row with the same signature, counted, so a
+   * webhook sender retrying into it is one row, not one per retry.
+   */
+  private recordSkip(opts: LiveStart, signature: string, detail: Record<string, unknown>): TriggerFire | null {
+    const { flowId, versionId } = opts;
+    if (opts.source === "schedule") {
+      return recordFire({ flowId, flowVersionId: versionId, source: opts.source, dedupeKey: opts.dedupeKey,
+        scheduledFor: opts.scheduledFor, lateMs: opts.lateMs ?? null, outcome: "skipped", detail });
+    }
+    return recordSkippedRepeat({ flowId, flowVersionId: versionId, source: opts.source, scheduledFor: opts.scheduledFor,
+      lateMs: opts.lateMs ?? null, signature, detail });
   }
 
   /**
@@ -1193,12 +1211,18 @@ export class TriggerManager {
       this.refuseLive({ flowId, versionId, kind: "engine", source: fireSource, scheduledFor: occurrence?.at, lateMs: occurrence?.lateMs }, error);
       return;
     }
+    // The poll runs as the flow's project; with no flow row, it does not run.
+    const flow = getFlow(flowId);
+    if (!flow) {
+      unrun("blocked", "The workflow no longer exists.");
+      return;
+    }
     this.pollingInFlight.add(flowId);
     let items: unknown[];
     try {
       const handle = await engine.acquire({
         runId: triggerHookRunId('poll', flowId, version),
-        projectId: getFlow(flowId)?.project_id ?? DEFAULT_IDS.project,
+        projectId: flow.project_id,
         flowId,
       });
       try {
@@ -1292,7 +1316,10 @@ export class TriggerManager {
       }
       if (queued >= MAX_QUEUED_WEBHOOK_RUNS) {
         this.log(`flow ${flowId} (webhook) fire dropped: ${queued} jobs already queued`);
-        const fire = recordFire({ flowId, flowVersionId: versionId, source: "webhook", outcome: "skipped",
+        // Folded like the other lasting skips: a sender retrying into a full
+        // queue is one counted row (the count in the reason is the first one's).
+        const fire = recordSkippedRepeat({ flowId, flowVersionId: versionId, source: "webhook",
+          signature: JSON.stringify([versionId, "QUEUE_FULL"]),
           detail: { reason: `${queued} jobs were already queued; the sender was asked to retry.` } });
         return { outcome: "skipped", fireId: fire?.id, reason: "Service busy, retry later", retryAfterSeconds: 30 };
       }

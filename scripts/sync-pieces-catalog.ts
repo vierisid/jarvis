@@ -76,6 +76,7 @@ import { spawnSync } from "node:child_process";
 import {
   diffCatalogs,
   renderReport,
+  REPORT_FULL_FILE,
   hasChanges,
   type GeneratedEntryLike,
 } from "./lib/catalog-diff";
@@ -614,7 +615,7 @@ async function writePrReport(
     checked: new Set(assessments.filter((a) => a.ok).map((a) => a.id)),
   });
   const lineIndex = buildLineIndex(rendered);
-  const { verdict, markdown } = renderReport(diff, {
+  const { verdict, markdown, full } = renderReport(diff, {
     shortSha: PINNED_SHA.slice(0, 7),
     generatedAt: new Date().toISOString().slice(0, 10),
     fileLabel: "src/workflows/pieces-library/catalog-generated.ts",
@@ -625,6 +626,10 @@ async function writePrReport(
 
   mkdirSync(dirname(reportPath), { recursive: true });
   writeFileSync(reportPath, markdown);
+  // The PR body is cut to fit GitHub (#1165); the cut points here, which the
+  // workflow uploads with the rest of the report directory.
+  const fullReportPath = join(dirname(reportPath), REPORT_FULL_FILE);
+  writeFileSync(fullReportPath, full);
   const changed = hasChanges(diff);
   info(`Wrote PR report to ${reportPath} (verdict: ${verdict}, changes: ${changed})`);
   if (!changed) {

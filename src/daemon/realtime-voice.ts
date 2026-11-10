@@ -77,6 +77,15 @@ export function liveRealtimeSessionCount(): number {
 }
 
 /**
+ * Tests only: forget every held session. The registry is process-wide, so a
+ * session another test file left open (and possibly voicing) would otherwise
+ * decide anyRealtimeVoicing for a test that never made it.
+ */
+export function forgetRealtimeSessionsForTests(): void {
+  liveSessions.clear();
+}
+
+/**
  * Create + wire a realtime voice session. The returned object owns the session
  * lifecycle; the caller pushes mic audio via the transport and calls `close()`
  * on disconnect / session timeout.

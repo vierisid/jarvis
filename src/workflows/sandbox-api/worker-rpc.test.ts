@@ -262,6 +262,46 @@ describe("WorkerRpcServer (B4: socket.io engine <-> daemon)", () => {
     }
   });
 
+  test("a parked engine's socket serves no run: no progress or output, and only one late run log for its finished run", async () => {
+    const sb = await makeSandbox();
+    try {
+      updateRun(sb.runId, { status: "FAILED", finishTime: 1_000 });
+      registry.park(sb.sandboxId);
+      const flowRun = { id: sb.runId, status: "SUCCEEDED" as const, flowId: sb.flowId, flowVersionId: sb.flowVersionId, projectId: sb.projectId };
+      await sb.workerClient.updateRunProgress({ flowRun });
+      expect(getFlowRun(sb.runId)?.status).toBe("FAILED");
+      sb.notifyClient.stdout({ message: "late line" });
+      await new Promise<void>((res) => setTimeout(res, 50));
+      expect(api.workerHandlers.logBuffer.get(sb.sandboxId) ?? []).toEqual([]);
+      // The run log the engine was still sending when it was released lands...
+      await sb.workerClient.uploadRunLog({ runId: sb.runId, projectId: sb.projectId, status: "FAILED", stepsCount: 3 });
+      expect(getFlowRun(sb.runId)?.stepsCount).toBe(3);
+      // ...and piece code still running in the parked engine cannot rewrite it afterwards.
+      await sb.workerClient.uploadRunLog({ runId: sb.runId, projectId: sb.projectId, status: "SUCCEEDED", stepsCount: 9 });
+      expect(getFlowRun(sb.runId)).toMatchObject({ status: "FAILED", stepsCount: 3 });
+    } finally {
+      sb.client.close();
+    }
+  });
+
+  test("what the handlers keep for a sandbox is bounded, and goes when its engine disconnects", async () => {
+    const sb = await makeSandbox();
+    const handlers = api.workerHandlers;
+    const big = "x".repeat(9 * 1024 * 1024);
+    handlers.stdout(sb.sandboxId, { message: big });
+    handlers.stdout(sb.sandboxId, { message: big });
+    const kept = handlers.logBuffer.get(sb.sandboxId) ?? [];
+    expect(kept.reduce((n, l) => n + l.message.length, 0)).toBeLessThanOrEqual(16 * 1024 * 1024);
+    await handlers.updateRunProgress(sb.sandboxId, { flowRun: { id: sb.runId, status: "RUNNING", flowId: sb.flowId,
+      flowVersionId: sb.flowVersionId, projectId: sb.projectId }, step: { name: "s", output: big } } as never);
+    expect((handlers.lastProgress.get(sb.sandboxId) as { step?: unknown }).step).toBeUndefined();
+    sb.client.close();
+    const deadline = Date.now() + 2_000;
+    while (handlers.logBuffer.has(sb.sandboxId) && Date.now() < deadline) await new Promise<void>((res) => setTimeout(res, 20));
+    expect(handlers.logBuffer.has(sb.sandboxId)).toBe(false);
+    expect(handlers.lastProgress.has(sb.sandboxId)).toBe(false);
+  });
+
   test("uploadRunLog ignores rows that don't match the sandbox's runId", async () => {
     const sb = await makeSandbox();
     try {

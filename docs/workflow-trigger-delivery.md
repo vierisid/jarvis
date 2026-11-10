@@ -164,7 +164,15 @@ turned off is stopped instead of continued.
 When starting another workflow needs approval (run_workflow, or a reusable
 child), the dashboard card names the workflow and shows the input it is given,
 as one line of JSON with hidden characters escaped; an input longer than 600
-characters as shown is refused before any card. A Telegram or Discord card
+characters as shown is refused before any card. Each quoted string on the card
+that holds a character outside ASCII (the name, a key or a value) is wrapped in
+a Unicode bidi isolate (U+2068 ... U+2069) inside its quotes, so right-to-left
+text cannot reorder the punctuation around it and make a key and its value read
+swapped; an ASCII card is unchanged, and the 600 counts the isolates. The name
+is cut with a visible "..." when the whole sentence would otherwise pass 1000
+characters with the most input a card shows (the Needs you title shows the
+first 1000); the workflow id before it still names the workflow. A card already
+pending keeps the sentence it was asked with. A Telegram or Discord card
 names only the input's top-level fields (at most ten, then how many more), or
 for a list or a single value only its kind, never the values; a card too long
 for one chat message can only be denied from chat.
@@ -219,7 +227,15 @@ after Reset starts a run then, as any delivery after Reset would.
 (`schedule`, `webhook`, `event`, `poll`, `resume`, `lifecycle`), when it was
 due, when it was handled, how late, its run, when that run actually began, and
 why it did not start. A repeat adds no row: it is counted on the original
-(`repeats`). A waitpoint is stored only as a digest: its id is a bearer
+(`repeats`). A delivery skipped for a reason that lasts (Pause or Kill, a full
+approvals backlog, a full queue) is folded the same way: deliveries of any
+source but a schedule (webhook retries, events, polled items, continuations
+under Kill) skipped for the same reason are counted on the latest row of that
+source when it is a skip for that reason, rather than a row each (the
+ingress allows 60 a minute per flow, up to 86,400 rows a day). A delivery that
+started in between begins a new row; a second Pause with nothing started since
+the first counts on the first one's row. A scheduled time stays a keyed row of
+its own. A waitpoint is stored only as a digest: its id is a bearer
 capability. Rows are pruned after 30 days; no foreign key, so the record
 outlives a deleted workflow.
 

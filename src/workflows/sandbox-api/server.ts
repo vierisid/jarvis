@@ -478,6 +478,16 @@ export class SandboxApi {
     if (!engineTokensEqual(token, record.engineToken)) {
       return err("engine token superseded", 401);
     }
+    // Parked in the warm pool (`SandboxRegistry.park`): the run is over, so
+    // the token reaches nothing but that run's one late log upload (the logs
+    // route itself checks the run id against the token's). One: the backup
+    // a RESUME restores from is not rewritten by piece code left running.
+    if (record.parkedAt != null) {
+      if (record.parkedLogPut || !(req.method === "PUT" && /^\/v1\/logs\/[^/]+$/.test(pathname))) {
+        return err("sandbox parked", 401);
+      }
+      record.parkedLogPut = true;
+    }
 
     for (const route of this.routes) {
       if (route.method !== req.method) continue;

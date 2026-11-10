@@ -29,6 +29,7 @@ import {
   CodeInstallTooLargeError,
   measureTree,
   declaredDependencies,
+  codeStepLockPath,
   INSTALLED_MANIFEST_MARKER,
   materializeCodeActions,
   runInstall,
@@ -310,6 +311,58 @@ describe("materializeCodeActions installs exactly what was declared", () => {
       }),
     ).rejects.toThrow(/did not install .* where it was run/);
     expect(existsSync(join(base, "v_1", "compute", "node_modules"))).toBe(false);
+  });
+
+  test("with a kept lockfile in place, an install whose tree links into another project is still refused", async () => {
+    // The kept lock is copied into the install directory first, so a lock
+    // appearing there no longer shows Bun installed there. A workspace that
+    // takes the install over with Bun's isolated layout leaves a tree of links
+    // into its own packages (measured in review): that is refused.
+    const base = scratch();
+    const pj = JSON.stringify({ dependencies: { "is-number": "7.0.0" } });
+    await materializeCodeActions(versionWithCode(pj), base, { install: fakeInstall(["is-number"]) });
+    expect(existsSync(codeStepLockPath(join(base, "v_1"), "compute"))).toBe(true);
+    rmSync(join(base, "v_1"), { recursive: true, force: true });
+    const foreign = join(scratch(), "workspace", "node_modules", ".bun", "is-number");
+    mkdirSync(foreign, { recursive: true });
+    await expect(materializeCodeActions(versionWithCode(pj), base, {
+      install: async (dir: string) => {
+        mkdirSync(join(dir, "node_modules"), { recursive: true });
+        symlinkSync(foreign, join(dir, "node_modules", "is-number"));
+      },
+    })).rejects.toThrow(/did not install .* where it was run/);
+    expect(existsSync(join(base, "v_1", "compute", "node_modules"))).toBe(false);
+    // A link that stays inside the tree (a .bin entry) is the install's own.
+    await materializeCodeActions(versionWithCode(pj), base, {
+      install: async (dir: string) => {
+        await fakeInstall(["is-number"])(dir);
+        mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true });
+        symlinkSync("../is-number/cli.js", join(dir, "node_modules", ".bin", "is-number"));
+      },
+    });
+    expect(existsSync(join(base, "v_1", "compute", "node_modules", "is-number"))).toBe(true);
+  });
+
+  test("an install from a kept lockfile that fails names the lockfile; a removed step's lockfile goes", async () => {
+    const base = scratch();
+    const pj = JSON.stringify({ dependencies: { "is-number": "7.0.0" } });
+    await materializeCodeActions(versionWithCode(pj), base, { install: fakeInstall(["is-number"]) });
+    const lock = codeStepLockPath(join(base, "v_1"), "compute");
+    rmSync(join(base, "v_1"), { recursive: true, force: true });
+    const error = await materializeCodeActions(versionWithCode(pj), base, {
+      install: async () => { throw new Error("No version matching 7.0.0"); },
+    }).then(() => null, (e: Error) => e);
+    expect(error?.message).toContain("No version matching 7.0.0");
+    expect(error?.message).toContain(lock);
+    // The step is renamed: once its old tree is gone, so is its old lock.
+    rmSync(join(base, "v_1"), { recursive: true, force: true });
+    await materializeCodeActions(versionWithCode(pj, "renamed"), base, { install: fakeInstall(["is-number"]) });
+    expect(existsSync(lock)).toBe(false);
+    expect(existsSync(codeStepLockPath(join(base, "v_1"), "renamed"))).toBe(true);
+    // The draft drops its last CODE step: once that tree is gone, its lock goes too.
+    rmSync(join(base, "v_1", "renamed"), { recursive: true, force: true });
+    await materializeCodeActions({ id: "v_1", trigger: { name: "trigger", type: "EMPTY" } } as unknown as UpstreamFlowVersion, base);
+    expect(existsSync(codeStepLockPath(join(base, "v_1"), "renamed"))).toBe(false);
   });
 
   test("skips an install already done for the same manifest, redoes it when the manifest changes", async () => {
