@@ -6,9 +6,20 @@ export function emptyInput(value: unknown): boolean {
   return value === undefined || value === null || (typeof value === 'string' && !value.trim());
 }
 
+/**
+ * `emptyInput` for a declared field. A dropdown choice the piece itself lists
+ * is a value even when it is only whitespace (the CSV piece's "Tab" option is
+ * "\t"); anything else that is blank stays empty.
+ */
+export function emptyFieldInput(field: Pick<PieceInputField, 'type' | 'options'>, value: unknown): boolean {
+  if (!emptyInput(value)) return false;
+  return !(field.type === 'enum' && typeof value === 'string' && value !== ''
+    && field.options?.some(option => option.value === value));
+}
+
 /** Mirrors the engine's text/number coercions; never guesses a dynamic value. */
 export function inputIssue(field: PieceInputField, value: unknown): string | null {
-  if (emptyInput(value)) return field.required ? 'required input is missing' : null;
+  if (emptyFieldInput(field, value)) return field.required ? 'required input is missing' : null;
   switch (field.type) {
     case 'number':
       return (typeof value === 'number' || typeof value === 'string') && Number.isFinite(Number(value))
