@@ -128,6 +128,9 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   // #1242: the child or run_workflow target was turned off; nothing was started.
   FLOW_TURNED_OFF: { category: 'missing_binding', why: 'the workflow it calls is turned off. Turn that workflow on again, or choose another one', step: 'edit_and_run_again' },
   WORKFLOW_BROWSER_REVIEW_STALE: { category: 'missing_binding', why: 'the reviewed browser session changed or Jarvis restarted', step: 'ask_again' },
+  // #1314: a switch turned off while a run was going; turning it back on fixes it.
+  DESKTOP_DISABLED: { category: 'missing_binding', why: 'desktop control is turned off. Turn it on in Settings > General > Desktop control, then run it again', step: 'run_again' },
+  SCREEN_CAPTURE_DISABLED: { category: 'missing_binding', why: 'screen awareness is turned off, and it takes screenshots. Turn awareness on, then run it again', step: 'run_again' },
   WORKFLOW_MACHINE_REPLACED: { category: 'missing_binding', why: 'the computer it was enabled for is no longer enrolled', step: 'accept_binding_change' },
   // #1314 M2: a browser or desktop action needs a computer a person chose.
   WORKFLOW_MACHINE_UNPINNED: { category: 'missing_binding', why: 'its browser or desktop steps have no pinned computer. Enable the workflow to pin its computer, or name the computer in the step', step: 'accept_binding_change' },

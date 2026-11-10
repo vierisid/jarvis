@@ -1,4 +1,5 @@
 import { requestHumanInput } from './human-input';
+import { machinePinForRun } from '../db/repos/binding-pins';
 import {createSubflowService,returnSubflowResult} from './subflow-service';
 import { MEETING_ACCOUNTS, meetingSetup, meetingSetupMatches, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
 import { createLeadBatchService } from './batch-service';
@@ -508,7 +509,9 @@ export function buildSandboxServiceBackends(
         // capability refusal.
         try { assertDesktopAllowed(tool, req.params); }
         catch (error) {
-          effects.auditRefusal({ context: ctx, toolName: `desktop_disabled(${tool.name})`, category: refusedEffectCategory(tool) });
+          // Labelled by the switch that refused it (#1314 review).
+          const which = error instanceof ActionOutcomeError && error.outcome.code === 'SCREEN_CAPTURE_DISABLED' ? 'screen_capture_disabled' : 'desktop_disabled';
+          effects.auditRefusal({ context: ctx, toolName: `${which}(${tool.name})`, category: refusedEffectCategory(tool) });
           throw error;
         }
         const capability = (() => {
@@ -522,7 +525,7 @@ export function buildSandboxServiceBackends(
         })();
         const gate = resolveToolGate(tool, req.toolName, req.params);
         const uiReview = workflowUiReview(tool, req.toolName, req.params);
-        const remoteKey = !uiReview ? null : remoteKeyPressRefusal(tool.name, req.params)
+        const remoteKey = !uiReview ? null : remoteKeyPressRefusal(tool.name, req.params, machinePinForRun(ctx.runId))
           ?? (tool.name === 'desktop_click' && !fromRunData.has('element_id') ? DESKTOP_ELEMENT_ID_REFUSAL : null);
         if (remoteKey) {
           effects.auditRefusal({ context: ctx, toolName: tool.name, category: refusedEffectCategory(tool) });
@@ -539,7 +542,7 @@ export function buildSandboxServiceBackends(
         // Written in the step, never resolved from run data: a UI step's params
         // are held to the graph above; a skill's target is read from the graph.
         const literalTarget = typeof req.params.target === 'string' && req.params.target.trim() !== ''
-          && (uiStep || stepTargetIsLiteral(ctx));
+          && (uiStep || stepTargetIsLiteral(ctx, req.params.target));
         if (uiReview) {
           try {
             // Nothing resolves a computer before the pin check (#1314 review): a refused call binds none.
@@ -993,7 +996,7 @@ export function buildSandboxServiceBackends(
         }
         const unboundable = surfaceBoundRefusal(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
         if (unboundable && !uiReview) return refuse(unboundable);
-        const remoteKey = uiReview ? remoteKeyPressRefusal(call.toolCall.name, call.toolCall.arguments) : null;
+        const remoteKey = uiReview ? remoteKeyPressRefusal(call.toolCall.name, call.toolCall.arguments, machinePinForRun(resolved.run.id)) : null;
         if (remoteKey) return refuse(remoteKey);
         if (gate.confirm === 'always' && !uiReview) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.`);

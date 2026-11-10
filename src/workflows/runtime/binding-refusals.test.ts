@@ -333,3 +333,12 @@ test('a flow refused before it ran for an unpinned computer says so, with the fi
   expect(failure.next.map(n => n.step)).toContain('accept_binding_change');
   expect(flowBindingBlock(f.row())).toMatchObject({ code: 'WORKFLOW_MACHINE_UNPINNED', kind: 'readiness' });
 });
+
+test('a switch turned off mid-run says which switch and that turning it on fixes it (#1314 review)', () => {
+  const f = setup();
+  for (const [code, words] of [['SCREEN_CAPTURE_DISABLED', 'screen awareness is turned off'], ['DESKTOP_DISABLED', 'desktop control is turned off']] as const) {
+    const failure = runFailure(f.refused({ status: 'blocked', code, effect: 'not_started', message: 'off' }))!;
+    expect(failure).toMatchObject({ category: 'missing_binding', code });
+    expect(failure.headline).toContain(words);
+  }
+});

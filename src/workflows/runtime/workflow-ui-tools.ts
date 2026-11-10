@@ -1,7 +1,6 @@
 import type { ToolDefinition } from '../../actions/tools/registry';
 import type { ActionCategory } from '../../roles/authority';
 import { ActionOutcomeError } from '../../actions/action-outcome';
-import { resolveToolTarget } from '../../actions/tools/sidecar-route';
 import { desktopRefusal, isDesktopEnabled, isScreenCaptureEnabled, SCREEN_CAPTURE_TOOLS, toolAlwaysUsesDesktop } from '../../actions/tools/desktop-guard';
 import { BOUNDED_TOOLS } from './tool-capability';
 import { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview } from '../../authority/ui-intent';
@@ -82,10 +81,16 @@ export const REMOTE_KEY_PRESS_REFUSAL = 'browser_press_key runs in a workflow on
   + 'on another computer the key cannot be bound to the page you reviewed. To press Enter in a field there, use browser_type with submit set to true.';
 
 /** The refusal for a workflow key press that would reach another computer, or null. */
-export function remoteKeyPressRefusal(toolName: string, params: Record<string, unknown>): string | null {
+export function remoteKeyPressRefusal(toolName: string, params: Record<string, unknown>,
+  pin: { sidecarId: string | null } | undefined): string | null {
   if (toolName !== 'browser_press_key') return null;
-  try { return resolveToolTarget(params.target, 'browser', toolName, { quiet: true }) ? REMOTE_KEY_PRESS_REFUSAL : null; }
-  catch { return REMOTE_KEY_PRESS_REFUSAL; }
+  // Decided from what the step names and the flow's pin, never by resolving a
+  // computer (#1314 review): resolving would bind the run before the pin check,
+  // and a refusal of the binding would read as this one. A target always names
+  // an enrolled computer (the Jarvis host has no name); with none, the pin
+  // decides; an unpinned step is refused by the pin check instead.
+  if (typeof params.target === 'string' && params.target.trim()) return REMOTE_KEY_PRESS_REFUSAL;
+  return pin && pin.sidecarId !== null ? REMOTE_KEY_PRESS_REFUSAL : null;
 }
 
 /** What a machine inventory says, for the static checks below. */

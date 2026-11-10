@@ -10,7 +10,7 @@
  * different fingerprint. It never composes, publishes, enables or runs a
  * workflow. Contract: docs/prepared-proposal-qualification.md.
  */
-import { directToolAboveLevelFloor } from '../workflows/runtime/workflow-ui-tools';
+import { directToolAboveLevelFloor } from '../workflows/runtime/workflow-ui-tools.ts';
 import type { BriefBinding, BriefEvidenceRef, BriefRevision, BriefTimestamp } from '../brief/contracts.ts';
 import { projectLegacyGoal } from '../brief/adapters.ts';
 import type { ActionCategory } from '../roles/authority.ts';

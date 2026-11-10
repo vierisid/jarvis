@@ -249,3 +249,17 @@ test('the page URL a local navigate reports reaches the flow framed too (#1314 r
   expect(body.outcome.verification).toMatchObject({ status: 'verified', postcondition: 'page_observed' });
   expect(body.outcome.verification.pageUrl).toContain('<<<UNTRUSTED_CONTENT');
 });
+
+test('a key press with no written computer on a flow pinned to another computer is refused, binding nothing (#1314 review)', async () => {
+  const { getRunMachineBinding } = await import('../db/repos/run-machine-binding');
+  const f = fixture(browserPressKeyTool, true), run = f.run();
+  getWorkflowDb().run(`UPDATE flow SET binding_pins = json_set(binding_pins, '$.machine', json('{"sidecarId":"pc","name":"PC"}'))`);
+  // The pinned computer is enrolled and connected, so resolving it would have bound the run.
+  setSidecarManagerRef({ listSidecars: () => [{ id: 'pc', name: 'PC', connected: true, capabilities: ['browser'], features: [] }],
+    getConnectionSessionId: () => 'session', dispatchRPC: async () => { throw new Error('no dispatch expected'); } } as any);
+  const response = await f.call(run.id, 'action');
+  expect(response.status).toBe(409);
+  expect((await response.json()).outcome).toMatchObject({ code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' });
+  expect(getRunMachineBinding(run.id)).toBeNull();
+  expect(f.approvals.getPending()).toHaveLength(0);
+});

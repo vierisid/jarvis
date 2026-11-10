@@ -245,3 +245,18 @@ test('a skill replays only on a computer a person chose (#1314 review)', async (
   await expect(f.invoke({ name: 'gmail-send', params: { subject: 'x' } })).rejects.toMatchObject({ outcome: { code: 'WORKFLOW_MACHINE_UNPINNED', effect: 'not_started' } });
   expect(calls).toHaveLength(0);
 });
+
+test('a skill step with a written computer runs only when the call asks for that same computer (#1314 review)', async () => {
+  const calls: Call[] = [];
+  fakeSidecar(calls);
+  gmailSkill();
+  const f = fixture();
+  getWorkflowDb().run('UPDATE flow SET binding_pins = NULL');
+  getWorkflowDb().run(`UPDATE flow_version SET trigger = json_set(trigger, '$.nextAction.settings.input.params', json('{"name":"gmail-send","target":"pc-1"}'))`);
+  // Another computer, sent beside the step's name: not the step's.
+  await expect(f.invoke({ name: 'gmail-send', params: { subject: 'x' }, target: 'pc-2' }))
+    .rejects.toMatchObject({ outcome: { code: 'WORKFLOW_MACHINE_UNPINNED', effect: 'not_started' } });
+  // The step's own computer passes the pin check (whatever Authority then decides).
+  const own = await Promise.resolve(f.invoke({ name: 'gmail-send', params: { subject: 'x' }, target: 'pc-1' })).catch(error => error);
+  expect((own as { outcome?: { code?: string } })?.outcome?.code).not.toBe('WORKFLOW_MACHINE_UNPINNED');
+});

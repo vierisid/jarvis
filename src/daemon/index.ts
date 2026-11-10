@@ -1009,6 +1009,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 5. Create real services
     const agentService = new AgentService(jarvisConfig);
+    // Assigned once the approval manager exists (#1314 m6); a switch turned
+    // off before then has no workflow cards of this process to close.
+    let closeSwitchedOffWorkflowCards: () => void = () => {};
     agentService.setResearchQueue(researchQueue);
     const observerService = config.noLocalTools
       ? null
@@ -4406,7 +4409,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // A workflow card for a tool a switch just turned off (desktop control,
     // or screen awareness for the screenshot tools) is closed, not left
     // waiting to be approved into a refusal (#1314 m6).
-    const closeSwitchedOffWorkflowCards = () => {
+    closeSwitchedOffWorkflowCards = () => {
       approvalManager.closeWorkflowCards(switchedOffCard(agentService?.getOrchestrator().getToolRegistry()), 'switched-off');
     };
     const auditTrail = new AuditTrail();
