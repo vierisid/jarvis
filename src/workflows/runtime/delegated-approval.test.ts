@@ -1503,3 +1503,21 @@ test('a delegated desktop_click get_value needs no mandatory review, like ui_act
   expect((await g.delegate({ requiredTools: ['desktop_click'] })).status).toBe('approval_required');
   expect(g.effects()).toBe(0);
 });
+
+test('a delegated navigate card approved in time but dispatched after five minutes is never executed (#1314)', async () => {
+  const { setSystemTime } = await import('bun:test');
+  const ids = createRun();
+  const f = backends(ids, { authority: { governed_categories: [] },
+    script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/', target: 'test-computer' } }, 'finish'] });
+  try {
+    const parked = await f.delegate({ requiredTools: ['browser_navigate'] });
+    const card = f.approvals.getRequest(parked.approval!.approvalId)!;
+    const deadline = JSON.parse(card.context!).expiresAt as number;
+    expect(deadline - card.created_at).toBeLessThanOrEqual(5 * 60_000);
+    f.approvals.approve(card.id, 'dashboard');
+    setSystemTime(new Date(deadline + 1));
+    await f.delegate({ requiredTools: ['browser_navigate'] });
+    expect(f.effects()).toBe(0);
+    expect(listWorkflowEffects(ids.run.id).at(-1)?.outcome).toMatchObject({ code: 'APPROVAL_EXPIRED', effect: 'not_started' });
+  } finally { setSystemTime(); }
+});

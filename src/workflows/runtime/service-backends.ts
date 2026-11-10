@@ -43,7 +43,7 @@ import type { AuditTrail } from "../../authority/audit";
 import type { EmergencyController } from "../../authority/emergency";
 import type { RoleDefinition } from "../../roles/types";
 import { JarvisLlmClient } from "../adapters/llm-client";
-import { directToolAboveLevelFloor } from './workflow-ui-tools';
+import { assertWorkflowUiCardCurrent, directToolAboveLevelFloor, workflowUiCardDeadline } from './workflow-ui-tools';
 import { JarvisToolRegistryAdapter, frameComputerStepResult } from "../adapters/tool-registry";
 import { JarvisNotifierAdapter, type NotifierDeps } from "../adapters/notifier";
 import { JarvisContextProviderAdapter } from "../adapters/context-provider";
@@ -518,7 +518,8 @@ export function buildSandboxServiceBackends(
           // The tool the step names, not only the step (#1152).
           pinnedInput: { toolName: req.toolName },
           ...(gate.confirm === 'always' ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review this UI effect' } } : {}),
-          ...(uiReview ? { reviewRegistry: opts.toolRegistry!, reviewSubject: tool.reviewSubject?.(req.params) ?? {} } : {}),
+          ...(uiReview ? { reviewRegistry: opts.toolRegistry!, reviewSubject: tool.reviewSubject?.(req.params) ?? {},
+            approvalExpiresAt: workflowUiCardDeadline(tool.name) } : {}),
           // As at the chat gate: a gated call over the workflow's level asks
           // instead of failing the step.
           ...(gate.confirm ? { aboveLevelFloor: directToolAboveLevelFloor(tool, req.params, gate) } : {}),
@@ -537,6 +538,7 @@ export function buildSandboxServiceBackends(
             if (uiReview && !dispatched) {
               const effect = getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], 'tool'));
               const approval = effect?.approvalId ? opts.approvalManager?.getRequest(effect.approvalId) : null;
+              assertWorkflowUiCardCurrent(approval);
               uiExecution = approval ? opts.approvalManager?.getUiExecution(approval) ?? null : null;
               if (!uiExecution) throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_UI_REVIEW_STALE', effect: 'not_started',
                 message: 'The reviewed app or browser session changed, or Jarvis restarted. Start a new run and review the current screen.' });
@@ -967,7 +969,8 @@ export function buildSandboxServiceBackends(
             // Every UI action needs a dashboard click and the originating
             // registry's live guard; Authority overrides cannot auto-approve it.
             ...(uiReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review UI action' }, reviewRegistry: registry,
-              reviewSubject: registry.get(call.toolCall.name)?.reviewSubject?.(call.toolCall.arguments) ?? {} } : {}),
+              reviewSubject: registry.get(call.toolCall.name)?.reviewSubject?.(call.toolCall.arguments) ?? {},
+              approvalExpiresAt: workflowUiCardDeadline(call.toolCall.name) } : {}),
             ...(gate.confirm || workflowUiRead(call.toolCall.name, call.toolCall.arguments)
               ? { aboveLevelFloor: uiReview || workflowUiRead(call.toolCall.name, call.toolCall.arguments) ? 'read_data' as const : gate.floorCategory } : {}),
             // The target names who asked, so the card and the record are bound
@@ -991,6 +994,7 @@ export function buildSandboxServiceBackends(
               if (uiReview && !dispatched) {
                 const effect = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
                 const approval = effect?.approvalId ? opts.approvalManager?.getRequest(effect.approvalId) : null;
+                assertWorkflowUiCardCurrent(approval);
                 uiExecution = approval ? opts.approvalManager?.getUiExecution(approval) ?? null : null;
                 if (!uiExecution) throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_UI_REVIEW_STALE', effect: 'not_started',
                   message: 'The reviewed app or browser session changed, or Jarvis restarted. Start a new run to review the current screen.' });

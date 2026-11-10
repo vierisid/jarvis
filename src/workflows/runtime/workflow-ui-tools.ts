@@ -1,5 +1,6 @@
 import type { ToolDefinition } from '../../actions/tools/registry';
 import type { ActionCategory } from '../../roles/authority';
+import { ActionOutcomeError } from '../../actions/action-outcome';
 import { BOUNDED_TOOLS } from './tool-capability';
 import { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview } from '../../authority/ui-intent';
 export { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview };
@@ -39,4 +40,32 @@ export function directToolAboveLevelFloor(tool: ToolDefinition, params: Record<s
   gate: { confirm?: unknown; floorCategory: ActionCategory }): ActionCategory | undefined {
   if (!gate.confirm) return undefined;
   return workflowUiReview(tool, tool.name, params) ? 'read_data' : gate.floorCategory;
+}
+
+/**
+ * How long a workflow card for an action that is not bound to the reviewed
+ * element stays answerable (owner decision on #1314): navigate, scroll and a
+ * key press act on whatever page is current when they run, so a card answered
+ * long after it was raised approves a screen nobody looked at. Five minutes is
+ * the wait an inline chat approval already gives (`waitForDecision`'s default)
+ * and the reviewer looking at the card is looking at the screen now. Past it
+ * the card expires, and an approval granted in time but not dispatched in time
+ * is refused too: never executed, typed APPROVAL_EXPIRED.
+ */
+export const WORKFLOW_UI_CARD_TTL_MS = 5 * 60_000;
+export const EXPIRING_WORKFLOW_UI_TOOLS: ReadonlySet<string> = new Set(['browser_navigate', 'browser_scroll', 'browser_press_key']);
+
+/** The deadline a new card for this call carries, or undefined. */
+export function workflowUiCardDeadline(toolName: string, now = Date.now()): number | undefined {
+  return EXPIRING_WORKFLOW_UI_TOOLS.has(toolName) ? now + WORKFLOW_UI_CARD_TTL_MS : undefined;
+}
+
+/** Refuse dispatching an approved card whose deadline has passed. */
+export function assertWorkflowUiCardCurrent(approval: { context?: string | null } | null | undefined, now = Date.now()): void {
+  let deadline: unknown;
+  try { deadline = JSON.parse(approval?.context ?? '{}').expiresAt; } catch { deadline = undefined; }
+  if (typeof deadline === 'number' && now > deadline) {
+    throw new ActionOutcomeError({ status: 'blocked', code: 'APPROVAL_EXPIRED', effect: 'not_started',
+      message: 'This approval was for the screen as it was when the card was raised, and it expired before the action ran. Nothing was done. Start a new run and review the current screen.' });
+  }
 }

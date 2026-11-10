@@ -166,3 +166,28 @@ test('a direct browser read and an approved navigate reach the flow framed as un
     expect(String(body.result)).toContain('[1] Editor');
   }
 });
+
+for (const late of ['click', 'dispatch'] as const) test(`a navigate card expires after five minutes and is never executed (late ${late}, #1314)`, async () => {
+  const { setSystemTime } = await import('bun:test');
+  const f = fixture(), run = f.run();
+  try {
+    const parked = await f.call(run.id, 'navigate'); expect(parked.status).toBe(202);
+    const id = (await parked.json()).approval.approvalId;
+    const card = f.approvals.getRequest(id)!;
+    const deadline = JSON.parse(card.context!).expiresAt as number;
+    // Five minutes from when the card was raised (the deadline is taken just before the row is written).
+    expect(deadline - card.created_at).toBeGreaterThan(5 * 60_000 - 1_000);
+    expect(deadline - card.created_at).toBeLessThanOrEqual(5 * 60_000);
+    if (late === 'click') {
+      setSystemTime(new Date(deadline + 1));
+      expect(f.approvals.approve(id, 'dashboard')).toBeNull();
+    } else {
+      f.approvals.approve(id, 'dashboard');
+      setSystemTime(new Date(deadline + 1));
+    }
+    const result = await Promise.resolve(f.call(run.id, 'navigate')).catch((error) => error);
+    const outcome = result instanceof Response ? (await result.json()).outcome : result.outcome;
+    expect(outcome).toMatchObject({ code: 'APPROVAL_EXPIRED', effect: 'not_started' });
+    expect(f.calls.filter(c => c.method === 'browser_navigate')).toHaveLength(0);
+  } finally { setSystemTime(); }
+});
