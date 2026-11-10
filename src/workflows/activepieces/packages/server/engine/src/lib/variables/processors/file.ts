@@ -4,12 +4,23 @@ import mime from 'mime-types'
 import { ProcessorFn } from './types'
 import axios from 'axios'
 // Jarvis (#961): a file URL is fetched through the HTTP step's egress guard.
-import { EgressRefusedError, egressPolicyFromEnv, egressRefusalIn, guardedFileDownload } from '../../../../../../../../runtime/http-egress'
+import { EgressRefusedError, MAX_RESPONSE_BYTES, egressPolicyFromEnv, egressRefusalIn, guardedFileDownload } from '../../../../../../../../runtime/http-egress'
 
-export const fileProcessor: ProcessorFn = async (_property, urlOrBase64, fileContext) => {
-    if (isNil(urlOrBase64) || !isString(urlOrBase64)) {
+export const fileProcessor: ProcessorFn = async (_property, rawValue, fileContext) => {
+    // === JARVIS PATCH (file chaining): one place that accepts every file shape ===
+    // A file field takes what Jarvis's own steps produce: the bare step-file
+    // path, the { fileName, url } object Create file returns, a data URL, or a
+    // { filename, base64 } object. Anything else fails the step in plain words
+    // rather than as "required input is missing".
+    const shaped = jarvisFileShape(rawValue)
+    if (shaped === null) {
         return null
     }
+    if (typeof shaped !== 'string') {
+        return shaped
+    }
+    const urlOrBase64 = shaped
+    // === END JARVIS PATCH ===
     try {
         const file = handleBase64File(urlOrBase64)
         if (!isNil(file)) {
@@ -25,6 +36,56 @@ export const fileProcessor: ProcessorFn = async (_property, urlOrBase64, fileCon
         return null
     }
 }
+
+// === JARVIS PATCH (file chaining) ===
+const NOT_A_FILE = 'This field needs a file from an earlier step, such as the output of Create file.'
+const MAX_FILE_MESSAGE = 'This file is too large for a step to carry (the limit is about 7 MiB).'
+const STEP_FILE_PATH = /^\/v1\/step-files\/[A-Za-z0-9_-]+$/
+
+function describeGot(value: unknown): string {
+    if (typeof value === 'string') return 'text'
+    if (typeof value === 'number') return 'a number'
+    if (typeof value === 'boolean') return 'true or false'
+    if (Array.isArray(value)) return 'a list'
+    return 'something that is not a file'
+}
+
+function notAFile(value: unknown): Error {
+    return new Error(NOT_A_FILE + ' It got ' + describeGot(value) + ' instead.')
+}
+
+/** A string that names a file: a step-file path, an http(s) URL or a data URL. */
+function stringFileShape(value: string): string | null {
+    if (value.trim() === '') return null
+    // Judged exactly as given: a padded or newline-ended path is not a step
+    // file, so it never earns the engine credential.
+    if (value.startsWith('data:')) {
+        // base64 carries 3 bytes in 4 characters
+        if (value.length > Math.ceil(MAX_RESPONSE_BYTES / 3) * 4 + 256) throw new Error(MAX_FILE_MESSAGE)
+        return value
+    }
+    if (STEP_FILE_PATH.test(value) || /^https?:\/\/\S+$/i.test(value)) return value
+    throw notAFile(value)
+}
+
+function jarvisFileShape(value: unknown): string | ApFile | null {
+    if (isNil(value)) return null
+    if (isString(value)) return stringFileShape(value)
+    if (typeof value !== 'object' || Array.isArray(value)) throw notAFile(value)
+    const record = value as Record<string, unknown>
+    // Create file returns { fileName, url }.
+    if (isString(record.url) && record.url.trim() !== '') return stringFileShape(record.url)
+    const name = [record.filename, record.fileName, record.name].find((n): n is string => isString(n) && n.trim() !== '')
+    if (isString(record.base64) && name !== undefined) {
+        const encoded = record.base64.replace(/^data:[^,]*;base64,/, '').replace(/\s+/g, '')
+        if (encoded.length > Math.ceil(MAX_RESPONSE_BYTES / 3) * 4) throw new Error(MAX_FILE_MESSAGE)
+        if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw new Error('The base64 text for ' + name + ' is not valid base64.')
+        const extension = name.includes('.') ? name.split('.').pop() : undefined
+        return new ApFile(name, Buffer.from(encoded, 'base64'), extension)
+    }
+    throw new Error(NOT_A_FILE + ' It got an object with no file in it instead.')
+}
+// === END JARVIS PATCH ===
 
 function handleBase64File(propertyValue: string): ApFile | null {
     if (!isBase64(propertyValue, { allowMime: true })) {

@@ -725,6 +725,18 @@ HTTP request specifics:
   for the run's list (`GET /v1/jarvis/read-hosts`, engine token) and a file
   URL whose host is not listed, or a redirect off the list, fails the step
   naming the host and the list.
+- **File shapes.** One rule in `processors/file.ts` decides what a file field
+  accepts, for every piece: the bare step-file path (`/v1/step-files/<id>`, what
+  zip, PDF, image and QR code steps return), the `{ fileName, url }` object
+  Create file returns (so `{{step_1}}` works as well as `{{step_1.url}}`), an
+  `http(s)` URL (held to the read list above), a `data:` URL, and a
+  `{ filename, base64 }` object (`fileName` or `name` also count; the base64 may
+  carry a `data:` prefix). Base64 is held to the same 7.3 MiB cap as a download.
+  Only an exact step-file path earns the engine credential; a padded or
+  query-carrying path does not. Any other value (plain text, a number, a list,
+  an object with no file) fails the step with "This field needs a file from an
+  earlier step, such as the output of Create file. It got text instead.", not
+  "required input is missing". An empty value is still no value.
 - **Read list (#1153).** A body-less GET or HEAD still carries what its URL and
   headers hold to the host it names, so it runs without a card only when that
   host is on the flow's read list (`POST /api/workflows/:id/read-hosts`
