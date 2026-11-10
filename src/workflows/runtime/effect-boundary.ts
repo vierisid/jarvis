@@ -1,4 +1,5 @@
 import type { ToolRegistry } from '../../actions/tools/registry';
+import { uiCardSentence, type UiCard } from './ui-card';
 import { collectActionVerification } from '../../actions/action-verification';
 import type { ActionOutcome } from '../../actions/action-outcome';
 import { projectDocument } from './decision-document';
@@ -74,6 +75,8 @@ export interface EffectInvocation {
   reviewRegistry?: ToolRegistry;
   /** Display only: what a reviewed browser call acts on, for its card. Never matched on. */
   reviewSubject?: { origin?: string; element?: string };
+  /** Display only: a reviewed UI call's card, values and computer included (#1314). Never matched on. */
+  uiCard?: UiCard;
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown>; bindings?: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
   /**
@@ -574,7 +577,11 @@ export class WorkflowEffectBoundary {
           // is labelled with the category the decision was made on.
           // A tool with no adapter target of its own still names its review
           // sentence through `confirmation`.
-          const intent = typeof record.target.intent === 'string' ? record.target.intent : input.confirmation?.intent;
+          // A reviewed UI call's card is its own sentence, with every value
+          // and the computer (#1314); the gate's generic sentence stays in the
+          // target, where the dispatch fence compares it.
+          const intent = input.uiCard ? uiCardSentence(input.uiCard)
+            : typeof record.target.intent === 'string' ? record.target.intent : input.confirmation?.intent;
           request = approvals.createRequest({ agentId: `workflow:${record.runId}`,
             agentName: `Workflow: ${flowLabel}${input.principal ? ` as ${input.principal.agentRoleId}` : ''}`,
             toolName: input.toolName, toolArguments: record.arguments, actionCategory: decision.actionCategory,
@@ -589,6 +596,7 @@ export class WorkflowEffectBoundary {
               // auto-approval cannot satisfy this card.
               ...(input.confirmation ? { confirm: input.confirmation.confirm } : {}),
               ...(input.reviewSubject && Object.keys(input.reviewSubject).length ? { reviewSubject: input.reviewSubject } : {}),
+              ...(input.uiCard ? { uiCard: input.uiCard } : {}),
               ...(intent ? { intent } : {}),
               // What a Telegram or Discord card says instead (#1152): a start
               // card's chat sentence names its input's fields, never values.

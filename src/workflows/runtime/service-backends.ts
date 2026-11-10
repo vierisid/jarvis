@@ -71,7 +71,8 @@ import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type Wor
 import { getWorkflowEffect, saveWorkflowEffect, listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { assertDesktopAllowed } from '../../actions/tools/desktop-guard.ts';
-import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
+import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability, uiCallComputer } from './effect-capabilities';
+import { desktopSubjectFromRun, uiCardRefusal, uiCardSentence, workflowUiCard, type UiCard } from './ui-card';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR,
@@ -519,11 +520,18 @@ export function buildSandboxServiceBackends(
         }
         let uiExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
         let dispatched = false;
+        // The card shows every frozen value, where each came from, the
+        // computer and the screen (#1314), or the step is refused unseen.
+        const subject = uiReview ? tool.reviewSubject?.(req.params) ?? {} : {};
+        const uiCard = uiReview ? workflowUiCard(tool.name, req.params, {
+          computer: uiCallComputer(tool.name, req.params.target).name,
+          source: name => fromRunData.has(name) ? 'run_data' : 'workflow',
+          page: subject.origin, element: subject.element, ...desktopSubjectFromRun(listWorkflowEffects(ctx.runId), tool.name, req.params) }) : null;
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
           // The tool the step names, not only the step (#1152).
           pinnedInput: { toolName: req.toolName },
-          ...(gate.confirm === 'always' ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review this UI effect' } } : {}),
-          ...(uiReview ? { reviewRegistry: opts.toolRegistry!, reviewSubject: tool.reviewSubject?.(req.params) ?? {},
+          ...(gate.confirm === 'always' ? { confirmation: { confirm: 'always' as const, intent: uiCard ? uiCardSentence(uiCard) : gate.intent ?? 'Review this UI effect' } } : {}),
+          ...(uiCard ? { reviewRegistry: opts.toolRegistry!, reviewSubject: subject, uiCard, cardRefusal: () => uiCardRefusal(uiCard),
             approvalExpiresAt: workflowUiCardDeadline(tool.name) } : {}),
           // As at the chat gate: a gated call over the workflow's level asks
           // instead of failing the step.
@@ -959,6 +967,18 @@ export function buildSandboxServiceBackends(
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.`);
         }
         let uiExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
+        // What the card shows (#1314): every value the agent sent, marked as
+        // the agent's, the computer, and the screen as this run last read it.
+        const subject = uiReview ? registry.get(call.toolCall.name)?.reviewSubject?.(call.toolCall.arguments) ?? {} : {};
+        let uiCard: UiCard | null = null;
+        if (uiReview) {
+          try {
+            uiCard = workflowUiCard(call.toolCall.name, call.toolCall.arguments, {
+              computer: uiCallComputer(call.toolCall.name, call.toolCall.arguments.target).name, source: () => 'agent',
+              page: subject.origin, element: subject.element,
+              ...desktopSubjectFromRun(listWorkflowEffects(resolved.run.id), call.toolCall.name, call.toolCall.arguments) });
+          } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+        }
         // Set once the call is dispatched; read by `validateTarget` below.
         let dispatched = false;
         try {
@@ -975,8 +995,8 @@ export function buildSandboxServiceBackends(
             //
             // Every UI action needs a dashboard click and the originating
             // registry's live guard; Authority overrides cannot auto-approve it.
-            ...(uiReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review UI action' }, reviewRegistry: registry,
-              reviewSubject: registry.get(call.toolCall.name)?.reviewSubject?.(call.toolCall.arguments) ?? {},
+            ...(uiCard ? { confirmation: { confirm: 'always' as const, intent: uiCardSentence(uiCard) }, reviewRegistry: registry,
+              reviewSubject: subject, uiCard, cardRefusal: () => uiCardRefusal(uiCard),
               approvalExpiresAt: workflowUiCardDeadline(call.toolCall.name) } : {}),
             ...(gate.confirm || workflowUiRead(call.toolCall.name, call.toolCall.arguments)
               ? { aboveLevelFloor: uiReview || workflowUiRead(call.toolCall.name, call.toolCall.arguments) ? 'read_data' as const : gate.floorCategory } : {}),

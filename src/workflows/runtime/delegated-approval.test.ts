@@ -1,6 +1,7 @@
 import { currentReviewedExecution } from '../../actions/tools/reviewed-call-scope';
 import { stopUnfinishedRunsForKill } from './emergency-hold';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { getSidecarManager, setSidecarManagerRef } from '../../actions/tools/sidecar-route';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -43,7 +44,12 @@ import { createRunFlowHandler } from '../runner/handler';
 import { Worker } from '../queue/worker';
 
 let directory: string, dbPath: string, previousDataDir: string | undefined;
+// The computer the scripted UI calls name (#1314): a card resolves the
+// computer it names, so it has to be enrolled.
+const originalSidecarManager = getSidecarManager();
 beforeEach(() => {
+  setSidecarManagerRef({ listSidecars: () => [{ id: 'test-computer', name: 'Test computer', connected: true,
+    capabilities: ['desktop', 'browser', 'filesystem', 'terminal'] }], getConnectionSessionId: () => 'session' } as any);
   directory = mkdtempSync(join(tmpdir(), 'jarvis-delegated-approval-'));
   dbPath = join(directory, 'workflow.db');
   previousDataDir = process.env.JARVIS_WORKFLOW_DATA_DIR;
@@ -51,6 +57,7 @@ beforeEach(() => {
   initWorkflowDb(dbPath);
 });
 afterEach(() => {
+  setSidecarManagerRef(originalSidecarManager!);
   closeWorkflowDb(); rmSync(directory, { recursive: true, force: true });
   if (previousDataDir === undefined) delete process.env.JARVIS_WORKFLOW_DATA_DIR;
   else process.env.JARVIS_WORKFLOW_DATA_DIR = previousDataDir;
@@ -1520,4 +1527,15 @@ test('a delegated navigate card approved in time but dispatched after five minut
     expect(f.effects()).toBe(0);
     expect(listWorkflowEffects(ids.run.id).at(-1)?.outcome).toMatchObject({ code: 'APPROVAL_EXPIRED', effect: 'not_started' });
   } finally { setSystemTime(); }
+});
+
+test('a delegated UI card shows the computer and every value as the agent chose it (#1314 M1)', async () => {
+  const ids = createRun();
+  const f = backends(ids, { authority: { governed_categories: [] },
+    script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/day?account={{secret}}&q=1', target: 'test-computer' } }, 'finish'] });
+  const parked = await f.delegate({ requiredTools: ['browser_navigate'] });
+  const context = JSON.parse(f.approvals.getRequest(parked.approval!.approvalId)!.context!);
+  expect(context.intent).toContain('On "Test computer (test-computer)": open a web page');
+  expect(context.intent).toContain('url="https://calendar.example/day?account={{secret}}&q=1" (chosen by the agent)');
+  expect(context.uiCard.values).toEqual([{ name: 'url', value: '"https://calendar.example/day?account={{secret}}&q=1"', source: 'agent' }]);
 });

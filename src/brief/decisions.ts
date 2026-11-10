@@ -151,6 +151,20 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
           if (typeof subject?.element === 'string' && subject.element.trim()) item.review.element = subject.element.slice(0, 160);
         } catch { /* An approval raised without a subject shows its tool and reason. */ }
       }
+      // A reviewed browser or desktop workflow card (#1314): the card the
+      // effect boundary wrote, shown whole. Display only, bounded at source.
+      try {
+        const card = (JSON.parse(approval.context ?? '') as { uiCard?: Record<string, unknown> }).uiCard;
+        if (card && typeof card.computer === 'string' && Array.isArray(card.values)) {
+          item.review.computer = card.computer.slice(0, 160);
+          if (typeof card.page === 'string' && /^https?:\/\//.test(card.page)) item.review.origin = card.page.slice(0, 160);
+          if (typeof card.element === 'string') item.review.element = card.element.slice(0, 200);
+          if (typeof card.window === 'string') item.review.window = card.window.slice(0, 200);
+          item.review.values = card.values.filter((v): v is { name: string; value: string; source: 'workflow' | 'run_data' | 'agent' } =>
+            !!v && typeof v.name === 'string' && typeof v.value === 'string' && ['workflow', 'run_data', 'agent'].includes(v.source))
+            .slice(0, 20).map(v => ({ name: v.name.slice(0, 64), value: v.value, source: v.source }));
+        }
+      } catch { /* A card raised before #1314 shows its tool and reason. */ }
       item.approval = { approvalId: sourceId, status: approval.status, executionMode: approval.execution_mode,
         executionOutcome: approval.execution_outcome ?? null };
       // A legacy executed row without a receipt is not proof of a committed effect.

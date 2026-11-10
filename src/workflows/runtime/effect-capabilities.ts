@@ -178,8 +178,9 @@ export function toolEffectCapability(tool: ToolDefinition, params: Record<string
     const gate = resolveToolGate(tool, tool.name, params);
     const capability: SidecarCapability = tool.name.startsWith('browser_') ? 'browser' : 'desktop';
     return { category: gate.actionCategory, categories: gate.categories,
-      target: (args: Record<string, unknown>) => ({ tool: tool.name, ...pinnedSidecar(capability, args.target), capability,
-        intent: gate.intent ?? 'Review this UI action' }),
+      // No intent here: the card sentence is the caller's (`ui-card.ts`),
+      // built with the values, the computer and the screen (#1314).
+      target: (args: Record<string, unknown>): Record<string, unknown> => ({ tool: tool.name, ...pinnedSidecar(capability, args.target), capability }),
       prepareArguments: (args: Record<string, unknown>) => {
         const pinned = pinnedSidecar(capability, args.target);
         return { ...args, ...(pinned.sidecarId ? { target: pinned.sidecarId } : {}) };
@@ -220,4 +221,17 @@ export function toolEffectCapability(tool: ToolDefinition, params: Record<string
     return intent ? { ...bounded, intent } : bounded;
   });
   return { category: categories[0]!, categories, target, prepareArguments };
+}
+
+/**
+ * The computer a reviewed UI call would act on, by id and name, for its card
+ * (#1314): resolved the way the call's target is, so the card names the
+ * machine the record is pinned to.
+ */
+export function uiCallComputer(toolName: string, requested: unknown): { sidecarId: string | null; name: string } {
+  const capability: SidecarCapability = toolName.startsWith('browser_') ? 'browser' : 'desktop';
+  const { sidecarId } = pinnedSidecar(capability, requested);
+  if (sidecarId === null) return { sidecarId, name: 'this computer (the Jarvis host)' };
+  const sidecar = getSidecarManager()?.listSidecars().find(s => s.id === sidecarId);
+  return { sidecarId, name: sidecar ? `${sidecar.name} (${sidecarId})` : sidecarId };
 }

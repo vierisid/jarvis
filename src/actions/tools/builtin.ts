@@ -1226,13 +1226,13 @@ function resolveBrowserTarget(
  * Display only, never a binding: the guard above is what holds the call to
  * the reviewed page. A remote target's page is not known here.
  */
-function browserReviewSubject(tool: 'browser_navigate' | 'browser_click' | 'browser_scroll') {
+function browserReviewSubject(tool: 'browser_navigate' | 'browser_click' | 'browser_scroll' | 'browser_type' | 'browser_hover' | 'browser_press_key') {
   return (params: Record<string, unknown>): { origin?: string; element?: string } => {
     const remote = typeof params.target === 'string' && params.target.trim() !== '';
     const url = tool === 'browser_navigate' ? (typeof params.url === 'string' ? params.url : null) : remote ? null : browser.lastKnownPageUrl();
     const origin = url ? pageOrigin(url) : null;
     const subject: { origin?: string; element?: string } = origin && /^https?:\/\//.test(origin) ? { origin: forCard(origin, 120) } : {};
-    if (tool === 'browser_click' && typeof params.element_id === 'number') {
+    if ((tool === 'browser_click' || tool === 'browser_type' || tool === 'browser_hover') && typeof params.element_id === 'number') {
       // Only from the map the card binds (#1161 review): when this loop's own
       // read is not the controller's current map, the current label names
       // another reader's element [n], and the card would show it while the
@@ -1648,6 +1648,7 @@ export const browserClickTool: ToolDefinition = {
 export const browserHoverTool: ToolDefinition = {
   name: 'browser_hover',
   captureApprovalGuard: browserCallGuard('browser_hover', { bindDocument: true }),
+  reviewSubject: browserReviewSubject('browser_hover'),
   description: 'Hover the mouse over an element by its [id]. Use this to reveal hover-only UI (message action toolbars, dropdown triggers, tooltips). After hovering, take a browser_snapshot to see the revealed elements, then click them without moving the mouse elsewhere first.',
   category: 'browser',
   parameters: {
@@ -1683,6 +1684,7 @@ export const browserHoverTool: ToolDefinition = {
 export const browserPressKeyTool: ToolDefinition = {
   name: 'browser_press_key',
   captureApprovalGuard: browserCallGuard('browser_press_key', { workflowBindsLoader: true }),
+  reviewSubject: browserReviewSubject('browser_press_key'),
   description: 'Press a key or key combination in the browser page (sent to the focused element). Examples: "Enter", "Escape", "Tab", "ArrowDown", "Ctrl+K", "Shift+Enter", "Ctrl+Shift+M". Use for in-app keyboard shortcuts, menu navigation, and committing edits. Note: browser-reserved shortcuts (Ctrl+N, Ctrl+T, Ctrl+1-9) are intercepted by Chrome and never reach the page — use in-page UI for those actions instead. PageUp, PageDown, Home and End scroll the page, which retires every element [id]: snapshot again before using one.',
   category: 'browser',
   parameters: {
@@ -1715,6 +1717,7 @@ export const browserPressKeyTool: ToolDefinition = {
 export const browserTypeTool: ToolDefinition = {
   name: 'browser_type',
   captureApprovalGuard: browserCallGuard('browser_type', { bindDocument: true }),
+  reviewSubject: browserReviewSubject('browser_type'),
   description: 'Type text into an input element by its [id]. IMPORTANT: by default this REPLACES the element\'s existing content (it is cleared first). Set append to true to keep existing content and add at the end. Set submit to true to press Enter after typing (useful for search forms).',
   category: 'browser',
   parameters: {

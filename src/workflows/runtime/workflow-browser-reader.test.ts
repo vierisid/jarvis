@@ -221,3 +221,18 @@ test('a workflow key press bound for another computer is refused before any card
   expect(f.approvals.getPending()).toHaveLength(0);
   expect(f.calls.filter(c => c.method === 'browser_press_key')).toHaveLength(0);
 });
+
+test('a navigate card shows the full URL and a type card the text, with the computer (#1314 M1, m9)', async () => {
+  const f = fixture(browserTypeTool), run = f.run();
+  const nav = await f.call(run.id, 'navigate'); expect(nav.status).toBe(202);
+  const navCard = JSON.parse(f.approvals.getRequest((await nav.json()).approval.approvalId)!.context!);
+  expect(navCard.intent).toContain('url="https://example.test/"');
+  expect(navCard.intent).toContain('On "PC (pc)": open a web page');
+  f.approvals.approve(navCard.effectId ? f.approvals.getPending()[0]!.id : '', 'dashboard');
+  expect((await f.call(run.id, 'navigate')).status).toBe(200);
+  await f.call(run.id, 'snapshot');
+  const typed = await f.call(run.id, 'action'); expect(typed.status).toBe(202);
+  const card = JSON.parse(f.approvals.getRequest((await typed.json()).approval.approvalId)!.context!);
+  expect(card.intent).toContain('text="Synthetic note"');
+  expect(card.uiCard.values.map((v: any) => v.name)).toEqual(['element_id', 'text']);
+});

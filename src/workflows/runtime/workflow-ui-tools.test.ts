@@ -28,7 +28,8 @@ const graph = (toolName: string, params = {}): any => ({ name: 'trigger', type: 
   name: 'action', type: 'PIECE', settings: { pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1',
     actionName: 'invoke', input: { toolName, params } } } });
 
-function fixture(tool = desktopLaunchAppTool, params: Record<string, unknown> = { target: 'pc', executable: 'notepad.exe' }, reply: unknown = { success: true, window_visible: true, pid: 123, window_title: 'Untitled - Notepad' }) {
+function fixture(tool = desktopLaunchAppTool, params: Record<string, unknown> = { target: 'pc', executable: 'notepad.exe' }, reply: unknown = { success: true, window_visible: true, pid: 123, window_title: 'Untitled - Notepad' },
+  graphParams: Record<string, unknown> = params) {
   const machines = [{ id: 'pc', name: 'PC', os: 'windows', connected: true, session: 'first', capabilities: ['desktop', 'browser'],
     features: ['browser_elem_gen', 'browser_action_outcomes'] }];
   const calls: Array<{ method: string; args: any }> = [];
@@ -37,7 +38,7 @@ function fixture(tool = desktopLaunchAppTool, params: Record<string, unknown> = 
       return reply; } } as any);
   const registry = new ToolRegistry(); registry.register(tool);
   const flow = createFlow();
-  const version = createDraftVersion({ flowId: flow.id, displayName: 'Notepad audit', trigger: graph(tool.name, params) });
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Notepad audit', trigger: graph(tool.name, graphParams) });
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
   const approvals = new ApprovalManager();
   const build = (manager = approvals, level = 10) => buildSandboxServiceBackends({ toolRegistry: registry,
@@ -148,4 +149,32 @@ test('a key press that would reach another computer is refused at composition an
   expect(issues({ key: 'Enter' }, [{ ...studio, capabilities: ['desktop'] }])).toEqual([]);
   expect(issues({ key: 'Enter' }, [])[0]?.message).toBeUndefined();
   expect(issues({ key: 'Enter' }, [studio])[0]!.message).toContain('browser_type with submit');
+});
+
+
+test('the card shows every value, the computer, and which values run data chose (#1314 M1)', async () => {
+  const f = fixture(desktopLaunchAppTool, { target: 'pc', executable: 'notepad.exe', args: 'C:\\notes\\"q".txt' }, undefined,
+    { target: 'pc', executable: 'notepad.exe', args: '{{trigger.body.file}}' });
+  expect((await f.call()).status).toBe(202);
+  const card = f.approvals.getPending()[0]!;
+  const context = JSON.parse(card.context!);
+  expect(context.intent).toContain('On "PC (pc)": open an app');
+  expect(context.intent).toContain('executable="notepad.exe"');
+  expect(context.intent).toContain('args="C:\\\\notes\\\\\\"q\\".txt" (from run data)');
+  expect(context.uiCard).toMatchObject({ computer: 'PC (pc)', values: [
+    { name: 'args', source: 'run_data' }, { name: 'executable', value: '"notepad.exe"', source: 'workflow' }] });
+});
+
+test('a value the card would cut is refused before any card (#1314 M1, #1040)', async () => {
+  const long = 'x'.repeat(700);
+  const f = fixture(desktopLaunchAppTool, { target: 'pc', executable: 'notepad.exe', args: long }, undefined,
+    { target: 'pc', executable: 'notepad.exe', args: '{{trigger.body.file}}' });
+  await expect(Promise.resolve(f.call())).rejects.toMatchObject({ outcome: { code: 'CARD_CANNOT_SHOW', effect: 'not_started' } });
+  expect(f.approvals.getPending()).toHaveLength(0); expect(f.calls).toHaveLength(0);
+});
+
+test('a hidden character in a value is shown escaped, never dropped (#1314 M1)', async () => {
+  const f = fixture(desktopLaunchAppTool, { target: 'pc', executable: 'note\u202epad.exe' });
+  expect((await f.call()).status).toBe(202);
+  expect(JSON.parse(f.approvals.getPending()[0]!.context!).intent).toContain('executable="note\\u202Epad.exe"');
 });
