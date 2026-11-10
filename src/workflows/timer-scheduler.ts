@@ -41,6 +41,20 @@ export class TimerWaitpointScheduler {
   }
 
   /**
+   * Continue parents whose required child or call step has settled, now
+   * rather than on the next poll. The worker calls this after each job, when
+   * a child has just ended or a parent has just parked. The poll stays the
+   * safety net for a crash, a restart and anything that settles off the
+   * worker. Idempotent with `tick`: the same claim consumes each waitpoint
+   * once. Never throws.
+   */
+  resumeSettledChildren(): number {
+    if (emergencyHold()) return 0;
+    try { return resumeCompletedChildRuns(this.onCardClosed); }
+    catch (error) { console.error('[TimerScheduler] child continuation failed:', error); return 0; }
+  }
+
+  /**
    * Resume every currently-due TIMER waitpoint. Returns how many were resumed.
    * Never throws (runs on a setInterval — a throw would become an
    * uncaughtException and take the daemon down); per-waitpoint errors are logged
