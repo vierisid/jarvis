@@ -15,7 +15,7 @@ import { CredentialResolver } from "../credentials/adapter";
 import { DEFAULT_IDS } from "../db/schema";
 import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../db";
 import { graphDigest } from "../runtime/continuation";
-import { _clearStoreForTests } from "../db/repos/store-entry";
+import { _clearStoreForTests, getStoreEntry, putStoreEntry } from "../db/repos/store-entry";
 import { createFlow, setPublishedVersion, updateFlowStatus } from "../db/repos/flow";
 import { createDraftVersion, lockVersion } from "../db/repos/flow-version";
 import { createFlowRun } from "../db/repos/flow-run";
@@ -476,6 +476,42 @@ describe("SandboxApi routes (B2: connections, store, flows)", () => {
     expect(r.status).toBe(413);
   });
 
+  test("a FLOW-scoped store key is served only to a run of that flow; PROJECT keys stay shared", async () => {
+    const as = async (runId: string) => {
+      const id = { ...sampleIdentity(), runId };
+      const { token } = await signer.mint(id);
+      registry.register({ ...id, engineToken: token, expiresAt: Date.now() + 60_000, terminatedAt: null });
+      return (path: string, init: RequestInit = {}) =>
+        fetch(`${api.baseUrl}${path}`, { ...init, headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` } });
+    };
+    const put = (key: string, value: unknown) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key, value }) });
+    const mine = persistedIdentity();
+    const other = persistedIdentity();
+    const mineFlow = getWorkflowDb().query<{ flow_id: string }, [string]>("SELECT flow_id FROM flow_run WHERE id = ?").get(mine.runId)!.flow_id;
+    const otherFlow = getWorkflowDb().query<{ flow_id: string }, [string]>("SELECT flow_id FROM flow_run WHERE id = ?").get(other.runId)!.flow_id;
+    putStoreEntry(DEFAULT_IDS.project, `flow_${otherFlow}/cursor`, "theirs");
+    const f = await as(mine.runId);
+    // Its own flow's keys, a trigger test run's included, and project keys.
+    expect((await f("/v1/store-entries", put(`flow_${mineFlow}/cursor`, "mine"))).status).toBe(201);
+    expect((await f("/v1/store-entries", put(`testflow_${mineFlow}/cursor`, "mine"))).status).toBe(201);
+    expect((await f(`/v1/store-entries?key=${encodeURIComponent(`flow_${mineFlow}/cursor`)}`)).status).toBe(200);
+    expect((await f("/v1/store-entries", put("shared", 1))).status).toBe(201);
+    // Another flow's: refused on every verb, and its entry is untouched.
+    const theirs = encodeURIComponent(`flow_${otherFlow}/cursor`);
+    expect((await f(`/v1/store-entries?key=${theirs}`)).status).toBe(403);
+    expect((await f("/v1/store-entries", put(`flow_${otherFlow}/cursor`, "forged"))).status).toBe(403);
+    expect((await f("/v1/store-entries", put(`testflow_${otherFlow}/cursor`, "forged"))).status).toBe(403);
+    expect((await f(`/v1/store-entries?key=${theirs}`, { method: "DELETE" })).status).toBe(403);
+    expect(getStoreEntry(DEFAULT_IDS.project, `flow_${otherFlow}/cursor`)?.value).toBe("theirs");
+    // A trigger hook of the other flow is that flow; a token that serves no flow gets no FLOW key at all.
+    const version = getWorkflowDb().query<{ id: string }, [string]>("SELECT id FROM flow_version WHERE flow_id = ?").get(otherFlow)!;
+    const hook = await as(triggerHookRunId("poll", otherFlow, { id: version.id, trigger: {} }));
+    expect((await hook(`/v1/store-entries?key=${theirs}`)).status).toBe(200);
+    const nobody = await as("run_without_flow");
+    expect((await nobody(`/v1/store-entries?key=${theirs}`)).status).toBe(403);
+    expect((await nobody("/v1/store-entries?key=shared")).status).toBe(200);
+  });
+
   test("GET /v1/engine/populated-flows returns published flows in SeekPage shape", async () => {
     const flow = createFlow({ projectId: DEFAULT_IDS.project });
     const v = createDraftVersion({
@@ -827,6 +863,16 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
       }),
     });
     expect(r.status).toBe(403);
+  });
+
+  test("POST /v1/waitpoints refuses a projectId other than the token's", async () => {
+    const r = await authedFetchForRun("/v1/waitpoints", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ flowRunId: testRunId, projectId: "proj_elsewhere", stepName: "x", type: "WEBHOOK", version: "V1" }),
+    });
+    expect(r.status).toBe(403);
+    expect(getWorkflowDb().query("SELECT COUNT(*) AS n FROM waitpoint WHERE project_id = ?").get("proj_elsewhere")).toEqual({ n: 0 });
   });
 
   test("POST /v1/waitpoints accepts DELAY (stored as TIMER) and normalizes RFC-1123 -> ISO", async () => {

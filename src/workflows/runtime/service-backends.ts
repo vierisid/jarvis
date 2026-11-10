@@ -290,8 +290,62 @@ function workflowDelegateCardRefusal(args: Record<string, unknown>, specialists:
  * pinned version's.
  */
 function workflowStartIntent(flowId: string, name: string, waitForCompletion: boolean, input: string | null): string {
-  return `${waitForCompletion ? 'Start and wait for' : 'Start'} the workflow ${forCard(flowId, 128)} named ${JSON.stringify(boundedApprovalLabel(name, START_CARD_NAME_MAX_CHARS))}`
-    + (input === null ? '' : input);
+  const head = `${waitForCompletion ? 'Start and wait for' : 'Start'} the workflow ${forCard(flowId, 128)} named `;
+  return head + startCardName(name, START_CARD_SENTENCE_MAX_CHARS - head.length - START_INPUT_SHOWN_MAX_CHARS) + (input === null ? '' : input);
+}
+
+/**
+ * Most characters a start card's sentence may take: the Needs you title
+ * (`brief/decisions.ts`) shows the first 1000 of an approval's intent and
+ * cuts the rest without a mark, so a sentence never runs past it.
+ */
+const START_CARD_SENTENCE_MAX_CHARS = 1000;
+/** `, with the input ` and the most input a card shows (`workflowStartCardRefusal`). */
+const START_INPUT_SHOWN_MAX_CHARS = ', with the input '.length + AGENT_TASK_MAX_CHARS;
+
+/**
+ * The flow's name as a start card shows it, quoted, in at most `budget`
+ * characters: cut with a visible "..." (`boundedApprovalLabel`) when the whole
+ * name does not fit beside the most input the card can show, since the flow
+ * id before it still says which flow starts. Measured as shown, so JSON's
+ * escaping of quotes and backslashes and the bidi isolates count.
+ */
+function startCardName(name: string, budget: number): string {
+  // A name shorter than the cap is not cut by the label above it, so start there.
+  let max = Math.min(START_CARD_NAME_MAX_CHARS, Math.max(1, name.length));
+  for (;;) {
+    const shown = isolateJsonStrings(JSON.stringify(boundedApprovalLabel(name, max)));
+    if (shown.length <= budget || max <= 1) return shown;
+    max = Math.max(1, max - Math.max(1, Math.ceil((shown.length - budget) / 2)));
+  }
+}
+
+/** FIRST STRONG ISOLATE and POP DIRECTIONAL ISOLATE (Unicode bidi isolates). */
+const FSI = '\u2068';
+const PDI = '\u2069';
+/** A JSON string token: its quotes and everything between, escapes included. */
+const JSON_STRING = /"(?:[^"\\]|\\.)*"/g;
+
+/** Any character outside ASCII: the only kind that can be right-to-left text. */
+const NON_ASCII = /[^\x00-\x7f]/;
+
+/**
+ * `json` with the text of each string in it (keys and values) that holds a
+ * character outside ASCII wrapped in a bidi isolate, inside its quotes.
+ * Right-to-left text in a value otherwise reorders the punctuation around it
+ * on the dashboard: in `{"<rtl key>":"<rtl value>"}` the colon between two
+ * right-to-left runs takes their direction, and the pair reads with key and
+ * value swapped. An isolate keeps such a string to itself, so the card reads
+ * in the order it is written, in any script, without escaping anyone's
+ * language. A string of ASCII alone cannot hold right-to-left text, so it is
+ * left as it was and an ASCII card is unchanged. Only for text whose own
+ * format characters are already gone or escaped (`START_INPUT_HIDDEN`, a
+ * label's reduction), so a string cannot close or open an isolate of its own.
+ * The isolates are display only: what the child receives is the payload.
+ * They are shown characters for the card's length budget, so they count.
+ */
+function isolateJsonStrings(json: string): string {
+  return json.replace(JSON_STRING, (token) => NON_ASCII.test(token) ? `"${FSI}${token.slice(1, -1)}${PDI}"` : token);
 }
 
 /**
@@ -319,9 +373,14 @@ function startInputJson(payload: unknown): string | null {
   if (typeof payload === 'object' && !Array.isArray(payload) && Object.keys(payload).length === 0) return null;
   return canonicalJson(payload).replace(START_INPUT_HIDDEN, unitEscapes);
 }
-function startInputForCard(payload: unknown): string | null {
+/** The input exactly as the dashboard card shows it, isolates included. */
+function startInputShown(payload: unknown): string | null {
   const json = startInputJson(payload);
-  return json === null ? null : `, with the input ${json}`;
+  return json === null ? null : isolateJsonStrings(json);
+}
+function startInputForCard(payload: unknown): string | null {
+  const shown = startInputShown(payload);
+  return shown === null ? null : `, with the input ${shown}`;
 }
 
 /** How many of a payload's field names a chat card lists before "and N more" (#1152). The card's own length budget still applies. */
@@ -371,7 +430,7 @@ export function workflowStartChannelIntentOf(args: Record<string, unknown>): str
  * has to approve runs as it did.
  */
 function workflowStartCardRefusal(args: Record<string, unknown>): string | null {
-  const input = startInputJson(args.payload);
+  const input = startInputShown(args.payload);
   return input !== null && input.length > AGENT_TASK_MAX_CHARS
     ? `The input passed to the workflow is ${input.length} characters as the approval card shows it; the limit is ${AGENT_TASK_MAX_CHARS}, so the card can show all of it. Pass fewer or shorter fields, or let the started workflow read the rest itself.`
     : null;

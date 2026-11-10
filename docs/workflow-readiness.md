@@ -14,6 +14,20 @@ flow again, which pins the current bindings; saving a draft does not. In chat,
 that acceptance needs a person's approval. See
 `docs/workflow-binding-pins.md`.
 
+A step that asks a person (the input piece's `request_input` or
+`request_approval`, or the legacy approval piece) is a `HUMAN_INPUT_UNAVAILABLE`
+issue while Brief decisions (Needs you) is off, with the message the step would
+otherwise fail with mid-run. Decisions is on with the default Brief dashboard;
+an install that chose the legacy dashboard turns it on with
+`JARVIS_BRIEF_DECISIONS=1` and a restart, which registers the refused triggers
+again. While it is off, such a workflow cannot be published, enabled or run,
+an enabled one is not triggered, and the live draft of an enabled, unpublished
+one cannot be saved (a rename included), wherever the step sits (a branch
+rarely taken included). A draft saved meanwhile keeps the `valid` flag it was
+saved with until it is saved again. A run already under way is not refused when it resumes, and a
+single-step preview is refused only when the previewed step is the one that
+asks.
+
 Single-step previews validate the selected node using its saved sample input
 override. Other unfinished nodes retain identity/scope checks but do not need
 activation-ready inputs or bindings. Whole-workflow runs and publication still

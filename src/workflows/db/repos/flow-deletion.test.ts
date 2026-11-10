@@ -16,7 +16,7 @@ import { saveWorkflowEffect, type WorkflowEffect } from "./workflow-effect";
 import { createWorkflowRoutes } from "../../api/routes";
 import { createManageWorkflowTool } from "../../../actions/tools/manage-workflow";
 import { beginEffectDispatch } from "../../runtime/effect-inflight";
-import { deleteWorkflow, FLOW_DELETE_BATCH, FLOW_DELETE_WAIT_MS } from "./flow-deletion";
+import { deleteWorkflow, FLOW_DELETE_BATCH, FLOW_DELETE_WAIT_MS, setDeletedWorkflowCardListener } from "./flow-deletion";
 
 let dir: string, savedData: string | undefined;
 beforeEach(() => {
@@ -72,6 +72,7 @@ function leftovers(flowId: string, versionId: string) {
   writeFileSync(join(logs, `${finished.id}.bin`), "state");
   writeFileSync(join(files, flowId, "step", "file__a.txt"), "data");
   return {
+    card,
     check: () => {
       expect(getFlow(flowId)).toBeNull();
       expect(getFlowRun(finished.id)).toBeNull();
@@ -86,20 +87,31 @@ function leftovers(flowId: string, versionId: string) {
   };
 }
 
-test("the dashboard delete removes run logs, step files, file rows, store keys, jobs and ended runs' cards", async () => {
+test("the dashboard delete removes run logs, step files, file rows, store keys, jobs and ended runs' cards, and tells the dashboard", async () => {
   const { flow, version } = fixture();
   const left = leftovers(flow.id, version.id);
+  const closed: string[] = [];
+  setDeletedWorkflowCardListener((id) => closed.push(id));
   const request = Object.assign(new Request(`http://local/api/workflows/${flow.id}`, { method: "DELETE" }), { params: { id: flow.id } });
   expect((await createWorkflowRoutes()["/api/workflows/:id"]!.DELETE!(request)).status).toBe(200);
   left.check();
+  // The dashboard hears each card the delete closed, as it does for a purge.
+  expect(closed).toEqual([left.card]);
 });
 
-test("manage_workflow delete removes the same", async () => {
+test("manage_workflow delete removes the same and tells the dashboard; a failing listener does not stop it", async () => {
   const { flow, version } = fixture();
   const left = leftovers(flow.id, version.id);
+  // A live run's card too: the delete stops the run and closes it.
+  const live = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+  const liveCard = cardFor(live.id, flow.id, version.id);
+  const closed: string[] = [];
+  setDeletedWorkflowCardListener((id) => { closed.push(id); throw new Error("socket gone"); });
   const out = JSON.parse(await createManageWorkflowTool().execute({ action: "delete", flow: flow.id }) as string);
   expect(out).toEqual({ id: flow.id, deleted: true });
   left.check();
+  // Every card is reported, the later one too after the listener threw on the first.
+  expect(closed.sort()).toEqual([left.card, liveCard].sort());
 });
 
 test("a missing or foreign flow is not found and nothing is touched", async () => {
