@@ -103,7 +103,7 @@ describe('#884: each channel sender has a conversation of their own', () => {
     await service(agent)({ ...telegram(3003, 'hi', false), from: 'eve\u202Egnp.exe' });
     const row = getDb().query(`SELECT t.title FROM conversations c JOIN conversation_tabs t ON t.conversation_id = c.id
       WHERE c.sender = ?`).get(conversationSender(telegram(3003, '', false))!) as { title: string };
-    expect(row.title).toBe('Telegram guest - evegnp.exe');
+    expect(row.title).toMatch(/^Telegram guest - evegnp\.exe, \d{4}-\d{2}-\d{2}$/);
   });
 
   test('the owner\'s private thread is titled by role, whatever their name', async () => {
@@ -111,7 +111,7 @@ describe('#884: each channel sender has a conversation of their own', () => {
     await service(agent, [1001])({ ...telegram(1001, 'hi', true), from: 'kuroi' });
     const row = getDb().query(`SELECT t.title FROM conversations c JOIN conversation_tabs t ON t.conversation_id = c.id
       WHERE c.sender = ?`).get(conversationSender(telegram(1001, '', true))!) as { title: string };
-    expect(row.title).toBe('Telegram - you');
+    expect(row.title).toMatch(/^Telegram - you, \d{4}-\d{2}-\d{2}$/);
   });
 
   test('classic mode: a stranger is not answered from the owner\'s dashboard or channel history', async () => {

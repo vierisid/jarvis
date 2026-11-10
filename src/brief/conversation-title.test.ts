@@ -32,28 +32,31 @@ test('a topic of exactly 60 characters is kept whole', () => {
 });
 
 // #1313 follow-up: Telegram and Discord threads were all "Chat history".
-test('a guest thread is titled with its channel and sender name', () => {
-  expect(channelThreadTitle('telegram', 'alice_b', 'guest')).toBe('Telegram guest - alice_b');
-  expect(channelThreadTitle('discord', 'Bob', 'guest')).toBe('Discord guest - Bob');
+const DM = { privateChat: true, startedAt: Date.UTC(2026, 10, 10, 9) };
+const GROUP = { privateChat: false, startedAt: Date.UTC(2026, 10, 10, 9) };
+test('a guest thread is titled with its channel, kind of chat, sender name and day', () => {
+  expect(channelThreadTitle('telegram', 'alice_b', 'guest', DM)).toBe('Telegram guest - alice_b, 2026-11-10');
+  expect(channelThreadTitle('discord', 'Bob', 'guest', GROUP)).toBe('Discord group guest - Bob, 2026-11-10');
 });
 test('the owner\'s threads are named by role, so no chosen name can pass for them', () => {
-  expect(channelThreadTitle('telegram', 'kuroi', 'owner')).toBe('Telegram - you');
-  expect(channelThreadTitle('telegram', 'kuroi', 'shared')).toBe('Telegram group - you');
+  expect(channelThreadTitle('telegram', 'kuroi', 'owner', DM)).toBe('Telegram - you, 2026-11-10');
+  expect(channelThreadTitle('telegram', 'kuroi', 'shared', GROUP)).toBe('Telegram group - you, 2026-11-10');
   // A guest who copies the owner's name, or the owner's whole title, still reads as a guest.
-  for (const name of ['kuroi', 'you', 'Telegram - you']) expect(channelThreadTitle('telegram', name, 'guest')!.startsWith('Telegram guest - ')).toBe(true);
+  for (const name of ['kuroi', 'you', 'Telegram - you']) expect(channelThreadTitle('telegram', name, 'guest', DM)!.startsWith('Telegram guest - ')).toBe(true);
 });
 test('a sender name is untrusted: format, control and invisible characters go, marks do not stack, and it is capped', () => {
+  const name = (raw: string) => channelThreadTitle('telegram', raw, 'guest', DM)!.slice('Telegram guest - '.length, -', 2026-11-10'.length);
   // A right-to-left override would reorder what follows it in the tab strip.
-  expect(channelThreadTitle('telegram', `ali\u202Ece\u0000\n\u200Bx`, 'guest')).toBe('Telegram guest - alice x');
-  expect(channelThreadTitle('telegram', 'x'.repeat(500), 'guest')).toBe(`Telegram guest - ${'x'.repeat(40)}...`);
-  expect(channelThreadTitle('telegram', `a${'\u0301'.repeat(60)}b`, 'guest')).toBe('Telegram guest - \u00E1\u0301\u0301b'); // NFKC composes the first mark; two more at most stay
-  expect(channelThreadTitle('telegram', '\uFF41\uFF4C\uFF49', 'guest')).toBe('Telegram guest - ali');
-  expect(channelThreadTitle('telegram', '<img src=x onerror=alert(1)>', 'guest')).toBe('Telegram guest - <img src=x onerror=alert(1)>');
+  expect(name(`ali\u202Ece\u0000\n\u200Bx`)).toBe('alice x');
+  expect(name('x'.repeat(500))).toBe(`${'x'.repeat(40)}...`);
+  expect(name(`a${'\u0301'.repeat(60)}b`)).toBe('\u00E1\u0301\u0301b'); // NFKC composes the first mark; two more at most stay
+  expect(name('\uFF41\uFF4C\uFF49')).toBe('ali');
+  expect(name('<img src=x onerror=alert(1)>')).toBe('<img src=x onerror=alert(1)>');
 });
 test('no visible name, or a channel without a label, keeps the default title', () => {
-  for (const name of ['', '   ', '\u202E\u200B', '\u3164\u2800\u115F', '\u0301\u0301', undefined, 42, null]) {
-    expect(channelThreadTitle('telegram', name, 'guest')).toBeUndefined();
+  for (const raw of ['', '   ', '\u202E\u200B', '\u3164\u2800\u115F', '\u0301\u0301', undefined, 42, null]) {
+    expect(channelThreadTitle('telegram', raw, 'guest', DM)).toBeUndefined();
   }
-  expect(channelThreadTitle('websocket', 'alice', 'guest')).toBeUndefined();
-  expect(channelThreadTitle('websocket', 'alice', 'owner')).toBeUndefined();
+  expect(channelThreadTitle('websocket', 'alice', 'guest', DM)).toBeUndefined();
+  expect(channelThreadTitle('websocket', 'alice', 'owner', DM)).toBeUndefined();
 });

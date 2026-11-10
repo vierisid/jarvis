@@ -21,23 +21,27 @@ const INVISIBLE_LETTERS = /[\u115F\u1160\u3164\uFFA0\u2800]/g;
  * The title a Telegram or Discord thread is created with, so closed threads
  * can be told apart (#1313 follow-up). Who the sender is comes from the
  * server, never from the name: the owner's own private chat is "Telegram -
- * you", the owner in a group "Telegram group - you", and anyone else
- * "Telegram guest - <name>", so no name can pass for the owner's thread.
+ * you, <day>", the owner in a group "Telegram group - you, <day>", and anyone
+ * else "Telegram guest - <name>, <day>", so no name can pass for the owner's.
  * The name is what the sender chose: untrusted. It is normalised (NFKC),
  * loses control, format and invisible characters and stacked combining
  * marks, collapses whitespace and is capped; it is only ever rendered as
  * text. Undefined keeps the default title.
  */
-export function channelThreadTitle(channel: string, sender: unknown, who: 'owner' | 'shared' | 'guest'): string | undefined {
+export function channelThreadTitle(channel: string, sender: unknown, who: 'owner' | 'shared' | 'guest',
+  where: { privateChat: boolean; startedAt: number }): string | undefined {
   const label = threadChannelName(channel);
   if (!label) return undefined;
-  if (who === 'owner') return `${label} - you`;
-  if (who === 'shared') return `${label} group - you`;
+  // A sender has a thread per chat and a new one after a quiet spell: the kind
+  // of chat and the day it started tell them apart.
+  const place = where.privateChat ? label : `${label} group`;
+  const day = `, ${new Date(where.startedAt).toISOString().slice(0, 10)}`;
+  if (who !== 'guest') return `${place} - you${day}`;
   if (typeof sender !== 'string') return undefined;
   const clean = sender.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(INVISIBLE_LETTERS, '')
     .replace(/(\p{M}{2})\p{M}+/gu, '$1')
     .replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ').replace(/\s+/g, ' ').trim();
   if (!/[\p{L}\p{N}\p{S}\p{P}]/u.test(clean)) return undefined;
   const chars = [...clean];
-  return `${label} guest - ${chars.length > SENDER_NAME_MAX ? `${chars.slice(0, SENDER_NAME_MAX).join('').trimEnd()}...` : clean}`;
+  return `${place} guest - ${chars.length > SENDER_NAME_MAX ? `${chars.slice(0, SENDER_NAME_MAX).join('').trimEnd()}...` : clean}${day}`;
 }
