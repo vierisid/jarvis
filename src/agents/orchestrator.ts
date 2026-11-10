@@ -9,7 +9,7 @@ import type { Tier } from '../llm/tiers.ts';
 import { AgentInstance, canSpawnChildren } from './agent.ts';
 import { AgentHierarchy } from './hierarchy.ts';
 import { ToolRegistry, type ToolDefinition, isToolResult } from '../actions/tools/registry.ts';
-import { toolDefToLLMTool } from '../actions/tools/builtin.ts';
+import { toolDefToLLMTool, BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
 import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn, toolReturnText } from '../roles/untrusted.ts';
@@ -201,6 +201,15 @@ export type TaskCallResult =
 
 /** Prefix of a turn mark recording an intent the person did not approve (Q-08). */
 const DECLINED_INTENT = 'declined-intent:';
+
+/**
+ * Whether a role's tool entry -- a category or, since #1314, one tool by
+ * name -- is within `entries`: the same entry, or a named tool whose
+ * category `entries` allows.
+ */
+function withinToolEntries(entries: readonly string[], entry: string): boolean {
+  return entries.includes(entry) || BUILTIN_TOOLS.some((t) => t.name === entry && entries.includes(t.category));
+}
 
 export class AgentOrchestrator {
   private hierarchy: AgentHierarchy;
@@ -663,7 +672,7 @@ export class AgentOrchestrator {
     if (!caller || !target) return null;
     const mine = caller.agent.agent.authority;
     const theirs = target.agent.authority;
-    const extra = theirs.allowed_tools.filter((t) => !mine.allowed_tools.includes(t));
+    const extra = theirs.allowed_tools.filter((t) => !withinToolEntries(mine.allowed_tools, t));
     const undenied = mine.denied_tools.filter((t) => !theirs.denied_tools.includes(t));
     if (theirs.max_authority_level < mine.max_authority_level && extra.length === 0 && undenied.length === 0) return null;
     const why = theirs.max_authority_level >= mine.max_authority_level
@@ -725,7 +734,9 @@ export class AgentOrchestrator {
     const bounds = [parent.agent.authority, actor.agent.authority];
     const childAuthority = {
       max_authority_level: Math.min(role.authority_level, ...bounds.map((b) => b.max_authority_level - 1)),
-      allowed_tools: role.tools.filter((tool) => bounds.every((b) => b.allowed_tools.includes(tool))),
+      // An entry is a category or, since #1314, one tool by name: a named
+      // tool is within a bound that allows it by name or allows its category.
+      allowed_tools: role.tools.filter((tool) => bounds.every((b) => withinToolEntries(b.allowed_tools, tool))),
       denied_tools: [...new Set(bounds.flatMap((b) => b.denied_tools))],
       max_token_budget: Math.floor(Math.min(...bounds.map((b) => b.max_token_budget)) / 2),
       can_spawn_children: canSpawnChildren(role),

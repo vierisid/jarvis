@@ -16,7 +16,9 @@ export interface QueuedDecision extends BriefDecision {
   refs: DecisionReference[];
   relatedTruncated: boolean;
   supportedActions: DecisionAction[];
-  review?: { toolName: string; reason: string; target?: string; origin?: string; element?: string; workflowName?: string; requestedAt?: number; message?: string; channels?: string[]; fallback?: 'desktop' };
+  review?: { toolName: string; reason: string; target?: string; origin?: string; element?: string; workflowName?: string; requestedAt?: number; message?: string; channels?: string[]; fallback?: 'desktop';
+    /** #1314: a reviewed browser/desktop workflow card: the computer, the window, and every value with where it came from. */
+    computer?: string; window?: string; values?: Array<{ name: string; value: string; source: 'workflow' | 'run_data' | 'agent' }> };
   placement: number;
   createdAt: number;
 }

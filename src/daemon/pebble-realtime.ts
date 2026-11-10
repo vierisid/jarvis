@@ -450,6 +450,10 @@ export function wireRealtimeReadvertisement(
       .catch((err) => console.warn('[pebble-realtime] re-advertisement failed:', err));
   };
   coordinator.registerApplier('voice', push, { debounceMs: READVERTISE_DEBOUNCE_MS });
+  // The tool list a session advertises follows the desktop and screen
+  // awareness switches too (#1314 review): turning either off withdraws tools.
+  coordinator.registerApplier('awareness', push, { debounceMs: READVERTISE_DEBOUNCE_MS });
+  coordinator.registerApplier('desktop', push, { debounceMs: READVERTISE_DEBOUNCE_MS });
   coordinator.setPostReloadAll(async () => push());
   return { settled: () => chain };
 }

@@ -257,3 +257,19 @@ test('a stop request blocks new capture events before queued shutdown begins', a
     expect(svc.status()).toBe('stopped');
   } finally { await svc.stop(); }
 });
+
+test('nothing is delivered while screen awareness is off, even with the worker running; it is sent when awareness is back (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  const item = proposal();
+  const seen: string[] = [];
+  const w = worker(async suggestion => { seen.push(suggestion.id); return 'websocket'; });
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    await w.flush();
+    expect(seen).toEqual([]);
+    expect(row().delivered_at).toBeNull();
+    setScreenCaptureEnabledSource(null);
+    await w.flush();
+    expect(seen).toEqual([item.id]);
+  } finally { setScreenCaptureEnabledSource(null); }
+});

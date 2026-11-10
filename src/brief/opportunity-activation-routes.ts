@@ -1,3 +1,4 @@
+import { awarenessHistoryHidden } from '../awareness/history-guard.ts';
 import type { BriefCapabilities } from './capabilities';
 import { OpportunityActionError, type OpportunityActivation } from './opportunity-activation';
 
@@ -21,6 +22,10 @@ async function body(req: Request): Promise<{ revision: string; idempotencyKey: s
 export function createOpportunityActivationRoutes(capabilities: BriefCapabilities, json: (value: unknown, status?: number) => Response, provider?: OpportunityActivation) {
   const wrap = (action?: 'approve' | 'dismiss') => async (req: Params) => {
     let response: Response;
+    // Prepared proposals cite recorded captures: approving, dismissing or
+    // reading one waits while awareness is off, as the prepared routes do (#1314 review).
+    const hidden = awarenessHistoryHidden(json);
+    if (hidden) { hidden.headers.set('Cache-Control', 'no-store'); return hidden; }
     try {
       if (!provider || !capabilities.hasProvider('opportunityActivation', provider)) throw new OpportunityActionError('Opportunity activation is unsupported', 501);
       if (!capabilities.snapshot().capabilities.opportunityActivation.enabled) throw new OpportunityActionError('Opportunity activation is disabled or unavailable', 503);

@@ -28,6 +28,7 @@ import { walkFlowNodes } from '../flow-graph';
 import type { FlowTriggerNode } from './flow-version';
 import { CONNECTION_SOURCE, type ReadinessIssue } from '../../runtime/workflow-readiness';
 import { BOUNDED_TOOLS, boundedToolCapability } from '../../runtime/tool-capability';
+import { WORKFLOW_REVIEWED_UI_TOOLS } from '../../runtime/workflow-ui-tools';
 import { workflowReadinessServices } from './readiness-services';
 import type { SidecarCapability, SidecarInfo } from '../../../sidecar/types';
 import { servesCapability } from '../../../sidecar/capability-predicate';
@@ -43,7 +44,16 @@ export type ConnectionIdentity =
  */
 export type PinnedConnection = ConnectionIdentity | { kind: 'unresolved' };
 /** The computer a flow runs on: an enrolled sidecar, or this computer (`null`). */
-export interface MachinePin { sidecarId: string | null; name: string }
+export interface MachinePin {
+  sidecarId: string | null; name: string;
+  /**
+   * Chosen with nobody choosing (a saved draft, the startup pass) for a flow
+   * whose steps act on the screen (#1314 review): such a pin keeps the run on
+   * one computer, but it is not a computer a person chose, so its browser and
+   * desktop actions are refused until a person enables the flow.
+   */
+  unattended?: true;
+}
 export interface BindingPins {
   schemaVersion: 1;
   /** The version the pins were taken from. Pins apply to runs of that version only. */
@@ -82,6 +92,8 @@ export interface RunConnectionBindingView {
 /** Where a version names a connection. */
 export interface ConnectionReference { node: string; path: string }
 
+/** What a person reads when a browser or desktop step has no computer a person chose (#1314 M2). */
+export const UNPINNED_COMPUTER_TEXT = 'Enable the workflow to pin its computer, or name the computer in the step.';
 const ACCEPT = 'It may now act as a different account. Check the connection, then enable or publish the workflow again to accept it.';
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const isExpression = (value: unknown) => typeof value === 'string' && value.includes('{{');
@@ -211,16 +223,47 @@ export function describeConnectionChange(externalId: string, before: PinnedConne
   return `Connection ${externalId} now resolves to a different kind of credential`;
 }
 
-/** The computers a flow's steps need: the first machine step's capability, literal targets, and whether run data picks the target. */
-function machineNeeds(trigger: unknown): { capability: SidecarCapability | null; targets: string[]; dynamic: boolean } {
-  let capability: SidecarCapability | null = null, dynamic = false;
+/**
+ * A role's tool entries act on the computer's screen (#1314 M2): a browser or
+ * desktop category or tool. Enabling a flow that delegates to one pins a
+ * computer. `general` (capture_screen) does not count: pinning every default
+ * delegation would move its file and system tools to that computer too; an
+ * unpinned delegation's screenshot is refused at run time instead.
+ */
+export function roleUsesComputer(tools: readonly string[] | null | undefined): SidecarCapability | null {
+  if (!tools) return null;
+  if (tools.some(t => t === 'desktop' || t.startsWith('desktop_'))) return 'desktop';
+  return tools.some(t => t === 'browser' || t.startsWith('browser_')) ? 'browser' : null;
+}
+
+const isJarvisAgent = (pieceName: string) => pieceName === 'jarvis-agent' || pieceName.endsWith('/piece-jarvis-agent');
+
+/**
+ * The computers a flow's steps need: the first machine step's capability,
+ * literal targets, whether run data picks the target, and whether any step
+ * acts on the screen (`ui`, #1314 M2): a reviewed browser or desktop step, or
+ * a delegation whose role has browser or desktop tools. A delegation names no
+ * computer of its own, so the pin is the only one it may use.
+ */
+function machineNeeds(trigger: unknown): { capability: SidecarCapability | null; targets: string[]; dynamic: boolean; ui: boolean; directUi: boolean } {
+  let capability: SidecarCapability | null = null, dynamic = false, ui = false, directUi = false;
   const targets: string[] = [];
   for (const node of walkFlowNodes(trigger as FlowTriggerNode).slice(1)) {
-    if (node.type !== 'PIECE' || !isJarvisTool(String(node.settings?.pieceName ?? ''))) continue;
+    if (node.type !== 'PIECE') continue;
+    const pieceName = String(node.settings?.pieceName ?? '');
     const input = object(node.settings?.input) ? node.settings!.input : {};
+    if (isJarvisAgent(pieceName) && node.settings?.actionName === 'delegate') {
+      const role = typeof input.role === 'string' && input.role.trim() ? input.role : 'workflow-default';
+      if (isExpression(role)) { dynamic = true; continue; }
+      const needs = roleUsesComputer(workflowReadinessServices()?.roleTools?.(role));
+      if (needs) { ui = true; capability ??= needs; }
+      continue;
+    }
+    if (!isJarvisTool(pieceName)) continue;
     const toolName = input.toolName;
     if (typeof toolName !== 'string' || isExpression(toolName)) { dynamic = true; continue; }
-    if (!BOUNDED_TOOLS.has(toolName) && toolName !== 'run_skill') continue;
+    if (!BOUNDED_TOOLS.has(toolName) && !WORKFLOW_REVIEWED_UI_TOOLS.has(toolName) && toolName !== 'run_skill') continue;
+    if (WORKFLOW_REVIEWED_UI_TOOLS.has(toolName) || toolName === 'run_skill') ui = directUi = true;
     // A skill's surface is known only when it runs; a desktop-capable computer serves either.
     capability ??= toolName === 'run_skill' ? 'desktop' : boundedToolCapability(toolName);
     const target = paramsOf(input).target;
@@ -229,7 +272,7 @@ function machineNeeds(trigger: unknown): { capability: SidecarCapability | null;
       else targets.push(target.trim());
     }
   }
-  return { capability, targets, dynamic };
+  return { capability, targets, dynamic, ui, directUi };
 }
 
 /** An enrolled computer by exact id, or the only one with exactly this name. Never a partial match. */
@@ -257,7 +300,8 @@ function exactMachine(selector: string, inventory: SidecarInfo[]): SidecarInfo |
  * it sleeps, as runs did before pins.
  */
 function computeMachinePin(trigger: unknown, unattended: boolean): MachinePin | null {
-  return machinePinFrom(trigger, unattended, workflowReadinessServices()?.machines?.());
+  const pin = machinePinFrom(trigger, unattended, workflowReadinessServices()?.machines?.());
+  return pin && unattended && machineNeeds(trigger).ui ? { ...pin, unattended: true } : pin;
 }
 /** `computeMachinePin` over an inventory already read, so a caller that also needs it reads it once. */
 function machinePinFrom(trigger: unknown, unattended: boolean, inventory: SidecarInfo[] | undefined): MachinePin | null {
@@ -292,7 +336,9 @@ function draftMachinePin(trigger: unknown, previous: MachinePin | null): Machine
   const capability = needs.capability;
   const inventory = workflowReadinessServices()?.machines?.();
   const pinned = inventory?.find(s => s.id === previous.sidecarId);
-  return !inventory || !pinned || pinned.capabilities?.includes(capability) ? previous : machinePinFrom(trigger, true, inventory);
+  if (!inventory || !pinned || pinned.capabilities?.includes(capability)) return previous;
+  const next = machinePinFrom(trigger, true, inventory);
+  return next && needs.ui ? { ...next, unattended: true } : next;
 }
 
 export function readBindingPins(flowId: string): BindingPins | null {
@@ -398,6 +444,15 @@ export function bindingPinIssues(flowId: string, versionId: string, trigger: unk
     if (change) issues.push({ node: references[0]!.node, path: references[0]!.path, code: 'BINDING_STALE', message: `${change} since this workflow was enabled. ${ACCEPT}` });
   }
   const machine = pins.machine;
+  // A flow whose own steps act on the screen with no computer a person
+  // pinned runs nowhere until a person chooses one by enabling it (#1314 M2).
+  // A delegation is not refused whole here (#1314 review): its agent may
+  // never touch a screen, so only the calls that would are refused, at run
+  // time, by the delegated machine scope.
+  if ((!machine || machine.unattended) && machineNeeds(trigger).directUi) {
+    issues.push({ node: 'trigger', path: 'machine', code: 'WORKFLOW_MACHINE_UNPINNED',
+      message: `This workflow's browser or desktop steps have no pinned computer. ${UNPINNED_COMPUTER_TEXT}` });
+  }
   const inventory = machine?.sidecarId ? workflowReadinessServices()?.machines?.() : undefined;
   if (machine?.sidecarId && inventory && !inventory.some(s => s.id === machine.sidecarId)) {
     issues.push({ node: 'trigger', path: 'machine', code: 'BINDING_STALE',
@@ -464,6 +519,35 @@ export function bindingChangesToAccept(flowId: string, versionId: string): strin
     changes.push(`The computer it runs on changes from ${drift.machine.pinned.name} to ${drift.machine.next?.name ?? 'whichever computer each run picks'}.`);
   }
   return changes;
+}
+
+/**
+ * Why a run has no computer a person chose, for the refusal's sentence
+ * (#1314 review), or null when it has one: `draft` (no pins for its version:
+ * never enabled, or a draft), `none` (enabled, but no computer could serve it
+ * then), `unattended` (pinned with nobody choosing).
+ */
+export function unchosenComputerReason(runId: string): 'draft' | 'none' | 'unattended' | null {
+  const run = getWorkflowDb().query<{ flow_id: string; flow_version_id: string }, [string]>(
+    'SELECT flow_id, flow_version_id FROM flow_run WHERE id = ?').get(runId);
+  const pins = run ? readBindingPins(run.flow_id) : null;
+  if (!run || !pins || pins.versionId !== run.flow_version_id) return 'draft';
+  if (!pins.machine) return 'none';
+  return pins.machine.unattended ? 'unattended' : null;
+}
+
+/** The sentence for `unchosenComputerReason`. */
+export function unchosenComputerText(reason: 'draft' | 'none' | 'unattended', capability?: SidecarCapability | null): string {
+  // A screenshot from a delegation whose role has no browser or desktop tools:
+  // enabling pins nothing for it, so the fix is the role.
+  if (capability === 'screenshot' && reason !== 'unattended') {
+    return 'Delegate screen work to a role with desktop tools (computer-operator), whose workflow pins its computer when enabled, then enable the workflow again.';
+  }
+  return reason === 'none'
+    ? 'No computer could be pinned when this workflow was enabled: connect or enroll a computer that has the browser, desktop or screenshot capability it needs, then enable the workflow again.'
+    : reason === 'unattended'
+      ? `Its computer was pinned with nobody choosing. ${UNPINNED_COMPUTER_TEXT}`
+      : UNPINNED_COMPUTER_TEXT;
 }
 
 /** The computer pinned for this run's version, or undefined when the run is not pinned to one. */
