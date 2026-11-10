@@ -423,3 +423,24 @@ test.each([
   };
   expect(matchesReceipt(request, item, wrong as ActionReceipt)).toBe(false);
 });
+
+test("awareness off clears every proposal, an action in flight included, and brings that one back when it is on (#1314)", async () => {
+  const { AWARENESS_OFF_TEXT } = await import("../host/http");
+  const f = makeOpportunitiesFixture();
+  let off = false;
+  const inFlight = deferred<ActionReceipt>();
+  const c = owner({ ...f.port,
+    read: async () => off ? { status: "unavailable", reason: AWARENESS_OFF_TEXT } as OpportunityCollection : f.port.read(),
+    act: () => inFlight.promise });
+  await c.refresh();
+  const id = c.snapshot().rows[0]!.proposal.proposalId;
+  void c.act(id, "approve");
+  await pause();
+  expect(c.snapshot().attempts.has(id)).toBe(true);
+  off = true; await c.refresh();
+  expect(c.snapshot().rows).toEqual([]);
+  expect(c.snapshot().selectedId).toBeNull();
+  expect(c.snapshot().attempts.has(id)).toBe(true);
+  off = false; await c.refresh();
+  expect(c.snapshot().rows.some(x => x.proposal.proposalId === id)).toBe(true);
+});

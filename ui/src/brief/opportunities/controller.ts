@@ -1,3 +1,4 @@
+import { AWARENESS_OFF_TEXT } from "../host/http";
 import {
   activeProposal,
   approvalBlock,
@@ -123,12 +124,23 @@ export class OpportunitiesController {
         .filter((x) => !this.state.attempts.has(x.proposal.proposalId));
       // Reserve pending/acknowledged slots even when the read omits terminal proposals.
       // Other rows still receive the provider's fresh content and ordering.
+      // Awareness off (#1314): nothing derived from captures stays on screen,
+      // not even a proposal with an action in flight. Its attempt is kept and
+      // its row comes back with the next read once awareness is on again.
+      if (read.status === "unavailable" && read.reason === AWARENESS_OFF_TEXT) {
+        this.publish({ read, rows: [], selectedId: null, refreshing: false });
+        return;
+      }
       this.state.rows.forEach((row, index) => {
         const id = row.proposal.proposalId;
         const attempt = this.state.attempts.get(id);
         if (attempt && !this.completed.has(id))
           rows.splice(Math.min(index, rows.length), 0, attempt.item);
       });
+      // Attempts whose rows were cleared by an unavailable read come back at the end.
+      for (const [id, attempt] of this.state.attempts)
+        if (!this.completed.has(id) && !rows.some((x) => x.proposal.proposalId === id))
+          rows.push(attempt.item);
       const selectedId = rows.some(
         (x) => x.proposal.proposalId === this.state.selectedId,
       )
