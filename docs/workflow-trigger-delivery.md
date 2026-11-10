@@ -165,10 +165,14 @@ When starting another workflow needs approval (run_workflow, or a reusable
 child), the dashboard card names the workflow and shows the input it is given,
 as one line of JSON with hidden characters escaped; an input longer than 600
 characters as shown is refused before any card. Each quoted string on the card
-(the name, every key and value) is wrapped in a Unicode bidi isolate (U+2068 ...
-U+2069) inside its quotes, so right-to-left text cannot reorder the punctuation
-around it and make a key and its value read swapped; the 600 counts the JSON
-without them. A card already pending keeps the sentence it was asked with. A Telegram or Discord card
+that holds a character outside ASCII (the name, a key or a value) is wrapped in
+a Unicode bidi isolate (U+2068 ... U+2069) inside its quotes, so right-to-left
+text cannot reorder the punctuation around it and make a key and its value read
+swapped; an ASCII card is unchanged, and the 600 counts the isolates. The name
+is cut with a visible "..." when the whole sentence would otherwise pass 1000
+characters with the most input a card shows (the Needs you title shows the
+first 1000); the workflow id before it still names the workflow. A card already
+pending keeps the sentence it was asked with. A Telegram or Discord card
 names only the input's top-level fields (at most ten, then how many more), or
 for a list or a single value only its kind, never the values; a card too long
 for one chat message can only be denied from chat.
