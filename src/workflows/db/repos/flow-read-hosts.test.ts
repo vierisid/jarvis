@@ -104,6 +104,24 @@ describe("POST /api/workflows/:id/read-hosts", () => {
     expect(getFlowReadHosts(flow.id)!.hosts).toEqual(["keep.example.com"]);
   });
 
+  test("refuses a host Jarvis could never reach, with a plain message, and changes nothing", async () => {
+    const flow = createFlow();
+    setFlowReadHosts(flow.id, ["keep.example.com"]);
+    // Loopback and link-local never work; 192.168.x only on a self-hosted install, which this route map is by default.
+    for (const host of ["127.0.0.1", "localhost", "[::1]", "169.254.169.254", "api.localhost"]) {
+      const refused = await call("/api/workflows/:id/read-hosts", "POST", flow.id, { hosts: ["ok.example.com", host] });
+      expect(`${host}: ${refused.status}`).toBe(`${host}: 400`);
+      expect(String(refused.body.error)).toContain("Jarvis does not send requests to addresses on this computer or local network.");
+    }
+    const hosted = createWorkflowRoutes({ egressPolicy: "public-only" });
+    const lan = await (hosted["/api/workflows/:id/read-hosts"] as { POST: (r: Request) => Promise<Response> }).POST(Object.assign(
+      new Request("http://x/", { method: "POST", body: JSON.stringify({ hosts: ["192.168.1.5"] }) }), { params: { id: flow.id } }));
+    expect(lan.status).toBe(400);
+    expect(getFlowReadHosts(flow.id)!.hosts).toEqual(["keep.example.com"]);
+    // A private-network host is fine on a self-hosted install.
+    expect((await call("/api/workflows/:id/read-hosts", "POST", flow.id, { hosts: ["10.0.0.5"] })).status).toBe(200);
+  });
+
   test("an edit that names the list it started from is refused when the list changed since", async () => {
     const flow = createFlow();
     setFlowReadHosts(flow.id, ["a.example.com", "b.example.com"]);

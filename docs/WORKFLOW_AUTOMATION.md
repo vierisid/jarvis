@@ -725,6 +725,19 @@ HTTP request specifics:
   for the run's list (`GET /v1/jarvis/read-hosts`, engine token) and a file
   URL whose host is not listed, or a redirect off the list, fails the step
   naming the host and the list.
+- **What the card says, and what is refused before it.** An HTTP or GraphQL
+  request's card (and its Needs you entry) says what will happen in words,
+  naming the method and the host and never the path or query ("Jarvis wants to
+  send a POST request to api.example.com", "Jarvis wants to read
+  api.example.com", "Jarvis wants to send a GraphQL request to ..."). It rides
+  in the effect target's `intent`, like every other per-step card sentence. A
+  request whose URL names `localhost` or an address the rules above never
+  allow (and, on a hosted install, any private address) is refused before a
+  card is raised: "Jarvis does not send requests to addresses on this computer
+  or local network." A name that only resolves to such an address is still
+  refused by the guard when it connects. `parse_url` makes no request, so it
+  never asks and is never held to the read list. The read list refuses the
+  same hosts when a person adds them (400), since a read there could never run.
 - **Read list (#1153).** A body-less GET or HEAD still carries what its URL and
   headers hold to the host it names, so it runs without a card only when that
   host is on the flow's read list (`POST /api/workflows/:id/read-hosts`

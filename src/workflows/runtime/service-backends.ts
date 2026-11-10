@@ -74,6 +74,8 @@ import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR,
   HTTP_PIECE, httpReadHostListed } from './piece-effects';
+import { httpApprovalIntent, httpApprovalReason, localAddressRefusal, makesNetworkRequest } from './http-approval';
+import type { EgressPolicy } from './http-egress';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
 import { captureProviderBinding, providerBindingHolds } from './provider-reconciliation';
 import { recordPieceCompletion, recordPieceNotSent } from './piece-completion';
@@ -224,6 +226,8 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
    * is allowed, as before.
    */
   humanInputUnavailable?: () => string | null;
+  /** Where a workflow HTTP step may connect, as the engine is told; a request it would refuse is refused before any card. Absent: public addresses only. */
+  egressPolicy?: EgressPolicy;
 }
 
 /**
@@ -1305,13 +1309,21 @@ export function buildSandboxServiceBackends(
     // method) is judged on the projection the card and the record carry; the
     // engine's digest of the whole input binds that projection to what runs.
     const judged = resolveGovernedPieceAction(req.piece, req.action, projected)!;
+    const network = makesNetworkRequest(req.piece, req.action);
+    // A request the egress guard refuses as soon as it runs (this computer,
+    // the local network) is refused here, before anyone is asked to approve it.
+    const localRefusal = network ? localAddressRefusal(projected, opts.egressPolicy ?? 'public-only') : null;
+    if (localRefusal) {
+      effects.auditRefusal({ context: ctx, toolName: governedPieceToolName(judged.adapter.catalogId, judged.action), category: judged.category });
+      throw new ActionOutcomeError({ status: 'blocked', code: 'EGRESS_REFUSED', message: localRefusal, effect: 'not_started' });
+    }
     // #1153 (owner decision): an HTTP read runs without asking only to a host
     // on the flow's read list. A body-less GET still carries what its URL and
     // headers hold to the host it names, so to any other host it is a send
     // and asks while sends are governed. The list goes back with the
     // authorization, and the engine holds the request and every redirect to
     // it (`withReadHosts`), so a listed host's redirect cannot carry it on.
-    const readHosts = req.piece === HTTP_PIECE && judged.category === 'read_data' ? (() => {
+    const readHosts = req.piece === HTTP_PIECE && req.action === 'send_request' && judged.category === 'read_data' ? (() => {
       const flowRun = getFlowRun(ctx.runId);
       return flowRun && flowRun.projectId === ctx.projectId ? getFlowReadHosts(flowRun.flowId)?.hosts ?? [] : [];
     })() : null;
@@ -1394,11 +1406,16 @@ export function buildSandboxServiceBackends(
       prepare: () => {
         // Matched once, when the effect is recorded; resumes and retries recheck the record's facts.
         const facts = addressing ? recipientFactPins(recipientAddresses(input)) : [];
-        return { arguments: input, target: capability.target(input), ...(facts.length ? { bindings: { facts } } : {}) };
+        const named = network ? { ...capability.target(input), intent: httpApprovalIntent(req.piece, input) } : capability.target(input);
+        return { arguments: input, target: named, ...(facts.length ? { bindings: { facts } } : {}) };
       },
+      // The card says what the request will do (method and host), not the engine's category sentence.
+      ...(network ? { intentFor: (args: Record<string, unknown>) => httpApprovalIntent(req.piece, args), approvalReason: httpApprovalReason(req.piece, input) } : {}),
       // A revised document carries its own reviewed target; anything else is frozen to this input.
+      // The card sentence rides in the target but is words about it, not part of it.
       validateTarget: (args, target) => {
-        if (digest(capability.target(document ? args : input)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
+        const { intent: _sentence, ...reviewed } = target;
+        if (digest(capability.target(document ? args : input)) !== digest(network ? reviewed : target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
       },
       revalidate: record => assertRecipientFactsCurrent((record.bindings as { facts?: FactPin[] } | undefined)?.facts),
       revalidateOnReplay: true,
