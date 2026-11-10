@@ -327,6 +327,7 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/input-validation.ts',
   '../../runtime/resolved-input-guard.ts',
   '../../runtime/router-presence.ts',
+  '../../runtime/absent-value-fallbacks.ts',
   '../../../lib/cron-scheduler.ts',
   'server/engine/src/lib/helper/trigger-helper.ts',
   // Jarvis: the governed-piece admission gate. The adapter table and the
