@@ -30,6 +30,19 @@ const runLabel = (r: Pick<RunRow, 'id' | 'environment'>) => `${r.environment ===
 /** The digest of a request ID a "not found" receipt read withdrew (#1162). Not a sha256 hex.
  * Fences have their own budget and expire after a day: a POST still in transit
  * is long settled by then, and a read must never use up the capacity for runs. */
+/** A loop's iterations a run page lists: this many from each end, and up to this many failed ones between. */
+const LOOP_ITERATIONS_EACH_END = 20, LOOP_FAILED_SHOWN = 10;
+function shownIterations(iterations: unknown[]): number[] {
+  if (iterations.length <= LOOP_ITERATIONS_EACH_END * 2) return iterations.map((_, i) => i);
+  const keep = new Set<number>();
+  for (let i = 0; i < LOOP_ITERATIONS_EACH_END; i++) { keep.add(i); keep.add(iterations.length - 1 - i); }
+  let failed = 0;
+  for (let i = LOOP_ITERATIONS_EACH_END; i < iterations.length - LOOP_ITERATIONS_EACH_END && failed < LOOP_FAILED_SHOWN; i++) {
+    const it = iterations[i];
+    if (object(it) && Object.values(it).some(child => object(child) && child.status === 'FAILED')) { keep.add(i); failed++; }
+  }
+  return [...keep].sort((a, b) => a - b);
+}
 const WITHDRAWN = 'withdrawn', FENCE_LIMIT = 1_000, FENCE_TTL_MS = 24 * 60 * 60 * 1000;
 /** A stored receipt, labelled as today. Receipts written before #1100 carry the
  * long `Run <full id>`; a Brief manual start is always a production run. */
@@ -294,9 +307,14 @@ export class WorkflowContext {
     });
   }
   private detailRow(r: RunRow, nodes: Record<string, unknown>[] | null, context: InspectionContext): InspectionRunDetail {
-    const row = this.db.query<{ steps: string | null }, [string]>('SELECT substr(steps,1,4000001) AS steps FROM flow_run WHERE id=?').get(r.id)!;
-    const steps = boundedJson(row.steps), entries: Array<[string, unknown, string]> = [];
+    const row = this.db.query<{ steps: string | null; size: number }, [string]>(
+      'SELECT substr(steps,1,4000001) AS steps, length(CAST(steps AS BLOB)) AS size FROM flow_run WHERE id=?').get(r.id)!;
+    // A run that recorded more than can be read here (it hit the size Jarvis keeps for one run)
+    // still shows its status and failure; only its step data is left out.
+    const tooLarge = row.size > LIMIT.sourceBytes;
+    const steps = tooLarge ? undefined : boundedJson(row.steps), entries: Array<[string, unknown, string]> = [];
     if (steps !== undefined && !object(steps)) throw new WorkflowInspectionError('record_unavailable', 503);
+    let stepsOmitted = false; const loopsOmitted: string[] = [];
     const pending: Array<{ path: string; label: string; value: unknown }> = [{ path: '', label: '', value: steps }];
     while (pending.length) {
       const part = pending.pop()!;
@@ -309,10 +327,15 @@ export class WorkflowContext {
           && typeof raw.output.type === 'string' && typeof raw.output.status === 'string' ? raw.output : raw;
         const path = opaque(JSON.stringify([part.path, name]));
         const label = (part.label + safeName(name, 'unknown')).slice(0, 450);
-        entries.push([label, step, path]); this.boundedRows(entries);
+        // A run with more steps than a page can show is shown in part, never refused: the
+        // step list, statuses and failure stay readable, and the note says what is left out.
+        if (entries.length >= LIMIT.rows) { stepsOmitted = true; continue; }
+        entries.push([label, step, path]);
         if (object(step) && step.type === 'LOOP_ON_ITEMS' && object(step.output) && Array.isArray(step.output.iterations)) {
-          if (step.output.iterations.length + pending.length > LIMIT.rows) throw new WorkflowInspectionError('inspection_capacity', 413);
-          step.output.iterations.forEach((value, i) => pending.push({ path: opaque(JSON.stringify([path, i])), label: label + `-iteration-${i + 1}-`, value }));
+          const iterations = step.output.iterations, shown = shownIterations(iterations);
+          if (shown.length < iterations.length) loopsOmitted.push(`Showing ${shown.length} of ${iterations.length} iterations of ${label}.`);
+          // Pushed last first so the stack reads them back in order.
+          for (const i of shown.reverse()) pending.push({ path: opaque(JSON.stringify([path, i])), label: label + `-iteration-${i + 1}-`, value: iterations[i] });
         }
       }
     }
@@ -347,7 +370,7 @@ export class WorkflowContext {
           status: typeof s.status === 'string' ? status(s.status) : 'uncertain',
           fields: [inspectionValue('Input', s.input), inspectionValue('Output', s.output)] }; }),
       effects, waits, context: used,
-      inspection: { status: 'partial', note: `Text values and field names are redacted. Context covers retained records only.${nodes ? '' : ' Immutable historical graph unavailable.'}${steps == null ? ' Step data was not recorded.' : ''}` } };
+      inspection: { status: 'partial', note: `Text values and field names are redacted. Context covers retained records only.${nodes ? '' : ' Immutable historical graph unavailable.'}${tooLarge ? ' This run recorded more step data than can be shown here, so its steps are not listed.' : steps == null ? ' Step data was not recorded.' : ''}${loopsOmitted.slice(0, 5).map(n => ` ${n}`).join('')}${stepsOmitted ? ` Showing the first ${LIMIT.rows} steps.` : ''}` } };
   }
   request(flowId: string, requestId: string): ManualInspectionRunResult {
     this.assertReady();

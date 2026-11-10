@@ -181,8 +181,10 @@ test('history queries seek within the selected flow index without scanning or so
   }
 });
 test('legacy giant source, aggregate receipts and row counts are refused before projection', () => {
-  const r = run(); db.run('UPDATE flow_run SET steps=? WHERE id=?', [' '.repeat(INSPECTION_LIMITS.sourceBytes + 1), r.id]);
-  expect(() => service.detail(flowId, r.id)).toThrow('source_too_large');
+  const r = run(); db.run('UPDATE flow_run SET steps=? WHERE id=?', [JSON.stringify({ trigger: { status: 'SUCCEEDED', output: 'x'.repeat(INSPECTION_LIMITS.sourceBytes) } }), r.id]);
+  // Too large to read is shown as such (status and failure stay), not refused.
+  const large = service.detail(flowId, r.id);
+  expect(large.steps).toEqual([]); expect(large.inspection.note).toContain('more step data than can be shown');
   db.run('UPDATE flow_run SET steps=NULL WHERE id=?', [r.id]);
   for (let i = 0; i < 201; i++) saveWorkflowEffect({ ...effect(r.id), id: `effect-${i}` });
   expect(() => service.detail(flowId, r.id)).toThrow('inspection_capacity');
@@ -408,6 +410,31 @@ test('loop iterations retain individual actual inputs, outputs and statuses', ()
   const detail = service.detail(flowId, r.id); expect(detail.steps).toHaveLength(3);
   expect(new Set(detail.steps.map(s => s.id)).size).toBe(3);
   expect(detail.steps.find(s => s.title.includes('iteration-2'))).toMatchObject({ status: 'failed', fields: [{ label: 'Input', value: '2' }, { label: 'Output', value: 'false' }] });
+});
+const iterationsOf = (n: number, failAt = -1) => Array.from({ length: n }, (_, i) =>
+  ({ child: { status: i === failAt ? 'FAILED' : 'SUCCEEDED', input: i, output: i } }));
+test('a loop of 200 iterations is shown in part with a note, not refused', () => {
+  const r = run(); updateRun(r.id, { status: 'SUCCEEDED', steps: { loop: { type: 'LOOP_ON_ITEMS', status: 'SUCCEEDED', input: [], output: { iterations: iterationsOf(200) } } } });
+  const selection = service.selection(flowId, versionId, r.id), detail = selection.run!;
+  expect(detail.steps.length).toBe(41);
+  expect(detail.steps[0]!.title).toBe('Step loop');
+  const titles = detail.steps.map(s => s.title);
+  expect(titles).toContain('Step loop-iteration-1-child'); expect(titles).toContain('Step loop-iteration-200-child');
+  expect(titles).not.toContain('Step loop-iteration-100-child');
+  expect(titles.indexOf('Step loop-iteration-1-child')).toBeLessThan(titles.indexOf('Step loop-iteration-200-child'));
+  expect(detail.inspection.note).toContain('Showing 40 of 200 iterations of loop.');
+  expect(detail.status).toBe('succeeded');
+});
+test('a failed iteration in the middle of a long loop stays visible', () => {
+  const r = run(); updateRun(r.id, { steps: { loop: { type: 'LOOP_ON_ITEMS', status: 'FAILED', input: [], output: { iterations: iterationsOf(500, 250) } } } });
+  const detail = service.detail(flowId, r.id);
+  expect(detail.steps.find(s => s.title === 'Step loop-iteration-251-child')).toMatchObject({ status: 'failed' });
+  expect(detail.inspection.note).toContain('Showing 41 of 500 iterations');
+});
+test('more steps than a page lists are shown in part, not refused', () => {
+  const r = run(); updateRun(r.id, { steps: Object.fromEntries(Array.from({ length: 250 }, (_, i) => [`s${i}`, { status: 'SUCCEEDED' }])) });
+  const detail = service.detail(flowId, r.id);
+  expect(detail.steps).toHaveLength(INSPECTION_LIMITS.rows); expect(detail.inspection.note).toContain(`Showing the first ${INSPECTION_LIMITS.rows} steps.`);
 });
 test('goal references match configured and accepted work without reading arbitrary metadata or granting progress', () => {
   const goal = createGoal('Fixture goal', 'objective');

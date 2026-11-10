@@ -3,6 +3,7 @@ import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion } from './editor-version';
+import { boundedRunSteps } from './run-view';
 import type { BriefCapabilities } from '../../brief/capabilities';
 import { requireWorkflowContext } from '../../brief/workflow-context-routes';
 import { WorkflowInspectionError } from '../../brief/inspection-values';
@@ -2319,7 +2320,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             offset,
           };
           if (status) opts.status = status;
-          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run) }));
+          const items = listRuns(opts).map(run => ({ ...boundedRunSteps(run), failure: runFailure(run) }));
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
@@ -2416,7 +2417,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
-          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run) }) : err("run not found", 404);
+          return run ? ok({ ...boundedRunSteps(run), fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run) }) : err("run not found", 404);
         }),
     },
 
