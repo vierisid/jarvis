@@ -80,6 +80,7 @@ import {
   createFlowRun,
   getFlowRun,
   getFlowRunInProject,
+  listRecentRuns,
   listRuns,
   type FlowRunStatus,
   type RunEnvironment,
@@ -2321,6 +2322,24 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (status) opts.status = status;
           const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run) }));
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
+        }),
+    },
+
+    // Today's "Recent activity": the latest production, top-level run of each
+    // flow in the caller's project, newest first. One bounded read, so Today
+    // does not list every flow and fetch each flow's runs. Identity, status and
+    // time only; never step output.
+    "/api/workflow-runs/recent": {
+      GET: req =>
+        trapErrors(() => {
+          const { limit } = clampPage(new URL(req.url).searchParams, 5);
+          // Named the way the Workflows room names a flow (its published version,
+          // else its latest draft), not by the version the run used, so a rename
+          // shows the same name in both places. At most `limit` rows, so the
+          // per-row lookup stays small.
+          const items = listRecentRuns(callerProject(req), limit)
+            .map(row => ({ ...row, name: serializeFlow(getFlow(row.flowId))?.displayName ?? row.name }));
+          return ok({ items });
         }),
     },
 

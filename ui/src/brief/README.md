@@ -272,10 +272,19 @@ is unchanged.
   the conversation, so the goal stays mounted and above Pebble when chat opens. While chat is closed,
   wheel input over the goal scrolls the room.
 - `today/figma-reference.json` records the source values.
-- Outcomes and Recent activity (`today/outcomes/`, `today/activity/`) are read-only. `Outcomes` and
-  `RecentActivity` take an `OutcomeBinding`; `outcomeView` passes it through only when `source` is
-  `"fixture"` in preview mode, or `"live"` with both the `outcomes` and `goalMeasurements` capabilities
-  enabled in live mode; anything else renders "unavailable". No live provider is wired yet.
+- Outcomes and Recent activity (`today/outcomes/`, `today/activity/`) are read-only. `Outcomes` takes an
+  `OutcomeBinding`; `outcomeView` passes it through only when `source` is `"fixture"` in preview mode, or
+  `"live"` with both the `outcomes` and `goalMeasurements` capabilities enabled in live mode; anything else
+  renders "unavailable". `RecentActivity` takes a plain view binding of the matching source and does not
+  depend on those capabilities. No live provider is wired for Outcomes yet.
+- Today's Recent activity is built by `today/activity/model.ts` from one bounded read,
+  `GET /api/workflow-runs/recent?limit=5` (`today/activity/read.ts`): the latest production, top-level run of
+  each workflow in the caller's project, newest first. Test runs and subflow child runs are never candidates.
+  It is a reconciliation projection over the `runs` and `today` domains, so workflow events and the client's
+  regular polling refresh it while Today is open. A row is the workflow name, a plain status (Done, Failed,
+  Waiting for you, Running) and a local time, and opens `workflow` with the flow, version and run ids.
+  Verified outcomes may add rows but never decide whether the list is empty or unavailable. Rows carry
+  identity, status and time only, never captured step output. Empty reads "No workflow has run yet."
 - A figure renders only if its F-01 `BriefMeasurement` is finite, has a unit, an `asOf`, at least one
   provenance reference and `qualification` `measured` or `user_reported` (`qualified` in
   `outcomes/model.ts`). Time saved also needs `minutes` and a baseline at or above the value. The view

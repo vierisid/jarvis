@@ -444,3 +444,41 @@ export function listRuns(opts: ListRunsOptions = {}): FlowRun[] {
     .all(...args, limit, offset)
     .map(rowToRun);
 }
+
+/** One row of the Today recent-runs read: identity, status and time only. */
+export interface RecentRunRow {
+  runId: string;
+  flowId: string;
+  flowVersionId: string;
+  name: string;
+  status: FlowRunStatus;
+  startTime: number | null;
+  created: number;
+}
+
+/**
+ * The latest production, top-level run of each flow in a project, newest first.
+ * One query: a window function picks each flow's latest run, so the cost does
+ * not grow with the number of flows. Test runs and subflow child runs are never
+ * candidates, so they cannot hide a flow's real latest run. `steps` is not
+ * selected; captured step output never leaves the database through this read.
+ * The name is the display name of the version the run used.
+ */
+export function listRecentRuns(projectId: string, limit: number): RecentRunRow[] {
+  return db()
+    .query<{ id: string; flow_id: string; flow_version_id: string; status: FlowRunStatus; start_time: number | null; created: number; display_name: string },
+      SQLQueryBindings[]>(
+      `SELECT r.id, r.flow_id, r.flow_version_id, r.status, r.start_time, r.created, v.display_name
+         FROM (SELECT r.id, r.flow_id, r.flow_version_id, r.status, r.start_time, r.created, r.rowid AS rid,
+                      ROW_NUMBER() OVER (PARTITION BY r.flow_id ORDER BY r.created DESC, r.rowid DESC) AS rn
+                 FROM flow_run r JOIN flow f ON f.id = r.flow_id
+                WHERE f.project_id = ? AND r.environment = 'PRODUCTION' AND r.parent_run_id IS NULL) r
+         JOIN flow_version v ON v.id = r.flow_version_id
+        WHERE r.rn = 1
+        ORDER BY COALESCE(r.start_time, r.created) DESC, r.rid DESC
+        LIMIT ?`,
+    )
+    .all(projectId, limit)
+    .map(row => ({ runId: row.id, flowId: row.flow_id, flowVersionId: row.flow_version_id, name: row.display_name,
+      status: row.status, startTime: row.start_time, created: row.created }));
+}
