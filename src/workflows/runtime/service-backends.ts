@@ -91,7 +91,7 @@ import { getFlowRun } from '../db/repos/flow-run';
 import { getFlowReadHosts } from '../db/repos/flow-read-hosts';
 import { boundedReceiptText } from '../../roles/untrusted';
 import { evaluateLlmOutput } from './llm-output-contract';
-import { withWorkflowMachineBinding } from './machine-binding';
+import { assertUiComputerPinned, withWorkflowMachineBinding } from './machine-binding';
 import { getMachineScope } from '../../actions/machine-scope';
 import type { SidecarCapability } from '../../sidecar/types';
 import { toolReturnText } from '../../roles/untrusted.ts';
@@ -530,15 +530,23 @@ export function buildSandboxServiceBackends(
         // The card shows every frozen value, where each came from, the
         // computer and the screen (#1314), or the step is refused unseen.
         const subject = uiReview ? tool.reviewSubject?.(req.params) ?? {} : {};
-        const uiCard = uiReview ? workflowUiCard(tool.name, req.params, {
-          computer: uiCallComputer(tool.name, req.params.target).name,
-          source: name => fromRunData.has(name) ? 'run_data' : 'workflow',
-          page: subject.origin, element: subject.element, ...desktopSubjectFromRun(listWorkflowEffects(ctx.runId), tool.name, req.params) }) : null;
+        let uiCard: UiCard | null = null;
+        // A computer that cannot be resolved is refused, typed and recorded,
+        // by `prepare` below; no card is raised without one.
+        if (uiReview) {
+          try {
+            uiCard = workflowUiCard(tool.name, req.params, {
+              computer: uiCallComputer(tool.name, req.params.target).name,
+              source: name => fromRunData.has(name) ? 'run_data' : 'workflow',
+              page: subject.origin, element: subject.element, ...desktopSubjectFromRun(listWorkflowEffects(ctx.runId), tool.name, req.params) });
+          } catch { uiCard = null; }
+        }
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
           // The tool the step names, not only the step (#1152).
           pinnedInput: { toolName: req.toolName },
           ...(gate.confirm === 'always' ? { confirmation: { confirm: 'always' as const, intent: uiCard ? uiCardSentence(uiCard) : gate.intent ?? 'Review this UI effect' } } : {}),
-          ...(uiCard ? { reviewRegistry: opts.toolRegistry!, reviewSubject: subject, uiCard, cardRefusal: () => uiCardRefusal(uiCard),
+          ...(uiReview ? { reviewRegistry: opts.toolRegistry!, reviewSubject: subject, ...(uiCard ? { uiCard } : {}),
+            cardRefusal: () => uiCard ? uiCardRefusal(uiCard) : 'The approval card could not name the computer this action would run on.',
             approvalExpiresAt: workflowUiCardDeadline(tool.name) } : {}),
           // As at the chat gate: a gated call over the workflow's level asks
           // instead of failing the step.
@@ -550,7 +558,10 @@ export function buildSandboxServiceBackends(
           // the route's body must never invalidate a pending approval.
           request: { toolName: req.toolName, params: req.params }, prepare: () => {
             const args = capability.prepareArguments(req.params);
-            return { arguments: args, target: capability.target(args) };
+            const target = capability.target(args);
+            // On a computer a person chose (#1314 M2): the pin, or the step's own written target.
+            if (uiReview) assertUiComputerPinned(ctx.runId, typeof req.params.target === 'string' && req.params.target.trim() !== '');
+            return { arguments: args, target };
           },
           validateTarget: (args, target) => {
             if (digest(capability.target(args)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
@@ -990,7 +1001,7 @@ export function buildSandboxServiceBackends(
               computer: uiCallComputer(call.toolCall.name, call.toolCall.arguments.target).name, source: () => 'agent',
               page: subject.origin, element: subject.element,
               ...desktopSubjectFromRun(listWorkflowEffects(resolved.run.id), call.toolCall.name, call.toolCall.arguments) });
-          } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+          } catch { uiCard = null; /* `prepare` refuses it typed and recorded; no card is raised without a computer. */ }
         }
         // Set once the call is dispatched; read by `validateTarget` below.
         let dispatched = false;
@@ -1008,8 +1019,9 @@ export function buildSandboxServiceBackends(
             //
             // Every UI action needs a dashboard click and the originating
             // registry's live guard; Authority overrides cannot auto-approve it.
-            ...(uiCard ? { confirmation: { confirm: 'always' as const, intent: uiCardSentence(uiCard) }, reviewRegistry: registry,
-              reviewSubject: subject, uiCard, cardRefusal: () => uiCardRefusal(uiCard),
+            ...(uiReview ? { confirmation: { confirm: 'always' as const, intent: uiCard ? uiCardSentence(uiCard) : gate.intent ?? 'Review UI action' }, reviewRegistry: registry,
+              reviewSubject: subject, ...(uiCard ? { uiCard } : {}),
+              cardRefusal: () => uiCard ? uiCardRefusal(uiCard) : 'The approval card could not name the computer this action would run on.',
               approvalExpiresAt: workflowUiCardDeadline(call.toolCall.name) } : {}),
             ...(gate.confirm || workflowUiRead(call.toolCall.name, call.toolCall.arguments)
               ? { aboveLevelFloor: uiReview || workflowUiRead(call.toolCall.name, call.toolCall.arguments) ? 'read_data' as const : gate.floorCategory } : {}),
@@ -1022,9 +1034,14 @@ export function buildSandboxServiceBackends(
             // task -- which was harmless while the spawn sink asked again on
             // its own card. That approval now answers the sink (`execute`
             // below), so the card it buys has to say what it buys.
-            prepare: () => ({ arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence,
+            prepare: () => {
+              // A delegated UI call runs only on the computer the workflow was
+              // enabled against (#1314 M2), never one the agent named itself.
+              if (uiReview) { uiCallComputer(call.toolCall.name, call.toolCall.arguments.target); assertUiComputerPinned(resolved.run.id, false); }
+              return { arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence,
               principal: { agentId: call.principal.agentId, agentRoleId: call.principal.agentRoleId, agentAuthorityLevel: call.principal.agentAuthorityLevel },
-              ...(gate.intent ? { intent: gate.intent } : {}) } }),
+              ...(gate.intent ? { intent: gate.intent } : {}) } };
+            },
             // The arguments are frozen but a path in them is resolved only
             // when the tool runs, possibly long after review. A write that now
             // reaches a stricter category than the gate judged (a relative

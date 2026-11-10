@@ -207,3 +207,11 @@ test('a call keeps the text its step writes around a template (#1314 review)', a
     else expect(reply).toMatchObject({ outcome: { code: 'WORKFLOW_STEP_INPUT_MISMATCH', effect: 'not_started' } });
   }
 });
+
+test('a direct computer step with no written computer on an unpinned flow raises no card (#1314 M2)', async () => {
+  const f = fixture(desktopLaunchAppTool, { executable: 'notepad.exe' });
+  const response = await f.call();
+  expect(response.status).toBe(409);
+  expect((await response.json()).outcome).toMatchObject({ code: 'WORKFLOW_MACHINE_UNPINNED', effect: 'not_started' });
+  expect(f.approvals.getPending()).toHaveLength(0); expect(f.calls).toHaveLength(0);
+});

@@ -129,6 +129,8 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   FLOW_TURNED_OFF: { category: 'missing_binding', why: 'the workflow it calls is turned off. Turn that workflow on again, or choose another one', step: 'edit_and_run_again' },
   WORKFLOW_BROWSER_REVIEW_STALE: { category: 'missing_binding', why: 'the reviewed browser session changed or Jarvis restarted', step: 'ask_again' },
   WORKFLOW_MACHINE_REPLACED: { category: 'missing_binding', why: 'the computer it was enabled for is no longer enrolled', step: 'accept_binding_change' },
+  // #1314 M2: a browser or desktop action needs a computer a person chose.
+  WORKFLOW_MACHINE_UNPINNED: { category: 'missing_binding', why: 'its browser or desktop steps have no pinned computer. Enable the workflow to pin its computer, or name the computer in the step', step: 'accept_binding_change' },
   WORKFLOW_FACT_STALE: { category: 'missing_binding', why: 'a recipient it sends to is no longer current in memory', step: 'update_recipient' },
   WORKFLOW_FACT_AMBIGUOUS: { category: 'missing_binding', why: 'memory holds conflicting values for a recipient it sends to', step: 'update_recipient' },
   SIDECAR_TOO_OLD_FOR_REVIEWED_ACTION: { category: 'missing_binding', why: 'the Jarvis app on that computer is too old for this approved action', step: 'update_desktop_app' },
@@ -155,7 +157,7 @@ const APPROVAL_WHY: Record<string, string> = {
 /** A notification that was sent on no channel at all (the notify step's own outcome). */
 const DELIVERY_FAILED = 'DELIVERY_FAILED';
 /** Readiness issues that name a binding rather than invalid input. */
-const BINDING_ISSUES = new Set(['CONNECTION_BINDING', 'WORKFLOW_BINDING', 'TOOL_BINDING', 'ROLE_BINDING', 'BINDING_STALE']);
+const BINDING_ISSUES = new Set(['CONNECTION_BINDING', 'WORKFLOW_BINDING', 'TOOL_BINDING', 'ROLE_BINDING', 'BINDING_STALE', 'MACHINE_UNPINNED']);
 /** A connection or computer that changed since the workflow was enabled (Q-05): accepted by enabling it again. */
 const STALE_BINDING_ISSUE = 'BINDING_STALE';
 

@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { ActionOutcomeError } from '../../actions/action-outcome';
 import { getSidecarManager } from '../../actions/tools/sidecar-route';
 import { isNoLocalTools } from '../../actions/tools/local-tools-guard';
 import { withMachineScope, type MachineScope } from '../../actions/machine-scope';
 import type { SidecarCapability, SidecarInfo } from '../../sidecar/types';
 import { ensureRunMachineBinding, getRunMachineBinding, machineBindingBlocked } from '../db/repos/run-machine-binding';
-import { machinePinForRun } from '../db/repos/binding-pins';
+import { machinePinForRun, UNPINNED_COMPUTER_TEXT } from '../db/repos/binding-pins';
 import { assertRunNotCanceled } from './cancellation';
 import { getWorkflowDb } from '../db';
 import { getFlowVersion } from '../db/repos/flow-version';
@@ -20,11 +21,13 @@ const localSessionId = randomUUID();
 // machine and connection it was captured on.
 const PERCEPTION_CAPABILITIES: SidecarCapability[] = ['desktop', 'browser', 'screenshot'];
 
-function identify(selector: string, inventory: SidecarInfo[]): SidecarInfo {
+function identify(selector: string, inventory: SidecarInfo[], exactOnly = false): SidecarInfo {
   const exact = inventory.find(s => s.id === selector);
   if (exact) return exact;
   const named = inventory.filter(s => s.name.toLowerCase() === selector.toLowerCase());
-  const matches = named.length ? named : inventory.filter(s => s.name.toLowerCase().includes(selector.toLowerCase()));
+  // A browser or desktop action names its computer exactly (#1314 M2): part of
+  // a name is not a choice of computer a person made.
+  const matches = named.length || exactOnly ? named : inventory.filter(s => s.name.toLowerCase().includes(selector.toLowerCase()));
   if (matches.length !== 1) machineBindingBlocked('WORKFLOW_TARGET_AMBIGUOUS', `Workflow target "${selector}" is missing or ambiguous.`);
   return matches[0]!;
 }
@@ -110,7 +113,8 @@ export function withWorkflowMachineBinding<T>(ctx: { runId: string; projectId: s
       }
       // Frozen IDs continue to identify an offline/revoked device. Never let
       // fuzzy name matching reinterpret a previously selected ID.
-      const requested = selector && prior?.sidecarId !== selector ? identify(selector, inventory).id : selector;
+      const requested = selector && prior?.sidecarId !== selector
+        ? identify(selector, inventory, capability === 'browser' || capability === 'desktop').id : selector;
       const binding = ensureRunMachineBinding(ctx.runId, ctx.projectId, () => {
         // A pinned flow runs on the computer it was enabled against (Q-05),
         // never on whichever is the default today. Gone is a blocker; offline
@@ -163,4 +167,21 @@ export function withWorkflowMachineBinding<T>(ctx: { runId: string; projectId: s
     },
   };
   return withMachineScope(policy, execute);
+}
+
+/** The text a person reads when a computer action has no pinned computer (#1314 M2). */
+export const UNPINNED_COMPUTER_MESSAGE = UNPINNED_COMPUTER_TEXT;
+
+/**
+ * A browser or desktop action acts on a computer a person chose (#1314 M2):
+ * the one the workflow was enabled against (its pin), or, for a direct step,
+ * the one its step names literally (the step's params are held to the graph,
+ * `pinnedStepParams`). Never the computer a delegated agent named in its own
+ * first call, nor whichever one a capability search found first.
+ */
+export function assertUiComputerPinned(runId: string, literalTarget: boolean): void {
+  const binding = getRunMachineBinding(runId);
+  if (binding?.selectedBy === 'pinned' || literalTarget) return;
+  throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_MACHINE_UNPINNED', effect: 'not_started',
+    message: `This workflow's browser or desktop step has no computer a person chose. ${UNPINNED_COMPUTER_MESSAGE}` });
 }

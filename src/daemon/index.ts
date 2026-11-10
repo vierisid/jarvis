@@ -5280,6 +5280,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           workflowRefusal: workflowToolDeclarationRefusal(tool) } : null;
       },
       roles: () => new Set(agentService.getSpecialists().keys()),
+      roleTools: (id) => agentService.getSpecialists().get(id)?.tools ?? null,
       // Q-05: the computers a workflow can be pinned to, and whether this one may run local tools.
       // `--no-local-tools` reaches the tools only later in startup (9b), after
       // the pin pass below, so the flag is read here as well.

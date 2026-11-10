@@ -83,6 +83,8 @@ export interface RunConnectionBindingView {
 /** Where a version names a connection. */
 export interface ConnectionReference { node: string; path: string }
 
+/** What a person reads when a browser or desktop step has no computer a person chose (#1314 M2). */
+export const UNPINNED_COMPUTER_TEXT = 'Enable the workflow to pin its computer, or name the computer in the step.';
 const ACCEPT = 'It may now act as a different account. Check the connection, then enable or publish the workflow again to accept it.';
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const isExpression = (value: unknown) => typeof value === 'string' && value.includes('{{');
@@ -212,16 +214,41 @@ export function describeConnectionChange(externalId: string, before: PinnedConne
   return `Connection ${externalId} now resolves to a different kind of credential`;
 }
 
-/** The computers a flow's steps need: the first machine step's capability, literal targets, and whether run data picks the target. */
-function machineNeeds(trigger: unknown): { capability: SidecarCapability | null; targets: string[]; dynamic: boolean } {
-  let capability: SidecarCapability | null = null, dynamic = false;
+/** A role's tool entries reach the computer's screen: a browser or desktop category or tool (#1314 M2). */
+export function roleUsesComputer(tools: readonly string[] | null | undefined): SidecarCapability | null {
+  if (!tools) return null;
+  if (tools.some(t => t === 'desktop' || t.startsWith('desktop_'))) return 'desktop';
+  return tools.some(t => t === 'browser' || t.startsWith('browser_')) ? 'browser' : null;
+}
+
+const isJarvisAgent = (pieceName: string) => pieceName === 'jarvis-agent' || pieceName.endsWith('/piece-jarvis-agent');
+
+/**
+ * The computers a flow's steps need: the first machine step's capability,
+ * literal targets, whether run data picks the target, and whether any step
+ * acts on the screen (`ui`, #1314 M2): a reviewed browser or desktop step, or
+ * a delegation whose role has browser or desktop tools. A delegation names no
+ * computer of its own, so the pin is the only one it may use.
+ */
+function machineNeeds(trigger: unknown): { capability: SidecarCapability | null; targets: string[]; dynamic: boolean; ui: boolean } {
+  let capability: SidecarCapability | null = null, dynamic = false, ui = false;
   const targets: string[] = [];
   for (const node of walkFlowNodes(trigger as FlowTriggerNode).slice(1)) {
-    if (node.type !== 'PIECE' || !isJarvisTool(String(node.settings?.pieceName ?? ''))) continue;
+    if (node.type !== 'PIECE') continue;
+    const pieceName = String(node.settings?.pieceName ?? '');
     const input = object(node.settings?.input) ? node.settings!.input : {};
+    if (isJarvisAgent(pieceName) && node.settings?.actionName === 'delegate') {
+      const role = typeof input.role === 'string' && input.role.trim() ? input.role : 'workflow-default';
+      if (isExpression(role)) { dynamic = true; continue; }
+      const needs = roleUsesComputer(workflowReadinessServices()?.roleTools?.(role));
+      if (needs) { ui = true; capability ??= needs; }
+      continue;
+    }
+    if (!isJarvisTool(pieceName)) continue;
     const toolName = input.toolName;
     if (typeof toolName !== 'string' || isExpression(toolName)) { dynamic = true; continue; }
     if (!BOUNDED_TOOLS.has(toolName) && !WORKFLOW_REVIEWED_UI_TOOLS.has(toolName) && toolName !== 'run_skill') continue;
+    if (WORKFLOW_REVIEWED_UI_TOOLS.has(toolName)) ui = true;
     // A skill's surface is known only when it runs; a desktop-capable computer serves either.
     capability ??= toolName === 'run_skill' ? 'desktop' : boundedToolCapability(toolName);
     const target = paramsOf(input).target;
@@ -230,7 +257,7 @@ function machineNeeds(trigger: unknown): { capability: SidecarCapability | null;
       else targets.push(target.trim());
     }
   }
-  return { capability, targets, dynamic };
+  return { capability, targets, dynamic, ui };
 }
 
 /** An enrolled computer by exact id, or the only one with exactly this name. Never a partial match. */
@@ -374,6 +401,19 @@ export function pinUnpinnedEnabledFlows(): number {
     try { if (pinFlowBindings(id, { unattended: true })) pinned++; }
     catch (error) { console.warn(`[binding-pins] could not pin flow ${id}: ${(error as Error).message}`); }
   }
+  // An enabled flow pinned before its delegations counted as computer steps
+  // (#1314 M2): pinned now the way an upgrade pins, so only when exactly one
+  // computer could serve it. Otherwise it waits for a person to enable it.
+  const machineless = getWorkflowDb().query<{ id: string }, []>(
+    "SELECT id FROM flow WHERE status = 'ENABLED' AND binding_pins IS NOT NULL AND json_extract(binding_pins, '$.machine') IS NULL").all();
+  for (const { id } of machineless) {
+    try {
+      const pins = readBindingPins(id), version = runningVersion(id);
+      if (!pins || !version || pins.versionId !== version.versionId || !machineNeeds(version.trigger).ui) continue;
+      const machine = computeMachinePin(version.trigger, true);
+      if (machine) { writePins(id, { ...pins, machine }); pinned++; }
+    } catch (error) { console.warn(`[binding-pins] could not pin the computer of flow ${id}: ${(error as Error).message}`); }
+  }
   return pinned;
 }
 
@@ -399,6 +439,13 @@ export function bindingPinIssues(flowId: string, versionId: string, trigger: unk
     if (change) issues.push({ node: references[0]!.node, path: references[0]!.path, code: 'BINDING_STALE', message: `${change} since this workflow was enabled. ${ACCEPT}` });
   }
   const machine = pins.machine;
+  // A flow that acts on the screen and was enabled with no computer pinned
+  // (several could serve it when the startup pass ran, say) runs nowhere
+  // until a person chooses one (#1314 M2).
+  if (!machine && machineNeeds(trigger).ui) {
+    issues.push({ node: 'trigger', path: 'machine', code: 'MACHINE_UNPINNED',
+      message: `This workflow's browser or desktop steps have no pinned computer. ${UNPINNED_COMPUTER_TEXT}` });
+  }
   const inventory = machine?.sidecarId ? workflowReadinessServices()?.machines?.() : undefined;
   if (machine?.sidecarId && inventory && !inventory.some(s => s.id === machine.sidecarId)) {
     issues.push({ node: 'trigger', path: 'machine', code: 'BINDING_STALE',

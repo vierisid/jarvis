@@ -98,3 +98,64 @@ test('a flow pinned to this computer stays here when a sidecar enrolls later, an
   setNoLocalTools(true);
   expect(blockedCode(() => resolve(flow.run()))).toMatchObject({ code: 'WORKFLOW_MACHINE_UNAVAILABLE' });
 });
+
+/** An enabled flow whose one step delegates to `role`. */
+function delegatingFlow(role: string, enable = true) {
+  const flow = createFlow({});
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Agent routine', trigger: { name: 'trigger', type: 'EMPTY',
+    nextAction: { name: 'agent', type: 'PIECE', settings: { pieceName: '@jarvispieces/piece-jarvis-agent', actionName: 'delegate',
+      input: { goal: 'Write the note', role } } } } as any });
+  if (enable) updateFlowStatus(flow.id, 'ENABLED');
+  return { flowId: flow.id, versionId: version.id };
+}
+const withRoles = () => configureWorkflowReadiness({
+  pieces: new PieceCatalog([{ name: TOOL, displayName: '', description: '', actions: { invoke: { name: 'invoke', displayName: '', description: '' } } },
+    { name: '@jarvispieces/piece-jarvis-agent', displayName: '', description: '', actions: { delegate: { name: 'delegate', displayName: '', description: '' } } }] as any),
+  machines: () => machines as any, localTools: () => !isNoLocalTools(), roles: () => new Set(['computer-operator', 'writer']),
+  roleTools: id => ({ 'computer-operator': ['desktop_click', 'browser_navigate'], writer: ['file-ops'] } as Record<string, string[]>)[id] ?? null });
+
+test('a delegation whose role works the screen pins its computer when enabled; one that does not, does not (#1314 M2)', () => {
+  withRoles();
+  expect(readBindingPins(delegatingFlow('computer-operator').flowId)!.machine).toEqual({ sidecarId: 'a', name: 'Computer a' });
+  expect(readBindingPins(delegatingFlow('writer').flowId)!.machine).toBeNull();
+});
+
+test('a computer action names its computer exactly; part of a name is not a choice (#1314 M2)', () => {
+  // A draft's run: nothing pinned, so the step's own target decides.
+  const flow = createFlow({});
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Draft', trigger: { name: 'trigger', type: 'EMPTY' } as any });
+  const run = () => createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' }).id;
+  machines = [computer('a'), { ...computer('b'), name: 'Studio workstation' }];
+  for (const capability of ['desktop', 'browser'] as const) {
+    expect(blockedCode(() => scoped(run(), () => getMachineScope()!.resolveTarget('Studio', capability))))
+      .toMatchObject({ code: 'WORKFLOW_TARGET_AMBIGUOUS' });
+  }
+  // Other capabilities keep the old partial match; the full name still finds it.
+  expect(scoped(run(), () => getMachineScope()!.resolveTarget('Studio', 'filesystem'))).toBe('b');
+  expect(scoped(run(), () => getMachineScope()!.resolveTarget('Studio workstation', 'browser'))).toBe('b');
+});
+
+test('the startup pass pins the computer of an enabled screen flow pinned before, only when one computer serves it (#1314 M2)', async () => {
+  const { pinUnpinnedEnabledFlows } = await import('../db/repos/binding-pins');
+  const { getWorkflowDb } = await import('../db');
+  // Enabled before delegations counted: its pins hold no computer.
+  withRoles();
+  const flow = delegatingFlow('computer-operator');
+  getWorkflowDb().run(`UPDATE flow SET binding_pins = json_set(binding_pins, '$.machine', json('null')) WHERE id = ?`, [flow.flowId]);
+  pinUnpinnedEnabledFlows();
+  expect(readBindingPins(flow.flowId)!.machine).toBeNull(); // two computers could serve it: a person chooses
+  machines = [computer('a')];
+  pinUnpinnedEnabledFlows();
+  expect(readBindingPins(flow.flowId)!.machine).toEqual({ sidecarId: 'a', name: 'Computer a' });
+});
+
+test('an enabled screen flow with no pinned computer is blocked before it runs, saying how to fix it (#1314 M2)', async () => {
+  const { bindingPinIssues } = await import('../db/repos/binding-pins');
+  const { getWorkflowDb } = await import('../db');
+  withRoles();
+  const flow = delegatingFlow('computer-operator');
+  getWorkflowDb().run(`UPDATE flow SET binding_pins = json_set(binding_pins, '$.machine', json('null')) WHERE id = ?`, [flow.flowId]);
+  const { getFlowVersion } = await import('../db/repos/flow-version');
+  expect(bindingPinIssues(flow.flowId, flow.versionId, getFlowVersion(flow.versionId)!.trigger)).toEqual([expect.objectContaining({
+    code: 'MACHINE_UNPINNED', message: expect.stringContaining('Enable the workflow to pin its computer, or name the computer in the step.') })]);
+});

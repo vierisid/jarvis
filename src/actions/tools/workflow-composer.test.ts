@@ -1018,13 +1018,25 @@ describe("composeFlow", () => {
 
     test("skips the check for a templated target", async () => {
       const llm = new StubLlm(
-        invoke("desktop_launch_app", { executable: "notepad.exe", target: "{{trigger.payload.machine}}" }),
+        invoke("read_file", { path: "C:\\Users\\me\\notes.txt", target: "{{trigger.payload.machine}}" }),
       );
       const result = await composeFlow(
         { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost] },
-        { name: "Opener", description: "open notepad somewhere" },
+        { name: "Opener", description: "read notes somewhere" },
       );
       expect(result.ok).toBe(true);
+    });
+
+    test("refuses a templated computer for a browser or desktop action (#1314 M2)", async () => {
+      const llm = new StubLlm(
+        invoke("desktop_launch_app", { executable: "notepad.exe", target: "{{trigger.payload.machine}}" }),
+      );
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost], maxAttempts: 1 },
+        { name: "Opener", description: "open notepad somewhere" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.join(" ")).toContain("Name the computer directly");
     });
 
     test("leaves tools that carry no OS-bound params alone", async () => {

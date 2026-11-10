@@ -468,7 +468,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         let machines: readonly WorkflowMachineView[] | undefined;
         try { machines = context.machines?.(); } catch { machines = undefined; }
         for (const found of workflowUiStepRefusals(input.toolName, input.params, machines)) {
-          issue(node, found.path, 'WORKFLOW_TOOL_UNSUPPORTED', found.message);
+          issue(node, found.path, found.code ?? 'WORKFLOW_TOOL_UNSUPPORTED', found.message);
         }
       }
     }

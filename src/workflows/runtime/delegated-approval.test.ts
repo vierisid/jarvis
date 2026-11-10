@@ -82,6 +82,16 @@ function createRun(input: Record<string, unknown> = {}, loop = false, notify = f
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
   return { flow, version, run };
 }
+/**
+ * A run of a flow pinned to the test computer, as enabling it pins it (Q-05):
+ * a delegated browser or desktop action runs only on a pinned computer (#1314 M2).
+ */
+function createPinnedRun(...args: Parameters<typeof createRun>) {
+  const ids = createRun(...args);
+  getWorkflowDb().run('UPDATE flow SET binding_pins = ? WHERE id = ?', [JSON.stringify({ schemaVersion: 1, versionId: ids.version.id,
+    pinnedAt: Date.now(), connections: {}, machine: { sidecarId: 'test-computer', name: 'Test computer' } }), ids.flow.id]);
+  return ids;
+}
 const delegationId = (runId: string, path: Array<[string, number]> = []) => 'wfd_' + digest([runId, 'delegate', path]);
 
 type Options = {
@@ -1347,7 +1357,7 @@ for (const tool of ['browser_navigate', 'desktop_launch_app', 'desktop_click']) 
     : { element_id: 123, action: 'set_value', value: 'Synthetic note', target: 'test-computer' };
   const options = { authority: { governed_categories: [] }, script: [{ call: tool, args }, 'finish'] as Turn[] };
   test('requires a dashboard click even with permissive Authority and dispatches only once', async () => {
-    const ids = createRun(); const f = backends(ids, options);
+    const ids = createPinnedRun(); const f = backends(ids, options);
     const parked = await f.delegate({ requiredTools: [tool] });
     expect(parked.status).toBe('approval_required'); expect(f.effects()).toBe(0);
     const card = f.approvals.getRequest(parked.approval!.approvalId)!;
@@ -1360,27 +1370,27 @@ for (const tool of ['browser_navigate', 'desktop_launch_app', 'desktop_click']) 
     await f.delegate({ requiredTools: [tool] }); expect(f.effects()).toBe(1);
   });
   test('stale browser guard blocks approved execution', async () => {
-    let current = true; const ids = createRun();
+    let current = true; const ids = createPinnedRun();
     const f = backends(ids, { ...options, browserGuard: () => current });
     const parked = await f.delegate(); f.approvals.approve(parked.approval!.approvalId, 'dashboard'); current = false;
     await f.delegate(); expect(f.effects()).toBe(0);
     expect(listWorkflowEffects(ids.run.id).at(-1)?.outcome).toMatchObject({ code: 'WORKFLOW_UI_REVIEW_STALE', effect: 'not_started' });
   });
   test('restart cannot reconstruct an approved live browser binding', async () => {
-    const ids = createRun(); const f = backends(ids, options); const parked = await f.delegate();
+    const ids = createPinnedRun(); const f = backends(ids, options); const parked = await f.delegate();
     f.approvals.approve(parked.approval!.approvalId, 'dashboard');
     const resumed = backends(ids, options); await resumed.delegate(); expect(resumed.effects()).toBe(0);
     expect(listWorkflowEffects(ids.run.id).at(-1)?.outcome).toMatchObject({ code: 'WORKFLOW_UI_REVIEW_STALE' });
   });
   test('denying browser review never navigates', async () => {
-    const ids = createRun(); const f = backends(ids, options); const parked = await f.delegate();
+    const ids = createPinnedRun(); const f = backends(ids, options); const parked = await f.delegate();
     f.approvals.deny(parked.approval!.approvalId, 'dashboard'); await f.delegate(); expect(f.effects()).toBe(0);
   });
 });
 
 
 test.skipIf(engineSkip)('browser delegation pauses the real engine, then resumes once after dashboard approval', async () => {
-  const ids = createRun({ requiredTools: 'browser_navigate,browser_snapshot', requireSuccess: true });
+  const ids = createPinnedRun({ requiredTools: 'browser_navigate,browser_snapshot', requireSuccess: true });
   updateRun(ids.run.id, { status: 'QUEUED' });
   const f = await boot(ids, { childLevel: 3, authority: { default_level: 3, governed_categories: [] },
     script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/', target: 'test-computer' } }, { call: 'browser_snapshot', args: { target: 'test-computer' } }, 'finish'] });
@@ -1403,7 +1413,7 @@ test.skipIf(engineSkip)('browser delegation pauses the real engine, then resumes
 
 test.skipIf(engineSkip)('desktop writing pauses the real engine for each write, reads back, then completes once', async () => {
   const names = ['desktop_launch_app', 'desktop_snapshot', 'desktop_click', 'desktop_snapshot'];
-  const ids = createRun({ requiredTools: 'desktop_launch_app,desktop_snapshot,desktop_click', requireSuccess: true, maxIterations: 6 });
+  const ids = createPinnedRun({ requiredTools: 'desktop_launch_app,desktop_snapshot,desktop_click', requireSuccess: true, maxIterations: 6 });
   updateRun(ids.run.id, { status: 'QUEUED' });
   const f = await boot(ids, { childLevel: 3, authority: { default_level: 3, governed_categories: [] },
     script: [...names.map(call => ({ call, args: { target: 'test-computer' } })), 'finish'] });
@@ -1425,7 +1435,7 @@ test.skipIf(engineSkip)('desktop writing pauses the real engine for each write, 
 }, 60_000);
 
 test('each browser action pauses independently, including after outside content', async () => {
-  const ids = createRun();
+  const ids = createPinnedRun();
   const names = ['browser_navigate', 'browser_click', 'browser_scroll'];
   const f = backends(ids, { taintGating: true, distinctChildren: true, authority: { governed_categories: [] },
     script: [...names.map(call => ({ call, args: { target: 'test-computer' } })), 'finish'] });
@@ -1441,7 +1451,7 @@ test('each browser action pauses independently, including after outside content'
 
 
 test('browser review never lifts an explicit Authority denial', async () => {
-  const ids = createRun();
+  const ids = createPinnedRun();
   const f = backends(ids, { childLevel: 3, authority: { default_level: 3, overrides: [{ scope: 'action', target: 'control_app', policy: 'deny' }] },
     profileFor: () => ({ denied_categories: ['control_app'] }),
     script: [{ call: 'browser_navigate' }, 'finish'] });
@@ -1450,7 +1460,7 @@ test('browser review never lifts an explicit Authority denial', async () => {
 
 
 test('browser approval rechecks both browser access and UI control after the card waits', async () => {
-  const ids = createRun(); let profile: import('../../authority/engine').AuthorityProfile | null = null;
+  const ids = createPinnedRun(); let profile: import('../../authority/engine').AuthorityProfile | null = null;
   const f = backends(ids, { profileFor: () => profile, script: [{ call: 'browser_navigate' }, 'finish'] });
   const parked = await f.delegate(); expect(parked.status).toBe('approval_required');
   profile = { denied_categories: ['access_browser'] };
@@ -1460,7 +1470,7 @@ test('browser approval rechecks both browser access and UI control after the car
 
 
 test.skipIf(engineSkip)('a signed-out browser fails the real run and never reaches its notification step', async () => {
-  const ids = createRun({ requiredTools: 'browser_snapshot', requireSuccess: true }, false, true);
+  const ids = createPinnedRun({ requiredTools: 'browser_snapshot', requireSuccess: true }, false, true);
   updateRun(ids.run.id, { status: 'QUEUED' });
   const f = await boot(ids, { script: [{ call: 'browser_snapshot' }, 'finish'],
     finalReport: JSON.stringify({ taskStatus: 'blocked', reason: 'sign_in_required', finalMessage: 'Sign in in the Jarvis browser.' }) });
@@ -1478,7 +1488,7 @@ test.skipIf(engineSkip)('a signed-out browser fails the real run and never reach
 
 
 test.skipIf(engineSkip)('a completed browser agenda reaches the real notification piece once', async () => {
-  const ids = createRun({ requiredTools: 'browser_snapshot', requireSuccess: true }, false, true);
+  const ids = createPinnedRun({ requiredTools: 'browser_snapshot', requireSuccess: true }, false, true);
   updateRun(ids.run.id, { status: 'QUEUED' });
   const f = await boot(ids, { script: [{ call: 'browser_snapshot' }, 'finish'],
     finalReport: JSON.stringify({ taskStatus: 'completed', finalMessage: 'No meetings today' }) });
@@ -1496,7 +1506,7 @@ test.skipIf(engineSkip)('a completed browser agenda reaches the real notificatio
 
 test('a delegated desktop_click get_value needs no mandatory review, like ui_act get_value (#1314 m11)', async () => {
   // Permissive Authority: the read runs with no card, as ui_act get_value would.
-  const ids = createRun();
+  const ids = createPinnedRun();
   const f = backends(ids, { authority: { governed_categories: [] },
     script: [{ call: 'desktop_click', args: { element_id: 7, action: 'get_value', target: 'test-computer' } }, 'finish'] });
   const done = await f.delegate({ requiredTools: ['desktop_click'] });
@@ -1504,7 +1514,7 @@ test('a delegated desktop_click get_value needs no mandatory review, like ui_act
   expect(f.approvals.getPending()).toHaveLength(0);
   expect(f.effects()).toBe(1);
   // A value write by the same tool still waits for a dashboard click.
-  const write = createRun();
+  const write = createPinnedRun();
   const g = backends(write, { authority: { governed_categories: [] },
     script: [{ call: 'desktop_click', args: { element_id: 7, action: 'set_value', value: 'x', target: 'test-computer' } }, 'finish'] });
   expect((await g.delegate({ requiredTools: ['desktop_click'] })).status).toBe('approval_required');
@@ -1513,7 +1523,7 @@ test('a delegated desktop_click get_value needs no mandatory review, like ui_act
 
 test('a delegated navigate card approved in time but dispatched after five minutes is never executed (#1314)', async () => {
   const { setSystemTime } = await import('bun:test');
-  const ids = createRun();
+  const ids = createPinnedRun();
   const f = backends(ids, { authority: { governed_categories: [] },
     script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/', target: 'test-computer' } }, 'finish'] });
   try {
@@ -1530,7 +1540,7 @@ test('a delegated navigate card approved in time but dispatched after five minut
 });
 
 test('a delegated UI card shows the computer and every value as the agent chose it (#1314 M1)', async () => {
-  const ids = createRun();
+  const ids = createPinnedRun();
   const f = backends(ids, { authority: { governed_categories: [] },
     script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/day?account={{secret}}&q=1', target: 'test-computer' } }, 'finish'] });
   const parked = await f.delegate({ requiredTools: ['browser_navigate'] });
@@ -1538,4 +1548,23 @@ test('a delegated UI card shows the computer and every value as the agent chose 
   expect(context.intent).toContain('On "Test computer (test-computer)": open a web page');
   expect(context.intent).toContain('url="https://calendar.example/day?account={{secret}}&q=1" (chosen by the agent)');
   expect(context.uiCard.values).toEqual([{ name: 'url', value: '"https://calendar.example/day?account={{secret}}&q=1"', source: 'agent' }]);
+});
+
+test('a delegated UI action of an unpinned flow raises no card and is refused as a binding (#1314 M2)', async () => {
+  const ids = createRun();
+  const f = backends(ids, { authority: { governed_categories: [] },
+    script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/', target: 'test-computer' } }, 'finish'] });
+  await f.delegate({ requiredTools: ['browser_navigate'] });
+  expect(f.approvals.getPending()).toHaveLength(0); expect(f.effects()).toBe(0);
+  const refused = listWorkflowEffects(ids.run.id).find(e => e.toolName === 'browser_navigate')!;
+  expect(refused.outcome).toMatchObject({ code: 'WORKFLOW_MACHINE_UNPINNED', effect: 'not_started' });
+  expect((refused.outcome as { message: string }).message).toContain('Enable the workflow to pin its computer, or name the computer in the step.');
+});
+
+test('a pinned delegated UI action cannot move to a computer the agent names (#1314 M2)', async () => {
+  const ids = createPinnedRun();
+  const f = backends(ids, { authority: { governed_categories: [] },
+    script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/', target: 'Test' } }, 'finish'] });
+  await f.delegate({ requiredTools: ['browser_navigate'] });
+  expect(f.approvals.getPending()).toHaveLength(0); expect(f.effects()).toBe(0);
 });

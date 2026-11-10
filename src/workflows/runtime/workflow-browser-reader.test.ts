@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../db';
+import { initWorkflowDb, closeWorkflowDb, getWorkflowDb, DEFAULT_IDS } from '../db';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun } from '../db/repos/flow-run';
@@ -54,6 +54,9 @@ function fixture(action = browserClickTool, local = false) {
     settings: { pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1', actionName: 'invoke',
       input: { toolName: step.tool.name, params: step.params } } };
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Browser steps', trigger: { name: 'trigger', type: 'EMPTY', nextAction } });
+  // A local run names no computer, so the flow is pinned to this one, as enabling pins it (#1314 M2).
+  if (local) getWorkflowDb().run('UPDATE flow SET binding_pins = ? WHERE id = ?', [JSON.stringify({ schemaVersion: 1, versionId: version.id,
+    pinnedAt: Date.now(), connections: {}, machine: { sidecarId: null, name: 'this computer' } }), flow.id]);
   const run = () => createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
   const approvals = new ApprovalManager();
   const build = () => buildSandboxServiceBackends({ toolRegistry: registry, approvalManager: approvals,

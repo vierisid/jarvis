@@ -108,10 +108,16 @@ export function statedStepParams(raw: unknown): Record<string, unknown> | null {
  * validation all ask it, so a refusal arrives before anything runs.
  */
 export function workflowUiStepRefusals(toolName: string, rawParams: unknown,
-  machines?: readonly WorkflowMachineView[]): Array<{ path: string; message: string }> {
+  machines?: readonly WorkflowMachineView[]): Array<{ path: string; message: string; code?: 'TOOL_BINDING' }> {
   if (!WORKFLOW_REVIEWED_UI_TOOLS.has(toolName)) return [];
-  const out: Array<{ path: string; message: string }> = [];
+  const out: Array<{ path: string; message: string; code?: 'TOOL_BINDING' }> = [];
   const params = statedStepParams(rawParams);
+  // The computer is never run data's to choose (#1314 M2), nor are the
+  // params as a whole, which would choose it too.
+  if (!params) out.push({ path: 'settings.input.params', code: 'TOOL_BINDING',
+    message: 'Write this step\'s params out one by one: a template for all of them would let run data choose the computer and every value.' });
+  else if (isTemplate(params.target)) out.push({ path: 'settings.input.params.target', code: 'TOOL_BINDING',
+    message: 'Name the computer directly, or leave it out to use the computer the workflow is enabled with: a template would let run data choose which computer this action runs on.' });
   if (toolName === 'desktop_click' && params) {
     if (params.element_id !== undefined && !isTemplate(params.element_id)) {
       out.push({ path: 'settings.input.params.element_id', message: DESKTOP_ELEMENT_ID_REFUSAL });

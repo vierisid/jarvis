@@ -555,6 +555,9 @@ describe('Authority predictions match the effect boundary', () => {
         const flow = createFlow({});
         const version = createDraftVersion({ flowId: flow.id, displayName: 'Parity', trigger: { name: 'trigger', type: 'EMPTY',
           nextAction: step('action', route.piece, route.action, route.input) } });
+        // A computer action runs only on a pinned computer (#1314 M2): pinned here as enabling pins it.
+        getWorkflowDb().run('UPDATE flow SET binding_pins = ? WHERE id = ?', [JSON.stringify({ schemaVersion: 1, versionId: version.id,
+          pinnedAt: Date.now(), connections: {}, machine: { sidecarId: null, name: 'this computer' } }), flow.id]);
         const predicted = observePreparedProposal({ proposalId: 'parity', revision: 'r', evidence: [], goal: null, compositionId: null,
           workflow: { flowId: flow.id, versionId: version.id, versionDigest: '' }, bindings: [], constraints: [], preview: null, sample: null },
         services()).steps.find(s => s.step === 'action')!.decision;
