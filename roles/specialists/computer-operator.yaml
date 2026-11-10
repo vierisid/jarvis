@@ -27,8 +27,24 @@ communication_style:
   formality: adaptive
 heartbeat_instructions: No heartbeat. Complete the assigned task and report its verified result.
 sub_roles: []
+# Named one by one (#1314): the browser and desktop tools this role is for and
+# nothing else. No `general` (clipboard, screen capture, system info), and none
+# of the tools workflows refuse (browser_evaluate, browser_upload_file,
+# desktop_type, desktop_press_keys).
 tools:
-  - general
-  - browser
-  - desktop
+  - browser_navigate
+  - browser_snapshot
+  - browser_click
+  - browser_type
+  - browser_hover
+  - browser_press_key
+  - browser_scroll
+  - browser_screenshot
+  - desktop_list_windows
+  - desktop_snapshot
+  - desktop_find_element
+  - desktop_launch_app
+  - desktop_focus_window
+  - desktop_click
+  - desktop_screenshot
 authority_level: 3

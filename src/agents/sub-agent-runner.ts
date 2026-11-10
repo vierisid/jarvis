@@ -1073,12 +1073,13 @@ function carriedDeliveryScope(value: unknown): string | null {
 
 /**
  * Create a scoped ToolRegistry for a sub-agent.
- * Only includes builtin tools whose category is in the allowed list.
+ * Only includes builtin tools whose category, or whose own name (#1314: a
+ * role that lists its tools one by one), is in the allowed list.
  */
 export function createScopedToolRegistry(allowedCategories: string[]): ToolRegistry {
   const registry = new ToolRegistry();
   for (const tool of BUILTIN_TOOLS) {
-    if (allowedCategories.includes(tool.category)) {
+    if (allowedCategories.includes(tool.category) || allowedCategories.includes(tool.name)) {
       registry.register(tool);
     }
   }
