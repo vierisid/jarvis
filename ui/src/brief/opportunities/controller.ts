@@ -218,9 +218,11 @@ export class OpportunitiesController {
       if (this.retired) return;
       // Refused before anything was applied (#1314 review): a definite
       // refusal, which the next ready read clears, never an unknown outcome.
-      if (error instanceof AwarenessOffError)
+      if (error instanceof AwarenessOffError) {
         this.updateAttempt(id, { ...attempt, state: "refused", reason: AWARENESS_OFF_TEXT });
-      else this.updateAttempt(id, { ...attempt, state: "unknown" });
+        // And the room shows nothing derived from captures from now on, as an awareness-off read does (#1314 review).
+        this.publish({ read: { status: "unavailable", reason: AWARENESS_OFF_TEXT } as never, rows: [], selectedId: null, refreshing: false, phase: "rest" });
+      } else this.updateAttempt(id, { ...attempt, state: "unknown" });
     }
   }
   async recover(id: string) {

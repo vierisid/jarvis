@@ -456,6 +456,9 @@ test("an action refused because awareness is off is a refusal: the row can be ac
   const id = c.snapshot().rows[0]!.proposal.proposalId;
   await c.act(id, "approve");
   expect(c.snapshot().attempts.get(id)?.state).toBe("refused");
+  // Nothing derived from captures stays on screen once the refusal says awareness is off.
+  expect(c.snapshot().rows).toEqual([]);
+  expect(c.snapshot().selectedId).toBeNull();
   off = true; await c.refresh();
   off = false; await c.refresh();
   expect(c.snapshot().attempts.has(id)).toBe(false);
