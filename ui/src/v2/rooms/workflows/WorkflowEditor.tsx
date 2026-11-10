@@ -1,3 +1,4 @@
+import { CodeStepFields } from './CodeStepFields';
 import { helpScoutInputSchema, isHelpScoutReference } from "../../../../../src/workflows/runtime/managed-help-scout-inputs";
 import { HelpScoutConnection, useHelpScoutStatus } from "../../integrations/HelpScoutConnection";
 import { zoomInputSchema, isZoomReference } from "../../../../../src/workflows/runtime/managed-zoom-inputs";
@@ -1013,6 +1014,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             onSetTriggerKind={(kind) => editor.setTriggerKind(kind)}
             onSetErrorHandling={(patch) => editor.setStepErrorHandling(selectedStep.name, patch)}
             onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
+            onSetSourceCode={sourceCode => editor.updateStep(selectedStep.name, { settings: { ...selectedStep.settings, sourceCode } })}
             onUseStandardClickUpFields={() => editor.updateStep(selectedStep.name, {settings: {
               ...selectedStep.settings,
               input: {...selectedStep.settings?.input, custom_fields: {}, check_required_custom_fields: true},
@@ -3176,6 +3178,7 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
   let kindTone: "accent" | "neutral" | "warn" | "ok" = "neutral";
   if (step.type === "EMPTY") { kindLabel = "Manual"; kindTone = "accent"; }
   else if (isTrigger) { kindLabel = "Trigger"; kindTone = "accent"; }
+  else if (step.type === "CODE") { kindLabel = "Code"; }
   else if (isLoop) { kindLabel = "Loop"; kindTone = "warn"; }
   else if (isRouter) {
     // IF reads as a distinct affordance even though it's a ROUTER under
@@ -3328,6 +3331,8 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
             {(step.settings?.branches?.length ?? 0)} branch{(step.settings?.branches?.length ?? 0) === 1 ? "" : "es"} ·{" "}
             {step.settings?.executionType === "EXECUTE_ALL_MATCH" ? "all match" : "first match"}
           </span>
+        ) : step.type === "CODE" ? (
+          <span className="wf-node__piece">Custom JavaScript</span>
         ) : step.settings?.pieceName ? (
           <>
             <span className="wf-node__piece">{piece?.displayName ?? step.settings.pieceName}</span>
@@ -3379,6 +3384,7 @@ interface PropertiesPanelProps {
   isLocked: boolean;
   onSetTriggerKind: (kind: "manual" | "schedule" | "webhook" | "event") => void;
   onSetErrorHandling: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
+  onSetSourceCode: (sourceCode: { code: string; packageJson: string }) => void;
   onSetInput: (key: string, value: unknown) => void;
   onUseStandardClickUpFields: () => void;
   onAddInputKey: (key: string) => void;
@@ -3582,6 +3588,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         </p>
       ) : null}
 
+      {step.type === "CODE" && <CodeStepFields step={step} readOnly={props.readOnly} onChange={props.onSetSourceCode} />}
       {props.workspace && step.type === "PIECE" && !piece && <Button onClick={props.onChoosePiece}>Choose a node</Button>}
       {detectedTriggerKind === "other" ? (
         <p className="wf-props__hint">
@@ -3721,7 +3728,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         // section on step A would silently carry over to step B even
         // though the user might not need it there.
         key={`advanced-${step.name}`}
-        showErrorHandling={step.type === "PIECE" && !isTriggerStep}
+        showErrorHandling={(step.type === "PIECE" || step.type === "CODE") && !isTriggerStep}
         continueOnFailure={!!step.settings?.errorHandlingOptions?.continueOnFailure?.value}
         retryOnFailure={!!step.settings?.errorHandlingOptions?.retryOnFailure?.value}
         onSetErrorHandling={onSetErrorHandling}
@@ -3750,7 +3757,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
           onCommit={onSetDisplayName}
         />}
         <p>
-          <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Piece trigger") : isLoop ? "Loop" : isRouter ? "Router" : "Action"}
+          <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Piece trigger") : isLoop ? "Loop" : isRouter ? "Router" : step.type === "CODE" ? "Code" : "Action"}
         </p>
       </header>
 
