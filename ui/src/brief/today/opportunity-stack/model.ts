@@ -36,10 +36,18 @@ export interface OpportunityBinding extends BriefViewPort<readonly OpportunityCa
 export const OPPORTUNITY_APPROVE_LABEL = "Approve & enable";
 export const OPPORTUNITY_TIMING = { acknowledge: 520, dismiss: 360, exit: 160, enter: 180 } as const;
 
+/** An operator setting, not a fault: self-hosted installs leave preparation off
+ * until JARVIS_BRIEF_PREPARED_OPPORTUNITIES=1 (it spends background model calls). */
+export const OPPORTUNITIES_OFF_REASON = "Prepared opportunities are off on this Jarvis. Set JARVIS_BRIEF_PREPARED_OPPORTUNITIES=1 and restart to turn them on.";
+export function opportunitiesOff(capabilities: unknown): boolean {
+  const value = (capabilities as { capabilities?: Record<string, { supported?: unknown; reason?: unknown }> } | null | undefined)?.capabilities?.preparedOpportunities;
+  return value?.supported === true && value.reason === "disabled";
+}
+
 export function opportunityView(mode: "live" | "preview", binding?: OpportunityBinding): OpportunityBinding {
   const source = mode === "live" ? "live" : "fixture";
   if (!binding || !binding.scopeKey || binding.source !== source || (mode === "live" && !isBriefCapabilityEnabled(binding.capabilities, "preparedOpportunities"))) {
-    return { source, scopeKey: binding?.scopeKey || "unavailable", state: { status: "unsupported", reason: "Prepared opportunities are not available yet." } };
+    return { source, scopeKey: binding?.scopeKey || "unavailable", state: { status: "unsupported", reason: mode === "live" && opportunitiesOff(binding?.capabilities) ? OPPORTUNITIES_OFF_REASON : "Prepared opportunities are not available yet." } };
   }
   if (mode === "live" && !isBriefCapabilityEnabled(binding.capabilities, "opportunityActivation")) return { ...binding, onAction: undefined, receipts: undefined };
   return binding;
