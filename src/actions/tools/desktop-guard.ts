@@ -150,7 +150,7 @@ export function isScreenCaptureEnabled(): boolean {
   try { return screenSource() !== false; } catch { return false; }
 }
 /** The tools that capture the screen. */
-export const SCREEN_CAPTURE_TOOLS: ReadonlySet<string> = new Set(['desktop_screenshot', 'capture_screen']);
+export const SCREEN_CAPTURE_TOOLS: ReadonlySet<string> = new Set(['desktop_screenshot', 'capture_screen', 'browser_screenshot']);
 export const SCREEN_CAPTURE_DISABLED_CODE = 'SCREEN_CAPTURE_DISABLED';
 export const SCREEN_CAPTURE_DISABLED_MESSAGE =
   'Error: Screen awareness is turned off on this Jarvis, so this screenshot was not taken. '

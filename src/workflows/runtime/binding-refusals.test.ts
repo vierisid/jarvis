@@ -321,3 +321,15 @@ test('an unpinned computer step reads as a binding the person fixes by enabling 
   expect(failure.headline).toContain('Enable the workflow to pin its computer, or name the computer in the step');
   expect(failure.next.map(n => n.step)).toContain('accept_binding_change');
 });
+
+test('a flow refused before it ran for an unpinned computer says so, with the fix (#1314 review)', () => {
+  const f = setup();
+  const run = updateRun(f.ended('FAILED', 3_000).id, { failedStep: { name: '<readiness>', displayName: 'Workflow readiness', errorMessage: 'unpinned' },
+    steps: { '<readiness>': { status: 'FAILED', output: { code: 'WORKFLOW_NOT_READY', readiness: { ready: false, issues: [
+      { node: 'trigger', path: 'machine', code: 'WORKFLOW_MACHINE_UNPINNED', message: 'no pin' }] } } } } })!;
+  const failure = runFailure(run)!;
+  expect(failure).toMatchObject({ category: 'missing_binding', code: 'WORKFLOW_MACHINE_UNPINNED' });
+  expect(failure.headline).toContain('Enable the workflow to pin its computer, or name the computer in the step');
+  expect(failure.next.map(n => n.step)).toContain('accept_binding_change');
+  expect(flowBindingBlock(f.row())).toMatchObject({ code: 'WORKFLOW_MACHINE_UNPINNED', kind: 'readiness' });
+});

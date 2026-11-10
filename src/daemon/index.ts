@@ -73,7 +73,7 @@ import { registerWorkflowComposition } from '../brief/registrations/workflow-com
 import { ProfileSettings } from '../brief/profile-settings';
 import { registerProfileSettings } from '../brief/registrations/profile-settings';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
-import { workflowToolDeclarationRefusal } from '../workflows/runtime/workflow-ui-tools';
+import { switchedOffCard, workflowToolDeclarationRefusal, workflowToolSwitchRefusal } from '../workflows/runtime/workflow-ui-tools';
 import { pinUnpinnedEnabledFlows } from '../workflows/db/repos/binding-pins';
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -205,7 +205,7 @@ import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded } fr
 import { createSidecarOfflineNotifier } from "./sidecar-offline-notice.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
 import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
-import { bindDesktopSwitch, bindScreenCaptureSwitch, desktopRefusal, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled } from "../actions/tools/desktop-guard.ts";
+import { bindDesktopSwitch, bindScreenCaptureSwitch, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled } from "../actions/tools/desktop-guard.ts";
 import { osFamily } from "../util/execution-environment.ts";
 import { isLocalBrowserDisabled, isNoLocalTools } from "../actions/tools/local-tools-guard.ts";
 
@@ -4407,13 +4407,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // or screen awareness for the screenshot tools) is closed, not left
     // waiting to be approved into a refusal (#1314 m6).
     const closeSwitchedOffWorkflowCards = () => {
-      const registry = agentService?.getOrchestrator().getToolRegistry();
-      approvalManager.closeWorkflowCards((request) => {
-        const tool = registry?.get(request.tool_name);
-        let args: Record<string, unknown> = {};
-        try { args = JSON.parse(request.tool_arguments ?? '{}'); } catch { /* judged on the tool alone */ }
-        return !!tool && desktopRefusal(tool, args) !== null;
-      }, 'switched-off');
+      approvalManager.closeWorkflowCards(switchedOffCard(agentService?.getOrchestrator().getToolRegistry()), 'switched-off');
     };
     const auditTrail = new AuditTrail();
     const learner = new AuthorityLearner(authorityConfig.learning?.suggest_threshold ?? 5);
@@ -5292,7 +5286,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       tool: name => {
         const tool = agentService.getOrchestrator().getToolRegistry()?.list().find(t => t.name === name);
         return tool ? { params: Object.entries(tool.parameters).map(([name, param]) => ({ name, ...param })),
-          workflowRefusal: workflowToolDeclarationRefusal(tool) } : null;
+          workflowRefusal: workflowToolDeclarationRefusal(tool), switchRefusal: workflowToolSwitchRefusal(tool) } : null;
       },
       roles: () => new Set(agentService.getSpecialists().keys()),
       roleTools: (id) => agentService.getSpecialists().get(id)?.tools ?? null,
@@ -5560,7 +5554,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               toolRegistry.list(cat).map((t) => ({
                 name: t.name,
                 description: t.description,
-                workflowRefusal: workflowToolDeclarationRefusal(t),
+                workflowRefusal: workflowToolDeclarationRefusal(t) ?? workflowToolSwitchRefusal(t)?.message ?? null,
                 params: Object.entries(t.parameters).map(([name, p]) => ({
                   name,
                   type: p.type,

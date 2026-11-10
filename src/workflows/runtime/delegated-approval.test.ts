@@ -2,6 +2,7 @@ import { currentReviewedExecution } from '../../actions/tools/reviewed-call-scop
 import { stopUnfinishedRunsForKill } from './emergency-hold';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { getSidecarManager, setSidecarManagerRef } from '../../actions/tools/sidecar-route';
+import { getMachineScope } from '../../actions/machine-scope';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -177,8 +178,9 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
       expect(currentReviewedExecution()?.remoteBrowserSnapshot).toEqual({ sidecarId: 'test-computer', elemGen: 'reviewed-generation' });
       effects++; return 'Calendar page';
     } });
-  registry.register({ name: 'browser_snapshot', category: 'browser', description: 'Synthetic bounded browser read', parameters: {},
-    execute: async () => { effects++; return 'Calendar snapshot'; } });
+  registry.register({ name: 'browser_snapshot', category: 'browser', description: 'Synthetic bounded browser read', parameters: UI_PARAMS,
+    // Routed as the real read is: through the run's machine scope (#1314).
+    execute: async (p: Record<string, unknown>) => { getMachineScope()?.resolveTarget(p.target, 'browser'); effects++; return 'Calendar snapshot'; } });
   for (const name of ['desktop_launch_app', 'desktop_click']) registry.register({ name, category: 'desktop', description: 'Synthetic desktop action', parameters: UI_PARAMS,
     captureApprovalGuard: () => () => opts.browserGuard?.() ?? true,
     execute: async () => { effects++; return 'Desktop action completed'; } });
@@ -1570,4 +1572,17 @@ test('a pinned delegated UI action cannot move to a computer the agent names (#1
     script: [{ call: 'browser_navigate', args: { url: 'https://calendar.example/', target: 'Test' } }, 'finish'] });
   await f.delegate({ requiredTools: ['browser_navigate'] });
   expect(f.approvals.getPending()).toHaveLength(0); expect(f.effects()).toBe(0);
+  // Refused for naming the computer by part of its name, not for any other reason.
+  expect(listWorkflowEffects(ids.run.id).find(e => e.toolName === 'browser_navigate')?.outcome).toMatchObject({ code: 'WORKFLOW_TARGET_AMBIGUOUS' });
+});
+
+test('a delegated screen read of an unpinned flow is refused and binds no computer (#1314 review)', async () => {
+  const ids = createRun();
+  const f = backends(ids, { authority: { governed_categories: [] },
+    script: [{ call: 'browser_snapshot', args: { target: 'test-computer' } }, 'finish'] });
+  const done = await f.delegate({ requiredTools: ['browser_snapshot'] });
+  expect(f.effects()).toBe(0);
+  expect(JSON.stringify(done)).toContain('Enable the workflow to pin its computer, or name the computer in the step.');
+  const { getRunMachineBinding } = await import('../db/repos/run-machine-binding');
+  expect(getRunMachineBinding(ids.run.id)).toBeNull();
 });

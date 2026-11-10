@@ -157,7 +157,7 @@ const APPROVAL_WHY: Record<string, string> = {
 /** A notification that was sent on no channel at all (the notify step's own outcome). */
 const DELIVERY_FAILED = 'DELIVERY_FAILED';
 /** Readiness issues that name a binding rather than invalid input. */
-const BINDING_ISSUES = new Set(['CONNECTION_BINDING', 'WORKFLOW_BINDING', 'TOOL_BINDING', 'ROLE_BINDING', 'BINDING_STALE', 'MACHINE_UNPINNED']);
+const BINDING_ISSUES = new Set(['CONNECTION_BINDING', 'WORKFLOW_BINDING', 'TOOL_BINDING', 'ROLE_BINDING', 'BINDING_STALE', 'WORKFLOW_MACHINE_UNPINNED']);
 /** A connection or computer that changed since the workflow was enabled (Q-05): accepted by enabling it again. */
 const STALE_BINDING_ISSUE = 'BINDING_STALE';
 
@@ -319,6 +319,16 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
       const codes = evidence.issues.map(issue => issue.code);
       const binding = codes.find(c => BINDING_ISSUES.has(c));
       const detail = evidence.issues.map(issue => `${issue.code}${issue.message ? `: ${issue.message}` : ''}`).join('\n');
+      // #1314: a computer step with no computer a person chose, said with the fix.
+      if (codes.includes('WORKFLOW_MACHINE_UNPINNED')) return build('missing_binding', 'none',
+        `${s} did not run because ${NAMED_REFUSALS.WORKFLOW_MACHINE_UNPINNED!.why}.`, NOTHING,
+        ['accept_binding_change'], links, 'WORKFLOW_MACHINE_UNPINNED', detail);
+      // #1314: a tool whose switch is off is not an unsupported action; turning the switch on fixes it.
+      const switched = codes.find(c => c === 'DESKTOP_DISABLED' || c === 'SCREEN_CAPTURE_DISABLED');
+      if (switched) return build('missing_binding', 'none', switched === 'DESKTOP_DISABLED'
+        ? `${s} did not run: desktop control is turned off. Turn it on in Settings > General > Desktop control, then run it again.`
+        : `${s} did not run: screen awareness is turned off, and it takes screenshots. Turn awareness on, then run it again.`,
+        NOTHING, ['run_again'], links, switched, detail);
       if (codes.includes('WORKFLOW_TOOL_UNSUPPORTED')) return build('invalid_input', 'none',
         `${s} did not run: it contains an action that is not supported in this workflow.`, NOTHING,
         ['edit_and_run_again'], links, 'WORKFLOW_TOOL_UNSUPPORTED', detail);

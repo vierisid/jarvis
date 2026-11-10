@@ -74,7 +74,9 @@ export interface ReadinessContext {
    */
   connection?: (externalId: string, pieceName: string, path: string, settings: Record<string, unknown>, nodeType?: unknown) => string | ConnectionRefusal | null;
   workflow?: (id: string) => string | null;
-  tool?: (name: string) => { params: Array<{ name: string; type: string; required: boolean; enum?: string[] }>; workflowRefusal?: string | null } | null;
+  tool?: (name: string) => { params: Array<{ name: string; type: string; required: boolean; enum?: string[] }>; workflowRefusal?: string | null;
+    /** A switch that has the tool turned off (#1314 m6). */
+    switchRefusal?: { code: string; message: string } | null } | null;
   roles?: () => ReadonlySet<string>;
   /** The enrolled computers, for the reviewed-UI step checks (#1314). */
   machines?: () => readonly WorkflowMachineView[];
@@ -483,6 +485,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         if (!tool) issue(node, 'settings.input.toolName', 'TOOL_BINDING', context.tool ? 'Unknown tool' : 'Tool inventory is unavailable');
         else {
           if (tool.workflowRefusal) issue(node, 'settings.input.toolName', 'WORKFLOW_TOOL_UNSUPPORTED', tool.workflowRefusal);
+          if (tool.switchRefusal) issue(node, 'settings.input.toolName', tool.switchRefusal.code, tool.switchRefusal.message);
           let params = staticInput(input.params ?? {});
           if (params.known && typeof params.value === 'string') {
             try { params = { known: true, value: JSON.parse(params.value) }; } catch { /* report below */ }

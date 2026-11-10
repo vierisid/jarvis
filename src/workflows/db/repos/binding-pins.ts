@@ -44,7 +44,16 @@ export type ConnectionIdentity =
  */
 export type PinnedConnection = ConnectionIdentity | { kind: 'unresolved' };
 /** The computer a flow runs on: an enrolled sidecar, or this computer (`null`). */
-export interface MachinePin { sidecarId: string | null; name: string }
+export interface MachinePin {
+  sidecarId: string | null; name: string;
+  /**
+   * Chosen with nobody choosing (a saved draft, the startup pass) for a flow
+   * whose steps act on the screen (#1314 review): such a pin keeps the run on
+   * one computer, but it is not a computer a person chose, so its browser and
+   * desktop actions are refused until a person enables the flow.
+   */
+  unattended?: true;
+}
 export interface BindingPins {
   schemaVersion: 1;
   /** The version the pins were taken from. Pins apply to runs of that version only. */
@@ -248,7 +257,7 @@ function machineNeeds(trigger: unknown): { capability: SidecarCapability | null;
     const toolName = input.toolName;
     if (typeof toolName !== 'string' || isExpression(toolName)) { dynamic = true; continue; }
     if (!BOUNDED_TOOLS.has(toolName) && !WORKFLOW_REVIEWED_UI_TOOLS.has(toolName) && toolName !== 'run_skill') continue;
-    if (WORKFLOW_REVIEWED_UI_TOOLS.has(toolName)) ui = true;
+    if (WORKFLOW_REVIEWED_UI_TOOLS.has(toolName) || toolName === 'run_skill') ui = true;
     // A skill's surface is known only when it runs; a desktop-capable computer serves either.
     capability ??= toolName === 'run_skill' ? 'desktop' : boundedToolCapability(toolName);
     const target = paramsOf(input).target;
@@ -285,7 +294,8 @@ function exactMachine(selector: string, inventory: SidecarInfo[]): SidecarInfo |
  * it sleeps, as runs did before pins.
  */
 function computeMachinePin(trigger: unknown, unattended: boolean): MachinePin | null {
-  return machinePinFrom(trigger, unattended, workflowReadinessServices()?.machines?.());
+  const pin = machinePinFrom(trigger, unattended, workflowReadinessServices()?.machines?.());
+  return pin && unattended && machineNeeds(trigger).ui ? { ...pin, unattended: true } : pin;
 }
 /** `computeMachinePin` over an inventory already read, so a caller that also needs it reads it once. */
 function machinePinFrom(trigger: unknown, unattended: boolean, inventory: SidecarInfo[] | undefined): MachinePin | null {
@@ -320,7 +330,9 @@ function draftMachinePin(trigger: unknown, previous: MachinePin | null): Machine
   const capability = needs.capability;
   const inventory = workflowReadinessServices()?.machines?.();
   const pinned = inventory?.find(s => s.id === previous.sidecarId);
-  return !inventory || !pinned || pinned.capabilities?.includes(capability) ? previous : machinePinFrom(trigger, true, inventory);
+  if (!inventory || !pinned || pinned.capabilities?.includes(capability)) return previous;
+  const next = machinePinFrom(trigger, true, inventory);
+  return next && needs.ui ? { ...next, unattended: true } : next;
 }
 
 export function readBindingPins(flowId: string): BindingPins | null {
@@ -401,19 +413,6 @@ export function pinUnpinnedEnabledFlows(): number {
     try { if (pinFlowBindings(id, { unattended: true })) pinned++; }
     catch (error) { console.warn(`[binding-pins] could not pin flow ${id}: ${(error as Error).message}`); }
   }
-  // An enabled flow pinned before its delegations counted as computer steps
-  // (#1314 M2): pinned now the way an upgrade pins, so only when exactly one
-  // computer could serve it. Otherwise it waits for a person to enable it.
-  const machineless = getWorkflowDb().query<{ id: string }, []>(
-    "SELECT id FROM flow WHERE status = 'ENABLED' AND binding_pins IS NOT NULL AND json_extract(binding_pins, '$.machine') IS NULL").all();
-  for (const { id } of machineless) {
-    try {
-      const pins = readBindingPins(id), version = runningVersion(id);
-      if (!pins || !version || pins.versionId !== version.versionId || !machineNeeds(version.trigger).ui) continue;
-      const machine = computeMachinePin(version.trigger, true);
-      if (machine) { writePins(id, { ...pins, machine }); pinned++; }
-    } catch (error) { console.warn(`[binding-pins] could not pin the computer of flow ${id}: ${(error as Error).message}`); }
-  }
   return pinned;
 }
 
@@ -439,11 +438,11 @@ export function bindingPinIssues(flowId: string, versionId: string, trigger: unk
     if (change) issues.push({ node: references[0]!.node, path: references[0]!.path, code: 'BINDING_STALE', message: `${change} since this workflow was enabled. ${ACCEPT}` });
   }
   const machine = pins.machine;
-  // A flow that acts on the screen and was enabled with no computer pinned
-  // (several could serve it when the startup pass ran, say) runs nowhere
-  // until a person chooses one (#1314 M2).
-  if (!machine && machineNeeds(trigger).ui) {
-    issues.push({ node: 'trigger', path: 'machine', code: 'MACHINE_UNPINNED',
+  // A flow that acts on the screen with no computer a person pinned (several
+  // could serve it when it was pinned unattended, say) runs nowhere until a
+  // person chooses one by enabling it (#1314 M2).
+  if ((!machine || machine.unattended) && machineNeeds(trigger).ui) {
+    issues.push({ node: 'trigger', path: 'machine', code: 'WORKFLOW_MACHINE_UNPINNED',
       message: `This workflow's browser or desktop steps have no pinned computer. ${UNPINNED_COMPUTER_TEXT}` });
   }
   const inventory = machine?.sidecarId ? workflowReadinessServices()?.machines?.() : undefined;

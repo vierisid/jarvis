@@ -2,7 +2,7 @@ import type { ToolDefinition } from '../../actions/tools/registry';
 import type { ActionCategory } from '../../roles/authority';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { resolveToolTarget } from '../../actions/tools/sidecar-route';
-import { isDesktopEnabled, isScreenCaptureEnabled, SCREEN_CAPTURE_TOOLS, toolAlwaysUsesDesktop } from '../../actions/tools/desktop-guard';
+import { desktopRefusal, isDesktopEnabled, isScreenCaptureEnabled, SCREEN_CAPTURE_TOOLS, toolAlwaysUsesDesktop } from '../../actions/tools/desktop-guard';
 import { BOUNDED_TOOLS } from './tool-capability';
 import { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview } from '../../authority/ui-intent';
 export { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview };
@@ -25,14 +25,6 @@ export function workflowToolRefusal(name: string): string | null {
 export function workflowToolDeclarationRefusal(tool: ToolDefinition): string | null {
   const refusal = workflowToolRefusal(tool.name);
   if (refusal) return refusal;
-  // The switches, read live (#1314 m6): composing or enabling a flow around a
-  // tool that is turned off would only fail at its first run.
-  if (!isDesktopEnabled() && toolAlwaysUsesDesktop(tool)) {
-    return `${tool.name} is unavailable while desktop control is turned off (desktop.enabled: false). Turn it on in Settings > General > Desktop control first.`;
-  }
-  if (SCREEN_CAPTURE_TOOLS.has(tool.name) && !isScreenCaptureEnabled()) {
-    return `${tool.name} is unavailable while screen awareness is turned off. Turn awareness on first.`;
-  }
   if (WORKFLOW_REVIEWED_UI_TOOLS.has(tool.name)) return workflowUiReview(tool, tool.name) ? null
     : `${tool.name} is unavailable in workflows because its live approval guard is missing.`;
   if (BOUNDED_TOOLS.has(tool.name) || tool.name === 'run_skill' || tool.workflowEffect) return null;
@@ -155,3 +147,35 @@ export function workflowUiStepRefusals(toolName: string, rawParams: unknown,
  */
 export const DESKTOP_ELEMENT_ID_REFUSAL = 'A desktop element id written into a workflow names nothing: ids come from a desktop_snapshot taken in the same run, and change between runs. '
   + 'Use jarvis-agent:delegate with a desktop role (computer-operator), which observes the app and picks the element itself.';
+
+/**
+ * A tool turned off by a switch, read live (#1314 m6): composing or enabling a
+ * flow around it would only fail at its first run, and a run admitted while it
+ * is off says which switch, not that the action is unsupported.
+ */
+export function workflowToolSwitchRefusal(tool: ToolDefinition): { code: 'DESKTOP_DISABLED' | 'SCREEN_CAPTURE_DISABLED'; message: string } | null {
+  if (!isDesktopEnabled() && toolAlwaysUsesDesktop(tool)) {
+    return { code: 'DESKTOP_DISABLED', message: `${tool.name} is unavailable while desktop control is turned off (desktop.enabled: false). Turn it on in Settings > General > Desktop control first.` };
+  }
+  if (SCREEN_CAPTURE_TOOLS.has(tool.name) && !isScreenCaptureEnabled()) {
+    return { code: 'SCREEN_CAPTURE_DISABLED', message: `${tool.name} is unavailable while screen awareness is turned off. Turn awareness on first.` };
+  }
+  return null;
+}
+
+/**
+ * Which waiting cards a switch just turned off (#1314 m6): one whose tool,
+ * with its recorded arguments, the switches now refuse. A tool the registry
+ * no longer holds, or arguments that cannot be read, close the card too: it
+ * could not be judged runnable, and closing only means asking again.
+ */
+export function switchedOffCard(registry: { get(name: string): ToolDefinition | undefined } | null | undefined) {
+  return (request: { tool_name: string; tool_arguments: string | null }): boolean => {
+    const tool = registry?.get(request.tool_name);
+    if (!tool) return /^desktop_/.test(request.tool_name) || SCREEN_CAPTURE_TOOLS.has(request.tool_name)
+      ? !isDesktopEnabled() || !isScreenCaptureEnabled() : false;
+    let args: Record<string, unknown>;
+    try { args = JSON.parse(request.tool_arguments ?? '{}'); } catch { return true; }
+    return desktopRefusal(tool, args) !== null;
+  };
+}

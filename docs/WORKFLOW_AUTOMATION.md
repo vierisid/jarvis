@@ -90,9 +90,13 @@ Practical consequences:
   enable; it never runs on a computer the agent names. Without a pin the
   action is refused with `WORKFLOW_MACHINE_UNPINNED`, which shows on the
   Workflows list and in a "Workflow needs attention" notice: enable the
-  workflow to pin its computer, or name the computer in the step. On upgrade,
-  an enabled flow pinned with no computer is pinned when exactly one computer
-  serves it; otherwise it waits for a person to enable it again.
+  workflow to pin its computer, or name the computer in the step. A pin made
+  with nobody choosing (the startup pass, a saved draft) keeps the run on one
+  computer but does not count: its browser and desktop actions wait for a
+  person to enable the flow. The check reads the pin before anything resolves
+  a computer, so a refused call binds the run to none. The same rule covers a
+  delegated agent's screen reads (screenshots, snapshots, window lists) and a
+  `run_skill` step, which replays recorded clicks and typing.
 - **A direct step is held to its step** (#1314). The tool route trusts the
   step-name header, so a reviewed UI call must send exactly the params its
   step states: literal values as written, the text around a template kept, no
@@ -117,8 +121,13 @@ Practical consequences:
   card, like `ui_act` `get_value`; its `control_app` floor stays.
 - Desktop control off (`desktop.enabled: false`) refuses desktop tools when a
   workflow is composed or enabled, and closes desktop cards still waiting.
-  Screen awareness off refuses `desktop_screenshot` and `capture_screen` on
-  every path (and the pebble's screen context), and closes their waiting cards.
+  Screen awareness off refuses `desktop_screenshot`, `capture_screen` and
+  `browser_screenshot` on every path (the pebble's screen context and the
+  Brief's screenshot attachment included), and closes their waiting cards. A
+  run admitted while a switch is off says which switch, not that the action is
+  unsupported. The text reads of the screen (`desktop_snapshot`,
+  `desktop_list_windows`, `browser_snapshot`, `ui_snapshot`) follow desktop
+  control, not awareness.
 - Direct browser steps keep live snapshot generations per workflow run, across
   snapshot, approval and execution, independently of chat and other runs. Local
   and remote element actions use the snapshot that run actually read. Replaying

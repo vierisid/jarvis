@@ -97,11 +97,20 @@ function previewUsesUnqualifiedSamples(runId: string, activeStepName?: string): 
   return false;
 }
 
-export function withWorkflowMachineBinding<T>(ctx: { runId: string; projectId: string; stepName?: string }, execute: () => T): T {
+export function withWorkflowMachineBinding<T>(ctx: { runId: string; projectId: string; stepName?: string }, execute: () => T,
+  opts: { delegated?: boolean } = {}): T {
   const policy: MachineScope = {
     binding: () => getRunMachineBinding(ctx.runId),
     resolveTarget(explicit, capability) {
       assertRunNotCanceled(ctx.runId);
+      // A delegated agent reaches a screen -- a click or a read -- only on a
+      // computer a person pinned (#1314 review), never one it names itself.
+      // Checked before anything binds, so a refused call binds the run to none.
+      if (opts.delegated && capability && PERCEPTION_CAPABILITIES.includes(capability)) {
+        const pin = machinePinForRun(ctx.runId);
+        if (!pin || pin.unattended) machineBindingBlocked('WORKFLOW_MACHINE_UNPINNED',
+          `This workflow's agent may use a browser or desktop only on a computer a person chose. ${UNPINNED_COMPUTER_TEXT}`);
+      }
       const selector = typeof explicit === 'string' && explicit.trim() ? explicit.trim() : null;
       const manager = getSidecarManager();
       const inventory = manager?.listSidecars() ?? [];
@@ -180,8 +189,10 @@ export const UNPINNED_COMPUTER_MESSAGE = UNPINNED_COMPUTER_TEXT;
  * first call, nor whichever one a capability search found first.
  */
 export function assertUiComputerPinned(runId: string, literalTarget: boolean): void {
-  const binding = getRunMachineBinding(runId);
-  if (binding?.selectedBy === 'pinned' || literalTarget) return;
+  // Read from the pin, not the run's binding, so a refused call binds nothing
+  // (#1314 review): the check comes before anything resolves a computer.
+  const pin = machinePinForRun(runId);
+  if ((pin && !pin.unattended) || literalTarget) return;
   throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_MACHINE_UNPINNED', effect: 'not_started',
     message: `This workflow's browser or desktop step has no computer a person chose. ${UNPINNED_COMPUTER_MESSAGE}` });
 }

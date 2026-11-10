@@ -10,7 +10,7 @@ import { BUILTIN_TOOLS } from './builtin.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
 import { bindScreenCaptureSwitch, setDesktopEnabledSource, setScreenCaptureEnabledSource, withoutDisabledDesktopTools,
   SCREEN_CAPTURE_DISABLED_CODE } from './desktop-guard.ts';
-import { workflowToolDeclarationRefusal } from '../../workflows/runtime/workflow-ui-tools.ts';
+import { workflowToolSwitchRefusal } from '../../workflows/runtime/workflow-ui-tools.ts';
 import { fetchPebbleScreenshot } from '../../daemon/pebble-desktop-context.ts';
 
 afterEach(() => { setScreenCaptureEnabledSource(null); setDesktopEnabledSource(null); });
@@ -44,8 +44,9 @@ test('the pebble takes no screenshot while awareness is off', async () => {
 
 test('a workflow cannot be composed or enabled around a tool its switch has turned off', () => {
   setDesktopEnabledSource(() => false);
-  expect(workflowToolDeclarationRefusal(byName('desktop_launch_app'))).toContain('desktop control is turned off');
+  expect(workflowToolSwitchRefusal(byName('desktop_launch_app'))).toMatchObject({ code: 'DESKTOP_DISABLED', message: expect.stringContaining('desktop control is turned off') });
   setDesktopEnabledSource(null); setScreenCaptureEnabledSource(() => false);
-  expect(workflowToolDeclarationRefusal(byName('desktop_screenshot'))).toContain('screen awareness is turned off');
-  expect(workflowToolDeclarationRefusal(byName('desktop_launch_app'))).toBeNull();
+  expect(workflowToolSwitchRefusal(byName('desktop_screenshot'))).toMatchObject({ code: 'SCREEN_CAPTURE_DISABLED' });
+  expect(workflowToolSwitchRefusal(byName('browser_screenshot'))).toMatchObject({ code: 'SCREEN_CAPTURE_DISABLED' });
+  expect(workflowToolSwitchRefusal(byName('desktop_launch_app'))).toBeNull();
 });

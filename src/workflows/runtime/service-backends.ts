@@ -83,7 +83,7 @@ import { recordPieceCompletion } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
-import { canonicalJson, digest, resolveEffectContext, pinnedStepParams, type WorkflowEffectContext } from './effect-context';
+import { canonicalJson, digest, resolveEffectContext, pinnedStepParams, stepTargetIsLiteral, type WorkflowEffectContext } from './effect-context';
 import { isCommunityAction } from './step-admission';
 import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
 import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
@@ -495,7 +495,10 @@ export function buildSandboxServiceBackends(
         // run data's to choose.
         // A forged call is a tamper signal, so the refusal is audited (#1314 review).
         let fromRunData = new Set<string>();
-        try { if (workflowUiReview(tool, req.toolName, req.params)) fromRunData = pinnedStepParams(ctx, req.params, ['target']); }
+        // A skill replays recorded clicks and typing, so it is a computer action too (#1314 review).
+        const uiStep = workflowUiReview(tool, req.toolName, req.params);
+        const computerAction = uiStep || tool.name === 'run_skill';
+        try { if (uiStep) fromRunData = pinnedStepParams(ctx, req.params, ['target']); }
         catch (error) {
           effects.auditRefusal({ context: ctx, toolName: tool.name, category: refusedEffectCategory(tool) });
           throw error;
@@ -533,8 +536,14 @@ export function buildSandboxServiceBackends(
         let uiCard: UiCard | null = null;
         // A computer that cannot be resolved is refused, typed and recorded,
         // by `prepare` below; no card is raised without one.
+        // Written in the step, never resolved from run data: a UI step's params
+        // are held to the graph above; a skill's target is read from the graph.
+        const literalTarget = typeof req.params.target === 'string' && req.params.target.trim() !== ''
+          && (uiStep || stepTargetIsLiteral(ctx));
         if (uiReview) {
           try {
+            // Nothing resolves a computer before the pin check (#1314 review): a refused call binds none.
+            assertUiComputerPinned(ctx.runId, literalTarget);
             uiCard = workflowUiCard(tool.name, req.params, {
               computer: uiCallComputer(tool.name, req.params.target).name,
               source: name => fromRunData.has(name) ? 'run_data' : 'workflow', declared: Object.keys(tool.parameters ?? {}),
@@ -557,11 +566,10 @@ export function buildSandboxServiceBackends(
           // WHAT is dispatched belong in it. A reply-handling flag added to
           // the route's body must never invalidate a pending approval.
           request: { toolName: req.toolName, params: req.params }, prepare: () => {
-            const args = capability.prepareArguments(req.params);
-            const target = capability.target(args);
             // On a computer a person chose (#1314 M2): the pin, or the step's own written target.
-            if (uiReview) assertUiComputerPinned(ctx.runId, typeof req.params.target === 'string' && req.params.target.trim() !== '');
-            return { arguments: args, target };
+            if (computerAction) assertUiComputerPinned(ctx.runId, literalTarget);
+            const args = capability.prepareArguments(req.params);
+            return { arguments: args, target: capability.target(args) };
           },
           validateTarget: (args, target) => {
             if (digest(capability.target(args)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
@@ -997,6 +1005,7 @@ export function buildSandboxServiceBackends(
         let uiCard: UiCard | null = null;
         if (uiReview) {
           try {
+            assertUiComputerPinned(resolved.run.id, false);
             uiCard = workflowUiCard(call.toolCall.name, call.toolCall.arguments, {
               computer: uiCallComputer(call.toolCall.name, call.toolCall.arguments.target).name, source: () => 'agent',
               declared: Object.keys(registry.get(call.toolCall.name)?.parameters ?? {}),
@@ -1038,7 +1047,11 @@ export function buildSandboxServiceBackends(
             prepare: () => {
               // A delegated UI call runs only on the computer the workflow was
               // enabled against (#1314 M2), never one the agent named itself.
-              if (uiReview) { uiCallComputer(call.toolCall.name, call.toolCall.arguments.target); assertUiComputerPinned(resolved.run.id, false); }
+              // Every read of the screen is held the same way by the machine
+              // scope (`withWorkflowMachineBinding`, delegated): a snapshot shows
+              // the agent a computer as much as a click acts on one.
+              if (uiReview) assertUiComputerPinned(resolved.run.id, false);
+              if (uiReview) uiCallComputer(call.toolCall.name, call.toolCall.arguments.target);
               return { arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence,
               principal: { agentId: call.principal.agentId, agentRoleId: call.principal.agentRoleId, agentAuthorityLevel: call.principal.agentAuthorityLevel },
               ...(gate.intent ? { intent: gate.intent } : {}) } };
@@ -1535,7 +1548,7 @@ export function buildSandboxServiceBackends(
     llmChat: cancellableWorkflowService(llmChat),
     notify: cancellableWorkflowService(notify),
     contextProvider,
-    agentDelegate: cancellableWorkflowService((req, ctx) => withWorkflowMachineBinding(ctx, () => agentDelegate(req, ctx))),
+    agentDelegate: cancellableWorkflowService((req, ctx) => withWorkflowMachineBinding(ctx, () => agentDelegate(req, ctx), { delegated: true })),
     eventsPoll,
     workflowsStart: cancellableWorkflowService(workflowsStart),
     ...(opts.resumeUrlPrefix !== undefined ? { resumeUrlPrefix: opts.resumeUrlPrefix } : {}),

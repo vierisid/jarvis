@@ -165,3 +165,16 @@ export function pinnedStepParams(ctx: WorkflowEffectContext, params: Record<stri
   }
   return fromRunData;
 }
+
+/** Whether the step writes its `target` literally, not as a template (#1314 review). */
+export function stepTargetIsLiteral(ctx: WorkflowEffectContext): boolean {
+  const run = getFlowRun(ctx.runId);
+  const version = run ? getFlowVersion(run.flowVersionId) : null;
+  const node = version && ctx.stepName ? walkFlowNodes(version.trigger).filter(n => n.name === ctx.stepName) : [];
+  if (node.length !== 1) return false;
+  const input = effectiveStepInput(ctx.runId, ctx.stepName!, node[0]!.settings?.input) as Record<string, unknown> | undefined;
+  let params: unknown = input?.params;
+  if (typeof params === 'string') { try { params = JSON.parse(params); } catch { return false; } }
+  const target = params && typeof params === 'object' ? (params as Record<string, unknown>).target : undefined;
+  return typeof target === 'string' && target.trim() !== '' && !templated(target);
+}
