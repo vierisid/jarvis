@@ -1183,7 +1183,10 @@ src/workflows/
       jarvis-tools.ts           /v1/jarvis/tools  -> ToolRegistry.invoke
       jarvis-workflows.ts       /v1/jarvis/workflows -> workflow runner
       logs.ts                   /v1/logs/:runId zstd execution-state backup
-      store.ts                  /v1/store-entries (engine's KV store)
+      store.ts                  /v1/store-entries (engine's KV store); a
+                                FLOW-scoped key ([test]flow_<id>/...) only
+                                for a run or trigger hook of that flow
+      run-flow.ts               (helper, no route) the flow a token's run serves
       waitpoints.ts             `/v1/waitpoints` (the public resume route,
                                 `/api/webhooks/waitpoints/:id`, is in api/routes.ts)
 
