@@ -798,10 +798,18 @@ export class EngineRuntime {
       // Reusing the warm engine -- cancel its pending eviction; the next
       // release will arm a fresh one.
       this.clearIdleEvictionTimer();
-      const { token, expiresAt } = await this.api.signer.mint(
-        { sandboxId: warm.sandboxId, runId: opts.runId, projectId: opts.projectId },
-        opts.tokenTtlSeconds,
-      );
+      let minted: Awaited<ReturnType<typeof this.api.signer.mint>>;
+      try {
+        minted = await this.api.signer.mint(
+          { sandboxId: warm.sandboxId, runId: opts.runId, projectId: opts.projectId },
+          opts.tokenTtlSeconds,
+        );
+      } catch (e) {
+        // Out of the slot already: retired, or nothing would ever stop it.
+        this.retireEngine(warm);
+        throw e;
+      }
+      const { token, expiresAt } = minted;
       try {
         this.api.registry.rebind(warm.sandboxId, {
           runId: opts.runId,

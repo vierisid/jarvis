@@ -134,6 +134,17 @@ describe("a parked warm engine", () => {
     await second.release();
   });
 
+  test("a parked engine taken for a run whose token cannot be minted is retired, not stranded", async () => {
+    const first = await acquire("run-1");
+    const { proc } = first._internals();
+    await first.release();
+    duringMint = async () => { throw new Error("signing failed"); };
+    await expect(acquire("run-2")).rejects.toThrow("signing failed");
+    expect(api.registry.get(first.sandboxId)).toBeNull();
+    await proc.exited;
+    expect(proc.alive()).toBe(false);
+  });
+
   test("a rebind failing on an engine that exited meanwhile signals nothing through the dead handle", async () => {
     const first = await acquire("run-1");
     const { proc } = first._internals();
