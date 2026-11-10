@@ -115,6 +115,25 @@ async function computeHmac(secret: string, body: string): Promise<string> {
     .join('');
 }
 
+/** Headers that carry a sender's credentials, besides any whose name matches `SECRET_HEADER_NAME`. */
+const CREDENTIAL_HEADERS = new Set(['authorization', 'proxy-authorization', 'cookie', 'set-cookie', 'x-api-key', 'api-key', 'x-jarvis-timestamp']);
+const SECRET_HEADER_NAME = /token|secret|signature|password/i;
+export const REDACTED_HEADER_VALUE = '[redacted]';
+
+/**
+ * The request headers a workflow and its run history may see. Credential
+ * headers keep their name but not their value: a run is read by the
+ * dashboard and the assistant and copied into sample data, and a step could
+ * pass the value on. Signature checks run on the raw request before this.
+ */
+export function redactedHeaders(headers: Headers): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of headers.entries()) {
+    out[name] = CREDENTIAL_HEADERS.has(name.toLowerCase()) || SECRET_HEADER_NAME.test(name) ? REDACTED_HEADER_VALUE : value;
+  }
+  return out;
+}
+
 // ── WebhookManager ──
 
 /** Per-flow and global ingress budgets. Generous for real integrations, fatal for a flood. */
@@ -346,7 +365,7 @@ export class WebhookManager {
       method: req.method,
       url: req.url,
       timestamp: Date.now(),
-      headers: Object.fromEntries(req.headers.entries()),
+      headers: redactedHeaders(req.headers),
     };
 
     // Fire callback. It records the delivery and says what became of it.

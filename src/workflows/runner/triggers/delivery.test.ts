@@ -640,6 +640,29 @@ describe("webhooks", () => {
     await d.stop();
   });
 
+  test("sender credentials in headers are redacted in the stored run and in the trigger data, and a signed request still verifies", async () => {
+    const { flowId } = webhook({ secret: SECRET });
+    const d = await daemon(Date.now());
+    const body = '{"order":1}';
+    const response = await post(d, flowId, body, {
+      ...(await timestamped(SECRET, body)),
+      "Content-Type": "application/json", "X-GitHub-Event": "push",
+      Authorization: "Bearer sk-live-sender-secret", Cookie: "session=cookie-secret", "X-Hub-Signature-256": "sha256=provider-signature",
+      "X-Api-Key": "key-secret", "X-Custom-Token": "custom-secret",
+    });
+    expect(await response.json()).toMatchObject({ outcome: "started" });
+    // What the queue hands the run as trigger data, and what the run records.
+    const stored = JSON.stringify([claimNextJob(), runsOf(flowId)]);
+    expect(stored).toContain("push");
+    for (const leaked of ["sk-live-sender-secret", "cookie-secret", "provider-signature", "key-secret", "custom-secret"]) expect(stored).not.toContain(leaked);
+    expect(stored).toContain("[redacted]");
+    expect(stored).toContain('content-type');
+    expect(stored).toContain('application/json');
+    expect(stored).toContain('"x-github-event":"push"');
+    expect(JSON.stringify(listFlowFires(flowId))).not.toContain("sender-secret");
+    await d.stop();
+  });
+
   test("a workflow turned off answers 404 and starts nothing", async () => {
     const { flowId } = webhook();
     const d = await daemon(Date.now());

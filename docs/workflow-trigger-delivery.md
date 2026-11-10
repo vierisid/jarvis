@@ -114,6 +114,16 @@ A delivery's identity, in order:
   delivery id header is ignored there: trusting it would let a captured request
   run again under a fresh id.
 
+Credential headers are not passed on. In `_webhook.headers` (the run history,
+the trigger output, `{{trigger._webhook.headers.*}}`) the value of
+`Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`,
+`Api-Key`, `X-Jarvis-Timestamp` and any header whose name contains `token`,
+`secret`, `signature` or `password` (including `X-Jarvis-Signature` and
+`X-Hub-Signature-256`) is `[redacted]`; other headers (`Content-Type`,
+`User-Agent`, `X-GitHub-Event`) are kept. Signatures are verified on the raw
+request before this. A workflow that needs a sender's token must receive it in
+the body or the query, not a header.
+
 A repeat answers 200 with `outcome: "duplicate"` and the original `runId`;
 nothing runs again. Identical unsigned bodies without an id are separate
 deliveries: pings and button presses repeat on purpose. A provider's manual
