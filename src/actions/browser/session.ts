@@ -2421,13 +2421,16 @@ export class BrowserController {
    */
   captureApprovalGuard(
     allowInitialConnection = false,
-    opts: { bindDocument?: boolean } = {},
+    opts: { bindDocument?: boolean; bindLoader?: boolean } = {},
   ): () => boolean {
     const epoch = this.approvalEpoch;
     const connected = this._connected;
+    // `bindLoader` (#1314) binds the document alone, not the id map: for a
+    // call that addresses no element (a workflow key press), so another
+    // snapshot of the same page does not retire it, while a navigation does.
     const surface = opts.bindDocument
-      ? { loaderId: this.elementDoc.loaderId, gen: this.snapshotGen }
-      : null;
+      ? { loaderId: this.elementDoc.loaderId, gen: this.snapshotGen as number | null }
+      : opts.bindLoader ? { loaderId: this.elementDoc.loaderId, gen: null } : null;
     // AN EMPTY SURFACE IS NOT A SURFACE, and the same rule this change puts in
     // `assertSamePage` and `documentMovedReason` applies to the thing that
     // CAPTURES one. Reachable in two ordinary calls: snapshot, then
@@ -2442,7 +2445,7 @@ export class BrowserController {
         ? this._connected && this.cdp.isOpen && !!this.requestGuard?.isOpen
         : allowInitialConnection && !this._connected;
       if (!live) return false;
-      if (surface && (surface.loaderId !== this.elementDoc.loaderId || surface.gen !== this.snapshotGen)) {
+      if (surface && (surface.loaderId !== this.elementDoc.loaderId || (surface.gen !== null && surface.gen !== this.snapshotGen))) {
         return false;
       }
       return true;

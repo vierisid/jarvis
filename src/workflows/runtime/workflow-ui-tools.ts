@@ -1,6 +1,7 @@
 import type { ToolDefinition } from '../../actions/tools/registry';
 import type { ActionCategory } from '../../roles/authority';
 import { ActionOutcomeError } from '../../actions/action-outcome';
+import { resolveToolTarget } from '../../actions/tools/sidecar-route';
 import { BOUNDED_TOOLS } from './tool-capability';
 import { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview } from '../../authority/ui-intent';
 export { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview };
@@ -68,4 +69,56 @@ export function assertWorkflowUiCardCurrent(approval: { context?: string | null 
     throw new ActionOutcomeError({ status: 'blocked', code: 'APPROVAL_EXPIRED', effect: 'not_started',
       message: 'This approval was for the screen as it was when the card was raised, and it expired before the action ran. Nothing was done. Start a new run and review the current screen.' });
   }
+}
+
+/**
+ * A workflow key press runs only in this computer's own browser (#1314). It
+ * is bound to the reviewed document, and only the local controller can hold
+ * that binding: the sidecar's key handler checks no document. Composition,
+ * activation and dispatch all refuse a key press bound for another computer.
+ */
+export const REMOTE_KEY_PRESS_REFUSAL = 'browser_press_key runs in a workflow only in the browser on the Jarvis computer itself: '
+  + 'on another computer the key cannot be bound to the page you reviewed. To press Enter in a field there, use browser_type with submit set to true.';
+
+/** The refusal for a workflow key press that would reach another computer, or null. */
+export function remoteKeyPressRefusal(toolName: string, params: Record<string, unknown>): string | null {
+  if (toolName !== 'browser_press_key') return null;
+  try { return resolveToolTarget(params.target, 'browser', toolName, { quiet: true }) ? REMOTE_KEY_PRESS_REFUSAL : null; }
+  catch { return REMOTE_KEY_PRESS_REFUSAL; }
+}
+
+/** What a machine inventory says, for the static checks below. */
+export type WorkflowMachineView = { id: string; name: string; capabilities?: readonly string[] };
+
+const isTemplate = (value: unknown): boolean => typeof value === 'string' && value.includes('{{');
+
+/** A step's params as the graph states them: an object, or null when run data decides them whole. */
+export function statedStepParams(raw: unknown): Record<string, unknown> | null {
+  let value = raw ?? {};
+  if (typeof value === 'string') {
+    if (value.trim().startsWith('{{')) return null;
+    try { value = JSON.parse(value); } catch { return null; }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+/**
+ * Why a direct reviewed-UI step cannot run as composed, keyed by the input
+ * path it is about. Static: composition, activation and the composer's own
+ * validation all ask it, so a refusal arrives before anything runs.
+ */
+export function workflowUiStepRefusals(toolName: string, rawParams: unknown,
+  machines?: readonly WorkflowMachineView[]): Array<{ path: string; message: string }> {
+  if (!WORKFLOW_REVIEWED_UI_TOOLS.has(toolName)) return [];
+  const out: Array<{ path: string; message: string }> = [];
+  const params = statedStepParams(rawParams);
+  if (toolName === 'browser_press_key' && params && !isTemplate(params.target)) {
+    const target = typeof params.target === 'string' ? params.target.trim() : '';
+    // No target: the computer pinned at enable is the most recent one that
+    // serves the browser, so any enrolled browser computer means a remote key.
+    if (target || machines?.some(m => m.capabilities?.includes('browser'))) {
+      out.push({ path: 'settings.input.params.target', message: REMOTE_KEY_PRESS_REFUSAL });
+    }
+  }
+  return out;
 }

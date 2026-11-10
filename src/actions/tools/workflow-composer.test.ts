@@ -2089,3 +2089,15 @@ test('strict optional-data guidance reaches both composer paths and their repair
     }
   }
 });
+
+test('the composer refuses a key press the computer a run would use cannot bind (#1314)', async () => {
+  const candidate = { displayName: 'Search', trigger: { name: 'trigger', type: 'EMPTY', nextAction: { name: 'enter', type: 'PIECE',
+    settings: { pieceName: '@jarvispieces/piece-jarvis-tool', actionName: 'invoke', input: { toolName: 'browser_press_key', params: { key: 'Enter' } } } } } };
+  const llm: ComposerLlmClient = { chat: async () => ({ text: JSON.stringify(candidate) }) };
+  const result = await composeFlow({ llm, pieceRegistry: new PieceCatalog([{ name: '@jarvispieces/piece-jarvis-tool', displayName: 'Tool', description: '',
+    actions: { invoke: { name: 'invoke', displayName: 'Invoke', description: '' } } }]), toolNames: ['browser_press_key'], maxAttempts: 1,
+    executionTargets: [{ id: '', name: 'This computer', os: 'linux' }, { id: 'studio', name: 'Studio', os: 'windows', connected: true, capabilities: ['browser'] }] },
+    { name: 'Search', description: 'press Enter' });
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.errors.join(' ')).toContain('browser_type with submit');
+});

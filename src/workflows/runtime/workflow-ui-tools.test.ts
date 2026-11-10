@@ -138,3 +138,14 @@ test('a call naming a reviewed step with params its step does not state raises n
   expect(f.approvals.getPending()).toHaveLength(0); expect(f.calls).toHaveLength(0);
   expect((await f.call()).status).toBe(202);
 });
+
+test('a key press that would reach another computer is refused at composition and activation (#1314)', () => {
+  const studio = { id: 'studio', name: 'Studio', capabilities: ['browser'] };
+  const issues = (params: Record<string, unknown>, machines: any[]) => compileWorkflow(graph('browser_press_key', params),
+    { pieces: catalog, phase: 'composition', machines: () => machines }).issues.filter(i => i.code === 'WORKFLOW_TOOL_UNSUPPORTED');
+  expect(issues({ key: 'Enter' }, [studio])).toHaveLength(1);
+  expect(issues({ key: 'Enter', target: 'Studio' }, [])).toHaveLength(1);
+  expect(issues({ key: 'Enter' }, [{ ...studio, capabilities: ['desktop'] }])).toEqual([]);
+  expect(issues({ key: 'Enter' }, [])[0]?.message).toBeUndefined();
+  expect(issues({ key: 'Enter' }, [studio])[0]!.message).toContain('browser_type with submit');
+});

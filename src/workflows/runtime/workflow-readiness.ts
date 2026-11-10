@@ -9,7 +9,7 @@ import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
 import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
 import { REFUND_REQUIRED, refundSetup } from './refund';
 import { walkFlowNodes } from '../db/flow-graph';
-import { workflowToolRefusal } from './workflow-ui-tools';
+import { workflowToolRefusal, workflowUiStepRefusals, type WorkflowMachineView } from './workflow-ui-tools';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import { REFUND_ACCOUNTS, REFUND_LOOP_REFUSAL, REFUND_PIECE, isRefundAction, managedRefundRefusal, type RefundAccountField } from '../refund-accounts';
 import { IMPORT_REQUIRED, importSetup } from './contact-import';
@@ -76,6 +76,8 @@ export interface ReadinessContext {
   workflow?: (id: string) => string | null;
   tool?: (name: string) => { params: Array<{ name: string; type: string; required: boolean; enum?: string[] }>; workflowRefusal?: string | null } | null;
   roles?: () => ReadonlySet<string>;
+  /** The enrolled computers, for the reviewed-UI step checks (#1314). */
+  machines?: () => readonly WorkflowMachineView[];
 }
 
 const object = (value: unknown): value is Record<string, any> =>
@@ -462,6 +464,13 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input)) {
       const refusal = typeof input.toolName === 'string' ? workflowToolRefusal(input.toolName) : null;
       if (refusal) issue(node, 'settings.input.toolName', 'WORKFLOW_TOOL_UNSUPPORTED', refusal);
+      if (typeof input.toolName === 'string') {
+        let machines: readonly WorkflowMachineView[] | undefined;
+        try { machines = context.machines?.(); } catch { machines = undefined; }
+        for (const found of workflowUiStepRefusals(input.toolName, input.params, machines)) {
+          issue(node, found.path, 'WORKFLOW_TOOL_UNSUPPORTED', found.message);
+        }
+      }
     }
     if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input) && context.phase !== 'composition') {
       const name = { value: input.toolName };

@@ -43,7 +43,7 @@ import type { AuditTrail } from "../../authority/audit";
 import type { EmergencyController } from "../../authority/emergency";
 import type { RoleDefinition } from "../../roles/types";
 import { JarvisLlmClient } from "../adapters/llm-client";
-import { assertWorkflowUiCardCurrent, directToolAboveLevelFloor, workflowUiCardDeadline } from './workflow-ui-tools';
+import { assertWorkflowUiCardCurrent, directToolAboveLevelFloor, remoteKeyPressRefusal, workflowUiCardDeadline } from './workflow-ui-tools';
 import { JarvisToolRegistryAdapter, frameComputerStepResult } from "../adapters/tool-registry";
 import { JarvisNotifierAdapter, type NotifierDeps } from "../adapters/notifier";
 import { JarvisContextProviderAdapter } from "../adapters/context-provider";
@@ -512,6 +512,11 @@ export function buildSandboxServiceBackends(
         })();
         const gate = resolveToolGate(tool, req.toolName, req.params);
         const uiReview = workflowUiReview(tool, req.toolName, req.params);
+        const remoteKey = uiReview ? remoteKeyPressRefusal(tool.name, req.params) : null;
+        if (remoteKey) {
+          effects.auditRefusal({ context: ctx, toolName: tool.name, category: refusedEffectCategory(tool) });
+          throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started', message: `WORKFLOW_TOOL_UNSUPPORTED: ${remoteKey}` });
+        }
         let uiExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
         let dispatched = false;
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
@@ -948,6 +953,8 @@ export function buildSandboxServiceBackends(
         }
         const unboundable = surfaceBoundRefusal(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
         if (unboundable && !uiReview) return refuse(unboundable);
+        const remoteKey = uiReview ? remoteKeyPressRefusal(call.toolCall.name, call.toolCall.arguments) : null;
+        if (remoteKey) return refuse(remoteKey);
         if (gate.confirm === 'always' && !uiReview) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.`);
         }

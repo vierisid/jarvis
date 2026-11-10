@@ -537,7 +537,7 @@ async function composeOneShot(
       continue;
     }
 
-    const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients);
+    const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients, deps.executionTargets ?? []);
     rememberCandidate(deps, context, raw, parsed, validation.ok ? [] : validation.errors);
     if (validation.ok) {
       if (attempt > 1) logAttempt(attempt, "success-after-retry", null);
@@ -667,7 +667,7 @@ async function composeWithTools(
           inlineErrors = [`response was not valid JSON: ${(e as Error).message}`];
         }
         if (!inlineErrors) {
-          const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients);
+          const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients, deps.executionTargets ?? []);
           if (validation.ok) {
             rememberCandidate(deps, context, text, parsed, []);
             logAttempt(turn, "tool-loop-inline-json", null);
@@ -715,7 +715,7 @@ async function composeWithTools(
         submits++;
         const flowArg = unwrapSubmittedFlow(call.arguments);
         lastRaw = safeStringify(flowArg);
-        const validation = acceptComposedFlow(contract, flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients);
+        const validation = acceptComposedFlow(contract, flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients, deps.executionTargets ?? []);
         rememberCandidate(deps, context, lastRaw, flowArg, validation.ok ? [] : validation.errors);
         if (validation.ok) {
           if (submits > 1) logAttempt(submits, "tool-loop-success-after-retry", null);
@@ -1728,6 +1728,7 @@ function validateComposedFlow(
   toolSpecs: Map<string, ComposerToolSpec> | null,
   osCheck: OsCheckContext | null,
   ingredients: readonly ResolvedCompositionIngredient[] = [],
+  machines: readonly ExecutionTarget[] = [],
 ): ValidationOk | ValidationFail {
   if (typeof raw !== "object" || raw === null) {
     return { ok: false, errors: ["expected an object at the top level"] };
@@ -1778,7 +1779,10 @@ function validateComposedFlow(
     errors.push("A scheduled or event-driven workflow needs at least one actual action step. A trigger alone or prose describing missing actions is not a completed workflow. Build the supported steps, inspect a permitted browser-agent alternative, or report_blocked.");
   }
   if (errors.length > 0) return { ok: false, errors };
-  const readiness = compileWorkflow(trigger, { pieces: registry, phase: 'composition' });
+  // The enrolled computers (#1314), never the brain host: a reviewed UI step
+  // that cannot run on the computer a run would use is refused here too.
+  const readiness = compileWorkflow(trigger, { pieces: registry, phase: 'composition',
+    machines: () => machines.filter(m => m.id !== '') });
   if (!readiness.ready) return { ok: false, errors: readiness.issues.map(i => `step "${i.node}" (${i.path}): ${i.message}`) };
   const ingredientErrors = ingredientUsageIssues(trigger, ingredients, registry);
   if (ingredientErrors.length) return { ok: false, errors: ingredientErrors };

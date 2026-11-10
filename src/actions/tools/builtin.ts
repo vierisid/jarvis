@@ -1287,9 +1287,13 @@ function browserReviewSubject(tool: 'browser_navigate' | 'browser_click' | 'brow
  */
 function browserCallGuard(
   tool: string,
-  opts: { bindDocument?: boolean } = {},
-): (params: Record<string, unknown>) => ApprovalGuard {
-  return (params) => {
+  opts: { bindDocument?: boolean; workflowBindsLoader?: boolean } = {},
+): (params: Record<string, unknown>, call?: { workflow?: boolean }) => ApprovalGuard {
+  return (params, call) => {
+    // A workflow key press (#1314) is bound to the reviewed document, which
+    // only the local controller can hold: the sidecar's key handler compares
+    // no document, so a remote one has nothing to bind and is refused.
+    const loaderBound = !!(opts.workflowBindsLoader && call?.workflow);
     let reviewedRoute: string | null;
     try {
       // Quiet (#675): this resolution is a comparison, not a dispatch, and
@@ -1314,9 +1318,11 @@ function browserCallGuard(
     // element-addressed tools are the opposite -- they cannot work without the
     // snapshot that minted their ids, so for them a cold browser at review
     // really does mean nothing was reviewed.
+    if (loaderBound && reviewedRoute) return () => false;
     const machineCurrent = captureMachineApprovalGuard(params.target, 'browser', tool);
-    const mayConnectLazily = !opts.bindDocument;
-    const local = reviewedRoute ? null : browser.captureApprovalGuard(mayConnectLazily, opts);
+    const mayConnectLazily = !opts.bindDocument && !loaderBound;
+    const local = reviewedRoute ? null : browser.captureApprovalGuard(mayConnectLazily,
+      loaderBound ? { bindLoader: true } : { bindDocument: opts.bindDocument });
     // The local map's generation, read in the same synchronous step as the
     // guard above, for the element action to compare again under the
     // controller's snapshot lock (#875). The guard's own comparison runs
@@ -1676,7 +1682,7 @@ export const browserHoverTool: ToolDefinition = {
 
 export const browserPressKeyTool: ToolDefinition = {
   name: 'browser_press_key',
-  captureApprovalGuard: browserCallGuard('browser_press_key'),
+  captureApprovalGuard: browserCallGuard('browser_press_key', { workflowBindsLoader: true }),
   description: 'Press a key or key combination in the browser page (sent to the focused element). Examples: "Enter", "Escape", "Tab", "ArrowDown", "Ctrl+K", "Shift+Enter", "Ctrl+Shift+M". Use for in-app keyboard shortcuts, menu navigation, and committing edits. Note: browser-reserved shortcuts (Ctrl+N, Ctrl+T, Ctrl+1-9) are intercepted by Chrome and never reach the page — use in-page UI for those actions instead. PageUp, PageDown, Home and End scroll the page, which retires every element [id]: snapshot again before using one.',
   category: 'browser',
   parameters: {

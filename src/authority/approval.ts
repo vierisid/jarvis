@@ -261,7 +261,7 @@ export class ApprovalManager {
     let current: ApprovalGuard | undefined;
     if (tool && rawUiGate(params.toolName, params.toolArguments)) {
       try {
-        current = tool.captureApprovalGuard?.(JSON.parse(toolArgs)) ?? (() => true);
+        current = tool.captureApprovalGuard?.(JSON.parse(toolArgs), { workflow: executionMode === 'workflow' }) ?? (() => true);
       } catch {
         // A failed subject capture must not create an executable approval.
         current = () => false;

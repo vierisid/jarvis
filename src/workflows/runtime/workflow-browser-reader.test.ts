@@ -4,7 +4,7 @@ import { createFlow } from '../db/repos/flow';
 import { createDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun } from '../db/repos/flow-run';
 import { ToolRegistry } from '../../actions/tools/registry';
-import { browser, browserNavigateTool, browserSnapshotTool, browserClickTool, browserTypeTool, browserHoverTool } from '../../actions/tools/builtin';
+import { browser, browserNavigateTool, browserSnapshotTool, browserClickTool, browserTypeTool, browserHoverTool, browserPressKeyTool } from '../../actions/tools/builtin';
 import { FakeRenderer, wireController } from '../../actions/browser/fixtures/fake-renderer';
 import { isNoLocalTools, setNoLocalTools } from '../../actions/tools/local-tools-guard';
 import { currentTemplateDeliveryScope } from '../../actions/tools/template-delivery-scope';
@@ -43,7 +43,8 @@ function fixture(action = browserClickTool, local = false) {
   const steps = {
     navigate: { tool: browserNavigateTool, params: { ...target, url: 'https://example.test/' } },
     snapshot: { tool: browserSnapshotTool, params: target },
-    action: { tool: action, params: { ...target, element_id: 1, ...(action === browserTypeTool ? { text: 'Synthetic note' } : {}) } },
+    action: { tool: action, params: action === browserPressKeyTool ? { ...target, key: 'Enter' }
+      : { ...target, element_id: 1, ...(action === browserTypeTool ? { text: 'Synthetic note' } : {}) } },
   };
   const registry = new ToolRegistry();
   for (const step of Object.values(steps)) registry.register(step.tool);
@@ -190,4 +191,33 @@ for (const late of ['click', 'dispatch'] as const) test(`a navigate card expires
     expect(outcome).toMatchObject({ code: 'APPROVAL_EXPIRED', effect: 'not_started' });
     expect(f.calls.filter(c => c.method === 'browser_navigate')).toHaveLength(0);
   } finally { setSystemTime(); }
+});
+
+for (const moved of [false, true]) test(`a local workflow key press is bound to the reviewed document (navigated away: ${moved}, #1314)`, async () => {
+  const fake = new FakeRenderer([{ name: 'Editor', x: 50, y: 40 }]);
+  restore = wireController(browser, fake);
+  const f = fixture(browserPressKeyTool, true), run = f.run();
+  expect((await f.call(run.id, 'snapshot')).status).toBe(200);
+  const parked = await f.call(run.id, 'action'); expect(parked.status).toBe(202);
+  // Another snapshot of the same document does not retire the card; a new document does.
+  if (moved) fake.loaderId = 'L2';
+  await browserSnapshotTool.execute({});
+  f.approvals.approve((await parked.json()).approval.approvalId, 'dashboard');
+  const response = await f.call(run.id, 'action');
+  if (moved) {
+    expect((await response.json()).outcome).toMatchObject({ code: 'WORKFLOW_UI_REVIEW_STALE', effect: 'not_started' });
+    expect(fake.keys).toEqual([]);
+  } else {
+    expect(response.status).toBe(200);
+    expect(fake.keys).toHaveLength(1);
+  }
+});
+
+test('a workflow key press bound for another computer is refused before any card (#1314)', async () => {
+  const f = fixture(browserPressKeyTool), run = f.run();
+  const response = await f.call(run.id, 'action');
+  expect(response.status).toBe(409);
+  expect((await response.json()).outcome).toMatchObject({ code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' });
+  expect(f.approvals.getPending()).toHaveLength(0);
+  expect(f.calls.filter(c => c.method === 'browser_press_key')).toHaveLength(0);
 });
