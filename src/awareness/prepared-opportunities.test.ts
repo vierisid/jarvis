@@ -435,12 +435,15 @@ test('nothing is prepared while awareness is off, a drain stops at the next job 
     p.kick(); await p.idle();
     expect(calls).toBe(0);
     expect(getDb().query('SELECT id FROM prepared_opportunities').all()).toHaveLength(0);
-    // On: the first job composes and turns awareness off; the second stays queued, with no attempt spent.
+    // On: the first job's model call turns awareness off. That job is held
+    // before it writes anything (#1314 review: nothing derived is attached
+    // while off) and goes back to the queue unspent; the second never starts.
     on = true; p.kick(); await p.idle();
     expect(calls).toBe(1);
     const states = (getDb().query('SELECT state FROM prepared_opportunities ORDER BY created_at').all() as Array<{ state: string }>).map(r => r.state);
-    expect(states.filter(s => s === 'queued')).toHaveLength(1);
-    expect(getDb().query('SELECT id FROM prepared_opportunity_attempts').all()).toHaveLength(1);
+    expect(states).toEqual(['queued', 'queued']);
+    expect(getDb().query('SELECT id FROM prepared_opportunity_attempts').all()).toHaveLength(0);
+    expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(0);
     void a; void b;
   } finally { setScreenCaptureEnabledSource(null); }
 });
@@ -455,5 +458,22 @@ test('a drain that starts after awareness turned off writes nothing derived (#13
     p.kick(); on = false; await p.idle();
     expect(calls).toBe(0);
     expect(getDb().query('SELECT id FROM prepared_opportunities').all()).toHaveLength(0);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test('a job running when awareness turns off sends nothing more and goes back to the queue unspent (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  let on = true, calls = 0;
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    const s = source('a');
+    // The first answer fails validation, so the composer would try again; awareness goes off in between.
+    const p = provider({ async chat() { calls++; on = false; return { text: 'not a workflow' }; } });
+    p.kick(); await p.idle();
+    expect(calls).toBe(1);
+    const row = getDb().query('SELECT state, attempts, error FROM prepared_opportunities').get() as { state: string; attempts: number; error: string | null };
+    expect(row).toMatchObject({ state: 'queued', attempts: 0, error: null });
+    expect(getDb().query('SELECT id FROM prepared_opportunity_attempts').all()).toHaveLength(0);
+    void s;
   } finally { setScreenCaptureEnabledSource(null); }
 });

@@ -314,3 +314,31 @@ test('a composer drain stops at the next job when awareness turns off, and the r
     expect(claimSuggestionComposition()).not.toBeNull();
   } finally { setScreenCaptureEnabledSource(null); }
 });
+
+test('a composition whose awareness went off mid-job attaches nothing and goes back to the queue unspent (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  let on = true;
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    const id = proposal().id;
+    acceptSuggestion(id, acceptance);
+    worker = new SuggestionComposer(async () => { on = false; return result; });
+    worker.start(); await worker.idle();
+    const job = getDb().query('SELECT state, attempts, flow_id FROM suggestion_composition_jobs').get() as { state: string; attempts: number; flow_id: string | null };
+    expect(job).toMatchObject({ state: 'queued', attempts: 0, flow_id: null });
+    expect(getDb().query('SELECT job_id FROM suggestion_composition_attempts').all()).toHaveLength(0);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test('the model client a composition uses refuses every call once awareness is off (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  const { awarenessHeldLlm, AwarenessHeldError } = await import('./history-guard.ts');
+  let sent = 0;
+  const llm = awarenessHeldLlm({ async chat() { sent++; return { text: '' }; } });
+  await llm.chat();
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    expect(() => llm.chat()).toThrow(AwarenessHeldError);
+    expect(sent).toBe(1);
+  } finally { setScreenCaptureEnabledSource(null); }
+});

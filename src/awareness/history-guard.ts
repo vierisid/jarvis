@@ -19,3 +19,26 @@ export function awarenessHistoryHidden(json: (data: unknown, status?: number) =>
 export function awarenessHistoryVisible(): boolean {
   return isScreenCaptureEnabled();
 }
+
+/** Thrown inside a job when awareness turned off before its next model call (#1314 review). */
+export class AwarenessHeldError extends Error {
+  constructor() { super('Screen awareness is off; this job waits until it is turned back on.'); this.name = 'AwarenessHeldError'; }
+}
+
+/**
+ * A model client that refuses every call while screen awareness is off, so a
+ * job already running sends nothing more once the switch goes off: the loop
+ * head stops the next job, this stops the rest of this one.
+ */
+export function awarenessHeldLlm<T extends object>(llm: T): T {
+  return new Proxy(llm, {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        if (!awarenessHistoryVisible()) throw new AwarenessHeldError();
+        return (value as (...a: unknown[]) => unknown).apply(target, args);
+      };
+    },
+  });
+}

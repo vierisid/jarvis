@@ -1,6 +1,6 @@
 import { compositionQueueStatus, COMPOSITION_LIMITS } from './composition-budget';
-import { awarenessHistoryVisible } from './history-guard.ts';
-import { claimOpportunityComposition, nextOwnedQueuedJob } from './composition-leases';
+import { AwarenessHeldError, awarenessHistoryVisible } from './history-guard.ts';
+import { claimOpportunityComposition, holdCompositionLease, nextOwnedQueuedJob } from './composition-leases';
 import { runWithOrigin } from '../llm/origin';
 import { getDb, generateId } from '../vault/schema.ts';
 import { createFlow } from '../workflows/db/repos/flow.ts';
@@ -128,6 +128,8 @@ export class SuggestionComposer {
         ]);
         // A stopped/replaced worker must never write into a reopened database.
         if (!this.running || this.active !== active) return;
+        // Awareness went off mid-job (#1314 review): nothing derived is attached; the job waits, unspent.
+        if (!awarenessHistoryVisible()) throw new AwarenessHeldError();
         if (result.ok) {
           if (!attachSuggestionDraft(job, result)) failSuggestionComposition(job, 'Composition lease expired. Review the request and retry.');
         } else {
@@ -135,6 +137,12 @@ export class SuggestionComposer {
           failSuggestionComposition(job, result.errors.join('\n') + (installs ? `\nRequired pieces: ${installs}` : ''));
         }
       } catch (error) {
+        if (this.running && this.active === active && (error instanceof AwarenessHeldError || !awarenessHistoryVisible())) {
+          holdCompositionLease(getDb(), 'suggestion_composition_jobs', job.id, job.lease_token);
+          getDb().run(`DELETE FROM suggestion_composition_attempts WHERE rowid = (SELECT rowid FROM suggestion_composition_attempts
+            WHERE job_id = ? ORDER BY started_at DESC LIMIT 1)`, [job.id]);
+          return;
+        }
         if (this.running && this.active === active) failSuggestionComposition(job, error instanceof Error ? error.message : String(error));
       } finally {
         if (timer) clearTimeout(timer);
