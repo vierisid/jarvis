@@ -676,9 +676,11 @@ HTTP request specifics:
   else the flow budget the daemon holds the engine to (600 s by default,
   `JARVIS_WORKFLOW_FLOW_TIMEOUT_SECONDS`, passed as
   `JARVIS_ENGINE_REQUEST_TIMEOUT_MS`), so the step fails naming the cap rather
-  than the engine being killed with the run. axios's own `timeout` is only an
-  idle timer on the socket, which a server sending a byte at a time never
-  trips (#1153).
+  than the engine being killed with the run; that failure is never retried or
+  continued past. A step's own shorter timeout is a wall clock too, and fails
+  as a timeout always has, so its failure mode (retry, continue) still
+  applies. axios's own `timeout` is only an idle timer on the socket, which a
+  server sending a byte at a time never trips (#1153).
 - **Egress.** Every connection is resolved once, each address checked, and the
   connection made to the checked address (`runtime/http-egress.ts`); IP
   literals and every redirect target are checked too, and a request that is not
@@ -701,7 +703,11 @@ HTTP request specifics:
   them in `JARVIS_HOST_ADDRESSES` (comma-separated addresses, e.g.
   `docker run -e JARVIS_HOST_ADDRESSES=192.168.1.20 ...`), passed to the
   engine as `JARVIS_ENGINE_HOST_ADDRESSES`, or a self-hosted install's steps
-  can reach the ports the host publishes on it. Hosted is `isHostedInstall`; the daemon passes the answer
+  can reach the ports the host publishes on it. On Linux Docker,
+  `host.docker.internal` (host-gateway) is 172.17.0.1, so a step that called a
+  service on the host that way (a local model server, say) is now refused:
+  run that service in another container on a shared network and call it by
+  name. Hosted is `isHostedInstall`; the daemon passes the answer
   in `JARVIS_ENGINE_EGRESS`, and an engine told nothing applies the hosted
   rule. The piece's proxy option is refused, since a proxy would pick the
   address. Measured: Bun 1.3.8 ignores a patched `dns.lookup`, a patched
@@ -732,8 +738,10 @@ HTTP request specifics:
   published version gets the hosts that version's GET and HEAD steps name
   literally, and the hosts of literal file URLs in its HTTP steps' form data
   (`grantedBy: "upgrade"`); a host filled in at run time, and a draft's, is
-  never seeded. Other pieces' file props are not seeded: a flow that
-  downloads one from a URL needs its host listed.
+  never seeded. An install that already had the read list gets the same file
+  hosts merged into it once, on the upgrade that holds file downloads to it
+  (a list a person wrote keeps its grant). Other pieces' file props are not
+  seeded: a flow that downloads one from a URL needs its host listed.
 - **Not covered:** CODE steps and community pieces make their own
   connections outside this guard.
 

@@ -263,8 +263,10 @@ describe('the guarded client connects only where it checked', () => {
   test('#1153: a request is held to a wall clock, which a server sending a byte at a time cannot hold open', async () => {
     // axios's own timeout alone did not stop this response (an idle timer): measured, it completed after 4 s under timeout 1000.
     const started = Date.now();
-    await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/drip`, timeout: 1000 }))
-      .rejects.toThrow(/did not finish within 1 seconds/);
+    // The step's own shorter timeout fires as axios reports its own, so the step's failure mode still applies (#1153 review).
+    const own = await client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/drip`, timeout: 1000 }).catch((e: unknown) => e);
+    expect(own).toMatchObject({ code: 'ECONNABORTED', message: 'timeout of 1000ms exceeded' });
+    expect(egressRefusalIn(own)).toBeNull();
     expect(Date.now() - started).toBeLessThan(3000);
     // With no timeout of its own, the flow budget the daemon passes caps it.
     const before = process.env[REQUEST_TIMEOUT_ENV];

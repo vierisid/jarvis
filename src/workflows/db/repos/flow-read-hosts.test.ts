@@ -190,6 +190,43 @@ describe("existing flows are grandfathered on upgrade", () => {
     }
   });
 
+  test("#1153 review: a database that already had the list (v0.17.6+) gets its published flows' literal file hosts merged in, once", () => {
+    closeWorkflowDb();
+    const directory = mkdtempSync(join(tmpdir(), "jarvis-read-hosts-files-"));
+    const path = join(directory, "v0176.db");
+    try {
+      initWorkflowDb(path);
+      const upload = (url: string) => step("upload", { method: "POST", url: "https://upload.example.com/", body_type: "form_data",
+        body: { data: [{ fieldName: "doc", fieldType: "file", fileFieldValue: url }] } });
+      const publish = (trigger: FlowTriggerNode) => {
+        const flow = createFlow();
+        const v = createDraftVersion({ flowId: flow.id, displayName: "Live", trigger });
+        getWorkflowDb().run(`UPDATE flow_version SET state = 'LOCKED' WHERE id = ?`, [v.id]);
+        getWorkflowDb().run(`UPDATE flow SET published_version_id = ?, status = 'ENABLED' WHERE id = ?`, [v.id, flow.id]);
+        return flow.id;
+      };
+      const listed = publish({ name: "trigger", type: "EMPTY", nextAction: upload("https://files.example.com/a.pdf") });
+      setFlowReadHosts(listed, ["api.example.com"]);
+      const unlisted = publish({ name: "trigger", type: "EMPTY", nextAction: upload("https://files.example.com/b.pdf") });
+      const templated = publish({ name: "trigger", type: "EMPTY", nextAction: upload("https://{{trigger.host}}/b.pdf") });
+      // Rewind to v0.17.6: the list is there, the file seed is not.
+      getWorkflowDb().exec("ALTER TABLE flow DROP COLUMN read_hosts_files_seeded");
+      closeWorkflowDb();
+      initWorkflowDb(path);
+      createSchema(getWorkflowDb());
+      expect(getFlowReadHosts(listed)).toMatchObject({ hosts: ["api.example.com", "files.example.com"], grantedBy: "user" });
+      expect(getFlowReadHosts(unlisted)).toMatchObject({ hosts: ["files.example.com"], grantedBy: "upgrade" });
+      expect(getFlowReadHosts(templated)!.hosts).toEqual([]);
+      // Once: a person's later change survives the next boot.
+      setFlowReadHosts(unlisted, []);
+      createSchema(getWorkflowDb());
+      expect(getFlowReadHosts(unlisted)!.hosts).toEqual([]);
+    } finally {
+      closeWorkflowDb();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("a fresh database grandfathers nothing", () => {
     const flow = createFlow();
     createDraftVersion({ flowId: flow.id, displayName: "F", trigger: { name: "trigger", type: "EMPTY", nextAction: step("get", { method: "GET", url: "https://api.example.com/" }) } });

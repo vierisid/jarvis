@@ -528,6 +528,7 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
   const cap = options.timeoutMs !== undefined ? Math.min(options.timeoutMs, requestTimeoutMs()) : requestTimeoutMs();
   let wall: AbortSignal | null = null;
   let wallMs = cap;
+  let capBound = true;
   instance.interceptors.request.use((config: Record<string, unknown>) => {
     const target = new URL(String(config.url ?? ''), typeof config.baseURL === 'string' ? config.baseURL : undefined);
     if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new EgressRefusedError(`HTTP request refused: ${target.protocol} is not http or https`);
@@ -563,6 +564,7 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     // A wall clock over the whole exchange, redirects and body included (#1153).
     const askedMs = typeof config.timeout === 'number' && config.timeout > 0 ? config.timeout : Infinity;
     wallMs = Math.min(askedMs, cap);
+    capBound = askedMs >= cap;
     const timer = AbortSignal.timeout(wallMs);
     wall = timer;
     config.signal = config.signal ? AbortSignal.any([config.signal as AbortSignal, timer]) : timer;
@@ -576,12 +578,20 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     const refused = egressRefusalIn(error);
     if (refused) throw redirected && !refused.afterSend ? new EgressRefusedError(refused.message, { afterSend: true }) : refused;
     if (wall?.aborted) {
-      // Whatever axios made of the abort ("canceled"): the step fails naming the cap. It may have been sent.
-      // A refusal after sending: the pieces fail the step on it (never retried,
-      // continued past or read as a server answer), the file processor fails
-      // the step rather than send it without its file, and a tracked send
-      // stays uncertain (#1153 review).
-      throw new EgressRefusedError(`HTTP request did not finish within ${Math.round(wallMs / 1000)} seconds, the most a workflow request may take; it may have reached the server`, { afterSend: true });
+      if (capBound) {
+        // The flow budget, not the step's own setting: a refusal after
+        // sending, so the pieces fail the step on it (never retried, continued
+        // past or read as a server answer), the file processor fails the step
+        // rather than send it without its file, and a tracked send stays
+        // uncertain (#1153 review).
+        throw new EgressRefusedError(`HTTP request did not finish within ${wallMs / 1000} seconds, the most a workflow request may take; it may have reached the server`, { afterSend: true });
+      }
+      // The step's own timeout, now a wall clock: as axios reports its own
+      // timeout, so the step's failure mode (retry, continue) applies as before.
+      if (error !== null && typeof error === 'object') {
+        Object.assign(error as object, { code: 'ECONNABORTED', message: `timeout of ${wallMs}ms exceeded` });
+      }
+      throw error;
     }
     // axios's own wording for a body past maxContentLength.
     const message = (error as { message?: unknown } | null)?.message;

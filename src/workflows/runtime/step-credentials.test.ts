@@ -63,9 +63,9 @@ describe('what the model reads', () => {
   });
 
   test('#1153 review: a value is a scheme credential only as a scheme and one token, not as prose', () => {
-    const g = graph(step('call', { input: { ...input(), body_type: 'json', body: { data: { note: 'Basic plan upgrade', other: 'SSWS 00abcdefghij' } } } }));
+    const g = graph(step('call', { input: { ...input(), body_type: 'json', body: { data: { note: 'Basic plan upgrade', a: 'Key takeaways', b: 'Token expired.', c: 'Basic membership', other: 'SSWS 00abcdefghij' } } } }));
     const seen = JSON.stringify(versionAsModelSees({ trigger: g }));
-    expect(seen).toContain('Basic plan upgrade');
+    for (const prose of ['Basic plan upgrade', 'Key takeaways', 'Token expired.', 'Basic membership']) expect(seen).toContain(prose);
     expect(seen).not.toContain('00abcdefghij');
   });
 

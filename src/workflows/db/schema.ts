@@ -17,7 +17,7 @@ import { ensureWorkflowRemovalSchema } from './workflow-removal-schema';
 
 import type { Database } from "bun:sqlite";
 import { hasCodeStep } from "./flow-graph";
-import { literalReadHosts } from "./read-hosts";
+import { literalFileHosts, literalReadHosts, MAX_READ_HOSTS, parseReadHosts } from "./read-hosts";
 import type { FlowTriggerNode } from "./repos/flow-version";
 
 export const DEFAULT_IDS = {
@@ -168,6 +168,10 @@ const STATEMENTS: string[] = [
     read_hosts TEXT,
     read_hosts_grant TEXT,
     read_hosts_granted_at INTEGER,
+    -- #1153: set once the upgrade that holds file-field downloads to the read
+    -- list has added the literal file hosts (seedFileReadHosts). Its only job
+    -- is to mark that one-time step on databases that already had the list.
+    read_hosts_files_seeded INTEGER,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
@@ -609,6 +613,9 @@ function applyAdditiveColumnMigrations(db: Database): void {
     { table: "flow", column: "read_hosts", ddl: "ALTER TABLE flow ADD COLUMN read_hosts TEXT" },
     { table: "flow", column: "read_hosts_grant", ddl: "ALTER TABLE flow ADD COLUMN read_hosts_grant TEXT" },
     { table: "flow", column: "read_hosts_granted_at", ddl: "ALTER TABLE flow ADD COLUMN read_hosts_granted_at INTEGER" },
+    // #1153: file-field downloads held to the read list; the column marks the
+    // one-time seed below on a database that already had the list (v0.17.6+).
+    { table: "flow", column: "read_hosts_files_seeded", ddl: "ALTER TABLE flow ADD COLUMN read_hosts_files_seeded INTEGER" },
   ];
   // One transaction around the ALTERs AND the backfill they key. SQLite DDL is
   // transactional, and the coupling matters: the backfill is keyed on the
@@ -635,7 +642,48 @@ function applyAdditiveColumnMigrations(db: Database): void {
     if (gateColumns.some((column) => added.has(`flow.${column}`))) grandfatherRunningCodeFlows(db);
     // Likewise once, on the database that predates the read list.
     if (added.has("flow.read_hosts")) grandfatherReadHosts(db);
+    // Once, on a database that predates file downloads being held to it. A
+    // database that also predates the list was seeded with them just above;
+    // merging again adds nothing.
+    if (added.has("flow.read_hosts_files_seeded")) seedFileReadHosts(db);
   })();
+}
+
+/**
+ * One-time seed of file-download hosts into existing read lists (#1153).
+ * File fields are now fetched only from listed hosts, so each flow with a
+ * published version gets the literal hosts of its HTTP steps' form-data file
+ * URLs (`literalFileHosts`) merged into its list. A list that already exists
+ * keeps its hosts and its grant; one the seed creates is stamped `upgrade`.
+ * Templated hosts and drafts are never seeded, as for GET hosts.
+ */
+function seedFileReadHosts(db: Database): void {
+  const candidates = db
+    .query<{ id: string; version_id: string | null; read_hosts: string | null; read_hosts_grant: string | null }, []>(
+      `SELECT id, published_version_id AS version_id, read_hosts, read_hosts_grant FROM flow WHERE published_version_id IS NOT NULL`,
+    )
+    .all();
+  const at = Date.now();
+  for (const candidate of candidates) {
+    if (!candidate.version_id) continue;
+    const row = db.query<{ trigger: string }, [string]>(`SELECT trigger FROM flow_version WHERE id = ?`).get(candidate.version_id);
+    if (!row) continue;
+    let trigger: FlowTriggerNode | null = null;
+    try {
+      trigger = JSON.parse(row.trigger) as FlowTriggerNode;
+    } catch {
+      continue;
+    }
+    const current = parseReadHosts(candidate.read_hosts);
+    const merged = [...new Set([...current, ...literalFileHosts(trigger)])].sort().slice(0, MAX_READ_HOSTS);
+    if (merged.length === current.length) continue;
+    db.run(`UPDATE flow SET read_hosts = ?, read_hosts_grant = ?, read_hosts_granted_at = ? WHERE id = ?`, [
+      JSON.stringify(merged),
+      candidate.read_hosts_grant === "user" || candidate.read_hosts_grant === "upgrade" ? candidate.read_hosts_grant : "upgrade",
+      at,
+      candidate.id,
+    ]);
+  }
 }
 
 /**
