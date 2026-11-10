@@ -6,6 +6,7 @@ import { ReplyMarkdown } from "./ReplyMarkdown";
 import { running, threadItems, type MessageBinding } from "./model";
 import { useReadingPosition, type ThreadMemory } from "./reading";
 import { useBriefReducedMotion } from "../../motion";
+import { DESTINATIONS, targetHref } from "../../navigation/destinations";
 // The .brief-sr-only helper on the approval waiting line (#1092).
 import "../../components/controls/controls.css";
 import "./messages.css";
@@ -14,6 +15,11 @@ const providerFailureCodes = new Set([
   'provider_background_throttled', 'provider_auth', 'provider_forbidden', 'provider_rate_limit',
   'provider_network', 'provider_bad_request', 'provider_unsupported_tools', 'provider_not_found',
   'provider_server', 'provider_quota_exhausted', 'provider_content_policy', 'provider_restricted',
+]);
+// Failures the user fixes in the AI provider settings (credentials, model, plan).
+const providerSettingsCodes = new Set([
+  'provider_auth', 'provider_forbidden', 'provider_rate_limit', 'provider_quota_exhausted',
+  'provider_not_found', 'provider_unsupported_tools', 'provider_restricted',
 ]);
 // Only the new classified contract contains authored recovery copy. Older or
 // untyped errors may contain raw upstream detail and keep the safe fallback.
@@ -109,8 +115,8 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
             {message?.content && <ReplyMarkdown text={message.content}/>}
             {(failed || cancelled) && <p className="brief-message-notice" data-error={failed} data-reading-anchor="terminal">
               {failed ? failureNotice(turn.error) : "Response stopped."}{message?.content ? " The partial answer is kept above." : ""}</p>}
-            {failed && ['provider_auth', 'provider_forbidden', 'provider_rate_limit', 'provider_quota_exhausted', 'provider_not_found', 'provider_unsupported_tools', 'provider_restricted'].includes(turn.error?.code ?? '') &&
-              <a data-provider-settings href="?brief=0&briefMaintenance=1&settingsTab=llm#/_room_settings">Open AI settings</a>}
+            {failed && providerSettingsCodes.has(turn.error?.code ?? '') &&
+              <a data-provider-settings href={targetHref(window.location.href, DESTINATIONS.credentials.legacy)}>Open AI settings</a>}
             {turn?.state === "completed" && !message?.content && <p className="brief-message-notice" data-reading-anchor="terminal">Finished without a text reply.</p>}
           </article>;
         })}

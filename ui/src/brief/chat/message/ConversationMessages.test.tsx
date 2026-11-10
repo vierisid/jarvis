@@ -172,6 +172,8 @@ test('provider recovery is visible, announced, and offers the existing AI settin
   expect(host.querySelector('[role="status"]')?.textContent).toContain('credentials');
   const settings = host.querySelector<HTMLAnchorElement>('a[data-provider-settings]');
   expect(settings?.textContent).toBe('Open AI settings');
-  expect(settings?.getAttribute('href')).toContain('settingsTab=llm');
+  const href = new URL(settings!.getAttribute('href')!);
+  expect([href.searchParams.get('brief'), href.searchParams.get('briefMaintenance'), href.searchParams.get('settingsTab'), href.hash])
+    .toEqual(['0', '1', 'llm', '#/_room_settings']);
   expect(host.querySelector('.brief-reply-prose')).not.toBeNull();
 });
