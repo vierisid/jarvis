@@ -164,8 +164,11 @@ Practical consequences:
   Logs room, the palette search, the agents' prompts); the awareness
   service's own read methods, the live context and the current session
   included, return nothing; the background composers that turn recorded
-  evidence into drafts wait until awareness is on, and one that is draining
-  when it turns off stops before its next job, leaving the rest queued; and a flow's
+  evidence into drafts wait until awareness is on: one that is draining when
+  it turns off stops before its next job, a composition already running is
+  held before its next model call and goes back to the queue unspent, and
+  prepared-opportunity discovery and the opportunity notification outbox
+  hold on the switch itself, so nothing queued is lost; and a flow's
   `awarenessRecent` context returns no activity. Vault entities and goal notes once written from awareness are
   ordinary data and stay visible (owner decision). Nothing is deleted; it shows
   again when awareness is turned back on. Not covered: shell commands
