@@ -75,6 +75,6 @@ describe('the daemon and the Usage room agree', () => {
 // shown address read differently from the one copied, so they go too.
 test('the appeal contact keeps no control or format characters', async () => {
   const { restrictionCopy } = await import('../util/hosted-error.ts');
-  const copy = restrictionCopy({ reason: 'content_policy', contact: `appeals@ex‮ample.test​\u0007 <x>` });
+  const copy = restrictionCopy({ reason: 'content_policy', contact: `appeals@ex\u202Eample.test\u200B\u0007 <x>` });
   expect(copy).toBe('Usejarvis AI is restricted on this account for a usage-policy violation. To appeal, contact appeals@example.test x.');
 });

@@ -170,7 +170,7 @@ test('provider recovery is visible, announced, and offers the existing AI settin
   await render();
   expect(host.querySelector('.brief-message-notice[data-error]')?.textContent).toContain('credentials');
   expect(host.querySelector('[role="status"]')?.textContent).toContain('credentials');
-  const settings = host.querySelector<HTMLAnchorElement>('a[data-provider-settings]');
+  const settings = host.querySelector<HTMLAnchorElement>('a[data-failure-link]');
   expect(settings?.textContent).toBe('Open AI settings');
   const href = new URL(settings!.getAttribute('href')!);
   expect([href.searchParams.get('brief'), href.searchParams.get('briefMaintenance'), href.searchParams.get('settingsTab'), href.hash])
@@ -200,7 +200,7 @@ test('hosted failures link to where they are fixed, and a restriction or policy 
   const link = async (code: string) => {
     setTurn({state:'failed',error:{code,message:`Your request failed. Detail for ${code}.`}});
     await render();
-    const anchor = host.querySelector<HTMLAnchorElement>('a[data-provider-settings]');
+    const anchor = host.querySelector<HTMLAnchorElement>('a[data-failure-link]');
     if (!anchor) return null;
     const href = new URL(anchor.getAttribute('href')!);
     return { label: anchor.textContent, tab: href.searchParams.get('settingsTab'), hash: href.hash };

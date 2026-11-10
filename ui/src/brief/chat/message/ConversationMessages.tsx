@@ -129,7 +129,7 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
             {(failed || cancelled) && <p className="brief-message-notice" data-error={failed} data-reading-anchor="terminal">
               {failed ? failureNotice(turn.error) : "Response stopped."}{message?.content ? " The partial answer is kept above." : ""}</p>}
             {failed && Object.hasOwn(failureLinks, turn.error?.code ?? '') &&
-              <a data-provider-settings href={targetHref(window.location.href, failureLinks[turn.error!.code!]!.target)}>{failureLinks[turn.error!.code!]!.label}</a>}
+              <a data-failure-link href={targetHref(window.location.href, failureLinks[turn.error!.code!]!.target)}>{failureLinks[turn.error!.code!]!.label}</a>}
             {turn?.state === "completed" && !message?.content && <p className="brief-message-notice" data-reading-anchor="terminal">Finished without a text reply.</p>}
           </article>;
         })}
