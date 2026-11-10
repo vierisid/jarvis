@@ -38,7 +38,8 @@ export async function deliverOpportunityNotification(
   const names = channels.getManager().listChannels();
   let result: Awaited<ReturnType<ChannelService['tryBroadcastToChannels']>>;
   try {
-    result = await channels.tryBroadcastToChannels(names, `**${title}**\n${body}\nOpportunity: ${id}`);
+    // Stops before the next channel if awareness goes off while one is tried (#1314 review).
+    result = await channels.tryBroadcastToChannels(names, `**${title}**\n${body}\nOpportunity: ${id}`, { shouldContinue: awarenessHistoryVisible });
   } catch (err) {
     // The router reports each channel itself; one that threw part way may have sent.
     throw new DeliveryUnconfirmedError(names, err instanceof Error ? err.message : String(err));

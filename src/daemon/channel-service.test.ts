@@ -1248,3 +1248,19 @@ describe("#890: whether each channel has anywhere to send approval requests", ()
     })).toBe("Telegram will not receive approval requests or notifications: no user ID is listed for it. Discord will not receive approval requests or notifications until the channel's owner, the first allowed user ID, sends the bot a direct message (again, if they did before). A bot cannot start a chat with someone who has never messaged it.");
   });
 });
+
+test("a sender whose permission lapses while one channel is tried stops before the next (#1314 review)", async () => {
+  let allowed = true;
+  const tg = new FakeAdapter({ connected: true });
+  const discord = new FakeAdapter({ connected: true });
+  // Telegram's send is where the switch flips.
+  const send = tg.sendMessage.bind(tg);
+  tg.sendMessage = async (to: string, text: string) => { allowed = false; await send(to, text); throw new Error("telegram refused"); };
+  const res = await routePerChannel(["telegram", "discord"], "Opportunity", makeServices({
+    adapters: { telegram: tg, discord }, recipients: { telegram: "tg-user", discord: "dc-user" },
+  }), { shouldContinue: () => allowed });
+  expect(discord.sent).toEqual([]);
+  expect(res.delivered).toEqual([]);
+  // Telegram's own outcome is its send's; discord was never tried.
+  expect(res.failed.find(f => f.channel === "discord")?.error).toContain("held");
+});
