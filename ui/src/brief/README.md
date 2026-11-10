@@ -682,6 +682,11 @@ actions only change local fixture state.
   `GET .../document?requestId=<original>`. Persist requests before dispatch and reconcile them after
   reload; network errors, 5xx and timeouts are unknown, never refusals. Today and Needs you must share
   one decision owner before activation.
+- One count: `host/needs-you.tsx` `needsYouCount` (document decisions with an action, other queued rows
+  still asking, workflow input requests) feeds Today's request count, the sidebar badge and the room
+  heading. Approved rows waiting to run or running (`awaiting_execution`, `in_flight`) are not counted and
+  show in an "In progress" group. Card titles never show raw tool ids (`plainDecisionTitle`). Workflow
+  input requests render above the permission list, one line each with the focused one open.
 - Opt-in `decisionsRegistration(useBinding)`, not in the production registry. `decisionsAvailable`
   requires a non-empty scope, a `source` matching the shell mode, a controller bound to the same scope
   and, in live mode, the `decisions` capability.
