@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { badgeLabel, breadcrumbs, canMountNavigation, connectionLabel, navigationData, navigationRoute, planFromBilling, UNKNOWN_NAVIGATION } from "./model";
+import { badgeLabel, breadcrumbs, canMountNavigation, connectionLabel, connectionWord, navigationData, navigationRoute, planFromBilling, UNKNOWN_NAVIGATION } from "./model";
 import type { BriefNavigationBinding } from "./model";
 import type { BriefShellPort } from "../../contracts";
 import type { BillingSnapshot } from "../../../v2/billing/useBilling";
@@ -209,4 +209,15 @@ test("status targets the connected workspace and unknown state remains explicitl
   const status = host.querySelector<HTMLButtonElement>(".brief-connection")!;
   expect(status.getAttribute("aria-label")).toBe("Connection status unavailable. Open connected workspace");
   await click(status); expect(shell.route.room).toBe("connected-workspace"); expect(shell.chatOpen).toBe(true);
+});
+
+test("the connection indicator names its state in visible text and shape, not colour alone", async () => {
+  binding = { ...binding, view: { source: "fixture", state: { status: "ready", data: { ...(binding.view.state as any).data, connection: "offline", hosting: "self" } } } } as BriefNavigationBinding;
+  await render();
+  const status = host.querySelector<HTMLButtonElement>(".brief-connection")!;
+  expect(status.getAttribute("aria-label")).toBe("Jarvis offline. Open connected workspace");
+  expect(status.querySelector(".brief-connection-text")?.textContent).toBe("Offline");
+  expect(status.querySelector(".brief-connection-dot")?.getAttribute("data-state")).toBe("offline");
+  expect(connectionWord("connected")).toBe("");
+  expect(new Set(["reconnecting", "offline", "unknown"].map(state => connectionWord(state as any))).size).toBe(3);
 });

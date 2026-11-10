@@ -133,3 +133,38 @@ for (const hash of ['#/', maintenance]) test(`self-hosted Brief preserves its ow
   expect(element.querySelector('.brief-maintenance')?.textContent).toContain('Back to workspace');
   expect(shell).toEqual({ mounts: 0, unmounts: 0 });
 });
+
+const withDecisions: HostDescriptor = { ...hosted, capabilities: { contractVersion: 1, asOf: 1, capabilities: {
+  decisions: { supported: true, ready: true, enabled: true, state: 'ready', reason: null },
+  navigationCompatibility: { supported: true, ready: true, enabled: true, state: 'ready', reason: null } } } };
+test('when Jarvis cannot be reached the page says so after a grace period, hides stale counts, and clears on recovery', async () => {
+  let up = true;
+  globalThis.WebSocket = QuietSocket as never;
+  globalThis.fetch = (async (path: RequestInfo | URL) => {
+    const url = String(path); calls.push(url);
+    if (url === '/api/brief/host') return Response.json(withDecisions);
+    if (url === '/api/onboarding/status') return Response.json({ setup_completed: true, profile_completed: true, tutorial_completed: true });
+    if (!up) throw new TypeError('Failed to fetch');
+    if (url === '/api/authority/status') return Response.json({ enabled: true, emergency_state: 'normal' });
+    if (url === '/api/workflow-inputs') return Response.json({ requests: [{ id: 'r1', status: 'pending' }] });
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+  const settle = () => React.act(async () => { await new Promise(r => setTimeout(r, 30)); });
+  const focus = async () => { await React.act(async () => window.dispatchEvent(new Event('focus'))); await settle(); };
+  await open('#/'); await settle();
+  expect(element.textContent).toContain('1 workflow request needs your attention');
+  expect(element.textContent).not.toContain('Jarvis is not reachable');
+
+  up = false; await focus(); await focus(); await focus();
+  // Inside the grace period the page stays quiet: no flicker and no misleading emergency notice.
+  expect(element.textContent).not.toContain('Jarvis is not reachable');
+  expect(element.textContent).not.toContain('Emergency status is unavailable');
+  await React.act(async () => { await new Promise(r => setTimeout(r, 4200)); });
+  expect(element.textContent).toContain('Jarvis is not reachable. Your work is safe; this page will reconnect on its own.');
+  expect(element.textContent).not.toContain('workflow request needs your attention');
+  expect(element.querySelector('.brief-connection-text')?.textContent).toBe('Offline');
+
+  up = true; await focus();
+  expect(element.textContent).not.toContain('Jarvis is not reachable');
+  expect(element.textContent).toContain('1 workflow request needs your attention');
+}, 15000);
