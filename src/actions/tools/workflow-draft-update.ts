@@ -5,10 +5,16 @@ import { getFlowVersion, getLatestDraft, updateDraftVersion, type FlowVersion, t
 import { workflowRemovalState } from '../../workflows/db/repos/workflow-removal-state';
 import { compileWorkflow, type ReadinessContext } from '../../workflows/runtime/workflow-readiness';
 import { CODE_STEP_TYPE, walkFlowNodes } from '../../workflows/db/flow-graph';
+import { credentialEditRefusal, restoreRedactedCredentials, versionAsModelSees } from '../../workflows/runtime/step-credentials';
+import { assistantWebhookSecretRefusal } from '../../workflows/runner/triggers/webhook-secret';
 
 /** Covers the persisted authoring snapshot, not a recomputed readiness report. */
 export function draftRevision(version: FlowVersion): string {
-  return createHash('sha256').update(JSON.stringify(version)).digest('hex');
+  // Over the version as the model reads it (#1153): a hash over the stored
+  // credentials would let the model test a guess at one. A change to a
+  // credential alone keeps the revision; the edit is applied to the saved
+  // draft, so it keeps the new credential.
+  return createHash('sha256').update(JSON.stringify(versionAsModelSees(version))).digest('hex');
 }
 
 const object = (value: unknown): value is Record<string, any> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -89,7 +95,16 @@ export function updateSavedDraft(input: {
     if (!/^[a-f0-9]{64}$/.test(input.expectedRevision) || draftRevision(version) !== input.expectedRevision) fail('draft changed since readback; get the definition again before editing');
     if (!input.context.pieces) fail('installed action schemas are unavailable');
     if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200)) fail('name must be a nonempty string of at most 200 characters');
-    const graph = patchDraftGraph(version.trigger, input.patches);
+    // The model reads credential-taking steps redacted (`versionForModel`):
+    // a value it wrote back unchanged keeps the stored credential, and an edit
+    // that would store the marker in its place is refused (#1153).
+    // Applied to the draft as the model reads it, so only what it wrote and
+    // the markers it read are in it; the stored credentials are then put back
+    // where it left their markers, and what that put back is judged (#1153).
+    const written = patchDraftGraph(versionAsModelSees(version).trigger, input.patches);
+    const graph = restoreRedactedCredentials(version.trigger, written);
+    const refusal = credentialEditRefusal(version.trigger, written, graph) ?? assistantWebhookSecretRefusal(version.trigger, graph);
+    if (refusal) fail(refusal);
     assertNoAssistantCode(version.trigger, graph);
     const validation = compileWorkflow(graph, { ...input.context, phase: 'composition' });
     if (!validation.ready) fail('edited graph is invalid: ' + validation.issues.slice(0, 5).map(i => `${i.node} (${i.path}): ${i.message}`).join('; '));

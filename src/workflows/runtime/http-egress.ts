@@ -46,6 +46,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 import { isIP } from 'node:net';
 import { networkInterfaces } from 'node:os';
+import { existsSync, readFileSync } from 'node:fs';
 import { Agent as HttpAgent } from 'node:http';
 import { Agent as HttpsAgent } from 'node:https';
 
@@ -189,12 +190,80 @@ export function interfaceAddresses(): Set<string> {
   return out;
 }
 
+/** The engine env var the daemon sets to the host's own addresses, as `JARVIS_HOST_ADDRESSES` gives them (#1153). */
+export const HOST_ADDRESSES_ENV = 'JARVIS_ENGINE_HOST_ADDRESSES';
+
+/**
+ * The IPv4 default gateways in a `/proc/net/route` table: destination
+ * 00000000 with the gateway flag, the address little-endian hex.
+ */
+export function defaultGateways(routeTable: string): string[] {
+  const out: string[] = [];
+  for (const line of routeTable.split('\n').slice(1)) {
+    const [, destination, gateway, flags] = line.trim().split(/\s+/u);
+    if (destination !== '00000000' || !gateway || !/^[0-9a-f]{8}$/iu.test(gateway) || (parseInt(flags ?? '0', 16) & 0x2) === 0) continue;
+    const n = parseInt(gateway, 16);
+    out.push([n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, n >>> 24].join('.'));
+  }
+  return out;
+}
+
+/** The IPv6 default gateways in a `/proc/net/ipv6_route` table: destination ::/0 with a next hop. */
+export function defaultGateways6(routeTable: string | null): string[] {
+  const out: string[] = [];
+  for (const line of (routeTable ?? '').split('\n')) {
+    const f = line.trim().split(/\s+/u);
+    if (f.length < 10 || f[0] !== '0'.repeat(32) || f[1] !== '00' || !/^[0-9a-f]{32}$/iu.test(f[4]!) || /^0+$/u.test(f[4]!)) continue;
+    const canonical = canonicalAddress(f[4]!.match(/.{4}/gu)!.join(':'));
+    if (canonical) out.push(canonical);
+  }
+  return out;
+}
+
+function ipv6Table(): string | null {
+  try { return readFileSync('/proc/net/ipv6_route', 'utf8'); } catch { return null; }
+}
+
+/** True inside a Docker or Podman container (their marker files). */
+function inContainer(): boolean {
+  return existsSync('/.dockerenv') || existsSync('/run/.containerenv');
+}
+
+/**
+ * The addresses that reach the machine Jarvis runs on (#1153): its own
+ * interfaces; inside a container, its default gateway, which is the host's
+ * end of the bridge (Docker's 172.17.0.1); and the host addresses the operator
+ * names in `JARVIS_HOST_ADDRESSES` (the host's LAN address, which a container
+ * cannot see, passed to the engine as `JARVIS_ENGINE_HOST_ADDRESSES`). A port
+ * the host publishes answers on all of them.
+ */
+export function ownAddresses(env: Record<string, string | undefined> = process.env,
+  routeTable: () => string | null = () => { try { return inContainer() ? readFileSync('/proc/net/route', 'utf8') : null; } catch { return null; } }): Set<string> {
+  const out = interfaceAddresses();
+  const table = routeTable();
+  if (table) {
+    // The host's end of a Docker or Podman bridge: the default bridge's
+    // 172.17.0.1, and the default gateway when it is in the bridges' default
+    // pool (172.16.0.0/12). A gateway outside it is a LAN router (host or
+    // macvlan networking, Podman's pasta), which a self-hosted install may
+    // reach; a compose network's other bridges are named in JARVIS_HOST_ADDRESSES.
+    out.add('172.17.0.1');
+    for (const gateway of defaultGateways(table)) if (inRange(v4Bytes(gateway)!, v4Bytes('172.16.0.0')!, 12, 8)) out.add(gateway);
+    for (const gateway of defaultGateways6(ipv6Table())) out.add(gateway);
+  }
+  for (const raw of `${env[HOST_ADDRESSES_ENV] ?? ''},${env.JARVIS_HOST_ADDRESSES ?? ''}`.split(',')) {
+    const canonical = raw.trim() === '' ? null : canonicalAddress(raw.trim());
+    if (canonical) out.add(canonical);
+  }
+  return out;
+}
+
 /**
  * The policy, plus: never this machine itself. A service bound to 0.0.0.0 on
  * the host answers on every interface address -- the LAN address, a Docker
  * bridge, a hosted VM's own public address -- not only on loopback.
  */
-export function destinationAllowed(address: string, policy: EgressPolicy, own: ReadonlySet<string> = interfaceAddresses()): boolean {
+export function destinationAllowed(address: string, policy: EgressPolicy, own: ReadonlySet<string> = ownAddresses()): boolean {
   const canonical = canonicalAddress(address);
   return canonical !== null && addressAllowed(address, policy) && !own.has(canonical);
 }
@@ -203,6 +272,17 @@ export function destinationAllowed(address: string, policy: EgressPolicy, own: R
 const REFUSED_CODE = 'ERR_EGRESS_REFUSED';
 export class EgressRefusedError extends Error {
   readonly code = REFUSED_CODE;
+  /**
+   * True when the refusal came after the request went out: a redirect the
+   * guard would not follow, a response too large. Every other refusal is
+   * raised before a byte is sent, and a tracked send refused so is recorded
+   * as not sent (#1153); one refused after sending stays uncertain.
+   */
+  readonly afterSend: boolean;
+  constructor(message: string, options: { afterSend?: boolean } = {}) {
+    super(message);
+    this.afterSend = options.afterSend === true;
+  }
 }
 
 function refusal(host: string, address: string, policy: EgressPolicy, label = 'HTTP request'): EgressRefusedError {
@@ -219,11 +299,13 @@ function refusal(host: string, address: string, policy: EgressPolicy, label = 'H
  */
 export class ResponseTooLargeError extends EgressRefusedError {
   /**
-   * Unlike every other refusal, this one comes after the request went out: a
-   * caller that records refusals as "not sent" must not record this one so,
-   * or a retry would send a non-read request twice.
+   * This one always comes after the request went out: a caller that records
+   * refusals as "not sent" must not record this one so, or a retry would send
+   * a non-read request twice.
    */
-  readonly afterSend = true;
+  constructor(message: string) {
+    super(message, { afterSend: true });
+  }
 }
 
 /** Refuse an IP-literal host outside the policy. A name is checked by `guardedLookup` instead. */
@@ -313,6 +395,31 @@ export const MAX_REDIRECTS = 21;
  * `http-egress.test.ts` pins the derivation. A request may ask for less, never more.
  */
 export const MAX_RESPONSE_BYTES = ((10 * 1024 * 1024 - 256 * 1024) * 3) / 4;
+
+/** The engine env var the daemon sets to its flow budget, in milliseconds (#1153). */
+export const REQUEST_TIMEOUT_ENV = 'JARVIS_ENGINE_REQUEST_TIMEOUT_MS';
+
+/**
+ * The flow budget's default, 600 s (`DEFAULT_TIMEOUT_S` in
+ * `runner/engine-runtime/operation-builder.ts`): an engine that was told
+ * nothing caps a request at it.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
+
+/**
+ * The longest a workflow HTTP request (the HTTP and GraphQL steps, the
+ * engine's file download) may take, start to last byte (#1153). The daemon
+ * stops waiting for a flow after its budget and kills the engine, losing the
+ * run, so no request may outlast that budget: past it the step fails naming
+ * the cap instead. A step's own shorter timeout applies as a wall clock too.
+ * axios's `timeout` alone is not one: on Node's transport it is an idle timer
+ * on the socket, and a server sending a byte at a time keeps it from firing
+ * (measured: a 4 s response sent in 500 ms drips completed under `timeout: 1000`).
+ */
+export function requestTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env[REQUEST_TIMEOUT_ENV]);
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : DEFAULT_REQUEST_TIMEOUT_MS;
+}
 
 /** The subset of axios this needs; the piece passes its own bundled copy. */
 interface AxiosLike {
@@ -405,6 +512,9 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     proxy: false,
     ...(options.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
     beforeRedirect: (next: { hostname?: string; host?: string; protocol?: string; port?: string | number }, _response: unknown) => {
+      // A redirect answers a request that was sent: whatever is refused from
+      // here on (this hop's checks, or its lookup) comes after sending.
+      redirected = true;
       const host = String(next.hostname ?? next.host ?? '');
       assertHostAllowed(host, policy, allowed);
       assertReadHostListed(host, readHosts, 'a redirect');
@@ -414,6 +524,11 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     },
   });
   let firstOrigin = '';
+  let redirected = false;
+  const cap = options.timeoutMs !== undefined ? Math.min(options.timeoutMs, requestTimeoutMs()) : requestTimeoutMs();
+  let wall: AbortSignal | null = null;
+  let wallMs = cap;
+  let capBound = true;
   instance.interceptors.request.use((config: Record<string, unknown>) => {
     const target = new URL(String(config.url ?? ''), typeof config.baseURL === 'string' ? config.baseURL : undefined);
     if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new EgressRefusedError(`HTTP request refused: ${target.protocol} is not http or https`);
@@ -446,6 +561,14 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     if (config.responseType === 'stream') throw new EgressRefusedError('HTTP request refused: a streamed response would not be held to the size cap');
     // follow-redirects' own default, which axios uses when given none; never more.
     if (typeof config.maxRedirects !== 'number' || config.maxRedirects > MAX_REDIRECTS) config.maxRedirects = MAX_REDIRECTS;
+    // A wall clock over the whole exchange, redirects and body included (#1153).
+    const askedMs = typeof config.timeout === 'number' && config.timeout > 0 ? config.timeout : Infinity;
+    wallMs = Math.min(askedMs, cap);
+    capBound = askedMs >= cap;
+    const timer = AbortSignal.timeout(wallMs);
+    wall = timer;
+    config.signal = config.signal ? AbortSignal.any([config.signal as AbortSignal, timer]) : timer;
+    config.timeout = wallMs;
     return config;
   });
   // A refusal raised inside the transport (the lookup, a redirect) reaches
@@ -453,7 +576,23 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
   // "status 500". Hand it back as itself, so the step fails naming the rule.
   instance.interceptors.response.use(undefined, (error: unknown) => {
     const refused = egressRefusalIn(error);
-    if (refused) throw refused;
+    if (refused) throw redirected && !refused.afterSend ? new EgressRefusedError(refused.message, { afterSend: true }) : refused;
+    if (wall?.aborted) {
+      if (capBound) {
+        // The flow budget, not the step's own setting: a refusal after
+        // sending, so the pieces fail the step on it (never retried, continued
+        // past or read as a server answer), the file processor fails the step
+        // rather than send it without its file, and a tracked send stays
+        // uncertain (#1153 review).
+        throw new EgressRefusedError(`HTTP request did not finish within ${wallMs / 1000} seconds, the most a workflow request may take; it may have reached the server`, { afterSend: true });
+      }
+      // The step's own timeout, now a wall clock: as axios reports its own
+      // timeout, so the step's failure mode (retry, continue) applies as before.
+      if (error !== null && typeof error === 'object') {
+        Object.assign(error as object, { code: 'ECONNABORTED', message: `timeout of ${wallMs}ms exceeded` });
+      }
+      throw error;
+    }
     // axios's own wording for a body past maxContentLength.
     const message = (error as { message?: unknown } | null)?.message;
     if (typeof message === 'string' && /^maxContentLength size of \d+ exceeded$/u.test(message)) {
@@ -472,10 +611,25 @@ export function egressRefusalIn(error: unknown): EgressRefusedError | null {
   let current: unknown = error;
   for (let depth = 0; depth < 5 && current !== null && typeof current === 'object'; depth++) {
     if (current instanceof EgressRefusedError) return current;
-    if ((current as { code?: unknown }).code === REFUSED_CODE) return new EgressRefusedError((current as Error).message);
+    // Another bundle's copy of this module: same code, another class. Its
+    // `afterSend` is carried over, so a refusal after sending stays one.
+    if ((current as { code?: unknown }).code === REFUSED_CODE) {
+      return new EgressRefusedError((current as Error).message, { afterSend: (current as { afterSend?: unknown }).afterSend === true });
+    }
     current = (current as { cause?: unknown }).cause;
   }
   return null;
+}
+
+/**
+ * True when the error is a refusal the guard raised before the request went
+ * out (#1153): nothing reached the server, so a tracked send is recorded as
+ * not sent rather than as uncertain. False for anything else, including a
+ * refusal after sending and every transport error, which stay uncertain.
+ */
+export function refusedBeforeSend(error: unknown): boolean {
+  const refused = egressRefusalIn(error);
+  return refused !== null && !refused.afterSend;
 }
 
 function redirectOrigin(next: { hostname?: string; host?: string; protocol?: string; port?: string | number }): string {
@@ -495,10 +649,30 @@ function redirectOrigin(next: { hostname?: string; host?: string; protocol?: str
  * redirects it follows are checked one by one.
  */
 export async function guardedFileDownload<A extends AxiosLike>(axios: A, url: string, policy: EgressPolicy,
-  options: Omit<GuardOptions, 'read'> = {}): Promise<{ data: Buffer; headers: Record<string, unknown> }> {
-  const client = egressGuardedAxios(axios, policy, { ...options, read: true }) as unknown as {
-    request(config: Record<string, unknown>): Promise<{ data: ArrayBuffer | Buffer; headers: Record<string, unknown> }>;
+  options: Omit<GuardOptions, 'read'> & {
+    /**
+     * The flow's read list (#1153). A file field is fetched while its step's
+     * props are resolved, before Authority is asked, so with a list the
+     * download, and each redirect it follows, reaches listed hosts only.
+     */
+    readHosts?: readonly string[];
+  } = {}): Promise<{ data: Buffer; headers: Record<string, unknown> }> {
+  const { readHosts, ...guard } = options;
+  const download = async () => {
+    const client = egressGuardedAxios(axios, policy, { ...guard, read: true }) as unknown as {
+      request(config: Record<string, unknown>): Promise<{ data: ArrayBuffer | Buffer; headers: Record<string, unknown> }>;
+    };
+    const response = await client.request({ method: 'GET', url, responseType: 'arraybuffer' });
+    return { data: Buffer.from(response.data as ArrayBuffer), headers: response.headers };
   };
-  const response = await client.request({ method: 'GET', url, responseType: 'arraybuffer' });
-  return { data: Buffer.from(response.data as ArrayBuffer), headers: response.headers };
+  if (!readHosts) return download();
+  let host: string;
+  // Not a URL: nothing to fetch, and not a refusal (the processor gives no file, as upstream).
+  try { host = new URL(url).hostname; } catch { throw new Error('File download failed: not a URL'); }
+  const key = readHostKey(host.replace(/^\[(.*)\]$/u, '$1').includes(':') ? `[${host.replace(/^\[(.*)\]$/u, '$1')}]` : host);
+  const listed = new Set(readHosts.map((h) => readHostKey(h)).filter((h): h is string => h !== null));
+  if (key === null || !listed.has(key)) {
+    throw new EgressRefusedError(`File download refused: ${host || url} is not on this workflow's read list. A file field is fetched before its step is approved, so it may only come from a listed host; add ${host || 'the host'} under the workflow's permissions ("Hosts it may read without asking") if it should`);
+  }
+  return withReadHosts(readHosts, download);
 }

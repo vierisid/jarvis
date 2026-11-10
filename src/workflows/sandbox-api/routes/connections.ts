@@ -36,7 +36,7 @@
  * access token calls back into this endpoint for one.
  */
 
-import { JARVIS_PREFIX, managedSourceFor, type CredentialResolver, type ResolvedConnection } from "../../credentials/adapter";
+import { JARVIS_PREFIX, managedSourceFor, secretTextValue, type CredentialResolver, type ResolvedConnection } from "../../credentials/adapter";
 import { managedConnectionScopeRefusal, storedConnectionScopeRefusal } from "../../db/repos/managed-connection-scope";
 import { AmbiguousConnectionError } from "../../db/repos/app-connection";
 import { enforceRunConnectionBinding, recordRunCredentialOutcome } from "../../db/repos/binding-pins";
@@ -138,13 +138,11 @@ export function createConnectionsRoute(deps: ConnectionsRouteDeps): RouteHandler
       const data = value["data"];
       if (data && typeof data === "object" && !Array.isArray(data) && "refresh_token" in data) value["data"] = { ...(data as Record<string, unknown>), refresh_token: "" };
     }
-    // #1153: SECRET_TEXT rows saved before the validator asked for
-    // `secret_text` hold `secret` or `value`, which the engine never read
-    // (the piece got undefined); hand the one secret on under the key it reads.
-    if (resolved.type === "SECRET_TEXT" && typeof value["secret_text"] !== "string") {
-      const legacy = [value["secret"], value["value"]].filter((v): v is string => typeof v === "string" && v !== "");
-      if (legacy.length === 1) value["secret_text"] = legacy[0];
-    }
+    // #1153: a SECRET_TEXT row saved before the validator asked for
+    // `secret_text` is handed on under the key the piece reads; the resolver
+    // already did this for a stored row (`secretTextValue`), and a Jarvis
+    // source's value goes through the same rule here.
+    if (resolved.type === "SECRET_TEXT") Object.assign(value, secretTextValue(resolved.type, value));
 
     const claims: EngineTokenClaims = ctx.claims;
     const now = new Date().toISOString();

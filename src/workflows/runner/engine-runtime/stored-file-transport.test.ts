@@ -54,7 +54,9 @@ test('path tricks, encodings and absolute URLs never receive the engine token', 
     // the loopback URL is refused by the egress policy. None reaches the server.
     await run(value).catch(() => null);
   }
-  expect(seen).toEqual([]);
+  // #1153: the engine asks its own internal API for the flow's read list, at
+  // that fixed path; the token never goes to a flow-chosen path.
+  expect(seen.filter((s) => !(s.path === '/api/v1/jarvis/read-hosts' && s.auth === 'Bearer engine-secret'))).toEqual([]);
 });
 
 test('a stored-file path without the workflow context is not fetched', async () => {

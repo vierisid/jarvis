@@ -35,6 +35,21 @@ function stubSource(id: string, externalId: string, value: ResolvedConnection | 
 }
 
 describe("CredentialResolver", () => {
+  test("#1153: a SECRET_TEXT row saved as secret or value resolves under secret_text, for every reader", async () => {
+    // The report and refund services read `resolved.value.secret_text` straight from the resolver.
+    for (const [externalId, value] of [["legacy-secret", { secret: "sk_live_legacy" }], ["legacy-value", { value: "sk_live_legacy" }],
+      ["both-same", { secret: "sk_live_legacy", value: "sk_live_legacy" }]] as const) {
+      upsertConnection({ externalId, displayName: "Legacy", type: "SECRET_TEXT", pieceName: "@activepieces/piece-stripe", pieceVersion: "1", value });
+      const got = await new CredentialResolver().resolve({ projectId: DEFAULT_IDS.project, pieceName: "@activepieces/piece-stripe", externalId });
+      expect(`${externalId}: ${got?.value.secret_text}`).toBe(`${externalId}: sk_live_legacy`);
+    }
+    // Two different legacy values are not guessed between; a current row is as stored.
+    upsertConnection({ externalId: "ambiguous", displayName: "L", type: "SECRET_TEXT", pieceName: "@activepieces/piece-stripe", pieceVersion: "1", value: { secret: "a", value: "b" } });
+    expect((await new CredentialResolver().resolve({ projectId: DEFAULT_IDS.project, pieceName: "@activepieces/piece-stripe", externalId: "ambiguous" }))?.value.secret_text).toBeUndefined();
+    upsertConnection({ externalId: "current", displayName: "C", type: "SECRET_TEXT", pieceName: "@activepieces/piece-stripe", pieceVersion: "1", value: { secret_text: "sk_now", secret: "old" } });
+    expect((await new CredentialResolver().resolve({ projectId: DEFAULT_IDS.project, pieceName: "@activepieces/piece-stripe", externalId: "current" }))?.value.secret_text).toBe("sk_now");
+  });
+
   test("dispatches jarvis:* externalIds to a registered Jarvis source", async () => {
     const r = new CredentialResolver();
     r.register(

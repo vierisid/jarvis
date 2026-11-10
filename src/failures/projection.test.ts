@@ -31,6 +31,15 @@ describe('the projection reads typed evidence, never wording', () => {
     expect([a.category, a.headline, a.outcome, a.key]).toEqual([b.category, b.headline, b.outcome, b.key]);
   });
 
+  test('#1153: an egress refusal before sending reads as not sent, fixed by editing the step, not by running again', () => {
+    const failure = projectFailure({ source: 'action', outcome: { status: 'blocked', code: 'EGRESS_REFUSED', message: 'Not sent: refused', effect: 'not_started' } },
+      { label: 'The step "Call"', sideEffects: true });
+    expect(failure).toMatchObject({ category: 'invalid_input' });
+    expect(failure.headline).toContain('nothing was sent');
+    expect(JSON.stringify(failure)).toContain('edit_and_run_again');
+    expect(JSON.stringify(failure)).not.toContain('"run_again"');
+  });
+
   test('an untyped error is internal whatever it says', () => {
     for (const message of ['429 rate limit', 'approval denied', 'ECONNREFUSED', 'timed out']) {
       expect(projectFailure(failureEvidence(new Error(message)), { label: 'The step', sideEffects: true }).category).toBe('internal');

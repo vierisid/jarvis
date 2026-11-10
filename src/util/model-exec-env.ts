@@ -212,6 +212,11 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_ENGINE_ORPHAN_POLL_MS',
   // The workflow composer's planning policy (Q-03), read by the daemon.
   'JARVIS_PLANNING_POLICY',
+  // The host's own addresses an operator names (#1153, http-egress.ts), which
+  // workflow steps never reach. Not a credential, and it only ever narrows
+  // egress: a daemon restarted from the model's shell must keep it, or its
+  // steps could reach the host's published ports again.
+  'JARVIS_HOST_ADDRESSES',
   // Set on model-directed children by modelExecEnv(), and must survive into
   // what they start: see util/model-exec-marker.ts.
   MODEL_EXEC_MARKER_ENV, MODEL_EXEC_ENV_KEY_FLAG,
@@ -241,6 +246,10 @@ export const JARVIS_INTERNAL_ENV_NAMES: readonly string[] = Object.freeze([
   // The HTTP step's egress policy (#961), set by the daemon on the engine it
   // spawns (spawn.ts) from whether the install is hosted.
   'JARVIS_ENGINE_EGRESS',
+  // Likewise set only on the engine it spawns (#1153, spawn.ts): the flow
+  // budget that caps each workflow request, and the operator's
+  // JARVIS_HOST_ADDRESSES as the engine reads them.
+  'JARVIS_ENGINE_REQUEST_TIMEOUT_MS', 'JARVIS_ENGINE_HOST_ADDRESSES',
   // The private capture path the win32 screenshot one-liner reads instead of
   // taking it from the command text (#746). Set only on that spawn, by the
   // daemon, on a file it just created with mkdtemp.
