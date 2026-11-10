@@ -24,7 +24,7 @@ export const HUMAN_INPUT_UNAVAILABLE_CODE = 'HUMAN_INPUT_UNAVAILABLE';
 export function humanInputRefusal(decisions: { enabled: boolean; reason: string | null }, dashboard: 'brief' | 'legacy'): string | null {
   const why = 'so nothing could answer this request.';
   if (dashboard === 'legacy') {
-    return `Needs you is not available with the previous dashboard, ${why} Requests for input or approval are answered only in Brief. Switch to Brief (JARVIS_DASHBOARD=brief, with JARVIS_HOSTED_DASHBOARD unset) to let workflows ask for input or approval.`;
+    return `Needs you is not available with the previous dashboard, ${why} Requests for input or approval are answered only in Brief. Switch to Brief (set JARVIS_DASHBOARD=brief) to let workflows ask for input or approval.`;
   }
   if (decisions.enabled) return null;
   if (decisions.reason !== 'disabled') {

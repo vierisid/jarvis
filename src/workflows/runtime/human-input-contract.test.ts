@@ -14,7 +14,6 @@ describe('humanInputRefusal', () => {
       const text = humanInputRefusal(decisions, 'legacy')!;
       expect(text).toContain('answered only in Brief');
       expect(text).toContain('JARVIS_DASHBOARD=brief');
-      expect(text).toContain('JARVIS_HOSTED_DASHBOARD unset');
       expect(text).not.toContain('JARVIS_BRIEF_DECISIONS=1');
     }
   });
