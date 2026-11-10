@@ -22,7 +22,7 @@ const providerFailureCodes = new Set([
 // the managed Usejarvis AI row in AI settings is read-only. A restriction is
 // appealed to the contact its message names and a content policy block is
 // changed in the request, so neither links anywhere.
-const failureLinks: Record<string, { label: string; target: (typeof DESTINATIONS)[keyof typeof DESTINATIONS]["legacy"] }> = {
+export const failureLinks: Record<string, { label: string; target: (typeof DESTINATIONS)[keyof typeof DESTINATIONS]["legacy"] }> = {
   provider_auth: { label: "Open AI settings", target: DESTINATIONS.credentials.legacy },
   provider_forbidden: { label: "Open AI settings", target: DESTINATIONS.credentials.legacy },
   provider_rate_limit: { label: "Open AI settings", target: DESTINATIONS.credentials.legacy },

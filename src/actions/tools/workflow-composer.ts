@@ -18,7 +18,9 @@ import type {
 } from "../../workflows/runtime/piece-input.ts";
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { LLMMessage, LLMResponse, LLMTool, LLMToolCall } from "../../llm/provider.ts";
-import { getLLMErrorCode, type LLMErrorCode } from "../../llm/provider.ts";
+import { getLLMErrorCode, LLMProviderError, type LLMErrorCode } from "../../llm/provider.ts";
+
+const hostedDetailOf = (e: unknown): string | undefined => e instanceof LLMProviderError ? e.hostedDetail : undefined;
 import { CompositionTimeoutError, withCompositionBudget } from "./composition-budget.ts";
 
 /**
@@ -207,6 +209,8 @@ export interface ComposeFail {
    */
   suggestedInstalls?: SuggestedInstall[];
   errorCode?: LLMErrorCode | 'composition_timeout';
+  /** The hosted provider's authored sentence for this failure; never an upstream body. */
+  hostedDetail?: string;
 }
 
 export type ComposeResult = ComposeOk | ComposeFail;
@@ -511,6 +515,7 @@ async function composeOneShot(
       return {
         ok: false,
         errorCode: getLLMErrorCode(e),
+        hostedDetail: hostedDetailOf(e),
         errors: [`LLM call failed: ${(e as Error).message}`],
         rawResponse: lastRaw,
       };
@@ -642,6 +647,7 @@ async function composeWithTools(
       return {
         ok: false,
         errorCode: code,
+        hostedDetail: hostedDetailOf(e),
         errors: [`LLM call failed: ${message}`],
         rawResponse: lastRaw,
       };

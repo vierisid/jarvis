@@ -14,6 +14,7 @@ import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness
 import { getWorkflowComposition } from '../workflows/db/repos/workflow-composition';
 import { sampleCatalog } from '../workflows/runtime/test-fixtures';
 import type { ComposerLlmClient } from '../actions/tools/workflow-composer';
+import { LLMProviderError } from '../llm/provider';
 import { currentOrigin, runWithOrigin } from '../llm/origin';
 import { currentAdmission, runWithAdmission } from '../llm/background-budget';
 
@@ -169,6 +170,25 @@ test('report_blocked preserves actionable reasons without attaching or running a
   const { job } = p.submit(input); await p.idle();
   expect(p.get(job.jobId)).toMatchObject({ state: 'blocked', blocker: { code: 'composition_blocked', details: [expect.stringContaining('destination')] } });
   expect(count('flow')).toBe(0); expect(count('flow_run')).toBe(0);
+});
+
+test.each([
+  ['auth', 'provider_auth', 'credentials'],
+  ['rate_limit', 'provider_rate_limit', 'limit'],
+] as const)('a %s provider failure gets the chat guidance and its code, never the provider body', async (code, blockerCode, wording) => {
+  const p = provider({ async chat(): Promise<{ text: string }> { throw new LLMProviderError('PRIVATE BODY sk-secret', code); } });
+  const { job } = p.submit({ ...input, requestId: `provider-${code}` }); await p.idle();
+  const failed = p.get(job.jobId);
+  expect(failed).toMatchObject({ state: 'failed', workflow: null, blocker: { code: blockerCode, message: expect.stringContaining(wording), details: [] }, specification: { prompt: input.prompt } });
+  expect(JSON.stringify(failed)).not.toContain('PRIVATE'); expect(JSON.stringify(failed)).not.toContain('saved request');
+});
+
+test('an invalid composition says so in plain words and points back to the request', async () => {
+  const p = provider({ async chat() { return { text: '{PRIVATE MODEL RESPONSE' }; } });
+  const { job } = p.submit({ ...input, requestId: 'invalid-composition' }); await p.idle();
+  const failed = p.get(job.jobId);
+  expect(failed).toMatchObject({ state: 'failed', blocker: { code: 'composition_failed' }, specification: { prompt: input.prompt } });
+  expect(failed.blocker!.message).toContain('Edit the request'); expect(failed.blocker!.message).not.toContain('saved request');
 });
 
 test('provider errors and malformed responses stay out of the public failure receipt', async () => {
