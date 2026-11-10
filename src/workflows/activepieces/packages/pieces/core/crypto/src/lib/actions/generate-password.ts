@@ -30,6 +30,12 @@ export const generatePassword = createAction({
     }),
   },
   async run(context) {
+    // Jarvis (F-13): a length of 0, a negative or a fractional one returned an
+    // empty or short password and succeeded; a huge one failed with a raw error.
+    const requested = context.propsValue.length;
+    if (!Number.isInteger(requested) || requested < 1 || requested > 256) {
+      throw new Error('Password length must be a whole number from 1 to 256.');
+    }
     await propsValidation.validateZod(context.propsValue, {
       length: z.number().max(256),
     });
