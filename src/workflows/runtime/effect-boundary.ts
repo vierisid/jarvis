@@ -19,7 +19,7 @@ import { ActionOutcomeError, type ActionFailure } from '../../actions/action-out
 import { getFlowRun } from '../db/repos/flow-run';
 import { createWaitpoint, getWaitpoint } from '../db/repos/waitpoint';
 import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
-import { canonicalJson, digest, resolveEffectContext, STEP_INPUT_NOT_FIXED, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
+import { canonicalJson, digest, resolveEffectContext, STEP_INPUT_NOT_FIXED, STEP_INPUT_MISMATCH, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
 import { aboveLevelMayAsk, governedCategoriesFor, substituteAboveLevel } from '../../authority/tool-action-map';
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
 import { budgetCap, budgetOf, deferredAhead, deferredAheadLimit, waitingWorkflowCards } from './deferred-cards';
@@ -204,7 +204,9 @@ const refused = (error: PolicyRefusal): ActionFailure =>
 export const GOVERNANCE_REFUSALS: ReadonlySet<string> = new Set(['EMERGENCY_STOPPED', 'RUN_NOT_RUNNING', 'AUTHORITY_DENIED',
   'APPROVAL_DENIED', 'APPROVAL_EXPIRED', 'APPROVAL_WITHDRAWN', 'APPROVAL_REQUIRED', 'WORKFLOW_CHANGED', 'CARD_CANNOT_SHOW',
   // A step whose tool run data would choose cannot run as written (#1152).
-  STEP_INPUT_NOT_FIXED]);
+  STEP_INPUT_NOT_FIXED,
+  // A call whose params are not the ones its step states (#1314).
+  STEP_INPUT_MISMATCH]);
 
 /** The durable identity of an effect: one per run, step, loop position and route. */
 export const workflowEffectId = (runId: string, stepName: string, executionPath: Array<[string, number]>, route: string) =>

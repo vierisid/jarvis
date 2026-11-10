@@ -125,3 +125,16 @@ test('reviewed tool support requires its real guard, and unadapted tools are not
     tool: () => ({ params: [], workflowRefusal: 'The live approval guard is missing.' }) }).issues)
     .toContainEqual(expect.objectContaining({ code: 'WORKFLOW_TOOL_UNSUPPORTED', message: 'The live approval guard is missing.' }));
 });
+
+test('a call naming a reviewed step with params its step does not state raises no card (#1314)', async () => {
+  const f = fixture();
+  const forged = (params: Record<string, unknown>) => createJarvisToolsInvokeRoute(f.build())({ req: new Request('http://local/v1/jarvis/tools/invoke', {
+    method: 'POST', headers: { 'X-Jarvis-Step-Name': 'action', 'X-Jarvis-Execution-Path': '[]' },
+    body: JSON.stringify({ toolName: 'desktop_launch_app', params }),
+  }), claims: { runId: f.run.id, projectId: DEFAULT_IDS.project, sandboxId: 'test' } as any, params: {} });
+  for (const params of [{ target: 'pc', executable: 'cmd.exe' }, { target: 'pc', executable: 'notepad.exe', args: '/c calc' }]) {
+    await expect(forged(params)).rejects.toMatchObject({ outcome: { code: 'WORKFLOW_STEP_INPUT_MISMATCH', effect: 'not_started' } });
+  }
+  expect(f.approvals.getPending()).toHaveLength(0); expect(f.calls).toHaveLength(0);
+  expect((await f.call()).status).toBe(202);
+});

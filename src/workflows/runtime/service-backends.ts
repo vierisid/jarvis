@@ -81,7 +81,7 @@ import { recordPieceCompletion } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
-import { canonicalJson, digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
+import { canonicalJson, digest, resolveEffectContext, pinnedStepParams, type WorkflowEffectContext } from './effect-context';
 import { isCommunityAction } from './step-admission';
 import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
 import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
@@ -487,6 +487,11 @@ export function buildSandboxServiceBackends(
           throw new Error(`tool not found: ${req.toolName}`);
         }
         const tool = opts.toolRegistry!.get(req.toolName)!;
+        // A reviewed UI call is held to the params its step states (#1314):
+        // the step-name header alone would let any holder of the run's token
+        // raise this step's card with params of its own. The computer is never
+        // run data's to choose.
+        const fromRunData = workflowUiReview(tool, req.toolName) ? pinnedStepParams(ctx, req.params, ['target']) : new Set<string>();
         // desktop.enabled: false (#905). Typed and not started, before any
         // effect record or approval card exists for the step; audited like a
         // capability refusal.

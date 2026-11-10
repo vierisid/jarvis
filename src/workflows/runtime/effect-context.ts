@@ -81,3 +81,56 @@ export function resolveEffectContext(ctx: WorkflowEffectContext, piece: string, 
   return { run, version, stepName: ctx.stepName, executionPath: ctx.executionPath,
     versionDigest: digest(version.trigger) };
 }
+
+/** A step's literal params differ from the call that names the step (#1314). */
+export const STEP_INPUT_MISMATCH = 'WORKFLOW_STEP_INPUT_MISMATCH';
+
+const templated = (value: unknown): boolean => typeof value === 'string' ? value.includes('{{')
+  : Array.isArray(value) ? value.some(templated)
+  : !!value && typeof value === 'object' && Object.values(value).some(templated);
+
+/**
+ * Hold a call to the params its step states (#1314). The tool route trusts
+ * the step-name header, and anything holding the run's sandbox token can set
+ * it, so a call naming a reviewed UI step could otherwise raise a card with
+ * params of its own choosing. Each param the graph states literally must be
+ * sent exactly; a param the graph does not name must not be sent at all; a
+ * templated param is the run data's to choose and is returned, so the card
+ * can mark it. Params templated as a whole, and any key in `fixed` that is
+ * templated, are refused typed: run data would choose them.
+ */
+export function pinnedStepParams(ctx: WorkflowEffectContext, params: Record<string, unknown>,
+  fixed: readonly string[] = []): Set<string> {
+  const run = getFlowRun(ctx.runId);
+  const version = run ? getFlowVersion(run.flowVersionId) : null;
+  const node = version ? walkFlowNodes(version.trigger).filter(n => n.name === ctx.stepName) : [];
+  if (!ctx.stepName || node.length !== 1) throw new Error('Workflow effect step does not match the pinned version');
+  const input = effectiveStepInput(ctx.runId, ctx.stepName, node[0]!.settings?.input) as Record<string, unknown> | undefined;
+  let stated: unknown = input?.params ?? {};
+  if (typeof stated === 'string') {
+    try { stated = JSON.parse(stated); } catch { stated = undefined; }
+  }
+  if (!stated || typeof stated !== 'object' || Array.isArray(stated)) {
+    throw new ActionOutcomeError({ status: 'blocked', code: STEP_INPUT_NOT_FIXED, effect: 'not_started',
+      message: "This step's params are a template as a whole, so run data would choose them. Name each param directly in the workflow." });
+  }
+  const graph = stated as Record<string, unknown>;
+  const fromRunData = new Set<string>();
+  for (const key of new Set([...Object.keys(graph), ...Object.keys(params)])) {
+    if (!Object.hasOwn(graph, key)) {
+      throw new ActionOutcomeError({ status: 'blocked', code: STEP_INPUT_MISMATCH, effect: 'not_started',
+        message: `This call sends a param, ${JSON.stringify(key.slice(0, 64))}, that its step does not state. Nothing was done.` });
+    }
+    if (templated(graph[key])) {
+      if (fixed.includes(key)) {
+        throw new ActionOutcomeError({ status: 'blocked', code: STEP_INPUT_NOT_FIXED, effect: 'not_started',
+          message: `This step's ${key} is a template, so run data would choose it. Name it directly in the workflow.` });
+      }
+      fromRunData.add(key);
+    } else if (canonicalJson(graph[key]) !== canonicalJson(params[key])) {
+      throw new ActionOutcomeError({ status: 'blocked', code: STEP_INPUT_MISMATCH, effect: 'not_started',
+        message: `This call's ${JSON.stringify(key.slice(0, 64))} is not the value its step states. Nothing was done.` });
+    }
+  }
+  return fromRunData;
+}
