@@ -21,10 +21,13 @@ const providerSettingsCodes = new Set([
   'provider_auth', 'provider_forbidden', 'provider_rate_limit', 'provider_quota_exhausted',
   'provider_not_found', 'provider_unsupported_tools', 'provider_restricted',
 ]);
-// Only the new classified contract contains authored recovery copy. Older or
-// untyped errors may contain raw upstream detail and keep the safe fallback.
+// The daemon's other turn failures, each with copy it wrote itself (src/brief/chat-transport.ts,
+// src/brief/chat-failure.ts, src/vault/chat-turns.ts): never an upstream body.
+const authoredFailureCodes = new Set(['generation_failed', 'attachment_unavailable', 'interrupted']);
+// Only classified codes carry authored recovery copy. A code this client does
+// not know may carry raw detail and keeps the safe fallback.
 function failureNotice(error?: { code?: string; message?: string }) {
-  return error?.code && providerFailureCodes.has(error.code) && error.message
+  return error?.code && (providerFailureCodes.has(error.code) || authoredFailureCodes.has(error.code)) && error.message
     ? error.message : 'This response could not finish.';
 }
 

@@ -390,3 +390,13 @@ test('a legacy blob whose move fails is kept, with its values, for the next load
   expect(inner.records.get(key)).toBe(legacy);
   expect(store.getSnapshot().conversations.a?.attachments.map(item => item.attachmentId)).toEqual(['legacy']);
 });
+
+test('a failed turn is shown in its thread, not repeated as the composer error; a request error still is', () => {
+  const store = fixture();
+  store.applyEvent(event(1, { kind: 'message', message: { conversationId: 'a', turnId: 'turn-a', requestId: 'request-a', messageId: 'user', role: 'user', content: 'First', createdAt: 1 } }), 1);
+  store.applyEvent(event(2, { kind: 'terminal', state: 'failed', error: { code: 'provider_rate_limit', message: 'Your request failed: the AI provider is rate limiting requests.' } }), 1);
+  expect(store.getSnapshot().conversations.a?.turns['turn-a']?.error?.code).toBe('provider_rate_limit');
+  expect(store.getSnapshot().conversations.a?.error).toBeNull();
+  store.setError('a', 'Could not send.');
+  expect(store.getSnapshot().conversations.a?.error).toBe('Could not send.');
+});

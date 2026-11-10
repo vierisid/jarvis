@@ -177,3 +177,21 @@ test('provider recovery is visible, announced, and offers the existing AI settin
     .toEqual(['0', '1', 'llm', '#/_room_settings']);
   expect(host.querySelector('.brief-reply-prose')).not.toBeNull();
 });
+
+test('every failure the daemon authors is shown in the thread, where the composer no longer repeats it', async () => {
+  const authored = {
+    generation_failed: 'This response could not finish. Check what earlier actions did before sending another request.',
+    attachment_unavailable: 'Attachment was removed or expired; choose it again',
+    interrupted: 'The daemon restarted before this turn finished.',
+  };
+  for (const [code, message] of Object.entries(authored)) {
+    setTurn({state:'failed',error:{code,message}});
+    await render();
+    expect(host.querySelector('.brief-message-notice[data-error]')?.textContent).toContain(message);
+  }
+  // A code the client does not know keeps the generic sentence.
+  setTurn({state:'failed',error:{code:'future_code',message:'PRIVATE_DETAIL'}});
+  await render();
+  expect(host.textContent).not.toContain('PRIVATE_DETAIL');
+  expect(host.querySelector('.brief-message-notice[data-error]')?.textContent).toContain('This response could not finish.');
+});
