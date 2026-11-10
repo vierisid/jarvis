@@ -58,8 +58,35 @@ export const GATED_TOOL_NAMES: ReadonlySet<string> = GATED_TOOLS;
  * The durable effect stores the request and receipt, never a substitute for
  * the live guard. A restart, disconnect or changed subject blocks dispatch.
  *
- * Other raw actions and unregistered guarded tools remain unsupported. Bounded
- * reads are exempt: their connection guards do not make them UI writes.
+ * Why the binding is live and never persisted (#638, kept condensed). An
+ * approval on a SURFACE is bound by `captureApprovalGuard`: a closure over the
+ * CDP connection, the approval epoch and, for an element-addressed tool, the
+ * document and the id-map generation (#602). A workflow record is durable and
+ * is rechecked on resume by `validateTarget`, which sees only the frozen
+ * arguments and target; a closure does not cross that gap or a restart
+ * (`reconcileAfterRestart` clears `uiExecutions`). Nor can the binding be made
+ * durable: a target persists NAMES (a sidecar id, a path, a skill version),
+ * while an element id is a process-local counter that restarts at 1 and that
+ * four snapshots anywhere evict (`ui.ts`, `MAX_REMEMBERED_SNAPSHOTS`).
+ * Persisting it would let a comparison PASS on a different surface, which is
+ * worse than no check. The durable alternative is an adapter whose target
+ * carries the reviewed SUBJECT and re-resolves it at dispatch, as `run_skill`
+ * does. So this path keeps the live guard in process and refuses when it is
+ * gone (WORKFLOW_UI_REVIEW_STALE).
+ *
+ * Two signals cover both drift directions. `rawUiGate(name, params)` is the
+ * authoritative "raw UI action needing review" (its `get_value` carve-out
+ * comes with it). A declared `captureApprovalGuard` on a tool in neither
+ * `REVIEWED_UI_TOOLS` nor `BOUNDED_TOOLS` is a tool saying reviewing it is not
+ * enough, which nobody registered: the one signal that survives a guarded tool
+ * added without `ui-intent.ts`. Both exclusions carry weight: `createBrowserTools`
+ * gives EVERY tool a guard, `browser_snapshot` and `browser_screenshot`
+ * included, and a guard on a BOUNDED read is about the connection, its target
+ * being bound by the durable `validateTarget` mechanism instead.
+ *
+ * NOT the same refusal as `OPAQUE_TOOLS`: opaque means a category cannot
+ * describe the effect; this means what it acts on cannot be bound across a
+ * waitpoint without the live guard.
  */
 export function surfaceBoundRefusal(
   tool: ToolDefinition | undefined,
