@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import type { BriefConversation } from '../../../../src/brief/contracts';
 import type { BriefConversationClient } from '../chat/client';
+import { ChatApiError } from '../chat/api';
 import './closed-chats.css';
 
 export function ClosedChats({ client, openIds, busy }: {
@@ -34,7 +35,11 @@ export function ClosedChats({ client, openIds, busy }: {
     try {
       await client.reopen(conversationId);
       if (mounted.current) { setExpanded(false); trigger.current?.focus(); }
-    } catch { if (mounted.current) setError('This chat could not be reopened. Try again.'); }
+    } catch (failure) {
+      // 409 is the open-tab limit: retrying cannot help until another chat is closed.
+      if (mounted.current) setError(failure instanceof ChatApiError && failure.status === 409
+        ? 'Too many chats are open. Close one, then reopen this chat.' : 'This chat could not be reopened. Try again.');
+    }
     finally { lock.current = false; if (mounted.current) setPending(null); }
   }
   return <div className="brief-closed-chats">

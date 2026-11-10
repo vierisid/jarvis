@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'bun:te
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import type { BriefConversation, BriefPage } from '../../../../src/brief/contracts';
 import type { Root } from 'react-dom/client';
+import { ChatApiError } from '../chat/api';
 let React: typeof import('react'), createRoot: typeof import('react-dom/client').createRoot;
 let ClosedChats: typeof import('./ClosedChats').ClosedChats;
 let root: Root, host: HTMLDivElement;
@@ -41,4 +42,10 @@ test('a pending reopen dispatches once and a new close refreshes visible history
   await render(['x']); await click('Closed chats'); await render([]); expect(reads).toBe(2);
   await click('Reopen Chat a'); await click('Reopen Chat a'); expect(opens).toBe(1);
   await React.act(async () => finish());
+});
+test('a reopen refused at the open-chat limit says to close a chat instead of retrying', async () => {
+  const client = { listClosed: async () => ({ items: [row('a')], nextCursor: null }), reopen: async () => { throw new ChatApiError(409); } };
+  await React.act(async () => root.render(<ClosedChats client={client} openIds={[]} busy={false} />));
+  await click('Closed chats'); await click('Reopen Chat a');
+  expect(host.textContent).toContain('Too many chats are open'); expect(host.textContent).not.toContain('Try again');
 });
