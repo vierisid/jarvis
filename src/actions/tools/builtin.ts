@@ -1357,6 +1357,7 @@ function browserCallGuard(
     const reader = { reader: currentSnapshotReader(), ...(readLog ? { readLog } : {}) };
     const localReviewed: ReviewedExecution = {
       ...(localSnapshotGen !== undefined ? { localSnapshotGen } : {}),
+      ...(local && loaderBound ? { localLoaderId: browser.reviewedLoaderId() } : {}),
       ...(local && readLog ? { readLog } : {}),
     };
     const reviewed: ReviewedExecution | undefined = !reviewedRoute
@@ -1707,7 +1708,9 @@ export const browserPressKeyTool: ToolDefinition = {
     if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
     if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
-      return await browser.pressKey(params.key as string);
+      // A workflow key press carries the document it was reviewed on (#1314).
+      const reviewed = currentReviewedExecution();
+      return await browser.pressKey(params.key as string, reviewed && 'localLoaderId' in reviewed ? reviewed.localLoaderId ?? '' : undefined);
     } catch (err) {
       return browserActionError(err);
     }
@@ -2218,6 +2221,9 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
     // And the element-addressed three carry the generation they bound, for the
     // action to compare again under the controller's snapshot lock (#875): the
     // guard's own comparison runs before the action waits on that lock.
+    // The `{ workflow }` flag (#1314) is not read here: this background set is
+    // never a workflow's registry (delegations scope BUILTIN_TOOLS, direct
+    // steps use the main registry), and its guards already bind the document.
     tool.captureApprovalGuard = () => {
       const guard = ctrl.captureApprovalGuard(!bindDocument, { bindDocument });
       if (!bindDocument) return guard;

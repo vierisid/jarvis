@@ -73,7 +73,7 @@ import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { assertDesktopAllowed } from '../../actions/tools/desktop-guard.ts';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability, uiCallComputer } from './effect-capabilities';
 import { desktopSubjectFromRun, uiCardRefusal, uiCardSentence, workflowUiCard, type UiCard } from './ui-card';
-import { ActionOutcomeError } from '../../actions/action-outcome';
+import { ActionOutcomeError, type ActionOutcome } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR,
   HTTP_PIECE, httpReadHostListed } from './piece-effects';
@@ -493,7 +493,13 @@ export function buildSandboxServiceBackends(
         // the step-name header alone would let any holder of the run's token
         // raise this step's card with params of its own. The computer is never
         // run data's to choose.
-        const fromRunData = workflowUiReview(tool, req.toolName, req.params) ? pinnedStepParams(ctx, req.params, ['target']) : new Set<string>();
+        // A forged call is a tamper signal, so the refusal is audited (#1314 review).
+        let fromRunData = new Set<string>();
+        try { if (workflowUiReview(tool, req.toolName, req.params)) fromRunData = pinnedStepParams(ctx, req.params, ['target']); }
+        catch (error) {
+          effects.auditRefusal({ context: ctx, toolName: tool.name, category: refusedEffectCategory(tool) });
+          throw error;
+        }
         // desktop.enabled: false (#905). Typed and not started, before any
         // effect record or approval card exists for the step; audited like a
         // capability refusal.
@@ -566,9 +572,15 @@ export function buildSandboxServiceBackends(
           } });
         // Computer reads and navigation reach the flow framed (#1314), never as raw page or window text.
         const computer = /^(browser|desktop)_/.test(tool.name);
-        return reply.approval ? { result: null, toolName: req.toolName, approval: reply.approval }
-          : { result: computer ? frameComputerStepResult(tool.name, tool.category, reply.result) : reply.result,
-            toolName: req.toolName, ...(reply.outcome ? { outcome: reply.outcome } : {}) };
+        // The page a navigate landed on is the page's to choose (a redirect,
+        // pushState), so its URL in the receipt is framed too (#1314 review).
+        if (reply.approval) return { result: null, toolName: req.toolName, approval: reply.approval };
+        const verification = reply.outcome?.status === 'succeeded' ? reply.outcome.verification : undefined;
+        const outcome: ActionOutcome | undefined = computer && verification?.status === 'verified' && verification.postcondition === 'page_observed'
+          ? { status: 'succeeded', verification: { ...verification, pageUrl: String(frameComputerStepResult(tool.name, tool.category, verification.pageUrl)) } }
+          : reply.outcome;
+        return { result: computer ? frameComputerStepResult(tool.name, tool.category, reply.result) : reply.result,
+          toolName: req.toolName, ...(outcome ? { outcome } : {}) };
       }
     : undefined;
 

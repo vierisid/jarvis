@@ -1832,8 +1832,18 @@ export class BrowserController {
    * "Escape", "Tab", "ArrowDown", "Ctrl+K", "Shift+Enter". Keys go to the
    * currently focused element.
    */
-  async pressKey(combo: string): Promise<string> {
+  async pressKey(combo: string, reviewedLoaderId?: string): Promise<string> {
     await this.ensureConnected();
+    // A key press reviewed on one document (#1314) is sent only while the
+    // live page is still that document: read now, not from the last snapshot.
+    if (reviewedLoaderId !== undefined) {
+      let now: { loaderId: string };
+      try { now = await this.readFrameState(); }
+      catch { return browserActionFailure('Error: Could not confirm the browser is still on the page this key press was reviewed on, so nothing was done.'); }
+      if (!reviewedLoaderId || now.loaderId !== reviewedLoaderId) {
+        return browserActionFailure('Error: The browser is no longer on the page this key press was reviewed on, so nothing was done. Start a new run and review the current page.');
+      }
+    }
 
     const parsed = parseKeyCombo(combo);
     if (!parsed) {
@@ -2419,6 +2429,11 @@ export class BrowserController {
    * message names something the user can act on, and the alternative is
    * executing a click whose id now means a different element.
    */
+  /** The document the current element map came from, for a guard to carry (#1314). */
+  reviewedLoaderId(): string {
+    return this.elementDoc.loaderId;
+  }
+
   captureApprovalGuard(
     allowInitialConnection = false,
     opts: { bindDocument?: boolean; bindLoader?: boolean } = {},

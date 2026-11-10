@@ -455,7 +455,11 @@ describe('#573 premise 1: the reachable tool set is closed and known', () => {
   });
 
   /** Non-vacuous: the decision would be trivial if nothing reachable were untrusted. */
-  test('the untrusted-source subset is the eight byte-exact tools plus the nine framed computer actions', () => {
+  // The eight are what the #573 decision is about: the ADAPTER returns them
+  // byte-exact. On a direct step the browser and desktop ones among them are
+  // framed by the route (`frameComputerStepResult`, owner decision on #1314);
+  // read_file, get_clipboard and run_skill are not.
+  test('the untrusted-source subset is the eight #573 tools plus the nine framed computer actions', () => {
     const untrusted = Object.entries(REVIEWED_REACHABLE).filter(([, v]) => v).map(([n]) => n);
     const computer = untrusted.filter((n) => WORKFLOW_REVIEWED_UI_TOOLS.has(n));
     expect(computer.sort()).toEqual([...WORKFLOW_REVIEWED_UI_TOOLS].sort());

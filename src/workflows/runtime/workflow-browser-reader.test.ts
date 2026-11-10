@@ -193,7 +193,7 @@ for (const late of ['click', 'dispatch'] as const) test(`a navigate card expires
   } finally { setSystemTime(); }
 });
 
-for (const moved of [false, true]) test(`a local workflow key press is bound to the reviewed document (navigated away: ${moved}, #1314)`, async () => {
+for (const [moved, snapshot] of [[false, true], [true, true], [true, false]] as const) test(`a local workflow key press is bound to the reviewed document (navigated away: ${moved}, snapshot after: ${snapshot}, #1314)`, async () => {
   const fake = new FakeRenderer([{ name: 'Editor', x: 50, y: 40 }]);
   restore = wireController(browser, fake);
   const f = fixture(browserPressKeyTool, true), run = f.run();
@@ -201,11 +201,12 @@ for (const moved of [false, true]) test(`a local workflow key press is bound to 
   const parked = await f.call(run.id, 'action'); expect(parked.status).toBe(202);
   // Another snapshot of the same document does not retire the card; a new document does.
   if (moved) fake.loaderId = 'L2';
-  await browserSnapshotTool.execute({});
+  // Without a snapshot the controller's record still names the reviewed page, so only the live check can see the move.
+  if (snapshot) await browserSnapshotTool.execute({});
   f.approvals.approve((await parked.json()).approval.approvalId, 'dashboard');
   const response = await f.call(run.id, 'action');
   if (moved) {
-    expect((await response.json()).outcome).toMatchObject({ code: 'WORKFLOW_UI_REVIEW_STALE', effect: 'not_started' });
+    expect((await response.json()).outcome).toMatchObject({ effect: 'not_started' });
     expect(fake.keys).toEqual([]);
   } else {
     expect(response.status).toBe(200);
@@ -235,4 +236,13 @@ test('a navigate card shows the full URL and a type card the text, with the comp
   const card = JSON.parse(f.approvals.getRequest((await typed.json()).approval.approvalId)!.context!);
   expect(card.intent).toContain('text="Synthetic note"');
   expect(card.uiCard.values.map((v: any) => v.name)).toEqual(['element_id', 'text']);
+});
+
+test('the page URL a local navigate reports reaches the flow framed too (#1314 review)', async () => {
+  const fake = new FakeRenderer([{ name: 'Editor', x: 50, y: 40 }]);
+  restore = wireController(browser, fake);
+  const f = fixture(browserTypeTool, true), run = f.run();
+  const body = await (await f.approve(run.id, 'navigate')).json();
+  expect(body.outcome.verification).toMatchObject({ status: 'verified', postcondition: 'page_observed' });
+  expect(body.outcome.verification.pageUrl).toContain('<<<UNTRUSTED_CONTENT');
 });

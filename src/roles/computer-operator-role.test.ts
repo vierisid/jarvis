@@ -36,3 +36,16 @@ test('a role naming its tools keeps them under a parent that allows their catego
   // desktop_click's category is not the parent's, so the child does not get it.
   expect(child.agent.authority.allowed_tools).toEqual(['browser_navigate']);
 });
+
+test('a caller allowed a named tool by its category is not told the target has more tools (#1314 review)', async () => {
+  const { AgentOrchestrator } = await import('../agents/orchestrator.ts');
+  const { runAsActingAgent } = await import('../agents/acting-agent.ts');
+  const orch = new AgentOrchestrator();
+  const primary = orch.createPrimary({ id: 'pa', name: 'PA', description: 'A role.', responsibilities: ['x'], autonomous_actions: [],
+    approval_required: [], tools: ['delegation', 'browser'], authority_level: 8 } as never);
+  const caller = orch.spawnSubAgent(primary.id, { id: 'lead', name: 'LEAD', description: 'A role.', responsibilities: ['x'], autonomous_actions: [],
+    approval_required: [], tools: ['delegation', 'browser'], authority_level: 6 } as never);
+  const target = orch.spawnSubAgent(primary.id, { id: 'op', name: 'OP', description: 'A role.', responsibilities: ['x'], autonomous_actions: [],
+    approval_required: [], tools: ['browser_navigate'], authority_level: 3 } as never);
+  expect(runAsActingAgent({ agentId: caller.id, profile: null, taint: [] }, () => orch.delegationShortfall(target.id))).toBeNull();
+});

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../db';
+import { initDatabase } from '../../vault/schema';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun } from '../db/repos/flow-run';
@@ -20,7 +21,7 @@ import { compileWorkflow } from './workflow-readiness';
 import { PieceCatalog } from './piece-catalog';
 
 const originalManager = getSidecarManager();
-beforeEach(() => initWorkflowDb(':memory:'));
+beforeEach(() => { initDatabase(':memory:'); initWorkflowDb(':memory:'); });
 afterEach(() => { setSidecarManagerRef(originalManager!); closeWorkflowDb(); });
 const catalog = new PieceCatalog([{ name: '@jarvispieces/piece-jarvis-tool', displayName: 'Tool', description: '',
   actions: { invoke: { name: 'invoke', displayName: 'Invoke', description: '' } } }]);
@@ -139,6 +140,8 @@ test('a call naming a reviewed step with params its step does not state raises n
     await expect(forged(params)).rejects.toMatchObject({ outcome: { code: 'WORKFLOW_STEP_INPUT_MISMATCH', effect: 'not_started' } });
   }
   expect(f.approvals.getPending()).toHaveLength(0); expect(f.calls).toHaveLength(0);
+  // Each forged call left an audit row naming the run, not executed.
+  expect(new AuditTrail().query({ agentId: `workflow:${f.run.id}` }).filter(r => r.tool_name === 'desktop_launch_app' && r.executed === 0)).toHaveLength(2);
   expect((await f.call()).status).toBe(202);
 });
 
@@ -193,4 +196,14 @@ test('a desktop element id written into a workflow is refused at composition and
   expect(response.status).toBe(409);
   expect((await response.json()).outcome).toMatchObject({ code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' });
   expect(f.approvals.getPending()).toHaveLength(0); expect(f.calls).toHaveLength(0);
+});
+
+test('a call keeps the text its step writes around a template (#1314 review)', async () => {
+  const graphParams = { target: 'pc', executable: 'C:\\Apps\\{{trigger.body.app}}.exe' };
+  for (const [executable, ok] of [['C:\\Apps\\notepad.exe', true], ['C:\\Windows\\cmd.exe', false], ['C:\\Apps\\x.exe.bat', false]] as const) {
+    const f = fixture(desktopLaunchAppTool, { target: 'pc', executable }, undefined, graphParams);
+    const reply = await Promise.resolve(f.call()).catch(error => error);
+    if (ok) expect((reply as Response).status).toBe(202);
+    else expect(reply).toMatchObject({ outcome: { code: 'WORKFLOW_STEP_INPUT_MISMATCH', effect: 'not_started' } });
+  }
 });

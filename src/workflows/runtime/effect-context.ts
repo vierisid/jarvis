@@ -85,6 +85,25 @@ export function resolveEffectContext(ctx: WorkflowEffectContext, piece: string, 
 /** A step's literal params differ from the call that names the step (#1314). */
 export const STEP_INPUT_MISMATCH = 'WORKFLOW_STEP_INPUT_MISMATCH';
 
+/**
+ * Whether `value` is `stated` with each `{{...}}` replaced by some text: the
+ * first literal a prefix, the last a suffix, the rest found in order. Linear,
+ * with no regex built from either string.
+ */
+function keepsLiteralText(stated: string, value: string): boolean {
+  const parts = stated.split(/\{\{[^]*?\}\}/);
+  const first = parts[0]!, last = parts[parts.length - 1]!;
+  if (!value.startsWith(first) || value.length < first.length + last.length || !value.endsWith(last)) return false;
+  let at = first.length;
+  const end = value.length - last.length;
+  for (const middle of parts.slice(1, -1)) {
+    const found = value.indexOf(middle, at);
+    if (found < 0 || found + middle.length > end) return false;
+    at = found + middle.length;
+  }
+  return true;
+}
+
 const templated = (value: unknown): boolean => typeof value === 'string' ? value.includes('{{')
   : Array.isArray(value) ? value.some(templated)
   : !!value && typeof value === 'object' && Object.values(value).some(templated);
@@ -125,6 +144,15 @@ export function pinnedStepParams(ctx: WorkflowEffectContext, params: Record<stri
       if (fixed.includes(key)) {
         throw new ActionOutcomeError({ status: 'blocked', code: STEP_INPUT_NOT_FIXED, effect: 'not_started',
           message: `This step's ${key} is a template, so run data would choose it. Name it directly in the workflow.` });
+      }
+      // The text the author wrote around a template is still theirs: a call
+      // must keep it (#1314 review), so `https://intranet/?q={{x}}` cannot
+      // arrive as `https://anywhere`.
+      const written = graph[key];
+      if (typeof written === 'string' && !/^\{\{[^]*?\}\}$/.test(written)
+        && (typeof params[key] !== 'string' || !keepsLiteralText(written, params[key] as string))) {
+        throw new ActionOutcomeError({ status: 'blocked', code: STEP_INPUT_MISMATCH, effect: 'not_started',
+          message: `This call's ${JSON.stringify(key.slice(0, 64))} does not keep the text its step states around its template. Nothing was done.` });
       }
       fromRunData.add(key);
     } else if (canonicalJson(graph[key]) !== canonicalJson(params[key])) {
