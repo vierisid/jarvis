@@ -23,6 +23,12 @@ import { getFlowRun, updateRun, type FlowRunStatus } from "../db/repos/flow-run"
 import { getRunCancellation } from "../db/repos/run-cancellation";
 
 const PER_RUN_LOG_BUFFER_MAX = 200;
+/**
+ * Most characters of output kept per sandbox: one engine RPC frame's worth
+ * (`MAX_HTTP_BUFFER_SIZE` in worker-rpc.ts, 16 MiB), however the 200 lines
+ * divide it. Before, each of the 200 lines could itself be a full frame.
+ */
+const PER_SANDBOX_LOG_CHARS_MAX = 16 * 1024 * 1024;
 
 /**
  * Statuses a run never leaves on its own. Once the row reads one of these,
@@ -90,9 +96,30 @@ export class DefaultWorkerHandlers
     this.opts = { ...this.opts, onLogLine: cb };
   }
 
-  private requireRunId(sandboxId: string): string | null {
+  /** Sandboxes whose one late run log was taken since they were parked, by the park time it was taken under. */
+  private readonly parkedLogTaken = new Map<string, number>();
+
+  /**
+   * The run this sandbox serves, or null. A parked engine (between runs in
+   * the warm pool, `SandboxRegistry.park`) serves none: its finished run is
+   * not rewritten by piece code still running in it. `lateRunLog` lets
+   * through the one run log the engine may still be sending for that run
+   * after its RPC returned (the executor releases it at once); one per park.
+   */
+  private requireRunId(sandboxId: string, lateRunLog = false): string | null {
     const record = this.opts.registry.get(sandboxId);
-    return record?.runId ?? null;
+    if (!record) return null;
+    if (record.parkedAt == null) return record.runId;
+    if (!lateRunLog || this.parkedLogTaken.get(sandboxId) === record.parkedAt) return null;
+    this.parkedLogTaken.set(sandboxId, record.parkedAt);
+    return record.runId;
+  }
+
+  /** Drop what is kept for a sandbox whose engine went away. */
+  forget(sandboxId: string): void {
+    this.logBuffer.delete(sandboxId);
+    this.lastProgress.delete(sandboxId);
+    this.parkedLogTaken.delete(sandboxId);
   }
 
   /**
@@ -124,7 +151,9 @@ export class DefaultWorkerHandlers
 
   async updateRunProgress(sandboxId: string, input: UpdateRunProgressRequest): Promise<void> {
     if (this.requireRunId(sandboxId) !== input.flowRun.id) return;
-    this.lastProgress.set(sandboxId, input);
+    // Without the step's output, which can be a whole frame on its own.
+    const { step: _step, ...progress } = input;
+    this.lastProgress.set(sandboxId, progress);
     // Late progress from an engine whose run the daemon already settled.
     if (this.isStaleWrite(input.flowRun.id, input.flowRun.status)) return;
     // Persist in-flight status. In TESTING mode the engine also streams per-
@@ -155,7 +184,7 @@ export class DefaultWorkerHandlers
   }
 
   async uploadRunLog(sandboxId: string, input: UploadRunLogsRequest): Promise<void> {
-    const runId = this.requireRunId(sandboxId);
+    const runId = this.requireRunId(sandboxId, true);
     if (!runId) return;
     if (input.runId !== runId) return; // mismatch: engine talking about a different run
     if (this.isStaleWrite(input.runId, input.status)) return; // don't resurrect a settled run
@@ -198,7 +227,9 @@ export class DefaultWorkerHandlers
     const entry: LogLine = { sandboxId, runId, stream, message, ts: Date.now() };
     const buf = this.logBuffer.get(sandboxId) ?? [];
     buf.push(entry);
-    if (buf.length > PER_RUN_LOG_BUFFER_MAX) buf.shift();
+    let chars = buf.reduce((n, line) => n + line.message.length, 0);
+    while (buf.length > PER_RUN_LOG_BUFFER_MAX || (buf.length > 1 && chars > PER_SANDBOX_LOG_CHARS_MAX)) chars -= buf.shift()!.message.length;
+    if (chars > PER_SANDBOX_LOG_CHARS_MAX) buf[0] = { ...buf[0]!, message: buf[0]!.message.slice(0, PER_SANDBOX_LOG_CHARS_MAX) };
     this.logBuffer.set(sandboxId, buf);
     this.opts.onLogLine?.(entry);
   }
