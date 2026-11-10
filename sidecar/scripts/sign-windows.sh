@@ -216,7 +216,12 @@ verify_signature() {
 		done
 	fi
 	if [ -n "$bundle" ]; then
-		out="$(osslsigncode verify -require-leaf-hash "sha256:${LEAF_SHA256}" -CAfile "$bundle" "$f" 2>&1)" && rc=0 || rc=$?
+		# The same file for the timestamp authority's chain (#1165): without
+		# -TSA-CAfile osslsigncode reads its own default bundle for that, so
+		# a CA_BUNDLE given here covered the signer and not the timestamp.
+		# With no CA_BUNDLE the two are the same file (both look in
+		# /etc/ssl/certs/ca-certificates.crt first).
+		out="$(osslsigncode verify -require-leaf-hash "sha256:${LEAF_SHA256}" -CAfile "$bundle" -TSA-CAfile "$bundle" "$f" 2>&1)" && rc=0 || rc=$?
 	else
 		out="$(osslsigncode verify -require-leaf-hash "sha256:${LEAF_SHA256}" "$f" 2>&1)" && rc=0 || rc=$?
 	fi
@@ -256,6 +261,17 @@ verify_signature() {
 	*"Leaf hash match: failed"*)
 		fail "$f is signed by a certificate other than the leaf of ${CODESIGN_CERT_FILE} (SHA-256 ${LEAF_SHA256}); a matching CN does not make it ours"
 		;;
+	esac
+	# Before the leaf allowlist, only so the reason is the right one: a real
+	# osslsigncode (2.8, #1165) prints no leaf line at all when the digest
+	# does not match, so a tampered file would otherwise be reported as not
+	# confirmed ours. Refused either way.
+	case "$out" in
+	*MISMATCH*)
+		fail "signature on $f does not cover its contents (digest MISMATCH)"
+		;;
+	esac
+	case "$out" in
 	*"Leaf hash match: ok"*) ;;
 	*) fail "osslsigncode did not confirm that $f is signed by the leaf of ${CODESIGN_CERT_FILE} (no 'Leaf hash match: ok' in its output)" ;;
 	esac
@@ -265,9 +281,6 @@ verify_signature() {
 	#   CMS_verify error          signature blob does not verify cryptographically
 	#   verification: failed      ditto, including the timestamp countersignature
 	case "$out" in
-	*MISMATCH*)
-		fail "signature on $f does not cover its contents (digest MISMATCH)"
-		;;
 	*"CMS_verify error"* | *"verification: failed"* | *"verification failure"*)
 		fail "signature on $f does not verify cryptographically — refusing to ship it"
 		;;

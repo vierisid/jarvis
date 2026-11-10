@@ -121,9 +121,11 @@
 #      rule 5 reads.
 #  13. (#1048) Rule 5 reads every workflow rule 3 does: authority or reach.
 #      Every container:, services: and docker:// image in every workflow is
-#      pinned by digest. Not checked: the BuildKit layer cache docker-build
-#      reads with cache-from type=gha, whose index is the latest any run
-#      on main wrote, not an exact key.
+#      pinned by digest. (#1165) Every action rule 5 reads is on its list
+#      of actions known to stay out of the Actions cache or checked for it,
+#      so an unknown one is refused; and no build action uses the gha
+#      BuildKit cache (cache-from or cache-to type=gha), whose index is the
+#      latest any run on main wrote, not an exact key.
 #  14. (#1255) update-webview.yml runs no Go, no repository script and no
 #      host Go toolchain outside a docker run, and a job there that runs
 #      docker runs only file-moving commands on the host. Its toolchain image
@@ -166,6 +168,7 @@ trap 'rm -rf "$WORK"' EXIT
 #   rule = scoped | publish-perms | pinned | authority | reach | untrusted
 #          | mutable | narrow | pushcache | opens-pr | catalog-pr | npmpin
 #          | runs | persist | images | license-scan | pr-license-scan | contained
+#          | signenv
 check() {
 	# Written to a file once and run from there, not handed to bun -e: the
 	# source outgrew the 128 KiB Linux allows a single argument
@@ -784,13 +787,14 @@ if (rule === "runs") {
         ],
         xcrun: [
           "xcrun notarytool log \"$SUBMISSION_ID\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\"",
-          "xcrun notarytool submit \"$zip\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" --wait --timeout 30m --output-format json",
+          "xcrun notarytool submit \"$zip\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" --output-format json",
+          "xcrun notarytool wait \"$SUBMISSION_ID\" --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" --timeout 30m --output-format json",
           "xcrun stapler staple \"$app\"",
         ],
       },
       funcs: [],
       arrays: [],
-      fors: ["leg in darwin-arm64 darwin-x64"],
+      fors: ["entry in $submitted", "leg in darwin-arm64 darwin-x64"],
       calls: [],
       assigns: [
         "absent=\"\"",
@@ -801,16 +805,23 @@ if (rule === "runs") {
         "absent=\"${absent:+${absent}, }ASC_API_KEY_P8\"",
         "IDENTITY=\"$(security find-identity -v -p codesigning \"$kc\" | awk -F\x27\"\x27 \x27/Developer ID Application/ {print $2; exit}\x27)\"",
         "KEYCHAIN_PASSWORD=\"$(openssl rand -hex 24)\"",
-        "NOTARY_STATUS=\"$(echo \"$SUBMIT_JSON\" | jq -r \x27.status // empty\x27)\"",
-        "SUBMISSION_ID=\"$(echo \"$SUBMIT_JSON\" | jq -r \x27.id // empty\x27)\"",
-        "SUBMIT_JSON=\"$(xcrun notarytool submit \"$zip\" \\\n    --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" \\\n    --wait --timeout 30m --output-format json)\"",
+        "NOTARY_STATUS=\"$(echo \"$WAIT_JSON\" | jq -r \x27.status // empty\x27 2>/dev/null)\"",
+        "NOTARY_STATUS=\"\"",
+        "SUBMISSION_ID=\"$(echo \"$SUBMIT_JSON\" | jq -r \x27.id // empty\x27 2>/dev/null)\"",
+        "SUBMISSION_ID=\"\"",
+        "SUBMISSION_ID=\"${entry#*:}\"",
+        "SUBMIT_JSON=\"$(xcrun notarytool submit \"$zip\" \\\n    --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" \\\n    --output-format json)\"",
+        "WAIT_JSON=\"$(xcrun notarytool wait \"$SUBMISSION_ID\" \\\n    --key \"$key\" --key-id \"$ASC_KEY_ID\" --issuer \"$ASC_ISSUER_ID\" \\\n    --timeout 30m --output-format json)\"",
         "app=\"${RUNNER_TEMP}/work/${leg}/Jarvis.app\"",
         "cert=\"${RUNNER_TEMP}/cert.p12\"",
         "dest=\"${RUNNER_TEMP}/work/${leg}\"",
         "in=\"${RUNNER_TEMP}/unsigned\"",
         "kc=\"${RUNNER_TEMP}/sign.keychain-db\"",
+        "leg=\"${entry%%:*}\"",
         "key=\"${RUNNER_TEMP}/asc_key.p8\"",
         "names=\"$(/usr/bin/tar -tzf \"$tgz\")\"",
+        "submitted=\"\"",
+        "submitted=\"${submitted} ${leg}:${SUBMISSION_ID}\"",
         "sum=\"$(shasum -a 256 \"${RUNNER_TEMP}/out/${leg}/jarvis-app.tar.gz\")\"",
         "sum=\"${sum%% *}\"",
         "tgz=\"${RUNNER_TEMP}/unsigned/${leg}/jarvis-app.tar.gz\"",
@@ -1452,6 +1463,42 @@ if (rule === "mutable") {
         const image = (opts.find((o) => o.startsWith("image=")) ?? "").slice("image=".length);
         if (!digest.test(image)) out.push(label + ": BuildKit image is not pinned by digest (" + JSON.stringify(image || "default buildx-stable-1") + ")");
       }
+      // (#1165) Every action read here is one this rule knows, so a new
+      // action that restores from the Actions cache is refused until it is
+      // looked at, rather than passed because no check names it. An
+      // allow-list: each name is either known not to touch the cache, or
+      // checked above. The build actions reach the cache only through
+      // cache-from and cache-to, and type=gha there is the Actions cache by
+      // a mutable index (last writer wins), so it is refused outright.
+      const KNOWN = new Set([
+        // No Actions cache.
+        "actions/checkout", "actions/upload-artifact", "actions/download-artifact", "actions/labeler",
+        "docker/login-action", "docker/metadata-action", "docker/setup-buildx-action", "dorny/paths-filter",
+        "google-github-actions/auth", "peter-evans/create-pull-request", "softprops/action-gh-release",
+        // Their cache use is checked above.
+        "actions/cache", "actions/cache/restore", "actions/setup-go", "actions/setup-node", "oven-sh/setup-bun",
+        "docker/setup-qemu-action",
+        // Checked just below. Not docker/bake-action: it takes its cache
+        // settings from a bake file this rule does not read.
+        "docker/build-push-action",
+      ]);
+      const actionName = uses.replace(/@.*$/, "").replace(/\/+$/, "");
+      if (uses && !uses.startsWith("./") && !uses.startsWith("docker://") && !KNOWN.has(actionName))
+        out.push(label + ": " + actionName + " is not an action this rule knows to stay out of the Actions cache; check it and add it to the list");
+      if (actionName === "docker/build-push-action")
+        for (const k of ["cache-from", "cache-to"]) {
+          const v = resolve(s.with?.[k], ...scopes).replace(/["\x27]/g, "");
+          if (/(?:^|[\s,=])type\s*=\s*gha\b/i.test(v) || /^\s*gha\b/im.test(v))
+            out.push(label + ": " + k + " uses the gha cache (type=gha), whose index is the latest any run on main wrote");
+          else if (v.includes("${{"))
+            out.push(label + ": " + k + " is an expression this rule cannot resolve, so it could name the gha cache");
+        }
+      // (#1165 review) setup-buildx keeps the buildx binary it downloads for
+      // an explicit version in the Actions cache unless cache-binary is off.
+      if (actionName === "docker/setup-buildx-action" && s.with?.version !== undefined && String(s.with?.["cache-binary"]) !== "false")
+        out.push(label + ": setup-buildx-action with a version and without cache-binary: false restores buildx from the Actions cache");
+      if (typeof s.run === "string" && /--cache-(?:from|to)(?:\s+|=)["\x27]?(?:[^\s"\x27]*[,\s])?type\s*=\s*gha\b|--cache-(?:from|to)(?:\s+|=)["\x27]?gha\b/i.test(s.run))
+        out.push(label + ": runs a build with the gha cache (--cache-from or --cache-to type=gha)");
       // #680: an SBOM attestation runs a generator IMAGE inside the build,
       // with the image filesystem mounted, and its default is the tag
       // docker/buildkit-syft-scanner:stable-1. Both spellings: the sbom
@@ -1517,7 +1564,14 @@ if (rule === "narrow") {
       else {
         const on = called.on ?? called[true] ?? {};
         const declared = Object.keys(on.workflow_call?.secrets ?? {}).sort();
-        const used = [...refs(called.jobs ?? {})].sort();
+        // The five Apple signing secrets, read in a job of the signing
+        // environment, are secrets of that environment: GitHub hands them
+        // to the job directly, with nothing passed (#1165). That and only
+        // that is exempt; every other secret a called job reads must be
+        // declared and passed, whatever environment the job names.
+        const SIGNING = ["APPLE_CERT_P12", "APPLE_CERT_PASSWORD", "ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_API_KEY_P8"];
+        const inSigning = (j) => (j?.environment?.name ?? j?.environment) === "signing";
+        const used = [...new Set(Object.values(called.jobs ?? {}).flatMap((j) => [...refs(j)].filter((k) => !(inSigning(j) && SIGNING.includes(k.toUpperCase())))))].sort();
         if ([...JSON.stringify(called.jobs ?? {}).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((m) => /\bsecrets\b(?!\s*\.)/i.test(m[1])))
           out.push(name + ": " + job.uses + " reads the whole secrets context, so no list of secrets passed to it can be checked");
         // No `secrets:` at all passes nothing, which is the case that makes
@@ -2452,6 +2506,53 @@ if (rule === "pr-license-scan") {
   for (const p of PATHS)
     if (!listed.includes(p)) out.push("changes: the pieces-licenses filter does not list " + p + ", so a PR changing it does not run the license scan");
 }
+if (rule === "signenv") {
+  // (#1165) Both signers, the Windows one (it federates into the KMS key
+  // through google-github-actions/auth) and the macOS one (it reads the Apple
+  // signing secrets), run in the `signing` environment, named statically, and
+  // nothing else does. Its deployment rule (main and the v* and installer-v*
+  // tags, set in the repository settings) is the gate, and its secrets are
+  // the Apple ones, so any other job naming it could read them. Static: an
+  // expression could send a dry run, or any run, elsewhere. The Apple secrets
+  // are environment secrets, so no workflow declares them under workflow_call
+  // and no caller passes them: a passed value would be a repository secret.
+  const SIGNING = ["APPLE_CERT_P12", "APPLE_CERT_PASSWORD", "ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_API_KEY_P8"];
+  const named = (x) => [...JSON.stringify(x ?? null).matchAll(/\bsecrets\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_]*)|\[\s*\\?["\x27]([A-Za-z_][A-Za-z0-9_]*)\\?["\x27]\s*\])/gi)]
+    .map((m) => (m[1] ?? m[2]).toUpperCase()).filter((k) => SIGNING.includes(k));
+  const on = doc.on ?? doc[true] ?? {};
+  for (const k of Object.keys((on && typeof on === "object" && on.workflow_call?.secrets) || {}))
+    if (SIGNING.includes(k.toUpperCase())) out.push("workflow_call declares " + k + ", which is a secret of the signing environment, not one a caller passes");
+  for (const [name, job] of Object.entries(jobs)) {
+    const env = job.environment;
+    const envName = typeof env === "string" ? env : env && typeof env === "object" ? env.name : undefined;
+    const isSigning = envName === "signing" && (typeof env === "string" || Object.keys(env).join() === "name");
+    const steps = flatSteps(job.steps).map((x) => x.st);
+    const federates = steps.some((st) => String(st.uses ?? "").toLowerCase().startsWith("google-github-actions/auth@"));
+    const reads = [...new Set(named({ ...job, secrets: undefined }))];
+    const passes = [...new Set([...Object.keys(job.secrets && typeof job.secrets === "object" ? job.secrets : {}).filter((k) => SIGNING.includes(k.toUpperCase())), ...named(job.secrets)])];
+    if (passes.length) out.push(name + ": passes " + passes.join(", ") + " to " + job.uses + "; the signing secrets are secrets of the signing environment, and no caller passes them");
+    const why = federates ? "federates into the KMS signing key" : reads.length ? "reads " + reads.join(", ") : "";
+    if (why && !isSigning)
+      out.push(name + ": " + why + " outside the signing environment (environment must be exactly signing, got " + JSON.stringify(env ?? null) + ")");
+    if (!why && envName !== undefined && /signing/i.test(JSON.stringify(env)))
+      out.push(name + ": names the signing environment but neither signs on Windows nor reads an Apple signing secret, so it would be handed those secrets");
+    // (#1165 review) One key per job: the Windows signer runs a script from
+    // the checkout with the KMS token, and must not hold the Apple key too.
+    if (federates && reads.length)
+      out.push(name + ": federates into the KMS signing key and reads " + reads.join(", ") + "; each signer holds one key");
+    // A job holding id-token can mint the token itself, without the auth
+    // action, so outside the signing environment none may name the GCP
+    // signing variables or the token request endpoint.
+    const perm = job.permissions ?? doc.permissions;
+    const mints = perm === "write-all" || (perm && typeof perm === "object" && perm["id-token"] === "write");
+    const body = JSON.stringify({ ...job, secrets: undefined });
+    if (mints && !isSigning && /\bvars\s*\.\s*GCP_|vars\s*\[\s*\\?["\x27]GCP_|ACTIONS_ID_TOKEN_REQUEST/i.test(body))
+      out.push(name + ": holds id-token outside the signing environment and names the GCP signing configuration or the token request endpoint");
+    // A secret read by a computed name cannot be checked against any list.
+    if (/\bsecrets\s*\[\s*(?!\\?["\x27][A-Za-z_][A-Za-z0-9_]*\\?["\x27]\s*\])/i.test(body))
+      out.push(name + ": reads a secret by a computed name (secrets[...] that is not a string literal)");
+  }
+}
 if (rule === "contained") {
   // (#1255) A job that runs upstream code runs it inside sealed docker runs,
   // never on the host runner: the host has passwordless sudo, and with root
@@ -3004,6 +3105,37 @@ done
 	expect_caught 'a workflow with no pin of its own gaining a job-level one (#960)' npmpin "$WORKFLOWS/test.yml" \
 		$'jobs:\n' $'jobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      NPM_VERSION: "npm:evil-pkg@12.1.0"\n    steps:\n      - run: npm install -g "npm@${NPM_VERSION}"\n' \
 		'sneak: sets NPM_VERSION over the workflow pin'
+	# #1165: an allow-list of actions, and no gha BuildKit cache.
+	expect_caught 'the gha BuildKit cache back on the docker-build image build (#1165)' mutable "$WORKFLOWS/docker-build.yml" \
+		$'          build-args: VERSION=0.0.0-ci\n' $'          build-args: VERSION=0.0.0-ci\n          cache-from: type=gha\n' \
+		'cache-from uses the gha cache (type=gha)'
+	expect_caught 'only the gha cache write back on the docker-build image build (#1165)' mutable "$WORKFLOWS/docker-build.yml" \
+		$'          build-args: VERSION=0.0.0-ci\n' $'          build-args: VERSION=0.0.0-ci\n          cache-to: type=gha,mode=max,scope=x\n' \
+		'cache-to uses the gha cache (type=gha)'
+	expect_caught 'the gha cache spelled with a space and capitals (#1165)' mutable "$WORKFLOWS/docker-build.yml" \
+		$'          build-args: VERSION=0.0.0-ci\n' $'          build-args: VERSION=0.0.0-ci\n          cache-from: |\n            type=registry,ref=x\n            Type = GHA,scope=y\n' \
+		'cache-from uses the gha cache (type=gha)'
+	expect_caught 'the gha cache in a quoted CSV field (#1165 review)' mutable "$WORKFLOWS/docker-build.yml" \
+		$'          build-args: VERSION=0.0.0-ci\n' $'          build-args: VERSION=0.0.0-ci\n          cache-from: \'"type=gha",scope=x\'\n' \
+		'cache-from uses the gha cache (type=gha)'
+	expect_caught 'a cache source the rule cannot resolve (#1165 review)' mutable "$WORKFLOWS/docker-build.yml" \
+		$'          build-args: VERSION=0.0.0-ci\n' $'          build-args: VERSION=0.0.0-ci\n          cache-from: ${{ vars.BUILD_CACHE }}\n' \
+		'cache-from is an expression this rule cannot resolve'
+	expect_caught 'setup-buildx downloading a buildx version into the Actions cache (#1165 review)' mutable "$WORKFLOWS/docker-build.yml" \
+		$'        with:\n          driver-opts: image=moby/buildkit' $'        with:\n          version: v0.20.0\n          driver-opts: image=moby/buildkit' \
+		'setup-buildx-action with a version and without cache-binary: false'
+	expect_caught 'a buildx command line with the gha cache, in a job that ships nothing (#1165 review)' mutable "$WORKFLOWS/docker-build.yml" \
+		'      - name: Check the release cache guard has not been disarmed' $'      - run: docker buildx build --cache-from type=gha,scope=x .\n      - name: Check the release cache guard has not been disarmed' \
+		'runs a build with the gha cache'
+	expect_caught 'bake-action, whose cache settings live in a bake file (#1165 review)' mutable "$WORKFLOWS/docker-build.yml" \
+		'        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0' '        uses: docker/bake-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6' \
+		'docker/bake-action is not an action this rule knows'
+	expect_caught 'an action this rule does not know, which may restore from the cache (#1165)' mutable "$WORKFLOWS/docker-build.yml" \
+		$'      - name: Set up Docker Buildx\n' $'      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0\n        with:\n          cache: pip\n      - name: Set up Docker Buildx\n' \
+		'actions/setup-python is not an action this rule knows'
+	expect_caught 'a known action name under another owner (#1165)' mutable "$WORKFLOWS/docker-build.yml" \
+		'        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0' '        uses: d0cker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0' \
+		'd0cker/build-push-action is not an action this rule knows'
 	expect_caught 'a global install of npm through an npm: alias (#960)' mutable "$WORKFLOWS/release-exec.yml" \
 		'          npm install -g --offline --ignore-scripts "$npm_tgz"' '          npm install -g "npm@npm:evil-pkg@12.1.0"' \
 		'global install of npm@npm:evil-pkg@12.1.0 is not an exact version'
@@ -3297,6 +3429,91 @@ for f in "$WORKFLOWS"/*.yml; do
 done
 
 echo
+echo "both signers run in the signing environment, and nothing else does (#1165)"
+for f in "$WORKFLOWS"/*.yml; do
+	expect_clean "$(basename "$f"): signers in the signing environment, signing secrets neither declared nor passed" signenv "$f"
+done
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'the macOS sidecar signer out of the signing environment (#1165)' signenv "$WORKFLOWS/sidecar-release.yml" \
+		$'    environment: signing\n    permissions:\n' $'    permissions:\n' \
+		'sign-sidecar-darwin: reads APPLE_CERT_P12'
+	expect_caught 'the Windows sidecar signer out of the signing environment (#1165)' signenv "$WORKFLOWS/sidecar-release.yml" \
+		$'    environment: signing\n    # OIDC, for google-github-actions/auth: Windows' $'    # OIDC, for google-github-actions/auth: Windows' \
+		'sign-sidecar-windows: federates into the KMS signing key outside the signing environment'
+	expect_caught 'the Windows installer signer out of the signing environment (#1165)' signenv "$WORKFLOWS/installer-release.yml" \
+		$'    environment: signing\n    # OIDC, for google-github-actions/auth: signing' $'    # OIDC, for google-github-actions/auth: signing' \
+		'sign-windows: federates into the KMS signing key outside the signing environment'
+	expect_caught 'the macOS installer signer out of the signing environment (#1165)' signenv "$WORKFLOWS/installer-release.yml" \
+		$'    environment: signing\n    permissions:\n' $'    permissions:\n' \
+		'sign-macos: reads APPLE_CERT_P12'
+	expect_caught 'the signing environment keyed on dry_run, so a dry run lands elsewhere (#1165)' signenv "$WORKFLOWS/sidecar-release.yml" \
+		$'    environment: signing\n    permissions:\n' $'    environment: ${{ inputs.dry_run == true && \'release-dry-run\' || \'signing\' }}\n    permissions:\n' \
+		'outside the signing environment'
+	expect_caught 'the signing environment given with a url beside its name (#1165)' signenv "$WORKFLOWS/installer-release.yml" \
+		$'    environment: signing\n    permissions:\n' $'    environment:\n      name: signing\n      url: https://example.com\n    permissions:\n' \
+		'outside the signing environment'
+	expect_caught 'a verify job in the signing environment, handed the Apple secrets (#1165)' signenv "$WORKFLOWS/sidecar-release.yml" \
+		$'  verify-sidecar-darwin:\n    needs: [resolve, sign-sidecar-darwin]\n' $'  verify-sidecar-darwin:\n    environment: signing\n    needs: [resolve, sign-sidecar-darwin]\n' \
+		'verify-sidecar-darwin: names the signing environment but neither signs'
+	expect_caught 'an Apple secret by index syntax in a job outside the environment (#1165)' signenv "$WORKFLOWS/sidecar-release.yml" \
+		$'  verify-sidecar-darwin:\n    needs: [resolve, sign-sidecar-darwin]\n' $'  verify-sidecar-darwin:\n    env:\n      K: ${{ secrets[\'ASC_API_KEY_P8\'] }}\n    needs: [resolve, sign-sidecar-darwin]\n' \
+		'verify-sidecar-darwin: reads ASC_API_KEY_P8 outside the signing environment'
+	expect_caught 'the Apple secrets declared under workflow_call again (#1165)' signenv "$WORKFLOWS/sidecar-release.yml" \
+		$'  workflow_dispatch:\n' $'    secrets:\n      APPLE_CERT_P12:\n        required: false\n  workflow_dispatch:\n' \
+		'workflow_call declares APPLE_CERT_P12'
+	expect_caught 'the Windows signer handed an Apple secret as well (#1165 review)' signenv "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Authenticate to Google Cloud\n' $'      - name: x\n        env:\n          K: ${{ secrets.APPLE_CERT_P12 }}\n        run: true\n      - name: Authenticate to Google Cloud\n' \
+		'sign-sidecar-windows: federates into the KMS signing key and reads APPLE_CERT_P12; each signer holds one key'
+	expect_caught 'the npm publisher naming the GCP signing provider, to mint and exchange a token itself (#1165 review)' signenv "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Resolve the version this call publishes\n' $'      - name: x\n        env:\n          P: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}\n        run: true\n      - name: Resolve the version this call publishes\n' \
+		'publish-sidecar: holds id-token outside the signing environment and names the GCP signing configuration'
+	expect_caught 'a secret read by a computed name (#1165 review)' signenv "$WORKFLOWS/sidecar-release.yml" \
+		$'  verify-sidecar-darwin:\n    needs: [resolve, sign-sidecar-darwin]\n' $'  verify-sidecar-darwin:\n    env:\n      K: ${{ secrets[format(\'APPLE_{0}\', \'CERT_P12\')] }}\n    needs: [resolve, sign-sidecar-darwin]\n' \
+		'verify-sidecar-darwin: reads a secret by a computed name'
+	expect_caught 'the release executor passing an Apple secret to the sidecar build again (#1165)' signenv "$WORKFLOWS/release-exec.yml" \
+		$'    uses: ./.github/workflows/sidecar-release.yml\n' $'    uses: ./.github/workflows/sidecar-release.yml\n    secrets:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n' \
+		'sidecar-build: passes APPLE_CERT_P12'
+}
+# narrow reads a called workflow from the repository, so this mutant is a
+# copy of the repository workflows with one job of the callee reading a
+# secret outside any environment: it must still be declared and passed. The
+# environment exemption is only for jobs that name an environment (#1165).
+mrepo="${WORK}/narrow-repo"
+mkdir -p "${mrepo}/.github/workflows"
+if FROM="$WORKFLOWS/sidecar-release.yml" TO="${mrepo}/.github/workflows/sidecar-release.yml" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const old = "  verify-sidecar-darwin:\n    needs: [resolve, sign-sidecar-darwin]\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(old, () => "  verify-sidecar-darwin:\n    env:\n      K: ${{ secrets.ASC_KEY_ID }}\n    needs: [resolve, sign-sidecar-darwin]\n"));
+'; then
+	found="$(REPO_DIR="$mrepo" check narrow "$WORKFLOWS/release-exec.yml")"
+	if grep -qF 'reads secrets ["ASC_KEY_ID"] but declares []' <<<"$found"; then
+		ok "reports: a callee job outside any environment reading a secret it does not declare (#1165)"
+	else
+		no "reports: a callee job outside any environment reading a secret it does not declare (#1165)" "got: ${found}"
+	fi
+else
+	no "mutant 'a callee job reading a secret outside any environment' could be applied"
+fi
+if FROM="$WORKFLOWS/sidecar-release.yml" TO="${mrepo}/.github/workflows/sidecar-release.yml" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const old = "  verify-sidecar-darwin:\n    needs: [resolve, sign-sidecar-darwin]\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(old, () => "  verify-sidecar-darwin:\n    environment: other\n    env:\n      K: ${{ secrets.NPM_TOKEN }}\n    needs: [resolve, sign-sidecar-darwin]\n"));
+'; then
+	found="$(REPO_DIR="$mrepo" check narrow "$WORKFLOWS/release-exec.yml")"
+	if grep -qF 'reads secrets ["NPM_TOKEN"] but declares []' <<<"$found"; then
+		ok "reports: a callee job in some other environment reading a secret it does not declare (#1165 review)"
+	else
+		no "reports: a callee job in some other environment reading a secret it does not declare (#1165 review)" "got: ${found}"
+	fi
+else
+	no "mutant 'a callee job in another environment reading a secret' could be applied"
+fi
+rm -rf "$mrepo"
+
+echo
 echo "no job that ships an image restores it from a cache (#782, #868)"
 for f in "$WORKFLOWS"/*.yml; do
 	expect_clean "$(basename "$f"): every image a shipping job builds is built cold" pushcache "$f"
@@ -3336,22 +3553,32 @@ done
 	# A job that pushes only through skopeo, with no login, no push flag and
 	# no imagetools: the validate-only docker-build.yml job with a skopeo
 	# copy added, so only the skopeo detection can report its cache (#868).
-	expect_caught 'a cached build in a job that pushes only through skopeo (#868)' pushcache "$WORKFLOWS/docker-build.yml" \
+	# docker-build builds cold since #1165, so these start from a copy with
+	# its old gha cache put back: the hole each one makes needs a cache.
+	mkdir -p "${WORK}/cached"
+	CACHED_DB="${WORK}/cached/docker-build.yml"
+	FROM="$WORKFLOWS/docker-build.yml" TO="$CACHED_DB" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const a = "          build-args: VERSION=0.0.0-ci\n";
+if (s.split(a).length !== 2) process.exit(2);
+await Bun.write(process.env.TO, s.replace(a, () => a + "          cache-from: type=gha\n          cache-to: type=gha,mode=max\n"));
+' || no "a docker-build copy with its gha cache could be made for the #868 mutants"
+	expect_caught 'a cached build in a job that pushes only through skopeo (#868)' pushcache "$CACHED_DB" \
 		'      - name: Check the release cache guard has not been disarmed' $'      - run: skopeo copy docker-daemon:jarvis:ci docker://ghcr.io/o/r:ci\n      - name: Check the release cache guard has not been disarmed' \
 		'restores cache-from "type=gha" in a job that pushes'
 	# The same, with a global flag before the subcommand (#868 review).
-	expect_caught 'a cached build in a job that pushes through skopeo --debug copy (#868 review)' pushcache "$WORKFLOWS/docker-build.yml" \
+	expect_caught 'a cached build in a job that pushes through skopeo --debug copy (#868 review)' pushcache "$CACHED_DB" \
 		'      - name: Check the release cache guard has not been disarmed' $'      - run: skopeo --debug copy docker-daemon:jarvis:ci docker://ghcr.io/o/r:ci\n      - name: Check the release cache guard has not been disarmed' \
 		'restores cache-from "type=gha" in a job that pushes'
 	# Away from release-exec.yml, so the image mode there cannot be what
 	# catches them: the cached validate build gaining an upload of a parent
 	# directory, or of the same path spelled another way (#868 review).
-	expect_caught 'a cached build uploading the directory holding its output (#868 review)' pushcache "$WORKFLOWS/docker-build.yml" \
+	expect_caught 'a cached build uploading the directory holding its output (#868 review)' pushcache "$CACHED_DB" \
 		'      - name: Check the release cache guard has not been disarmed' $'      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2\n        with:\n          name: image\n          path: ${{ runner.temp }}\n      - name: Check the release cache guard has not been disarmed' \
 		'restores cache-from "type=gha" in a job that builds an image and uploads an artifact'
 	# The whole build step is replaced, so its text is read from the
 	# workflow (it carries the action SHA, which an anchor never spells).
-	build_step="$(FILE="$WORKFLOWS/docker-build.yml" bun -e '
+	build_step="$(FILE="$CACHED_DB" bun -e '
 const s = await Bun.file(process.env.FILE).text();
 const a = s.indexOf("      - name: Build Docker image (validate)\n        uses: docker/build-push-action@");
 const end = "          cache-to: type=gha,mode=max\n";
@@ -3359,7 +3586,7 @@ const b = s.indexOf(end, a);
 if (a < 0 || b < 0) process.exit(2);
 process.stdout.write(s.slice(a, b + end.length));
 ')" || build_step="(the build step was not found)"
-	expect_caught 'a classic docker build with a cache, saved and uploaded (#868 review)' pushcache "$WORKFLOWS/docker-build.yml" \
+	expect_caught 'a classic docker build with a cache, saved and uploaded (#868 review)' pushcache "$CACHED_DB" \
 		"$build_step"$'\n' \
 		$'      - run: docker build --cache-from jarvis:ci -t jarvis:ci . && docker save jarvis:ci -o i.tar\n      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2\n        with:\n          name: image\n          path: i.tar\n' \
 		'runs a build with --cache-from in a job that builds an image and uploads an artifact'
@@ -4054,9 +4281,14 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
 	expect_caught 'secrets: inherit back on the sidecar call' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    secrets:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n' $'    secrets: inherit\n    x-was:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n'
-	expect_caught 'a declared signing secret the caller does not pass (signing would silently skip)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}\n' ''
+		$'    uses: ./.github/workflows/sidecar-release.yml\n' $'    uses: ./.github/workflows/sidecar-release.yml\n    secrets: inherit\n' \
+		'secrets: inherit'
+	# (#1165) The Apple secrets are secrets of the signing environment, so
+	# the call passes none; passing one again is a mismatch with what the
+	# callee declares (nothing).
+	expect_caught 'a signing secret passed to the sidecar call again (#1165)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'    uses: ./.github/workflows/sidecar-release.yml\n' $'    uses: ./.github/workflows/sidecar-release.yml\n    secrets:\n      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}\n' \
+		'passes ["ASC_API_KEY_P8"] to ./.github/workflows/sidecar-release.yml, which declares []'
 	expect_caught 'id-token back on a sidecar build leg' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    # One leg.' $'      contents: read\n      id-token: write\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    # One leg.' \
 		'a matrix job holding id-token'
@@ -4065,8 +4297,6 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'publishes with id-token and runs'
 	expect_caught 'a token left in .git/config by the release job' narrow "$WORKFLOWS/release-exec.yml" \
 		$'          fetch-depth: 0\n          persist-credentials: false\n' $'          fetch-depth: 0\n'
-	expect_caught 'no secrets passed to the sidecar call at all (signing would silently skip)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    secrets:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}\n      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}\n      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}\n      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}\n' ''
 	expect_caught 'a checkout back in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
 		'      - name: Verify the tarball' $'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - name: Verify the tarball' \
 		'uses actions/checkout@'
@@ -5260,8 +5490,8 @@ const scripts = [
     "while read -r name; do",
     "case \"$name\" in",
     "\"\" | libs/*_test.go) [ -z \"$name\" ] || { echo \"::error::the vendored tree holds ${name}, a test file (#1049)\"; exit 1; } ;;",
-    "libs/*.h | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;",
-    "*) echo \"::error::the vendored tree holds ${name}, which is not a header, Go file, text or license under libs/ (#1049)\"; exit 1 ;;",
+    "libs/*.h | libs/*.hh | libs/*.cc | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;",
+    "*) echo \"::error::the vendored tree holds ${name}, which is not a header, C++ source, Go file, text or license under libs/ (#1049)\"; exit 1 ;;",
     "esac",
     "done <<<\"$libs\"",
     "for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do",
@@ -5530,6 +5760,12 @@ else
 	copy_case 'an upstream README at the top of the vendored tree is refused (#1049)' refused 'printf x >webview_go/README.md'
 	copy_case 'a directory other than libs at the top of the vendored tree is refused (#1049)' refused 'mkdir webview_go/examples && printf x >webview_go/examples/main.go'
 	copy_case 'a new C source is accepted (#1049)' ok 'printf "int x;\n" >webview_go/extra.c'
+	# #1165: webview 0.12 and later ship .hh headers and .cc sources under
+	# their library directory, as a webview_go that vendors them would.
+	copy_case 'a .hh header and a .cc source under libs, as webview 0.12 ships them, are accepted (#1165)' ok \
+		'mkdir -p webview_go/libs/webview/core/include/webview/detail webview_go/libs/webview/core/src && printf x >webview_go/libs/webview/core/include/webview/detail/engine_base.hh && printf x >webview_go/libs/webview/core/src/webview.cc'
+	copy_case 'a .cpp source under libs is still refused (#1165)' refused 'printf x >webview_go/libs/webview/evil.cpp' 'holds libs/webview/evil.cpp'
+	copy_case 'a CMake script under libs is still refused (#1165)' refused 'printf x >webview_go/libs/webview/build.cmake' 'holds libs/webview/build.cmake'
 	copy_case 'a license under another name is for a person to take (#1049 review)' refused 'printf x >webview_go/LICENSE-THIRD-PARTY' 'holds LICENSE-THIRD-PARTY'
 	# Security review of #1049: built files under a license name, files
 	# the script keeps, hidden diffs, go.sum, directories, a carriage return,
@@ -5610,7 +5846,7 @@ else
 			'| "f LICENSE") ;;' '| "f LICENSE"*) ;;' \
 			'a LICENSE.syso, which Go links by its extension, is refused (#1049 review)' refused 'printf x >webview_go/LICENSE.syso'
 		copy_mutant 'libs taking any file (#1049 review)' \
-			'libs/*.h | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;' 'libs/*) ;;' \
+			'libs/*.h | libs/*.hh | libs/*.cc | libs/*.go | libs/*.txt | libs/*/LICENSE) ;;' 'libs/*) ;;' \
 			'a .syso under libs is refused (#1049 review)' refused 'printf x >webview_go/libs/webview/evil_windows_amd64.syso'
 		copy_mutant 'the kept files taken as the artifact has them (#1049 review)' \
 			'for f in .gitattributes jarvis.patch JARVIS_PATCH.md; do' 'for f in; do' \

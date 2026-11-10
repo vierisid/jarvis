@@ -294,7 +294,9 @@ describe("#971: Actual Budget is excluded everywhere, not only from the hosted t
   test("the sync writes only the generated files and its reports, never the overrides", () => {
     const sync = readFileSync(new URL("../../../scripts/sync-pieces-catalog.ts", import.meta.url), "utf8");
     const writes = [...sync.matchAll(/writeFileSync\(\s*([A-Za-z_]+)/g)].map((m) => m[1]).sort();
-    expect(writes).toEqual(["MANIFEST_FILE", "MANIFEST_FILE", "OUT_FILE", "heldPath", "reportPath"]);
+    // fullReportPath is the uncut PR report, beside reportPath (#1165).
+    expect(writes).toEqual(["MANIFEST_FILE", "MANIFEST_FILE", "OUT_FILE", "fullReportPath", "heldPath", "reportPath"]);
+    expect(sync).toContain("const fullReportPath = join(dirname(reportPath), REPORT_FULL_FILE);");
     expect(sync).toContain('const OUT_FILE = resolve(import.meta.dir, "../src/workflows/pieces-library/catalog-generated.ts");');
     expect(sync).toContain('const MANIFEST_FILE = resolve(import.meta.dir, "../src/workflows/pieces-library/verified-manifests-generated.ts");');
     expect(sync).not.toMatch(/resolve\([^)]*catalog-overrides/);
