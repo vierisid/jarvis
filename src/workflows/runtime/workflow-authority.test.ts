@@ -93,7 +93,8 @@ function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' | 'context' | '
     if (route === 'tool') {
       return backends.toolsInvoke!({ toolName: 'write_file', params: { path: '/tmp/synthetic', content: 'hello' } }, context);
     }
-    return backends.notify!({ message: 'Synthetic notification', channels: ['dashboard'], priority: 'normal' }, context);
+    // Telegram can reach other people, so it stays governed; dashboard-only notices are covered below.
+    return backends.notify!({ message: 'Synthetic notification', channels: ['telegram'], priority: 'normal' }, context);
   };
   /** Name another tool on the step: a call must ask for the tool its step names (#1152). */
   const useTool = (toolName: string) => {
@@ -1128,7 +1129,7 @@ describe('workflow effect boundary', () => {
     const f = fixture(route);
     const action = f.version.trigger.nextAction!;
     action.settings!.input = route === 'tool' ? { toolName: 'write_file', params: { path: '/tmp/synthetic', content: 'hello' } }
-      : { message: 'hello', channels: ['dashboard'], priority: 'normal' };
+      : { message: 'hello', channels: ['telegram'], priority: 'normal' };
     updateDraftVersion(f.version.id, { trigger: { name: 'trigger', type: 'EMPTY', nextAction: {
       name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.items}}' }, firstLoopAction: action,
     } } });
@@ -1171,7 +1172,7 @@ describe('workflow effect boundary', () => {
 test('a completed notification identity skips a fresh approval, but new keys and other flows still require it', async () => {
   const f = fixture('notify');
   f.authority.setGovernedCategories(['send_message']);
-  const request = { message: 'Reviewed notification', channels: ['dashboard'] as const, priority: 'normal' as const, idempotencyKey: 'daily:one' };
+  const request = { message: 'Reviewed notification', channels: ['telegram'] as const, priority: 'normal' as const, idempotencyKey: 'daily:one' };
   const send = (context = f.context, key = request.idempotencyKey, services = f.backends) => services.notify!({ ...request, channels: [...request.channels], idempotencyKey: key }, context);
   const first = await send(); expect(first.approval).toBeDefined();
   f.approvals.approve(first.approval!.approvalId, 'user'); await send(); expect(f.calls).toHaveLength(1);
@@ -1196,7 +1197,7 @@ test('notification completion survives SQLite reopen and dedupes concurrently in
   const path = join(directory, 'test.db');
   try {
     initWorkflowDb(path); const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
-    const request = { message: 'Restart fixture', channels: ['dashboard'] as any, priority: 'normal' as const, idempotencyKey: 'once' };
+    const request = { message: 'Restart fixture', channels: ['telegram'] as any, priority: 'normal' as const, idempotencyKey: 'once' };
     const pending = await f.backends.notify!(request, f.context); f.approvals.approve(pending.approval!.approvalId, 'user');
     await f.backends.notify!(request, f.context);
     closeWorkflowDb(); initWorkflowDb(path);
@@ -1213,7 +1214,7 @@ test('notification completion survives SQLite reopen and dedupes concurrently in
 for (const fence of ['canceled', 'killed', 'paused', 'denied', 'wrong-project'] as const)
   test(`completed notification receipt still respects ${fence}`, async () => {
     const f = fixture('notify');
-    const request = { message: 'Fence fixture', channels: ['dashboard'] as any, priority: 'normal' as const, idempotencyKey: 'once' };
+    const request = { message: 'Fence fixture', channels: ['telegram'] as any, priority: 'normal' as const, idempotencyKey: 'once' };
     await f.backends.notify!(request, f.context);
     const run = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
     const context = { ...f.context, runId: run.id };
@@ -1234,17 +1235,80 @@ test('an uncertain identity is not a completed receipt and cannot skip approval 
   await expect(f.backends.notify!(request, f.context)).rejects.toThrow();
   f.authority.setGovernedCategories(['send_message']);
   const next = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
-  expect((await f.backends.notify!(request, { ...f.context, runId: next.id })).approval).toBeDefined();
+  // The key is not consumed, so a governed channel under it still asks first.
+  expect((await f.backends.notify!({ ...request, channels: ['telegram'] as any }, { ...f.context, runId: next.id })).approval).toBeDefined();
   expect(f.calls).toHaveLength(1);
+});
+
+// Founder decision: a notification that only reaches the owner on their own
+// devices is not a message to anyone else, so it asks for no approval.
+describe('owner-only notifications', () => {
+  const ownerRequest = (channels: string[], idempotencyKey?: string) =>
+    ({ message: 'Stand-up at 9', channels, priority: 'normal' as const, ...(idempotencyKey ? { idempotencyKey } : {}) });
+
+  for (const channels of [['dashboard'], ['desktop'], ['voice'], ['dashboard', 'desktop', 'voice']]) {
+    test(`${channels.join('+')} delivers with send_message governed, no approval, and keeps its effect row`, async () => {
+      const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
+      f.options.sendDesktop = async () => { f.calls.push('desktop'); return true; };
+      f.options.wsService.broadcastProactiveVoice = async () => { f.calls.push('voice'); return 1; };
+      const services = buildSandboxServiceBackends(f.options);
+      const reply = await services.notify!(ownerRequest(channels), f.context);
+      expect(reply.approval).toBeUndefined();
+      expect(reply.delivered).toEqual(expect.arrayContaining(channels));
+      expect(f.approvals.getPending()).toHaveLength(0);
+      expect(f.deliveredApprovals).toHaveLength(0);
+      expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ toolName: 'workflow_notify', status: 'succeeded', approvalId: null });
+    });
+  }
+
+  for (const channels of [['telegram'], ['discord'], ['dashboard', 'telegram'], ['auto']]) {
+    test(`${channels.join('+')} still asks for approval`, async () => {
+      const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
+      const reply = await f.backends.notify!(ownerRequest(channels), f.context);
+      expect(reply.approval?.approvalId).toBeTruthy();
+      expect(f.calls).toHaveLength(0);
+    });
+  }
+
+  test('Pause holds an owner-only notification and Kill refuses it', async () => {
+    const f = fixture('notify');
+    f.emergency.pause();
+    expect((await f.backends.notify!(ownerRequest(['dashboard']), f.context)).approval?.hold).toMatch(/paused/i);
+    expect(f.calls).toHaveLength(0);
+    f.emergency.resume(); f.emergency.kill();
+    await expect(f.backends.notify!(ownerRequest(['dashboard']), f.context)).rejects.toThrow(/killed/i);
+    expect(f.calls).toHaveLength(0);
+  });
+
+  test('a canceled run does not deliver an owner-only notification', async () => {
+    const f = fixture('notify');
+    cancelFlowRun(f.run.id);
+    await expect(f.backends.notify!(ownerRequest(['dashboard']), f.context)).rejects.toThrow();
+    expect(f.calls).toHaveLength(0);
+  });
+
+  test('a repeated idempotency key delivers once and raises no approval, whatever the run', async () => {
+    const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
+    const request = ownerRequest(['dashboard'], 'weekday-9');
+    expect((await f.backends.notify!(request, f.context)).approval).toBeUndefined();
+    for (let i = 0; i < 3; i++) {
+      const run = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
+      const reply = await f.backends.notify!(request, { ...f.context, runId: run.id });
+      expect(reply).toMatchObject({ delivered: [], deduplicated: true });
+      expect(reply.approval).toBeUndefined();
+    }
+    expect(f.calls).toHaveLength(1);
+    expect(f.approvals.getPending()).toHaveLength(0);
+  });
 });
 
 test('a reused notification receipt sends nothing, even when the message or channels changed under the same key', async () => {
   const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
-  const request = { message: 'Reviewed text', channels: ['dashboard'] as any, priority: 'normal' as const, idempotencyKey: 'same' };
+  const request = { message: 'Reviewed text', channels: ['telegram'] as any, priority: 'normal' as const, idempotencyKey: 'same' };
   const first = await f.backends.notify!(request, f.context); f.approvals.approve(first.approval!.approvalId, 'user');
   await f.backends.notify!(request, f.context); expect(f.calls).toHaveLength(1);
   const run = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
-  const changed = await f.backends.notify!({ ...request, message: 'Different text', channels: ['dashboard', 'telegram'] as any }, { ...f.context, runId: run.id });
+  const changed = await f.backends.notify!({ ...request, message: 'Different text', channels: ['telegram', 'discord'] as any }, { ...f.context, runId: run.id });
   expect(changed).toMatchObject({ delivered: [], failed: [], unknown: [], deduplicated: true });
   expect(changed.approval).toBeUndefined();
   expect(f.calls).toHaveLength(1); expect(f.deliveredApprovals).toHaveLength(1);

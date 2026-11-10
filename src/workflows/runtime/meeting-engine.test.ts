@@ -37,6 +37,7 @@ import { fixtureNow, fixtureSetup, fixtureEvent, fixtureRequest } from './meetin
 import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
 const native=(name:string)=>'@jarvispieces/piece-jarvis-'+name;
 let authority:AuthorityEngine;
+let emergency:EmergencyController;
 let approvals:ApprovalManager,services:ReturnType<typeof buildSandboxServiceBackends>;
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog;
 const versions:Record<string,string>={},notifications:string[]=[],runIds:string[]=[],calls:string[]=[];
@@ -54,7 +55,7 @@ beforeAll(async()=>{
  for(const [suffix,piece] of [['calendar','google-calendar'],['gmail','gmail'],['hubspot','hubspot']])upsertConnection({externalId:'fixture-'+suffix,displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-'+piece,pieceVersion:'0.0.1',value:{access_token:'synthetic-'+suffix}});
  authority=new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'});
  approvals=new ApprovalManager();
- services=buildSandboxServiceBackends({credentialResolver:resolver=new RecordingResolver({tokenTransport:async()=>{tokenCalls++;if(tokenDown)throw Error('token endpoint unreachable');return {status:200,body:{access_token:'synthetic-calendar',expires_in:3600}};}}),authorityEngine:authority,approvalManager:approvals,emergencyController:new EmergencyController(),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
+ services=buildSandboxServiceBackends({credentialResolver:resolver=new RecordingResolver({tokenTransport:async()=>{tokenCalls++;if(tokenDown)throw Error('token endpoint unreachable');return {status:200,body:{access_token:'synthetic-calendar',expires_in:3600}};}}),authorityEngine:authority,approvalManager:approvals,emergencyController:(emergency=new EmergencyController()),auditTrail:new AuditTrail(),eventBuffer:new WorkflowEventBuffer(),
  meetingNow:()=>fixtureNow,meetingFetch:(async(url:any,init:any)=>{
   const u=new URL(String(url));const provider=u.hostname==='www.googleapis.com'?'calendar':u.hostname==='gmail.googleapis.com'?'gmail':'hubspot';
   expect(['www.googleapis.com','gmail.googleapis.com','api.hubapi.com']).toContain(u.hostname);
@@ -151,16 +152,16 @@ test('account replacement is blocked by workflow pins before any provider reques
  try {expect((await f.run()).status).toBe('FAILED');expect([calls.length,notifications.length]).toEqual(before);}
  finally {upsertConnection({externalId:'fixture-calendar',displayName:'Fixture',type:'OAUTH2',pieceName:'@activepieces/piece-google-calendar',pieceVersion:'0.0.1',value:{access_token:'synthetic-calendar'}});}
 },60_000);
-test('approval wait rechecks Calendar before delivery and leaves stale key unconsumed',async()=>{
+// A dashboard-only brief needs no approval, but a Pause can still hold it between preparing and delivering.
+test('a pause hold rechecks Calendar before delivery and leaves stale key unconsumed',async()=>{
  const f=await fixture(),n=notifications.length;
  const execution=createFlowRun({flowId:f.flow.id,flowVersionId:f.version.id,status:'RUNNING'});runIds.push(execution.id);
  const ctx={runId:execution.id,projectId:DEFAULT_IDS.project,stepName:'prepare',executionPath:[] as Array<[string,number]>};
  const prepared=await services.meetingBriefs!({...fixtureSetup},ctx) as any;const item=prepared.meetings[0];
- authority.setGovernedCategories(['send_message']);
  const notifyCtx={...ctx,stepName:'notify',executionPath:[['each_meeting',0]] as Array<[string,number]>};
  const req={message:item.brief,meetingGuard:item.guard,channels:['dashboard'],priority:'normal' as const};
- const pending=await services.notify!(req,notifyCtx);expect(pending.approval).toBeDefined();expect(notifications.length).toBe(n);
- changed=fixtureEvent({status:'cancelled'});approvals.approve(pending.approval!.approvalId,'fixture');
+ emergency.pause();const pending=await services.notify!(req,notifyCtx);expect(pending.approval?.hold).toBeDefined();expect(notifications.length).toBe(n);
+ changed=fixtureEvent({status:'cancelled'});emergency.resume();
  const result=await services.notify!(req,notifyCtx) as any;expect(result.skipped).toContain('changed');expect(notifications.length).toBe(n);
  changed=undefined;authority.setGovernedCategories([]);expect((await f.run()).status).toBe('SUCCEEDED');expect(notifications.length).toBe(n+1);
 },60_000);
@@ -189,7 +190,7 @@ test('the freshness recheck before delivery resolves only the Calendar account',
  // Preparation reads all three; the recheck reads Calendar again and nothing else.
  expect([count('fixture-calendar'),count('fixture-gmail'),count('fixture-hubspot')]).toEqual([2,1,1]);
 },60_000);
-test('a Jarvis timezone change during the approval wait does not fail a step that follows it',async()=>{
+test('a Jarvis timezone change during a pause hold does not fail a step that follows it',async()=>{
  const previous=getCronTimezone();
  try {
   setCronTimezone('America/New_York');
@@ -198,13 +199,12 @@ test('a Jarvis timezone change during the approval wait does not fail a step tha
   const ctx={runId:execution.id,projectId:DEFAULT_IDS.project,stepName:'prepare',executionPath:[] as Array<[string,number]>};
   const prepared=await services.meetingBriefs!({...fixtureSetup,internalDomains:'example.com',timezone:''},ctx) as any;const item=prepared.meetings[0];
   expect(item.guard.setup.timezone).toBe('America/New_York');
-  authority.setGovernedCategories(['send_message']);
   const notifyCtx={...ctx,stepName:'notify',executionPath:[['each_meeting',0]] as Array<[string,number]>};
   const req={message:item.brief,meetingGuard:item.guard,channels:['dashboard'],priority:'normal' as const};
-  const pending=await services.notify!(req,notifyCtx);expect(pending.approval).toBeDefined();
-  setCronTimezone('Asia/Tokyo');approvals.approve(pending.approval!.approvalId,'fixture');
+  emergency.pause();const pending=await services.notify!(req,notifyCtx);expect(pending.approval?.hold).toBeDefined();
+  setCronTimezone('Asia/Tokyo');emergency.resume();
   const result=await services.notify!(req,notifyCtx) as any;expect(result.skipped).toBeUndefined();expect(notifications.length).toBe(n+1);
- } finally {authority.setGovernedCategories([]);setCronTimezone(previous);}
+ } finally {emergency.resume();setCronTimezone(previous);}
 },60_000);
 test('readiness refuses a Jarvis-managed id for the HubSpot account',()=>{
  for(const phase of ['composition','activation'] as const){
