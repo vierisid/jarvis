@@ -14,7 +14,7 @@ import { CATALOG } from '../pieces-library/catalog';
 import { CORE_PIECE_ADAPTERS, GRAPHQL_PIECE, PIECE_ABOVE_LEVEL_ASKS, resolveGovernedPieceAction, sanitizePieceInput, SFTP_PIECE, SMTP_PIECE, tracksPieceCompletion } from './piece-effects';
 import { IN_RUN_STEP_PIECES, isCommunityPiece } from './step-admission';
 import { discoverPieces } from './piece-catalog';
-import { EGRESS_POLICY_ENV, REQUEST_TIMEOUT_ENV, requestTimeoutMs } from './http-egress';
+import { EGRESS_POLICY_ENV, HOST_ADDRESSES_ENV, REQUEST_TIMEOUT_ENV, requestTimeoutMs } from './http-egress';
 import { DEFAULT_TIMEOUT_S } from '../runner/engine-runtime/operation-builder';
 
 const CORE = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, 'pieces/core');
@@ -195,6 +195,16 @@ describe('the engine is told the install\'s egress policy', () => {
     expect(isEngineEnvName(REQUEST_TIMEOUT_ENV)).toBe(true);
     expect(engineEnv(base)[REQUEST_TIMEOUT_ENV]).toBe(String(DEFAULT_TIMEOUT_S * 1000));
     expect(requestTimeoutMs({ [REQUEST_TIMEOUT_ENV]: engineEnv(base)[REQUEST_TIMEOUT_ENV] })).toBe(DEFAULT_TIMEOUT_S * 1000);
+  });
+  test('#1153: and the host addresses the operator names, which workflow steps never reach', () => {
+    const before = process.env.JARVIS_HOST_ADDRESSES;
+    try {
+      delete process.env.JARVIS_HOST_ADDRESSES;
+      expect(HOST_ADDRESSES_ENV in engineEnv(base)).toBe(false);
+      process.env.JARVIS_HOST_ADDRESSES = '192.168.1.20';
+      expect(isEngineEnvName(HOST_ADDRESSES_ENV)).toBe(true);
+      expect(engineEnv(base)[HOST_ADDRESSES_ENV]).toBe('192.168.1.20');
+    } finally { if (before === undefined) delete process.env.JARVIS_HOST_ADDRESSES; else process.env.JARVIS_HOST_ADDRESSES = before; }
   });
 });
 

@@ -46,6 +46,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 import { isIP } from 'node:net';
 import { networkInterfaces } from 'node:os';
+import { existsSync, readFileSync } from 'node:fs';
 import { Agent as HttpAgent } from 'node:http';
 import { Agent as HttpsAgent } from 'node:https';
 
@@ -189,12 +190,55 @@ export function interfaceAddresses(): Set<string> {
   return out;
 }
 
+/** The engine env var the daemon sets to the host's own addresses, as `JARVIS_HOST_ADDRESSES` gives them (#1153). */
+export const HOST_ADDRESSES_ENV = 'JARVIS_ENGINE_HOST_ADDRESSES';
+
+/**
+ * The IPv4 default gateways in a `/proc/net/route` table: destination
+ * 00000000 with the gateway flag, the address little-endian hex.
+ */
+export function defaultGateways(routeTable: string): string[] {
+  const out: string[] = [];
+  for (const line of routeTable.split('\n').slice(1)) {
+    const [, destination, gateway, flags] = line.trim().split(/\s+/u);
+    if (destination !== '00000000' || !gateway || !/^[0-9a-f]{8}$/iu.test(gateway) || (parseInt(flags ?? '0', 16) & 0x2) === 0) continue;
+    const n = parseInt(gateway, 16);
+    out.push([n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, n >>> 24].join('.'));
+  }
+  return out;
+}
+
+/** True inside a Docker or Podman container (their marker files). */
+function inContainer(): boolean {
+  return existsSync('/.dockerenv') || existsSync('/run/.containerenv');
+}
+
+/**
+ * The addresses that reach the machine Jarvis runs on (#1153): its own
+ * interfaces; inside a container, its default gateway, which is the host's
+ * end of the bridge (Docker's 172.17.0.1); and the host addresses the operator
+ * names in `JARVIS_HOST_ADDRESSES` (the host's LAN address, which a container
+ * cannot see, passed to the engine as `JARVIS_ENGINE_HOST_ADDRESSES`). A port
+ * the host publishes answers on all of them.
+ */
+export function ownAddresses(env: Record<string, string | undefined> = process.env,
+  routeTable: () => string | null = () => { try { return inContainer() ? readFileSync('/proc/net/route', 'utf8') : null; } catch { return null; } }): Set<string> {
+  const out = interfaceAddresses();
+  const table = routeTable();
+  if (table) for (const gateway of defaultGateways(table)) out.add(gateway);
+  for (const raw of `${env[HOST_ADDRESSES_ENV] ?? ''},${env.JARVIS_HOST_ADDRESSES ?? ''}`.split(',')) {
+    const canonical = raw.trim() === '' ? null : canonicalAddress(raw.trim());
+    if (canonical) out.add(canonical);
+  }
+  return out;
+}
+
 /**
  * The policy, plus: never this machine itself. A service bound to 0.0.0.0 on
  * the host answers on every interface address -- the LAN address, a Docker
  * bridge, a hosted VM's own public address -- not only on loopback.
  */
-export function destinationAllowed(address: string, policy: EgressPolicy, own: ReadonlySet<string> = interfaceAddresses()): boolean {
+export function destinationAllowed(address: string, policy: EgressPolicy, own: ReadonlySet<string> = ownAddresses()): boolean {
   const canonical = canonicalAddress(address);
   return canonical !== null && addressAllowed(address, policy) && !own.has(canonical);
 }

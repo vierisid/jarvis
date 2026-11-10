@@ -10,7 +10,7 @@ import type { LookupAddress } from 'node:dns';
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { MAX_RESPONSE_BYTES, ResponseTooLargeError, resolveGuardedAddress, addressAllowed, assertHostAllowed, canonicalAddress, classifyAddress, destinationAllowed, egressGuardedAxios, egressPolicyFromEnv,
-  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, EGRESS_POLICY_ENV, EgressRefusedError, readHostKey, refusedBeforeSend, REQUEST_TIMEOUT_ENV, requestTimeoutMs, withReadHosts } from './http-egress';
+  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, defaultGateways, ownAddresses, HOST_ADDRESSES_ENV, EGRESS_POLICY_ENV, EgressRefusedError, readHostKey, refusedBeforeSend, REQUEST_TIMEOUT_ENV, requestTimeoutMs, withReadHosts } from './http-egress';
 
 describe('which addresses the HTTP step may reach', () => {
   const table: Array<[string, 'public' | 'private' | 'blocked']> = [
@@ -51,6 +51,29 @@ describe('which addresses the HTTP step may reach', () => {
     const real = interfaceAddresses();
     expect(real.has('127.0.0.1')).toBe(true);
     for (const address of real) expect(canonicalAddress(address)).toBe(address);
+  });
+
+  test('#1153: inside a container the default gateway (the host end of the bridge) and the host addresses the operator names are this machine too', () => {
+    // A real Docker bridge table: the default route via 172.17.0.1, and the bridge subnet with no gateway.
+    const table = 'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n'
+      + 'eth0\t00000000\t010011AC\t0003\t0\t0\t0\t00000000\t0\t0\t0\n'
+      + 'eth0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n';
+    expect(defaultGateways(table)).toEqual(['172.17.0.1']);
+    const own = ownAddresses({ JARVIS_HOST_ADDRESSES: '192.168.1.20, ::ffff:10.0.0.9, not-an-address' }, () => table);
+    for (const address of ['172.17.0.1', '192.168.1.20', '10.0.0.9']) {
+      expect(`${address}: ${destinationAllowed(address, 'private-allowed', own)}`).toBe(`${address}: false`);
+    }
+    expect(destinationAllowed('192.168.1.21', 'private-allowed', own)).toBe(true);
+    // The engine is handed the operator's list under its own name.
+    expect(ownAddresses({ [HOST_ADDRESSES_ENV]: '192.168.1.30' }, () => null).has('192.168.1.30')).toBe(true);
+    // Outside a container no route table is read: a LAN's router stays reachable for a self-hosted install.
+    expect(ownAddresses({}, () => null).has('172.17.0.1')).toBe(interfaceAddresses().has('172.17.0.1'));
+    // The default check every request makes reads them.
+    const before = process.env[HOST_ADDRESSES_ENV];
+    process.env[HOST_ADDRESSES_ENV] = '93.184.216.34';
+    try { expect(destinationAllowed('93.184.216.34', 'public-only')).toBe(false); }
+    finally { if (before === undefined) delete process.env[HOST_ADDRESSES_ENV]; else process.env[HOST_ADDRESSES_ENV] = before; }
+    expect(destinationAllowed('93.184.216.34', 'public-only')).toBe(true);
   });
 
   test('an engine told nothing applies the hosted rule', () => {

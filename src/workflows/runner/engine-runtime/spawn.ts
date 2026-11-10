@@ -25,7 +25,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { accessSync, constants as fsConstants, lstatSync, readdirSync, readFileSync, realpathSync, utimesSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isSecretEnvName } from "../../../util/subprocess-env";
-import { EGRESS_POLICY_ENV, REQUEST_TIMEOUT_ENV, type EgressPolicy } from "../../runtime/http-egress";
+import { EGRESS_POLICY_ENV, HOST_ADDRESSES_ENV, REQUEST_TIMEOUT_ENV, type EgressPolicy } from "../../runtime/http-egress";
 import { DEFAULT_TIMEOUT_S } from "./operation-builder";
 import { assertBundleUnchanged } from "./bundle-integrity";
 import {
@@ -254,6 +254,10 @@ export function engineEnv(opts: Omit<SpawnEngineOptions, "expectedDigest">): Rec
   if (opts.egressPolicy) env[EGRESS_POLICY_ENV] = opts.egressPolicy;
   // #1153: no workflow request outlasts the flow budget the daemon holds the engine to.
   env[REQUEST_TIMEOUT_ENV] = String(DEFAULT_TIMEOUT_S * 1000);
+  // #1153: the host's own addresses an operator names (its LAN address, which
+  // a container cannot see): workflow steps never reach them.
+  const hostAddresses = process.env["JARVIS_HOST_ADDRESSES"]?.trim();
+  if (hostAddresses) env[HOST_ADDRESSES_ENV] = hostAddresses.slice(0, 4096);
   if (opts.customPiecesPaths?.length) {
     env["AP_CUSTOM_PIECES_PATHS"] = opts.customPiecesPaths.join(":");
   }

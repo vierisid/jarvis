@@ -690,8 +690,13 @@ HTTP request specifics:
   benchmarking, reserved and IPv6 transition ranges (NAT64 64:ff9b::/96
   included, so an IPv6-only host behind DNS64 cannot reach IPv4 destinations), or any address of the machine Jarvis runs on (its LAN
   address, a Docker bridge, a VM's own public address). That last check knows
-  only the interfaces Jarvis itself sees: run in a container, the Docker host's
-  own addresses are not among them. Hosted is `isHostedInstall`; the daemon passes the answer
+  the interfaces Jarvis itself sees and, run in a container, its default
+  gateway, the host's end of the bridge (Docker's 172.17.0.1) (#1153). The
+  host's LAN or public address is invisible from inside a container: name it
+  in `JARVIS_HOST_ADDRESSES` (comma-separated, e.g.
+  `docker run -e JARVIS_HOST_ADDRESSES=192.168.1.20 ...`), passed to the
+  engine as `JARVIS_ENGINE_HOST_ADDRESSES`, or a self-hosted install's steps
+  can reach the ports the host publishes on it. Hosted is `isHostedInstall`; the daemon passes the answer
   in `JARVIS_ENGINE_EGRESS`, and an engine told nothing applies the hosted
   rule. The piece's proxy option is refused, since a proxy would pick the
   address. Measured: Bun 1.3.8 ignores a patched `dns.lookup`, a patched
