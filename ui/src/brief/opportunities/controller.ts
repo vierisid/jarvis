@@ -212,6 +212,7 @@ export class OpportunitiesController {
       state: "sending",
     };
     this.updateAttempt(id, attempt);
+    const generation = this.generation;
     try {
       this.receive(attempt, await this.port.act(attempt.request));
     } catch (error) {
@@ -220,10 +221,20 @@ export class OpportunitiesController {
       // refusal, which the next ready read clears, never an unknown outcome.
       if (error instanceof AwarenessOffError) {
         this.updateAttempt(id, { ...attempt, state: "refused", reason: AWARENESS_OFF_TEXT });
-        // And the room shows nothing derived from captures from now on, as an awareness-off read does (#1314 review).
-        this.publish({ read: { status: "unavailable", reason: AWARENESS_OFF_TEXT } as never, rows: [], selectedId: null, refreshing: false, phase: "rest" });
+        this.awarenessOff(generation);
       } else this.updateAttempt(id, { ...attempt, state: "unknown" });
     }
+  }
+  /**
+   * The server said awareness is off (#1314 review): the room shows nothing
+   * derived from captures, as an awareness-off read does. A read that landed
+   * after the refused call was sent knows better than the refusal, so then
+   * the server is asked again instead.
+   */
+  private awarenessOff(generation: number) {
+    if (generation !== this.generation) { void this.refresh(); return; }
+    this.generation++;
+    this.publish({ read: { status: "unavailable", reason: AWARENESS_OFF_TEXT }, rows: [], selectedId: null, refreshing: false, phase: "rest" });
   }
   async recover(id: string) {
     const attempt = this.state.attempts.get(id);
@@ -238,11 +249,14 @@ export class OpportunitiesController {
     )
       return;
     this.updateAttempt(id, { ...attempt, checking: true });
+    const generation = this.generation;
     try {
       this.receive(attempt, await this.port.recover(attempt.request));
-    } catch {
-      if (!this.retired)
-        this.updateAttempt(id, { ...attempt, checking: false });
+    } catch (error) {
+      if (this.retired) return;
+      // The outcome is still unknown; only the screen follows the switch (#1314 review).
+      this.updateAttempt(id, { ...attempt, checking: false });
+      if (error instanceof AwarenessOffError) this.awarenessOff(generation);
     }
   }
   private receive(

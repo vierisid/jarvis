@@ -476,3 +476,35 @@ test("awareness off ends a transition, so the next proposal is shown when it is 
   off = true; await c.refresh();
   expect(c.snapshot().phase).toBe("rest");
 });
+
+test("a late awareness-off refusal does not hide a ready read that came after it (#1314 review)", async () => {
+  const { AwarenessOffError } = await import("../host/http");
+  const f = makeOpportunitiesFixture();
+  let reject!: (e: unknown) => void;
+  const c = owner({ ...f.port, act: () => new Promise((_, r) => { reject = r; }) });
+  await c.refresh();
+  const id = c.snapshot().rows[0]!.proposal.proposalId;
+  const acting = c.act(id, "approve");
+  await c.refresh(); // awareness back on: the server answered ready
+  reject(new AwarenessOffError());
+  await acting;
+  await new Promise((r) => setTimeout(r, 0));
+  expect(c.snapshot().read.status).toBe("ready");
+  expect(c.snapshot().rows.length).toBeGreaterThan(0);
+});
+
+test("a recovery refused because awareness is off clears the room and keeps the attempt (#1314 review)", async () => {
+  const { AwarenessOffError } = await import("../host/http");
+  const f = makeOpportunitiesFixture();
+  const c = owner({ ...f.port, act: async () => { throw new Error("transport lost"); },
+    recover: async () => { throw new AwarenessOffError(); } });
+  await c.refresh();
+  const id = c.snapshot().rows[0]!.proposal.proposalId;
+  await c.act(id, "approve");
+  expect(c.snapshot().attempts.get(id)?.state).toBe("unknown");
+  await c.recover(id);
+  expect(c.snapshot().rows).toEqual([]);
+  expect(c.snapshot().read.status).toBe("unavailable");
+  expect(c.snapshot().attempts.get(id)?.state).toBe("unknown");
+  expect(c.snapshot().attempts.get(id)?.checking).toBe(false);
+});
