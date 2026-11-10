@@ -327,6 +327,31 @@ export const MAX_REDIRECTS = 21;
  */
 export const MAX_RESPONSE_BYTES = ((10 * 1024 * 1024 - 256 * 1024) * 3) / 4;
 
+/** The engine env var the daemon sets to its flow budget, in milliseconds (#1153). */
+export const REQUEST_TIMEOUT_ENV = 'JARVIS_ENGINE_REQUEST_TIMEOUT_MS';
+
+/**
+ * The flow budget's default, 600 s (`DEFAULT_TIMEOUT_S` in
+ * `runner/engine-runtime/operation-builder.ts`): an engine that was told
+ * nothing caps a request at it.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
+
+/**
+ * The longest a workflow HTTP request (the HTTP and GraphQL steps, the
+ * engine's file download) may take, start to last byte (#1153). The daemon
+ * stops waiting for a flow after its budget and kills the engine, losing the
+ * run, so no request may outlast that budget: past it the step fails naming
+ * the cap instead. A step's own shorter timeout applies as a wall clock too.
+ * axios's `timeout` alone is not one: on Node's transport it is an idle timer
+ * on the socket, and a server sending a byte at a time keeps it from firing
+ * (measured: a 4 s response sent in 500 ms drips completed under `timeout: 1000`).
+ */
+export function requestTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = Number(env[REQUEST_TIMEOUT_ENV]);
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
 /** The subset of axios this needs; the piece passes its own bundled copy. */
 interface AxiosLike {
   create(config: Record<string, unknown>): {
@@ -431,6 +456,9 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
   });
   let firstOrigin = '';
   let redirected = false;
+  const cap = options.timeoutMs !== undefined ? Math.min(options.timeoutMs, requestTimeoutMs()) : requestTimeoutMs();
+  let wall: AbortSignal | null = null;
+  let wallMs = cap;
   instance.interceptors.request.use((config: Record<string, unknown>) => {
     const target = new URL(String(config.url ?? ''), typeof config.baseURL === 'string' ? config.baseURL : undefined);
     if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new EgressRefusedError(`HTTP request refused: ${target.protocol} is not http or https`);
@@ -463,6 +491,13 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
     if (config.responseType === 'stream') throw new EgressRefusedError('HTTP request refused: a streamed response would not be held to the size cap');
     // follow-redirects' own default, which axios uses when given none; never more.
     if (typeof config.maxRedirects !== 'number' || config.maxRedirects > MAX_REDIRECTS) config.maxRedirects = MAX_REDIRECTS;
+    // A wall clock over the whole exchange, redirects and body included (#1153).
+    const askedMs = typeof config.timeout === 'number' && config.timeout > 0 ? config.timeout : Infinity;
+    wallMs = Math.min(askedMs, cap);
+    const timer = AbortSignal.timeout(wallMs);
+    wall = timer;
+    config.signal = config.signal ? AbortSignal.any([config.signal as AbortSignal, timer]) : timer;
+    config.timeout = wallMs;
     return config;
   });
   // A refusal raised inside the transport (the lookup, a redirect) reaches
@@ -471,6 +506,10 @@ export function egressGuardedAxios<A extends AxiosLike>(axios: A, policy: Egress
   instance.interceptors.response.use(undefined, (error: unknown) => {
     const refused = egressRefusalIn(error);
     if (refused) throw redirected && !refused.afterSend ? new EgressRefusedError(refused.message, { afterSend: true }) : refused;
+    if (wall?.aborted) {
+      // Whatever axios made of the abort ("canceled"): the step fails naming the cap. It may have been sent.
+      throw new Error(`HTTP request did not finish within ${Math.round(wallMs / 1000)} seconds, the most a workflow request may take; it may have reached the server`);
+    }
     // axios's own wording for a body past maxContentLength.
     const message = (error as { message?: unknown } | null)?.message;
     if (typeof message === 'string' && /^maxContentLength size of \d+ exceeded$/u.test(message)) {

@@ -670,8 +670,14 @@ HTTP request specifics:
   larger one fails the step as a refusal, never retried or continued past, and
   a file field whose download is too large fails its step instead of being
   sent empty. A streamed response is refused. Redirects stop at
-  follow-redirects' 21, and the run's own deadline (600 s by default, plus the
-  daemon's 30 s ack margin) bounds a request that sets no timeout.
+  follow-redirects' 21. Every request (and file download) runs under a wall
+  clock from first byte to last: its own timeout when it sets a shorter one,
+  else the flow budget the daemon holds the engine to (600 s by default,
+  `JARVIS_WORKFLOW_FLOW_TIMEOUT_SECONDS`, passed as
+  `JARVIS_ENGINE_REQUEST_TIMEOUT_MS`), so the step fails naming the cap rather
+  than the engine being killed with the run. axios's own `timeout` is only an
+  idle timer on the socket, which a server sending a byte at a time never
+  trips (#1153).
 - **Egress.** Every connection is resolved once, each address checked, and the
   connection made to the checked address (`runtime/http-egress.ts`); IP
   literals and every redirect target are checked too, and a request that is not

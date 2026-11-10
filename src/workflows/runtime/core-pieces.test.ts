@@ -14,7 +14,8 @@ import { CATALOG } from '../pieces-library/catalog';
 import { CORE_PIECE_ADAPTERS, GRAPHQL_PIECE, PIECE_ABOVE_LEVEL_ASKS, resolveGovernedPieceAction, sanitizePieceInput, SFTP_PIECE, SMTP_PIECE, tracksPieceCompletion } from './piece-effects';
 import { IN_RUN_STEP_PIECES, isCommunityPiece } from './step-admission';
 import { discoverPieces } from './piece-catalog';
-import { EGRESS_POLICY_ENV } from './http-egress';
+import { EGRESS_POLICY_ENV, REQUEST_TIMEOUT_ENV, requestTimeoutMs } from './http-egress';
+import { DEFAULT_TIMEOUT_S } from '../runner/engine-runtime/operation-builder';
 
 const CORE = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, 'pieces/core');
 const SRC = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, '../../..');
@@ -189,6 +190,11 @@ describe('the engine is told the install\'s egress policy', () => {
     expect(engineEnv({ ...base, egressPolicy: 'private-allowed' })[EGRESS_POLICY_ENV]).toBe('private-allowed');
     expect(engineEnv({ ...base, egressPolicy: 'public-only' })[EGRESS_POLICY_ENV]).toBe('public-only');
     expect(EGRESS_POLICY_ENV in engineEnv(base)).toBe(false);
+  });
+  test('#1153: and the flow budget, which caps every workflow request', () => {
+    expect(isEngineEnvName(REQUEST_TIMEOUT_ENV)).toBe(true);
+    expect(engineEnv(base)[REQUEST_TIMEOUT_ENV]).toBe(String(DEFAULT_TIMEOUT_S * 1000));
+    expect(requestTimeoutMs({ [REQUEST_TIMEOUT_ENV]: engineEnv(base)[REQUEST_TIMEOUT_ENV] })).toBe(DEFAULT_TIMEOUT_S * 1000);
   });
 });
 

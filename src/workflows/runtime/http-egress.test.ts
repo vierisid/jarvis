@@ -10,7 +10,7 @@ import type { LookupAddress } from 'node:dns';
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { MAX_RESPONSE_BYTES, ResponseTooLargeError, resolveGuardedAddress, addressAllowed, assertHostAllowed, canonicalAddress, classifyAddress, destinationAllowed, egressGuardedAxios, egressPolicyFromEnv,
-  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, EGRESS_POLICY_ENV, EgressRefusedError, readHostKey, refusedBeforeSend, withReadHosts } from './http-egress';
+  egressRefusalIn, guardedFileDownload, guardedLookup, interfaceAddresses, EGRESS_POLICY_ENV, EgressRefusedError, readHostKey, refusedBeforeSend, REQUEST_TIMEOUT_ENV, requestTimeoutMs, withReadHosts } from './http-egress';
 
 describe('which addresses the HTTP step may reach', () => {
   const table: Array<[string, 'public' | 'private' | 'blocked']> = [
@@ -91,6 +91,8 @@ describe('the guarded client connects only where it checked', () => {
       if (req.url === '/to-blocked-name') { res.writeHead(302, { location: `http://internal.test:${port}/secret` }); res.end(); return; }
       if (req.url === '/to-other-origin') { res.writeHead(307, { location: `http://other.test:${port}/landing` }); res.end(); return; }
       if (req.url === '/to-same-origin') { res.writeHead(307, { location: '/landing' }); res.end(); return; }
+      // A byte every 500 ms for 4 s: never idle long enough for a socket idle timer.
+      if (req.url === '/drip') { res.writeHead(200); let n = 0; const t = setInterval(() => { if (res.destroyed) { clearInterval(t); return; } res.write('x'); if (++n === 8) { clearInterval(t); res.end(); } }, 500); return; }
       const big = /^\/big\?n=(\d+)(&chunked)?$/u.exec(req.url ?? '');
       if (big) {
         const n = Number(big[1]);
@@ -202,6 +204,22 @@ describe('the guarded client connects only where it checked', () => {
     // A read may follow it.
     expect((await client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/to-other-origin` })).data).toEqual({ ok: true, url: '/landing' });
   });
+
+  test('#1153: a request is held to a wall clock, which a server sending a byte at a time cannot hold open', async () => {
+    // axios's own timeout alone did not stop this response (an idle timer): measured, it completed after 4 s under timeout 1000.
+    const started = Date.now();
+    await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/drip`, timeout: 1000 }))
+      .rejects.toThrow(/did not finish within 1 seconds/);
+    expect(Date.now() - started).toBeLessThan(3000);
+    // With no timeout of its own, the flow budget the daemon passes caps it.
+    const before = process.env[REQUEST_TIMEOUT_ENV];
+    process.env[REQUEST_TIMEOUT_ENV] = '1000';
+    try {
+      await expect(client(true, onlyLocal).request({ method: 'GET', url: `http://ops.test:${port}/drip` })).rejects.toThrow(/did not finish within 1 seconds/);
+    } finally { if (before === undefined) delete process.env[REQUEST_TIMEOUT_ENV]; else process.env[REQUEST_TIMEOUT_ENV] = before; }
+    expect(requestTimeoutMs({})).toBe(600_000);
+    expect(requestTimeoutMs({ [REQUEST_TIMEOUT_ENV]: 'nonsense' })).toBe(600_000);
+  }, 20_000);
 
   test('#1153: a refusal before sending reads as not sent; one after a request went out (a refused redirect) does not', async () => {
     const reason = async (p: Promise<unknown>) => { try { await p; } catch (error) { return error; } throw new Error('expected a refusal'); };
