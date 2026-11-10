@@ -1,4 +1,5 @@
 import { getDb, generateId } from './schema.ts';
+import { awarenessHistoryVisible } from '../awareness/history-guard.ts';
 
 export type ObservationType =
   | 'file_change'
@@ -269,11 +270,17 @@ export function getRecentObservations(
 
   let query = 'SELECT * FROM observations';
   const params: unknown[] = [];
+  const where: string[] = [];
 
   if (type) {
-    query += ' WHERE type = ?';
+    where.push('type = ?');
     params.push(type);
   }
+  // Screen captures are recorded awareness: hidden while it is off (#1314),
+  // filtered in SQL so hidden rows do not use up the limit. Every reader goes
+  // through here: the Logs room, the palette search and the agents' prompts.
+  if (!awarenessHistoryVisible()) where.push("type != 'screen_capture'");
+  if (where.length) query += ` WHERE ${where.join(' AND ')}`;
 
   query += ' ORDER BY created_at DESC LIMIT ?';
   params.push(limit);

@@ -1,4 +1,5 @@
 import { generateId, getDb } from '../vault/schema.ts';
+import { awarenessHistoryVisible } from './history-guard.ts';
 import { DeliveryUnconfirmedError } from '../comms/delivery.ts';
 import type { Suggestion, SuggestionRow } from './types.ts';
 
@@ -61,7 +62,9 @@ export class OpportunityDelivery {
   }
 
   private async drain(): Promise<void> {
-    while (!this.stopped) {
+    // Keyed on the switch itself, not only the service lifecycle (#1314 review):
+    // a proposal carries capture evidence, so none is sent while awareness is off.
+    while (!this.stopped && awarenessHistoryVisible()) {
       const db = getDb();
       const claimed = db.transaction(() => {
         const row = db.prepare(`SELECT s.* FROM opportunity_delivery d

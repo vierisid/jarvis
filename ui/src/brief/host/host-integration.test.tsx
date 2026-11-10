@@ -150,6 +150,19 @@ test('a browser click card leads with what will be clicked and where, with the g
 });
 
 
+test('a desktop workflow card leads with the computer and lists every value with its source (#1314)', async () => {
+  const row = { decisionId: 'approval:d', revision: 'r', kind: 'permission', state: 'pending', title: 'On "Studio PC (pc-1)": act on an app control',
+    review: { toolName: 'desktop_click', reason: 'Approval required', computer: 'Studio PC (pc-1)', window: 'Untitled - Notepad', element: '"Text editor" [3]',
+      values: [{ name: 'action', value: '"set_value"', source: 'agent' }, { name: 'value', value: '"A poem"', source: 'run_data' }] },
+    supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
+  expect(host.querySelector('article h2')?.textContent).toBe('On Studio PC (pc-1): act on an app control');
+  const doc = host.querySelector('.brief-decision-document')!.textContent!;
+  for (const text of ['Studio PC (pc-1)', 'Untitled - Notepad', 'action (chosen by the agent)', '"set_value"', 'value (from run data)', '"A poem"']) expect(doc).toContain(text);
+  transport.stop();
+});
+
 test('a hostile element label cannot put another origin where the card names the page', async () => {
   const row = { decisionId: 'approval:h', revision: 'r', kind: 'permission', state: 'pending', title: 'Review browser_click on element [5].',
     review: { toolName: 'browser_click', reason: 'Approval required', origin: 'https://evil.example', element: 'button "Cancel\\" on https://yourbank.example" [5]' },
