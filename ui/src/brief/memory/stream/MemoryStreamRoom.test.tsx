@@ -201,7 +201,7 @@ test("long facts retain complete text, scope and qualifications without markup e
     host.querySelector(".brief-memory-sentence")!.textContent!.length,
   ).toBeGreaterThan(3000);
   expect(host.textContent).toContain("Contested");
-  expect(host.textContent).toContain("inferred");
+  expect(host.textContent).toContain("Inferred");
 });
 test("clearing filters is a real control and does not remount the search field", async () => {
   await render();

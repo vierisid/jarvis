@@ -3,6 +3,7 @@ import type { MemoryUsageCoverage } from '../vault/memory-usage';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Database } from 'bun:sqlite';
 import { getDb } from '../vault/schema';
+import { notInternalEntitySql } from '../vault/entities';
 import type { FactRow } from '../vault/fact-policy';
 import type { FactEvidence } from '../vault/facts';
 import type { BriefMemoryUse } from './contracts';
@@ -12,7 +13,7 @@ export const MEMORY_STREAM_LIMITS = { facts: 10000, evidence: 50000, uses: 50000
   snapshots: 16, ttlMs: 5 * 60_000, page: 100 } as const;
 export class MemoryQueryError extends Error {}
 class CapacityError extends Error {}
-type Row = FactRow & { subject_name: string };
+type Row = FactRow & { subject_name: string; subject_type: string };
 type Collection = { items: Map<string, MemoryStreamItem>; usedIn: MemoryStreamPage['usedIn']; usageCoverage?: MemoryUsageCoverage };
 type Snapshot = { queryKey: string; asOf: number; expiresAt: number; members: [string, string][];
   matches: string[]; total: number; usedIn: MemoryStreamPage['usedIn'] };
@@ -20,6 +21,15 @@ const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(va
 const compareText = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const idValid = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 200 && !/[\\/\u0000-\u001f\u007f]/.test(v) && v !== '.' && v !== '..';
 const timestamp = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && Math.abs(v) <= 8.64e15;
+/** A name that is a generated id (a flow id, a UUID), not something a person would call a thing. */
+const looksLikeId = (name: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name)
+  || (/^[A-Za-z0-9_-]{16,}$/.test(name) && /\d/.test(name) && /[a-z]/.test(name) && /[A-Z]/.test(name));
+const SOURCE_PHRASE: Record<string, string> = { llm_extraction: 'noted from a chat', user_profile: 'from your profile', dashboard: 'added by you' };
+/** The subject as a person reads it: its name, or a type and source phrase when the name is only an id. */
+export function readableSubject(name: string, type: string, source: string | null): string {
+  if (!looksLikeId(name)) return name;
+  return `A ${type} ${SOURCE_PHRASE[source ?? ''] ?? 'in your memory'}`;
+}
 export function memoryFactId(value: unknown): string {
   if (!idValid(value)) throw new MemoryQueryError('Invalid fact ID'); return value;
 }
@@ -62,8 +72,8 @@ export class MemoryStream {
     } catch { return 'unavailable'; }
   }
   private collection(): Collection {
-    const rows = this.db.query<Row, []>(`SELECT f.*, e.name AS subject_name FROM facts f
-      JOIN entities e ON e.id = f.subject_id ORDER BY f.id LIMIT ${MEMORY_STREAM_LIMITS.facts + 1}`).all();
+    const rows = this.db.query<Row, []>(`SELECT f.*, e.name AS subject_name, e.type AS subject_type FROM facts f
+      JOIN entities e ON e.id = f.subject_id WHERE ${notInternalEntitySql('e')} ORDER BY f.id LIMIT ${MEMORY_STREAM_LIMITS.facts + 1}`).all();
     const evidence = this.db.query<FactEvidence, []>(`SELECT id, fact_id, source, source_ref, basis, confidence, recorded_at
       FROM fact_evidence ORDER BY id LIMIT ${MEMORY_STREAM_LIMITS.evidence + 1}`).all();
     if (rows.length > MEMORY_STREAM_LIMITS.facts || evidence.length > MEMORY_STREAM_LIMITS.evidence
@@ -117,7 +127,7 @@ export class MemoryStream {
       if (!timestamp(updatedAt)) throw Error('Invalid provenance');
       const revision = digest([row, ev, factUses]);
       const href = `/api/brief/memory/${encodeURIComponent(row.id)}`;
-      items.set(row.id, { factId: row.id, sourceId: null, sentence: `${row.subject_name} ${row.predicate} ${row.object}`,
+      items.set(row.id, { factId: row.id, sourceId: null, sentence: `${readableSubject(row.subject_name, row.subject_type, row.source)} ${row.predicate.replace(/_/g, ' ')} ${row.object}`,
         revision, ...(usageCoverage ? { usageCoverage } : {}), subjectId: row.subject_id, scope: row.scope, updatedAt, basis, status: row.status,
         validity: { from: row.valid_from, to: row.valid_to }, sourceSummary: { labels, evidenceCount: ev.length },
         provenance: ev.map(e => ({ kind: 'source', id: e.id, revision: digest(e) })), uses: factUses,

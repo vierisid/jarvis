@@ -229,3 +229,26 @@ export function usageLabel(row: MemoryItem) {
       .join(" · ") + " · recorded supply"
   );
 }
+
+const SOURCE_WORDS: Record<string, string> = {
+  llm_extraction: "Learned from a chat",
+  user_profile: "Added by you",
+  dashboard: "Added by you",
+};
+/** Plain-words source label; the raw label stays the filter value. */
+export function sourceWords(label: string): string {
+  const known = SOURCE_WORDS[label];
+  if (known) return known;
+  const spaced = label.replace(/[_-]+/g, " ").trim();
+  return spaced ? spaced[0]!.toUpperCase() + spaced.slice(1) : label;
+}
+const BASIS_WORDS: Record<string, string> = {
+  confirmed: "Confirmed by you",
+  reported: "Reported to Jarvis",
+  observed: "Observed",
+  inferred: "Inferred",
+  unspecified: "Basis not recorded",
+};
+export function basisWords(basis: string): string {
+  return BASIS_WORDS[basis] ?? basis;
+}

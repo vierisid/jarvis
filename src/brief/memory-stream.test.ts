@@ -175,3 +175,20 @@ test('history cycles terminate and oversized lineage is unavailable without trun
   getDb().transaction(() => { for (let i = 0; i < 99; i++) stmt.run(...entries.map(([k, v]) => k === 'id' ? `history-${i}` : v) as SQLQueryBindings[]); })();
   expect(provider.detail(a.id, true)).toEqual({ state: 'unavailable' });
 });
+test('workflow bookkeeping entities are left out of the stream and counts, and id-only subjects read as a type and source', async () => {
+  const flow = createEntity('project', 'lbk0h4QNrT2dLz9oEdSQQ', { entity_kind: 'workflow' });
+  const draft = createEntity('concept', 'zkRaquk048rgAX6HlPz84', { entity_kind: 'draft_version' });
+  createFact(flow.id, 'reported_schedule', 'daily', { source: 'llm_extraction' });
+  createFact(draft.id, 'requested_state', 'disabled draft', { source: 'llm_extraction' });
+  const bare = createEntity('project', 'qwErTy0123456789AbCdEf');
+  const kept = createFact(bare.id, 'reported_schedule', 'weekly', { source: 'llm_extraction' });
+  fact('tea');
+  const view = await page();
+  expect(view.count.total).toBe(2);
+  expect(view.items.map(i => i.sentence).join('\n')).not.toContain('lbk0h4QNrT2dLz9oEdSQQ');
+  const row = view.items.find(i => i.factId === kept.id)!;
+  expect(row.sentence).toBe('A project noted from a chat reported schedule weekly');
+  expect(row.sentence).not.toContain('qwErTy0123456789AbCdEf');
+  expect(view.items.some(i => i.sentence === 'Ada likes tea')).toBe(true);
+  expect(getDb().query('SELECT COUNT(*) c FROM facts').get()).toEqual({ c: 3 + 1 });
+});

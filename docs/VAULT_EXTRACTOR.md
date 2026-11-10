@@ -14,6 +14,12 @@ The Vault Extractor is an LLM-powered knowledge extraction system that automatic
 - **Provenance**: Every extracted claim is stored as inferred or reported evidence.
   Extraction can never confirm a fact or supersede a confirmed correction -- only
   an explicit decision in the Memory room can.
+- **What people see**: The Memory room lists facts about people, companies,
+  decisions and the like. Entities marked `properties.entity_kind` of `workflow`
+  or `draft_version` are workflow bookkeeping: they stay in the vault but are left
+  out of the Memory room and of workflow `vault_search`. Source and basis read in
+  plain words ("Learned from a chat", "Inferred"); a subject whose name is only a
+  generated id shows as its type and source, never the id.
 
 ## Architecture
 
