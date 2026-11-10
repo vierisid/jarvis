@@ -245,6 +245,15 @@ export function updateFlowMetadata(id: string, metadata: Record<string, unknown>
   if (res.changes === 0) throw new Error(`updateFlowMetadata: flow not found (id=${id})`);
 }
 
+/** Minutes one run of this flow saves, as set by its owner. Null clears it (the estimate applies again). */
+export function updateFlowTimeSavedPerRun(id: string, minutes: number | null): void {
+  if (minutes !== null && (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440)) {
+    throw new Error("time saved per run must be a whole number of minutes from 0 to 1440, or null");
+  }
+  const res = db().run(`UPDATE flow SET time_saved_per_run = ?, updated = ? WHERE id = ?`, [minutes, now(), id]);
+  if (res.changes === 0) throw new Error(`updateFlowTimeSavedPerRun: flow not found (id=${id})`);
+}
+
 export function deleteFlow(id: string): void {
   db().run(`DELETE FROM flow WHERE id = ?`, [id]);
 }

@@ -378,6 +378,10 @@
 .brief-root .wf-library__search { display: flex; align-items: center; gap: 8px; }
 .brief-root .wf-library__search input { flex: 1; min-width: 0; }
 
+/* Minutes each run saves: one quiet line above the setup details. */
+.brief-root .brief-canvas-time-saved { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-block: 4px 8px; font-size: 14px; }
+.brief-root .brief-canvas-time-saved p { margin: 0; color: var(--brief-secondary); }
+.brief-root .brief-canvas-time-saved form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; }
 /* Setup is part of the saved draft, with links into its existing inspector. */
 .brief-root .brief-canvas-setup { margin-block: 4px 12px; max-height: 200px; overflow: auto; font-size: 14px; }
 .brief-root .brief-canvas-setup summary { cursor: pointer; font-weight: 600; }

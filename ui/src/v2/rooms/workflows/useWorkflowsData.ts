@@ -33,6 +33,10 @@ export interface Flow {
    * and revoked through `POST /api/workflows/:id/code-steps`; see
    * `docs/WORKFLOW_AUTOMATION.md`.
    */
+  /** Minutes one successful run saves, as set by the owner; null when they have not. Set through `PATCH /api/workflows/:id`. */
+  timeSavedPerRun?: number | null;
+  /** What Today counts per run when the owner has not set minutes: an estimate from the flow's steps. */
+  estimatedTimeSavedPerRun?: number | null;
   codeSteps?: {
     enabled: boolean;
     grantedBy: "user" | "upgrade" | null;

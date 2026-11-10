@@ -3,6 +3,7 @@ import { getDb } from '../vault/schema';
 import { invalid, number, timezone } from '../goals/validation';
 import type { BriefMeasurement, BriefOutcome, BriefReadResult, BriefEvidenceRef } from './contracts';
 import { outcomeWindow, outcomeCalendar, type OutcomeWindow } from './outcome-windows';
+import { estimateMinutesFromJson, MAX_ESTIMATED_MINUTES_PER_WORKFLOW_PER_DAY } from '../workflows/time-saved-estimate';
 import { OutcomeConflict, outcomeId, readOutcomeTime, timeBack, timeCommand, type OutcomeTimeRecord } from './outcome-time';
 
 type WorkRow = { work_id: string; goal_id: string | null; mode: string; workflow_id: string | null; workflow_version_id: string | null;
@@ -15,9 +16,13 @@ export interface GoalDelta {
   goalId: string; title: string; change: BriefMeasurement | null; reason: 'missing_opening' | 'definition_changed' | null;
   attribution: 'observed_change_only'; rollup: 'independent';
 }
+/** One counted root run: its minutes and where they came from. */
+interface RunTime { runId: string; flowId: string; finishedAt: number; minutes: number; source: 'owner' | 'estimate'; capped?: boolean }
 export interface OutcomeSummary {
   window: OutcomeWindow; today: BriefMeasurement | null; week: BriefMeasurement | null;
-  days: { id: string; current: boolean; time: BriefMeasurement | null; coverage: OutcomeCoverage }[];
+  /** Plain-words basis of the figure above, e.g. "14 runs x about 12 min. Estimated from each workflow's steps." */
+  todayBasis: string | null; weekBasis: string | null;
+  days: { id: string; current: boolean; future: boolean; time: BriefMeasurement | null; basis: string | null; coverage: OutcomeCoverage }[];
   completedWork: BriefMeasurement | null; outcomes: BriefOutcome[]; goalDeltas: GoalDelta[]; todayGoalDeltas: GoalDelta[];
   coverage: OutcomeCoverage; basis: string;
 }
@@ -26,6 +31,20 @@ const parse = <T>(s: string | null): T | null => { try { return s ? JSON.parse(s
 const within = (at: number, w: OutcomeWindow, now: number) => Number.isSafeInteger(at) && at >= w.start && at < w.end && at <= now;
 const source = (id: string, revision: string): BriefEvidenceRef => ({ kind: 'source', id, revision });
 
+/**
+ * Time back has two tiers, and a run is counted in exactly one of them.
+ *
+ * 1. Checked work: a goal work item the owner checked, with a time record they
+ *    reported. Its root run counts the user-reported minutes, as before.
+ * 2. Every other successful root run of a workflow counts the minutes per run
+ *    the owner set on the workflow (`flow.time_saved_per_run`), or else an
+ *    estimate from the run's own flow version steps (`estimateMinutesFromJson`).
+ *    Enabling a workflow is enough: no check or time record is needed.
+ *
+ * A run counts when it SUCCEEDED in PRODUCTION, has no parent, is not a test or
+ * sample-data run, and finished inside the window. Child runs never count on
+ * their own. Run-derived minutes are qualified `estimated`, never `measured`.
+ */
 export class Outcomes {
   constructor(private readonly db: Database) {}
   private has(table: string) { return !!this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table); }
@@ -127,14 +146,84 @@ export class Outcomes {
       return items.length ? { state: 'ready', data: items, asOf: now, coverage } as const : { state: 'empty', asOf: now, coverage } as const;
     })();
   }
-  private aggregate(items: BriefOutcome[], field: 'timeBack' | 'result'): BriefMeasurement | null {
-    const values = items.map(item => item[field]).filter((m): m is BriefMeasurement => m !== null);
+  /** Root runs eligible for estimated time, finished inside `w`, except runs whose checked work already carries the owner's own time. */
+  private runTimes(w: OutcomeWindow, now: number, skip: Set<string>): RunTime[] {
+    if (!['flow_run', 'flow', 'flow_version'].every(t => this.has(t))) return [];
+    const rows = this.db.query<{ id: string; flow_id: string; finish_time: number; execution_config: string | null; owner_minutes: number | null; trigger: string | null; flow_version_id: string }, [number, number]>(
+      `SELECT r.id, r.flow_id, r.flow_version_id, r.finish_time, r.execution_config, f.time_saved_per_run AS owner_minutes, v.trigger
+       FROM flow_run r LEFT JOIN flow f ON f.id=r.flow_id LEFT JOIN flow_version v ON v.id=r.flow_version_id
+       WHERE r.status='SUCCEEDED' AND r.environment='PRODUCTION' AND r.parent_run_id IS NULL AND r.step_name_to_test IS NULL
+         AND r.finish_time >= ? AND r.finish_time < ? LIMIT 20001`).all(w.start, Math.min(w.end, now + 1));
+    if (rows.length > 20000) throw Error('Run coverage exceeds read bound');
+    const estimates = new Map<string, number>(), out: RunTime[] = [];
+    for (const row of rows) {
+      if (skip.has(row.id) || !Number.isSafeInteger(row.finish_time)) continue;
+      const execution = parse<{ sampleData?: unknown; sampleInputOverride?: unknown; stepNameToTest?: unknown }>(row.execution_config);
+      if (row.execution_config !== null && (!execution || execution.sampleData || execution.sampleInputOverride || execution.stepNameToTest)) continue;
+      const owner = row.owner_minutes !== null && Number.isFinite(row.owner_minutes) && row.owner_minutes >= 0 ? row.owner_minutes : null;
+      let minutes = owner;
+      if (minutes === null) {
+        if (!estimates.has(row.flow_version_id)) estimates.set(row.flow_version_id, estimateMinutesFromJson(row.trigger));
+        minutes = estimates.get(row.flow_version_id)!;
+      }
+      out.push({ runId: row.id, flowId: row.flow_id, finishedAt: row.finish_time, minutes, source: owner !== null ? 'owner' : 'estimate' });
+    }
+    return out;
+  }
+  /** Runs whose checked, timed work item already counts the owner's own minutes. */
+  private timedRunIds(evaluated: ReturnType<Outcomes['evaluate']>): Set<string> {
+    const ids = new Set<string>();
+    for (const { work, check, reason } of evaluated)
+      if (!reason && work.mode === 'workflow' && work.run_id && readOutcomeTime(this.db, work.work_id)?.resultCheckId === check!.id) ids.add(work.run_id);
+    return ids;
+  }
+  /** Checked-work time plus run-derived time for one window, with the basis in plain words. */
+  /** Default estimates stop at the per-workflow daily cap; owner-set minutes are never capped. */
+  private capEstimates(runs: RunTime[], days: OutcomeWindow[]): RunTime[] {
+    const used = new Map<string, number>();
+    return [...runs].sort((a, b) => a.finishedAt - b.finishedAt).map(run => {
+      if (run.source === 'owner') return run;
+      const key = `${run.flowId}|${days.findIndex(d => run.finishedAt >= d.start && run.finishedAt < d.end)}`;
+      const left = Math.max(0, MAX_ESTIMATED_MINUTES_PER_WORKFLOW_PER_DAY - (used.get(key) ?? 0)), minutes = Math.min(run.minutes, left);
+      used.set(key, (used.get(key) ?? 0) + minutes);
+      return minutes < run.minutes ? { ...run, minutes, capped: true } : run;
+    });
+  }
+  /** `known`: the window has started and runs can be read, so no successful run is a real zero, not an unknown. */
+  private time(items: BriefOutcome[], runs: RunTime[], known: boolean, now: number): { measurement: BriefMeasurement | null; basis: string | null } {
+    const checked = items.filter(i => i.timeBack !== null), parts = checked.map(i => i.timeBack!);
+    if (runs.length) {
+      const total = runs.reduce((n, r) => n + r.minutes, 0), flows = new Map<string, RunTime['source']>();
+      for (const r of runs) flows.set(r.flowId, r.source);
+      parts.push({ value: total, unit: 'minutes', baseline: total, target: null, asOf: Math.max(...runs.map(r => r.finishedAt)),
+        provenance: [...flows].map(([flowId, kind]) => source(`flow-runs:${flowId}`, kind === 'owner' ? 'owner-set-minutes' : 'estimated-from-steps')),
+        qualification: 'estimated' });
+    }
+    const measurement = this.aggregate(parts);
+    if (!measurement) return known ? { measurement: { value: 0, unit: 'minutes', baseline: 0, target: null, asOf: now,
+      provenance: [source('flow-runs:none', 'no-successful-runs')], qualification: 'estimated' }, basis: 'No time saved.' } : { measurement, basis: null };
+    const owner = runs.filter(r => r.source === 'owner').length, estimated = runs.length - owner;
+    const each = runs.length ? Math.round(runs.reduce((n, r) => n + r.minutes, 0) / runs.length) : 0;
+    const same = runs.every(r => r.minutes === runs[0]!.minutes);
+    const count = `${runs.length} ${runs.length === 1 ? 'run' : 'runs'}`;
+    const runBasis = !runs.length ? '' : owner && estimated ? `${count}, about ${each} min each. Some minutes you set, the rest estimated from the workflow's steps.`
+      : owner ? `${count} x ${same ? '' : 'about '}${each} min. You set the minutes per run.` : `${count} x about ${each} min. Estimated from the workflow's steps.`;
+    const checkedBasis = checked.length ? `${checked.length} checked work ${checked.length === 1 ? 'item' : 'items'} with minutes you reported.` : '';
+    const capBasis = runs.some(r => r.capped) ? `Estimates are capped at ${MAX_ESTIMATED_MINUTES_PER_WORKFLOW_PER_DAY} min per workflow per day.` : '';
+    return { measurement, basis: [runBasis, checkedBasis, capBasis].filter(Boolean).join(' ') };
+  }
+  private aggregate(values: BriefMeasurement[]): BriefMeasurement | null;
+  private aggregate(items: BriefOutcome[], field: 'result'): BriefMeasurement | null;
+  private aggregate(input: BriefMeasurement[] | BriefOutcome[], field?: 'result'): BriefMeasurement | null {
+    const values = field ? (input as BriefOutcome[]).map(item => item[field]).filter((m): m is BriefMeasurement => m !== null) : input as BriefMeasurement[];
     if (!values.length) return null;
     const refs = new Map<string, BriefEvidenceRef>();
     for (const m of values) for (const r of m.provenance) refs.set(JSON.stringify(r), r);
-    return { value: values.reduce((n, m) => n + m.value, 0), unit: field === 'timeBack' ? 'minutes' : 'checked work items',
-      baseline: field === 'timeBack' ? values.reduce((n, m) => n + m.baseline!, 0) : null, target: null,
-      asOf: Math.max(...values.map(m => m.asOf)), provenance: [...refs.values()], qualification: 'user_reported' };
+    return { value: values.reduce((n, m) => n + m.value, 0), unit: field ? 'checked work items' : 'minutes',
+      baseline: field ? null : values.reduce((n, m) => n + m.baseline!, 0), target: null,
+      asOf: Math.max(...values.map(m => m.asOf)), provenance: [...refs.values()],
+      // One run-derived part makes the whole figure an estimate; it is never promoted to what the owner reported.
+      qualification: values.every(m => m.qualification === 'user_reported') ? 'user_reported' : 'estimated' };
   }
   private goalDeltas(w: OutcomeWindow, now: number): GoalDelta[] {
     // Optional F15 persistence seam. No count is inferred from goal.score, titles,
@@ -173,16 +262,20 @@ export class Outcomes {
     return this.db.transaction(() => {
       const evaluated = this.evaluate(now), week = this.collect(calendar.week, now, evaluated), goals = this.goalDeltas(calendar.week, now);
       const todayGoals = this.goalDeltas(calendar.today, now);
-      const today = week.items.filter(i => within(i.result.asOf, calendar.today, now));
-      const data: OutcomeSummary = { window: calendar.week, today: this.aggregate(today, 'timeBack'), week: this.aggregate(week.items, 'timeBack'),
+      const skip = this.timedRunIds(evaluated), weekRuns = this.capEstimates(this.runTimes(calendar.week, now, skip), calendar.days), canRead = ['flow_run', 'flow', 'flow_version'].every(t => this.has(t));
+      const runsIn = (w: OutcomeWindow) => weekRuns.filter(r => within(r.finishedAt, w, now));
+      const todayTime = this.time(week.items.filter(i => within(i.result.asOf, calendar.today, now)), runsIn(calendar.today), canRead, now);
+      const weekTime = this.time(week.items, weekRuns, canRead, now);
+      const data: OutcomeSummary = { window: calendar.week, today: todayTime.measurement, week: weekTime.measurement,
+        todayBasis: todayTime.basis, weekBasis: weekTime.basis,
         days: calendar.days.map(day => {
-          const { items, coverage } = this.collect(day, now, evaluated);
-          return { id: day.id, current: day.id === calendar.date, time: this.aggregate(items, 'timeBack'), coverage };
+          const { items, coverage } = this.collect(day, now, evaluated), t = this.time(items, runsIn(day), canRead && day.start <= now, now);
+          return { id: day.id, current: day.id === calendar.date, future: day.start > now, time: t.measurement, basis: t.basis, coverage };
         }), completedWork: this.aggregate(week.items, 'result'), outcomes: week.items, goalDeltas: goals, todayGoalDeltas: todayGoals,
         coverage: { ...week.coverage, complete: week.coverage.complete && [...goals, ...todayGoals].every(g => g.change !== null) },
-        basis: 'User-checked work, counted once per root run. Time uses a user-reported manual baseline minus observed intervention intervals; missing evidence is omitted. Goal changes are independent observations, not causal attribution to work.' };
-      if (!week.items.length && !goals.length && (week.coverage.excluded.runtime_unavailable || week.coverage.excluded.run_coverage_incomplete)) return { state: 'unavailable', reason: 'provider_unavailable', coverage: data.coverage } as const;
-      return week.items.length || goals.length ? { state: 'ready', data, asOf: now, coverage: data.coverage } as const : { state: 'empty', asOf: now, coverage: data.coverage } as const;
+        basis: 'Time saved counts every successful run of your workflows once, never its child runs or test runs. Each run counts the minutes you set for the workflow, or an estimate from its steps, and both are estimates. Work you checked and timed yourself uses your own numbers. Goal changes are independent observations, not causal attribution to work.' };
+      if (!week.items.length && !weekRuns.length && !goals.length && (week.coverage.excluded.runtime_unavailable || week.coverage.excluded.run_coverage_incomplete)) return { state: 'unavailable', reason: 'provider_unavailable', coverage: data.coverage } as const;
+      return week.items.length || weekRuns.length || goals.length || canRead ? { state: 'ready', data, asOf: now, coverage: data.coverage } as const : { state: 'empty', asOf: now, coverage: data.coverage } as const;
     })();
   }
   recordTime(workId: string, raw: unknown): OutcomeTimeRecord {

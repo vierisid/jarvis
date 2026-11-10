@@ -2,13 +2,21 @@ import type { BriefMeasurement, BriefOutcome } from "../../../../../src/brief/co
 import { isBriefCapabilityEnabled } from "../../../../../src/brief/capabilities";
 import type { BriefViewPort } from "../../contracts";
 
-/** F-16 supplies aggregates and their evidence. This view never sums runs, interprets
- * goal scores, or subtracts engine duration to manufacture time saved. */
+/** F-16 supplies aggregates and their evidence. This view never sums runs itself, interprets
+ * goal scores, or subtracts engine duration to manufacture time saved. Time figures built from
+ * runs arrive qualified `estimated` and are labelled so. */
 export interface OutcomeSummary {
   window: BriefOutcome["window"];
   today: BriefMeasurement | null;
   week: BriefMeasurement | null;
-  days: readonly { id: string; label: string; current: boolean; time: BriefMeasurement | null }[];
+  /** Plain-words basis of `today` and `week`, e.g. "14 runs x about 12 min. Estimated from the workflow's steps." */
+  todayBasis?: string | null;
+  weekBasis?: string | null;
+  days: readonly { id: string; label: string; current: boolean; time: BriefMeasurement | null; basis?: string | null;
+    /** A day that has not started: blank, never a zero or an unknown. */
+    future?: boolean;
+    /** Full date for the tooltip when `label` is short. */
+    title?: string }[];
   /** Stable chart scale for this window, in minutes. Overflow is explicitly marked. */
   chartMaxMinutes: number;
   goal: {
@@ -34,13 +42,18 @@ export function outcomeView<T>(mode: "live" | "preview", binding?: OutcomeBindin
 }
 
 /** Display guard, not an evaluator of whether the underlying evidence is sufficient. */
-export function qualified(measurement: BriefMeasurement | null | undefined): measurement is BriefMeasurement {
+function complete(measurement: BriefMeasurement | null | undefined): measurement is BriefMeasurement {
   return !!measurement && Number.isFinite(measurement.value) && Number.isFinite(new Date(measurement.asOf).getTime())
-    && !!measurement.unit.trim() && measurement.provenance.length > 0
-    && ["measured", "user_reported"].includes(measurement.qualification);
+    && !!measurement.unit.trim() && measurement.provenance.length > 0;
 }
+/** Goal figures are measured or reported by the owner; an estimate never qualifies one. */
+export function qualified(measurement: BriefMeasurement | null | undefined): measurement is BriefMeasurement {
+  return complete(measurement) && ["measured", "user_reported"].includes(measurement.qualification);
+}
+/** Time may also be `estimated` (counted runs times assumed minutes), and is then labelled as such, never as measured. */
 export function qualifiedTime(measurement: BriefMeasurement | null | undefined): measurement is BriefMeasurement {
-  return qualified(measurement) && measurement.unit === "minutes" && measurement.value >= 0
+  return complete(measurement) && ["measured", "user_reported", "estimated"].includes(measurement.qualification)
+    && measurement.unit === "minutes" && measurement.value >= 0
     && measurement.baseline !== null && Number.isFinite(measurement.baseline) && measurement.baseline >= measurement.value;
 }
 export function qualifiedProgress(measurement: BriefMeasurement | null | undefined): measurement is BriefMeasurement & { target: number } {
@@ -50,6 +63,9 @@ export function qualifiedProgress(measurement: BriefMeasurement | null | undefin
 export function progressBand(value: number, target: number) {
   const ratio = value / target;
   return ratio < .2 ? "near" : ratio < .4 ? "early" : ratio < .75 ? "middle" : "complete";
+}
+export function qualificationLabel(measurement: BriefMeasurement) {
+  return measurement.qualification === "estimated" ? "Estimated" : measurement.qualification === "user_reported" ? "User reported" : "Measured";
 }
 export const formatNumber = (value: number) => new Intl.NumberFormat("en", { maximumSignificantDigits: 12 }).format(value);
 export function weekTime(value: number) {
