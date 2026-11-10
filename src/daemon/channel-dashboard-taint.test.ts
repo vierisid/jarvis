@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { AgentService } from './agent-service.ts';
-import { CHANNEL_GUEST_CONVERSATION_SOURCE, isChannelGuestConversation } from './channel-service.ts';
+import { CHANNEL_GUEST_CONVERSATION_SOURCE, isChannelGuestConversation, isChannelGuestThread } from './channel-service.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
 import { ApprovalManager } from '../authority/approval.ts';
@@ -143,4 +143,18 @@ test('control: a Brief turn on the owner\'s own thread still learns', async () =
   for await (const _event of result.stream) { /* drain */ }
   await result.onComplete('Noted.');
   expect(learned.sort()).toEqual(['extract', 'learn']);
+});
+
+// #1313 follow-up: the Brief transport frames a thread's rows as a guest's by
+// its sender alone. A forward in the owner's own thread taints the turn, but
+// does not make the owner's own words read as a guest's.
+test('a guest thread is decided by its sender, not by a forward in it', () => {
+  const owner = getOrCreateConversation('telegram', { sender: 'user:42/chat:42' }).id;
+  getDb().run("INSERT INTO conversation_messages (id, conversation_id, role, content, created_at) VALUES ('f1', ?, 'user', 'fwd', 1)", [owner]);
+  getDb().run("INSERT INTO conversation_forwards (message_id, conversation_id) VALUES ('f1', ?)", [owner]);
+  expect(isChannelGuestConversation(owner, channels)).toBe(true);
+  expect(isChannelGuestThread(owner, channels)).toBe(false);
+  expect(isChannelGuestThread(getOrCreateConversation('telegram', { sender: 'user:7/chat:7' }).id, channels)).toBe(true);
+  expect(isChannelGuestThread(getOrCreateConversation('telegram').id, channels)).toBe(true);
+  expect(isChannelGuestThread(getOrCreateConversation('websocket').id, channels)).toBe(false);
 });

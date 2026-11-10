@@ -1204,6 +1204,21 @@ export const CHANNEL_GUEST_CONVERSATION_SOURCE = 'channel guest conversation';
  * continuing one there runs a turn with their tools on that history.
  */
 export function isChannelGuestConversation(conversationId: string, channels: JarvisConfig['channels']): boolean {
+  return channelConversationHolds(conversationId, channels, true);
+}
+
+/**
+ * Whether a conversation is a channel thread whose sender is not the
+ * channel's current owner, or has none (saved before #884): its rows not
+ * written in Brief are a guest's (#1313 follow-up). Unlike
+ * isChannelGuestConversation, a forward in the owner's own thread does not
+ * count: the forward is framed on its own, and the owner's words stay theirs.
+ */
+export function isChannelGuestThread(conversationId: string, channels: JarvisConfig['channels']): boolean {
+  return channelConversationHolds(conversationId, channels, false);
+}
+
+function channelConversationHolds(conversationId: string, channels: JarvisConfig['channels'], countForwards: boolean): boolean {
   let row: { channel: string; sender: string | null; forwards: number } | null;
   try {
     row = getDb().query(`SELECT channel, sender,
@@ -1221,7 +1236,7 @@ export function isChannelGuestConversation(conversationId: string, channels: Jar
   // tainted by the transport from the very rows its history read
   // (ChatTurnRepository.historyWithForwards), so a framed forward never
   // reaches the untainted conv path, whose compactor would cut it.
-  if (!row.sender || row.forwards) return true;
+  if (!row.sender || (countForwards && row.forwards)) return true;
   const userId = /^user:([^/]+)\//.exec(row.sender)?.[1];
   const raw = row.channel === 'telegram' ? channels?.telegram?.allowed_users : channels?.discord?.allowed_users;
   const owner = channelOwnerId(row.channel, raw);

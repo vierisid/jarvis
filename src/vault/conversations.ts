@@ -276,8 +276,12 @@ export function pruneChannelConversationMessages(before: number, alsoChannels: r
   // failed earlier sweep left behind is still cleared.
   const tables = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name));
   if (tables.has('brief_chat_turns')) {
+    // Not while a message it wrote is still stored: a reply newer than the
+    // cutoff would otherwise lose the record that keeps it out of a guest's
+    // turn (briefTurnMessageIds, #1313 follow-up). A later sweep takes both.
     const turns = `SELECT turn_id FROM brief_chat_turns WHERE created_at < ? AND state IN ('completed', 'failed', 'cancelled')
-      AND conversation_id IN (${owned})`;
+      AND conversation_id IN (${owned})
+      AND NOT EXISTS (SELECT 1 FROM conversation_messages m WHERE m.id IN (brief_chat_turns.user_message_id, brief_chat_turns.assistant_message_id))`;
     db.transaction(() => {
       if (tables.has('brief_chat_attachments')) {
         db.prepare(`UPDATE brief_chat_attachments SET turn_id = NULL, bytes = NULL, extracted_text = NULL,
