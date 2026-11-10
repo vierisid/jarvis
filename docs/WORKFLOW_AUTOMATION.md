@@ -152,12 +152,17 @@ Practical consequences:
   sessions, stats, the daily and weekly reports, insights and the live
   context), what is derived from captures (suggestions, routines,
   compositions, a suggestion's learning, opportunities and the Brief's
-  prepared opportunities) answer `409 AWARENESS_OFF` with no data, which the
-  Brief and the Routines panel show as "awareness is off"; screen-capture
-  observations are left out of every observation read (the Logs room, the
-  palette search, the agents' prompts); the awareness service's own read
-  methods return nothing; and a flow's `awarenessRecent` context returns no
-  activity. Vault entities and goal notes once written from awareness are
+  prepared opportunities) answer `409 AWARENESS_OFF` with no data, and so do
+  the writes on them (accept, retry, dismiss, act, opportunity feedback and the
+  prepared-opportunity ensure, dismiss and retry), which answer with the
+  records they change; the Brief's Today stack, the Opportunities room and the
+  Routines panel show "awareness is off" and clear what they showed before;
+  screen-capture observations are left out of every observation read (the
+  Logs room, the palette search, the agents' prompts); the awareness
+  service's own read methods, the live context and the current session
+  included, return nothing; the background composers that turn recorded
+  evidence into drafts wait until awareness is on; and a flow's
+  `awarenessRecent` context returns no activity. Vault entities and goal notes once written from awareness are
   ordinary data and stay visible (owner decision). Nothing is deleted; it shows
   again when awareness is turned back on. Not covered: shell commands
   (`run_command`) that read the screen (owner decision: left as is) and the

@@ -159,3 +159,19 @@ test('saved waiting work explains unavailable preparation instead of silently ap
   expect(host.textContent).toContain('Preparation is unavailable. Your saved requests are kept.');
   expect(host.textContent).toContain('0 waiting');
 });
+
+test("turning awareness off clears routines already on screen and says so (#1314 review)", async () => {
+  const { setScreenCaptureEnabledSource } = await import("../../../../../src/actions/tools/desktop-guard");
+  await mount(); expect(host.textContent).toContain("Invoice review"); expect(host.textContent).toContain("capture-1");
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    await act(async () => button("Refresh requests").click());
+    expect(host.textContent).not.toContain("Invoice review");
+    expect(host.textContent).not.toContain("capture-1");
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("Screen awareness is off");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    setScreenCaptureEnabledSource(null);
+    await act(async () => button("Refresh requests").click());
+    expect(host.textContent).toContain("Invoice review");
+  } finally { setScreenCaptureEnabledSource(null); }
+});
