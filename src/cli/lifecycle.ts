@@ -1,9 +1,10 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readlinkSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import os from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import YAML from 'yaml';
-import { readLockedPort, isProcessAlive } from '../daemon/pid.ts';
+import { readLockedPort, isProcessAlive, getPidPath } from '../daemon/pid.ts';
 import { readPortSetting, type PortSetting } from '../config/port.ts';
 import { win32SystemExe } from '../util/system-exe.ts';
 
@@ -75,20 +76,82 @@ async function findListeningPids(port: number, currentPid: number): Promise<numb
   )];
 }
 
+/** The `bin/jarvis.ts` of THIS install: what its daemons are started from. */
+const OWN_ENTRY = join(import.meta.dir, '..', '..', 'bin', 'jarvis.ts');
+
+function realpathOrNull(path: string): string | null {
+  try { return realpathSync(path); } catch { return null; }
+}
+
+/**
+ * Is this command line (argv of a process) this install's own `jarvis`?
+ *
+ * Compared by real path, so the symlink a global install puts on PATH counts
+ * and a different program that merely mentions "jarvis" does not. This is the
+ * proof `jarvis stop` needs before it signals a process it did not find
+ * through its own lock.
+ */
+export function isOwnJarvisCommand(argv: string[], entry: string = OWN_ENTRY, cwd?: string): boolean {
+  const own = realpathOrNull(entry);
+  if (own === null) return false;
+  // A relative path (`bun run bin/jarvis.ts`) means something only from the
+  // process's own directory, not ours.
+  return argv.some((arg) => arg.includes('/') && realpathOrNull(cwd ? resolve(cwd, arg) : arg) === own);
+}
+
+function readProcessCwd(pid: number): string | undefined {
+  try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return undefined; }
+}
+
+/** argv of a process, or null when it cannot be read (gone, or not ours to read). */
+async function readProcessArgv(pid: number): Promise<string[] | null> {
+  if (os.platform() === 'linux') {
+    try {
+      const raw = readFileSync(`/proc/${pid}/cmdline`, 'utf-8');
+      const argv = raw.split('\0').filter((a) => a !== '');
+      if (argv.length > 0) return argv;
+    } catch { /* fall through to ps */ }
+  }
+  if (os.platform() === 'win32') return null;
+  const out = (await captureOutput(['ps', '-o', 'args=', '-p', String(pid)])).trim();
+  return out === '' ? null : out.split(/\s+/);
+}
+
+/** A listener that is not provably this Jarvis. `name` is the program only, never its arguments. */
+export interface ForeignListener { pid: number; name: string }
+
+/**
+ * Clear `port` of THIS install's own Jarvis processes, and report everything
+ * else that holds it without touching it.
+ *
+ * Only a process whose command line is this Jarvis is signalled. A port number
+ * proves nothing about who is behind it: the founder's other dev server on 3142
+ * used to be SIGTERMed and then SIGKILLed by `jarvis stop` (config.example.yaml
+ * promises stop never goes after someone else's listener). Those come back in
+ * `foreign`, named by program only because arguments can carry secrets.
+ * `stuck` is our own listeners that would not die.
+ */
 export async function ensurePortReleased(
   port: number,
   currentPid: number = process.pid,
-): Promise<{ released: boolean; terminated: number[]; forced: number[] }> {
+  isOurs: (pid: number) => Promise<boolean> = async (pid) => {
+    const argv = await readProcessArgv(pid);
+    return argv !== null && isOwnJarvisCommand(argv, OWN_ENTRY, readProcessCwd(pid));
+  },
+): Promise<{ released: boolean; terminated: number[]; forced: number[]; foreign: ForeignListener[]; stuck: number[] }> {
   const initialPids = await findListeningPids(port, currentPid);
-  if (initialPids.length === 0) {
-    return { released: true, terminated: [], forced: [] };
-  }
-
   const terminated: number[] = [];
   const forced: number[] = [];
+  const foreign: ForeignListener[] = [];
 
   for (const pid of initialPids) {
     if (!isPidAlive(pid)) continue;
+
+    if (!await isOurs(pid)) {
+      const argv = await readProcessArgv(pid);
+      foreign.push({ pid, name: argv ? basename(argv[0]!) : 'unknown program' });
+      continue;
+    }
 
     try {
       process.kill(pid, 'SIGTERM');
@@ -121,11 +184,132 @@ export async function ensurePortReleased(
     }
   }
 
+  const remaining = await findListeningPids(port, currentPid);
+  const foreignPids = new Set(foreign.map((f) => f.pid));
   return {
-    released: (await findListeningPids(port, currentPid)).length === 0,
+    released: remaining.length === 0,
     terminated,
     forced,
+    foreign,
+    stuck: remaining.filter((pid) => !foreignPids.has(pid)),
   };
+}
+
+/** True when nothing is bound to `port` (checked by binding it, as the daemon will). */
+export function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once('error', () => resolve(false));
+    server.listen({ port }, () => server.close(() => resolve(true)));
+  });
+}
+
+/**
+ * Is `pid` the one answering on `port`? Used by `start -d` so a stranger that
+ * already held the port cannot pass for the daemon we just started. When the
+ * listener cannot be looked up (no lsof or ss), a connection is all we have.
+ */
+export async function daemonOwnsPort(pid: number, port: number): Promise<boolean> {
+  const accepting = await new Promise<boolean>((resolve) => {
+    const socket = Bun.connect({
+      hostname: '127.0.0.1',
+      port,
+      socket: { open(s) { s.end(); resolve(true); }, data() {}, error() { resolve(false); }, connectError() { resolve(false); } },
+    });
+    socket.catch(() => resolve(false));
+  });
+  if (!accepting) return false;
+  const holders = await findListeningPids(port, process.pid);
+  return holders.length === 0 || holders.includes(pid);
+}
+
+/**
+ * `--port N` or `--port=N` from a command line.
+ *
+ * Neither "missing" nor "unusable" may fall through to the default: a typo'd
+ * `--port=3196` used to be ignored and the daemon came up on 3142 with nothing
+ * said. `port` is undefined only when the flag is absent.
+ */
+export function parsePortArg(args: string[]): { port: number | undefined } | { error: string } {
+  const message = '--port requires a number between 1 and 65535';
+  let raw: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === '--port') {
+      const next = args[i + 1];
+      if (next === undefined || next.startsWith('-')) return { error: message };
+      raw = next;
+      break;
+    }
+    if (arg.startsWith('--port=')) {
+      raw = arg.slice('--port='.length);
+      break;
+    }
+  }
+  if (raw === undefined) return { port: undefined };
+  const port = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : NaN;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return { error: message };
+  return { port };
+}
+
+/** How the running daemon was started, so `jarvis restart` can start it the same way. */
+export interface LaunchRecord {
+  pid: number;
+  detached: boolean;
+  noOpen: boolean;
+  noLocalTools: boolean;
+  port?: number;
+  dataDir?: string;
+  systemConfigPath?: string;
+}
+
+function launchRecordPath(): string {
+  return join(dirname(getPidPath()), 'jarvis.launch.json');
+}
+
+export function writeLaunchRecord(record: LaunchRecord): void {
+  try { writeFileSync(launchRecordPath(), JSON.stringify(record), { mode: 0o600 }); } catch { /* restart just falls back to plain args */ }
+}
+
+export function clearLaunchRecord(): void {
+  try { unlinkSync(launchRecordPath()); } catch { /* absent */ }
+}
+
+/** The record for the daemon with this pid. A record left by an earlier daemon is ignored. */
+export function readLaunchRecord(pid: number): LaunchRecord | null {
+  try {
+    const raw = JSON.parse(readFileSync(launchRecordPath(), 'utf-8')) as Partial<LaunchRecord> | null;
+    if (!raw || raw.pid !== pid) return null;
+    const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : undefined);
+    return {
+      pid,
+      detached: raw.detached === true,
+      noOpen: raw.noOpen === true,
+      noLocalTools: raw.noLocalTools === true,
+      port: validPort(raw.port) ?? undefined,
+      dataDir: str(raw.dataDir),
+      systemConfigPath: str(raw.systemConfigPath),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The arguments `jarvis restart` hands to start: what the daemon was started
+ * with, except for anything the user passes now.
+ */
+export function restartStartArgs(record: LaunchRecord | null, userArgs: string[]): string[] {
+  const out = [...userArgs];
+  if (!record) return out;
+  const given = (...flags: string[]) => userArgs.some((a) => flags.some((f) => a === f || a.startsWith(`${f}=`)));
+  if (record.detached && !given('-d', '--detach')) out.push('--detach');
+  if (record.noOpen && !given('--no-open')) out.push('--no-open');
+  if (record.noLocalTools && !given('--no-local-tools')) out.push('--no-local-tools');
+  if (record.port !== undefined && !given('--port')) out.push('--port', String(record.port));
+  if (record.dataDir !== undefined && !given('--data-dir')) out.push('--data-dir', record.dataDir);
+  if (record.systemConfigPath !== undefined && !given('--system-config')) out.push('--system-config', record.systemConfigPath);
+  return out;
 }
 
 /**
