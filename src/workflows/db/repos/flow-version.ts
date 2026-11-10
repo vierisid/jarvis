@@ -16,6 +16,7 @@ import { touchFlow } from "./flow";
 import { assertLiveDraftReady, graphReadiness } from './flow-readiness';
 import { assertCodeStepsAllowedForLiveDraft } from "./flow-code-steps";
 import { repinLiveDraft } from "./binding-pins";
+import { applyWebhookSecretRules, WebhookSecretError } from "../../runner/triggers/webhook-secret";
 
 export type FlowVersionState = "DRAFT" | "LOCKED";
 
@@ -255,10 +256,33 @@ function rowToFlowVersion(row: FlowVersionRow): FlowVersion {
   };
 }
 
+/**
+ * A Webhook trigger's signing secret as it may be saved (#1153): a created or
+ * changed secret meets the length floor and is timestamped; one already
+ * stored, here or in any version (a copy of an existing webhook), keeps
+ * working as it is. Every writer of a version passes through here.
+ */
+function webhookSecretRules<T>(previous: unknown, trigger: T): T {
+  try {
+    return applyWebhookSecretRules(previous, trigger, (secret) => db().query<{ one: number }, [string]>(
+      "SELECT 1 AS one FROM flow_version WHERE instr(trigger, ?) > 0 LIMIT 1").get(`"secret":${JSON.stringify(secret)}`) !== null);
+  } catch (error) {
+    if (error instanceof WebhookSecretError) throw new FlowVersionRequestError(error.message, 400);
+    throw error;
+  }
+}
+
+/** The flow's most recent version's trigger, the one a new draft follows. */
+function latestTrigger(flowId: string): unknown {
+  const row = db().query<{ trigger: string }, [string]>(
+    "SELECT trigger FROM flow_version WHERE flow_id = ? ORDER BY created DESC, rowid DESC LIMIT 1").get(flowId);
+  return row ? JSON.parse(row.trigger) : null;
+}
+
 export function createDraftVersion(input: CreateDraftVersionInput): FlowVersion {
   const id = apId();
   const ts = now();
-  const trigger = input.trigger ?? {};
+  const trigger = webhookSecretRules(latestTrigger(input.flowId), input.trigger ?? {});
   // A new draft becomes the LATEST draft, which is the version an ENABLED
   // flow with nothing published actually runs. See the gate's own comment.
   assertCodeStepsAllowedForLiveDraft(input.flowId, trigger);
@@ -328,6 +352,7 @@ export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): 
     throw new FlowVersionRequestError(
       `version ${id} is LOCKED and cannot be edited; create a new draft to change it`, 409);
   }
+  if (patch.trigger !== undefined) patch = { ...patch, trigger: webhookSecretRules(JSON.parse(existing.trigger), patch.trigger) };
   // A draft is mutated in place, so writing a CODE step into the draft an
   // ENABLED flow is already running would deploy it without passing publish.
   if (patch.trigger !== undefined) assertCodeStepsAllowedForLiveDraft(existing.flow_id, patch.trigger);

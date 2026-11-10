@@ -156,10 +156,10 @@ describe("manage_workflow tool", () => {
     const { updateDraftVersion } = await import("../../workflows/db/repos/flow-version.ts");
     const created = (await call("create", { name: "hooked", empty: true })) as { id: string };
     updateDraftVersion(getLatestDraft(created.id)!.id, {
-      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: { secret: "whsec-s3cret-value" } } } as never,
+      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: { secret: "whsec-s3cret-value-of-at-least-32-chars" } } } as never,
     });
     const got = await call("get", { flow: "hooked" }) as { latestDraft: { trigger: { settings: { input: { secret: string } } } } };
-    expect(JSON.stringify(got)).not.toContain("whsec-s3cret-value");
+    expect(JSON.stringify(got)).not.toContain("s3cret-value");
     expect(got.latestDraft.trigger.settings.input.secret).toBe("[redacted]");
     for (const view of ['definition', 'validation']) {
       let text = '', cursor: string | null = null;
@@ -167,11 +167,11 @@ describe("manage_workflow tool", () => {
         const page = await call('get', { flow: created.id, view, ...(cursor ? { cursor } : {}) }) as { content: string; nextCursor: string | null };
         text += page.content; cursor = page.nextCursor;
       } while (cursor);
-      expect(text).not.toContain('whsec-s3cret-value');
+      expect(text).not.toContain("s3cret-value");
       if (view === 'definition') expect(JSON.parse(text).trigger.settings.input.secret).toBe('[redacted]');
     }
     // The stored version keeps it: the ingress still checks against it.
-    expect((getLatestDraft(created.id)!.trigger as unknown as { settings: { input: { secret: string } } }).settings.input.secret).toBe("whsec-s3cret-value");
+    expect((getLatestDraft(created.id)!.trigger as unknown as { settings: { input: { secret: string } } }).settings.input.secret).toBe("whsec-s3cret-value-of-at-least-32-chars");
   });
 
   describe("HTTP-step inline credentials (#1153)", () => {

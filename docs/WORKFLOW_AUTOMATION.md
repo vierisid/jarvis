@@ -719,10 +719,32 @@ HTTP request specifics:
   request's duration are bounded only by the run's own deadline.
 
 The Webhook trigger has an optional signing secret, now a field in the editor.
-With one set, `/api/webhooks/<flowId>` refuses a request unless
-`X-Jarvis-Signature` carries the hex HMAC-SHA256 of the raw body keyed with
-it. Without one, the flow id is the whole capability, and either way what a
-request sends is untrusted input.
+With one set, `/api/webhooks/<flowId>` refuses a request unless it carries
+`X-Jarvis-Timestamp` (Unix seconds) and `X-Jarvis-Signature`, the hex
+HMAC-SHA256 keyed with the secret of `<timestamp>.<raw body>` (the timestamp,
+a dot, then the body exactly as sent). A timestamp more than 5 minutes from
+the daemon's clock is refused, and the same signature is answered as a repeat
+for as long as its timestamp is accepted, so a captured request cannot be run
+again (#1153). A secret must be at least 32 characters when it is set or
+changed. Without one, the flow id is the whole capability, and either way what
+a request sends is untrusted input.
+
+A sender signs like this:
+
+```
+ts=$(date +%s)
+sig=$(printf '%s.%s' "$ts" "$body" | openssl dgst -sha256 -hmac "$secret" -hex | sed 's/^.* //')
+curl -X POST "$url" -H "X-Jarvis-Timestamp: $ts" -H "X-Jarvis-Signature: $sig" --data "$body"
+```
+
+Webhooks whose secret was saved before #1153 are LEGACY (no
+`signature_scheme: "timestamped"` in the trigger input): they keep accepting
+the old signature over the raw body alone, which a captured request can
+replay after the 10-minute repeat window, and they also accept a timestamped
+request, so senders can move first. The editor marks such a webhook as legacy
+and offers "Require timestamps", which sets the scheme; a webhook never goes
+back to legacy while it keeps its secret, and setting a new secret makes it
+timestamped. Short legacy secrets keep working until they are changed.
 
 ### `CODE` steps need a per-flow opt-in
 
@@ -1427,7 +1449,7 @@ For the community-pieces curation flow (how a piece reaches the Verified tier, s
 | Source | How it's wired |
 |---|---|
 | `schedule` | Routed to `CronScheduler`. Supports the standard 5-field cron plus a `@every Ns` sub-minute extension. Job ID is `flow:{flowId}`. |
-| `webhook` | Routed to `WebhookManager`. Registers `/api/webhooks/<flowId>`. GET and POST both fire. An optional `secret` (the editor's "Signing secret") makes it refuse any request whose `X-Jarvis-Signature` is not the hex HMAC-SHA256 of the raw body. |
+| `webhook` | Routed to `WebhookManager`. Registers `/api/webhooks/<flowId>`. GET and POST both fire. An optional `secret` (the editor's "Signing secret", at least 32 characters when set) makes it refuse any request whose `X-Jarvis-Signature` is not the hex HMAC-SHA256 of `<X-Jarvis-Timestamp>.<raw body>` with a timestamp within 5 minutes; a legacy webhook (saved before #1153, no `signature_scheme: "timestamped"`) also takes a body-only signature. |
 | Engine-managed (anything else) | The piece's trigger logic runs in the engine. `EXECUTE_TRIGGER_HOOK(ON_ENABLE)` returns either `scheduleOptions` (registered with `CronScheduler`) or `listeners` (registered with `WebhookManager`). On disable, `EXECUTE_TRIGGER_HOOK(ON_DISABLE)` runs first; persistent state clears even if the engine call fails. |
 
 Polling triggers (e.g. Gmail's watch) live in this third category: the engine schedules a cron-driven `RUN` of the trigger's polling logic and emits new items.

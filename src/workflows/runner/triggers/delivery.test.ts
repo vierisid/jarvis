@@ -32,6 +32,7 @@ import { Worker } from "../../queue/worker";
 import { createRunFlowHandler, RUN_FLOW } from "../handler";
 import { TriggerManager } from "./manager";
 import { scheduleZoneWarning } from "./schedule-zone";
+import { WEBHOOK_TIMESTAMP_TOLERANCE_S } from "./webhook-secret";
 import { getScheduleWatch, setScheduleWatch } from "../../db/repos/trigger-fire";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
 import { createWaitpoint } from "../../db/repos/waitpoint";
@@ -117,6 +118,23 @@ const post = (d: { manager: TriggerManager }, flowId: string, body: string, head
 const runsOf = (flowId: string) => listRuns({ flowId, limit: 100 });
 const finishAll = (flowId: string) => { for (const run of runsOf(flowId)) updateRun(run.id, { status: "SUCCEEDED", finishTime: Date.now() }); };
 const labels = (flowId: string) => listFlowFires(flowId).map(f => f.label);
+
+/** A new webhook secret: at least 32 characters, timestamped (#1153). */
+const SECRET = "fixture-signing-secret-of-32-chars-or-more";
+
+/** The headers of a timestamped request: `X-Jarvis-Signature` over `<timestamp>.<body>`. */
+async function timestamped(secret: string, body: string): Promise<Record<string, string>> {
+  const ts = String(Math.floor(Date.now() / 1000));
+  return { "X-Jarvis-Timestamp": ts, "X-Jarvis-Signature": await hmacHex(secret, `${ts}.${body}`) };
+}
+
+/** A webhook as an install before #1153 stored it: a short secret, no scheme. Written past the save rules, as the old code wrote it. */
+function legacyWebhook(secret: string): { flowId: string; versionId: string } {
+  const out = webhook();
+  getWorkflowDb().run("UPDATE flow_version SET trigger = ? WHERE id = ?",
+    [JSON.stringify({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input: { secret } } }), out.versionId]);
+  return out;
+}
 
 async function hmacHex(secret: string, body: string): Promise<string> {
   const enc = new TextEncoder();
@@ -541,25 +559,45 @@ describe("webhooks", () => {
   });
 
   test("on a signed workflow only what the signature covers names a delivery: a replay under a fresh id header is a repeat", async () => {
-    const { flowId } = webhook({ secret: "s3cret" });
+    const { flowId } = webhook({ secret: SECRET });
     const start = Date.now();
     const d = await daemon(start);
     const body = '{"order":1}';
-    const sig = await hmacHex("s3cret", body);
-    expect(await (await post(d, flowId, body, { "X-Jarvis-Signature": sig, "Idempotency-Key": "a" })).json()).toMatchObject({ outcome: "started" });
-    expect(await (await post(d, flowId, body, { "X-Jarvis-Signature": sig, "Idempotency-Key": "b" })).json()).toMatchObject({ outcome: "duplicate" });
-    // An event id inside the signed body names the delivery past the ten minutes.
+    const signed = await timestamped(SECRET, body);
+    expect(await (await post(d, flowId, body, { ...signed, "Idempotency-Key": "a" })).json()).toMatchObject({ outcome: "started" });
+    expect(await (await post(d, flowId, body, { ...signed, "Idempotency-Key": "b" })).json()).toMatchObject({ outcome: "duplicate" });
+    // An event id inside the signed body names the delivery past the repeat window, re-signed with a fresh timestamp.
     const event = '{"id":"evt_9","object":"event"}';
-    const eventSig = await hmacHex("s3cret", event);
-    await post(d, flowId, event, { "X-Jarvis-Signature": eventSig });
-    setSystemTime(new Date(start + 11 * 60_000));
-    expect(await (await post(d, flowId, event, { "X-Jarvis-Signature": eventSig })).json()).toMatchObject({ outcome: "duplicate" });
+    await post(d, flowId, event, await timestamped(SECRET, event));
+    setSystemTime(new Date(start + 12 * 60_000));
+    expect(await (await post(d, flowId, event, await timestamped(SECRET, event))).json()).toMatchObject({ outcome: "duplicate" });
     expect(runsOf(flowId)).toHaveLength(2);
     await d.stop();
   });
 
-  test("an identical signed request is one delivery for ten minutes; identical unsigned pings are not deduplicated", async () => {
-    const signed = webhook({ secret: "s3cret" });
+  test("#1153: a timestamped request is a repeat while its timestamp is accepted, and refused after, so it cannot be replayed", async () => {
+    const { flowId } = webhook({ secret: SECRET });
+    const start = Date.now();
+    const d = await daemon(start);
+    const body = '{"ping":true}';
+    const signed = await timestamped(SECRET, body);
+    expect(await (await post(d, flowId, body, signed)).json()).toMatchObject({ outcome: "started" });
+    // Just inside the tolerance it is still a repeat ...
+    setSystemTime(new Date(start + (WEBHOOK_TIMESTAMP_TOLERANCE_S - 1) * 1000));
+    expect(await (await post(d, flowId, body, signed)).json()).toMatchObject({ outcome: "duplicate" });
+    // ... and past it, refused.
+    setSystemTime(new Date(start + (WEBHOOK_TIMESTAMP_TOLERANCE_S + 2) * 1000));
+    expect((await post(d, flowId, body, signed)).status).toBe(401);
+    // Body-only signing is not accepted on a timestamped webhook, nor a signature over another timestamp.
+    expect((await post(d, flowId, body, { "X-Jarvis-Signature": await hmacHex(SECRET, body) })).status).toBe(401);
+    const fresh = await timestamped(SECRET, body);
+    expect((await post(d, flowId, body, { ...fresh, "X-Jarvis-Timestamp": String(Number(fresh["X-Jarvis-Timestamp"]) - 1) })).status).toBe(401);
+    expect(runsOf(flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test("a legacy webhook (saved before #1153): an identical signed request is one delivery for ten minutes; it also takes a timestamped one", async () => {
+    const signed = legacyWebhook("s3cret");
     const plain = webhook();
     const start = Date.now();
     const d = await daemon(start);
@@ -570,6 +608,8 @@ describe("webhooks", () => {
     setSystemTime(new Date(start + 11 * 60_000));
     expect(await (await post(d, signed.flowId, body, { "X-Jarvis-Signature": sig })).json()).toMatchObject({ outcome: "started" });
     expect(runsOf(signed.flowId)).toHaveLength(2);
+    // A sender can move to timestamps before the owner switches the webhook.
+    expect(await (await post(d, signed.flowId, '{"n":2}', await timestamped("s3cret", '{"n":2}'))).json()).toMatchObject({ outcome: "started" });
     await post(d, plain.flowId, body);
     await post(d, plain.flowId, body);
     expect(runsOf(plain.flowId)).toHaveLength(2);
