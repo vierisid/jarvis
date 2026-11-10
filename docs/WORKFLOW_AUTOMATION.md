@@ -739,7 +739,9 @@ An ordinary step's process does not outlive its engine. On macOS and Linux the
 engine leads a process group of its own and the daemon signals the whole group
 when it stops the engine (only while the engine has not exited, so a reused
 group id is never signalled); a step whose engine died by itself exits when its
-IPC channel closes. This is cleanup, not containment: code that handles or
+IPC channel closes. The engine's group is a session of its own (`setsid`), so
+Ctrl-C on a daemon run in a terminal reaches the daemon only, which stops its
+engines on shutdown. This is cleanup, not containment: code that handles or
 ignores SIGTERM while its engine exits on it, removes the disconnect handler,
 or starts processes of its own (in its group or out of it with `setsid`) can
 outlive the engine. It is same-user code (see "Trust model").

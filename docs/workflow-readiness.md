@@ -21,8 +21,10 @@ otherwise fail with mid-run. Decisions is on with the default Brief dashboard;
 an install that chose the legacy dashboard turns it on with
 `JARVIS_BRIEF_DECISIONS=1` and a restart, which registers the refused triggers
 again. While it is off, such a workflow cannot be published, enabled or run,
-and an enabled one is not triggered, wherever the step sits (a branch rarely
-taken included). A run already under way is not refused when it resumes, and a
+an enabled one is not triggered, and the live draft of an enabled, unpublished
+one cannot be saved (a rename included), wherever the step sits (a branch
+rarely taken included). A draft saved meanwhile keeps the `valid` flag it was
+saved with until it is saved again. A run already under way is not refused when it resumes, and a
 single-step preview is refused only when the previewed step is the one that
 asks.
 
