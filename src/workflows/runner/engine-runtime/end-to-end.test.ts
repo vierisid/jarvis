@@ -226,6 +226,46 @@ describe("Engine end-to-end (F gate)", () => {
     }
   }
 
+  // F-32: a number condition compares numbers. An operand that is not one used to
+  // make the condition false, so the run took the fallback branch without a word.
+  for (const fixture of [
+    { label: 'numeric strings and numbers compare as numbers', operator: 'NUMBER_IS_GREATER_THAN', first: '10', second: 5, expected: 'matched' },
+    { label: 'less than on numeric text', operator: 'NUMBER_IS_LESS_THAN', first: '3', second: '4', expected: 'matched' },
+    { label: 'equal on numeric text', operator: 'NUMBER_IS_EQUAL_TO', first: '7.0', second: 7, expected: 'matched' },
+    { label: 'a false numeric comparison still takes the fallback', operator: 'NUMBER_IS_GREATER_THAN', first: 1, second: '5', expected: 'fallback' },
+    { label: 'text as the first value fails the step', operator: 'NUMBER_IS_GREATER_THAN', first: 'abc', second: '5', expected: null, named: "The first value 'abc' is not a number" },
+    { label: 'text as the second value fails the step', operator: 'NUMBER_IS_LESS_THAN', first: 3, second: 'many', expected: null, named: "The second value 'many' is not a number" },
+    { label: 'text equal to text is not a number comparison', operator: 'NUMBER_IS_EQUAL_TO', first: 'abc', second: 'abc', expected: null, named: "The first value 'abc' is not a number" },
+  ]) {
+    test.skipIf(skipE2eTests)(`F-32: ${fixture.label}`, async () => {
+      const before = llmCalls.length;
+      const ask = (name: string): FlowTriggerNode => ({ name, type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, actionName: 'ask', input: { prompt: name } } });
+      const flow = createFlow();
+      const trigger: FlowTriggerNode = { name: 'trigger', type: 'EMPTY', nextAction: { name: 'router', type: 'ROUTER', settings: {
+        executionType: 'EXECUTE_FIRST_MATCH', branches: [
+          { branchType: 'CONDITION', branchName: 'Match', conditions: [[{ firstValue: fixture.first, operator: fixture.operator, secondValue: fixture.second } as never]] },
+          { branchType: 'FALLBACK', branchName: 'Otherwise' },
+        ],
+      }, children: [ask('matched'), ask('fallback')] } };
+      const version = createDraftVersion({ flowId: flow.id, displayName: fixture.label, trigger });
+      const req = Object.assign(new Request('http://local/run', { method: 'POST', body: JSON.stringify({ environment: 'TESTING', payload: {} }) }), { params: { id: flow.id } });
+      const response = await createWorkflowRoutes()['/api/workflows/:id/run']!.POST!(req);
+      expect(response.status).toBe(202);
+      const { id: runId } = await response.json() as { id: string };
+      const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime!) }) } });
+      await worker.drain();
+      const run = getFlowRun(runId)!;
+      expect(run.status).toBe(fixture.expected ? 'SUCCEEDED' : 'FAILED');
+      expect(llmCalls.slice(before).map(call => call.prompt)).toEqual(fixture.expected ? [fixture.expected] : []);
+      if (fixture.named) {
+        // The router step itself fails, with the message as it is; the run is not an engine error.
+        const failed = (run as unknown as { failedStep?: { name?: string; errorMessage?: string } }).failedStep;
+        expect(failed?.name).toBe('router');
+        expect(failed?.errorMessage).toContain(fixture.named);
+      }
+    }, 45_000);
+  }
+
   for (const executionType of ['EXECUTE_FIRST_MATCH', 'EXECUTE_ALL_MATCH'] as const) {
     for (const payload of [{}, { optional: 'approved' }]) {
       test.skipIf(skipE2eTests)(`review: router evaluates only reachable branches (${executionType}, ${JSON.stringify(payload)})`, async () => {
