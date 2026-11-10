@@ -16,6 +16,7 @@ import { httpMethodDropdown } from '../common/props';
 import axios from 'axios';
 // Jarvis (#961): the workflow egress guard.
 import { EgressRefusedError, egressGuardedAxios, egressPolicyFromEnv, egressRefusalIn } from '../../../../../../../../runtime/http-egress';
+import { continuedFailure, describeHttpFailure, graphqlErrorMessage, httpFailureOf } from '../../../../../../../../runtime/http-failure';
 
 export const query = createAction({
   name: 'send_request',
@@ -133,16 +134,30 @@ export const query = createAction({
     }
     // === END JARVIS PATCH ===
     try {
-      return await httpClient.sendRequest(request, egressGuardedAxios(axios, egressPolicyFromEnv(), { read: false }) as never);
+      const response = await httpClient.sendRequest(request, egressGuardedAxios(axios, egressPolicyFromEnv(), { read: false }) as never);
+      // === JARVIS PATCH: a GraphQL server answers 200 with an `errors` array when the query failed ===
+      // The step fails on it, naming the first error, unless "No Error on
+      // Failure" is on; then it returns the response with `ok: false`.
+      const graphqlError = graphqlErrorMessage(response.body);
+      if (graphqlError) {
+        if (failsafe) return { ...response, ok: false, error: graphqlError };
+        throw new Error(graphqlError);
+      }
+      return { ...response, ok: true };
+      // === END JARVIS PATCH ===
     } catch (error) {
       // A refused address fails the step as itself, even with "No Error on Failure".
       const refused = egressRefusalIn(error);
       if (refused) throw refused;
+      // Jarvis: a failure reads as a sentence, and a continued one keeps the success fields.
+      const failure = httpFailureOf(error);
+      if (!failure) throw error;
+      const message = describeHttpFailure(failure, { url, timeoutSeconds: timeout });
       if (failsafe) {
-        return (error as HttpError).errorMessage();
+        return continuedFailure(failure, message);
       }
 
-      throw error;
+      throw new Error(message);
     }
   },
 });

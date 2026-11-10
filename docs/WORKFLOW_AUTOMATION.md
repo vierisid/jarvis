@@ -665,6 +665,29 @@ HTTP request specifics:
   redacted receipt carries `receiptRedacted: true`. The step
   itself still hands the flow the whole response; only a replay of a recorded
   step reads the receipt.
+- **Failures read as sentences.** A failed request fails the step with one
+  plain sentence, never the upstream JSON envelope: `The server answered 404 Not
+  Found.` plus `It said:` and the first 300 characters of the reply, redacted
+  by the same credential rules as the card and the receipt; `The request timed
+  out after 2 seconds.` for the step's own timeout (never shown as a server
+  500); `Could not reach api.example.com.` when nothing answered. Only the host
+  name is named, never the path, query or login. The text is built in
+  `runtime/http-failure.ts`.
+- **Retries.** "Retry on errors" tries again on a 5xx, a timeout, a network
+  error, a 408 or a 429, and never on another 4xx: the same request would be
+  refused the same way. Only a read is tried again at all (up to three
+  times, see "No resend").
+- **Continuing past a failure** ("Continue flow on ..." modes) returns the same
+  fields as a success, `status`, `headers` and `body`, plus `ok: false` and
+  `error` (the sentence), so `{{step_1.body}}` and `{{step_1.status}}` keep
+  working. A success carries `ok: true`. With no response (a timeout, an
+  unreachable host) `status` is `null` and `body` is `null`. The old keys stay for
+  saved flows: `response: { status, body }` (the body redacted and cut to 300
+  characters when long) and `request: {}`.
+- **GraphQL.** An HTTP 200 answer whose `errors` array is not empty fails the
+  step with `The GraphQL server reported an error:` and the first error's
+  message. With "No Error on Failure" on, the step returns the response with
+  `ok: false` and `error` instead. A non-2xx answer reads as above.
 - **Size.** A response (and an engine file download) is read up to 7.3 MiB,
   `(10 MiB - 256 KiB) * 3/4`: the engine fails a run whose step data passes
   10 MiB less a 256 KiB offset, and a binary response is stored as base64. A
