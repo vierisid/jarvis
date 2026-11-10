@@ -272,7 +272,8 @@ test('approval to activate does not grant Authority for a later notification', a
     wsService: { broadcastNotificationToDashboard() { sends++; } } as any,
   });
   const run = createFlowRun({ flowId: view.workflow!.flowId, flowVersionId: view.workflow!.versionId, status: 'RUNNING' });
-  const result = await backends.notify!({ message: 'Draft report', channels: ['dashboard'], priority: 'normal' },
+  // Telegram can reach other people, so it stays governed; dashboard-only notices to the owner no longer ask.
+  const result = await backends.notify!({ message: 'Draft report', channels: ['telegram'], priority: 'normal' },
     { runId: run.id, projectId: getFlow(view.workflow!.flowId)!.project_id, stepName: 'report', executionPath: [] });
   expect(result).toHaveProperty('approval'); expect(approvals.getPending()).toHaveLength(1); expect(sends).toBe(0);
 });
