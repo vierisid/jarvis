@@ -807,7 +807,7 @@ export class ChannelService implements Service {
     //    conversation, so on a channel anyone may message (an empty list,
     //    #811) a stranger could ask about the owner's earlier turns.
     // Titled after its sender (#1313 follow-up), so closed threads can be told apart.
-    const label = channelThreadTitle(channelTag, msg.from);
+    const label = channelThreadTitle(channelTag, msg.from, who);
     const conversation = getOrCreateConversation(channelTag, { sender, ...(label ? { label } : {}) });
     // A forward is marked in the same transaction (#1155): stored unmarked,
     // it would read as the owner's own words on every later turn.
