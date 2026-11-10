@@ -10,6 +10,8 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import type { Root } from "react-dom/client";
 import type { BriefShellPort } from "../contracts";
 import { OpportunitiesController } from "./controller";
+import { BriefCapabilities } from "../../../../src/brief/capabilities";
+import { OPPORTUNITIES_OFF_REASON } from "../today/opportunity-stack/model";
 import type { OpportunitiesBinding } from "./OpportunitiesRoom";
 import {
   makeOpportunitiesFixture,
@@ -96,6 +98,13 @@ test("wrong source, wrong scope and missing live capability fail closed without 
   shell = { ...shell, mode: "live" };
   await render();
   expect(f.stats().reads).toBe(0);
+  expect(host.textContent).toContain("Prepared opportunities are unavailable.");
+  // Preparation left off by the operator (self-hosted default) says how to turn it on.
+  const provider = { readiness: () => "ready" as const };
+  const off = new BriefCapabilities([{ id: "preparedOpportunities", provider }], []).snapshot();
+  await render({ ...binding(), capabilities: off });
+  expect(f.stats().reads).toBe(0);
+  expect(host.textContent).toContain(OPPORTUNITIES_OFF_REASON);
 });
 test("list and detail retain exact selected identity through shell changes and refresh", async () => {
   await render();

@@ -8,7 +8,7 @@ Hosted and self-hosted installs open the Brief dashboard at `/`. The authenticat
 descriptor (`GET /api/brief/host`, read by `host/hosted-entry.ts`) selects it using
 `resolveReleaseEntry` with rollout `released`. Maintenance links remain inside the Brief owner.
 `?brief=0` on a fresh load, or `JARVIS_DASHBOARD=legacy` plus a restart, returns to `AppShellV2`.
-The hosted-only `JARVIS_HOSTED_DASHBOARD` alias remains supported; the common override takes
+The older `JARVIS_HOSTED_DASHBOARD` alias remains supported; the common override takes
 precedence. `docs/hosted-dashboard.md` describes backend feature defaults and rollback.
 
 ## Entry points
