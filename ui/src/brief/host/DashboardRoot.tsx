@@ -21,6 +21,7 @@ import { useBilling } from '../../v2/billing/useBilling';
 import type { BriefRoute, BriefShellPort } from '../contracts';
 import { useNotificationCenter } from '../../hooks/useNotificationCenter';
 import { AttentionRoutes } from '../navigation/AttentionRoutes';
+import { StoredNoticesContext } from '../navigation/StoredNoticesContext';
 import { dashboardAttentionSnapshot, dashboardToastNotice } from '../navigation/notifications';
 import { ViewHost } from '../../onboarding-next/host/ViewHost';
 import { createSession, type Session } from '../../onboarding-next/host/session';
@@ -192,8 +193,13 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     if (owner.roomNavRequest && !owner.roomActionRequests.some(request => request.ts === owner.roomNavRequest?.ts))
       void host.navigation.intent(owner.roomNavRequest.key, false);
   }, [owner.roomNavRequest?.ts]);
-  const attention = <><HumanInputInbox queue={humanInputs} http={host.transport} focusId={route.room === 'needs-you' ? route.selection.inputId : undefined} /><AttentionRoutes snapshot={dashboardAttentionSnapshot(owner.isConnected, notices.items, host.capabilities())}
-    navigation={host.navigation} roomAvailable={host.available} markRead={identity => notices.markRead(identity.id)} />
+  // A reminder a workflow sent is for the founder: unread ones lead the Needs you room, the rest stay below.
+  const isNewStored = (item: { stored?: boolean; unread: boolean }) => item.stored === true && item.unread;
+  const storedNew = notices.items.filter(isNewStored);
+  const attentionFor = (items: typeof notices.items, heading?: string) => <AttentionRoutes snapshot={dashboardAttentionSnapshot(owner.isConnected, items, host.capabilities())}
+    navigation={host.navigation} roomAvailable={host.available} markRead={identity => notices.markRead(identity.id)} heading={heading} />;
+  const storedNotices = { count: storedNew.length, list: storedNew.length ? attentionFor(storedNew, 'New messages from your workflows') : null };
+  const attention = <><HumanInputInbox queue={humanInputs} http={host.transport} focusId={route.room === 'needs-you' ? route.selection.inputId : undefined} />{attentionFor(notices.items.filter(item => !isNewStored(item)), storedNew.length ? 'Earlier notifications' : undefined)}
     <section aria-label="Voice confirmations">{owner.clarifiers.map(item => <ClarifierCard key={item.id} {...item}
       onConfirm={() => void resolveAttention('clarifier', item.id, 'confirm')} onCancel={() => void resolveAttention('clarifier', item.id, 'cancel')} />)}
       {owner.repeatBacks.map(item => <RepeatBackCard key={item.id} {...item}
@@ -206,7 +212,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     return { ...host.rooms, 'needs-you': { ...host.rooms['needs-you']!, Body: ({ shell }: { shell: BriefShellPort }) => <><Body shell={shell} />{latest.current}</> } };
   }, [host]);
   const RetainedBody = retained ? getRoomBody(retained) : null;
-  return <EmergencyStatusContext.Provider value={emergency}><HumanInputsContext.Provider value={{ pending: humanPending }}><RoomActionBridge requests={owner.roomActionRequests} ack={owner.ackRoomActionRequests}
+  return <StoredNoticesContext.Provider value={storedNotices}><EmergencyStatusContext.Provider value={emergency}><HumanInputsContext.Provider value={{ pending: humanPending }}><RoomActionBridge requests={owner.roomActionRequests} ack={owner.ackRoomActionRequests}
     forceIdle={() => {}} wsRef={owner.wsRef} beforeDispatch={async request => {
       if (!host.active()) return false;
       const result = await host.navigation.intent(request.room, true);
@@ -237,5 +243,5 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
         <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>View notifications</button>
         <button onClick={() => notices.markRead(notice.id)}>Dismiss</button></aside>;
     })()}
-  </HumanInputsContext.Provider></EmergencyStatusContext.Provider>;
+  </HumanInputsContext.Provider></EmergencyStatusContext.Provider></StoredNoticesContext.Provider>;
 }
