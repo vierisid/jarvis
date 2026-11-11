@@ -34,6 +34,7 @@ import { WorkflowInspectionError } from '../../brief/inspection-values';
  * `initWorkflowDb(...)` before routes serve traffic.
  */
 
+import { getRunHistoryKeep, isRunHistoryKeep, countRunsToPrune, pruneRunHistory, runHistorySummary, RUN_HISTORY_KEEP_VALUES, setRunHistoryKeep } from "../db/repos/run-retention";
 import { DEFAULT_IDS, getWorkflowDb } from '../db';
 import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
 import { OnboardingResolutionError, resolveOnboardingOutcome, runOnboardingOutcomes } from '../runtime/onboarding-service';
@@ -1541,6 +1542,37 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               });
             default: return err("waitpoint already resumed", 410);
           }
+        }),
+    },
+
+    // How long finished runs are kept, and how much history there is now.
+    // GET answers with the setting and the size; `?keep=90d` also says how many
+    // finished runs that choice would delete (for the confirmation before it is
+    // saved). PATCH saves the choice, and a shorter one starts a clean-up now.
+    // The default and the only silent value is "forever".
+    "/api/workflows/run-history": {
+      GET: (req) =>
+        trapErrors(async () => {
+          const summary = await runHistorySummary();
+          const url = new URL(req.url);
+          const asked = url.searchParams.get("keep");
+          if (asked !== null && !isRunHistoryKeep(asked)) return err(`keep must be one of: ${RUN_HISTORY_KEEP_VALUES.join(", ")}`, 400);
+          return ok({
+            keep: getRunHistoryKeep(), options: RUN_HISTORY_KEEP_VALUES, runs: summary.runs, oldestAt: summary.oldestAt,
+            bytes: summary.bytes, dataBytes: summary.dataBytes, logBytes: summary.logBytes,
+            ...(asked ? { wouldRemoveRuns: countRunsToPrune(asked) } : {}),
+          });
+        }),
+      PATCH: (req) =>
+        trapErrors(async () => {
+          const read = await readWriteBody(req, 1024);
+          if ("error" in read) return read.error;
+          const keep = read.body.keep;
+          if (!isRunHistoryKeep(keep)) return err(`keep must be one of: ${RUN_HISTORY_KEEP_VALUES.join(", ")}`, 400);
+          setRunHistoryKeep(keep);
+          // Applied now rather than at the next daily sweep, in the background.
+          if (keep !== "forever") void pruneRunHistory(keep).catch((e) => console.error("[Retention] Run history sweep failed:", e));
+          return ok({ keep });
         }),
     },
 

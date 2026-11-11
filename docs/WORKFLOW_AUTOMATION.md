@@ -1772,6 +1772,8 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | POST | `/api/workflows/:id/read-hosts` | Replace this flow's read list, the hosts an HTTP GET or HEAD reaches without asking (`{"hosts": string[]}`, required; bare host names, at most 64; `[]` clears it). A host matches exactly: listing `example.com` does not list `api.example.com`. Optional `expected`: the list the edit started from; 409 when the list has changed since |
 | POST | `/api/workflows/:id/run` | Enqueue a run, 202. `{ environment?, triggeredBy?, stepNameToTest?, payload? }`, or `{ workItemId }` alone |
 | GET | `/api/workflows/:id/runs` | Run history, newest first. `?status`, `?limit` (default 50, max 100), `?offset`; answers `{ items, nextOffset }` |
+| GET | `/api/workflows/run-history` | The run-history retention setting and what is stored: `{ keep, options, runs, oldestAt, bytes, dataBytes, logBytes }`. `?keep=90d` adds `wouldRemoveRuns`, the finished runs that choice would delete now |
+| PATCH | `/api/workflows/run-history` | `{ keep }`, one of `forever`, `1y`, `90d`, `30d`. A limit also starts a clean-up in the background |
 | GET | `/api/workflow-runs/:runId` | One run, including its machine binding and cancellation |
 | GET | `/api/workflow-runs/:runId/effects` | The run's governed effect records, `{ runId, effects }` |
 | GET | `/api/workflow-runs/:runId/waitpoints` | The run's active waitpoints with resume URLs |
@@ -1813,6 +1815,32 @@ The natural key for this order is the pair `(created, rowid)`, but `flow_run`
 has a TEXT primary key, so its `rowid` is implicit and `VACUUM` may renumber it,
 which would silently invalidate a cursor a client holds; and `flow_run.id` is a
 nanoid, not time-sortable. A cursor therefore needs its own stable column.
+
+### How long run history is kept
+
+Finished runs (database rows, effect records and the run-log file under
+`workflow-logs/`) are kept **forever** unless the owner chooses a limit under
+"Keep run history for" in Brief Settings (Forever, 1 year, 90 days, 30 days; the
+setting is `workflow.run_history_keep`). Settings shows how many runs and how
+much space the history takes, and says how many runs a limit would delete before
+it is saved. With a limit set, a clean-up runs a couple of minutes after start,
+then daily, and once when the setting is saved. It deletes in batches of 500
+runs, letting the event loop go between them, and removes the runs' jobs and log
+files with them.
+
+A run is never deleted while it is queued, running or paused, has an unresolved
+waitpoint or a pending or dispatching effect, is named by an open or approved
+approval card (or a kept decision document), is still on Today's list of
+failures to deal with, has a live parent or live child, or is pointed to by a
+planned task. Approval history and the audit trail are not run history and are
+not deleted. Today's time-saved and outcome figures cover the current week, so
+the shortest limit (30 days) does not change them.
+
+Separately, and whatever the setting, a finished job row keeps the key fields the
+queue reads (run id, execution type, waitpoint) but drops its copy of the input
+that started it (a webhook body, a manual run's input, sample data) after 7 days.
+A job whose run is still live keeps it, because recovery of a run parked by an
+older version reads the original input.
 
 ### Request limits
 
