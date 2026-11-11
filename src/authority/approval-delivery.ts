@@ -1149,7 +1149,7 @@ export class ApprovalDelivery {
   /**
    * Deliver an approval request to all appropriate channels.
    */
-  async deliver(request: ApprovalRequest): Promise<void> {
+  async deliver(request: ApprovalRequest, again = false): Promise<void> {
     // A request raised from what was on the screen is held while screen
     // awareness is off (#1314 follow-up): no card goes anywhere, and one
     // being sent stops before its next send or retry. It stays pending and
@@ -1158,7 +1158,11 @@ export class ApprovalDelivery {
       this.held.add(request.id);
       return;
     }
-    const stillDeliverable = request.provenance === 'screen' ? { shouldContinue: () => !approvalHeldByAwareness(request) } : {};
+    // Set when the switch stopped a send: read after the send, since awareness
+    // may be back on by then (off and on again while the card was going out).
+    let stopped = false;
+    const stillDeliverable = request.provenance === 'screen'
+      ? { shouldContinue: () => { const go = !approvalHeldByAwareness(request); if (!go) stopped = true; return go; } } : {};
 
     // Always push to dashboard via WebSocket
     this.broadcaster?.broadcastApprovalRequest(request);
@@ -1172,10 +1176,15 @@ export class ApprovalDelivery {
       } catch (err) {
         console.error('[ApprovalDelivery] Failed to send to external channels:', err);
       }
-      // Awareness went off while the card was going out: a channel may have
-      // been stopped before its send, so it goes out again on resume (a
-      // duplicate card over a lost one, as for approval-card retries, Q-19).
-      if (approvalHeldByAwareness(request)) this.held.add(request.id);
+      // Awareness went off while the card was going out and a channel send was
+      // stopped: it goes out again on resume, or now if awareness is already
+      // back on (a duplicate card over a lost one, as for approval-card
+      // retries, Q-19).
+      if (stopped || approvalHeldByAwareness(request)) {
+        // Once: a switch flapping during every send must not loop.
+        if (approvalHeldByAwareness(request) || again) this.held.add(request.id);
+        else await this.deliver(request, true);
+      }
     }
   }
 

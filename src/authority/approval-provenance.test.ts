@@ -280,3 +280,21 @@ test('an ordinary background turn started from inside a screen-derived context d
   await runWithApprovalProvenance('screen', () => svc.handleMessage('a commitment is due', 'system'));
   expect(raised.map(r => mgr.getRequest(r.id)!.provenance)).toEqual([null]);
 });
+
+test('a card whose send was stopped while awareness went off and back on goes out again at once', async () => {
+  const shown: string[] = [], sent: string[] = [];
+  const out = new ApprovalDelivery();
+  out.setBroadcaster({ broadcastApprovalRequest: (r) => shown.push(r.id) });
+  let flips = 0;
+  out.setChannelSender({ async broadcastToAll(_text, _options, d) {
+    if (d?.shouldContinue && !d.shouldContinue()) return;
+    sent.push('first');
+    // The first time: off before the retry (which is stopped), on again before the send returns.
+    if (flips++ === 0) { on = false; if (d?.shouldContinue && !d.shouldContinue()) { on = true; return; } }
+    sent.push('retry');
+  } });
+  const screen = request(true);
+  await out.deliver(screen);
+  expect(shown).toEqual([screen.id, screen.id]);
+  expect(sent).toEqual(['first', 'first', 'retry']);
+});

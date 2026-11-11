@@ -41,3 +41,19 @@ test('the daemon skips held cards in the notification poll and delivers held car
   const applier = index.slice(index.indexOf("settingsReload.registerApplier('awareness'"), index.indexOf("settingsReload.registerApplier('desktop'"));
   expect(applier).toContain("if (cfg.awareness?.enabled === false) closeSwitchedOffWorkflowCards();\n      // Back on: the screen-derived approval cards held while it was off go out now.\n      else void approvalDelivery.resumeHeld((id) => approvalManager.getRequest(id));");
 });
+
+// The long-press saves the choice through persistAwarenessChoice; that save is
+// what runs the awareness applier (and so resumeHeld) via the section-saved
+// listener the daemon installs (settingsReload.sectionChanged). Pinned so the
+// long-press keeps resuming held cards without a call of its own.
+test('saving the awareness choice notifies the section-saved listener the applier hangs on', async () => {
+  const { persistAwarenessChoice, setSectionSavedListener } = await import('./user-settings');
+  const saved: string[] = [];
+  setSectionSavedListener((section) => saved.push(section));
+  try { persistAwarenessChoice(true); } finally { setSectionSavedListener(null); }
+  expect(saved).toEqual(['awareness']);
+  const index = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+  expect(index).toContain('setSectionSavedListener((section) => settingsReload?.sectionChanged(section));');
+  const press = index.slice(index.indexOf("event.event_type !== 'pebble.blind_toggle'"), index.indexOf("console.log(`[ambient-ui] blind toggle"));
+  expect(press).toContain('persistAwarenessChoice(nextEnabled);');
+});
