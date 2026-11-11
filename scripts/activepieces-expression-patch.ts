@@ -264,6 +264,22 @@ export const expressionPatches = {
                 // === END JARVIS PATCH ===
 `],
   ],
+  // Jarvis: a failed HTTP request's bodies and headers never reach engine
+  // stderr (the daemon log and the per-run log buffer). Upstream's
+  // ERROR_MESSAGES_TO_REDACT looks for a prefix the HttpClient no longer prints;
+  // runtime/engine-console-redaction.ts replaces such errors by their status.
+  "packages/server/engine/src/lib/worker-socket.ts": [
+    ["import { runProgressService } from './handler/run-progress'",
+      "import { runProgressService } from './handler/run-progress'\n// Jarvis: no request or response body, and no request headers, of a failed HTTP request reach engine stderr.\nimport { redactEngineLogArgs } from '../../../../../../runtime/engine-console-redaction'"],
+    ["        console.log = function (...args): void {\n            notifyClient?.stdout",
+      "        console.log = function (...raw): void {\n            const args = redactEngineLogArgs(raw)\n            notifyClient?.stdout"],
+    ["        console.warn = function (...args): void {\n            notifyClient?.stdout",
+      "        console.warn = function (...raw): void {\n            const args = redactEngineLogArgs(raw)\n            notifyClient?.stdout"],
+    ["        console.error = function (...args): void {\n            let sanitizedArgs",
+      "        console.error = function (...raw): void {\n            const args = redactEngineLogArgs(raw)\n            let sanitizedArgs"],
+    ["notifyClient?.stderr({ message: inspect(error) })",
+      "notifyClient?.stderr({ message: inspect(redactEngineLogArgs([error])[0]) })"],
+  ],
   "packages/server/engine/src/lib/handler/piece-executor.ts": [
     ["import { ActionContext, backwardCompatabilityContextUtils, ", "import { helpScoutEngineProps } from \"../../../../../../../runtime/managed-help-scout-inputs\"\nimport { zoomEngineProps } from \"../../../../../../../runtime/managed-zoom-inputs\"\nimport { gitlabEngineProps } from \"../../../../../../../runtime/managed-gitlab-inputs\"\nimport { pipedriveEngineProps } from \"../../../../../../../runtime/managed-pipedrive-inputs\"\nimport { wrikeEngineProps } from \"../../../../../../../runtime/managed-wrike-inputs\"\nimport { mondayEngineProps } from \"../../../../../../../runtime/managed-monday-inputs\"\nimport { webflowEngineProps } from \"../../../../../../../runtime/managed-webflow-inputs\"\nimport { ActionContext, backwardCompatabilityContextUtils, "],
     ["\n        stepOutput.input = censoredInput\n\n        const { processedInput, errors } = await propsProcessor.applyProcessorsAndValidators(resolvedInput, pieceAction.props, piece.auth, pieceAction.requireAuth, action.settings.propertySettings)\n        if (Object.keys(errors).length > 0) {\n            throw new Error(JSON.stringify(errors, null, 2))\n        }\n", "\n        stepOutput.input = censoredInput\n\n        const { processedInput, errors } = await propsProcessor.applyProcessorsAndValidators(resolvedInput, helpScoutEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? zoomEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? gitlabEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? pipedriveEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? wrikeEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? webflowEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? mondayEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? pieceAction.props, piece.auth, pieceAction.requireAuth, action.settings.propertySettings, { apiUrl: constants.internalApiUrl, engineToken: constants.engineToken })\n        if (Object.keys(errors).length > 0) {\n            throw new Error(JSON.stringify(errors, null, 2))\n        }\n"],
