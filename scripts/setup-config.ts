@@ -19,6 +19,7 @@ import type { JarvisConfig } from '../src/config/types.ts';
 import { initDatabase, closeDb } from '../src/vault/schema.ts';
 import { mergeLLMSettingsIntoConfig, testLLMProvider } from '../src/daemon/llm-settings.ts';
 import { USEJARVIS_PROVIDER_NAME, effectiveLlmForBinding, hasUsejarvisAi } from '../src/daemon/usejarvis-ai.ts';
+import { redactSecrets } from '../src/util/redact.ts';
 
 const CONFIG_DIR = join(homedir(), '.jarvis');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.yaml');
@@ -133,7 +134,12 @@ export async function testProviders(
       results.push({ name, status: 'ok', detail });
       log(`✓ ${name}: Connected (${detail})`);
     } else {
-      const detail = result.error ?? 'unknown error';
+      // A provider error can echo the credential it was sent, and setup
+      // output gets pasted into bug reports: drop the saved key itself (it
+      // may have no recognizable prefix) and anything else key-shaped.
+      const key = config.llm.providers?.[name]?.api_key;
+      const raw = result.error ?? 'unknown error';
+      const detail = redactSecrets(key ? raw.split(key).join('***redacted***') : raw);
       results.push({ name, status: 'failed', detail });
       log(`✗ ${name}: ${detail}`);
     }

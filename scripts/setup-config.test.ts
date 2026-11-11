@@ -50,6 +50,11 @@ beforeAll(() => {
         });
       }
       if (url.pathname === '/broken/api/chat') return new Response('model exploded', { status: 500 });
+      if (url.pathname === '/echo/v1/chat/completions') {
+        // A server that echoes the credential it was sent in its error body.
+        const sent = (req.headers.get('authorization') ?? '').replace(/^Bearer /, '');
+        return Response.json({ error: { message: `invalid key ${sent}` } }, { status: 401 });
+      }
       return new Response('not found', { status: 404 });
     },
   });
@@ -154,6 +159,29 @@ describe('setup-config testProviders', () => {
 
     expect(results).toEqual([{ name: 'compat', status: 'ok', detail: 'model stub-model' }]);
     expect(compatAuth).toEqual(['Bearer sk-setup-test']);
+  });
+
+  test('a provider error that echoes the saved key does not print it', async () => {
+    const dbPath = join(dir, 'echo.db');
+    // No recognizable prefix, so only the exact-key redaction can catch it.
+    const key = 'opaque-setup-key-0123456789';
+    initDatabase(dbPath, { quiet: true });
+    saveLLMSettings(configAt(dbPath), {
+      providers: {
+        echo: { kind: 'openai_compatible', base_url: `http://127.0.0.1:${server.port}/echo/v1`, api_key: key },
+      },
+      default: 'echo:stub-model',
+    });
+    closeDb();
+
+    const lines: string[] = [];
+    const results = await testProviders(configAt(dbPath), (l) => lines.push(l));
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.status).toBe('failed');
+    expect(results[0]!.detail).toContain('invalid key ***redacted***');
+    expect(JSON.stringify(results)).not.toContain(key);
+    expect(lines.join('\n')).not.toContain(key);
   });
 
   test('repairs the merge makes in memory are not written back', async () => {
