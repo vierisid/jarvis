@@ -1,7 +1,7 @@
 import { EmergencyStatusBanner, EmergencyStatusContext, useEmergencyStatus } from './EmergencyStatus';
 import { humanRequestNeedsAttention } from '../../../../src/workflows/runtime/human-input-contract';
 import { HumanInputsContext, HumanInputInbox, useHumanInputQueue, hasLocalDraft } from './HumanInputs';
-import { NeedsYouContext, documentDecisionCount, needsYouCount, useOtherDecisions } from './needs-you';
+import { NeedsYouContext, documentDecisionCount, listedNoticeCount, needsYouCount, useOtherDecisions } from './needs-you';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { DashboardEntry, BriefHost } from '../entry/DashboardEntry';
@@ -182,8 +182,13 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   const humanPending = humanInputs.requests.filter(r => humanRequestNeedsAttention(r) || hasLocalDraft(r)).length;
   // The one derivation of "needs you": Today, the sidebar badge and the room all read it.
   const decisionsOn = isBriefCapabilityEnabled(host.capabilities(), 'decisions');
-  const documents = useBriefProjection(host.data.decisionRead), others = useOtherDecisions(host.data.ports.otherDecisions, decisionsOn);
-  const needsCount = needsYouCount({ documents: documentDecisionCount(documents.data), others: others.rows, humanInputs: humanPending });
+  const documents = useBriefProjection(host.data.decisionRead);
+  // Each read fetches one document per row: poll at full rate only while the room is open.
+  const others = useOtherDecisions(host.data.ports.otherDecisions, decisionsOn, false, route.room === 'needs-you' ? 10_000 : 60_000);
+  // Counted from the same snapshot the room lists, plus the voice confirmation cards it shows,
+  // so nothing is counted that the room hides (disconnected, filtered) and nothing listed goes uncounted.
+  const noticeCount = listedNoticeCount(dashboardAttentionSnapshot(owner.isConnected, notices.items, host.capabilities())) + owner.clarifiers.length + owner.repeatBacks.length;
+  const needsCount = needsYouCount({ documents: documentDecisionCount(documents.data), others: others.rows, humanInputs: humanPending, notices: noticeCount });
   const [attentionMessage, setAttentionMessage] = useState('');
   const resolveAttention = async (kind: 'clarifier' | 'repeat-back', id: string, decision: 'confirm' | 'cancel') => {
     try {
@@ -202,7 +207,8 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   }, [owner.roomNavRequest?.ts]);
   const inbox = <HumanInputInbox queue={humanInputs} http={host.transport} focusId={route.room === 'needs-you' ? route.selection.inputId : undefined} />;
   // A reminder a workflow sent is for the founder: unread ones lead the Needs you room, the rest stay below.
-  const isNewStored = (item: { stored?: boolean; unread: boolean }) => item.stored === true && item.unread;
+  // The lead list sits in the decisions room, which is not shown with decisions off: then they stay in one list.
+  const isNewStored = (item: { stored?: boolean; unread: boolean }) => decisionsOn && item.stored === true && item.unread;
   const storedNew = notices.items.filter(isNewStored);
   const attentionFor = (items: typeof notices.items, heading?: string) => <AttentionRoutes snapshot={dashboardAttentionSnapshot(owner.isConnected, items, host.capabilities())}
     navigation={host.navigation} roomAvailable={host.available} markRead={identity => notices.markRead(identity.id)} heading={heading} />;

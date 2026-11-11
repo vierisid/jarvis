@@ -690,8 +690,11 @@ actions only change local fixture state.
   reload; network errors, 5xx and timeouts are unknown, never refusals. Today and Needs you must share
   one decision owner before activation.
 - One count: `host/needs-you.tsx` `needsYouCount` (document decisions with an action, other queued rows
-  still asking, workflow input requests) feeds Today's request count, the sidebar badge and the room
-  heading. Approved rows waiting to run or running (`awaiting_execution`, `in_flight`) are not counted and
+  still asking, workflow input requests, and `listedNoticeCount`: the unread notification rows the room
+  lists from the same snapshot, saved workflow reminders included, plus voice confirmation cards) feeds
+  Today's request count, the sidebar badge and the room heading. Read notices are history and not counted;
+  a pending approval listed there (decisions off) counts until it resolves. A disconnected list shows
+  nothing and counts nothing. A held-runs note (`kind: 'held'`) is never counted. Approved rows waiting to run or running (`awaiting_execution`, `in_flight`) are not counted and
   show in an "In progress" group. Card titles never show raw tool ids (`plainDecisionTitle`). Workflow
   input requests render above the permission list, one line each with the focused one open.
 - Opt-in `decisionsRegistration(useBinding)`, not in the production registry. `decisionsAvailable`

@@ -171,9 +171,9 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     // With the workspace around, its read decides; the list reports its own count only when rendered alone.
     const otherCount = shared ? shared.others?.length ?? null : ownCount;
     const onlyOther = onlyOtherDecisions(all, otherCount === null ? null : otherCount + humanPending);
-    const count = shared?.count ?? documentDecisionCount(all.data) + humanPending + (otherCount ?? 0);
+    const count = shared?.count ?? 0;
     return <>{onlyOther ? <><header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header>{stored.list}</> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
-      {shared && count > 0 && <p className="brief-needs-count" role="status">{count} {count === 1 ? 'request' : 'requests'} waiting for you.</p>}
+      {shared && count > 0 && <p className="brief-needs-count" role="status">{count} waiting for you.</p>}
       {shared?.inbox}
       <PendingDecisions onCount={setOtherCount} selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
   }

@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
-import { documentDecisionCount, isInProgress, needsYouCount, pendingByWorkflow, plainDecisionTitle, relativeTime, siblingNote } from './needs-you';
+import { BriefCapabilities } from '../../../../src/brief/capabilities';
+import { dashboardAttentionSnapshot } from '../navigation/notifications';
+import { documentDecisionCount, isInProgress, listedNoticeCount, needsYouCount, pendingByWorkflow, plainDecisionTitle, relativeTime, siblingNote } from './needs-you';
 
 const row = (over: Record<string, unknown> = {}) => ({ decisionId: 'x', title: 'Send report', state: 'pending', kind: 'permission', supportedActions: ['approve_permission', 'inspect'], ...over }) as any;
 
@@ -40,4 +42,27 @@ test('repeat requests from one workflow say so, with a relative time', () => {
   expect(relativeTime(now - 5 * 60_000, now)).toBe('5 min ago');
   expect(relativeTime(now - 3 * 3_600_000, now)).toBe('3 h ago');
   expect(relativeTime(now - 26 * 3_600_000, now)).toBe('1 day ago');
+});
+
+test('a held-runs note is never counted, and listed notices add to the count', () => {
+  const others = [row(), row({ kind: 'held', state: 'pending', supportedActions: ['inspect'] })];
+  expect(needsYouCount({ documents: 0, others, humanInputs: 0 })).toBe(1);
+  expect(needsYouCount({ documents: 0, others, humanInputs: 0, notices: 2 })).toBe(3);
+});
+
+test('notices count exactly what the room lists: unread rows, and pending approvals only while they are listed', () => {
+  const item = (over: Record<string, unknown>) => ({ id: 'n', kind: 'system', title: 't', text: '', timestamp: 1, tone: 'neutral', unread: true, ...over }) as any;
+  const items = [
+    item({ id: 'stored', stored: true }), item({ id: 'live' }), item({ id: 'read', unread: false }),
+    item({ id: 'approval', kind: 'approval', unread: false }),
+    // Clarifiers and repeat-backs have their own cards; the caller adds those.
+    item({ id: 'clarifier', kind: 'clarifier' }), item({ id: 'repeat', kind: 'repeat-back' }),
+  ];
+  const decisions = (on: boolean) => new BriefCapabilities([{ id: 'decisions', provider: { readiness: () => 'ready' } as never }], on ? ['decisions'] : []).snapshot();
+  // With decisions on, approvals are the permission list's rows, not counted here twice.
+  expect(listedNoticeCount(dashboardAttentionSnapshot(true, items, decisions(true)))).toBe(2);
+  // With decisions off the room lists the approval, read or not, so it counts.
+  expect(listedNoticeCount(dashboardAttentionSnapshot(true, items, decisions(false)))).toBe(3);
+  // Disconnected, the list shows nothing, so nothing is counted.
+  expect(listedNoticeCount(dashboardAttentionSnapshot(false, items, decisions(true)))).toBe(0);
 });
