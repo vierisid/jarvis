@@ -8,6 +8,7 @@
  * their display name, then to a humanized piece name, so nothing is ever blank.
  */
 
+import { forCard } from "../../../../../src/util/card-text";
 import { describeSchedule, isScheduleSettings } from "./schedule-words";
 import { detectTriggerKind } from "./trigger-kinds";
 import type { FlowStepNode, PieceCatalogEntry } from "./useWorkflowEditor";
@@ -55,8 +56,13 @@ function shorten(text: string, max = PHRASE_MAX_CHARS): string {
   return text.length <= max ? text : `${text.slice(0, max - 3).trimEnd()}...`;
 }
 
+/**
+ * One line of text a person or a model wrote (a step name, a branch value).
+ * Invisible and control characters go, as on an approval card: a bidi override
+ * in one step name would otherwise reorder the rest of the sentence.
+ */
 function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  return forCard(text, Number.POSITIVE_INFINITY);
 }
 
 /** The first name a template refers to: "{{step_1.items}}" gives "step_1". */
@@ -217,12 +223,14 @@ export function summarizeWorkflow(trigger: FlowStepNode, catalog: PieceCatalogEn
     length += phrase.length + 7;
   }
   const hiddenSteps = all.length - steps.length;
+  // The trigger and piece names come from the graph too: clean the whole sentence once more.
+  const clean = (text: string): string => forCard(text, Number.POSITIVE_INFINITY);
   const more = hiddenSteps ? [`${hiddenSteps} more ${hiddenSteps === 1 ? "step" : "steps"}`] : [];
   const sentence = [triggerText, ...steps.map((s) => `then ${s}`), ...more.map((m) => `and ${m}`)].join(", ");
   return {
-    trigger: triggerText,
-    steps,
+    trigger: clean(triggerText),
+    steps: steps.map(clean),
     hiddenSteps,
-    text: steps.length || more.length ? `${sentence}.` : `${triggerText}, then nothing else yet.`,
+    text: clean(steps.length || more.length ? `${sentence}.` : `${triggerText}, then nothing else yet.`),
   };
 }
