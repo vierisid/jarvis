@@ -22,6 +22,7 @@ import {
   type Job,
 } from "../db/repos/job-queue";
 import { emergencyHold } from "../runtime/emergency-hold";
+import { databaseLostMessage } from "../../vault/db-guard";
 
 export type JobHandler<P = Record<string, unknown>> = (job: Job<P>) => Promise<void>;
 
@@ -102,7 +103,9 @@ export class Worker {
   private async runLoop(idx: number): Promise<void> {
     while (this.running) {
       // Paused or stopped: claim nothing; queued work waits for Resume (Q-08).
-      if (emergencyHold()) {
+      // A database file that was deleted or swapped under us: running a job now
+      // would do its side effects and lose the record of them.
+      if (emergencyHold() || databaseLostMessage()) {
         await sleep(this.pollIntervalMs);
         continue;
       }

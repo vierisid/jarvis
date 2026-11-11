@@ -8,12 +8,13 @@
 import { existsSync, statSync } from "node:fs";
 import { ServiceRegistry, type ServiceStatus } from "./services.ts";
 import { getDb } from "../vault/schema.ts";
+import { checkDatabaseFile, databaseLostMessage } from "../vault/db-guard.ts";
 
 export type HealthStatus = {
   uptime: number;           // seconds
   services: Record<string, ServiceStatus>;
   memory: { heapUsed: number; heapTotal: number; rss: number };
-  database: { connected: boolean; size: number };  // DB file size in bytes
+  database: { connected: boolean; size: number; problem?: string };  // DB file size in bytes; problem when the file was deleted, emptied or swapped
   startedAt: number;        // epoch ms
 };
 
@@ -132,7 +133,7 @@ export class HealthMonitor {
   /**
    * Get database statistics
    */
-  private getDatabaseStats(): { connected: boolean; size: number } {
+  private getDatabaseStats(): { connected: boolean; size: number; problem?: string } {
     let connected = false;
     let size = 0;
 
@@ -152,6 +153,11 @@ export class HealthMonitor {
       connected = false;
     }
 
+    // The handle still answers after the file is deleted, truncated or swapped,
+    // so "connected" also needs the file on disk to be the one Jarvis opened.
+    checkDatabaseFile();
+    const problem = databaseLostMessage();
+    if (problem) return { connected: false, size, problem };
     return { connected, size };
   }
 

@@ -247,6 +247,8 @@ export interface DaemonConfig {
    * self-host installs, which keep the forgiving loader defaults.
    */
   systemConfigPath?: string;
+  /** Owner asked for a fresh database even though other install state exists (`--new-database`). */
+  allowNewDatabase?: boolean;
 }
 
 let shutdownInProgress = false;
@@ -298,6 +300,9 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Partial<Daemo
       case '--no-local-tools':
         config.noLocalTools = true;
         break;
+      case '--new-database':
+        config.allowNewDatabase = true;
+        break;
       case '--system-config': {
         // Hosted-mode flag (usejarvis #66): pin the config read to a
         // root-owned path. A missing value, or one that looks like another
@@ -326,6 +331,9 @@ Options:
   --db-path <path>         Database file path (default: ~/.jarvis/jarvis.db)
   --data-dir <path>        Data directory (default: ~/.jarvis)
   --health-interval <ms>   Health check interval in ms (default: 30000)
+  --new-database           Create an empty database even though this data directory has
+                           other saved state (a missing or empty jarvis.db otherwise
+                           stops the start so you can run jarvis restore)
   --no-local-tools         Keep the general tools (run_command, read_file, desktop, browser...) off
                            this host: they only run on a connected sidecar, i.e. your machine.
                            The site builder still builds and runs projects on this host.
@@ -830,9 +838,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 1. Ensure data directory exists
     ensureDataDir(config.dataDir);
 
-    // 2. Initialize database
+    // 2. Initialize database. An install that has other state but no database
+    // (deleted, emptied) is lost data, not a new install: refuse rather than
+    // start empty and lock out every enrolled device. `--new-database` is the
+    // owner asking for a fresh one.
+    const { assertDatabaseUsable, watchDatabaseFile } = await import('../vault/db-guard.ts');
+    assertDatabaseUsable(config.dbPath, config.dataDir, { allowNew: userConfig?.allowNewDatabase });
     logWithTimestamp(`Initializing database at ${config.dbPath}`);
     initDatabase(config.dbPath);
+    // Notice the file being deleted, emptied or swapped while running: writes
+    // then stop with a loud error instead of going to a file that is gone.
+    watchDatabaseFile(config.dbPath);
     const { syncInterviewProfileKnowledgeAtStartup } = await import('../vault/user-profile.ts');
     syncInterviewProfileKnowledgeAtStartup((message) => logWithTimestamp(message));
     logWithTimestamp('Database initialized successfully');
@@ -6279,7 +6295,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     console.log('');
 
   } catch (error) {
-    console.error('[Daemon] Fatal error during startup:', error);
+    // A database problem arrives as plain words with the next step; a stack
+    // trace would only bury it.
+    const { DatabaseProblemError } = await import('../vault/db-guard.ts');
+    if (error instanceof DatabaseProblemError) console.error(`\n[Daemon] ${error.message}\n`);
+    else console.error('[Daemon] Fatal error during startup:', error);
     process.exit(1);
   }
 }

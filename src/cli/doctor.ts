@@ -51,6 +51,39 @@ export function bunRuntimeCheck(bunVersion: string): CheckResult {
   };
 }
 
+/**
+ * The database file itself: there, not empty next to other saved state, and
+ * passing SQLite's quick_check. Read-only, so a doctor run never creates or
+ * changes it. `bun:sqlite working` says nothing about THIS file.
+ */
+export async function databaseFileCheck(dbPath: string, dataDir: string): Promise<CheckResult> {
+  const name = 'Database';
+  const { inspectDatabaseFile, describeOpenFailure } = await import('../vault/db-guard.ts');
+  const { state, evidence } = inspectDatabaseFile(dbPath, dataDir);
+  if (state === 'fresh') {
+    return { name, status: 'warn', message: 'No database yet. Jarvis creates it the first time it starts.' };
+  }
+  if (state === 'missing' || state === 'empty') {
+    return { name, status: 'fail', message: `The database file is ${state === 'missing' ? 'missing' : 'empty'}, but this folder has saved settings (${evidence.join(', ')}). Run: jarvis restore <your-backup-file>` };
+  }
+  try {
+    const { Database } = await import('bun:sqlite');
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const rows = db.query('PRAGMA quick_check').all() as Array<Record<string, string>>;
+      const verdicts = rows.map((row) => Object.values(row)[0]!);
+      if (verdicts.length === 1 && verdicts[0] === 'ok') return { name, status: 'ok', message: `${dbPath} passes the integrity check` };
+      return { name, status: 'fail', message: `The database file is damaged (${verdicts.slice(0, 2).join('; ').slice(0, 120)}). Jarvis has not changed it. Run: jarvis restore <your-backup-file>` };
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    const plain = describeOpenFailure(raw, dbPath);
+    return { name, status: 'fail', message: plain ? plain.message.split('\n')[0]! + ' Run: jarvis restore <your-backup-file>' : `The database file cannot be opened: ${raw.slice(0, 100)}` };
+  }
+}
+
 export async function runDoctor(): Promise<void> {
   printBanner();
   console.log(c.bold('Running system diagnostics...\n'));
@@ -120,10 +153,19 @@ export async function runDoctor(): Promise<void> {
     const { loadConfig } = await import('../config/loader.ts');
     const { initDatabase } = await import('../vault/schema.ts');
     const { mergeLLMSettingsIntoConfig } = await import('../daemon/llm-settings.ts');
-    llmConfig = await loadConfig();
-    initDatabase(llmConfig.daemon.db_path);
-    mergeLLMSettingsIntoConfig(llmConfig, { persistMigrations: false });
-    llmProviderNames = Object.keys(llmConfig.llm.providers ?? {});
+    const loaded = await loadConfig();
+    // Look at the file before opening it: opening would create an empty
+    // database in place of a missing one, and hide the damage.
+    const database = await databaseFileCheck(loaded.daemon.db_path, loaded.daemon.data_dir);
+    results.push(database);
+    if (database.status === 'fail') {
+      results.push({ name: 'LLM Provider', status: 'skip', message: 'Not checked: the database file needs attention first' });
+    } else {
+      llmConfig = loaded;
+      initDatabase(llmConfig.daemon.db_path);
+      mergeLLMSettingsIntoConfig(llmConfig, { persistMigrations: false });
+    }
+    if (llmConfig) llmProviderNames = Object.keys(llmConfig.llm.providers ?? {});
   } catch (err) {
     results.push({ name: 'LLM Provider', status: 'fail', message: `Could not load LLM settings: ${String(err).slice(0, 80)}` });
   }
