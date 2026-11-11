@@ -25,11 +25,17 @@ export function httpApprovalIntent(piece: string, input: Record<string, unknown>
   return `Jarvis wants to send a ${method}request to ${host ?? 'a web address set when the step runs'}`;
 }
 
-/** Why the request asks, as the card says it (the engine's own wording names a category, not the request). */
-export function httpApprovalReason(piece: string, input: Record<string, unknown>): string {
-  return piece === HTTP_PIECE && httpRequestIsRead(input)
-    ? 'This site is not on the workflow\'s list of sites it may read without asking.'
-    : 'Sending a request to another server needs your approval.';
+/**
+ * Why the request asks, as the card says it (the engine's own wording names a
+ * category, not the request). `unlistedRead` is true when an HTTP read asks
+ * only because its host is not on the flow's read list. A read whose host is
+ * listed and still asks (reads governed by the owner's settings) gets no
+ * sentence here: the engine's own reason is the true one.
+ */
+export function httpApprovalReason(piece: string, input: Record<string, unknown>, unlistedRead: boolean): string | undefined {
+  if (unlistedRead) return 'This site is not on the workflow\'s list of sites it may read without asking.';
+  if (piece === HTTP_PIECE && httpRequestIsRead(input)) return undefined;
+  return 'Sending a request to another server needs your approval.';
 }
 
 export const LOCAL_ADDRESS_REFUSAL = 'Jarvis does not send requests to addresses on this computer or local network.';

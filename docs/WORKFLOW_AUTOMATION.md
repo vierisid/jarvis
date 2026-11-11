@@ -869,12 +869,20 @@ HTTP request specifics:
   naming the method and the host and never the path or query ("Jarvis wants to
   send a POST request to api.example.com", "Jarvis wants to read
   api.example.com", "Jarvis wants to send a GraphQL request to ..."). It rides
-  in the effect target's `intent`, like every other per-step card sentence. A
-  request whose URL names `localhost` or an address the rules above never
+  in the effect target's `intent`, like every other per-step card sentence.
+  Its reason line says why in words ("not on the workflow's list of sites it
+  may read without asking", "Sending a request to another server needs your
+  approval") in place of the engine's generic governed-category sentence only;
+  an override's, a context rule's or a profile's reason is shown as before,
+  and so is the engine's own reason for a listed read that asks because reads
+  are governed. A request whose URL names `localhost` or an address the rules above never
   allow (and, on a hosted install, any private address) is refused before a
   card is raised: "Jarvis does not send requests to addresses on this computer
   or local network." A name that only resolves to such an address is still
-  refused by the guard when it connects. `parse_url` makes no request, so it
+  refused by the guard when it connects. A step already recorded (a card
+  raised before the install's rule changed) is not refused early: the guard
+  refuses it when it runs, and a tracked send is recorded as not sent.
+  `parse_url` makes no request, so it
   never asks and is never held to the read list. The read list refuses the
   same hosts when a person adds them (400), since a read there could never run.
 - **Read list (#1153).** A body-less GET or HEAD still carries what its URL and

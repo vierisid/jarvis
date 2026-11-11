@@ -3,7 +3,7 @@ import { uiCardSentence, type UiCard } from './ui-card';
 import { collectActionVerification } from '../../actions/action-verification';
 import type { ActionOutcome } from '../../actions/action-outcome';
 import { projectDocument } from './decision-document';
-import { combineDecisions, type AuthorityEngine, type AuthorityProfile } from '../../authority/engine';
+import { combineDecisions, governedActionReason, type AuthorityEngine, type AuthorityProfile } from '../../authority/engine';
 import type { AuditTrail } from '../../authority/audit';
 import type { EmergencyController } from '../../authority/emergency';
 import type { ApprovalManager, ApprovalRequest } from '../../authority/approval';
@@ -98,7 +98,10 @@ export interface EffectInvocation {
   /**
    * Why this effect asks, in the card's words, in place of the Authority
    * engine's generic "<category> is a governed action requiring user
-   * approval". Display only: the decision is the engine's either way.
+   * approval" (`governedActionReason`). Only that sentence is replaced: an
+   * override's, a context rule's (which a person wrote), a profile's or the
+   * level's reason is the card's as before. Display only: the decision is the
+   * engine's either way.
    */
   approvalReason?: string;
   /**
@@ -592,7 +595,8 @@ export class WorkflowEffectBoundary {
           request = approvals.createRequest({ agentId: `workflow:${record.runId}`,
             agentName: `Workflow: ${flowLabel}${input.principal ? ` as ${input.principal.agentRoleId}` : ''}`,
             toolName: input.toolName, toolArguments: record.arguments, actionCategory: decision.actionCategory,
-            urgency: decision.actionCategory === 'make_payment' ? 'urgent' : 'normal', reason: input.approvalReason ?? decision.reason,
+            urgency: decision.actionCategory === 'make_payment' ? 'urgent' : 'normal', reason: input.approvalReason && decision.reason === governedActionReason(decision.actionCategory)
+              ? input.approvalReason : decision.reason,
             // `stepName` here is a label too: the context is read back only for
             // `target`, `confirm`, `intent` and `reviewSubject` (the Brief card
             // shows it, display only), and nothing matches on it.

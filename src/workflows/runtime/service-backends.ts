@@ -1428,8 +1428,14 @@ export function buildSandboxServiceBackends(
     const network = makesNetworkRequest(req.piece, req.action);
     // A request the egress guard refuses as soon as it runs (this computer,
     // the local network) is refused here, before anyone is asked to approve it.
+    // A step already recorded (a card raised under another policy or build)
+    // takes the path below instead, as before: the engine's guard refuses it
+    // when it runs and a tracked send is receipted not sent (#1153), so its
+    // record and card are not left open behind a refusal that skips them.
+    const recorded = () => !!ctx.stepName && (['piece', 'piece-dispatch'] as const).some(route =>
+      getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], route)) !== null);
     const localRefusal = network ? localAddressRefusal(projected, opts.egressPolicy ?? 'public-only') : null;
-    if (localRefusal) {
+    if (localRefusal && !recorded()) {
       effects.auditRefusal({ context: ctx, toolName: governedPieceToolName(judged.adapter.catalogId, judged.action), category: judged.category });
       throw new ActionOutcomeError({ status: 'blocked', code: 'EGRESS_REFUSED', message: localRefusal, effect: 'not_started' });
     }
@@ -1526,7 +1532,7 @@ export function buildSandboxServiceBackends(
         return { arguments: input, target: named, ...(facts.length ? { bindings: { facts } } : {}) };
       },
       // The card says what the request will do (method and host), not the engine's category sentence.
-      ...(network ? { intentFor: (args: Record<string, unknown>) => httpApprovalIntent(req.piece, args), approvalReason: httpApprovalReason(req.piece, input) } : {}),
+      ...(network ? { intentFor: (args: Record<string, unknown>) => httpApprovalIntent(req.piece, args), approvalReason: httpApprovalReason(req.piece, input, readHosts !== null && !listedRead) } : {}),
       // A revised document carries its own reviewed target; anything else is frozen to this input.
       // The card sentence rides in the target but is words about it, not part of it.
       validateTarget: (args, target) => {

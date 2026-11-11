@@ -1614,6 +1614,50 @@ describe('#961: the core HTTP piece is governed by method', () => {
       .toMatchObject({ dispatch: 'approval_required' });
   });
 
+  test('the early refusal uses the egress guard\'s own-address rule: JARVIS_HOST_ADDRESSES and a mapped loopback are refused before a card', async () => {
+    const saved = process.env.JARVIS_HOST_ADDRESSES;
+    process.env.JARVIS_HOST_ADDRESSES = '93.184.216.36';
+    try {
+      for (const url of ['https://93.184.216.36/x', 'http://[::ffff:127.0.0.1]/x', 'http://localhost./x']) {
+        const f = shipped([]);
+        await expect(f.authorize(request('POST', { url }))).rejects.toThrow('Jarvis does not send requests to addresses on this computer or local network.');
+        expect(`${url}: ${f.approvals.getPending().length} ${listWorkflowEffects(f.run.id).length}`).toBe(`${url}: 0 0`);
+        closeWorkflowDb(); initWorkflowDb(':memory:');
+      }
+    } finally {
+      if (saved === undefined) delete process.env.JARVIS_HOST_ADDRESSES; else process.env.JARVIS_HOST_ADDRESSES = saved;
+    }
+    // A public address the operator did not name still asks.
+    expect(await shipped().authorize(request('POST', { url: 'https://93.184.216.36/x' }))).toMatchObject({ dispatch: 'approval_required' });
+  });
+
+  test('a step already recorded is not refused early: its card stays the one it has, and the engine guard decides when it runs', async () => {
+    // A card raised on a self-hosted install, then read by a daemon that now applies the hosted rule.
+    const f = fixture(HTTP, 'send_request', DEFAULT_CONFIG.authority.default_level);
+    f.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories] as ActionCategory[]);
+    const lan = request('POST', { url: 'http://192.168.1.10/x' });
+    const before = buildSandboxServiceBackends({ ...f.options, egressPolicy: 'private-allowed' });
+    const first = await before.pieceAuthorize!({ piece: HTTP, action: 'send_request', input: lan, inputDigest: await pieceInputDigest(lan) }, f.context);
+    expect(first).toMatchObject({ dispatch: 'approval_required' });
+    const after = buildSandboxServiceBackends({ ...f.options, egressPolicy: 'public-only' });
+    const again = await after.pieceAuthorize!({ piece: HTTP, action: 'send_request', input: lan, inputDigest: await pieceInputDigest(lan) }, f.context);
+    expect(approvalOf(again)).toBe(approvalOf(first));
+    expect(f.approvals.getPending()).toHaveLength(1);
+  });
+
+  test('the card\'s own reason replaces only the engine\'s generic sentence, never an override\'s, nor a listed read\'s', async () => {
+    // A listed read asks only because reads are governed here: the engine's reason is the true one.
+    const read = shipped();
+    read.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories, 'read_data'] as ActionCategory[]);
+    const readCard = read.approvals.getRequest(approvalOf(await read.authorize(request('GET'))))!;
+    expect(approvalIntentParts(readCard)).toEqual({ action: 'Jarvis wants to read ops.example.test', reason: 'read_data is a governed action requiring user approval' });
+    closeWorkflowDb(); initWorkflowDb(':memory:');
+    const send = shipped();
+    send.authority.addOverride({ action: 'send_message', allowed: true, requires_approval: true });
+    const sendCard = send.approvals.getRequest(approvalOf(await send.authorize(request('POST'))))!;
+    expect(approvalIntentParts(sendCard).reason).toBe('Override requires approval for send_message');
+  });
+
   test('PUT and PATCH ask as a POST does; DELETE and any other method are denied at the default level', async () => {
     for (const [method, outcome] of [['PUT', 'card'], ['PATCH', 'card'], ['post', 'card'], ['HEAD', 'run'], ['get', 'run'],
       ['DELETE', 'denied'], ['PURGE', 'denied'], [' GET', 'denied'], ['', 'denied']] as const) {
