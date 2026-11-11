@@ -258,6 +258,11 @@ function rowToFlowVersion(row: FlowVersionRow): FlowVersion {
   };
 }
 
+/** Fill the saved schema of each dynamic property (HTTP body, auth fields, zip password) for its current values. */
+function resolvedSchemas<T>(trigger: T): T {
+  return withResolvedPropertySchemas(trigger, workflowReadinessServices()?.pieces);
+}
+
 /**
  * A Webhook trigger's signing secret as it may be saved (#1153): a created or
  * changed secret meets the length floor and is timestamped; one a Webhook
@@ -265,11 +270,6 @@ function rowToFlowVersion(row: FlowVersionRow): FlowVersion {
  * rollback, a copy) keeps working as it is. Every writer of a version passes
  * through here.
  */
-/** Fill the saved schema of each dynamic property (HTTP body, auth fields, zip password) for its current values. */
-function resolvedSchemas<T>(trigger: T): T {
-  return withResolvedPropertySchemas(trigger, workflowReadinessServices()?.pieces);
-}
-
 function webhookSecretRules<T>(flowId: string, previous: unknown, trigger: T): T {
   try {
     // Only a Webhook trigger's own secret, and only in this flow's project:
