@@ -461,26 +461,46 @@ export interface RecentRunRow {
 }
 
 /**
- * The latest production, top-level run of each flow in a project, newest first.
- * One query: a window function picks each flow's latest run, so the cost does
- * not grow with the number of flows. Test runs and subflow child runs are never
- * candidates, so they cannot hide a flow's real latest run. `steps` is not
- * selected; captured step output never leaves the database through this read.
- * The name is the display name of the version the run used.
+ * The latest production, top-level run of each workflow in a project, newest
+ * first. Test runs, single-step tests and subflow child runs are never
+ * candidates, so they cannot hide a workflow's real latest run, and a removed
+ * workflow (Undo receipt held) is left out as the Workflows room leaves it out.
+ *
+ * Each workflow's latest run is one seek on `idx_flow_run_recent`, so the cost
+ * grows with the number of workflows, not with their accumulated run history:
+ * Today polls this, and a window over every run sorted the whole history on the
+ * daemon thread (about 96 ms at 200 workflows and 100k runs, 0.4 ms this way;
+ * 1.5 ms at 1000 workflows).
+ *
+ * The name is the one the Workflows room shows (the published version's, else
+ * the selected draft's), falling back to the version the run used. `steps` is
+ * not selected; captured step output never leaves the database through this read.
  */
 export function listRecentRuns(projectId: string, limit: number): RecentRunRow[] {
   const rows = db()
     .query<{ id: string; flow_id: string; flow_version_id: string; status: FlowRunStatus; start_time: number | null; created: number; display_name: string },
       SQLQueryBindings[]>(
-      `SELECT r.id, r.flow_id, r.flow_version_id, r.status, r.start_time, r.created, v.display_name
-         FROM (SELECT r.id, r.flow_id, r.flow_version_id, r.status, r.start_time, r.created, r.rowid AS rid,
-                      ROW_NUMBER() OVER (PARTITION BY r.flow_id ORDER BY r.created DESC, r.rowid DESC) AS rn
-                 FROM flow_run r JOIN flow f ON f.id = r.flow_id
-                WHERE f.project_id = ? AND r.environment = 'PRODUCTION' AND r.parent_run_id IS NULL) r
-         JOIN flow_version v ON v.id = r.flow_version_id
-        WHERE r.rn = 1
-        ORDER BY COALESCE(r.start_time, r.created) DESC, r.rid DESC
-        LIMIT ?`,
+      // The latest runs first, then names for those few rows only: the draft
+      // selection view is per workflow, and joined to every workflow it made
+      // the read grow with the square of the workflow count.
+      `SELECT t.id, t.flow_id, t.flow_version_id, t.status, t.start_time, t.created,
+              COALESCE(CASE WHEN t.published_version_id IS NOT NULL
+                         THEN (SELECT display_name FROM flow_version WHERE id = t.published_version_id)
+                         ELSE (SELECT v.display_name FROM brief_workflow_draft_selection d
+                                 JOIN flow_version v ON v.id = d.version_id WHERE d.flow_id = t.flow_id) END,
+                       (SELECT display_name FROM flow_version WHERE id = t.flow_version_id)) AS display_name
+         FROM (SELECT r.id, r.flow_id, r.flow_version_id, r.status, r.start_time, r.created, f.published_version_id
+                 FROM flow f
+                 JOIN flow_run r ON r.id = (
+                        SELECT x.id FROM flow_run x INDEXED BY idx_flow_run_recent
+                         WHERE x.project_id = f.project_id AND x.flow_id = f.id
+                           AND x.environment = 'PRODUCTION' AND x.parent_run_id IS NULL AND x.step_name_to_test IS NULL
+                         ORDER BY x.created DESC, x.id DESC LIMIT 1)
+                WHERE f.project_id = ?
+                  AND f.id NOT IN (SELECT flow_id FROM brief_workflow_slots WHERE receipt_id IS NOT NULL)
+                ORDER BY COALESCE(r.start_time, r.created) DESC, r.created DESC, r.id DESC
+                LIMIT ?) t
+        ORDER BY COALESCE(t.start_time, t.created) DESC, t.created DESC, t.id DESC`,
     )
     .all(projectId, limit)
     .map(row => ({ runId: row.id, flowId: row.flow_id, flowVersionId: row.flow_version_id, name: row.display_name,

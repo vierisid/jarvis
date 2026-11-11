@@ -1,6 +1,7 @@
 import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, listHumanInputs, resolveHumanInput } from '../runtime/human-input';
 import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
+import { forCard } from '../../util/card-text';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion } from './editor-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
@@ -2333,12 +2334,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       GET: req =>
         trapErrors(() => {
           const { limit } = clampPage(new URL(req.url).searchParams, 5);
-          // Named the way the Workflows room names a flow (its published version,
-          // else its latest draft), not by the version the run used, so a rename
-          // shows the same name in both places. At most `limit` rows, so the
-          // per-row lookup stays small.
+          // The name is model- or person-authored text shown on Today: invisible
+          // and bidi control characters are dropped and it is capped, as on a card.
           const items = listRecentRuns(callerProject(req), limit)
-            .map(row => ({ ...row, name: serializeFlow(getFlow(row.flowId))?.displayName ?? row.name }));
+            .map(row => ({ ...row, name: forCard(row.name, RECENT_RUN_NAME_MAX) }));
           return ok({ items });
         }),
     },
@@ -2622,6 +2621,8 @@ function numParam(raw: string | null): number | null {
  * moves, move `LIST_RUNS_MAX_LIMIT` with it.
  */
 const LISTING_MAX_LIMIT = 100;
+/** Longest workflow name Today's Recent activity shows. */
+const RECENT_RUN_NAME_MAX = 120;
 
 /**
  * A listing's `limit` and `offset`, clamped. Three listings were doing this

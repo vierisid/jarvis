@@ -3506,6 +3506,33 @@ describe("#652: the runs listing says where the next page starts", () => {
     expect((await read("")).items.find((row) => row.runId === latestA.id)?.name).toBe("Alpha renamed");
   });
 
+  test("the recent-runs read leaves out removed workflows and single-step tests, and cleans the name", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const { getWorkflowDb } = await import("../db/index");
+    const make = (name: string) => {
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: name,
+        trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+      return { flow, version };
+    };
+    const kept = make("Invoice\u202Etxt.exe  sender\u200B"), removed = make("Removed"), stepped = make("Stepped");
+    const keptRun = createFlowRun({ flowId: kept.flow.id, flowVersionId: kept.version.id, status: "SUCCEEDED" });
+    createFlowRun({ flowId: removed.flow.id, flowVersionId: removed.version.id, status: "SUCCEEDED" });
+    await Bun.sleep(3);
+    const realStepped = createFlowRun({ flowId: stepped.flow.id, flowVersionId: stepped.version.id, status: "FAILED" });
+    await Bun.sleep(3);
+    // "Test this step" sent as a production run is still a test of one step.
+    createFlowRun({ flowId: stepped.flow.id, flowVersionId: stepped.version.id, stepNameToTest: "step_1", status: "SUCCEEDED" });
+    // A removed workflow (Undo receipt held) is gone from the Workflows room, so from Today too.
+    getWorkflowDb().run("UPDATE brief_workflow_slots SET receipt_id = 'receipt' WHERE flow_id = ?", [removed.flow.id]);
+    const res = await callJson(routes["/api/workflow-runs/recent"]?.GET, reqWithParams("GET", "http://x/api/workflow-runs/recent", {}));
+    const items = (res.body as { items: Array<{ runId: string; name: string; status: string }> }).items;
+    expect(items.map(row => [row.runId, row.status])).toEqual([[realStepped.id, "FAILED"], [keptRun.id, "SUCCEEDED"]]);
+    expect(items[1]!.name).toBe("Invoicetxt.exe sender");
+  });
+
   test("a paused run in the recent-runs read says whether it waits on a person or a timer", async () => {
     const { createFlow } = await import("../db/repos/flow");
     const { createDraftVersion } = await import("../db/repos/flow-version");
