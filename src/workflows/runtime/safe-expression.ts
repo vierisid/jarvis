@@ -117,9 +117,15 @@ class Parser {
     return left;
   }
 
-  /** `[key]`: a literal key gets the same forbidden-name check as the dot form. */
+  /** `[key]`: a literal key gets the same forbidden-name check as the dot form. A key
+   * built only from literals (`['__pro' + 'to__']`) is worked out here and checked too,
+   * so it is refused when the flow is saved rather than on every run. */
   private bracketKey(): Node {
-    const key = this.expression(); this.require(']');
+    let key = this.expression(); this.require(']');
+    if (key.kind !== 'literal' && !hasReference(key)) {
+      const value = evaluateTree(key, Object.create(null));
+      if (typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))) key = { kind: 'literal', value };
+    }
     if (key.kind === 'literal' && typeof key.value === 'string') checkKey(key.value);
     return key;
   }
@@ -351,8 +357,30 @@ export function workflowInterpolationText(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
+/** True when any part of the tree reads data; false for a tree of literals only. */
+function hasReference(start: Node): boolean {
+  const pending = [start];
+  while (pending.length) {
+    const node = pending.pop()!;
+    switch (node.kind) {
+      case 'reference': return true;
+      case 'array': pending.push(...node.items); break;
+      case 'object': pending.push(...node.entries.map(([, value]) => value)); break;
+      case 'member': pending.push(node.object, node.key); break;
+      case 'unary': pending.push(node.value); break;
+      case 'binary': pending.push(node.left, node.right); break;
+      case 'conditional': pending.push(node.condition, node.yes, node.no); break;
+      case 'flatten': pending.push(node.data, node.path); break;
+    }
+  }
+  return false;
+}
+
 function evaluateParsed(script: string, context: Record<string, unknown>): unknown {
-  const tree = new Parser(tokenize(script)).parse();
+  return evaluateTree(new Parser(tokenize(script)).parse(), context);
+}
+
+function evaluateTree(tree: Node, context: Record<string, unknown>): unknown {
   const budget = new Budget();
   const evaluate = (node: Node, depth = 0): unknown => {
     budget.visit(depth);
