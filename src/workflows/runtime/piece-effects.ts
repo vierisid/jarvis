@@ -1082,6 +1082,53 @@ const PATH_SECRETS: readonly RegExp[] = [
   /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?(?:[a-z0-9-]+\.)*webhook\.office\.com\.?(?::\d+)?[\\/]+webhookb2[\\/]+[^/\\?#]+[\\/]+IncomingWebhook[\\/]+)([^/\\?#]+)/iu,
 ];
 
+/** A path segment after which a token-shaped segment is a credential: `/hooks/<token>`, `/key/<key>`, `/token/<t>`. */
+const isPathMarker = (segment: string): boolean => /^(?:web)?hooks?$|^(?:api[-_]?)?keys$/iu.test(segment) || isSecretName(segment);
+/** A host whose own name says its paths are hook secrets (`hook.eu1.make.com/<token>`, `hooks.zapier.com/hooks/...`). */
+const HOOK_HOST = /^(?:web)?hooks?\./iu;
+const TOKEN_CHARS = /^[A-Za-z0-9._~+=:-]+$/u;
+const hasLetterAndDigit = (text: string): boolean => /[A-Za-z]/u.test(text) && /\d/u.test(text);
+/**
+ * A segment that reads as a token once a marker said one follows: letters and
+ * digits mixed (`abcdef1`, a UUID), or long. Words (`catch`, `messages`) and
+ * plain numbers (a GitHub hook id) are content.
+ */
+const pathToken = (segment: string, cut: boolean): boolean => TOKEN_CHARS.test(segment)
+  && (cut || (segment.length >= 6 && hasLetterAndDigit(segment)) || segment.length >= 20);
+/** A fragment that is itself a token (`#<token>`), told from an anchor (`#section-2`) or a route (`#/settings`) by length and shape. */
+const fragmentToken = (fragment: string): boolean => TOKEN_CHARS.test(fragment) && !fragment.includes('=')
+  && ((fragment.length >= 16 && hasLetterAndDigit(fragment)) || fragment.length >= 32);
+
+/**
+ * Token-shaped secrets in a URL's path and fragment that no name announces:
+ * every token-shaped segment after a marker segment (`/hooks/<token>`,
+ * `/rocket/hooks/<id>/<token>`, `/with/key/<key>`) or on a hook host, and a
+ * bare fragment that is one token. Ordinary paths keep their words and plain
+ * numbers. Text edits only; a URL the engine cut is judged without its cut
+ * note, and its last path segment, if it falls under a marker, is hidden
+ * whatever its length, since the cut may have shortened it.
+ */
+function redactUrlTokens(url: string): string {
+  const note = CUT_NOTE.exec(url)?.[0] ?? '';
+  const text = url.slice(0, url.length - note.length);
+  const parts = /^(\s*[a-z][a-z0-9+.-]*:[\\/]+)([^/\\?#]*)([^?#]*)(\?[^#]*)?(#[\s\S]*)?$/iu.exec(text);
+  if (!parts) return url;
+  const [, scheme, authority, path, query = '', fragment = ''] = parts as unknown as [string, string, string, string, string?, string?];
+  let marked = HOOK_HOST.test(authority.replace(/^.*@/u, ''));
+  const cutInPath = note !== '' && query === '' && fragment === '';
+  const segments = path.split(/([\\/]+)/u);
+  const lastSegment = segments.length - 1;
+  const redactedPath = segments.map((segment, i) => {
+    if (i % 2 === 1 || segment === '') return segment;
+    if (marked && pathToken(segment, cutInPath && i === lastSegment)) return REDACTED;
+    if (isPathMarker(segment)) marked = true;
+    return segment;
+  }).join('');
+  const body = fragment.slice(1);
+  const redactedFragment = fragmentToken(body) ? `#${REDACTED}` : fragment;
+  return `${scheme}${authority}${redactedPath}${query}${redactedFragment}${note}`;
+}
+
 /**
  * The HTTP piece takes credentials as plain props: Basic or Bearer fields, a
  * proxy password, an `Authorization` header, an `api_key` query parameter, a
@@ -1110,6 +1157,7 @@ export function redactHttpInput(input: Record<string, unknown>): Record<string, 
     for (const pattern of PATH_SECRETS) {
       out.url = (out.url as string).replace(pattern, (whole, head: string, secret: string) => secret !== '' ? `${head}${redactValue(secret)}` : whole);
     }
+    out.url = redactUrlTokens(out.url as string);
   }
   return out;
 }

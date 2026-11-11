@@ -831,7 +831,11 @@ HTTP request specifics:
   written or percent-decoded, at any depth of a JSON or form body, in a raw
   JSON string body or a wholly form-encoded one, and in a URL fragment
   (`#access_token=`). The secret path segment of a Slack, Discord, Telegram or
-  Teams webhook URL is redacted too. The engine's digest of the whole input still
+  Teams webhook URL is redacted too, and so is any token-shaped path segment
+  (letters and digits mixed, or 20+ characters) after a `hooks`, `webhook`,
+  `key` or other credential-named segment or on a `hook.`/`hooks.` host
+  (`/hooks/<token>`, `hook.eu1.make.com/<token>`), and a fragment that is one
+  token (`#<token>`). Words and plain numbers in a path are kept. The engine's digest of the whole input still
   binds the approval to what runs.
 - **Receipts keep no tokens.** The durable receipt of a sent request drops
   `Set-Cookie`, redacts token-named fields and headers at any depth

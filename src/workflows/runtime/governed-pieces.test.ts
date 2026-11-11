@@ -1802,6 +1802,38 @@ describe('#961: the core HTTP piece is governed by method', () => {
     for (const u of ['https://hooks.slack.com:443/services/T1/B2/S3', 'https://acme.webhook.office.com/webhookb2/g/IncomingWebhook/S/o']) expect(url(url(u))).toBe(url(u));
   });
 
+  test('token-shaped path segments after a hook or key segment, on a hook host, and a bare token fragment are redacted; ordinary paths are kept', () => {
+    const url = (u: string) => String(redactHttpInput(request('GET', { url: u })).url);
+    const hidden: Array<[string, string]> = [
+      ['https://chat.example.test/hooks/xj4kq8n2b7m3c9p5r1t6', 'https://chat.example.test/hooks/[redacted]'],
+      ['https://rocket.example.test/hooks/65f1a2b3c4d5/Zx8Yw7Vu6Ts5Rq4Po3?x=1', 'https://rocket.example.test/hooks/[redacted]/[redacted]?x=1'],
+      ['https://hooks.zapier.com/hooks/catch/123456/abcdef1/', 'https://hooks.zapier.com/hooks/catch/123456/[redacted]/'],
+      ['https://hook.eu1.make.com/a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6', 'https://hook.eu1.make.com/[redacted]'],
+      ['https://maker.ifttt.com/trigger/evt/with/key/dXk3Lm9PqRsTuVwX', 'https://maker.ifttt.com/trigger/evt/with/key/[redacted]'],
+      ['https://n8n.example.test/webhook/550e8400-e29b-41d4-a716-446655440000', 'https://n8n.example.test/webhook/[redacted]'],
+      ['https://x.test/api/token/abcdefghijklmnopqrstuvwxyz', 'https://x.test/api/token/[redacted]'],
+      ['https://x.test\\hooks\\Ab12Cd34Ef', 'https://x.test\\hooks\\[redacted]'],
+      ['https://app.test/cb#eyJhbGciOiJIUzI1NiJ9abc123', 'https://app.test/cb#[redacted]'],
+      // A cut URL: the shortened last segment under a marker goes whatever its length.
+      ['https://x.test/hooks/ab... [40 more characters]', 'https://x.test/hooks/[redacted]... [40 more characters]'],
+    ];
+    for (const [raw, shown] of hidden) {
+      expect(url(raw)).toBe(shown);
+      expect(url(url(raw))).toBe(shown);
+    }
+    for (const kept of [
+      'https://api.github.com/repos/o/r/hooks/487652345/pings',
+      'https://example.test/users/550e8400-e29b-41d4-a716-446655440000/profile',
+      'https://api.example.test/v2/keys/list',
+      'https://api.example.test/oauth/token',
+      'https://docs.example.test/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit',
+      'https://app.test/page#section-2',
+      'https://app.test/#/settings/profile2',
+      'https://app.test/page#introduction',
+      'https://x.test/hooks/{{token}}',
+    ]) expect(url(kept)).toBe(kept);
+  });
+
   test('a wide input whose projection loses the method is a tracked worst case on both sides', async () => {
     const wide = request('GET', Object.fromEntries(Array.from({ length: 45 }, (_, i) => [`a${String(i).padStart(2, '0')}`, i])));
     let sent: Record<string, any> = {};
