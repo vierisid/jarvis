@@ -1082,50 +1082,72 @@ const PATH_SECRETS: readonly RegExp[] = [
   /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?(?:[a-z0-9-]+\.)*webhook\.office\.com\.?(?::\d+)?[\\/]+webhookb2[\\/]+[^/\\?#]+[\\/]+IncomingWebhook[\\/]+)([^/\\?#]+)/iu,
 ];
 
-/** A path segment after which a token-shaped segment is a credential: `/hooks/<token>`, `/key/<key>`, `/token/<t>`. */
-const isPathMarker = (segment: string): boolean => /^(?:web)?hooks?$|^(?:api[-_]?)?keys$/iu.test(segment) || isSecretName(segment);
+/** A segment after which every token-shaped segment is a hook secret: `/hooks/<id>/<token>`, `/webhook-test/<uuid>`. */
+const HOOK_MARKER = /^(?:web)?hooks?(?:-test)?$/iu;
+/** A segment naming the one segment after it as a credential: `/with/key/<key>`, `/token/<t>`. */
+const KEY_MARKER = /^(?:(?:api[-_]?)?keys?|apikeys?|tokens?|access[-_]?tokens?|secrets?|passw(?:or)?d)$/iu;
 /** A host whose own name says its paths are hook secrets (`hook.eu1.make.com/<token>`, `hooks.zapier.com/hooks/...`). */
 const HOOK_HOST = /^(?:web)?hooks?\./iu;
-const TOKEN_CHARS = /^[A-Za-z0-9._~+=:-]+$/u;
+const TOKEN_CHARS = /^[A-Za-z0-9._~+=:%-]+$/u;
 const hasLetterAndDigit = (text: string): boolean => /[A-Za-z]/u.test(text) && /\d/u.test(text);
 /**
  * A segment that reads as a token once a marker said one follows: letters and
- * digits mixed (`abcdef1`, a UUID), or long. Words (`catch`, `messages`) and
- * plain numbers (a GitHub hook id) are content.
+ * digits mixed (`abcdef1` under a hook, 12+ characters after a key segment, a
+ * UUID), or long. Words (`catch`, `messages`), plain numbers (a GitHub hook
+ * id) and short versioned names after a key segment (`/key/oauth2`) are content.
  */
-const pathToken = (segment: string, cut: boolean): boolean => TOKEN_CHARS.test(segment)
-  && (cut || (segment.length >= 6 && hasLetterAndDigit(segment)) || segment.length >= 20);
-/** A fragment that is itself a token (`#<token>`), told from an anchor (`#section-2`) or a route (`#/settings`) by length and shape. */
-const fragmentToken = (fragment: string): boolean => TOKEN_CHARS.test(fragment) && !fragment.includes('=')
-  && ((fragment.length >= 16 && hasLetterAndDigit(fragment)) || fragment.length >= 32);
+const pathToken = (segment: string, mixedMin: number, cut: boolean): boolean => TOKEN_CHARS.test(segment)
+  && (cut || (segment.length >= mixedMin && hasLetterAndDigit(segment)) || segment.length >= 20);
+/**
+ * A heading anchor: lowercase parts joined by `-`, `_` or `.`, one of them a
+ * word no hex string spells (`step-1-install-dependencies`, `section-12-overview`).
+ */
+const isAnchor = (fragment: string): boolean => /^[a-z0-9]+(?:[-_.][a-z0-9]+)+$/u.test(fragment)
+  && fragment.split(/[-_.]/u).some((part) => part.length >= 3 && /^[a-z]*[g-z][a-z]*$/u.test(part));
+/**
+ * A fragment that is itself a token (`#<token>`), told from an anchor
+ * (`#section-2`, `#step-1-install-dependencies`) or a route (`#/settings`) by
+ * shape and length. A fragment the engine cut is judged on what is left of it.
+ */
+const fragmentToken = (fragment: string, cut: boolean): boolean => TOKEN_CHARS.test(fragment) && !fragment.includes('=')
+  && !isAnchor(fragment)
+  && ((cut && fragment.length >= 8) || (fragment.length >= 16 && hasLetterAndDigit(fragment)) || fragment.length >= 32);
 
 /**
  * Token-shaped secrets in a URL's path and fragment that no name announces:
- * every token-shaped segment after a marker segment (`/hooks/<token>`,
- * `/rocket/hooks/<id>/<token>`, `/with/key/<key>`) or on a hook host, and a
- * bare fragment that is one token. Ordinary paths keep their words and plain
- * numbers. Text edits only; a URL the engine cut is judged without its cut
- * note, and its last path segment, if it falls under a marker, is hidden
- * whatever its length, since the cut may have shortened it.
+ * every token-shaped segment after a hook segment (`/hooks/<token>`,
+ * `/rocket/hooks/<id>/<token>`) or on a hook host, the one segment after a key
+ * or token segment (`/with/key/<key>`), and a bare fragment that is one token.
+ * Ordinary paths keep their words and short plain numbers. A URL a
+ * `PATH_SECRETS` pattern already matched (Slack, Discord, Telegram, Teams) is
+ * left to it, so its team and channel ids stay readable. Text edits only; a URL
+ * the engine cut is judged without its cut note, and the part the cut fell in
+ * is hidden on less evidence, since the cut may have shortened it.
  */
 function redactUrlTokens(url: string): string {
+  if (PATH_SECRETS.some((pattern) => pattern.test(url))) return url;
   const note = CUT_NOTE.exec(url)?.[0] ?? '';
   const text = url.slice(0, url.length - note.length);
   const parts = /^(\s*[a-z][a-z0-9+.-]*:[\\/]+)([^/\\?#]*)([^?#]*)(\?[^#]*)?(#[\s\S]*)?$/iu.exec(text);
   if (!parts) return url;
   const [, scheme, authority, path, query = '', fragment = ''] = parts as unknown as [string, string, string, string, string?, string?];
-  let marked = HOOK_HOST.test(authority.replace(/^.*@/u, ''));
+  let hooked = HOOK_HOST.test(authority.replace(/^.*@/u, ''));
+  let keyNext = false;
   const cutInPath = note !== '' && query === '' && fragment === '';
   const segments = path.split(/([\\/]+)/u);
   const lastSegment = segments.length - 1;
   const redactedPath = segments.map((segment, i) => {
     if (i % 2 === 1 || segment === '') return segment;
-    if (marked && pathToken(segment, cutInPath && i === lastSegment)) return REDACTED;
-    if (isPathMarker(segment)) marked = true;
+    const underMarker = hooked || keyNext;
+    const mixedMin = hooked ? 6 : 12;
+    keyNext = false;
+    if (underMarker && pathToken(segment, mixedMin, cutInPath && i === lastSegment)) return REDACTED;
+    if (HOOK_MARKER.test(segment)) hooked = true;
+    else if (KEY_MARKER.test(segment)) keyNext = true;
     return segment;
   }).join('');
   const body = fragment.slice(1);
-  const redactedFragment = fragmentToken(body) ? `#${REDACTED}` : fragment;
+  const redactedFragment = fragmentToken(body, note !== '' && fragment !== '') ? `#${REDACTED}` : fragment;
   return `${scheme}${authority}${redactedPath}${query}${redactedFragment}${note}`;
 }
 

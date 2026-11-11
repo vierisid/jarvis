@@ -153,6 +153,20 @@ describe('a draft edit (credentialEditRefusal after restore)', () => {
     expect(edit(withParse, (g) => { g.nextAction!.nextAction!.settings!.input!.method = 'PUT'; })).toBeNull();
   });
 
+  test('a hook token in the URL path is kept on a method edit and refused on a path edit; a URL with no hidden part stays editable', () => {
+    const hooked = graph(step('call', { input: { method: 'POST', url: 'https://chat.example.com/hooks/Zx8Yw7Vu6Ts5Rq4Po3', headers: {} } }));
+    const seen = versionAsModelSees({ trigger: hooked }).trigger as FlowTriggerNode;
+    expect(JSON.stringify(seen)).not.toContain('Zx8Yw7Vu6Ts5Rq4Po3');
+    const g = structuredClone(seen);
+    g.nextAction!.settings!.input!.method = 'PUT';
+    const restored = restoreRedactedCredentials(hooked, g);
+    expect(credentialEditRefusal(hooked, g, restored)).toBeNull();
+    expect(restored.nextAction!.settings!.input!.url).toBe('https://chat.example.com/hooks/Zx8Yw7Vu6Ts5Rq4Po3');
+    expect(edit(hooked, (h) => { h.nextAction!.settings!.input!.url = 'https://chat.example.com/hooks/[redacted]/x'; })).toMatch(/would store \[redacted\]/);
+    const plain = graph(step('call', { input: { method: 'GET', url: 'https://api.example.com/v1/auth/users/u123abc/roles', headers: {} } }));
+    expect(edit(plain, (h) => { h.nextAction!.settings!.input!.url = 'https://api.example.com/v1/auth/users/u123abc/perms'; })).toBeNull();
+  });
+
   test('replacing the step with one that holds none of the credentials is allowed', () => {
     expect(edit(saved, (g) => { g.nextAction!.settings = { pieceName: 'jarvis-notify', actionName: 'notify', input: { message: 'hi' } }; })).toBeNull();
   });
