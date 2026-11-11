@@ -245,6 +245,14 @@ function check(value: unknown, schema: OutputSchema, path: string, report: (mess
  * travels beside the outcome so a handled branch can still inspect it.
  */
 export function evaluateLlmOutput(input: { text: string; parseJson?: boolean; outputSchema?: OutputSchema }): LlmOutputEvaluation {
+  // A provider that answered with nothing gave this step nothing to pass on.
+  // Counting that as success ran every later step on an empty string. An Ask
+  // step has no side effects, so nothing was done either way. A step that asks
+  // for JSON keeps its own verdict below (INVALID_JSON_OUTPUT): graphs route on it.
+  if (input.text.trim() === '' && !input.parseJson && !input.outputSchema) {
+    return { outcome: { status: 'error', code: 'EMPTY_AI_REPLY', effect: 'not_started',
+      message: 'The AI answered with an empty reply, so this step stopped before the next step could use it. Run it again, or check the model in Settings.' } };
+  }
   if (!input.parseJson && !input.outputSchema) return { outcome: { status: 'succeeded' } };
   let parsed: unknown;
   try {

@@ -92,6 +92,44 @@ function makeSuccessRunner(messages: LLMMessage[] = [], finalText = "all done"):
   } satisfies SubAgentResult);
 }
 
+describe("an agent whose tool calls failed", () => {
+  const trace: LLMMessage[] = [
+    { role: "assistant", content: "", tool_calls: [{ id: "t1", name: "run_command", arguments: {} }, { id: "t2", name: "vault_search", arguments: {} }] },
+    { role: "tool", tool_call_id: "t1", content: 'Error: no tool named "run_command" is available.' },
+    { role: "tool", tool_call_id: "t2", content: "found" },
+  ];
+  const run = (requiredTools?: string[]) => {
+    const { orchestrator } = makeOrchestratorStub({ primary: { id: "primary", canSpawn: true } });
+    const runner: RunSubAgentFn = async () => ({ success: true, response: "Triaged.", toolsUsed: [], tokensUsed: { input: 1, output: 1 },
+      terminationReason: "completed", messages: trace, failedToolCalls: ["t1"] } satisfies SubAgentResult);
+    return new M7AgentDelegator({ orchestrator: orchestrator as never, llmManager: {} as never,
+      specialists: new Map([["workflow-default", makeRole("workflow-default")]]), runSubAgentFn: runner })
+      .delegate({ goal: "triage", ...(requiredTools ? { requiredTools } : {}) });
+  };
+
+  test("still succeeds, as it did before, but the output says which calls failed", async () => {
+    const out = await run();
+    expect(out.status).toBe("completed");
+    expect(out.outcome).toEqual({ status: "succeeded" });
+    expect(out.finalMessage).toBe("Triaged.");
+    expect(out.warning).toContain("1 of 2 tool calls did not work (run_command)");
+    expect(out.toolErrors).toEqual([{ name: "run_command", error: expect.stringContaining("no tool named") }]);
+  });
+
+  test("fails when a tool the step requires is the one that failed", async () => {
+    expect((await run(["run_command"])).outcome).toMatchObject({ status: "error", code: "REQUIRED_TOOL_NOT_COMPLETED" });
+  });
+
+  test("an agent whose calls all worked carries no warning", async () => {
+    const { orchestrator } = makeOrchestratorStub({ primary: { id: "primary", canSpawn: true } });
+    const out = await new M7AgentDelegator({ orchestrator: orchestrator as never, llmManager: {} as never,
+      specialists: new Map([["workflow-default", makeRole("workflow-default")]]), runSubAgentFn: makeSuccessRunner(trace.slice(0, 1).concat(trace.slice(2)), "done") })
+      .delegate({ goal: "triage" });
+    expect(out.warning).toBeUndefined();
+    expect(out.toolErrors).toBeUndefined();
+  });
+});
+
 describe("M7AgentDelegator", () => {
   test("returns status='error' when no primary agent is registered", async () => {
     const { orchestrator } = makeOrchestratorStub({});

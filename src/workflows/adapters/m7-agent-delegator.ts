@@ -188,6 +188,26 @@ export function runScopedAuditTrail(base: AuditTrail, run: { runId: string; step
   return scoped;
 }
 
+/** Most failed calls listed in a step's output; the warning still counts all of them. */
+const MAX_LISTED_TOOL_ERRORS = 10;
+
+/**
+ * The part of a finished delegation that did not happen. A tool that was not
+ * available, was denied or failed comes back to the model as text, so the agent
+ * often ends with a cheerful final message anyway ("Triaged."). The step's
+ * outcome is not changed by this (see `requiredTools`); it only makes the
+ * failures visible in the step's output and in run details.
+ */
+export function failedToolCallNotice(toolCalls: PieceAgentToolCall[]): Pick<PieceAgentDelegateResult, "warning" | "toolErrors"> {
+  const failed = toolCalls.filter(call => call.error !== undefined);
+  if (failed.length === 0) return {};
+  const names = [...new Set(failed.map(call => call.name))];
+  return {
+    warning: `${failed.length} of ${toolCalls.length} tool call${toolCalls.length === 1 ? "" : "s"} did not work (${names.join(", ")}), so the work behind them was not done. The agent's final message may not say so.`,
+    toolErrors: failed.slice(0, MAX_LISTED_TOOL_ERRORS).map(call => ({ name: call.name, error: call.error! })),
+  };
+}
+
 const errorResult = (error: string, toolCalls: PieceAgentToolCall[] = []): PieceAgentDelegateResult =>
   ({ finalMessage: "", toolCalls, status: "error", error });
 
@@ -466,6 +486,7 @@ export class M7AgentDelegator implements PieceAgentDelegator {
             status: result.terminationReason === "max_iterations" ? "max_iterations" : "completed" };
       finished = browserTaskResult(finished, input.requiredTools ?? []);
       finished.outcome = delegationOutcome(finished, input.requiredTools);
+      Object.assign(finished, failedToolCallNotice(finished.toolCalls));
       // The log is dropped once the result exists; the trace is in the step output.
       durable?.save({ ...stateOf(0), messages: [], status: "completed", result: finished });
       return finished;

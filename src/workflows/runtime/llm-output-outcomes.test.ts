@@ -105,6 +105,16 @@ describe('LLM output contract through the route and the durable receipt', () => 
     expect(listWorkflowEffects(f.run.id)[0]).not.toHaveProperty('outcome');
   });
 
+  test('an empty reply fails the step by default and is data for a handled step', async () => {
+    const f = fixture('');
+    const failed = await f.call({});
+    expect(failed.status).toBe(422);
+    expect(await failed.json()).toMatchObject({ text: '', outcome: { status: 'error', code: 'EMPTY_AI_REPLY', effect: 'not_started' } });
+    const handled = await f.call({ requireSuccess: false });
+    expect(handled.status).toBe(200);
+    expect(await handled.json()).toMatchObject({ outcome: { code: 'EMPTY_AI_REPLY' } });
+  });
+
   test('a handled step receives the same outcome as data, still without a parsed value', async () => {
     const f = fixture('not json');
     const response = await f.call({ parseJson: true, requireSuccess: false });
@@ -327,6 +337,16 @@ describe('LLM output contract through the real engine', () => {
       return getFlowRun(f.run.id)!;
     } finally { await runtime.shutdown(); await api.stop(); }
   }
+
+  test('an empty reply fails the step and nothing downstream runs on an empty string', async () => {
+    const f = fixture('');
+    const ask = askAction({});
+    ask.nextAction = toolAction('deliver', { path: '/synthetic', content: 'should not run' });
+    const run = await runFlow(f, { ...f.version.trigger, nextAction: ask });
+    expect(run.status).toBe('FAILED');
+    expect(run.failedStep?.errorMessage).toContain('empty reply');
+    expect(f.downstream).toHaveLength(0);
+  }, 60_000);
 
   test('required malformed JSON fails the step and nothing downstream runs', async () => {
     const f = fixture('Here you go: {"total": 12}');

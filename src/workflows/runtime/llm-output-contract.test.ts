@@ -177,6 +177,16 @@ describe('LLM output evaluation', () => {
     expect((result.outcome as { message: string }).message).toContain('code fence');
   });
 
+  test('an empty reply with no contract is an error that says nothing was done, not a success', () => {
+    for (const text of ['', '  \n\t ']) {
+      const result = evaluateLlmOutput({ text });
+      expect('parsed' in result).toBe(false);
+      expect(result.outcome).toMatchObject({ status: 'error', code: 'EMPTY_AI_REPLY', effect: 'not_started' });
+      expect((result.outcome as { message: string }).message).toContain('empty reply');
+    }
+    expect(evaluateLlmOutput({ text: 'ok' }).outcome).toEqual({ status: 'succeeded' });
+  });
+
   test('an empty reply is not JSON', () => {
     expect(evaluateLlmOutput({ text: '', parseJson: true }).outcome).toMatchObject({ code: 'INVALID_JSON_OUTPUT' });
   });

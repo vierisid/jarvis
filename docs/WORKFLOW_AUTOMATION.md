@@ -654,6 +654,11 @@ succeeded when the reply is not JSON. `/v1/jarvis/llm/chat` answers
   downstream runs. Turn `Require valid output` off (`requireSuccess: false`)
   only when a later step routes on `{{step.outcome.status}}` and handles the
   failure. That step still gets `text`; it never gets `parsed`.
+- An empty reply (nothing, or only whitespace) from a step with no JSON contract
+  is `EMPTY_AI_REPLY`, an `error` with effect `not_started`: the step fails by
+  default, so later steps never run on an empty string, and with
+  `requireSuccess: false` it is data to route on. A step that asks for JSON keeps
+  `INVALID_JSON_OUTPUT` for an empty reply.
 - `Output schema (JSON)` is a closed JSON Schema subset: `type`, `properties`,
   `required`, `additionalProperties` (boolean), `items`, `enum`, `minItems`,
   `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`. Any other keyword
@@ -695,6 +700,14 @@ cleanly. A failed outcome (`REQUIRED_TOOL_NOT_COMPLETED`,
 instead. The sub-agent's audit rows now record what happened: a call that
 needed approval is `approval_required` and not executed, and an allowed call
 is recorded after it ran.
+
+When the agent finishes but some of its tool calls failed, were denied or named
+a tool that is not available, the step keeps its outcome (published workflows
+that finish today keep finishing unless `Required tools` says otherwise), and
+its output adds `warning` (how many calls did not work and which tools) and
+`toolErrors` (name and bounded error text per failed call, at most ten). The
+agent's final message may read as success; these fields are where a person reading
+the run sees what was not done.
 
 ### Required nested workflow continuation
 
