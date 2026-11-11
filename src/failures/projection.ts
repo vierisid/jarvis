@@ -31,6 +31,8 @@ export type FailureCategory =
   | 'provider_limit'
   /** The computer, service or provider it needed could not be reached. */
   | 'target_offline'
+  /** A provider answered with an error or a reply it could not use. */
+  | 'provider_error'
   /** An approval was denied, expired or withdrawn, or Authority does not allow it. */
   | 'approval_denied'
   /** It may or may not have taken effect. */
@@ -179,7 +181,7 @@ const PROVIDER: Record<LLMErrorCode, { category: FailureCategory; what: string }
   bad_request: { category: 'invalid_input', what: 'the AI provider refused the request as invalid' },
   unsupported_tools: { category: 'provider_limit', what: 'the selected model cannot use tools' },
   not_found: { category: 'missing_binding', what: 'the configured model or endpoint does not exist' },
-  server: { category: 'target_offline', what: 'the AI provider had a server error' },
+  server: { category: 'provider_error', what: 'the AI provider returned an error' },
   quota_exhausted: { category: 'provider_limit', what: "the plan's included AI usage is used up for now" },
   content_policy: { category: 'provider_limit', what: "the AI platform's content policy blocked the request" },
   restricted: { category: 'provider_limit', what: 'hosted AI is restricted on this account' },
@@ -369,7 +371,7 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
         : evidence.code === 'restricted' ? ['appeal_restriction']
         : mapped.category === 'provider_limit' ? ['wait_or_switch_model']
         : mapped.category === 'missing_binding' ? ['connect']
-        : mapped.category === 'target_offline' ? (effect === 'none' ? ['run_again'] : [])
+        : mapped.category === 'target_offline' || mapped.category === 'provider_error' ? (effect === 'none' ? ['run_again'] : [])
         : mapped.category === 'invalid_input' ? ['edit_and_run_again'] : [];
       if (effect === 'unknown') steps.push('check_before_running_again');
       return build(mapped.category, effect, `${s} failed: ${mapped.what}.`,

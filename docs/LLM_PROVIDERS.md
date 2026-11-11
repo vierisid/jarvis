@@ -352,6 +352,14 @@ manager.setFallbackChain(['openai', 'ollama']);
 const response = await manager.chat(messages);
 ```
 
+### Retries and failover
+
+- A 5xx, a timeout and a provider-side rate limit are retried up to three times on the same provider. A 500 or 5xx waits 0.5 s then 1.5 s between attempts unless the server sent `Retry-After`. A dropped connection (reset) or a malformed reply is retried once.
+- When every attempt failed because the provider is down (5xx, reset or refused connection, timeout, malformed reply), or is out of capacity (rate limit, quota, restricted account), the call moves to the next provider configured for that tier. Only providers the user mapped to a tier are used.
+- It never moves on for `bad_request` or a content-policy block: those are verdicts on the request, not on the provider.
+- A stream that already produced text does not move on; the partial reply is kept and the turn fails.
+- In what the user reads: a 5xx is "the AI provider returned an error", a refused or dropped connection is "the AI provider could not be reached".
+
 ### Provider-Specific Options
 
 ```typescript

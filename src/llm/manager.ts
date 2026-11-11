@@ -8,7 +8,7 @@ import type {
   LLMStreamEvent,
   LLMErrorCode,
 } from './provider.ts';
-import { addUsage, classifyErrorString, hasUsage, getLLMErrorCode, LLMProviderError, type LLMUsage } from './provider.ts';
+import { addUsage, classifyErrorString, hasUsage, isTransportGlitch, getLLMErrorCode, LLMProviderError, type LLMUsage } from './provider.ts';
 import { abortableDelay, raceWithSignal } from '../util/abort.ts';
 import {
   type Tier,
@@ -55,6 +55,12 @@ export class LLMManager {
    * cumulatively across one provider's attempts (see waitForRetry).
    */
   private static readonly MAX_RETRY_AFTER_MS = 60000;
+  /**
+   * Pause before retrying a 5xx or a dropped connection that carried no
+   * Retry-After, one entry per retry. Back to back, three attempts at a
+   * struggling provider land within milliseconds of each other.
+   */
+  private static readonly RETRY_BACKOFF_MS = [500, 1500];
   private static readonly isDebugging = process.env.JARVIS_LOG_LEVEL === 'debug' || process.env.DEBUG_LLM === 'true';
 
   constructor() {}
@@ -228,6 +234,7 @@ export class LLMManager {
 
     const msg = error.message.toLowerCase();
     // Retry on network/timeout errors, not on auth/validation errors
+    if (this.shouldRetryCode(classifyErrorString(msg))) return true;
     return msg.includes('timeout') || /\btimed\s+out\b/.test(msg) ||
       msg.includes('econnrefused') ||
       msg.includes('enotfound') ||
@@ -244,13 +251,18 @@ export class LLMManager {
   /**
    * Tier failover is intentionally narrower than a provider-local retry.
    * Sending the same conversation to another provider is only appropriate
-   * when the selected model is unavailable or the provider has no quota.
+   * when the selected model is unavailable, the provider has no quota, or it
+   * is not answering at all.
    */
   private shouldFailOver(code: LLMErrorCode | undefined, message: string): boolean {
     // Out of capacity on THIS provider: another one may still serve. A
     // restricted hosted account has the same shape — the restriction covers the
     // platform's AI, not a key of the user's own on another tier.
     if (code === 'rate_limit' || code === 'quota_exhausted' || code === 'restricted') return true;
+    // The provider is down or answering nonsense (5xx, reset or refused
+    // connection, timeout, malformed reply): it already had its retries, and a
+    // configured next provider is exactly what is for. A bad_request stays put.
+    if (code === 'network' || code === 'server') return true;
     // A content-policy block is a verdict on the REQUEST: sending the same
     // conversation to another provider would be routing around it. It falls
     // through to `false` below like every other code not listed.
@@ -274,13 +286,28 @@ export class LLMManager {
     retryAfterMs: number | undefined,
     budget: { remainingMs: number },
     signal?: AbortSignal,
+    why?: { code?: LLMErrorCode; attempt: number; message?: string },
   ): Promise<boolean> {
     signal?.throwIfAborted();
-    if (retryAfterMs === undefined || retryAfterMs <= 0) return true;
+    if (retryAfterMs === undefined || retryAfterMs <= 0) {
+      const pause = why && (why.code === 'server' || isTransportGlitch(why.message))
+        ? LLMManager.RETRY_BACKOFF_MS[Math.min(why.attempt, LLMManager.RETRY_BACKOFF_MS.length) - 1] ?? 0 : 0;
+      if (pause > 0) await abortableDelay(pause, signal);
+      return true;
+    }
     if (retryAfterMs > budget.remainingMs) return false;
     budget.remainingMs -= retryAfterMs;
     await abortableDelay(retryAfterMs, signal);
     return true;
+  }
+
+  /**
+   * Whether attempt number `attempt` was the last one worth making. A dropped
+   * connection or a malformed reply gets one more try, not three: it is either
+   * a blip or the server is broken in a way waiting does not fix.
+   */
+  private retriesSpent(attempt: number, message: string): boolean {
+    return attempt >= LLMManager.MAX_RETRIES_PER_PROVIDER || (attempt >= 2 && isTransportGlitch(message));
   }
 
   private newRetryBudget(): { remainingMs: number } {
@@ -439,7 +466,7 @@ export class LLMManager {
         if (!this.shouldFailOver(code, msg)) throw err;
         // The same provider under another tier would answer the same way: its
         // budget or the account's restriction does not depend on the model.
-        if (code === 'rate_limit' || code === 'quota_exhausted' || code === 'restricted') {
+        if (code === 'rate_limit' || code === 'quota_exhausted' || code === 'restricted' || code === 'network' || code === 'server') {
           exhaustedProviders.add(provider.name);
         }
       }
@@ -525,7 +552,7 @@ export class LLMManager {
         yield terminalError;
         return;
       }
-      if (terminalCode === 'rate_limit' || terminalCode === 'quota_exhausted' || terminalCode === 'restricted') {
+      if (terminalCode === 'rate_limit' || terminalCode === 'quota_exhausted' || terminalCode === 'restricted' || terminalCode === 'network' || terminalCode === 'server') {
         exhaustedProviders.add(provider.name);
       }
       failures.push(terminalError);
@@ -585,10 +612,10 @@ export class LLMManager {
         console.error(
           `[LLM] Provider ${provider.name} failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER})${!shouldRetry ? ' [no retry]' : ''}: ${errorMsg}`
         );
-        if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
+        if (!shouldRetry || this.retriesSpent(attempt, errorMsg)) break;
         const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
         if (failFastOnRateLimit && lastCode === 'rate_limit') break;
-        if (!await this.waitForRetry(retryAfterMs, retryBudget, options?.signal)) break;
+        if (!await this.waitForRetry(retryAfterMs, retryBudget, options?.signal, { code: lastCode, attempt, message: errorMsg })) break;
       }
     }
     throw new LLMProviderError(
@@ -649,9 +676,9 @@ export class LLMManager {
           yield event;
         }
         if (!hasError) return;
-        if (!retryableEvent || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
+        if (!retryableEvent || this.retriesSpent(attempt, errors.at(-1) ?? '')) break;
         if (failFastOnRateLimit && lastErrorCode === 'rate_limit') break;
-        if (!await this.waitForRetry(eventRetryAfterMs, retryBudget)) break;
+        if (!await this.waitForRetry(eventRetryAfterMs, retryBudget, options?.signal, { code: lastErrorCode, attempt, message: errors.at(-1) })) break;
       } catch (err) {
         if (spent && err instanceof LLMProviderError) addUsage(spent, err.usage);
         const errorMsg = err instanceof Error ? err.message : String(err);
@@ -674,9 +701,9 @@ export class LLMManager {
           };
           return;
         }
-        if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
+        if (!shouldRetry || this.retriesSpent(attempt, errorMsg)) break;
         if (failFastOnRateLimit && lastErrorCode === 'rate_limit') break;
-        if (!await this.waitForRetry(retryAfterMs, retryBudget)) break;
+        if (!await this.waitForRetry(retryAfterMs, retryBudget, options?.signal, { code: lastErrorCode, attempt, message: errorMsg })) break;
       }
     }
     yield {
@@ -738,7 +765,8 @@ export class LLMManager {
 
           if (!shouldRetry) break;
           const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
-          if (attempt < LLMManager.MAX_RETRIES_PER_PROVIDER && !await this.waitForRetry(retryAfterMs, retryBudget, options?.signal)) break;
+          if (this.retriesSpent(attempt, errorMsg)) break;
+          if (!await this.waitForRetry(retryAfterMs, retryBudget, options?.signal, { code: getLLMErrorCode(err), attempt, message: errorMsg })) break;
         }
       }
 
@@ -827,8 +855,8 @@ export class LLMManager {
           if (!hasError) {
             return;
           }
-          if (!retryableEvent || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
-          if (!await this.waitForRetry(eventRetryAfterMs, retryBudget)) break;
+          if (!retryableEvent || this.retriesSpent(attempt, errors.at(-1) ?? '')) break;
+          if (!await this.waitForRetry(eventRetryAfterMs, retryBudget, options?.signal, { code: lastErrorCode, attempt, message: errors.at(-1) })) break;
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
           errors.push(`attempt ${attempt}: ${errorMsg}`);
@@ -853,8 +881,8 @@ export class LLMManager {
             return;
           }
 
-          if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
-          if (!await this.waitForRetry(retryAfterMs, retryBudget)) break;
+          if (!shouldRetry || this.retriesSpent(attempt, errorMsg)) break;
+          if (!await this.waitForRetry(retryAfterMs, retryBudget, options?.signal, { code: lastErrorCode, attempt, message: errorMsg })) break;
         }
       }
 

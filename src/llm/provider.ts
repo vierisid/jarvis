@@ -162,7 +162,8 @@ export function classifyHttpStatus(status: number): LLMErrorCode {
   if (status === 498) return 'network';
   if (status === 404) return 'not_found';
   if (status === 400 || status === 422) return 'bad_request';
-  if (status === 502 || status === 503 || status === 504) return 'network';
+  // A gateway or overloaded provider that ANSWERED with an error is an error
+  // the provider returned, not a provider that could not be reached.
   if (status >= 500) return 'server';
   return 'unknown';
 }
@@ -201,11 +202,16 @@ export function classifyErrorString(raw: string | undefined | null): LLMErrorCod
     s.includes('insufficient_quota') || s.includes('quota')
   ) return 'rate_limit';
   if (
-    /\b(502|503|504)\b/.test(s) ||
-    s.includes('timeout') || /\btimed\s+out\b/.test(s) || s.includes('temporarily unavailable') ||
+    s.includes('timeout') || /\btimed\s+out\b/.test(s) ||
     s.includes('econnrefused') || s.includes('enotfound') ||
+    s.includes('econnreset') || s.includes('socket connection was closed') || s.includes('connection closed') ||
+    s.includes('epipe') || s.includes('ehostunreach') || s.includes('enetunreach') || s.includes('unable to connect') ||
     s.includes('network')
   ) return 'network';
+  // The provider answered, but not with a usable reply.
+  if (
+    /\b(502|503|504)\b/.test(s) || s.includes('temporarily unavailable') || s.includes('malformed_http') || s.includes('malformed http')
+  ) return 'server';
   if (/\b404\b/.test(s) || s.includes('not found') || s.includes('model_not_found')) return 'not_found';
   if (/\b5\d\d\b/.test(s) || s.includes('internal server error')) return 'server';
   if (
@@ -215,6 +221,16 @@ export function classifyErrorString(raw: string | undefined | null): LLMErrorCod
   ) return 'unsupported_tools';
   if (/\b(400|422)\b/.test(s) || s.includes('bad request') || s.includes('invalid_request')) return 'bad_request';
   return 'unknown';
+}
+
+/**
+ * A dropped connection or a reply that is not HTTP at all. Worth exactly one
+ * more try: either a blip, or a server broken in a way waiting does not fix.
+ */
+export function isTransportGlitch(message: string | undefined | null): boolean {
+  const s = (message ?? '').toLowerCase();
+  return s.includes('econnreset') || s.includes('socket connection was closed') || s.includes('connection closed')
+    || s.includes('malformed_http') || s.includes('malformed http') || s.includes('epipe');
 }
 
 export type LLMOptions = {
