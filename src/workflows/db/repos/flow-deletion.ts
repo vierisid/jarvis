@@ -96,7 +96,8 @@ export function deleteFlowHistoryBatch(flowId: string, db: Database = getWorkflo
 /**
  * Delete the flow itself and everything else it owns: its remaining runs,
  * versions, trigger events and slot (by cascade), jobs, flow-scoped store
- * keys, step-file rows, open failures and removal receipts. The caller holds
+ * keys, step-file rows, open failures, saved dashboard notifications and
+ * removal receipts. The caller holds
  * the transaction; receipts go only under a purge's grant (the schema's
  * fences refuse it otherwise). Returns false, deleting nothing, if no flow of
  * that id is in that project.
@@ -126,6 +127,9 @@ export function deleteFlowRows(flowId: string, projectId: string, db: Database =
   db.run(`DELETE ${store}`, [flowId, projectId]);
   db.run("DELETE FROM workflow_file WHERE flow_id = ?", [flowId]);
   db.run("DELETE FROM open_failure WHERE flow_id = ?", [flowId]);
+  // Its saved dashboard notifications (#1344): a deleted workflow's messages
+  // leave the owner's Needs you list with it.
+  db.run("DELETE FROM dashboard_notifications WHERE workflow_id = ?", [flowId]);
   // The receipts' foreign key requires them gone before the flow.
   db.run("DELETE FROM brief_workflow_removals WHERE flow_id = ?", [flowId]);
   // Versions, runs, effects, waitpoints, trigger events and the slot cascade.
