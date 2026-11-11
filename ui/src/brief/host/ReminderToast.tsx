@@ -20,7 +20,8 @@ function saveToasted(ids: Set<string>): void {
 
 /**
  * The reminder toast: each new unread reminder is announced once, for a few seconds, then it is
- * only in the Needs you list. Showing, timing out or dismissing never marks it read.
+ * only in the Needs you list. Showing it, timing out or opening the list never marks it read;
+ * Dismiss does, as it did before (the caller's `onDismiss`).
  */
 export function useReminderToast(items: readonly NotificationItem[]) {
   const [notice, setNotice] = useState<NotificationItem | null>(null);
@@ -42,9 +43,9 @@ export function useReminderToast(items: readonly NotificationItem[]) {
   return { notice, hide };
 }
 
-export function ReminderToast({ notice, onView, onHide }: { notice: NotificationItem; onView(): void; onHide(): void }) {
+export function ReminderToast({ notice, onView, onDismiss }: { notice: NotificationItem; onView(): void; onDismiss(): void }) {
   return <aside className="brief-root brief-host-toast" role="status" aria-label="New Jarvis notification">
     <strong>{notice.title}</strong><p>{notice.text}</p>
-    <div className="brief-host-toast-actions"><button onClick={onView}>View notifications</button><button onClick={onHide}>Dismiss</button></div>
+    <div className="brief-host-toast-actions"><button onClick={onView}>View notifications</button><button onClick={onDismiss}>Dismiss</button></div>
   </aside>;
 }

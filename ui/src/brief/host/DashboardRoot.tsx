@@ -239,7 +239,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
         </section>
       </LiveDataProvider>)}
     </BriefHost>
-    {route.room !== 'needs-you' && toast.notice && <ReminderToast notice={toast.notice} onHide={toast.hide}
+    {route.room !== 'needs-you' && toast.notice && <ReminderToast notice={toast.notice} onDismiss={() => { notices.markRead(toast.notice!.id); toast.hide(); }}
       onView={() => { toast.hide(); void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null })); }} />}
   </HumanInputsContext.Provider></EmergencyStatusContext.Provider></StoredNoticesContext.Provider>;
 }

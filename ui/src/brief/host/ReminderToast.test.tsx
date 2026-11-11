@@ -12,13 +12,15 @@ let last: ReturnType<typeof mod.useReminderToast>;
 const reminder = (id: string) => ({ id, kind: "system" as const, proactive: true, stored: true, title: `Reminder ${id}`, text: "Call the accountant", timestamp: 1, tone: "neutral" as const, unread: true });
 
 beforeAll(async () => { React = await import("react"); ({ createRoot } = await import("react-dom/client")); mod = await import("./ReminderToast"); });
-beforeEach(() => { localStorage.clear(); element = document.createElement("div"); document.body.append(element); root = createRoot(element); });
+beforeEach(() => { dismissed = []; localStorage.clear(); element = document.createElement("div"); document.body.append(element); root = createRoot(element); });
 afterEach(async () => { await React.act(async () => root.unmount()); element.remove(); });
 afterAll(() => GlobalRegistrator.unregister());
 
+let dismissed: string[] = [];
 function Harness({ items }: { items: ReturnType<typeof reminder>[] }) {
   last = mod.useReminderToast(items);
-  return last.notice ? <mod.ReminderToast notice={last.notice} onView={() => {}} onHide={last.hide} /> : null;
+  const shown = last.notice;
+  return shown ? <mod.ReminderToast notice={shown} onView={last.hide} onDismiss={() => { dismissed.push(shown.id); last.hide(); }} /> : null;
 }
 async function mount(items: ReturnType<typeof reminder>[]) {
   const view = () => <Harness items={items} />;
@@ -43,12 +45,20 @@ test("a newer reminder is toasted even when an older unread one was already show
   expect(element.textContent).toContain("Reminder n2");
 });
 
-test("hiding the toast removes it and keeps the reminder unread", async () => {
+test("opening the list hides the toast and keeps the reminder unread", async () => {
   const items = [reminder("n1")];
   await mount(items);
-  await React.act(async () => element.querySelectorAll("button")[1]!.click());
+  await React.act(async () => element.querySelectorAll("button")[0]!.click());
   expect(element.querySelector("aside")).toBeNull();
   expect(items[0]!.unread).toBe(true);
+  expect(dismissed).toEqual([]);
+});
+
+test("Dismiss hides the toast and hands that reminder to the caller to mark read", async () => {
+  await mount([reminder("n1")]);
+  await React.act(async () => element.querySelectorAll("button")[1]!.click());
+  expect(element.querySelector("aside")).toBeNull();
+  expect(dismissed).toEqual(["n1"]);
 });
 
 test("the toast goes away on its own", async () => {
