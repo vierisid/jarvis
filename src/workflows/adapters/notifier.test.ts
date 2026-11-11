@@ -241,3 +241,48 @@ test("a desktop toast that did not confirm in time is unknown, not failed", asyn
   expect(await adapter.notify({ message: "x", channels: ["desktop"] }))
     .toEqual({ delivered: [], failed: [], unknown: [{ channel: "desktop", error: "it did not confirm in time; it may have shown" }] });
 });
+
+describe("JarvisNotifierAdapter: dashboard notifications are stored", () => {
+  test("with no dashboard open it is stored and delivered, not failed", async () => {
+    const stored: string[] = [];
+    const adapter = new JarvisNotifierAdapter(makeDeps({
+      broadcastToDashboard: () => 0,
+      recordDashboard: (text) => { stored.push(text); return "n1"; },
+    }));
+    const r = await adapter.notify({ message: "9am reminder", channels: ["dashboard"] });
+    expect(stored).toEqual(["9am reminder"]);
+    expect(r).toEqual({ delivered: ["dashboard"], failed: [], unknown: [] });
+  });
+
+  test("the live broadcast carries the stored id", async () => {
+    const seen: Array<string | undefined> = [];
+    const adapter = new JarvisNotifierAdapter(makeDeps({
+      broadcastToDashboard: (_t, _p, id) => { seen.push(id); return 1; },
+      recordDashboard: () => "n7",
+    }));
+    await adapter.notify({ message: "x", channels: ["dashboard"] });
+    expect(seen).toEqual(["n7"]);
+  });
+
+  test("a store that fails reports the dashboard failed and sends no live toast", async () => {
+    let broadcast = 0;
+    const adapter = new JarvisNotifierAdapter(makeDeps({
+      broadcastToDashboard: () => { broadcast++; return 1; },
+      recordDashboard: () => { throw new Error("disk full"); },
+    }));
+    const r = await adapter.notify({ message: "x", channels: ["dashboard"] });
+    expect(r.failed).toEqual([{ channel: "dashboard", error: "disk full" }]);
+    expect(broadcast).toBe(0);
+  });
+
+  test("auto with nobody watching also tries the desktop", async () => {
+    const adapter = new JarvisNotifierAdapter(makeDeps({
+      broadcastToDashboard: () => 0,
+      recordDashboard: () => "n1",
+      sendDesktop: async () => true,
+    }));
+    const r = await adapter.notify({ message: "x", channels: ["auto"], autoDashboard: true });
+    expect(r.delivered).toContain("dashboard");
+    expect(r.delivered).toContain("desktop");
+  });
+});
