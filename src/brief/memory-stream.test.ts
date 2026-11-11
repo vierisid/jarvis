@@ -126,7 +126,9 @@ test('cursors are bound to query and page size and signed against offset tamperi
   fact('tea'); fact('coffee'); const first = await page({ limit: 1 });
   for (const query of [{ limit: 2 }, { limit: 1, q: 'tea' }, { limit: 1, source: 'meeting' }])
     await expect(provider.read({ ...query, cursor: first.nextCursor! })).rejects.toThrow('different query');
-  await expect(provider.read({ limit: 1, cursor: first.nextCursor!.replace('.1.', '.0.') })).rejects.toThrow('Invalid cursor');
+  const [snapshot, position, signature] = first.nextCursor!.split('.');
+  await expect(provider.read({ limit: 1, cursor: [snapshot, Buffer.from(JSON.stringify(null)).toString('base64url'), signature].join('.') })).rejects.toThrow('Invalid cursor');
+  expect(position!.length).toBeGreaterThan(0);
 });
 test('strict bounds reject unsupported fields and malformed query inputs', async () => {
   for (const query of [{ limit: 0 }, { limit: 101 }, { limit: 1.5 }, { q: '' }, { q: 'a'.repeat(257) }, { q: 'x\u0000' },
@@ -149,20 +151,22 @@ test('malformed and duplicate usage records fail closed', async () => {
   }
   uses = [supplied(a.id), supplied(a.id)]; expect((await provider.read()).state).toBe('unavailable');
 });
-test('hard collection cap is unavailable, never a silently truncated count', async () => {
+test('a store over the old 10,000 fact cap still pages, searches and counts from the database', async () => {
   const template = fact('tea'), entries = Object.entries(getDb().query<any, [string]>('SELECT * FROM facts WHERE id=?').get(template.id));
   const columns = entries.map(([k]) => k), stmt = getDb().prepare(`INSERT INTO facts (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`);
-  getDb().transaction(() => { for (let i = 0; i < MEMORY_STREAM_LIMITS.facts; i++) stmt.run(...entries.map(([k, v]) => k === 'id' ? `extra-${i}` : v) as SQLQueryBindings[]); })();
-  expect(await provider.read()).toEqual({ state: 'unavailable', reason: 'capacity_exceeded' });
+  const total = 20_000;
+  getDb().transaction(() => { for (let i = 0; i < total; i++) stmt.run(...entries.map(([k, v]) => k === 'id' ? `extra-${String(i).padStart(5, '0')}` : k === 'object' ? (i === 12_345 ? 'needle' : `item ${i}`) : v) as SQLQueryBindings[]); })();
+  const first = await page({ limit: 100 });
+  expect(first.count).toEqual({ total: total + 1, matched: total + 1, returned: 100 }); expect(first.nextCursor).not.toBeNull();
+  const found = await page({ q: 'NEEDLE' }); expect(found.items.map(i => i.sentence)).toEqual(['Ada likes needle']);
+  const seen = new Set(first.items.map(i => i.factId)); let next = first.nextCursor;
+  for (let n = 0; n < 20 && next; n++) { const current = await page({ limit: 100, cursor: next }); for (const i of current.items) seen.add(i.factId); next = current.nextCursor; }
+  expect(seen.size).toBe(2100); expect(next).not.toBeNull();
+  expect((provider.detail('extra-12345') as any).state).toBe('ready');
 });
 
-
-test('usage and provenance caps fail closed before returning misleading partial evidence', async () => {
+test('a usage ledger over its cap fails closed before returning misleading partial evidence', async () => {
   const a = fact('tea'); uses = Array.from({ length: MEMORY_STREAM_LIMITS.uses + 1 }, (_, i) => supplied(a.id, { useId: `use-${i}` }));
-  expect(await provider.read()).toEqual({ state: 'unavailable', reason: 'capacity_exceeded' });
-  uses = [];
-  const stmt = getDb().prepare(`INSERT INTO fact_evidence(id,fact_id,source,basis,confidence,recorded_at,evidence_key) VALUES(?,?,'fixture','reported',1,?,?)`);
-  getDb().transaction(() => { for (let i = 0; i < MEMORY_STREAM_LIMITS.evidence; i++) stmt.run(`e-${i}`, a.id, now, `key-${i}`); })();
   expect(await provider.read()).toEqual({ state: 'unavailable', reason: 'capacity_exceeded' });
 });
 test('history cycles terminate and oversized lineage is unavailable without truncation', async () => {

@@ -114,3 +114,14 @@ test('#1118: a name is matched by the daemon over names only, with the shared ma
   expect((await routes()['/api/vault/entity-match'].GET(new Request(`http://localhost/api/vault/entity-match?name=${'a'.repeat(501)}`))).status).toBe(400);
   expect((await match('a'.repeat(500))).entity).toBeNull();
 });
+
+test('GET /api/vault/facts pages with limit and offset, and keeps the full list without them', async () => {
+  const subject = createEntity('person', 'Ada').id;
+  for (let i = 0; i < 7; i++) createFact(subject, 'note', `item ${i}`, { source: 'dashboard' });
+  const get = async (qs = '') => routes()['/api/vault/facts'].GET(new Request(`http://localhost/api/vault/facts${qs}`));
+  const all = await (await get()).json() as { id: string }[];
+  expect(all).toHaveLength(7);
+  const pages = [...await (await get('?limit=3')).json(), ...await (await get('?limit=3&offset=3')).json(), ...await (await get('?limit=3&offset=6')).json()];
+  expect(pages.map((f: { id: string }) => f.id)).toEqual(all.map(f => f.id));
+  for (const bad of ['?limit=0', '?limit=1001', '?limit=x', '?limit=1&offset=-1', '?offset=2']) expect((await get(bad)).status).toBe(400);
+});

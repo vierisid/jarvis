@@ -579,6 +579,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (subjectId) query.subject_id = subjectId;
         if (predicate) query.predicate = predicate;
         if (object) query.object = object;
+        // Optional paging. Without `limit` the response is every fact, as before.
+        for (const key of ['limit', 'offset'] as const) {
+          const raw = params.get(key);
+          if (raw === null) continue;
+          if (!/^[0-9]{1,9}$/.test(raw) || (key === 'limit' && (Number(raw) < 1 || Number(raw) > 1000))) return error(`${key} must be a whole number${key === 'limit' ? ' from 1 to 1000' : ''}`, 400);
+          query[key] = Number(raw);
+        }
+        if (query.offset !== undefined && query.limit === undefined) return error('offset needs a limit', 400);
         return json(findFacts(query));
       },
       POST: async (req: Request) => {
