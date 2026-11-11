@@ -1,7 +1,7 @@
 import { HOSTED_CONNECTION_PROVIDERS, connectionProviderForPiece, type HostedConnectionProvider } from '../integrations/connection-providers';
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_IDS } from '../workflows/db';
-import type { PieceLookup } from '../workflows/runtime/piece-catalog';
+import { userPieces, type PieceLookup } from '../workflows/runtime/piece-catalog';
 import type { SidecarInfo } from '../sidecar/types';
 import type { ConnectedRow, ConnectedWorkspaceSnapshot, ConnectionSetupAction } from './connected-workspace-contracts';
 
@@ -129,7 +129,7 @@ export class ConnectedWorkspace {
     try {
       const catalog = this.sources.pieces?.();
       if (!catalog) throw new Error('absent');
-      pieces = catalog.list();
+      pieces = userPieces(catalog.list());
       if (pieces.length > CONNECTED_LIMIT || pieces.some(p => !safeId(p.name) || (p.version !== undefined && !safeVersion(p.version)))) throw new Error('invalid catalog');
       for (const p of pieces) {
         const row = base(`piece:${p.name}`, 'library_piece', p.name, p.displayName);

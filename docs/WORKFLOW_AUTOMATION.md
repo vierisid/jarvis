@@ -1776,7 +1776,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | GET | `/api/workflow-runs/:runId/effects` | The run's governed effect records, `{ runId, effects }` |
 | GET | `/api/workflow-runs/:runId/waitpoints` | The run's active waitpoints with resume URLs |
 | POST | `/api/workflow-runs/:runId/cancel` | Close the run's dispatch fence (idempotent; `accepted: false` once finished) |
-| GET | `/api/workflows/pieces` | Engine-extracted catalog |
+| GET | `/api/workflows/pieces` | Engine-extracted catalog, without the engine's test fixtures (`piece-jarvis-test`, `piece-jarvis-validate`): they are built and loaded for the engine's own tests and by any workflow that already names one, but are not offered in the piece picker, the Brief ingredient list, the connected-workspace list or the composer. The Validate plumbing step reports the connection's token only as `[redacted]` plus a short `accessTokenFingerprint`, never the token, since step output is kept in run history |
 | GET | `/api/workflows/pieces/library` | Catalog of installable community pieces |
 | POST | `/api/workflows/pieces/library/:id/install` | Install or update a community piece |
 | DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece |

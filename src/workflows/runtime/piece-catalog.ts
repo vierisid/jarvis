@@ -159,6 +159,23 @@ export interface PieceCatalogEntry {
 }
 
 /**
+ * Pieces that exist only so the engine's own tests have something to run
+ * (a plumbing check and an echo). They are built and loaded like any other,
+ * so a saved workflow that names one keeps running, but they are not offered:
+ * not in the piece picker, the Brief ingredient list, the connected-workspace
+ * list or the composer (which excludes them by name too).
+ */
+export const TEST_FIXTURE_PIECES: ReadonlySet<string> = new Set([
+  "@jarvispieces/piece-jarvis-test",
+  "@jarvispieces/piece-jarvis-validate",
+]);
+
+/** The catalog's pieces as a user is offered them: without the test fixtures. */
+export function userPieces(entries: PieceCatalogEntry[]): PieceCatalogEntry[] {
+  return entries.filter((entry) => !TEST_FIXTURE_PIECES.has(entry.name));
+}
+
+/**
  * Structural interface that both `PieceCatalog` and `JarvisPieceRegistry`
  * satisfy. Consumers (composer, workflow routes) take this so either source
  * works without further branching.
