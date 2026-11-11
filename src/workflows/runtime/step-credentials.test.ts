@@ -223,3 +223,37 @@ describe('what a run shows of webhook headers stored before the trigger withheld
   });
 });
 
+describe('what a run shows of a generated password', () => {
+  const CRYPTO = '@activepieces/piece-crypto';
+  const pw = (name: string): FlowTriggerNode => ({ name, type: 'PIECE',
+    settings: { pieceName: CRYPTO, actionName: 'generate-password', input: { length: 24, characterSet: 'alphanumeric' } } } as FlowTriggerNode);
+  const PASSWORD = 'Xq7RkP2mVz9LtB4nWc8Hs1Jd';
+
+  test('the generator output is withheld, and so is the password where a later step used it; the stored steps keep it', () => {
+    const steps = {
+      make_pw: { output: { type: 'PIECE', status: 'SUCCEEDED', input: { length: 24, characterSet: 'alphanumeric' }, output: PASSWORD } },
+      create_user: { output: { type: 'PIECE', status: 'SUCCEEDED', input: { body: { password: PASSWORD, name: 'Ann' } }, output: { ok: true } } },
+    };
+    const run = { steps, failedStep: { name: 'create_user', displayName: 'Create', errorMessage: `rejected ${PASSWORD}` } };
+    const shown = runAsShown(run, graph(pw('make_pw'), step('create_user')));
+    expect(JSON.stringify(shown)).not.toContain(PASSWORD);
+    expect((shown.steps.make_pw as { output: { output: unknown } }).output.output).toBe('[redacted]');
+    expect(JSON.stringify(shown.steps.create_user)).toContain('"name":"Ann"');
+    expect(shown.failedStep.errorMessage).toBe('rejected [redacted]');
+    // Stored as generated: the engine and a resumed run read the real value.
+    expect(steps.make_pw.output.output).toBe(PASSWORD);
+    expect(runAsShown(shown, graph(pw('make_pw'), step('create_user')))).toEqual(shown);
+  });
+
+  test('inside a loop and in sample data too; another piece with the same output is shown as it is', () => {
+    const loop = { name: 'each', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.items}}' }, firstLoopAction: pw('inner_pw') } as unknown as FlowTriggerNode;
+    const steps = { each: { type: 'LOOP_ON_ITEMS', status: 'SUCCEEDED', input: {}, output: { iterations: [
+      { inner_pw: { type: 'PIECE', status: 'SUCCEEDED', input: {}, output: PASSWORD } }] } },
+      other: { type: 'PIECE', status: 'SUCCEEDED', input: {}, output: 'not-a-secret-123456' } };
+    const shown = stepsAsShown(steps, graph(loop, step('other'))).steps;
+    expect(JSON.stringify(shown)).not.toContain(PASSWORD);
+    expect(JSON.stringify(shown)).toContain('not-a-secret-123456');
+    const seen = versionAsModelSees({ trigger: graph(pw('make_pw')), sampleData: { make_pw: { type: 'PIECE', status: 'SUCCEEDED', output: PASSWORD } } });
+    expect(JSON.stringify(seen)).not.toContain(PASSWORD);
+  });
+});

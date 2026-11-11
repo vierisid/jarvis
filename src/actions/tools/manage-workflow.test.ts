@@ -219,7 +219,7 @@ describe("manage_workflow tool", () => {
       expect(detail).toContain('"ok":true');
     });
 
-    test("get_run withholds old webhook credential headers the stored run still holds", async () => {
+    test("get_run withholds old webhook credential headers and a generated password the stored run still holds", async () => {
       const created = (await call("create", { name: "hooked", empty: true })) as { id: string };
       const draft = getLatestDraft(created.id)!;
       updateDraftVersion(draft.id, { trigger: { name: "trigger", type: "EMPTY", displayName: "Start", settings: {}, valid: true,
@@ -227,9 +227,10 @@ describe("manage_workflow tool", () => {
           settings: { pieceName: "@activepieces/piece-crypto", pieceVersion: "0.1.0", actionName: "generate-password", input: { length: 20 } } } } as never });
       const runId = createFlowRun({ flowId: created.id, flowVersionId: draft.id }).id;
       updateRun(runId, { steps: {
-        trigger: { output: { type: "EMPTY", status: "SUCCEEDED", input: {}, output: { _webhook: { headers: { "x-api-key": "OLD-KEY-SECRET-77", "user-agent": "hook/1" } } } } } } });
+        trigger: { output: { type: "EMPTY", status: "SUCCEEDED", input: {}, output: { _webhook: { headers: { "x-api-key": "OLD-KEY-SECRET-77", "user-agent": "hook/1" } } } } },
+        make_pw: { output: { type: "PIECE", status: "SUCCEEDED", input: { length: 20 }, output: "GENpw4Secret7Value9xy" } } } });
       const detail = JSON.stringify(await call("get_run", { run_id: runId }));
-      for (const secret of ["OLD-KEY-SECRET-77"]) expect(detail).not.toContain(secret);
+      for (const secret of ["OLD-KEY-SECRET-77", "GENpw4Secret7Value9xy"]) expect(detail).not.toContain(secret);
       expect(detail).toContain("hook/1");
     });
 

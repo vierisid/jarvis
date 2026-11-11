@@ -179,8 +179,20 @@ export function redactHeaderRecord<V>(headers: Record<string, V>): Record<string
   return out;
 }
 
+/** The Crypto piece's password generator: its output is a credential the workflow made. */
+const PASSWORD_STEPS: ReadonlyMap<string, ReadonlySet<string>> = new Map([['@activepieces/piece-crypto', new Set(['generate-password'])]]);
 /** A shown value is scrubbed of a secret found elsewhere in the run only when it is at least this long, so a short one cannot blank ordinary text. */
 const SCRUB_MIN = 6;
+
+/** Step names whose output is a generated password, at any depth of the graph. */
+function passwordSteps(trigger: FlowTriggerNode | null | undefined): Set<string> {
+  const names = new Set<string>();
+  for (const node of walkFlowNodes(trigger)) {
+    const actions = typeof node.settings?.pieceName === 'string' ? PASSWORD_STEPS.get(node.settings.pieceName) : undefined;
+    if (typeof node.name === 'string' && actions?.has(String(node.settings?.actionName))) names.add(node.name);
+  }
+  return names;
+}
 
 /** Note a secret's text, and the token of a `Bearer x` value, for scrubbing elsewhere. */
 function noteSecret(value: unknown, secrets: Set<string>): void {
@@ -204,6 +216,29 @@ function hideWebhookHeaders(value: unknown, secrets: Set<string>, depth: number)
   }));
 }
 
+/** A step map (`{ name: StepOutput }` or the worker's `{ name: { output: StepOutput } }`) with generated passwords withheld, in loops too. */
+function hidePasswords(steps: Record<string, unknown>, names: Set<string>, secrets: Set<string>, depth: number): Record<string, unknown> {
+  if (depth > 16) return steps;
+  const hideStep = (name: string, step: Record<string, unknown>): Record<string, unknown> => {
+    let out = step;
+    if (names.has(name) && 'output' in step && step.output !== null && step.output !== undefined && step.output !== REDACTED) {
+      noteSecret(step.output, secrets);
+      out = { ...out, output: REDACTED };
+    }
+    const inner = out.output;
+    if (object(inner) && Array.isArray(inner.iterations)) {
+      out = { ...out, output: { ...inner, iterations: inner.iterations.map((iteration) =>
+        object(iteration) ? hidePasswords(iteration, names, secrets, depth + 1) : iteration) } };
+    }
+    return out;
+  };
+  return Object.fromEntries(Object.entries(steps).map(([name, raw]) => {
+    if (!object(raw)) return [name, raw];
+    const enveloped = Object.keys(raw).length === 1 && object(raw.output) && typeof raw.type !== 'string';
+    return [name, enveloped ? { output: hideStep(name, raw.output as Record<string, unknown>) } : hideStep(name, raw)];
+  }));
+}
+
 /** Every string in a value with each secret replaced by `[redacted]`. */
 function scrub(value: unknown, secrets: readonly string[], depth = 0): unknown {
   if (secrets.length === 0 || depth > 64) return value;
@@ -220,7 +255,8 @@ function scrub(value: unknown, secrets: readonly string[], depth = 0): unknown {
  * one reads from `flow_run.steps`. On top of `redactRunSteps`:
  *   - credential headers in any `_webhook.headers`, including trigger data
  *     stored before the webhook trigger withheld them (#1359);
- *   - such a value wherever else the run repeats it (a later step's input or
+ *   - the output of a password generator step (Crypto: Generate Password);
+ *   - either value wherever else the run repeats it (a later step's input or
  *     output, the failed step's message), at least `SCRUB_MIN` long.
  * `failedMessage` is scrubbed of the same values. Idempotent.
  */
@@ -230,7 +266,8 @@ export function stepsAsShown<S extends Record<string, unknown> | null | undefine
   if (!object(steps)) return { steps, failedMessage };
   const secrets = new Set<string>();
   const credentialed = redactRunSteps(steps, trigger) as Record<string, unknown>;
-  const hidden = hideWebhookHeaders(credentialed, secrets, 0);
+  const passwords = passwordSteps(trigger);
+  const hidden = hideWebhookHeaders(passwords.size > 0 ? hidePasswords(credentialed, passwords, secrets, 0) : credentialed, secrets, 0);
   // Longest first, so a token inside a longer `Bearer` value is not cut out of it first.
   const list = [...secrets].sort((a, b) => b.length - a.length);
   return { steps: scrub(hidden, list) as S, failedMessage: failedMessage === undefined ? undefined : scrub(failedMessage, list) as string };

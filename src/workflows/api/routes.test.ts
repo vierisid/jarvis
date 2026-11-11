@@ -886,7 +886,7 @@ describe("workflow API: runs", () => {
 });
 
 describe("workflow API: what a run and its sample data show (read side)", () => {
-  test("webhook credential headers stored before redaction are withheld; the stored row keeps them", async () => {
+  test("webhook credential headers stored before redaction and a generated password are withheld; the stored row keeps them", async () => {
     const { createFlow } = await import("../db/repos/flow");
     const { createDraftVersion, setSampleDataEntry } = await import("../db/repos/flow-version");
     const { createFlowRun, updateRun, getFlowRun } = await import("../db/repos/flow-run");
@@ -897,10 +897,12 @@ describe("workflow API: what a run and its sample data show (read side)", () => 
       nextAction: { type: "PIECE", name: "make_pw", displayName: "Password", settings: { pieceName: "@activepieces/piece-crypto", actionName: "generate-password", input: { length: 20 } } },
     } as unknown as Record<string, unknown> });
     const triggerOutput = { type: "PIECE_TRIGGER", status: "SUCCEEDED", input: {}, output: { _webhook: { headers: { authorization: "Bearer OLD-HEADER-SECRET-1", "x-github-event": "push" } } } };
+    const pwOutput = { type: "PIECE", status: "SUCCEEDED", input: { length: 20 }, output: "GENpw4Secret7Value9xy" };
     const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id, environment: "TESTING" });
-    updateRun(run.id, { status: "SUCCEEDED", steps: { trigger: { output: triggerOutput } } });
+    updateRun(run.id, { status: "SUCCEEDED", steps: { trigger: { output: triggerOutput }, make_pw: { output: pwOutput } } });
     setSampleDataEntry(v.id, "trigger", triggerOutput);
-    const leaks = ["OLD-HEADER-SECRET-1"];
+    setSampleDataEntry(v.id, "make_pw", pwOutput);
+    const leaks = ["OLD-HEADER-SECRET-1", "GENpw4Secret7Value9xy"];
     const responses = [
       await callJson(routes["/api/workflow-runs/:runId"]?.GET, reqWithParams("GET", `http://x/api/workflow-runs/${run.id}`, { runId: run.id })),
       await callJson(routes["/api/workflows/:id/runs"]?.GET, reqWithParams("GET", `http://x/api/workflows/${flow.id}/runs`, { id: flow.id })),
