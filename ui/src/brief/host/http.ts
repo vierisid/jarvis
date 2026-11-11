@@ -11,6 +11,12 @@ export function createHostTransport(send: typeof fetch = fetch, onUnauthorized: 
   }) as typeof fetch;
   const json = async (path: string, init?: RequestInit): Promise<any> => {
     const response = await request(path, init);
+    if (response.status === 409 && response.headers.get('content-type')?.includes('application/json')) {
+      // Screen awareness off hides what it recorded (#1314): said as such, not as a broken read.
+      const body = await response.json().catch(() => null) as { code?: unknown; error?: unknown } | null;
+      if (body?.code === 'AWARENESS_OFF') throw new AwarenessOffError();
+      throw new Error(`Request unavailable (${response.status})`);
+    }
     if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error(`Request unavailable (${response.status})`);
     const value = await response.json(); lifetime.signal.throwIfAborted(); return value;
   };
@@ -18,3 +24,9 @@ export function createHostTransport(send: typeof fetch = fetch, onUnauthorized: 
 }
 export type HostTransport = ReturnType<typeof createHostTransport>;
 export const post = (value: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+
+/** What a read of recorded awareness answers while screen awareness is off (#1314). */
+export const AWARENESS_OFF_TEXT = 'Screen awareness is off, so what it recorded is hidden until you turn it back on.';
+export class AwarenessOffError extends Error {
+  constructor() { super(AWARENESS_OFF_TEXT); this.name = 'AwarenessOffError'; }
+}
