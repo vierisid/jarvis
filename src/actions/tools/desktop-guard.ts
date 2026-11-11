@@ -132,9 +132,85 @@ export function toolAlwaysUsesDesktop(tool: Pick<ToolDefinition, 'category' | 'u
   return tool.category === 'desktop' || tool.usesDesktop === true;
 }
 
+/**
+ * Screen awareness (#1314 m6). Turning it off blinds the pebble and pauses
+ * the sidecar's own capture, so a tool that captures the screen is refused
+ * too: the person's "stop looking" covers every way Jarvis looks.
+ */
+let screenSource: () => boolean = () => true;
+export function setScreenCaptureEnabledSource(source: (() => boolean) | null): void {
+  screenSource = source ?? (() => true);
+}
+/** Bind the switch to the daemon's live config (`awareness.enabled`), read through on every check. */
+export function bindScreenCaptureSwitch(config: { awareness?: unknown }): void {
+  setScreenCaptureEnabledSource(() => (config.awareness as { enabled?: unknown } | undefined)?.enabled !== false);
+}
+/** Whether screen capture is allowed. A reader that throws counts as OFF. */
+export function isScreenCaptureEnabled(): boolean {
+  try { return screenSource() !== false; } catch { return false; }
+}
+/** The tools that capture the screen. */
+export const SCREEN_CAPTURE_TOOLS: ReadonlySet<string> = new Set(['desktop_screenshot', 'capture_screen', 'browser_screenshot']);
+/**
+ * Every tool that hands back what is on a screen (owner decision on #1314):
+ * the screenshots above and the reads that return the screen as TEXT -- a
+ * window's control tree, the window list, a found element, the accessibility
+ * surface `ui_snapshot` reads and the surface diff `ui_act` returns. Turning
+ * awareness off stops all of them, on every path, as it stops the screenshots.
+ *
+ * NOT here, by owner decision: `browser_navigate`, `browser_snapshot` and
+ * `browser_evaluate`. They read the Jarvis browser's own tabs, in its own
+ * browser, not what the person has on their screen, so they keep working with
+ * awareness off. (`browser_screenshot` stays a screenshot and stays off.)
+ */
+export const BROWSER_PAGE_READS: ReadonlySet<string> = new Set(['browser_navigate', 'browser_snapshot', 'browser_evaluate']);
+export const SCREEN_READ_TOOLS: ReadonlySet<string> = new Set([...SCREEN_CAPTURE_TOOLS,
+  'desktop_snapshot', 'desktop_list_windows', 'desktop_find_element', 'ui_snapshot', 'ui_act',
+  // A read by another name (#1314 review): a skill replay reads each surface
+  // it acts on and reports what it saw (titles, new content, field values).
+  'run_skill']);
+
+/**
+ * Whether this call hands back what is on a screen: a screen-read tool, a
+ * desktop_click that reads a field's value (matched as the registry's enum
+ * check matches, case-insensitively), or a skill recording, whose result
+ * names the controls the person used.
+ */
+export function callReadsScreen(name: string | undefined, params: Record<string, unknown>): boolean {
+  if (!name) return false;
+  const action = typeof params.action === 'string' ? params.action.toLowerCase() : params.action;
+  return SCREEN_READ_TOOLS.has(name) || (name === 'desktop_click' && action === 'get_value')
+    || (name === 'record_skill' && action === 'start');
+}
+
+/** A refusal for a screen read made by a path that is not a tool call (a surface capture, a region). */
+export function assertScreenReadAllowed(): void {
+  if (isScreenCaptureEnabled()) return;
+  throw new ActionOutcomeError({ status: 'blocked', code: SCREEN_CAPTURE_DISABLED_CODE, effect: 'not_started', message: SCREEN_CAPTURE_DISABLED_MESSAGE });
+}
+
+/**
+ * An action's reply with the window titles it carries removed while
+ * awareness is off (#1314 review): launching or focusing an app is allowed,
+ * reading what its window says is not.
+ */
+export function withoutScreenText<T>(reply: T): T {
+  if (isScreenCaptureEnabled() || !reply || typeof reply !== 'object') return reply;
+  const copy: Record<string, unknown> = { ...(reply as Record<string, unknown>) };
+  for (const key of ['title', 'window_title', 'note', 'toggle_state']) if (key in copy) copy[key] = '(hidden: screen awareness is off)';
+  return copy as T;
+}
+
+export const SCREEN_CAPTURE_DISABLED_CODE = 'SCREEN_CAPTURE_DISABLED';
+export const SCREEN_CAPTURE_DISABLED_MESSAGE =
+  'Error: Screen awareness is turned off on this Jarvis, so this was not run: Jarvis does not take screenshots or read what is on a screen '
+  + '(windows, controls, page text) on any machine until the user turns awareness back on. Do NOT retry; tell the user awareness is off.';
+
 /** The refusal text for this call, or null when it may run. */
-export function desktopRefusal(tool: Pick<ToolDefinition, 'category' | 'usesDesktop'> | undefined, params: Record<string, unknown>): string | null {
-  if (!tool || isDesktopEnabled()) return null;
+export function desktopRefusal(tool: Pick<ToolDefinition, 'category' | 'usesDesktop'> & { name?: string } | undefined, params: Record<string, unknown>): string | null {
+  if (!tool) return null;
+  if (callReadsScreen(tool.name, params) && !isScreenCaptureEnabled()) return SCREEN_CAPTURE_DISABLED_MESSAGE;
+  if (isDesktopEnabled()) return null;
   return callUsesDesktop(tool, params) ? DESKTOP_DISABLED_MESSAGE : null;
 }
 
@@ -153,10 +229,11 @@ export function isDesktopDisabledError(error: unknown): boolean {
 }
 
 /** Throw the typed refusal when this call may not run. Nothing was started. */
-export function assertDesktopAllowed(tool: Pick<ToolDefinition, 'category' | 'usesDesktop'>, params: Record<string, unknown>): void {
+export function assertDesktopAllowed(tool: Pick<ToolDefinition, 'category' | 'usesDesktop'> & { name?: string }, params: Record<string, unknown>): void {
   const refusal = desktopRefusal(tool, params);
   if (refusal === null) return;
-  throw new ActionOutcomeError({ status: 'blocked', code: DESKTOP_DISABLED_CODE, effect: 'not_started', message: refusal });
+  throw new ActionOutcomeError({ status: 'blocked', code: refusal === SCREEN_CAPTURE_DISABLED_MESSAGE ? SCREEN_CAPTURE_DISABLED_CODE : DESKTOP_DISABLED_CODE,
+    effect: 'not_started', message: refusal });
 }
 
 /**
@@ -164,6 +241,20 @@ export function assertDesktopAllowed(tool: Pick<ToolDefinition, 'category' | 'us
  * States absence, like scopeSystemNote, because the cached tool guide still
  * documents the desktop tools.
  */
+export function screenAwarenessOffSystemNote(): string | null {
+  if (isScreenCaptureEnabled()) return null;
+  return [
+    '# Screen awareness is off',
+    '',
+    'The user has turned screen awareness off. The tool guide above documents tools that read the screen, '
+    + 'but on this install you cannot take screenshots or read what is on any screen: '
+    + `${[...SCREEN_READ_TOOLS].join(', ')} and desktop_click with action get_value are not available, and record_skill cannot start a recording. `
+    + `The Jarvis browser's own tabs stay readable: ${[...BROWSER_PAGE_READS].join(', ')} still work. `
+    + 'Do not read the screen another way, for example through shell commands. '
+    + 'If the user asks about what is on their screen, say that screen awareness is off and that they can turn it back on.',
+  ].join('\n');
+}
+
 export function desktopOffSystemNote(): string | null {
   if (isDesktopEnabled()) return null;
   return [
@@ -171,7 +262,7 @@ export function desktopOffSystemNote(): string | null {
     '',
     'The user has turned desktop control off (desktop.enabled: false). The tool guide above documents the desktop tools, '
     + 'but on this install you cannot list windows, read the screen, read or write the clipboard, or click, type, press keys, launch or focus apps on any machine: '
-    + 'the desktop_* tools, capture_screen, get_clipboard and set_clipboard are not available, ui_snapshot, ui_act and run_skill work only on the browser, '
+    + `the desktop_* tools, capture_screen, get_clipboard and set_clipboard are not available, ${isScreenCaptureEnabled() ? 'ui_snapshot, ui_act and run_skill work only on the browser' : 'and with screen awareness off ui_snapshot, ui_act, run_skill and browser_screenshot are not available either (browser_navigate, browser_snapshot and browser_evaluate still work)'}, `
     + 'and record_skill cannot start a recording. '
     + 'Do not try to reach the desktop another way, for example through shell commands. '
     + 'If the user asks for something on their desktop, say that desktop control is off and that they can turn it back on '
@@ -180,7 +271,8 @@ export function desktopOffSystemNote(): string | null {
 }
 
 /** The tools to offer: drops the always-desktop ones while the switch is off. */
-export function withoutDisabledDesktopTools<T extends Pick<ToolDefinition, 'category' | 'usesDesktop'>>(tools: readonly T[]): readonly T[] {
-  if (isDesktopEnabled()) return tools;
-  return tools.filter((tool) => !toolAlwaysUsesDesktop(tool));
+export function withoutDisabledDesktopTools<T extends Pick<ToolDefinition, 'category' | 'usesDesktop'> & { name?: string }>(tools: readonly T[]): readonly T[] {
+  const screen = isScreenCaptureEnabled();
+  if (isDesktopEnabled() && screen) return tools;
+  return tools.filter((tool) => !(!isDesktopEnabled() && toolAlwaysUsesDesktop(tool)) && !(!screen && tool.name && SCREEN_READ_TOOLS.has(tool.name)));
 }

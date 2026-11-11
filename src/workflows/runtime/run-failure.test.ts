@@ -44,6 +44,22 @@ function setup(status: FlowRun['status'] = 'RUNNING', graph: keyof typeof GRAPHS
 }
 
 describe('runFailure (Q-19)', () => {
+  test('the historical Notepad failure names the unsupported path without exposing raw text', () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: 'Notepad', trigger: { name: 'trigger', type: 'EMPTY',
+      nextAction: { name: 'launch', type: 'PIECE', settings: { pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1',
+        actionName: 'invoke', input: { toolName: 'desktop_launch_app' } } } } });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
+    const failed = updateRun(run.id, { status: 'FAILED', failedStep: { name: 'launch', displayName: 'Open Notepad',
+      errorMessage: 'Error: jarvis-tool: daemon response lacks an action outcome (500): {"error":"internal error: Unsupported direct workflow capability: desktop_launch_app has opaque code/UI effects; use a typed governed adapter"}' } })!;
+    const failure = runFailure(failed)!;
+    expect(failure).toMatchObject({ category: 'invalid_input', effect: 'none', code: 'WORKFLOW_TOOL_UNSUPPORTED' });
+    expect(failure.headline).toContain('not supported by the workflow');
+    expect(failure.next.some(n => n.step === 'edit_and_run_again')).toBe(true);
+    expect(failure.detail).not.toContain('500');
+    expect(runFailure({ ...failed, failedStep: { ...failed.failedStep!, errorMessage: 'Unsupported direct workflow capability: run_command has opaque code/UI effects' } })?.code).toBeNull();
+  });
+
   test('a run that did not end badly has no failure', () => {
     const { run } = setup();
     expect(runFailure(run)).toBeNull();

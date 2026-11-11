@@ -42,7 +42,7 @@ import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { freezeToolArguments, getActionForTool, resolveToolGate, substituteAboveLevel } from '../authority/tool-action-map.ts';
 import { desktopRefusal, withoutDisabledDesktopTools } from '../actions/tools/desktop-guard.ts';
-import { workflowBrowserRead, workflowBrowserReview } from '../authority/ui-intent.ts';
+import { workflowUiRead, workflowUiReview } from '../authority/ui-intent.ts';
 import { combineDecisions } from '../authority/engine.ts';
 import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
@@ -512,7 +512,7 @@ async function executeTool(
     const actionCategory = gate.actionCategory;
 
     // Mandatory confirmation is refused unless a workflow can park this guarded browser call for review.
-    if (gate.confirm === 'always' && !(governedTools && workflowBrowserReview(tool, toolCall.name))) {
+    if (gate.confirm === 'always' && !(governedTools && workflowUiReview(tool, toolCall.name, toolCall.arguments))) {
       auditTrail?.log({
         agent_id: agent.id,
         agent_name: agent.agent.role.name,
@@ -539,12 +539,12 @@ async function executeTool(
     // floor, asks for approval instead of being refused (a write to a shell rc
     // at level 3, #522). Only a pure level shortfall qualifies. Where nobody
     // can hold an approval (no governedTools) it is still refused below.
-    // A guarded workflow browser action can ask the person for permission
+    // A guarded workflow UI action can ask the person for permission
     // above its autonomous level. Hard denials/profile caps still stand;
     // the dispatch requires an explicit click and a current live guard.
-    const reviewBrowser = governedTools && (workflowBrowserReview(tool, toolCall.name) || workflowBrowserRead(toolCall.name));
+    const reviewUi = governedTools && (workflowUiReview(tool, toolCall.name, toolCall.arguments) || workflowUiRead(toolCall.name, toolCall.arguments));
     const decision = substituteAboveLevel(combineDecisions(gate.categories.map(check)),
-      reviewBrowser ? { ...gate, confirm: gate.confirm ?? 'above_level', floorCategory: 'read_data' } : gate, check);
+      reviewUi ? { ...gate, confirm: gate.confirm ?? 'above_level', floorCategory: 'read_data' } : gate, check);
 
     audit = (authorityDecision, executed, approvalId) => auditTrail?.log({
       agent_id: agent.id,
@@ -1073,12 +1073,13 @@ function carriedDeliveryScope(value: unknown): string | null {
 
 /**
  * Create a scoped ToolRegistry for a sub-agent.
- * Only includes builtin tools whose category is in the allowed list.
+ * Only includes builtin tools whose category, or whose own name (#1314: a
+ * role that lists its tools one by one), is in the allowed list.
  */
 export function createScopedToolRegistry(allowedCategories: string[]): ToolRegistry {
   const registry = new ToolRegistry();
   for (const tool of BUILTIN_TOOLS) {
-    if (allowedCategories.includes(tool.category)) {
+    if (allowedCategories.includes(tool.category) || allowedCategories.includes(tool.name)) {
       registry.register(tool);
     }
   }
