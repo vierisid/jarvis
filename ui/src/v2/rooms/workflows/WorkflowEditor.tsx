@@ -3689,7 +3689,7 @@ export function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement
           ) : schema ? (
             <>
               {isTriggerStep && detectedTriggerKind === "schedule" && step.settings?.pieceName === "schedule" ? (
-                <ScheduleEditor input={(step.settings?.input ?? {}) as Record<string, unknown>} onSetInput={onSetInput} />
+                <ScheduleEditor input={(step.settings?.input ?? {}) as Record<string, unknown>} chosenTimezone={step.settings?.chosenTimezone} onSetInput={onSetInput} />
               ) : null}
               <SchemaInputsWithAdvanced
                 pieceName={step.settings?.pieceName}

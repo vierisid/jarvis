@@ -9,6 +9,7 @@
 import React, { useMemo, useState } from "react";
 import {
   buildSimpleCron,
+  chosenZoneOf,
   cronToWords,
   dayName,
   parseSimpleCron,
@@ -42,9 +43,12 @@ const pad = (n: number): string => String(n).padStart(2, "0");
 
 export function ScheduleEditor({
   input,
+  chosenTimezone,
   onSetInput,
 }: {
   input: Record<string, unknown>;
+  /** `settings.chosenTimezone`: the stored zone is used only while it equals this. */
+  chosenTimezone?: string;
   onSetInput: (key: string, value: unknown) => void;
 }): React.ReactElement {
   const cron = scheduleCron(input);
@@ -54,8 +58,11 @@ export function ScheduleEditor({
   const [forcedCustom, setForcedCustom] = useState(false);
   const mode: Mode | "" = forcedCustom ? "custom" : !cron ? "" : simple ? simple.mode : "custom";
   const time = simple ?? { ...DEFAULT_TIME, mode: "daily" as const, days: [] };
-  const zone = typeof input["timezone"] === "string" ? (input["timezone"] as string) : "";
-  const zones = useMemo(() => (zone && !timeZones().includes(zone) ? [zone, ...timeZones()] : timeZones()), [zone]);
+  const stored = typeof input["timezone"] === "string" ? (input["timezone"] as string) : "";
+  // The picker shows the zone the schedule really runs in: a stored zone nobody
+  // chose is not used (schedule-zone.ts), so it reads as the Jarvis default.
+  const zone = chosenZoneOf({ input, ...(chosenTimezone !== undefined ? { chosenTimezone } : {}) }) ?? "";
+  const zones = useMemo(() => (stored && !timeZones().includes(stored) ? [stored, ...timeZones()] : timeZones()), [stored]);
   const words = cron ? cronToWords(cron) : null;
 
   function write(next: SimpleSchedule): void {
@@ -114,7 +121,7 @@ export function ScheduleEditor({
             onChange={(e) => onSetInput("cron_expression", e.target.value)}
             aria-label="Cron expression"
           />
-          <span className="wf-props__field-help">Minute, hour, day of month, month, day of week. Example: 30 8 * * 5 is Fridays at 8:30.</span>
+          <span className="wf-props__field-help">Minute, hour, day of month, month, day of week, as numbers (Sunday is 0). Example: 30 8 * * 5 is Fridays at 8:30; 0 17 LW * * is the last weekday of each month at 17:00.</span>
         </label>
       ) : (
         <label className="wf-props__field">
@@ -129,6 +136,7 @@ export function ScheduleEditor({
           <option value="">Jarvis default</option>
           {zones.map((z) => <option key={z} value={z}>{z}</option>)}
         </select>
+        {stored && !zone ? <span className="wf-props__field-help">{stored} is saved but nobody picked it, so this runs in the Jarvis default. Pick it to use it.</span> : null}
       </label>
 
       <p className="wf-props__hint" role="status">

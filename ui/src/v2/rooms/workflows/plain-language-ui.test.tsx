@@ -36,10 +36,15 @@ function setValue(el: Element, value: string) {
 const change = async (el: Element, value: string, event = 'change') =>
   act(async () => { setValue(el, value); el.dispatchEvent(new Event(event, { bubbles: true })); });
 
-/** Holds the input the way the editor does, and records every field write. */
-function ScheduleHarness({ initial, writes }: { initial: Record<string, unknown>; writes: Array<[string, unknown]> }) {
+/** Holds the input the way the editor does (picking a zone marks it chosen, as tree.ts withStepInput), and records every field write. */
+function ScheduleHarness({ initial, chosen: initialChosen, writes }: { initial: Record<string, unknown>; chosen?: string; writes: Array<[string, unknown]> }) {
   const [input, setInput] = React.useState(initial);
-  return <ScheduleEditor input={input} onSetInput={(k, v) => { writes.push([k, v]); setInput((cur) => ({ ...cur, [k]: v })); }} />;
+  const [chosen, setChosen] = React.useState(initialChosen);
+  return <ScheduleEditor input={input} chosenTimezone={chosen} onSetInput={(k, v) => {
+    writes.push([k, v]);
+    setInput((cur) => ({ ...cur, [k]: v }));
+    if (k === 'timezone') setChosen(typeof v === 'string' && v ? v : undefined);
+  }} />;
 }
 const select = (label: string) => host.querySelector(`select[aria-label="${label}"]`) as HTMLSelectElement;
 
@@ -58,6 +63,7 @@ test('"Fridays at 8:30 in Rome" writes the schedule piece fields: cron_expressio
 
   expect(writes.at(-2)).toEqual(['cron_expression', '30 8 * * 5']);
   expect(writes.at(-1)).toEqual(['timezone', 'Europe/Rome']);
+  expect(select('Timezone').value).toBe('Europe/Rome');
   expect(host.querySelector('[role="status"]')?.textContent).toBe('Every Friday at 8:30');
   // Every write goes to a field the schedule piece already has.
   expect(new Set(writes.map(([k]) => k))).toEqual(new Set(['cron_expression', 'timezone']));
@@ -73,6 +79,24 @@ test('weekdays, and a custom expression keeps its text box instead of being rewr
   await change(select('Repeats'), 'weekdays');
   expect(writes).toEqual([['cron_expression', '0 9 * * 1-5']]);
   expect(host.querySelector('[role="status"]')?.textContent).toBe('Every weekday at 9:00');
+});
+
+test('a stored zone nobody picked reads as the Jarvis default, which is where it runs', async () => {
+  const writes: Array<[string, unknown]> = [];
+  await act(async () => root.render(<ScheduleHarness initial={{ cron_expression: '0 9 * * *', timezone: 'UTC' }} writes={writes} />));
+  expect(select('Timezone').value).toBe('');
+  expect(host.textContent).toContain('UTC is saved but nobody picked it, so this runs in the Jarvis default.');
+  await change(select('Timezone'), 'UTC');
+  expect(writes).toEqual([['timezone', 'UTC']]);
+  expect(select('Timezone').value).toBe('UTC');
+  expect(host.textContent).not.toContain('nobody picked it');
+});
+
+test('a day-name expression the scheduler refuses opens as Custom, not as a schedule', async () => {
+  const writes: Array<[string, unknown]> = [];
+  await act(async () => root.render(<ScheduleHarness initial={{ cron_expression: '0 9 * * MON-FRI' }} writes={writes} />));
+  expect(select('Repeats').value).toBe('custom');
+  expect(host.querySelector('[role="status"]')?.textContent).toBe('This expression has no plain-English form.');
 });
 
 const catalog = [{
