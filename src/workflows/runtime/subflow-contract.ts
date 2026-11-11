@@ -25,9 +25,12 @@ export function completedChild(runId:string,status:string,result:{present:boolea
  catch {return {status:'invalid_output',runId,code:'CHILD_RESULT_INVALID'};}
  return {status:'succeeded',runId,output:result.value};
 }
-/** Plain-words reason a call step fails when its child did not give a usable result (read by a founder, so no codes). */
-export function childFailureMessage(result:ChildResult,child:string,timeoutSeconds?:number):string {
- const name='The workflow "'+child+'"';
+/**
+ * Plain-words reason a call step fails when its child did not give a usable result (read by a founder, so no codes).
+ * `shownName` is the child's name already quoted and bounded for display (`childNameShown` in subflow-service.ts).
+ */
+export function childFailureMessage(result:ChildResult,shownName:string,timeoutSeconds?:number):string {
+ const name='The workflow '+shownName;
  const why=result.code==='CHILD_RESULT_MISSING'?name+' finished but did not send back a result. Add a "Return structured workflow result" step at its end.'
   :result.code==='CHILD_RESULT_INVALID'?name+' sent back a result in a different shape than this step expects. Check the expected result in this step against what the workflow returns.'
   :result.status==='timeout'?name+' did not finish'+(timeoutSeconds?' within '+timeoutSeconds+' seconds':' in time')+'.'
