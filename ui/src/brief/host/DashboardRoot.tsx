@@ -177,13 +177,18 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   const profile = useSyncExternalStore(host.account.profile.subscribe, host.account.profile.snapshot, host.account.profile.snapshot);
   const notices = useNotificationCenter(owner);
   const toast = useReminderToast(notices.items);
-  const emergency = useEmergencyStatus(host.transport, owner.emergencyRevision);
+  // Retry and every socket open or close read the status again at once: a socket that
+  // comes back before the next poll must not show a stale "status unavailable" notice.
+  const [retries, setRetries] = useState(0);
+  const emergency = useEmergencyStatus(host.transport, `${owner.emergencyRevision}:${owner.isConnected}:${retries}`);
   const humanInputs = useHumanInputQueue(host.transport, isBriefCapabilityEnabled(host.capabilities(), 'decisions'));
   const humanPending = humanInputs.requests.filter(r => humanRequestNeedsAttention(r) || hasLocalDraft(r)).length;
   // Socket closed and the status read failing: Jarvis cannot be reached. Counts read
   // from before the outage are then stale, so they are hidden rather than shown as current.
   const lost = useConnectionLost(!owner.isConnected && emergency === 'unavailable');
-  const retryConnection = () => { void host.reconciliation.refresh(); window.dispatchEvent(new Event('focus')); };
+  // Reconnect the socket now instead of after its backoff, and read again what the outage left stale.
+  const retryConnection = () => { window.dispatchEvent(new Event('jarvis:ws-reconnect')); setRetries(n => n + 1);
+    void host.reconciliation.refresh(); void humanInputs.refresh(); };
   const [attentionMessage, setAttentionMessage] = useState('');
   const resolveAttention = async (kind: 'clarifier' | 'repeat-back', id: string, decision: 'confirm' | 'cancel') => {
     try {
