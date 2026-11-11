@@ -897,9 +897,10 @@ workflow connections.
 
 `jarvis restore jarvis-backup.tar` needs the brain stopped. Before it touches
 anything it checks the archive. It refuses, and changes nothing, when the
-archive holds saved connections but not the key that opens them (or the key does
-not open them). `--allow-missing-keys` overrides that for a key you supply
-another way. When it finishes it says what came back and what you still have
+archive holds saved connections that neither its own key nor, for an archive
+without a key, the key already on this machine opens. `--allow-missing-keys`
+overrides that for a key you supply another way. It also refuses an
+installed-apps list that the Library could not have written. When it finishes it says what came back and what you still have
 to do, such as adding AI provider keys, connecting devices again, or reinstalling
 Library apps your workflows use that the backup did not list. Run logs and
 uploaded files are not part of the archive.
