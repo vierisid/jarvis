@@ -178,23 +178,26 @@ describe("Engine end-to-end (F gate)", () => {
     }
   }, 60_000);
 
-  // F-08: the default-value step takes a missing reference as empty; text around a reference does not.
+  // F-08: the default-value step takes a missing reference as empty; text around a reference does not,
+  // and no other step does, even for an optional input of the same piece.
+  const defaultValue = (value: string) => ({ actionName: 'defaultValue', input: { value, defaultString: 'fb' } });
   for (const fixture of [
-    { label: 'a missing reference gets the default', value: '{{trigger.missing}}', payload: {}, expected: 'fb' },
-    { label: 'a missing reference inside text still fails', value: 'Hi {{trigger.missing}}', payload: {}, expected: null },
+    { label: 'a missing reference gets the default', ...defaultValue('{{trigger.missing}}'), payload: {}, succeeds: true },
+    { label: 'a missing reference inside text still fails', ...defaultValue('Hi {{trigger.missing}}'), payload: {}, succeeds: false },
+    { label: 'a missing reference on another step still fails', actionName: 'replace', input: { text: 'a', searchValue: 'a', replaceValue: '{{trigger.missing}}' }, payload: {}, succeeds: false },
   ]) {
     test.skipIf(skipE2eTests)(`F-08: ${fixture.label}`, async () => {
       const textHelper = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, 'pieces/core/text-helper');
       if (buildOptIn) await buildPiece(textHelper);
       const flow = createFlow();
-      const trigger: FlowTriggerNode = { name: 'trigger', type: 'EMPTY', nextAction: { name: 'fallback', type: 'PIECE', settings: { pieceName: '@activepieces/piece-text-helper', pieceVersion: '0.4.15', actionName: 'defaultValue', input: { value: fixture.value, defaultString: 'fb' } } } };
+      const trigger: FlowTriggerNode = { name: 'trigger', type: 'EMPTY', nextAction: { name: 'fallback', type: 'PIECE', settings: { pieceName: '@activepieces/piece-text-helper', pieceVersion: '0.4.15', actionName: fixture.actionName, input: fixture.input } } };
       const version = createDraftVersion({ flowId: flow.id, displayName: fixture.label, trigger });
       const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, environment: 'TESTING', payload: fixture.payload } as never);
       const handle = await runtime!.acquire({ runId: run.id, projectId: DEFAULT_IDS.project });
       try {
         const result = await handle.executeFlow({ flowVersion: version, payload: fixture.payload } as never);
-        expect(result.status).toBe(fixture.expected ? 'SUCCEEDED' : 'FAILED');
-        if (!fixture.expected) expect(JSON.stringify(result.failedStep)).toContain('absent value');
+        expect(result.status).toBe(fixture.succeeds ? 'SUCCEEDED' : 'FAILED');
+        if (!fixture.succeeds) expect(JSON.stringify(result.failedStep)).toContain('absent value');
       } finally { await handle.release(); }
     }, 60_000);
   }
