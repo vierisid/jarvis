@@ -544,7 +544,13 @@ ingredients (ready, loading, unavailable). It sends no request.
   cron the piece writes). The words say what really fires: a step that does not divide the period
   (`*/59` minutes, `*/7` hours) lists the real times because it restarts each hour or day, and day
   29 to 31 says it skips months without it. The editor offers no minutes picker, so it cannot write
-  an uneven step; Custom (cron) goes through the same words. The All workflows "Runs when" label
+  an uneven step; Custom (cron) goes through the same words. Only what `src/lib/cron-scheduler.ts`
+  accepts reads as a schedule (numbers, lists, ranges, steps): day names, `?`, `L`, `W` and `#` fall
+  back to the raw text, and the catalog inputs are read as the piece reads them (a non-integer hour is
+  0). The zone rule is the trigger manager's for both names, and the editor's zone picker shows the
+  Jarvis default for a stored zone nobody picked. Step and piece names in the summary go through
+  `forCard` (`src/util/card-text.ts`), so a bidi or invisible character cannot reorder the sentence.
+  The All workflows "Runs when" label
   (`src/brief/workflow-trigger-label.ts`) still words schedules separately.
 - Step labels use no developer terms: a plain piece step carries no label chip (AI judgment steps keep
   theirs), the panel header says "Trigger", and a piece missing from the catalog shows a humanized name.

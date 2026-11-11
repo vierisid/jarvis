@@ -176,7 +176,7 @@ test('a plain step no longer carries the "Programmed" label, and its piece shows
   expect(host.textContent).toContain('AI judgment');
 });
 
-test('the schedule trigger card shows the schedule in words, not "Schedule · Cron Expression"', async () => {
+test('the schedule trigger card shows the schedule in words, not "Schedule - Cron Expression"', async () => {
   await renderNode({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', triggerName: 'cron_expression', input: { cron_expression: '0 9 * * 1-5' } } });
   expect(host.querySelector('.wf-node__body')?.textContent).toBe('Every weekday at 9:00');
 });
