@@ -102,6 +102,7 @@ import {
   type PieceInputField,
 } from "./useWorkflowEditor";
 import { flattenSteps, pathToStep, withoutChosenZone } from "./tree";
+import { deleteStepPrompt, removeBranchPrompt } from "./destructive-edits";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
 import { fetchFlowsForPicker, type FlowPickerEntry } from "./flow-picker-data";
@@ -376,6 +377,16 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
   }, [editor.allSteps, editor.draftOrphans, selectedStepName]);
   const selectedStep = selectedFlat?.step ?? null;
   const selectedDepth = selectedFlat?.depth ?? 0;
+  // The trigger tree and the detached chains: where a deleted step's result may still be read.
+  const editorRoots = useMemo(
+    () => [...(editor.draftTrigger ? [editor.draftTrigger] : []), ...editor.draftOrphans.map((o) => o.node)],
+    [editor.draftTrigger, editor.draftOrphans],
+  );
+  /** Ask before deleting, naming the steps that go with it and the steps it would leave broken. */
+  const confirmDeleteStep = useCallback((name: string): Promise<boolean> => {
+    const step = editorRoots.flatMap((root) => flattenSteps(root)).find((entry) => entry.step.name === name)?.step;
+    return confirmDialog(step ? deleteStepPrompt(editorRoots, step) : `Delete step "${name}"?`);
+  }, [editorRoots]);
 
   // Per-step status snapshots for the run currently being overlaid on the
   // canvas (set via the Runs panel's "Show on canvas" button). Empty when
@@ -1040,7 +1051,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
               if (created) setSelectedStepName(created);
             }}
             onDelete={async () => {
-              if (await confirmDialog(`Delete step "${selectedStep.displayName ?? selectedStep.name}"?`)) {
+              if (await confirmDeleteStep(selectedStep.name)) {
                 editor.deleteStep(selectedStep.name);
                 closePopover();
               }
@@ -1054,7 +1065,11 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             // ROUTER-specific
             onSetRouterExecutionType={(t) => editor.setRouterExecutionType(selectedStep.name, t)}
             onAddRouterBranch={(name) => editor.addRouterBranch(selectedStep.name, name)}
-            onRemoveRouterBranch={(idx) => editor.removeRouterBranch(selectedStep.name, idx)}
+            onRemoveRouterBranch={async (idx) => {
+              const branch = selectedStep.settings?.branches?.[idx];
+              const prompt = removeBranchPrompt(editorRoots, branch?.branchName ?? String(idx), selectedStep.children?.[idx]);
+              if (await confirmDialog(prompt)) editor.removeRouterBranch(selectedStep.name, idx);
+            }}
             onSetBranchConditions={(idx, conditions) =>
               editor.setBranchConditions(selectedStep.name, idx, conditions)
             }
@@ -1152,9 +1167,11 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
                     icon: Trash2,
                     label: "Delete",
                     destructive: true,
-                    onSelect: () => {
-                      editor.deleteStep(nodeContextMenu.nodeId);
+                    onSelect: async () => {
+                      const nodeId = nodeContextMenu.nodeId;
                       closeNodeContextMenu();
+                      if (!(await confirmDeleteStep(nodeId))) return;
+                      editor.deleteStep(nodeId);
                       // Close the settings popover too if it happened to
                       // be open on the same step -- the step's gone, the
                       // popover would render against a phantom selection.
@@ -3397,7 +3414,8 @@ interface PropertiesPanelProps {
   onAddStepToLoopBody: () => void;
   onSetRouterExecutionType: (type: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH") => void;
   onAddRouterBranch: (branchName: string) => void;
-  onRemoveRouterBranch: (branchIndex: number) => void;
+  /** Asks before removing: the branch's steps are deleted with it. */
+  onRemoveRouterBranch: (branchIndex: number) => void | Promise<void>;
   onAddStepToBranch: (branchName: string) => void;
   onSetBranchConditions: (branchIndex: number, conditions: BranchConditions) => void;
   /** Save the JSON sample output for this step. Pass null to clear. */
@@ -5428,7 +5446,8 @@ function RouterEditor({
   step: FlowStepNode;
   onSetRouterExecutionType: (type: "EXECUTE_FIRST_MATCH" | "EXECUTE_ALL_MATCH") => void;
   onAddRouterBranch: (branchName: string) => void;
-  onRemoveRouterBranch: (branchIndex: number) => void;
+  /** Asks before removing: the branch's steps are deleted with it. */
+  onRemoveRouterBranch: (branchIndex: number) => void | Promise<void>;
   onAddStepToBranch: (branchName: string) => void;
   onSetBranchConditions: (branchIndex: number, conditions: BranchConditions) => void;
 }): React.ReactElement {
@@ -5500,11 +5519,7 @@ function RouterEditor({
                       <button
                         type="button"
                         className="wf-props__input-remove"
-                        onClick={async () => {
-                          if (await confirmDialog(`Remove branch "${b?.branchName ?? idx}"?`)) {
-                            onRemoveRouterBranch(idx);
-                          }
-                        }}
+                        onClick={() => void onRemoveRouterBranch(idx)}
                         title="Remove branch"
                       >
                         <Icon icon={Trash2} size={12} />

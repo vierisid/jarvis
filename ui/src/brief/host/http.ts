@@ -15,12 +15,20 @@ export function createHostTransport(send: typeof fetch = fetch, onUnauthorized: 
       // Screen awareness off hides what it recorded (#1314): said as such, not as a broken read.
       const body = await response.json().catch(() => null) as { code?: unknown; error?: unknown } | null;
       if (body?.code === 'AWARENESS_OFF') throw new AwarenessOffError();
-      throw new Error(`Request unavailable (${response.status})`);
+      throw new HostRefusal(response.status, body);
     }
-    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error(`Request unavailable (${response.status})`);
+    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) {
+      // Keep what the server said (a refused publish lists its issues) for a caller that can word it.
+      const body = response.headers.get('content-type')?.includes('application/json') ? await response.json().catch(() => null) : null;
+      throw new HostRefusal(response.status, body);
+    }
     const value = await response.json(); lifetime.signal.throwIfAborted(); return value;
   };
   return { request, json, stop: () => lifetime.abort(), signal: lifetime.signal };
+}
+/** A refused read or write: the status and, when the server sent JSON, what it said. */
+export class HostRefusal extends Error {
+  constructor(readonly status: number, readonly body: unknown) { super(`Request unavailable (${status})`); this.name = 'HostRefusal'; }
 }
 export type HostTransport = ReturnType<typeof createHostTransport>;
 export const post = (value: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });

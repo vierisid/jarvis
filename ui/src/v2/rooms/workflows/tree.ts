@@ -600,3 +600,42 @@ export function chainScopeFor(root: FlowStepNode, stepName: string): ChainScope 
   }
   return null;
 }
+
+/* ---------------------------------------------- what a destructive edit hits */
+
+/** The steps inside a step's loop body or router branches, nested ones included. A step's own
+ * next step is not inside it. Deleting a loop or router removes these along with it. */
+export function stepsInside(step: FlowStepNode): FlowStepNode[] {
+  const inner: FlowStepNode[] = [];
+  const heads = [step.firstLoopAction, ...(Array.isArray(step.children) ? step.children : [])];
+  for (const head of heads) if (head) inner.push(...flattenSteps(head).map((entry) => entry.step));
+  return inner;
+}
+
+/** The chain starting at `head` (a router branch's first step), with everything nested in it. */
+export function stepsOnChain(head: FlowStepNode | null | undefined): FlowStepNode[] {
+  return head ? flattenSteps(head).map((entry) => entry.step) : [];
+}
+
+/** Does a step's input read `name` through a `{{ ... }}` reference (`{{step_1}}`, `{{step_1.field}}`,
+ * a condition, a loop's items)? Plain text that only mentions the name does not count. */
+export function stepReferences(step: FlowStepNode, name: string): boolean {
+  const settings = JSON.stringify(step.settings ?? {});
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const reads = new RegExp(`(^|[^\\w.$])${escaped}(?![\\w])`);
+  for (const match of settings.matchAll(/\{\{([\s\S]*?)\}\}/g)) if (reads.test(match[1]!)) return true;
+  return false;
+}
+
+/** The steps that would be left reading a removed result. `roots` are the trigger tree and any
+ * detached chains; `removed` are the steps going away, which cannot dangle. */
+export function stepsReadingResultOf(roots: FlowStepNode[], name: string, removed: FlowStepNode[] = []): FlowStepNode[] {
+  const gone = new Set([name, ...removed.map((step) => step.name)]);
+  const readers: FlowStepNode[] = [];
+  for (const root of roots) {
+    for (const { step } of flattenSteps(root)) {
+      if (!gone.has(step.name) && stepReferences(step, name)) readers.push(step);
+    }
+  }
+  return readers;
+}

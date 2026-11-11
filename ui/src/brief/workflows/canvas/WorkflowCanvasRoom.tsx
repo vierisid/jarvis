@@ -1,6 +1,7 @@
 import { FlowPermissions } from '../../../v2/rooms/workflows/FlowPermissions';
+import { flattenSteps } from "../../../v2/rooms/workflows/tree";
 import type { Flow } from '../../../v2/rooms/workflows/useWorkflowsData';
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, LayoutGrid, RotateCcw, Undo2 } from "lucide-react";
 import type { BriefShellPort, BriefRoomModule } from "../../contracts";
 import { BriefButton } from "../../components/controls";
@@ -15,6 +16,7 @@ import {
   type WorkflowRequest,
 } from "../../../v2/rooms/workflows/WorkflowEditorEnvironment";
 import { versionBoundRequest } from "./request";
+import { issueLine, refusalMessage } from "../../../v2/rooms/workflows/readiness-text";
 import "./canvas.css";
 import { WorkflowViewHeader } from "../runs/WorkflowViewHeader";
 
@@ -140,13 +142,34 @@ function CanvasHeader({
     [runMessage, setRunMessage] = useState("");
   const busy = useRef(false);
   const [changing, setChanging] = useState(false);
-  async function change(action: () => Promise<void>) {
+  // Titles for the steps the server's readiness issues name by their internal id.
+  const stepTitles = useMemo(() => new Map([editor.draftTrigger, ...editor.draftOrphans.map(o => o.node)]
+    .flatMap(root => root ? flattenSteps(root).map(({ step }) => [step.name, step.displayName ?? step.name] as const) : [])),
+  [editor.draftTrigger, editor.draftOrphans]);
+  const nameOf = (name: string) => stepTitles.get(name);
+  async function change(action: () => Promise<void>, doing: string) {
     if (busy.current || editor.dirty) return;
     busy.current = true; setChanging(true); setRunMessage('');
     try { await action(); }
-    catch { setRunMessage('The version change could not be confirmed. Reopen this workflow to check before trying again.'); }
+    catch (error) {
+      // A refusal says what is wrong (a step reads a deleted step's result, a field is empty): say it.
+      const reason = refusalMessage((error as { body?: unknown } | null)?.body, nameOf);
+      setRunMessage(reason ? `${doing} stopped. ${reason}` : 'The version change could not be confirmed. Reopen this workflow to check before trying again.');
+    }
     finally { setChanging(false); busy.current = false; }
   }
+  // What the server says is wrong with the saved version, read after every save.
+  const [serverIssues, setServerIssues] = useState<unknown[]>([]);
+  const savedVersionId = editor.version?.id, savedAt = editor.version?.updated;
+  useEffect(() => {
+    if (binding.source !== 'live' || !savedVersionId || editor.dirty || editor.loading || savedVersionId !== binding.versionId) return;
+    const abort = new AbortController();
+    void binding.request(`/api/workflows/${encodeURIComponent(binding.flowId)}/versions/${encodeURIComponent(savedVersionId)}/readiness`, { signal: abort.signal })
+      .then(response => response.ok ? response.json() : null)
+      .then(body => { if (!abort.signal.aborted) setServerIssues(body && body.ready === false && Array.isArray(body.issues) ? body.issues : []); })
+      .catch(() => { /* The notice is extra; the server still refuses what is not ready. */ });
+    return () => abort.abort();
+  }, [binding.source, binding.request, binding.flowId, binding.versionId, savedVersionId, savedAt, editor.dirty, editor.loading]);
   const setupSteps = [...new Set(editor.validationGaps.map(gap => gap.stepName))].map(name => ({
     name, gaps: editor.validationGaps.filter(gap => gap.stepName === name),
   }));
@@ -154,6 +177,16 @@ function CanvasHeader({
   const hasCode = editor.allSteps.some(({ step }) => step.type === 'CODE');
   const codeBlocked = hasCode && binding.permissions?.codeSteps?.enabled !== true;
   const versionMatches = editor.version?.id === binding.versionId;
+  // Fixing what the editor already flags comes first, so these are the rest.
+  const blockers = serverIssues.filter((issue): issue is Record<string, unknown> => typeof issue === 'object' && issue !== null
+    && !(needsSetup && (issue as { code?: unknown }).code === 'SETUP_REQUIRED'));
+  const runBlockedBy = !binding.run && !binding.publish && !binding.edit ? '' // read-only view elsewhere
+    : codeBlocked ? 'CODE steps are not allowed yet. Open Flow permissions below to allow them.'
+    : needsSetup ? 'Finish setup first: the steps listed below still need details.'
+    : editor.dirty ? 'Save your changes to run this workflow.'
+    : !versionMatches ? 'This page now shows a different version. Reopen the workflow from Workflows.'
+    : !binding.run ? (binding.publish ? (blockers.length ? 'This draft cannot be published yet. See what to fix below.' : 'Publish this draft to run it.') : 'This version cannot be run from here.')
+    : '';
   async function run() {
     if (busy.current || !binding.run || codeBlocked || editor.dirty || !versionMatches) return;
     busy.current = true;
@@ -201,6 +234,7 @@ function CanvasHeader({
             !versionMatches ||
             busy.current
           }
+          aria-describedby={runBlockedBy ? 'brief-run-reason' : undefined}
           onClick={() => void run()}
           title={
             codeBlocked ? "Review Flow permissions to allow CODE steps" : needsSetup ? "Complete setup before running" : editor.dirty
@@ -215,8 +249,8 @@ function CanvasHeader({
       }
     >
       <div className="brief-canvas-tools" aria-label="Draft tools">
-        {binding.publish && <BriefButton size="sm" disabled={codeBlocked || needsSetup || changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!)}>Publish version</BriefButton>}
-        {binding.edit && <BriefButton size="sm" disabled={changing} onClick={() => void change(binding.edit!)}>Edit a new draft</BriefButton>}
+        {binding.publish && <BriefButton size="sm" disabled={codeBlocked || needsSetup || changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!, 'Publishing')}>Publish version</BriefButton>}
+        {binding.edit && <BriefButton size="sm" disabled={changing} onClick={() => void change(binding.edit!, 'Starting a new draft')}>Edit a new draft</BriefButton>}
         <BriefButton
           size="sm"
           onClick={() => shell.navigate({ room: "workflows", selection: {} })}
@@ -278,6 +312,14 @@ function CanvasHeader({
         <summary>Flow permissions{codeBlocked ? ' · CODE steps not allowed' : ''}</summary>
         <FlowPermissions key={binding.flowId} flow={binding.permissions} request={binding.request as typeof fetch}
           onChanged={() => { void binding.permissionsChanged?.().catch(() => setRunMessage('Permission state could not be refreshed. Reopen this workflow to check.')); }} />
+      </details>}
+      {runBlockedBy && !editor.loading && !editor.error && <p className="brief-canvas-run-reason" id="brief-run-reason">{runBlockedBy}</p>}
+      {!editor.dirty && blockers.length > 0 && <details className="brief-canvas-setup" open>
+        <summary>{binding.readOnly ? 'Not ready to run' : 'Not ready to publish'}</summary>
+        <ul>{blockers.map((issue, index) => <li key={index}>
+          {typeof issue.node === 'string' && stepTitles.has(issue.node) && <BriefButton size="sm" onClick={() => selectSetupStep(issue.node as string)}>{stepTitles.get(issue.node)}</BriefButton>}
+          <span>{issueLine(issue, nameOf)}</span>
+        </li>)}</ul>
       </details>}
       {needsSetup && <details className="brief-canvas-setup" open>
         <summary>Setup required</summary>
