@@ -655,6 +655,9 @@ export function setSampleInputEntry(
  */
 export const SAMPLE_DATA_AUTO_CAPTURE_MAX_BYTES = 256 * 1024;
 
+/** The engine's own step record types: a step output carrying one of these is the record, not what the step returned. */
+const STEP_RECORD_TYPES = new Set(["PIECE", "CODE", "LOOP_ON_ITEMS", "ROUTER", "PIECE_TRIGGER", "EMPTY"]);
+
 /**
  * Merge step outputs from a successful run into the version's sampleData
  * map, but only for cells that are currently empty. Designed to be called
@@ -710,7 +713,7 @@ export function mergeRunOutputsIntoSampleData(
     // sample is what the step returned, which is what a test feeds to later steps.
     if (
       output && typeof output === "object" && !Array.isArray(output)
-      && typeof (output as Record<string, unknown>).type === "string"
+      && STEP_RECORD_TYPES.has(String((output as Record<string, unknown>).type))
       && typeof (output as Record<string, unknown>).status === "string"
       && "output" in (output as Record<string, unknown>)
     ) {
