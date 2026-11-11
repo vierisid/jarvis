@@ -146,7 +146,9 @@ export function evaluateFounderCase(engine: Engine, fixture: FounderCase, corpus
         const expectedId = binding.expected ? refs.find(r => r.key === binding.expected)!.factId : null;
         return { ...binding, actualFactId: fact?.id ?? null, expectedFactId: expectedId, pass: (fact?.id ?? null) === expectedId };
       });
-      const tokens = tokenizer.encode(context, [], []).length;
+      // Memory the owner did not enter is framed with a fresh nonce per build: measure and digest it with a fixed one.
+      const stableContext = context.replace(/[0-9a-f]{32}/g, '0'.repeat(32));
+      const tokens = tokenizer.encode(stableContext, [], []).length;
       const budgetPassed = context.length <= (fixture.maxChars ?? 12_000) && tokens <= corpus.maxTokens;
       const omissionDisclosed = context.includes('[Additional memory omitted by relevance and context limits; this is not an exhaustive record.]');
       const omissions = records.filter(r => !keys.includes(r.key)).map(r => ({ key: r.key, factId: r.factId,
@@ -163,7 +165,8 @@ export function evaluateFounderCase(engine: Engine, fixture: FounderCase, corpus
         found: found.map(r => ({ key: r.key, factId: r.factId, subjectId: r.fact.subject_id,
           ledgerEvidenceIds: r.fact.evidence.map(e => e.id).sort() })).sort((a, b) => a.key.localeCompare(b.key)),
         missing, irrelevant, forbidden, wrongPerson, misattributed, unqualified, unidentifiedLines, qualified, bindings,
-        omissionDisclosed, omissions, chars: context.length, tokens, budgetPassed, elapsedMs, contextSha256: digest(context) };
+        omissionDisclosed, omissions, chars: context.length, tokens, budgetPassed, elapsedMs, // Memory the owner did not enter is framed with a fresh nonce per build; the digest is of the context without it.
+        contextSha256: digest(stableContext) };
     });
   } finally { engine.schema.closeDb(); Date.now = originalClock; }
 }

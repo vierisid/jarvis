@@ -57,6 +57,12 @@ const result = await extractAndStore(
 );
 ```
 
+#### Trust rules for stored facts
+
+- A fact the model proposes is stored as inferred. If it reads as an instruction, a standing order or a permission ("always run...", "pay without approval"), it is dropped unless the owner's own message contains it: the extractor's `user_quote` must be a verbatim part of the owner's message and must itself read that way.
+- When facts are recalled into a prompt, only owner-entered facts (sources `dashboard`, `user`, `user_correction`, `user_confirmation`, `user_profile`) are plain text. Every other source is outside content: its block is wrapped in a per-block untrusted frame, and the turn is tainted with source `memory`. Side-effecting tools in that turn need approval, and the approval reason says `outside content read this turn (memory)`.
+- A new source label is outside content by default.
+
 ## Data Structures
 
 ### ExtractionResult

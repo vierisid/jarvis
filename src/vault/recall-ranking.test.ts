@@ -9,12 +9,15 @@ import { saveUserProfile } from './user-profile.ts';
 import { createRelationship } from './relationships.ts';
 import { getKnowledgeForMessage, retrieveForMessage, formatKnowledgeContext } from './retrieval.ts';
 import { isRecallSelfOverview, rankRecall, recallTerms, type RecallFact } from './recall-ranking.ts';
-import { packRecallContext, RECALL_LIMITS } from './recall-context.ts';
+import { packRecallContext, RECALL_LIMITS, FRAME_RESERVE } from './recall-context.ts';
 import { formatFact } from './fact-format.ts';
 import { runRecallBenchmark } from '../../scripts/benchmark-memory-recall.ts';
 
 beforeEach(() => initDatabase(':memory:', { quiet: true }));
 afterEach(() => closeDb());
+
+/** Memory the owner did not enter is framed with a fresh nonce on every build; compare blocks without it. */
+const stable = (text: string) => text.replace(/[0-9a-f]{32}/g, '<nonce>');
 
 test('development benchmark meets recall, qualification, precision and order gates', () => {
   const result = runRecallBenchmark('development');
@@ -459,7 +462,7 @@ test.each(['Does Alex still use Vim?', 'Vim'])('value query retains the current 
   expect(context).toContain('"state":"contested"');
   expect(context).toContain('"basis":"confirmed"');
   // The confirmed answer may fit alone, but the inference cannot appear alone.
-  const tight = packRecallContext(profiles, formatFact(confirmed).length + 550);
+  const tight = packRecallContext(profiles, formatFact(confirmed).length + 550 + FRAME_RESERVE);
   expect(tight).toContain('preferred_editor: Zed');
   expect(tight).not.toContain('prefers_editor: Vim');
   expect(tight).toContain('omitted');
@@ -531,7 +534,7 @@ test('default recall recovers qualified facts after a database restart', () => {
     repository.createFact(entity.id, 'срок', 'Завтра', { source: 'meeting', confidence: 0.8 });
     const before = getKnowledgeForMessage('Михаил срок');
     closeDb(); initDatabase(file, { quiet: true });
-    expect(getKnowledgeForMessage('Михаил срок')).toBe(before);
+    expect(stable(getKnowledgeForMessage('Михаил срок'))).toBe(stable(before));
     expect(before).toContain('Завтра');
   } finally { closeDb(); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -565,7 +568,7 @@ test('value queries retain the correction through aliases, crowding and restart'
     const query = 'Does beacon still use Vim?';
     const before = getKnowledgeForMessage(query);
     closeDb(); initDatabase(file, { quiet: true });
-    expect(getKnowledgeForMessage(query)).toBe(before);
+    expect(stable(getKnowledgeForMessage(query))).toBe(stable(before));
     expect(before).toContain('preferred_editor: Zed');
     expect(before).toContain('alias: beacon');
     expect((before.match(/  - /g) ?? []).length).toBeLessThanOrEqual(RECALL_LIMITS.factsPerEntity);
@@ -594,7 +597,7 @@ test('repeated evidence preserves corrected recall and the full ledger after res
     const before = getKnowledgeForMessage('portmap preferred editor');
     closeDb(); initDatabase(file, { quiet: true });
     const after = getKnowledgeForMessage('portmap preferred editor');
-    expect(after).toBe(before);
+    expect(stable(after)).toBe(stable(before));
     expect(after).toContain('alias: portmap');
     expect(after).toContain('preferred_editor: CurrentEditor');
     expect(after).not.toContain('OldEditor');

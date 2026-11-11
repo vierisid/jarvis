@@ -1,6 +1,8 @@
 import { memoryFactRef, type MemoryFactRef } from './memory-usage';
 import type { Entity } from './entities.ts';
 import { defangFactText as line, formatFact, MEMORY_USE_RULES } from './fact-format.ts';
+import { wrapUntrusted } from '../roles/untrusted.ts';
+import { isOwnerEnteredFact, MEMORY_TAINT_SOURCE } from './fact-trust.ts';
 import { expandRecallDependencies, isCurrentRecallFact, type RecallFact, type RecallFactDependency } from './recall-ranking.ts';
 
 export type RecallProfile = { entity: Entity; facts: RecallFact[]; hasMore?: boolean;
@@ -12,7 +14,14 @@ export const RECALL_LIMITS = { chars: 12_000, entities: 6, facts: 18, factsPerEn
 // the fact repository. This module only ranks, selects and bounds the block.
 const omission = '\n\n[Additional memory omitted by relevance and context limits; this is not an exhaustive record.]';
 
-export type PackedRecall = { text: string; selected: MemoryFactRef[]; included: MemoryFactRef[] };
+/** `outside` is true when the block holds a fact the owner did not enter
+ *  themselves. The block is then framed as untrusted content and the turn that
+ *  receives it must be tainted (see `memoryTaintSource`). */
+export type PackedRecall = { text: string; selected: MemoryFactRef[]; included: MemoryFactRef[]; outside?: boolean;
+  /** `text` split for a prompt that defangs delimiters in trusted text: `plain` is safe to defang, `framed` is the
+   *  untrusted block (and what follows it), which must reach the model byte-exact. `text` is plain + framed. */
+  plain?: string; framed?: string };
+export const FRAME_RESERVE = wrapUntrusted('', MEMORY_TAINT_SOURCE).length + 16;
 export function packRecallContext(profiles: RecallProfile[], maxChars: number = RECALL_LIMITS.chars): string {
   return packRecallEvidence(profiles, maxChars).text;
 }
@@ -21,13 +30,16 @@ export function packRecallEvidence(profiles: RecallProfile[], maxChars: number =
   const selectedRefs = profiles.slice(0, RECALL_LIMITS.entities).flatMap(profile => profile.facts
     .filter(fact => isCurrentRecallFact(fact)).map(fact => memoryFactRef(fact, profile.entity.name)));
   const includedRefs: MemoryFactRef[] = [];
-  const result = (text: string): PackedRecall => ({ text, selected: selectedRefs, included: includedRefs });
+  const result = (text: string, outside = false, split?: { plain: string; framed: string }): PackedRecall =>
+    ({ text, selected: selectedRefs, included: includedRefs, outside, plain: split?.plain ?? text, framed: split?.framed ?? '' });
   const budget = Math.min(RECALL_LIMITS.chars, Number.isFinite(maxChars) ? Math.max(0, Math.floor(maxChars)) : RECALL_LIMITS.chars);
   if (!profiles.length || budget < MEMORY_USE_RULES.length + omission.length) return result('');
   const at = Date.now();
   const selected = profiles.slice(0, RECALL_LIMITS.entities);
   const sections = selected.map(profile => ({ header: `**${line(profile.entity.name)}** (${profile.entity.type})`, lines: [] as string[] }));
-  let length = MEMORY_USE_RULES.length, count = 0, omitted = profiles.length > selected.length || profiles.some(profile => profile.hasMore);
+  // Room for the frame, only when some candidate could put one in.
+  const mayFrame = selected.some(profile => profile.facts.some(fact => !isOwnerEnteredFact(fact)));
+  let length = MEMORY_USE_RULES.length + (mayFrame ? FRAME_RESERVE : 0), count = 0, omitted = profiles.length > selected.length || profiles.some(profile => profile.hasMore);
   const append = (index: number, value: string) => {
     const section = sections[index]!;
     const extra = (section.lines.length ? 1 : section.header.length + 3) + value.length;
@@ -39,6 +51,7 @@ export function packRecallEvidence(profiles: RecallProfile[], maxChars: number =
   if (facts.some((list, i) => list.length < selected[i]!.facts.length)) omitted = true;
   const byId = facts.map(list => new Map(list.map(fact => [fact.id, fact])));
   const included = selected.map(() => new Set<string>());
+  let outside = false;
   const aliases = selected.map((profile, i) => [...new Set(profile.matchedAliasIds ?? [])]
     .map(id => facts[i]!.find(fact => fact.id === id)));
   // A missing, expired or over-limit selection dependency cannot become an
@@ -58,6 +71,7 @@ export function packRecallEvidence(profiles: RecallProfile[], maxChars: number =
       if (append(i, group.map(item => `  - ${formatFact(item)}`).join('\n'))) {
         for (const item of group) {
           included[i]!.add(item.id);
+          if (!isOwnerEnteredFact(item)) outside = true;
           includedRefs.push(memoryFactRef(item, selected[i]!.entity.name));
         }
         count += group.length;
@@ -82,5 +96,10 @@ export function packRecallEvidence(profiles: RecallProfile[], maxChars: number =
   }
   const body = sections.filter(section => section.lines.length).map(section => section.header + '\n' + section.lines.join('\n')).join('\n\n');
   if (!body) return result(omitted ? MEMORY_USE_RULES + omission : '');
-  return result(MEMORY_USE_RULES + '\n\n' + body + (omitted ? omission : ''));
+  // Owner-entered memory stays plain. Anything else is another party's words
+  // as far as this turn can tell: one frame around the entity lines, outside
+  // the rules sentence, with the same nonce as every other outside content.
+  if (!outside) return result(MEMORY_USE_RULES + '\n\n' + body + (omitted ? omission : ''));
+  const framed = wrapUntrusted(body, MEMORY_TAINT_SOURCE) + (omitted ? omission : '');
+  return result(MEMORY_USE_RULES + '\n\n' + framed, true, { plain: MEMORY_USE_RULES, framed });
 }
