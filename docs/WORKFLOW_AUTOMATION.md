@@ -171,7 +171,17 @@ Practical consequences:
   until its draft workflow is attached: after that a failure fails as before,
   and a job dismissed meanwhile keeps its spent attempt), and
   prepared-opportunity discovery and the opportunity notification outbox
-  hold on the switch itself, so nothing queued is lost; and a flow's
+  hold on the switch itself, so nothing queued is lost; the automatic help
+  that sends screen text to the background agent (error and struggle
+  research, and the event reactor's turns on awareness events) does not
+  start while awareness is off, stops before its next model call, provider
+  retry or tool run once it turns off, runs on a thread of its own so the
+  screen text never enters the background agent's history, and a result
+  that finishes after the switch is not shown, toasted or spoken; a
+  suggestion's or a fix's spoken copy stops before its next sentence and
+  its channel copies (the urgent echo included) before their next retry; an
+  awareness event that arrives after the switch (a capture still in flight)
+  is dropped, so no `awareness.*` flow or dashboard gets it; and a flow's
   `awarenessRecent` context returns no activity. Vault entities and goal notes once written from awareness are
   ordinary data and stay visible (owner decision). Nothing is deleted; it shows
   again when awareness is turned back on. Not covered: shell commands
