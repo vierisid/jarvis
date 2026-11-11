@@ -12,9 +12,13 @@
  *   month 13, no hour 25). Years run 0001 to 9999.
  * - An explicit offset at the end of a time input ("Z", "+05:45", "+0100",
  *   "GMT+0100 (CET)") wins over the zone setting. Fractional seconds are kept.
- * - Without an offset, the wall time is read in `zone`.
- * - Format `X` is Unix seconds. A value above the year 9999 is refused, which
- *   is what milliseconds look like.
+ * - Without an offset, the wall time is read in `zone`. A wall time the zone
+ *   skips (spring forward) moves forward by the gap; one it repeats (fall back)
+ *   is the earlier of the two, as JavaScript dates and Temporal do.
+ * - Format `X` is Unix seconds within the same years. A value above the year
+ *   9999 is refused, which is what milliseconds look like.
+ * - A refusal quotes at most a short, single-line cut of the text it refuses,
+ *   so a long or multi-line value from run data is not copied into the outcome.
  *
  * This module imports nothing, so the vendored piece can load it from the engine.
  */
@@ -22,6 +26,9 @@
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
 const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const MAX_UNIX_SECONDS = 253402300799; // 9999-12-31T23:59:59Z
+const MIN_UNIX_SECONDS = -62135596800; // 0001-01-01T00:00:00Z
+const QUOTE_MAX = 40;
+const DAY_MS = 86_400_000;
 
 type Field = 'year' | 'year2' | 'monthNum' | 'monthName' | 'monthShort' | 'day' | 'weekday' | 'hour' | 'hour12' | 'minute' | 'second' | 'milli' | 'meridiem';
 
@@ -56,6 +63,13 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** A short, single-line cut of `value` for a refusal message. */
+function quote(value: string): string {
+  const flat = value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ');
+  const chars = Array.from(flat);
+  return `"${chars.length > QUOTE_MAX ? `${chars.slice(0, QUOTE_MAX).join('')}...` : flat}"`;
+}
+
 function daysInMonth(year: number, month: number): number {
   const d = new Date(0);
   d.setUTCFullYear(year, month, 0);
@@ -79,17 +93,25 @@ function zoneOffsetMs(zone: string, ms: number): number {
   return asUtc.getTime() - Math.floor(ms / 1000) * 1000;
 }
 
-/** The instant at which `zone` shows the wall time `wallMs` (read as UTC). A skipped or repeated local time resolves the same way on every daemon. */
+/**
+ * The instant at which `zone` shows the wall time `wallMs` (read as UTC).
+ * The offsets a day before and a day after bracket any transition: a wall
+ * time both of them map back to is repeated (take the earlier instant), one
+ * neither maps back to is skipped (read it with the offset before the gap,
+ * which lands after the gap). Same result on every daemon and in every zone.
+ */
 function wallToInstant(zone: string, wallMs: number): number {
-  const guess = wallMs - zoneOffsetMs(zone, wallMs);
-  return wallMs - zoneOffsetMs(zone, guess);
+  const before = zoneOffsetMs(zone, wallMs - DAY_MS);
+  const after = zoneOffsetMs(zone, wallMs + DAY_MS);
+  const valid = [wallMs - before, wallMs - after].filter((t) => zoneOffsetMs(zone, t) === wallMs - t);
+  return valid.length > 0 ? Math.min(...valid) : wallMs - before;
 }
 
 export function assertKnownZone(zone: string): void {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: zone });
   } catch {
-    throw new Error(`"${zone}" is not a time zone this step knows. Pick a zone from the list.`);
+    throw new Error(`${quote(String(zone))} is not a time zone this step knows. Pick a zone from the list.`);
   }
 }
 
@@ -98,13 +120,15 @@ export function parseDateInstant(input: string, format: string, zone = 'UTC'): n
   const text = String(input ?? '').trim();
   const fmt = format.trim();
   assertKnownZone(zone);
-  const mismatch = () => new Error(`The date "${text}" does not match the format "${format}". Check the date and the "From Time Format" setting.`);
+  const shown = quote(text);
+  const mismatch = () => new Error(`The date ${shown} does not match the format ${quote(format)}. Check the date and its format setting.`);
 
   if (fmt === 'X') {
     if (!/^[+-]?\d+(?:\.\d+)?$/.test(text)) throw mismatch();
     const seconds = Number(text);
-    if (Math.abs(seconds) > MAX_UNIX_SECONDS) {
-      throw new Error(`"${text}" is too large to be a Unix time in seconds. If it is in milliseconds, divide it by 1000.`);
+    if (seconds < MIN_UNIX_SECONDS) throw new Error(`${shown} is before the year 0001 as a Unix time in seconds.`);
+    if (seconds > MAX_UNIX_SECONDS) {
+      throw new Error(`${shown} is too large to be a Unix time in seconds. If it is in milliseconds, divide it by 1000.`);
     }
     return Math.round(seconds * 1000);
   }
@@ -129,7 +153,7 @@ export function parseDateInstant(input: string, format: string, zone = 'UTC'): n
     } else if (tok === 'T' || !/[A-Za-z]/.test(tok)) {
       pattern += escapeRe(tok);
     } else {
-      throw new Error(`The date format "${format}" is not supported. Pick a format from the list.`);
+      throw new Error(`The date format ${quote(format)} is not supported. Pick a format from the list.`);
     }
   }
   if (hasSeconds && !hasMilli) pattern += '(?:\\.(\\d{1,9}))?';
@@ -158,18 +182,20 @@ export function parseDateInstant(input: string, format: string, zone = 'UTC'): n
       default: break;
     }
   });
-  // Without a year in the format the date is today's year; a format with a day and no year is not offered, so 1970 is never used.
+  // A part the format lacks defaults to 1970-01-01 00:00. Every format the
+  // dropdown offers has a year, month and day, and the step's input check
+  // refuses any other format value, so the 1970 default is never reached there.
   const tail = match.slice(fields.length + 1);
   const fraction = hasSeconds && !hasMilli ? tail[0] : undefined;
   const offsetText = hasTime ? tail[hasSeconds && !hasMilli ? 1 : 0] : undefined;
   if (fraction) milli = Math.floor(Number(`0.${fraction}`) * 1000);
   if (hour12 !== undefined) {
-    if (hour12 < 1 || hour12 > 12) throw new Error(`"${text}" is not a real time: the hour must be 1 to 12.`);
+    if (hour12 < 1 || hour12 > 12) throw new Error(`${shown} is not a real time: the hour must be 1 to 12.`);
     hour = (hour12 % 12) + (pm ? 12 : 0);
   }
 
   const real = year >= 1 && year <= 9999 && month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth(year, month) && hour <= 23 && minute <= 59 && second <= 59;
-  if (!real) throw new Error(`"${text}" is not a real date or time.`);
+  if (!real) throw new Error(`${shown} is not a real date or time.`);
 
   const wall = new Date(0);
   wall.setUTCFullYear(year, month - 1, day);
@@ -181,7 +207,7 @@ export function parseDateInstant(input: string, format: string, zone = 'UTC'): n
     const m = /^([+-])(\d{2}):?(\d{2})?$/.exec(offsetText) as RegExpExecArray;
     const hh = Number(m[2]);
     const mm = Number(m[3] ?? 0);
-    if (hh > 23 || mm > 59) throw new Error(`"${text}" has an offset that is not real.`);
+    if (hh > 23 || mm > 59) throw new Error(`${shown} has an offset that is not real.`);
     return wallMs - (m[1] === '-' ? -1 : 1) * (hh * 60 + mm) * 60000;
   }
   return wallToInstant(zone, wallMs);
