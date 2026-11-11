@@ -31,6 +31,8 @@ const button = (host: HTMLElement, text: string) => [...host.querySelectorAll('b
 test('allowing CODE steps asks first, says what it allows, and posts only after a yes', async () => {
   await mount(flow({ enabled: false, grantedBy: null, grantedAt: null }), () => NativeResponse.json({}), async (host, posts, changed, act) => {
     expect(host.textContent).toContain('CODE steps: not allowed.');
+    expect(host.textContent).toContain('webhook, event and schedule triggers stop starting it');
+    expect(host.textContent).not.toContain('a schedule already set up');
     const asked: string[] = [];
     window.confirm = (m?: string) => { asked.push(String(m)); return false; };
     await act(() => button(host, 'Allow CODE steps')!.click());
@@ -38,6 +40,7 @@ test('allowing CODE steps asks first, says what it allows, and posts only after 
     expect(asked[0]).toContain('Allow CODE steps in the workflow "Nightly report"?');
     expect(asked[0]).toContain('full access to its files, network and shell');
     expect(asked[0]).toContain('without an approval card');
+    expect(asked[0]).toContain('read every saved connection in this workspace');
     expect(asked[0]).toContain('any CODE step added to this workflow later');
     expect(posts).toEqual([]);
     window.confirm = () => true;

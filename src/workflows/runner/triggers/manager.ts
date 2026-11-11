@@ -322,6 +322,15 @@ export class TriggerManager {
       // A saved edit to the live draft keeps its version id: compare what the
       // trigger says, so an edited schedule replaces the old one.
       const desiredTrigger = desiredVersionId ? getFlowVersion(desiredVersionId)?.trigger : undefined;
+      // The CODE-step permission was taken back while the trigger stayed
+      // registered: tear the subscription down (register() below would only
+      // decline to make a new one). Granting it again finds no sub and registers.
+      if (existing && desiredTrigger && ungrantedCodeSteps(flow, desiredTrigger)) {
+        this.log(`flow ${flowId}: CODE steps are no longer allowed; removing its trigger subscription`);
+        await this.unregister(flowId);
+        clearScheduleWatch(flowId);
+        return;
+      }
       if (existing && existing.versionId === desiredVersionId
         && existing.generation === workflowRemovalState(flowId).generation
         && (!existing.triggerDigest || existing.triggerDigest === triggerDigest(desiredTrigger))) {
@@ -850,6 +859,35 @@ export class TriggerManager {
   }
 
   /**
+   * Why a live delivery may not run a CODE step, or null. The owner can take
+   * the CODE-step permission back from a flow that is published and enabled
+   * (`POST /api/workflows/:id/code-steps {"enabled": false}`); the grant is
+   * read again here, at fire time, so a webhook, event or scheduled time
+   * stops running the code at once instead of keeping a subscription made
+   * before the revoke alive. A flow that never lost the grant (every flow that
+   * could be published, and every grandfathered one) is never refused here.
+   */
+  private codeGrantRefusal(flowId: string, versionId: string): string | null {
+    const flow = getFlow(flowId);
+    const version = getFlowVersion(versionId);
+    if (!flow || !version) return null;
+    const ungranted = ungrantedCodeSteps(flow, version.trigger);
+    if (!ungranted) return null;
+    const shown = ungranted.slice(0, 3).map((name) => `"${name}"`).join(", ");
+    const more = ungranted.length > 3 ? ` and ${ungranted.length - 3} more` : "";
+    return `This workflow has ${ungranted.length > 1 ? "CODE steps" : "a CODE step"} (${shown}${more}), and CODE steps are not allowed for it any more, so it did not run. `
+      + "Allow CODE steps in the workflow's permissions to run it again.";
+  }
+
+  /** Record a delivery refused for the revoked CODE-step permission: one counted row per run of identical refusals. */
+  private recordCodeGrantRefusal(opts: { flowId: string; versionId: string; source: FireSource; scheduledFor?: number | null; lateMs?: number | null }, reason: string): TriggerFire | null {
+    this.log(`flow ${opts.flowId} (${opts.source}) not started: ${reason}`);
+    return recordBlocked({ flowId: opts.flowId, flowVersionId: opts.versionId, source: opts.source,
+      signature: JSON.stringify([opts.versionId, "CODE_STEPS_NOT_ENABLED"]), scheduledFor: opts.scheduledFor ?? null,
+      lateMs: opts.lateMs ?? null, detail: { reason, code: "CODE_STEPS_NOT_ENABLED" } });
+  }
+
+  /**
    * A live readiness refusal. Input-carrying deliveries (webhooks, events, poll
    * items) keep a FAILED run each, holding their input for a person to decide
    * on, as before. A schedule tick or a pre-poll check carries nothing: a
@@ -912,6 +950,12 @@ export class TriggerManager {
         outcome: "blocked", detail: { reason: off, ...(opts.dedupeKey ? { deliveryKey: opts.dedupeKey } : {}) } });
       this.log(`flow ${flowId} (${opts.source}) not started: ${off}`);
       return { outcome: "blocked", fireId: fire?.id, reason: off, disabled: true };
+    }
+    // The CODE-step permission, read at fire time (see codeGrantRefusal).
+    const noCodeGrant = this.codeGrantRefusal(flowId, versionId);
+    if (noCodeGrant) {
+      const fire = this.recordCodeGrantRefusal({ flowId, versionId, source: opts.source, scheduledFor: opts.scheduledFor, lateMs: opts.lateMs }, noCodeGrant);
+      return { outcome: "blocked", fireId: fire?.id, reason: noCodeGrant, disabled: true };
     }
     // Pause holds and Kill stops (Q-08): nothing starts. A scheduled time is
     // skipped and shown, keyed so it is never run late after Resume; a webhook
@@ -1101,6 +1145,12 @@ export class TriggerManager {
       // A job left over from a replaced registration does nothing.
       if (this.subs.get(flowId)?.versionId !== versionId) return;
       const at = occurrence?.at ?? Date.now();
+      // Before the overlap check, so a revoked permission is what the row says.
+      const noCodeGrant = this.codeGrantRefusal(flowId, versionId);
+      if (noCodeGrant) {
+        this.recordCodeGrantRefusal({ flowId, versionId, source: "schedule", scheduledFor: at, lateMs: occurrence?.lateMs }, noCodeGrant);
+        return;
+      }
       const skipped = this.overlapping(flowId, "trigger:cron");
       if (skipped) {
         recordFire({ flowId, flowVersionId: versionId, source: "schedule", dedupeKey: occurrence?.key, scheduledFor: at,
@@ -1185,6 +1235,13 @@ export class TriggerManager {
     const off = this.notAdmitted(flowId, versionId, generation);
     if (off) {
       unrun("blocked", off);
+      return;
+    }
+    // No poll for a flow that may not run CODE: an event source keeps its items.
+    const noCodeGrant = this.codeGrantRefusal(flowId, versionId);
+    if (noCodeGrant) {
+      if (pureSchedule) this.recordCodeGrantRefusal({ flowId, versionId, source: "schedule", scheduledFor: occurrence?.at, lateMs: occurrence?.lateMs }, noCodeGrant);
+      else this.log(`flow ${flowId} (engine-${source}) not polled: ${noCodeGrant}`);
       return;
     }
     // Runs parked behind its approval cards (#1152): no poll, as under Pause.

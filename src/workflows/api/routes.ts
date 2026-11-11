@@ -2050,10 +2050,13 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             return err('enabled must be a boolean ({"enabled": true} permits CODE steps for this flow)', 400);
           }
           // Revoking does NOT stop a run already in flight or unpublish the
-          // version; it takes the permission away from the next publish,
-          // enable or run, which is the same authoring-time boundary the
-          // grant itself lives on.
-          return ok(serializeFlow(setFlowCodeStepsEnabled(id, body.enabled, "user")));
+          // version. It takes the permission away from the next publish,
+          // enable or run, and from the next fire of a webhook, event or
+          // schedule: the trigger manager reads the grant when a delivery
+          // arrives, and the refresh below drops the subscription.
+          const saved = setFlowCodeStepsEnabled(id, body.enabled, "user");
+          refreshTrigger(id);
+          return ok(serializeFlow(saved));
         }),
     },
 

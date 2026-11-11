@@ -1037,7 +1037,7 @@ A global switch would be the wrong shape: turning CODE on for one automation
 would turn it on for every flow composed afterwards, which is the thing the
 gate exists to prevent.
 
-The refusal happens at AUTHORING time, never per execution:
+The refusal happens at AUTHORING time, never per execution of a flow that holds the grant (a flow published with the grant can only be refused at fire time after its owner revokes it, below):
 
 - `POST /api/workflows/:id/publish` and `manage_workflow publish` refuse with
   403 and change nothing -- the version is not locked, not attached, and the
@@ -1089,11 +1089,17 @@ with `{"enabled": false}`. Every other flow -- including one holding an
 unpublished CODE draft -- starts at OFF.
 
 Revoking with `{"enabled": false}` takes the permission away from the next
-publish, enable, run or draft write, and from the next trigger registration --
-so a live schedule keeps firing until the daemon restarts or the flow is
-refreshed, and then stops. It does not unpublish the version and it does not
-stop a run already in flight. Disabling the flow is what stops a schedule
-immediately. The grant is not handed back later: the upgrade backfill is keyed
+publish, enable, run or draft write, and from the next trigger registration.
+It also takes effect for a flow that is already published and enabled: the
+trigger manager reads the grant again every time a webhook, event or scheduled
+time arrives, so none of them starts a run once it is revoked, and the grant
+route refreshes the flow's registration so the subscription is dropped
+(granting again registers it). A refused delivery runs nothing and leaves a
+`blocked` row in the delivery record with `code: "CODE_STEPS_NOT_ENABLED"` and
+a plain reason; repeats fold into one counted row; a webhook sender is answered
+as for a workflow that is not active (404); an event source is not polled.
+It does not unpublish the version and it does not stop a run already in
+flight; disabling the flow does that. The grant is not handed back later: the upgrade backfill is keyed
 on the columns being introduced, so a revoked permission stays revoked across
 restarts. The other side of that key is that a build rolled back below this
 version and then rolled forward again will not re-grandfather a flow published
