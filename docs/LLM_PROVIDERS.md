@@ -352,6 +352,12 @@ manager.setFallbackChain(['openai', 'ollama']);
 const response = await manager.chat(messages);
 ```
 
+### Timeouts
+
+- A non-streaming call is cut off after 90 seconds. A streaming call (chat) is cut off when the provider sends nothing for 90 seconds before the first data, or for 60 seconds between data after that. Time Jarvis spends running a tool between two events never counts.
+- A stalled stream is not retried on the same provider (a hung provider stays hung); the turn fails with "did not answer in time". Chat runs one turn at a time, so a stalled turn holds up the next one for at most that long.
+- A workflow Ask step has one overall deadline of 120 seconds across all retries and fallbacks.
+
 ### Provider-Specific Options
 
 ```typescript

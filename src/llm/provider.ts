@@ -239,6 +239,13 @@ export type LLMOptions = {
    */
   checkDeadline?: () => void;
   /**
+   * Streaming only. The manager sets it; a provider calls it each time bytes
+   * arrive from the server, even when they do not yet add up to an event to
+   * yield (a tool call's arguments arrive in many chunks and are yielded once).
+   * It keeps the manager's stall timer from firing on a stream that is alive.
+   */
+  onStreamActivity?: () => void;
+  /**
    * Internal resource admission for a provider's retry of the same messages.
    * Call only after the previous transport settles, before starting another,
    * and use the returned options (including any lower output limit). Throws
