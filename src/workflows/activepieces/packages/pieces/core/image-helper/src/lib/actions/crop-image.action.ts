@@ -43,18 +43,23 @@ export const cropImage = createAction({
     const image = await jimp.read(context.propsValue.image.data);
     // === JARVIS PATCH: a crop outside the image says so in plain words ===
     // Upstream let the image library fail with a raw "offset is out of range".
+    // The library rounds each value before it crops, so check the rounded ones.
     const { left, top, width, height } = context.propsValue;
+    const x = Math.round(left);
+    const y = Math.round(top);
+    const w = Math.round(width);
+    const h = Math.round(height);
     if (
       ![left, top, width, height].every(Number.isFinite) ||
-      left < 0 ||
-      top < 0 ||
-      width <= 0 ||
-      height <= 0 ||
-      left + width > image.getWidth() ||
-      top + height > image.getHeight()
+      x < 0 ||
+      y < 0 ||
+      w < 1 ||
+      h < 1 ||
+      x + w > image.getWidth() ||
+      y + h > image.getHeight()
     ) {
       throw new Error(
-        `The crop area does not fit inside the image. The image is ${image.getWidth()} by ${image.getHeight()} pixels, so Left and Top must be 0 or more, Width and Height must be above 0, and Left plus Width and Top plus Height must stay within the image.`
+        `The crop area does not fit inside the image. The image is ${image.getWidth()} by ${image.getHeight()} pixels, so Left and Top must be 0 or more, Width and Height must be at least 1, and Left plus Width and Top plus Height must stay within the image.`
       );
     }
     // === END JARVIS PATCH ===

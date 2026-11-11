@@ -57,7 +57,7 @@ describe.skipIf(skip)('the compiled core Image Helper piece', () => {
     expect(written[0]!.data.length).toBeGreaterThan(0);
   });
 
-  test.each(['abc', '', undefined, 'NaN'])('compress refuses the quality %p in plain words', async (quality) => {
+  test.each(['abc', '', undefined, 'NaN', '150', -1])('compress refuses the quality %p in plain words', async (quality) => {
     await expect(compress(quality)).rejects.toThrow('Quality must be a number from 0 to 100');
   });
 
@@ -70,6 +70,11 @@ describe.skipIf(skip)('the compiled core Image Helper piece', () => {
     { left: 35, top: 0, width: 10, height: 10 },
     { left: -1, top: 0, width: 10, height: 10 },
     { left: 0, top: 0, width: 0, height: 10 },
+    // A full-width crop takes the library's shortcut, which silently returns a short image.
+    { left: 0, top: 25, width: 40, height: 10 },
+    // The library rounds 34.5 and 5.5 up to 35 and 6, past the right edge.
+    { left: 34.5, top: 0, width: 5.5, height: 10 },
+    { left: 0, top: 0, width: 0.4, height: 10 },
   ])('a crop outside the image fails in plain words %p', async (area) => {
     const error = await crop(area).then(() => null, (e: Error) => e);
     expect(error?.message).toContain('The crop area does not fit inside the image. The image is 40 by 30 pixels');

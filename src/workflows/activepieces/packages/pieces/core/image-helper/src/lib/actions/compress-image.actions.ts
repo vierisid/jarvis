@@ -49,7 +49,9 @@ export const compressImage = createAction({
     const quality = Number(context.propsValue.quality);
     if (
       String(context.propsValue.quality).trim() === '' ||
-      !Number.isFinite(quality)
+      !Number.isFinite(quality) ||
+      quality < 0 ||
+      quality > 100
     ) {
       throw new Error(
         'Quality must be a number from 0 to 100. Pick High Quality or Lossy Quality.'
