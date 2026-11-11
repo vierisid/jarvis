@@ -47,6 +47,18 @@ Practical consequences:
 - A category the user put under approval parks the run at a waitpoint and delivers
   an approval request. The run resumes on approval and fails on denial or expiry.
   This is why `jarvis-context` reads can now answer `202` instead of `200`.
+- A notify step whose every channel is the owner's own screen (`dashboard`,
+  `desktop`) asks for no approval, even while `send_message` is governed: it
+  shows the owner the same text an approval card would have shown, and no one
+  else. It is judged as `read_data`, so it still records its effect row and
+  audit row, is held by Pause, refused by Kill and stopped by cancellation, and
+  an override or context rule on `read_data` applies to it while one on
+  `send_message` no longer does. `auto`, `telegram`, `discord`, `voice` (spoken
+  aloud to the room) and any mix that includes one of them stay `send_message`.
+  To make self-notifications ask again without asking for every read, add a
+  context rule on `read_data` with the condition `tool_name` set to
+  `workflow_notify` and the effect `require_approval`. A repeated
+  `idempotencyKey` is deduplicated before any approval is asked.
 - Each effect is recorded in `workflow_effect` with its frozen arguments, target,
   decision and outcome, readable at `GET /api/workflow-runs/:runId/effects`.
 - A tool that fails reports a typed outcome rather than a result that happens to
