@@ -687,13 +687,6 @@ export class WebSocketServer {
     this.server = Bun.serve<WsData>({
       ...listenOpts,
       idleTimeout: 30, // seconds - prevent timeout during heavy processing (OCR, PowerShell)
-      // Anything a route throws that it did not catch itself. Without this Bun
-      // answers with its HTML error page, which carries absolute paths and
-      // source lines. The cause goes to the log only.
-      error(err) {
-        console.error('[WebSocketServer] Unhandled request error:', err);
-        return Response.json({ error: 'Something went wrong on our side. Try again.' }, { status: 500 });
-      },
       // One body limit for every route. Bun refuses a declared length past it;
       // a chunked body is counted here, because Bun < 1.4 does not apply this
       // option to one (util/bounded-body.ts).
@@ -716,6 +709,14 @@ export class WebSocketServer {
           return tooLarge();
         }
         return res;
+      },
+
+      // Anything a route throws that it did not catch itself. Without this Bun
+      // answers with its HTML error page, which carries absolute paths and
+      // source lines. The cause goes to the log only.
+      error(err) {
+        console.error('[WebSocketServer] Unhandled request error:', err);
+        return Response.json({ error: 'Something went wrong on our side. Try again.' }, { status: 500 });
       },
 
       websocket: {
