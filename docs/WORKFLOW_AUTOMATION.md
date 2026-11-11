@@ -1862,6 +1862,12 @@ The primary agent has a `manage_workflow` tool registered (`src/actions/tools/ma
 
 Source: `src/actions/tools/manage-workflow.ts` and `src/actions/tools/workflow-composer.ts`. The composer's role profile lives in `roles/specialists/workflow-default.yaml`.
 
+### Secrets are never written into a composed workflow
+
+A key, token, password or private key typed into a step is stored in plain text in the workflow version and copied into every run's logs. The composer refuses such a plan (`src/actions/tools/secret-literals.ts`) and feeds back where it is and what to do: use a connection. The feedback never names the value. Detected: credential formats (vendor key prefixes, JWTs, private keys, `Bearer <token>`, a password inside a URL), and a long high-entropy value in a field named like a credential (`apiKey`, `token`, `password`, `Authorization`). A value that holds an expression (`{{ ... }}`) is a reference and is never flagged. What is kept in composition history (`previous_response`, `previous_graph`, errors) and returned on failure has secret-shaped text replaced with `[secret removed]`.
+
+Publishing (and locking) a workflow that already holds one, whether drawn by hand or composed earlier, still succeeds, because readiness is re-checked on every trigger and a refusal would stop workflows that run today. The response adds `warnings` naming the step and field, never the value.
+
 ### Intent-preserving repair
 
 Every repair prompt carries the same versioned job specification, the latest raw

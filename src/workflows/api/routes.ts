@@ -6,6 +6,7 @@ import { editorVersion } from './editor-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
 import { requireWorkflowContext } from '../../brief/workflow-context-routes';
 import { WorkflowInspectionError } from '../../brief/inspection-values';
+import { secretLiteralWarnings } from '../../actions/tools/secret-literals.ts';
 /**
  * HTTP routes for the workflow runtime.
  *
@@ -1900,7 +1901,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // here so future readers know that's by design.
           const locked = withOwnedFlowVersion(id, versionId, () => { assertVersionReady(id, versionId); return lockVersion(versionId); });
           const osWarnings = lockOsWarnings(locked.trigger);
-          return ok(osWarnings.length > 0 ? { ...locked, osWarnings } : locked);
+          const warnings = secretLiteralWarnings(locked.trigger);
+          return ok({ ...locked, ...(osWarnings.length > 0 ? { osWarnings } : {}), ...(warnings.length ? { warnings } : {}) });
         }),
     },
 
@@ -2114,7 +2116,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const { flow, version } = publishFlowVersion(id, body.versionId);
           refreshTrigger(id);
-          return ok({ flow: serializeFlow(flow), version });
+          // A key typed into a step is stored in plain text and copied into every run.
+          // Said at the moment it goes live; never a refusal (see secretLiteralWarnings).
+          const warnings = secretLiteralWarnings(version.trigger);
+          return ok({ flow: serializeFlow(flow), version, ...(warnings.length ? { warnings } : {}) });
         }),
     },
 
