@@ -261,6 +261,9 @@ let healthMonitor: HealthMonitor | null = null;
 let commitmentExecutor: CommitmentExecutor | null = null;
 let bgAgent: BackgroundAgentService | null = null;
 let awarenessService: import('../awareness/service.ts').AwarenessService | null = null;
+// Starts the awareness service when screen awareness is turned on after a boot
+// with it off (owner decision 2026-11-11); a no-op until post-setup is wired.
+let startAwarenessIfNeeded: () => Promise<void> = async () => {};
 let goalService: import('../goals/service.ts').GoalService | null = null;
 let workflowWorker: WorkflowWorker | null = null;
 let triggerManager: TriggerManager | null = null;
@@ -2143,8 +2146,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // this install to today's capture interval and cooldowns forever.
           // The long-press is the user's own choice, so it is marked as one.
           persistAwarenessChoice(nextEnabled);
-          // Toggle live awareness service if it exists.
+          // Toggle the live awareness service, or start it when it was off at boot.
           if (awarenessService) awarenessService.toggle(nextEnabled);
+          else if (nextEnabled) await startAwarenessIfNeeded();
           if (!nextEnabled) closeSwitchedOffWorkflowCards();
           // Push visual: blinded = !enabled.
           // Awareness drops every capture while desktop.enabled is off (#905),
@@ -4594,7 +4598,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // awareness — the service snapshots its sub-config at construction; the
     // enabled flag is the one knob with a live setter today.
     settingsReload.registerApplier('awareness', async (cfg) => {
-      awarenessService?.toggle(cfg.awareness?.enabled !== false);
+      // Off at boot left no service to toggle: turning it on starts one.
+      if (awarenessService) awarenessService.toggle(cfg.awareness?.enabled !== false);
+      else if (cfg.awareness?.enabled !== false) await startAwarenessIfNeeded();
       if (cfg.awareness?.enabled === false) closeSwitchedOffWorkflowCards();
       // The glyph follows the stored choice too, on every pebble (#1157).
       // Not awaited: appliers run in one serialized queue, and a sidecar RPC can take 30s to give up.
@@ -5864,7 +5870,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Awareness service construction extracted so the post-setup helper
     // can call it conditionally. Closes over the same boot-scope deps as
     // the original inline block.
-    const startAwarenessService = async (): Promise<void> => {
+    // One start at a time: boot, onboarding and a switch turned on can race,
+    // and each start would wire its own sidecar listeners.
+    let awarenessStarting: Promise<void> | null = null;
+    const startAwarenessService = (): Promise<void> => {
+      if (awarenessService) return Promise.resolve();
+      awarenessStarting ??= startAwarenessServiceNow().finally(() => { awarenessStarting = null; });
+      return awarenessStarting;
+    };
+    const startAwarenessServiceNow = async (): Promise<void> => {
       if (awarenessService) return;
       try {
         const { AwarenessService } = await import('../awareness/service.ts');
@@ -5943,6 +5957,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         await svc.start();
         awarenessService = svc;
         apiContext.awarenessService = svc;
+        // Turned off while it was starting: the applier saw no service then.
+        if (jarvisConfig.awareness?.enabled === false) svc.toggle(false);
         console.log('[Daemon] Awareness service started (event-driven OCR + context tracking)');
 
         // Wire sidecar awareness events to awareness service
@@ -5999,6 +6015,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       },
     });
     apiContext.startPostSetupServices = postSetupServices.start;
+    startAwarenessIfNeeded = postSetupServices.startAwarenessIfNeeded;
     apiContext.isPostSetupServicesReady = () => bgAgent !== null;
     apiContext.onboardingServiceReadiness = postSetupServices.readiness;
 

@@ -83,3 +83,23 @@ test('the daemon pushes the observer pause on connect, on the long-press, and fr
   const desktop = index.slice(desktopAt, index.indexOf('});', desktopAt));
   expect(desktop).toContain("pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()))");
 });
+
+// Owner decision 2026-11-11: with awareness off at boot the service was never
+// built, and the long-press and the settings applier only toggled a service
+// that existed, so turning it on saved the choice and nothing ran until a
+// restart. Both now start it when there is none (post-setup-services.test.ts
+// covers when the start is allowed).
+test('the long-press and the awareness applier start the service when awareness was off at boot', () => {
+  const index = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+  const toggle = index.slice(index.indexOf("event.event_type !== 'pebble.blind_toggle'"), index.indexOf("console.log(`[ambient-ui] blind toggle"));
+  expect(toggle).toContain('if (awarenessService) awarenessService.toggle(nextEnabled);\n          else if (nextEnabled) await startAwarenessIfNeeded();');
+  // Started before the observer pause is pushed, so the unpause meets a running service.
+  expect(toggle.indexOf('await startAwarenessIfNeeded()')).toBeLessThan(toggle.indexOf('pushObserverPause('));
+  const awareness = index.slice(index.indexOf("settingsReload.registerApplier('awareness'"), index.indexOf("settingsReload.registerApplier('desktop'"));
+  expect(awareness).toContain("if (awarenessService) awarenessService.toggle(cfg.awareness?.enabled !== false);\n      else if (cfg.awareness?.enabled !== false) await startAwarenessIfNeeded();");
+  expect(awareness.indexOf('await startAwarenessIfNeeded()')).toBeLessThan(awareness.indexOf('pushObserverPause('));
+  expect(index).toContain('startAwarenessIfNeeded = postSetupServices.startAwarenessIfNeeded;');
+  // One start at a time, and a switch turned off while it started is applied to it.
+  expect(index).toContain('awarenessStarting ??= startAwarenessServiceNow()');
+  expect(index).toMatch(/awarenessService = svc;\n\s+apiContext\.awarenessService = svc;\n[^\n]*\n\s+if \(jarvisConfig\.awareness\?\.enabled === false\) svc\.toggle\(false\);/);
+});
