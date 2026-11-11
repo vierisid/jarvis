@@ -739,6 +739,24 @@ parent/child runs and remove their `waitForCompletion` settings. Older binaries
 ignore that input and would otherwise restore asynchronous behavior. Retain the
 additive table and historical receipts; never retry an uncertain run as rollback.
 
+### Reusable workflow calls fail by default
+
+The "Jarvis: Reusable workflows" `call` step fails when its child does not give
+a usable result: the child failed, timed out, stopped uncertain, returned
+nothing (no `return_result` step), or returned output that does not match the
+step's expected result shape. The failure names the child workflow and says why
+in plain words, and it fails the run. Only a succeeded child with a valid result
+continues the parent.
+
+Authors who want to branch on the child's outcome turn on **Continue when the
+child fails** (`continueOnChildFailure`). The step then returns the status object
+(`status` of `failed`, `invalid_output`, `timeout` or `uncertain`, a `code` and
+the child `runId`) and the parent stays green. An absent setting means the safe
+default, so saved flows that never set it fail on a bad child. The setting is
+not part of the invocation fingerprint: it changes how the parent treats the
+receipt, never what is sent to the child. `require_success` still works after a
+`call`, but a default `call` already fails first.
+
 ### Governed pieces
 
 The ten verified pieces -- gmail, slack, notion, openai, github, google-calendar,
