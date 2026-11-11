@@ -444,3 +444,26 @@ export function listRuns(opts: ListRunsOptions = {}): FlowRun[] {
     .all(...args, limit, offset)
     .map(rowToRun);
 }
+
+export interface RecentRunSummary {
+  id: string; flowId: string; flowVersionId: string; status: FlowRunStatus;
+  environment: "PRODUCTION" | "TESTING"; startTime: number | null; created: number;
+}
+/**
+ * The newest run of each workflow, most recently run first, in one read: what
+ * "Recently run" shows. It is a read of recent runs, never of a window of
+ * workflows, and carries no step output. Removed workflows (a pending Undo)
+ * are left out, as the list leaves them out.
+ */
+export function listRecentRunSummaries(projectId: string, limit: number): RecentRunSummary[] {
+  return db()
+    .query<FlowRunRow, [string, number]>(
+      `SELECT r.* FROM flow f
+       JOIN flow_run r ON r.id = (SELECT id FROM flow_run WHERE flow_id = f.id ORDER BY created DESC, rowid DESC LIMIT 1)
+       WHERE f.project_id = ? AND f.id NOT IN (SELECT flow_id FROM brief_workflow_slots WHERE receipt_id IS NOT NULL)
+       ORDER BY COALESCE(r.start_time, r.created) DESC, r.id DESC LIMIT ?`,
+    )
+    .all(projectId, limit)
+    .map(row => ({ id: row.id, flowId: row.flow_id, flowVersionId: row.flow_version_id, status: row.status as FlowRunStatus,
+      environment: row.environment, startTime: row.start_time, created: row.created }));
+}
