@@ -24,10 +24,10 @@ import type { InspectionSelection } from '../../../../src/brief/workflow-context
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import type { HostTransport } from './http';
 import { post, RequestError } from './http';
+import { needsManualRunInput } from '../../v2/rooms/workflows/trigger-kinds';
 
 /** The workflow and its version were read, but no run has the selected id. */
 class RunNotFound extends Error {}
-import { needsManualRunInput } from '../../v2/rooms/workflows/trigger-kinds';
 
 export interface WorkflowHost {
   scopeId: string; transport: HostTransport; capabilities(): unknown;
