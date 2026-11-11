@@ -66,13 +66,134 @@ Practical consequences:
   none. The `toolName` must be written directly: a templated one (`{{...}}`)
   would let run data, such as a webhook body, choose the tool, so readiness
   refuses it and a run refuses it with `WORKFLOW_STEP_INPUT_NOT_FIXED`.
-- `jarvis-tool` only invokes tools with a bounded, declared Authority action (see
-  `BOUNDED_TOOLS` in `src/workflows/runtime/effect-capabilities.ts`). Tools whose
-  effect is a script or a click sequence -- `run_command`, `browser_click`,
-  `desktop_type` and friends -- need a typed `ToolDefinition.workflowEffect`
-  adapter first. A flow that called one of those directly now fails with
-  "Unsupported direct workflow capability".
-- `run_skill` is the one click sequence a flow may invoke, because a skill is
+- `jarvis-tool` invokes bounded tools, typed `ToolDefinition.workflowEffect`
+  adapters and the explicit reviewed UI set in `src/authority/ui-intent.ts`:
+  browser navigation, click, type, key press, hover and scroll; desktop app
+  launch, window focus and targeted `desktop_click` actions. Each UI action
+  requires a separate dashboard approval using its live guard, even at full
+  Authority. These actions cannot run unattended. A restart, changed session
+  or missing guard refuses dispatch.
+- **The card shows what will run** (#1314). Every frozen argument is on it as
+  one line of escaped JSON (the full URL for `browser_navigate`), each marked
+  when run data chose it (a templated param of a direct step) or when a
+  delegated agent did; the computer it runs on by name and id; and the page,
+  element or window as Jarvis last saw them (display only, never a binding;
+  a desktop label comes only from this run's own structured snapshot). A value
+  over 600 characters, a card over 1000, a parameter the tool does not take
+  or more than 20 values is refused with `CARD_CANNOT_SHOW`: never shown cut.
+- **The computer is one a person chose** (#1314). A browser or desktop action
+  runs only on the computer the workflow was enabled against (its pin) or,
+  for a direct step, the computer the step names literally, by exact id or
+  name. A templated `target` (or templated params as a whole) is refused at
+  composition and activation. A delegation whose role has browser or desktop
+  tools counts as a computer step when the pin is chosen, so it is pinned at
+  enable; it never runs on a computer the agent names. Without a pin the
+  action is refused with `WORKFLOW_MACHINE_UNPINNED`, which shows on the
+  Workflows list and in a "Workflow needs attention" notice: enable the
+  workflow to pin its computer, or name the computer in the step. A pin made
+  with nobody choosing (the startup pass, a saved draft) keeps the run on one
+  computer but does not count, and pins made that way before #1314 carry no
+  mark and still count. A flow whose own steps act on the screen is refused
+  whole at admission; a delegation is not, since its agent may never touch a
+  screen: only the agent's browser, desktop and screenshot calls are refused,
+  with a sentence saying why (enable again; no computer could serve it when
+  enabled; or, for a screenshot from a role with no browser or desktop tools,
+  use a role such as `computer-operator`). Upgrade note: an enabled flow that
+  delegates to a role with browser tools was pinned with no computer before
+  #1314, so its agent's browser calls are refused until the flow is enabled
+  again. The check reads the pin before anything resolves a computer, so a
+  refused call binds the run to none. The same rule covers a delegated
+  agent's screen reads (screenshots, snapshots, window lists) and a
+  `run_skill` step, which replays recorded clicks and typing.
+- **A direct step is held to its step** (#1314). The tool route trusts the
+  step-name header, so a reviewed UI call must send exactly the params its
+  step states: literal values as written, the text around a template kept, no
+  extra keys (`WORKFLOW_STEP_INPUT_MISMATCH`, audited).
+- **Cards that are not element-bound expire** (#1314). A workflow card for
+  `browser_navigate`, `browser_scroll` or `browser_press_key` expires five
+  minutes after it was raised, the wait an inline chat approval gives; an
+  approval dispatched after that is refused (`APPROVAL_EXPIRED`), never run.
+  A workflow key press runs only in the browser on the Jarvis computer itself,
+  bound to the document reviewed (checked against the live page before the
+  key is sent); a key press bound for another computer is refused at
+  composition, activation and dispatch, since the sidecar cannot compare the
+  document. Use `browser_type` with `submit` to press Enter in a field there.
+  Same-document navigation (pushState, hash) keeps the document, so it does
+  not retire a key-press card.
+- A direct `desktop_click` takes its element id from run data; a desktop
+  element id written into a workflow names nothing and is refused, as is a
+  direct `get_value` read. Desktop work belongs in a delegation with the
+  `computer-operator` role, whose tools are listed one by one (browser and
+  desktop only: no clipboard, screen capture or system info). A delegated
+  `desktop_click` with `action: get_value` is a read and needs no mandatory
+  card, like `ui_act` `get_value`; its `control_app` floor stays.
+- Desktop control off (`desktop.enabled: false`) refuses desktop tools when a
+  workflow is composed or enabled, and closes desktop cards still waiting.
+  Screen awareness off refuses everything that hands back what is on a
+  screen, in chat, delegations and direct steps alike, and hides it from the
+  model (owner decision on #1314): the screenshots (`desktop_screenshot`,
+  `capture_screen`, `browser_screenshot`) and the text reads
+  (`desktop_snapshot`, `desktop_list_windows`, `desktop_find_element`,
+  `ui_snapshot`, `ui_act`, which returns the surface it changed, a
+  `desktop_click` with `action: get_value` in any case, `run_skill`, whose
+  replay reads each surface it acts on, and starting a `record_skill`
+  recording), with `SCREEN_CAPTURE_DISABLED`. `browser_navigate`,
+  `browser_snapshot` and `browser_evaluate` keep working: they read the Jarvis
+  browser's own tabs (its own profile, never the person's Chrome), not the
+  person's screen (owner decision on #1314). A person can browse in that
+  visible browser too, and those tabs are readable the same way. The structural surface reader refuses on its
+  own, so no other caller reads past the switch. Launching or focusing an app
+  still works, with the window title it would report hidden. The pebble's
+  screen context, its region capture and the Brief's screenshot attachment
+  stop too, the prompt says awareness is off, a live voice session's tool
+  list is re-sent when either switch changes, and waiting cards for any of
+  these are closed. What awareness recorded before is hidden too while it is
+  off: the `/api/awareness` history routes (captures, a capture and its image,
+  sessions, stats, the daily and weekly reports, insights and the live
+  context), what is derived from captures (suggestions, routines,
+  compositions, a suggestion's learning, opportunities and the Brief's
+  prepared opportunities) answer `409 AWARENESS_OFF` with no data, and so do
+  the writes on them (accept, retry, dismiss, act, opportunity feedback and the
+  prepared-opportunity ensure, dismiss and retry, and the Brief's activation
+  read, approve and dismiss), which answer with the records they change; the
+  Brief's Today stack, the Opportunities room (a proposal with an action in
+  flight included; it comes back when awareness is on) and the Routines panel
+  (an open routine whose save is refused included) show "awareness is off" and
+  clear what they showed before, as soon as a read or an action is refused;
+  screen-capture observations are left out of every observation read (the
+  Logs room, the palette search, the agents' prompts); the awareness
+  service's own read methods, the live context and the current session
+  included, return nothing; the background composers that turn recorded
+  evidence into drafts wait until awareness is on: one that is draining when
+  it turns off stops before its next job, a composition already running is
+  held before its next model call, including a provider retry or fallback
+  inside one call, and goes back to the queue unspent (a prepared job only
+  until its draft workflow is attached: after that a failure fails as before,
+  and a job dismissed meanwhile keeps its spent attempt), and
+  prepared-opportunity discovery and the opportunity notification outbox
+  hold on the switch itself, so nothing queued is lost; and a flow's
+  `awarenessRecent` context returns no activity. Vault entities and goal notes once written from awareness are
+  ordinary data and stay visible (owner decision). Nothing is deleted; it shows
+  again when awareness is turned back on. Not covered: shell commands
+  (`run_command`) that read the screen (owner decision: left as is) and the
+  operator-only debug RPC. A run admitted while a
+  switch is off says which switch, not that the action is unsupported.
+- Direct browser steps keep live snapshot generations per workflow run, across
+  snapshot, approval and execution, independently of chat and other runs. Local
+  and remote element actions use the snapshot that run actually read. Replaying
+  a saved snapshot receipt after restart or eviction of the live reader does not
+  restore a live binding: take a fresh snapshot in a new step/run. UI approvals
+  themselves remain process-bound and require a new run after restart.
+- Raw scripts (`run_command`, `browser_evaluate`), focused-window desktop input
+  (`desktop_type`, `desktop_press_keys`), `ui_act`, skill recording/management and
+  `browser_upload_file` remain unsupported as direct steps. Upload has no
+  computer-bound workflow adapter or sidecar route. Composition and activation
+  reject these with `WORKFLOW_TOOL_UNSUPPORTED`; use a supported connector or
+  reviewed adapter. For desktop text work, the `computer-operator` role uses a
+  fresh snapshot, targeted `desktop_click` with `set_value`, then `get_value`
+  readback. Those value actions require Windows and a compatible control; an
+  unsupported editor is a blocker, not permission to type into the focused app.
+- `run_skill` is the recorded click sequence a flow may invoke, because a skill is
   reviewed content with its own per-step classification (`GATED_TOOLS` in the
   same file). A step `{ toolName: "run_skill", params: { name, params } }` is
   gated on every category the skill's stored steps reach, worst case first (a
@@ -101,6 +222,31 @@ Practical consequences:
   says so. Which pieces count is `src/workflows/runtime/step-admission.ts`,
   which both the admission and `/api/workflows/pieces` (`notApprovalGated`)
   read.
+
+### A dashboard notification is saved, not only shown
+
+A `jarvis-notify` step to `dashboard` (or `auto`, which includes it) saves the notification in the
+daemon's `dashboard_notifications` table, then sends the live toast to any open dashboard tab under
+the same id. Saved means delivered: the step succeeds whether or not a tab is open, so a 9:00
+reminder is not lost when nobody is looking at 9:00. The row keeps the message, priority, time, flow
+id and run id.
+
+- The dashboard loads the unread rows when it opens (`GET /api/dashboard-notifications`) and shows
+  them in the Needs you notifications list and as a toast. Marking one read
+  (`POST /api/dashboard-notifications/:id/read`) clears it for every tab and every later visit.
+- A deduplicated notification (same idempotency key) is claimed before anything is saved, so it is
+  stored once.
+- Retention: at most the newest 200 rows and nothing older than 30 days, read or not, trimmed on
+  every insert. A message longer than 32,000 characters is saved shortened, with a note saying so.
+- Deleting a workflow (the ordinary delete and the Brief purge) deletes its saved notifications.
+  Removing it with Undo available keeps them.
+- If the row cannot be saved, the dashboard channel is failed, and the step fails when no other
+  channel delivered. If the live toast throws, or a Pause, Kill or cancel stops it, after the row
+  was saved, the step reports the send as unconfirmed and its idempotency key stays used.
+- The saved text is the workflow's own output and may carry outside content it read. It is shown
+  as plain text and is never given to a model.
+- `auto` with no tab open also shows the desktop notification, as before. `voice` still needs an
+  open dashboard to play the audio and reports so when none is open.
 
 ### A step's tool result is NOT framed as untrusted content
 
@@ -163,13 +309,22 @@ delegation row, and a taint-gated call in a workflow delegation becomes a durabl
 pause rather than a silent pass. So a workflow does have a framing-and-taint
 path; it is the agent path, and the unframed adapter path is the data path.
 
-**What a step CAN still do.** `browser_navigate` and `run_command` are refused as
-opaque, but `run_skill` is admitted as a governed adapter and a recorded skill
-step may `navigate` with a caller-supplied value. A flow can therefore point the
-browser somewhere and read the page with a following `browser_snapshot`; it is
-gated rather than refused -- by an approval card when the resolved category is
-above the run's authority floor, so a permissive configuration may dispatch it
-with no card. And the webhook trigger ingress is public and unauthenticated by
+**The computer is the exception (#1314).** A DIRECT `browser_*` or `desktop_*`
+step's result -- `browser_navigate`'s page and every browser or desktop read --
+reaches the flow framed as untrusted content, exactly as the chat model would
+see it (`frameComputerStepResult`). The trade above is accepted for these: a
+screen is written by whoever controls it, and a flow reads one to hand it to
+something that decides. The effect receipt keeps the tool's own value; only what
+the step receives is framed. Values a later card shows that came from run data
+are marked as such on the card, which is the workflow form of taint.
+
+**What a step CAN still do.** `browser_navigate` can run after individual live UI
+review; `run_command` remains refused. `run_skill` is a governed adapter and a
+recorded skill step may `navigate` with a caller-supplied value. Via that skill,
+a flow can point the browser somewhere and read the page with a following
+`browser_snapshot`. The skill path requires approval when its resolved category
+is above the run's authority floor, so a permissive configuration may dispatch
+the skill without a card. The webhook trigger ingress is public and unauthenticated by
 design, so `{{trigger.*}}` is attacker-influenceable and flows into tool
 parameters and prompts.
 
@@ -179,8 +334,11 @@ hit all four:
 - `ui_snapshot` is listed there as reachable. It is not -- nor is `ui_act`, which
   is an untrusted source in chat and would be the obvious next request. Neither is
   in `BOUNDED_TOOLS` or `GATED_TOOLS` and neither declares a `workflowEffect`, so
-  `toolEffectCapability` refuses both. The reachable set is the 14 names in
-  `untrusted-reach.test.ts`, of which 8 are untrusted sources.
+  `toolEffectCapability` refuses both. The reachable set is the 23 names in
+  `untrusted-reach.test.ts`, measured by putting every production tool to
+  `toolEffectCapability`: 14 bounded or gated names, of which 8 are untrusted
+  sources kept byte-exact, plus the 9 reviewed computer actions, whose
+  results are untrusted and framed (below).
 - "Nothing in `src/workflows/` imports from `src/roles/untrusted.ts` at all" is
   stale: #567 added two importers, `adapters/tool-registry.ts` and
   `runtime/service-backends.ts`.
@@ -506,14 +664,20 @@ checkpointed in `workflow_delegation` after every turn and while it waits,
 dropped when it finishes or the run is cancelled; a step the engine runs
 again after that answers from the record. A declined approval becomes
 `[APPROVAL DENIED]` in the conversation and the tool never runs. A tool the
-direct tool piece refuses as opaque (`run_command`, browser clicks and
-typing) is refused here too when it would need approval; one the sub-agent's
-Authority allows outright runs inside the sub-agent as before.
+direct tool piece refuses as opaque (`run_command`, `browser_evaluate`,
+focused-window desktop typing) remains refused here. Supported browser and
+desktop UI actions instead pause for individual review through their originating
+registry's live guard. A restart or changed session invalidates that review.
+Other tools the sub-agent's Authority allows outright run inside it as before.
 
 The step's `outcome` is its business contract. `Required tools` names the
 tools that must complete; `succeeded` means the conversation finished and
-each of them has a result and no error. Without them, `succeeded` only says
-the agent finished cleanly. A failed outcome (`REQUIRED_TOOL_NOT_COMPLETED`,
+each of them has a result and no error. Browser and desktop tasks additionally
+require the agent's structured `taskStatus`/`finalMessage` completion report;
+missing, blocked or failed reports suppress downstream output. Launching an app
+or completing a transport call alone does not prove the requested task is done.
+Without UI tools or required tools, `succeeded` only says the agent finished
+cleanly. A failed outcome (`REQUIRED_TOOL_NOT_COMPLETED`,
 `AGENT_INCOMPLETE`, `AGENT_ERROR`) answers 422 and stops the step; turn
 `Require the declared outcome` off to route on `{{step.outcome.status}}`
 instead. The sub-agent's audit rows now record what happened: a call that
@@ -1100,6 +1264,10 @@ a silent switch is now a typed `blocked` outcome with `effect: 'not_started'`:
 - `WORKFLOW_TARGET_AMBIGUOUS` -- an explicit name matched no device or several.
 - `WORKFLOW_MACHINE_UNAVAILABLE` -- nothing capable is connected and local
   execution is disabled.
+- `WORKFLOW_MACHINE_UNPINNED` -- a browser or desktop action with no pinned
+  computer and, for a direct step, no computer named in the step (#1314).
+  A browser or desktop action matches a named computer exactly: part of a
+  name is ambiguous.
 - `WORKFLOW_BINDING_LEGACY` -- the run already did machine work under an older
   binary, so it has no verifiable connection generation to adopt.
 

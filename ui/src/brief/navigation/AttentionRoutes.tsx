@@ -6,7 +6,9 @@ import type { RoomAvailability } from "./destinations";
 /** Body for the host's existing Needs you / attention outlet, mounted outside conversation.
  * Props are canonical snapshots, never an independent fetch or websocket subscription.
  */
-export function AttentionRoutes({ snapshot, navigation, roomAvailable, markRead }: {
+export function AttentionRoutes({ snapshot, navigation, roomAvailable, markRead, heading = "Notifications" }: {
+  /** Title and label of the list; the default is shown when it is the only one. */
+  heading?: string;
   snapshot: AttentionSnapshot;
   navigation: NavigationCompatibility;
   roomAvailable: RoomAvailability;
@@ -19,8 +21,8 @@ export function AttentionRoutes({ snapshot, navigation, roomAvailable, markRead 
   const latest = React.useRef({ snapshot, roomAvailable, markRead });
   latest.current = { snapshot, roomAvailable, markRead };
   if (view.status === "ready" && view.items.length === 0) return null;
-  return <section className="brief-attention-feed" aria-label="Notifications">
-    <h2 className="brief-type-section-heading">Notifications</h2>
+  return <section className="brief-attention-feed" aria-label={heading}>
+    <h2 className="brief-type-section-heading">{heading}</h2>
     {view.status !== "ready" ? <p role="status">Notifications are {view.status}. Open Authority, task recovery or device settings to inspect their current state.</p>
       : <ul>{view.items.map(item => <li className="brief-attention-item" key={attentionKey(item)}>
         <h3>{item.title}</h3>
