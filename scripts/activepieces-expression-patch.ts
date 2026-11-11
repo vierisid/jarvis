@@ -298,8 +298,10 @@ export const expressionPatches = {
       '\'The time that you would like to get the date and time of, as HH:mm in 24h format, for example 09:30. Not used when "Use Current Time" is checked.\','],
   ],
   "packages/pieces/core/date-helper/src/lib/actions/add-subtract-date.ts": [
-    ['  expression = expression.replace(/(\\r\\n|\\n|\\r)/gm, \'\').replace(/ /g, \'\');\n',
-      '  expression = expression.replace(/(\\r\\n|\\n|\\r)/gm, \'\').replace(/ /g, \'\');\n  // === JARVIS PATCH: an expression that is not one or more "+/- number unit" terms fails ===\n  // Anything else used to be skipped term by term, so "banana" changed nothing\n  // and a misspelt unit was ignored, while the step reported success.\n  if (!/^(?:[+-]?\\d+(?:year|month|day|hour|minute|second)s?)+$/i.test(expression)) {\n    throw new Error(\n      `Invalid expression "${String(expression).slice(0, 60)}". Use terms of a sign, a number and a unit, such as "+ 1 day" or "+ 1 year - 3 month". The units are year, month, day, hour, minute and second.`\n    );\n  }\n  // === END JARVIS PATCH ===\n'],
+    ["  expression = expression.replace(/(\\r\\n|\\n|\\r)/gm, '').replace(/ /g, '');\n",
+      "  expression = expression.replace(/(\\r\\n|\\n|\\r)/gm, '').replace(/ /g, '');\n  // === JARVIS PATCH: an expression that is not one or more \"+/- number unit\" terms fails ===\n  // Anything else used to be skipped term by term, so \"banana\" changed nothing\n  // and a misspelt unit was ignored, while the step reported success. The\n  // message does not repeat the expression: it can hold run data.\n  expression = expression.replace(/\\s/g, '');\n  if (!/^(?:[+-]*\\d+(?:year|month|day|hour|minute|second)s?)+$/i.test(expression)) {\n    throw new Error(\n      'The expression could not be read. Use terms of a sign, a number and a unit, such as \"+ 1 day\" or \"+ 1 year - 3 month\". The units are year, month, day, hour, minute and second.'\n    );\n  }\n  // \"+ {{n}} day\" with a negative n reads \"+-3day\": a run of signs is one sign.\n  expression = expression.replace(/[+-]{2,}/g, (signs) => (signs.split('-').length % 2 === 0 ? '-' : '+'));\n  // === END JARVIS PATCH ===\n"],
+    ["  return dayjsDate;\n}",
+      "  // === JARVIS PATCH: a result outside the range a date can hold fails ===\n  if (!dayjsDate.isValid()) {\n    throw new Error('The expression moves the date outside the range a date can hold. Use a smaller number.');\n  }\n  // === END JARVIS PATCH ===\n  return dayjsDate;\n}"],
   ],
 } as const;
 

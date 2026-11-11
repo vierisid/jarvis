@@ -35,10 +35,17 @@ describe.skipIf(skip)('the compiled core date-helper piece', () => {
   });
 
   test('add_subtract_date refuses an expression it cannot read and says what is accepted', async () => {
-    for (const bad of ['banana', '1 fortnight', '+ day', '2', '', '+1 day banana']) {
+    for (const bad of ['banana', '1 fortnight', '+ day', '2', '', '+1 day banana', '+ 1.5 hour']) {
       const failure = await run('add_subtract_date')({ propsValue: addSubtract(bad) }).then(() => null, (e: Error) => e);
-      expect(failure?.message ?? `${JSON.stringify(bad)} was accepted`).toMatch(/^Invalid expression .*year, month, day, hour, minute and second/);
+      expect(failure?.message ?? `${JSON.stringify(bad)} was accepted`).toMatch(/^The expression could not be read\. .*year, month, day, hour, minute and second\.$/);
+      // The expression can hold run data, so the message does not repeat it.
+      expect(failure?.message).not.toContain('banana');
     }
+  });
+
+  test('add_subtract_date refuses a result outside the range a date can hold instead of returning "Invalid Date"', async () => {
+    await expect(run('add_subtract_date')({ propsValue: addSubtract('+ 99999999999999999999 day') }))
+      .rejects.toThrow('outside the range a date can hold');
   });
 
   test('add_subtract_date still applies every valid form of the expression', async () => {
@@ -46,6 +53,8 @@ describe.skipIf(skip)('the compiled core date-helper piece', () => {
       ['- 1 day', '2026-01-30'], ['+1 day', '2026-02-01'], ['+ 2 days', '2026-02-02'],
       ['+ 1 month', '2026-02-28'], ['+ 1 year - 3 day', '2027-01-28'], ['5 second', '2026-01-31'],
       ['+1 DAY\n- 1 month', '2026-01-01'], ['+ 24 hours', '2026-02-01'],
+      // A templated negative amount ("+ {{n}} day" with n = -3) and other whitespace.
+      ['+ -3 day', '2026-01-28'], ['- -3 day', '2026-02-03'], ['+\t1 day', '2026-02-01'], ['+ 1\u00a0day', '2026-02-01'],
     ];
     for (const [expression, expected] of cases) {
       expect((await run('add_subtract_date')({ propsValue: addSubtract(expression) })).result).toBe(expected);
