@@ -135,6 +135,20 @@
 #      under RUNNER_TEMP at /work, -w /work and --network none, runs that
 #      image and one phase of the contained build script and nothing after
 #      it, and every phase but fetch has no network.
+#  15. (owner decision 2026-11-11, after run 42868738162) Every job of
+#      release.yml, release-exec.yml, sidecar-release.yml and
+#      installer-release.yml, and of every local reusable workflow they
+#      call, runs on a hosted runner label that names its OS version
+#      (ubuntu-NN.NN, optionally -arm; macos-N, optionally -intel, -large
+#      or -xlarge; windows-N, optionally -arm; a fixed label of any other
+#      shape is refused too, until it is added here): no -latest alias, no
+#      other floating name, a matrix runner resolved from the written-out
+#      matrix, and no runs-on this test cannot resolve. ubuntu-latest moved to
+#      ubuntu-26.04 between two releases and broke smoke-image; a move is
+#      now a diff someone reviews. The label pins the OS release only: the
+#      image under it still updates weekly. test.yml and docker-build.yml
+#      stay on -latest on purpose, so the next image move shows up on an
+#      ordinary PR before anyone moves a release pin.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -168,7 +182,7 @@ trap 'rm -rf "$WORK"' EXIT
 #   rule = scoped | publish-perms | pinned | authority | reach | untrusted
 #          | mutable | narrow | pushcache | opens-pr | catalog-pr | npmpin
 #          | runs | persist | images | license-scan | pr-license-scan | contained
-#          | signenv
+#          | signenv | runners
 check() {
 	# Written to a file once and run from there, not handed to bun -e: the
 	# source outgrew the 128 KiB Linux allows a single argument
@@ -2696,6 +2710,81 @@ if (rule === "contained") {
   }
   if (runs === 0) out.push("no docker run in this workflow, so nothing here is contained");
 }
+if (rule === "runners") {
+  // (owner decision 2026-11-11, after run 42868738162) Every job on the
+  // release path runs on a hosted runner label that names its OS version, so
+  // a runner image move reaches a release as a reviewed diff, not as a broken
+  // release: ubuntu-latest moved to ubuntu-26.04 between two releases and
+  // changed the docker image store smoke-image loads into. An allow-list of
+  // label shapes, not a deny-list of -latest: ubuntu-slim and other floating
+  // names are refused too. Every local reusable workflow a job calls is
+  // followed, recursively; a matrix runner is resolved from the matrix, and
+  // anything that cannot be resolved here (an expression, a group, a remote
+  // workflow) is refused rather than guessed. Not reported: an include
+  // entry with no runner that GitHub adds as a leg of its own beside a
+  // runner axis; that leg has no label at all, so it fails to start rather
+  // than floating.
+  const fs = require("node:fs");
+  const SHAPE = /^(ubuntu-[0-9]{2}\.[0-9]{2}(-arm)?|macos-[0-9]+(-intel|-large|-xlarge)?|windows-[0-9]+(-arm)?)$/;
+  const label = (where, v) => {
+    for (const l of [].concat(v)) {
+      if (typeof l !== "string") out.push(where + ": runner label " + JSON.stringify(l) + " is not a plain string");
+      else if (!SHAPE.test(l)) out.push(where + ": runs on " + l + ", a label that does not name its OS version (pin it, as ubuntu-24.04 or macos-26)");
+    }
+  };
+  const followed = new Set();
+  const walk = (wf, file, depth) => {
+    for (const [name, job] of Object.entries((wf && wf.jobs) ?? {})) {
+      const where = file + " " + name;
+      if (typeof job?.uses === "string") {
+        const u = job.uses;
+        if (!u.startsWith("./")) { out.push(where + ": calls " + u + ", a remote workflow whose runners cannot be read here"); continue; }
+        if (depth > 4) { out.push(where + ": reusable workflows nested too deep to check"); continue; }
+        const p = u.slice(2);
+        if (followed.has(p)) continue;
+        followed.add(p);
+        let called = null;
+        try { called = Bun.YAML.parse(fs.readFileSync(process.env.REPO + "/" + p, "utf8")); } catch {}
+        if (!called || typeof called !== "object") { out.push(where + ": calls " + u + ", which cannot be read, so its runners cannot be checked"); continue; }
+        walk(called, p, depth + 1);
+        continue;
+      }
+      const ro = job?.["runs-on"];
+      if (ro === undefined) { out.push(where + ": has no runs-on"); continue; }
+      if (typeof ro !== "string" && !Array.isArray(ro)) { out.push(where + ": runs-on " + JSON.stringify(ro) + " is a group or object, whose image cannot be read here"); continue; }
+      if (Array.isArray(ro) && ro.length === 0) { out.push(where + ": runs-on is an empty list"); continue; }
+      for (const l of [].concat(ro)) {
+        if (typeof l !== "string" || !l.includes("${{")) { label(where, l); continue; }
+        const m = /^\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}$/.exec(l);
+        if (!m) { out.push(where + ": runs-on " + l + " is an expression other than one matrix field, so its label cannot be read here"); continue; }
+        const key = m[1];
+        const mx = job.strategy?.matrix;
+        if (!mx || typeof mx !== "object" || Array.isArray(mx)) { out.push(where + ": runs-on reads matrix." + key + " from a matrix that is not written out (" + JSON.stringify(mx ?? null) + ")"); continue; }
+        let n = 0;
+        if (mx[key] !== undefined) {
+          if (!Array.isArray(mx[key])) out.push(where + ": matrix." + key + " is not a written-out list (" + JSON.stringify(mx[key]) + ")");
+          else for (const v of mx[key]) { n++; label(where + " (matrix." + key + ")", v); }
+        }
+        if (mx.include !== undefined) {
+          if (!Array.isArray(mx.include)) { out.push(where + ": matrix.include is not a written-out list (" + JSON.stringify(mx.include) + ")"); continue; }
+          for (const leg of mx.include) {
+            if (!leg || typeof leg !== "object" || Array.isArray(leg)) { out.push(where + ": a matrix.include entry is not written out (" + JSON.stringify(leg) + ")"); continue; }
+            if (leg[key] !== undefined) { n++; label(where + " (matrix.include " + key + ")", leg[key]); }
+            else if (mx[key] === undefined) out.push(where + ": a matrix.include entry sets no " + key + ", so that leg has no runner label");
+          }
+        }
+        if (n === 0) out.push(where + ": runs-on reads matrix." + key + ", which the matrix never sets");
+      }
+    }
+  };
+  // The root by its repository path when it is one, so a cycle back to it
+  // stops there; a mutated copy outside the repository by its file name.
+  const path = require("node:path");
+  const rel = path.relative(path.resolve(process.env.REPO), path.resolve(process.env.FILE));
+  const root = rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel : path.basename(process.env.FILE);
+  followed.add(root);
+  walk(doc, root, 0);
+}
 if (rule === "pinned") {
   const uses = [];
   for (const [name, job] of Object.entries(jobs)) {
@@ -3155,13 +3244,13 @@ done
 		'          npm install -g --offline --ignore-scripts "$npm_tgz"' '          npm_config_registry=https://registry.evil.example/ npm install -g --offline --ignore-scripts "$npm_tgz"' \
 		'publish-sidecar: publishes with id-token and runs: npm_config_registry='
 	expect_caught 'npm_config_registry in the npm publish job env (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env:\n      npm_config_registry: https://registry.evil.example/\n' \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n    env:\n      npm_config_registry: https://registry.evil.example/\n' \
 		'publish-brain: job env sets npm_config_registry in a job that publishes with id-token'
 	expect_caught 'setup-node pointing the npm publish job at another registry (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
 		'          registry-url: "https://registry.npmjs.org"' '          registry-url: "https://registry.evil.example"' \
 		'publish-brain: setup-node registry-url is'
 	expect_caught 'a default shell that sets NPM_VERSION first (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    defaults:\n      run:\n        shell: env NPM_VERSION=npm:evil-pkg@12.1.0 bash -e {0}\n' \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n    defaults:\n      run:\n        shell: env NPM_VERSION=npm:evil-pkg@12.1.0 bash -e {0}\n' \
 		'publish-brain: step with shell: env NPM_VERSION=npm:evil-pkg@12.1.0 bash -e {0}'
 	expect_caught 'a step shell that runs code before the script (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
 		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        shell: bash -c \x27export NPM_VERSION=npm:evil-pkg@12.1.0; . {0}\x27\n        run: |' \
@@ -3760,8 +3849,8 @@ echo "each rule reports the hole it exists for (mutated copies)"
 expect_caught 'a workflow and job with no permissions anywhere' scoped "$WORKFLOWS/test.yml" \
 	$'permissions:\n  contents: read\n' ''
 expect_caught 'a publish job with no permissions of its own' publish-perms "$WORKFLOWS/release-exec.yml" \
-	$'    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n    steps:\n      - name: Get release notes\n' \
-	$'    runs-on: ubuntu-latest\n    steps:\n      - name: Get release notes\n'
+	$'    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - name: Get release notes\n' \
+	$'    runs-on: ubuntu-24.04\n    steps:\n      - name: Get release notes\n'
 expect_caught 'write scopes back at the top of the publish path' publish-perms "$WORKFLOWS/release-exec.yml" \
 	$'permissions: {}\n' $'permissions:\n  contents: write\n'
 expect_caught 'a major tag on the publish path' pinned "$WORKFLOWS/release-exec.yml" \
@@ -4800,7 +4889,7 @@ echo "no env in a job holding id-token names code to run first, and no step writ
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
 	expect_caught 'BASH_ENV in the brain publish job env (#999)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env:\n      BASH_ENV: /tmp/x\n' \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n    env:\n      BASH_ENV: /tmp/x\n' \
 		'publish-brain: job env sets BASH_ENV in a job holding id-token'
 	expect_caught 'ENV in the sidecar workflow env (#999)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'  NPM_VERSION: "12.1.0"\n' $'  NPM_VERSION: "12.1.0"\n  ENV: /tmp/x\n' \
@@ -4836,7 +4925,7 @@ echo "no env in a job holding id-token names code to run first, and no step writ
 		$'  publish-sidecar:\n    # Same requirement' $'  publish-sidecar:\n    container:\n      image: x\n      env:\n        NODE_OPTIONS: --require /tmp/x.js\n    # Same requirement' \
 		'publish-sidecar: container env sets NODE_OPTIONS in a job holding id-token'
 	expect_caught 'a job env given as an expression, which the rule cannot read (#999)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env: ${{ fromJSON(vars.PUBLISH_ENV) }}\n' \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n    env: ${{ fromJSON(vars.PUBLISH_ENV) }}\n' \
 		'publish-brain: job env is "${{ fromJSON(vars.PUBLISH_ENV) }}", not a mapping this rule can read'
 	expect_caught 'a step env given as an expression (#999)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env: ${{ fromJSON(vars.PUBLISH_ENV) }}\n        run: |' \
@@ -4860,7 +4949,7 @@ echo "no env in a job holding id-token names code to run first, and no step writ
 		$'  NPM_VERSION: "12.1.0"\n' $'  NPM_VERSION: "12.1.0"\n  NODE_EXTRA_CA_CERTS: /tmp/evil-ca.pem\n' \
 		'publish-sidecar: workflow env sets NODE_EXTRA_CA_CERTS in a job holding id-token'
 	expect_caught 'HOME moved, so npm reads another .npmrc (#999 security review)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env:\n      HOME: /tmp/evil-home\n' \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n    env:\n      HOME: /tmp/evil-home\n' \
 		'publish-brain: job env sets HOME in a job holding id-token'
 	expect_caught 'GITHUB_ENV set as an env name (#999 security review)' narrow "$WORKFLOWS/release-exec.yml" \
 		$'      - name: Publish to npm\n        env:\n' $'      - name: Publish to npm\n        env:\n          GITHUB_ENV: /tmp/evil-env\n' \
@@ -4872,7 +4961,7 @@ echo "no env in a job holding id-token names code to run first, and no step writ
 		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          SOMETHING_NEW: x\n        run: |' \
 		'publish-sidecar: step Ensure npm supports Trusted Publishing env sets SOMETHING_NEW, a name no job holding id-token uses yet'
 	expect_caught 'a container whose options set env (#999 security review)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    container:\n      image: node:22\n      options: --env NODE_OPTIONS=--require=/tmp/x.js\n' \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n    container:\n      image: node:22\n      options: --env NODE_OPTIONS=--require=/tmp/x.js\n' \
 		'publish-brain: runs in a container: in a job holding id-token'
 	expect_caught 'a service container beside the signer (#999 security review)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'  sign-sidecar-windows:\n    needs: [resolve, build-sidecar-windows]\n' $'  sign-sidecar-windows:\n    needs: [resolve, build-sidecar-windows]\n    services:\n      x:\n        image: evil\n' \
@@ -4896,7 +4985,7 @@ echo "no env in the job that installs npm and packs the brain tarball names code
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
 	expect_caught 'BASH_ENV in the pack-brain job env (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, test, smoke-image]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, test, smoke-image]\n    runs-on: ubuntu-latest\n    env:\n      BASH_ENV: /tmp/x\n' \
+		$'    needs: [validate-tag, test, smoke-image]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, test, smoke-image]\n    runs-on: ubuntu-24.04\n    env:\n      BASH_ENV: /tmp/x\n' \
 		'pack-brain: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
 	expect_caught 'an earlier pack-brain step writing NODE_OPTIONS to GITHUB_ENV (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
 		'      - name: Install the pinned npm' $'      - run: echo "NODE_OPTIONS=--require /tmp/x.js" >> "$GITHUB_ENV"\n      - name: Install the pinned npm' \
@@ -6113,6 +6202,149 @@ await Bun.write(process.env.TO, s.replace(old, () => "      - name: Something el
 else
 	no "reports: the npm content check gone from publish-sidecar (#1046)"
 fi
+
+echo
+echo "the release path runs on runner labels that name their OS version (rule 15, run 42868738162)"
+RELEASE_PATH="release.yml release-exec.yml sidecar-release.yml installer-release.yml"
+for f in $RELEASE_PATH; do
+	expect_clean "${f}: every runner label names its OS version, reusable workflows followed" runners "$WORKFLOWS/$f"
+done
+# The list above is written out, so a release workflow added later must be
+# added to it: every workflow a tag push, a release event, a ref creation or
+# another workflow run starts is on it. A new workflow started only by
+# workflow_dispatch, as release.yml is, cannot be told apart from any other
+# here; adding it to the list is left to its review.
+# release_roots <dir>: each such workflow in dir not on RELEASE_PATH.
+release_roots() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	DIR="$1" LISTED="$RELEASE_PATH" bun -e '
+const fs = require("node:fs");
+const listed = process.env.LISTED.split(" ");
+for (const f of fs.readdirSync(process.env.DIR).filter((x) => /\.ya?ml$/.test(x)).sort()) {
+  const d = Bun.YAML.parse(fs.readFileSync(process.env.DIR + "/" + f, "utf8")) ?? {};
+  const on = d.on ?? d[true] ?? {};
+  const ev = typeof on === "string" ? [on] : Array.isArray(on) ? on : Object.keys(on);
+  // A push with no branch filter runs on tag pushes too.
+  const p = on && typeof on === "object" && !Array.isArray(on) ? on.push : undefined;
+  const branchOnly = p && typeof p === "object" && (p.branches !== undefined || p["branches-ignore"] !== undefined) && p.tags === undefined && p["tags-ignore"] === undefined;
+  const tags = ev.includes("push") && !branchOnly;
+  if ((tags || ["release", "workflow_run", "create"].some((e) => ev.includes(e))) && !listed.includes(f))
+    console.log(f + ": started by a tag push, a release, a ref creation or another workflow run, but not on the release path list rule 15 checks");
+}
+'
+}
+found="$(release_roots "$WORKFLOWS")" || found="the bun helper failed"
+if [ -z "$found" ]; then ok "every tag, release and workflow_run triggered workflow is on the rule 15 list"; else no "every tag, release and workflow_run triggered workflow is on the rule 15 list" "$found"; fi
+mkdir -p "${WORK}/roots" && cp "$WORKFLOWS"/*.yml "${WORK}/roots/"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+if FROM="$WORKFLOWS/docker-build.yml" TO="${WORK}/roots/docker-build.yml" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const old = "  push:\n    branches: [main]\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(old, () => "  push:\n    branches: [main]\n    tags: [\"v*\"]\n"));
+' && grep -qF 'docker-build.yml: started by a tag push' <<<"$(release_roots "${WORK}/roots")"; then
+	ok "reports: a tag-triggered workflow left off the rule 15 list"
+else
+	no "reports: a tag-triggered workflow left off the rule 15 list"
+fi
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+if FROM="$WORKFLOWS/docker-build.yml" TO="${WORK}/roots/docker-build.yml" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const old = "  push:\n    branches: [main]\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(old, () => "  push:\n    paths: [Dockerfile]\n"));
+' && grep -qF 'docker-build.yml: started by a tag push' <<<"$(release_roots "${WORK}/roots")"; then
+	ok "reports: a workflow whose push has no branch filter, so tags start it, left off the rule 15 list"
+else
+	no "reports: a workflow whose push has no branch filter, so tags start it, left off the rule 15 list"
+fi
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'smoke-image back on ubuntu-latest, as it was for run 42868738162' runners "$WORKFLOWS/release-exec.yml" \
+		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-24.04\n' \
+		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-latest\n' \
+		'smoke-image: runs on ubuntu-latest'
+	expect_caught 'the release cut back on ubuntu-latest' runners "$WORKFLOWS/release.yml" \
+		$'  cut:\n    runs-on: ubuntu-24.04\n' $'  cut:\n    runs-on: ubuntu-latest\n' \
+		'cut: runs on ubuntu-latest'
+	expect_caught 'the macOS installer build back on macos-latest' runners "$WORKFLOWS/installer-release.yml" \
+		$'  build-macos:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \x27true\x27\n    runs-on: macos-26\n' \
+		$'  build-macos:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \x27true\x27\n    runs-on: macos-latest\n' \
+		'build-macos: runs on macos-latest'
+	expect_caught 'the linux sidecar leg back on ubuntu-latest through its matrix' runners "$WORKFLOWS/sidecar-release.yml" \
+		$'            runner: ubuntu-24.04\n' $'            runner: ubuntu-latest\n' \
+		'build-sidecar-linux-x64 (matrix.include runner): runs on ubuntu-latest'
+	expect_caught 'the darwin arm64 sidecar leg back on macos-latest through its matrix' runners "$WORKFLOWS/sidecar-release.yml" \
+		$'            npm_pkg: darwin-arm64\n            runner: macos-26\n' $'            npm_pkg: darwin-arm64\n            runner: macos-latest\n' \
+		'build-sidecar-darwin-arm64 (matrix.include runner): runs on macos-latest'
+	expect_caught 'a -latest alias with a size suffix' runners "$WORKFLOWS/installer-release.yml" \
+		$'  build-macos:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \x27true\x27\n    runs-on: macos-26\n' \
+		$'  build-macos:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \x27true\x27\n    runs-on: macos-latest-xlarge\n' \
+		'build-macos: runs on macos-latest-xlarge'
+	expect_caught 'a floating label that does not say latest' runners "$WORKFLOWS/release.yml" \
+		$'  cut:\n    runs-on: ubuntu-24.04\n' $'  cut:\n    runs-on: ubuntu-slim\n' \
+		'cut: runs on ubuntu-slim'
+	expect_caught 'ubuntu-latest as one label of a list' runners "$WORKFLOWS/release.yml" \
+		$'  cut:\n    runs-on: ubuntu-24.04\n' $'  cut:\n    runs-on: [ubuntu-latest]\n' \
+		'cut: runs on ubuntu-latest'
+	expect_caught 'a runner chosen by a variable' runners "$WORKFLOWS/release.yml" \
+		$'  cut:\n    runs-on: ubuntu-24.04\n' $'  cut:\n    runs-on: ${{ vars.RELEASE_RUNNER }}\n' \
+		'cut: runs-on ${{ vars.RELEASE_RUNNER }} is an expression other than one matrix field'
+	expect_caught 'a runner group, whose image cannot be read' runners "$WORKFLOWS/release.yml" \
+		$'  cut:\n    runs-on: ubuntu-24.04\n' $'  cut:\n    runs-on:\n      group: release-runners\n' \
+		'cut: runs-on {"group":"release-runners"} is a group or object'
+	expect_caught 'a matrix runner read from a matrix built at run time' runners "$WORKFLOWS/sidecar-release.yml" \
+		$'    strategy:\n      matrix:\n        include:\n          - goos: darwin\n            goarch: arm64\n            npm_pkg: darwin-arm64\n            runner: macos-26\n            setup: darwin\n' \
+		$'    strategy:\n      matrix: ${{ fromJSON(needs.resolve.outputs.legs) }}\n' \
+		'build-sidecar-darwin-arm64: runs-on reads matrix.runner from a matrix that is not written out'
+	expect_caught 'a matrix leg with no runner at all' runners "$WORKFLOWS/sidecar-release.yml" \
+		$'            npm_pkg: darwin-arm64\n            runner: macos-26\n' $'            npm_pkg: darwin-arm64\n' \
+		'build-sidecar-darwin-arm64: a matrix.include entry sets no runner'
+	PUBLISH_CALL=$'    uses: ./.github/workflows/sidecar-release.yml\n    with:\n      dry_run: ${{ inputs.dry_run == true }}\n      publish_only: true\n'
+	expect_caught 'the release executor calling a remote reusable workflow' runners "$WORKFLOWS/release-exec.yml" \
+		"$PUBLISH_CALL" "${PUBLISH_CALL/.\/.github\/workflows\/sidecar-release.yml/some-org\/some-repo\/.github\/workflows\/x.yml@0123456789012345678901234567890123456789}" \
+		'a remote workflow whose runners cannot be read here'
+	LINUX_LEG=$'      matrix:\n        include:\n          - goos: linux\n            goarch: amd64\n            npm_pkg: linux-x64\n            runner: ubuntu-24.04\n            setup: linux\n'
+	expect_caught 'a runner axis list holding ubuntu-latest' runners "$WORKFLOWS/sidecar-release.yml" \
+		"$LINUX_LEG" $'      matrix:\n        runner: [ubuntu-latest]\n        include:\n          - goos: linux\n            goarch: amd64\n            npm_pkg: linux-x64\n            setup: linux\n' \
+		'build-sidecar-linux-x64 (matrix.runner): runs on ubuntu-latest'
+	expect_caught 'a runner axis that is not a written-out list' runners "$WORKFLOWS/sidecar-release.yml" \
+		"$LINUX_LEG" $'      matrix:\n        runner: ${{ fromJSON(vars.RUNNERS) }}\n        include:\n          - goos: linux\n            goarch: amd64\n            npm_pkg: linux-x64\n            setup: linux\n' \
+		'build-sidecar-linux-x64: matrix.runner is not a written-out list'
+	expect_caught 'matrix.include built at run time' runners "$WORKFLOWS/sidecar-release.yml" \
+		"$LINUX_LEG" $'      matrix:\n        include: ${{ fromJSON(vars.LEGS) }}\n' \
+		'build-sidecar-linux-x64: matrix.include is not a written-out list'
+	expect_caught 'an empty runs-on list' runners "$WORKFLOWS/release.yml" \
+		$'  cut:\n    runs-on: ubuntu-24.04\n' $'  cut:\n    runs-on: []\n' \
+		'cut: runs-on is an empty list'
+	expect_caught 'the release executor calling a local workflow that does not exist' runners "$WORKFLOWS/release-exec.yml" \
+		"$PUBLISH_CALL" "${PUBLISH_CALL/sidecar-release.yml/no-such-release.yml}" \
+		'which cannot be read, so its runners cannot be checked'
+	# Called workflows are read from the repository, so these read a fixture
+	# repository instead: one called workflow on ubuntu-latest; a chain five
+	# calls deep from ok-root.yml, the most the rule follows, which passes;
+	# and release-exec.yml calling chain1 to chain5, where the sixth call,
+	# chain5 to chain6, is refused (chain6 is never read).
+	RUNNERS_REPO="${WORK}/runners-repo"
+	mkdir -p "${RUNNERS_REPO}/.github/workflows"
+	printf 'on: workflow_call\njobs:\n  floater:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n' >"${RUNNERS_REPO}/.github/workflows/floating.yml"
+	for i in 1 2 3 4 5; do
+		printf 'on: workflow_call\njobs:\n  next:\n    uses: ./.github/workflows/chain%s.yml\n' "$((i + 1))" >"${RUNNERS_REPO}/.github/workflows/chain${i}.yml"
+	done
+	printf 'on: workflow_call\njobs:\n  last:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: "true"\n' >"${RUNNERS_REPO}/.github/workflows/chain6.yml"
+	printf 'on: workflow_dispatch\njobs:\n  next:\n    uses: ./.github/workflows/ok1.yml\n' >"${RUNNERS_REPO}/.github/workflows/ok-root.yml"
+	for i in 1 2 3 4; do
+		printf 'on: workflow_call\njobs:\n  next:\n    uses: ./.github/workflows/ok%s.yml\n' "$((i + 1))" >"${RUNNERS_REPO}/.github/workflows/ok${i}.yml"
+	done
+	printf 'on: workflow_call\njobs:\n  last:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: "true"\n' >"${RUNNERS_REPO}/.github/workflows/ok5.yml"
+	REPO_DIR="$RUNNERS_REPO" expect_clean "a chain of reusable workflows five calls deep, the most rule 15 follows, is read to its end" runners "${RUNNERS_REPO}/.github/workflows/ok-root.yml"
+	REPO_DIR="$RUNNERS_REPO" expect_caught 'the release executor calling a local workflow that runs on ubuntu-latest' runners "$WORKFLOWS/release-exec.yml" \
+		"$PUBLISH_CALL" "${PUBLISH_CALL/sidecar-release.yml/floating.yml}" \
+		'.github/workflows/floating.yml floater: runs on ubuntu-latest'
+	REPO_DIR="$RUNNERS_REPO" expect_caught 'reusable workflows nested deeper than the rule follows' runners "$WORKFLOWS/release-exec.yml" \
+		"$PUBLISH_CALL" "${PUBLISH_CALL/sidecar-release.yml/chain1.yml}" \
+		'reusable workflows nested too deep to check'
+}
 
 echo
 echo "${pass} passed, ${fail} failed"
