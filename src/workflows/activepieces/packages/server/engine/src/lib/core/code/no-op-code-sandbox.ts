@@ -111,11 +111,13 @@ export function codeChildConfigArgs(execArgv: readonly string[] = process.execAr
  * Jarvis: what a CODE step's child may take from this machine. A step is
  * granted code, not unlimited resources, and three of them were unbounded.
  *
- * Memory: the child runs with an address-space ceiling (`ulimit -v`, 2 GiB by
+ * Memory: the child runs with an address-space ceiling (`ulimit -v`, 4 GiB by
  * default; the daemon's `JARVIS_CODE_STEP_MEMORY_MB` reaches the engine as
  * `AP_CODE_STEP_MEMORY_MB` to change it, `0` to remove it). An
  * allocation past it fails inside the step as an out-of-memory error instead of
- * taking the machine's RAM; the step then fails with a plain message. Enforced
+ * taking the machine's RAM; the step then fails with a plain message. The
+ * ceiling is address space, so a step can fill less than it (on Bun 1.3.11 about
+ * 1.5 GB of 4 GiB). Enforced
  * on Linux. macOS ignores the limit and Windows has no `sh`, so there the step
  * runs without a ceiling (the 10-minute flow timeout still applies).
  *
@@ -125,7 +127,7 @@ export function codeChildConfigArgs(execArgv: readonly string[] = process.execAr
  * unchanged. A step that calls fetch without a timeout waits as long as the
  * peer lets it.
  */
-export const CODE_STEP_MEMORY_MB_DEFAULT = 2048
+export const CODE_STEP_MEMORY_MB_DEFAULT = 4096
 /** One run keeps at most 10 MB of step data (the engine's own cap); a single step result past it can only fail the run. */
 export const CODE_STEP_OUTPUT_MAX_MB = 10
 export const CODE_STEP_LOG_MIRROR_BYTES = 64 * 1024

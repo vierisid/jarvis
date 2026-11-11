@@ -21,7 +21,7 @@ function step(body: string): { file: string; done: () => void } {
 }
 
 describe("a CODE step's limits", () => {
-  test("the memory ceiling defaults to 2 GiB, can be changed, and 0 or Windows removes it; a bad value keeps the default", () => {
+  test("the memory ceiling defaults to 4 GiB, can be changed, and 0 or Windows removes it; a bad value keeps the default", () => {
     expect(codeStepMemoryCeilingMb({}, "linux")).toBe(CODE_STEP_MEMORY_MB_DEFAULT);
     expect(codeStepMemoryCeilingMb({ AP_CODE_STEP_MEMORY_MB: "512" }, "linux")).toBe(512);
     expect(codeStepMemoryCeilingMb({ AP_CODE_STEP_MEMORY_MB: "0" }, "linux")).toBeNull();
