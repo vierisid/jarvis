@@ -147,6 +147,8 @@ describe("manage_workflow tool", () => {
     await expect(call("create", { name: "   ", empty: true })).rejects.toThrow(/non-empty string/);
     const created = (await call("create", { name: "  Padded  ", empty: true })) as { name: string };
     expect(created.name).toBe("Padded");
+    await expect(call("create", { name: "\u200b\u202e", empty: true })).rejects.toThrow(/non-empty string/);
+    await expect(call("compose", { name: "  ", description: "x" })).rejects.toThrow(/non-empty string/);
   });
 
   test("get accepts display name (case-insensitive) and id", async () => {

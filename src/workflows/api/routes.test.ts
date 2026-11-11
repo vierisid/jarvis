@@ -301,6 +301,43 @@ describe("#598: flow metadata is validated and bounded on the way in", () => {
     expect(patched.status).toBe(400);
   });
 
+  test("a workflow already stored with a blank name still saves, and a rename heals it", async () => {
+    const id = await makeFlow();
+    const postVersion = (b: unknown) =>
+      callJson(
+        routes["/api/workflows/:id/versions"]?.POST,
+        reqWithParams("POST", `http://x/api/workflows/${id}/versions`, { id }, b),
+      );
+    const versionId = ((await postVersion({ displayName: "v" })).body as { id: string }).id;
+    const { getWorkflowDb } = await import("../db/index");
+    // As an install from before the rule holds it: no writer can store this now.
+    getWorkflowDb().run("UPDATE flow_version SET display_name = ? WHERE flow_id = ?", ["   ", id]);
+    const patchVersion = (b: unknown) =>
+      callJson(
+        routes["/api/workflows/:id/versions/:versionId"]?.PATCH,
+        reqWithParams("PATCH", `http://x/api/workflows/${id}/versions/${versionId}`, { id, versionId }, b),
+      );
+    // The editor sends the stored name back with every save: not a lockout.
+    const saved = await patchVersion({ displayName: "   " });
+    expect(saved.status).toBe(200);
+    expect((saved.body as { displayName: string }).displayName).toBe("Untitled workflow");
+    // A blank name the flow does not hold is still refused.
+    expect((await patchVersion({ displayName: "\u200b" })).status).toBe(400);
+    const renamed = await patchVersion({ displayName: "Named again" });
+    expect((renamed.body as { displayName: string }).displayName).toBe("Named again");
+    // The clone path (Edit on a published workflow) carries the stored name too.
+    getWorkflowDb().run("UPDATE flow_version SET display_name = ? WHERE flow_id = ?", ["  ", id]);
+    const cloned = await postVersion({ displayName: "  " });
+    expect(cloned.status).toBe(201);
+    expect((cloned.body as { displayName: string }).displayName).toBe("Untitled workflow");
+    // Another flow's blank name lends nothing.
+    const other = await makeFlow();
+    expect((await callJson(
+      routes["/api/workflows/:id/versions"]?.POST,
+      reqWithParams("POST", `http://x/api/workflows/${other}/versions`, { id: other }, { displayName: "  " }),
+    )).status).toBe(400);
+  });
+
   test("displayName is bounded on both version write routes too", async () => {
     const id = await makeFlow();
     const postVersion = (b: unknown) =>

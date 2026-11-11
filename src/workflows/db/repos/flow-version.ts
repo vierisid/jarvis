@@ -18,6 +18,7 @@ import { assertCodeStepsAllowedForLiveDraft } from "./flow-code-steps";
 import { repinLiveDraft } from "./binding-pins";
 import { applyWebhookSecretRules, WebhookSecretError } from "../../runner/triggers/webhook-secret";
 import { withoutHiddenText } from "../../../vault/commitment-text";
+import { isBlankWorkflowName, UNTITLED_WORKFLOW_NAME } from "../../display-name";
 
 // eslint-disable-next-line no-control-regex
 const NAME_BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
@@ -27,11 +28,14 @@ const NAME_BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
  * and line or paragraph separators a space), well formed, without the
  * characters that reorder or hide text. The API refuses controls first
  * (`validDisplayName`); this holds the composer, the assistant's tools and
- * onboarding, which never throw over a name, to the same line. A no-op for an
- * ordinary name.
+ * onboarding, which never throw over a name, to the same line, and never
+ * store a blank one. A no-op for an ordinary name.
  */
 export function storedDisplayName(name: string): string {
-  return withoutHiddenText(String(name).toWellFormed().replace(NAME_BREAKS, " "));
+  const line = withoutHiddenText(String(name).toWellFormed().replace(NAME_BREAKS, " "));
+  // Nothing visible left (a composer or tool fallback that was itself blank):
+  // store the name the list would show anyway, never a blank row (#1379).
+  return isBlankWorkflowName(line) ? UNTITLED_WORKFLOW_NAME : line;
 }
 
 export type FlowVersionState = "DRAFT" | "LOCKED";

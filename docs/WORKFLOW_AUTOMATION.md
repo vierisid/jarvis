@@ -510,11 +510,13 @@ Three things about #598 are load bearing beyond the frame itself:
 - **Both caller-written fields are capped at both ends.** On the way in, the
   write routes reject a `metadata` that is not an object, carries a top-level
   `__proto__` / `constructor` / `prototype` key, or exceeds 16 KB, and reject a
-  `displayName` that is not a non-empty string or exceeds 512 characters, or
+  `displayName` that is not a string with a visible character (it is trimmed)
+  or exceeds 512 characters, or
   that holds a control character, a line or paragraph separator or a lone
   surrogate (a name the flow already stores is let through, so a workflow
   named before that rule can still be saved; every writer stores a name on one
-  line without the bidi controls, `storedDisplayName`). All of
+  line without the bidi controls and never blank, `storedDisplayName`; the
+  blank rule is `workflows/display-name.ts`). All of
   that is close to free, because no shipped caller writes `metadata` at all (the
   dashboard POSTs `{ displayName }`, PATCHes `{ status }`, and keeps its editor
   state in `flow_version_ui_meta`) and no real workflow name is that long. A
@@ -1768,7 +1770,7 @@ empty or whitespace-only body reads as `{}`.
 | Route | Body cap | Other limits |
 |---|---|---|
 | `POST /api/workflows`, `PATCH /api/workflows/:id` | 262,144 bytes | `displayName` required on POST, trimmed, never empty or without a visible character (400), at most 512 characters (413). `metadata` a JSON object or null, at most 16,384 characters serialized (413), no `__proto__` / `constructor` / `prototype` key (400). `status` must be `ENABLED` or `DISABLED` (400) |
-| `POST /api/workflows/:id/versions`, `PATCH .../versions/:vid` | 4,000,000 bytes | `displayName` trimmed, never empty or without a visible character (400), at most 512 characters (413). `uiMeta` shape-checked (400). PATCH only: `connectionIds` / `agentIds` arrays of strings (400), at most 100 entries each and 256 characters an entry (413); the POST ignores both |
+| `POST /api/workflows/:id/versions`, `PATCH .../versions/:vid` | 4,000,000 bytes | `displayName` trimmed, never empty or without a visible character (400), at most 512 characters (413); a blank name the flow already stores (an install from before the rule) is saved as `Untitled workflow` instead of refused. `uiMeta` shape-checked (400). PATCH only: `connectionIds` / `agentIds` arrays of strings (400), at most 100 entries each and 256 characters an entry (413); the POST ignores both |
 | `PATCH .../sample-data/:step`, `PATCH .../sample-input/:step` | 2,000,000 bytes | `:step` at most 120 characters (413) and not `__proto__` / `prototype` / `constructor` (400). One entry at most 262,144 characters serialized (413). The whole map at most 100 entries and 4,194,304 characters serialized, keys included (413); a write that shrinks an over-limit map is always allowed. A LOCKED version is refused (409) |
 | `POST /api/workflows/:id/publish` | 262,144 bytes | Empty, `{}` or `{ versionId }` with a non-empty string (400 otherwise) |
 | `POST /api/workflows/:id/code-steps` | 262,144 bytes | `enabled` must be a boolean (400) |
