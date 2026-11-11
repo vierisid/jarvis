@@ -48,7 +48,7 @@ async function ensureConfigFile(): Promise<void> {
     await copyFile(EXAMPLE_CONFIG, CONFIG_PATH);
     console.log(`✓ Config file created: ${CONFIG_PATH}`);
     console.log('\nAI providers and API keys are not set in this file.');
-    console.log('Start Jarvis (jarvis start) and choose a provider in the dashboard setup screen.\n');
+    console.log('Start Jarvis (jarvis start -d), enroll a device (jarvis enroll "my-desktop") and choose a provider in the dashboard setup screen.\n');
   } else {
     console.log(`✓ Config file exists: ${CONFIG_PATH}\n`);
   }
@@ -201,7 +201,7 @@ async function main() {
 
   console.log('Setup complete! 🚀\n');
   console.log('Next steps:');
-  console.log('  1. Start Jarvis: jarvis start');
+  console.log('  1. Start Jarvis: jarvis start -d');
   console.log('  2. Enroll this device: jarvis enroll "my-desktop"');
   console.log('  3. Choose your AI provider in the dashboard setup screen');
   console.log('');

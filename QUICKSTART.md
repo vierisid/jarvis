@@ -10,7 +10,7 @@ curl -fsSL https://raw.githubusercontent.com/vierisid/jarvis/main/install.sh | b
 
 This installs Bun if it is missing, puts the code in `~/.jarvis/daemon`, and adds the `jarvis` command. If the installer says your PATH changed, restart your terminal first.
 
-Prefer a global install? Run `bun upgrade`, then `bun install -g @usejarvis/brain`. Docker is covered in the [README](README.md#docker).
+Prefer a global install? It needs Bun 1.3.11 or later, which `bun install -g` does not check, so run `bun upgrade` first, then `bun install -g @usejarvis/brain`. On Linux, also install the libc development headers (`libc6-dev` on Debian/Ubuntu). Docker is covered in the [README](README.md#docker).
 
 ## 2. Start
 
@@ -31,14 +31,14 @@ jarvis enroll "my-laptop"
 Pick one:
 
 - **Desktop app (recommended).** Install it from [usejarvis.dev/download](https://usejarvis.dev/download/), launch it, and paste the token. It opens the dashboard already signed in.
-- **Browser only.** Trade the token for a short-lived link. It is valid for 10 minutes, then the browser keeps its own session:
+- **Browser only.** Trade the token for a short-lived link. The link must be opened within 10 minutes; the browser then keeps its own session:
 
   ```bash
   curl -s -X POST http://localhost:3142/sidecar/token \
     -H "Authorization: Bearer <enrollment-token>"
   ```
 
-  Open `http://localhost:3142/?token=<access_token>` using the `access_token` from the reply.
+  Open `http://localhost:3142/?token=<access_token>` using the `access_token` from the reply. The browser session ends when you close the browser or after 12 hours at most; run the `curl` again for a new link.
 
 Keep the enrollment token private. It grants access to your Jarvis. See the [self-hosting guide](docs/SELF_HOSTING.md) for LAN and VPS setups and 401 troubleshooting.
 
@@ -46,7 +46,7 @@ Keep the enrollment token private. It grants access to your Jarvis. See the [sel
 
 The dashboard setup screen asks which AI provider to use. This is where your API key goes. Keys are stored encrypted in the database. Nothing about providers goes in `config.yaml`: an `llm:` block there is ignored, and so are the old key environment variables.
 
-You can change providers later from **Settings** in the dashboard. See [LLM providers](docs/LLM_PROVIDERS.md) for what each one needs.
+Chat and workflows need a provider. If you leave setup without one, add it later in **Settings > LLM**, where you can also change providers. See [LLM providers](docs/LLM_PROVIDERS.md) for what each one needs.
 
 ## 5. Build your first workflow
 

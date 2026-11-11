@@ -32,7 +32,7 @@ The **brain** keeps your memory, conversations, and workflows running. The **des
 
 For example, you can build workflows to prepare a client brief from connected sources, draft follow-ups for review, or turn recurring reports into a scheduled job. Start with one routine, connect its sources, and test the result before enabling it.
 
-> **Dashboard:** the Brief dashboard is the default on current main, for hosted and self-hosted installs. Set `JARVIS_DASHBOARD=legacy` and restart to use the previous dashboard. See the [Brief development notes](ui/src/brief/README.md) and [releases](https://github.com/vierisid/jarvis/releases) for implementation and release status.
+> **Dashboard:** the Brief dashboard is the default on current main, for hosted and self-hosted installs. Set `JARVIS_DASHBOARD=legacy` and restart to use the previous dashboard. Self-hosted installs of v0.17.6 and earlier still open the previous dashboard by default. See the [Brief development notes](ui/src/brief/README.md) and [releases](https://github.com/vierisid/jarvis/releases) for implementation and release status.
 
 ## Get started
 
@@ -60,7 +60,7 @@ Instead of Bun's global install you can use the install script, which installs B
 curl -fsSL https://raw.githubusercontent.com/vierisid/jarvis/main/install.sh | bash
 ```
 
-`jarvis enroll` prints a device enrollment token. Keep it private: it grants access to your brain. If you used the install script, run `jarvis start` and then `jarvis enroll "my-desktop"` yourself: the script does not enroll a device, and opening `http://localhost:3142` before enrolling shows a 401 page.
+`jarvis enroll` prints a device enrollment token. Keep it private: it grants access to your brain. If you used the install script, run `jarvis start -d` and then `jarvis enroll "my-desktop"` yourself: the script does not enroll a device, and opening `http://localhost:3142` before enrolling shows a 401 page.
 
 **2. Connect the desktop app.**
 

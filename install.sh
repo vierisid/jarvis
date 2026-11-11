@@ -412,7 +412,7 @@ main() {
   echo -e "  Start the daemon, then give this device access to the dashboard:"
   echo -e "    ${CYAN}jarvis start -d${RESET}"
   echo -e "    ${CYAN}jarvis enroll my-laptop${RESET}   ${DIM}# prints a token for the desktop app or a browser sign-in${RESET}"
-  echo -e "    ${DIM}→ http://localhost:3142 shows a 401 page until you sign in (see QUICKSTART.md, step 3)${RESET}"
+  echo -e "    ${DIM}-> http://localhost:3142 shows a 401 page until you sign in (see QUICKSTART.md, step 3)${RESET}"
 }
 
 main "$@"

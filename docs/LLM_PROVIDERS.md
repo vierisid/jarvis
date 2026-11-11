@@ -45,7 +45,7 @@ Add and configure providers in the dashboard: onboarding on first run, or **Sett
 | **LiteLLM** | Proxy URL, key optional | The model name must match an alias on your proxy |
 | **OmniRoute** | API URL, key optional | Loads routes and combos from your instance |
 
-Local and compatible providers have in-dashboard [setup guides](provider-guides/README.md). Model names come from the provider's live catalog, with a curated fallback list in `src/llm/model-catalog.ts`.
+Local and compatible providers have in-dashboard [setup guides](provider-guides/README.md). The model picker loads a live catalog for Groq, NVIDIA NIM, Ollama and OmniRoute; for Anthropic, OpenAI, Gemini and OpenRouter it suggests the curated list in `src/llm/model-catalog.ts`, and **Settings > LLM** also offers **Custom...** for another model id. OpenAI-compatible and LiteLLM take a model name you enter.
 
 On hosted installs a system-managed Usejarvis AI provider is added for you; it is not user-creatable.
 
@@ -140,7 +140,7 @@ const provider = new AnthropicProvider(
 ```
 
 **Available Models**:
-Suggested models are listed in `src/llm/model-catalog.ts`. The dashboard model picker shows your account's live catalog first.
+Suggested models are listed in `src/llm/model-catalog.ts` and shown in the dashboard model picker. With a custom endpoint URL, the connection test reads the endpoint's own model list.
 
 **API Endpoint**: `https://api.anthropic.com/v1/messages`
 
@@ -208,7 +208,7 @@ ollama serve
 
 Providers, credentials, the default model, and per-tier routing are set in the dashboard (onboarding or **Settings > LLM**). They live in the database and encrypted keychain.
 
-`~/.jarvis/config.yaml` holds system settings only (port, public URL, timezone, logging). It has no LLM settings: an `llm:` block is ignored on load and stripped on save, and the old provider-key environment variables are not read. See [config.example.yaml](../config.example.yaml) and [the config README](../src/config/README.md).
+`~/.jarvis/config.yaml` holds system settings only (port, public URL, timezone, logging). It has no LLM settings: an `llm:` block is ignored on load (the brain never writes this file), and the old provider-key environment variables are not read. See [config.example.yaml](../config.example.yaml) and [the config README](../src/config/README.md).
 
 The daemon listens on port 3142 by default (`daemon.port`).
 
@@ -390,7 +390,9 @@ bun test src/config/loader.test.ts
 
 ### Manual Testing
 
-Add a provider in **Settings > LLM** and use its connection test, then send a message in chat. There is no standalone CLI test script.
+Add a provider in **Settings > LLM** and use its connection test, then send a message in chat.
+
+From a source checkout, `bun run test:llm` (`src/llm/test.ts`) loads the providers and tiers saved in the dashboard from the same database and runs a chat, a streaming and a prompt-cache check on the medium tier.
 
 ## Troubleshooting
 
