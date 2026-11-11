@@ -34,7 +34,7 @@ import { ReadFailure, type Snapshot, type Source } from '../reconciliation/resou
 import { outcomesSource } from '../reconciliation/sources';
 import { createDomainPorts } from './domain-ports';
 import type { HostTransport } from './http';
-import { post } from './http';
+import { post, AWARENESS_OFF_TEXT } from './http';
 
 function view<T, U>(state: Snapshot<T>, map: (data: T) => U): BriefReadState<U> {
   if ((state.state === 'ready' || state.state === 'stale') && state.data !== null)
@@ -49,10 +49,13 @@ export function todayDecisionSnapshot<T>(state: Snapshot<T>): Snapshot<T> {
   return state.state === 'stale' && state.data === null && state.asOf !== null && state.refreshing && state.reason === null
     ? { ...state, state: 'empty' } : state;
 }
-function source<T>(domains: Source<T>['domains'], capability: Source<T>['capability'], read: () => Promise<BriefReadState<T>>): Source<T> {
+/** Exported for its test: how a domain port's read becomes a reconciled source. */
+export function source<T>(domains: Source<T>['domains'], capability: Source<T>['capability'], read: () => Promise<BriefReadState<T>>): Source<T> {
   return { domains, capability, read: async signal => {
     const value = await read(); signal.throwIfAborted();
     if (value.status === 'empty') return { data: null, empty: true, asOf: Date.now() };
+    // Awareness off (#1314): say so, and clear what was shown before rather than keep it as stale.
+    if (value.status === 'unavailable' && value.reason === AWARENESS_OFF_TEXT) throw new ReadFailure(AWARENESS_OFF_TEXT, true);
     if (value.status !== 'ready') throw new ReadFailure('source_unavailable');
     return { data: value.data, empty: false, asOf: Date.now() };
   } };

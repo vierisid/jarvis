@@ -42,6 +42,8 @@ export class FakeRenderer {
   /** Called after the renderer has inserted typed text. */
   afterInsert: (() => void) | null = null;
   keys: string[] = [];
+  /** The document's loader id; a test changes it to stand for a navigation. */
+  loaderId = 'L1';
   /** Called after the renderer has answered any message, with its log label. */
   afterAnswer: ((label: string, params: Record<string, any>) => void) | null = null;
   /** When set, the snapshot evaluate never answers (a hung renderer). */
@@ -137,7 +139,7 @@ export class FakeRenderer {
   private answer(method: string, params: Record<string, any>): unknown {
     switch (method) {
       case 'Page.getFrameTree':
-        return { frameTree: { frame: { id: 'F1', url: 'https://mail.example.test/', loaderId: 'L1' }, childFrames: [] } };
+        return { frameTree: { frame: { id: 'F1', url: 'https://mail.example.test/', loaderId: this.loaderId }, childFrames: [] } };
       case 'Page.createIsolatedWorld':
         return { executionContextId: 7 };
       case 'Input.insertText':

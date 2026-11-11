@@ -1,4 +1,5 @@
 import type { AwarenessEvent, Suggestion } from '../awareness/types.ts';
+import { awarenessHistoryVisible } from '../awareness/history-guard.ts';
 import type { BackgroundAgentService } from './background-agent-service.ts';
 import type { ChannelService } from './channel-service.ts';
 import type { WebSocketService } from './ws-service.ts';
@@ -132,6 +133,8 @@ export class AwarenessDeliveryPolicy {
           `Start your response with the fix, not a question.`,
           'awareness'
         ).then(solution => {
+          // Awareness turned off while the research ran (#1314): its result is screen-derived, so nothing is shown, sent or spoken.
+          if (!awarenessHistoryVisible()) { screenAlerts.researchEnded(errorKey); return; }
           if (solution && solution.length > 10) {
             // A turn that stopped on an approval request is not a fix yet.
             const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
@@ -197,6 +200,8 @@ export class AwarenessDeliveryPolicy {
           `Provide a specific, actionable fix. Start with the solution, not a question.`,
           'awareness'
         ).then(solution => {
+          // Awareness turned off while the research ran (#1314): its result is screen-derived, so nothing is shown, sent or spoken.
+          if (!awarenessHistoryVisible()) { screenAlerts.researchEnded(struggleKey); return; }
           if (solution && solution.length > 10) {
             const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
             const heading = awaiting ? `Needs your approval (${sAppName})` : `Help for ${sAppName}`;
@@ -240,7 +245,8 @@ export class AwarenessDeliveryPolicy {
       suggestion, this.deps.sockets.getServer(), this.deps.channels,
       this.deps.desktopWithReceipt, { quiet: this.quiet },
     );
-    if (channel === 'websocket' && !this.quiet) {
+    // No toast or spoken copy of a recording once awareness is off (#1314 review).
+    if (channel === 'websocket' && !this.quiet && awarenessHistoryVisible()) {
       (this.deps.desktop ?? defaultDesktop)(`JARVIS: ${suggestion.title}`, suggestion.body, { urgency: 'normal' });
       this.deps.sockets.broadcastProactiveVoice(suggestion.body).catch(err => console.error('[Daemon] Awareness TTS error:', err));
     }

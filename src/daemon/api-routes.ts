@@ -37,7 +37,8 @@ import type { AuthorityLearner } from '../authority/learning.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import { applyQuickOverride } from '../authority/quick-override.ts';
-import { desktopEnabledFromSection } from '../actions/tools/desktop-guard.ts';
+import { desktopEnabledFromSection, isScreenCaptureEnabled } from '../actions/tools/desktop-guard.ts';
+import { awarenessHistoryHidden as awarenessHistoryHiddenAs } from '../awareness/history-guard.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { authorityConfigPatchError, isActionCategory } from '../authority/config-validation.ts';
 
@@ -291,6 +292,10 @@ function json(data: unknown, status = 200): Response {
 
 function error(message: string, status = 400): Response {
   return json({ error: message }, status);
+}
+
+function awarenessHistoryHidden(): Response | null {
+  return awarenessHistoryHiddenAs(json);
 }
 
 /**
@@ -4463,7 +4468,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json({
           status: ctx.awarenessService.status(),
           enabled: ctx.awarenessService.isEnabled(),
-          liveContext: ctx.awarenessService.getLiveContext(),
+          liveContext: isScreenCaptureEnabled() ? ctx.awarenessService.getLiveContext() : null,
           usageEstimate: ctx.awarenessService.getUsageEstimate(),
         });
       },
@@ -4471,6 +4476,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/awareness/context': {
       GET: () => {
+        const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         if (!ctx.awarenessService) return error('Awareness service not running', 503);
         return json(ctx.awarenessService.getLiveContext());
       },
@@ -4478,6 +4484,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/awareness/captures': {
       GET: (req: Request) => {
+        const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         const params = getSearchParams(req);
         const limit = parseInt(params.get('limit') ?? '50', 10);
         const app = params.get('app') ?? undefined;
@@ -4487,6 +4494,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/awareness/captures/:id': {
       GET: (req: Request & { params: { id: string } }) => {
+        const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         const capture = getCapture(req.params.id);
         if (!capture) return error('Capture not found', 404);
         return json(capture);
@@ -4495,6 +4503,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/awareness/captures/:id/image': {
       GET: async (req: Request & { params: { id: string } }) => {
+        const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         const capture = getCapture(req.params.id);
         if (!capture || !capture.image_path) return error('Image not found', 404);
 
@@ -4545,6 +4554,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/awareness/sessions': {
       GET: (req: Request) => {
+        const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         if (!ctx.awarenessService) return error('Awareness service not running', 503);
         const params = getSearchParams(req);
         const limit = parseInt(params.get('limit') ?? '20', 10);
@@ -4554,6 +4564,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/awareness/suggestions': {
       GET: (req: Request) => {
+        const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         if (!ctx.awarenessService) return error('Awareness service not running', 503);
         const params = getSearchParams(req);
         const limit = parseInt(params.get('limit') ?? '20', 10);
@@ -4566,6 +4577,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/awareness/report': {
       GET: async (req: Request) => {
+        const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         if (!ctx.awarenessService) return error('Awareness service not running', 503);
         const params = getSearchParams(req);
         const date = params.get('date') ?? undefined;
@@ -4580,6 +4592,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/awareness/stats': {
       GET: (req: Request) => {
+        const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         const params = getSearchParams(req);
         const start = parseInt(params.get('start') ?? String(Date.now() - 24 * 60 * 60 * 1000), 10);
         const end = parseInt(params.get('end') ?? String(Date.now()), 10);
@@ -4589,6 +4602,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/awareness/report/weekly': {
       GET: async (req: Request) => {
+        const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         const awareness = ctx.awarenessService;
         if (!awareness) return error('Awareness service not available', 503);
         try {
@@ -4609,6 +4623,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/awareness/insights': {
       GET: (req: Request) => {
+        const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         if (!ctx.awarenessService) return error('Awareness service not available', 503);
         try {
           const params = getSearchParams(req);

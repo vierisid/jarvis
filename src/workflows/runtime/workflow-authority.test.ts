@@ -611,10 +611,10 @@ describe('workflow effect boundary', () => {
   test('a refused capability is audited, not silently rejected', async () => {
     const f = fixture();
     f.registry.register({ name: 'run_command', category: 'terminal', description: 'Synthetic shell', parameters: {},
-      execute: async () => 'ran' });
+      execute: async () => { f.calls.push('ran'); return 'ran'; } });
     f.useTool('run_command');
     await expect(f.backends.toolsInvoke!({ toolName: 'run_command', params: { command: 'id' } }, f.context))
-      .rejects.toThrow(/opaque code\/UI effects/);
+      .rejects.toMatchObject({ outcome: { status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' } });
     expect(f.calls).toHaveLength(0);
     // The refusal happens before any effect record exists, so the audit row is
     // the only trace of it. It records the tool's real category, not read_data.
@@ -890,7 +890,8 @@ describe('workflow effect boundary', () => {
     const f = fixture();
     f.registry.register({ name: tool, description: 'Opaque effect', category: 'browser', parameters: {}, execute: async () => { f.calls.push('unsafe'); } });
     f.useTool(tool);
-    await expect(f.backends.toolsInvoke!({ toolName: tool, params: {} }, f.context)).rejects.toThrow(/opaque/);
+    await expect(f.backends.toolsInvoke!({ toolName: tool, params: {} }, f.context))
+      .rejects.toMatchObject({ outcome: { status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' } });
     expect(f.calls).toHaveLength(0);
   });
 
