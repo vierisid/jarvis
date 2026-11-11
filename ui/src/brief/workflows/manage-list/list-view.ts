@@ -27,9 +27,28 @@ export function matchesState(row: ManagementSlot, filter: StateFilter) {
   return true;
 }
 
+/** What the All workflows list is narrowed to. Held by the controller so it
+ * survives leaving the room, like the scroll position. `keep` lists rows the
+ * founder acted on since the search or filter last changed. */
+export interface ListViewPrefs {
+  query: string;
+  filter: StateFilter;
+  limit: number;
+  keep: readonly string[];
+}
+export const DEFAULT_VIEW: ListViewPrefs = {
+  query: "",
+  filter: "all",
+  limit: PAGE_SIZE,
+  keep: [],
+};
+
 export interface ListView {
-  /** Rows to draw: matching live rows up to the limit, plus every removed row so
-   * its collapse animation and Undo keep working. */
+  /** Rows to draw: matching live rows up to the limit, plus every row that must
+   * stay in sight whatever the search, filter or page: removed rows (collapse
+   * and Undo), rows waiting on a confirm, a command or a reconcile, and rows the
+   * founder acted on, so a paused row does not vanish from "On" with its
+   * outcome unread. */
   rows: ManagementSlot[];
   /** Live rows that match the search and filter. */
   matching: number;
@@ -42,6 +61,7 @@ export function buildListView(
   query: string,
   filter: StateFilter,
   limit: number,
+  keep: ReadonlySet<string> = new Set(),
 ): ListView {
   const out: ManagementSlot[] = [];
   let matching = 0,
@@ -52,9 +72,14 @@ export function buildListView(
       continue;
     }
     total++;
-    if (!matchesQuery(r.item.name, query) || !matchesState(r, filter)) continue;
+    const pinned =
+      r.confirming || r.phase !== "idle" || keep.has(r.item.flowId);
+    if (!matchesQuery(r.item.name, query) || !matchesState(r, filter)) {
+      if (pinned) out.push(r);
+      continue;
+    }
     matching++;
-    if (matching <= limit) out.push(r);
+    if (matching <= limit || pinned) out.push(r);
   }
   return { rows: out, matching, total };
 }

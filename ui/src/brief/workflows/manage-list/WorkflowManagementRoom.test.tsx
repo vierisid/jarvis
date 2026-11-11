@@ -274,7 +274,9 @@ test("the list says before any switch that pausing stops queued and waiting runs
   );
 });
 const field = (label: string) =>
-  Array.from(host.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input,select")).find(
+  Array.from(
+    host.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input,select"),
+  ).find(
     (e) => host.querySelector(`label[for="${e.id}"]`)?.textContent === label,
   )!;
 async function type(label: string, value: string) {
@@ -330,4 +332,60 @@ test("a long list draws one page and Show more adds the next", async () => {
   await click("Show 24 more (24 left)");
   expect(rowNames().length).toBe(124);
   expect(button("Show 24 more (24 left)")).toBeUndefined();
+});
+test("a row acted on under a filter stays drawn with its outcome until the filter changes", async () => {
+  await render();
+  await pick("Show", "on");
+  await click("Enable Meeting follow-ups");
+  expect(row("meeting")).toBeTruthy();
+  expect(row("meeting").textContent).toContain(
+    "queued and waiting runs were stopped",
+  );
+  expect(host.textContent).toContain("2 of 4 workflows");
+  await pick("Show", "off");
+  await pick("Show", "on");
+  expect(row("meeting")).toBeNull();
+});
+test("search, filter and the page survive leaving the room, so the opened row is focused on return", async () => {
+  f.controller.retire();
+  f = makeManagementFixture("long list");
+  await render();
+  await type("Search workflows", "research");
+  await click("Show 50 more (70 left)");
+  const name = row("long-80").querySelector<HTMLElement>(
+    ".brief-management-open",
+  )!;
+  await React.act(async () => name.click());
+  expect(shell.route.room).toBe("workflow");
+  await React.act(async () => root.render(<div />));
+  await render();
+  await React.act(async () => {
+    await new Promise((r) => setTimeout(r, 40));
+  });
+  expect((field("Search workflows") as HTMLInputElement).value).toBe(
+    "research",
+  );
+  expect(row("long-80")).toBeTruthy();
+  expect(document.activeElement).toBe(
+    row("long-80").querySelector(".brief-management-open"),
+  );
+});
+test("search and filter stay reachable while they hide every row", async () => {
+  await render();
+  await click("Delete Meeting follow-ups");
+  await click("Delete");
+  await click("Delete Competitor watch");
+  await click("Delete");
+  await type("Search workflows", "investor");
+  await click("Delete Weekly investor update");
+  await click("Delete");
+  expect(host.textContent).toContain("0 of 1 workflow");
+  expect(host.textContent).toContain("No workflows match.");
+  expect(field("Search workflows")).toBeTruthy();
+  await click("Clear search and filter");
+  expect(
+    Array.from(
+      host.querySelectorAll('[data-removed="false"] .brief-management-open'),
+    ).map((e) => e.textContent),
+  ).toEqual(["Morning inbox brief"]);
 });
