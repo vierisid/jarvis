@@ -224,3 +224,59 @@ test('approval_requests carries the provenance column', () => {
   const columns = (getDb().query('PRAGMA table_info(approval_requests)').all() as Array<{ name: string }>).map(c => c.name);
   expect(columns).toContain('provenance');
 });
+
+// ── Review follow-ups ──
+
+test('an inline screen request approved as awareness goes off is put back to pending as deferred, so it can be approved again', async () => {
+  const screen = runWithApprovalProvenance('screen', () => mgr.createRequest({ agentId: 'bg', agentName: 'Background', toolName: 'send_email',
+    toolArguments: {}, actionCategory: 'send_email', urgency: 'normal', reason: 'r', context: '', executionMode: 'inline' }));
+  mgr.approve(screen.id, 'dashboard');
+  on = false;
+  expect(await executor.executeApprovedWithReceipt(screen.id, 'inline-gate')).toMatchObject({ claimed: false, held: 'awareness_off' });
+  expect(mgr.getRequest(screen.id)).toMatchObject({ status: 'pending', execution_mode: 'deferred', execution_claimed_at: null });
+  on = true;
+  expect(await applyApprovalDecision('approve', screen.id, 'dashboard', deps)).toMatchObject({ status: 'approved', executed: true });
+  expect(executions).toBe(1);
+});
+
+test('a reopened approval is recorded in the audit trail as not executed', async () => {
+  const screen = request(true);
+  const trail = new AuditTrail();
+  const audited = new DeferredExecutor(mgr, trail);
+  audited.setToolRegistry({ get: () => undefined, execute: async () => 'sent' } as unknown as Registry);
+  mgr.approve(screen.id, 'dashboard');
+  on = false;
+  await audited.executeApprovedWithReceipt(screen.id, 'dashboard');
+  expect(getDb().query('SELECT executed FROM audit_trail WHERE approval_id = ?').all(screen.id)).toEqual([{ executed: 0 }]);
+});
+
+test('a card whose channel send was stopped by the switch goes out again when awareness is back on', async () => {
+  const { out, shown, sent, setMidSend } = delivery();
+  const screen = request(true);
+  setMidSend(() => { on = false; });
+  await out.deliver(screen);
+  expect(sent).toEqual(['first']);
+  setMidSend(() => {});
+  on = true;
+  await out.resumeHeld((id) => mgr.getRequest(id));
+  expect(shown).toEqual([screen.id, screen.id]);
+  expect(sent).toEqual(['first', 'first', 'retry']);
+});
+
+test('an ordinary background turn started from inside a screen-derived context does not mark its approvals', async () => {
+  const llm = new LLMManager();
+  const provider = new Provider();
+  llm.registerProvider(provider);
+  llm.setTierMap({ medium: { provider: provider.name } });
+  const svc = new BackgroundAgentService({} as JarvisConfig, llm);
+  const orch = svc.getOrchestrator();
+  orch.setLLMManager(llm);
+  const tools = new ToolRegistry();
+  const raised: ApprovalRequest[] = [];
+  tools.register({ name: 'ask', description: 'ask', category: 'research', parameters: {},
+    execute: async () => { raised.push(request(false)); return 'asked'; } });
+  orch.setToolRegistry(tools);
+  orch.createPrimary(ROLE);
+  await runWithApprovalProvenance('screen', () => svc.handleMessage('a commitment is due', 'system'));
+  expect(raised.map(r => mgr.getRequest(r.id)!.provenance)).toEqual([null]);
+});

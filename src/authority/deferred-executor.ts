@@ -41,8 +41,8 @@ export type ApprovedReceipt = {
   trailer?: string;
   /**
    * Set when nothing ran because the request is held (#1314 follow-up): a
-   * screen-derived request while screen awareness is off. Not claimed; a
-   * deferred row is put back to pending, so it can be approved again.
+   * screen-derived request while screen awareness is off. Not claimed; the
+   * row is put back to pending (as deferred), so it can be approved again.
    */
   held?: 'awareness_off';
 };
@@ -242,7 +242,8 @@ export class DeferredExecutor {
     // (#1314 follow-up): refused before the claim, so nothing ran and nothing
     // is recorded as a run. A deferred row goes back to pending, not denied.
     if (approvalHeldByAwareness(request)) {
-      this.approvalManager.reopenUnclaimed(requestId);
+      // Recorded: the approval the decision logged did not stand.
+      if (this.approvalManager.reopenUnclaimed(requestId)) this.logReceipt(request, false);
       return { claimed: false, held: 'awareness_off', result: `Approved action ${request.tool_name} was NOT executed: ${AWARENESS_HELD_APPROVAL_MESSAGE}` };
     }
 

@@ -81,8 +81,12 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
   notification, and one being sent stops before its next retry; approving it
   waits, the card stays pending and says it is held while screen awareness is
   off (denying still works); and the executor refuses to run it, taking no
-  claim. When awareness is back on it is approvable again, and the cards held
-  meanwhile are delivered. Every other request is unchanged.
+  claim. One approved in the instant awareness went off goes back to pending
+  (a chat gate waiting on it is told it is held, not handed a result). When
+  awareness is back on it is approvable again, and the cards held meanwhile,
+  or stopped part way out, are delivered (a card may then arrive twice, as
+  with approval-card retries). Held cards still expire after 24 hours
+  unanswered, like any other. Every other request is unchanged.
 
 ## Pause and Kill
 

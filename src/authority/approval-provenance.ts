@@ -27,6 +27,11 @@ export function runWithApprovalProvenance<T>(provenance: ApprovalProvenance, fn:
   return store.run(provenance, fn);
 }
 
+/** Run `fn` with no provenance, whatever context it was called from. */
+export function runWithoutApprovalProvenance<T>(fn: () => T): T {
+  return store.exit(fn);
+}
+
 export function currentApprovalProvenance(): ApprovalProvenance | null {
   return store.getStore() ?? null;
 }

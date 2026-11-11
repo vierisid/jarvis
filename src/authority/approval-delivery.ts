@@ -1172,6 +1172,10 @@ export class ApprovalDelivery {
       } catch (err) {
         console.error('[ApprovalDelivery] Failed to send to external channels:', err);
       }
+      // Awareness went off while the card was going out: a channel may have
+      // been stopped before its send, so it goes out again on resume (a
+      // duplicate card over a lost one, as for approval-card retries, Q-19).
+      if (approvalHeldByAwareness(request)) this.held.add(request.id);
     }
   }
 

@@ -404,15 +404,16 @@ export class ApprovalManager {
   /**
    * Put an approval back to pending when its run was refused before anyone
    * took it: a screen-derived request approved in the instant screen
-   * awareness went off (owner decision 2026-11-11). Only a deferred row,
-   * approved, never claimed and with no outcome: nothing ran, and no live
-   * gate is waiting on it. It stays a card the person can approve again.
+   * awareness went off (owner decision 2026-11-11). Only a row approved,
+   * never claimed and with no outcome: nothing ran. An inline row goes back
+   * as deferred: the gate that was waiting on it has been answered that it
+   * is held and has moved on, so whoever approves it next runs it.
    */
   reopenUnclaimed(requestId: string): boolean {
     const db = getDb();
     return db.run(
-      `UPDATE approval_requests SET status = 'pending', decided_at = NULL, decided_by = NULL
-       WHERE id = ? AND status = 'approved' AND execution_mode = 'deferred'
+      `UPDATE approval_requests SET status = 'pending', decided_at = NULL, decided_by = NULL, execution_mode = 'deferred'
+       WHERE id = ? AND status = 'approved' AND execution_mode IN ('deferred', 'inline')
          AND execution_claimed_at IS NULL AND execution_outcome IS NULL`,
       [requestId]
     ).changes > 0;
