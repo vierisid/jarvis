@@ -35,13 +35,21 @@ export function sameOwner(initial: HostDescriptor, next: HostDescriptor): boolea
     && (next.dashboard ?? 'legacy') === (initial.dashboard ?? 'legacy');
 }
 export function createDashboardOwner(initial: HostDescriptor, ports: {
-  storage: Storage; fetch?: typeof fetch; changed(): void; unauthorized(): void; explain(message: string): void;
+  storage: Storage; fetch?: typeof fetch; changed(): void; unauthorized(): void; sessionEnded?(): void; explain(message: string): void;
   confirm(message: string): Promise<boolean>; runInput(): Promise<Record<string, unknown> | null>;
   revealConversationItem(id: string): void; replayTutorial(): Promise<{ state: 'replayed' | 'unknown' | 'unavailable' }>;
 }) {
   let descriptor = initial, retired = false, devices: SidecarInfo[] | null = null;
   const dirty = new Set<string>();
-  const transport = createHostTransport(ports.fetch, () => { retire(); ports.unauthorized(); });
+  // A session that ends while there are unsaved edits must not take the page, and the edits, with it:
+  // the owner stays up so they stay on screen, and the page says to sign in again. Retiring
+  // (the reconnect page) waits until nothing unsaved is left.
+  let ended = false;
+  const transport = createHostTransport(ports.fetch, () => {
+    if (!retired && ports.sessionEnded && hasUnsaved()) { if (!ended) { ended = true; ports.sessionEnded(); } return; }
+    retire(); ports.unauthorized();
+  });
+  const hasUnsaved = () => data.detail.unsaved() || data.detail.snapshot().phase === 'pending' || dirty.size > 0 || account.profile.hasEdits() || account.settings.snapshot().draft !== null;
   const capabilities = () => retired ? undefined : descriptor.capabilities;
   let rooms: BriefRoomRegistry = {}, account: ReturnType<typeof createAccountRooms>;
   const available = (room: BriefRoute['room']) => !retired && !!rooms[room]?.Body;
@@ -109,7 +117,9 @@ export function createDashboardOwner(initial: HostDescriptor, ports: {
   return { scopeId: initial.scopeId, transport, capabilities, descriptor: () => descriptor, rooms, available, canLeave,
     navigation, chat, reconciliation, workflow, account, data, onboarding, refresh, retire,
     guardShell(shell: BriefShellPort) { return account.guardShell({ ...shell, navigate: route => { void navigation.open(() => ({ target: { kind: 'brief', route }, message: null })); } }); },
-    hasUnsaved: () => data.detail.unsaved() || data.detail.snapshot().phase === 'pending' || dirty.size > 0 || account.profile.hasEdits() || account.settings.snapshot().draft !== null,
+    hasUnsaved,
+    /** The session ended while edits were unsaved; see `unauthorized`. */
+    sessionEnded: () => ended && !retired,
     setWorkflowDirty: (key: string, value: boolean) => { if (value) dirty.add(key); else { const existed = dirty.delete(key); if (existed && !dirty.size) ports.explain(''); } },
     active: () => !retired,
     devices: () => devices?.filter(device => device.connected) ?? [],

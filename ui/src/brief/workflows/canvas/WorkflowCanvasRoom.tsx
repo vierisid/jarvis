@@ -95,14 +95,26 @@ function BoundCanvas({
       versionBoundRequest(binding.request, binding.flowId, binding.versionId, binding.readOnly),
     [binding.request, binding.flowId, binding.versionId, binding.readOnly],
   );
+  // Unsaved edits are copied into this tab (not shared storage: a draft may hold secrets), so a
+  // reload or a session that ended does not lose them. Fixtures and blocked storage get none.
+  const editCopy = useMemo(() => {
+    if (binding.source !== "live" || binding.readOnly) return undefined;
+    const key = `jarvis:brief:workflow-edits:v1:${binding.scopeId}:${binding.flowId}:${binding.versionId}`;
+    return {
+      read: () => { try { return window.sessionStorage.getItem(key); } catch { return null; } },
+      write: (value: string) => { try { window.sessionStorage.setItem(key, value); } catch { /* full or blocked */ } },
+      clear: () => { try { window.sessionStorage.removeItem(key); } catch { /* blocked */ } },
+    };
+  }, [binding.source, binding.readOnly, binding.scopeId, binding.flowId, binding.versionId]);
   const environment = useMemo(
     () => ({
       request,
       portalHost,
       workspace: true,
       sampleDrafts: sampleDrafts.current,
+      editCopy,
     }),
-    [request, portalHost],
+    [request, portalHost, editCopy],
   );
   return (
     <div className="brief-workflow-canvas">
@@ -173,6 +185,18 @@ function CanvasHeader({
       ); /* An uncertain submission must not be retried here. F-21 owns reconciliation. */
     }
   }
+  // One line for the state of the draft. A failed save keeps "Unsaved changes" beside its reason:
+  // the reason alone would read as if the edits were safe.
+  const restored = editor.dirty && editor.restoredAt
+    ? `Restored your unsaved edits from ${new Date(editor.restoredAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` : "";
+  const note = runMessage || message?.text || restored;
+  const feedback = editor.loading ? "Loading workflow…"
+    : editor.error ? "Workflow unavailable"
+    : !versionMatches && editor.version ? "Version changed. Reopen from Workflows before editing."
+    : note ? (editor.dirty && !runMessage ? `${note} Unsaved changes` : note)
+    : editor.dirty ? editor.invalidJsonMessage ?? "Unsaved changes"
+    : editor.version?.state === "LOCKED" ? "Published version"
+    : needsSetup ? "Saved draft · Setup required" : "Saved draft";
   return (
     <WorkflowViewHeader
       shell={shell}
@@ -253,27 +277,19 @@ function CanvasHeader({
         <BriefButton
           size="sm"
           onClick={() => void save()}
-          disabled={!editor.dirty || editor.hasInvalidJson || saving || !versionMatches}
+          disabled={!editor.dirty || editor.hasInvalidJson || saving || !versionMatches || editor.workflowRemoved}
           title={editor.invalidJsonMessage ?? undefined}
         >
           {saving ? "Saving…" : "Save changes"}
         </BriefButton>
         <span className="brief-canvas-feedback" role={message?.tone === 'warn' ? 'alert' : 'status'} data-tone={message?.tone}>
-          {editor.loading
-            ? "Loading workflow…"
-            : editor.error
-              ? "Workflow unavailable"
-              : !versionMatches && editor.version
-                ? "Version changed. Reopen from Workflows before editing."
-                : runMessage ||
-                  message?.text ||
-                  (editor.dirty
-                    ? editor.invalidJsonMessage ?? "Unsaved changes"
-                    : editor.version?.state === "LOCKED"
-                      ? "Published version"
-                      : needsSetup ? "Saved draft · Setup required" : "Saved draft")}
+          {feedback}
         </span>
       </div>
+      {editor.workflowRemoved && <div className="brief-canvas-removed" role="alert">
+        <p><strong>This workflow was deleted in another tab or window.</strong> Your edits are still here but cannot be saved to it. Copy anything you want to keep, then go back to All workflows.</p>
+        <BriefButton size="sm" onClick={() => { discard(); window.setTimeout(() => shell.navigate({ room: "all-workflows", selection: {} }), 50); }}>Discard edits and go to All workflows</BriefButton>
+      </div>}
       {binding.permissions && <details className="brief-canvas-setup" open={hasCode || undefined}>
         <summary>Flow permissions{codeBlocked ? ' · CODE steps not allowed' : ''}</summary>
         <FlowPermissions key={binding.flowId} flow={binding.permissions} request={binding.request as typeof fetch}

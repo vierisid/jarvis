@@ -1,5 +1,7 @@
 import { jsonInputBase, jsonInputScope, type JsonInputDraft } from './json-input-drafts';
-import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
+import { useEditCopy, useWorkflowRequest } from "./WorkflowEditorEnvironment";
+import { keptEdits, serializeEdits } from "./edit-copy";
+import { describeSaveFailure, WORKFLOW_REMOVED_TEXT, workflowGone } from "./save-failure";
 /**
  * Hook for the workflow visual editor.
  *
@@ -239,12 +241,17 @@ interface ActionResult {
 
 export function useWorkflowEditor(flowId: string | null) {
   const fetch = useWorkflowRequest();
+  const editCopy = useEditCopy();
   const savedDisplayName = useRef<string | null>(null);
   const [catalog, setCatalog] = useState<PieceCatalogEntry[]>([]);
   const [version, setVersion] = useState<FlowVersion | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
+  // The workflow was deleted elsewhere: nothing here can be saved any more.
+  const [workflowRemoved, setWorkflowRemoved] = useState(false);
+  // Set when unsaved edits from an earlier visit were put back on opening (see `edit-copy.ts`).
+  const [restoredAt, setRestoredAt] = useState<number | null>(null);
   // Raw JSON is part of the edit buffer even while it cannot enter the typed graph.
   const [jsonInputDrafts, setJsonInputDrafts] = useState<Record<string, JsonInputDraft>>({});
   const setJsonInputDraft = useCallback((key: string, draft: JsonInputDraft) => {
@@ -392,6 +399,7 @@ export function useWorkflowEditor(flowId: string | null) {
         editable = { ...detail.published };
       }
       savedDisplayName.current = editable?.displayName ?? null;
+      setWorkflowRemoved(false);
       setVersion(editable);
       setDraftTrigger(editable ? cloneTrigger(editable.trigger) : null);
       // Hydrate orphans + positions from the editor sidecar. Both default to
@@ -405,6 +413,18 @@ export function useWorkflowEditor(flowId: string | null) {
       );
       setStepPositions(meta?.positions && typeof meta.positions === "object" ? { ...meta.positions } : {});
       setDirty(false);
+      setRestoredAt(null);
+      // Edits that were unsaved when this draft was last open (a reload, or a session that ended)
+      // come back, as long as the draft has not changed since they were made.
+      const kept = editable?.state === "DRAFT" ? keptEdits(editCopy?.read() ?? null, editable.editorRevision) : null;
+      if (kept && editable) {
+        setDraftTrigger(kept.trigger);
+        setDraftOrphans(kept.orphans);
+        setStepPositions(kept.positions);
+        if (kept.displayName) setVersion({ ...editable, displayName: kept.displayName });
+        setDirty(true);
+        setRestoredAt(kept.savedAt);
+      }
       setJsonInputDrafts({});
       // Reload replaces the entire edit buffer with server state; any
       // in-flight undo history would be against a tree that no longer
@@ -417,7 +437,7 @@ export function useWorkflowEditor(flowId: string | null) {
     } finally {
       if (current()) setLoading(false);
     }
-  }, [flowId, fetch]);
+  }, [flowId, fetch, editCopy]);
 
   useEffect(() => {
     if (ignoreNextLoadRef.current) {
@@ -427,6 +447,19 @@ export function useWorkflowEditor(flowId: string | null) {
     }
     return () => { loadRequest.current?.abort(); loadRequest.current = null; };
   }, [reload]);
+
+  // Keep a copy of unsaved edits where a reload can find it. Written shortly after each change and
+  // when the page is hidden or closed; dropped by a save or a discard.
+  useEffect(() => {
+    if (!editCopy || !version || loading || !dirty || version.state !== "DRAFT" || !draftTrigger) return;
+    const persist = (): void => {
+      const text = serializeEdits({ base: version.editorRevision ?? null, displayName: version.displayName, trigger: draftTrigger, orphans: draftOrphans, positions: stepPositions });
+      if (text) try { editCopy.write(text); } catch { /* storage full or blocked: the edits are still on screen */ }
+    };
+    const timer = window.setTimeout(persist, 200);
+    window.addEventListener("pagehide", persist);
+    return () => { window.clearTimeout(timer); window.removeEventListener("pagehide", persist); };
+  }, [editCopy, version, loading, dirty, draftTrigger, draftOrphans, stepPositions]);
 
   /**
    * Apply an in-place mutation to a step wherever it lives -- inside the
@@ -1259,6 +1292,7 @@ export function useWorkflowEditor(flowId: string | null) {
       }
       if (!res.ok) {
         const body = await safeJson(res);
+        if (workflowGone(body)) { setWorkflowRemoved(true); return { ok: false, message: WORKFLOW_REMOVED_TEXT }; }
         return { ok: false, message: body?.error ?? `save failed: ${res.status}` };
       }
       const updated = (await res.json()) as FlowVersion;
@@ -1277,13 +1311,16 @@ export function useWorkflowEditor(flowId: string | null) {
       // Drop the stack so undo can't accidentally restore a state the
       // user already deliberately overwrote.
       setUndoStack([]);
+      try { editCopy?.clear(); } catch { /* nothing to clear */ }
       return { ok: true, message: "Saved" };
     } catch (e) {
-      return { ok: false, message: e instanceof Error ? e.message : String(e) };
+      return { ok: false, message: describeSaveFailure(e) };
     }
-  }, [flowId, version, draftTrigger, draftOrphans, stepPositions, fetch, invalidJson]);
+  }, [flowId, version, draftTrigger, draftOrphans, stepPositions, fetch, invalidJson, editCopy]);
 
   const reset = useCallback((): void => {
+    try { editCopy?.clear(); } catch { /* nothing to clear */ }
+    setRestoredAt(null);
     if (version) {
       setDraftTrigger(cloneTrigger(version.trigger));
       // Reset clears in-memory edits including orphans + positions. The
@@ -1296,7 +1333,7 @@ export function useWorkflowEditor(flowId: string | null) {
       setJsonInputDrafts({});
       setUndoStack([]);
     }
-  }, [version]);
+  }, [version, editCopy]);
 
   /**
    * Per-step sample data update. Saves through to the server immediately
@@ -1480,6 +1517,8 @@ export function useWorkflowEditor(flowId: string | null) {
     isHandleAvailable,
     error,
     loading,
+    workflowRemoved,
+    restoredAt,
     dirty: dirty || Object.keys(jsonInputDrafts).length > 0,
     jsonInputDrafts,
     setJsonInputDraft,

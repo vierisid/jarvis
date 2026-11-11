@@ -113,10 +113,10 @@ export function ConnectedDashboard({ route, retained = null, integration = false
 function OwnedDashboard({ descriptor, route, retained, integration, legacy, installGuard }: {
   descriptor: HostDescriptor; route: BriefRoute; retained: RoomKey | null; integration: boolean; legacy: ReactNode; installGuard(owner: DashboardOwner | null): void;
 }) {
-  const [, changed] = useState(0), [revoked, revoke] = useState(false), [message, explain] = useState(''), [open, setOpen] = useState(false);
+  const [, changed] = useState(0), [revoked, revoke] = useState(false), [ended, setEnded] = useState(false), [message, explain] = useState(''), [open, setOpen] = useState(false);
   const session = useRef<Session | null>(null), shell = useRef<BriefShellPort | null>(null), reveal = useRef<(id: string) => void>(() => { throw Error('Conversation unavailable'); });
   const [host] = useState(() => createDashboardOwner(descriptor, { storage: window.localStorage, changed: () => changed(n => n + 1),
-    unauthorized: () => revoke(true), explain, confirm: text => confirmDialog(text),
+    unauthorized: () => revoke(true), sessionEnded: () => setEnded(true), explain, confirm: text => confirmDialog(text),
     runInput: () => manualRunInput(),
     revealConversationItem: id => reveal.current(id), replayTutorial: async () => {
       if (!session.current) return { state: 'unavailable' };
@@ -154,10 +154,17 @@ function OwnedDashboard({ descriptor, route, retained, integration, legacy, inst
   });
   useEffect(() => { session.current = onboarding; if (onboarding) void onboarding.start(); return () => { session.current = null; onboarding?.dispose(); }; }, [onboarding]);
   useEffect(() => { explain(''); }, [route.room, route.selection.factId, route.selection.flowId]);
+  // After the session ended the edits stay on screen. Once none are left (saved elsewhere or discarded)
+  // there is nothing to keep the page for, so it falls back to the reconnect page.
+  useEffect(() => {
+    if (!ended) return;
+    const timer = window.setInterval(() => { if (!host.hasUnsaved()) { host.retire(); revoke(true); } }, 1000);
+    return () => window.clearInterval(timer);
+  }, [ended, host]);
   if (revoked) return <main className="brief-root brief-foundation"><h1>Reconnect to your workspace</h1><p>Your session, workspace or dashboard setting changed. Reload to continue, signing in again if asked.</p><button onClick={() => window.location.reload()}>Reload</button></main>;
   const content = (result: ReactNode | null = null) => <BriefConversationProvider enabled chatVisible={open} client={host.chat} reconciliation={host.reconciliation}>
     <Workspace host={host} route={result && onboarding?.state().journey?.draft ? { room: 'workflow-draft', selection: onboarding.state().journey!.draft! } : route}
-      retained={retained} open={open} setOpen={setOpen} reveal={reveal} shellRef={shell} message={message}
+      retained={retained} open={open} setOpen={setOpen} reveal={reveal} shellRef={shell} message={message} sessionEnded={ended}
       beforeNavigate={result ? async () => {
         if (!onboarding || !await host.canLeave(host.transport.signal)) return false;
         const state = onboarding.state(), journey = state.journey;
@@ -170,7 +177,14 @@ function OwnedDashboard({ descriptor, route, retained, integration, legacy, inst
     ? <ViewHost session={onboarding} renderWorkspace={content} legacy={integration ? <main><h1>Local onboarding is unavailable</h1><p>Inspect the local integration diagnostics, then reload.</p></main> : legacy} />
     : <OnboardingGate brief={host.onboarding}>{content()}</OnboardingGate>}</BriefOnboardingHost></div>;
 }
-function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, message, children, beforeNavigate }: { host: DashboardOwner; route: BriefRoute; retained: RoomKey | null; open: boolean; setOpen(value: boolean): void;
+/** The session ended with edits unsaved: they stay on screen, and this says how to get them saved. */
+function SessionEndedBanner() {
+  return <aside className="brief-root brief-session-banner" role="alert">
+    <p><strong>Your session ended.</strong> Your edits are still on this page, and a copy is kept in this tab. Sign in again to save them: reload, then open Jarvis again if asked.</p>
+    <button type="button" onClick={() => window.location.reload()}>Reload and sign in</button>
+  </aside>;
+}
+function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, message, sessionEnded, children, beforeNavigate }: { host: DashboardOwner; route: BriefRoute; retained: RoomKey | null; open: boolean; setOpen(value: boolean): void; sessionEnded: boolean;
   reveal: React.MutableRefObject<(id: string) => void>; shellRef: React.MutableRefObject<BriefShellPort | null>; message: string; children?: ReactNode; beforeNavigate?(): Promise<boolean> }) {
   const owner = useBriefConversation(), billing = useBilling({ refreshOnMount: false }); useBriefProjection(host.refresh);
   const profile = useSyncExternalStore(host.account.profile.subscribe, host.account.profile.snapshot, host.account.profile.snapshot);
@@ -221,7 +235,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
       return result.state === 'opened' && host.active();
     }} />{message && <p className="brief-host-notice" role="status">{message}</p>}
     {!!humanPending && route.room !== 'needs-you' && <aside className="brief-human-banner" role="status">{humanPending} workflow {humanPending === 1 ? 'request needs' : 'requests need'} your attention. <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>Open Needs you</button></aside>}
-    <BriefHost route={route} rooms={rooms} notice={<EmergencyStatusBanner state={emergency} open={() => host.navigation.navigate('emergency-controls')} />} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
+    <BriefHost route={route} rooms={rooms} notice={sessionEnded ? <SessionEndedBanner /> : <EmergencyStatusBanner state={emergency} open={() => host.navigation.navigate('emergency-controls')} />} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
       const guarded = host.guardShell(base);
       return beforeNavigate ? { ...guarded, navigate: next => { void beforeNavigate().then(ok => { if (ok) guarded.navigate(next); }); } } : guarded;
     }}

@@ -39,3 +39,11 @@
 .brief-emergency-banner button:focus-visible { outline:2px solid var(--brief-focus); outline-offset:3px; }
 .brief-emergency-banner > .brief-emergency-banner__message { flex-basis:100%; font-size:13px; color:var(--brief-error-text); }
 @media (max-width: 600px) { .brief-emergency-banner { margin:12px 16px; } .brief-emergency-banner button { width:100%; } }
+
+/* The session ended with unsaved edits: shown with the emergency banner, inside BriefHost, so the shell cannot cover it. */
+.brief-root.brief-session-banner { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin:12px 24px; padding:12px 16px; border:1px solid var(--brief-error-text); border-left-width:4px; background:var(--brief-error-surface); color:var(--brief-ink); border-radius:var(--brief-corner-control); }
+.brief-session-banner > p { margin:0; flex:1 1 320px; line-height:1.5; overflow-wrap:anywhere; }
+.brief-session-banner strong { color:var(--brief-error-text); }
+.brief-session-banner button { min-height:44px; padding:8px 14px; font:inherit; color:var(--brief-ink); background:var(--brief-card); border:1px solid var(--brief-card-edge); border-radius:var(--brief-corner-control); cursor:pointer; }
+.brief-session-banner button:focus-visible { outline:2px solid var(--brief-focus); outline-offset:3px; }
+@media (max-width: 600px) { .brief-session-banner { margin:12px 16px; } .brief-session-banner button { width:100%; } }
