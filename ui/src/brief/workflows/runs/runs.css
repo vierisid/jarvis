@@ -99,6 +99,13 @@
   cursor: pointer;
   transition: background 160ms ease-out;
 }
+.brief-root .brief-runs-row-note {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--brief-secondary);
+  overflow-wrap: anywhere;
+}
 .brief-root .brief-runs-row:hover {
   background: var(--brief-soft);
 }

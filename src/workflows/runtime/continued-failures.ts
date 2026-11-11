@@ -48,3 +48,8 @@ export function continuedFailures(run: FlowRun): ContinuedFailure[] {
   const seen = new Set<string>();
   return found.filter(name => !seen.has(name) && seen.add(name)).map(name => ({ name, displayName: names.get(name) ?? name }));
 }
+
+/** How a run that finished with failed steps reads: "Finished with a failed step", or the count when there are several. */
+export function continuedFailureHeadline(count: number): string {
+  return count === 1 ? 'Finished with a failed step' : `Finished with ${count} failed steps`;
+}

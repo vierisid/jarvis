@@ -8,6 +8,8 @@ export type InspectionRunStatus = 'queued' | 'running' | 'paused' | 'failed' | '
 export interface InspectionRunSummary {
   scopeId: string; flowId: string; versionId: string; runId: string;
   label: string; status: InspectionRunStatus; createdAt: number; startedAt: number | null;
+  /** Set on a succeeded run that went on past a failed step: "Finished with a failed step: <name>". */
+  note?: string;
 }
 export interface InspectionField { label: string; value: string; redacted?: boolean; redaction?: 'partial' | 'full' }
 export interface InspectionStep {

@@ -1505,7 +1505,9 @@ Advanced settings). They are saved as `settings.errorHandlingOptions` and
   `SUCCEEDED` with the step still failed: the runs API adds
   `continuedFailures` (name and display name of each failed step, no error
   text) to a run and the Runs list, and the dashboard reads "Finished with a
-  failed step" instead of a clean success. Effect records and Authority
+  failed step" instead of a clean success. The Brief Runs list and run detail
+  show "Finished with a failed step: <step name>" (`note` on the run), and
+  All workflows shows it as the latest run. Effect records and Authority
   decisions are written the same way as for a failing run. A step the daemon
   refused to run (a denied or held dispatch, `authorizePieceDispatch` failing)
   is never continued past, so a refusal of Authority cannot be skipped.
