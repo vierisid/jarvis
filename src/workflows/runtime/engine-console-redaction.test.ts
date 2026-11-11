@@ -86,22 +86,64 @@ describe('engine console redaction', () => {
   test('info, debug, trace, dir, table, assert and direct stream writes are redacted once installed', () => {
     const lines: string[] = [];
     const sink = (...args: unknown[]) => { lines.push(args.map((a) => (typeof a === 'string' ? a : inspect(a, { depth: 8 }))).join(' ')); };
-    const fake = { info: sink, debug: sink, trace: sink, dir: sink, table: sink, assert: (c: unknown, ...a: unknown[]) => { if (!c) sink(...a); } } as unknown as Console;
+    const fake = { info: sink, debug: sink, trace: sink, dir: sink, table: sink, group: sink, groupCollapsed: sink, count: sink, write: sink, timeLog: sink,
+      assert: (c: unknown, ...a: unknown[]) => { if (!c) sink(...a); } } as unknown as Console;
     const written: unknown[] = [];
     const stream = { write: (chunk: unknown) => { written.push(chunk); return true; } };
     installEngineOutputRedaction(fake, [stream]);
     installEngineOutputRedaction(fake, [stream]);
     const error = new HttpError({ password: 'BODY-SECRET' }, axiosError() as never);
-    for (const name of ['info', 'debug', 'trace', 'dir', 'table'] as const) (fake[name] as (...a: unknown[]) => void)(name, error);
+    for (const name of ['info', 'debug', 'trace', 'dir', 'table', 'group', 'groupCollapsed', 'count', 'timeLog'] as const) (fake[name] as (...a: unknown[]) => void)(name, error);
+    (fake as unknown as { write: (...a: unknown[]) => void }).write('write', error.message);
     fake.assert(false, 'assert', { error });
     stream.write(`direct ${error.message}\n`);
     stream.write(new TextEncoder().encode(`bytes ${error.message}`));
     stream.write(new TextEncoder().encode('plain bytes'));
     const text = [...lines, ...written.map((w) => (typeof w === 'string' ? w : new TextDecoder().decode(w as Uint8Array)))].join('\n');
     for (const secret of SECRETS) expect(text).not.toContain(secret);
-    expect(lines).toHaveLength(6);
+    expect(lines).toHaveLength(11);
     expect(text).toContain('direct [request and response bodies withheld]');
     expect(text).toContain('plain bytes');
+  });
+
+  test('in a Map, a Set, under a symbol key, and in an error of another realm or with a hidden cause', () => {
+    const error = new HttpError({ password: 'BODY-SECRET' }, axiosError() as never);
+    const sym = Symbol('k');
+    const realm = { message: 'from a vm', stack: 'Error: from a vm', cause: error };
+    const hiddenCause = new Error('outer');
+    Object.defineProperty(hiddenCause, 'cause', { value: error, enumerable: false });
+    const text = printed([new Map([['e', error]]), new Set([error]), { [sym]: error }, realm, hiddenCause]);
+    for (const secret of SECRETS) expect(text).not.toContain(secret);
+    expect(text).toContain('from a vm');
+    expect(text).toContain('outer');
+  });
+
+  test('line structure: only the line with the serialized request is cut, later lines and line ends are kept', () => {
+    expect(redactEngineText('line1 {"requestBody":1}\nline2 important\n')).toBe('line1 [request and response bodies withheld]\nline2 important\n');
+    expect(redactEngineText('a {\n  "response": {\n    "status": 401,\n    "body": "RESP-SECRET"\n  }\n}\nnext\n'))
+      .toBe('a [request and response bodies withheld]\nnext\n');
+    expect(redactEngineText('requestBody: { password: "BODY-SECRET" },\nok')).toBe('[request and response bodies withheld]\nok');
+    expect(redactEngineText('{"headers":{"X-Meta":{"a":1},"Proxy-Authorization":"Basic HDR-SECRET"}}')).not.toContain('HDR-SECRET');
+    // Ordinary JSON with a config is not cut.
+    expect(redactEngineText('loaded {"name":"x","config":{"retries":3}}')).toBe('loaded {"name":"x","config":{"retries":3}}');
+  });
+
+  test('ordinary values print as before: bytes, class instances, cycles, accessors; a revoked proxy is withheld, not thrown', () => {
+    const bytes = Buffer.alloc(300);
+    expect(redactEngineLogArgs([bytes])[0]).toBe(bytes);
+    class Foo { n = 1; self: unknown = null; note = 'x {"requestBody":1}'; }
+    const foo = new Foo(); foo.self = foo;
+    const shown = redactEngineLogArgs([foo])[0] as Foo;
+    expect(shown).toBeInstanceOf(Foo);
+    expect(shown.note).toBe('x [request and response bodies withheld]');
+    let calls = 0;
+    const withGetter = { get secret() { calls++; return 'BODY-SECRET'; }, note: 'x {"requestBody":1}' };
+    redactEngineLogArgs([withGetter]);
+    expect(calls).toBe(0);
+    const revoked = Proxy.revocable({}, {}); revoked.revoke();
+    expect(redactEngineLogArgs([revoked.proxy])).toEqual(['[unprintable value withheld]']);
+    const unanswered = new HttpError({ a: 1 }, { message: 'connect ECONNREFUSED' } as never);
+    expect(redactEngineLogArgs([unanswered])).toEqual(['HttpError: request failed (no response); bodies and headers withheld']);
   });
 
   test('ordinary logs pass through unchanged, and a throwing getter does not throw here', () => {
