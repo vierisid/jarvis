@@ -20,6 +20,8 @@ export function keys(value: Record<string, unknown>, allowed: readonly string[],
 }
 export function text(value: unknown, path: string, required = true, max = 20000): string {
   if (typeof value !== 'string' || (required && !value.trim()) || value.length > max) invalid(path, 'must be a valid string');
+  // C0 controls and DEL are refused. Tab and line breaks stay for descriptions, not for a title.
+  if ((/(^|\.)title$/.test(path) ? /[\x00-\x1f\x7f]/ : /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/).test(value)) invalid(path, 'must not contain control characters');
   return value;
 }
 export function enumeration<T extends string>(value: unknown, values: readonly T[], path: string): T {

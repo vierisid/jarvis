@@ -1,4 +1,5 @@
 import { getDb, generateId } from './schema.ts';
+import { cleanVaultText, RELATIONSHIP_TYPE_MAX_CHARS } from './input-limits.ts';
 import type { Entity } from './entities.ts';
 
 export type Relationship = {
@@ -38,6 +39,7 @@ export function createRelationship(
   type: string,
   properties?: Record<string, unknown>
 ): Relationship {
+  type = cleanVaultText(String(type), RELATIONSHIP_TYPE_MAX_CHARS);
   const db = getDb();
   const id = generateId();
   const now = Date.now();

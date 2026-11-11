@@ -79,6 +79,7 @@ const pending = findCommitments({ status: 'pending' });
 - **Vault Extractor**: [docs/VAULT_EXTRACTOR.md](~/jarvis/docs/VAULT_EXTRACTOR.md)
 - **Entity Types**: person, project, tool, place, concept, event
 - **Commitment Statuses**: pending, active, completed, failed, escalated
+- **Input limits** (`input-limits.ts`): entity name 200 characters, relationship label 100, fact predicate 200, fact value 4000. No control characters (C0 and DEL; a fact value may keep tab and line breaks). The API refuses a breach with a 400. `createEntity` and `createRelationship` also serve the model and awareness, so they never throw: control characters become spaces and an over-long value is cut at the limit. Rows stored before the limits keep their full text.
 
 ## Testing
 

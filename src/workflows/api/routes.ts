@@ -597,6 +597,11 @@ function validDisplayName(raw: unknown): { name: string } | { error: Response } 
       ),
     };
   }
+  // A name is one line of plain text: a control character in it (NUL, a bell,
+  // an escape, a line break) breaks lists and logs. Refused as a plain 400.
+  if (/[\x00-\x1f\x7f]/.test(raw)) {
+    return { error: err("displayName cannot contain control characters") };
+  }
   return { name: raw };
 }
 
