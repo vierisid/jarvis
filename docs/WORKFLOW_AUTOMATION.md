@@ -237,10 +237,14 @@ id and run id.
 - A deduplicated notification (same idempotency key) is claimed before anything is saved, so it is
   stored once.
 - Retention: at most the newest 200 rows and nothing older than 30 days, read or not, trimmed on
-  every insert.
+  every insert. A message longer than 32,000 characters is saved shortened, with a note saying so.
+- Deleting a workflow (the ordinary delete and the Brief purge) deletes its saved notifications.
+  Removing it with Undo available keeps them.
 - If the row cannot be saved, the dashboard channel is failed, and the step fails when no other
-  channel delivered. If the live toast throws after the row was saved, the step reports the send as
-  unconfirmed, as before.
+  channel delivered. If the live toast throws, or a Pause, Kill or cancel stops it, after the row
+  was saved, the step reports the send as unconfirmed and its idempotency key stays used.
+- The saved text is the workflow's own output and may carry outside content it read. It is shown
+  as plain text and is never given to a model.
 - `auto` with no tab open also shows the desktop notification, as before. `voice` still needs an
   open dashboard to play the audio and reports so when none is open.
 
