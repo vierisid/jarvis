@@ -40,6 +40,21 @@ describe.skipIf(skip)('the compiled core CSV piece, JSON to CSV', () => {
       .toBe('n,address.city,tags.0,tags.1\nJohn,LA,x,y\nJane,SF,z,\n');
   });
 
+  test('a cell is read as the row\'s own key, never as a path into another of its values', async () => {
+    // `tags.0` from the second row must not read "f" out of the first row's string `tags`.
+    expect(await convert([{ tags: 'foo' }, { tags: ['x', 'y'] }])).toBe('tags,tags.0,tags.1\nfoo,,\n,x,y\n');
+    expect(await convert([{ tags: ['x'] }, { tags: 'foo' }])).toBe('tags.0,tags\nx,\n,foo\n');
+  });
+
+  test('a key named like an Object.prototype member gets a column and does not fail the step', async () => {
+    expect(await convert([{ a: 1 }, { toString: 'x', constructor: 'y' }])).toBe('a,toString,constructor\n1,,\n,x,y\n');
+  });
+
+  test('rows with no keys and a non-object row behave as before', async () => {
+    expect(await convert([{}, {}])).toBe('\n\n\n');
+    await expect(convert([{ a: 1 }, 5])).rejects.toThrow('Invalid Record');
+  });
+
   test('an empty array and a non-array input behave as before', async () => {
     expect(await convert([])).toBe('');
     await expect(convert({ a: 1 })).rejects.toThrow('The input should be a JSON array');
