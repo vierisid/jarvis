@@ -216,7 +216,8 @@ const NEXT: Record<RecoveryStep, string> = {
   change_request: 'Change what it asks, then try again. If you think it was blocked by mistake, contact support.',
   appeal_restriction: 'Contact support to appeal, or use your own AI provider.',
   fix_step: 'Fix the step, then run it again.',
-  check_ai_settings: 'Check the AI provider key in AI settings, then run it again.',
+  // A hosted provider reports an inactive plan as auth too (#1317), so the plan is named beside the key.
+  check_ai_settings: 'Check the AI provider key in AI settings, or your plan in Billing if you use Jarvis AI, then run it again.',
 };
 const next = (...steps: RecoveryStep[]) => steps.map(step => ({ step, label: NEXT[step] }));
 /** Recovery steps with their labels, for a reading that adjusts a projected failure. */
