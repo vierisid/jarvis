@@ -20,6 +20,13 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
+  // w8-27: supported reviewed browser/desktop workflow guidance and targeted desktop editing.
+  'w8-27': {
+    bare: '2eec06783667e51050ad7519ac2fcb8653cb772efe23229e8dc3226bca226a1c',
+    production: '512501544c212cd2f111448892097fa880ca17ea573c96f95b55858f0c6c10c1',
+    'hosted production': 'c319f6728b99e06b065095fbc7e321e66c8d0d444e0d7cc0458aceca19d4a0ec',
+    'tool names only': '358d96c0c98192143a70b7949e10aee41367bb45fb12982c1bb2ffa99b6b4935',
+  },
   // w8-26: schedule dst_policy (skip_missing_first_repeated) in the schedule primitive details.
   // Those details are fetched on demand, so these shapes match w8-25.
   'w8-26': {
