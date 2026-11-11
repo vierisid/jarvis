@@ -1226,13 +1226,13 @@ function resolveBrowserTarget(
  * Display only, never a binding: the guard above is what holds the call to
  * the reviewed page. A remote target's page is not known here.
  */
-function browserReviewSubject(tool: 'browser_navigate' | 'browser_click' | 'browser_scroll') {
+function browserReviewSubject(tool: 'browser_navigate' | 'browser_click' | 'browser_scroll' | 'browser_type' | 'browser_hover' | 'browser_press_key') {
   return (params: Record<string, unknown>): { origin?: string; element?: string } => {
     const remote = typeof params.target === 'string' && params.target.trim() !== '';
     const url = tool === 'browser_navigate' ? (typeof params.url === 'string' ? params.url : null) : remote ? null : browser.lastKnownPageUrl();
     const origin = url ? pageOrigin(url) : null;
     const subject: { origin?: string; element?: string } = origin && /^https?:\/\//.test(origin) ? { origin: forCard(origin, 120) } : {};
-    if (tool === 'browser_click' && typeof params.element_id === 'number') {
+    if ((tool === 'browser_click' || tool === 'browser_type' || tool === 'browser_hover') && typeof params.element_id === 'number') {
       // Only from the map the card binds (#1161 review): when this loop's own
       // read is not the controller's current map, the current label names
       // another reader's element [n], and the card would show it while the
@@ -1287,9 +1287,13 @@ function browserReviewSubject(tool: 'browser_navigate' | 'browser_click' | 'brow
  */
 function browserCallGuard(
   tool: string,
-  opts: { bindDocument?: boolean } = {},
-): (params: Record<string, unknown>) => ApprovalGuard {
-  return (params) => {
+  opts: { bindDocument?: boolean; workflowBindsLoader?: boolean } = {},
+): (params: Record<string, unknown>, call?: { workflow?: boolean }) => ApprovalGuard {
+  return (params, call) => {
+    // A workflow key press (#1314) is bound to the reviewed document, which
+    // only the local controller can hold: the sidecar's key handler compares
+    // no document, so a remote one has nothing to bind and is refused.
+    const loaderBound = !!(opts.workflowBindsLoader && call?.workflow);
     let reviewedRoute: string | null;
     try {
       // Quiet (#675): this resolution is a comparison, not a dispatch, and
@@ -1314,9 +1318,11 @@ function browserCallGuard(
     // element-addressed tools are the opposite -- they cannot work without the
     // snapshot that minted their ids, so for them a cold browser at review
     // really does mean nothing was reviewed.
+    if (loaderBound && reviewedRoute) return () => false;
     const machineCurrent = captureMachineApprovalGuard(params.target, 'browser', tool);
-    const mayConnectLazily = !opts.bindDocument;
-    const local = reviewedRoute ? null : browser.captureApprovalGuard(mayConnectLazily, opts);
+    const mayConnectLazily = !opts.bindDocument && !loaderBound;
+    const local = reviewedRoute ? null : browser.captureApprovalGuard(mayConnectLazily,
+      loaderBound ? { bindLoader: true } : { bindDocument: opts.bindDocument });
     // The local map's generation, read in the same synchronous step as the
     // guard above, for the element action to compare again under the
     // controller's snapshot lock (#875). The guard's own comparison runs
@@ -1351,6 +1357,7 @@ function browserCallGuard(
     const reader = { reader: currentSnapshotReader(), ...(readLog ? { readLog } : {}) };
     const localReviewed: ReviewedExecution = {
       ...(localSnapshotGen !== undefined ? { localSnapshotGen } : {}),
+      ...(local && loaderBound ? { localLoaderId: browser.reviewedLoaderId() } : {}),
       ...(local && readLog ? { readLog } : {}),
     };
     const reviewed: ReviewedExecution | undefined = !reviewedRoute
@@ -1392,20 +1399,22 @@ function browserCallGuard(
  * RESUMED with snapshot replies in its buffer and no local read of its own
  * binds nothing (undefined), so the approved action is refused as unbound
  * rather than held to whatever another caller snapshotted during the pause.
- * Otherwise -- no loop (a sub-agent's or a workflow's card, the voice route),
+ * An isolated workflow reader likewise requires its own live read. Otherwise
+ * -- no loop (a sub-agent's card, the voice route),
  * or a loop that read nothing locally -- the controller's current generation,
  * as before: the residual #827 states for remote cards, here too.
  */
 function reviewedLocalGeneration(log: SnapshotReadLog | undefined): number | undefined {
   if (log?.localGeneration !== undefined) return log.localGeneration;
-  if (log?.resumedWithReads) return undefined;
+  if (log?.resumedWithReads || log?.isolatedReader) return undefined;
   return browser.snapshotGeneration();
 }
 
 /**
  * Record a local snapshot as the current model loop's read (#1161). Outside a
  * loop, or for a reader that is not the loop's (`currentSnapshotReadLog`
- * answers undefined for a sub-agent or a workflow), there is nothing to write.
+ * answers undefined for a sub-agent), there is nothing to write. Direct
+ * workflow steps instead own an isolated run-local log.
  */
 function recordLocalRead(snap: PageSnapshot): void {
   const log = currentSnapshotReadLog();
@@ -1640,6 +1649,7 @@ export const browserClickTool: ToolDefinition = {
 export const browserHoverTool: ToolDefinition = {
   name: 'browser_hover',
   captureApprovalGuard: browserCallGuard('browser_hover', { bindDocument: true }),
+  reviewSubject: browserReviewSubject('browser_hover'),
   description: 'Hover the mouse over an element by its [id]. Use this to reveal hover-only UI (message action toolbars, dropdown triggers, tooltips). After hovering, take a browser_snapshot to see the revealed elements, then click them without moving the mouse elsewhere first.',
   category: 'browser',
   parameters: {
@@ -1674,7 +1684,8 @@ export const browserHoverTool: ToolDefinition = {
 
 export const browserPressKeyTool: ToolDefinition = {
   name: 'browser_press_key',
-  captureApprovalGuard: browserCallGuard('browser_press_key'),
+  captureApprovalGuard: browserCallGuard('browser_press_key', { workflowBindsLoader: true }),
+  reviewSubject: browserReviewSubject('browser_press_key'),
   description: 'Press a key or key combination in the browser page (sent to the focused element). Examples: "Enter", "Escape", "Tab", "ArrowDown", "Ctrl+K", "Shift+Enter", "Ctrl+Shift+M". Use for in-app keyboard shortcuts, menu navigation, and committing edits. Note: browser-reserved shortcuts (Ctrl+N, Ctrl+T, Ctrl+1-9) are intercepted by Chrome and never reach the page — use in-page UI for those actions instead. PageUp, PageDown, Home and End scroll the page, which retires every element [id]: snapshot again before using one.',
   category: 'browser',
   parameters: {
@@ -1697,7 +1708,9 @@ export const browserPressKeyTool: ToolDefinition = {
     if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
     if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
-      return await browser.pressKey(params.key as string);
+      // A workflow key press carries the document it was reviewed on (#1314).
+      const reviewed = currentReviewedExecution();
+      return await browser.pressKey(params.key as string, reviewed && 'localLoaderId' in reviewed ? reviewed.localLoaderId ?? '' : undefined);
     } catch (err) {
       return browserActionError(err);
     }
@@ -1707,6 +1720,7 @@ export const browserPressKeyTool: ToolDefinition = {
 export const browserTypeTool: ToolDefinition = {
   name: 'browser_type',
   captureApprovalGuard: browserCallGuard('browser_type', { bindDocument: true }),
+  reviewSubject: browserReviewSubject('browser_type'),
   description: 'Type text into an input element by its [id]. IMPORTANT: by default this REPLACES the element\'s existing content (it is cleared first). Set append to true to keep existing content and add at the end. Set submit to true to press Enter after typing (useful for search forms).',
   category: 'browser',
   parameters: {
@@ -2207,6 +2221,9 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
     // And the element-addressed three carry the generation they bound, for the
     // action to compare again under the controller's snapshot lock (#875): the
     // guard's own comparison runs before the action waits on that lock.
+    // The `{ workflow }` flag (#1314) is not read here: this background set is
+    // never a workflow's registry (delegations scope BUILTIN_TOOLS, direct
+    // steps use the main registry), and its guards already bind the document.
     tool.captureApprovalGuard = () => {
       const guard = ctrl.captureApprovalGuard(!bindDocument, { bindDocument });
       if (!bindDocument) return guard;

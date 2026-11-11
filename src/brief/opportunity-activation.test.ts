@@ -272,7 +272,8 @@ test('approval to activate does not grant Authority for a later notification', a
     wsService: { broadcastNotificationToDashboard() { sends++; } } as any,
   });
   const run = createFlowRun({ flowId: view.workflow!.flowId, flowVersionId: view.workflow!.versionId, status: 'RUNNING' });
-  const result = await backends.notify!({ message: 'Draft report', channels: ['dashboard'], priority: 'normal' },
+  // Telegram can reach other people, so it stays governed; dashboard-only notices to the owner no longer ask.
+  const result = await backends.notify!({ message: 'Draft report', channels: ['telegram'], priority: 'normal' },
     { runId: run.id, projectId: getFlow(view.workflow!.flowId)!.project_id, stepName: 'report', executionPath: [] });
   expect(result).toHaveProperty('approval'); expect(approvals.getPending()).toHaveLength(1); expect(sends).toBe(0);
 });
@@ -409,4 +410,23 @@ test('dashboard recovery consumes the canonical activation GET receipt', async (
   const receipt = await ports.opportunities.recover!({ proposalId: view.proposalId, revision: view.revision, idempotencyKey: 'recover-local', decision: 'approve' });
   expect(receipt).toMatchObject({ proposalId: view.proposalId, currentActivation: 'enabled', registration: { state: 'registered' } });
   noRuns(); http.stop();
+});
+
+test('activation waits while screen awareness is off, for reads and decisions alike (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  const { p, view } = await fixture(), a = activation(p, fakeTriggers());
+  const registrations = [...registerPreparedOpportunities(p), ...registerOpportunityActivation(a)];
+  const routes = createOpportunityActivationRoutes(new BriefCapabilities(registrations, ['preparedOpportunities', 'opportunityActivation']),
+    (v: unknown, status = 200) => Response.json(v, { status }), a);
+  const base = '/api/brief/opportunity-actions/:id';
+  const request = (method: string) => Object.assign(new Request('http://localhost/actions', { method,
+    ...(method === 'POST' ? { body: JSON.stringify({ revision: view.revision, idempotencyKey: 'off-key' }) } : {}) }), { params: { id: view.proposalId } });
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    for (const response of [await routes[base]!.GET!(request('GET')), await routes[`${base}/approve`]!.POST!(request('POST')), await routes[`${base}/dismiss`]!.POST!(request('POST'))]) {
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: 'AWARENESS_OFF' });
+    }
+    noRuns();
+  } finally { setScreenCaptureEnabledSource(null); }
 });
