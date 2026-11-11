@@ -173,6 +173,12 @@ describe('runFailure (Q-19)', () => {
     expect(failureText(failure)).not.toContain('cannot tell');
   });
 
+  test('another engine status whose detail mentions the data limit is not read as it', () => {
+    const { fail } = setup('RUNNING', 'jarvisOnly');
+    const failure = runFailure(fail({ name: '<engine>', displayName: 'engine', errorMessage: 'executeFlow(run r1) -> INTERNAL_ERROR: x -> LOG_SIZE_EXCEEDED' }))!;
+    expect(failure.code).not.toBe('RUN_LOG_SIZE_EXCEEDED');
+  });
+
   test('a run stopped at the data size reads the steps before it the careful way', () => {
     const { run, fail } = setup('RUNNING', 'codeThenNotify');
     updateRun(run.id, { steps: { code: { status: 'SUCCEEDED', output: {} } } });
