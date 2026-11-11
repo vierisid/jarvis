@@ -157,8 +157,9 @@ export function useConnections(): ConnectionsState {
           const body = (await r.json().catch(() => ({}))) as { error?: string };
           return { ok: false, message: body.error ?? `HTTP ${r.status}` };
         }
+        const deleted = (await r.json().catch(() => ({}))) as { warning?: string };
         await refresh();
-        return { ok: true, message: "deleted" };
+        return { ok: true, message: deleted.warning ? `Deleted. ${deleted.warning}` : "deleted" };
       } catch (e) {
         return { ok: false, message: (e as Error).message };
       }

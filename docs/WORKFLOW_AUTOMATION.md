@@ -690,6 +690,21 @@ Recovery polling also stops required children whose parent failed or was deleted
 For required children that already ended, it retires remaining waitpoints and
 undispatched approvals before continuing the parent. The child's terminal status,
 failure detail and any dispatched effect evidence remain intact.
+
+### Deleting what other workflows use
+
+Deleting a workflow or a connection is never blocked because published
+workflows use it. The delete answers with `usedBy` (the published workflows
+that call the workflow or bind the connection) and a plain `warning` sentence,
+and `GET /api/workflows/:id/dependents` and
+`GET /api/workflows/connections/:id/dependents` give the same list beforehand,
+so the Workflows room can name them in its confirmation. Afterwards an enabled
+workflow that calls a deleted workflow, or binds a deleted connection, lists
+`blocked` with code `DEPENDENCY_MISSING` and a sentence naming the step and
+what is missing; it has no run, so `runId` is null. Only published graphs
+count: a draft nobody runs is not a dependent. A parent already waiting on a
+child that was deleted fails with a sentence saying the child was deleted,
+not the engine's status word.
 Independent asynchronous children retain their existing lifecycle. Delegated
 agent uncertainty now stops the conversation and reaches the parent as an
 `unknown` outcome rather than becoming conversational success.
