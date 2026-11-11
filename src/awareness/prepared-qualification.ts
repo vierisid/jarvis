@@ -10,6 +10,7 @@
  * different fingerprint. It never composes, publishes, enables or runs a
  * workflow. Contract: docs/prepared-proposal-qualification.md.
  */
+import { directToolAboveLevelFloor } from '../workflows/runtime/workflow-ui-tools.ts';
 import type { BriefBinding, BriefEvidenceRef, BriefRevision, BriefTimestamp } from '../brief/contracts.ts';
 import { projectLegacyGoal } from '../brief/adapters.ts';
 import type { ActionCategory } from '../roles/authority.ts';
@@ -472,7 +473,7 @@ function judgeStep(node: FlowTriggerNode, services: Pick<QualificationServices, 
     const gate = resolveToolGate(tool, toolName, params);
     const judged = fact(capability.categories, decide(services.authority, { toolName: tool.name, toolCategory: tool.category,
       category: capability.category, categories: capability.categories,
-      ...(gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {}), confirmation: gate.confirm === 'always' }));
+      ...(gate.confirm ? { aboveLevelFloor: directToolAboveLevelFloor(tool, params, gate) } : {}), confirmation: gate.confirm === 'always' }));
     // A per-call gate judges the resolved arguments, so a value it reads that
     // is only known at run time can change the decision either way.
     const gateInputs = GATE_INPUTS[tool.name];

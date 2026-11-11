@@ -1066,6 +1066,22 @@ function createTables(db: Database): void {
   db.run(`CREATE INDEX IF NOT EXISTS idx_agent_activity_agent_id ON agent_activity(agent_id, timestamp DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_agent_activity_timestamp ON agent_activity(timestamp DESC)`);
 
+  // Notifications a workflow sent to the dashboard, kept so one sent while no
+  // dashboard was open is still there on the next visit. Bounded on insert
+  // (newest 200, at most 30 days): see dashboard-notifications.ts.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS dashboard_notifications (
+      id TEXT PRIMARY KEY,
+      message TEXT NOT NULL,
+      priority TEXT NOT NULL CHECK(priority IN ('urgent', 'normal', 'low')),
+      workflow_id TEXT,
+      run_id TEXT,
+      created_at INTEGER NOT NULL,
+      read_at INTEGER
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_dashboard_notifications_created ON dashboard_notifications(created_at DESC)`);
+
   // LLM usage tracking: every chatTier/streamTier call appends one row so
   // future cost analysis can attribute consumption to a subsystem (chat,
   // heartbeat, voice_intent, extractor, suggestion_engine, ...) on a given
