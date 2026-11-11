@@ -8,7 +8,7 @@
  * inline on the event.
  */
 
-import { AWARENESS_OFF_MESSAGE, awarenessHistoryVisible } from './history-guard.ts';
+import { AWARENESS_OFF_MESSAGE, awarenessHeldLlm, awarenessHistoryVisible } from './history-guard.ts';
 import type { Service, ServiceStatus } from '../daemon/services.ts';
 import type { JarvisConfig, AwarenessConfig } from '../config/types.ts';
 import type { LLMManager } from '../llm/manager.ts';
@@ -87,8 +87,11 @@ export class AwarenessService implements Service {
     const maxGapMs = captureGapCapFor(cfg.capture_interval_ms);
 
     this.contextTracker = new ContextTracker(cfg);
+    // Screen analysis and session topics send what was read from the screen:
+    // every such model call refuses once awareness is off, including one a
+    // capture already in flight would make after its image fetch.
     this.intelligence = new AwarenessIntelligence(
-      llm,
+      awarenessHeldLlm(llm),
       cfg.cloud_vision_enabled ? cfg.cloud_vision_cooldown_ms : Infinity,
       cfg.cloud_vision_enabled ? cfg.cloud_vision_ambient_cooldown_ms : Infinity
     );
@@ -293,6 +296,14 @@ export class AwarenessService implements Service {
     }
   }
 
+  /**
+   * Whether a capture's processing may go on. Read again after every await:
+   * the entry check in handleSidecarEvent only covers the moment it arrived.
+   */
+  private stillSeeing(): boolean {
+    return this.runRequested && awarenessHistoryVisible() && isDesktopEnabled();
+  }
+
   // ── Event Handlers ──
 
   private async handleScreenCapture(sidecarId: string, event: SidecarEvent): Promise<void> {
@@ -462,6 +473,13 @@ export class AwarenessService implements Service {
           return null;
         });
 
+        // The switch was read when this capture arrived; awareness may have
+        // been turned off while the image was on its way. Nothing was sent.
+        if (!this.stillSeeing()) {
+          this.intelligence.releaseEscalation(escalation.token);
+          return;
+        }
+
         if (!imageBuffer) {
           // Nothing was billed, so hand the cooldown back rather than letting
           // a missing file swallow the next real signal.
@@ -490,8 +508,11 @@ export class AwarenessService implements Service {
         }
       }
 
-      // 7. Suggestion evaluation
+      // 7. Suggestion evaluation. Awareness may have gone off during the
+      // analysis: what it read is not turned into a suggestion or an event.
+      if (!this.stillSeeing()) return;
       const suggestion = await this.suggestionEngine.evaluate(context, events, cloudAnalysis);
+      if (!this.stillSeeing()) return;
       if (suggestion) {
         if (!suggestion.context?.opportunity) {
           try { markSuggestionDelivered(suggestion.id, 'websocket'); } catch { /* ignore */ }
@@ -561,6 +582,9 @@ export class AwarenessService implements Service {
         .map(c => c.ocr_text!);
 
       if (sampleOcrTexts.length === 0) return;
+      // Session topics send screen text: none starts, and none is stored from
+      // a call that was refused part way, once awareness is off.
+      if (!this.stillSeeing()) return;
 
       const { topic, summary } = await this.intelligence.summarizeSession(
         [...apps],
@@ -569,6 +593,7 @@ export class AwarenessService implements Service {
         sampleOcrTexts
       );
 
+      if (!this.stillSeeing()) return;
       // A later writer may have supplied a summary while the model was busy.
       if (getSession(sessionId)?.summary !== null) return;
       updateSession(sessionId, { topic, summary });
