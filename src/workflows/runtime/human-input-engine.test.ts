@@ -62,14 +62,15 @@ afterAll(async () => {
 const fields = [ { key: 'update', label: 'Daily update', type: 'long_text', required: true }, { key: 'count', label: 'Count', type: 'number', required: true }, { key: 'blocked', label: 'Blocked?', type: 'boolean', required: true } ];
 const answers = { update: 'Finished the local fixture', count: 0, blocked: false };
 function step(name: string, pieceName: string, actionName: string, input: any, nextAction?: any): any { return { name, type: 'PIECE', displayName: name, settings: { pieceName, pieceVersion: pieceName === '@activepieces/piece-approval' ? '0.1.19' : '0.0.1', actionName, input }, ...(nextAction ? { nextAction } : {}) }; }
-function fixture(kind: 'input' | 'approval' = 'input', legacy = false, links: boolean | string = false, shared = false, continueOnReject = false) {
+function fixture(kind: 'input' | 'approval' = 'input', legacy = false, links: boolean | string = false, shared = false, continueOnReject: boolean | string = false, errorHandling?: any) {
   const flow = createFlow();
   const finish = step('returned', '@jarvispieces/piece-jarvis-subflow', 'return_result', { result: '{{ask}}' });
   const ask = step('ask', legacy ? '@activepieces/piece-approval' : HUMAN_INPUT_PIECE, legacy ? 'wait_for_approval' : `request_${kind}`,
-    legacy ? { prompt: 'Review the fixture proposal', ...(continueOnReject ? { continueOnReject: true } : {}), ...(links === true ? { requestId: '{{links.requestId}}' } : {}) } : { title: 'Daily operations update', prompt: 'What changed today?', fields, requestKey: '{{trigger.date}}', timeoutHours: 48, ...(shared ? { shareAcrossRuns: true } : {}) }, finish);
+    legacy ? { prompt: 'Review the fixture proposal', ...(continueOnReject ? { continueOnReject } : {}), ...(links === true ? { requestId: '{{links.requestId}}' } : {}) } : { title: 'Daily operations update', prompt: 'What changed today?', fields, requestKey: '{{trigger.date}}', timeoutHours: 48, ...(shared ? { shareAcrossRuns: true } : {}) }, finish);
+  if (errorHandling) ask.settings.errorHandlingOptions = errorHandling;
   const trigger: any = { name: 'trigger', type: 'EMPTY', settings: {}, nextAction: links ? step('links', '@activepieces/piece-approval', 'create_approval_links', { prompt: 'Approve this fixture only' }, ask) : ask };
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Fixture daily input', trigger });
-  return { flow, version, async run(date = '2026-11-04') {
+  return { flow, version, async run(date: unknown = '2026-11-04') {
     const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id }); runs.push(run.id);
     enqueue({ jobType: RUN_FLOW, payload: { runId: run.id, payload: { date } }, flowId: flow.id, flowRunId: run.id }); await worker.drain(); return getFlowRun(run.id)!;
   } };
@@ -144,12 +145,26 @@ for (const outcome of ['reject', 'cancel', 'expire']) test(`legacy Wait for Appr
   expect(final.status).toBe('FAILED'); expect((final.steps as any).returned).toBeUndefined();
   const { runFailure } = await import('./run-failure'); const failure = runFailure(final)!;
   expect(failure).toMatchObject({ category: 'approval_denied', effect: 'none', code: outcome === 'expire' ? 'APPROVAL_EXPIRED' : 'APPROVAL_DENIED' });
+  expect(final.failedStep?.errorMessage).toContain(outcome === 'expire' ? 'not answered in time' : outcome === 'cancel' ? 'was cancelled in Needs you' : 'was rejected in Needs you');
 });
 for (const outcome of ['reject', 'cancel', 'expire']) test(`legacy Wait for Approval with Continue when rejected returns approved:false on ${outcome}`, async () => {
   const f = fixture('approval', true, false, false, true), run = await f.run(), request = requestFor(run.id);
   if (outcome === 'expire') resumeHumanInputs(request.deadline); else expect(respond(request, outcome).status).toBe(200);
   await finish(); const final = getFlowRun(run.id)!;
   expect(final.status).toBe('SUCCEEDED'); expect((final.steps as any).returned.output.output).toEqual({ approved: false });
+});
+// The opt-in is the author's saved choice: an expression that trigger data (or an
+// earlier step) resolves to true is not one, and neither is Continue on failure.
+test('legacy Wait for Approval stops on reject when Continue when rejected is an expression trigger data sets to true', async () => {
+  const f = fixture('approval', true, false, false, '{{trigger.date}}'), run = await f.run(true), request = requestFor(run.id);
+  expect(respond(request, 'reject').status).toBe(200); await finish(); const final = getFlowRun(run.id)!;
+  expect(final.status).toBe('FAILED'); expect((final.steps as any).returned).toBeUndefined();
+});
+test('legacy Wait for Approval stops on reject even with Continue on failure saved on the step', async () => {
+  const f = fixture('approval', true, false, false, false, { continueOnFailure: { value: true }, retryOnFailure: { value: true } });
+  const run = await f.run(), request = requestFor(run.id);
+  expect(respond(request, 'reject').status).toBe(200); await finish(); const final = getFlowRun(run.id)!;
+  expect(final.status).toBe('FAILED'); expect((final.steps as any).returned).toBeUndefined();
 });
 test('legacy Wait for Approval with a request ID no Create Approval Links step made says where it must come from', async () => {
   const flow = createFlow();

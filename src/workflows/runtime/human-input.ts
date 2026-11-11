@@ -141,12 +141,17 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
     // cancelled or expired), like the input piece's approval: nothing after a
     // refusal may run unless the author opted in. `continueOnReject` keeps the
     // old contract: the step returns `{ approved: false }` and the flow branches on it.
+    // The opt-in is read from the pinned version as the author saved it (a ticked
+    // box is literally `true`), never from the resolved input: an expression that
+    // trigger data or an earlier step sets, or the request body, cannot turn a
+    // refusal into a continue.
     if (request.status !== 'pending' && legacy) {
-      if (request.status === 'approved' || input.continueOnReject === true) return { approved: request.status === 'approved' };
+      const continueOnReject = node?.settings?.input?.continueOnReject === true;
+      if (request.status === 'approved' || continueOnReject) return { approved: request.status === 'approved' };
       const expired = request.status === 'expired';
       throw new ActionOutcomeError({ status: 'blocked', code: expired ? 'APPROVAL_EXPIRED' : 'APPROVAL_DENIED', effect: 'not_started',
         message: expired ? 'The approval was not answered in time, so the workflow stopped at this step.'
-          : 'The approval was rejected in Needs you, so the workflow stopped at this step.' });
+          : `The approval was ${request.status === 'cancelled' ? 'cancelled' : 'rejected'} in Needs you, so the workflow stopped at this step.` });
     }
     if (request.status !== 'pending') {
       // No denied/expired request can accidentally fall through into a write.
