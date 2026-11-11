@@ -1,4 +1,5 @@
 import { requestHumanInput } from './human-input';
+import { machinePinForRun } from '../db/repos/binding-pins';
 import {createSubflowService,returnSubflowResult} from './subflow-service';
 import { MEETING_ACCOUNTS, meetingSetup, meetingSetupMatches, parseMeetingGuard, prepareMeetingBriefs, meetingStillCurrent, meetingNotificationKey, meetingTransport, type MeetingSetup } from './meeting-briefs';
 import { createLeadBatchService } from './batch-service';
@@ -28,8 +29,9 @@ import { documentInput, projectDocument } from './decision-document';
 import { HUBSPOT_CLAIM_WAIT_MS, HubspotNotStartedError, HubspotWriteRefusedError, hubspotContactInput, isHubspotContact, upsertHubspotContact } from './hubspot-contact';
 import { getConnection } from '../db/repos/app-connection';
 import { claimIdentity, completeIdentity, identityCompleted, IdentityUnresolvedError, releaseIdentity } from '../db/repos/effect-identity';
-import { workflowBrowserRead, workflowBrowserReview } from '../../authority/ui-intent';
+import { workflowUiRead, workflowUiReview } from '../../authority/ui-intent';
 import { runAsReviewed } from '../../actions/tools/reviewed-call-scope';
+import { newSnapshotReadLog, withSnapshotReadLog, type SnapshotReadLog } from '../../actions/tools/snapshot-read-log';
 import type { ApprovalManager } from '../../authority/approval';
 
 import type { LLMManager } from "../../llm/manager";
@@ -42,7 +44,8 @@ import type { AuditTrail } from "../../authority/audit";
 import type { EmergencyController } from "../../authority/emergency";
 import type { RoleDefinition } from "../../roles/types";
 import { JarvisLlmClient } from "../adapters/llm-client";
-import { JarvisToolRegistryAdapter } from "../adapters/tool-registry";
+import { assertWorkflowUiCardCurrent, directToolAboveLevelFloor, DESKTOP_ELEMENT_ID_REFUSAL, remoteKeyPressRefusal, workflowUiCardDeadline } from './workflow-ui-tools';
+import { JarvisToolRegistryAdapter, frameComputerStepResult } from "../adapters/tool-registry";
 import { JarvisNotifierAdapter, type NotifierDeps } from "../adapters/notifier";
 import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
@@ -69,8 +72,9 @@ import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type Wor
 import { getWorkflowEffect, saveWorkflowEffect, listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { assertDesktopAllowed } from '../../actions/tools/desktop-guard.ts';
-import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
-import { ActionOutcomeError } from '../../actions/action-outcome';
+import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability, uiCallComputer } from './effect-capabilities';
+import { desktopSubjectFromRun, uiCardRefusal, uiCardSentence, workflowUiCard, type UiCard } from './ui-card';
+import { ActionOutcomeError, type ActionOutcome } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR,
   HTTP_PIECE, httpReadHostListed } from './piece-effects';
@@ -80,21 +84,23 @@ import { recordPieceCompletion, recordPieceNotSent } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
-import { canonicalJson, digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
+import { canonicalJson, digest, resolveEffectContext, pinnedStepParams, stepTargetIsLiteral, type WorkflowEffectContext } from './effect-context';
 import { isCommunityAction } from './step-admission';
 import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
 import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
 import { getFlowRun } from '../db/repos/flow-run';
+import { recordDashboardNotification } from '../../vault/dashboard-notifications';
 import { getFlowReadHosts } from '../db/repos/flow-read-hosts';
 import { boundedReceiptText } from '../../roles/untrusted';
 import { evaluateLlmOutput } from './llm-output-contract';
-import { withWorkflowMachineBinding } from './machine-binding';
+import { assertUiComputerPinned, withWorkflowMachineBinding } from './machine-binding';
 import { getMachineScope } from '../../actions/machine-scope';
 import type { SidecarCapability } from '../../sidecar/types';
 import { toolReturnText } from '../../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../../actions/tools/template-delivery-scope.ts';
 import { outsideApprovalScope, runAsApproved } from '../../authority/approved-action-scope.ts';
 import type { ActionCategory } from '../../roles/authority';
+import { isOwnerOnlyNotify } from '../jarvis-pieces/types';
 import { sendMayHaveArrived } from '../../comms/delivery.ts';
 import { providerOutcome } from '../../failures/evidence.ts';
 import { escapedLiteralForCard, forCard, withoutCardInvisibles } from '../../util/card-text.ts';
@@ -170,6 +176,12 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
    * the toast may already be up. The daemon passes the desktop receipt.
    */
   sendDesktop?: (title: string, body: string) => Promise<boolean | 'unknown'>;
+  /**
+   * Where a dashboard notification is saved; defaults to the vault's table.
+   * Fixtures that must not write the owner's list pass their own, and one that
+   * throws is a notification that was not stored.
+   */
+  recordDashboardNotification?: typeof recordDashboardNotification;
   /** Recent-events buffer for `jarvis-trigger:on_event` polling. */
   eventBuffer: WorkflowEventBuffer;
   /**
@@ -444,6 +456,18 @@ export function buildSandboxServiceBackends(
 ): SandboxApiServices {
   const llmClient = new JarvisLlmClient(opts.llmManager);
   const effects = new WorkflowEffectBoundary(opts);
+  // Browser reads and review capture must share a reader, independent of the
+  // adapter's playbook suppression. Keep live generations only, never restore
+  // them from durable receipts. A restart/eviction requires a fresh read.
+  // Bounded per backend so completed or abandoned runs cannot leak logs.
+  const toolSnapshotReads = new Map<string, SnapshotReadLog>();
+  const withToolSnapshots = <T>(runId: string, execute: () => T): T => {
+    const log = toolSnapshotReads.get(runId) ?? newSnapshotReadLog({ isolatedReader: `workflow-direct:${runId}` });
+    toolSnapshotReads.delete(runId);
+    toolSnapshotReads.set(runId, log);
+    while (toolSnapshotReads.size > 256) toolSnapshotReads.delete(toolSnapshotReads.keys().next().value!);
+    return withSnapshotReadLog(log, execute);
+  };
   const callLlm = async (req: LlmChatRequest): Promise<LlmChatResponse> => {
     // System-prompt composition:
     //   - overrideSystem=true       : use `req.system` only. Jarvis
@@ -533,12 +557,28 @@ export function buildSandboxServiceBackends(
           throw new Error(`tool not found: ${req.toolName}`);
         }
         const tool = opts.toolRegistry!.get(req.toolName)!;
+        // A reviewed UI call is held to the params its step states (#1314):
+        // the step-name header alone would let any holder of the run's token
+        // raise this step's card with params of its own. The computer is never
+        // run data's to choose.
+        // A forged call is a tamper signal, so the refusal is audited (#1314 review).
+        let fromRunData = new Set<string>();
+        // A skill replays recorded clicks and typing, so it is a computer action too (#1314 review).
+        const uiStep = workflowUiReview(tool, req.toolName, req.params);
+        const computerAction = uiStep || tool.name === 'run_skill';
+        try { if (uiStep) fromRunData = pinnedStepParams(ctx, req.params, ['target']); }
+        catch (error) {
+          effects.auditRefusal({ context: ctx, toolName: tool.name, category: refusedEffectCategory(tool) });
+          throw error;
+        }
         // desktop.enabled: false (#905). Typed and not started, before any
         // effect record or approval card exists for the step; audited like a
         // capability refusal.
         try { assertDesktopAllowed(tool, req.params); }
         catch (error) {
-          effects.auditRefusal({ context: ctx, toolName: `desktop_disabled(${tool.name})`, category: refusedEffectCategory(tool) });
+          // Labelled by the switch that refused it (#1314 review).
+          const which = error instanceof ActionOutcomeError && error.outcome.code === 'SCREEN_CAPTURE_DISABLED' ? 'screen_capture_disabled' : 'desktop_disabled';
+          effects.auditRefusal({ context: ctx, toolName: `${which}(${tool.name})`, category: refusedEffectCategory(tool) });
           throw error;
         }
         const capability = (() => {
@@ -551,35 +591,91 @@ export function buildSandboxServiceBackends(
           }
         })();
         const gate = resolveToolGate(tool, req.toolName, req.params);
+        const uiReview = workflowUiReview(tool, req.toolName, req.params);
+        const remoteKey = !uiReview ? null : remoteKeyPressRefusal(tool.name, req.params, machinePinForRun(ctx.runId))
+          ?? (tool.name === 'desktop_click' && !fromRunData.has('element_id') ? DESKTOP_ELEMENT_ID_REFUSAL : null);
+        if (remoteKey) {
+          effects.auditRefusal({ context: ctx, toolName: tool.name, category: refusedEffectCategory(tool) });
+          throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started', message: `WORKFLOW_TOOL_UNSUPPORTED: ${remoteKey}` });
+        }
+        let uiExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
+        let dispatched = false;
+        // The card shows every frozen value, where each came from, the
+        // computer and the screen (#1314), or the step is refused unseen.
+        const subject = uiReview ? tool.reviewSubject?.(req.params) ?? {} : {};
+        let uiCard: UiCard | null = null;
+        // A computer that cannot be resolved is refused, typed and recorded,
+        // by `prepare` below; no card is raised without one.
+        // Written in the step, never resolved from run data: a UI step's params
+        // are held to the graph above; a skill's target is read from the graph.
+        const literalTarget = typeof req.params.target === 'string' && req.params.target.trim() !== ''
+          && (uiStep || stepTargetIsLiteral(ctx, req.params.target));
+        if (uiReview) {
+          try {
+            // Nothing resolves a computer before the pin check (#1314 review): a refused call binds none.
+            assertUiComputerPinned(ctx.runId, literalTarget);
+            uiCard = workflowUiCard(tool.name, req.params, {
+              computer: uiCallComputer(tool.name, req.params.target).name,
+              source: name => fromRunData.has(name) ? 'run_data' : 'workflow', declared: Object.keys(tool.parameters ?? {}),
+              page: subject.origin, element: subject.element, ...desktopSubjectFromRun(listWorkflowEffects(ctx.runId), tool.name, req.params) });
+          } catch { uiCard = null; }
+        }
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
           // The tool the step names, not only the step (#1152).
           pinnedInput: { toolName: req.toolName },
-          ...(gate.confirm === 'always' ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review this UI effect' } } : {}),
+          ...(gate.confirm === 'always' ? { confirmation: { confirm: 'always' as const, intent: uiCard ? uiCardSentence(uiCard) : gate.intent ?? 'Review this UI effect' } } : {}),
+          ...(uiReview ? { reviewRegistry: opts.toolRegistry!, reviewSubject: subject, ...(uiCard ? { uiCard } : {}),
+            cardRefusal: () => uiCard ? uiCardRefusal(uiCard) : 'The approval card could not name the computer this action would run on.',
+            approvalExpiresAt: workflowUiCardDeadline(tool.name) } : {}),
           // As at the chat gate: a gated call over the workflow's level asks
           // instead of failing the step.
-          ...(gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {}),
+          ...(gate.confirm ? { aboveLevelFloor: directToolAboveLevelFloor(tool, req.params, gate) } : {}),
           route: 'tool', toolName: tool.name, category: capability.category, categories: capability.categories, toolCategory: tool.category,
           // Spelled out rather than spread: the request is what the effect's
           // identity digest is taken over, so only the two fields that decide
           // WHAT is dispatched belong in it. A reply-handling flag added to
           // the route's body must never invalidate a pending approval.
           request: { toolName: req.toolName, params: req.params }, prepare: () => {
+            // On a computer a person chose (#1314 M2): the pin, or the step's own written target.
+            if (computerAction) assertUiComputerPinned(ctx.runId, literalTarget);
             const args = capability.prepareArguments(req.params);
             return { arguments: args, target: capability.target(args) };
           },
           validateTarget: (args, target) => {
             if (digest(capability.target(args)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
             if (target.machineBinding) getMachineScope()?.assertDispatch(target.sidecarId as string | null, target.capability as SidecarCapability);
+            if (uiReview && !dispatched) {
+              const effect = getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], 'tool'));
+              const approval = effect?.approvalId ? opts.approvalManager?.getRequest(effect.approvalId) : null;
+              assertWorkflowUiCardCurrent(approval);
+              uiExecution = approval ? opts.approvalManager?.getUiExecution(approval) ?? null : null;
+              if (!uiExecution) throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_UI_REVIEW_STALE', effect: 'not_started',
+                message: 'The reviewed app or browser session changed, or Jarvis restarted. Start a new run and review the current screen.' });
+            }
           },
-          execute: async (args, checkpoint) => { checkpoint(); return toolAdapter.execute(req.toolName, args); } });
-        return reply.approval ? { result: null, toolName: req.toolName, approval: reply.approval }
-          : { result: reply.result, toolName: req.toolName, ...(reply.outcome ? { outcome: reply.outcome } : {}) };
+          execute: async (args, checkpoint) => {
+            checkpoint(); dispatched = true;
+            return uiReview ? runAsReviewed(uiExecution!.reviewed,
+              () => new JarvisToolRegistryAdapter(uiExecution!.registry).execute(req.toolName, args))
+              : toolAdapter.execute(req.toolName, args);
+          } });
+        // Computer reads and navigation reach the flow framed (#1314), never as raw page or window text.
+        const computer = /^(browser|desktop)_/.test(tool.name);
+        // The page a navigate landed on is the page's to choose (a redirect,
+        // pushState), so its URL in the receipt is framed too (#1314 review).
+        if (reply.approval) return { result: null, toolName: req.toolName, approval: reply.approval };
+        const verification = reply.outcome?.status === 'succeeded' ? reply.outcome.verification : undefined;
+        const outcome: ActionOutcome | undefined = computer && verification?.status === 'verified' && verification.postcondition === 'page_observed'
+          ? { status: 'succeeded', verification: { ...verification, pageUrl: String(frameComputerStepResult(tool.name, tool.category, verification.pageUrl)) } }
+          : reply.outcome;
+        return { result: computer ? frameComputerStepResult(tool.name, tool.category, reply.result) : reply.result,
+          toolName: req.toolName, ...(outcome ? { outcome } : {}) };
       }
     : undefined;
 
   const notifierDeps: NotifierDeps = {
-    broadcastToDashboard: (text, priority) =>
-      opts.wsService.broadcastNotificationToDashboard(text, priority),
+    broadcastToDashboard: (text, priority, storedId) =>
+      opts.wsService.broadcastNotificationToDashboard(text, priority, storedId),
     // Real per-channel routing: tryBroadcastToChannels iterates the requested
     // names, dispatches each to its adapter, and reports delivered/failed
     // independently. A flow that says "telegram" only goes to telegram (with
@@ -677,8 +773,15 @@ export function buildSandboxServiceBackends(
       if (req.channels.length !== 1 || req.channels[0] !== 'dashboard') throw Error('Meeting briefs only notify the dashboard');
       req = {...req, meetingGuard:guard, idempotencyKey:meetingNotificationKey(guard)};
     }
+    // A notification that reaches only the owner's own surfaces is not a
+    // message to anyone else, so it is judged as `read_data` and raises no
+    // card. It is still an effect row, an audit row, and stopped by Pause,
+    // Kill and cancellation. Anything that can reach another person (`auto`
+    // included, which may fan out to Telegram or Discord, and `voice`, spoken
+    // aloud in the room) stays `send_message`.
+    const ownerOnly = isOwnerOnlyNotify(req.channels);
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-notify', action: 'notify',
-      route: 'notify', toolName: 'workflow_notify', category: 'send_message', ...(guard ? {categories:['read_data','send_message'] as ActionCategory[]} : {}), toolCategory: 'notification', request: { ...req },
+      route: 'notify', toolName: 'workflow_notify', category: ownerOnly ? 'read_data' : 'send_message', toolCategory: 'notification', request: { ...req },
       reuseCompleted: record => {
         const key = record.arguments.idempotencyKey;
         const identity = typeof key === 'string' && key ? digest(['workflow-notify-v1', record.projectId, record.flowId, key]) : null;
@@ -729,7 +832,16 @@ export function buildSandboxServiceBackends(
         try {
           const recipients = args.recipients as Record<string, string | null>;
           const guardedNotifier = new JarvisNotifierAdapter({ ...notifierDeps,
-            broadcastToDashboard: (text, priority) => { checkpoint(); return sent(() => opts.wsService.broadcastNotificationToDashboard(text, priority)); },
+            recordDashboard: (text, priority) => {
+              checkpoint();
+              const id = (opts.recordDashboardNotification ?? recordDashboardNotification)({ message: text, priority, workflowId: currentRun?.flowId ?? null, runId: ctx.runId }).id;
+              // Saved: it is in the owner's list now. A Pause, Kill or cancel
+              // that stops the live toast after this must not report it as
+              // never sent, nor release the key for a later run to save again.
+              mayHaveArrived = true;
+              return id;
+            },
+            broadcastToDashboard: (text, priority, storedId) => { checkpoint(); return sent(() => opts.wsService.broadcastNotificationToDashboard(text, priority, storedId)); },
             broadcastToChannels: async (channels, text) => {
               const report: ChannelDeliveryReport = { delivered: [], failed: [], unknown: [] };
               for (const channel of channels) {
@@ -956,27 +1068,43 @@ export function buildSandboxServiceBackends(
           blockParkedEffect(reason);
           return { kind: 'denied' as const, reason };
         };
-        // Browser navigation keeps the same click-only, live-surface review as
+        // Supported UI actions keep the same click-only, live-surface review as
         // chat. Other opaque code/UI capabilities remain unsupported here.
-        const browserReview = workflowBrowserReview(registry.get(call.toolCall.name), call.toolCall.name);
-        if (OPAQUE_TOOL_NAMES.has(call.toolCall.name) && !browserReview) {
+        const uiReview = workflowUiReview(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
+        if (OPAQUE_TOOL_NAMES.has(call.toolCall.name) && !uiReview && !workflowUiRead(call.toolCall.name, call.toolCall.arguments)) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} has opaque code/UI effects; use a typed governed adapter.`);
         }
         if (GATED_TOOL_NAMES.has(call.toolCall.name)) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} is only approvable through its typed adapter; call it as a flow step, not from a delegated agent.`);
         }
         const unboundable = surfaceBoundRefusal(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
-        if (unboundable && !browserReview) return refuse(unboundable);
-        if (gate.confirm === 'always' && !browserReview) {
+        if (unboundable && !uiReview) return refuse(unboundable);
+        const remoteKey = uiReview ? remoteKeyPressRefusal(call.toolCall.name, call.toolCall.arguments, machinePinForRun(resolved.run.id)) : null;
+        if (remoteKey) return refuse(remoteKey);
+        if (gate.confirm === 'always' && !uiReview) {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.`);
         }
-        let browserExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
+        let uiExecution: ReturnType<ApprovalManager['getUiExecution']> = null;
+        // What the card shows (#1314): every value the agent sent, marked as
+        // the agent's, the computer, and the screen as this run last read it.
+        const subject = uiReview ? registry.get(call.toolCall.name)?.reviewSubject?.(call.toolCall.arguments) ?? {} : {};
+        let uiCard: UiCard | null = null;
+        if (uiReview) {
+          try {
+            assertUiComputerPinned(resolved.run.id, false);
+            uiCard = workflowUiCard(call.toolCall.name, call.toolCall.arguments, {
+              computer: uiCallComputer(call.toolCall.name, call.toolCall.arguments.target).name, source: () => 'agent',
+              declared: Object.keys(registry.get(call.toolCall.name)?.parameters ?? {}),
+              page: subject.origin, element: subject.element,
+              ...desktopSubjectFromRun(listWorkflowEffects(resolved.run.id), call.toolCall.name, call.toolCall.arguments) });
+          } catch { uiCard = null; /* `prepare` refuses it typed and recorded; no card is raised without a computer. */ }
+        }
         // Set once the call is dispatched; read by `validateTarget` below.
         let dispatched = false;
         try {
           const inner = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
             route: `agent-tool:${call.sequence}`, toolName: call.toolCall.name, category: call.actionCategory,
-            ...(browserReview || workflowBrowserRead(call.toolCall.name) ? { categories: gate.categories } : {}),
+            ...(uiReview || workflowUiRead(call.toolCall.name, call.toolCall.arguments) ? { categories: gate.categories } : {}),
             toolCategory: call.toolCategory, request: { toolName: call.toolCall.name, arguments: call.toolCall.arguments },
             // Judged as the sub-agent the gate judged it for, and never
             // concluded to need less than the gate required.
@@ -985,12 +1113,14 @@ export function buildSandboxServiceBackends(
             // level shortfall; judge it here the same way, or the approval it
             // asked for could never be granted.
             //
-            // Every browser action needs a dashboard click and the originating
+            // Every UI action needs a dashboard click and the originating
             // registry's live guard; Authority overrides cannot auto-approve it.
-            ...(browserReview ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review browser action' }, reviewRegistry: registry,
-              reviewSubject: registry.get(call.toolCall.name)?.reviewSubject?.(call.toolCall.arguments) ?? {} } : {}),
-            ...(gate.confirm || workflowBrowserRead(call.toolCall.name)
-              ? { aboveLevelFloor: browserReview || workflowBrowserRead(call.toolCall.name) ? 'read_data' as const : gate.floorCategory } : {}),
+            ...(uiReview ? { confirmation: { confirm: 'always' as const, intent: uiCard ? uiCardSentence(uiCard) : gate.intent ?? 'Review UI action' }, reviewRegistry: registry,
+              reviewSubject: subject, ...(uiCard ? { uiCard } : {}),
+              cardRefusal: () => uiCard ? uiCardRefusal(uiCard) : 'The approval card could not name the computer this action would run on.',
+              approvalExpiresAt: workflowUiCardDeadline(call.toolCall.name) } : {}),
+            ...(gate.confirm || workflowUiRead(call.toolCall.name, call.toolCall.arguments)
+              ? { aboveLevelFloor: uiReview || workflowUiRead(call.toolCall.name, call.toolCall.arguments) ? 'read_data' as const : gate.floorCategory } : {}),
             // The target names who asked, so the card and the record are bound
             // to the principal and not only to the tool.
             //
@@ -1000,21 +1130,31 @@ export function buildSandboxServiceBackends(
             // task -- which was harmless while the spawn sink asked again on
             // its own card. That approval now answers the sink (`execute`
             // below), so the card it buys has to say what it buys.
-            prepare: () => ({ arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence,
+            prepare: () => {
+              // A delegated UI call runs only on the computer the workflow was
+              // enabled against (#1314 M2), never one the agent named itself.
+              // Every read of the screen is held the same way by the machine
+              // scope (`withWorkflowMachineBinding`, delegated): a snapshot shows
+              // the agent a computer as much as a click acts on one.
+              if (uiReview) assertUiComputerPinned(resolved.run.id, false);
+              if (uiReview) uiCallComputer(call.toolCall.name, call.toolCall.arguments.target);
+              return { arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence,
               principal: { agentId: call.principal.agentId, agentRoleId: call.principal.agentRoleId, agentAuthorityLevel: call.principal.agentAuthorityLevel },
-              ...(gate.intent ? { intent: gate.intent } : {}) } }),
+              ...(gate.intent ? { intent: gate.intent } : {}) } };
+            },
             // The arguments are frozen but a path in them is resolved only
             // when the tool runs, possibly long after review. A write that now
             // reaches a stricter category than the gate judged (a relative
             // path under a different cwd, a file that became a shell rc or a
             // hook, #522) is not the call that was approved.
             validateTarget: (args, target) => {
-              if (browserReview && !dispatched) {
+              if (uiReview && !dispatched) {
                 const effect = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
                 const approval = effect?.approvalId ? opts.approvalManager?.getRequest(effect.approvalId) : null;
-                browserExecution = approval ? opts.approvalManager?.getUiExecution(approval) ?? null : null;
-                if (!browserExecution) throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_BROWSER_REVIEW_STALE', effect: 'not_started',
-                  message: 'The reviewed browser session changed or Jarvis restarted. Start a new run to review the current browser.' });
+                assertWorkflowUiCardCurrent(approval);
+                uiExecution = approval ? opts.approvalManager?.getUiExecution(approval) ?? null : null;
+                if (!uiExecution) throw new ActionOutcomeError({ status: 'blocked', code: 'WORKFLOW_UI_REVIEW_STALE', effect: 'not_started',
+                  message: 'The reviewed app or browser session changed, or Jarvis restarted. Start a new run to review the current screen.' });
               }
               const now = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, args);
               if (severityRank(now.actionCategory) > severityRank(call.actionCategory)) {
@@ -1046,8 +1186,8 @@ export function buildSandboxServiceBackends(
                 // sub-agent's. Suppressing nests inside that scope, which is the
                 // right way round: the innermost caller knows what happens to
                 // the value.
-                const run = () => withoutTemplateDelivery(() => browserReview
-                  ? runAsReviewed(browserExecution!.reviewed, () => browserExecution!.registry.execute(call.toolCall.name, args))
+                const run = () => withoutTemplateDelivery(() => uiReview
+                  ? runAsReviewed(uiExecution!.reviewed, () => uiExecution!.registry.execute(call.toolCall.name, args))
                   : registry.execute(call.toolCall.name, args));
                 // Inside the approval this call was dispatched under (#988),
                 // as the deferred executor runs an approved card: a spawn or
@@ -1495,11 +1635,14 @@ export function buildSandboxServiceBackends(
     llmChat: cancellableWorkflowService(llmChat),
     notify: cancellableWorkflowService(notify),
     contextProvider,
-    agentDelegate: cancellableWorkflowService((req, ctx) => withWorkflowMachineBinding(ctx, () => agentDelegate(req, ctx))),
+    agentDelegate: cancellableWorkflowService((req, ctx) => withWorkflowMachineBinding(ctx, () => agentDelegate(req, ctx), { delegated: true })),
     eventsPoll,
     workflowsStart: cancellableWorkflowService(workflowsStart),
     ...(opts.resumeUrlPrefix !== undefined ? { resumeUrlPrefix: opts.resumeUrlPrefix } : {}),
   };
-  if (toolsInvoke) services.toolsInvoke = cancellableWorkflowService((req, ctx) => withWorkflowMachineBinding(ctx, () => toolsInvoke(req, ctx)));
+  if (toolsInvoke) services.toolsInvoke = cancellableWorkflowService((req, ctx) => withWorkflowMachineBinding(ctx,
+    () => req.toolName.startsWith('browser_')
+      ? withToolSnapshots(ctx.runId, () => toolsInvoke(req, ctx))
+      : toolsInvoke(req, ctx)));
   return services;
 }
