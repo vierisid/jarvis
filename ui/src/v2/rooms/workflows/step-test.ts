@@ -41,7 +41,8 @@ export function refusalText(body: Record<string, unknown> | null, status: number
   const head = text(body?.error);
   const shown = issues.slice(0, 3).join(" ");
   const more = issues.length > 3 ? ` And ${issues.length - 3} more.` : "";
-  if (shown) return `${head && !/^workflow_not_ready$/i.test(head) ? head + " " : ""}${shown}${more}`.trim();
+  // The server's own sentence already repeats the first issue; the issues are the useful part.
+  if (shown) return `${shown}${more}`;
   return head && !/^[a-z_]+$/.test(head) ? head : `The test could not start (error ${status}).`;
 }
 
