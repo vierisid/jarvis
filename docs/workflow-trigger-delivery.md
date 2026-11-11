@@ -114,6 +114,22 @@ A delivery's identity, in order:
   delivery id header is ignored there: trusting it would let a captured request
   run again under a fresh id.
 
+Credential headers are not passed on. In `_webhook.headers` (the run history,
+the trigger output, `{{trigger._webhook.headers.*}}`) a header keeps its name
+but its value is `[redacted]` when the name is a credential's, in any case:
+`Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, any name with
+the word `auth`, `key`, `sig`, `signature`, `credential` or `session-id` in it
+(`X-Api-Key`, `X-Goog-Api-Key`, `X-Auth-Key`, `Stripe-Signature`,
+`X-Hub-Signature-256`, `X-Jarvis-Signature`), any name containing `token`,
+`secret`, `password` or `hmac` (`X-Gitlab-Token`, `X-Shopify-Hmac-Sha256`), and
+`X-Jarvis-Timestamp`. A value shaped like `Bearer <token>` or `Basic <token>`
+is redacted under any name. `Idempotency-Key` and other headers
+(`Content-Type`, `User-Agent`, `X-GitHub-Event`, `X-GitHub-Delivery`) are kept.
+Signatures and delivery identity are checked on the raw request before this.
+A workflow that read one of these headers now gets `[redacted]`: authenticate
+the sender with the webhook secret, and keep a credential a step needs in a
+connection, not in the request.
+
 A repeat answers 200 with `outcome: "duplicate"` and the original `runId`;
 nothing runs again. Identical unsigned bodies without an id are separate
 deliveries: pings and button presses repeat on purpose. A provider's manual
