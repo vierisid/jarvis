@@ -712,6 +712,14 @@ export class WebSocketServer {
         return res ? withSecurityHeaders(res) : res;
       },
 
+      // A route that throws would otherwise get Bun's default 500, which
+      // carries none of the headers above and, without NODE_ENV=production,
+      // is an HTML page quoting the throwing source.
+      error(err) {
+        console.error('[WebSocketServer] Unhandled request error:', err);
+        return withSecurityHeaders(new Response('Internal Server Error', { status: 500, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }));
+      },
+
       websocket: {
         // Limit individual WS messages to 16 MB (defense against abusive HMR payloads)
         maxPayloadLength: 16 * 1024 * 1024,
