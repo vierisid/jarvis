@@ -308,6 +308,11 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
       if (code === 'EMERGENCY_STOPPED') {
         return build('cancelled', 'none', `${s} did not run: Jarvis was stopped.`, NOTHING, ['run_again_when_resumed'], links, code, detail);
       }
+      if (code === 'CONNECTION_BINDING_REFUSED') {
+        // The run was refused a connection it had pinned (Q-05): the first sentence of the refusal says which and why.
+        const why = o.message.split(/(?<=\.)\s/u)[0]!.trim();
+        return build('missing_binding', 'none', `${s} could not continue. ${why}`, NOTHING, ['accept_binding_change'], links, code, detail);
+      }
       if (code && NAMED_REFUSALS[code]) {
         const named = NAMED_REFUSALS[code];
         return build(named.category, 'none', `${s} did not run: ${named.why}.`, NOTHING, [named.step], links, code, detail);

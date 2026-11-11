@@ -11,6 +11,7 @@ import { ManagedConnectionRow, type RowState } from '../../integrations/ManagedC
 
 import React, { useCallback, useEffect, useState } from "react";
 import { CONNECTION_SETUP_EVENT, takePieceSetup, type PieceSetupRequest } from './connection-setup-request';
+import { fetchRotationNotice } from './connection-rotation';
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { requestSettingsTab } from "../../shell/settings-tab-request";
 import { openRoom } from "../../router";
@@ -147,9 +148,10 @@ export function ConnectionsPanel(): React.ReactElement {
               }}
               onUpdate={async (patch) => {
                 const r = await conn.update(c.id, patch);
+                // A new key that paused workflows answers with the sentence saying which; otherwise "updated".
                 flash(
-                  r.ok ? "ok" : "warn",
-                  r.ok ? `Updated "${c.displayName}"` : `Update failed: ${r.message}`,
+                  r.ok ? (r.message === "updated" ? "ok" : "warn") : "warn",
+                  r.ok ? `Updated "${c.displayName}"${r.message === "updated" ? "" : `. ${r.message}`}` : `Update failed: ${r.message}`,
                 );
                 return r.ok;
               }}
@@ -236,6 +238,12 @@ function EditConnectionForm({
   const [valueText, setValueText] = useState<string>("");
   const [parseError, setParseError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [rotationNotice, setRotationNotice] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchRotationNotice(connection.id).then((notice) => { if (!cancelled) setRotationNotice(notice); });
+    return () => { cancelled = true; };
+  }, [connection.id]);
 
   const handleSubmit = async (): Promise<void> => {
     const patch: {
@@ -307,6 +315,7 @@ function EditConnectionForm({
         />
         {isOAuth2Type(connection.type) ? <span className="wf-conn__form-help">{OAUTH2_VALUE_HELP}</span> : null}
         {valueWarning(connection.type, valueText)}
+        {rotationNotice ? <span className="wf-conn__form-warn" data-testid="rotation-notice">{rotationNotice}</span> : null}
         {parseError ? <span className="wf-conn__form-err">{parseError}</span> : null}
       </label>
       <div className="wf-conn__form-actions">

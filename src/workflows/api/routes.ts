@@ -110,6 +110,7 @@ import {
   type AppConnectionType,
 } from "../db/repos/app-connection";
 import type { CredentialResolver } from "../credentials/adapter";
+import { enabledWorkflowsUsingConnection, rotationSentence, type ConnectionDependent } from "../db/repos/connection-dependents";
 import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oauth2";
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
@@ -704,6 +705,12 @@ function sampleStepNameRefusal(stepName: string): Response | null {
 
 export interface CreateWorkflowRoutesOptions {
   recoveryAuthority?: AuthorityEngine;
+  /**
+   * Called after a connection's key was replaced while enabled workflows run
+   * on it. Those workflows refuse their runs until published again, so the
+   * daemon tells the owner now instead of at the next failed fire.
+   */
+  onConnectionReplaced?: (change: { connectionId: string; displayName: string; workflows: ConnectionDependent[]; message: string }) => void;
   briefWorkflowContext?: WorkflowContext;
   briefCapabilities?: BriefCapabilities;
   /**
@@ -1305,6 +1312,19 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     // id from another project was reachable here while invisible to the list.
     // A mismatch is a 404, not a 403: to this caller the row does not exist,
     // and a distinct answer would confirm the id to someone guessing them.
+    // What saving a new key would do: the enabled workflows that run on this
+    // connection stop until each is published again. The Rotate form reads it.
+    "/api/workflows/connections/:id/rotation-impact": {
+      GET: (req) =>
+        trapErrors(() => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          const existing = getConnectionInProject(callerProject(req), id);
+          if (!existing) return err("connection not found", 404);
+          const workflows = enabledWorkflowsUsingConnection(callerProject(req), existing.externalId);
+          return ok({ workflows, message: rotationSentence(workflows) });
+        }),
+    },
+
     "/api/workflows/connections/:id": {
       DELETE: (req) =>
         trapErrors(() => {
@@ -1380,6 +1400,17 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             ...(status ? { status } : {}),
           });
           if (!merged) return err("connection not found", 404);
+          // A different key advances the credential generation, and every
+          // enabled workflow that runs on this connection then refuses its
+          // runs until it is published again (docs/workflow-binding-pins.md).
+          // Say so to the caller, and tell the owner once.
+          const replaced = merged.credentialGeneration !== current.credentialGeneration;
+          const pausedWorkflows = replaced ? enabledWorkflowsUsingConnection(callerProject(req), merged.externalId) : [];
+          const notice = rotationSentence(pausedWorkflows, "after");
+          if (notice) {
+            try { opts.onConnectionReplaced?.({ connectionId: merged.id, displayName: merged.displayName, workflows: pausedWorkflows, message: notice }); }
+            catch (e) { console.error("[workflow-api] connection replaced notice failed:", e); }
+          }
           return ok({
             id: merged.id,
             externalId: merged.externalId,
@@ -1388,6 +1419,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             pieceName: merged.pieceName,
             status: merged.status,
             updated: merged.updated,
+            ...(notice ? { pausedWorkflows, notice } : {}),
           });
         }),
     },

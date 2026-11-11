@@ -5377,6 +5377,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         sharedPiecesDir: sharedRuntime.piecesDir,
         ...(onPieceLibraryChanged ? { onPieceLibraryChanged } : {}),
         getEventBufferDropped: () => workflowEventBuffer.dropped(),
+        // A rotated key pauses the enabled workflows that run on it until they
+        // are published again: tell the owner now, not at the next failed fire.
+        onConnectionReplaced: ({ connectionId, displayName, message }) => {
+          notifyAll({
+            id: `workflow-connection-replaced:${connectionId}:${Date.now()}`, kind: 'workflow',
+            title: `Workflows paused: ${displayName.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim().slice(0, 40)} key changed`, body: message,
+            actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
+          });
+        },
         // Lets the editor's publish (version lock) report a step whose
         // command can't run on any machine it could land on -- the one OS
         // check a hand-drawn flow gets, since it never meets the composer.

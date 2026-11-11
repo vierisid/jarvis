@@ -27,7 +27,7 @@ import { digest } from './effect-context';
 import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { walkFlowNodes } from '../db/flow-graph';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
-import { nodeConnectionReferences, type RunConnectionBindingView } from '../db/repos/binding-pins';
+import { nodeConnectionReferences, runConnectionBindingViews, type RunConnectionBindingView } from '../db/repos/binding-pins';
 import { expressionFailureGuidance } from './expression-failure';
 import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, isHumanInputStep } from './human-input-contract';
 
@@ -110,20 +110,29 @@ function readinessIssues(run: FlowRun): Array<{ code: string; message?: string }
     : [];
 }
 
+/** What the engine's fetch of a connection says when the run was refused it (Q-05): the engine itself reports only a bare loading error. */
+export const CONNECTION_BINDING_REFUSED = 'CONNECTION_BINDING_REFUSED';
+
 /**
  * #954: the binding of a connection this step names whose last fetch in this
- * run was not handed out (an expired token Jarvis could not refresh), or
- * null. A binding the run was refused (Q-05) says why the step failed on its
- * own, so a stale credential failure never stands in for it. The fetch that
- * failed did nothing; whether the step did anything before it (an earlier
+ * run was not handed out, or null: a binding the run was refused (Q-05, the
+ * credential was replaced or removed while the run was going), else an
+ * expired token Jarvis could not refresh. A refusal says why the step failed
+ * on its own, so a stale credential failure never stands in for it. The fetch
+ * that failed did nothing; whether the step did anything before it (an earlier
  * attempt, an earlier round of a loop, a fetch mid-step) is `handedOut`'s and
  * the effect records' to say.
+ *
+ * A run read for a list carries no bindings, so they are read here, once, for
+ * the failed step only; a list and the run's page then give the same advice.
  */
-function credentialFailureFor(run: FlowRun, node: FlowTriggerNode): RunConnectionBindingView | null {
+function credentialFailureFor(run: FlowRun, node: FlowTriggerNode): { binding: RunConnectionBindingView; code: string; message: string } | null {
   const named = new Set(nodeConnectionReferences(node).map(([externalId]) => externalId));
-  const bindings = (run.connectionBindings ?? []).filter(binding => named.has(binding.externalId));
-  if (bindings.some(binding => binding.refusal)) return null;
-  return bindings.find(binding => binding.credentialFailure) ?? null;
+  const bindings = (run.connectionBindings ?? runConnectionBindingViews(run.id)).filter(binding => named.has(binding.externalId));
+  const refused = bindings.find(binding => binding.refusal);
+  if (refused?.refusal) return { binding: refused, code: CONNECTION_BINDING_REFUSED, message: refused.refusal.message };
+  const failed = bindings.find(binding => binding.credentialFailure);
+  return failed?.credentialFailure ? { binding: failed, code: failed.credentialFailure.code, message: failed.credentialFailure.message } : null;
 }
 
 /** The typed refusals of a human input step (#1266). */
@@ -209,10 +218,10 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
     ?? (own.length === 0 ? unsupportedToolRefusal(node, step.errorMessage) : null);
   let evidence: FailureEvidence;
   let sideEffects = true;
-  const binding = !outcome && node ? credentialFailureFor(run, node) : null;
-  if (binding?.credentialFailure) {
+  const credential = !outcome && node ? credentialFailureFor(run, node) : null;
+  if (credential) {
     // A typed reason recorded by the connection fetch: that fetch handed nothing out.
-    const { code, message } = binding.credentialFailure;
+    const { binding, code, message } = credential;
     const typed = projectFailure({ source: 'action', outcome: { status: 'blocked', code, message, effect: 'not_started' } },
       { label, sideEffects: false }, links);
     // The step may still have acted before it: a dispatch on its own record, or, for a step with no

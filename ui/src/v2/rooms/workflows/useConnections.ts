@@ -139,7 +139,9 @@ export function useConnections(): ConnectionsState {
           return { ok: false, message: body.error ?? `HTTP ${r.status}` };
         }
         await refresh();
-        return { ok: true, message: "updated" };
+        // A saved key that replaced the old one says which workflows it paused (`notice`); otherwise just "updated".
+        const saved = (await r.json().catch(() => ({}))) as { notice?: unknown };
+        return { ok: true, message: typeof saved.notice === "string" && saved.notice ? saved.notice : "updated" };
       } catch (e) {
         return { ok: false, message: (e as Error).message };
       }
