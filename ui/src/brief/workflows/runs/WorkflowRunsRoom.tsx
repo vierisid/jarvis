@@ -112,11 +112,13 @@ function BoundRuns({
     if (detail.current && inspected?.runId === state.selectedId)
       detail.current.scrollTop = store.position(`detail:${state.selectedId}`);
   }, [store, state.selectedId, inspected?.runId]);
-  function select(id: string) {
+  /** A run opens with the version it ran on: the inspection answers a run only for its own
+   * version, so after an edit the runs of earlier versions would otherwise not open. */
+  function select(id: string, versionId: string = b.versionId) {
     store.select(id);
     shell.navigate({
       room: "workflow-runs",
-      selection: { flowId: b.flowId, versionId: b.versionId, runId: id },
+      selection: { flowId: b.flowId, versionId, runId: id },
     });
   }
   async function start() {
@@ -215,7 +217,7 @@ function BoundRuns({
                 }
                 aria-label={`Open ${run.label}`}
                 title={run.runId}
-                onClick={() => select(run.runId)}
+                onClick={() => select(run.runId, run.versionId)}
               >
                 <strong>{run.label}</strong>
                 <time>{date(run.startedAt)}</time>
