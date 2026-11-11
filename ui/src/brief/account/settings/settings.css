@@ -103,14 +103,6 @@
 .brief-root .brief-settings-retry-hidden {
   visibility: hidden;
 }
-.brief-root .brief-settings > section > .brief-segments {
-  margin-top: 18px;
-  max-width: 390px;
-}
-.brief-root .brief-settings-unavailable {
-  color: var(--brief-secondary);
-  font-size: 12px;
-}
 .brief-root .brief-settings-destination {
   width: 100%;
   display: flex;

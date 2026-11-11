@@ -8,10 +8,7 @@ import React, {
 import { ArrowRight } from "lucide-react";
 import { isBriefCapabilityEnabled } from "../../../../../src/brief/capabilities";
 import type { BriefRoomModule, BriefShellPort } from "../../contracts";
-import {
-  BriefButton,
-  BriefSelect,
-} from "../../components/controls";
+import { BriefButton, BriefSelect } from "../../components/controls";
 import { AppearanceSelector } from "./AppearanceSelector";
 import { SettingsController } from "./controller";
 import type { SettingsDestination } from "./model";

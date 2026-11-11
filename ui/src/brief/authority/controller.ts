@@ -55,6 +55,8 @@ export class AuthorityController {
   private generation = 0;
   private abort?: AbortController;
   private navigationAbort?: AbortController;
+  /** When the last save was confirmed; background reads keep the confirmation visible briefly. */
+  private savedAt = 0;
   constructor(private port: AuthorityPort) {
     this.source = port.source;
     this.scopeId = port.scopeId;
@@ -194,12 +196,14 @@ export class AuthorityController {
         });
       else if (
         data &&
+        !discard &&
         previous.phase === "saved" &&
         Date.now() - this.savedAt < SAVED_VISIBLE_MS &&
         previous.saved &&
         sameValues(data, previous.saved)
       )
-        // The background poll must not erase "Saved" the moment after a save.
+        // A background poll must not erase "Saved" the moment after a save; an
+        // explicit reload (discard) still reports that current settings loaded.
         this.publish({ saved: data, availability: "ready" });
       else if (data)
         this.publish({
@@ -273,8 +277,6 @@ export class AuthorityController {
       if (op.current()) this.unknown(attemptedFields);
     }
   }
-  /** When the last save was confirmed; background reads keep the confirmation visible briefly. */
-  private savedAt = 0;
   private unknown(retryFields: AuthorityField[]) {
     this.publish({
       phase: "unknown",
