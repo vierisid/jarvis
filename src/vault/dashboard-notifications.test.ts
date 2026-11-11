@@ -1,7 +1,7 @@
 import { test, expect, beforeEach, describe } from 'bun:test';
 import { initDatabase } from './schema.ts';
 import {
-  DASHBOARD_NOTIFICATION_CAP, DASHBOARD_NOTIFICATION_MAX_AGE_MS,
+  DASHBOARD_NOTIFICATION_CAP, DASHBOARD_NOTIFICATION_MAX_AGE_MS, DASHBOARD_NOTIFICATION_MAX_CHARS,
   listUnreadDashboardNotifications, markDashboardNotificationRead, recordDashboardNotification,
 } from './dashboard-notifications.ts';
 
@@ -32,6 +32,17 @@ describe('dashboard notifications', () => {
     expect(rows).toHaveLength(DASHBOARD_NOTIFICATION_CAP);
     expect(rows[0]!.message).toBe(`n${DASHBOARD_NOTIFICATION_CAP + 4}`);
     expect(rows.some(r => r.message === 'n0')).toBe(false);
+  });
+
+  test('a message longer than the cap is shortened and says so, a shorter one is kept whole', () => {
+    const whole = 'b'.repeat(24_000);
+    recordDashboardNotification({ message: whole, priority: 'normal', now: 1 });
+    const long = recordDashboardNotification({ message: 'a'.repeat(DASHBOARD_NOTIFICATION_MAX_CHARS + 1000), priority: 'normal', now: 2 });
+    const [kept, other] = listUnreadDashboardNotifications();
+    expect(kept!.id).toBe(long.id);
+    expect(kept!.message.length).toBeLessThanOrEqual(DASHBOARD_NOTIFICATION_MAX_CHARS);
+    expect(kept!.message).toEndWith('[Shortened: the full message was longer than the dashboard keeps.]');
+    expect(other!.message).toBe(whole);
   });
 
   test('drops rows older than 30 days, read or not', () => {

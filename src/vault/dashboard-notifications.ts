@@ -16,6 +16,19 @@ export interface DashboardNotificationRow {
 export const DASHBOARD_NOTIFICATION_CAP = 200;
 /** Rows older than this are dropped on every insert, read or not. */
 export const DASHBOARD_NOTIFICATION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * Longest message kept, in characters. Above the 24,000-character meeting
+ * brief limit, so a brief is kept whole; a longer message is shortened, never
+ * dropped. With the row cap it bounds the table and the unread list.
+ */
+export const DASHBOARD_NOTIFICATION_MAX_CHARS = 32_000;
+const SHORTENED = '\n\n[Shortened: the full message was longer than the dashboard keeps.]';
+
+function boundedMessage(message: string): string {
+  return message.length <= DASHBOARD_NOTIFICATION_MAX_CHARS ? message
+    // Not ending on half of a surrogate pair.
+    : message.slice(0, DASHBOARD_NOTIFICATION_MAX_CHARS - SHORTENED.length).replace(/[\uD800-\uDBFF]$/, '') + SHORTENED;
+}
 
 /**
  * Store one notification a workflow sent to the dashboard, so it is still
@@ -32,18 +45,22 @@ export function recordDashboardNotification(input: {
   const db = getDb();
   const now = input.now ?? Date.now();
   const row: DashboardNotificationRow = {
-    id: crypto.randomUUID(), message: input.message, priority: input.priority,
+    id: crypto.randomUUID(), message: boundedMessage(input.message), priority: input.priority,
     workflow_id: input.workflowId ?? null, run_id: input.runId ?? null, created_at: now, read_at: null,
   };
-  db.run(
-    `INSERT INTO dashboard_notifications (id, message, priority, workflow_id, run_id, created_at, read_at) VALUES (?, ?, ?, ?, ?, ?, NULL)`,
-    [row.id, row.message, row.priority, row.workflow_id, row.run_id, row.created_at],
-  );
-  db.run(`DELETE FROM dashboard_notifications WHERE created_at < ?`, [now - DASHBOARD_NOTIFICATION_MAX_AGE_MS]);
-  db.run(
-    `DELETE FROM dashboard_notifications WHERE id NOT IN (SELECT id FROM dashboard_notifications ORDER BY created_at DESC, rowid DESC LIMIT ?)`,
-    [DASHBOARD_NOTIFICATION_CAP],
-  );
+  // One transaction: a trim that fails must not leave a row saved behind a
+  // throw, which the caller would report as not saved.
+  db.transaction(() => {
+    db.run(
+      `INSERT INTO dashboard_notifications (id, message, priority, workflow_id, run_id, created_at, read_at) VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+      [row.id, row.message, row.priority, row.workflow_id, row.run_id, row.created_at],
+    );
+    db.run(`DELETE FROM dashboard_notifications WHERE created_at < ?`, [now - DASHBOARD_NOTIFICATION_MAX_AGE_MS]);
+    db.run(
+      `DELETE FROM dashboard_notifications WHERE id NOT IN (SELECT id FROM dashboard_notifications ORDER BY created_at DESC, rowid DESC LIMIT ?)`,
+      [DASHBOARD_NOTIFICATION_CAP],
+    );
+  })();
   return row;
 }
 
