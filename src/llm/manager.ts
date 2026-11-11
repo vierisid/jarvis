@@ -8,7 +8,7 @@ import type {
   LLMStreamEvent,
   LLMErrorCode,
 } from './provider.ts';
-import { addUsage, classifyErrorString, hasUsage, getLLMErrorCode, LLMProviderError, type LLMUsage } from './provider.ts';
+import { addUsage, classifyErrorString, cleanUsage, hasUsage, getLLMErrorCode, LLMProviderError, type LLMUsage } from './provider.ts';
 import { abortableDelay, raceWithSignal } from '../util/abort.ts';
 import {
   type Tier,
@@ -391,13 +391,15 @@ export class LLMManager {
       // usage (a cut-off body); recorded with the call, never as zero (#1258).
       const spent: LLMUsage = { input_tokens: 0, output_tokens: 0 };
       try {
-        const response = await this.invokeWithRetry(
+        const reported = await this.invokeWithRetry(
           provider,
           messages,
           mergedOptions,
           hasAlternativeProvider,
           spent,
         );
+        // The numbers a provider reports are checked once, here, for every caller.
+        const response = { ...reported, usage: cleanUsage(reported.usage) };
         addUsage(spent, response.usage);
         recordUsage({
           tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
@@ -487,7 +489,11 @@ export class LLMManager {
           hasAlternativeProvider,
           spent,
         )) {
-          if (event.type === 'done') finalResponse = event.response;
+          if (event.type === 'done') {
+            finalResponse = { ...event.response, usage: cleanUsage(event.response.usage) };
+            yield { ...event, response: finalResponse };
+            continue;
+          }
           if (event.type === 'text' || event.type === 'tool_call') emittedContent = true;
           if (event.type === 'error') {
             terminalError = event;

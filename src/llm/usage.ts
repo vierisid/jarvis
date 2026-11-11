@@ -13,6 +13,7 @@
 
 import type { Database } from 'bun:sqlite';
 import type { Tier } from './tiers.ts';
+import { cleanTokenCount } from './provider.ts';
 
 type DbResolver = () => Database | null;
 
@@ -79,11 +80,14 @@ export function recordUsage(rec: UsageRecord): void {
         rec.subsystem,
         rec.provider,
         rec.model,
-        rec.input_tokens,
-        rec.output_tokens,
-        rec.cache_read_input_tokens ?? 0,
-        rec.cache_creation_input_tokens ?? 0,
-        rec.latency_ms,
+        // A provider's numbers are not trusted: anything that is not a sane
+        // count is 0 (unknown), so the call is still recorded and the totals
+        // and threshold alerts built on them are never corrupted.
+        cleanTokenCount(rec.input_tokens),
+        cleanTokenCount(rec.output_tokens),
+        cleanTokenCount(rec.cache_read_input_tokens),
+        cleanTokenCount(rec.cache_creation_input_tokens),
+        Number.isFinite(rec.latency_ms) && rec.latency_ms >= 0 ? Math.round(rec.latency_ms) : 0,
         rec.error_code ?? null,
       ],
     );
