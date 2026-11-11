@@ -364,6 +364,28 @@ test('D-12: Forget removes every earlier version of a corrected fact from each r
   expect(JSON.stringify(await context.vaultSearch({ query: 'Ada' }))).not.toContain('ZEBRA');
   expect(JSON.stringify(await context.vaultGetEntity(entity.id))).not.toContain('ZEBRA');
   expect(getFact(other.id)?.object).toBe('Other company');
-  // The older versions' automatic sources stay suppressed too.
+  // What Forget keeps is content-free (replay suppression of earlier versions is the next test).
   expect(JSON.stringify(getDb().query('SELECT * FROM memory_forget_suppressions').all())).not.toContain('ZEBRA');
+});
+test('D-12: a replay of an earlier version\'s automatic source cannot bring it back after Forget', () => {
+  const { fact, entity, options } = fixture();
+  const corrected = correctFact(fact.id, 'Helix', 'I switched editors');
+  forget(corrected.id);
+  expect(getFact(fact.id)).toBeNull();
+  // The same extraction input replayed must stay forgotten, like the chosen version's own source.
+  expect(() => createFact(entity.id, 'preferred_editor', 'PRIVATE Emacs', options)).toThrow(FactSuppressedError);
+  expect(findFacts({ subject_id: entity.id, predicate: 'preferred_editor', includeSuperseded: true })).toEqual([]);
+});
+test('D-12: Forget follows only supersession links, never shared text, entity or predicate', () => {
+  const ada = createEntity('person', 'Ada'), bob = createEntity('person', 'Bob');
+  const first = createFact(ada.id, 'pricing_note', 'Shared words', { source: 'dashboard', confirmed: true });
+  const current = correctFact(first.id, 'Newer words', 'Changed');
+  const sameText = createFact(bob.id, 'pricing_note', 'Shared words', { source: 'dashboard', confirmed: true });
+  const otherFirst = createFact(ada.id, 'works_at', 'Acme', { source: 'dashboard', confirmed: true });
+  const otherCurrent = correctFact(otherFirst.id, 'Globex', 'Moved');
+  const otherScope = createFact(ada.id, 'pricing_note', 'Shared words', { source: 'dashboard', confirmed: true, scope: 'EU' });
+  forget(current.id);
+  expect([first.id, current.id].map(getFact)).toEqual([null, null]);
+  for (const kept of [sameText, otherFirst, otherCurrent, otherScope]) expect(getFact(kept.id)?.object).toBe(kept.object);
+  expect(getFact(otherFirst.id)?.superseded_by).toBe(otherCurrent.id);
 });
