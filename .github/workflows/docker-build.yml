@@ -74,20 +74,53 @@ permissions:
   contents: read
 
 jobs:
+  # Two legs, the same steps (owner decision 2026-11-11, option c), as in
+  # test.yml's sidecar-build. The release builds and smokes the image on
+  # ubuntu-24.04 (release-exec.yml build-image and smoke-image), so the leg
+  # that gates is on that label; the ubuntu-latest leg only warns (a red
+  # check when it fails, not a failed workflow; neither is required). The image
+  # itself is built inside a BuildKit pinned by digest, but loading and
+  # running it goes through the host's dockerd, and that is what moved under
+  # it: ubuntu-26.04 ships Docker 29 on the containerd image store, which
+  # changed what `docker load` reports as the image ID and failed
+  # smoke-image in release dry run 42868738162 while this job, then on
+  # ubuntu-latest, was green. workflow-hardening.test.sh rule 16 holds the
+  # gating leg to the release label and the -latest leg to non-blocking.
   docker-build:
-    runs-on: ubuntu-latest
+    name: docker-build (${{ matrix.leg }})
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.early_warning }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            leg: ubuntu-24.04, release image
+            early_warning: false
+          - runner: ubuntu-latest
+            leg: ubuntu-latest, early warning
+            early_warning: true
     env:
       # Run-scoped rather than a bare `jarvis:ci`. On a GitHub-hosted runner
       # each job gets a fresh VM so it makes no difference, but `concurrency` is
       # per-ref: on a self-hosted runner two refs can build at once, and a
       # shared tag would mean one ref's smoke check running the other ref's
-      # image, then one job deleting the tag out from under the other.
-      IMAGE_TAG: jarvis:ci-${{ github.run_id }}-${{ github.run_attempt }}
+      # image, then one job deleting the tag out from under the other. The
+      # leg index keeps the two legs of one run apart the same way.
+      IMAGE_TAG: jarvis:ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
     # The build is the long pole; the smoke check adds ~2-3 minutes on the
     # happy path and fails at ~100s on the #614 shape. Nothing bounds the
     # docker build or `docker run` themselves, and the default is 6 hours.
     timeout-minutes: 30
     steps:
+      # A -latest label moves over weeks, not at once, so the early-warning
+      # leg can still land on the old image; this says which one it ran and
+      # which image store its dockerd uses.
+      - name: Name the runner image
+        env:
+          LEG: ${{ matrix.leg }}
+        run: echo "::notice::${LEG} ran on ${ImageOS:-unknown} ${ImageVersion:-unknown}, docker storage $(docker info --format '{{.Driver}} {{json .DriverStatus}}' 2>/dev/null || echo unknown)"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -150,7 +183,7 @@ jobs:
         env:
           # Unique per run AND per re-run, so a retry can never collide with a
           # leftover from the attempt before it.
-          SMOKE_PREFIX: jarvis-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          SMOKE_PREFIX: jarvis-smoke-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
         run: ./.github/scripts/docker-smoke.sh "$IMAGE_TAG"
 
       # #647: a version bump may re-run only the version-dependent steps. A release commit
