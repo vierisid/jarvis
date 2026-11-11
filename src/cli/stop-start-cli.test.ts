@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +11,7 @@ import { join } from 'node:path';
 const BIN = join(import.meta.dir, '..', '..', 'bin', 'jarvis.ts');
 const HOME = mkdtempSync(join(tmpdir(), 'jarvis-cli-e2e-'));
 const children: Array<ReturnType<typeof Bun.spawn>> = [];
+let heldPort: number | null = null;
 
 async function cli(args: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> {
   const proc = Bun.spawn(['bun', BIN, ...args], {
@@ -29,11 +30,21 @@ async function unrelatedListener(): Promise<{ pid: number; port: number }> {
   );
   children.push(child);
   const { value } = await child.stdout.getReader().read();
-  return { pid: child.pid, port: Number.parseInt(new TextDecoder().decode(value).trim(), 10) };
+  const port = Number.parseInt(new TextDecoder().decode(value).trim(), 10);
+  heldPort = port;
+  return { pid: child.pid, port };
 }
 
 afterAll(async () => {
-  await cli(['stop']).catch(() => {});
+  // Nothing here should have started a daemon. If a regression did, its lock
+  // is in this HOME and `stop` signals only that lock's holder. The port is
+  // pinned to one of our own listeners (never this install's, so never
+  // signalled): a bare `stop` would fall back to 3142 and clear any daemon
+  // run from this checkout -- the developer's own -- since its command line is
+  // this bin/jarvis.ts.
+  if (existsSync(join(HOME, '.jarvis', 'jarvis.pid')) && heldPort !== null) {
+    await cli(['stop'], { JARVIS_PORT: String(heldPort) }).catch(() => {});
+  }
   for (const child of children) { try { child.kill('SIGKILL'); } catch { /* gone */ } }
   try { rmSync(HOME, { recursive: true, force: true }); } catch { /* ignore */ }
 });
