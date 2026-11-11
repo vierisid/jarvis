@@ -754,6 +754,23 @@ describe("workflow API: runs", () => {
     expect(queueStats().queued).toBe(1);
   });
 
+  test("POST /:id/run refuses with a 503 and Retry-After once the queue is full, and queues nothing", async () => {
+    const { enqueue } = await import("../db/repos/job-queue");
+    const { MAX_QUEUED_WEBHOOK_RUNS } = await import("../runner/triggers/manager");
+    const post = routes["/api/workflows"]?.POST;
+    const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
+    const flowId = created.body.flow.id;
+    const run = routes["/api/workflows/:id/run"]?.POST;
+    const start = () => (run as (r: Request) => Promise<Response>)(reqWithParams("POST", `http://x/api/workflows/${flowId}/run`, { id: flowId }, {}) as Request);
+    for (let i = 0; i < MAX_QUEUED_WEBHOOK_RUNS - 1; i++) enqueue({ jobType: "RUN_FLOW", payload: {} });
+    expect((await start()).status).toBe(202);
+    const refused = await start();
+    expect(refused.status).toBe(503);
+    expect(refused.headers.get("Retry-After")).toBe("30");
+    expect((await refused.json()).error).toContain("Try again");
+    expect(queueStats().queued).toBe(MAX_QUEUED_WEBHOOK_RUNS);
+  });
+
   test("POST /:id/run with stepNameToTest prefers DRAFT over PUBLISHED", async () => {
     // The test-from-here UX edits sample data + step definitions on a
     // draft. If we ran the published version instead, the test would

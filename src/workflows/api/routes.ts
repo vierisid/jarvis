@@ -2191,6 +2191,17 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           ) {
             return err(`triggeredBy must be a string of at most ${RUN_TRIGGERED_BY_MAX_CHARS} characters`, 400);
           }
+          // A manual start is capped like webhook ingress: past this many
+          // waiting jobs a request is refused, not queued behind them for
+          // minutes. Before any run row exists, so nothing is left to clean up.
+          let waiting = 0;
+          try { waiting = countQueued(); } catch { /* a probe failure must not stop the owner's run */ }
+          if (waiting >= MAX_QUEUED_WEBHOOK_RUNS) {
+            return new Response(JSON.stringify({ error: "Jarvis is busy: too many runs are waiting. Try again in a minute." }), {
+              status: 503,
+              headers: { "Content-Type": "application/json", "Retry-After": "30" },
+            });
+          }
           // Version selection:
           //   - Test-from-here (stepNameToTest set): prefer DRAFT. The user
           //     is iterating on step definitions + sample data in the editor,

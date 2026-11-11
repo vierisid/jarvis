@@ -266,6 +266,17 @@ or waiting in the queue. `GET /api/workflow-runs/:runId` includes the `fire`
 that started the run, and `manage_workflow get` returns the workflow's
 `recentDeliveries`.
 
+## Queue order and caps
+
+The queue takes the highest priority first, then the oldest. A scheduled run
+and an approval or timer continuation queue at priority 1; webhook, manual and
+other runs at 0. A schedule's tick therefore goes ahead of any backlog of
+webhook or manual runs instead of being skipped behind it.
+
+Manual starts (`POST /api/workflows/:id/run`) are refused with a plain 503 and
+`Retry-After: 30` once 500 jobs are waiting, the same cap webhook ingress has.
+Nothing is created for a refused start.
+
 ## Limits
 
 - Polls of event sources are not missed runs; only schedules record misses.

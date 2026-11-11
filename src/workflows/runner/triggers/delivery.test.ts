@@ -476,6 +476,18 @@ describe("schedules, in Jarvis's configured time zone", () => {
     await d.stop();
   });
 
+  test("a scheduled run is claimed ahead of a backlog of webhook and manual jobs", async () => {
+    setCronTimezone("UTC");
+    const { flowId } = schedule("* * * * *");
+    const d = await daemon(at("2026-10-07T09:00:00Z"));
+    // A backlog already waiting, as a busy webhook source leaves it.
+    for (let i = 0; i < 20; i++) enqueue({ jobType: RUN_FLOW, payload: { runId: `backlog-${i}` }, flowRunId: `backlog-${i}` });
+    d.tick(flowId, "2026-10-07T09:00:10Z");
+    const run = runsOf(flowId)[0]!;
+    expect(claimNextJob()?.flowRunId).toBe(run.id);
+    await d.stop();
+  });
+
   test("a broken every-minute schedule is one failed run and one counted blocked row, not one per minute", async () => {
     setEncryptionKey(Buffer.alloc(32, 0x61));
     const save = () => upsertConnection({ externalId: "account", pieceName: "private-piece", displayName: "Synthetic", pieceVersion: "1", type: "SECRET_TEXT", value: { secret_text: "x" } });

@@ -89,6 +89,15 @@ interface TriggerNode {
  */
 export const MAX_QUEUED_WEBHOOK_RUNS = 500;
 
+/**
+ * Queue priority of a scheduled run. The queue takes higher priority first and
+ * then the oldest, and webhook and manual runs wait at 0, so a schedule's tick
+ * goes ahead of any backlog of them instead of being skipped behind it (a tick
+ * is skipped while the previous one has not started). Approval continuations
+ * share this priority; each group keeps its order among itself.
+ */
+export const SCHEDULE_RUN_PRIORITY = 1;
+
 type SubscriptionKind = "cron" | "webhook" | "event" | "engine";
 type ActiveSub = {
   generation: number;
@@ -970,6 +979,7 @@ export class TriggerManager {
         flowRunId: run.id,
         flowId,
         flowVersionId: versionId,
+        priority: opts.source === "schedule" ? SCHEDULE_RUN_PRIORITY : 0,
         // No auto-retry: trigger-fired runs often have side effects that
         // would duplicate on retry (e.g. notify, email, downstream API
         // calls). Surface the failure once; the trigger's next fire is

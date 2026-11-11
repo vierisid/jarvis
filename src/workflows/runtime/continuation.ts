@@ -26,6 +26,9 @@ import { getWaitpoint, markWaitpointResumed, type Waitpoint } from "../db/repos/
 import { claimFire, fireDigest, recordFire } from "../db/repos/trigger-fire";
 import { emergencyHold } from "./emergency-hold";
 
+/** Queue priority of a continuation: ahead of runs that have not started (default 0). */
+export const RESUME_PRIORITY = 1;
+
 /** Digest of a version's graph: a draft edited while a run of it was paused no longer matches. */
 export function graphDigest(trigger: unknown): string {
   const canonical = JSON.stringify(trigger, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
@@ -136,6 +139,8 @@ export function claimContinuation(input: {
       flowRunId: runId,
       // Re-resuming an already-resumed waitpoint would walk past it.
       maxAttempts: 1,
+      // A person's answer or a due timer goes ahead of runs that have not started.
+      priority: RESUME_PRIORITY,
     });
     return { runId };
   });
