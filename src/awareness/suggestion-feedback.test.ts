@@ -296,3 +296,96 @@ test('routine discovery pages canonical proposals and decisions without a notifi
   expect(all.find(row => row.opportunityId === old.id).status).toBe('dismissed');
   expect((await list(-1)).status).toBe(400);
 });
+
+test('a composer drain stops at the next job when awareness turns off, and the rest stays queued (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  let on = true, calls = 0;
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    acceptSuggestion(proposal().id, acceptance);
+    const other = createSuggestion({ type: 'automation', title: 'Review receipts', body: 'Receipt review repeats.',
+      triggerCaptureId: 'capture-other', context: { opportunity: { patternKey: 'job-v1:receipt_review',
+        evidence: [{ captureId: 'observed-2', observedAt: 100, app: 'Mail', cue: 'receipt' }], goalCandidates: [] } } });
+    acceptSuggestion(other.id, { ...acceptance, requestId: 'accept-2', name: 'Receipt check' });
+    worker = new SuggestionComposer(async () => { calls++; on = false; return result; });
+    worker.start(); await worker.idle();
+    expect(calls).toBe(1);
+    on = true;
+    expect(claimSuggestionComposition()).not.toBeNull();
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test('a composition whose awareness went off mid-job attaches nothing and goes back to the queue unspent (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  let on = true;
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    const id = proposal().id;
+    acceptSuggestion(id, acceptance);
+    worker = new SuggestionComposer(async () => { on = false; return result; });
+    worker.start(); await worker.idle();
+    const job = getDb().query('SELECT state, attempts, flow_id FROM suggestion_composition_jobs').get() as { state: string; attempts: number; flow_id: string | null };
+    expect(job).toMatchObject({ state: 'queued', attempts: 0, flow_id: null });
+    expect(getDb().query('SELECT job_id FROM suggestion_composition_attempts').all()).toHaveLength(0);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test('the model client a composition uses refuses every call once awareness is off (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  const { awarenessHeldLlm, AwarenessHeldError } = await import('./history-guard.ts');
+  let sent = 0;
+  const llm = awarenessHeldLlm({ async chat() { sent++; return { text: '' }; } });
+  await llm.chat();
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    expect(() => llm.chat()).toThrow(AwarenessHeldError);
+    expect(sent).toBe(1);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test('a held call the composer reported as a failure still goes back to the queue unspent, even if awareness is back on (#1314 review)', async () => {
+  acceptSuggestion(proposal().id, acceptance);
+  // The switch refused a call (held), the composer turned it into ok:false, and awareness was on again by the check.
+  worker = new SuggestionComposer(async (_request, held) => { held!.held = true; return { ok: false, errors: ['LLM call failed: Screen awareness is off'] } as never; });
+  worker.start(); await worker.idle();
+  const job = getDb().query('SELECT state, attempts FROM suggestion_composition_jobs').get() as { state: string; attempts: number };
+  expect(job).toMatchObject({ state: 'queued', attempts: 0 });
+  expect(getDb().query('SELECT job_id FROM suggestion_composition_attempts').all()).toHaveLength(0);
+});
+
+test('a hold that holds nothing refunds nothing (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  let on = true;
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    acceptSuggestion(proposal().id, acceptance);
+    // The job stops being this lease's (dismissed elsewhere) while awareness goes off mid-compose.
+    worker = new SuggestionComposer(async () => { on = false;
+      getDb().run("UPDATE suggestion_composition_jobs SET state = 'failed', lease_token = NULL"); throw new Error('provider error'); });
+    worker.start(); await worker.idle();
+    expect(getDb().query('SELECT job_id FROM suggestion_composition_attempts').all()).toHaveLength(1);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test('the tool-loop model call is held at its retry boundary too (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  const { awarenessHeldLlm, AwarenessHeldError } = await import('./history-guard.ts');
+  let on = true; const sends: string[] = [];
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    const state = { held: false };
+    const llm = awarenessHeldLlm({ async chatTools(_m: unknown, _t: unknown, _o: unknown, checkDeadline?: () => void) {
+      checkDeadline?.(); sends.push('a'); on = false; checkDeadline?.(); sends.push('b'); return {}; } }, state);
+    await expect(llm.chatTools([], [], {})).rejects.toBeInstanceOf(AwarenessHeldError);
+    expect(sends).toEqual(['a']); expect(state.held).toBe(true);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test('a held call that comes back as a thrown error still goes back to the queue unspent, even if awareness is back on (#1314 review)', async () => {
+  acceptSuggestion(proposal().id, acceptance);
+  // The manager re-wraps the switch's refusal as a provider error; awareness is on again by the catch.
+  worker = new SuggestionComposer(async (_request, held) => { held!.held = true; throw new Error('LLMProviderError: Screen awareness is off'); });
+  worker.start(); await worker.idle();
+  const job = getDb().query('SELECT state, attempts FROM suggestion_composition_jobs').get() as { state: string; attempts: number };
+  expect(job).toMatchObject({ state: 'queued', attempts: 0 });
+});
