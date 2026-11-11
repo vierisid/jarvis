@@ -10,28 +10,33 @@ import { flowExecutor } from './flow-executor'
 
 export const routerExecuter: BaseExecutor<RouterAction> = {
     async handle(params) {
+        // === JARVIS PATCH: a router that cannot resolve an operand fails as the router step ===
+        // Without this the error escaped as an engine error naming no step
+        // (a reference with no value ended the run on "<engine>"). Only resolving
+        // and evaluating the conditions is caught: the chosen branch runs after,
+        // outside it, so an error there keeps the steps that ran and is not
+        // blamed on the router.
+        let runBranches: () => Promise<FlowExecutorContext>
         try {
-            return await routeStep(params)
+            runBranches = await resolveRoute(params)
         }
         catch (error) {
-            // === JARVIS PATCH: a router that cannot resolve an operand fails as the router step ===
-            // Without this the error escaped as an engine error naming no step
-            // (a reference with no value ended the run on "<engine>").
             const { action, executionState } = params
             const message = utils.formatError(error as Error)
             return executionState
                 .upsertStep(action.name, RouterStepOutput.init({ input: action.settings }).setStatus(StepOutputStatus.FAILED).setErrorMessage(message))
                 .setVerdict({ status: FlowRunStatus.FAILED, failedStep: { name: action.name, displayName: action.displayName, message } })
-            // === END JARVIS PATCH ===
         }
+        return runBranches()
+        // === END JARVIS PATCH ===
     },
 }
 
-const routeStep: BaseExecutor<RouterAction>['handle'] = async ({
+const resolveRoute = async ({
     action,
     executionState,
     constants,
-}) => {
+}: Parameters<BaseExecutor<RouterAction>['handle']>[0]): Promise<() => Promise<FlowExecutorContext>> => {
         const resolver = constants.getPropsResolver(LATEST_CONTEXT_VERSION)
         const settings = withPresenceFallbacks(action.settings) as RouterActionSettings
         // Resolve metadata first, leaving condition operands untouched until
@@ -76,9 +81,9 @@ const routeStep: BaseExecutor<RouterAction>['handle'] = async ({
 
         switch (resolvedInput.executionType) {
             case RouterExecutionType.EXECUTE_ALL_MATCH:
-                return handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType: RouterExecutionType.EXECUTE_ALL_MATCH })
+                return () => handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType: RouterExecutionType.EXECUTE_ALL_MATCH })
             case RouterExecutionType.EXECUTE_FIRST_MATCH:
-                return handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType: RouterExecutionType.EXECUTE_FIRST_MATCH })
+                return () => handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType: RouterExecutionType.EXECUTE_FIRST_MATCH })
             default:
                 throw new EngineGenericError('RouterExecutionTypeNotSupportedError', `Router execution type ${resolvedInput.executionType} is not supported`)
         }

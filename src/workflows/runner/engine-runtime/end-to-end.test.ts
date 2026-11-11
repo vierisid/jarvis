@@ -341,6 +341,27 @@ describe("Engine end-to-end (F gate)", () => {
     expect(llmCalls.slice(before)).toEqual([]);
   }, 45_000);
 
+  test.skipIf(skipE2eTests)('router: an engine error inside the chosen branch is not blamed on the router', async () => {
+    const before = llmCalls.length;
+    const ask = (name: string): FlowTriggerNode => ({ name, type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, actionName: 'ask', input: { prompt: name } } });
+    const matched = ask('matched');
+    // No action name: the engine raises an engine error, after the branch's first step ran.
+    matched.nextAction = { name: 'broken', type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, input: {} } };
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: 'Branch error', trigger: { name: 'trigger', type: 'EMPTY', nextAction: {
+      name: 'router', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [
+        { branchType: 'CONDITION', branchName: 'Always', conditions: [[{ firstValue: 'a', operator: 'TEXT_EXACTLY_MATCHES', secondValue: 'a' }]] },
+        { branchType: 'FALLBACK', branchName: 'Otherwise' },
+      ] }, children: [matched, ask('fallback')] } } });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, environment: 'TESTING' });
+    const handle = await runtime!.acquire({ runId: run.id, projectId: DEFAULT_IDS.project });
+    try {
+      // The branch's step ran (an AI call), so the router must not be read as a step that did nothing.
+      await expect(handle.executeFlow({ flowVersion: version })).rejects.toThrow('Action name is not set');
+    } finally { await handle.release(); }
+    expect(llmCalls.slice(before).map(call => call.prompt)).toEqual(['matched']);
+  }, 45_000);
+
   test.skipIf(skipE2eTests)('AppSumo: EMPTY manual triggers ignore stale piece metadata before the AI step', async () => {
     const before = llmCalls.length;
     const shared = mkdtempSync(join(tmpdir(), 'appsumo-shared-'));
