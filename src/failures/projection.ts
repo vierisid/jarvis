@@ -162,6 +162,35 @@ const APPROVAL_WHY: Record<string, string> = {
   APPROVAL_WITHDRAWN: 'its approval was withdrawn', APPROVAL_REQUIRED: 'it now needs approval',
   EFFECT_CHANGED_AFTER_REVIEW: 'what it would do changed after it was approved',
 };
+/** What an action does, for "needs a higher level". */
+const ASKED_ACTIONS: Record<string, { what: string; setting: string }> = {
+  send_email: { what: 'sending email', setting: 'Send email' },
+  send_message: { what: 'sending messages', setting: 'Send messages' },
+  make_payment: { what: 'making payments', setting: 'Make payments' },
+};
+/**
+ * Which Authority setting refused an action, from the refusal's own text
+ * (`Authority denied <tool>: <reason>`), in plain words. A reason it does not
+ * recognise reads as before.
+ */
+export function authorityWhy(message: string | undefined): string {
+  const text = message ?? '';
+  const level = /Authority level (\d+) is below required (\d+) for (\w+)/u.exec(text);
+  if (level) {
+    const asked = ASKED_ACTIONS[level[3]!];
+    const base = `your Authority level (${level[1]}) is below the ${level[2]} that ${asked?.what ?? level[3]!.replace(/_/gu, ' ')} needs`;
+    // A step that sends or pays asks first while its setting is On; refused outright means it is Off.
+    return asked && Number(level[1]) >= 3
+      ? `${base}, and ${asked.setting} is Off in Authority settings, so Jarvis could not ask you first. Turn ${asked.setting} On to be asked each time, or raise the level`
+      : `${base}. Raise the level in Authority settings`;
+  }
+  if (/Explicitly denied by override/u.test(text)) return 'a Deny override in your Authority settings blocks it. Remove the override to allow it';
+  const rule = /^Authority denied \S+: (.+)$/su.exec(text)?.[1]?.trim();
+  if (rule && !/^(Authority|Denied|Temporarily|Explicitly|Workflow|Emergency)/u.test(rule) && rule.length <= 200) {
+    return `your Authority rule "${rule.replace(/"/gu, "'")}" blocks it`;
+  }
+  return 'your Authority settings do not allow it';
+}
 /** A notification that was sent on no channel at all (the notify step's own outcome). */
 const DELIVERY_FAILED = 'DELIVERY_FAILED';
 /** Readiness issues that name a binding rather than invalid input. */
@@ -302,7 +331,7 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
         return build('approval_denied', 'none', `${s} did not run: ${APPROVAL_WHY[code]}.`, NOTHING, ['ask_again'], links, code, detail);
       }
       if (code === 'AUTHORITY_DENIED') {
-        return build('approval_denied', 'none', `${s} did not run: your Authority settings do not allow it.`, NOTHING,
+        return build('approval_denied', 'none', `${s} did not run: ${authorityWhy(o.message)}.`, NOTHING,
           ['review_authority'], links, code, detail);
       }
       if (code === 'EMERGENCY_STOPPED') {

@@ -421,6 +421,13 @@ const API_FACT_SOURCES: ReadonlySet<string> = new Set(['dashboard', 'user', 'api
 /**
  * Create all API route handlers.
  */
+/**
+ * Kill stops Jarvis and Reset brings it back. A rule loosened while it is
+ * stopped would silently go live on Reset, so Authority settings are read-only
+ * until then. Pause keeps working as before.
+ */
+export const AUTHORITY_FROZEN_WHILE_KILLED = 'Jarvis is stopped. Reset it first, then change Authority settings.';
+
 export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
   const googleOAuthFlows = new GoogleOAuthFlowStore();
   // Identifies this daemon boot; the workspace id identifies the data it serves.
@@ -4277,6 +4284,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request) => {
         if (!ctx.authorityEngine) return error('Authority engine not configured', 500);
+        if (ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
         try {
           const body = await req.json() as Record<string, unknown>;
           // Checked before anything is applied: a level that is not a number
@@ -4354,6 +4362,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/authority/config/quick-override': {
       POST: async (req: Request) => {
         if (!ctx.authorityEngine) return error('Authority engine not configured', 500);
+        if (ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
         try {
           const body = await req.json() as { action?: ActionCategory; allow?: boolean; role_id?: string };
           if (!body.action) return error('Missing "action" field', 400);
@@ -4408,6 +4417,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!ctx.learner || !ctx.authorityEngine) {
           return error('Learning system not configured', 500);
         }
+        if (ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
         try {
           const body = await req.json() as { action: ActionCategory; tool_name: string };
           if (!body.action) return error('Missing "action" field');

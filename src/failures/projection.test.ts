@@ -120,3 +120,22 @@ test('browser sign-in failure keeps the setup instruction without claiming no ea
   expect(failure.effect).toBe('unknown'); expect(failure.outcome).not.toContain('Nothing was done');
   expect(failure.headline).not.toContain('Private account');
 });
+
+describe('an Authority refusal names the setting that refused it (G-9)', () => {
+  const denied = (message: string) => projectFailure({ source: 'action', outcome: { status: 'blocked', code: 'AUTHORITY_DENIED', message, effect: 'not_started' } },
+    { label: 'The step "Send invoice"', sideEffects: false }).headline;
+
+  test('a level shortfall on email says the level, that Send email is Off, and what to do', () => {
+    expect(denied('Authority denied piece:smtp/send-email: Authority level 3 is below required 7 for send_email')).toBe(
+      'The step "Send invoice" did not run: your Authority level (3) is below the 7 that sending email needs, and Send email is Off in Authority settings, so Jarvis could not ask you first. Turn Send email On to be asked each time, or raise the level.');
+  });
+  test('a level shortfall on an action that is never asked about says to raise the level', () => {
+    expect(denied('Authority denied piece:gmail/gmail_delete_draft: Authority level 3 is below required 8 for delete_data')).toContain('below the 8 that delete data needs. Raise the level in Authority settings.');
+  });
+  test('a deny override and a rule you wrote are named, anything else reads as before', () => {
+    expect(denied('Authority denied piece:smtp/send-email: Explicitly denied by override for global')).toContain('a Deny override in your Authority settings blocks it');
+    expect(denied('Authority denied piece:smtp/send-email: No emails during current hour')).toContain('your Authority rule "No emails during current hour" blocks it');
+    expect(denied('Authority denied piece:smtp/send-email: Denied by background profile')).toContain('your Authority settings do not allow it');
+    expect(denied('')).toContain('your Authority settings do not allow it');
+  });
+});
