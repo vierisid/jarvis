@@ -761,30 +761,33 @@ test('built-in schedule validates explicit DST policy',()=>{
 });
 
 const routerOf = (after: any): any => ({ name: 'router', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [{ branchType: 'CONDITION', conditions: [[{ operator: 'EXISTS', firstValue: '{{trigger.email}}' }]] }, { branchType: 'FALLBACK' }] }, children: [step('a'), step('b')], nextAction: after });
-test('a step after a router cannot read a branch step without a fallback, and the refusal says how to fix it', () => {
-  const refused = compile(graph(routerOf(step('after', '{{a.out}}'))));
-  expect(refused.ready).toBe(false);
-  expect(refused.issues).toContainEqual(expect.objectContaining({ node: 'after', path: 'settings.input.to', code: 'REFERENCE_BRANCH', message: expect.stringContaining('does not run every time') }));
-  // Inside text, and through an expression with no fallback, it is still refused.
-  expect(compile(graph(routerOf(step('after', 'Hi {{a.out}}')))).ready).toBe(false);
-  expect(compile(graph(routerOf(step('after', '{{a.out + 1}}')))).ready).toBe(false);
-  // A step of the same branch, and a value that is not from a branch, stay fine.
+const branchNotice = (r: { runtimeChecks: { message: string }[] }) => r.runtimeChecks.filter(c => c.message.includes('does not run every time'));
+test('a step after a router reading a branch step without a fallback gets a notice that says how to fix it, and stays publishable', () => {
+  const noted = compile(graph(routerOf(step('after', '{{a.out}}'))));
+  // Not a refusal: readiness is checked again when a trigger fires, and a workflow that always takes the branch works.
+  expect(noted.ready).toBe(true);
+  expect(noted.runtimeChecks).toContainEqual(expect.objectContaining({ node: 'after', path: 'settings.input.to', guard: 'expression', message: expect.stringContaining('does not run every time') }));
+  // Inside text, and through an expression with no fallback, it is noted too.
+  expect(branchNotice(compile(graph(routerOf(step('after', 'Hi {{a.out}}')))))).toHaveLength(1);
+  expect(branchNotice(compile(graph(routerOf(step('after', '{{a.out + 1}}')))))).toHaveLength(1);
+  // A step of the same branch, and a value that is not from a branch, get no notice.
   const inBranch: any = routerOf(step('after', '{{trigger.email}}'));
   inBranch.children[0].nextAction = step('a2', '{{a.out}}');
   expect(compile(graph(inBranch)).issues).toEqual([]);
+  expect(branchNotice(compile(graph(inBranch)))).toEqual([]);
 });
-test('a branch reference wrapped in a fallback stays publishable', () => {
-  expect(compile(graph(routerOf(step('after', "{{a.out ?? 'none'}}")))).issues).toEqual([]);
-  expect(compile(graph(routerOf(step('after', '{{a.out ?? b.out}}')))).issues).toEqual([]);
+test('a branch reference wrapped in a fallback gets no notice', () => {
+  expect(branchNotice(compile(graph(routerOf(step('after', "{{a.out ?? 'none'}}")))))).toEqual([]);
+  expect(branchNotice(compile(graph(routerOf(step('after', '{{a.out ?? b.out}}')))))).toEqual([]);
   const textHelper = new PieceCatalog([{ name: '@activepieces/piece-text-helper', displayName: '', description: '', actions: { defaultValue: { name: 'defaultValue', displayName: '', description: '' } } }]);
   const fallback = (value: string): any => ({ name: 'fb', type: 'PIECE', settings: { pieceName: '@activepieces/piece-text-helper', actionName: 'defaultValue', input: { value, defaultString: 'x' } } });
-  expect(compileWorkflow(graph(routerOf(fallback('{{a.out}}'))), { pieces: textHelper }).issues.filter(i => i.code === 'REFERENCE_BRANCH')).toEqual([]);
-  expect(compileWorkflow(graph(routerOf(fallback('Hi {{a.out}}'))), { pieces: textHelper }).issues).toContainEqual(expect.objectContaining({ code: 'REFERENCE_BRANCH' }));
+  expect(branchNotice(compileWorkflow(graph(routerOf(fallback('{{a.out}}'))), { pieces: textHelper }))).toEqual([]);
+  expect(branchNotice(compileWorkflow(graph(routerOf(fallback('Hi {{a.out}}'))), { pieces: textHelper }))).toHaveLength(1);
 });
 test('a nested router branch is not readable from after the outer router either', () => {
   const inner = routerOf(step('after_inner', '{{trigger.email}}')); inner.name = 'inner'; inner.children = [step('x'), step('y')];
   const outer: any = routerOf(step('after', '{{x.out}}')); outer.children = [inner, step('b')]; inner.nextAction.name = 'after_inner';
-  expect(compile(graph(outer)).issues).toContainEqual(expect.objectContaining({ node: 'after', code: 'REFERENCE_BRANCH' }));
+  expect(branchNotice(compile(graph(outer)))).toContainEqual(expect.objectContaining({ node: 'after' }));
 });
 
 const subflowCatalog = new PieceCatalog([{ name: 'jarvis-subflow', displayName: '', description: '', actions: { call: { name: 'call', displayName: '', description: '' } } }]);

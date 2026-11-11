@@ -202,7 +202,9 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         const guarded = DEFAULT_VALUE_STEP.pieceName === pieceName && stepSettings.actionName === DEFAULT_VALUE_STEP.actionName && path === 'settings.input.value' && value === match[0]
           ? refs : workflowExpressionGuardedReferences(source);
         for (const ref of refs) if (scope.has(ref) && branchOnly.has(ref) && !guarded.has(ref)) {
-          issue(node, path, 'REFERENCE_BRANCH', `"${ref}" is inside a branch that does not run every time, so it has no value on runs that take another branch. Move this step into the branch, or give the reference a fallback such as {{${ref} ?? 'none'}}`);
+          // A notice, not a refusal: a published workflow that always takes this branch works today,
+          // and readiness is checked again whenever a trigger fires.
+          runtime(node, path, 'expression', `"${ref}" is inside a branch that does not run every time, so it has no value on runs that take another branch. Move this step into the branch, or give the reference a fallback such as {{${ref} ?? 'none'}}`);
         }
         if (refs.has('connections')) issue(node, path, 'CONNECTION_BINDING', "Use a complete {{connections.id}} or {{connections['id']}} binding");
         else if (refs.size) runtime(node, path, 'expression', 'Resolve data at runtime; an absent value must fail before dispatch (use an explicit fallback for optional data)');
