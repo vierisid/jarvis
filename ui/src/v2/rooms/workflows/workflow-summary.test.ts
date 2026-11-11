@@ -31,7 +31,8 @@ describe("trigger in words", () => {
       .toBe("When a clipboard changed event happens");
   });
   test("a schedule saved with the catalog piece name gets the same words", () => {
-    const trigger = (triggerName: string, input: Record<string, unknown>): FlowStepNode => ({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "@activepieces/piece-schedule", triggerName, input } });
+    const trigger = (triggerName: string, input: Record<string, unknown>): FlowStepNode => ({ name: "trigger", type: "PIECE_TRIGGER",
+      settings: { pieceName: "@activepieces/piece-schedule", triggerName, input, ...(typeof input.timezone === "string" ? { chosenTimezone: input.timezone } : {}) } });
     expect(summarizeWorkflow(trigger("every_x_minutes", { minutes: 59 })).trigger).toBe("At minutes 0 and 59 of every hour");
     expect(summarizeWorkflow(trigger("cron_expression", { cronExpression: "0 */7 * * *", timezone: "UTC" })).trigger)
       .toBe("Every 7 hours from midnight (00:00, 07:00, 14:00, 21:00) (UTC)");
@@ -60,6 +61,14 @@ describe("steps in order", () => {
   test("a long display name or the engine's default name is not read out", () => {
     const long = step("step_1", { pieceName: "@activepieces/piece-gmail", actionName: "send_email" }, { displayName: "Notify once per scheduled date; review unconfirmed delivery" });
     expect(summarizeWorkflow(schedule("0 9 * * *", undefined, long), catalog).steps).toEqual(["send email"]);
+  });
+  test("invisible and bidi characters in names are dropped, so one name cannot reorder the sentence", () => {
+    // U+202E RIGHT-TO-LEFT OVERRIDE would render everything after it reversed; U+200B and a control char hide text.
+    const tricky = step("step_1", { pieceName: "@activepieces/piece-gmail", actionName: "send_email" }, { displayName: "Email \u202Ethe\u200B team\u0007", nextAction: notify() });
+    const s = summarizeWorkflow(schedule("0 9 * * *", undefined, tricky), catalog);
+    expect(s.text).toBe("Every day at 9:00, then email the team, then notify you on the dashboard.");
+    const event: FlowStepNode = { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "@x/piece-\u202Eevil", triggerName: "t", input: {} } };
+    expect(summarizeWorkflow(event).text).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/);
   });
   test("an empty workflow still says something", () => {
     expect(summarizeWorkflow({ name: "trigger", type: "EMPTY" }).text).toBe("When you run it, then nothing else yet.");

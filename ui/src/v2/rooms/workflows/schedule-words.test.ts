@@ -10,15 +10,25 @@ describe("cronToWords", () => {
     ["0 9 1 * *", "Monthly on day 1 at 9:00"],
     ["0 9 * * *", "Every day at 9:00"],
     ["0 9 * * 1,3,5", "Every Monday, Wednesday and Friday at 9:00"],
-    ["0 10 * * 0,6", "Every weekend at 10:00"],
+    ["0 10 * * 0,6", "Every Saturday and Sunday at 10:00"],
     ["0 * * * *", "Every hour"],
     ["15 * * * *", "Every hour at minute 15"],
     ["0 */2 * * *", "Every 2 hours"],
     ["0 9,17 * * 1-5", "Every weekday at 9:00 and 17:00"],
     ["0 9 1,15 * *", "Monthly on days 1 and 15 at 9:00"],
-    ["0 8 * * MON-FRI", "Every weekday at 8:00"],
+    ["0 * * * 1-5", "Every hour on weekdays"],
+    ["*/15 * * * 0,6", "Every 15 minutes on Saturdays and Sundays"],
+    ["30 */2 * * 1", "Every 2 hours at minute 30 on Mondays"],
     ["0 8 * * 7", "Every Sunday at 8:00"],
   ])("%s reads as %s", (cron, words) => expect(cronToWords(cron)).toBe(words));
+
+  test("what the scheduler refuses reads as no schedule: day names, ?, L, W and #", () => {
+    // src/lib/cron-scheduler.ts parses numbers, lists, ranges and steps only (plus LW).
+    for (const cron of ["0 8 * * MON-FRI", "0 8 * * mon", "0 8 ? * 1", "0 8 1 * ?", "0 8 L * *", "0 8 15W * *", "0 8 * * 5L", "0 8 * * 1#2"]) {
+      expect(cronToWords(cron)).toBeNull();
+      expect(parseSimpleCron(cron)).toBeNull();
+    }
+  });
 
   test("shapes with no plain form return null instead of a wrong sentence", () => {
     for (const cron of ["0 17 LW * *", "0 9 1 6 *", "0 9 1 * 1", "0 0 9 * * *", "nonsense", "", "61 9 * * *", "0 25 * * *"]) {
@@ -80,7 +90,11 @@ describe("schedules that do not divide their period evenly", () => {
 });
 
 describe("the catalog schedule piece reads like the built-in one", () => {
-  const catalog = (triggerName: string, input: Record<string, unknown>) => describeSchedule({ pieceName: "@activepieces/piece-schedule", triggerName, input });
+  // A zone counts only when a person chose it, as the trigger manager runs it.
+  const catalog = (triggerName: string, input: Record<string, unknown>) => describeSchedule({
+    pieceName: "@activepieces/piece-schedule", triggerName, input,
+    ...(typeof input.timezone === "string" ? { chosenTimezone: input.timezone } : {}),
+  });
   test("every_x_minutes, every_month and cron_expression", () => {
     expect(catalog("every_x_minutes", { minutes: 5 })).toBe("Every 5 minutes");
     expect(catalog("every_x_minutes", { minutes: 59 })).toBe("At minutes 0 and 59 of every hour");
@@ -94,6 +108,22 @@ describe("the catalog schedule piece reads like the built-in one", () => {
     expect(catalog("every_hour", { run_on_weekends: true })).toBe("Every hour");
     expect(catalog("every_day", { hour_of_the_day: 8, run_on_weekends: false, timezone: "UTC" })).toBe("Every weekday at 8:00 (UTC)");
     expect(catalog("every_week", { day_of_the_week: 1, hour_of_the_day: 8, timezone: "UTC" })).toBe("Every Monday at 8:00 (UTC)");
+  });
+  test("a stored zone nobody chose is not shown: the manager runs it in Jarvis's zone", () => {
+    const unchosen = (triggerName: string, input: Record<string, unknown>) => describeSchedule({ pieceName: "@activepieces/piece-schedule", triggerName, input });
+    expect(unchosen("every_day", { hour_of_the_day: 9, run_on_weekends: true, timezone: "UTC" })).toBe("Every day at 9:00");
+    expect(unchosen("cron_expression", { cronExpression: "0 9 * * 1-5", timezone: "UTC" })).toBe("Every weekday at 9:00");
+    // The hourly triggers report UTC to the manager, so a chosen zone other than UTC is not used either.
+    expect(describeSchedule({ pieceName: "@activepieces/piece-schedule", triggerName: "every_hour", input: { run_on_weekends: true, timezone: "Europe/Rome" }, chosenTimezone: "Europe/Rome" })).toBe("Every hour");
+  });
+  test("inputs read the way the piece reads them", () => {
+    // validateHours turns anything but an integer into 0, and clamps; the checkbox is tested for truthiness.
+    expect(catalog("every_day", { hour_of_the_day: "9", run_on_weekends: true })).toBe("Every day at 0:00");
+    expect(catalog("every_day", { hour_of_the_day: 30, run_on_weekends: "yes" })).toBe("Every day at 23:00");
+    expect(catalog("every_week", { day_of_the_week: 9, hour_of_the_day: 8 })).toBe("Every Saturday at 8:00");
+    expect(catalog("every_hour", { run_on_weekends: false })).toBe("Every hour on weekdays");
+    // */120 fires once an hour, at minute 0.
+    expect(catalog("every_x_minutes", { minutes: 120 })).toBe("At minute 0 of every hour");
   });
   test("an unfilled trigger says it is not set yet", () => {
     expect(catalog("every_x_minutes", {})).toBe("On a schedule that is not set yet");

@@ -9,7 +9,6 @@
  */
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
-const DAY_ALIASES: Record<string, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
 
 /** Names of the days of the week, Sunday first (cron numbering). */
 export function dayName(day: number): string {
@@ -25,10 +24,15 @@ export function formatTime(hour: number, minute: number): string {
   return `${hour}:${String(minute).padStart(2, "0")}`;
 }
 
-/** Expand one cron field to a sorted list of numbers. Null when it uses anything beyond lists, ranges and steps. */
-function expandField(field: string, min: number, max: number, aliases?: Record<string, number>): number[] | null {
+/**
+ * Expand one cron field to a sorted list of numbers. Null when it uses anything
+ * beyond numbers, lists, ranges and steps: the scheduler (src/lib/cron-scheduler.ts)
+ * accepts only those, so day names, `?`, `L`, `W` and `#` never fire there and
+ * must not read as a schedule here.
+ */
+function expandField(field: string, min: number, max: number): number[] | null {
   const out = new Set<number>();
-  for (const part of field.toLowerCase().split(",")) {
+  for (const part of field.split(",")) {
     const stepMatch = /^(.+?)\/(\d+)$/.exec(part);
     const step = stepMatch ? Number(stepMatch[2]) : 1;
     const base = stepMatch ? stepMatch[1]! : part;
@@ -37,11 +41,10 @@ function expandField(field: string, min: number, max: number, aliases?: Record<s
     let to: number;
     if (base === "*") { from = min; to = max; }
     else {
-      const range = /^([a-z0-9]+)(?:-([a-z0-9]+))?$/.exec(base);
+      const range = /^(\d+)(?:-(\d+))?$/.exec(base);
       if (!range) return null;
-      const num = (token: string): number => (aliases && token in aliases ? aliases[token]! : /^\d+$/.test(token) ? Number(token) : NaN);
-      from = num(range[1]!);
-      to = range[2] === undefined ? (stepMatch ? max : from) : num(range[2]);
+      from = Number(range[1]);
+      to = range[2] === undefined ? (stepMatch ? max : from) : Number(range[2]);
     }
     if (!Number.isInteger(from) || !Number.isInteger(to) || from > to) return null;
     for (let v = from; v <= to; v += step) out.add(v);
@@ -63,12 +66,12 @@ function splitCron(expression: string): CronFields | null {
   const parts = expression.trim().split(/\s+/);
   if (parts.length !== 5) return null;
   const [minute, hour, dom, month, dow] = parts as [string, string, string, string, string];
-  return { minute, hour, dom: dom === "?" ? "*" : dom, month, dow: dow === "?" ? "*" : dow };
+  return { minute, hour, dom, month, dow };
 }
 
 /** Days of the week a cron day-of-week field names (0 = Sunday, 7 folded to 0), or null. */
 function weekdays(field: string): number[] | null {
-  const days = expandField(field, 0, 7, DAY_ALIASES);
+  const days = expandField(field, 0, 7);
   return days ? [...new Set(days.map((d) => (d === 7 ? 0 : d)))].sort((a, b) => a - b) : null;
 }
 
@@ -77,46 +80,61 @@ const isNumber = (field: string): boolean => /^\d+$/.test(field);
 function dayPhrase(days: number[]): string {
   if (days.length === 7) return "Every day";
   if (days.join() === "1,2,3,4,5") return "Every weekday";
-  if (days.join() === "0,6") return "Every weekend";
-  // Monday first reads naturally.
-  const ordered = [...days].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
-  return `Every ${joinWords(ordered.map(dayName))}`;
+  return `Every ${joinWords(mondayFirst(days).map(dayName))}`;
+}
+
+/** Monday first reads naturally. */
+const mondayFirst = (days: number[]): number[] => [...days].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
+
+/**
+ * " on weekdays" or " on Mondays and Fridays" for an interval limited to some
+ * days of the week; "" for every day; null when the day fields say more than that.
+ */
+function onDays(f: CronFields): string | null {
+  if (f.dom !== "*" || f.month !== "*") return null;
+  if (f.dow === "*") return "";
+  const days = weekdays(f.dow);
+  if (!days || !days.length) return null;
+  if (days.length === 7) return "";
+  if (days.join() === "1,2,3,4,5") return " on weekdays";
+  return ` on ${joinWords(mondayFirst(days).map((d) => `${dayName(d)}s`))}`;
 }
 
 /** A cron expression in words, or null when it is not one of the shapes people commonly write. */
 export function cronToWords(expression: string): string | null {
   const f = splitCron(expression);
   if (!f) return null;
-  const everyDay = f.dom === "*" && f.month === "*" && f.dow === "*";
+  // Intervals limited at most to some days of the week ("Every hour on weekdays").
+  const on = onDays(f);
 
   // Intervals: every minute, every N minutes, every hour, every N hours.
-  if (f.hour === "*" && everyDay) {
-    if (f.minute === "*") return "Every minute";
+  if (f.hour === "*" && on !== null) {
+    if (f.minute === "*") return `Every minute${on}`;
     const step = /^\*\/(\d+)$/.exec(f.minute);
     if (step) {
       const every = Number(step[1]);
-      if (every === 1) return "Every minute";
+      if (every === 1) return `Every minute${on}`;
       // A step that does not divide 60 restarts at the top of every hour: */59 fires at :00 and :59.
-      if (60 % every === 0) return `Every ${every} minutes`;
+      if (60 % every === 0) return `Every ${every} minutes${on}`;
       const minutes = expandField(f.minute, 0, 59);
-      return minutes ? `At ${minutes.length === 1 ? "minute" : "minutes"} ${joinWords(minutes.map(String))} of every hour` : null;
+      return minutes ? `At ${minutes.length === 1 ? "minute" : "minutes"} ${joinWords(minutes.map(String))} of every hour${on}` : null;
     }
-    if (isNumber(f.minute) && Number(f.minute) <= 59) return f.minute === "0" ? "Every hour" : `Every hour at minute ${Number(f.minute)}`;
+    if (isNumber(f.minute) && Number(f.minute) <= 59) return `${f.minute === "0" ? "Every hour" : `Every hour at minute ${Number(f.minute)}`}${on}`;
     return null;
   }
   const hourStep = /^\*\/(\d+)$/.exec(f.hour);
-  if (hourStep && everyDay && isNumber(f.minute) && Number(f.minute) <= 59) {
+  if (hourStep && on !== null && isNumber(f.minute) && Number(f.minute) <= 59) {
     const n = Number(hourStep[1]);
     const minute = Number(f.minute);
     if (n === 1 || (n > 0 && 24 % n === 0)) {
       const every = n === 1 ? "Every hour" : `Every ${n} hours`;
-      return minute === 0 ? every : `${every} at minute ${minute}`;
+      return `${minute === 0 ? every : `${every} at minute ${minute}`}${on}`;
     }
     // A step that does not divide 24 restarts at midnight, so say the real times.
     const hours = expandField(f.hour, 0, 23);
     if (hours && hours.length > 1) {
       const clock = (h: number): string => `${String(h).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-      return `Every ${n} hours from ${minute === 0 ? "midnight" : clock(0)} (${hours.map(clock).join(", ")})`;
+      return `Every ${n} hours from ${minute === 0 ? "midnight" : clock(0)} (${hours.map(clock).join(", ")})${on}`;
     }
   }
 
@@ -148,36 +166,45 @@ export function isScheduleSettings(settings: { pieceName?: string } | undefined)
   return settings?.pieceName === SCHEDULE_PIECE || settings?.pieceName === CATALOG_SCHEDULE_PIECE;
 }
 
-const wholeNumber = (value: unknown): number | null => {
-  const n = typeof value === "string" && value.trim() ? Number(value) : value;
-  return typeof n === "number" && Number.isInteger(n) ? n : null;
-};
+const missing = (value: unknown): boolean => value === undefined || value === null || value === "";
 
 /**
- * The cron expression a catalog schedule trigger turns its inputs into
- * (mirrors the piece: every_x_minutes, every_hour, every_day, every_week,
- * every_month, cron_expression). Empty when the inputs are not filled in.
+ * A dropdown number as the schedule piece reads it (`validateHours` and friends
+ * in its common/index.ts): anything but an integer becomes 0, then it is
+ * clamped. The engine does not coerce dropdown values, so a stored "9" fires at
+ * hour 0, and the words must say so. Null when nothing is stored.
+ */
+const pieceNumber = (value: unknown, min: number, max: number): number | null =>
+  missing(value) ? null : typeof value === "number" && Number.isInteger(value) ? Math.min(Math.max(value, min), max) : 0;
+
+/**
+ * The cron expression a catalog schedule trigger turns its inputs into, built
+ * exactly as the piece's onEnable builds it (every_x_minutes, every_hour,
+ * every_day, every_week, every_month, cron_expression), so the words describe
+ * what fires. Empty when a required input is not filled in.
  */
 function catalogCron(settings: { triggerName?: string; input?: Record<string, unknown> }): string {
   const input = settings.input ?? {};
-  const hour = wholeNumber(input["hour_of_the_day"]);
+  const hour = pieceNumber(input["hour_of_the_day"], 0, 23);
+  // The piece tests the checkbox for truthiness.
+  const weekends = Boolean(input["run_on_weekends"]);
   switch (settings.triggerName) {
     case "cron_expression": {
       const value = input["cronExpression"];
       return typeof value === "string" ? value.trim() : "";
     }
     case "every_x_minutes": {
-      const minutes = wholeNumber(input["minutes"]);
-      return minutes !== null && minutes >= 1 && minutes <= 59 ? `*/${minutes} * * * *` : "";
+      const minutes = input["minutes"];
+      return missing(minutes) ? "" : `*/${String(minutes)} * * * *`;
     }
-    case "every_hour": return input["run_on_weekends"] === true ? "0 * * * *" : "0 * * * 1-5";
-    case "every_day": return hour === null ? "" : `0 ${hour} * * ${input["run_on_weekends"] === true ? "*" : "1-5"}`;
+    case "every_hour": return weekends ? "0 * * * *" : "0 * * * 1-5";
+    case "every_day": return hour === null ? "" : `0 ${hour} * * ${weekends ? "*" : "1-5"}`;
     case "every_week": {
-      const day = wholeNumber(input["day_of_the_week"]);
+      const day = pieceNumber(input["day_of_the_week"], 0, 6);
       return hour === null || day === null ? "" : `0 ${hour} * * ${day}`;
     }
     case "every_month": {
-      const day = wholeNumber(input["day_of_the_month"]);
+      const day = pieceNumber(input["day_of_the_month"], 0, 31);
       return hour === null || day === null ? "" : `0 ${hour} ${day} * *`;
     }
     default: return "";
@@ -213,17 +240,22 @@ interface ScheduleSettings {
 /**
  * The one place a schedule becomes words, for the trigger card, the trigger
  * panel and the summary. "Every weekday at 9:00 (Europe/Rome)". Falls back to
- * the raw expression, or says nothing is set yet. The catalog piece always
- * runs in the zone it stores (interval triggers in UTC, shown without one).
+ * the raw expression, or says nothing is set yet.
+ *
+ * The zone follows the trigger manager (src/workflows/runner/triggers/manager.ts):
+ * both schedule names run in their stored zone only when a person chose it, and
+ * otherwise in Jarvis's zone, shown as no zone. The catalog piece's hourly and
+ * every-few-minutes triggers report UTC whatever is stored, so only a chosen UTC
+ * is used for them.
  */
 export function describeSchedule(settings: ScheduleSettings | undefined): string {
   const catalog = settings?.pieceName === CATALOG_SCHEDULE_PIECE;
   const cron = catalog ? catalogCron(settings) : scheduleCron(settings?.input);
   if (!cron) return "On a schedule that is not set yet";
   const words = cronToWords(cron) ?? `On a custom schedule (${cron})`;
-  const stored = settings?.input?.["timezone"];
-  const catalogZone = catalog && typeof stored === "string" && stored && settings?.triggerName !== "every_x_minutes" && settings?.triggerName !== "every_hour" ? stored : undefined;
-  const zone = catalog ? catalogZone : chosenZoneOf(settings);
+  const chosen = chosenZoneOf(settings);
+  const fixedUtc = catalog && (settings?.triggerName === "every_x_minutes" || settings?.triggerName === "every_hour");
+  const zone = fixedUtc && chosen !== "UTC" ? undefined : chosen;
   return zone ? `${words} (${zone})` : words;
 }
 
