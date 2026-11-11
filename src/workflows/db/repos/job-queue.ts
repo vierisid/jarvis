@@ -313,8 +313,29 @@ export function recoverOrphanedJobs(): number {
       [JSON.stringify({ name: '<recovery>', displayName: 'Recovery',
         errorMessage: 'Execution was interrupted and exhausted its attempts. Its outcome is unknown; inspect partial results before proposing another run.' }), ts, ts],
     );
+    settleRunsWithoutJob(ts);
     return res.changes;
   })();
+}
+
+/**
+ * A run row and its job are written together, so a QUEUED run with no job at
+ * all can only come from a crash in code that wrote them separately (before
+ * they shared one transaction). Nothing will ever start it, and the client that
+ * asked for it never got an answer and may have asked again, so it is NOT
+ * queued again: it closes as stopped, saying it never started. Runs a job
+ * exists for, in any state, are left to the recovery above.
+ */
+export function settleRunsWithoutJob(ts: number = nowMs()): number {
+  return db().run(
+    `UPDATE flow_run SET status = 'STOPPED', finish_time = ?, updated = ?, failed_step = ?
+     WHERE status = 'QUEUED'
+       AND NOT EXISTS (SELECT 1 FROM workflow_run_cancellation c WHERE c.run_id = flow_run.id)
+       AND NOT EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id = flow_run.id
+         OR (j.flow_run_id IS NULL AND CASE WHEN json_valid(j.payload) THEN json_extract(j.payload, '$.runId') END = flow_run.id))`,
+    [ts, ts, JSON.stringify({ name: '<lifecycle>', displayName: 'Did not start',
+      errorMessage: 'This run did not start and nothing ran. Jarvis stopped before it could begin. Start it again if you still want it.' })],
+  ).changes;
 }
 
 /**

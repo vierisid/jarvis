@@ -87,6 +87,21 @@ describe("workflow retry containment", () => {
     });
   }
 
+  test("restart settles a QUEUED run that has no job as not started, and queues nothing", () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "orphan run" });
+    const orphan = createFlowRun({ flowId: flow.id, flowVersionId: version.id, startTime: Date.now() });
+    const { run: withJob, job } = workflowJob();
+    recoverOrphanedJobs();
+    expect(getFlowRun(orphan.id)).toMatchObject({ status: "STOPPED" });
+    expect(getFlowRun(orphan.id)?.finishTime).toBeGreaterThan(0);
+    expect(getFlowRun(orphan.id)?.failedStep?.errorMessage).toContain("did not start and nothing ran");
+    expect(queueStats().queued).toBe(1);
+    // A run that has its job is untouched.
+    expect(getFlowRun(withJob.id)?.status).toBe("QUEUED");
+    expect(getJob(job.id)?.status).toBe("QUEUED");
+  });
+
   test("a recorded terminal result survives orphan retirement", () => {
     const { job, run } = workflowJob();
     claimNextJob();

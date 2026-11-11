@@ -4,7 +4,7 @@ import { PieceCatalog } from '../../workflows/runtime/piece-catalog';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { closeWorkflowDb, initWorkflowDb } from "../../workflows/db/index.ts";
+import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../../workflows/db/index.ts";
 import { findActiveJobForRun, getJob, queueStats } from "../../workflows/db/repos/job-queue.ts";
 import { getFlowRun } from "../../workflows/db/repos/flow-run.ts";
 import { createFlow, getFlow, updateFlowMetadata } from "../../workflows/db/repos/flow.ts";
@@ -245,6 +245,13 @@ describe("manage_workflow tool", () => {
     expect(out.status).toBe("QUEUED");
     expect(queueStats().queued).toBe(1);
     expect(findActiveJobForRun(out.run_id)?.maxAttempts).toBe(1);
+  });
+
+  test("run leaves no run behind when its job cannot be written", async () => {
+    await call("create", { name: "nojob", empty: true });
+    getWorkflowDb().run(`CREATE TRIGGER no_jobs BEFORE INSERT ON workflow_job BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+    await expect(call("run", { flow: "nojob" })).rejects.toThrow();
+    expect(getWorkflowDb().query<{ n: number }, []>("SELECT count(*) AS n FROM flow_run").get()!.n).toBe(0);
   });
 
   test("chat run never repeats a completed effect after a downstream failure", async () => {
