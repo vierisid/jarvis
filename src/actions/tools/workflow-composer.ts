@@ -19,9 +19,10 @@ import type {
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { LLMMessage, LLMResponse, LLMTool, LLMToolCall } from "../../llm/provider.ts";
 import { getLLMErrorCode, LLMProviderError, type LLMErrorCode } from "../../llm/provider.ts";
-
-const hostedDetailOf = (e: unknown): string | undefined => e instanceof LLMProviderError ? e.hostedDetail : undefined;
 import { CompositionTimeoutError, withCompositionBudget } from "./composition-budget.ts";
+
+/** The hosted provider's authored sentence on a failure; the manager drops any other provider's. */
+const hostedDetailOf = (e: unknown): string | undefined => e instanceof LLMProviderError ? e.hostedDetail : undefined;
 
 /**
  * LLM-client shape the composer needs. `chat` is the mandatory single-shot
