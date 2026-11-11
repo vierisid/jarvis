@@ -138,6 +138,13 @@ describe('Today work trace', () => {
     checkWorkResult(work.id, { ...result, verdict: 'failed' });
     expect(JSON.stringify(getWorkItem(work.id).resultCheck)).not.toContain('OLDSECRET4321');
     expect(getWorkItem(work.id).resultCheck?.runSnapshot?.id).toBe(run.id);
+    // A snapshot an earlier check kept in clear is shown the same way.
+    const raw = getDb().query('SELECT result_check FROM commitment_work WHERE work_id = ?').get(work.id) as { result_check: string };
+    const check = JSON.parse(raw.result_check);
+    check.runSnapshot = getFlowRun(run.id);
+    getDb().run('UPDATE commitment_work SET result_check = ? WHERE work_id = ?', [JSON.stringify(check), work.id]);
+    expect(JSON.stringify(getDb().query('SELECT result_check FROM commitment_work WHERE work_id = ?').get(work.id))).toContain('OLDSECRET4321');
+    expect(JSON.stringify(getWorkItem(work.id).resultCheck)).not.toContain('OLDSECRET4321');
   });
 
   test('a crash between waitpoint creation and the pause upload leaves a checkable failure', async () => {

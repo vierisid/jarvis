@@ -231,8 +231,8 @@ function hideWebhookHeaders(value: unknown, secrets: Set<string>, depth: number)
   if (!object(value)) return value;
   return Object.fromEntries(Object.entries(value).map(([key, item]) => {
     if (key === '_webhook' && object(item) && object(item.headers)) {
-      // The timestamp is withheld by name, but is no secret to find elsewhere.
-      for (const [name, header] of Object.entries(item.headers)) if (isCredentialHeader(name, header) && name.toLowerCase() !== 'x-jarvis-timestamp') noteSecret(header, secrets, name);
+      // A timestamp is withheld by name but, a bare number, not looked for elsewhere (`addSecret`).
+      for (const [name, header] of Object.entries(item.headers)) if (isCredentialHeader(name, header)) noteSecret(header, secrets, name);
       return [key, { ...item, headers: redactHeaderRecord(item.headers) }];
     }
     return [key, hideWebhookHeaders(item, secrets, depth + 1)];
