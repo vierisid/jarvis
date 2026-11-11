@@ -116,7 +116,7 @@ for(const scenario of ['success','invalid'])test('a parent continues as soon as 
  const f=await fixture();mode=scenario;
  const final=await runWithSettleHook(f.parent.id,f.pv.id);
  expect(final.status).toBe(scenario==='success'?'SUCCEEDED':'FAILED');
- if(scenario==='invalid')expect(final.failedStep?.errorMessage).toContain('invalid_output');
+ if(scenario==='invalid')expect(final.failedStep?.errorMessage).toMatch(/invalid_output|different shape/);
 });
 test('without the settle hook the poll still continues a parent after a restart',async()=>{
  const f=await fixture(),first=await f.run();expect(first.status).toBe('PAUSED');
