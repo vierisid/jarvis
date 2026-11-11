@@ -76,8 +76,9 @@ export function createDomainPorts(scopeId: string, http: HostTransport, storage:
         const d = doc.decision;
         if (!d || d.decisionId !== row.decisionId || d.revision !== row.revision || !Array.isArray(doc.actions)) throw new Error('Decision changed during read');
         const document = doc.document;
-        // An accepted step is waiting on the founder to do it, not to review it.
-        const accepted = d.kind === 'intent' && d.workStatus === 'ready';
+        // An accepted step the founder finishes in Needs you is waiting on them to do it, not to review it.
+        // Accepted workflow work is ready too, but it finishes through its run, so it is not offered a finish.
+        const accepted = d.kind === 'intent' && Array.isArray(d.supportedActions) && d.supportedActions.includes('mark_done');
         const subject = document?.kind === 'email' ? document.subject : document?.kind === 'calendar' ? document.title : d.title;
         const body = document?.kind === 'email' ? document.body : document?.kind === 'calendar' ? document.description : accepted ? 'Open Needs you to mark this step done, or to say you are not doing it.' : 'Open Needs you to review this decision and its available actions.';
         data.push({ paper: { decision: d, title: d.title, summary: d.title, description: accepted ? 'You accepted this step. Tell Jarvis when it is done.' : d.kind === 'intent' ? 'A proposed next step needs your review.' : 'A decision needs your review.',
