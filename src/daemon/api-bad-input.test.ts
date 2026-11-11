@@ -45,11 +45,13 @@ const BODY_ROUTES: Array<[string, string, string]> = [
   ['POST', '/api/goals/reorder', '/api/goals/reorder'],
 ];
 const BAD_BODIES = ['{not json', '', 'null', '42', '<xml/>'];
-/** Routes whose body is optional settings: an empty body means "defaults", the rest is still refused. */
-const EMPTY_BODY_MEANS_DEFAULTS = new Set(['/api/onboarding/reset']);
+/** A list where a route reads named fields: refused rather than read as "no fields set". */
+const ARRAY_BODY = '[]';
+/** The one route whose body is a list. */
+const ARRAY_BODY_ROUTES = new Set(['/api/goals/reorder']);
 
-test.each(BODY_ROUTES.flatMap(route => BAD_BODIES.filter(body => body !== '' || !EMPTY_BODY_MEANS_DEFAULTS.has(route[1])).map(body => [...route, body] as const)))(
-  '%s %s with body %j is a plain 400',
+test.each(BODY_ROUTES.flatMap(route => [...BAD_BODIES, ...(ARRAY_BODY_ROUTES.has(route[1]) ? [] : [ARRAY_BODY])].map(body => [...route, body] as const)))(
+  '%s %s (as %s) with body %j is a plain 400',
   async (method, path, url, body) => {
     const response = await call(method, path, url, body);
     const text = await response.text();
@@ -64,9 +66,29 @@ test('a reset with a body that is not JSON does not clear anything', async () =>
   expect(response.status).toBe(400);
 });
 
-test('a reset with no body at all still means "everything"', async () => {
-  const response = await routes()['/api/onboarding/reset']!.POST!(new Request('http://local/api/onboarding/reset', { method: 'POST' }));
+test('a reset with no body, an array or a scope that is not one of the four clears nothing', async () => {
+  // A reset writes ctx.config.onboarding; a refused one leaves it unset.
+  const config: Record<string, unknown> = {};
+  const reset = createApiRoutes({ config, awarenessService } as unknown as ApiContext)['/api/onboarding/reset'] as Record<string, Handler>;
+  const post = (body?: string) => reset.POST!(new Request('http://local/api/onboarding/reset', { method: 'POST', ...(body === undefined ? {} : { body }) }));
+  for (const body of [undefined, '', '[]', '{"scope":null}', '{"scope":1}', '{"scope":"everything"}']) {
+    expect((await post(body)).status).toBe(400);
+  }
+  expect(config.onboarding).toBeUndefined();
+  expect((await post('{"scope":"tutorial"}')).status).toBe(200);
+  expect(config.onboarding).toBeDefined();
+});
+
+test('a reset with an object that leaves the scope out still means "everything"', async () => {
+  const response = await call('POST', '/api/onboarding/reset', '/api/onboarding/reset', '{}');
   expect(response.status).toBe(200);
+  expect((await response.json() as { cleared: string[] }).cleared).toEqual(['setup', 'profile', 'tutorial']);
+});
+
+test('a TTS preview with a body that is not JSON is a 400, not a provider failure', async () => {
+  const response = await call('POST', '/api/tts/preview', '/api/tts/preview', '{not json');
+  expect(response.status).toBe(400);
+  expect(await response.text()).not.toMatch(INTERNALS);
 });
 
 test('a goals reorder refused for its content names no exception class', async () => {
@@ -101,7 +123,7 @@ const LIMIT_ROUTES: Array<[string, string, string | undefined]> = [
 ];
 
 test.each(LIMIT_ROUTES.flatMap(route => LIMIT_VALUES.map(value => [...route, value] as const)))(
-  'GET %s with limit=%j is answered, with a safe number',
+  'GET %s (as %s, seen as %s) with value %j is answered, with a safe number',
   async (path, url, seenAs, value) => {
     const goal = createGoal('Goal', 'task');
     const query = path === '/api/awareness/insights' ? 'days' : 'limit';

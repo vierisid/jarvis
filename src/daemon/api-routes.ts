@@ -318,18 +318,23 @@ class InvalidJsonBody extends HttpError {
 }
 
 /**
- * Read a JSON request body. Invalid JSON, `null` and bare scalars are refused
- * with a plain 400 instead of reaching the handler and failing as a 500 with
- * the engine's own message. `optional` treats an empty body as `{}` (routes
- * whose body is a set of optional settings); invalid JSON is still refused.
+ * Read a JSON request body. Invalid JSON, `null`, bare scalars and arrays are
+ * refused with a plain 400 instead of reaching the handler and failing as a
+ * 500 with the engine's own message, or being read as "no fields set" (an
+ * array has no `scope`, so a reset would have fallen back to its default).
+ * `optional` treats an empty body as `{}` (routes whose body is a set of
+ * optional settings); invalid JSON is still refused. `allowArray` is for the
+ * one route whose body is a list (goals reorder, which checks it itself).
  */
-async function readJson(req: Request, optional = false): Promise<unknown> {
+async function readJson(req: Request, opts: { optional?: boolean; allowArray?: boolean } = {}): Promise<unknown> {
   let text: string;
   try { text = await req.text(); } catch { throw new InvalidJsonBody('Request body could not be read.'); }
-  if (optional && !text.trim()) return {};
+  if (opts.optional && !text.trim()) return {};
   let body: unknown;
   try { body = JSON.parse(text); } catch { throw new InvalidJsonBody('Request body must be valid JSON.'); }
-  if (body === null || typeof body !== 'object') throw new InvalidJsonBody('Request body must be a JSON object.');
+  if (body === null || typeof body !== 'object' || (Array.isArray(body) && !opts.allowArray)) {
+    throw new InvalidJsonBody('Request body must be a JSON object.');
+  }
   return body;
 }
 
@@ -1317,12 +1322,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/onboarding/reset': {
       POST: async (req: Request) => {
         try {
-          const body = (await readJson(req, true)) as {
-            scope?: 'all' | 'setup' | 'profile' | 'tutorial';
-          };
-          const scope = body?.scope ?? 'all';
-          if (!['all', 'setup', 'profile', 'tutorial'].includes(scope)) {
-            return error(`Invalid scope "${scope}".`, 400);
+          // A reset clears data, so it needs a JSON object (the dashboard
+          // always sends `{ scope }`). Only a left-out scope means "all"; an
+          // empty body, `null` or any other value is refused, never read as
+          // the widest default.
+          const body = (await readJson(req)) as { scope?: unknown };
+          const scope = body.scope === undefined ? 'all' : body.scope;
+          if (typeof scope !== 'string' || !['all', 'setup', 'profile', 'tutorial'].includes(scope)) {
+            return error('Invalid scope. Use all, setup, profile or tutorial.', 400);
           }
 
           const { saveUserSection } = await import('./user-settings.ts');
@@ -3622,7 +3629,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/tts/preview': {
       POST: async (req: Request) => {
         try {
-          const body = (await readJson(req, true)) as {
+          const body = (await readJson(req, { optional: true })) as {
             provider?: string; voice?: string; api_key?: string; voice_id?: string; model?: string; text?: string;
           };
           const text = (typeof body.text === 'string' && body.text.trim() ? body.text.trim() : "Hi, I'm Jarvis. This is how I'll sound.").slice(0, 280);
@@ -3659,6 +3666,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const audio = await provider.synthesize(text);
           return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } });
         } catch (err) {
+          // A bad body is the caller's 400, not a provider failure (502).
+          if (err instanceof HttpError) return error(err.message, err.status);
           const msg = err instanceof Error ? err.message : String(err);
           return error(msg, 502);
         }
@@ -4777,7 +4786,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/goals/reorder': {
       POST: async (req: Request) => {
         try {
-          const body = await readJson(req) as { id: string; sort_order: number }[];
+          const body = await readJson(req, { allowArray: true }) as { id: string; sort_order: number }[];
           getGoalApplication().reorderGoals(body);
           return json({ ok: true });
         } catch (err) {
@@ -5608,7 +5617,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
         if (!projectPath) return error('Project not found', 404);
         try {
-          const body = await readJson(req, true) as { force?: boolean };
+          const body = await readJson(req, { optional: true }) as { force?: boolean };
           const result = await ctx.siteBuilderService.githubManager.push(projectPath, undefined, body.force);
           if (!result.success) return error(result.error ?? 'Push failed');
 
