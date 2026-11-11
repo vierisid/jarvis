@@ -47,6 +47,66 @@ describe.skipIf(skip)('the compiled core text helper', () => {
     expect(html).not.toMatch(/alert\(/);
   });
 
+  // Known XSS shapes: encoded and whitespace-split schemes, SVG/MathML,
+  // raw-text elements, forms, embedded documents and conditional comments.
+  const payloads = [
+    '<svg><script>alert(1)</script></svg>', '<svg onload=alert(1)>',
+    '<math><mtext><table><mglyph><style><img src=x onerror=alert(1)>',
+    '<noscript><p title="</noscript><img src=x onerror=alert(1)>">',
+    '<xmp><img src=x onerror=alert(1)></xmp>', '<noembed><img src=x onerror=alert(1)></noembed>',
+    '<plaintext><img src=x onerror=alert(1)>', '<textarea><img src=x onerror=alert(1)></textarea>',
+    '<template><img src=x onerror=alert(1)></template>', '<select><style><img src=x onerror=alert(1)></style></select>',
+    '<iframe srcdoc="<script>alert(1)</script>"></iframe>',
+    '<a href="JaVaScRiPt:alert(1)">x</a>', '<a href="&#106;&#97;&#118;&#97;&#115;&#99;&#114;&#105;&#112;&#116;&#58;alert(1)">x</a>',
+    '<a href="java&#x0A;script:alert(1)">x</a>', '<a href="\u0001javascript:alert(1)">x</a>', '<a href="javas\u0000cript:alert(1)">x</a>',
+    '<a href="javascript&colon;alert(1)">x</a>', '<a href="vbscript:msgbox(1)">x</a>',
+    '<a href="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">x</a>',
+    '<img src="data:image/svg+xml,<svg onload=alert(1)>">', '<img src=x srcset="javascript:alert(1)">',
+    '<image src=x onerror=alert(1)>', '<details open ontoggle=alert(1)>x</details>',
+    '<input type=checkbox autofocus onfocus=alert(1)>', '<input type=image src=x onerror=alert(1)>',
+    '<form action=javascript:alert(1)><button>x</button></form>',
+    '<object data="javascript:alert(1)"></object><embed src="javascript:alert(1)">',
+    '<base href="javascript:/">', '<meta http-equiv="refresh" content="0;url=javascript:alert(1)">',
+    '<div style="background:url(javascript:alert(1))">s</div>',
+    '<img src="https://x" usemap="#m"><map name=m><area href="javascript:alert(1)">',
+    '<!--[if gte mso 9]><img src=x onerror=alert(1)><![endif]-->', '<!--><img src=x onerror=alert(1)>-->',
+  ];
+
+  test('known XSS payloads come out inert when the output is parsed again', async () => {
+    for (const payload of payloads) {
+      const html = await md(payload);
+      // A second, independent parser (lol-html) reads the output as a browser
+      // or mail client would and finds no comment, no active element, no
+      // event handler and no URL outside http(s), mailto, tel or relative.
+      const found: string[] = [];
+      new HTMLRewriter()
+        .on('*', { element(el) {
+          const tag = el.tagName.toLowerCase();
+          if (/^(script|style|iframe|frame|object|embed|svg|math|form|base|meta|link|template|noscript|area|map)$/.test(tag)) found.push(tag);
+          for (const [name, value] of el.attributes) {
+            if (/^on|^style$|^srcset$|^srcdoc$|^action$|^formaction$/i.test(name)) found.push(name);
+            if ((name === 'href' || name === 'src') && /^[a-z][a-z0-9+.-]*:/i.test(value.replace(/[\u0000-\u0020]+/g, '')) && !/^(https?|mailto|tel):/i.test(value.trim())) found.push(value);
+          }
+        } })
+        .onDocument({ comments(c) { found.push(`<!--${c.text}-->`); } })
+        .transform(html);
+      expect({ payload, found }).toEqual({ payload, found: [] });
+    }
+  });
+
+  test('a table column alignment survives as the align attribute', async () => {
+    const html = await md('| l | c | r |\n|:---|:---:|---:|\n| 1 | 2 | 3 |');
+    expect(html).toMatch(/<th[^>]* align="left"[^>]*>l<\/th>/);
+    expect(html).toMatch(/<td[^>]* align="center"[^>]*>2<\/td>/);
+    expect(html).toMatch(/<td[^>]* align="right"[^>]*>3<\/td>/);
+    expect(html).not.toContain('style=');
+  });
+
+  test('harmless inline formatting in raw HTML is kept', async () => {
+    const html = await md('A <mark>m</mark> <ins>i</ins> <small>s</small> <q>q</q> <cite>c</cite> <var>v</var>');
+    for (const tag of ['mark', 'ins', 'small', 'q', 'cite', 'var']) expect(html).toContain(`<${tag}>`);
+  });
+
   test('markdown to HTML keeps ordinary formatting, safe links and images', async () => {
     const html = await md('# Title\n\nSome **bold** and *em* text with `code`.\n\n- one\n- two\n\n[site](https://example.com/a?b=1)\n\n![pic](https://example.com/p.png)\n\n| a | b |\n|---|---|\n| 1 | 2 |');
     expect(html).toContain('<h1');
