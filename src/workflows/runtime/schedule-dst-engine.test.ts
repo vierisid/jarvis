@@ -45,7 +45,8 @@ beforeAll(async()=>{
  const approvals=new ApprovalManager(),audit=new AuditTrail();
  const services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver(),eventBuffer:new WorkflowEventBuffer(),authorityEngine:authority,approvalManager:approvals,auditTrail:audit,emergencyController:new EmergencyController(),
   llmManager:{chat:async()=>{throw Error('No model access');}} as any,channelService:{sendWorkflowNotification:async()=>{throw Error('No external channels');}} as any,
-  wsService:{broadcastNotificationToDashboard:()=>{attempts++;if(outcome==='uncertain')throw Error('Synthetic loss after accepted send');return outcome==='failure'?0:1;}} as any});
+  recordDashboardNotification:input=>{attempts++;if(outcome==='failure')throw Error('Not saved');return {id:'n'+attempts,message:input.message,priority:input.priority,workflow_id:null,run_id:null,created_at:0,read_at:null};},
+  wsService:{broadcastNotificationToDashboard:()=>{if(outcome==='uncertain')throw Error('Synthetic loss after accepted send');return 1;}} as any});
  api=new SandboxApi({services});await api.start({port:0});runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
  const handle=await runtime.acquire({runId:'dst-metadata',projectId:DEFAULT_IDS.project});
  try{catalog=new PieceCatalog([metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName:meta.name,pieceVersion:meta.version}))]);}finally{await handle.release();}

@@ -15,7 +15,10 @@
  *   "telegram"  -> ChannelService.broadcastToChannels(['telegram']).
  *   "discord"   -> same idea on Discord.
  *   "voice"     -> TTS over the dashboard WS, when `sendVoice` is wired.
- *   "dashboard" -> WS broadcast to connected dashboards.
+ *   "dashboard" -> stored for the dashboard's unread list (when `recordDashboard`
+ *                  is wired), then broadcast to open dashboards as a live toast.
+ *                  Stored means delivered: it is there on the next visit even
+ *                  when no dashboard was open now.
  *   "desktop"   -> sendDesktopNotification, when available.
  *
  * Each request returns which channels delivered, which failed, and which
@@ -43,7 +46,14 @@ export interface NotifierDeps {
    * Broadcasts to all open dashboard websockets. Synchronous, never throws.
    * Returns how many sockets accepted it; 0 means no dashboard was open.
    */
-  broadcastToDashboard: (text: string, priority: "urgent" | "normal" | "low") => number;
+  broadcastToDashboard: (text: string, priority: "urgent" | "normal" | "low", storedId?: string) => number;
+  /**
+   * Stores a dashboard notification durably and returns its id (also sent with
+   * the live broadcast so an open tab shows it once). Throws when it could not
+   * be stored. Missing means the dashboard channel is live-only: delivered
+   * only when a dashboard socket was open.
+   */
+  recordDashboard?: (text: string, priority: "urgent" | "normal" | "low") => string;
   /**
    * Optional desktop notification surface (D-Bus / native). Optional means
    * "platform may not have it". Resolves whether the desktop showed it, or
@@ -99,7 +109,14 @@ export class JarvisNotifierAdapter implements PieceNotifier {
     if (expanded.has("dashboard")) {
       try {
         checkpointExecution();
-        if (this.deps.broadcastToDashboard(input.message, priority) > 0) delivered.push("dashboard");
+        if (this.deps.recordDashboard) {
+          // Stored first: with no tab open it still reaches the unread list.
+          const storedId = this.deps.recordDashboard(input.message, priority);
+          const open = this.deps.broadcastToDashboard(input.message, priority, storedId);
+          delivered.push("dashboard");
+          // Nobody watching: `auto` also tries the desktop, as before.
+          if (open === 0 && autoDashboard && this.deps.sendDesktop) expanded.add("desktop");
+        } else if (this.deps.broadcastToDashboard(input.message, priority) > 0) delivered.push("dashboard");
         else if (autoDashboard) {
           skipped.push({ channel: "dashboard", error: "no dashboard was open" });
           if (this.deps.sendDesktop) expanded.add("desktop");
@@ -136,7 +153,7 @@ export class JarvisNotifierAdapter implements PieceNotifier {
         failed.push({ channel: "voice", error: "voice channel not wired (TTS provider not configured)" });
       } else {
         await this.surface("voice", () => this.deps.sendVoice!(input.message),
-          "nothing was spoken: no dashboard was open to play it", { delivered, failed, unknown });
+          "nothing was spoken because voice plays only in an open dashboard, and none was open", { delivered, failed, unknown });
       }
     }
 
