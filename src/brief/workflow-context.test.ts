@@ -203,12 +203,23 @@ test('a run too large to show keeps the canvas, version and its status, failure 
   expect(detail.inspection.note).toContain('This run is too large to show here');
   expect(selection.context.groups.bindings.status).toBe('unavailable');
 });
-test('a run whose steps outgrow one answer is shown without them, not refused', () => {
+test('a run whose step values outgrow one answer keeps its steps and statuses, with the values left out', () => {
   const r = run();
   const wide = Object.fromEntries(Array.from({ length: 30 }, (_, k) => [`k${k}`, { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6 }]));
-  updateRun(r.id, { steps: Object.fromEntries(Array.from({ length: 150 }, (_, i) => [`s${i}`, { status: 'SUCCEEDED', input: wide, output: wide }])) });
+  updateRun(r.id, { steps: Object.fromEntries(Array.from({ length: 150 }, (_, i) => [`s${i}`, { status: i === 149 ? 'FAILED' : 'SUCCEEDED', input: wide, output: wide }])) });
   const detail = service.selection(flowId, versionId, r.id).run!;
-  expect(detail.steps).toEqual([]); expect(detail.inspection.note).toContain('too large to show here');
+  expect(detail.steps).toHaveLength(150);
+  expect(detail.steps.find(s => s.title === 'Step s149')).toMatchObject({ status: 'failed',
+    fields: [{ label: 'Input', value: '[Omitted: this run is too large to show values here]' }, { label: 'Output', value: '[Omitted: this run is too large to show values here]' }] });
+  expect(detail.inspection.note).toContain('so its step and receipt values are left out');
+});
+test('more than five shortened loops are counted in the note, not dropped from it', () => {
+  const r = run();
+  updateRun(r.id, { status: 'SUCCEEDED', steps: Object.fromEntries(Array.from({ length: 7 }, (_, l) =>
+    [`loop${l}`, { type: 'LOOP_ON_ITEMS', status: 'SUCCEEDED', input: [], output: { iterations: Array.from({ length: 45 }, () => ({})) } }])) });
+  const note = service.detail(flowId, r.id).inspection.note!;
+  expect(note.match(/Showing 40 of 45 iterations/g)).toHaveLength(5);
+  expect(note).toContain('2 more loops are shown in part.');
 });
 test('deep/wide values are bounded and explicitly partial', () => {
   const field = inspectionValue('Output', Array.from({ length: 1000 }, () => ({ secret: 'private' })));
