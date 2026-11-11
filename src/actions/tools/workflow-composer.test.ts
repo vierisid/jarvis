@@ -371,7 +371,7 @@ describe("composeFlow", () => {
     const sys = llm.calls[0]?.system ?? "";
     expect(sys).toContain("gmail_send");
     expect(sys).toContain("vault_search");
-    expect(sys).toContain("Available Jarvis tools");
+    expect(sys).toContain("Jarvis tool capabilities");
   });
 
   test("system prompt mentions the DISABLED-default contract", async () => {
@@ -951,15 +951,14 @@ describe("composeFlow", () => {
       expect(result.ok).toBe(true);
     });
 
-    test("a portable command needs no target even on a mixed fleet", async () => {
-      // The rule fires on OS-BOUND values only -- it must not turn every
-      // untargeted step on a heterogeneous fleet into an error.
+    test("a portable command is still unsupported as a direct workflow action", async () => {
       const llm = new StubLlm(invoke("run_command", { command: "git pull && bun test" }));
       const result = await composeFlow(
         { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, win, linuxHost], maxAttempts: 1 },
         { name: "Opener", description: "pull and test" },
       );
-      expect(result.ok).toBe(true);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.join(' ')).toContain('run_command is not supported');
     });
 
     test("judges an explicit target against THAT machine, not the fleet", async () => {
@@ -987,8 +986,8 @@ describe("composeFlow", () => {
       if (!result.ok) expect(result.errors.join(" ")).toContain("Windows");
     });
 
-    test("passes an OS-correct command through untouched", async () => {
-      const llm = new StubLlm(invoke("run_command", { command: "open -a TextEdit" }));
+    test("passes an OS-correct app launch through untouched", async () => {
+      const llm = new StubLlm(invoke("desktop_launch_app", { executable: "TextEdit" }));
       const result = await composeFlow(
         { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost] },
         { name: "Opener", description: "open TextEdit" },
@@ -999,7 +998,7 @@ describe("composeFlow", () => {
     test("ignores OS syntax that only appears inside a {{template}}", async () => {
       // The template resolves at run time to a value we cannot see; only the
       // literal text around it is ours to judge.
-      const llm = new StubLlm(invoke("run_command", { command: "cat {{trigger.payload.notepad.exe}}" }));
+      const llm = new StubLlm(invoke("read_file", { path: "{{trigger.payload.notepad.exe}}" }));
       const result = await composeFlow(
         { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost] },
         { name: "Opener", description: "read a file" },
@@ -1019,13 +1018,25 @@ describe("composeFlow", () => {
 
     test("skips the check for a templated target", async () => {
       const llm = new StubLlm(
-        invoke("run_command", { command: "notepad.exe", target: "{{trigger.payload.machine}}" }),
+        invoke("read_file", { path: "C:\\Users\\me\\notes.txt", target: "{{trigger.payload.machine}}" }),
       );
       const result = await composeFlow(
         { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost] },
-        { name: "Opener", description: "open notepad somewhere" },
+        { name: "Opener", description: "read notes somewhere" },
       );
       expect(result.ok).toBe(true);
+    });
+
+    test("refuses a templated computer for a browser or desktop action (#1314 M2)", async () => {
+      const llm = new StubLlm(
+        invoke("desktop_launch_app", { executable: "notepad.exe", target: "{{trigger.payload.machine}}" }),
+      );
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost], maxAttempts: 1 },
+        { name: "Opener", description: "open notepad somewhere" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.join(" ")).toContain("Name the computer directly");
     });
 
     test("leaves tools that carry no OS-bound params alone", async () => {
@@ -2044,6 +2055,30 @@ describe("tool-loop composer", () => {
 });
 
 
+test('both composer paths reject focused-window typing and teach the supported desktop path', async () => {
+  for (const mode of ['one-shot', 'tools']) {
+    const systems: string[] = [];
+    let requestedIndex = false;
+    const candidate = { displayName: 'Notepad', trigger: { name: 'trigger', type: 'EMPTY', nextAction: { name: 'type', type: 'PIECE',
+      settings: { pieceName: 'jarvis-tool', actionName: 'invoke', input: { toolName: 'desktop_type', params: { text: 'A poem' } } } } } };
+    const llm: ComposerLlmClient = mode === 'one-shot'
+      ? { chat: async ({ system }) => { systems.push(system!); return { text: JSON.stringify(candidate) }; } }
+      : { chat: async () => { throw new Error('unexpected fallback'); }, chatTools: async messages => {
+        if (!requestedIndex) { requestedIndex = true; return { content: '', tool_calls: [{ id: 'index', name: 'list_pieces', arguments: {} }] }; }
+        systems.push(messages.filter(m => m.role === 'tool').map(m => m.content).join('\n'));
+        return { content: '', tool_calls: [{ id: 'unsafe', name: 'submit_flow', arguments: candidate }] };
+      } };
+    const result = await composeFlow({ llm, pieceRegistry: new PieceCatalog([{ name: '@jarvispieces/piece-jarvis-tool', displayName: 'Tool', description: '',
+      actions: { invoke: { name: 'invoke', displayName: 'Invoke', description: '' } } }]),
+      toolNames: ['desktop_type', 'desktop_launch_app'], maxAttempts: 1 }, { name: 'Notepad', description: 'Write a poem in Notepad' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.join(' ')).toContain('whichever window has focus');
+    expect(systems[0]).toContain('NOT AVAILABLE as a workflow tool step');
+    expect(systems[0]).toContain('Cannot run unattended');
+    expect(systems[0]).toContain('action=get_value');
+  }
+});
+
 test('strict optional-data guidance reaches both composer paths and their repairs', async () => {
   for (const mode of ['one-shot', 'tools']) {
     const systems: string[] = [];
@@ -2065,4 +2100,16 @@ test('strict optional-data guidance reaches both composer paths and their repair
       expect(system).toContain('{{a.out ?? b.out}}');
     }
   }
+});
+
+test('the composer refuses a key press the computer a run would use cannot bind (#1314)', async () => {
+  const candidate = { displayName: 'Search', trigger: { name: 'trigger', type: 'EMPTY', nextAction: { name: 'enter', type: 'PIECE',
+    settings: { pieceName: '@jarvispieces/piece-jarvis-tool', actionName: 'invoke', input: { toolName: 'browser_press_key', params: { key: 'Enter' } } } } } };
+  const llm: ComposerLlmClient = { chat: async () => ({ text: JSON.stringify(candidate) }) };
+  const result = await composeFlow({ llm, pieceRegistry: new PieceCatalog([{ name: '@jarvispieces/piece-jarvis-tool', displayName: 'Tool', description: '',
+    actions: { invoke: { name: 'invoke', displayName: 'Invoke', description: '' } } }]), toolNames: ['browser_press_key'], maxAttempts: 1,
+    executionTargets: [{ id: '', name: 'This computer', os: 'linux' }, { id: 'studio', name: 'Studio', os: 'windows', connected: true, capabilities: ['browser'] }] },
+    { name: 'Search', description: 'press Enter' });
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.errors.join(' ')).toContain('browser_type with submit');
 });

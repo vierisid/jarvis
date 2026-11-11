@@ -103,6 +103,7 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
     pieces: configured?.pieces,
     tool: configured?.tool,
     roles: configured?.roles,
+    ...(configured?.machines ? { machines: configured.machines } : {}),
     connection(externalId, pieceName, path, settings, nodeType) {
       if (externalId.startsWith('jarvis:')) {
         const source = managedSourceFor(configured?.credentials?.list(), externalId);
