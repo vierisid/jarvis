@@ -42,6 +42,16 @@ export function claimCompositionLease<T extends CompositionLease>(db: Database, 
   }).immediate();
 }
 
+/**
+ * Put a running job back in the queue unspent (#1314 review): it was held
+ * because screen awareness turned off, not tried and failed. Only the lease
+ * holder can. Returns whether the job was held: false when it was no longer
+ * this lease's (dismissed, failed, taken over).
+ */
+export function holdCompositionLease(db: Database, table: CompositionTable, id: string, token: string | null, now = Date.now()): boolean {
+  return db.run(`UPDATE ${tableName(table)} SET state = 'queued', attempts = MAX(attempts - 1, 0), lease_token = NULL, lease_until = 0, updated_at = ?
+    WHERE id = ? AND state = 'running' AND lease_token = ?`, [now, id, token]).changes === 1;
+}
 
 type CompositionOwner = { owner: 'legacy' | 'prepared'; job_id: string };
 /** Resolve pre-reservation databases deterministically. A setup-only blocker owns no work.

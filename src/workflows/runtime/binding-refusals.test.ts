@@ -6,7 +6,7 @@ import { createFlowRun, updateRun, type FlowRun } from '../db/repos/flow-run';
 import { listWorkflowEffects, saveWorkflowEffect } from '../db/repos/workflow-effect';
 import type { ActionFailure } from '../../actions/action-outcome';
 import { _resetBindingNoticesForTests, bindingRefusalNotifier, flowBindingBlock, LATEST_ENDED_RUN_SQL, markBindingNoticeTold, runtimeBindingNotice, workflowRunNotice, type BindingNotification } from './binding-refusals';
-import { runFailureNotice } from './run-failure';
+import { runFailure, runFailureNotice } from './run-failure';
 import { TOAST_TITLE_MAX } from '../../comms/toast-limits';
 
 beforeEach(() => { initWorkflowDb(':memory:'); _resetBindingNoticesForTests(); });
@@ -164,7 +164,7 @@ describe('runtimeBindingNotice (#1080)', () => {
 
   // Thrown while the target is first resolved; the boundary records them since
   // #1152, with no target (none was frozen), so about no one computer.
-  for (const code of ['WORKFLOW_MACHINE_REPLACED', 'WORKFLOW_MACHINE_UNAVAILABLE']) {
+  for (const code of ['WORKFLOW_MACHINE_REPLACED', 'WORKFLOW_MACHINE_UNAVAILABLE', 'WORKFLOW_MACHINE_UNPINNED']) {
     test(`a computer refusal raised before the step's target was frozen (${code}) is a binding code, about any computer`, () => {
       const f = setup();
       const run = f.refused({ status: 'blocked', code, effect: 'not_started', message: 'gone' });
@@ -311,4 +311,34 @@ describe('the Workflows list blocked lookup reads its own index (#1152)', () => 
     const plan = getWorkflowDb().query(`EXPLAIN QUERY PLAN ${LATEST_ENDED_RUN_SQL}`).all('p', 'f') as Array<{ detail: string }>;
     expect(plan.map((p) => p.detail)).toEqual(['SEARCH flow_run USING INDEX idx_flow_run_ended (project_id=? AND flow_id=?)']);
   });
+});
+
+test('an unpinned computer step reads as a binding the person fixes by enabling again, with the exact fix (#1314 M2)', () => {
+  const f = setup();
+  const run = f.refused({ status: 'blocked', code: 'WORKFLOW_MACHINE_UNPINNED', effect: 'not_started', message: 'unpinned' });
+  const failure = runFailure(run)!;
+  expect(failure).toMatchObject({ category: 'missing_binding', effect: 'none', code: 'WORKFLOW_MACHINE_UNPINNED' });
+  expect(failure.headline).toContain('Enable the workflow to pin its computer, or name the computer in the step');
+  expect(failure.next.map(n => n.step)).toContain('accept_binding_change');
+});
+
+test('a flow refused before it ran for an unpinned computer says so, with the fix (#1314 review)', () => {
+  const f = setup();
+  const run = updateRun(f.ended('FAILED', 3_000).id, { failedStep: { name: '<readiness>', displayName: 'Workflow readiness', errorMessage: 'unpinned' },
+    steps: { '<readiness>': { status: 'FAILED', output: { code: 'WORKFLOW_NOT_READY', readiness: { ready: false, issues: [
+      { node: 'trigger', path: 'machine', code: 'WORKFLOW_MACHINE_UNPINNED', message: 'no pin' }] } } } } })!;
+  const failure = runFailure(run)!;
+  expect(failure).toMatchObject({ category: 'missing_binding', code: 'WORKFLOW_MACHINE_UNPINNED' });
+  expect(failure.headline).toContain('Enable the workflow to pin its computer, or name the computer in the step');
+  expect(failure.next.map(n => n.step)).toContain('accept_binding_change');
+  expect(flowBindingBlock(f.row())).toMatchObject({ code: 'WORKFLOW_MACHINE_UNPINNED', kind: 'readiness' });
+});
+
+test('a switch turned off mid-run says which switch and that turning it on fixes it (#1314 review)', () => {
+  const f = setup();
+  for (const [code, words] of [['SCREEN_CAPTURE_DISABLED', 'screen awareness is turned off'], ['DESKTOP_DISABLED', 'desktop control is turned off']] as const) {
+    const failure = runFailure(f.refused({ status: 'blocked', code, effect: 'not_started', message: 'off' }))!;
+    expect(failure).toMatchObject({ category: 'missing_binding', code });
+    expect(failure.headline).toContain(words);
+  }
 });

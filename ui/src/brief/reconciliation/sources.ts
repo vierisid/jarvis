@@ -4,7 +4,6 @@ import type { MemoryStreamPage, MemoryStreamQuery } from '../../../../src/brief/
 import type { InspectionSelection } from '../../../../src/brief/workflow-context-contracts';
 import type { WorkflowRemoval } from '../../../../src/brief/workflow-removal';
 import type { OutcomeSummary } from '../../../../src/brief/outcomes';
-import type { PreparedOpportunityView } from '../../../../src/awareness/prepared-contracts';
 import type { Goal } from '../../../../src/goals/types';
 import type { WorkItem } from '../../../../src/goals/work-items';
 import { ReadFailure, type Read, type Source } from './resource';
@@ -81,11 +80,6 @@ export function decisionsSource(options: PageOptions & { runId?: string } = {}, 
   const { pages = 1, limit = 30, runId } = options;
   return { domains: ['decisions'], capability: 'decisions', read: signal => windowRead(cursor => get(queryUrl('/api/brief/decisions', { limit, runId, cursor }), signal)
     .then(value => envelope<BriefPage<QueuedDecision>>(value, data => page(data, 'decisionId'))), 'decisionId', pages) };
-}
-export function opportunitiesSource(options: PageOptions = {}, get: GetJson = getJson): Source<Window<PreparedOpportunityView>> {
-  const { pages = 1, limit = 20 } = options;
-  return { domains: ['opportunities'], capability: 'preparedOpportunities', read: signal => windowRead(cursor => get(queryUrl('/api/brief/prepared-opportunities', { limit, cursor }), signal)
-    .then(value => envelope<BriefPage<PreparedOpportunityView>>(value, data => page(data, 'proposalId'))), 'proposalId', pages) };
 }
 export function memorySource(options: Omit<MemoryStreamQuery, 'cursor'> & { pages?: number } = {}, get: GetJson = getJson): Source<Window<MemoryStreamPage['items'][number], MemoryStreamPage>> {
   const { pages = 1, ...query } = options;

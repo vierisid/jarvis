@@ -159,3 +159,60 @@ test('saved waiting work explains unavailable preparation instead of silently ap
   expect(host.textContent).toContain('Preparation is unavailable. Your saved requests are kept.');
   expect(host.textContent).toContain('0 waiting');
 });
+
+test("turning awareness off clears routines already on screen and says so (#1314 review)", async () => {
+  const { setScreenCaptureEnabledSource } = await import("../../../../../src/actions/tools/desktop-guard");
+  await mount(); expect(host.textContent).toContain("Invoice review"); expect(host.textContent).toContain("capture-1");
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    await act(async () => button("Refresh requests").click());
+    expect(host.textContent).not.toContain("Invoice review");
+    expect(host.textContent).not.toContain("capture-1");
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("Screen awareness is off");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    setScreenCaptureEnabledSource(null);
+    await act(async () => button("Refresh requests").click());
+    expect(host.textContent).toContain("Invoice review");
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test("a save refused because awareness went off clears the open routine too (#1314 review)", async () => {
+  const { setScreenCaptureEnabledSource } = await import("../../../../../src/actions/tools/desktop-guard");
+  await mount(); await act(async () => button("Dismiss proposal").click());
+  (host.querySelector('[name="reason"]') as HTMLTextAreaElement).value = "Already automated";
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(host.textContent).not.toContain("Invoice review");
+    expect(host.textContent).not.toContain("capture-1");
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("Screen awareness is off");
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test("a poll answered from before awareness went off cannot put a cleared routine back (#1314 review)", async () => {
+  const { setScreenCaptureEnabledSource } = await import("../../../../../src/actions/tools/desktop-guard");
+  await mount(); await act(async () => button("Dismiss proposal").click());
+  (host.querySelector('[name="reason"]') as HTMLTextAreaElement).value = "Already automated";
+  // The next routines read is answered while awareness is on, and delivered late.
+  const fixtureFetch = globalThis.fetch;
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  globalThis.fetch = (async (input, options) => {
+    if (String(input).startsWith("/api/awareness/routines")) {
+      const early = await fixtureFetch(input, options);
+      await held; return early;
+    }
+    return fixtureFetch(input, options);
+  }) as typeof fetch;
+  try {
+    // A poll starts and waits on the held answer.
+    document.dispatchEvent(new Event("visibilitychange"));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    setScreenCaptureEnabledSource(() => false);
+    await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(host.textContent).not.toContain("Invoice review");
+    await act(async () => { release(); await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(host.textContent).not.toContain("Invoice review");
+    expect(host.textContent).not.toContain("capture-1");
+  } finally { setScreenCaptureEnabledSource(null); globalThis.fetch = fixtureFetch; }
+});
