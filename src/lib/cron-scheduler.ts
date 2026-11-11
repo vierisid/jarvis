@@ -672,7 +672,13 @@ export class CronScheduler {
       if (handledOrder.length > 1_024) handled.delete(handledOrder.shift()!);
     };
 
-    const tick = (nowMs: number, catchUp = false): void => {
+    // A schedule resumed from a stored watch (`dueAfter`) owes the times since
+    // then. Its first evaluation, whichever timer or caller runs it, is the
+    // startup catch-up: the later times it delivers are marked `afterEarlier`.
+    let resuming = options.dueAfter !== undefined;
+    const tick = (nowMs: number): void => {
+      const catchUp = resuming;
+      resuming = false;
       const current = Math.floor(nowMs / 60_000);
       if (current <= evaluatedThrough) {
         // Same minute again, or a small step back: nothing new is due. A clock
@@ -707,20 +713,19 @@ export class CronScheduler {
           console.error(`[CronScheduler] Job "${id}" missed-occurrence handler threw:`, err);
         }
       }
-      for (const [index, occurrence] of due.entries()) {
+      let delivered = 0;
+      const deliver = (occurrence: CronOccurrence): void => {
         remember(occurrence.key);
-        run(catchUp && index > 0 ? { ...occurrence, afterEarlier: true } : occurrence);
-      }
+        run(catchUp && delivered++ > 0 ? { ...occurrence, afterEarlier: true } : occurrence);
+      };
+      for (const occurrence of due) deliver(occurrence);
       // A minute that clocks skipped when they jumped forward fires once,
       // right after the jump. Only while ticking normally: a jump during a
       // long stall is part of what was missed.
       if (dstPolicy !== 'skip_missing_first_repeated' && current - from <= 2) {
         for (let minute = from + 1; minute <= current; minute++) {
           const shifted = skippedOccurrence(parsed, minute * 60_000, zone);
-          if (shifted && !handled.has(shifted.key)) {
-            remember(shifted.key);
-            run({ ...shifted, lateMs: nowMs - shifted.at });
-          }
+          if (shifted && !handled.has(shifted.key)) deliver({ ...shifted, lateMs: nowMs - shifted.at });
         }
       }
       // The next run is for display; work it out only when something fired.
@@ -730,7 +735,7 @@ export class CronScheduler {
 
     const handle = setInterval(() => tick(this.now()), 30_000);
 
-    this.jobs.set(id, {
+    const job: CronJob = {
       id,
       expression,
       callback,
@@ -738,14 +743,15 @@ export class CronScheduler {
       nextRun: nextRun.getTime(),
       handle,
       tick,
-    });
+    };
+    this.jobs.set(id, job);
 
-    // A schedule resumed from a stored watch (`dueAfter`) owes the times since
-    // then: run them now, not at the next interval, or a time near the end of
-    // its grace window ages out first. Deferred so the caller finishes
-    // registering the job before its callback runs.
-    if (options.dueAfter !== undefined) {
-      setTimeout(() => { if (this.jobs.get(id)?.handle === handle) tick(this.now(), true); }, 0);
+    // Run the times a resumed schedule owes now, not at the next interval, or
+    // one near the end of its grace window ages out first. Deferred so the
+    // caller finishes registering the job before its callback runs; a job
+    // cancelled or replaced meanwhile does nothing.
+    if (resuming) {
+      setTimeout(() => { if (this.jobs.get(id) === job) tick(this.now()); }, 0);
     }
 
     console.log(`[CronScheduler] Scheduled job "${id}" (${expression}), next run: ${nextRun.toISOString()}`);

@@ -40,6 +40,35 @@ describe("CronScheduler occurrences", () => {
     expect(cancelled).toEqual([]);
   });
 
+  test("the first evaluation of a resumed schedule is its catch-up, whoever runs it, and the deferred one then repeats nothing", async () => {
+    setCronTimezone("UTC");
+    setSystemTime(new Date(at("2026-10-07T09:36:25Z")));
+    scheduler = new CronScheduler();
+    const fired: CronOccurrence[] = [];
+    scheduler.schedule("j", "* * * * *", (o) => fired.push(o), { dueAfter: at("2026-10-07T09:34:25Z") });
+    // Another timer (a shared ticker, a test) evaluates the job before the deferred catch-up does.
+    scheduler.runDue("j", at("2026-10-07T09:36:25Z"));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(fired.map((o) => [o.key, o.afterEarlier ?? false])).toEqual([["2026-10-07T09:35", false], ["2026-10-07T09:36", true]]);
+    // Ordinary ticks after it mark nothing.
+    scheduler.runDue("j", at("2026-10-07T09:37:01Z"));
+    expect(fired[2]).toEqual({ at: at("2026-10-07T09:37:00Z"), key: "2026-10-07T09:37", lateMs: 1_000 });
+  });
+
+  test("a catch-up across the spring-forward jump marks the shifted minute as following the time before it", async () => {
+    setCronTimezone("America/New_York");
+    // 2026-03-08 02:00 EST jumps to 03:00 EDT (07:00Z). 02:00 does not exist and fires once right after the jump.
+    setSystemTime(new Date(at("2026-03-08T07:01:30Z")));
+    scheduler = new CronScheduler();
+    const fired: CronOccurrence[] = [];
+    scheduler.schedule("j", "0 2,3 * * *", (o) => fired.push(o), { dueAfter: at("2026-03-08T06:59:30Z") });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(fired.map((o) => [o.key, o.shifted ?? false, o.afterEarlier ?? false])).toEqual([
+      ["2026-03-08T03:00", false, false],
+      ["2026-03-08T02:00", true, true],
+    ]);
+  });
+
   test("each fires once, named by its wall-clock minute in the configured zone", () => {
     setCronTimezone("Asia/Kolkata");
     const { fired, tick } = job("0 9 * * *", "2026-10-07T03:29:00Z");
