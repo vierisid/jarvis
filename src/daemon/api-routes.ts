@@ -59,6 +59,7 @@ import { getOrCreateConversation, getMessages, getRecentConversation } from '../
 import { telegramAllowList, discordAllowList, channelOwnerId } from '../comms/channels/allow-list.ts';
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
 import { listAgentActivity, countAgentActivity } from '../vault/agent-activity.ts';
+import { listUnreadDashboardNotifications, markDashboardNotificationRead } from '../vault/dashboard-notifications.ts';
 import { getPersonality } from '../personality/model.ts';
 import { getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
 import { forgetUserProfile } from '../onboarding-next/runtime/forget.ts';
@@ -1099,6 +1100,28 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const events = listAgentActivity(req.params.id, { limit, offset });
           const total = countAgentActivity(req.params.id);
           return json({ events, total });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    // Notifications a workflow sent to the dashboard, unread ones first-class so
+    // one sent while no dashboard was open is there on the next visit.
+    '/api/dashboard-notifications': {
+      GET: () => {
+        try {
+          return json({ notifications: listUnreadDashboardNotifications() });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    '/api/dashboard-notifications/:id/read': {
+      POST: (req: Request & { params: { id: string } }) => {
+        try {
+          return markDashboardNotificationRead(req.params.id) ? json({ ok: true }) : error('Notification not found', 404);
         } catch (err) {
           return errorFromException(err);
         }
