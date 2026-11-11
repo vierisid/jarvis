@@ -78,7 +78,7 @@ import { ActionOutcomeError, type ActionOutcome } from '../../actions/action-out
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR,
   HTTP_PIECE, httpReadHostListed } from './piece-effects';
-import { httpApprovalIntent, httpApprovalReason, localAddressRefusal, makesNetworkRequest } from './http-approval';
+import { httpApprovalIntent, httpApprovalReason, httpCardRefusal, localAddressRefusal, makesNetworkRequest } from './http-approval';
 import type { EgressPolicy } from './http-egress';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
 import { captureProviderBinding, providerBindingHolds } from './provider-reconciliation';
@@ -1531,8 +1531,10 @@ export function buildSandboxServiceBackends(
         const named = network ? { ...capability.target(input), intent: httpApprovalIntent(req.piece, input) } : capability.target(input);
         return { arguments: input, target: named, ...(facts.length ? { bindings: { facts } } : {}) };
       },
-      // The card says what the request will do (method and host), not the engine's category sentence.
-      ...(network ? { intentFor: (args: Record<string, unknown>) => httpApprovalIntent(req.piece, args), approvalReason: httpApprovalReason(req.piece, input, readHosts !== null && !listedRead) } : {}),
+      // The card says what the request will do (method, host and path), not the engine's
+      // category sentence, and a request it could not show whole is refused, not cut.
+      ...(network ? { intentFor: (args: Record<string, unknown>) => httpApprovalIntent(req.piece, args),
+        cardRefusal: (args: Record<string, unknown>) => httpCardRefusal(req.piece, args), approvalReason: httpApprovalReason(req.piece, input, readHosts !== null && !listedRead) } : {}),
       // A revised document carries its own reviewed target; anything else is frozen to this input.
       // The card sentence rides in the target but is words about it, not part of it.
       validateTarget: (args, target) => {

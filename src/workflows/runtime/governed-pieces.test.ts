@@ -1558,9 +1558,9 @@ describe('#961: the core HTTP piece is governed by method', () => {
 
   test('the card says in words what the request will do, naming the method and the host, and why it asks', async () => {
     const cases: Array<[string, Record<string, unknown>, string, RegExp]> = [
-      ['post', request('POST', { url: 'https://api.example.test/v1/orders?token=secret-q' }), 'Jarvis wants to send a POST request to api.example.test', /Sending a request/],
-      ['delete', request('PUT', { method: 'put' }), 'Jarvis wants to send a PUT request to ops.example.test', /Sending a request/],
-      ['unlisted read', request('GET', { url: 'https://other.example.test/x?d=1' }), 'Jarvis wants to read other.example.test', /not on the workflow's list/],
+      ['post', request('POST', { url: 'https://api.example.test/v1/orders?token=secret-q' }), 'Jarvis wants to send a POST request to api.example.test/v1/orders', /Sending a request/],
+      ['delete', request('PUT', { method: 'put' }), 'Jarvis wants to send a PUT request to ops.example.test/api/logs', /Sending a request/],
+      ['unlisted read', request('GET', { url: 'https://other.example.test/x?d=1' }), 'Jarvis wants to read other.example.test/x', /not on the workflow's list/],
       ['unknown host', request('POST', { url: '{{trigger.url}}' }), 'Jarvis wants to send a POST request to a web address set when the step runs', /Sending a request/],
     ];
     for (const [name, input, sentence, why] of cases) {
@@ -1576,7 +1576,39 @@ describe('#961: the core HTTP piece is governed by method', () => {
     const gql = fixture('@activepieces/piece-graphql', 'send_request', DEFAULT_CONFIG.authority.default_level);
     gql.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories] as ActionCategory[]);
     const card = gql.approvals.getRequest(approvalOf(await gql.authorize({ method: 'POST', url: 'https://graph.example.test/graphql', query: '{ me { id } }' })))!;
-    expect(approvalIntentParts(card).action).toBe('Jarvis wants to send a GraphQL request to graph.example.test');
+    expect(approvalIntentParts(card).action).toBe('Jarvis wants to send a GraphQL request to graph.example.test/graphql');
+  });
+
+  test('the card names the path from the redacted URL: never query, fragment or userinfo; secrets masked; unknown parts named; too long refused', async () => {
+    const cases: Array<[string, string]> = [
+      // Query, fragment and userinfo never reach the sentence.
+      ['https://user:pw@api.stripe.test/v1/refunds?api_key=q-secret#frag', 'api.stripe.test/v1/refunds'],
+      // #1318's path secrets stay redacted, and a long token-shaped segment is masked the same way.
+      ['https://hooks.slack.com/services/T0/B0/abcdefghijklmnop1234', 'hooks.slack.com/services/T0/B0/[redacted]'],
+      ['https://api.example.test/keys/sk_live_51HabcdEFGhijkLMNop/rotate', 'api.example.test/keys/[redacted]/rotate'],
+      // A long plain word is not a token.
+      ['https://api.example.test/customer-subscriptions-list', 'api.example.test/customer-subscriptions-list'],
+      // Decoded only where the result is plain; markup, slashes and non-ASCII stay encoded.
+      ['https://api.example.test/a%2Db/%3Cb%3E/a%2Fb/caf%C3%A9', 'api.example.test/a-b/%3Cb%3E/a%2Fb/caf%C3%A9'],
+      // A part the engine has not resolved is named as such; an unresolved host is unknown whole.
+      ['https://api.example.test/v1/{{trigger.id}}/refunds', 'api.example.test/v1/[set when the step runs]/refunds'],
+      ['https://{{trigger.host}}/v1/x', 'a web address set when the step runs'],
+    ];
+    for (const [url, where] of cases) {
+      const f = shipped([]);
+      const card = f.approvals.getRequest(approvalOf(await f.authorize(request('POST', { url }))))!;
+      expect(approvalIntentParts(card).action).toBe(`Jarvis wants to send a POST request to ${where}`);
+      expect(JSON.parse(card.context).intent).toBe(`Jarvis wants to send a POST request to ${where}`);
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
+    // A URL the engine's bound cut, and a sentence past the card's limit, are refused, not cut.
+    for (const url of [`https://api.example.test/${'a/'.repeat(300)}`, `https://api.example.test/${'{{x}}/'.repeat(23)}`]) {
+      const f = shipped([]);
+      await expect(f.authorize(request('POST', { url }))).rejects.toThrow(/approval card/);
+      expect(f.approvals.getPending()).toHaveLength(0);
+      expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'blocked', outcome: { code: 'CARD_CANNOT_SHOW' } });
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
   });
 
   test('parse_url makes no request: it runs without a card, whether or not any host is listed', async () => {
@@ -1650,7 +1682,7 @@ describe('#961: the core HTTP piece is governed by method', () => {
     const read = shipped();
     read.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories, 'read_data'] as ActionCategory[]);
     const readCard = read.approvals.getRequest(approvalOf(await read.authorize(request('GET'))))!;
-    expect(approvalIntentParts(readCard)).toEqual({ action: 'Jarvis wants to read ops.example.test', reason: 'read_data is a governed action requiring user approval' });
+    expect(approvalIntentParts(readCard)).toEqual({ action: 'Jarvis wants to read ops.example.test/api/logs', reason: 'read_data is a governed action requiring user approval' });
     closeWorkflowDb(); initWorkflowDb(':memory:');
     const send = shipped();
     send.authority.addOverride({ action: 'send_message', allowed: true, requires_approval: true });
@@ -1713,8 +1745,8 @@ describe('#961: the core HTTP piece is governed by method', () => {
       // Userinfo and a parent domain do not make another host a listed one.
       [['ops.example.test'], 'https://ops.example.test@exfil.example.test/'],
       [['example.test'], 'https://ops.example.test/api/logs'],
-      // A URL the projection cut, or one that does not parse, is never listed.
-      [['ops.example.test'], `https://ops.example.test/${'a'.repeat(600)}`],
+      // A URL that does not parse is never listed. (One the projection cut is
+      // never listed either, and its card is refused, not cut: below.)
       [['ops.example.test'], '{{trigger.url}}'],
     ] as const) {
       for (const method of ['GET', 'HEAD']) {
@@ -1726,6 +1758,14 @@ describe('#961: the core HTTP piece is governed by method', () => {
         expect(JSON.parse(card.context).target).toMatchObject({ method });
         closeWorkflowDb(); initWorkflowDb(':memory:');
       }
+    }
+    // Cut by the projection: not listed, so it would ask, and a card cannot show it whole, so it is refused.
+    for (const method of ['GET', 'HEAD']) {
+      const cut = shipped(['ops.example.test']);
+      await expect(cut.authorize(sanitizePieceInput(request(method, { url: `https://ops.example.test/${'a'.repeat(600)}` }), HTTP)))
+        .rejects.toThrow(/too long for the approval card/);
+      expect(listWorkflowEffects(cut.run.id)[0]).toMatchObject({ actionCategory: 'send_message', outcome: { code: 'CARD_CANNOT_SHOW' } });
+      closeWorkflowDb(); initWorkflowDb(':memory:');
     }
     // Listed, in any letter case, it runs, and the list goes back to the engine.
     const f = shipped(['OPS.Example.test', 'other.example.test']);
