@@ -55,6 +55,8 @@ export function PendingDecisions({ http, read, enabled, changed, selection, else
   const [selected, select] = useState<string | null>(null), [chosenFor, setChosenFor] = useState<string>();
   // A link names its request until the founder picks one on purpose.
   const named = selection && chosenFor !== selection ? 'approval:' + selection : null;
+  // Once the route drops the id, a later link to the same request names it again.
+  useEffect(() => { if (!selection) setChosenFor(undefined); }, [selection]);
   // null while loading or failed: an unknown permission list is not an empty one.
   useEffect(() => { onCount?.(enabled ? rows?.length ?? null : 0); }, [rows, enabled, onCount]);
   const list = React.useRef<HTMLElement>(null), restoreFocus = React.useRef(false);

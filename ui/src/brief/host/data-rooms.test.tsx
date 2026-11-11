@@ -63,3 +63,16 @@ test('Needs you never shows an all-clear while the independent permission list h
   expect(Rooms.onlyOtherDecisions(snap('unavailable', null, { reason: 'down' }), 2)).toBe(false);
   expect(Rooms.onlyOtherDecisions(snap('stale', [{ actions: [] }], { reason: 'down' }), 2)).toBe(false);
 });
+
+test('a link names a document request only while the Needs you document list shows it as actionable', () => {
+  const snap = (state: string, data: unknown) => ({ state, data, refreshing: false, reason: null }) as any;
+  const doc = (approvalId: string, actions: string[]) => ({ actions, paper: { decision: { approval: { approvalId } } } });
+  expect(Rooms.namedInDocuments(snap('ready', [doc('a', ['approve'])]), 'a')).toBe(true);
+  // An answered document request stays in the read without actions; the document room hides it, so it is gone.
+  expect(Rooms.namedInDocuments(snap('ready', [doc('a', [])]), 'a')).toBe(false);
+  expect(Rooms.namedInDocuments(snap('ready', [doc('b', ['approve'])]), 'a')).toBe(false);
+  expect(Rooms.namedInDocuments(snap('empty', null), 'a')).toBe(false);
+  // Until the document read settles, it may still hold the request.
+  expect(Rooms.namedInDocuments(snap('loading', null), 'a')).toBe(true);
+  expect(Rooms.namedInDocuments(snap('ready', [doc('a', ['approve'])]), undefined)).toBe(false);
+});

@@ -71,6 +71,11 @@ export function onlyOtherDecisions(all: Pick<Snapshot<readonly DecisionView[]>, 
   if (!settled || all.data?.some(row => row.actions.length > 0)) return false;
   return otherCount === null || otherCount > 0 || !!all.data?.length;
 }
+/** Whether the document list may hold the request a link names: only actionable rows are shown there, and an unsettled read may still hold it. */
+export function namedInDocuments(all: Pick<Snapshot<readonly DecisionView[]>, 'state' | 'data'>, approvalId: string | undefined): boolean {
+  if (!(all.state === 'ready' || all.state === 'empty' || all.state === 'stale')) return true;
+  return !!approvalId && !!all.data?.some(row => row.actions.length > 0 && row.paper.decision.approval?.approvalId === approvalId);
+}
 export function createDataRooms(host: { scopeId: string; transport: HostTransport; capabilities(): unknown;
   storage: Storage; reconciliation: BriefReconciliationClient; createGoal(): void }) {
   const { scopeId, transport, reconciliation } = host;
@@ -167,9 +172,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     const [otherCount, setOtherCount] = useState<number | null>(null);
     const onlyOther = onlyOtherDecisions(all, otherCount === null ? null : otherCount + humanPending);
     // A link's request may sit in either list; only when neither has it is it gone.
-    const named = shell.route.selection.approvalId;
-    const docsSettled = all.state === 'ready' || all.state === 'empty' || all.state === 'stale';
-    const elsewhere = !docsSettled || !!(named && all.data?.some(row => row.paper.decision.approval?.approvalId === named));
+    const elsewhere = namedInDocuments(all, shell.route.selection.approvalId);
     return <>{onlyOther ? <><header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header>{stored.list}</> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
       <PendingDecisions onCount={setOtherCount} elsewhere={elsewhere} selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
   }

@@ -169,6 +169,20 @@ test('the other decisions list stays quiet when the named request is in the docu
   expect(host.textContent).not.toContain('already answered');
   expect(host.querySelector('article.brief-decision-paper')).toBeNull();
 });
+test('reopening the same stale link after picking a card shows the message again, not the picked or first request', async () => {
+  const rows = permissionRows();
+  let selection: string | undefined = 'already-granted';
+  const draw = () => React.act(async () => root.render(<Commands.PendingDecisions http={idle} read={async () => rows as any} enabled changed={() => {}} selection={selection}
+    navigate={r => { selection = (r.selection as { approvalId?: string }).approvalId; void draw(); }} />));
+  await draw();
+  await React.act(async () => (host.querySelectorAll('.brief-decision-choice')[1] as HTMLElement).click());
+  expect(selection).toBeUndefined();
+  expect(host.querySelector('article.brief-decision-paper')?.textContent).toContain('Review two');
+  selection = 'already-granted'; await draw();
+  expect(host.textContent).toContain('This request was already answered or no longer exists.');
+  expect(host.querySelector('article.brief-decision-paper')).toBeNull();
+  expect(button('Grant permission')).toBeUndefined();
+});
 test('a browser click card leads with what will be clicked and where, with the generic action as subtitle', async () => {
   const row = { decisionId: 'approval:c', revision: 'r', kind: 'permission', state: 'pending', title: 'Review browser_click on element [5]. Business effect unknown.',
     review: { toolName: 'browser_click', reason: 'Approval required', origin: 'https://mail.example', element: 'button "Send" [5]' },
