@@ -801,6 +801,14 @@ test('a child call in a loop needs an invocation key that changes per item', () 
   for (const key of ['{{loop.item.id}}', 'order-{{loop.index}}', '{{trigger.id}}-{{loop.item}}']) {
     expect(compileWorkflow(inLoop(key), { pieces: subflowCatalog }).issues.filter(i => i.path === 'settings.input.invocationKey')).toEqual([]);
   }
+  // A constant key with a payload that is the same on every pass is one deduplicated call, not a refusal.
+  for (const payload of [{ order: '{{trigger.id}}' }, 'fixed']) {
+    const same = inLoop('{{trigger.request_id}}'); same.nextAction.firstLoopAction.settings.input.payload = payload;
+    expect(compileWorkflow(same, { pieces: subflowCatalog }).issues.filter(i => i.path === 'settings.input.invocationKey')).toEqual([]);
+  }
+  // A payload that reads the loop item inside an object is still per pass.
+  const nested = inLoop('lc-const'); nested.nextAction.firstLoopAction.settings.input.payload = { row: { id: '{{loop.item.id}}' } };
+  expect(compileWorkflow(nested, { pieces: subflowCatalog }).issues).toContainEqual(expect.objectContaining({ path: 'settings.input.invocationKey' }));
   // Outside a loop a fixed or request-wide key is exactly what is wanted.
   const outside = graph(callStep('{{trigger.request_id}}'));
   expect(compileWorkflow(outside, { pieces: subflowCatalog }).issues.filter(i => i.path === 'settings.input.invocationKey')).toEqual([]);

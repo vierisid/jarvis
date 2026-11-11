@@ -139,14 +139,20 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
   }
   // Steps inside a router branch, seen from a step after the router: they ran only if that branch was taken.
   const branchOnly = new Set<string>();
-  /** A non-empty key that names nothing from the loop, so every pass would use the same one. */
-  const constantKey = (key: unknown): boolean => {
-    if (typeof key !== 'string' || !key.trim()) return false;
-    for (const match of key.matchAll(/\{\{(.*?)\}\}/g)) {
-      try { if ([...workflowExpressionReferences(match[1]!.trim())].some(ref => loopVarying.has(ref))) return false; } catch { return false; }
+  /** True when a template anywhere in the value names something from the loop, so it can differ per pass.
+   * A template that does not parse counts as varying: it is reported on its own. */
+  const perPass = (value: unknown, depth = 0): boolean => {
+    if (typeof value === 'string') {
+      for (const match of value.matchAll(/\{\{(.*?)\}\}/g)) {
+        try { if ([...workflowExpressionReferences(match[1]!.trim())].some(ref => loopVarying.has(ref))) return true; } catch { return true; }
+      }
+      return false;
     }
-    return true;
+    if (depth > 32 || value === null || typeof value !== 'object') return false;
+    return Object.values(value).some(item => perPass(item, depth + 1));
   };
+  /** A non-empty key that names nothing from the loop, so every pass would use the same one. */
+  const constantKey = (key: unknown): boolean => typeof key === 'string' && !!key.trim() && !perPass(key);
   let count = 0, inputVisits = 0, schemaVisits = 0, runtimeCount = 0, previewFound = false;
   const issue = (node: string, path: string, code: string, message: string, allowedPieces?: readonly string[]) => {
     if (issues.length < 100) issues.push({ node, path, code, message, ...(allowedPieces ? { allowedPieces: [...allowedPieces] } : {}) });
@@ -402,7 +408,9 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     if (!root && isPiece('jarvis-subflow') && settings.actionName === 'call' && object(input)) {
       if (!emptyInput(input.outputSchema)) try {parseOutputSchema(input.outputSchema);} catch(e) {issue(node,'settings.input.outputSchema','INPUT_TYPE',(e as Error).message);}
       if (!emptyInput(input.timeoutSeconds) && (!Number.isInteger(input.timeoutSeconds)||Number(input.timeoutSeconds)<1||Number(input.timeoutSeconds)>86400)) issue(node,'settings.input.timeoutSeconds','INPUT_TYPE','Child timeout must be 1-86400 seconds');
-      if (refundLoopBodies.has(raw) && constantKey(input.invocationKey)) {
+      // Only when the payload differs per pass: a constant key with a constant payload is one
+      // deduplicated call, which published workflows may rely on (readiness runs at every trigger).
+      if (refundLoopBodies.has(raw) && constantKey(input.invocationKey) && perPass(input.payload)) {
         issue(node, 'settings.input.invocationKey', 'INPUT_TYPE', 'The invocation key is the same on every pass of the loop, so the second pass is refused. Include something that changes per item, such as {{loop.item.id}} or {{loop.index}}');
       }
       runtime(node,'settings.input.invocationKey','piece-input','Persist child invocation and validated output across parent retries; refuse changed payload/configuration under the same key');
