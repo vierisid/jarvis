@@ -6,6 +6,7 @@
  * message is the cause. The report stays in the server log.
  */
 import { redactSecrets } from '../util/redact';
+import { boundedReceiptText } from '../roles/untrusted';
 import { WORKFLOW_RETRY_GUIDANCE } from '../workflows/queue/retry-policy';
 
 export const CAUSE_MAX = 240;
@@ -40,8 +41,8 @@ function fromJson(line: string): string | null {
 
 /**
  * The step's own error message: first line, with no stack frame, server or
- * engine path, error class name or retry guidance, credentials redacted and
- * bounded. Null when nothing readable is left.
+ * engine path, error class name or retry guidance, credentials redacted, frame
+ * delimiters defanged and bounded. Null when nothing readable is left.
  */
 export function failureCause(message: unknown, max = CAUSE_MAX): string | null {
   const text = typeof message === 'string' ? message : message === undefined || message === null ? '' : safeJson(message);
@@ -56,7 +57,9 @@ export function failureCause(message: unknown, max = CAUSE_MAX): string | null {
     line = redactSecrets(line).replace(ERROR_NAME, '').replace(PATH, '').replace(/\s{2,}/g, ' ').replace(/\s+([.,;:])/g, '$1').trim();
     line = line.replace(/^[\s:;,(]+|[\s:;,(]+$/g, '');
     if (!/[A-Za-z0-9]/.test(line)) continue;
-    return line.length > max ? `${line.slice(0, max - 3).trimEnd()}...` : line;
+    // The message can carry text from outside Jarvis (a piece's error, a server's reply):
+    // a frame delimiter in it is defanged, as every other receipt text is.
+    return boundedReceiptText(line.length > max ? `${line.slice(0, max - 3).trimEnd()}...` : line, max);
   }
   return null;
 }
