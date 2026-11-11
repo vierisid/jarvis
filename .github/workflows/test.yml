@@ -315,10 +315,39 @@ jobs:
   # two toolchains verifiable on a Linux runner; darwin compiles in its own
   # macos job below (previously it first compiled inside the RELEASE workflow,
   # so an ObjC error failed a release instead of the PR).
+  #
+  # Two legs, the same steps (owner decision 2026-11-11, option c). The
+  # release builds the linux-x64 sidecar and the mingw Windows sidecar and
+  # installer on ubuntu-24.04 (sidecar-release.yml build-sidecar-linux-x64
+  # and build-sidecar-windows, installer-release.yml build-windows), so the
+  # leg that gates is on that label: a green PR proves the toolchain the
+  # release uses. The ubuntu-latest leg only warns (continue-on-error: its
+  # check shows red when it fails, the workflow does not fail; neither leg
+  # is a required check, only `test` is), so the next image move shows up
+  # on an ordinary PR before anyone moves a release pin. The two are not interchangeable: measured on 2026-11-11,
+  # the linux-x64 sidecar built on ubuntu-26.04 (GCC 15.2, release dry run
+  # 42882853884) imports __cxa_call_terminate@CXXABI_1.3.15, which needs the
+  # libstdc++ of GCC 14 or later, while the published 0.12.1 built on
+  # ubuntu-24.04 (GCC 13.3) needs nothing past CXXABI_1.3 and GLIBCXX_3.4.21.
+  # workflow-hardening.test.sh rule 16 holds the gating leg to the release
+  # label and the -latest leg to non-blocking. fail-fast is off so a red
+  # gating leg still shows what the next image does.
   sidecar-build:
     needs: changes
     if: needs.changes.outputs.sidecar == 'true'
-    runs-on: ubuntu-latest
+    name: sidecar-build (${{ matrix.leg }})
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.early_warning }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            leg: ubuntu-24.04, release image
+            early_warning: false
+          - runner: ubuntu-latest
+            leg: ubuntu-latest, early warning
+            early_warning: true
     env:
       # One literal for the `-skip`/`-run` pair below. They partition the module
       # between an unretried step and a retried one, and sharing a single regex
@@ -357,6 +386,13 @@ jobs:
       X_HOTKEY_TESTS: '^TestLinuxX'
       X_HOTKEY_TEST_COUNT: '9'
     steps:
+      # A -latest label moves over weeks, not at once, so the early-warning
+      # leg can still land on the old image; this says which one it ran.
+      - name: Name the runner image
+        env:
+          LEG: ${{ matrix.leg }}
+        run: echo "::notice::${LEG} ran on ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
