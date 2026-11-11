@@ -45,6 +45,7 @@ import { noOpCodeSandbox } from '../activepieces/packages/server/engine/src/lib/
 import { runFailure } from './run-failure';
 import { LLMProviderError } from '../../llm/provider';
 import { getDb } from '../../vault/schema';
+import { listUnreadDashboardNotifications, recordDashboardNotification } from '../../vault/dashboard-notifications';
 
 beforeEach(() => { initWorkflowDb(':memory:'); });
 afterEach(() => { closeWorkflowDb(); });
@@ -93,7 +94,8 @@ function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' | 'context' | '
     if (route === 'tool') {
       return backends.toolsInvoke!({ toolName: 'write_file', params: { path: '/tmp/synthetic', content: 'hello' } }, context);
     }
-    return backends.notify!({ message: 'Synthetic notification', channels: ['dashboard'], priority: 'normal' }, context);
+    // Telegram can reach other people, so it stays governed; dashboard-only notices are covered below.
+    return backends.notify!({ message: 'Synthetic notification', channels: ['telegram'], priority: 'normal' }, context);
   };
   /** Name another tool on the step: a call must ask for the tool its step names (#1152). */
   const useTool = (toolName: string) => {
@@ -610,10 +612,10 @@ describe('workflow effect boundary', () => {
   test('a refused capability is audited, not silently rejected', async () => {
     const f = fixture();
     f.registry.register({ name: 'run_command', category: 'terminal', description: 'Synthetic shell', parameters: {},
-      execute: async () => 'ran' });
+      execute: async () => { f.calls.push('ran'); return 'ran'; } });
     f.useTool('run_command');
     await expect(f.backends.toolsInvoke!({ toolName: 'run_command', params: { command: 'id' } }, f.context))
-      .rejects.toThrow(/opaque code\/UI effects/);
+      .rejects.toMatchObject({ outcome: { status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' } });
     expect(f.calls).toHaveLength(0);
     // The refusal happens before any effect record exists, so the audit row is
     // the only trace of it. It records the tool's real category, not read_data.
@@ -784,7 +786,8 @@ describe('workflow effect boundary', () => {
     const shown: string[] = [];
     f.options.sendDesktop = async (_title, body) => { shown.push(body); return true; };
     const reply = await f.backends.notify!({ message: 'hello', channels: ['auto'], priority: 'normal' }, f.context);
-    expect(reply).toEqual({ delivered: ['desktop'], failed: [], unknown: [] });
+    // The dashboard copy is saved for the next visit, so it counts as delivered too.
+    expect(reply).toEqual({ delivered: ['dashboard', 'desktop'], failed: [], unknown: [] });
     expect(shown).toEqual(['hello']);
     expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded',
       arguments: { channels: ['dashboard'], autoDashboard: true, fallback: 'desktop' }, target: { fallback: 'desktop' } });
@@ -792,16 +795,16 @@ describe('workflow effect boundary', () => {
 
   test('a notification sent nowhere fails the step with a typed outcome and records it', async () => {
     const f = fixture('notify');
-    f.options.wsService = { broadcastNotificationToDashboard: () => 0 } as any;
     f.options.channelService.sendWorkflowNotification = async () => { throw Object.assign(new Error('Forbidden: bot was blocked'), { status: 403 }); };
-    const req = { message: 'hello', channels: ['dashboard', 'telegram'], priority: 'normal' as const };
+    // Desktop is not wired in this fixture; the dashboard now always delivers, so it cannot be the failing one.
+    const req = { message: 'hello', channels: ['desktop', 'telegram'], priority: 'normal' as const };
     const error = await f.backends.notify!(req, f.context).catch(e => e);
     expect(error).toBeInstanceOf(ActionOutcomeError);
     expect(error.outcome).toMatchObject({ status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started' });
-    expect(error.outcome.message).toContain('dashboard (no dashboard was open)');
+    expect(error.outcome.message).toContain('desktop (desktop notifications not available');
     expect(error.outcome.message).toContain('telegram (Forbidden: bot was blocked)');
     // The reply still reports each channel (review suggestion).
-    expect(error.report.failed.map((f: { channel: string }) => f.channel)).toEqual(['dashboard', 'telegram']);
+    expect(error.report.failed.map((f: { channel: string }) => f.channel)).toEqual(['telegram', 'desktop']);
     expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'failed', outcome: { code: 'DELIVERY_FAILED' } });
     // A replay returns the recorded outcome; nothing is sent again.
     let sends = 0;
@@ -810,13 +813,53 @@ describe('workflow effect boundary', () => {
     expect(sends).toBe(0);
   });
 
+  // The dashboard channel stores the notification, so it reaches the owner
+  // even when no tab is open at the time (audit N1 part b).
+  test('a dashboard notification with no tab open succeeds and is stored as unread', async () => {
+    const f = fixture('notify');
+    f.options.wsService = { broadcastNotificationToDashboard: () => 0 } as any;
+    const reply = await f.backends.notify!({ message: 'Stand-up at 9', channels: ['dashboard'], priority: 'high' }, f.context);
+    expect(reply).toEqual({ delivered: ['dashboard'], failed: [], unknown: [] });
+    const unread = listUnreadDashboardNotifications();
+    expect(unread).toHaveLength(1);
+    expect(unread[0]).toMatchObject({ message: 'Stand-up at 9', priority: 'urgent', run_id: f.run.id, workflow_id: f.run.flowId, read_at: null });
+  });
+
+  // #1344 review: once the row is saved the owner has it, so a Kill that stops
+  // the live toast afterwards must not report the notification as never sent
+  // (that would release its key for a later run to save it again).
+  test('a Kill after the notification was saved and before the live toast is not reported as not sent', async () => {
+    const f = fixture('notify');
+    f.options.recordDashboardNotification = input => { const row = recordDashboardNotification(input); f.emergency.kill(); return row; };
+    const error = await f.backends.notify!({ message: 'Saved, then killed', channels: ['dashboard'], priority: 'normal', idempotencyKey: 'k1' }, f.context).catch(e => e);
+    expect(error).toBeInstanceOf(ActionOutcomeError);
+    expect(error.outcome).toMatchObject({ code: 'DELIVERY_UNCERTAIN', effect: 'may_have_occurred' });
+    expect(listUnreadDashboardNotifications().map(row => row.message)).toEqual(['Saved, then killed']);
+    // The live toast was stopped by the Kill.
+    expect(f.calls).toHaveLength(0);
+  });
+
+  test('an open tab gets the live toast under the stored id, and the same notification is stored once', async () => {
+    const f = fixture('notify');
+    await f.backends.notify!({ message: 'Live and saved', channels: ['dashboard'], priority: 'normal', idempotencyKey: 'daily:9am' }, f.context);
+    const [text, priority, storedId] = f.calls[0] as [string, string, string];
+    expect([text, priority]).toEqual(['Live and saved', 'normal']);
+    expect(listUnreadDashboardNotifications().map(row => row.id)).toEqual([storedId]);
+    // The same key in a later run is a duplicate: nothing more is stored or toasted.
+    const next = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
+    const duplicate = await f.backends.notify!({ message: 'Live and saved', channels: ['dashboard'], priority: 'normal', idempotencyKey: 'daily:9am' }, { ...f.context, runId: next.id });
+    expect(duplicate).toMatchObject({ deduplicated: true });
+    expect(listUnreadDashboardNotifications()).toHaveLength(1);
+    expect(f.calls).toHaveLength(1);
+  });
+
   test('a channel that timed out is reported unknown, and the step does not fail', async () => {
     const f = fixture('notify');
     f.options.wsService = { broadcastNotificationToDashboard: () => 0 } as any;
     const timeout = Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
     f.options.channelService.sendWorkflowNotification = async () => { throw timeout; };
     const reply = await f.backends.notify!({ message: 'hello', channels: ['dashboard', 'telegram'], priority: 'normal' }, f.context);
-    expect(reply).toEqual({ delivered: [], failed: [{ channel: 'dashboard', error: 'no dashboard was open' }],
+    expect(reply).toEqual({ delivered: ['dashboard'], failed: [],
       unknown: [{ channel: 'telegram', error: 'The operation was aborted.' }] });
     expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded', result: reply });
   });
@@ -862,7 +905,8 @@ describe('workflow effect boundary', () => {
     const f = fixture();
     f.registry.register({ name: tool, description: 'Opaque effect', category: 'browser', parameters: {}, execute: async () => { f.calls.push('unsafe'); } });
     f.useTool(tool);
-    await expect(f.backends.toolsInvoke!({ toolName: tool, params: {} }, f.context)).rejects.toThrow(/opaque/);
+    await expect(f.backends.toolsInvoke!({ toolName: tool, params: {} }, f.context))
+      .rejects.toMatchObject({ outcome: { status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started' } });
     expect(f.calls).toHaveLength(0);
   });
 
@@ -1128,7 +1172,7 @@ describe('workflow effect boundary', () => {
     const f = fixture(route);
     const action = f.version.trigger.nextAction!;
     action.settings!.input = route === 'tool' ? { toolName: 'write_file', params: { path: '/tmp/synthetic', content: 'hello' } }
-      : { message: 'hello', channels: ['dashboard'], priority: 'normal' };
+      : { message: 'hello', channels: ['telegram'], priority: 'normal' };
     updateDraftVersion(f.version.id, { trigger: { name: 'trigger', type: 'EMPTY', nextAction: {
       name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.items}}' }, firstLoopAction: action,
     } } });
@@ -1171,7 +1215,7 @@ describe('workflow effect boundary', () => {
 test('a completed notification identity skips a fresh approval, but new keys and other flows still require it', async () => {
   const f = fixture('notify');
   f.authority.setGovernedCategories(['send_message']);
-  const request = { message: 'Reviewed notification', channels: ['dashboard'] as const, priority: 'normal' as const, idempotencyKey: 'daily:one' };
+  const request = { message: 'Reviewed notification', channels: ['telegram'] as const, priority: 'normal' as const, idempotencyKey: 'daily:one' };
   const send = (context = f.context, key = request.idempotencyKey, services = f.backends) => services.notify!({ ...request, channels: [...request.channels], idempotencyKey: key }, context);
   const first = await send(); expect(first.approval).toBeDefined();
   f.approvals.approve(first.approval!.approvalId, 'user'); await send(); expect(f.calls).toHaveLength(1);
@@ -1196,7 +1240,7 @@ test('notification completion survives SQLite reopen and dedupes concurrently in
   const path = join(directory, 'test.db');
   try {
     initWorkflowDb(path); const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
-    const request = { message: 'Restart fixture', channels: ['dashboard'] as any, priority: 'normal' as const, idempotencyKey: 'once' };
+    const request = { message: 'Restart fixture', channels: ['telegram'] as any, priority: 'normal' as const, idempotencyKey: 'once' };
     const pending = await f.backends.notify!(request, f.context); f.approvals.approve(pending.approval!.approvalId, 'user');
     await f.backends.notify!(request, f.context);
     closeWorkflowDb(); initWorkflowDb(path);
@@ -1213,7 +1257,7 @@ test('notification completion survives SQLite reopen and dedupes concurrently in
 for (const fence of ['canceled', 'killed', 'paused', 'denied', 'wrong-project'] as const)
   test(`completed notification receipt still respects ${fence}`, async () => {
     const f = fixture('notify');
-    const request = { message: 'Fence fixture', channels: ['dashboard'] as any, priority: 'normal' as const, idempotencyKey: 'once' };
+    const request = { message: 'Fence fixture', channels: ['telegram'] as any, priority: 'normal' as const, idempotencyKey: 'once' };
     await f.backends.notify!(request, f.context);
     const run = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
     const context = { ...f.context, runId: run.id };
@@ -1234,17 +1278,91 @@ test('an uncertain identity is not a completed receipt and cannot skip approval 
   await expect(f.backends.notify!(request, f.context)).rejects.toThrow();
   f.authority.setGovernedCategories(['send_message']);
   const next = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
-  expect((await f.backends.notify!(request, { ...f.context, runId: next.id })).approval).toBeDefined();
+  // The key is not consumed, so a governed channel under it still asks first.
+  expect((await f.backends.notify!({ ...request, channels: ['telegram'] as any }, { ...f.context, runId: next.id })).approval).toBeDefined();
   expect(f.calls).toHaveLength(1);
+});
+
+// A notification that only shows the owner a notice on their own screen is
+// not a message to anyone else, so it asks for no approval.
+describe('owner-only notifications', () => {
+  const ownerRequest = (channels: string[], idempotencyKey?: string) =>
+    ({ message: 'Stand-up at 9', channels, priority: 'normal' as const, ...(idempotencyKey ? { idempotencyKey } : {}) });
+
+  for (const channels of [['dashboard'], ['desktop'], ['dashboard', 'desktop']]) {
+    test(`${channels.join('+')} delivers with send_message governed, no approval, and keeps its effect row`, async () => {
+      const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
+      f.options.sendDesktop = async () => { f.calls.push('desktop'); return true; };
+      const services = buildSandboxServiceBackends(f.options);
+      const reply = await services.notify!(ownerRequest(channels), f.context);
+      expect(reply.approval).toBeUndefined();
+      expect(reply.delivered).toEqual(expect.arrayContaining(channels));
+      expect(f.approvals.getPending()).toHaveLength(0);
+      expect(f.deliveredApprovals).toHaveLength(0);
+      expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ toolName: 'workflow_notify', status: 'succeeded', approvalId: null });
+    });
+  }
+
+  // Voice is spoken aloud to whoever is in the room, so it stays a governed send.
+  for (const channels of [['telegram'], ['discord'], ['voice'], ['dashboard', 'voice'], ['dashboard', 'telegram'], ['auto']]) {
+    test(`${channels.join('+')} still asks for approval`, async () => {
+      const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
+      const reply = await f.backends.notify!(ownerRequest(channels), f.context);
+      expect(reply.approval?.approvalId).toBeTruthy();
+      expect(f.calls).toHaveLength(0);
+    });
+  }
+
+  test('a read_data context rule naming workflow_notify makes owner-only notifications ask, and nothing else', async () => {
+    const f = fixture('notify');
+    f.authority.addContextRule({ id: 'ask-self-notify', action: 'read_data', condition: 'tool_name',
+      params: { tool_name: 'workflow_notify' }, effect: 'require_approval', description: 'Ask before notifying me' });
+    const reply = await f.backends.notify!(ownerRequest(['dashboard']), f.context);
+    expect(reply.approval?.approvalId).toBeTruthy();
+    expect(f.calls).toHaveLength(0);
+    expect(f.authority.checkAuthority({ agentId: 'workflow:x', agentRoleId: 'workflow-default', agentAuthorityLevel: 0,
+      toolName: 'workflow_context', toolCategory: 'context', actionCategory: 'read_data', temporaryGrants: new Map(), profile: null }).requiresApproval).toBe(false);
+  });
+
+  test('Pause holds an owner-only notification and Kill refuses it', async () => {
+    const f = fixture('notify');
+    f.emergency.pause();
+    expect((await f.backends.notify!(ownerRequest(['dashboard']), f.context)).approval?.hold).toMatch(/paused/i);
+    expect(f.calls).toHaveLength(0);
+    f.emergency.resume(); f.emergency.kill();
+    await expect(f.backends.notify!(ownerRequest(['dashboard']), f.context)).rejects.toThrow(/killed/i);
+    expect(f.calls).toHaveLength(0);
+  });
+
+  test('a canceled run does not deliver an owner-only notification', async () => {
+    const f = fixture('notify');
+    cancelFlowRun(f.run.id);
+    await expect(f.backends.notify!(ownerRequest(['dashboard']), f.context)).rejects.toThrow();
+    expect(f.calls).toHaveLength(0);
+  });
+
+  test('a repeated idempotency key delivers once and raises no approval, whatever the run', async () => {
+    const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
+    const request = ownerRequest(['dashboard'], 'weekday-9');
+    expect((await f.backends.notify!(request, f.context)).approval).toBeUndefined();
+    for (let i = 0; i < 3; i++) {
+      const run = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
+      const reply = await f.backends.notify!(request, { ...f.context, runId: run.id });
+      expect(reply).toMatchObject({ delivered: [], deduplicated: true });
+      expect(reply.approval).toBeUndefined();
+    }
+    expect(f.calls).toHaveLength(1);
+    expect(f.approvals.getPending()).toHaveLength(0);
+  });
 });
 
 test('a reused notification receipt sends nothing, even when the message or channels changed under the same key', async () => {
   const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
-  const request = { message: 'Reviewed text', channels: ['dashboard'] as any, priority: 'normal' as const, idempotencyKey: 'same' };
+  const request = { message: 'Reviewed text', channels: ['telegram'] as any, priority: 'normal' as const, idempotencyKey: 'same' };
   const first = await f.backends.notify!(request, f.context); f.approvals.approve(first.approval!.approvalId, 'user');
   await f.backends.notify!(request, f.context); expect(f.calls).toHaveLength(1);
   const run = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
-  const changed = await f.backends.notify!({ ...request, message: 'Different text', channels: ['dashboard', 'telegram'] as any }, { ...f.context, runId: run.id });
+  const changed = await f.backends.notify!({ ...request, message: 'Different text', channels: ['telegram', 'discord'] as any }, { ...f.context, runId: run.id });
   expect(changed).toMatchObject({ delivered: [], failed: [], unknown: [], deduplicated: true });
   expect(changed.approval).toBeUndefined();
   expect(f.calls).toHaveLength(1); expect(f.deliveredApprovals).toHaveLength(1);

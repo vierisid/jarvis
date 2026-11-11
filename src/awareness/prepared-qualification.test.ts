@@ -72,11 +72,15 @@ beforeEach(() => {
   initDatabase(':memory:');
   initWorkflowDb(':memory:');
   setEncryptionKey(Buffer.alloc(32, 0x71));
-  configureWorkflowReadiness({ pieces: catalog, tool: name => name === 'write_file' ? WRITE_FILE : null });
+  configureWorkflowReadiness({ pieces: catalog, tool: name => name === 'write_file' ? WRITE_FILE : name === 'desktop_launch_app' ? { params: [] } : null });
   authority = new AuthorityEngine(authorityConfig());
   registry = new ToolRegistry();
   registry.register({ name: 'write_file', category: 'file-ops', description: 'Synthetic write', execute: async () => 'saved',
     parameters: { path: { type: 'string', description: 'path', required: true }, content: { type: 'string', description: 'content', required: true } } });
+  // A reviewed computer action (#1314 m7): its card is mandatory and asks above the level from read_data.
+  registry.register({ name: 'desktop_launch_app', category: 'desktop', description: 'Synthetic launch', execute: async () => 'launched',
+    captureApprovalGuard: () => () => true,
+    parameters: { executable: { type: 'string', description: 'app', required: true } } });
   targets = [{ id: '', name: 'This computer', os: 'linux', isHost: true },
     { id: 'sidecar-studio', name: 'Studio PC', os: 'windows', connected: false, capabilities: ['filesystem'] }];
   credentials = undefined;
@@ -468,7 +472,7 @@ describe('prepared proposal qualification', () => {
 
   test('a graph the dry runner supports needs a successful sample of this exact version', () => {
     const notifyOnly = prepare(schedule(step('commitments', JARVIS + 'context', 'commitments_list', {},
-      step('tell_me', JARVIS + 'notify', 'notify', { message: 'Follow up on {{commitments}}', channels: ['dashboard'] }))));
+      step('tell_me', JARVIS + 'notify', 'notify', { message: 'Follow up on {{commitments}}', channels: ['telegram'] }))));
     expect(drySupport(notifyOnly.version.trigger)).toBeNull();
     const effects = [{ step: 'tell_me', approval: 'asks_first' as const, sample: 'simulated' as const }];
     const request = proposal(notifyOnly, { preview: { basis: 'sandbox_sample', runId: null, effects } });
@@ -505,6 +509,12 @@ describe('Authority predictions match the effect boundary', () => {
     call: (b: any, ctx: any) => Promise<any> }> = {
     notify: { piece: JARVIS + 'notify', action: 'notify', input: { message: 'Hi', channels: ['dashboard'] },
       call: (b: any, ctx: any) => b.notify({ message: 'Hi', channels: ['dashboard'], priority: 'normal' }, ctx) },
+    // Telegram can reach other people, so it is judged as a send; dashboard-only (above) is the owner's own.
+    'notify to Telegram': { piece: JARVIS + 'notify', action: 'notify', input: { message: 'Hi', channels: ['telegram'] },
+      call: (b: any, ctx: any) => b.notify({ message: 'Hi', channels: ['telegram'], priority: 'normal' }, ctx) },
+    // Voice is spoken aloud to the room, so it is judged as a send too.
+    'notify by voice': { piece: JARVIS + 'notify', action: 'notify', input: { message: 'Hi', channels: ['voice'] },
+      call: (b: any, ctx: any) => b.notify({ message: 'Hi', channels: ['voice'], priority: 'normal' }, ctx) },
     ask: { piece: JARVIS + 'ask', action: 'ask', input: { prompt: 'Summarise' }, call: (b: any, ctx: any) => b.llmChat({ prompt: 'Summarise' }, ctx) },
     context: { piece: JARVIS + 'context', action: 'vault_search', input: { query: 'ana' },
       call: (b: any, ctx: any) => b.contextProvider.vaultSearch({ query: 'ana' }, ctx) },
@@ -514,6 +524,8 @@ describe('Authority predictions match the effect boundary', () => {
       gate: { actionCategory: 'execute_command', confirm: 'above_level', intent: 'Run this as a command' } },
     'tool with mandatory review': { ...writeFile, gate: { actionCategory: 'write_data', confirm: 'always', intent: 'Review this write' } },
     'tool above its level': { ...writeFile, gate: { actionCategory: 'execute_command', confirm: 'above_level', intent: 'Run this as a command' } },
+    'reviewed computer action': { piece: JARVIS + 'tool', action: 'invoke', input: { toolName: 'desktop_launch_app', params: { executable: 'notepad.exe' } },
+      call: (b: any, ctx: any) => b.toolsInvoke({ toolName: 'desktop_launch_app', params: { executable: 'notepad.exe' } }, ctx) },
     // #953: a delete is never substituted, even where a send is.
     'gmail trash': { piece: GMAIL, action: 'gmail_trash_message', input: { auth: '{{connections.billing-gmail}}', message_id: 'm1' },
       call: async (b: any, ctx: any) => b.pieceAuthorize({ piece: GMAIL, action: 'gmail_trash_message', input: { message_id: 'm1' },
@@ -549,6 +561,9 @@ describe('Authority predictions match the effect boundary', () => {
         const flow = createFlow({});
         const version = createDraftVersion({ flowId: flow.id, displayName: 'Parity', trigger: { name: 'trigger', type: 'EMPTY',
           nextAction: step('action', route.piece, route.action, route.input) } });
+        // A computer action runs only on a pinned computer (#1314 M2): pinned here as enabling pins it.
+        getWorkflowDb().run('UPDATE flow SET binding_pins = ? WHERE id = ?', [JSON.stringify({ schemaVersion: 1, versionId: version.id,
+          pinnedAt: Date.now(), connections: {}, machine: { sidecarId: null, name: 'this computer' } }), flow.id]);
         const predicted = observePreparedProposal({ proposalId: 'parity', revision: 'r', evidence: [], goal: null, compositionId: null,
           workflow: { flowId: flow.id, versionId: version.id, versionDigest: '' }, bindings: [], constraints: [], preview: null, sample: null },
         services()).steps.find(s => s.step === 'action')!.decision;
