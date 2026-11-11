@@ -260,7 +260,7 @@ test('a draft whose request is gone is read once, then stays copyable and discar
   await React.act(async () => root.render(<Probe />));
   for (let i = 0; i < 3; i++) await React.act(async () => { await queue.refresh(); });
   expect(urls.filter(url => url.endsWith('/gone-request'))).toHaveLength(1);
-  expect(urls.filter(url => url === '/api/workflow-inputs')).toHaveLength(4);
+  expect(urls.filter(url => url === '/api/workflow-inputs?limit=50')).toHaveLength(4);
   expect(host.textContent).toContain('no longer available'); expect(host.querySelector('button[type="submit"]')).toBeNull();
   await click('Copy unsent answers'); expect(copied).toContain('Typed before it vanished');
   await click('Discard unsent answers');
@@ -337,4 +337,42 @@ test('a queued continuation held by global pause says so, and reads as continuin
   await React.act(async()=>root.render(<EmergencyStatusContext.Provider value="normal"><Forms.HumanInputForm request={queued} http={http} changed={async()=>{}} /></EmergencyStatusContext.Provider>));
   expect(host.textContent).toContain('Workflow is continuing.');
   expect(host.textContent).not.toContain('Global emergency pause');
+});
+
+function Probe2({ onQueue }: { onQueue: (queue: ReturnType<typeof Forms.useHumanInputQueue>) => void }) { const queue = Forms.useHumanInputQueue(stable2, true); onQueue(queue); return <p>{queue.requests.length}</p>; }
+let urls2: string[] = [], body2: () => object = () => ({ requests: [] });
+const stable2 = createHostTransport((async (url: string) => { urls2.push(String(url)); return Response.json(body2()); }) as unknown as typeof fetch);
+const pendingRequest = (n: number): HumanRequest => ({ ...request, id: `req-${n}`, status: 'pending', title: `Approve ${n}`, kind: 'approval', fields: [] });
+test('the queue asks for one page of pending requests, shows the rest as "Show more", and counts from the server', async () => {
+  urls2 = []; body2 = () => ({ requests: Array.from({ length: 50 }, (_, i) => pendingRequest(i)), pendingTotal: 1025, historyCursor: null });
+  let latest!: ReturnType<typeof Forms.useHumanInputQueue>;
+  await React.act(async () => root.render(<Probe2 onQueue={queue => { latest = queue; }} />));
+  expect(urls2).toEqual(['/api/workflow-inputs?limit=50']); expect(latest.pendingTotal).toBe(1025);
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputInbox queue={latest} http={http} />));
+  expect(host.querySelectorAll('article.brief-human-card').length).toBe(50);
+  expect([...host.querySelectorAll('button')].some(b => b.textContent === 'Show more requests (975 more waiting)')).toBe(true);
+  await React.act(async () => root.render(<Probe2 onQueue={queue => { latest = queue; }} />));
+  urls2 = []; await React.act(async () => { latest.showMore!(); });
+  expect(urls2).toEqual(['/api/workflow-inputs?limit=100']);
+});
+test('a hidden tab does not poll the queue, and reads once when it is shown again', async () => {
+  urls2 = []; body2 = () => ({ requests: [], pendingTotal: 0 });
+  const original = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState') ?? Object.getOwnPropertyDescriptor(document, 'visibilityState');
+  let state = 'visible'; Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+  const realSetInterval = globalThis.setInterval; let tick: (() => void) | undefined;
+  (globalThis as any).setInterval = (fn: () => void, ms?: number) => { if (ms === 5000) { tick = fn; return 0 as any; } return realSetInterval(fn, ms); };
+  try {
+    await React.act(async () => root.render(<Probe2 onQueue={() => {}} />)); expect(urls2).toHaveLength(1);
+    state = 'hidden'; await React.act(async () => { tick!(); }); expect(urls2).toHaveLength(1);
+    state = 'visible'; await React.act(async () => { document.dispatchEvent(new Event('visibilitychange')); }); expect(urls2).toHaveLength(2);
+    await React.act(async () => { tick!(); }); expect(urls2).toHaveLength(3);
+  } finally { (globalThis as any).setInterval = realSetInterval; if (original) Object.defineProperty(document, 'visibilityState', original); else delete (document as any).visibilityState; }
+});
+test('an option is shown without bidi controls', async () => {
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const select = { ...request, fields: [{ key: 'pick', label: 'Pick', type: 'select' as const, required: true, options: ['Pay ‮0001'] }] };
+  await React.act(async () => root.render(<Forms.HumanInputForm request={select} http={http} changed={async () => {}} />));
+  const option = [...host.querySelectorAll('option')].find(o => o.value !== '')!;
+  expect(option.textContent).toBe('Pay 0001'); expect(option.value).toBe('Pay ‮0001');
 });

@@ -91,10 +91,13 @@ export class DecisionsController {
       const read = await this.port.read();
       if (!this.access || this.retired || generation !== this.generation)
         return false;
-      const incoming =
+      // A request a person can answer comes before a row that can only be inspected, so the first
+      // card is never a dead one. The order within each group is the queue's own.
+      const incoming = actionableFirst(
         read.status === "ready" || read.status === "stale"
           ? [...read.data]
-          : [];
+          : [],
+      );
       const attempts = new Map(this.state.attempts);
       if (read.status === "ready" || read.status === "empty")
         for (const [id, attempt] of attempts) {
@@ -121,7 +124,7 @@ export class DecisionsController {
         (x) => decisionId(x) === this.state.selectedId,
       )
         ? this.state.selectedId
-        : decisionIdOrNull(rows[0]);
+        : decisionIdOrNull(rows.find(isActionable) ?? rows[0]);
       this.publish({ read, rows, selectedId, attempts, refreshing: false });
       return read.status === "ready" || read.status === "empty";
     } catch {
@@ -450,6 +453,10 @@ function requestId() {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
+}
+const isActionable = (item: DecisionView) => item.actions.length > 0;
+function actionableFirst(rows: DecisionView[]): DecisionView[] {
+  return [...rows.filter(isActionable), ...rows.filter((row) => !isActionable(row))];
 }
 function decisionIdOrNull(item?: DecisionView) {
   return item ? decisionId(item) : null;

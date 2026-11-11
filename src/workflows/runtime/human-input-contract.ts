@@ -53,6 +53,20 @@ export type HumanRequest = {
   /** A shared form reopened after it closed is a new instance; earlier waits keep `reopenedFrom`. */
   generation?: number; reopenedFrom?: HumanRequest['status'];
 };
+/**
+ * Bidirectional controls (embeddings, overrides, isolates, marks): left in a title or question they
+ * reorder the text around them, so "Pay <U+202E>0001 EUR" reads as another amount. The Authority
+ * sentences strip them (`boundedApprovalLabel`); so does a request when it is shown. The stored
+ * request keeps what the workflow wrote.
+ */
+const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+export const withoutBidiControls = (text: string): string => typeof text === 'string' ? text.replace(BIDI_CONTROLS, '') : text;
+/** The request as a person is shown it: no bidi controls in any text a workflow author chose. */
+export function humanRequestForDisplay(request: HumanRequest): HumanRequest {
+  return { ...request, title: withoutBidiControls(request.title), prompt: withoutBidiControls(request.prompt),
+    requestKey: withoutBidiControls(request.requestKey), workflowName: withoutBidiControls(request.workflowName),
+    fields: Array.isArray(request.fields) ? request.fields.map(field => ({ ...field, label: withoutBidiControls(field.label) })) : request.fields };
+}
 export function formFields(value: unknown): InputField[] {
   if (!Array.isArray(value) || !value.length || value.length > 20) throw Error('Provide 1–20 input fields');
   const keys = new Set<string>();

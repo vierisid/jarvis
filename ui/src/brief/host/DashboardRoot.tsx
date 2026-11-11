@@ -178,7 +178,10 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   const toast = useReminderToast(notices.items);
   const emergency = useEmergencyStatus(host.transport, owner.emergencyRevision);
   const humanInputs = useHumanInputQueue(host.transport, isBriefCapabilityEnabled(host.capabilities(), 'decisions'));
-  const humanPending = humanInputs.requests.filter(r => humanRequestNeedsAttention(r) || hasLocalDraft(r)).length;
+  // Pending requests are counted by the server, whatever page is listed; the rest are the settled ones that still need attention.
+  const humanListedPending = humanInputs.requests.filter(r => r.status === 'pending').length;
+  const humanPending = humanInputs.requests.filter(r => r.status !== 'pending' && (humanRequestNeedsAttention(r) || hasLocalDraft(r))).length
+    + Math.max(humanInputs.pendingTotal ?? 0, humanListedPending);
   const [attentionMessage, setAttentionMessage] = useState('');
   const resolveAttention = async (kind: 'clarifier' | 'repeat-back', id: string, decision: 'confirm' | 'cancel') => {
     try {

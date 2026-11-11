@@ -1,4 +1,4 @@
-import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, listHumanInputs, resolveHumanInput } from '../runtime/human-input';
+import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, humanInputQueue, HUMAN_INPUT_LIST_DEFAULT, HUMAN_INPUT_LIST_MAX, resolveHumanInput } from '../runtime/human-input';
 import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import type { WorkflowContext } from '../../brief/workflow-context';
@@ -2457,9 +2457,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflow-inputs": {
       GET: req => trapErrors(() => {
         const refused = decisionsRefusal(); if (refused) return refused;
-        const project = callerProject(req), requests = listHumanInputs(project);
+        // `limit` bounds the pending requests listed; `pendingTotal` counts them all, so a count never depends on the page.
+        const raw = new URL(req.url).searchParams.get('limit');
+        if (raw !== null && (!/^[0-9]{1,6}$/.test(raw) || Number(raw) < 1 || Number(raw) > HUMAN_INPUT_LIST_MAX)) return err(`limit must be a whole number from 1 to ${HUMAN_INPUT_LIST_MAX}`, 400);
+        const project = callerProject(req), { requests, pendingTotal } = humanInputQueue(project, { limit: raw === null ? HUMAN_INPUT_LIST_DEFAULT : Number(raw) });
         // Polled every few seconds: the cursor is an ids-only indexed read, not a second outcome lookup.
-        return ok({ requests, historyCursor: humanInputHistoryCursor(project) });
+        return ok({ requests, pendingTotal, historyCursor: humanInputHistoryCursor(project) });
       }),
     },
     "/api/workflow-inputs/history": {

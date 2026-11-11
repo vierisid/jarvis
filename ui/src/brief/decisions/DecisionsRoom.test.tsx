@@ -140,6 +140,9 @@ test("editing keeps the document/actions mounted and blocks selection/approval",
 });
 test("unsupported edits stay disabled with a visible reason", async () => {
   await scenario("read-only");
+  // The first card selected is one a person can answer (G-10); the read-only one is opened by choosing it.
+  expect(host.querySelector("article")?.dataset.decision).toBe("fixture-decision-invitation");
+  await React.act(async () => { f.controller.select("fixture-decision-follow-up"); await wait(); });
   expect(button("Edit draft").disabled).toBe(true);
   expect(button("Approve & send").disabled).toBe(true);
   expect(host.textContent).toContain("cannot be edited");
