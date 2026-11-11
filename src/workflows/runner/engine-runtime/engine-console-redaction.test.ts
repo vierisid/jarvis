@@ -30,10 +30,11 @@ describe.skipIf(skip)("a real engine loading a piece whose HTTP request failed",
   let runtime: EngineRuntime | null = null;
   let root = "";
   let doneFile = "";
+  const runLog: string[] = [];
 
   beforeAll(async () => {
     initWorkflowDb(":memory:");
-    api = new SandboxApi({ services: { credentialResolver: new CredentialResolver() } });
+    api = new SandboxApi({ services: { credentialResolver: new CredentialResolver(), onLogLine: (entry) => { runLog.push(entry.message); } } });
     await api.start({ host: "127.0.0.1", port: 0 });
     let cached = initialCached;
     if (!cached && buildOptIn) cached = await buildEngineBundle();
@@ -64,6 +65,12 @@ describe.skipIf(skip)("a real engine loading a piece whose HTTP request failed",
       console.error("[HttpClient#(sanitized error message)] Request failed:", failure);
       console.error(axiosError);
       console.warn("retrying after " + failure.message);
+      // Nested, in a cause, through methods the engine's own wrappers skip, and written directly.
+      console.error("wrapped", { error: failure }, [failure], new Error("step failed", { cause: axiosError }));
+      console.info("info", failure);
+      console.debug("debug", failure.errorMessage());
+      console.log(JSON.stringify(failure));
+      process.stderr.write("direct " + failure.message + "\\n");
       console.log("marker-console-redaction-done");
       require("node:fs").writeFileSync(${JSON.stringify(doneFile)}, "done");
       exports.httpErrorLogger = {};
@@ -101,10 +108,18 @@ describe.skipIf(skip)("a real engine loading a piece whose HTTP request failed",
       await handle.release();
     }
     const text = seen.join("");
+    // Leaks first: an engine without the redaction prints them before anything else fails.
+    for (const secret of SECRETS) expect(text.includes(secret) ? secret : "absent").toBe("absent");
     expect(text).toContain("marker-console-redaction-done");
     expect(text).toContain("Request failed: HttpError: request failed (status 401)");
     expect(text).toContain("AxiosError: request failed (status 401)");
     expect(text).toContain("retrying after [request and response bodies withheld]");
+    expect(text).toContain("info HttpError: request failed (status 401)");
+    expect(text).toContain("direct [request and response bodies withheld]");
     for (const secret of SECRETS) expect(text.includes(secret) ? secret : "absent").toBe("absent");
+    // The per-run log buffer (the engine's notify stdout and stderr) holds none either.
+    const buffered = runLog.join("");
+    expect(buffered).toContain("marker-console-redaction-done");
+    for (const secret of SECRETS) expect(buffered.includes(secret) ? secret : "absent").toBe("absent");
   }, 60_000);
 });

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { inspect } from 'node:util';
-import { redactEngineLogArgs } from './engine-console-redaction';
+import { installEngineOutputRedaction, redactEngineLogArgs, redactEngineText } from './engine-console-redaction';
 import { HttpError } from '../activepieces/packages/pieces/common/src/lib/http/core/http-error';
 
 const SECRETS = ['BODY-SECRET', 'RESP-SECRET', 'HDR-SECRET'];
@@ -47,6 +47,61 @@ describe('engine console redaction', () => {
     expect(text).toContain('HttpErrorCopy: request failed (status 500)');
     expect(text).toContain('AxiosError: request failed (status 401)');
     expect(text).toContain('step failed: [request and response bodies withheld]');
+  });
+
+  test('an error nested in an object, an array, a cause or an AggregateError, and an errorMessage() body, are withheld', () => {
+    const error = new HttpError({ password: 'BODY-SECRET' }, axiosError() as never);
+    const wrapped = new Error('step failed', { cause: axiosError() });
+    const caller = { error, note: 'kept' };
+    const text = printed(['x', caller, [error], wrapped, new AggregateError([error], 'many'), error.errorMessage(),
+      { deep: { deeper: { request: { body: { password: 'BODY-SECRET' } }, response: { status: 500, body: 'RESP-SECRET' } } } }, caller]);
+    for (const secret of SECRETS) expect(text).not.toContain(secret);
+    expect(text).toContain('kept');
+    expect(text).toContain('step failed');
+    // The caller's own objects are not changed.
+    expect(caller.error).toBe(error);
+  });
+
+  test('serialized requests in text are cut: compact, pretty, escaped, an HttpError as JSON and axios toJSON', () => {
+    const error = new HttpError({ password: 'BODY-SECRET' }, axiosError() as never);
+    const forms = [
+      JSON.stringify(error), JSON.stringify(error.errorMessage(), null, 2), JSON.stringify({ log: error.message }),
+      JSON.stringify({ message: 'Request failed', name: 'AxiosError', config: { headers: { Authorization: 'Bearer HDR-SECRET' } } }),
+      '{"request":{"body":{"password":"BODY-SECRET"}}}', 'sent {"headers":{"Accept":"*/*","Authorization":"Bearer HDR-SECRET"}}',
+    ];
+    for (const form of forms) {
+      const shown = redactEngineText(form);
+      for (const secret of SECRETS) expect(shown).not.toContain(secret);
+      expect(shown).toContain('[request and response bodies withheld]');
+    }
+    expect(redactEngineText('[Progress] Backup failed: socket closed')).toBe('[Progress] Backup failed: socket closed');
+  });
+
+  test('an error with no response keeps its code', () => {
+    const refused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), { name: 'AxiosError', isAxiosError: true, code: 'ECONNREFUSED',
+      config: { headers: { Authorization: 'Bearer HDR-SECRET' } } });
+    expect(redactEngineLogArgs([refused])).toEqual(['AxiosError: request failed [ECONNREFUSED]; bodies and headers withheld']);
+  });
+
+  test('info, debug, trace, dir, table, assert and direct stream writes are redacted once installed', () => {
+    const lines: string[] = [];
+    const sink = (...args: unknown[]) => { lines.push(args.map((a) => (typeof a === 'string' ? a : inspect(a, { depth: 8 }))).join(' ')); };
+    const fake = { info: sink, debug: sink, trace: sink, dir: sink, table: sink, assert: (c: unknown, ...a: unknown[]) => { if (!c) sink(...a); } } as unknown as Console;
+    const written: unknown[] = [];
+    const stream = { write: (chunk: unknown) => { written.push(chunk); return true; } };
+    installEngineOutputRedaction(fake, [stream]);
+    installEngineOutputRedaction(fake, [stream]);
+    const error = new HttpError({ password: 'BODY-SECRET' }, axiosError() as never);
+    for (const name of ['info', 'debug', 'trace', 'dir', 'table'] as const) (fake[name] as (...a: unknown[]) => void)(name, error);
+    fake.assert(false, 'assert', { error });
+    stream.write(`direct ${error.message}\n`);
+    stream.write(new TextEncoder().encode(`bytes ${error.message}`));
+    stream.write(new TextEncoder().encode('plain bytes'));
+    const text = [...lines, ...written.map((w) => (typeof w === 'string' ? w : new TextDecoder().decode(w as Uint8Array)))].join('\n');
+    for (const secret of SECRETS) expect(text).not.toContain(secret);
+    expect(lines).toHaveLength(6);
+    expect(text).toContain('direct [request and response bodies withheld]');
+    expect(text).toContain('plain bytes');
   });
 
   test('ordinary logs pass through unchanged, and a throwing getter does not throw here', () => {

@@ -270,13 +270,15 @@ export const expressionPatches = {
   // runtime/engine-console-redaction.ts replaces such errors by their status.
   "packages/server/engine/src/lib/worker-socket.ts": [
     ["import { runProgressService } from './handler/run-progress'",
-      "import { runProgressService } from './handler/run-progress'\n// Jarvis: no request or response body, and no request headers, of a failed HTTP request reach engine stderr.\nimport { redactEngineLogArgs } from '../../../../../../runtime/engine-console-redaction'"],
+      "import { runProgressService } from './handler/run-progress'\n// Jarvis: no request or response body, and no request headers, of a failed HTTP request reach engine stderr.\nimport { installEngineOutputRedaction, redactEngineLogArgs } from '../../../../../../runtime/engine-console-redaction'"],
     ["        console.log = function (...args): void {\n            notifyClient?.stdout",
       "        console.log = function (...raw): void {\n            const args = redactEngineLogArgs(raw)\n            notifyClient?.stdout"],
     ["        console.warn = function (...args): void {\n            notifyClient?.stdout",
       "        console.warn = function (...raw): void {\n            const args = redactEngineLogArgs(raw)\n            notifyClient?.stdout"],
     ["        console.error = function (...args): void {\n            let sanitizedArgs",
       "        console.error = function (...raw): void {\n            const args = redactEngineLogArgs(raw)\n            let sanitizedArgs"],
+    ["            originalError.apply(console, sanitizedArgs)\n        }\n",
+      "            originalError.apply(console, sanitizedArgs)\n        }\n        installEngineOutputRedaction()\n"],
     ["notifyClient?.stderr({ message: inspect(error) })",
       "notifyClient?.stderr({ message: inspect(redactEngineLogArgs([error])[0]) })"],
   ],

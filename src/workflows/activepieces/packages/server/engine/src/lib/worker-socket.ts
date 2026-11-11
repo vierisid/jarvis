@@ -14,7 +14,7 @@ import {
 import { io, type ManagerOptions, type Socket, type SocketOptions } from 'socket.io-client'
 import { runProgressService } from './handler/run-progress'
 // Jarvis: no request or response body, and no request headers, of a failed HTTP request reach engine stderr.
-import { redactEngineLogArgs } from '../../../../../../runtime/engine-console-redaction'
+import { installEngineOutputRedaction, redactEngineLogArgs } from '../../../../../../runtime/engine-console-redaction'
 import { execute } from './operations'
 
 let socket: Socket | undefined
@@ -53,6 +53,7 @@ export const workerSocket = {
             notifyClient?.stderr({ message: sanitizedArgs.join(' ') + '\n' })
             originalError.apply(console, sanitizedArgs)
         }
+        installEngineOutputRedaction()
 
         createRpcServer<EngineContract>(socket, {
             executeOperation: async ({ operationType, operation }): Promise<EngineResponse<unknown>> => {

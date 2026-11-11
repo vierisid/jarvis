@@ -852,13 +852,20 @@ HTTP request specifics:
   redacted receipt carries `receiptRedacted: true`. The step
   itself still hands the flow the whole response; only a replay of a recorded
   step reads the receipt.
-- **Engine logs keep no bodies.** The engine's console (what the daemon copies
-  into its own log as `[engine ...]` lines) prints a failed request's error as
-  its type and status only: the HTTP client's `Request failed:` line, an
-  `HttpError` or `AxiosError` a piece logs itself, and text carrying an
-  `HttpError` message lose the request body, the response body and the request
-  headers (`runtime/engine-console-redaction.ts`), whichever copy of the client
-  a piece brings.
+- **Engine logs withhold failed requests.** The engine's console and its
+  direct stdout/stderr writes (what the daemon copies into its own log as
+  `[engine ...]` lines and into the per-run log buffer) print a failed
+  request's error as its type, status and error code only, whichever copy of
+  the HTTP client a piece brings: an `HttpError` or `AxiosError` at any depth
+  of what is logged (inside an object, an array or an error's `cause`), and
+  text from a serialized request or response onward (an `HttpError` message,
+  its JSON, an axios error's JSON, headers holding `Authorization`). The
+  daemon cuts such text again as it copies engine output
+  (`runtime/engine-console-redaction.ts`). Not covered: an error type other
+  than these logged with its request config (another HTTP library), text a
+  piece builds from a body itself, and a CODE step printing a value it holds,
+  which it may do on purpose. An engine log line holding such JSON for
+  another reason is cut too.
 - **Size.** A response (and an engine file download) is read up to 7.3 MiB,
   `(10 MiB - 256 KiB) * 3/4`: the engine fails a run whose step data passes
   10 MiB less a 256 KiB offset, and a binary response is stored as base64. A

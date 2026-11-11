@@ -20,6 +20,7 @@
  * layered on without changing the acquire contract.
  */
 
+import { redactEngineText } from "../../runtime/engine-console-redaction";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { EngineContract, EngineResponse } from "../../sandbox-api/contracts";
@@ -1168,7 +1169,9 @@ function bindEngineStream(
   stream.on("data", (chunk: Buffer) => {
     // Trim a trailing newline so the daemon log doesn't double-space; we
     // re-add a single newline ourselves.
-    const text = chunk.toString("utf8").replace(/\n$/, "");
+    // A backstop for output the engine's own redaction missed: a serialized
+    // request or response (a failed request's bodies and headers) is cut.
+    const text = redactEngineText(chunk.toString("utf8").replace(/\n$/, ""));
     if (text.length === 0) return;
     sink.write(`${prefix} ${text}\n`);
     if (tail) {
