@@ -100,7 +100,10 @@ beforeAll(async()=>{
       return fetch(fixtureUrl,init);
     }) as typeof fetch,
     llmManager:{chat:async()=>({content:reply,finish_reason:'end_turn',tool_calls:[],usage:{input_tokens:1,output_tokens:1}})} as any,
-    channelService:{} as any,wsService:{broadcastNotificationToDashboard:(text:string)=>{if(dashboardClosed)return 0;notifications.push(text);if(loseNotification)throw Error('Lost notification reply');return 1;}} as any});
+    channelService:{} as any,
+    // A saved dashboard notification counts as sent, so "nothing sent" is a store that failed.
+    recordDashboardNotification:input=>{if(dashboardClosed)throw Error('Not saved');notifications.push(input.message);return {id:'n'+notifications.length,message:input.message,priority:input.priority,workflow_id:null,run_id:null,created_at:0,read_at:null};},
+    wsService:{broadcastNotificationToDashboard:()=>{if(loseNotification)throw Error('Lost notification reply');return 1;}} as any});
   const authorize=services.pieceAuthorize!;
   services.pieceAuthorize=(async(...args:Parameters<typeof authorize>)=>{beforeAuthorize?.(args[1] as {runId:string});return authorize(...args);}) as typeof authorize;
   api=new SandboxApi({services}); await api.start({port:0});

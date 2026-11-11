@@ -87,9 +87,13 @@ async function execute(saved:any) {
         services=buildSandboxServiceBackends({credentialResolver:new CredentialResolver(),eventBuffer:new WorkflowEventBuffer(),llmManager:{} as any,channelService:{} as any,
           authorityEngine:new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'}),
           approvalManager:approvals,auditTrail:audit,emergencyController:new EmergencyController(),
-          wsService:{broadcastNotificationToDashboard:()=>{
+          // The fixture keeps its own copy: it must never write the owner's saved notifications.
+          recordDashboardNotification:input=>{
             attempts++;
-            if(c.outcome==='failure')return 0;
+            if(c.outcome==='failure')throw Error('Synthetic: the notification could not be saved');
+            return {id:'fixture-'+attempts,message:input.message,priority:input.priority,workflow_id:null,run_id:null,created_at:0,read_at:null};
+          },
+          wsService:{broadcastNotificationToDashboard:()=>{
             acceptedByMock++;
             if(c.outcome==='uncertain')throw Error('Synthetic response lost after dashboard accepted');
             confirmations++;return 1;
