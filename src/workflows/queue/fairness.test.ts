@@ -5,7 +5,8 @@ import { createDraftVersion } from "../db/repos/flow-version";
 import { getStoreEntry, putStoreEntry } from "../db/repos/store-entry";
 import { createFlowRun } from "../db/repos/flow-run";
 import { claimNextJob, completeJob, enqueue, getJob, queueWait } from "../db/repos/job-queue";
-import { RESUME_PRIORITY } from "../runtime/continuation";
+import { createWaitpoint } from "../db/repos/waitpoint";
+import { claimContinuation, RESUME_PRIORITY } from "../runtime/continuation";
 import { Worker, WORKFLOW_WORKER_CONCURRENCY } from "./worker";
 
 beforeEach(() => initWorkflowDb(":memory:"));
@@ -28,6 +29,10 @@ function queueRun(flow: { id: string }, version: { id: string }, extra: { priori
   return { run, job };
 }
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
+/** Wait for a condition instead of a fixed time, so a slow machine only waits longer. */
+async function until(done: () => boolean, ms = 10_000) {
+  for (const end = Date.now() + ms; !done() && Date.now() < end;) await tick(5);
+}
 
 describe("run queue fairness", () => {
   test("the daemon runs more than one workflow at a time", () => {
@@ -45,7 +50,7 @@ describe("run queue fairness", () => {
       handlers: { RUN_FLOW: async (job) => { if (job.id === long.job.id) await gate; done.push(job.id); } },
     });
     worker.start({ concurrency: 2 });
-    await tick(100);
+    await until(() => done.length > 0);
     expect(done).toEqual([short.job.id]);
     release();
     await worker.stop();
@@ -62,7 +67,7 @@ describe("run queue fairness", () => {
       handlers: { RUN_FLOW: async (job) => { peak = Math.max(peak, ++active); await tick(40); order.push(job.id); active--; } },
     });
     worker.start({ concurrency: 3 });
-    await tick(250);
+    await until(() => order.length === 2);
     await worker.stop();
     expect(peak).toBe(1);
     expect(order).toEqual([first.job.id, second.job.id]);
@@ -81,8 +86,13 @@ describe("run queue fairness", () => {
   test("a continuation is claimed before runs that have not started", () => {
     const a = newFlow(), b = newFlow();
     const waiting = queueRun(a.flow, a.version);
-    const resume = queueRun(b.flow, b.version, { priority: RESUME_PRIORITY });
-    expect(claimNextJob()?.id).toBe(resume.job.id);
+    const paused = createFlowRun({ flowId: b.flow.id, flowVersionId: b.version.id, status: "PAUSED" });
+    const due = createWaitpoint({ flowRunId: paused.id, projectId: "p", stepName: "wait", type: "TIMER",
+      resumeDateTime: new Date(Date.now() - 1000).toISOString() });
+    expect(claimContinuation({ runId: paused.id, waitpoint: due, kind: "timer", resumePayload: {} })).toBe("resumed");
+    const resumed = claimNextJob();
+    expect(resumed?.flowRunId).toBe(paused.id);
+    expect(resumed?.priority).toBe(RESUME_PRIORITY);
     expect(claimNextJob()?.id).toBe(waiting.job.id);
   });
 
@@ -114,7 +124,7 @@ describe("run queue fairness", () => {
       } },
     });
     worker.start({ concurrency: 3 });
-    for (let i = 0; i < 200 && ((getStoreEntry("p", "shared")?.value as string | undefined)?.length ?? 0) < each * 2; i++) await tick(20);
+    await until(() => ((getStoreEntry("p", "shared")?.value as string | undefined)?.length ?? 0) >= each * 2, 4_000);
     await worker.stop();
     return (getStoreEntry("p", "shared")?.value as string | undefined)?.length ?? 0;
   }

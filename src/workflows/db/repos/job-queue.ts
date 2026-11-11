@@ -150,16 +150,20 @@ const JOB_VERSION = (alias: string) =>
  */
 const sharedStoreCache = new Map<string, { updated: number; shared: boolean }>();
 function usesSharedStore(versionId: string): boolean {
-  const row = db()
-    .query<{ trigger: string; updated: number }, [string]>(`SELECT trigger, updated FROM flow_version WHERE id = ?`)
+  // Every claim asks, so read the graph itself only when the version changed.
+  const stamp = db()
+    .query<{ updated: number }, [string]>(`SELECT updated FROM flow_version WHERE id = ?`)
     .get(versionId);
-  if (!row) return false;
+  if (!stamp) return false;
   const hit = sharedStoreCache.get(versionId);
-  if (hit && hit.updated === row.updated) return hit.shared;
-  const shared = row.trigger.includes("piece-store")
-    && (row.trigger.includes("COLLECTION") || /"store_scope"\s*:\s*"[^"]*\{\{/.test(row.trigger));
+  if (hit && hit.updated === stamp.updated) return hit.shared;
+  const trigger = db()
+    .query<{ trigger: string }, [string]>(`SELECT trigger FROM flow_version WHERE id = ?`)
+    .get(versionId)?.trigger ?? "";
+  const shared = trigger.includes("piece-store")
+    && (trigger.includes("COLLECTION") || /"store_scope"\s*:\s*"[^"]*\{\{/.test(trigger));
   if (sharedStoreCache.size > 2000) sharedStoreCache.clear();
-  sharedStoreCache.set(versionId, { updated: row.updated, shared });
+  sharedStoreCache.set(versionId, { updated: stamp.updated, shared });
   return shared;
 }
 
