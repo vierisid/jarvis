@@ -9,6 +9,7 @@ import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
 import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
 import { REFUND_REQUIRED, refundSetup } from './refund';
 import { walkFlowNodes } from '../db/flow-graph';
+import { workflowToolRefusal, workflowUiStepRefusals, type WorkflowMachineView } from './workflow-ui-tools';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import { REFUND_ACCOUNTS, REFUND_LOOP_REFUSAL, REFUND_PIECE, isRefundAction, managedRefundRefusal, type RefundAccountField } from '../refund-accounts';
 import { IMPORT_REQUIRED, importSetup } from './contact-import';
@@ -77,6 +78,9 @@ export interface ReadinessContext {
   workflow?: (id: string) => string | null;
   tool?: (name: string) => {
     params: Array<{ name: string; type: string; required: boolean; enum?: string[] }>;
+    workflowRefusal?: string | null;
+    /** A switch that has the tool turned off (#1314 m6). */
+    switchRefusal?: { code: string; message: string } | null;
     /**
      * A plain-words refusal when a workflow step cannot run this tool, or null.
      * `params` is the step's parameters when they are known now, null when run
@@ -87,6 +91,8 @@ export interface ReadinessContext {
   /** Whether any enrolled computer is online now (or this one may run tools). Absent: not checked. */
   computerOnline?: () => boolean;
   roles?: () => ReadonlySet<string>;
+  /** The enrolled computers, for the reviewed-UI step checks (#1314). */
+  machines?: () => readonly WorkflowMachineView[];
 }
 
 const object = (value: unknown): value is Record<string, any> =>
@@ -480,6 +486,17 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         catch (error) { issue(node, 'settings.input.outputSchema', 'OUTPUT_SCHEMA', (error as Error).message); }
       }
     }
+    if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input)) {
+      const refusal = typeof input.toolName === 'string' ? workflowToolRefusal(input.toolName) : null;
+      if (refusal) issue(node, 'settings.input.toolName', 'WORKFLOW_TOOL_UNSUPPORTED', refusal);
+      if (typeof input.toolName === 'string') {
+        let machines: readonly WorkflowMachineView[] | undefined;
+        try { machines = context.machines?.(); } catch { machines = undefined; }
+        for (const found of workflowUiStepRefusals(input.toolName, input.params, machines)) {
+          issue(node, found.path, found.code ?? 'WORKFLOW_TOOL_UNSUPPORTED', found.message);
+        }
+      }
+    }
     if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input) && context.phase !== 'composition') {
       const name = { value: input.toolName };
       // Named in the workflow, never by a template: run data choosing the tool
@@ -490,11 +507,15 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         const tool = context.tool?.(name.value);
         if (!tool) issue(node, 'settings.input.toolName', 'TOOL_BINDING', context.tool ? 'Unknown tool' : 'Tool inventory is unavailable');
         else {
+          // The name-based refusal was reported in the block above; only a different declaration refusal is new.
+          if (tool.workflowRefusal && tool.workflowRefusal !== workflowToolRefusal(name.value)) issue(node, 'settings.input.toolName', 'WORKFLOW_TOOL_UNSUPPORTED', tool.workflowRefusal);
+          if (tool.switchRefusal) issue(node, 'settings.input.toolName', tool.switchRefusal.code, tool.switchRefusal.message);
           let params = staticInput(input.params ?? {});
           if (params.known && typeof params.value === 'string') {
             try { params = { known: true, value: JSON.parse(params.value) }; } catch { /* report below */ }
           }
-          const refused = tool.unsupported?.(params.known && object(params.value) && !JSON.stringify(params.value).includes('{{') ? params.value : null);
+          // A tool already refused by name above is not refused twice.
+          const refused = tool.workflowRefusal || tool.switchRefusal ? null : tool.unsupported?.(params.known && object(params.value) && !JSON.stringify(params.value).includes('{{') ? params.value : null);
           if (refused) issue(node, 'settings.input.toolName', 'TOOL_UNSUPPORTED', refused);
           else if (!params.known) runtime(node, 'settings.input.params', 'tool-input', 'Tool registry validates resolved required parameters and types before execution');
           else if (!object(params.value)) issue(node, 'settings.input.params', 'INPUT_TYPE', 'Tool params must resolve to an object');

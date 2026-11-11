@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { compileWorkflow } from './workflow-readiness';
 import { PieceCatalog } from './piece-catalog';
-import { workflowToolRefusal } from './effect-capabilities';
+import { workflowStepToolRefusal } from './effect-capabilities';
+import { workflowToolDeclarationRefusal } from './workflow-ui-tools';
 import { formFields } from './human-input-contract';
 import { initWorkflowDb, closeWorkflowDb } from '../db';
 import { configureWorkflowReadiness, graphReadiness } from '../db/repos/flow-readiness';
@@ -22,7 +23,7 @@ const registry = new Map<string, ToolDefinition>([
 ]);
 const lookup = (name: string) => {
   const t = registry.get(name);
-  return t ? { params: [], unsupported: (params: Record<string, unknown> | null) => workflowToolRefusal(t, params) } : null;
+  return t ? { params: [], unsupported: (params: Record<string, unknown> | null) => workflowStepToolRefusal(t, params) } : null;
 };
 const invoke = (toolName: string, params: unknown = {}): any => ({ name: 'trigger', type: 'EMPTY', nextAction: {
   name: 's', type: 'PIECE', settings: { pieceName: '@jarvispieces/piece-jarvis-tool', actionName: 'invoke', input: { toolName, params } } } });
@@ -47,6 +48,22 @@ test('run_skill with an unknown skill is refused, a known one and a run-data one
   expect(unknown.issues.some(i => i.code === 'TOOL_UNSUPPORTED' && i.message.includes('skill'))).toBe(true);
   expect(compileWorkflow(invoke('run_skill', { name: 'known' }), ctx).ready).toBe(true);
   expect(compileWorkflow(invoke('run_skill', { name: '{{trigger.skill}}' }), ctx).issues.some(i => i.code === 'TOOL_UNSUPPORTED')).toBe(false);
+});
+
+// The daemon's lookup: the name-based refusal (#1314) and this check side by side.
+const daemonLookup = (name: string) => {
+  const t = name === 'browser_click' ? tool('browser_click', { captureApprovalGuard: () => null } as any) : registry.get(name);
+  return t ? { params: [], workflowRefusal: workflowToolDeclarationRefusal(t), switchRefusal: null,
+    unsupported: (params: Record<string, unknown> | null) => workflowStepToolRefusal(t, params) } : null;
+};
+
+test('with the daemon lookup each cause is reported once, and a reviewed UI tool stays allowed', () => {
+  const codes = (toolName: string, params: unknown) => compileWorkflow(invoke(toolName, params), { pieces: catalog, tool: daemonLookup })
+    .issues.filter(i => i.path === 'settings.input.toolName').map(i => i.code);
+  expect(codes('run_command', { command: 'ls' })).toEqual(['WORKFLOW_TOOL_UNSUPPORTED']);
+  expect(codes('run_skill', { name: 'missing' })).toEqual(['TOOL_UNSUPPORTED']);
+  expect(codes('run_skill', { name: 'known' })).toEqual([]);
+  expect(codes('browser_click', { element_id: 3 })).toEqual([]);
 });
 
 test('form fields in the natural shape are checked at readiness in plain words', () => {

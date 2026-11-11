@@ -103,6 +103,7 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
     pieces: configured?.pieces,
     tool: configured?.tool,
     roles: configured?.roles,
+    ...(configured?.machines ? { machines: configured.machines } : {}),
     // Only when the daemon reports its computers: with none reported, nothing is claimed.
     computerOnline: configured?.machines ? () => {
       const inventory = configured.machines!();

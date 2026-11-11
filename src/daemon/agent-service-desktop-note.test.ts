@@ -28,3 +28,18 @@ test('the dynamic prompt says desktop control is off only while it is, and the s
   expect(off.dynamic).toContain('# Desktop control is off');
   expect(off.static).toBe(on.static);
 });
+
+test('the dynamic prompt says screen awareness is off only while it is (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  const service = new AgentService({} as JarvisConfig);
+  Object.assign(service, { role });
+  const on = service.buildFullSystemPromptParts('websocket', 'hello');
+  expect(on.dynamic).not.toContain('Screen awareness is off');
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    const off = service.buildFullSystemPromptParts('websocket', 'hello');
+    expect(off.dynamic).toContain('# Screen awareness is off');
+    expect(off.dynamic).toContain('browser_snapshot');
+    expect(off.static).toBe(on.static);
+  } finally { setScreenCaptureEnabledSource(null); }
+});

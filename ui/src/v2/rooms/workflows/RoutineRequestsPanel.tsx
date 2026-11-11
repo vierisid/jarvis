@@ -9,9 +9,13 @@ type Page = { suggestions: SuggestionLearning[]; nextOffset: number | null; back
 } };
 type Goal = { id: string; title: string };
 
+/** The server's typed answer for awareness off (#1314): matched by code, never by wording. */
+class AwarenessOff extends Error {}
+
 async function readJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   const result = await response.json();
+  if (response.status === 409 && result?.code === "AWARENESS_OFF") throw new AwarenessOff(result.error || "Screen awareness is off.");
   if (!response.ok) throw new Error(result.error || "Could not save this request. Please retry.");
   return result as T;
 }
@@ -30,6 +34,11 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [off, setOff] = useState("");
+  // Awareness off (#1314): what it recorded leaves the screen, whoever learns it first.
+  // A read started before awareness went off answers from before it: dropped (#1314 review).
+  const offGeneration = useRef(0);
+  const awarenessOff = (message: string) => { offGeneration.current++; setPage(null); setSelected(null); setOff(message); setError(""); };
   const [revision, setRevision] = useState(0);
   const refresh = () => setRevision(value => value + 1);
 
@@ -39,14 +48,18 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
     const load = async () => {
       if (fetching || document.hidden) return;
       fetching = true;
+      const generation = offGeneration.current;
       try {
         const result = await readJson<Page>(`/api/awareness/routines?offset=${offset}`, { signal: controller.signal });
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || generation !== offGeneration.current) return;
         setPage(result);
         setSelected(id => id ?? result.suggestions[0]?.opportunityId ?? null);
-        setError("");
+        setError(""); setOff("");
       } catch (err) {
-        if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Could not load routine requests.");
+        if (controller.signal.aborted) return;
+        // Awareness turned off: what it recorded leaves the screen too, not only the next poll (#1314 review).
+        if (err instanceof AwarenessOff) { awarenessOff(err.message); return; }
+        setError(err instanceof Error ? err.message : "Could not load routine requests.");
       } finally { fetching = false; }
     };
     void load();
@@ -79,8 +92,10 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
     </div>
     {pause && <p role="status">{pause}</p>}
     {background && <p>{background.composition.queued} waiting · {background.composition.running} preparing</p>}
+    {/* Awareness off hides routines built from what it recorded (#1314): a status, not a failure. */}
+    {off && <p role="status">{off}</p>}
     {error && <p role="alert">{error}</p>}
-    {!page ? !error && <p role="status">Loading routine requests…</p> : page.suggestions.length === 0 ?
+    {!page ? !error && !off && <p role="status">Loading routine requests…</p> : page.suggestions.length === 0 ?
       <div><p>{offset > 0 ? "No older requests." : "No routine requests yet. Proposals appear here when Jarvis notices recurring work."}</p>
         {offset > 0 && <Button size="sm" onClick={() => changePage(Math.max(0, offset - 100))}>Newer requests</Button>}
       </div> :
@@ -100,13 +115,14 @@ export function RoutineRequestsPanel({ onReview }: { onReview: (flowId: string) 
             {page.nextOffset !== null && <Button size="sm" onClick={() => changePage(page.nextOffset!)}>Older requests</Button>}
           </div>
         </div>
-        {learning ? <RoutineDetail key={learning.opportunityId} learning={learning} onSaved={update} onReview={onReview} /> :
+        {learning ? <RoutineDetail key={learning.opportunityId} learning={learning} onSaved={update} onReview={onReview} onAwarenessOff={awarenessOff} /> :
           <p>Select a request to inspect it.</p>}
       </div>}
   </section>;
 }
 
-function RoutineDetail({ learning, onSaved, onReview }: {
+function RoutineDetail({ learning, onSaved, onReview, onAwarenessOff }: {
+  onAwarenessOff?: (message: string) => void;
   learning: SuggestionLearning; onSaved: (item: SuggestionLearning) => void; onReview: (flowId: string) => void;
 }): React.ReactElement {
   const [mode, setMode] = useState<"draft" | "dismiss" | null>(null);
@@ -114,6 +130,7 @@ function RoutineDetail({ learning, onSaved, onReview }: {
   const [goalId, setGoalId] = useState("");
   const [goalError, setGoalError] = useState("");
   const [error, setError] = useState("");
+  const [offError, setOffError] = useState(false);
   const [busy, setBusy] = useState(false);
   const saving = useRef(false);
   const request = useRef<{ key: string; id: string } | null>(null);
@@ -130,7 +147,7 @@ function RoutineDetail({ learning, onSaved, onReview }: {
 
   const save = async (action: "accept" | "dismiss" | "retry", values: Record<string, unknown>) => {
     if (saving.current) return;
-    saving.current = true; setBusy(true); setError("");
+    saving.current = true; setBusy(true); setError(""); setOffError(false);
     const key = JSON.stringify({ action, values });
     if (request.current?.key !== key) request.current = { key, id: crypto.randomUUID() };
     try {
@@ -141,7 +158,10 @@ function RoutineDetail({ learning, onSaved, onReview }: {
         });
       request.current = null; setMode(null);
       onSaved("learning" in result ? result.learning : result);
-    } catch (err) { setError(err instanceof Error ? err.message : "Could not save. Please retry."); }
+    } catch (err) {
+      if (err instanceof AwarenessOff && onAwarenessOff) { onAwarenessOff(err.message); return; }
+      setOffError(err instanceof AwarenessOff); setError(err instanceof Error ? err.message : "Could not save. Please retry.");
+    }
     finally { saving.current = false; setBusy(false); }
   };
 
@@ -206,7 +226,8 @@ function RoutineDetail({ learning, onSaved, onReview }: {
         </fieldset>
       </form>}
     </>}
-    {error && <p role="alert">{error}</p>}
+    {/* Awareness off hides routines built from what it recorded (#1314): a status, not a failure. */}
+    {error && <p role={offError ? "status" : "alert"}>{error}</p>}
     {learning.feedback.length > 0 && <details><summary>Feedback history</summary><ul>
       {learning.feedback.map(item => <li key={item.id}>{item.reason} <small>{new Date(item.created_at).toLocaleString()}</small></li>)}
     </ul></details>}
