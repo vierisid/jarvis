@@ -1289,7 +1289,14 @@ threshold); without one, including rows saved before #954, on first use.
 - A token with neither an expiry nor refresh details is handed out as pasted;
   its provider's 401 is then the only sign it expired. The panel labels each
   row "Refreshed by Jarvis", "Not refreshed", "Not refreshed; expires ..." or
-  "Expired".
+  "Expired". Having the refresh details is not proof that a refresh works, so a
+  row that carries them but whose refresh is known to fail says so instead
+  (`oauth2.refreshProblem` on the connections list): "Refresh failed:
+  reconnect" when the provider or the network policy refused it, or the token
+  URL is an IP address this install never connects to; "Refresh failing:
+  provider not answering" when the provider did not answer. The refusal is
+  remembered in memory until the value changes or a refresh succeeds, so a
+  restart forgets it until the next use. A named host is not guessed at.
 - `jarvis:*` connections are not refreshed here: their own source does that
   (`GoogleAuth`, through the control plane on hosted).
 - Bun 1.3.8-1.3.10 cannot verify the token endpoint's certificate for its host

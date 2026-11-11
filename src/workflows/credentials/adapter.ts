@@ -22,8 +22,8 @@
 import { createHash } from "node:crypto";
 import type { AppConnectionStatus, AppConnectionType } from "../db/repos/app-connection";
 import { getConnectionByExternalId, getUniqueConnectionByExternalId } from "../db/repos/app-connection";
-import type { EgressPolicy } from "../runtime/http-egress";
-import { guardedTokenTransport, PastedOAuth2Refresher, type TokenTransport } from "./pasted-oauth2";
+import { assertHostAllowed, type EgressPolicy } from "../runtime/http-egress";
+import { guardedTokenTransport, PastedOAuth2Refresher, tokenUrlIpLiteral, type RefreshProblem, type TokenTransport } from "./pasted-oauth2";
 import { isMeetingBriefsStep, MEETING_ACCOUNTS } from "../meeting-accounts";
 import { isSalesFollowupsStep, SALES_ACCOUNTS } from "../sales-accounts";
 
@@ -241,10 +241,31 @@ export function secretTextValue(type: string, value: Record<string, unknown>): R
 export class CredentialResolver {
   private sources: JarvisConnectionSource[] = [];
   private readonly oauth2: PastedOAuth2Refresher;
+  /** The egress policy the refresh runs under; unset when a test supplies its own transport. */
+  private readonly policy: EgressPolicy | null;
 
   constructor(opts: CredentialResolverOptions = {}) {
+    this.policy = opts.tokenTransport ? null : opts.egressPolicy ?? "public-only";
     this.oauth2 = new PastedOAuth2Refresher(opts.tokenTransport ?? guardedTokenTransport(opts.egressPolicy ?? "public-only"),
       opts.now ? { now: opts.now } : {});
+  }
+
+  /**
+   * Why a stored OAuth2 row that carries refresh details cannot be refreshed,
+   * or null: a refresh the provider or the network policy refused, one the
+   * provider did not answer, or a token URL that is an address this install
+   * never connects to. The Connections panel says so instead of "Refreshed by
+   * Jarvis". A custom token transport (tests) decides the address itself.
+   */
+  refreshProblem(row: { projectId: string; id: string; value: Record<string, unknown> }): RefreshProblem | null {
+    const remembered = this.oauth2.refusalOf(row);
+    if (remembered) return remembered;
+    const host = tokenUrlIpLiteral(row.value);
+    if (!host || !this.policy) return null;
+    try { assertHostAllowed(host, this.policy); } catch (error) {
+      return { kind: "blocked", message: error instanceof Error ? error.message : "Jarvis may not connect to that address." };
+    }
+    return null;
   }
 
   register(source: JarvisConnectionSource): void {

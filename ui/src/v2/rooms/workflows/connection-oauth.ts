@@ -49,8 +49,14 @@ export function pastedOAuth2Warning(type: AppConnectionType, value: Record<strin
 export function oauth2RowLabel(connection: Pick<ConnectionMeta, "type" | "oauth2">, now: number = Date.now()):
   { tone: "ok" | "warn"; label: string; title: string } | null {
   if (!isOAuth2Type(connection.type) || !connection.oauth2) return null;
-  const { expiresAt, refreshable } = connection.oauth2;
+  const { expiresAt, refreshable, refreshProblem } = connection.oauth2;
   const when = expiresAt === null ? null : new Date(expiresAt).toLocaleString();
+  if (refreshable && refreshProblem) {
+    // It has refresh details, but Jarvis knows the refresh does not work: say so, not "Refreshed by Jarvis".
+    return refreshProblem.kind === "unreachable"
+      ? { tone: "warn", label: "Refresh failing: provider not answering", title: `${refreshProblem.message} Jarvis tries again on the next use.` }
+      : { tone: "warn", label: "Refresh failed: reconnect", title: `${refreshProblem.message} Paste a new token with its refresh details.` };
+  }
   if (refreshable) {
     return { tone: "ok", label: "Refreshed by Jarvis", title: `Jarvis refreshes this token before it expires${when ? ` (now ${when})` : ""}.` };
   }

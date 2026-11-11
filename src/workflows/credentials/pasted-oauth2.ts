@@ -25,6 +25,7 @@
  * thrown error carries a token, a client secret or the token endpoint's body.
  */
 
+import { isIP } from "node:net";
 import { request as httpsRequest } from "node:https";
 import type { AppConnectionType } from "../db/repos/app-connection";
 import { getConnectionInProject, replaceRefreshedConnectionValue, sameCredential } from "../db/repos/app-connection";
@@ -141,6 +142,27 @@ export interface PastedOAuth2Status {
 export function pastedOAuth2Status(type: AppConnectionType, value: Record<string, unknown>): PastedOAuth2Status | null {
   if (!OAUTH2_TYPES.has(type)) return null;
   return { expiresAt: oauth2ExpiresAt(value), refreshable: refreshGrant(value) !== null };
+}
+
+/**
+ * Why a row that carries refresh details cannot actually be refreshed, as the
+ * panel says it. `refused`: the provider (or Jarvis's network policy) refused
+ * the refresh, so only a person pasting a new token fixes it. `unreachable`:
+ * the provider did not answer; Jarvis tries again. `blocked`: the token URL is
+ * an address this install's network policy never allows, so no refresh can
+ * succeed.
+ */
+export interface RefreshProblem {
+  kind: "refused" | "unreachable" | "blocked";
+  message: string;
+}
+
+/** The host of the row's token URL when it is an IP address, or null. */
+export function tokenUrlIpLiteral(value: Record<string, unknown>): string | null {
+  const grant = refreshGrant(value);
+  if (!grant) return null;
+  const literal = grant.tokenUrl.hostname.replace(/^\[(.*)\]$/u, "$1");
+  return isIP(literal) !== 0 ? grant.tokenUrl.hostname : null;
 }
 
 /**
@@ -265,6 +287,17 @@ export class PastedOAuth2Refresher {
 
   constructor(private readonly transport: TokenTransport, opts: { now?: () => number } = {}) {
     this.now = opts.now ?? Date.now;
+  }
+
+  /**
+   * The last refresh this row's current value failed, if Jarvis remembers one:
+   * the failure is kept until the value changes or a refresh succeeds. Memory
+   * only, so a restart forgets it until the next fetch tries again.
+   */
+  refusalOf(conn: { projectId: string; id: string; value: Record<string, unknown> }): RefreshProblem | null {
+    const refused = this.refused.get(`${conn.projectId}\u0000${conn.id}`);
+    if (!refused || !sameCredential(refused.start, conn.value)) return null;
+    return { kind: refused.error.code === "CONNECTION_REFRESH_UNREACHABLE" ? "unreachable" : "refused", message: refused.error.message };
   }
 
   /**
