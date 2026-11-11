@@ -30,6 +30,13 @@ describe("trigger in words", () => {
     expect(summarizeWorkflow({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "@jarvispieces/piece-jarvis-trigger", triggerName: "on_event", input: { eventType: "clipboard.changed" } } }).trigger)
       .toBe("When a clipboard changed event happens");
   });
+  test("a schedule saved with the catalog piece name gets the same words", () => {
+    const trigger = (triggerName: string, input: Record<string, unknown>): FlowStepNode => ({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "@activepieces/piece-schedule", triggerName, input } });
+    expect(summarizeWorkflow(trigger("every_x_minutes", { minutes: 59 })).trigger).toBe("At minutes 0 and 59 of every hour");
+    expect(summarizeWorkflow(trigger("cron_expression", { cronExpression: "0 */7 * * *", timezone: "UTC" })).trigger)
+      .toBe("Every 7 hours from midnight (00:00, 07:00, 14:00, 21:00) (UTC)");
+    expect(summarizeWorkflow(trigger("every_month", { day_of_the_month: 31, hour_of_the_day: 9, timezone: "UTC" })).text).toBe("Monthly on day 31 of months that have one, at 9:00 (UTC), then nothing else yet.");
+  });
   test("another piece's trigger uses its names, and an unknown piece still reads", () => {
     const trigger = (pieceName: string): FlowStepNode => ({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName, triggerName: "new_email", input: {} } });
     expect(summarizeWorkflow(trigger("@activepieces/piece-gmail"), catalog).trigger).toBe("When new email in Gmail");

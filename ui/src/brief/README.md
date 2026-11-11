@@ -532,7 +532,13 @@ ingredients (ready, loading, unavailable). It sends no request.
   scheduler uses it. `ScheduleEditor` covers every day, weekdays and chosen days at a time in a
   timezone, and writes the existing `cron_expression` and `timezone` fields; the stored format and the
   schedule piece are unchanged. An expression it cannot express opens as "Custom (cron)" with the raw
-  text, and the daylight-saving policy sits under Advanced.
+  text, and the daylight-saving policy sits under Advanced. Both schedule names read the same: the
+  built-in `schedule` and the catalog `@activepieces/piece-schedule` (its inputs are turned into the
+  cron the piece writes). The words say what really fires: a step that does not divide the period
+  (`*/59` minutes, `*/7` hours) lists the real times because it restarts each hour or day, and day
+  29 to 31 says it skips months without it. The editor offers no minutes picker, so it cannot write
+  an uneven step; Custom (cron) goes through the same words. The All workflows "Runs when" label
+  (`src/brief/workflow-trigger-label.ts`) still words schedules separately.
 - Step labels use no developer terms: a plain piece step carries no label chip (AI judgment steps keep
   theirs), the panel header says "Trigger", and a piece missing from the catalog shows a humanized name.
   `advanced-fields.ts` lists the fields a step's panel keeps under a collapsed "Advanced" (the notify

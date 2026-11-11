@@ -93,14 +93,31 @@ export function cronToWords(expression: string): string | null {
   if (f.hour === "*" && everyDay) {
     if (f.minute === "*") return "Every minute";
     const step = /^\*\/(\d+)$/.exec(f.minute);
-    if (step) return Number(step[1]) === 1 ? "Every minute" : `Every ${Number(step[1])} minutes`;
+    if (step) {
+      const every = Number(step[1]);
+      if (every === 1) return "Every minute";
+      // A step that does not divide 60 restarts at the top of every hour: */59 fires at :00 and :59.
+      if (60 % every === 0) return `Every ${every} minutes`;
+      const minutes = expandField(f.minute, 0, 59);
+      return minutes ? `At ${minutes.length === 1 ? "minute" : "minutes"} ${joinWords(minutes.map(String))} of every hour` : null;
+    }
     if (isNumber(f.minute) && Number(f.minute) <= 59) return f.minute === "0" ? "Every hour" : `Every hour at minute ${Number(f.minute)}`;
     return null;
   }
   const hourStep = /^\*\/(\d+)$/.exec(f.hour);
   if (hourStep && everyDay && isNumber(f.minute) && Number(f.minute) <= 59) {
-    const every = Number(hourStep[1]) === 1 ? "Every hour" : `Every ${Number(hourStep[1])} hours`;
-    return f.minute === "0" ? every : `${every} at minute ${Number(f.minute)}`;
+    const n = Number(hourStep[1]);
+    const minute = Number(f.minute);
+    if (n === 1 || (n > 0 && 24 % n === 0)) {
+      const every = n === 1 ? "Every hour" : `Every ${n} hours`;
+      return minute === 0 ? every : `${every} at minute ${minute}`;
+    }
+    // A step that does not divide 24 restarts at midnight, so say the real times.
+    const hours = expandField(f.hour, 0, 23);
+    if (hours && hours.length > 1) {
+      const clock = (h: number): string => `${String(h).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+      return `Every ${n} hours from ${minute === 0 ? "midnight" : clock(0)} (${hours.map(clock).join(", ")})`;
+    }
   }
 
   // Everything else fires at fixed times of day.
@@ -116,7 +133,55 @@ export function cronToWords(expression: string): string | null {
   if (f.dow !== "*") return null;
   const dom = expandField(f.dom, 1, 31);
   if (!dom || !dom.length || dom.length > 6) return null;
-  return `Monthly on ${dom.length === 1 ? "day" : "days"} ${joinWords(dom.map(String))} ${at}`;
+  // Days 29 to 31 are skipped in months that lack them.
+  const short = dom.filter((d) => d > 28);
+  const note = !short.length ? "" : dom.length === 1 ? " of months that have one," : ` (${joinWords(short.map(String))} only in months that have ${short.length === 1 ? "it" : "them"}),`;
+  return `Monthly on ${dom.length === 1 ? "day" : "days"} ${joinWords(dom.map(String))}${note} ${at}`;
+}
+
+export const SCHEDULE_PIECE = "schedule";
+/** The catalog schedule piece. The built-in "schedule" name above is an alias that stores a cron expression directly. */
+export const CATALOG_SCHEDULE_PIECE = "@activepieces/piece-schedule";
+
+/** True for a trigger from either schedule name. */
+export function isScheduleSettings(settings: { pieceName?: string } | undefined): boolean {
+  return settings?.pieceName === SCHEDULE_PIECE || settings?.pieceName === CATALOG_SCHEDULE_PIECE;
+}
+
+const wholeNumber = (value: unknown): number | null => {
+  const n = typeof value === "string" && value.trim() ? Number(value) : value;
+  return typeof n === "number" && Number.isInteger(n) ? n : null;
+};
+
+/**
+ * The cron expression a catalog schedule trigger turns its inputs into
+ * (mirrors the piece: every_x_minutes, every_hour, every_day, every_week,
+ * every_month, cron_expression). Empty when the inputs are not filled in.
+ */
+function catalogCron(settings: { triggerName?: string; input?: Record<string, unknown> }): string {
+  const input = settings.input ?? {};
+  const hour = wholeNumber(input["hour_of_the_day"]);
+  switch (settings.triggerName) {
+    case "cron_expression": {
+      const value = input["cronExpression"];
+      return typeof value === "string" ? value.trim() : "";
+    }
+    case "every_x_minutes": {
+      const minutes = wholeNumber(input["minutes"]);
+      return minutes !== null && minutes >= 1 && minutes <= 59 ? `*/${minutes} * * * *` : "";
+    }
+    case "every_hour": return input["run_on_weekends"] === true ? "0 * * * *" : "0 * * * 1-5";
+    case "every_day": return hour === null ? "" : `0 ${hour} * * ${input["run_on_weekends"] === true ? "*" : "1-5"}`;
+    case "every_week": {
+      const day = wholeNumber(input["day_of_the_week"]);
+      return hour === null || day === null ? "" : `0 ${hour} * * ${day}`;
+    }
+    case "every_month": {
+      const day = wholeNumber(input["day_of_the_month"]);
+      return hour === null || day === null ? "" : `0 ${hour} ${day} * *`;
+    }
+    default: return "";
+  }
 }
 
 /** The cron expression a schedule step carries, wherever the stored input keeps it. */
@@ -138,12 +203,27 @@ export function chosenZoneOf(settings: { input?: Record<string, unknown>; chosen
   return typeof zone === "string" && zone && settings?.chosenTimezone === zone ? zone : undefined;
 }
 
-/** "Every weekday at 9:00 (Europe/Rome)". Falls back to the raw expression, or says nothing is set yet. */
-export function describeSchedule(settings: { input?: Record<string, unknown>; chosenTimezone?: string } | undefined): string {
-  const cron = scheduleCron(settings?.input);
+interface ScheduleSettings {
+  pieceName?: string;
+  triggerName?: string;
+  input?: Record<string, unknown>;
+  chosenTimezone?: string;
+}
+
+/**
+ * The one place a schedule becomes words, for the trigger card, the trigger
+ * panel and the summary. "Every weekday at 9:00 (Europe/Rome)". Falls back to
+ * the raw expression, or says nothing is set yet. The catalog piece always
+ * runs in the zone it stores (interval triggers in UTC, shown without one).
+ */
+export function describeSchedule(settings: ScheduleSettings | undefined): string {
+  const catalog = settings?.pieceName === CATALOG_SCHEDULE_PIECE;
+  const cron = catalog ? catalogCron(settings) : scheduleCron(settings?.input);
   if (!cron) return "On a schedule that is not set yet";
   const words = cronToWords(cron) ?? `On a custom schedule (${cron})`;
-  const zone = chosenZoneOf(settings);
+  const stored = settings?.input?.["timezone"];
+  const catalogZone = catalog && typeof stored === "string" && stored && settings?.triggerName !== "every_x_minutes" && settings?.triggerName !== "every_hour" ? stored : undefined;
+  const zone = catalog ? catalogZone : chosenZoneOf(settings);
   return zone ? `${words} (${zone})` : words;
 }
 

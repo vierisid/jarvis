@@ -56,3 +56,47 @@ describe("simple schedule shapes", () => {
     for (const cron of ["*/5 * * * *", "0 9 1 * *", "0 9,17 * * *", "0 17 LW * *", ""]) expect(parseSimpleCron(cron)).toBeNull();
   });
 });
+
+describe("schedules that do not divide their period evenly", () => {
+  test.each([
+    ["*/59 * * * *", "At minutes 0 and 59 of every hour"],
+    ["*/45 * * * *", "At minutes 0 and 45 of every hour"],
+    ["*/7 * * * *", "At minutes 0, 7, 14, 21, 28, 35, 42, 49 and 56 of every hour"],
+    ["*/15 * * * *", "Every 15 minutes"],
+    ["*/30 * * * *", "Every 30 minutes"],
+    ["0 */7 * * *", "Every 7 hours from midnight (00:00, 07:00, 14:00, 21:00)"],
+    ["0 */5 * * *", "Every 5 hours from midnight (00:00, 05:00, 10:00, 15:00, 20:00)"],
+    ["30 */7 * * *", "Every 7 hours from 00:30 (00:30, 07:30, 14:30, 21:30)"],
+    ["0 */6 * * *", "Every 6 hours"],
+    ["0 */12 * * *", "Every 12 hours"],
+  ])("%s reads as %s", (cron, words) => expect(cronToWords(cron)).toBe(words));
+
+  test("days 29 to 31 say they skip short months", () => {
+    expect(cronToWords("0 9 31 * *")).toBe("Monthly on day 31 of months that have one, at 9:00");
+    expect(cronToWords("0 9 29 * *")).toBe("Monthly on day 29 of months that have one, at 9:00");
+    expect(cronToWords("0 9 15,31 * *")).toBe("Monthly on days 15 and 31 (31 only in months that have it), at 9:00");
+    expect(cronToWords("0 9 28 * *")).toBe("Monthly on day 28 at 9:00");
+  });
+});
+
+describe("the catalog schedule piece reads like the built-in one", () => {
+  const catalog = (triggerName: string, input: Record<string, unknown>) => describeSchedule({ pieceName: "@activepieces/piece-schedule", triggerName, input });
+  test("every_x_minutes, every_month and cron_expression", () => {
+    expect(catalog("every_x_minutes", { minutes: 5 })).toBe("Every 5 minutes");
+    expect(catalog("every_x_minutes", { minutes: 59 })).toBe("At minutes 0 and 59 of every hour");
+    expect(catalog("every_x_minutes", { minutes: "45" })).toBe("At minutes 0 and 45 of every hour");
+    expect(catalog("every_month", { day_of_the_month: 31, hour_of_the_day: 9, timezone: "Pacific/Kiritimati" }))
+      .toBe("Monthly on day 31 of months that have one, at 9:00 (Pacific/Kiritimati)");
+    expect(catalog("every_month", { day_of_the_month: 1, hour_of_the_day: 9, timezone: "UTC" })).toBe("Monthly on day 1 at 9:00 (UTC)");
+    expect(catalog("cron_expression", { cronExpression: "30 2 * * *", timezone: "Europe/Rome" })).toBe("Every day at 2:30 (Europe/Rome)");
+  });
+  test("every_hour, every_day and every_week", () => {
+    expect(catalog("every_hour", { run_on_weekends: true })).toBe("Every hour");
+    expect(catalog("every_day", { hour_of_the_day: 8, run_on_weekends: false, timezone: "UTC" })).toBe("Every weekday at 8:00 (UTC)");
+    expect(catalog("every_week", { day_of_the_week: 1, hour_of_the_day: 8, timezone: "UTC" })).toBe("Every Monday at 8:00 (UTC)");
+  });
+  test("an unfilled trigger says it is not set yet", () => {
+    expect(catalog("every_x_minutes", {})).toBe("On a schedule that is not set yet");
+    expect(catalog("cron_expression", {})).toBe("On a schedule that is not set yet");
+  });
+});

@@ -104,7 +104,7 @@ import {
 import { flattenSteps, pathToStep, withoutChosenZone } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
-import { describeSchedule } from "./schedule-words";
+import { describeSchedule, isScheduleSettings } from "./schedule-words";
 import { ScheduleEditor } from "./ScheduleEditor";
 import { splitAdvancedFields } from "./advanced-fields";
 import { humanizePieceName } from "./workflow-summary";
@@ -3339,7 +3339,7 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
           </span>
         ) : step.type === "CODE" ? (
           <span className="wf-node__piece">Custom JavaScript</span>
-        ) : isTrigger && detectTriggerKind(step) === "schedule" ? (
+        ) : isTrigger && (detectTriggerKind(step) === "schedule" || isScheduleSettings(step.settings)) ? (
           <span className="wf-node__piece">{describeSchedule(step.settings)}</span>
         ) : step.settings?.pieceName ? (
           <>

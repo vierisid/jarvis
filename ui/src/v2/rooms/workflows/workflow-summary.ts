@@ -8,7 +8,7 @@
  * their display name, then to a humanized piece name, so nothing is ever blank.
  */
 
-import { describeSchedule } from "./schedule-words";
+import { describeSchedule, isScheduleSettings } from "./schedule-words";
 import { detectTriggerKind } from "./trigger-kinds";
 import type { FlowStepNode, PieceCatalogEntry } from "./useWorkflowEditor";
 
@@ -111,7 +111,7 @@ class Summarizer {
   trigger(step: FlowStepNode): string {
     const kind = detectTriggerKind(step);
     if (kind === "manual") return "When you run it";
-    if (kind === "schedule") return describeSchedule(step.settings);
+    if (kind === "schedule" || isScheduleSettings(step.settings)) return describeSchedule(step.settings);
     if (kind === "webhook") return "When a webhook receives data";
     if (kind === "event") {
       const eventType = step.settings?.input?.["eventType"];
