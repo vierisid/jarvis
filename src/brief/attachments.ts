@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import { isDesktopEnabled, isScreenCaptureEnabled } from '../actions/tools/desktop-guard';
 import type { SidecarManager } from '../sidecar/manager';
 import { servesCapability } from '../sidecar/capability-predicate';
 import { getDb } from '../vault/schema';
@@ -69,6 +70,9 @@ export class BriefAttachmentProvider {
     try { return await result; } finally { this.captures.delete(key); }
   }
   private async captureOnce(conversationId: string, id: string, deviceId: string) {
+    // Screen awareness off or desktop control off means no screen capture on any path (#1314 m6).
+    if (!isDesktopEnabled()) throw new ConversationRequestError('Desktop control is turned off, so Jarvis takes no screenshots. Turn it on in Settings first.', 409);
+    if (!isScreenCaptureEnabled()) throw new ConversationRequestError('Screen awareness is turned off, so Jarvis takes no screenshots. Turn awareness on first.', 409);
     const device = this.sidecar?.getSidecar(deviceId);
     if (!device || device.status === 'revoked' || !servesCapability(device, 'screenshot')) {
       throw new ConversationRequestError('Screenshot capture is unavailable on the selected device', 409);
