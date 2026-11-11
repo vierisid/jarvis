@@ -105,8 +105,8 @@ describe('a turn that never stops calling tools', () => {
     test(`${name}: stops at a sensible limit with plain words, not a marker`, async () => {
       const { orch, provider, ran } = build(forever);
       const outcome = await run(orch);
-      expect(provider.requests).toBeLessThanOrEqual(50);
-      expect(ran.length).toBeLessThanOrEqual(50);
+      expect(provider.requests).toBeLessThanOrEqual(200);
+      expect(ran.length).toBeLessThanOrEqual(200);
       expect(JSON.stringify(outcome)).not.toContain('Max tool iterations');
       if (name === 'streamMessage') {
         // Reported as stopped, never as a completed turn.

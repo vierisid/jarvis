@@ -103,12 +103,11 @@ function toSystemMessages(systemPrompt: string | SystemPromptParts): LLMMessage[
 }
 
 /**
- * Provider calls one turn may spend on tool rounds. A turn that is still calling
- * tools after this many is looping, and each round re-sends a longer history:
- * a stuck model costs more with every call. Delegated work that legitimately
- * needs more runs in the task tier, which reports back and can be continued.
+ * Provider calls one turn may spend on tool rounds. Raised from 25 to 200 on
+ * purpose (#13) so long tool work can finish in one turn. A turn that reaches
+ * it stops in plain words as stopped, never as a completed turn with a marker.
  */
-const MAX_TOOL_ITERATIONS = 50;
+const MAX_TOOL_ITERATIONS = 200;
 /** What a person is told when a turn stops at that limit. Plain words, no markers. */
 const TOOL_LOOP_STOPPED_TEXT =
   `I stopped after ${MAX_TOOL_ITERATIONS} steps without finishing. Check what was done so far, then ask me to carry on.`;

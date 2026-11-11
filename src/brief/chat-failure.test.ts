@@ -58,7 +58,7 @@ test('without hosted detail nothing extra is added, and the detail is bounded an
 });
 
 test('a turn Jarvis stopped for looping on tools says so and asks to check the steps', () => {
-  const failure = briefChatFailure(new LLMProviderError('I stopped after 50 steps', 'tool_loop_limit'), true);
+  const failure = briefChatFailure(new LLMProviderError('I stopped after 200 steps', 'tool_loop_limit'), true);
   expect(failure.code).toBe('tool_loop_limit');
   expect(failure.message).toContain('stopped after too many steps');
   expect(failure.message).not.toContain('provider');
