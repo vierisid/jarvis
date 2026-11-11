@@ -184,7 +184,9 @@ Practical consequences:
   is dropped, so no `awareness.*` flow or dashboard gets it, and the
   capture itself is not sent for screen analysis (a provider retry
   included), evaluated into a suggestion, summarised into a session topic or
-  matched against goals; and a flow's
+  matched against goals, and a daily or weekly report being written when it
+  turns off is not sent on (a provider retry included) or handed out; and a
+  flow's
   `awarenessRecent` context returns no activity. Vault entities and goal notes once written from awareness are
   ordinary data and stay visible (owner decision). Nothing is deleted; it shows
   again when awareness is turned back on. Not covered: shell commands

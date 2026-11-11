@@ -104,7 +104,9 @@ export class AwarenessService implements Service {
       })),
     }, maxGapMs);
     this.contextGraph = new ContextGraph();
-    this.analytics = new BehaviorAnalytics(llm, maxGapMs);
+    // Reports send app usage and session topics: held by the switch like the
+    // screen analysis, a provider retry or fallback inside one call included.
+    this.analytics = new BehaviorAnalytics(awarenessHeldLlm(llm), maxGapMs);
   }
 
   start(): Promise<void> {
@@ -242,7 +244,10 @@ export class AwarenessService implements Service {
 
   async generateReport(date?: string): Promise<DailyReport> {
     if (!awarenessHistoryVisible()) throw new Error(AWARENESS_OFF_MESSAGE);
-    return this.analytics.generateDailyReport(date);
+    const report = await this.analytics.generateDailyReport(date);
+    // Turned off while the report was being written: it is not handed out.
+    if (!awarenessHistoryVisible()) throw new Error(AWARENESS_OFF_MESSAGE);
+    return report;
   }
 
   getSessionHistory(limit?: number): SessionSummary[] {
@@ -252,7 +257,9 @@ export class AwarenessService implements Service {
 
   async generateWeeklyReport(weekStart?: string): Promise<WeeklyReport> {
     if (!awarenessHistoryVisible()) throw new Error(AWARENESS_OFF_MESSAGE);
-    return this.analytics.generateWeeklyReport(weekStart);
+    const report = await this.analytics.generateWeeklyReport(weekStart);
+    if (!awarenessHistoryVisible()) throw new Error(AWARENESS_OFF_MESSAGE);
+    return report;
   }
 
   getBehavioralInsights(days?: number): BehavioralInsight[] {
@@ -275,6 +282,9 @@ export class AwarenessService implements Service {
 
   async handleSidecarEvent(sidecarId: string, event: SidecarEvent): Promise<void> {
     if (!this.runRequested || this._status !== 'running') return;
+    // The switch itself, not only this service's copy of it: the two can
+    // differ while a start or stop is still settling.
+    if (!awarenessHistoryVisible()) return;
     // desktop.enabled: false covers the desktop observers too (#905): what
     // the sidecar captures is dropped unread, as with awareness off.
     if (!isDesktopEnabled()) return;
@@ -297,8 +307,9 @@ export class AwarenessService implements Service {
   }
 
   /**
-   * Whether a capture's processing may go on. Read again after every await:
-   * the entry check in handleSidecarEvent only covers the moment it arrived.
+   * Whether a capture's processing may go on. handleSidecarEvent asks the
+   * switch when the capture arrives; this is read again after every await,
+   * since awareness may have been turned off meanwhile.
    */
   private stillSeeing(): boolean {
     return this.runRequested && awarenessHistoryVisible() && isDesktopEnabled();

@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { AwarenessService } from './service.ts';
 import { SuggestionEngine } from './suggestion-engine.ts';
+import { AwarenessIntelligence } from './intelligence.ts';
 import type { AwarenessEvent } from './types.ts';
 import type { AwarenessConfig, JarvisConfig } from '../config/types.ts';
 import type { LLMManager } from '../llm/manager.ts';
@@ -147,4 +148,63 @@ test('on: a session topic is stored (the session fixture is live)', async () => 
   await capture(value, start + 150000, 'Browser');
   for (let i = 0; i < 5; i++) await settle();
   expect(getSession(sessionId)!.summary).toBe('Reviewed.');
+});
+
+test('a capture that arrives while the switch is off is dropped even if the service still runs', async () => {
+  const value = await service(llm(() => 'analysis'), async () => Buffer.from('png'));
+  on = false;
+  await capture(value, Date.now());
+  expect(sends).toEqual([]);
+  expect(evaluate).not.toHaveBeenCalled();
+  expect(events).toEqual([]);
+  on = true;
+  expect(value.getCurrentSession()).toBeNull();
+});
+
+test('a session topic is not even attempted when awareness went off as the session ended', async () => {
+  const start = Date.now() - 180000;
+  const summarize = spyOn(AwarenessIntelligence.prototype, 'summarizeSession');
+  try {
+    const value = await service(llm(() => '{"topic":"Leaked","summary":"Leaked."}'), async () => null, { cloud_vision_enabled: false });
+    // The session-end listener runs before the topic is inferred: the switch goes off there.
+    const listen = (event: AwarenessEvent) => { events.push(event); if (event.type === 'session_ended') on = false; };
+    (value as unknown as { eventCallback: (event: AwarenessEvent) => void }).eventCallback = listen;
+    await capture(value, start, 'Editor');
+    await capture(value, start + 150000, 'Browser');
+    for (let i = 0; i < 5; i++) await settle();
+    expect(events.map(event => event.type)).toContain('session_ended');
+    expect(summarize).not.toHaveBeenCalled();
+  } finally { summarize.mockRestore(); }
+});
+
+function workday(value: AwarenessService) {
+  const start = Date.now() - 20 * 60000;
+  return (async () => { for (let i = 0; i <= 20; i++) await capture(value, start + i * 60000, 'Editor', `Reviewing the project draft, part ${i}.`); })();
+}
+
+test('on: the daily report asks the model for takeaways (the report fixture is live)', async () => {
+  const value = await service(llm(() => '["ok"]'), async () => null, { cloud_vision_enabled: false });
+  await workday(value);
+  const report = await value.generateReport();
+  expect(sends).toContain('awareness_daily_takeaways');
+  expect(report.aiTakeaways).toEqual(['ok']);
+});
+
+test('a report is held at the provider retry boundary once awareness is off', async () => {
+  const value = await service(llm(options => { on = false; options?.checkDeadline?.(); return '["leaked"]'; }), async () => null, { cloud_vision_enabled: false });
+  await workday(value);
+  await expect(value.generateReport()).rejects.toThrow('Screen awareness is off');
+  expect(sends).toEqual([]);
+});
+
+test('a report finished after awareness went off is not handed out', async () => {
+  const value = await service(llm(() => { on = false; return '["leaked"]'; }), async () => null, { cloud_vision_enabled: false });
+  await workday(value);
+  await expect(value.generateReport()).rejects.toThrow('Screen awareness is off');
+  on = true;
+  sends.length = 0;
+  const weekly = llm(() => { on = false; return '["leaked"]'; });
+  const second = await service(weekly, async () => null, { cloud_vision_enabled: false });
+  await workday(second);
+  await expect(second.generateWeeklyReport()).rejects.toThrow('Screen awareness is off');
 });
