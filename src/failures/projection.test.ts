@@ -31,6 +31,15 @@ describe('the projection reads typed evidence, never wording', () => {
     expect([a.category, a.headline, a.outcome, a.key]).toEqual([b.category, b.headline, b.outcome, b.key]);
   });
 
+  test('#1153: an egress refusal before sending reads as not sent, fixed by editing the step, not by running again', () => {
+    const failure = projectFailure({ source: 'action', outcome: { status: 'blocked', code: 'EGRESS_REFUSED', message: 'Not sent: refused', effect: 'not_started' } },
+      { label: 'The step "Call"', sideEffects: true });
+    expect(failure).toMatchObject({ category: 'invalid_input' });
+    expect(failure.headline).toContain('nothing was sent');
+    expect(JSON.stringify(failure)).toContain('edit_and_run_again');
+    expect(JSON.stringify(failure)).not.toContain('"run_again"');
+  });
+
   test('an untyped error is internal whatever it says', () => {
     for (const message of ['429 rate limit', 'approval denied', 'ECONNREFUSED', 'timed out']) {
       expect(projectFailure(failureEvidence(new Error(message)), { label: 'The step', sideEffects: true }).category).toBe('internal');
@@ -43,6 +52,9 @@ describe('the projection reads typed evidence, never wording', () => {
     expect(failureEvidence(new LLMProviderError('slow down', 'rate_limit'))).toMatchObject({ source: 'provider', code: 'rate_limit' });
     expect(failureEvidence(new HostedProxyError('used up', 'quota_exhausted', 402))).toMatchObject({ source: 'provider', code: 'quota_exhausted' });
     expect(failureEvidence(new HostedProxyError('no', 'model_not_in_plan', 403))).toMatchObject({ source: 'provider', code: 'forbidden' });
+    // No active plan reads as the hosted provider's own code for it (auth), never as a restriction to appeal.
+    expect(failureEvidence(new HostedProxyError('no plan', 'inactive', 401))).toMatchObject({ source: 'provider', code: 'auth' });
+    expect(failureEvidence(new HostedProxyError('appeal', 'restricted', 401))).toMatchObject({ source: 'provider', code: 'restricted' });
     expect(failureEvidence(new WorkflowReadinessError({ ready: false, issues: [{ node: 'a', path: 'p', code: 'TOOL_BINDING', message: 'm' }], runtimeChecks: [] })))
       .toEqual({ source: 'readiness', issues: [{ code: 'TOOL_BINDING', message: 'm' }] });
     expect(failureEvidence(new WorkflowCancellationError('run-1'))).toMatchObject({ source: 'cancellation', dispatched: true });

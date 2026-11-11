@@ -341,7 +341,8 @@ export class ConvOrchestrator {
         } else if (event.type === 'done') {
           response = event.response;
         } else if (event.type === 'error') {
-          throw Object.assign(new Error(event.error), { code: event.code });
+          // The hosted provider's authored detail rides with its code (#1312 follow-up).
+          throw Object.assign(new Error(event.error), { code: event.code, hostedDetail: event.hosted_detail });
         }
       }
 

@@ -37,7 +37,7 @@ import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { scopeSystemNote, type TurnToolScope } from '../actions/tools/tool-scope.ts';
-import { desktopOffSystemNote } from '../actions/tools/desktop-guard.ts';
+import { desktopOffSystemNote, screenAwarenessOffSystemNote } from '../actions/tools/desktop-guard.ts';
 import { BUILTIN_TOOLS, browser } from '../actions/tools/builtin.ts';
 import { createDelegateTool, type DelegateToolDeps } from '../actions/tools/delegate.ts';
 import { createManageAgentsTool, type AgentToolDeps } from '../actions/tools/agents.ts';
@@ -83,14 +83,17 @@ import { TaskRegistry } from '../agents/conv/task-registry.ts';
 import { TaskDispatcher, type TaskRunner } from '../agents/conv/task-dispatcher.ts';
 import { DialogueCompactor } from '../agents/conv/dialogue-compactor.ts';
 import type { ConvTaskEvent } from '../agents/conv/conv-orchestrator.ts';
-import { getRecentConversation, getMessages, forwardedMessageIds, frameForward, holdsRecentForward, FORWARDED_MESSAGE_SOURCE } from '../vault/conversations.ts';
+import { getRecentConversation, getMessages, forwardedMessageIds, frameForward, holdsRecentForward, FORWARDED_MESSAGE_SOURCE, GUEST_MESSAGE_SOURCE, briefTurnMessageIds } from '../vault/conversations.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
-import { withChannelConversationTaint } from './channel-service.ts';
+import { CHANNEL_GUEST_CONVERSATION_SOURCE, withChannelConversationTaint } from './channel-service.ts';
 import { PEBBLE_CHANNEL, PEBBLE_DIALOGUE_WINDOW_MS, recordPebbleExchange } from './pebble-dialogue.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import type { ScopedChatInput } from '../brief/chat-transport.ts';
 import { commitmentPromptLine } from '../vault/commitment-text.ts';
 import { TurnTaintCarry, taintCarryKey, type TurnTaintLink } from '../agents/turn-taint-carry.ts';
+
+/** Untrusted sources that are someone else's words in the conversation itself: a turn on them teaches nothing. */
+const OTHERS_WORDS = new Set([CHANNEL_GUEST_CONVERSATION_SOURCE, GUEST_MESSAGE_SOURCE, FORWARDED_MESSAGE_SOURCE]);
 
 export class AgentService implements Service, IAgentService {
   name = 'agent';
@@ -332,7 +335,13 @@ export class AgentService implements Service, IAgentService {
     try {
       return withMemoryRecall(() => {
         const inner = this.streamMessageInner(text, channel, siteContext, scope, contextKey, conversation, carry);
-        return { stream: bindMemoryRecallStream(trackTurnStream(inner.stream, settle)), onComplete: inner.onComplete };
+        // Nothing is learned from a turn on someone else's words (#1313
+        // follow-up): a guest's thread, a guest's message or a forward in the
+        // history. The reply can restate them, and extraction would store them
+        // as the owner's facts for every later turn; the guest and forward
+        // paths already learn nothing. Decided here, before either path runs.
+        const learns = !conversation?.untrustedSources?.some(source => OTHERS_WORDS.has(source));
+        return { stream: bindMemoryRecallStream(trackTurnStream(inner.stream, settle)), onComplete: learns ? inner.onComplete : async () => {} };
       });
     } catch (err) {
       settle();
@@ -481,8 +490,10 @@ export class AgentService implements Service, IAgentService {
         const code = err && typeof err === 'object'
           ? (err as { code?: LLMErrorCode }).code
           : undefined;
+        // Only the hosted provider sets it: its own sentence, never a body (#1312 follow-up).
+        const hostedDetail = err && typeof err === 'object' ? (err as { hostedDetail?: unknown }).hostedDetail : undefined;
         console.error('[AgentService] Conv stream error:', errorMsg);
-        yield { type: 'error', error: errorMsg, code };
+        yield { type: 'error', error: errorMsg, code, ...(typeof hostedDetail === 'string' && hostedDetail ? { hosted_detail: hostedDetail } : {}) };
       }
     })();
 
@@ -915,8 +926,12 @@ export class AgentService implements Service, IAgentService {
    */
   private loadGuestDialogue(conversationId: string): LLMMessage[] {
     try {
-      return getMessages(conversationId, { limit: GUEST_HISTORY_MESSAGES + 1 })
-        .filter(m => m.role === 'user' || m.role === 'assistant')
+      // What the owner said in this thread in Brief, and the reply their
+      // assistant gave with their context and tools, is not the guest's or the
+      // group's to read (#1313 follow-up). An unreadable record reads nothing.
+      const brief = briefTurnMessageIds(conversationId);
+      return getMessages(conversationId, { limit: GUEST_HISTORY_MESSAGES + 1 + brief.size })
+        .filter(m => (m.role === 'user' || m.role === 'assistant') && !brief.has(m.id))
         .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
         .slice(-(GUEST_HISTORY_MESSAGES + 1));
     } catch (err) {
@@ -1266,10 +1281,11 @@ export class AgentService implements Service, IAgentService {
     // The tool guide in the static half documents the desktop tools whatever
     // the setting, and varying it would miss the prompt cache; this note goes
     // in the dynamic half instead, and only while desktop.enabled is off (#905).
-    const desktopNote = desktopOffSystemNote();
+    // The awareness note likewise, while screen awareness is off (#1314).
+    const notes = [desktopOffSystemNote(), screenAwarenessOffSystemNote()].filter((n): n is string => !!n);
     return {
       static: `${roleParts.static}\n\n${personalityPrompt}`,
-      dynamic: desktopNote ? `${roleParts.dynamic}\n\n${desktopNote}` : roleParts.dynamic,
+      dynamic: notes.length ? `${roleParts.dynamic}\n\n${notes.join('\n\n')}` : roleParts.dynamic,
     };
   }
 

@@ -92,13 +92,15 @@ test('removal during ON_ENABLE prevents a late subscription and reconciles the c
   expect(cron.callbacks.size).toBe(0); expect(tm.list()).toEqual([]); expect(disables).toBe(1); expect(queueStats().queued).toBe(0);
 });
 
-for (const secret of [undefined, 'fixture-webhook-secret']) test(`R3: pending ${secret ? 'signed' : 'unsigned'} webhook cannot cross Remove/Undo/Enable`, async () => {
+for (const secret of [undefined, 'fixture-webhook-secret-at-least-32-chars']) test(`R3: pending ${secret ? 'signed' : 'unsigned'} webhook cannot cross Remove/Undo/Enable`, async () => {
   const f = flow({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input: { ...(secret ? { secret } : {}) } } });
   tm = new TriggerManager({ eventBus: new WorkflowEventBus(), log: () => {} }); await tm.start(); service.start(tm);
   const payload = JSON.stringify({ stale: true }), headers: Record<string, string> = {};
   if (secret) {
     const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    headers['x-jarvis-signature'] = Buffer.from(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload))).toString('hex');
+    // A new secret is timestamped (#1153): the signature covers `<timestamp>.<body>`.
+    headers['x-jarvis-timestamp'] = String(Math.floor(Date.now() / 1000));
+    headers['x-jarvis-signature'] = Buffer.from(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${headers['x-jarvis-timestamp']}.${payload}`))).toString('hex');
   }
   let body!: ReadableStreamDefaultController<Uint8Array>;
   const request = new Request(`http://localhost/webhooks/${f}`, { method: 'POST', headers,

@@ -29,7 +29,10 @@ test('the secret is entered hidden, shown on request, and the hint names the sig
   expect(input.value).toBe('s3cret');
   expect(host.textContent).toContain('Signing secret (optional)');
   expect(host.textContent).toContain(WEBHOOK_SECRET_HINT);
-  expect(WEBHOOK_SECRET_HINT).toMatch(/X-Jarvis-Signature header holding the hex HMAC-SHA256 of the raw request body/);
+  // #1153: the signature covers a timestamp and the body, and an old request is refused.
+  expect(WEBHOOK_SECRET_HINT).toMatch(/X-Jarvis-Timestamp header \(Unix seconds\) and an X-Jarvis-Signature header holding the hex HMAC-SHA256 of the timestamp, a dot, and the raw request body/);
+  expect(WEBHOOK_SECRET_HINT).toMatch(/at least 32 characters/);
+  expect(WEBHOOK_SECRET_HINT).toMatch(/more than 5 minutes old, are refused/);
   expect(WEBHOOK_SECRET_HINT).toMatch(/Without one, anyone who has this workflow's webhook URL can start it/);
   const show = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Show secret')!;
   await act(async () => show.click());
@@ -44,4 +47,15 @@ test('with no secret the field is empty and says unsigned requests are accepted'
   const input = host.querySelector('input')!;
   expect(input.value).toBe('');
   expect(input.placeholder).toBe('No secret: unsigned requests are accepted');
+});
+
+test('#1153: a secret saved before timestamps says it is legacy and offers to require them; a timestamped one does not', async () => {
+  const asked: string[] = [];
+  await act(async () => root.render(<editor.WebhookTriggerFields secret="s3cret" onSetSecret={() => {}} onRequireTimestamps={() => asked.push('timestamped')} />));
+  expect(host.textContent).toContain(editor.WEBHOOK_LEGACY_SIGNING_NOTE);
+  await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Require timestamps')!.click());
+  expect(asked).toEqual(['timestamped']);
+  await act(async () => root.render(<editor.WebhookTriggerFields secret="s3cret" scheme="timestamped" onSetSecret={() => {}} onRequireTimestamps={() => {}} />));
+  expect(host.textContent).not.toContain(editor.WEBHOOK_LEGACY_SIGNING_NOTE);
+  expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Require timestamps')).toBe(false);
 });

@@ -5,8 +5,8 @@ import type { BriefActivity, BriefChatEvent, BriefChatPayload, BriefSendTurn, Br
 import { ConversationRepository, ConversationRequestError } from './conversation-lifecycle.ts';
 import { ChatAttachmentRepository, attachmentIds } from './chat-attachments';
 import type { BriefAttachmentRef } from '../brief/attachment-contracts';
-import { FORWARDED_MESSAGE_SOURCE, frameForward, insertConversationMessage } from './conversations.ts';
-export { FORWARDED_MESSAGE_SOURCE };
+import { FORWARDED_MESSAGE_SOURCE, GUEST_MESSAGE_SOURCE, frameForward, frameGuestMessage, frameGuestReply, insertConversationMessage } from './conversations.ts';
+export { FORWARDED_MESSAGE_SOURCE, GUEST_MESSAGE_SOURCE };
 
 export interface ChatTurn extends BriefTurnRef {
   text: string;
@@ -153,20 +153,40 @@ export class ChatTurnRepository {
 
   /**
    * The turn's history, and whether it holds a message the owner forwarded
-   * from a channel (#1155). Each forward is framed as someone else's words,
-   * and the caller taints the turn from `holdsForward`: decided from the rows
-   * read here, so the frame and the taint can never disagree about the window.
+   * from a channel (#1155) or one a channel guest wrote (#1313 follow-up).
+   * Each is framed as someone else's words, and the caller taints the turn
+   * from `holdsForward` and `holdsGuest`: decided from the rows read here, so
+   * the frame and the taint can never disagree about the window.
+   *
+   * `guestConversation`: whether this is a channel thread holding a guest's
+   * words (the caller knows the channel owner). In one, a row is the guest's
+   * exchange unless a Brief turn wrote it: the owner's message typed here
+   * after reopening the thread, or their assistant's reply.
    */
-  historyWithForwards(ref: BriefTurnRef): { messages: LLMMessage[]; holdsForward: boolean } {
+  historyWithForwards(ref: BriefTurnRef, guestConversation = false): { messages: LLMMessage[]; holdsForward: boolean; holdsGuest: boolean } {
     const turn = this.get(ref);
-    const rows = this.db.query<{ role: 'user' | 'assistant'; content: string; forwarded: number }, [string, string, string]>(`SELECT role, content,
-      EXISTS (SELECT 1 FROM conversation_forwards f WHERE f.message_id = conversation_messages.id) AS forwarded FROM conversation_messages
+    const rows = this.db.query<{ role: 'user' | 'assistant'; content: string; forwarded: number; brief: number }, [string, string, string]>(`SELECT role, content,
+      EXISTS (SELECT 1 FROM conversation_forwards f WHERE f.message_id = conversation_messages.id) AS forwarded,
+      EXISTS (SELECT 1 FROM brief_chat_turns b WHERE b.conversation_id = conversation_messages.conversation_id
+        AND (b.user_message_id = conversation_messages.id OR b.assistant_message_id = conversation_messages.id)) AS brief FROM conversation_messages
       WHERE conversation_id = ? AND role IN ('user', 'assistant') AND id NOT IN (?, ?)
       ORDER BY created_at DESC, id DESC LIMIT 80`).all(turn.conversationId, turn.userMessageId, turn.assistantMessageId).reverse();
+    // The guest's turns in their channel thread: what they wrote, and the
+    // replies a tool-less model they could steer gave them.
+    const guest = (row: typeof rows[number]) => guestConversation && row.forwarded !== 1 && row.brief !== 1;
     return {
-      messages: rows.map(({ role, content, forwarded }) => ({ role, content: forwarded ? frameForward(content) : content })),
+      messages: rows.map((row) => ({ role: row.role,
+        content: row.forwarded ? frameForward(row.content)
+          : guest(row) ? (row.role === 'user' ? frameGuestMessage(row.content) : frameGuestReply(row.content)) : row.content })),
       holdsForward: rows.some((row) => row.forwarded === 1),
+      holdsGuest: rows.some(guest),
     };
+  }
+
+  /** Whether a conversation is a Telegram or Discord thread: without an owner check, a guest's (fail closed). */
+  isChannelConversation(conversationId: string): boolean {
+    const row = this.db.query<{ channel: string | null }, [string]>('SELECT channel FROM conversations WHERE id = ?').get(conversationId);
+    return row?.channel === 'telegram' || row?.channel === 'discord';
   }
 
   snapshot(conversationId: string, afterSequence: number) {

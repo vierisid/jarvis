@@ -117,13 +117,17 @@ test("the composer drives the real F-04 client: acceptance, replay, exact-turn s
   assert.equal(host.querySelector('[role="status"]')!.textContent, "Stopping response…");
   const terminalError = "The response failed before it could stop.";
   await change(() => emit(turns.finish(second, "failed", { code: "provider_failed", message: terminalError })));
-  assert.equal(client.store.getSnapshot().conversations[b]?.error, terminalError);
-  assert.equal(host.querySelector('[role="status"]')!.textContent, terminalError);
+  // The failure is kept on its turn, which the thread shows; the composer does
+  // not repeat it, and the stop intent retires with the turn.
+  assert.equal(client.store.getSnapshot().conversations[b]?.turns[second.turnId]?.error?.message, terminalError);
+  assert.equal(client.store.getSnapshot().conversations[b]?.error, null);
+  assert.equal(host.querySelector('[role="status"]')!.textContent, "");
   assert.equal(input().value, "Keep B's next question");
   assert.ok(host.querySelector('[aria-label="Send"]'));
   await change(() => client.select(a)); assert.equal(input().value, "Retained on return");
   await change(() => client.select(b));
-  assert.equal(host.querySelector('[role="status"]')!.textContent, terminalError);
+  assert.equal(client.store.getSnapshot().conversations[b]?.turns[second.turnId]?.error?.message, terminalError);
+  assert.equal(host.querySelector('[role="status"]')!.textContent, "");
   assert.equal(input().value, "Keep B's next question");
   assert.equal(frames("brief_chat_cancel").length, 4);
 });

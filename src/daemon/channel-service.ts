@@ -26,6 +26,7 @@ import { getSettingsByPrefix, setSetting } from '../vault/settings.ts';
 import { NotSentError, partlySent, requestMayHaveArrived, sendMayHaveArrived, sendRetryable } from '../comms/delivery.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { checkpointExecution, withExecutionScope } from '../actions/execution-scope.ts';
+import { channelThreadTitle } from '../brief/conversation-title.ts';
 
 /**
  * How many channel turns, every chat on every channel together, run at once
@@ -501,11 +502,12 @@ export class ChannelService implements Service {
   async tryBroadcastToChannels(
     channels: string[],
     text: string,
+    options: RoutePerChannelOptions = {},
   ): Promise<ChannelDeliveryReport> {
     return routePerChannel(channels, text, {
       getAdapter: (name) => this.manager.getChannel(name) ?? null,
       getLastRecipient: (name) => this.getBroadcastRecipient(name),
-    });
+    }, options);
   }
 
   /**
@@ -805,7 +807,9 @@ export class ChannelService implements Service {
     //    conversation (#884). Every sender used to share the channel's one
     //    conversation, so on a channel anyone may message (an empty list,
     //    #811) a stranger could ask about the owner's earlier turns.
-    const conversation = getOrCreateConversation(channelTag, { sender });
+    // Titled after its sender (#1313 follow-up), so closed threads can be told apart.
+    const label = channelThreadTitle(channelTag, msg.from, who, { privateChat: isPrivateChat(msg), startedAt: Date.now() });
+    const conversation = getOrCreateConversation(channelTag, { sender, ...(label ? { label } : {}) });
     // A forward is marked in the same transaction (#1155): stored unmarked,
     // it would read as the owner's own words on every later turn.
     getDb().transaction(() => {
@@ -1023,10 +1027,19 @@ export interface ChannelRouterServices {
   getLastRecipient: (name: string) => string | null;
 }
 
+/**
+ * `shouldContinue` is asked before each send (#1314 review): a caller whose
+ * permission to send can lapse while one channel is tried (screen awareness
+ * turned off during an opportunity's delivery) stops before the next one.
+ * A channel not tried is reported failed, so nothing reads as sent.
+ */
+export interface RoutePerChannelOptions { shouldContinue?: () => boolean }
+
 export async function routePerChannel(
   channels: string[],
   text: string,
   services: ChannelRouterServices,
+  options: RoutePerChannelOptions = {},
 ): Promise<ChannelDeliveryReport> {
   const delivered: string[] = [];
   const failed: { channel: string; error: string }[] = [];
@@ -1057,6 +1070,10 @@ export async function routePerChannel(
       checkpointExecution();
     } catch (err) {
       failed.push({ channel: name, error: err instanceof Error ? err.message : String(err) });
+      continue;
+    }
+    if (options.shouldContinue && !options.shouldContinue()) {
+      failed.push({ channel: name, error: 'held: the sender stopped before this channel was tried' });
       continue;
     }
     try {
@@ -1201,6 +1218,21 @@ export const CHANNEL_GUEST_CONVERSATION_SOURCE = 'channel guest conversation';
  * continuing one there runs a turn with their tools on that history.
  */
 export function isChannelGuestConversation(conversationId: string, channels: JarvisConfig['channels']): boolean {
+  return channelConversationHolds(conversationId, channels, true);
+}
+
+/**
+ * Whether a conversation is a channel thread whose sender is not the
+ * channel's current owner, or has none (saved before #884): its rows not
+ * written in Brief are a guest's (#1313 follow-up). Unlike
+ * isChannelGuestConversation, a forward in the owner's own thread does not
+ * count: the forward is framed on its own, and the owner's words stay theirs.
+ */
+export function isChannelGuestThread(conversationId: string, channels: JarvisConfig['channels']): boolean {
+  return channelConversationHolds(conversationId, channels, false);
+}
+
+function channelConversationHolds(conversationId: string, channels: JarvisConfig['channels'], countForwards: boolean): boolean {
   let row: { channel: string; sender: string | null; forwards: number } | null;
   try {
     row = getDb().query(`SELECT channel, sender,
@@ -1218,7 +1250,7 @@ export function isChannelGuestConversation(conversationId: string, channels: Jar
   // tainted by the transport from the very rows its history read
   // (ChatTurnRepository.historyWithForwards), so a framed forward never
   // reaches the untainted conv path, whose compactor would cut it.
-  if (!row.sender || row.forwards) return true;
+  if (!row.sender || (countForwards && row.forwards)) return true;
   const userId = /^user:([^/]+)\//.exec(row.sender)?.[1];
   const raw = row.channel === 'telegram' ? channels?.telegram?.allowed_users : channels?.discord?.allowed_users;
   const owner = channelOwnerId(row.channel, raw);

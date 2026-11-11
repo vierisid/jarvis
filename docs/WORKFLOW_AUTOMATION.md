@@ -66,13 +66,134 @@ Practical consequences:
   none. The `toolName` must be written directly: a templated one (`{{...}}`)
   would let run data, such as a webhook body, choose the tool, so readiness
   refuses it and a run refuses it with `WORKFLOW_STEP_INPUT_NOT_FIXED`.
-- `jarvis-tool` only invokes tools with a bounded, declared Authority action (see
-  `BOUNDED_TOOLS` in `src/workflows/runtime/effect-capabilities.ts`). Tools whose
-  effect is a script or a click sequence -- `run_command`, `browser_click`,
-  `desktop_type` and friends -- need a typed `ToolDefinition.workflowEffect`
-  adapter first. A flow that called one of those directly now fails with
-  "Unsupported direct workflow capability".
-- `run_skill` is the one click sequence a flow may invoke, because a skill is
+- `jarvis-tool` invokes bounded tools, typed `ToolDefinition.workflowEffect`
+  adapters and the explicit reviewed UI set in `src/authority/ui-intent.ts`:
+  browser navigation, click, type, key press, hover and scroll; desktop app
+  launch, window focus and targeted `desktop_click` actions. Each UI action
+  requires a separate dashboard approval using its live guard, even at full
+  Authority. These actions cannot run unattended. A restart, changed session
+  or missing guard refuses dispatch.
+- **The card shows what will run** (#1314). Every frozen argument is on it as
+  one line of escaped JSON (the full URL for `browser_navigate`), each marked
+  when run data chose it (a templated param of a direct step) or when a
+  delegated agent did; the computer it runs on by name and id; and the page,
+  element or window as Jarvis last saw them (display only, never a binding;
+  a desktop label comes only from this run's own structured snapshot). A value
+  over 600 characters, a card over 1000, a parameter the tool does not take
+  or more than 20 values is refused with `CARD_CANNOT_SHOW`: never shown cut.
+- **The computer is one a person chose** (#1314). A browser or desktop action
+  runs only on the computer the workflow was enabled against (its pin) or,
+  for a direct step, the computer the step names literally, by exact id or
+  name. A templated `target` (or templated params as a whole) is refused at
+  composition and activation. A delegation whose role has browser or desktop
+  tools counts as a computer step when the pin is chosen, so it is pinned at
+  enable; it never runs on a computer the agent names. Without a pin the
+  action is refused with `WORKFLOW_MACHINE_UNPINNED`, which shows on the
+  Workflows list and in a "Workflow needs attention" notice: enable the
+  workflow to pin its computer, or name the computer in the step. A pin made
+  with nobody choosing (the startup pass, a saved draft) keeps the run on one
+  computer but does not count, and pins made that way before #1314 carry no
+  mark and still count. A flow whose own steps act on the screen is refused
+  whole at admission; a delegation is not, since its agent may never touch a
+  screen: only the agent's browser, desktop and screenshot calls are refused,
+  with a sentence saying why (enable again; no computer could serve it when
+  enabled; or, for a screenshot from a role with no browser or desktop tools,
+  use a role such as `computer-operator`). Upgrade note: an enabled flow that
+  delegates to a role with browser tools was pinned with no computer before
+  #1314, so its agent's browser calls are refused until the flow is enabled
+  again. The check reads the pin before anything resolves a computer, so a
+  refused call binds the run to none. The same rule covers a delegated
+  agent's screen reads (screenshots, snapshots, window lists) and a
+  `run_skill` step, which replays recorded clicks and typing.
+- **A direct step is held to its step** (#1314). The tool route trusts the
+  step-name header, so a reviewed UI call must send exactly the params its
+  step states: literal values as written, the text around a template kept, no
+  extra keys (`WORKFLOW_STEP_INPUT_MISMATCH`, audited).
+- **Cards that are not element-bound expire** (#1314). A workflow card for
+  `browser_navigate`, `browser_scroll` or `browser_press_key` expires five
+  minutes after it was raised, the wait an inline chat approval gives; an
+  approval dispatched after that is refused (`APPROVAL_EXPIRED`), never run.
+  A workflow key press runs only in the browser on the Jarvis computer itself,
+  bound to the document reviewed (checked against the live page before the
+  key is sent); a key press bound for another computer is refused at
+  composition, activation and dispatch, since the sidecar cannot compare the
+  document. Use `browser_type` with `submit` to press Enter in a field there.
+  Same-document navigation (pushState, hash) keeps the document, so it does
+  not retire a key-press card.
+- A direct `desktop_click` takes its element id from run data; a desktop
+  element id written into a workflow names nothing and is refused, as is a
+  direct `get_value` read. Desktop work belongs in a delegation with the
+  `computer-operator` role, whose tools are listed one by one (browser and
+  desktop only: no clipboard, screen capture or system info). A delegated
+  `desktop_click` with `action: get_value` is a read and needs no mandatory
+  card, like `ui_act` `get_value`; its `control_app` floor stays.
+- Desktop control off (`desktop.enabled: false`) refuses desktop tools when a
+  workflow is composed or enabled, and closes desktop cards still waiting.
+  Screen awareness off refuses everything that hands back what is on a
+  screen, in chat, delegations and direct steps alike, and hides it from the
+  model (owner decision on #1314): the screenshots (`desktop_screenshot`,
+  `capture_screen`, `browser_screenshot`) and the text reads
+  (`desktop_snapshot`, `desktop_list_windows`, `desktop_find_element`,
+  `ui_snapshot`, `ui_act`, which returns the surface it changed, a
+  `desktop_click` with `action: get_value` in any case, `run_skill`, whose
+  replay reads each surface it acts on, and starting a `record_skill`
+  recording), with `SCREEN_CAPTURE_DISABLED`. `browser_navigate`,
+  `browser_snapshot` and `browser_evaluate` keep working: they read the Jarvis
+  browser's own tabs (its own profile, never the person's Chrome), not the
+  person's screen (owner decision on #1314). A person can browse in that
+  visible browser too, and those tabs are readable the same way. The structural surface reader refuses on its
+  own, so no other caller reads past the switch. Launching or focusing an app
+  still works, with the window title it would report hidden. The pebble's
+  screen context, its region capture and the Brief's screenshot attachment
+  stop too, the prompt says awareness is off, a live voice session's tool
+  list is re-sent when either switch changes, and waiting cards for any of
+  these are closed. What awareness recorded before is hidden too while it is
+  off: the `/api/awareness` history routes (captures, a capture and its image,
+  sessions, stats, the daily and weekly reports, insights and the live
+  context), what is derived from captures (suggestions, routines,
+  compositions, a suggestion's learning, opportunities and the Brief's
+  prepared opportunities) answer `409 AWARENESS_OFF` with no data, and so do
+  the writes on them (accept, retry, dismiss, act, opportunity feedback and the
+  prepared-opportunity ensure, dismiss and retry, and the Brief's activation
+  read, approve and dismiss), which answer with the records they change; the
+  Brief's Today stack, the Opportunities room (a proposal with an action in
+  flight included; it comes back when awareness is on) and the Routines panel
+  (an open routine whose save is refused included) show "awareness is off" and
+  clear what they showed before, as soon as a read or an action is refused;
+  screen-capture observations are left out of every observation read (the
+  Logs room, the palette search, the agents' prompts); the awareness
+  service's own read methods, the live context and the current session
+  included, return nothing; the background composers that turn recorded
+  evidence into drafts wait until awareness is on: one that is draining when
+  it turns off stops before its next job, a composition already running is
+  held before its next model call, including a provider retry or fallback
+  inside one call, and goes back to the queue unspent (a prepared job only
+  until its draft workflow is attached: after that a failure fails as before,
+  and a job dismissed meanwhile keeps its spent attempt), and
+  prepared-opportunity discovery and the opportunity notification outbox
+  hold on the switch itself, so nothing queued is lost; and a flow's
+  `awarenessRecent` context returns no activity. Vault entities and goal notes once written from awareness are
+  ordinary data and stay visible (owner decision). Nothing is deleted; it shows
+  again when awareness is turned back on. Not covered: shell commands
+  (`run_command`) that read the screen (owner decision: left as is) and the
+  operator-only debug RPC. A run admitted while a
+  switch is off says which switch, not that the action is unsupported.
+- Direct browser steps keep live snapshot generations per workflow run, across
+  snapshot, approval and execution, independently of chat and other runs. Local
+  and remote element actions use the snapshot that run actually read. Replaying
+  a saved snapshot receipt after restart or eviction of the live reader does not
+  restore a live binding: take a fresh snapshot in a new step/run. UI approvals
+  themselves remain process-bound and require a new run after restart.
+- Raw scripts (`run_command`, `browser_evaluate`), focused-window desktop input
+  (`desktop_type`, `desktop_press_keys`), `ui_act`, skill recording/management and
+  `browser_upload_file` remain unsupported as direct steps. Upload has no
+  computer-bound workflow adapter or sidecar route. Composition and activation
+  reject these with `WORKFLOW_TOOL_UNSUPPORTED`; use a supported connector or
+  reviewed adapter. For desktop text work, the `computer-operator` role uses a
+  fresh snapshot, targeted `desktop_click` with `set_value`, then `get_value`
+  readback. Those value actions require Windows and a compatible control; an
+  unsupported editor is a blocker, not permission to type into the focused app.
+- `run_skill` is the recorded click sequence a flow may invoke, because a skill is
   reviewed content with its own per-step classification (`GATED_TOOLS` in the
   same file). A step `{ toolName: "run_skill", params: { name, params } }` is
   gated on every category the skill's stored steps reach, worst case first (a
@@ -163,13 +284,22 @@ delegation row, and a taint-gated call in a workflow delegation becomes a durabl
 pause rather than a silent pass. So a workflow does have a framing-and-taint
 path; it is the agent path, and the unframed adapter path is the data path.
 
-**What a step CAN still do.** `browser_navigate` and `run_command` are refused as
-opaque, but `run_skill` is admitted as a governed adapter and a recorded skill
-step may `navigate` with a caller-supplied value. A flow can therefore point the
-browser somewhere and read the page with a following `browser_snapshot`; it is
-gated rather than refused -- by an approval card when the resolved category is
-above the run's authority floor, so a permissive configuration may dispatch it
-with no card. And the webhook trigger ingress is public and unauthenticated by
+**The computer is the exception (#1314).** A DIRECT `browser_*` or `desktop_*`
+step's result -- `browser_navigate`'s page and every browser or desktop read --
+reaches the flow framed as untrusted content, exactly as the chat model would
+see it (`frameComputerStepResult`). The trade above is accepted for these: a
+screen is written by whoever controls it, and a flow reads one to hand it to
+something that decides. The effect receipt keeps the tool's own value; only what
+the step receives is framed. Values a later card shows that came from run data
+are marked as such on the card, which is the workflow form of taint.
+
+**What a step CAN still do.** `browser_navigate` can run after individual live UI
+review; `run_command` remains refused. `run_skill` is a governed adapter and a
+recorded skill step may `navigate` with a caller-supplied value. Via that skill,
+a flow can point the browser somewhere and read the page with a following
+`browser_snapshot`. The skill path requires approval when its resolved category
+is above the run's authority floor, so a permissive configuration may dispatch
+the skill without a card. The webhook trigger ingress is public and unauthenticated by
 design, so `{{trigger.*}}` is attacker-influenceable and flows into tool
 parameters and prompts.
 
@@ -179,8 +309,11 @@ hit all four:
 - `ui_snapshot` is listed there as reachable. It is not -- nor is `ui_act`, which
   is an untrusted source in chat and would be the obvious next request. Neither is
   in `BOUNDED_TOOLS` or `GATED_TOOLS` and neither declares a `workflowEffect`, so
-  `toolEffectCapability` refuses both. The reachable set is the 14 names in
-  `untrusted-reach.test.ts`, of which 8 are untrusted sources.
+  `toolEffectCapability` refuses both. The reachable set is the 23 names in
+  `untrusted-reach.test.ts`, measured by putting every production tool to
+  `toolEffectCapability`: 14 bounded or gated names, of which 8 are untrusted
+  sources kept byte-exact, plus the 9 reviewed computer actions, whose
+  results are untrusted and framed (below).
 - "Nothing in `src/workflows/` imports from `src/roles/untrusted.ts` at all" is
   stale: #567 added two importers, `adapters/tool-registry.ts` and
   `runtime/service-backends.ts`.
@@ -506,14 +639,20 @@ checkpointed in `workflow_delegation` after every turn and while it waits,
 dropped when it finishes or the run is cancelled; a step the engine runs
 again after that answers from the record. A declined approval becomes
 `[APPROVAL DENIED]` in the conversation and the tool never runs. A tool the
-direct tool piece refuses as opaque (`run_command`, browser clicks and
-typing) is refused here too when it would need approval; one the sub-agent's
-Authority allows outright runs inside the sub-agent as before.
+direct tool piece refuses as opaque (`run_command`, `browser_evaluate`,
+focused-window desktop typing) remains refused here. Supported browser and
+desktop UI actions instead pause for individual review through their originating
+registry's live guard. A restart or changed session invalidates that review.
+Other tools the sub-agent's Authority allows outright run inside it as before.
 
 The step's `outcome` is its business contract. `Required tools` names the
 tools that must complete; `succeeded` means the conversation finished and
-each of them has a result and no error. Without them, `succeeded` only says
-the agent finished cleanly. A failed outcome (`REQUIRED_TOOL_NOT_COMPLETED`,
+each of them has a result and no error. Browser and desktop tasks additionally
+require the agent's structured `taskStatus`/`finalMessage` completion report;
+missing, blocked or failed reports suppress downstream output. Launching an app
+or completing a transport call alone does not prove the requested task is done.
+Without UI tools or required tools, `succeeded` only says the agent finished
+cleanly. A failed outcome (`REQUIRED_TOOL_NOT_COMPLETED`,
 `AGENT_INCOMPLETE`, `AGENT_ERROR`) answers 422 and stops the step; turn
 `Require the declared outcome` off to route on `{{step.outcome.status}}`
 instead. The sub-agent's audit rows now record what happened: a call that
@@ -661,7 +800,8 @@ HTTP request specifics:
   `Set-Cookie`, redacts token-named fields and headers at any depth
   (`access_token`, `refresh_token`, `client_secret`, `X-Auth-Token`, ...; not
   `key` or `token_type`) and keeps no request body from a failure the step
-  continued past. A redacted receipt carries `receiptRedacted: true`. The step
+  continued past, and neither does the output later steps read (#1153). A
+  redacted receipt carries `receiptRedacted: true`. The step
   itself still hands the flow the whole response; only a replay of a recorded
   step reads the receipt.
 - **Size.** A response (and an engine file download) is read up to 7.3 MiB,
@@ -670,8 +810,16 @@ HTTP request specifics:
   larger one fails the step as a refusal, never retried or continued past, and
   a file field whose download is too large fails its step instead of being
   sent empty. A streamed response is refused. Redirects stop at
-  follow-redirects' 21, and the run's own deadline (600 s by default, plus the
-  daemon's 30 s ack margin) bounds a request that sets no timeout.
+  follow-redirects' 21. Every request (and file download) runs under a wall
+  clock from first byte to last: its own timeout when it sets a shorter one,
+  else the flow budget the daemon holds the engine to (600 s by default,
+  `JARVIS_WORKFLOW_FLOW_TIMEOUT_SECONDS`, passed as
+  `JARVIS_ENGINE_REQUEST_TIMEOUT_MS`), so the step fails naming the cap rather
+  than the engine being killed with the run; that failure is never retried or
+  continued past. A step's own shorter timeout is a wall clock too, and fails
+  as a timeout always has, so its failure mode (retry, continue) still
+  applies. axios's own `timeout` is only an idle timer on the socket, which a
+  server sending a byte at a time never trips (#1153).
 - **Egress.** Every connection is resolved once, each address checked, and the
   connection made to the checked address (`runtime/http-egress.ts`); IP
   literals and every redirect target are checked too, and a request that is not
@@ -684,8 +832,21 @@ HTTP request specifics:
   benchmarking, reserved and IPv6 transition ranges (NAT64 64:ff9b::/96
   included, so an IPv6-only host behind DNS64 cannot reach IPv4 destinations), or any address of the machine Jarvis runs on (its LAN
   address, a Docker bridge, a VM's own public address). That last check knows
-  only the interfaces Jarvis itself sees: run in a container, the Docker host's
-  own addresses are not among them. Hosted is `isHostedInstall`; the daemon passes the answer
+  the interfaces Jarvis itself sees and, run in a Docker or Podman container,
+  the host's end of its bridges: 172.17.0.1 (docker0), the default gateway
+  when it is in the bridge pool 172.16.0.0/12 (a compose network's), and the
+  IPv6 default gateway (#1153). A gateway outside that pool is taken for a LAN
+  router (host or macvlan networking, Podman's pasta) and stays reachable on a
+  self-hosted install. Other bridges' gateways, a Kubernetes node, and the
+  host's LAN or public address are invisible from inside a container: name
+  them in `JARVIS_HOST_ADDRESSES` (comma-separated addresses, e.g.
+  `docker run -e JARVIS_HOST_ADDRESSES=192.168.1.20 ...`), passed to the
+  engine as `JARVIS_ENGINE_HOST_ADDRESSES`, or a self-hosted install's steps
+  can reach the ports the host publishes on it. On Linux Docker,
+  `host.docker.internal` (host-gateway) is 172.17.0.1, so a step that called a
+  service on the host that way (a local model server, say) is now refused:
+  run that service in another container on a shared network and call it by
+  name. Hosted is `isHostedInstall`; the daemon passes the answer
   in `JARVIS_ENGINE_EGRESS`, and an engine told nothing applies the hosted
   rule. The piece's proxy option is refused, since a proxy would pick the
   address. Measured: Bun 1.3.8 ignores a patched `dns.lookup`, a patched
@@ -698,7 +859,11 @@ HTTP request specifics:
   step's props, before Authority is asked. That download now goes through the
   same guard (`guardedFileDownload`, patched into `processors/file.ts`). A
   file URL that answers 4xx or 5xx now yields no file, where upstream handed
-  the error body on as the file.
+  the error body on as the file. Because it runs before the step is approved,
+  it is held to the flow's read list too (#1153): the engine asks the daemon
+  for the run's list (`GET /v1/jarvis/read-hosts`, engine token) and a file
+  URL whose host is not listed, or a redirect off the list, fails the step
+  naming the host and the list.
 - **Read list (#1153).** A body-less GET or HEAD still carries what its URL and
   headers hold to the host it names, so it runs without a card only when that
   host is on the flow's read list (`POST /api/workflows/:id/read-hosts`
@@ -710,19 +875,47 @@ HTTP request specifics:
   do not list a host where anyone can receive what a GET carries (a chat
   bot API, a form endpoint, a request bin). On upgrade each flow with a
   published version gets the hosts that version's GET and HEAD steps name
-  literally (`grantedBy: "upgrade"`); a host filled in at run time, and a
-  draft's, is never seeded.
-- **Not covered:** a file property's URL is downloaded while the step's props
-  are resolved, before Authority is asked and outside the read list, so a URL
-  filled in at run time can still carry data to its host; CODE steps and community pieces
-  make their own connections outside this guard; a response's size and a
-  request's duration are bounded only by the run's own deadline.
+  literally, and the hosts of literal file URLs in its HTTP steps' form data
+  (`grantedBy: "upgrade"`); a host filled in at run time, and a draft's, is
+  never seeded. An install that already had the read list gets the same file
+  hosts merged into it once, on the upgrade that holds file downloads to it
+  (a list a person wrote keeps its grant). Other pieces' file props are not
+  seeded: a flow that downloads one from a URL needs its host listed.
+- **Not covered:** CODE steps and community pieces make their own
+  connections outside this guard.
 
 The Webhook trigger has an optional signing secret, now a field in the editor.
-With one set, `/api/webhooks/<flowId>` refuses a request unless
-`X-Jarvis-Signature` carries the hex HMAC-SHA256 of the raw body keyed with
-it. Without one, the flow id is the whole capability, and either way what a
-request sends is untrusted input.
+With one set, `/api/webhooks/<flowId>` refuses a request unless it carries
+`X-Jarvis-Timestamp` (Unix seconds) and `X-Jarvis-Signature`, the hex
+HMAC-SHA256 keyed with the secret of `<timestamp>.<raw body>` (the timestamp,
+a dot, then the body exactly as sent). A timestamp more than 5 minutes from
+the daemon's clock is refused, and the same signature is answered as a repeat
+for as long as its timestamp is accepted, so a captured request cannot be run
+again (#1153). A secret must be at least 32 characters when it is set or
+changed. Without one, the flow id is the whole capability, and either way what
+a request sends is untrusted input.
+
+A sender signs like this:
+
+```
+ts=$(date +%s)
+sig=$(printf '%s.%s' "$ts" "$body" | openssl dgst -sha256 -hmac "$secret" -hex | sed 's/^.* //')
+curl -X POST "$url" -H "X-Jarvis-Timestamp: $ts" -H "X-Jarvis-Signature: $sig" --data "$body"
+```
+
+Webhooks whose secret was saved before #1153 are LEGACY (no
+`signature_scheme: "timestamped"` in the trigger input): they keep accepting
+the old signature over the raw body alone, which a captured request can
+replay after the 10-minute repeat window, and they also accept a timestamped
+request, so senders can move first. A legacy webhook answers 400 to a
+body-only request whose body starts with `<digits>.`, the shape a captured
+timestamped request would take if re-sent without its header. A secret the
+assistant sets (`manage_workflow` update or compose) always meets the
+32-character floor, so a refusal never tells it whether a short guess is
+another webhook's stored secret. The editor marks such a webhook as legacy
+and offers "Require timestamps", which sets the scheme; a webhook never goes
+back to legacy while it keeps its secret, and setting a new secret makes it
+timestamped. Short legacy secrets keep working until they are changed.
 
 ### `CODE` steps need a per-flow opt-in
 
@@ -1046,6 +1239,10 @@ a silent switch is now a typed `blocked` outcome with `effect: 'not_started'`:
 - `WORKFLOW_TARGET_AMBIGUOUS` -- an explicit name matched no device or several.
 - `WORKFLOW_MACHINE_UNAVAILABLE` -- nothing capable is connected and local
   execution is disabled.
+- `WORKFLOW_MACHINE_UNPINNED` -- a browser or desktop action with no pinned
+  computer and, for a direct step, no computer named in the step (#1314).
+  A browser or desktop action matches a named computer exactly: part of a
+  name is ambiguous.
 - `WORKFLOW_BINDING_LEGACY` -- the run already did machine work under an older
   binary, so it has no verifiable connection generation to adopt.
 
@@ -1456,7 +1653,7 @@ For the community-pieces curation flow (how a piece reaches the Verified tier, s
 | Source | How it's wired |
 |---|---|
 | `schedule` | Routed to `CronScheduler`. Supports the standard 5-field cron plus a `@every Ns` sub-minute extension. Job ID is `flow:{flowId}`. |
-| `webhook` | Routed to `WebhookManager`. Registers `/api/webhooks/<flowId>`. GET and POST both fire. An optional `secret` (the editor's "Signing secret") makes it refuse any request whose `X-Jarvis-Signature` is not the hex HMAC-SHA256 of the raw body. |
+| `webhook` | Routed to `WebhookManager`. Registers `/api/webhooks/<flowId>`. GET and POST both fire. An optional `secret` (the editor's "Signing secret", at least 32 characters when set) makes it refuse any request whose `X-Jarvis-Signature` is not the hex HMAC-SHA256 of `<X-Jarvis-Timestamp>.<raw body>` with a timestamp within 5 minutes; a legacy webhook (saved before #1153, no `signature_scheme: "timestamped"`) also takes a body-only signature. |
 | Engine-managed (anything else) | The piece's trigger logic runs in the engine. `EXECUTE_TRIGGER_HOOK(ON_ENABLE)` returns either `scheduleOptions` (registered with `CronScheduler`) or `listeners` (registered with `WebhookManager`). On disable, `EXECUTE_TRIGGER_HOOK(ON_DISABLE)` runs first; persistent state clears even if the engine call fails. |
 
 Polling triggers (e.g. Gmail's watch) live in this third category: the engine schedules a cron-driven `RUN` of the trigger's polling logic and emits new items.
@@ -1509,7 +1706,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | POST | `/api/workflow-inputs/:id` | Answer one request: `{ decision: "submit", answers, generation }` for a form, `"approve"` or `"reject"` for an approval, or `"cancel"`. `generation` is the one the request was read with (it may be left out only for generation 0). Body at most 64,000 bytes, counted as it arrives (413). 409 for an answer to an earlier instance of a reopened form, once it is answered differently, or when the run's draft workflow was edited since the request was asked (the request is then withdrawn); 422 for invalid answers |
 | POST | `/api/workflow-inputs/:id/dismiss` | Acknowledge a closed request whose run failed, whose run status is unavailable, or that was withdrawn because the workflow changed, so it stops counting in Needs you. Optional body `{ generation }`, at most 1,000 bytes; same generation rule and 409 as answering. 200 (also when already dismissed), 404 outside the signed-in workspace, 409 while it is pending or a run of it is still running |
 
-The `/api/workflow-inputs` routes are Needs you, which is the Brief decisions feature (on by default with the Brief dashboard on hosted and self-hosted installs; with `JARVIS_DASHBOARD=legacy` it needs `JARVIS_BRIEF_DECISIONS=1`, and its requests are answered only in Brief). With decisions off they refuse as `/api/brief/decisions` does: 501 `{ error, code: "unsupported" }` when no decisions provider is registered, 503 `{ error, code: "unavailable" }` when it is off or not ready. With decisions off nothing could answer a request, so a step that would create one fails at once with code `HUMAN_INPUT_UNAVAILABLE` (a request created earlier is still read). A workflow may have 20 requests waiting for an answer (requests past their deadline, or whose runs all ended, do not count); a step that would add another fails with code `HUMAN_INPUT_LIMIT`, and the run says to answer, reject or cancel some of them, or stop runs waiting on them, first.
+The `/api/workflow-inputs` routes are Needs you, which is the Brief decisions feature (on by default with the Brief dashboard on hosted and self-hosted installs; its requests are answered only in Brief, so with `JARVIS_DASHBOARD=legacy` a step that would create one is refused whatever `JARVIS_BRIEF_DECISIONS` says). With decisions off they refuse as `/api/brief/decisions` does: 501 `{ error, code: "unsupported" }` when no decisions provider is registered, 503 `{ error, code: "unavailable" }` when it is off or not ready. With decisions off nothing could answer a request, so a step that would create one fails at once with code `HUMAN_INPUT_UNAVAILABLE` (a request created earlier is still read); its message names the cause: the legacy dashboard (switch to Brief), decisions turned off (turn them on), or a decisions provider that is not ready (run it again later). A workflow may have 20 requests waiting for an answer (requests past their deadline, or whose runs all ended, do not count); a step that would add another fails with code `HUMAN_INPUT_LIMIT`, and the run says to answer, reject or cancel some of them, or stop runs waiting on them, first.
 
 ### Pagination
 

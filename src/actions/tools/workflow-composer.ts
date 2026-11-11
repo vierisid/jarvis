@@ -81,6 +81,7 @@ import {
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
 import { compileWorkflow } from '../../workflows/runtime/workflow-readiness';
+import { workflowToolRefusal, WORKFLOW_REVIEWED_UI_TOOLS } from '../../workflows/runtime/workflow-ui-tools';
 import { canonicalZone, CHOSEN_TIMEZONE_KEY, statedScheduleZone, withScheduleZoneDefault } from "../../workflows/runner/triggers/schedule-zone.ts";
 
 export interface ComposedFlow {
@@ -288,6 +289,7 @@ export interface ComposerToolSpec {
   name: string;
   description?: string;
   params: ComposerToolParam[];
+  workflowRefusal?: string | null;
 }
 
 export interface ComposeDeps {
@@ -535,7 +537,7 @@ async function composeOneShot(
       continue;
     }
 
-    const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients);
+    const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients, deps.executionTargets ?? []);
     rememberCandidate(deps, context, raw, parsed, validation.ok ? [] : validation.errors);
     if (validation.ok) {
       if (attempt > 1) logAttempt(attempt, "success-after-retry", null);
@@ -665,7 +667,7 @@ async function composeWithTools(
           inlineErrors = [`response was not valid JSON: ${(e as Error).message}`];
         }
         if (!inlineErrors) {
-          const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients);
+          const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients, deps.executionTargets ?? []);
           if (validation.ok) {
             rememberCandidate(deps, context, text, parsed, []);
             logAttempt(turn, "tool-loop-inline-json", null);
@@ -713,7 +715,7 @@ async function composeWithTools(
         submits++;
         const flowArg = unwrapSubmittedFlow(call.arguments);
         lastRaw = safeStringify(flowArg);
-        const validation = acceptComposedFlow(contract, flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients);
+        const validation = acceptComposedFlow(contract, flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, req.ingredients, deps.executionTargets ?? []);
         rememberCandidate(deps, context, lastRaw, flowArg, validation.ok ? [] : validation.errors);
         if (validation.ok) {
           if (submits > 1) logAttempt(submits, "tool-loop-success-after-retry", null);
@@ -1027,13 +1029,14 @@ function renderPieceIndex(deps: ComposeDeps): string {
   for (const meta of WORKFLOW_EVENT_TYPES) {
     lines.push(`- ${meta.type}: ${firstLine(meta.description)}`);
   }
-  const toolNames = deps.tools?.map((t) => ({ name: t.name, description: t.description }))
-    ?? deps.toolNames?.map((n) => ({ name: n, description: undefined as string | undefined }));
+  const toolNames = deps.tools?.map((t) => ({ name: t.name, description: t.description, workflowRefusal: t.workflowRefusal }))
+    ?? deps.toolNames?.map((n) => ({ name: n, description: undefined as string | undefined, workflowRefusal: undefined }));
   if (toolNames && toolNames.length > 0) {
     lines.push("");
-    lines.push("Available Jarvis tools (wire via the jarvis-tool piece's invoke action; params via get_tool_details):");
+    lines.push("Jarvis tool capabilities (check workflow restrictions below; params via get_tool_details):");
     for (const t of toolNames) {
       lines.push(`- ${t.name}${t.description ? `: ${firstLine(t.description)}` : ""}`);
+      lines.push(...workflowToolGuidance(t.name, t.workflowRefusal));
     }
   }
   return lines.join("\n");
@@ -1056,7 +1059,7 @@ function renderPrimitiveDetails(name: "schedule" | "webhook"): string {
   return [
     "webhook (built-in trigger primitive): fires the flow on an HTTP POST to /api/webhooks/<flow_id>.",
     "  Use as the trigger node: type='PIECE_TRIGGER', settings={ pieceName: 'webhook', input: { secret: '<optional HMAC secret>' } }.",
-    "  - input.secret: string, optional; when set, requests must carry a valid HMAC signature.",
+    "  - input.secret: string, optional, at least 32 characters; when set, requests must carry X-Jarvis-Timestamp and a valid HMAC signature over the timestamp and body.",
     "  - Request webhooks without email: set input.request_id_field to the stable request-ID payload path; use an empty string for deferred Setup required. This uses persistent atomic admission across concurrent deliveries, retries, versions, manual runs and restart. Do not add a made-up email requirement. Do not combine request_id_field with the paired form fields. ClickUp create_task and clickup_create_task use durable dispatch claims and completion receipts: completed replay reuses the result; uncertain creation stops for review without another POST. This prevents duplicates, not eventual delivery.",
     "  - Form submissions: set input.submission_id_field and input.submission_email_field to explicit payload field paths (e.g. id and email, or form.id and form.email). Both are required together. If unknown, save both fields as empty strings in the disabled draft; the editor will collect the paths later. Do not invent payload paths.",
     "  - With these mappings Jarvis trims all string values recursively, lowercases and validates the email, rejects invalid/missing IDs or emails with HTTP 422 before queuing, and atomically accepts each normalized submission ID once per workflow. The identity survives restart, republish and ordinary history pruning. Changing headers or using a manual run cannot create another write for that ID. Numeric safe-integer IDs become strings; IDs are case-sensitive.",
@@ -1388,7 +1391,7 @@ function renderTools(
 ): string {
   if (tools && tools.length > 0) {
     const header =
-      "Available Jarvis tools (call via `jarvis-tool { toolName, params: { ... } }`; include EVERY param marked REQUIRED):";
+      "Jarvis tool capabilities (check workflow restrictions below; include EVERY param marked REQUIRED):";
     const lines = [header];
     for (const t of tools) {
       lines.push(...renderToolSpecLines(t).map((l) => `  ${l}`));
@@ -1397,8 +1400,8 @@ function renderTools(
   }
   if (toolNames && toolNames.length > 0) {
     return [
-      "Available Jarvis tools (call via `jarvis-tool { toolName, params }`):",
-      ...toolNames.map((n) => `  - ${n}`),
+      "Jarvis tool capabilities (check workflow restrictions below):",
+      ...toolNames.flatMap((n) => [`  - ${n}`, ...workflowToolGuidance(n)]),
     ].join("\n");
   }
   return "";
@@ -1429,6 +1432,7 @@ function renderSpecialistRoles(roles: ComposerSpecialistRole[] | undefined): str
  */
 export function renderToolSpecLines(t: ComposerToolSpec): string[] {
   const lines = [`- ${t.name}${t.description ? `: ${firstLine(t.description)}` : ""}`];
+  lines.push(...workflowToolGuidance(t.name, t.workflowRefusal));
   for (const p of t.params) {
     const req = p.required ? ", REQUIRED" : "";
     const choices = p.enum?.length ? `, one of: ${p.enum.join("|")}` : "";
@@ -1436,6 +1440,14 @@ export function renderToolSpecLines(t: ComposerToolSpec): string[] {
     lines.push(`    param ${p.name} (${p.type}${req}${choices})${desc}`);
   }
   return lines;
+}
+
+function workflowToolGuidance(name: string, declaredRefusal?: string | null): string[] {
+  const refusal = declaredRefusal ?? workflowToolRefusal(name);
+  if (refusal) return [`    NOT AVAILABLE as a workflow tool step: ${refusal}`];
+  if (!WORKFLOW_REVIEWED_UI_TOOLS.has(name)) return [];
+  return ['    Requires a separate user approval against the current app/browser for every action. Cannot run unattended. Restart or changed session invalidates an unanswered review.',
+    ...(name.startsWith('desktop_') ? ['    For desktop jobs, use jarvis-agent:delegate with a desktop-permitted role and the actual target machine. Open the app, observe its returned window/PID, take a fresh desktop_snapshot, use desktop_click action=set_value on the observed editable element, then read back with action=get_value and verify. A snapshot may omit field values. Never guess element IDs, use desktop_type/desktop_press_keys, type into the focused window, or claim completion without reading back the content. If set_value is unsupported, stop and report it.'] : [])];
 }
 
 /** First non-empty trimmed line of a (possibly multi-line) string. */
@@ -1716,6 +1728,7 @@ function validateComposedFlow(
   toolSpecs: Map<string, ComposerToolSpec> | null,
   osCheck: OsCheckContext | null,
   ingredients: readonly ResolvedCompositionIngredient[] = [],
+  machines: readonly ExecutionTarget[] = [],
 ): ValidationOk | ValidationFail {
   if (typeof raw !== "object" || raw === null) {
     return { ok: false, errors: ["expected an object at the top level"] };
@@ -1766,7 +1779,10 @@ function validateComposedFlow(
     errors.push("A scheduled or event-driven workflow needs at least one actual action step. A trigger alone or prose describing missing actions is not a completed workflow. Build the supported steps, inspect a permitted browser-agent alternative, or report_blocked.");
   }
   if (errors.length > 0) return { ok: false, errors };
-  const readiness = compileWorkflow(trigger, { pieces: registry, phase: 'composition' });
+  // The enrolled computers (#1314), never the brain host: a reviewed UI step
+  // that cannot run on the computer a run would use is refused here too.
+  const readiness = compileWorkflow(trigger, { pieces: registry, phase: 'composition',
+    machines: () => machines.filter(m => m.id !== '') });
   if (!readiness.ready) return { ok: false, errors: readiness.issues.map(i => `step "${i.node}" (${i.path}): ${i.message}`) };
   const ingredientErrors = ingredientUsageIssues(trigger, ingredients, registry);
   if (ingredientErrors.length) return { ok: false, errors: ingredientErrors };
@@ -1978,6 +1994,7 @@ function validateStep(
           `step "${name}" invokes unknown tool "${toolName}". Valid toolName values: ${known}`,
         );
       } else {
+        if (spec.workflowRefusal) errors.push(`step "${name}": ${spec.workflowRefusal}`);
         const params =
           input.params && typeof input.params === "object" && !Array.isArray(input.params)
             ? (input.params as Record<string, unknown>)

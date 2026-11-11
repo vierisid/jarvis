@@ -44,6 +44,7 @@ import {
   type CronMissedSummary, type CronOccurrence,
 } from "./cron";
 import { WebhookManager, type WebhookDelivery, type WebhookFireResult } from "./webhook";
+import { webhookScheme } from "./webhook-secret";
 import type { WorkflowEventBus } from "../../runtime/event-bus";
 import { getFlow, listFlows, type FlowRow } from "../../db/repos/flow";
 import {
@@ -501,7 +502,7 @@ export class TriggerManager {
     const input = (trigger.settings?.input ?? {}) as Record<string, unknown>;
     const secret = typeof input.secret === "string" && input.secret ? input.secret : undefined;
     const generation = workflowRemovalState(flowId).generation;
-    this.webhooks.register(flowId, secret, generation, submissionConfig(input));
+    this.webhooks.register(flowId, secret, generation, submissionConfig(input), webhookScheme(input));
     this.subs.set(flowId, {
       generation,
       flowId,

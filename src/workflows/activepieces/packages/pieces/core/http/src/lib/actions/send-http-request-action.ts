@@ -18,7 +18,7 @@ import FormData from 'form-data';
 import { httpMethodDropdown } from '../common/props';
 import axios from 'axios';
 // Jarvis (#961): the egress guard and the one method rule the daemon judges by.
-import { egressGuardedAxios, egressPolicyFromEnv, egressRefusalIn } from '../../../../../../../../runtime/http-egress';
+import { EgressRefusedError, egressGuardedAxios, egressPolicyFromEnv, egressRefusalIn } from '../../../../../../../../runtime/http-egress';
 import { httpRequestIsRead } from '../../../../../../../../runtime/piece-effects';
 
 enum AuthType {
@@ -354,7 +354,7 @@ export const httpSendRequestAction = createAction({
     // unguarded.
     const apiRequest = async () => {
       if (use_proxy) {
-        throw new Error('Jarvis does not send HTTP steps through a proxy: the address check would not apply. Turn off "Use Proxy".');
+        throw new EgressRefusedError('Jarvis does not send HTTP steps through a proxy: the address check would not apply. Turn off "Use Proxy".');
       }
       return await httpClient.sendRequest(request, egressGuardedAxios(axios, egressPolicyFromEnv(), { read: httpRequestIsRead({ method, body }) }) as never);
     };
@@ -381,7 +381,8 @@ export const httpSendRequestAction = createAction({
         // Jarvis (#961): a refused address fails the step as itself; it is
         // never retried or continued past as if the server had answered.
         const refused = egressRefusalIn(error);
-        if (refused) throw refused;
+        // An earlier attempt reached the server, so a refusal now is not a request never sent (#1153).
+        if (refused) throw attempts > 0 && !refused.afterSend ? new EgressRefusedError(refused.message, { afterSend: true }) : refused;
         attempts++;
 
         switch (failureMode) {

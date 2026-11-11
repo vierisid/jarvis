@@ -18,6 +18,7 @@ import { TaskDispatcher } from '../agents/conv/task-dispatcher.ts';
 import { TaskRegistry } from '../agents/conv/task-registry.ts';
 import { DialogueCompactor } from '../agents/conv/dialogue-compactor.ts';
 import { AgentService } from './agent-service.ts';
+import { UsejarvisAIProvider } from '../llm/usejarvis.ts';
 
 class RecordingProvider implements LLMProvider {
   name = 'rec';
@@ -156,5 +157,37 @@ describe('#912: a conv-tier turn sends the stored user message once', () => {
     for await (const _ of stream) { /* drain */ }
 
     expect(dialogueSent(provider)).toEqual(['user:open the browser', 'assistant:Opened.', 'user:and close it']);
+  });
+});
+
+// #1312 follow-up: most Brief turns run on the conv tier. The hosted
+// provider's authored detail (where to appeal) has to survive it, with its code.
+describe('a hosted failure keeps its authored detail on the conv tier', () => {
+  beforeEach(() => initDatabase(':memory:'));
+  afterEach(() => closeDb());
+
+  test('the stream error event carries the code and the hosted detail', async () => {
+    const detail = 'Usejarvis AI is restricted on this account for a usage-policy violation. To appeal, contact support@x.test.';
+    // Only the hosted provider may carry it (LLMManager drops any other's).
+    const hosted = Object.assign(new UsejarvisAIProvider('https://llm.usejarvis.test', 'sk-uj-test'), {
+      async *stream() {
+        yield { type: 'error' as const, error: 'Usejarvis AI API error (401): x', code: 'restricted' as const, hosted_detail: detail };
+      },
+    });
+    const llm = new LLMManager();
+    llm.registerProvider(hosted);
+    llm.setTierMap({ medium: { provider: hosted.name }, conversation: { provider: hosted.name } });
+    const registry = new TaskRegistry();
+    const dispatcher = new TaskDispatcher(llm, registry, async () => { throw new Error('no task runs here'); });
+    const agent = new AgentService({} as never);
+    Object.assign(agent as unknown as Record<string, unknown>, {
+      config: {}, convOrchestrator: new ConvOrchestrator(llm, registry, dispatcher, 'persona'), llmManager: llm,
+      extractKnowledge: async () => {}, learnFromInteraction: async () => {},
+    });
+    const { stream } = agent.streamMessage('hello', 'websocket');
+    const errors: LLMStreamEvent[] = [];
+    for await (const event of stream) if (event.type === 'error') errors.push(event);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ code: 'restricted', hosted_detail: detail });
   });
 });

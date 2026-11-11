@@ -46,8 +46,7 @@ export function bindConversationComposer(owner: ComposerOwner, source: ComposerB
       cancel: () => {
         available();
         if (!turn || turn.conversationId !== id) throw Error("No selected turn");
-        // Clear only the request error so identical retry failures are observable.
-        // Dismissing this turn would also hide a later terminal failure after Stop.
+        // Clear the request error so identical retry failures are observable.
         owner.client.store.setError(id, null);
         // Captured identity, never a later conversation's current turn.
         return owner.client.cancel({ conversationId: turn.conversationId, turnId: turn.turnId, requestId: turn.requestId });

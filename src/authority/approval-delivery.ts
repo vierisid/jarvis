@@ -718,7 +718,8 @@ export type ApprovalToast = {
  * (`toastLookAlike`, #812), shown whole with that reason in the meta.
  *
  * Above the budget the toast is review-only: no Approve, no Deny, an "Open
- * Jarvis" action, the body cut here with a visible `...`, and its own kind,
+ * Jarvis" action, the body cut here (with a visible `...` when anything was
+ * cut: a body can wrap past the lines yet fit the columns), and its own kind,
  * `approval_review`. The kind matters, not just the action list: the macOS
  * sidecar takes a notification's buttons from a category registered per kind,
  * and the `approval` category always has Approve and Deny, whatever actions
@@ -761,10 +762,13 @@ export function approvalToast(request: ApprovalRequest): ApprovalToast {
   }
   // Leave room for the `...` and the ` · <impact>` that follows the body. A
   // look-alike body already fits, so it is shown whole, with the reason.
+  // A body can be too long in lines yet fit in columns (a long word wraps
+  // early): then nothing is cut, and a `...` would claim that something was.
   const room = TOAST_APPROVABLE_MAX_COLUMNS - `... · ${impact}`.length;
+  const shown = fits ? body : fitColumns(body, room);
   return {
     id: request.id, kind: 'approval_review', title: `Review in Jarvis: ${tool}`,
-    body: fits ? body : `${fitColumns(body, room).trimEnd()}...`,
+    body: shown === body ? body : `${shown.trimEnd()}...`,
     meta: `${impact} · ${toolLabel} · ${clickOnly ? 'requires on-screen review in Jarvis' : lookAlike ? `${LOOK_ALIKE_REASON}, so check it in Jarvis` : 'too long to approve from a notification'}`, destructive,
     actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
     approvable,

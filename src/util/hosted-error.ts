@@ -57,6 +57,8 @@ export interface HostedRestriction {
 }
 
 export class HostedProxyError extends Error {
+  /** The authored sentence alone, without the `<label> error (NNN): ` marker (see invariant 2). */
+  readonly copy: string;
   constructor(
     message: string,
     readonly kind: HostedErrorKind,
@@ -64,6 +66,7 @@ export class HostedProxyError extends Error {
   ) {
     super(message);
     this.name = 'HostedProxyError';
+    this.copy = message.replace(/^.*? error \(\d+\): /, '');
   }
 }
 
@@ -159,7 +162,10 @@ export function restrictionCopy(restricted: HostedRestriction): string {
       : restricted.reason === 'account_suspended'
         ? 'Usejarvis AI is unavailable while this account is suspended.'
         : 'Usejarvis AI is restricted on this account for a usage-policy violation.';
-  const contact = (restricted.contact ?? '').replace(/[\r\n\t<>]/g, ' ').trim().slice(0, 200);
+  // Format characters (bidi overrides, zero-width) would make the shown address
+  // read differently from the one copied, so they go with the controls.
+  const contact = (restricted.contact ?? '').replace(/\p{Cf}/gu, '').replace(/[\p{Cc}\p{Zl}\p{Zp}<>]/gu, ' ')
+    .replace(/\s+/g, ' ').trim().slice(0, 200);
   return `${why} To appeal, contact ${contact || 'support'}.`;
 }
 

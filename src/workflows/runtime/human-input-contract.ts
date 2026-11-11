@@ -12,7 +12,26 @@ export const HUMAN_INPUT_LIMIT_CODE = 'HUMAN_INPUT_LIMIT';
  * answered in Needs you, the Brief decisions feature, and it is off (#1266).
  */
 export const HUMAN_INPUT_UNAVAILABLE_CODE = 'HUMAN_INPUT_UNAVAILABLE';
-export const HUMAN_INPUT_UNAVAILABLE_MESSAGE = 'Needs you is off on this Jarvis, so nothing could answer this request. Turn on decisions (JARVIS_BRIEF_DECISIONS=1) to let workflows ask for input or approval.';
+/**
+ * Why nothing could answer a request on this Jarvis, or null when Needs you
+ * (the Brief decisions capability) can take it. Requests are answered only in
+ * Brief, and under the previous dashboard Brief does not open in production,
+ * so there a step is refused whatever JARVIS_BRIEF_DECISIONS says: a request
+ * nobody can see would wait unanswered (owner decision, #1311 follow-up).
+ * Otherwise it names the cause: decisions turned off, or a decisions provider
+ * that is not ready.
+ */
+export function humanInputRefusal(decisions: { enabled: boolean; reason: string | null }, dashboard: 'brief' | 'legacy'): string | null {
+  const why = 'so nothing could answer this request.';
+  if (dashboard === 'legacy') {
+    return `Needs you is not available with the previous dashboard, ${why} Requests for input or approval are answered only in Brief. Switch to Brief (set JARVIS_DASHBOARD=brief) to let workflows ask for input or approval.`;
+  }
+  if (decisions.enabled) return null;
+  if (decisions.reason !== 'disabled') {
+    return `Needs you is not ready on this Jarvis, ${why} Run it again once Jarvis has finished starting; if it keeps failing, check the Jarvis log.`;
+  }
+  return `Needs you is off on this Jarvis, ${why} Turn on decisions (JARVIS_BRIEF_DECISIONS=1) to let workflows ask for input or approval.`;
+}
 /** A step that asks a person: the input piece's two actions, and the legacy approval piece's. */
 export function isHumanInputStep(piece: unknown, action: unknown): boolean {
   return (piece === HUMAN_INPUT_PIECE && (action === 'request_input' || action === 'request_approval'))
