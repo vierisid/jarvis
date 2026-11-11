@@ -50,7 +50,7 @@ function request(p: ReturnType<typeof prepare>, sample: DrySample): Qualificatio
     goal: { goalId: p.goal.id, revision: String(p.goal.updated_at) }, compositionId: p.journal.id,
     workflow: { flowId: p.flow.id, versionId: p.version.id, versionDigest: versionDigest(p.version.trigger) },
     bindings: [], constraints: JOB_CONSTRAINTS.invoice_review, sample,
-    preview: { basis: 'sandbox_sample', runId: null, effects: [{ step: 'tell_me', approval: 'asks_first', sample: 'simulated' }] } };
+    preview: { basis: 'sandbox_sample', runId: null, effects: [{ step: 'tell_me', approval: 'runs_automatically', sample: 'simulated' }] } };
 }
 const services = () => liveQualificationServices({ tool: () => null, targets: () => [], now: () => 1,
   authority: new AuthorityEngine({ default_level: 7, governed_categories: ['send_email', 'send_message'], overrides: [],
