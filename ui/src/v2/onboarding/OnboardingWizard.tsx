@@ -739,7 +739,7 @@ export function OnboardingWizard({
       // provider config as saved.
       const resBody = await r.json().catch(() => null) as { dropped?: string[] } | null;
       setDroppedSections(resBody?.dropped ?? []);
-      if (brainSkipped && onLeave) await onLeave({ setupSaved: true });
+      if (brainSkipped && !hosted && onLeave) await onLeave({ setupSaved: true });
       else if (setupOnly) await onComplete(); else goKey("connect");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Setup failed.");
@@ -1249,8 +1249,8 @@ export function OnboardingWizard({
             ))}
           </div>
           <div className="obw-provdetail"><ProviderSetupGuideButton kind={provId} />{renderProvDetail()}</div>
-          <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-skip" disabled={busy} onClick={() => { setBrainSkipped(true); next(); }}>Skip for now</button><button className="obw-btn obw-btn-pri" style={{ marginLeft: 12 }} disabled={!brainReady} onClick={() => { setBrainSkipped(false); next(); }}>Continue</button></div>
-          {!brainReady && !prov.noConfig && <div className="obw-hint" style={{ marginTop: 8 }}>Test the connection to continue, or skip for now. Without an AI provider, chat and workflows stay off until you add one in Settings.</div>}
+          <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" />{onLeave && <button className="obw-skip" disabled={busy} onClick={() => { setBrainSkipped(true); next(); }}>Skip for now</button>}<button className="obw-btn obw-btn-pri" style={{ marginLeft: 12 }} disabled={!brainReady} onClick={() => { setBrainSkipped(false); next(); }}>Continue</button></div>
+          {!brainReady && !prov.noConfig && <div className="obw-hint" style={{ marginTop: 8 }}>{onLeave ? "Test the connection to continue, or skip for now. Without an AI provider, chat and workflows stay off until you add one in Settings." : "Test the connection to continue."}</div>}
         </div></div>
       );
 

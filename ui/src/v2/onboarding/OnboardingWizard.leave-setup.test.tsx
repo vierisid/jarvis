@@ -144,6 +144,14 @@ describe("skipping the AI step", () => {
     expect(calls).toEqual(["leave:saved"]);
   });
 
+  test("is not offered when the host has no way into the dashboard", async () => {
+    await mount({ onBack: true });
+    await click(/^Continue$/);
+    expect(host!.textContent).toContain("Pick a brain for Jarvis.");
+    expect(find(/^Skip for now$/)).toBeUndefined();
+    expect(host!.textContent).not.toContain("skip for now");
+  });
+
   test("a key that passes Test connection continues exactly as before", async () => {
     await toBrain();
     const key = host!.querySelector<HTMLInputElement>('.obw-provdetail input[type="password"]')!;
