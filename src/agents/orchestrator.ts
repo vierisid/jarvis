@@ -2,7 +2,7 @@ import type { RoleDefinition } from '../roles/types.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { SystemPromptParts } from '../roles/prompt-builder.ts';
 import type { LLMMessage, LLMResponse, LLMStreamEvent, LLMToolCall, LLMTool, ContentBlock } from '../llm/provider.ts';
-import { capTextBlocks, guardImageSize } from '../llm/provider.ts';
+import { capTextBlocks, guardImageSize, malformedArgumentsResult } from '../llm/provider.ts';
 import { truncateWithNote } from '../util/truncate.ts';
 import { LLMManager } from '../llm/manager.ts';
 import type { Tier } from '../llm/tiers.ts';
@@ -102,7 +102,16 @@ function toSystemMessages(systemPrompt: string | SystemPromptParts): LLMMessage[
   return messages;
 }
 
-const MAX_TOOL_ITERATIONS = 200;
+/**
+ * Provider calls one turn may spend on tool rounds. A turn that is still calling
+ * tools after this many is looping, and each round re-sends a longer history:
+ * a stuck model costs more with every call. Delegated work that legitimately
+ * needs more runs in the task tier, which reports back and can be continued.
+ */
+const MAX_TOOL_ITERATIONS = 50;
+/** What a person is told when a turn stops at that limit. Plain words, no markers. */
+const TOOL_LOOP_STOPPED_TEXT =
+  `I stopped after ${MAX_TOOL_ITERATIONS} steps without finishing. Check what was done so far, then ask me to carry on.`;
 const MAX_TOOL_RESULT_CHARS = 6000; // Cap individual tool results to control context size
 
 /**
@@ -968,6 +977,7 @@ export class AgentOrchestrator {
     let decided = this.decideTurnTools(messages, tier, ledger, undefined, turnScope);
     let tools = decided.llm;
     let finalText = '';
+    let answered = false;
 
     // Tool execution loop
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -1041,8 +1051,12 @@ export class AgentOrchestrator {
         finalText += '\n\n[Response was truncated due to output token limits. If you asked for long content, ask to continue or use shorter chunks.]';
       }
 
+      answered = true;
       break;
     }
+
+    // Still calling tools at the limit: say so instead of returning nothing.
+    if (!answered) finalText = TOOL_LOOP_STOPPED_TEXT;
 
     // Add final response to persistent history
     if (!ownThread) primary.addMessage('assistant', finalText);
@@ -1197,6 +1211,7 @@ export class AgentOrchestrator {
     // the workflow).
     let toolsExecuted = opts.history?.some((m) => m.role === 'tool') ? 1 : 0;
     let nudges = 0;
+    let taskAnswered = false;
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
       if (opts.signal?.aborted) {
@@ -1335,9 +1350,14 @@ export class AgentOrchestrator {
         finalText += '\n\n[Response was truncated due to output token limits.]';
       }
       messages.push({ role: 'assistant', content: finalText });
+      taskAnswered = true;
       break;
     }
 
+    if (!taskAnswered) {
+      finalText = TOOL_LOOP_STOPPED_TEXT;
+      messages.push({ role: 'assistant', content: finalText });
+    }
     return { kind: 'completed', text: finalText, conversation: messages };
   }
 
@@ -1627,19 +1647,10 @@ export class AgentOrchestrator {
       // Continue loop — will stream next LLM response
     }
 
-    // Max iterations reached
-    yield { type: 'text', text: '\n[Max tool iterations reached]' };
-    yield {
-      type: 'done',
-      response: {
-        content: finalText + '\n[Max tool iterations reached]',
-        tool_calls: [],
-        usage: totalUsage,
-        model: responseModel,
-        finish_reason: 'stop',
-      },
-    };
-    if (!conversation) primary.addMessage('assistant', finalText);
+    // Limit reached: the turn did not finish, and it is reported as stopped
+    // rather than completed. What it already said is kept.
+    if (!conversation && finalText.trim()) primary.addMessage('assistant', finalText);
+    yield { type: 'error', error: TOOL_LOOP_STOPPED_TEXT, code: 'tool_loop_limit' };
   }
 
   /**
@@ -1920,6 +1931,10 @@ export class AgentOrchestrator {
     // (#571, actions/tools/turn-scope-store.ts). Ambient rather than passed
     // because `createCommitment` has six callers, four with no turn in hand.
     // Nothing reads it to grant anything.
+    // Arguments the model wrote that are not valid JSON: nothing ran, and the
+    // model is told so and can send the call again. Before the gate, like an
+    // unknown tool name: a call that cannot run is not a governance decision.
+    if (toolCall.argumentsError !== undefined) return malformedArgumentsResult(toolCall);
     return withTurnScopeId(scope?.id, () =>
       this.taintStore.run(taint ?? new Set<string>(), () => this.executeToolInner(toolCall, signal, scope)));
   }

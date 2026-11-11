@@ -20,7 +20,7 @@ import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import { truncateWithNote } from '../util/truncate.ts';
 import type { ContentBlock, LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
-import { capTextBlocks, guardImageSize } from '../llm/provider.ts';
+import { capTextBlocks, guardImageSize, malformedArgumentsResult } from '../llm/provider.ts';
 import { ToolRegistry, isToolResult, type ToolDefinition } from '../actions/tools/registry.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import { beginExecutionActivity } from '../actions/progress-context.ts';
@@ -449,6 +449,8 @@ async function executeTool(
   sequence: number,
   authorityCtx?: AuthorityContext,
 ): Promise<ToolDispatch> {
+  // Arguments the model wrote that were not valid JSON: nothing ran; it can try again.
+  if (toolCall.argumentsError !== undefined) return { text: malformedArgumentsResult(toolCall), failed: true };
   // The audit row says what happened, so it is written once the outcome is
   // known: a refusal or a pause with `executed: false`, an execution after
   // the tool returned. Nothing is recorded as executed before it ran.

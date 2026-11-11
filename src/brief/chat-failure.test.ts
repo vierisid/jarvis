@@ -56,3 +56,10 @@ test('without hosted detail nothing extra is added, and the detail is bounded an
   const long = briefChatFailure(new LLMProviderError('x', 'restricted', undefined, undefined, `To appeal, contact ${'a'.repeat(5000)}`), false);
   expect(long.message.length).toBeLessThan(1600);
 });
+
+test('a turn Jarvis stopped for looping on tools says so and asks to check the steps', () => {
+  const failure = briefChatFailure(new LLMProviderError('I stopped after 50 steps', 'tool_loop_limit'), true);
+  expect(failure.code).toBe('tool_loop_limit');
+  expect(failure.message).toContain('stopped after too many steps');
+  expect(failure.message).not.toContain('provider');
+});
