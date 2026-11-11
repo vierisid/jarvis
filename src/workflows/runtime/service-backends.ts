@@ -100,6 +100,7 @@ import { toolReturnText } from '../../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../../actions/tools/template-delivery-scope.ts';
 import { outsideApprovalScope, runAsApproved } from '../../authority/approved-action-scope.ts';
 import type { ActionCategory } from '../../roles/authority';
+import { isOwnerOnlyNotify } from '../jarvis-pieces/types';
 import { sendMayHaveArrived } from '../../comms/delivery.ts';
 import { providerOutcome } from '../../failures/evidence.ts';
 import { escapedLiteralForCard, forCard, withoutCardInvisibles } from '../../util/card-text.ts';
@@ -772,8 +773,15 @@ export function buildSandboxServiceBackends(
       if (req.channels.length !== 1 || req.channels[0] !== 'dashboard') throw Error('Meeting briefs only notify the dashboard');
       req = {...req, meetingGuard:guard, idempotencyKey:meetingNotificationKey(guard)};
     }
+    // A notification that reaches only the owner's own surfaces is not a
+    // message to anyone else, so it is judged as `read_data` and raises no
+    // card. It is still an effect row, an audit row, and stopped by Pause,
+    // Kill and cancellation. Anything that can reach another person (`auto`
+    // included, which may fan out to Telegram or Discord, and `voice`, spoken
+    // aloud in the room) stays `send_message`.
+    const ownerOnly = isOwnerOnlyNotify(req.channels);
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-notify', action: 'notify',
-      route: 'notify', toolName: 'workflow_notify', category: 'send_message', ...(guard ? {categories:['read_data','send_message'] as ActionCategory[]} : {}), toolCategory: 'notification', request: { ...req },
+      route: 'notify', toolName: 'workflow_notify', category: ownerOnly ? 'read_data' : 'send_message', toolCategory: 'notification', request: { ...req },
       reuseCompleted: record => {
         const key = record.arguments.idempotencyKey;
         const identity = typeof key === 'string' && key ? digest(['workflow-notify-v1', record.projectId, record.flowId, key]) : null;
