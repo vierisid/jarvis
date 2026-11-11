@@ -289,7 +289,9 @@ export async function extractAndStore(
       const quote = typeof factData.user_quote === 'string' && factData.user_quote.trim()
         && userMessage.includes(factData.user_quote) ? factData.user_quote : undefined;
       // Workflow bookkeeping (ids, cron strings, the assistant's own status reports) is not a memory.
-      if (isWorkflowSubjectName(subject) || isOperationalFact({ predicate, object, userQuoted: quote !== undefined })) continue;
+      // An id or cron string the user typed themselves is theirs and is kept.
+      if (isWorkflowSubjectName(subject) || isOperationalFact({ predicate, object, userQuoted: quote !== undefined,
+        objectStated: userMessage.includes(object.trim()) })) continue;
       try {
         createFact(subjectId, predicate, object, {
           confidence: Number.isFinite(confidence) && confidence >= 0 && confidence <= 1 ? confidence : 0.5,

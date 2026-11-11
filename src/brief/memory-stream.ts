@@ -4,7 +4,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import type { Database } from 'bun:sqlite';
 import { getDb } from '../vault/schema';
 import { notInternalEntitySql } from '../vault/entities';
-import { isOperationalFact, isWorkflowSubjectName, looksLikeId } from '../vault/operational-facts';
+import { isOperationalFact, isOperationalObject, isWorkflowSubjectName, looksLikeId } from '../vault/operational-facts';
 import type { FactRow } from '../vault/fact-policy';
 import type { FactEvidence } from '../vault/facts';
 import type { BriefMemoryUse } from './contracts';
@@ -14,7 +14,7 @@ export const MEMORY_STREAM_LIMITS = { facts: 10000, evidence: 50000, uses: 50000
   snapshots: 16, ttlMs: 5 * 60_000, page: 100 } as const;
 export class MemoryQueryError extends Error {}
 class CapacityError extends Error {}
-type Row = FactRow & { subject_name: string; subject_type: string };
+type Row = FactRow & { subject_name: string; subject_type: string; subject_internal: number };
 type Collection = { items: Map<string, MemoryStreamItem>; hidden: Set<string>; usedIn: MemoryStreamPage['usedIn']; usageCoverage?: MemoryUsageCoverage };
 type Snapshot = { queryKey: string; asOf: number; expiresAt: number; members: [string, string][];
   matches: string[]; total: number; usedIn: MemoryStreamPage['usedIn'] };
@@ -22,11 +22,12 @@ const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(va
 const compareText = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const idValid = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 200 && !/[\\/\u0000-\u001f\u007f]/.test(v) && v !== '.' && v !== '..';
 const timestamp = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && Math.abs(v) <= 8.64e15;
+const sameWords = (text: string) => text.toLowerCase().replace(/\s+/g, ' ').replace(/[\s.,;:!]+$/, '');
 const SOURCE_PHRASE: Record<string, string> = { llm_extraction: 'noted from a chat', user_profile: 'from your profile', dashboard: 'added by you' };
 /** The subject as a person reads it: its name, or a type and source phrase when the name is only an id. */
 export function readableSubject(name: string, type: string, source: string | null): string {
   if (!looksLikeId(name)) return name;
-  return `A ${type} ${SOURCE_PHRASE[source ?? ''] ?? 'in your memory'}`;
+  return `${/^[aeiou]/i.test(type) ? 'An' : 'A'} ${type} ${SOURCE_PHRASE[source ?? ''] ?? 'in your memory'}`;
 }
 export function memoryFactId(value: unknown): string {
   if (!idValid(value)) throw new MemoryQueryError('Invalid fact ID'); return value;
@@ -70,8 +71,11 @@ export class MemoryStream {
     } catch { return 'unavailable'; }
   }
   private collection(): Collection {
-    const rows = this.db.query<Row, []>(`SELECT f.*, e.name AS subject_name, e.type AS subject_type FROM facts f
-      JOIN entities e ON e.id = f.subject_id WHERE ${notInternalEntitySql('e')} ORDER BY f.id LIMIT ${MEMORY_STREAM_LIMITS.facts + 1}`).all();
+    // Facts about workflow bookkeeping entities are read like any other and hidden below, so detail,
+    // history, correction and forget still resolve them by id.
+    const rows = this.db.query<Row, []>(`SELECT f.*, e.name AS subject_name, e.type AS subject_type,
+      CASE WHEN ${notInternalEntitySql('e')} THEN 0 ELSE 1 END AS subject_internal FROM facts f
+      JOIN entities e ON e.id = f.subject_id ORDER BY f.id LIMIT ${MEMORY_STREAM_LIMITS.facts + 1}`).all();
     const evidence = this.db.query<FactEvidence, []>(`SELECT id, fact_id, source, source_ref, basis, confidence, recorded_at
       FROM fact_evidence ORDER BY id LIMIT ${MEMORY_STREAM_LIMITS.evidence + 1}`).all();
     if (rows.length > MEMORY_STREAM_LIMITS.facts || evidence.length > MEMORY_STREAM_LIMITS.evidence
@@ -132,17 +136,25 @@ export class MemoryStream {
         permissions: { canRead: true, canCorrect: row.status !== 'superseded' && this.correctionAvailable(), canForget: this.forget?.readiness() === 'ready' },
         detailHref: href, historyHref: `${href}/history`, supersededBy: row.superseded_by });
     }
-    // Hidden from the stream, never deleted (detail, history and forget still resolve them).
+    // Hidden from the stream, never deleted: detail, history, correction and forget still resolve them by id.
+    // Only extraction bookkeeping is hidden. A fact a person entered, confirmed or backed with another source
+    // always shows, whatever its subject or predicate looks like.
     const workflowNames = this.workflowNames(), hidden = new Set<string>(), latest = new Map<string, Row>();
+    const quotes = this.db.query<{ quote: string }, [string]>('SELECT quote FROM fact_evidence WHERE fact_id = ? AND quote IS NOT NULL');
     for (const row of rows) {
-      const item = items.get(row.id)!;
+      const item = items.get(row.id)!, ev = byFact.get(row.id) ?? [];
       if (item.status === 'superseded') continue;
-      if (workflowNames.has(row.subject_name.trim().toLowerCase()) || isWorkflowSubjectName(row.subject_name)
-        || isOperationalFact({ predicate: row.predicate, object: row.object, userQuoted: item.basis !== 'inferred' })) { hidden.add(row.id); continue; }
-      // The extractor re-learns the same attribute on every turn: show the most recent per subject, predicate and scope.
-      // Facts a person entered themselves are never collapsed (a predicate like "likes" holds many values).
-      if (row.source !== 'llm_extraction') continue;
-      const key = JSON.stringify([row.subject_id, row.predicate, row.scope]), prior = latest.get(key);
+      const extractedOnly = row.source === 'llm_extraction' && row.verified_at === null && ev.every(e => e.source === 'llm_extraction');
+      if (!extractedOnly) continue;
+      const object = row.object.trim();
+      const objectStated = isOperationalObject(object) && quotes.all(row.id).some(q => q.quote.includes(object));
+      if (row.subject_internal || workflowNames.has(row.subject_name.trim().toLowerCase()) || isWorkflowSubjectName(row.subject_name)
+        || isOperationalFact({ predicate: row.predicate, object, userQuoted: item.basis !== 'inferred', objectStated })) { hidden.add(row.id); continue; }
+      // The extractor re-learns the same thing in slightly different words: show the most recent of facts that
+      // differ only in case, spacing or end punctuation. Different values are different memories (predicates are
+      // multi-valued unless fact-policy says otherwise) and a contested pair stays visible for the person to settle.
+      if (item.status === 'contested') continue;
+      const key = JSON.stringify([row.subject_id, row.predicate_key, row.scope, sameWords(object)]), prior = latest.get(key);
       if (!prior) { latest.set(key, row); continue; }
       const a = items.get(prior.id)!, newer = item.updatedAt > a.updatedAt || (item.updatedAt === a.updatedAt && compareText(row.id, prior.id) < 0);
       hidden.add(newer ? prior.id : row.id); if (newer) latest.set(key, row);

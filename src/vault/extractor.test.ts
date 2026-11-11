@@ -575,4 +575,32 @@ describe('Vault Extractor: workflow bookkeeping', () => {
     const subject = findEntities({ name: 'Morloven' })[0]!;
     expect(findFacts({ subject_id: subject.id }).map(f => f.predicate)).toEqual(['sells']);
   });
+  test('keeps an id the user typed and a plain relation that only starts like a report', async () => {
+    const message = 'Our Stripe account is acct_1NqXyZ2eZvKYlo2C and Bea reports to Ada';
+    const provider: LLMProvider = {
+      name: 'mock',
+      async chat(): Promise<LLMResponse> {
+        return {
+          content: JSON.stringify({
+            entities: [{ name: 'Morloven', type: 'project' }, { name: 'Bea', type: 'person' }],
+            facts: [
+              { subject: 'Morloven', predicate: 'stripe_account_id', object: 'acct_1NqXyZ2eZvKYlo2C', confidence: 1, user_quote: 'Our Stripe account is acct_1NqXyZ2eZvKYlo2C' },
+              { subject: 'Bea', predicate: 'reported_to', object: 'Ada', confidence: 0.8 },
+            ],
+            relationships: [],
+            commitments: [],
+          }),
+          tool_calls: [],
+          usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'mock-model',
+          finish_reason: 'stop',
+        };
+      },
+      async *stream() { yield { type: 'done', response: {} as any }; },
+      async listModels() { return ['mock-model']; },
+    };
+    await extractAndStore(message, 'Noted.', makeManager(provider));
+    expect(findFacts({ subject_id: findEntities({ name: 'Morloven' })[0]!.id }).map(f => f.object)).toEqual(['acct_1NqXyZ2eZvKYlo2C']);
+    expect(findFacts({ subject_id: findEntities({ name: 'Bea' })[0]!.id }).map(f => f.predicate)).toEqual(['reported_to']);
+  });
 });

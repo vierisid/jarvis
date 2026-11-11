@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { initDatabase, closeDb, getDb } from '../vault/schema';
 import { createEntity } from '../vault/entities';
 import { createFact, correctFact, deleteFact, verifyFact } from '../vault/facts';
-import { MemoryStream, MEMORY_STREAM_LIMITS, memoryStreamQuery } from './memory-stream';
+import { MemoryStream, MEMORY_STREAM_LIMITS, memoryStreamQuery, readableSubject } from './memory-stream';
 import type { MemoryStreamQuery, MemoryStreamPage, MemoryUsageReader } from './memory-stream-contracts';
 import type { BriefMemoryUse } from './contracts';
 
@@ -209,14 +209,48 @@ test('operational facts stored earlier are hidden at read time and counted consi
   expect(await page({ q: 'cron' })).toMatchObject({ count: { total: 1, matched: 0 } });
   expect(getDb().query('SELECT COUNT(*) c FROM facts').get()).toEqual({ c: 5 });
 });
-test('repeated extracted facts with the same subject and predicate collapse to the latest; user-entered ones do not', async () => {
+test('extracted repeats that differ only in case or spacing collapse to the latest; different values and user-entered facts do not', async () => {
   const biz = createEntity('project', 'Morloven', undefined, 'llm_extraction');
-  createFact(biz.id, 'status', 'planning', { source: 'llm_extraction' }); now += 1000;
-  const latest = createFact(biz.id, 'status', 'shipping', { source: 'llm_extraction' });
+  const llm = { source: 'llm_extraction' };
+  createFact(biz.id, 'requires', 'One row per order.', llm); now += 1000;
+  const latest = createFact(biz.id, 'requires', 'one row  per order', llm);
+  const apparel = createFact(biz.id, 'sells', 'surf apparel', llm); now += 1000;
+  const wetsuits = createFact(biz.id, 'sells', 'wetsuits', llm);
   const a = fact('tea'), b = fact('coffee');
   const view = await page();
-  expect(view.items.map(i => i.factId).sort()).toEqual([latest.id, a.id, b.id].sort());
-  expect(view.count.total).toBe(3);
+  expect(view.items.map(i => i.factId).sort()).toEqual([latest.id, apparel.id, wetsuits.id, a.id, b.id].sort());
+  expect(view.count.total).toBe(5);
+});
+test('a contested extracted pair stays visible to be settled', async () => {
+  const llm = { source: 'llm_extraction' };
+  const one = createFact(subject, 'birthday', 'May 1', llm); now += 1000;
+  const two = createFact(subject, 'birthday', 'June 2', llm);
+  const view = await page();
+  expect(view.items.map(i => i.factId).sort()).toEqual([one.id, two.id].sort());
+  expect(view.items.every(i => i.status === 'contested')).toBe(true);
+});
+test('facts a person entered or confirmed always show, even when they look like bookkeeping', async () => {
+  const wf = createEntity('project', 'Hiring workflow', { entity_kind: 'workflow' });
+  getDb().run("CREATE TABLE IF NOT EXISTS flow_version (id TEXT PRIMARY KEY, flow_id TEXT, display_name TEXT)");
+  getDb().run("INSERT INTO flow_version (id, flow_id, display_name) VALUES ('v1', 'f1', 'Ada')");
+  const typed = createFact(subject, 'stripe_account', 'acct_1NqXyZ2eZvKYlo2C', { source: 'dashboard' });
+  const onFlow = createFact(wf.id, 'needs', 'two interviews', { source: 'dashboard' });
+  const confirmed = createFact(subject, 'reported_schedule_id', 'Q7hYt3kLmN0pQrStUv', { source: 'llm_extraction' });
+  verifyFact(confirmed.id, 'yes, that is mine');
+  const quoted = createFact(createEntity('project', 'Morloven').id, 'account_id', 'acct_1NqXyZ2eZvKYlo2C',
+    { source: 'llm_extraction', quote: 'our account is acct_1NqXyZ2eZvKYlo2C' });
+  const reportsTo = createFact(createEntity('person', 'Bea').id, 'reported_to', 'Ada', { source: 'llm_extraction' });
+  const ids = (await page()).items.map(i => i.factId);
+  for (const f of [typed, onFlow, quoted, reportsTo]) expect(ids).toContain(f.id);
+  expect(ids.length).toBe(5);
+});
+test('hidden bookkeeping still resolves by id for detail and history', async () => {
+  const flow = createEntity('project', 'lbk0h4QNrT2dLz9oEdSQQ', { entity_kind: 'workflow' });
+  const f = createFact(flow.id, 'reported_schedule', 'daily', { source: 'llm_extraction' });
+  expect((await page()).count.total).toBe(0);
+  expect(provider.detail(f.id)).toMatchObject({ state: 'ready', data: { factId: f.id } });
+  expect(provider.detail(f.id, true)).toMatchObject({ state: 'ready' });
+  expect(readableSubject('qwErTy0123456789AbCdEf', 'event', 'llm_extraction')).toBe('An event noted from a chat');
 });
 test('facts about a workflow itself are hidden, not facts about the business', async () => {
   const wf = createEntity('project', 'Order ingestion workflow', undefined, 'llm_extraction');

@@ -24,18 +24,31 @@ export function isOperationalObject(object: string): boolean {
   return looksLikeId(object) || looksLikeCron(object);
 }
 
+/** Words that make an `assistant_` / `reported_` predicate a report about the assistant's own work. */
+const BOOKKEEPING_WORDS = new Set(['id', 'ids', 'uuid', 'status', 'state', 'save', 'saved', 'draft', 'drafts', 'version', 'versions',
+  'cron', 'schedule', 'workflow', 'workflows', 'flow', 'flows', 'run', 'runs', 'publish', 'published', 'validation', 'validated',
+  'blocker', 'blockers', 'blocked', 'trigger', 'triggers', 'result', 'results', 'error', 'errors']);
+
 /**
  * Predicates the extractor uses when the assistant describes its own work
  * ("assistant_reported_save_status", "reported_draft_version_id"). Without a
  * quote from the user's message they are the assistant's report, not a fact.
+ * A plain relation such as "reported_to" or "assistant_name" is not: the
+ * predicate must also name a piece of the assistant's work.
  */
 export function isAssistantReportPredicate(predicate: string): boolean {
-  return /^(assistant_|reported_)/.test(predicate);
+  const words = predicate.trim().toLowerCase().split(/[_\s]+/);
+  return (words[0] === 'assistant' || words[0] === 'reported') && words.slice(1).some(w => BOOKKEEPING_WORDS.has(w));
 }
 
-/** Whether a fact should be kept out of memory. `userQuoted`: the user's own words support it. */
-export function isOperationalFact(fact: { predicate: string; object: string; userQuoted: boolean }): boolean {
-  return isOperationalObject(fact.object) || (!fact.userQuoted && isAssistantReportPredicate(fact.predicate));
+/**
+ * Whether a fact should be kept out of memory. `userQuoted`: a quote from the
+ * user's message supports it. `objectStated`: the user's own words contain the
+ * object itself, so an id or cron string the user typed (an account id, a
+ * schedule they asked for) is theirs, not the assistant's bookkeeping.
+ */
+export function isOperationalFact(fact: { predicate: string; object: string; userQuoted: boolean; objectStated: boolean }): boolean {
+  return (!fact.objectStated && isOperationalObject(fact.object)) || (!fact.userQuoted && isAssistantReportPredicate(fact.predicate));
 }
 
 /**
