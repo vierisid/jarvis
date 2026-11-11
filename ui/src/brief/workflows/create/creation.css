@@ -22,6 +22,11 @@
 .brief-root .brief-recent-name svg { flex:none; color:var(--brief-secondary); }
 .brief-root .brief-recent-name strong { overflow-wrap:anywhere; font-weight:600; }
 .brief-root .brief-recent-result { color:var(--brief-secondary); overflow-wrap:anywhere; }
+/* "Test run" sits under the name at every width; status and time span both lines. */
+.brief-root .brief-recent-name { grid-column:1; grid-row:1; }
+.brief-root .brief-recent-result { grid-column:1; grid-row:2; padding-left:31px; }
+.brief-root .brief-recent-status { grid-column:2; grid-row:1 / span 2; }
+.brief-root .brief-recent-row time { grid-column:3; grid-row:1 / span 2; }
 .brief-root :is(.brief-recent-status,.brief-recent-row time) { font:400 12px/18px var(--brief-sans); font-variant-numeric:tabular-nums; color:var(--brief-secondary); }
 .brief-root .brief-recent-status { display:flex; gap:8px; align-items:center; }
 .brief-root .brief-recent-status i { width:6px; height:6px; border-radius:50%; background:currentColor; flex:none; }
@@ -32,10 +37,6 @@
 .brief-root .brief-workflow-notice { color:var(--brief-secondary); font:400 14px/22px var(--brief-sans); min-height:72px; }
 @container brief-work (max-width: 980px) {
   .brief-root :is(.brief-recent-head,.brief-recent-row) { grid-template-columns:minmax(0,1fr) 116px 108px; gap:6px 18px; }
-  .brief-root .brief-recent-name { grid-column:1; grid-row:1; }
-  .brief-root .brief-recent-result { grid-column:1; grid-row:2; padding-left:31px; }
-  .brief-root .brief-recent-status { grid-column:2; grid-row:1 / span 2; }
-  .brief-root .brief-recent-row time { grid-column:3; grid-row:1 / span 2; }
 }
 @container brief-work (max-width: 560px) {
   .brief-root .brief-workflow-create-group { min-height:340px; padding-top:12px; }
