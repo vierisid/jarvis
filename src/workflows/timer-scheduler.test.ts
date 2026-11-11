@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeWorkflowDb, initWorkflowDb } from './db/index';
 import { createFlow } from './db/repos/flow';
 import { createDraftVersion } from './db/repos/flow-version';
-import { createFlowRun, updateRun } from './db/repos/flow-run';
+import { createFlowRun, getFlowRun, updateRun } from './db/repos/flow-run';
 import { createWaitpoint, getWaitpoint } from './db/repos/waitpoint';
 import { claimNextJob } from './db/repos/job-queue';
 import { TimerWaitpointScheduler } from './timer-scheduler';
@@ -118,5 +118,41 @@ describe('TimerWaitpointScheduler', () => {
     timerWaitpoint(runId, new Date(now - 1000).toISOString());
     expect(sched.tick(now)).toBe(1);
     expect(sched.tick(now)).toBe(0);
+  });
+});
+
+describe('TimerWaitpointScheduler.afterJobSettled', () => {
+  // A required child whose parent already ended: the child sweep stops it.
+  function abandonedChild() {
+    const flow = createFlow();
+    const v = createDraftVersion({ flowId: flow.id, displayName: 'v1', trigger: { name: 'trigger', type: 'EMPTY' } });
+    const parent = createFlowRun({ flowId: flow.id, flowVersionId: v.id, status: 'SUCCEEDED' });
+    const child = createFlowRun({ flowId: flow.id, flowVersionId: v.id, status: 'RUNNING', parentRunId: parent.id, failParentOnFailure: true });
+    const other = createFlowRun({ flowId: flow.id, flowVersionId: v.id, status: 'SUCCEEDED' });
+    return { child: child.id, other: other.id };
+  }
+  const job = (flowRunId: string | null, jobType = 'RUN_FLOW', payload: Record<string, unknown> = {}) => ({ jobType, flowRunId, payload });
+
+  test('a job of a run with no child and no child wait leaves the sweep to the poll', () => {
+    const runs = abandonedChild();
+    const sched = new TimerWaitpointScheduler();
+    sched.afterJobSettled(job(runs.other));
+    sched.afterJobSettled(job(runs.child, 'OTHER'));
+    expect(getFlowRun(runs.child)?.status).toBe('RUNNING');
+  });
+
+  test('a job of a child runs the sweep', () => {
+    const runs = abandonedChild();
+    new TimerWaitpointScheduler().afterJobSettled(job(runs.child));
+    expect(getFlowRun(runs.child)?.status).not.toBe('RUNNING');
+  });
+
+  test('a job that names its run only in the payload is matched by it; one naming none sweeps', () => {
+    const runs = abandonedChild();
+    const sched = new TimerWaitpointScheduler();
+    sched.afterJobSettled(job(null, 'RUN_FLOW', { runId: runs.other }));
+    expect(getFlowRun(runs.child)?.status).toBe('RUNNING');
+    sched.afterJobSettled(job(null));
+    expect(getFlowRun(runs.child)?.status).not.toBe('RUNNING');
   });
 });

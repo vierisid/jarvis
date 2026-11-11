@@ -8,6 +8,21 @@ import { getWaitpoint } from '../db/repos/waitpoint';
 import { claimContinuation } from './continuation';
 import { emergencyHold } from './emergency-hold';
 
+/**
+ * Whether a run that just stopped working can change what the child sweep
+ * does: it is a child (its end may continue a parent), or it waits on a
+ * child or a reusable call (it may have parked after its child ended). Both
+ * are indexed lookups, so the worker can ask after every job and run the
+ * sweep, whose cleanup reads grow with history, only when it may matter.
+ */
+export function runTouchesChildWait(runId: string): boolean {
+  return !!getWorkflowDb().query(`SELECT 1 FROM flow_run WHERE id=?1 AND parent_run_id IS NOT NULL
+    UNION ALL SELECT 1 FROM waitpoint w WHERE w.flow_run_id=?1 AND w.resumed_at IS NULL
+      AND (EXISTS (SELECT 1 FROM workflow_child_run c WHERE c.waitpoint_id=w.id)
+        OR EXISTS (SELECT 1 FROM workflow_subflow_wait s WHERE s.waitpoint_id=w.id))
+    LIMIT 1`).get(runId);
+}
+
 /** Required children continue their parent through the ordinary outer worker.
  * Polling survives daemon downtime and child completion before the parent parks.
  * `onCardClosed` hears each card this sweep closed, so the dashboard stops

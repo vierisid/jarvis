@@ -5744,7 +5744,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       workflowWorker = new WorkflowWorker({
         // A child that just ended, or a parent that just parked, continues its
         // parent now; the scheduler's poll remains the safety net.
-        onJobSettled: (job) => { if (job.jobType === RUN_FLOW) timerScheduler?.resumeSettledChildren(); },
+        onJobSettled: (job) => { timerScheduler?.afterJobSettled(job); },
         handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: flowExecutor,
           // #1080: a run refused for what it is bound to (its computer, a
           // recipient) tells the owner once per workflow and reason.

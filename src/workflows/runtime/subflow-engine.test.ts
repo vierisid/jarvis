@@ -106,7 +106,7 @@ for(const scenario of ['success','invalid','failure','timeout'])test('real paren
 // The daemon wires the worker's job-settled hook to the scheduler, so a parent continues when its child ends without waiting for the poll.
 async function runWithSettleHook(flowId:string,versionId:string){
  const scheduler=new TimerWaitpointScheduler();
- const hooked=new Worker({log:()=>{},handlers:{[RUN_FLOW]:createRunFlowHandler({executor:new EngineFlowExecutor(runtime),now:()=>now})},onJobSettled:job=>{if(job.jobType===RUN_FLOW)scheduler.resumeSettledChildren();}});
+ const hooked=new Worker({log:()=>{},handlers:{[RUN_FLOW]:createRunFlowHandler({executor:new EngineFlowExecutor(runtime),now:()=>now})},onJobSettled:job=>{scheduler.afterJobSettled(job);}});
  const r=createFlowRun({flowId,flowVersionId:versionId});runIds.push(r.id);enqueue({jobType:RUN_FLOW,payload:{runId:r.id,payload},flowId,flowRunId:r.id});
  await hooked.drain();
  for(const child of listRuns({limit:500}).filter(x=>x.parentRunId))if(!runIds.includes(child.id))runIds.push(child.id);
