@@ -273,3 +273,61 @@ test("the list says before any switch that pausing stops queued and waiting runs
     "Pausing a workflow stops its queued and waiting runs.",
   );
 });
+const field = (label: string) =>
+  Array.from(host.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input,select")).find(
+    (e) => host.querySelector(`label[for="${e.id}"]`)?.textContent === label,
+  )!;
+async function type(label: string, value: string) {
+  const el = field(label) as HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )!.set!;
+  await React.act(async () => {
+    setter.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+async function pick(label: string, value: string) {
+  const el = field(label) as HTMLSelectElement;
+  await React.act(async () => {
+    el.value = value;
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+const rowNames = () =>
+  Array.from(host.querySelectorAll(".brief-management-open")).map(
+    (e) => e.textContent,
+  );
+test("search narrows by name, filter by state, and an empty match says so", async () => {
+  await render();
+  expect(rowNames().length).toBe(4);
+  await type("Search workflows", "  INBOX ");
+  expect(rowNames()).toEqual(["Morning inbox brief"]);
+  expect(host.textContent).toContain("1 of 4 workflows");
+  await type("Search workflows", "zzz");
+  expect(rowNames()).toEqual([]);
+  expect(host.textContent).toContain("No workflows match.");
+  await click("Clear search and filter");
+  expect(rowNames().length).toBe(4);
+  await pick("Show", "off");
+  const off = rowNames().length;
+  await pick("Show", "on");
+  expect(off + rowNames().length).toBe(4);
+});
+test("a long list draws one page and Show more adds the next", async () => {
+  f.controller.retire();
+  f = makeManagementFixture("long list");
+  await render();
+  expect(rowNames().length).toBe(50);
+  expect(host.querySelectorAll("[data-flow]").length).toBe(50);
+  expect(host.textContent).toContain("124 workflows");
+  await type("Search workflows", "research 11");
+  expect(rowNames().length).toBeLessThan(50);
+  await type("Search workflows", "");
+  await click("Show 50 more (74 left)");
+  expect(rowNames().length).toBe(100);
+  await click("Show 24 more (24 left)");
+  expect(rowNames().length).toBe(124);
+  expect(button("Show 24 more (24 left)")).toBeUndefined();
+});

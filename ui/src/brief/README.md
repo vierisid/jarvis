@@ -594,6 +594,9 @@ run response). It sends no request.
 - `workflows/manage-list/` is the D-21 All workflows list: the name opens the exact flow/version, the
   Enabled/Paused switch and the bin are separate targets, and Delete confirms inside its own row.
   Publication and readiness are secondary facts beside the switch; Draft is never a switch state.
+- The list is searchable by name and filterable by On, Off or Needs setup (`list-view.ts`). It draws
+  at most 50 matching rows and adds 50 per `Show more`, so a long list stays light. Deleted rows
+  always stay drawn so Undo and the collapse keep working. Filtering never changes what is read.
 - `WorkflowManagementController` holds one owner scope and survives room, chat and sidebar changes;
   the host calls `retire()` on logout or owner change. Each command carries scope, flow, version,
   expected revision and a request ID. A lost or `pending` answer locks that row as uncertain until

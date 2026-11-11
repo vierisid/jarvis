@@ -11,8 +11,16 @@ import { isBriefCapabilityEnabled } from "../../../../../src/brief/capabilities"
 import {
   BriefButton,
   BriefIconButton,
+  BriefInput,
+  BriefSelect,
   BriefSwitch,
 } from "../../components/controls";
+import {
+  PAGE_SIZE,
+  STATE_FILTERS,
+  buildListView,
+  type StateFilter,
+} from "./list-view";
 import type {
   ManagementSlot,
   WorkflowManagementController,
@@ -82,8 +90,13 @@ function BoundManagement({
   const root = useRef<HTMLElement>(null),
     restore = useRef({ done: false, top: state.scrollTop });
   const [now, setNow] = useState(Date.now);
+  const [query, setQuery] = useState(""),
+    [filter, setFilter] = useState<StateFilter>("all"),
+    [limit, setLimit] = useState(PAGE_SIZE);
   const removed = state.rows.filter((r) => r.removed),
     visible = state.rows.filter((r) => !r.removed);
+  const view = buildListView(state.rows, query, filter, limit),
+    narrowed = !!query.trim() || filter !== "all";
   useEffect(() => {
     void store.load();
   }, [store]);
@@ -202,7 +215,9 @@ function BoundManagement({
       <div className="brief-management-meta">
         <span aria-live="polite">
           {state.read.status === "ready" || state.read.status === "empty"
-            ? `${visible.length} ${visible.length === 1 ? "workflow" : "workflows"}`
+            ? narrowed
+              ? `${view.matching} of ${visible.length} ${visible.length === 1 ? "workflow" : "workflows"}`
+              : `${visible.length} ${visible.length === 1 ? "workflow" : "workflows"}`
             : state.read.status === "loading"
               ? "Loading workflows…"
               : "Workflows"}
@@ -217,6 +232,46 @@ function BoundManagement({
       <p className="brief-management-hint">
         Pausing a workflow stops its queued and waiting runs.
       </p>
+      {visible.length > 1 && (
+        <div
+          className="brief-management-find"
+          role="search"
+          aria-label="Find a workflow"
+        >
+          <BriefInput
+            label="Search workflows"
+            type="search"
+            placeholder="Search"
+            maxLength={200}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setLimit(PAGE_SIZE);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && query) {
+                e.preventDefault();
+                setQuery("");
+                setLimit(PAGE_SIZE);
+              }
+            }}
+          />
+          <BriefSelect
+            label="Show"
+            value={filter}
+            onChange={(e) => {
+              setFilter(e.target.value as StateFilter);
+              setLimit(PAGE_SIZE);
+            }}
+          >
+            {STATE_FILTERS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </BriefSelect>
+        </div>
+      )}
       {state.read.status !== "ready" && state.read.status !== "empty" && (
         <p role="status" className="brief-management-notice">
           {state.read.status === "loading"
@@ -248,7 +303,7 @@ function BoundManagement({
             </span>
           </div>
           <div role="rowgroup">
-            {state.rows.map((r) => (
+            {view.rows.map((r) => (
               <WorkflowRow
                 key={r.item.flowId}
                 row={r}
@@ -264,6 +319,30 @@ function BoundManagement({
           !visible.length && (
             <p className="brief-management-empty">No workflows in this list.</p>
           )}
+        {(state.read.status === "empty" || state.read.status === "ready") &&
+          visible.length > 0 &&
+          !view.matching && (
+            <div className="brief-management-empty" role="status">
+              <p>No workflows match.</p>
+              <BriefButton
+                size="sm"
+                onClick={() => {
+                  setQuery("");
+                  setFilter("all");
+                  setLimit(PAGE_SIZE);
+                }}
+              >
+                Clear search and filter
+              </BriefButton>
+            </div>
+          )}
+        {view.matching > limit && (
+          <div className="brief-management-more">
+            <BriefButton size="sm" onClick={() => setLimit((n) => n + PAGE_SIZE)}>
+              {`Show ${Math.min(PAGE_SIZE, view.matching - limit)} more (${view.matching - limit} left)`}
+            </BriefButton>
+          </div>
+        )}
       </div>
       <div
         className="brief-management-undo-list"
