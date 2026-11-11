@@ -446,7 +446,9 @@ describe('live observation', () => {
     const paused = (title: string, type: WaitpointType, stepName: string) => {
       const work = accept(title, goal.id);
       const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'PAUSED' });
-      createWaitpoint({ flowRunId: run.id, projectId: DEFAULT_IDS.project, stepName, type });
+      // A timer wait always carries its resume time; one without is refused at creation.
+      createWaitpoint({ flowRunId: run.id, projectId: DEFAULT_IDS.project, stepName, type,
+        ...(type === 'TIMER' ? { resumeDateTime: new Date(Date.now() + 3 * 86_400_000).toISOString() } : {}) });
       getDb().run('UPDATE commitment_work SET run_id = ? WHERE work_id = ?', [run.id, work.id]);
     };
     paused('Wait three days', 'TIMER', 'wait');
