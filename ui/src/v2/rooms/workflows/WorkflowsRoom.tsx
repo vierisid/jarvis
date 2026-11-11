@@ -546,7 +546,8 @@ function RunRow({ run, expanded, onToggle, onCancel }: RunRowProps): React.React
             : run.cancellation?.inFlightMayHaveCompleted ? <p>{CANCELED_EFFECT_WARNING}</p> : null}
           {run.steps && Object.keys(run.steps).length > 0 ? (
             <details className="wf-runs__steps">
-              <summary>Step output JSON</summary>
+              <summary>{run.stepsTruncated ? "Step status JSON (shortened)" : "Step output JSON"}</summary>
+              {run.stepsTruncated ? <p className="wf-runs__steps-note">This run recorded too much step data to show here, so each step lists only its type and status.</p> : null}
               <pre>{JSON.stringify(run.steps, null, 2)}</pre>
             </details>
           ) : null}

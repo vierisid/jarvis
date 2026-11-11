@@ -90,6 +90,8 @@ export interface FlowRun {
   finishTime: number | null;
   stepsCount: number | null;
   steps: Record<string, unknown> | null;
+  /** The run recorded more step data than one answer carries, so `steps` holds each step's type and status only. */
+  stepsTruncated?: boolean;
   failedStep: { name: string; displayName: string; errorMessage?: string } | null;
   /** Q-19: how a run that ended badly reads, the same sentence Today shows. */
   failure?: UserFailure | null;
