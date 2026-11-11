@@ -118,6 +118,15 @@ export const WORKFLOW_TOOL_UNSUPPORTED_CODE = 'WORKFLOW_TOOL_UNSUPPORTED';
 function unsupportedCapability(message: string): ActionOutcomeError {
   return new ActionOutcomeError({ status: 'blocked', code: WORKFLOW_TOOL_UNSUPPORTED_CODE, effect: 'not_started', message });
 }
+/**
+ * A gated tool whose subject does not resolve, such as run_skill naming no saved skill. The tool itself
+ * is reachable from a workflow (#1314's admission table); what is missing is the skill, so the step needs
+ * a skill that exists rather than a different tool.
+ */
+export const WORKFLOW_SKILL_NOT_FOUND_CODE = 'SKILL_NOT_FOUND';
+function unresolvedSubject(message: string): ActionOutcomeError {
+  return new ActionOutcomeError({ status: 'blocked', code: WORKFLOW_SKILL_NOT_FOUND_CODE, effect: 'not_started', message });
+}
 
 /**
  * Capability for a gated tool. The gate runs at review time with the frozen
@@ -127,7 +136,7 @@ function unsupportedCapability(message: string): ActionOutcomeError {
 function gatedCapability(tool: ToolDefinition, params: Record<string, unknown>) {
   const gate = tool.authorityGate?.(params);
   if (!gate) {
-    throw unsupportedCapability(`Unsupported direct workflow capability: ${tool.name} cannot resolve what it would do for ${JSON.stringify(params).slice(0, 120)} (unknown skill?)`);
+    throw unresolvedSubject(`Unsupported direct workflow capability: ${tool.name} cannot resolve what it would do for ${JSON.stringify(params).slice(0, 120)} (unknown skill?)`);
   }
   const floor = TOOL_ACTION_MAP[tool.name] ?? 'execute_command';
   const known = (c: ActionCategory) => Object.hasOwn(AUTHORITY_REQUIREMENTS, c);

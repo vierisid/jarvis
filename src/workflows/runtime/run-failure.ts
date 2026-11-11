@@ -31,7 +31,7 @@ import { nodeConnectionReferences, type RunConnectionBindingView } from '../db/r
 import { expressionFailureGuidance, failedOnMissingReference } from './expression-failure';
 import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_REJECTED_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, isHumanInputStep } from './human-input-contract';
 import { IN_RUN_STEP_PIECES } from './step-admission';
-import { WORKFLOW_TOOL_UNSUPPORTED_CODE } from './effect-capabilities';
+import { WORKFLOW_SKILL_NOT_FOUND_CODE, WORKFLOW_TOOL_UNSUPPORTED_CODE } from './effect-capabilities';
 
 const ENDED_BADLY = new Set(['FAILED', 'TIMEOUT', 'INTERNAL_ERROR', 'QUOTA_EXCEEDED', 'MEMORY_LIMIT_EXCEEDED', 'SCHEDULE_FAILURE', 'STOPPED']);
 
@@ -139,13 +139,13 @@ const JARVIS_TOOL_PIECE = '@jarvispieces/piece-jarvis-tool';
 /**
  * The typed refusals a step's own piece can raise before or instead of doing
  * its work: a human input step refused (#1266) or rejected by the person, and
- * a tool step naming a tool no workflow can run.
+ * a tool step naming a tool no workflow can run or a skill that is not saved.
  */
 function typedRefusalCodes(node: FlowTriggerNode): string[] {
   if (isHumanInputStep(node.settings?.pieceName, node.settings?.actionName)) {
     return [HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, HUMAN_INPUT_REJECTED_CODE];
   }
-  return node.settings?.pieceName === JARVIS_TOOL_PIECE ? [WORKFLOW_TOOL_UNSUPPORTED_CODE] : [];
+  return node.settings?.pieceName === JARVIS_TOOL_PIECE ? [WORKFLOW_TOOL_UNSUPPORTED_CODE, WORKFLOW_SKILL_NOT_FOUND_CODE] : [];
 }
 
 /**
