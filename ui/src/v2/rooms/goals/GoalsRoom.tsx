@@ -1075,7 +1075,8 @@ function DetailPanel({
     // A partly cleared date reads as "" but is not a request to remove the deadline.
     const parsed = deadlineIncomplete ? undefined : deadline ? parseDeadlineInput(deadline) : null;
     if (parsed === undefined) { setSaveError("Enter a valid deadline, or use Clear deadline."); return; }
-    if (title.trim().length > MAX_GOAL_TITLE) { setSaveError(TITLE_TOO_LONG_TEXT); return; }
+    // A title saved before the limit stays editable through other fields; only a changed title is checked.
+    if (title.trim() !== opened.title && title.trim().length > MAX_GOAL_TITLE) { setSaveError(TITLE_TOO_LONG_TEXT); return; }
     if (typeof parsed === "number" && deadline !== opened.deadline && parsed < Date.now()) { setSaveError(PAST_DEADLINE_TEXT); return; }
     // Send only what changed. The server re-runs health whenever a deadline is
     // present, and a date input can only express 23:59 on a day, so resending
