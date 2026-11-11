@@ -287,3 +287,11 @@ describe('what else a run hides of its secrets, and what it leaves alone', () =>
     expect(shown).toContain('password [redacted] for user 2999');
   });
 });
+
+test('a run with nothing to hide is shown as the same objects, not a copy', () => {
+  // A secret elsewhere in the run, so the scrub does walk this step.
+  const steps = { trigger: { output: { type: 'EMPTY', status: 'SUCCEEDED', input: {}, output: { _webhook: { headers: { authorization: 'Bearer SOMESECRET99' } } } } },
+    call: { output: { type: 'PIECE', status: 'SUCCEEDED', input: { a: 1 }, output: { list: [1, 2], note: 'plain' } } } };
+  const shown = stepsAsShown(steps, graph()).steps as typeof steps;
+  expect(shown.call.output.output).toBe(steps.call.output.output);
+});

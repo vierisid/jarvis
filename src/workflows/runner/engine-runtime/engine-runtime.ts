@@ -20,13 +20,13 @@
  * layered on without changing the acquire contract.
  */
 
-import { redactEngineText } from "../../runtime/engine-console-redaction";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { EngineContract, EngineResponse } from "../../sandbox-api/contracts";
 import type { SandboxApi } from "../../sandbox-api/server";
 import { SandboxRegistry } from "../../sandbox-api/sandbox-registry";
 import { workflowLogsBase } from "../../sandbox-api/config";
+import { redactEngineText } from "../../runtime/engine-console-redaction";
 import { spawnEngine, type SpawnedEngine, type SpawnEngineOptions } from "./spawn";
 import { ENGINE_BUILD_PATHS } from "./build";
 import { loadedCorePieceDirs } from "./build-pieces";
@@ -1156,7 +1156,7 @@ function isUpstreamFlowVersion(
  *     lines (one chunk may carry partial lines). Each chunk is prefixed,
  *     which is enough for diagnosability.
  */
-function bindEngineStream(
+export function bindEngineStream(
   stream: NodeJS.ReadableStream | null,
   kind: "stdout" | "stderr",
   sandboxId: string,

@@ -955,6 +955,19 @@ describe("workflow API: a failed run, its effects, open failures, and lock and p
       expect([route, status]).toEqual([route, 200]);
       bodies.push(body);
     }
+    // The editor saves the sample it was shown: the marker keeps the captured password; a new value replaces it.
+    const { getFlowVersion } = await import("../db/repos/flow-version");
+    const sample = routes["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.PATCH;
+    const params = { id: flow.id, versionId: v.id, stepName: "make_pw" };
+    const saved = await callJson(sample, reqWithParams("PATCH", `http://x/api/workflows/${flow.id}/versions/${v.id}/sample-data/make_pw`, params,
+      { output: { ...pwOutput, output: "[redacted]", input: { length: 21 } } }));
+    expect(saved.status).toBe(200);
+    expect(JSON.stringify(saved.body)).not.toContain(PASSWORD);
+    expect(getFlowVersion(v.id)!.sampleData!.make_pw).toEqual({ ...pwOutput, input: { length: 21 } });
+    await callJson(sample, reqWithParams("PATCH", `http://x/api/workflows/${flow.id}/versions/${v.id}/sample-data/make_pw`, params,
+      { output: { ...pwOutput, output: "typed-by-hand-1" } }));
+    expect((getFlowVersion(v.id)!.sampleData!.make_pw as { output: string }).output).toBe("typed-by-hand-1");
+    await callJson(sample, reqWithParams("PATCH", `http://x/api/workflows/${flow.id}/versions/${v.id}/sample-data/make_pw`, params, { output: pwOutput }));
     const lock = await callJson(routes["/api/workflows/:id/versions/:versionId/lock"]?.POST,
       reqWithParams("POST", `http://x/api/workflows/${flow.id}/versions/${v.id}/lock`, { id: flow.id, versionId: v.id }));
     expect(lock.status).toBe(200);

@@ -1094,6 +1094,12 @@ const TOKEN_CHARS = /^[A-Za-z0-9._~+=:%-]+$/u;
 const hasLetterAndDigit = (text: string): boolean => /[A-Za-z]/u.test(text) && /\d/u.test(text);
 /** At least two letters and two digits: a random id, not a name with a version (`endpoint1`, `oauth2`). */
 const isMixed = (text: string): boolean => (text.match(/[A-Za-z]/gu)?.length ?? 0) >= 2 && (text.match(/\d/gu)?.length ?? 0) >= 2;
+/**
+ * Lowercase words joined by `-`, `_` or `.`, one a word no hex string spells
+ * (`slack-notification-hook`, `signature-verification`): a name, not a token.
+ */
+const isWordSlug = (text: string): boolean => /^[a-z0-9]+(?:[-_.][a-z0-9]+)+$/u.test(text)
+  && text.split(/[-_.]/u).some((part) => part.length >= 3 && /^[a-z]*[g-z][a-z]*$/u.test(part));
 /** A number with an optional extension (`123456789.json`) or an env-style name (`MY_SECRET_2024`): content. */
 const NAMED_ID = /^\d+(?:\.[a-z]{2,5})?$|^[A-Z][A-Z0-9_]*$/u;
 /**
@@ -1103,16 +1109,12 @@ const NAMED_ID = /^\d+(?:\.[a-z]{2,5})?$|^[A-Z][A-Z0-9_]*$/u;
  * env-style names and versioned names (`endpoint1`, `/key/oauth2`) are content.
  */
 const pathToken = (segment: string, mixedMin: number, cut: boolean): boolean => TOKEN_CHARS.test(segment)
-  && (cut || (!NAMED_ID.test(segment) && ((segment.length >= mixedMin && isMixed(segment)) || segment.length >= 20)));
+  && (cut || (!NAMED_ID.test(segment) && !isWordSlug(segment) && ((segment.length >= mixedMin && isMixed(segment)) || segment.length >= 20)));
 /**
  * A heading anchor: lowercase parts joined by `-`, `_` or `.`, one of them a
  * word no hex string spells (`step-1-install-dependencies`, `section-12-overview`).
  */
-const isAnchor = (fragment: string): boolean => {
-  const lower = fragment.toLowerCase();
-  return /^[a-z0-9]+(?:[-_.][a-z0-9]+)+$/u.test(lower)
-    && lower.split(/[-_.]/u).some((part) => part.length >= 3 && /^[a-z]*[g-z][a-z]*$/u.test(part));
-};
+const isAnchor = (fragment: string): boolean => isWordSlug(fragment.toLowerCase());
 /**
  * A fragment that is itself a token (`#<token>`), told from an anchor
  * (`#section-2`, `#step-1-install-dependencies`) or a route (`#/settings`) by

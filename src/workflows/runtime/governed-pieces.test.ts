@@ -1858,6 +1858,9 @@ describe('#961: the core HTTP piece is governed by method', () => {
       'https://kms.example.test/keys/550e8400-e29b-41d4-a716-446655440000',
       'https://app.test/doc#page=12',
       'https://en.example.test/wiki/X#2022_FIFA_World_Cup',
+      // Word slugs after a hooks segment.
+      'https://api.typeform.com/forms/abc/webhooks/slack-notification-hook',
+      'https://docs.stripe.com/webhooks/signature-verification',
     ]) expect(url(kept)).toBe(kept);
     // Slack keeps its team and channel ids; only the secret goes.
     expect(url('https://hooks.slack.com/services/T0123ABCD/B0123ABCD/XXXXxxxxXXXXxxxx1234')).toBe('https://hooks.slack.com/services/T0123ABCD/B0123ABCD/[redacted]');

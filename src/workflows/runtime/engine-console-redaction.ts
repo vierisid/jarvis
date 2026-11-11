@@ -28,8 +28,10 @@
  * (log, warn, error, info, debug, trace, dir, table, assert, group,
  * groupCollapsed, timeLog, count, and Bun's `console.write`) and to
  * `process.stdout`/`stderr.write`; the daemon applies `redactEngineText` again
- * to each chunk of engine output it copies. A logging call never throws
- * because of it: a value that cannot be read is withheld.
+ * to each chunk of engine output it copies (per chunk, so a serialized value
+ * split across two pipe chunks has its second part judged on its own). A
+ * logging call never throws because of it: a value that cannot be read is
+ * withheld.
  */
 
 /**
@@ -42,6 +44,8 @@
  */
 const SERIALIZED_REQUEST = /(?:\{\s*)?\\?"(?:response\\?"\s*:\s*\{\s*\\?"status|request\\?"\s*:\s*\{\s*\\?"body|requestBody\\?"\s*:|responseBody\\?"\s*:|name\\?"\s*:\s*\\?"AxiosError|headers\\?"\s*:\s*\{[\s\S]{0,500}?\\?"(?:(?:proxy-)?authorization|cookie|x-api-key|api-key|x-auth-token|x-access-token)\\?"\s*:)|^\s*(?:requestBody|responseBody)\s*:/imu;
 const WITHHELD = '[request and response bodies withheld]';
+/** The same pattern, global, for a scan that resumes where the last cut ended (`lastIndex` is set before each use). */
+const SCAN = new RegExp(SERIALIZED_REQUEST.source, 'gimu');
 /** A line that continues a value cut on an earlier line: indented, or closing it. */
 const CONTINUATION = /^(?:\s|[}\]"),]|$)/u;
 
@@ -117,7 +121,7 @@ function summary(value: Record<string, unknown>): string {
  */
 export function redactEngineText(text: string): string {
   let out = '', pos = 0;
-  const scan = new RegExp(SERIALIZED_REQUEST.source, 'gimu');
+  const scan = SCAN;
   for (;;) {
     scan.lastIndex = pos;
     const found = scan.exec(text);

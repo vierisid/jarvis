@@ -810,7 +810,7 @@ third-party dependencies are part of the engine's committed staging install
 | `smtp` | Governed: `send-email` is `send_email`, so it asks at the shipped defaults. Tracked (sent once): upstream's resend after a connection reset is removed, since a reset after the server took the message is a sent email. The mail server passes the egress guard; the connection's host name stays the TLS name. |
 | `sftp` | Governed by action: `read_file_content` and `listFolderContents` are `read_data`; `createFolder` is `write_data`; `upload_file` and `create_file` put content on the server and replace a file at that path, so they are `send_message`, as an HTTP PUT is (not tracked: a repeat writes the same bytes to the same path); `renameFileOrFolder` (which can replace the target), `deleteFile` and `deleteFolder` are `delete_data`. The server passes the egress guard for SFTP, FTP and FTPS, and an FTP data connection always goes to the checked control address, never to a host a PASV reply names. Its polling trigger (`new_file`) is not loaded: a trigger runs outside the effect boundary. |
 | `pdf` | Acts only inside the run, without upstream's "Convert to Image", which is not loaded: it writes the PDF to the OS temp dir and runs poppler's `pdftoppm` through `/bin/sh` with the engine's environment. |
-| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. The password `crypto` generates (Generate Password) reaches the next step as generated, but run history, the run list, `manage_workflow get_run` and sample data show it, and the same text anywhere else in that run, as `[redacted]` (`runAsShown` in `runtime/step-credentials.ts`); the stored run keeps it, since a resumed run rebuilds its steps from it. |
+| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. The password `crypto` generates (Generate Password) reaches the next step as generated, but run history, the run list, `manage_workflow get_run`, the run's effect records, its failure message, open failures, work items and sample data show it, and the same text (or its URL-encoded form) elsewhere in that run's steps, as `[redacted]` (`runAsShown` in `runtime/step-credentials.ts`); the stored run keeps it, since a resumed run rebuilds its steps from it. Not hidden: the approval card of a later step that sends it (the approver sees what is sent), a child workflow's run that returns it, the per-run engine log, and a password shorter than 6 characters anywhere but its own step. |
 | `webhook` | Vendored, not loaded. The editor's Webhook trigger is Jarvis's own ingress (below); the core piece's trigger would never fire through the engine, and its "return response" actions answer a synchronous webhook Jarvis does not hold open. |
 | `tables`, `forms`, `subflows`, `connections`, `tags`, `manual-trigger` | Not vendored: each needs the Activepieces server (its API, its form and chat pages, its MANUAL trigger strategy). Child workflows use the "Jarvis: Reusable workflows" piece, and a workflow started by hand uses the editor's own manual trigger. `CORE_PIECES_LEFT_OUT` gives each reason. |
 
@@ -835,13 +835,20 @@ HTTP request specifics:
   token-shaped path segment after a `hooks`, `webhook` or `webhook-test`
   segment or on a `hook.`/`hooks.` host (`/hooks/<token>`,
   `hook.eu1.make.com/<token>`): 8+ characters with at least two letters and two
-  digits, or 20+ characters. After a singular `key`, `token` or `secret`
-  segment only the next segment is judged, at 12+ characters
-  (`/with/key/<key>`). A fragment that is one token (`#<token>`: 16+ characters
+  digits, or 20+ characters. After a `key`, `apikey`, `api-key`, `token`,
+  `access_token`, `secret` or `password` segment (singular) only the next
+  segment is judged, at 12+ characters (`/with/key/<key>`). A fragment that is one token (`#<token>`: 16+ characters
   with letters and digits, or 32+, base64 padding allowed) is redacted, a
-  heading anchor such as `#step-1-install` is not. Words, numbers (with an
-  extension), env-style names (`MY_SECRET_2024`) and versioned names
-  (`endpoint1`) are kept, and an `auth` or `sig` segment hides nothing after it.
+  heading anchor such as `#step-1-install` is not. Words and word slugs
+  (`slack-notification-hook`), numbers (with an extension), env-style names
+  (`MY_SECRET_2024`) and versioned names (`endpoint1`) are kept, and an `auth`
+  or `sig` segment hides nothing after it. What moves: this redaction is part
+  of the projection an approval and a tracked send are bound to, so a step
+  whose URL it now changes (a hook URL, `/key/<k>`, `#<token>`, a Zapier hook,
+  a Slack `actions` or `commands` URL) and that was waiting on approval or
+  replay across the upgrade fails as "changed since it was recorded" (no
+  second send) and needs a new run; its card shows the URL with
+  `[redacted]` in place of the token.
   The engine's digest of the whole input still
   binds the approval to what runs.
 - **Receipts keep no tokens.** The durable receipt of a sent request drops
@@ -865,7 +872,8 @@ HTTP request specifics:
   it. The daemon cuts such JSON text again as it copies engine output
   (`runtime/engine-console-redaction.ts`). Not covered: an error type other
   than these logged with its request config (another HTTP library), text a
-  piece builds from a body itself, writes straight to a file descriptor, and a
+  piece builds from a body itself, writes straight to a file descriptor (the
+  daemon log copy still cuts JSON ones, the per-run buffer does not see them), and a
   CODE step printing a value it holds, which it may do on purpose. An engine
   log line holding such JSON for another reason is cut too, and a value too
   large to check (over 20,000 nested values) prints in part.

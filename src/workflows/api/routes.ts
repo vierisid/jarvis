@@ -3,7 +3,7 @@ import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion, versionAsShown } from './editor-version';
-import { runAsShown, runScrubber, scrubValue } from '../runtime/step-credentials';
+import { restoreShownSample, runAsShown, runScrubber, scrubValue } from '../runtime/step-credentials';
 import type { FlowRun } from '../db/repos/flow-run';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
@@ -1959,7 +1959,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               );
             }
           }
-          const v = withOwnedFlowVersion(id, versionId, () => setSampleDataEntry(versionId, stepName, output));
+          // A value the editor was shown as `[redacted]` and sent back unchanged keeps the stored one.
+          const v = withOwnedFlowVersion(id, versionId, () => setSampleDataEntry(versionId, stepName, restoreShownSample(getFlowVersion(versionId), stepName, output)));
           return ok({ versionId: v.id, sampleData: versionAsShown(v).sampleData });
         }),
       DELETE: (req) =>

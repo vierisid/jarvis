@@ -227,16 +227,20 @@ function noteSecret(value: unknown, secrets: Set<string>, header?: string): void
 /** Every `_webhook.headers` in a value (trigger data, or a step that passed it on) with its credential headers withheld. */
 function hideWebhookHeaders(value: unknown, secrets: Set<string>, depth: number): unknown {
   if (depth > 64) return value;
-  if (Array.isArray(value)) return value.map((item) => hideWebhookHeaders(item, secrets, depth + 1));
+  if (Array.isArray(value)) {
+    const out = value.map((item) => hideWebhookHeaders(item, secrets, depth + 1));
+    return out.some((item, i) => item !== value[i]) ? out : value;
+  }
   if (!object(value)) return value;
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+  const entries = Object.entries(value).map(([key, item]): [string, unknown] => {
     if (key === '_webhook' && object(item) && object(item.headers)) {
       // A timestamp is withheld by name but, a bare number, not looked for elsewhere (`addSecret`).
       for (const [name, header] of Object.entries(item.headers)) if (isCredentialHeader(name, header)) noteSecret(header, secrets, name);
       return [key, { ...item, headers: redactHeaderRecord(item.headers) }];
     }
     return [key, hideWebhookHeaders(item, secrets, depth + 1)];
-  }));
+  });
+  return entries.some(([key, item]) => item !== value[key]) ? Object.fromEntries(entries) : value;
 }
 
 /** A step map (`{ name: StepOutput }` or the worker's `{ name: { output: StepOutput } }`) with generated passwords withheld, in loops too. */
@@ -289,13 +293,17 @@ function scrubber(secrets: Iterable<string>): Scrubber | null {
   };
 }
 
-/** Every string in a value scrubbed; unchanged parts keep their identity. */
+/** Every string in a value scrubbed; a part with nothing to scrub is returned as it is, the same object. */
 export function scrubValue(value: unknown, scrub: Scrubber | null, depth = 0): unknown {
   if (!scrub || depth > 64) return value;
   if (typeof value === 'string') return scrub(value);
-  if (Array.isArray(value)) return value.map((item) => scrubValue(item, scrub, depth + 1));
+  if (Array.isArray(value)) {
+    const out = value.map((item) => scrubValue(item, scrub, depth + 1));
+    return out.some((item, i) => item !== value[i]) ? out : value;
+  }
   if (!object(value)) return value;
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrubValue(item, scrub, depth + 1)]));
+  const entries = Object.entries(value).map(([key, item]) => [key, scrubValue(item, scrub, depth + 1)] as const);
+  return entries.some(([key, item]) => item !== value[key]) ? Object.fromEntries(entries) : value;
 }
 
 /**
@@ -336,6 +344,21 @@ export function runAsShown<R extends { steps: Record<string, unknown> | null; fa
 /** What else a run's records must not show of the secrets its steps hold (its effect records): a scrubber, or null when there are none. */
 export function runScrubber(run: { steps: Record<string, unknown> | null }, trigger: FlowTriggerNode | null | undefined): Scrubber | null {
   return stepsAsShown(run.steps, trigger).scrub;
+}
+
+/**
+ * A sample-data entry the editor saves, with every value it was shown as
+ * `[redacted]` (a generated password, an old webhook credential header) and
+ * sent back unchanged put back from the stored entry, so saving a sample does
+ * not store the marker in place of the captured value. Any other edit stands.
+ */
+export function restoreShownSample(
+  version: { trigger: FlowTriggerNode; sampleData: Record<string, unknown> | null } | null, stepName: string, edited: unknown,
+): unknown {
+  const saved = version?.sampleData?.[stepName];
+  if (!version?.sampleData || saved === undefined || edited === null) return edited;
+  const shown = (stepsAsShown(version.sampleData, version.trigger).steps as Record<string, unknown>)[stepName];
+  return restoreValue(edited, saved, shown, 0);
 }
 
 /**
