@@ -249,6 +249,25 @@ export interface PieceNotifier {
 export const PIECE_NOTIFY_CHANNELS = ["auto", "telegram", "discord", "voice", "dashboard", "desktop"] as const;
 export type PieceNotifyChannel = typeof PIECE_NOTIFY_CHANNELS[number];
 
+/**
+ * Channels that only ever show the owner a notice on their own devices.
+ * `voice` is left out: it is spoken aloud to whoever is in the room, costs a
+ * TTS synthesis per run, and plays into a room that takes spoken commands, so
+ * it stays a governed send until the owner decides otherwise.
+ */
+const OWNER_ONLY_NOTIFY_CHANNELS: ReadonlySet<string> = new Set(["dashboard", "desktop"]);
+
+/**
+ * A notify step whose every requested channel is the owner's own surface is
+ * not a message to anyone else, so Authority does not ask before it runs.
+ * `auto` may fan out to Telegram or Discord and an empty list means `auto`,
+ * so neither counts, nor does `voice`; one outside channel makes the whole step governed.
+ */
+export function isOwnerOnlyNotify(channels: unknown): boolean {
+  return Array.isArray(channels) && channels.length > 0
+    && channels.every(channel => typeof channel === "string" && OWNER_ONLY_NOTIFY_CHANNELS.has(channel));
+}
+
 export type PieceNotifyPriority = "low" | "normal" | "high";
 
 export interface PieceNotifyInput {
