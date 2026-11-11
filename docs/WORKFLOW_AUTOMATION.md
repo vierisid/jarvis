@@ -47,6 +47,18 @@ Practical consequences:
 - A category the user put under approval parks the run at a waitpoint and delivers
   an approval request. The run resumes on approval and fails on denial or expiry.
   This is why `jarvis-context` reads can now answer `202` instead of `200`.
+- A notify step whose every channel is the owner's own screen (`dashboard`,
+  `desktop`) asks for no approval, even while `send_message` is governed: it
+  shows the owner the same text an approval card would have shown, and no one
+  else. It is judged as `read_data`, so it still records its effect row and
+  audit row, is held by Pause, refused by Kill and stopped by cancellation, and
+  an override or context rule on `read_data` applies to it while one on
+  `send_message` no longer does. `auto`, `telegram`, `discord`, `voice` (spoken
+  aloud to the room) and any mix that includes one of them stay `send_message`.
+  To make self-notifications ask again without asking for every read, add a
+  context rule on `read_data` with the condition `tool_name` set to
+  `workflow_notify` and the effect `require_approval`. A repeated
+  `idempotencyKey` is deduplicated before any approval is asked.
 - Each effect is recorded in `workflow_effect` with its frozen arguments, target,
   decision and outcome, readable at `GET /api/workflow-runs/:runId/effects`.
 - A tool that fails reports a typed outcome rather than a result that happens to
@@ -222,6 +234,31 @@ Practical consequences:
   says so. Which pieces count is `src/workflows/runtime/step-admission.ts`,
   which both the admission and `/api/workflows/pieces` (`notApprovalGated`)
   read.
+
+### A dashboard notification is saved, not only shown
+
+A `jarvis-notify` step to `dashboard` (or `auto`, which includes it) saves the notification in the
+daemon's `dashboard_notifications` table, then sends the live toast to any open dashboard tab under
+the same id. Saved means delivered: the step succeeds whether or not a tab is open, so a 9:00
+reminder is not lost when nobody is looking at 9:00. The row keeps the message, priority, time, flow
+id and run id.
+
+- The dashboard loads the unread rows when it opens (`GET /api/dashboard-notifications`) and shows
+  them in the Needs you notifications list and as a toast. Marking one read
+  (`POST /api/dashboard-notifications/:id/read`) clears it for every tab and every later visit.
+- A deduplicated notification (same idempotency key) is claimed before anything is saved, so it is
+  stored once.
+- Retention: at most the newest 200 rows and nothing older than 30 days, read or not, trimmed on
+  every insert. A message longer than 32,000 characters is saved shortened, with a note saying so.
+- Deleting a workflow (the ordinary delete and the Brief purge) deletes its saved notifications.
+  Removing it with Undo available keeps them.
+- If the row cannot be saved, the dashboard channel is failed, and the step fails when no other
+  channel delivered. If the live toast throws, or a Pause, Kill or cancel stops it, after the row
+  was saved, the step reports the send as unconfirmed and its idempotency key stays used.
+- The saved text is the workflow's own output and may carry outside content it read. It is shown
+  as plain text and is never given to a model.
+- `auto` with no tab open also shows the desktop notification, as before. `voice` still needs an
+  open dashboard to play the audio and reports so when none is open.
 
 ### A step's tool result is NOT framed as untrusted content
 
@@ -701,6 +738,24 @@ installing this version. Before downgrading, cancel or finish active required
 parent/child runs and remove their `waitForCompletion` settings. Older binaries
 ignore that input and would otherwise restore asynchronous behavior. Retain the
 additive table and historical receipts; never retry an uncertain run as rollback.
+
+### Reusable workflow calls fail by default
+
+The "Jarvis: Reusable workflows" `call` step fails when its child does not give
+a usable result: the child failed, timed out, stopped uncertain, returned
+nothing (no `return_result` step), or returned output that does not match the
+step's expected result shape. The failure names the child workflow and says why
+in plain words, and it fails the run. Only a succeeded child with a valid result
+continues the parent.
+
+Authors who want to branch on the child's outcome turn on **Continue when the
+child fails** (`continueOnChildFailure`). The step then returns the status object
+(`status` of `failed`, `invalid_output`, `timeout` or `uncertain`, a `code` and
+the child `runId`) and the parent stays green. An absent setting means the safe
+default, so saved flows that never set it fail on a bad child. The setting is
+not part of the invocation fingerprint: it changes how the parent treats the
+receipt, never what is sent to the child. `require_success` still works after a
+`call`, but a default `call` already fails first.
 
 ### Governed pieces
 
