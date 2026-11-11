@@ -17,6 +17,7 @@ import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../../../../src/lib/cron-scheduler';
 import { chosenScheduleZone } from '../../../../../src/workflows/runner/triggers/schedule-zone';
+import { isHumanInputStep } from '../../../../../src/workflows/runtime/human-input-contract';
 import type { ConnectionMeta } from "./useConnections";
 import {
   detectTriggerKind,
@@ -185,6 +186,8 @@ export interface PieceCatalogActionOrTrigger {
   requireAuth?: boolean;
   /** Set by the daemon on an ungoverned action of a partly governed piece (#955). */
   notApprovalGated?: boolean;
+  /** Set by the daemon on an action that asks a person: "Continue on failure" does not apply to it. */
+  continueUnavailable?: boolean;
   /**
    * Optional declared output for the action or trigger. Used by the
    * variable picker to surface field-level rows even before the step has
@@ -1141,6 +1144,9 @@ export function useWorkflowEditor(flowId: string | null) {
       const target = findTarget();
       if (!target) return null;
       if (target.type !== "PIECE") return null;
+      // A step that asks a person stops the run on a "no"; "Continue on
+      // failure" does not apply to it (step-admission.ts canContinuePastStep).
+      if (isHumanInputStep(target.settings?.pieceName, target.settings?.actionName)) return null;
 
       const pieceLabel = target.displayName ?? target.name;
       const router: FlowStepNode = {

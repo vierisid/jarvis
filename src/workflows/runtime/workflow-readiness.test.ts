@@ -756,3 +756,11 @@ test('readiness says "Retry on failure" cannot apply to a step that acts outside
   expect(compileWorkflow(graph(inside), { pieces }).warnings).toBeUndefined();
   expect(compile(graph(off)).warnings).toBeUndefined();
 });
+
+test('readiness says "Continue on failure" cannot apply to a step that asks a person, without refusing the flow', () => {
+  const ask: any = { name: 'ok', type: 'PIECE', settings: { pieceName: '@activepieces/piece-approval', actionName: 'wait_for_approval', input: {},
+    errorHandlingOptions: { continueOnFailure: { value: true } } } };
+  const report = compileWorkflow(graph(ask), { phase: 'composition' });
+  expect(report.warnings).toEqual([{ node: 'ok', path: 'settings.errorHandlingOptions.continueOnFailure', code: 'CONTINUE_UNAVAILABLE',
+    message: 'Continue on failure is not available for a step that asks a person, so the steps after it run only after a yes.' }]);
+});

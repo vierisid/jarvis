@@ -50,7 +50,8 @@ checks at dispatch.
 ```
 
 The report may also carry `warnings`: a saved option that cannot apply, such as
-"Retry on failure" on a step that acts outside Jarvis (`RETRY_UNAVAILABLE`). A
+"Retry on failure" on a step that acts outside Jarvis (`RETRY_UNAVAILABLE`), or
+"Continue on failure" on a step that asks a person (`CONTINUE_UNAVAILABLE`). A
 warning never changes `ready`; the flow runs as if the option were off.
 
 Rejected activation returns HTTP 422 with `code: "WORKFLOW_NOT_READY"`, a

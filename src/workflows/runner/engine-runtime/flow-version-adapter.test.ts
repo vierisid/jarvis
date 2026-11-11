@@ -37,3 +37,13 @@ test('adapter keeps "Retry on failure" only for built-in steps that act inside t
     expect(retried(outside)).toBeUndefined();
   }
 });
+
+test('adapter never hands the engine "Continue on failure" for a step that asks a person', () => {
+  const options = (pieceName: string, actionName: string) => (toUpstreamFlowVersion(versionOf({ name: 'a', type: 'PIECE',
+    settings: { pieceName, actionName, input: {}, errorHandlingOptions: both } })).trigger.nextAction as any).settings.errorHandlingOptions;
+  for (const [piece, action] of [['@activepieces/piece-approval', 'wait_for_approval'], ['@activepieces/piece-approval', 'create_approval_links'],
+    ['@jarvispieces/piece-jarvis-input', 'request_approval'], ['@jarvispieces/piece-jarvis-input', 'request_input']]) {
+    expect(options(piece!, action!)).toBeUndefined();
+  }
+  expect(options('@jarvispieces/piece-jarvis-ask', 'ask')).toEqual({ continueOnFailure: { value: true } });
+});

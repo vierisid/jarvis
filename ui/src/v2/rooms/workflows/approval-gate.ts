@@ -38,3 +38,6 @@ export function stepNotApprovalGated(step: FlowStepNode, catalog: readonly Piece
 
 /** Said where "Retry on failure" cannot apply (`RETRY_UNAVAILABLE_MESSAGE` in the daemon's step-admission.ts). */
 export const RETRY_UNAVAILABLE_MESSAGE = "Retry is not available for steps that act outside Jarvis, so a request is never sent twice.";
+
+/** Said where "Continue on failure" cannot apply (`CONTINUE_UNAVAILABLE_MESSAGE` in the daemon's step-admission.ts). */
+export const CONTINUE_UNAVAILABLE_MESSAGE = "Continue on failure is not available for a step that asks a person, so the steps after it run only after a yes.";

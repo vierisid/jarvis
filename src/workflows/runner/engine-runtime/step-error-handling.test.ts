@@ -21,12 +21,15 @@ import { Worker } from '../../queue/worker';
 import { createRunFlowHandler } from '../handler';
 import { createWorkflowRoutes } from '../../api/routes';
 import { continuedFailures } from '../../runtime/continued-failures';
+import { ActionOutcomeError } from '../../../actions/action-outcome';
 
 const buildOptIn = process.env.JARVIS_TEST_ENGINE_BUILD === '1';
 const initialCached = findCachedBundle();
 const piecesBuilt = existsSync(resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, 'pieces/jarvis/test/dist/src/index.js'));
 const skip = (initialCached === null && !buildOptIn) || (!piecesBuilt && !buildOptIn);
 const ASK = '@jarvispieces/piece-jarvis-ask';
+const TOOL = '@jarvispieces/piece-jarvis-tool';
+const INPUT = '@jarvispieces/piece-jarvis-input';
 const VERSION = '0.0.1';
 
 describe('step error handling options in the engine', () => {
@@ -42,7 +45,14 @@ describe('step error handling options in the engine', () => {
       pieceAuthorize: async (_request, context) => {
         if (context.stepName === 'refused') throw new Error('Jarvis refused this step');
         return { governed: false };
-      } } });
+      },
+      // A refusal a Jarvis step hears from inside its run, not from the dispatch check.
+      toolsInvoke: async (req) => {
+        if (req.toolName === 'denied') throw new ActionOutcomeError({ status: 'blocked', code: 'APPROVAL_DENIED', effect: 'not_started', message: 'Workflow approval denied; effect was not executed' });
+        return { toolName: req.toolName, result: null, outcome: { status: 'error', code: 'PROVIDER_ERROR', effect: 'not_started', message: 'The provider said no' } };
+      },
+      // A person rejected the request.
+      humanInput: async () => { throw new Error('Human request rejected'); } } });
     await api.start({ port: 0 });
     let cached = initialCached;
     if (!cached && buildOptIn) cached = await buildEngineBundle();
@@ -51,7 +61,9 @@ describe('step error handling options in the engine', () => {
     runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath, expectedDigest: cached.digest });
     const handle = await runtime.acquire({ runId: 'readiness-metadata', projectId: DEFAULT_IDS.project });
     try {
-      configureWorkflowReadiness({ pieces: new PieceCatalog([metadataToCatalogEntry(await handle.extractPieceMetadata({ pieceName: ASK, pieceVersion: VERSION }))]) });
+      const entries = [];
+      for (const pieceName of [ASK, TOOL, INPUT]) entries.push(metadataToCatalogEntry(await handle.extractPieceMetadata({ pieceName, pieceVersion: VERSION })));
+      configureWorkflowReadiness({ tool: () => ({ params: [] }), pieces: new PieceCatalog(entries) });
     } finally { await handle.release(); }
   }, 60_000);
   afterAll(async () => { await runtime?.shutdown(); await api.stop(); closeWorkflowDb(); });
@@ -96,5 +108,33 @@ describe('step error handling options in the engine', () => {
     expect(prompts.slice(before)).toEqual([]);
     expect(r.status).toBe('FAILED');
     expect(r.failedStep?.name).toBe('refused');
+  }, 60_000);
+
+  const tool = (name: string, toolName: string, extra: Record<string, unknown>, next?: FlowTriggerNode): FlowTriggerNode =>
+    ({ name, type: 'PIECE', settings: { pieceName: TOOL, pieceVersion: VERSION, actionName: 'invoke', input: { toolName, params: {} }, ...extra }, ...(next ? { nextAction: next } : {}) });
+
+  test.skipIf(skip)('continue on failure never continues past a refusal a Jarvis step heard from inside its run', async () => {
+    const before = prompts.length;
+    const r = await run(tool('denied', 'denied', continueOn, ask('after', 'ran')));
+    expect(prompts.slice(before)).toEqual([]);
+    expect(r.status).toBe('FAILED');
+    expect(r.failedStep?.name).toBe('denied');
+  }, 60_000);
+
+  test.skipIf(skip)('continue on failure goes past a Jarvis step whose action ran and failed', async () => {
+    const before = prompts.length;
+    const r = await run(tool('failed', 'provider', continueOn, ask('after', 'ran')));
+    expect(prompts.slice(before)).toEqual(['ran']);
+    expect(r.status).toBe('SUCCEEDED');
+    expect(continuedFailures(r).map(step => step.name)).toEqual(['failed']);
+  }, 60_000);
+
+  test.skipIf(skip)('continue on failure saved on a step that asks a person still stops the run on a rejection', async () => {
+    const before = prompts.length;
+    const r = await run({ name: 'approve', type: 'PIECE', settings: { pieceName: INPUT, pieceVersion: VERSION, actionName: 'request_approval',
+      input: { title: 'Ship?', prompt: 'Ship the release?', requestKey: 'k', timeoutHours: 1 }, ...continueOn }, nextAction: ask('after', 'ran') });
+    expect(prompts.slice(before)).toEqual([]);
+    expect(r.status).toBe('FAILED');
+    expect(r.failedStep?.name).toBe('approve');
   }, 60_000);
 });

@@ -1651,9 +1651,20 @@ Advanced settings). They are saved as `settings.errorHandlingOptions` and
   failed step" instead of a clean success. The Brief Runs list and run detail
   show "Finished with a failed step: <step name>" (`note` on the run), and
   All workflows shows it as the latest run. Effect records and Authority
-  decisions are written the same way as for a failing run. A step the daemon
-  refused to run (a denied or held dispatch, `authorizePieceDispatch` failing)
-  is never continued past, so a refusal of Authority cannot be skipped.
+  decisions are written the same way as for a failing run. A refusal is never
+  continued past, so it cannot be skipped: a step the daemon refused to run (a
+  denied or held dispatch, `authorizePieceDispatch` failing), and a Jarvis
+  step or approval that heard a refusal from inside its run (a `blocked`
+  outcome such as `APPROVAL_DENIED` or `EMERGENCY_STOPPED`, or an untyped
+  error; `continuableFailure` in `piece-effect-guard.ts`). Such a step goes on
+  only on a typed outcome that ran and failed (`error` or `unknown`).
+- **Continue on failure** does not apply at all to a step that asks a person
+  (Ask for input, Ask for approval, Create approval links, Wait for Approval:
+  `canContinuePastStep` in `step-admission.ts`). A rejection, cancellation or
+  expiry stops the run there, so the steps after it run only after a yes. The
+  adapter drops the option, the editor disables it and hides "Add error
+  handling" for those steps, and readiness reports a non-blocking
+  `CONTINUE_UNAVAILABLE` warning.
 - **Retry on failure** is honoured only for the built-in steps that work on
   data inside the run (`RETRY_SAFE_PIECES` in `step-admission.ts`: the
   in-run steps except approval, delay, schedule and store). It tries up to 4

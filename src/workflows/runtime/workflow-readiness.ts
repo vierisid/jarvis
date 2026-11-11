@@ -32,7 +32,7 @@ import {managedTrelloIssue} from './managed-trello';
 import {managedSlackIssue} from './managed-slack';
 import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
-import { canRetryStep, RETRY_UNAVAILABLE_MESSAGE } from './step-admission';
+import { canContinuePastStep, canRetryStep, CONTINUE_UNAVAILABLE_MESSAGE, RETRY_UNAVAILABLE_MESSAGE } from './step-admission';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
 import { emptyInput, inputIssue } from './input-validation';
 import { declaredDependencies } from './code-step-manifest';
@@ -277,6 +277,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     if (!root && (type === 'PIECE' || type === 'CODE') && settings.errorHandlingOptions?.retryOnFailure?.value === true
       && !(type === 'PIECE' && canRetryStep(pieceName)) && warnings.length < 100) {
       warnings.push({ node, path: 'settings.errorHandlingOptions.retryOnFailure', code: 'RETRY_UNAVAILABLE', message: RETRY_UNAVAILABLE_MESSAGE });
+    }
+    if (!root && type === 'PIECE' && settings.errorHandlingOptions?.continueOnFailure?.value === true
+      && !canContinuePastStep(pieceName, settings.actionName) && warnings.length < 100) {
+      warnings.push({ node, path: 'settings.errorHandlingOptions.continueOnFailure', code: 'CONTINUE_UNAVAILABLE', message: CONTINUE_UNAVAILABLE_MESSAGE });
     }
     // Any auth that names the managed account, not only the two exact spellings:
     // a binding with text around it must not skip the action allowlist.

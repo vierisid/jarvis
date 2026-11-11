@@ -30,7 +30,8 @@ export async function runWithExponentialBackoff<T extends CodeAction | PieceActi
 // approved) did not run. "Continue on failure" is for a step that ran and
 // failed; it must not turn a refusal of Authority into a step to move past.
 // The executors add the failed context they return when the refusal came from
-// the dispatch check.
+// the dispatch check or, for a step that asks Jarvis from inside its run (a
+// Jarvis piece, an approval), from there (piece-effect-guard continuableFailure).
 export const refusedDispatches = new WeakSet<FlowExecutorContext>()
 // === END JARVIS PATCH ===
 

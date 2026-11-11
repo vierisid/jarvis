@@ -115,7 +115,7 @@ import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oaut
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
-import { canRetryStep, isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
+import { canContinuePastStep, canRetryStep, isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import { withScheduleZoneDefault } from "../runner/triggers/schedule-zone";
@@ -934,6 +934,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               inputSchema: a.inputSchema ?? null,
               // A partly governed piece badges only its ungoverned actions.
               ...(!isCommunityPiece(p.name) && isCommunityAction(p.name, a.name) ? { notApprovalGated: true } : {}),
+              // A step that asks a person stops on a "no": "Continue on failure" does not apply.
+              ...(canContinuePastStep(p.name, a.name) ? {} : { continueUnavailable: true }),
               // Optional declared output sample (Jarvis extension to AP).
               // Surfaced to the dashboard so the variable picker can show
               // field-level rows for actions that have never been run yet.

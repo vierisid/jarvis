@@ -113,7 +113,8 @@ import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
 import { CANCELED_EFFECT_WARNING, continuedFailureLabel } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
 import { modKey } from "../../ui/platform";
-import { NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, RETRY_UNAVAILABLE_MESSAGE, stepNotApprovalGated } from "./approval-gate";
+import { isHumanInputStep } from "../../../../../src/workflows/runtime/human-input-contract";
+import { CONTINUE_UNAVAILABLE_MESSAGE, NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, RETRY_UNAVAILABLE_MESSAGE, stepNotApprovalGated } from "./approval-gate";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
 // cursor rightward by NODE_X_STEP; nested branches (loop body / router
@@ -267,6 +268,8 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
         nodeId: string;
         isTrigger: boolean;
         stepType: FlowStepNode["type"];
+        /** A step that asks a person: no "Add error handling", it stops on a "no". */
+        asksPerson: boolean;
       }
     | null
   >(null);
@@ -554,6 +557,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
         nodeId: node.id,
         isTrigger,
         stepType: node.data.step.type,
+        asksPerson: isHumanInputStep(node.data.step.settings?.pieceName, node.data.step.settings?.actionName),
       });
     },
     [editor.draftTrigger?.name, closePopover, closeCanvasMenu, closeLibraryPicker],
@@ -1164,7 +1168,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
                     },
                   },
                 ]),
-            ...(nodeContextMenu.stepType === "PIECE"
+            ...(nodeContextMenu.stepType === "PIECE" && !nodeContextMenu.asksPerson
               ? [
                   {
                     key: "add-error-handling",
@@ -3734,6 +3738,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         continueOnFailure={!!step.settings?.errorHandlingOptions?.continueOnFailure?.value}
         retryOnFailure={!!step.settings?.errorHandlingOptions?.retryOnFailure?.value}
         retryAvailable={step.type === "PIECE" && piece?.retrySafe === true}
+        continueAvailable={!(step.type === "PIECE" && piece?.actions.find((a) => a.name === step.settings?.actionName)?.continueUnavailable === true)}
         onSetErrorHandling={onSetErrorHandling}
         stepName={step.name}
         sampleData={props.sampleData}
@@ -3794,6 +3799,7 @@ function AdvancedSettings(props: {
   continueOnFailure: boolean;
   retryOnFailure: boolean;
   retryAvailable: boolean;
+  continueAvailable: boolean;
   onSetErrorHandling: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
   stepName: string;
   sampleData: unknown | undefined;
@@ -3824,6 +3830,7 @@ function AdvancedSettings(props: {
               continueOnFailure={props.continueOnFailure}
               retryOnFailure={props.retryOnFailure}
               retryAvailable={props.retryAvailable}
+              continueAvailable={props.continueAvailable}
               onChange={props.onSetErrorHandling}
             />
           ) : null}
@@ -4035,11 +4042,13 @@ function ErrorHandlingSection({
   continueOnFailure,
   retryOnFailure,
   retryAvailable,
+  continueAvailable,
   onChange,
 }: {
   continueOnFailure: boolean;
   retryOnFailure: boolean;
   retryAvailable: boolean;
+  continueAvailable: boolean;
   onChange: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
 }): React.ReactElement {
   return (
@@ -4048,15 +4057,16 @@ function ErrorHandlingSection({
       <label className="wf-props__field wf-props__field--inline">
         <input
           type="checkbox"
-          checked={continueOnFailure}
+          checked={continueOnFailure && continueAvailable}
+          disabled={!continueAvailable}
           onChange={(e) => onChange({ continueOnFailure: e.target.checked })}
         />
         <span className="wf-props__field-label">Continue on failure</span>
       </label>
       <p className="wf-props__hint">
-        If this step fails, the steps after it still run. The step shows as
-        failed and the run shows as finished with a failed step. A step that
-        Jarvis refused to run is never continued past.
+        {continueAvailable
+          ? "If this step fails, the steps after it still run. The step shows as failed and the run shows as finished with a failed step. A step that Jarvis refused to run, or that was refused approval, is never continued past."
+          : `${CONTINUE_UNAVAILABLE_MESSAGE}${continueOnFailure ? " This step has it turned on, but it is ignored." : ""}`}
       </p>
       <label className="wf-props__field wf-props__field--inline">
         <input
