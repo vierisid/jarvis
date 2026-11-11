@@ -52,6 +52,28 @@ function webhookInput(trigger: unknown): Record<string, unknown> | null {
 const secretOf = (input: Record<string, unknown> | null): string | null =>
   input && typeof input.secret === 'string' && input.secret !== '' ? input.secret : null;
 
+/**
+ * Why a webhook's signing setup cannot be trusted, or null. A secret that is
+ * not text (a number, a list), or a "timestamped" scheme with no secret to
+ * sign with, was once taken for "no secret" and accepted unsigned requests;
+ * a webhook meant to be signed must never fall back to unsigned. `null` and
+ * an empty string are "no secret", as the editor writes when it is cleared.
+ */
+export function webhookSecretProblem(input: unknown): string | null {
+  if (!object(input)) return null;
+  const secret = input.secret;
+  if (secret !== undefined && secret !== null && typeof secret !== 'string') {
+    return 'The webhook signing secret must be text. Use a random string of at least 32 characters.';
+  }
+  if (input[SIGNATURE_SCHEME_FIELD] === 'timestamped' && (typeof secret !== 'string' || secret === '')) {
+    return 'This webhook is set to require timestamps but has no signing secret. Add a signing secret, or remove the timestamp setting.';
+  }
+  return null;
+}
+
+/** The same check for a whole trigger node: null unless it is a Webhook trigger with a problem. */
+export const triggerSecretProblem = (trigger: unknown): string | null => webhookSecretProblem(webhookInput(trigger));
+
 /** The scheme a webhook trigger's input asks for: legacy unless it says timestamped. */
 export function webhookScheme(input: unknown): WebhookSignatureScheme {
   return object(input) && input[SIGNATURE_SCHEME_FIELD] === 'timestamped' ? 'timestamped' : 'legacy';
@@ -71,8 +93,17 @@ export interface KnownSecret { found: boolean; timestamped: boolean }
  */
 export function applyWebhookSecretRules<T>(previous: unknown, next: T, known: (secret: string) => KnownSecret): T {
   const input = webhookInput(next);
+  // A secret that is not text is refused, never read as "no secret".
+  if (input && input.secret !== undefined && input.secret !== null && typeof input.secret !== 'string') {
+    throw new WebhookSecretError(webhookSecretProblem(input)!);
+  }
   const secret = secretOf(input);
   if (!input || secret === null) {
+    // A scheme with no secret to sign with, on a webhook that had none: refused. (Clearing a
+    // secret leaves the scheme behind for the next line to remove, so that stays allowed.)
+    if (input && input[SIGNATURE_SCHEME_FIELD] === 'timestamped' && secretOf(webhookInput(previous)) === null) {
+      throw new WebhookSecretError(webhookSecretProblem(input)!);
+    }
     // No secret: no scheme to keep.
     if (input && SIGNATURE_SCHEME_FIELD in input) return withInput(next, Object.fromEntries(Object.entries(input).filter(([k]) => k !== SIGNATURE_SCHEME_FIELD)));
     return next;

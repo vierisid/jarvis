@@ -597,6 +597,44 @@ describe("webhooks", () => {
     await d.stop();
   });
 
+  test("a webhook meant to be signed never accepts unsigned requests, whatever its secret was saved as", async () => {
+    const d = await daemon(Date.now());
+    const seen: Array<[string, string]> = [];
+    // Written past the save rules, as an install from before them (or a hand-written row) holds them.
+    for (const [label, input] of [["number", { secret: 12345678901234567890123456789012 }], ["boolean", { secret: true }],
+      ["array", { secret: ["x".repeat(40)] }], ["object", { secret: { v: "x".repeat(40) } }], ["scheme only", { signature_scheme: "timestamped" }],
+      ["empty secret, scheme", { secret: "", signature_scheme: "timestamped" }]] as const) {
+      const out = webhook();
+      getWorkflowDb().run("UPDATE flow_version SET trigger = ? WHERE id = ?",
+        [JSON.stringify({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "webhook", input } }), out.versionId]);
+      await d.manager.refresh(out.flowId);
+      const res = await post(d, out.flowId, '{"n":1}');
+      seen.push([label, `${res.status}`]);
+      expect(runsOf(out.flowId)).toHaveLength(0);
+      // Nothing about the owner's setup is told to whoever holds the URL, but the owner's record has it.
+      expect(JSON.stringify(await res.json())).not.toContain("secret");
+      expect(listFlowFires(out.flowId)[0]).toMatchObject({ label: "blocked", detail: { code: "SECRET_UNUSABLE" } });
+    }
+    expect(seen.map(([, status]) => status)).toEqual(seen.map(() => "401"));
+    await d.stop();
+  });
+
+  test("a deeply nested body is refused with a 400 and recorded, not answered 500 retry later", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    const deep = "[".repeat(150_000) + "]".repeat(150_000);
+    const res = await post(d, flowId, deep);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain("too deeply nested");
+    expect(runsOf(flowId)).toHaveLength(0);
+    expect(listFlowFires(flowId)[0]).toMatchObject({ label: "blocked", detail: { code: "BODY_TOO_DEEP" } });
+    const objects = '{"a":'.repeat(50_000) + "1" + "}".repeat(50_000);
+    expect((await post(d, flowId, objects)).status).toBe(400);
+    // An ordinary nested body still runs.
+    expect((await post(d, flowId, JSON.stringify({ a: { b: [{ c: 1 }] } }))).status).toBe(200);
+    await d.stop();
+  });
+
   test("#1153 review: timestamps are refused outside the tolerance either way and in any other form; a stamped body cannot pass as body-only", async () => {
     const { flowId } = webhook({ secret: SECRET });
     const legacy = legacyWebhook("s3cret");

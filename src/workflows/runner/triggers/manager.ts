@@ -44,7 +44,7 @@ import {
   type CronMissedSummary, type CronOccurrence,
 } from "./cron";
 import { WebhookManager, type WebhookDelivery, type WebhookFireResult } from "./webhook";
-import { webhookScheme } from "./webhook-secret";
+import { webhookScheme, webhookSecretProblem } from "./webhook-secret";
 import type { WorkflowEventBus } from "../../runtime/event-bus";
 import { getFlow, listFlows, type FlowRow } from "../../db/repos/flow";
 import {
@@ -235,6 +235,13 @@ export class TriggerManager {
     ];
 
     this.webhooks.setTriggerCallback((flowId, payload, delivery, generation) => this.fire(flowId, payload, "webhook", delivery, generation));
+    // A delivery refused before it could fire still leaves a row, folded with its repeats.
+    this.webhooks.setRefusalCallback((flowId, code, reason) => {
+      const sub = this.subs.get(flowId);
+      if (!sub?.versionId) return;
+      try { recordBlocked({ flowId, flowVersionId: sub.versionId, source: "webhook", signature: JSON.stringify([sub.versionId, code]), detail: { reason, code } }); }
+      catch (e) { this.log(`flow ${flowId} (webhook) refused delivery could not be recorded: ${(e as Error).message}`); }
+    });
   }
 
   /** Exact-version registration receipt; refresh resolving alone is not proof of a subscription. */
@@ -501,8 +508,10 @@ export class TriggerManager {
   private registerWebhook(flowId: string, versionId: string, trigger: TriggerNode): void {
     const input = (trigger.settings?.input ?? {}) as Record<string, unknown>;
     const secret = typeof input.secret === "string" && input.secret ? input.secret : undefined;
+    // A secret that cannot be used is never read as "no secret": the route refuses every request.
+    const secretProblem = webhookSecretProblem(input) ?? undefined;
     const generation = workflowRemovalState(flowId).generation;
-    this.webhooks.register(flowId, secret, generation, submissionConfig(input), webhookScheme(input));
+    this.webhooks.register(flowId, secret, generation, submissionConfig(input), webhookScheme(input), secretProblem);
     this.subs.set(flowId, {
       generation,
       flowId,

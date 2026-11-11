@@ -22,6 +22,8 @@ export type WebhookRoute = {
   /** How a signature is made (#1153): over `<timestamp>.<body>`, or over the body alone (legacy). */
   scheme: WebhookSignatureScheme;
   registeredAt: number;
+  /** Set when the signing setup cannot be trusted: every request is refused with 401 and this reason. */
+  secretProblem?: string;
   /** Captured by the runtime at registration, never taken from the HTTP payload. */
   generation?: number;
 };
@@ -41,6 +43,24 @@ export type WebhookDelivery = {
   /** Where the key came from, for the delivery record. */
   label?: string;
 };
+
+/** A delivery refused before it fired (an unusable secret, a body nested too deeply). */
+export type WebhookRefusalCallback = (workflowId: string, code: string, reason: string, generation?: number) => void;
+
+/** How deeply a webhook body's JSON may nest. Real payloads stay under about 20. */
+export const WEBHOOK_MAX_JSON_DEPTH = 100;
+
+/** Whether a parsed JSON value nests deeper than `limit`. Iterative: a deep body must not overflow the stack it is measured on. */
+export function jsonNestsDeeperThan(value: unknown, limit: number): boolean {
+  const stack: Array<[unknown, number]> = [[value, 1]];
+  while (stack.length > 0) {
+    const [node, depth] = stack.pop()!;
+    if (node === null || typeof node !== 'object') continue;
+    if (depth > limit) return true;
+    for (const child of Array.isArray(node) ? node : Object.values(node)) stack.push([child, depth + 1]);
+  }
+  return false;
+}
 
 /** What became of a delivery, so the reply can say so (and a sender knows whether to retry). */
 export type WebhookFireResult =
@@ -169,6 +189,7 @@ const json = (status: number, body: Record<string, unknown>, extra: Record<strin
 export class WebhookManager {
   private routes: Map<string, WebhookRoute> = new Map();
   private triggerCallback: WebhookTriggerCallback | null = null;
+  private refusalCallback: WebhookRefusalCallback | null = null;
   private perFlow = new KeyedRateLimiter(60_000, WEBHOOK_PER_FLOW_PER_MINUTE);
   private global = new KeyedRateLimiter(60_000, WEBHOOK_GLOBAL_PER_MINUTE);
   private badSignature = new KeyedRateLimiter(60_000, WEBHOOK_BAD_SIGNATURE_PER_MINUTE);
@@ -211,7 +232,7 @@ export class WebhookManager {
    * Register a workflow webhook.
    * @returns the webhook path (e.g. "/webhooks/wf_abc123")
    */
-  register(workflowId: string, secret?: string, generation?: number, submission?: SubmissionConfig, scheme: WebhookSignatureScheme = 'legacy'): string {
+  register(workflowId: string, secret?: string, generation?: number, submission?: SubmissionConfig, scheme: WebhookSignatureScheme = 'legacy', secretProblem?: string): string {
     const path = `/webhooks/${workflowId}`;
 
     this.routes.set(workflowId, {
@@ -220,6 +241,7 @@ export class WebhookManager {
       secret: secret ?? null,
       scheme,
       registeredAt: Date.now(),
+      ...(secretProblem ? { secretProblem } : {}),
       ...(submission ? { submission } : {}),
       ...(generation === undefined ? {} : { generation }),
     });
@@ -268,6 +290,16 @@ export class WebhookManager {
     }
 
     const badKey = `${workflowId}:bad-signature`;
+    // A webhook meant to be signed whose secret cannot be used refuses everything:
+    // never "unsigned", which would let anyone with the URL start it.
+    if (route.secretProblem) {
+      if (!this.badSignature.allow(badKey)) {
+        return json(429, { error: 'Too many requests' }, { 'Retry-After': String(this.badSignature.retryAfterSeconds(badKey)) });
+      }
+      // The reason is for the owner (the delivery record), not for whoever holds the URL.
+      this.refused(workflowId, route, 'SECRET_UNUSABLE', route.secretProblem);
+      return json(401, { error: 'This webhook cannot accept requests until its owner fixes its signing setup.' });
+    }
     if (!route.secret) {
       const limited = this.chargeBudgets(workflowId);
       if (limited) return limited;
@@ -350,6 +382,11 @@ export class WebhookManager {
     if (rawBody.trim()) {
       try {
         const parsed = JSON.parse(rawBody);
+        if (jsonNestsDeeperThan(parsed, WEBHOOK_MAX_JSON_DEPTH)) {
+          const reason = `The request body is nested more than ${WEBHOOK_MAX_JSON_DEPTH} levels deep, so nothing ran for it.`;
+          this.refused(workflowId, route, 'BODY_TOO_DEEP', reason);
+          return json(400, { error: 'The request body is too deeply nested. Send a flatter body.' });
+        }
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           data = parsed as Record<string, unknown>;
         } else {
@@ -394,6 +431,16 @@ export class WebhookManager {
       console.warn(`[WebhookManager] No trigger callback set; webhook fired for "${workflowId}" but nothing will execute`);
     }
     return webhookReply(workflowId, result);
+  }
+
+  /** Set the callback told of a delivery refused before it could fire, so the owner's record shows it. */
+  setRefusalCallback(cb: WebhookRefusalCallback): void {
+    this.refusalCallback = cb;
+  }
+
+  private refused(workflowId: string, route: WebhookRoute, code: string, reason: string): void {
+    try { this.refusalCallback?.(workflowId, code, reason, route.generation); }
+    catch (err) { console.error(`[WebhookManager] Refusal callback threw for workflow "${workflowId}":`, err); }
   }
 
   /**
