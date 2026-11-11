@@ -4650,8 +4650,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
      */
     '/api/awareness/toggle': {
       POST: async (req: Request) => {
-        const service = ctx.awarenessService;
-        if (!service) return error('Awareness service not available', 503);
+        // After a boot with awareness off there is no service yet: the
+        // awareness applier starts it when this turns awareness on. Without a
+        // settings coordinator only a running service can be switched.
+        if (!ctx.settingsReload && !ctx.awarenessService) return error('Awareness service not available', 503);
         let body: unknown;
         try {
           body = await req.json();
@@ -4670,7 +4672,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         };
         const apply = async () => {
           if (ctx.settingsReload) return ctx.settingsReload.applyNow('awareness');
-          service.toggle(enabled);
+          ctx.awarenessService?.toggle(enabled);
           return null;
         };
         // Off fails closed, like desktop control: it takes effect now even if
