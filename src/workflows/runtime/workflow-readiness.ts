@@ -586,7 +586,9 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
               const value = input[field.name];
               const path = `settings.input.${field.name}`;
               if (field.required && emptyInput(value)) {
-                const account = /^(.+?)\s+account$/i.exec(field.label ?? '');
+                // Jarvis pieces name an account reference `<app>Connection` and label it
+                // "<App> account"; both must hold, so a third-party "Ad account" ID stays a fill-in.
+                const account = /Connection$/.test(field.name) ? /^(.+?)\s+account$/i.exec(field.label ?? '') : null;
                 if (account) needsSetup(node, path, `${field.label}: connect your ${account[1]} account in Connected workspace, then choose it here`, { app: account[1]! });
                 else needsSetup(node, path, `${field.label || field.name}: fill in this required input`);
                 continue;
