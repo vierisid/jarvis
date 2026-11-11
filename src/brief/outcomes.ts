@@ -4,6 +4,7 @@ import { invalid, number, timezone } from '../goals/validation';
 import type { BriefMeasurement, BriefOutcome, BriefReadResult, BriefEvidenceRef } from './contracts';
 import { outcomeWindow, outcomeCalendar, type OutcomeWindow } from './outcome-windows';
 import { estimateMinutesFromJson, MAX_ESTIMATED_MINUTES_PER_WORKFLOW_PER_DAY } from '../workflows/time-saved-estimate';
+import { DEFAULT_IDS } from '../workflows/db/index';
 import { OutcomeConflict, outcomeId, readOutcomeTime, timeBack, timeCommand, type OutcomeTimeRecord } from './outcome-time';
 
 type WorkRow = { work_id: string; goal_id: string | null; mode: string; workflow_id: string | null; workflow_version_id: string | null;
@@ -16,8 +17,12 @@ export interface GoalDelta {
   goalId: string; title: string; change: BriefMeasurement | null; reason: 'missing_opening' | 'definition_changed' | null;
   attribution: 'observed_change_only'; rollup: 'independent';
 }
-/** One counted root run: its minutes and where they came from. */
-interface RunTime { runId: string; flowId: string; finishedAt: number; minutes: number; source: 'owner' | 'estimate'; capped?: boolean }
+/** Counted root runs of one workflow version on one local day (`day` indexes the week's days): their minutes and where they came from. */
+interface RunGroup { flowId: string; day: number; runs: number; lastAt: number; perRun: number; minutes: number; source: 'owner' | 'estimate'; capped: boolean }
+/** Most (workflow, version, day) groups one summary reads. */
+const MAX_RUN_GROUPS = 5000;
+/** Most runs one summary re-reads because they may have continued past a failure. */
+const MAX_SUSPECT_RUNS = 1000;
 export interface OutcomeSummary {
   window: OutcomeWindow; today: BriefMeasurement | null; week: BriefMeasurement | null;
   /** Plain-words basis of the figure above, e.g. "14 runs x about 12 min. Estimated from each workflow's steps." */
@@ -30,6 +35,29 @@ type Read<T> = BriefReadResult<T> & { coverage?: OutcomeCoverage };
 const parse = <T>(s: string | null): T | null => { try { return s ? JSON.parse(s) : null; } catch { return null; } };
 const within = (at: number, w: OutcomeWindow, now: number) => Number.isSafeInteger(at) && at >= w.start && at < w.end && at <= now;
 const source = (id: string, revision: string): BriefEvidenceRef => ({ kind: 'source', id, revision });
+/** A step that FAILED and was continued past, here or in a loop iteration, as the engine records `flow_run.steps`. */
+function continuedPastFailure(steps: unknown, depth = 0): boolean {
+  if (!steps || typeof steps !== 'object' || Array.isArray(steps) || depth > 16) return false;
+  for (const raw of Object.values(steps)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const step = raw as { status?: unknown; output?: { iterations?: unknown } | null };
+    if (step.status === 'FAILED') return true;
+    const iterations = step.output && typeof step.output === 'object' ? step.output.iterations : undefined;
+    if (Array.isArray(iterations) && iterations.some(iteration => continuedPastFailure(iteration, depth + 1))) return true;
+  }
+  return false;
+}
+/** Default estimates stop at the per-workflow daily cap, earliest runs first; owner-set minutes are never capped. */
+function capEstimates(groups: RunGroup[]): RunGroup[] {
+  const used = new Map<string, number>();
+  return [...groups].sort((a, b) => a.lastAt - b.lastAt).map(group => {
+    if (group.source === 'owner') return group;
+    const key = `${group.flowId}|${group.day}`, left = Math.max(0, MAX_ESTIMATED_MINUTES_PER_WORKFLOW_PER_DAY - (used.get(key) ?? 0));
+    const minutes = Math.min(group.minutes, left);
+    used.set(key, (used.get(key) ?? 0) + minutes);
+    return minutes < group.minutes ? { ...group, minutes, capped: true } : group;
+  });
+}
 
 /**
  * Time back has two tiers, and a run is counted in exactly one of them.
@@ -41,12 +69,15 @@ const source = (id: string, revision: string): BriefEvidenceRef => ({ kind: 'sou
  *    estimate from the run's own flow version steps (`estimateMinutesFromJson`).
  *    Enabling a workflow is enough: no check or time record is needed.
  *
- * A run counts when it SUCCEEDED in PRODUCTION, has no parent, is not a test or
- * sample-data run, and finished inside the window. Child runs never count on
- * their own. Run-derived minutes are qualified `estimated`, never `measured`.
+ * A run counts when it SUCCEEDED in PRODUCTION in this project, has no parent,
+ * is not a test or sample-data run, did not continue past a failed step or a
+ * child run that did not succeed, and finished inside the window. Child runs
+ * never count on their own. Run-derived minutes are qualified `estimated`,
+ * never `measured`.
  */
 export class Outcomes {
-  constructor(private readonly db: Database) {}
+  /** Runs are read in this project only, like the workflow inspection beside it (`workflow-context.ts`). */
+  constructor(private readonly db: Database, private readonly projectId: string = DEFAULT_IDS.project) {}
   private has(table: string) { return !!this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table); }
   readiness(): 'ready' | 'unavailable' {
     try { return getDb() === this.db && ['commitment_work', 'commitments', 'outcome_time_record', 'goal_measurement_receipt'].every(t => this.has(t)) ? 'ready' : 'unavailable'; }
@@ -146,29 +177,72 @@ export class Outcomes {
       return items.length ? { state: 'ready', data: items, asOf: now, coverage } as const : { state: 'empty', asOf: now, coverage } as const;
     })();
   }
-  /** Root runs eligible for estimated time, finished inside `w`, except runs whose checked work already carries the owner's own time. */
-  private runTimes(w: OutcomeWindow, now: number, skip: Set<string>): RunTime[] {
-    if (!['flow_run', 'flow', 'flow_version'].every(t => this.has(t))) return [];
-    const rows = this.db.query<{ id: string; flow_id: string; finish_time: number; execution_config: string | null; owner_minutes: number | null; trigger: string | null; flow_version_id: string }, [number, number]>(
-      `SELECT r.id, r.flow_id, r.flow_version_id, r.finish_time, r.execution_config, f.time_saved_per_run AS owner_minutes, v.trigger
-       FROM flow_run r LEFT JOIN flow f ON f.id=r.flow_id LEFT JOIN flow_version v ON v.id=r.flow_version_id
-       WHERE r.status='SUCCEEDED' AND r.environment='PRODUCTION' AND r.parent_run_id IS NULL AND r.step_name_to_test IS NULL
-         AND r.finish_time >= ? AND r.finish_time < ? LIMIT 20001`).all(w.start, Math.min(w.end, now + 1));
-    if (rows.length > 20000) throw Error('Run coverage exceeds read bound');
-    const estimates = new Map<string, number>(), out: RunTime[] = [];
-    for (const row of rows) {
-      if (skip.has(row.id) || !Number.isSafeInteger(row.finish_time)) continue;
-      const execution = parse<{ sampleData?: unknown; sampleInputOverride?: unknown; stepNameToTest?: unknown }>(row.execution_config);
-      if (row.execution_config !== null && (!execution || execution.sampleData || execution.sampleInputOverride || execution.stepNameToTest)) continue;
-      const owner = row.owner_minutes !== null && Number.isFinite(row.owner_minutes) && row.owner_minutes >= 0 ? row.owner_minutes : null;
-      let minutes = owner;
-      if (minutes === null) {
-        if (!estimates.has(row.flow_version_id)) estimates.set(row.flow_version_id, estimateMinutesFromJson(row.trigger));
-        minutes = estimates.get(row.flow_version_id)!;
-      }
-      out.push({ runId: row.id, flowId: row.flow_id, finishedAt: row.finish_time, minutes, source: owner !== null ? 'owner' : 'estimate' });
+  /**
+   * Counted root runs of the week, grouped by workflow, version and local day.
+   *
+   * Grouped in SQL, so a workflow on an every-minute schedule (10,080 runs a
+   * week) costs one row, not ten thousand; the bound is on groups. Read from
+   * `idx_flow_run_finished` in this project only. A run whose checked work
+   * already carries the owner's own time (`skip`) is left to that tier.
+   *
+   * A run that SUCCEEDED only because it continued past a failure is not
+   * counted: a step that FAILED and was continued past, or a child run that did
+   * not succeed. The estimate assumes every step did its work, and an owner's
+   * minutes assume the run did what it is for. Those runs are counted in
+   * `partial` instead, so the basis can say they were left out.
+   */
+  private runGroups(calendar: ReturnType<typeof outcomeCalendar>, now: number, skip: Set<string>): { groups: RunGroup[]; partial: number[] } {
+    const partial = calendar.days.map(() => 0);
+    if (!['flow_run', 'flow', 'flow_version'].every(t => this.has(t))) return { groups: [], partial };
+    const starts = calendar.days.slice(1).map(d => d.start);
+    const day = `CASE ${starts.map((_, i) => `WHEN r.finish_time < ? THEN ${i}`).join(' ')} ELSE ${starts.length} END`;
+    // Same filters as the partial index, so the planner can use it.
+    const eligible = `FROM flow_run r INDEXED BY idx_flow_run_finished JOIN flow f ON f.id=r.flow_id AND f.project_id=r.project_id
+      WHERE r.project_id=? AND r.status='SUCCEEDED' AND r.parent_run_id IS NULL AND r.finish_time >= ? AND r.finish_time < ?
+        AND r.environment='PRODUCTION' AND r.step_name_to_test IS NULL AND (r.execution_config IS NULL OR r.execution_config='{}')
+        AND r.id NOT IN (SELECT value FROM json_each(?))`;
+    const childFailed = `EXISTS (SELECT 1 FROM flow_run c WHERE c.parent_run_id=r.id AND c.status<>'SUCCEEDED')`;
+    // A cheap screen: a FAILED step always writes this text. Output that merely
+    // contains it is read again below, so the screen never drops a clean run.
+    const suspect = `(${childFailed} OR COALESCE(instr(r.steps, '"status":"FAILED"'), 0) > 0)`;
+    const args = [...starts, this.projectId, calendar.week.start, Math.min(calendar.week.end, now + 1), JSON.stringify([...skip])];
+    const rows = this.db.query<{ flow_id: string; flow_version_id: string; day: number; runs: number; last: number; owner_minutes: number | null }, (string | number)[]>(
+      `SELECT r.flow_id, r.flow_version_id, ${day} AS day, COUNT(*) AS runs, MAX(r.finish_time) AS last, f.time_saved_per_run AS owner_minutes
+       ${eligible} AND NOT ${suspect} GROUP BY r.flow_id, r.flow_version_id, day LIMIT ${MAX_RUN_GROUPS + 1}`).all(...args);
+    if (rows.length > MAX_RUN_GROUPS) throw Error('Run coverage exceeds read bound');
+    const suspects = this.db.query<{ flow_id: string; flow_version_id: string; day: number; finish_time: number; owner_minutes: number | null; child_failed: number; steps: string | null }, (string | number)[]>(
+      `SELECT r.flow_id, r.flow_version_id, ${day} AS day, r.finish_time, f.time_saved_per_run AS owner_minutes,
+         ${childFailed} AS child_failed, CASE WHEN ${childFailed} THEN NULL ELSE r.steps END AS steps
+       ${eligible} AND ${suspect} ORDER BY r.finish_time LIMIT ${MAX_SUSPECT_RUNS + 1}`).all(...args);
+    const byKey = new Map<string, typeof rows[number]>(), clean = calendar.days.map(() => 0);
+    for (const row of rows) byKey.set(`${row.flow_id}|${row.flow_version_id}|${row.day}`, row);
+    for (const row of suspects.slice(0, MAX_SUSPECT_RUNS)) {
+      const steps = row.child_failed ? null : parse<unknown>(row.steps);
+      if (row.child_failed || steps === null || continuedPastFailure(steps)) { partial[row.day]!++; continue; }
+      clean[row.day]!++;
+      const key = `${row.flow_id}|${row.flow_version_id}|${row.day}`, group = byKey.get(key);
+      if (group) { group.runs++; group.last = Math.max(group.last, row.finish_time); }
+      else byKey.set(key, { flow_id: row.flow_id, flow_version_id: row.flow_version_id, day: row.day, runs: 1, last: row.finish_time, owner_minutes: row.owner_minutes });
     }
-    return out;
+    if (suspects.length > MAX_SUSPECT_RUNS) {
+      // Past the bound the rest are not read and stay uncounted: never more time than was checked.
+      partial.fill(0);
+      for (const { day: d, n } of this.db.query<{ day: number; n: number }, (string | number)[]>(
+        `SELECT ${day} AS day, COUNT(*) AS n ${eligible} AND ${suspect} GROUP BY day`).all(...args)) partial[d] = n - clean[d]!;
+    }
+    const estimates = new Map<string, number>(), groups: RunGroup[] = [];
+    for (const row of byKey.values()) {
+      if (!Number.isSafeInteger(row.last) || row.runs <= 0) continue;
+      const owner = row.owner_minutes !== null && Number.isFinite(row.owner_minutes) && row.owner_minutes >= 0 ? row.owner_minutes : null;
+      let perRun = owner;
+      if (perRun === null) {
+        if (!estimates.has(row.flow_version_id)) estimates.set(row.flow_version_id, estimateMinutesFromJson(
+          this.db.query<{ trigger: string }, [string]>('SELECT trigger FROM flow_version WHERE id=?').get(row.flow_version_id)?.trigger));
+        perRun = estimates.get(row.flow_version_id)!;
+      }
+      groups.push({ flowId: row.flow_id, day: row.day, runs: row.runs, lastAt: row.last, perRun, minutes: perRun * row.runs, source: owner !== null ? 'owner' : 'estimate', capped: false });
+    }
+    return { groups: capEstimates(groups), partial };
   }
   /** Runs whose checked, timed work item already counts the owner's own minutes. */
   private timedRunIds(evaluated: ReturnType<Outcomes['evaluate']>): Set<string> {
@@ -177,40 +251,30 @@ export class Outcomes {
       if (!reason && work.mode === 'workflow' && work.run_id && readOutcomeTime(this.db, work.work_id)?.resultCheckId === check!.id) ids.add(work.run_id);
     return ids;
   }
-  /** Checked-work time plus run-derived time for one window, with the basis in plain words. */
-  /** Default estimates stop at the per-workflow daily cap; owner-set minutes are never capped. */
-  private capEstimates(runs: RunTime[], days: OutcomeWindow[]): RunTime[] {
-    const used = new Map<string, number>();
-    return [...runs].sort((a, b) => a.finishedAt - b.finishedAt).map(run => {
-      if (run.source === 'owner') return run;
-      const key = `${run.flowId}|${days.findIndex(d => run.finishedAt >= d.start && run.finishedAt < d.end)}`;
-      const left = Math.max(0, MAX_ESTIMATED_MINUTES_PER_WORKFLOW_PER_DAY - (used.get(key) ?? 0)), minutes = Math.min(run.minutes, left);
-      used.set(key, (used.get(key) ?? 0) + minutes);
-      return minutes < run.minutes ? { ...run, minutes, capped: true } : run;
-    });
-  }
-  /** `known`: the window has started and runs can be read, so no successful run is a real zero, not an unknown. */
-  private time(items: BriefOutcome[], runs: RunTime[], known: boolean, now: number): { measurement: BriefMeasurement | null; basis: string | null } {
+  /** Checked-work time plus run-derived time for one window, with the basis in plain words. `known`: the window has started and runs can be read, so nothing counted is a real zero. */
+  private time(items: BriefOutcome[], groups: RunGroup[], partial: number, known: boolean, now: number): { measurement: BriefMeasurement | null; basis: string | null } {
     const checked = items.filter(i => i.timeBack !== null), parts = checked.map(i => i.timeBack!);
-    if (runs.length) {
-      const total = runs.reduce((n, r) => n + r.minutes, 0), flows = new Map<string, RunTime['source']>();
-      for (const r of runs) flows.set(r.flowId, r.source);
-      parts.push({ value: total, unit: 'minutes', baseline: total, target: null, asOf: Math.max(...runs.map(r => r.finishedAt)),
+    const runs = groups.reduce((n, g) => n + g.runs, 0), total = groups.reduce((n, g) => n + g.minutes, 0);
+    if (runs) {
+      const flows = new Map<string, RunGroup['source']>();
+      for (const g of groups) flows.set(g.flowId, g.source);
+      parts.push({ value: total, unit: 'minutes', baseline: total, target: null, asOf: Math.max(...groups.map(g => g.lastAt)),
         provenance: [...flows].map(([flowId, kind]) => source(`flow-runs:${flowId}`, kind === 'owner' ? 'owner-set-minutes' : 'estimated-from-steps')),
         qualification: 'estimated' });
     }
+    const partialBasis = partial ? `${partial} ${partial === 1 ? 'run that continued past a failure is' : 'runs that continued past a failure are'} not counted.` : '';
     const measurement = this.aggregate(parts);
     if (!measurement) return known ? { measurement: { value: 0, unit: 'minutes', baseline: 0, target: null, asOf: now,
-      provenance: [source('flow-runs:none', 'no-successful-runs')], qualification: 'estimated' }, basis: 'No time saved.' } : { measurement, basis: null };
-    const owner = runs.filter(r => r.source === 'owner').length, estimated = runs.length - owner;
-    const each = runs.length ? Math.round(runs.reduce((n, r) => n + r.minutes, 0) / runs.length) : 0;
-    const same = runs.every(r => r.minutes === runs[0]!.minutes);
-    const count = `${runs.length} ${runs.length === 1 ? 'run' : 'runs'}`;
-    const runBasis = !runs.length ? '' : owner && estimated ? `${count}, about ${each} min each. Some minutes you set, the rest estimated from the workflow's steps.`
+      provenance: [source('flow-runs:none', 'no-successful-runs')], qualification: 'estimated' }, basis: ['No time saved.', partialBasis].filter(Boolean).join(' ') } : { measurement, basis: null };
+    const owner = groups.filter(g => g.source === 'owner').reduce((n, g) => n + g.runs, 0), estimated = runs - owner;
+    const each = runs ? Math.round(total / runs) : 0;
+    const same = groups.every(g => !g.capped && g.perRun === groups[0]!.perRun);
+    const count = `${runs} ${runs === 1 ? 'run' : 'runs'}`;
+    const runBasis = !runs ? '' : owner && estimated ? `${count}, about ${each} min each. Some minutes you set, the rest estimated from the workflow's steps.`
       : owner ? `${count} x ${same ? '' : 'about '}${each} min. You set the minutes per run.` : `${count} x about ${each} min. Estimated from the workflow's steps.`;
     const checkedBasis = checked.length ? `${checked.length} checked work ${checked.length === 1 ? 'item' : 'items'} with minutes you reported.` : '';
-    const capBasis = runs.some(r => r.capped) ? `Estimates are capped at ${MAX_ESTIMATED_MINUTES_PER_WORKFLOW_PER_DAY} min per workflow per day.` : '';
-    return { measurement, basis: [runBasis, checkedBasis, capBasis].filter(Boolean).join(' ') };
+    const capBasis = groups.some(g => g.capped) ? `Estimates are capped at ${MAX_ESTIMATED_MINUTES_PER_WORKFLOW_PER_DAY} min per workflow per day.` : '';
+    return { measurement, basis: [runBasis, checkedBasis, capBasis, partialBasis].filter(Boolean).join(' ') };
   }
   private aggregate(values: BriefMeasurement[]): BriefMeasurement | null;
   private aggregate(items: BriefOutcome[], field: 'result'): BriefMeasurement | null;
@@ -262,18 +326,19 @@ export class Outcomes {
     return this.db.transaction(() => {
       const evaluated = this.evaluate(now), week = this.collect(calendar.week, now, evaluated), goals = this.goalDeltas(calendar.week, now);
       const todayGoals = this.goalDeltas(calendar.today, now);
-      const skip = this.timedRunIds(evaluated), weekRuns = this.capEstimates(this.runTimes(calendar.week, now, skip), calendar.days), canRead = ['flow_run', 'flow', 'flow_version'].every(t => this.has(t));
-      const runsIn = (w: OutcomeWindow) => weekRuns.filter(r => within(r.finishedAt, w, now));
-      const todayTime = this.time(week.items.filter(i => within(i.result.asOf, calendar.today, now)), runsIn(calendar.today), canRead, now);
-      const weekTime = this.time(week.items, weekRuns, canRead, now);
+      const canRead = ['flow_run', 'flow', 'flow_version'].every(t => this.has(t));
+      const { groups: weekRuns, partial } = this.runGroups(calendar, now, this.timedRunIds(evaluated));
+      const todayIndex = calendar.days.findIndex(d => d.id === calendar.date), runsOn = (i: number) => weekRuns.filter(g => g.day === i);
+      const todayTime = this.time(week.items.filter(i => within(i.result.asOf, calendar.today, now)), runsOn(todayIndex), partial[todayIndex] ?? 0, canRead, now);
+      const weekTime = this.time(week.items, weekRuns, partial.reduce((n, p) => n + p, 0), canRead, now);
       const data: OutcomeSummary = { window: calendar.week, today: todayTime.measurement, week: weekTime.measurement,
         todayBasis: todayTime.basis, weekBasis: weekTime.basis,
-        days: calendar.days.map(day => {
-          const { items, coverage } = this.collect(day, now, evaluated), t = this.time(items, runsIn(day), canRead && day.start <= now, now);
+        days: calendar.days.map((day, index) => {
+          const { items, coverage } = this.collect(day, now, evaluated), t = this.time(items, runsOn(index), partial[index]!, canRead && day.start <= now, now);
           return { id: day.id, current: day.id === calendar.date, future: day.start > now, time: t.measurement, basis: t.basis, coverage };
         }), completedWork: this.aggregate(week.items, 'result'), outcomes: week.items, goalDeltas: goals, todayGoalDeltas: todayGoals,
         coverage: { ...week.coverage, complete: week.coverage.complete && [...goals, ...todayGoals].every(g => g.change !== null) },
-        basis: 'Time saved counts every successful run of your workflows once, never its child runs or test runs. Each run counts the minutes you set for the workflow, or an estimate from its steps, and both are estimates. Work you checked and timed yourself uses your own numbers. Goal changes are independent observations, not causal attribution to work.' };
+        basis: 'Time saved counts every successful run of your workflows once, never its child runs or test runs, and not a run that only finished by continuing past a failure. Each run counts the minutes you set for the workflow, or an estimate from its steps, and both are estimates. Work you checked and timed yourself uses your own numbers. Goal changes are independent observations, not causal attribution to work.' };
       if (!week.items.length && !weekRuns.length && !goals.length && (week.coverage.excluded.runtime_unavailable || week.coverage.excluded.run_coverage_incomplete)) return { state: 'unavailable', reason: 'provider_unavailable', coverage: data.coverage } as const;
       return week.items.length || weekRuns.length || goals.length || canRead ? { state: 'ready', data, asOf: now, coverage: data.coverage } as const : { state: 'empty', asOf: now, coverage: data.coverage } as const;
     })();

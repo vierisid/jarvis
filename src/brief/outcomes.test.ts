@@ -69,8 +69,8 @@ test('no evidence is empty; goal titles and unrun workflows never invent time or
 // Founder decision (reverses #805): enabling a workflow is enough. Every successful
 // production root run counts, with the owner's minutes or an estimate from its steps.
 const step = (name: string, pieceName: string, extra: object = {}) => ({ name, type: 'PIECE', settings: { pieceName, actionName: 'a', input: {} }, ...extra });
-function runFlow(opts: { minutes?: number; steps?: object | null; runs?: number } = {}) {
-  const flow = createFlow();
+function runFlow(opts: { minutes?: number; steps?: object | null; runs?: number; projectId?: string } = {}) {
+  const flow = createFlow(opts.projectId ? { projectId: opts.projectId } : {});
   const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'Daily', trigger: { name: 'trigger', type: 'EMPTY' } }).id);
   setPublishedVersion(flow.id, version.id);
   if (opts.minutes !== undefined) getDb().run('UPDATE flow SET time_saved_per_run=? WHERE id=?', [opts.minutes, flow.id]);
@@ -453,4 +453,48 @@ test('a day with no successful runs is a known zero, a future day stays unknown'
     ['2026-10-05', false, 0], ['2026-10-06', false, 0], ['2026-10-07', false, 4], ['2026-10-08', true, null],
     ['2026-10-09', true, null], ['2026-10-10', true, null], ['2026-10-11', true, null]]);
   expect(view.days[0]!.basis).toBe('No time saved.');
+});
+
+test('runs of a workflow in another project never count here', async () => {
+  runFlow({ minutes: 9, projectId: 'jrv_proj_other' });
+  await nothing();
+  runFlow({ minutes: 4 });
+  expect((await summary()).week?.value).toBe(4);
+  expect(ready<OutcomeSummary>(await new Outcomes(getDb(), 'jrv_proj_other').summary({ timezone: 'UTC' })).week?.value).toBe(9);
+});
+test('a run that succeeded only by continuing past a failed step is not counted, and the basis says so', async () => {
+  const f = runFlow({ minutes: 5, runs: 3 });
+  updateRun(f.runs[0]!.id, { steps: { step_1: { status: 'FAILED', output: null }, step_2: { status: 'SUCCEEDED', output: {} } } });
+  updateRun(f.runs[1]!.id, { steps: { loop: { status: 'SUCCEEDED', output: { iterations: [{ step_1: { status: 'SUCCEEDED' } }, { step_1: { status: 'FAILED' } }] } } } });
+  // Output that only quotes a failure is not one: the run did its work.
+  updateRun(f.runs[2]!.id, { steps: { step_1: { status: 'SUCCEEDED', output: { build: { status: 'FAILED' } } } } });
+  const view = await summary();
+  expect(view.week?.value).toBe(5);
+  expect(view.weekBasis).toBe('1 run x 5 min. You set the minutes per run. 2 runs that continued past a failure are not counted.');
+  expect(view.todayBasis).toBe(view.weekBasis);
+  updateRun(f.runs[2]!.id, { steps: { step_1: { status: 'FAILED' } } });
+  const none = await summary();
+  expect(none.week?.value).toBe(0); expect(none.weekBasis).toBe('No time saved. 3 runs that continued past a failure are not counted.');
+});
+test('a root run whose child run did not succeed is not counted until it does', async () => {
+  const f = runFlow({ minutes: 6 });
+  const child = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id, parentRunId: f.runs[0]!.id });
+  updateRun(child.id, { status: 'FAILED', finishTime: now - 1000 });
+  expect((await summary()).week?.value).toBe(0);
+  updateRun(child.id, { status: 'SUCCEEDED' });
+  expect((await summary()).week?.value).toBe(6);
+});
+test('an every-minute schedule for the whole week is read as groups, not a run at a time', async () => {
+  const flows = [runFlow({ steps: null }), runFlow({ steps: null }), runFlow({ minutes: 1 })];
+  // 3 x 9,000 runs, one every 20 s back to Monday 07:00: more than a read of single runs could take.
+  for (const f of flows) getDb().run(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 9000)
+    INSERT INTO flow_run (id, flow_id, flow_version_id, project_id, status, environment, execution_config, finish_time, created, updated)
+    SELECT ?1 || i, ?2, ?3, f.project_id, 'SUCCEEDED', 'PRODUCTION', '{}', ?4 - i * 20000, 0, 0 FROM n, flow f WHERE f.id = ?2`,
+    [`bulk-${f.flow.id}-`, f.flow.id, f.version.id, now]);
+  const view = await summary();
+  // Two estimated workflows capped at 60 min on each of Monday to Wednesday; the owner-set minute is never capped.
+  expect(view.week?.value).toBe(2 * 3 * 60 + 9001);
+  expect(view.today?.value).toBe(2 * 60 + 9 * HOUR / 20000 + 1);
+  const plan = getDb().query("EXPLAIN QUERY PLAN SELECT 1 FROM flow_run INDEXED BY idx_flow_run_finished WHERE project_id='p' AND status='SUCCEEDED' AND parent_run_id IS NULL AND finish_time >= 0 AND finish_time < 1").all() as { detail: string }[];
+  expect(plan.map(p => p.detail).join()).toContain('USING INDEX idx_flow_run_finished (project_id=? AND finish_time>? AND finish_time<?)');
 });

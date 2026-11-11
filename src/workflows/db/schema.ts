@@ -246,6 +246,11 @@ const STATEMENTS: string[] = [
   // waiting: 8.4 ms a flow with 50k PAUSED runs ahead of the ended one.
   `CREATE INDEX IF NOT EXISTS idx_flow_run_ended ON flow_run(project_id, flow_id, created DESC, id DESC)
     WHERE status IN ${ENDED_RUN_STATUSES_SQL} AND step_name_to_test IS NULL`,
+  // Successful root runs by finish time, for Today's time saved
+  // (brief/outcomes.ts). Without it the week's runs were found by stepping
+  // through every SUCCEEDED run ever on the status index.
+  `CREATE INDEX IF NOT EXISTS idx_flow_run_finished ON flow_run(project_id, finish_time)
+    WHERE status = 'SUCCEEDED' AND parent_run_id IS NULL`,
 
   // Durable effect identity and dispatch fence, independent of run-log uploads.
   `CREATE TABLE IF NOT EXISTS workflow_effect (

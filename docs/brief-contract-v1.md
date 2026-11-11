@@ -47,7 +47,8 @@ Source of truth: `src/brief/contracts.ts`, `capabilities.ts`, `providers.ts` and
   not a measurement. Time back has two tiers and counts a run once: a checked work
   item with the owner's time record (a manual baseline minus observed intervention,
   `user_reported`), and otherwise every successful production root run of a
-  workflow (not a test, sample-data or child run) counted at the minutes per run
+  workflow in the project (not a test, sample-data or child run, and not one that
+  continued past a failed step or an unsuccessful child run) counted at the minutes per run
   the owner set on the workflow, or a deterministic estimate from the run's flow
   version steps. A default estimate adds at most 60 minutes per workflow per local
   day (`MAX_ESTIMATED_MINUTES_PER_WORKFLOW_PER_DAY`), so a frequent schedule cannot
