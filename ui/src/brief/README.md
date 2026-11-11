@@ -286,11 +286,14 @@ is unchanged.
   depend on those capabilities. No live provider is wired for Outcomes yet.
 - Today's Recent activity is built by `today/activity/model.ts` from one bounded read,
   `GET /api/workflow-runs/recent?limit=5` (`today/activity/read.ts`): the latest production, top-level run of
-  each workflow in the caller's project, newest first. Test runs and subflow child runs are never candidates.
-  It is a reconciliation projection over the `runs` and `today` domains, so workflow events and the client's
-  regular polling refresh it while Today is open. A row is the workflow name, a plain status (Done, Failed,
-  Waiting for you, Running) and a local time. Only a run waiting on a person (approval or input request) says
-  "Waiting for you"; a run paused on a timer reads "Waiting until <time>", and any other pause reads "Waiting", and opens `workflow` with the flow, version and run ids.
+  each workflow in the caller's project, newest first. Test runs, single-step tests and subflow child runs are
+  never candidates, and a removed workflow is left out as the Workflows room leaves it out. The read costs one
+  index seek per workflow, not a pass over run history. It is a reconciliation projection over the `runs` and
+  `today` domains, so workflow events and the client's regular polling refresh it while Today is open.
+- A row is the workflow name (invisible and bidi control characters dropped, capped at 120 characters), a plain
+  status (Done, Failed, Running, Queued, Stopped, or a wait) and a local time, and opens `workflow` with the
+  flow, version and run ids. Only a run waiting on a person (approval or input request) says "Waiting for
+  you"; a run paused on a timer reads "Waiting until <time>", and any other pause reads "Waiting".
   Verified outcomes may add rows but never decide whether the list is empty or unavailable. Rows carry
   identity, status and time only, never captured step output. Empty reads "No workflow has run yet."
 - A figure renders only if its F-01 `BriefMeasurement` is finite, has a unit, an `asOf`, at least one

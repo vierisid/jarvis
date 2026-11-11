@@ -13,7 +13,9 @@ export function activityStatus(status: string, wait?: Pick<RecentWorkflow, "wait
       if (wait?.waitingOn === "person") return "Waiting for you";
       if (wait?.waitingOn === "timer" && wait.resumeAt !== undefined) return `Waiting until ${timeLabel(wait.resumeAt, now)}`;
       return "Waiting";
-    case "RUNNING": case "QUEUED": return "Running";
+    case "RUNNING": return "Running";
+    // Not started yet, so not "Running" (the Workflows room says Queued too).
+    case "QUEUED": return "Queued";
     case "STOPPED": return "Stopped";
     case "FAILED": case "TIMEOUT": case "INTERNAL_ERROR": case "QUOTA_EXCEEDED": case "MEMORY_LIMIT_EXCEEDED": case "SCHEDULE_FAILURE": return "Failed";
     default: return "Status unknown";

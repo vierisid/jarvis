@@ -6,8 +6,8 @@ const run = (over: Partial<RecentWorkflow>): RecentWorkflow => ({ flowId: "f", v
   result: "Run completed", at: Date.parse("2026-11-10T09:30:00Z"), environment: "PRODUCTION", ...over });
 
 test("runs read as plain statuses, and test runs never appear", () => {
-  expect(["SUCCEEDED", "FAILED", "PAUSED", "RUNNING", "TIMEOUT", "WHATEVER"].map(s => activityStatus(s)))
-    .toEqual(["Done", "Failed", "Waiting", "Running", "Failed", "Status unknown"]);
+  expect(["SUCCEEDED", "FAILED", "PAUSED", "RUNNING", "QUEUED", "STOPPED", "TIMEOUT", "WHATEVER"].map(s => activityStatus(s)))
+    .toEqual(["Done", "Failed", "Waiting", "Running", "Queued", "Stopped", "Failed", "Status unknown"]);
   const items = runActivityItems([run({ runId: "a" }), run({ runId: "t", environment: "TESTING" })]);
   expect(items.map(item => item.activityId)).toEqual(["run:a"]);
   expect(items[0]).toMatchObject({ title: "Inbox brief", detail: "Done", destination: { room: "workflow", selection: { flowId: "f", versionId: "v", runId: "a" } } });
