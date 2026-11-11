@@ -1,3 +1,10 @@
+import {
+  KEY_BASED_KINDS,
+  LLM_PROVIDER_KIND_LABELS,
+  OPTIONAL_KEY_KINDS,
+  parseModelRef,
+  type LLMProviderKind,
+} from "../../../v2/rooms/settings/useSettingsData";
 export type Application = "applied" | "restart_required" | "failed" | "unknown";
 export interface VoicePreference {
   revision: string;
@@ -40,45 +47,47 @@ export type AiProvider =
   | { state: "managed"; model: string | null }
   | { state: "ready"; provider: string; model: string }
   | { state: "missing"; provider: string | null };
+/** The hosted plan provider (the daemon's USEJARVIS_PROVIDER_NAME). */
+const USEJARVIS_AI = "usejarvis_ai";
 export type AiProviderRead =
   | { state: "ready"; data: AiProvider }
   | { state: "error" | "unavailable" | "unsupported" };
-const KEYED_KINDS = ["anthropic", "openai", "groq", "gemini", "openrouter", "nvidia"];
-const PROVIDER_NAMES: Record<string, string> = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-  groq: "Groq",
-  gemini: "Gemini",
-  ollama: "Ollama",
-  openrouter: "OpenRouter",
-  nvidia: "NVIDIA",
-  usejarvis_ai: "Usejarvis AI",
-  litellm: "LiteLLM",
-  omniroute: "OmniRoute",
+const providerLabel = (name: string, kind: string) => {
+  const label =
+    LLM_PROVIDER_KIND_LABELS[kind as LLMProviderKind] ?? kind;
+  return name === kind ? label : `${label} (${name})`;
 };
-export const providerName = (name: string) => PROVIDER_NAMES[name] ?? name;
-/** Reads GET /api/config/llm, the response the AI settings page already uses. */
+/** Reads GET /api/config/llm, the response the AI settings page already uses. Kind
+ * labels and which kinds need a key come from that page, so the two cannot drift. */
 export function readAiProvider(value: unknown): AiProvider | null {
   if (!record(value) || !record(value.providers)) return null;
-  const effective = record(value.effective) && record(value.effective.tiers)
+  const effective =
+    record(value.effective) && record(value.effective.tiers)
       ? value.effective.tiers.conversation?.ref
-      : undefined,
-    ref = [effective, value.default, record(value.tiers) ? value.tiers.conversation : null].find(
-      (r) => typeof r === "string" && r.includes(":"),
-    ) as string | undefined;
-  const name = ref?.slice(0, ref.indexOf(":")) ?? null,
-    model = ref ? ref.slice(ref.indexOf(":") + 1) : null;
-  if (name === "usejarvis_ai" || (!ref && value.hosted_llm === true))
-    return { state: "managed", model: model && name === "usejarvis_ai" ? model : null };
-  if (!name || !model) return { state: "missing", provider: null };
-  const entry = value.providers[name];
+      : undefined;
+  const ref = [
+    effective,
+    value.default,
+    record(value.tiers) ? value.tiers.conversation : null,
+  ]
+    .map((r) => parseModelRef(r))
+    .find((r) => r !== null);
+  // Only a hosted install has the plan provider; a self-hosted entry with that name is the user's own.
+  const hosted = value.hosted_llm === true;
+  if (hosted && (!ref || ref.provider === USEJARVIS_AI))
+    return { state: "managed", model: ref?.model ?? null };
+  if (!ref) return { state: "missing", provider: null };
+  const entry = value.providers[ref.provider];
+  if (!record(entry)) return { state: "missing", provider: ref.provider };
+  const kind = String(entry.kind ?? ref.provider) as LLMProviderKind,
+    provider = providerLabel(ref.provider, kind);
   if (
-    !record(entry) ||
-    (entry.has_api_key !== true &&
-      KEYED_KINDS.includes(String(entry.kind ?? name)))
+    entry.has_api_key !== true &&
+    KEY_BASED_KINDS.has(kind) &&
+    !OPTIONAL_KEY_KINDS.has(kind)
   )
-    return { state: "missing", provider: providerName(name) };
-  return { state: "ready", provider: providerName(name), model };
+    return { state: "missing", provider };
+  return { state: "ready", provider, model: ref.model };
 }
 export type SettingsRead =
   | { state: "ready"; data: SettingsValue }

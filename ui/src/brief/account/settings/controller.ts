@@ -105,7 +105,8 @@ export class SettingsController {
     this.scope++;
     this.attempted = null;
     this.savedNotice = null;
-    this.publish({ ...initial(), availability });
+    // Voice settings being off says nothing about the AI provider row, which reads separately.
+    this.publish({ ...initial(), ai: this.state.ai, availability });
   }
   editable = () =>
     this.alive &&

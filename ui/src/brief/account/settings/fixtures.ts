@@ -118,7 +118,7 @@ export function makeSettingsFixture(
           example === "no-provider"
             ? { providers: {}, default: null, tiers: {}, hosted_llm: false }
             : hosted
-              ? { providers: {}, default: "usejarvis_ai:fast", hosted_llm: true }
+              ? { providers: {}, default: "usejarvis_ai:uj-chat", hosted_llm: true }
               : {
                   providers: { anthropic: { kind: "anthropic", has_api_key: true } },
                   default: "anthropic:claude-sonnet-4-5",
