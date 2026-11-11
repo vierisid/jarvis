@@ -82,6 +82,12 @@ export interface ClaimOptions {
   /** Lease duration for retryable jobs. RUN_FLOW claims cannot be stolen. */
   leaseMs?: number;
   now?: number;
+  /**
+   * Skip a RUN_FLOW job whose workflow already has a RUN_FLOW job running, so
+   * several workers never execute two runs of one workflow at once. Jobs of
+   * one workflow keep the order they had with a single worker.
+   */
+  serializeFlows?: boolean;
 }
 
 export interface FailJobOptions {
@@ -124,12 +130,37 @@ function rowToJob<P = Record<string, unknown>>(row: JobRow): Job<P> {
   };
 }
 
+/** The workflow a RUN_FLOW job belongs to: its own column, else its run's. */
+const JOB_FLOW = (alias: string) =>
+  `COALESCE(${alias}.flow_id, (SELECT fr.flow_id FROM flow_run fr WHERE fr.id = ${alias}.flow_run_id))`;
+
 /** Jobs waiting to run. Used to refuse public ingress once a backlog builds. */
 export function countQueued(): number {
   const row = db()
     .query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM workflow_job WHERE status = 'QUEUED'`)
     .get();
   return row?.n ?? 0;
+}
+
+/**
+ * Where a run's queued RUN_FLOW job stands, or null when none is waiting:
+ * how many workflow jobs are ahead of it (running, or queued earlier in claim
+ * order). Runs reads this to say why a run has not started.
+ */
+export function queueWait(runId: string): { ahead: number } | null {
+  const own = db()
+    .query<JobRow, [string, string]>(
+      `SELECT * FROM workflow_job WHERE flow_run_id = ? AND job_type = ? AND status = 'QUEUED' ORDER BY created DESC LIMIT 1`,
+    )
+    .get(runId, RUN_FLOW);
+  if (!own) return null;
+  const row = db()
+    .query<{ n: number }, [string, string, number, number, number, number, number]>(
+      `SELECT COUNT(*) AS n FROM workflow_job WHERE job_type = ? AND id != ? AND (status = 'RUNNING'
+         OR (status = 'QUEUED' AND (priority > ? OR (priority = ? AND (scheduled_at < ? OR (scheduled_at = ? AND created <= ?))))))`,
+    )
+    .get(RUN_FLOW, own.id, own.priority, own.priority, own.scheduled_at, own.scheduled_at, own.created);
+  return { ahead: row?.n ?? 0 };
 }
 
 export function enqueue<P = Record<string, unknown>>(input: EnqueueInput<P>): Job<P> {
@@ -185,8 +216,11 @@ export function claimNextJob<P = Record<string, unknown>>(opts: ClaimOptions = {
        SET status = ?, attempt = attempt + 1, locked_until = ?, updated = ?
        WHERE id = (
          SELECT id FROM workflow_job
-         WHERE (status = 'QUEUED' AND scheduled_at <= ?)
-            OR (status = 'RUNNING' AND locked_until IS NOT NULL AND locked_until <= ? AND job_type != ?)
+         WHERE ((status = 'QUEUED' AND scheduled_at <= ?)
+            OR (status = 'RUNNING' AND locked_until IS NOT NULL AND locked_until <= ? AND job_type != ?))
+           ${opts.serializeFlows ? `AND NOT (job_type = '${RUN_FLOW}' AND ${JOB_FLOW("workflow_job")} IS NOT NULL
+             AND EXISTS (SELECT 1 FROM workflow_job busy WHERE busy.status = 'RUNNING' AND busy.job_type = '${RUN_FLOW}'
+               AND busy.id != workflow_job.id AND ${JOB_FLOW("busy")} = ${JOB_FLOW("workflow_job")}))` : ""}
          ORDER BY priority DESC, scheduled_at ASC, created ASC
          LIMIT 1
        )

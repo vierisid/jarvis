@@ -2,10 +2,15 @@
  * In-process worker that polls the SQLite job queue and dispatches each
  * claimed job to a registered handler.
  *
- * Replaces BullMQ's worker pattern. One Worker instance per Jarvis daemon is
- * enough for the personal-AI scale we're targeting; if we ever need more
- * parallelism, increasing `concurrency` in start() lets us run several claim
- * loops in parallel within the same process.
+ * Replaces BullMQ's worker pattern. One Worker instance per Jarvis daemon;
+ * `concurrency` in start() sets how many claim loops run in parallel in this
+ * process (the daemon uses WORKFLOW_WORKER_CONCURRENCY so one long run cannot
+ * hold up every other workflow).
+ *
+ * Several loops never run two jobs of one workflow at once: a claim skips a
+ * RUN_FLOW job while another job of the same workflow is running, so a
+ * workflow's runs keep their queue order and its store, effects and engine
+ * state see one run at a time. Different workflows run side by side.
  *
  * Lifecycle:
  *   const worker = new Worker({ handlers: { RUN_FLOW: ... } });
@@ -23,6 +28,17 @@ import {
 } from "../db/repos/job-queue";
 import { emergencyHold } from "../runtime/emergency-hold";
 
+/**
+ * Parallel workflow runs in the daemon. Each run is its own engine process, so
+ * this bounds memory as well as fairness: three lets a long loop, a second
+ * workflow and an approval's continuation all make progress. Override with
+ * JARVIS_WORKFLOW_CONCURRENCY (1 to 8).
+ */
+export const WORKFLOW_WORKER_CONCURRENCY = (() => {
+  const n = Number(process.env.JARVIS_WORKFLOW_CONCURRENCY);
+  return Number.isInteger(n) && n >= 1 && n <= 8 ? n : 3;
+})();
+
 export type JobHandler<P = Record<string, unknown>> = (job: Job<P>) => Promise<void>;
 
 export interface WorkerOptions {
@@ -37,7 +53,7 @@ export interface WorkerOptions {
 }
 
 export interface StartOptions {
-  /** Number of parallel claim loops. Default 1. */
+  /** Number of parallel claim loops. Default 1 (the daemon passes more). */
   concurrency?: number;
 }
 
@@ -89,7 +105,7 @@ export class Worker {
     while (true) {
       // Paused or stopped: queued work waits (Q-08).
       if (emergencyHold()) return processed;
-      const job = claimNextJob({ leaseMs: this.leaseMs });
+      const job = claimNextJob({ leaseMs: this.leaseMs, serializeFlows: true });
       if (!job) return processed;
       await this.handle(job);
       processed++;
@@ -108,7 +124,7 @@ export class Worker {
       }
       let claimed: Job | null = null;
       try {
-        claimed = claimNextJob({ leaseMs: this.leaseMs });
+        claimed = claimNextJob({ leaseMs: this.leaseMs, serializeFlows: true });
       } catch (e) {
         this.log(`loop ${idx}: claim error: ${(e as Error).message}`);
       }
