@@ -125,3 +125,36 @@ test.each([0, 1])('native sender exit %i determines its receipt', async code => 
     rmSync(sys, { recursive: true, force: true });
   }
 });
+
+test('awareness turned off while the channels were tried: no desktop toast, left pending (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  let nativeCalls = 0;
+  try {
+    const result = await deliverOpportunityNotification(suggestion, { broadcastWithReceipt: () => 0 },
+      { getManager: () => ({ listChannels: () => ['telegram'] }),
+        tryBroadcastToChannels: async () => {
+          setScreenCaptureEnabledSource(() => false);
+          return { delivered: [], failed: [{ channel: 'telegram', error: 'offline' }], unknown: [] };
+        } },
+      async () => { nativeCalls++; return true; });
+    expect(result).toBeNull();
+    expect(nativeCalls).toBe(0);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
+test('the channels are told to stop before the next one once awareness is off (#1314 review)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  let stopAnswers: boolean[] = [];
+  try {
+    await deliverOpportunityNotification(suggestion, { broadcastWithReceipt: () => 0 },
+      { getManager: () => ({ listChannels: () => ['telegram', 'discord'] }),
+        tryBroadcastToChannels: async (_names: string[], _text: string, options?: { shouldContinue?: () => boolean }) => {
+          stopAnswers.push(options?.shouldContinue?.() ?? true);
+          setScreenCaptureEnabledSource(() => false);
+          stopAnswers.push(options?.shouldContinue?.() ?? true);
+          return { delivered: [], failed: [], unknown: [] };
+        } },
+      async () => true);
+    expect(stopAnswers).toEqual([true, false]);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
