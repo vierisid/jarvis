@@ -45,7 +45,7 @@ export type WebhookDelivery = {
 export type WebhookFireResult =
   | { outcome: 'started'; fireId: string; runId: string }
   | { outcome: 'duplicate'; fireId: string; runId?: string }
-  | { outcome: 'blocked'; fireId?: string; reason: string; disabled?: boolean }
+  | { outcome: 'blocked'; fireId?: string; reason: string; disabled?: boolean; turnedOff?: boolean }
   | { outcome: 'skipped'; fireId?: string; reason: string; retryAfterSeconds?: number }
   | { outcome: 'error'; reason: string };
 
@@ -123,6 +123,12 @@ export const WEBHOOK_GLOBAL_PER_MINUTE = 600;
 /** Budget for requests to a secret-protected flow that fail the signature. */
 export const WEBHOOK_BAD_SIGNATURE_PER_MINUTE = 30;
 /**
+ * Database lookups a minute, across all ids, to tell an unregistered id that
+ * is a turned-off flow from an unknown one. Past it the reply is the plain
+ * "not found", so a flood of made-up ids costs no more than it did before.
+ */
+export const WEBHOOK_OFF_LOOKUPS_PER_MINUTE = 60;
+/**
  * Body cap for the public ingress. The body is the real per-request cost
  * (the HMAC over it is microseconds), and the server's own default cap is
  * far larger than any webhook payload.
@@ -137,11 +143,16 @@ export const WORKFLOW_OFF_MESSAGE = 'This workflow is turned off. Turn it on in 
 /** Fields of a form or query string: repeated names become arrays. Own properties only, so a field named `__proto__` is data. */
 export function fieldsOf(pairs: Iterable<[string, unknown]>): Record<string, unknown> {
   const fields = new Map<string, unknown>();
+  // The arrays are built here, so appending in place is safe. Copying them
+  // instead made a 1 MB body of one repeated name quadratic: minutes of
+  // blocked event loop from a single request.
+  const repeated = new Set<string>();
   for (const [name, value] of pairs) {
     if (!fields.has(name)) fields.set(name, value);
+    else if (repeated.has(name)) (fields.get(name) as unknown[]).push(value);
     else {
-      const seen = fields.get(name);
-      fields.set(name, Array.isArray(seen) ? [...seen, value] : [seen, value]);
+      fields.set(name, [fields.get(name), value]);
+      repeated.add(name);
     }
   }
   return Object.fromEntries(fields);
@@ -178,6 +189,7 @@ export class WebhookManager {
   private badSignature = new KeyedRateLimiter(60_000, WEBHOOK_BAD_SIGNATURE_PER_MINUTE);
   private canAccept: (() => boolean) | null = null;
   private isTurnedOff: ((workflowId: string) => boolean) | null = null;
+  private offLookups = new KeyedRateLimiter(60_000, WEBHOOK_OFF_LOOKUPS_PER_MINUTE);
 
   /** Tells a flow that exists but is turned off from an id that is unknown. */
   setTurnedOffCheck(fn: ((workflowId: string) => boolean) | null): void {
@@ -258,7 +270,9 @@ export class WebhookManager {
 
     if (!route) {
       let off = false;
-      try { off = this.isTurnedOff?.(workflowId) ?? false; } catch { /* unknown id */ }
+      if (this.isTurnedOff && this.offLookups.allow('*')) {
+        try { off = this.isTurnedOff(workflowId); } catch { /* answered as an unknown id */ }
+      }
       if (off) return json(404, { error: WORKFLOW_OFF_MESSAGE });
       return new Response(JSON.stringify({ error: 'Webhook not found' }), {
         status: 404,
@@ -352,34 +366,37 @@ export class WebhookManager {
       if (limited) return limited;
     }
 
-    // Body/HMAC awaits can outlive Remove/Undo/re-enable (or secret rotation).
-    // Never deliver a request authorized for a replaced registration.
+    // Parse body. `body` is the JSON reading of the bytes, as before forms
+    // were parsed; the delivery's identity comes from it whatever the
+    // Content-Type says. The header is not signed: were the identity read
+    // from the form fields, a captured signed request named by its body's
+    // event id could be sent again as a form, under a fresh identity, and run
+    // twice.
+    let body: Record<string, unknown> = {};
+    if (rawBody.trim()) {
+      try {
+        const parsed = JSON.parse(rawBody);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          body = parsed as Record<string, unknown>;
+        } else {
+          body = { body: parsed };
+        }
+      } catch {
+        // Not JSON: pass as raw string
+        body = { body: rawBody };
+      }
+    }
+    const form = rawBody.trim() ? await formFields(req.headers.get('content-type'), rawBody) : null;
+    let data: Record<string, unknown> = form ?? body;
+
+    // Body/HMAC/form awaits can outlive Remove/Undo/re-enable (or secret
+    // rotation). Never deliver a request authorized for a replaced
+    // registration. Nothing below awaits.
     if (this.routes.get(workflowId) !== route) {
       return json(409, { error: 'Webhook registration changed' });
     }
 
-    // Parse body
-    let data: Record<string, unknown> = {};
-    if (rawBody.trim()) {
-      const form = await formFields(req.headers.get('content-type'), rawBody);
-      if (form) {
-        data = form;
-      } else {
-        try {
-          const parsed = JSON.parse(rawBody);
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            data = parsed as Record<string, unknown>;
-          } else {
-            data = { body: parsed };
-          }
-        } catch {
-          // Not JSON — pass as raw string
-          data = { body: rawBody };
-        }
-      }
-    }
-
-    let delivery = webhookDelivery(req.headers, data, verifiedSignature, timestampedSignature);
+    let delivery = webhookDelivery(req.headers, body, verifiedSignature, timestampedSignature);
     if (route.submission) {
       try {
         const prepared = prepareSubmission(data, route.submission);
@@ -448,8 +465,10 @@ function webhookReply(workflowId: string, result: unknown): Response {
       return json(200, { ok: true, workflowId, outcome: 'duplicate', duplicate: true, fireId: result.fireId,
         ...(result.runId ? { runId: result.runId } : {}) });
     case 'blocked':
+      // Only a workflow that is turned off says so; one removed, changed or
+      // not listening answers as an unknown id does, as the docs promise.
       return result.disabled
-        ? json(404, { error: WORKFLOW_OFF_MESSAGE, ...(result.fireId ? { fireId: result.fireId } : {}) })
+        ? json(404, { error: result.turnedOff ? WORKFLOW_OFF_MESSAGE : 'Webhook not found', ...(result.fireId ? { fireId: result.fireId } : {}) })
         // The refusal's reason names the workflow's steps and connections:
         // it stays in the owner's delivery record, not in a reply to a sender
         // who may hold nothing but the URL.

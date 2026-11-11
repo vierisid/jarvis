@@ -33,7 +33,7 @@ import { createRunFlowHandler, RUN_FLOW } from "../handler";
 import { TriggerManager } from "./manager";
 import { scheduleZoneWarning } from "./schedule-zone";
 import { TIMESTAMPED_REPEAT_WINDOW_MS, WEBHOOK_TIMESTAMP_TOLERANCE_S } from "./webhook-secret";
-import { webhookDelivery } from "./webhook";
+import { webhookDelivery, WEBHOOK_OFF_LOOKUPS_PER_MINUTE, WORKFLOW_OFF_MESSAGE } from "./webhook";
 import { getScheduleWatch, setScheduleWatch } from "../../db/repos/trigger-fire";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
 import { createWaitpoint } from "../../db/repos/waitpoint";
@@ -667,6 +667,50 @@ describe("webhooks", () => {
     await d.stop();
   });
 
+  test("a turned-off flow that is not a webhook stays not found", async () => {
+    const { flowId } = schedule("0 9 * * *");
+    const d = await daemon(Date.now());
+    await d.manager.stop();
+    updateFlowStatus(flowId, "DISABLED");
+    expect(await (await post(d, flowId, "{}")).json()).toEqual({ error: "Webhook not found" });
+    await d.stop();
+  });
+
+  test("lookups for unregistered ids are bounded; past the budget the reply is not found", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    await d.manager.stop();
+    updateFlowStatus(flowId, "DISABLED");
+    for (let i = 0; i < WEBHOOK_OFF_LOOKUPS_PER_MINUTE; i++) await post(d, `made-up-${i}`, "{}");
+    expect(await (await post(d, flowId, "{}")).json()).toEqual({ error: "Webhook not found" });
+    await d.stop();
+  });
+
+  test("only a turned-off refusal says turned off; removed, changed or not listening answers not found", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    const reply = async (result: Record<string, unknown>) => {
+      d.manager.webhookManager().setTriggerCallback(() => result);
+      const res = await post(d, flowId, "{}");
+      return { status: res.status, body: await res.json() };
+    };
+    expect(await reply({ outcome: "blocked", reason: "The workflow was removed.", disabled: true }))
+      .toEqual({ status: 404, body: { error: "Webhook not found" } });
+    expect(await reply({ outcome: "blocked", reason: "The workflow is turned off.", disabled: true, turnedOff: true }))
+      .toEqual({ status: 404, body: { error: WORKFLOW_OFF_MESSAGE } });
+    await d.stop();
+  });
+
+  test("a registered webhook turned off before the refresh says so", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    updateFlowStatus(flowId, "DISABLED"); // the route is still registered
+    const res = await post(d, flowId, "{}");
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe(WORKFLOW_OFF_MESSAGE);
+    await d.stop();
+  });
+
   describe("body shapes", () => {
     const FORM = { "Content-Type": "application/x-www-form-urlencoded" };
     const capture = async (flowId: string, body: string, headers: Record<string, string>, query = "") => {
@@ -709,6 +753,26 @@ describe("webhooks", () => {
       expect((await capture(flowId, "[1,2]", { "Content-Type": "application/json" })).data!.body).toEqual([1, 2]);
       expect((await capture(flowId, "hello", { "Content-Type": "text/plain" })).data!.body).toBe("hello");
       expect((await capture(flowId, "a=1", { "Content-Type": "text/plain" })).data!.body).toBe("a=1");
+    });
+
+    test("a captured signed event sent again as a form is still a repeat", async () => {
+      const { flowId } = webhook({ secret: SECRET, signature_scheme: "timestamped" });
+      const d = await daemon(Date.now());
+      const body = '{"object":"event","id":"evt_1","a":"x&b=y"}';
+      const headers = await timestamped(SECRET, body);
+      const send = (type: string) => post(d, flowId, body, { ...headers, "Content-Type": type });
+      expect(await (await send("application/json")).json()).toMatchObject({ outcome: "started" });
+      expect(await (await send("application/x-www-form-urlencoded")).json()).toMatchObject({ outcome: "duplicate" });
+      expect(runsOf(flowId)).toHaveLength(1);
+      await d.stop();
+    });
+
+    test("a 1 MB form of one repeated name parses in linear time", async () => {
+      const { flowId } = webhook();
+      const repeats = 330_000; // "a=&" is 3 bytes: just under the 1 MB cap
+      const { res, data } = await capture(flowId, "a=&".repeat(repeats), FORM);
+      expect(res.status).toBe(200);
+      expect(data!.a).toHaveLength(repeats);
     });
 
     test("a field named __proto__ is data, not a prototype", async () => {

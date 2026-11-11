@@ -125,7 +125,7 @@ work again, rerun it in Jarvis.
 | Started | 200 `{ ok, outcome: "started", fireId, runId }` |
 | Repeat | 200 `{ ok, outcome: "duplicate", duplicate: true, fireId, runId }` |
 | Readiness refused | 200 `{ ok, outcome: "blocked", reason }`; the delivery is kept on a failed run for a person to decide, and its retries are repeats |
-| Workflow turned off | 404 `{ error }` saying the workflow is turned off; a retry after it is turned back on runs |
+| Workflow turned off | 404 `{ error }` saying the workflow is turned off (a Webhook-trigger workflow only; past 60 such lookups a minute across all ids the reply is `Webhook not found`); a retry after it is turned back on runs |
 | Workflow changed or gone | 404 `Webhook not found`, as for an id that never existed |
 | Queue full | 503 with `Retry-After` |
 | 100 steps of the workflow already waiting behind its approval cards | 503 with `Retry-After: 60`, recorded as skipped |
@@ -134,7 +134,10 @@ work again, rerun it in Jarvis.
 ### What the workflow receives
 
 The body is read once, signature checked on those exact bytes, and only then
-parsed, so parsing never changes what is signed.
+parsed, so parsing never changes what is signed. The Content-Type is not
+signed, so a delivery's identity (an event id in the body) is read from the
+bytes as JSON whatever it says: the same signed bytes sent again as a form
+are still a repeat.
 
 | Content type | In `{{trigger}}` |
 | --- | --- |
