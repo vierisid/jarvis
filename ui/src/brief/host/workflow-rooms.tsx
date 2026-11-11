@@ -128,25 +128,44 @@ export function createWorkflowRooms(host: WorkflowHost) {
     const { flowId, versionId, runId } = shell.route.selection;
     const [selection, setSelection] = useState<{ flowId: string; versionId: string; title: string; flow: Flow; editable: boolean; needsInput: boolean; inspection: InspectionSelection } | null>(null);
     const [error, setError] = useState(false), [revision, retry] = useState(0);
+    // A draft that was found but could not be opened (a broken graph): the one thing that can be done with it is discard it.
+    const [brokenDraft, setBrokenDraft] = useState<string | null>(null);
+    const [discarding, setDiscarding] = useState<'idle' | 'asking' | 'working' | 'failed'>('idle');
     useEffect(() => {
-      const abort = new AbortController(); setSelection(null); setError(false);
+      const abort = new AbortController(); setSelection(null); setError(false); setBrokenDraft(null); setDiscarding('idle');
+      let draftSeen: string | null = null;
       void (async () => {
         if (!flowId) throw new Error('Select a workflow');
         const detail = await transport.json(`/api/workflows/${encodeURIComponent(flowId)}`, { signal: abort.signal });
         if (detail.flow?.id !== flowId) throw new Error('Workflow changed');
         const version = versionId ? await transport.json(`/api/workflows/${encodeURIComponent(flowId)}/versions/${encodeURIComponent(versionId)}`, { signal: abort.signal })
           : detail.latestDraft ?? detail.published;
+        if (version?.state === 'DRAFT' && version.flowId === flowId && typeof version.id === 'string') draftSeen = version.id;
         if (!version || version.flowId !== flowId || !['DRAFT', 'LOCKED'].includes(version.state)) throw new Error('Version unavailable');
         if (shell.route.room === 'workflow-draft' && version.state !== 'DRAFT') throw new Error('Draft changed');
         const params = new URLSearchParams({ versionId: version.id }); if (runId) params.set('runId', runId);
         const value = await transport.json(`/api/brief/workflows/${encodeURIComponent(flowId)}/inspection?${params}`, { signal: abort.signal });
         if (value.status !== 'ready' || value.data?.scopeId !== scopeId || value.data.flowId !== flowId || value.data.versionId !== version.id) throw new Error('Inspection unavailable');
         if (!abort.signal.aborted) setSelection({ flowId, versionId: version.id, title: version.displayName, flow: detail.flow, editable: version.state === 'DRAFT', needsInput: needsManualRunInput(version.trigger), inspection: value.data });
-      })().catch(() => { if (!abort.signal.aborted) setError(true); });
+      })().catch(() => { if (!abort.signal.aborted) { setError(true); setBrokenDraft(draftSeen); } });
       return () => abort.abort();
     }, [flowId, versionId, runId, shell.route.room, revision]);
+    const discard = async () => {
+      if (!flowId || !brokenDraft) return;
+      setDiscarding('working');
+      try {
+        await transport.json(`/api/workflows/${encodeURIComponent(flowId)}/versions/${encodeURIComponent(brokenDraft)}/discard`, post({}));
+        shell.navigate({ room: 'all-workflows', selection: {} });
+      } catch { setDiscarding('failed'); }
+    };
     if (!selection) return <section><h1 className="brief-type-room-title">Workflow</h1><p role="status">{error ? 'This workflow version is unavailable. Your selected IDs are retained.' : 'Loading workflow…'}</p>
-      {error && <BriefButton onClick={() => retry(v => v + 1)}>Check again</BriefButton>}<BriefButton onClick={() => shell.navigate({ room: 'all-workflows', selection: {} })}>All workflows</BriefButton></section>;
+      {error && brokenDraft && discarding === 'idle' && <p>If this draft cannot be opened, you can throw it away. Anything published stays as it is.</p>}
+      {discarding === 'failed' && <p role="alert">The draft could not be discarded. It may be what a turned-on workflow runs, or have runs recorded. Turn the workflow off or try again.</p>}
+      {discarding === 'asking' && <p role="alert">Discard this draft for good? Its steps cannot be brought back.</p>}
+      {error && <BriefButton onClick={() => retry(v => v + 1)}>Check again</BriefButton>}
+      {error && brokenDraft && discarding !== 'asking' && <BriefButton onClick={() => setDiscarding('asking')} disabled={discarding === 'working'}>Discard this draft</BriefButton>}
+      {discarding === 'asking' && <><BriefButton onClick={() => void discard()}>Yes, discard it</BriefButton><BriefButton onClick={() => setDiscarding('idle')}>Keep it</BriefButton></>}
+      <BriefButton onClick={() => shell.navigate({ room: 'all-workflows', selection: {} })}>All workflows</BriefButton></section>;
     const { runs, context } = controllers(selection.flowId, selection.versionId, selection.editable, selection.needsInput);
     const binding = { source: 'live' as const, scopeId, flowId: selection.flowId, versionId: selection.versionId, title: selection.title, capabilities: host.capabilities() };
     if (shell.route.room === 'workflow-runs') return <WorkflowRunsRoom shell={shell} binding={{ ...binding, controller: runs }} />;

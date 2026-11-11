@@ -32,6 +32,14 @@ export function publishFlowVersion(flowId: string, versionId?: string): { flow: 
     // version is locked, before it is attached, before the flow is enabled --
     // rather than per execution, where the refusal would land on a cron tick
     // with nobody reading it.
+    // Publishing an older version brings back its steps, not its old name:
+    // a workflow's name is its published version's label, so the older one
+    // takes the current name and the workflow keeps it.
+    const current = published && published !== target.id ? getFlowVersion(published) : null;
+    if (current && target.created < current.created && target.displayName !== current.displayName) {
+      getWorkflowDb().run("UPDATE flow_version SET display_name = ? WHERE id = ?", [current.displayName, target.id]);
+      target = { ...target, displayName: current.displayName };
+    }
     assertCodeStepsAllowed(flowId, target.id, "publish");
     // Publishing is a person accepting this version's bindings (Q-05):
     // `updateFlowStatus` below pins them, so they are not compared here.

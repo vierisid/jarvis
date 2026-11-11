@@ -344,6 +344,41 @@ export function getLatestDraft(flowId: string): FlowVersion | null {
   return row ? rowToFlowVersion(row) : null;
 }
 
+/** The flow's newest version of any state: the one a new draft starts as a copy of. */
+export function getNewestVersion(flowId: string): FlowVersion | null {
+  const row = db()
+    .query<FlowVersionRow, [string]>(`SELECT * FROM flow_version WHERE flow_id = ? ORDER BY created DESC, rowid DESC LIMIT 1`)
+    .get(flowId);
+  return row ? rowToFlowVersion(row) : null;
+}
+
+/**
+ * Throw away a draft that is not wanted (the way out of a draft that cannot
+ * be opened). Only a DRAFT: a locked version is history and the published
+ * one is what runs. A draft that runs have been made from, or that an enabled
+ * flow with nothing published is running, is kept, and the refusal says why.
+ */
+export function discardDraftVersion(flowId: string, versionId: string): void {
+  db().transaction(() => {
+    const row = db().query<FlowVersionRow, [string, string]>(`SELECT * FROM flow_version WHERE id = ? AND flow_id = ?`).get(versionId, flowId);
+    if (!row) throw new FlowVersionRequestError("version not found", 404);
+    if (row.state !== "DRAFT") {
+      throw new FlowVersionRequestError("Only a draft can be discarded. A published or locked version is kept as the workflow's history.", 409);
+    }
+    const flow = db().query<{ status: string; published_version_id: string | null }, [string]>(`SELECT status, published_version_id FROM flow WHERE id = ?`).get(flowId);
+    if (flow?.published_version_id === versionId) throw new FlowVersionRequestError("This version is the one running. Publish another version first.", 409);
+    const latestDraft = getLatestDraft(flowId);
+    if (flow?.status === "ENABLED" && !flow.published_version_id && latestDraft?.id === versionId) {
+      throw new FlowVersionRequestError("This draft is what the turned-on workflow runs. Turn the workflow off first, then discard the draft.", 409);
+    }
+    if (db().query(`SELECT 1 FROM flow_run WHERE flow_version_id = ? LIMIT 1`).get(versionId)) {
+      throw new FlowVersionRequestError("This draft has runs recorded against it, so it is kept.", 409);
+    }
+    db().run(`DELETE FROM flow_version WHERE id = ?`, [versionId]);
+    touchFlow(flowId);
+  }).immediate();
+}
+
 export function listVersions(flowId: string, limit = 50): FlowVersion[] {
   return db()
     .query<FlowVersionRow, [string, number]>(

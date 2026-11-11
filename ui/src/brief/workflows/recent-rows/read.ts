@@ -42,7 +42,8 @@ export async function readRecentWorkflows(request: (url:string, init?:RequestIni
         // Project only identity/status/time. Captured step output is never copy.
         runs.push({id:run.id,flowId:run.flowId,flowVersionId:run.flowVersionId,status:run.status,startTime:run.startTime,created:run.created,environment:run.environment});
         const detail=await read(`/api/workflows/${encodeURIComponent(flow.id)}`) as {latestDraft?:{displayName?:unknown};published?:{displayName?:unknown}};
-        const name=detail.latestDraft?.displayName??detail.published?.displayName;
+        // The name every other list shows: the published version's, else the latest draft's.
+        const name=detail.published?.displayName??detail.latestDraft?.displayName;
         if(typeof name==="string"&&name.trim())flow.displayName=name;
       }catch{incomplete=true;}
     }
