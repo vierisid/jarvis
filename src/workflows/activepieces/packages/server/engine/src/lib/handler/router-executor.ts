@@ -62,7 +62,17 @@ const routerBranchExecuter: BaseExecutor<RouterAction> = {
                     const result = await resolver.resolve<BranchCondition>({ unresolvedInput: condition, executionState })
                     resolvedGroup.push(result.resolvedInput)
                     censoredGroup.push(result.censoredInput as BranchCondition)
-                    matched = evaluateConditions([[result.resolvedInput]])
+                    // === JARVIS PATCH: a number condition names its operand as the run records it ===
+                    // The censored operand, so a connection value reads **REDACTED**.
+                    try {
+                        matched = evaluateConditions([[result.resolvedInput]])
+                    }
+                    catch (error) {
+                        if (!(error instanceof NonNumericOperandError)) throw error
+                        const censored = result.censoredInput as { firstValue?: unknown, secondValue?: unknown }
+                        throw new NonNumericOperandError(error.which, shownOperand(error.which === 'first' ? censored.firstValue : censored.secondValue))
+                    }
+                    // === END JARVIS PATCH ===
                     if (!matched) break
                 }
                 if (matched) break
@@ -346,15 +356,39 @@ function toLowercaseIfCaseInsensitive(text: unknown, caseSensitive: boolean | un
 // Upstream kept a non-numeric operand as a string, so "abc" > 5 was simply false
 // and the run silently took the fallback branch. The step now fails and names
 // the operand instead (`routerExecuter.handle` makes this the router step's
-// own failure, with this message as it is).
-class NonNumericOperandError extends Error {}
+// own failure, with this message as it is). The operand is attached where the
+// censored input is at hand; without one the message names no value.
+class NonNumericOperandError extends Error {
+    constructor(readonly which: 'first' | 'second', shown?: string) {
+        super(`The ${which} value${shown === undefined ? '' : ` ${shown}`} is not a number. A number condition needs a number on both sides.`)
+    }
+}
+
+// The operand on one line, at most 60 characters: text in double quotes, any
+// other value as its JSON. Control characters, line and paragraph separators
+// and bidirectional controls are written as escapes, so the value cannot break
+// or reorder the message it is echoed into.
+function shownOperand(value: unknown): string {
+    let text: string
+    if (typeof value === 'string') text = value
+    else {
+        try {
+            text = JSON.stringify(value) ?? String(value)
+        }
+        catch {
+            text = String(value)
+        }
+    }
+    const chars = Array.from(text.slice(0, 121))
+    const clipped = chars.slice(0, 60).join('')
+    const shown = (typeof value === 'string' ? JSON.stringify(clipped) : clipped)
+        .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+    return chars.length > 60 ? `${shown}...` : shown
+}
 
 function parseStringToNumber(value: unknown, which: 'first' | 'second'): number {
     const num = Number(value)
-    if (Number.isNaN(num)) {
-        const shown = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value)
-        throw new NonNumericOperandError(`The ${which} value '${shown.length > 60 ? `${shown.slice(0, 60)}...` : shown}' is not a number. A number condition needs a number on both sides.`)
-    }
+    if (Number.isNaN(num)) throw new NonNumericOperandError(which)
     return num
 }
 // === END JARVIS PATCH ===
