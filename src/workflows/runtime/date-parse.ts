@@ -63,8 +63,8 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** A short, single-line cut of `value` for a refusal message. */
-function quote(value: string): string {
+/** A short, single-line cut of `value` for a refusal message. Date Helper's Add/Subtract Time quotes its expression with it too. */
+export function quote(value: string): string {
   const flat = value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ');
   const chars = Array.from(flat);
   return `"${chars.length > QUOTE_MAX ? `${chars.slice(0, QUOTE_MAX).join('')}...` : flat}"`;

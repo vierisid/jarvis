@@ -37,10 +37,15 @@ describe.skipIf(skip)('the compiled core date-helper piece', () => {
   test('add_subtract_date refuses an expression it cannot read and says what is accepted', async () => {
     for (const bad of ['banana', '1 fortnight', '+ day', '2', '', '+1 day banana', '+ 1.5 hour']) {
       const failure = await run('add_subtract_date')({ propsValue: addSubtract(bad) }).then(() => null, (e: Error) => e);
-      expect(failure?.message ?? `${JSON.stringify(bad)} was accepted`).toMatch(/^The expression could not be read\. .*year, month, day, hour, minute and second\.$/);
-      // The expression can hold run data, so the message does not repeat it.
-      expect(failure?.message).not.toContain('banana');
+      expect(failure?.message ?? `${JSON.stringify(bad)} was accepted`).toMatch(/^The expression ".*" could not be read\. .*year, month, day, hour, minute and second\.$/);
     }
+  });
+
+  test('add_subtract_date quotes a refused expression as a short single-line cut', async () => {
+    const long = `+ 1 day\n${'x'.repeat(200)}`;
+    const failure = await run('add_subtract_date')({ propsValue: addSubtract(long) }).then(() => null, (e: Error) => e);
+    expect(failure?.message).toStartWith(`The expression "+ 1 day ${'x'.repeat(32)}..." could not be read.`);
+    expect(failure?.message).not.toContain('\n');
   });
 
   test('add_subtract_date refuses a result outside the range a date can hold instead of returning "Invalid Date"', async () => {
