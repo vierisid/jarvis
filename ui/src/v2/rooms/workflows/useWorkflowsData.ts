@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UserFailure } from "../../ui";
+import type { FlowStepNode } from "./useWorkflowEditor";
+import { manualTriggerFields } from "./trigger-kinds";
+import { manualRunInput } from "../../../brief/host/InputDialog";
 
 const POLL_INTERVAL_MS = 8000;
 
@@ -247,10 +250,25 @@ export function useWorkflowsData() {
 
   const runFlow = useCallback(async (flowId: string): Promise<ActionResult> => {
     try {
+      // A manual trigger that declares input fields is started with values for
+      // them; the list has no trigger of its own, so read the version that runs.
+      let payload: Record<string, unknown> | undefined;
+      try {
+        const detail = await fetch(`/api/workflows/${flowId}`);
+        if (detail.ok) {
+          const body = (await detail.json()) as { published?: { trigger?: FlowStepNode } | null; latestDraft?: { trigger?: FlowStepNode } | null };
+          const fields = manualTriggerFields((body.published ?? body.latestDraft)?.trigger);
+          if (fields.length) {
+            const entered = await manualRunInput(undefined, fields);
+            if (entered === null) return { ok: false, message: "Run cancelled. Nothing was started." };
+            payload = entered;
+          }
+        }
+      } catch { /* Without the trigger the run starts as before. */ }
       const res = await fetch(`/api/workflows/${flowId}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ triggeredBy: "dashboard" }),
+        body: JSON.stringify({ triggeredBy: "dashboard", ...(payload ? { payload } : {}) }),
       });
       if (!res.ok) {
         const body = await safeJson(res);

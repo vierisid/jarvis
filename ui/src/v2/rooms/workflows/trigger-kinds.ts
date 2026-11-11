@@ -224,12 +224,23 @@ function deepClone<T>(v: T): T {
 }
 
 
+/**
+ * The input fields a manual trigger declares: the names the owner added under
+ * the trigger's settings. A run is started with a value for each, and later
+ * steps read them as `{{trigger.<name>}}`. Empty for every other step.
+ */
+export function manualTriggerFields(step: FlowStepNode | null | undefined): string[] {
+  if (!step || step.type !== "EMPTY") return [];
+  return Object.keys(step.settings?.input ?? {});
+}
+
 /** A clock/manual trigger needs no sample event unless the graph consumes one.
  * Keep the input dialog for external events, code and expressions we cannot inspect.
  * This is a UI convenience only; server readiness and Authority still govern runs.
  */
 export function needsManualRunInput(trigger: FlowStepNode | null | undefined): boolean {
   if (!trigger || !['manual', 'schedule'].includes(detectTriggerKind(trigger))) return true;
+  if (manualTriggerFields(trigger).length) return true;
   const pending: unknown[] = [trigger], seen = new Set<object>();
   let visited = 0;
   while (pending.length) {

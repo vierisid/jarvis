@@ -257,6 +257,25 @@ test('manual run JSON stays open with the exact text until corrected; cancellati
   }
 });
 
+test('a manual trigger that declares fields asks for them in a form, with JSON as an advanced option', async () => {
+  await React.act(async () => root.render(<Input.InputHost />));
+  let result: Record<string, unknown> | null | undefined;
+  await React.act(async () => { void Input.manualRunInput(undefined, ['customer', 'amount']).then(value => { result = value; }); });
+  expect(document.querySelector('textarea')).toBeNull();
+  const boxes = [...document.querySelectorAll('input')] as HTMLInputElement[];
+  expect(boxes.length).toBe(2);
+  expect(document.body.textContent).toContain('customer'); expect(document.body.textContent).toContain('amount');
+  const type = async (box: HTMLInputElement, text: string) => React.act(async () => { Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(box, text); box.dispatchEvent(new Event('input', { bubbles: true })); });
+  await type(boxes[0]!, 'acme');
+  await click('Advanced: JSON');
+  expect(document.querySelector('textarea')!.value).toBe('{"customer":"acme","amount":""}');
+  await click('Use the form');
+  expect((document.querySelectorAll('input')[0] as HTMLInputElement).value).toBe('acme');
+  await type(document.querySelectorAll('input')[1] as HTMLInputElement, '12');
+  await click('Continue');
+  expect(result).toEqual({ customer: 'acme', amount: '12' });
+});
+
 test('publishing from the existing canvas route reloads authoritative state and enables Run without navigation', async () => {
   const { createWorkflowRooms } = await import('./workflow-rooms');
   const { makeCanvasFixture } = await import('../workflows/canvas/fixtures');

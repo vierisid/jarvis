@@ -117,7 +117,7 @@ function OwnedDashboard({ descriptor, route, retained, integration, legacy, inst
   const session = useRef<Session | null>(null), shell = useRef<BriefShellPort | null>(null), reveal = useRef<(id: string) => void>(() => { throw Error('Conversation unavailable'); });
   const [host] = useState(() => createDashboardOwner(descriptor, { storage: window.localStorage, changed: () => changed(n => n + 1),
     unauthorized: () => revoke(true), explain, confirm: text => confirmDialog(text),
-    runInput: () => manualRunInput(),
+    runInput: fields => manualRunInput(undefined, fields),
     revealConversationItem: id => reveal.current(id), replayTutorial: async () => {
       if (!session.current) return { state: 'unavailable' };
       try {
