@@ -21,6 +21,8 @@ function providerBlocker(error: unknown): BriefCompositionJob['blocker'] {
   return failure.code.startsWith('provider_') ? { code: failure.code as `provider_${string}`, message: failure.message, details: [] } : null;
 }
 
+const COULD_NOT_FINISH = 'Jarvis could not finish preparing this workflow. Send the request again.';
+
 export class CompositionRequestError extends Error {
   constructor(message: string, public readonly status = 400) { super(message); }
 }
@@ -212,10 +214,11 @@ export class BriefCompositionProvider {
         if (!result.ok) {
           // A provider failure says what the provider did and where it is fixed, as chat does. Only
           // authored copy crosses: the provider's own diagnostics stay in the journal.
-          const provider = !result.blocked && result.errorCode && result.errorCode !== 'composition_timeout'
-            ? providerBlocker(new LLMProviderError('', result.errorCode, undefined, undefined, result.hostedDetail)) : null;
+          const callCode = !result.blocked && result.errorCode !== 'composition_timeout' ? result.errorCode : undefined;
+          const provider = callCode ? providerBlocker(new LLMProviderError('', callCode, undefined, undefined, result.hostedDetail)) : null;
           this.finish(row.id, result.blocked ? 'blocked' : 'failed', provider ?? { code: result.errorCode === 'composition_timeout' ? 'timeout' : result.blocked ? 'composition_blocked' : 'composition_failed',
-            message: result.blocked ? 'More information or an available capability is needed.' : 'Jarvis could not build a valid workflow from this request. Edit the request above, add more detail, and send it again.',
+            // A model call that failed for an unclassified reason says nothing about the request.
+            message: result.blocked ? 'More information or an available capability is needed.' : callCode ? COULD_NOT_FINISH : 'Jarvis could not build a valid workflow from this request. Edit the request above, add more detail, and send it again.',
             // Malformed-response excerpts stay in the journal.
             details: result.blocked ? result.errors.slice(0, 6).map(message => message.slice(0, 500)) : [] });
         } else if (!walkFlowNodes(result.flow.trigger).some(node => node.type === 'PIECE')) {
@@ -236,7 +239,7 @@ export class BriefCompositionProvider {
         }
       } catch (error) {
         if (!this.stopped && this.currentDatabase() && this.active === active) this.finish(row.id, 'failed', (!timedOut && providerBlocker(error)) || {
-          code: timedOut ? 'timeout' : 'composition_failed', message: timedOut ? 'Preparing the workflow took too long. Edit the request above or send it again.' : 'Jarvis could not finish preparing this workflow. Send the request again.', details: [],
+          code: timedOut ? 'timeout' : 'composition_failed', message: timedOut ? 'Preparing the workflow took too long. Edit the request above or send it again.' : COULD_NOT_FINISH, details: [],
         });
       } finally {
         clearTimeout(timer); active.abort.abort(); if (this.active === active) this.active = null;
