@@ -907,6 +907,37 @@ describe("through the engine, as production runs triggers", () => {
     await d.stop();
   });
 
+  test("an engine catch-up time that waited past its grace window behind the check before it is missed, not run late", async () => {
+    setCronTimezone("UTC");
+    const p = pieceSchedule("* * * * *", "UTC");
+    let release: () => void = () => {};
+    let gated = false;
+    const { engine } = stubEngine({ enable: p.enable, poll: async () => {
+      if (gated) await new Promise<void>((resolve) => { release = resolve; });
+      return [{}];
+    } });
+    let d = await daemon(at("2026-10-07T09:33:20Z"), engine);
+    await d.poll(p.flowId, "2026-10-07T09:33:30Z");
+    finishAll(p.flowId);
+    await d.stop();
+    gated = true;
+    d = await daemon(at("2026-10-07T09:36:25Z"), engine);
+    await settle();
+    // The check for 09:35 hangs until 09:38:30, when 09:36 is 150 s old.
+    setSystemTime(new Date(at("2026-10-07T09:38:30Z")));
+    gated = false;
+    release();
+    await settle();
+    const fires = listFlowFires(p.flowId).filter(f => f.scheduledFor! > at("2026-10-07T09:34:59Z"));
+    expect(fires.map(f => [f.dedupeKey, f.label])).toEqual([
+      ["2026-10-07T09:36", "missed"],
+      ["2026-10-07T09:35", "delayed"],
+    ]);
+    expect(fires[0]!.lateMs).toBe(150_000);
+    expect(runsOf(p.flowId)).toHaveLength(2);
+    await d.stop();
+  });
+
   test("a scheduled time that cannot run still leaves a row: a check still running, an engine failure, a workflow turned off", async () => {
     setCronTimezone("UTC");
     const { flowId, enable } = pieceSchedule("* * * * *", "UTC");
@@ -1109,6 +1140,29 @@ describe("Pause and Kill (Q-08)", () => {
     again.tick(flowId, "2026-10-07T09:01:10Z");
     expect(runsOf(flowId)).toHaveLength(0);
     await again.stop();
+  });
+
+  test("paused at a restart, the times the catch-up owes are skipped and shown, and none runs late after Resume", async () => {
+    setCronTimezone("UTC");
+    const { flowId } = schedule("* * * * *");
+    const controller = emergency();
+    let d = await daemon(at("2026-10-07T09:33:20Z"));
+    d.tick(flowId, "2026-10-07T09:33:30Z");
+    finishAll(flowId);
+    await d.stop();
+    controller.pause();
+    d = await daemon(at("2026-10-07T09:36:25Z"));
+    await settle();
+    expect(runsOf(flowId)).toHaveLength(1);
+    expect(listFlowFires(flowId).slice(0, 2).map(f => [f.dedupeKey, f.label])).toEqual([
+      ["2026-10-07T09:36", "skipped"],
+      ["2026-10-07T09:35", "skipped"],
+    ]);
+    controller.resume();
+    d.tick(flowId, "2026-10-07T09:37:02Z");
+    expect(runsOf(flowId)).toHaveLength(2);
+    expect(listFlowFires(flowId)[0]).toMatchObject({ dedupeKey: "2026-10-07T09:37" });
+    await d.stop();
   });
 
   test("a webhook while paused is told to retry later, and its retry after Resume runs", async () => {

@@ -1156,7 +1156,18 @@ export class TriggerManager {
     const behind = pureSchedule && occurrence?.afterEarlier ? this.scheduleBurst.get(flowId) : undefined;
     const poll = async (): Promise<void> => {
       try {
-        await this.pollEngineTrigger(flowId, versionId, source, occurrence, pureSchedule, generation, occurrence?.afterEarlier === true);
+        let current = occurrence;
+        // A time that waited behind the check before it is as late as it is
+        // now, not as when it came due; past the grace window it is missed,
+        // never run late (Q-06), however long that check took.
+        if (behind && current) {
+          current = { ...current, lateMs: Date.now() - current.at };
+          if (current.lateMs > CRON_GRACE_MS) {
+            this.recordMissed(flowId, versionId, [current], "The check of the time before it was still running");
+            return;
+          }
+        }
+        await this.pollEngineTrigger(flowId, versionId, source, current, pureSchedule, generation, current?.afterEarlier === true);
       } catch (e) {
         this.log(`flow ${flowId} (engine-${source}) failed: ${(e as Error).message}`);
       }

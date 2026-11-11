@@ -62,7 +62,7 @@ in that schedule's zone (`2026-11-01T01:30`), which is the occurrence's identity
 | On time, or up to two minutes late | Runs; lateness over a minute shows as delayed |
 | Later than two minutes (host asleep, process stalled, Jarvis off) | Recorded as missed, not run |
 | A long sleep | The time still within two minutes runs; the newest 100 missed are listed, older ones counted in one row, back seven days |
-| Restart within two minutes after a time | Runs at startup, late, once. Several times still owed (a one-minute schedule down for a few minutes) all run at startup, one after another, none skipped as stacked |
+| Restart within two minutes after a time | Runs at startup, late, once. Several times still owed (a one-minute schedule down for a few minutes) all run at startup, one after another, none skipped as stacked; one left waiting more than two minutes behind the check before it is missed |
 | Autumn hour that happens twice | Its minutes fire once |
 | Minute skipped by the spring-forward jump | Fires once, right after the jump, saying why |
 | Restart, republish or re-enable inside the firing minute | The same occurrence is a repeat, not a second run |
