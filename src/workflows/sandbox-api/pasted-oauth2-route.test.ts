@@ -10,7 +10,7 @@ import type { TokenTransport } from "../credentials/pasted-oauth2";
 import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from "../db";
 import { graphDigest } from "../runtime/continuation";
 import { setEncryptionKey } from "../db/encryption";
-import { getConnection, upsertConnection } from "../db/repos/app-connection";
+import { getConnection, listConnections, upsertConnection } from "../db/repos/app-connection";
 import { createFlow } from "../db/repos/flow";
 import { createDraftVersion } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun, updateRun } from "../db/repos/flow-run";
@@ -207,10 +207,20 @@ describe("#954 pasted OAuth2 connections through the engine endpoint", () => {
 
 describe("#954 saving and listing a pasted OAuth2 connection", () => {
   const routes = () => createWorkflowRoutes()["/api/workflows/connections"]!;
-  const post = (value: Record<string, unknown>) => routes().POST!(new Request("http://localhost/api/workflows/connections", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ externalId: "work-gmail", displayName: "Work Gmail", type: "OAUTH2", pieceName: "@activepieces/piece-gmail", value }),
-  }));
+  // Adding refuses an existing connection, so saving again goes through Rotate (PATCH).
+  const post = (value: Record<string, unknown>) => {
+    const existing = listConnections()[0];
+    if (existing) {
+      return createWorkflowRoutes()["/api/workflows/connections/:id"]!.PATCH!(Object.assign(
+        new Request(`http://localhost/api/workflows/connections/${existing.id}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value }),
+        }), { params: { id: existing.id } }));
+    }
+    return routes().POST!(new Request("http://localhost/api/workflows/connections", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ externalId: "work-gmail", displayName: "Work Gmail", type: "OAUTH2", pieceName: "@activepieces/piece-gmail", value }),
+    }));
+  };
   const list = async () => (await (await routes().GET!(new Request("http://localhost/api/workflows/connections"))).json()) as {
     connections: Array<Record<string, unknown>> };
 
@@ -222,7 +232,7 @@ describe("#954 saving and listing a pasted OAuth2 connection", () => {
     const id = (await list()).connections[0]!.id as string;
     const claimed = getConnection(id)!.value.claimed_at as number;
     expect(claimed).toBeGreaterThanOrEqual(before);
-    expect((await post(pasted)).status).toBe(201);
+    expect((await post(pasted)).status).toBe(200);
     expect(getConnection(id)!.value.claimed_at).toBe(claimed);
     expect(getConnection(id)!.credentialGeneration).toBe(0);
   });
@@ -233,7 +243,7 @@ describe("#954 saving and listing a pasted OAuth2 connection", () => {
     upsertConnection({ externalId: "work-gmail", displayName: "Work Gmail", type: "OAUTH2", pieceName: "@activepieces/piece-gmail",
       pieceVersion: "0.0.0", value: legacy });
     expect((await list()).connections[0]!.oauth2).toEqual({ expiresAt: null, refreshable: true });
-    expect((await post(legacy)).status).toBe(201);
+    expect((await post(legacy)).status).toBe(200);
     const id = (await list()).connections[0]!.id as string;
     expect(getConnection(id)!.credentialGeneration).toBe(0);
   });
@@ -245,7 +255,7 @@ describe("#954 saving and listing a pasted OAuth2 connection", () => {
     expect(row.oauth2).toEqual({ expiresAt: expect.any(Number), refreshable: false });
     expect(JSON.stringify(body)).not.toContain("ya29.only");
     expect((await post({ access_token: "ya29.full", expires_in: 3599, refresh_token: "1//r", client_id: "c", client_secret: "s",
-      token_url: "https://oauth2.example.test/token" })).status).toBe(201);
+      token_url: "https://oauth2.example.test/token" })).status).toBe(200);
     const refreshed = await list();
     expect(refreshed.connections[0]!.oauth2).toEqual({ expiresAt: expect.any(Number), refreshable: true });
     for (const secret of ["ya29.full", "1//r", "\"s\""]) expect(JSON.stringify(refreshed)).not.toContain(secret);
