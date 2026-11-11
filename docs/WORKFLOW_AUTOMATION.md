@@ -831,14 +831,17 @@ HTTP request specifics:
   written or percent-decoded, at any depth of a JSON or form body, in a raw
   JSON string body or a wholly form-encoded one, and in a URL fragment
   (`#access_token=`). The secret path segment of a Slack, Discord, Telegram or
-  Teams webhook URL is redacted too. So is every token-shaped path segment
-  (letters and digits mixed, or 20+ characters) after a `hooks`, `webhook` or
-  `webhook-test` segment or on a `hook.`/`hooks.` host (`/hooks/<token>`,
-  `hook.eu1.make.com/<token>`), the one segment after a `key`, `token` or
-  `secret` segment when it is 12+ characters with letters and digits
-  (`/with/key/<key>`), and a fragment that is one token (`#<token>`, not a
-  heading anchor such as `#step-1-install`). Words and numbers under 20
-  characters are kept, and an `auth` or `sig` segment hides nothing after it.
+  Teams webhook URL and of a Zapier catch hook is redacted too. So is every
+  token-shaped path segment after a `hooks`, `webhook` or `webhook-test`
+  segment or on a `hook.`/`hooks.` host (`/hooks/<token>`,
+  `hook.eu1.make.com/<token>`): 8+ characters with at least two letters and two
+  digits, or 20+ characters. After a singular `key`, `token` or `secret`
+  segment only the next segment is judged, at 12+ characters
+  (`/with/key/<key>`). A fragment that is one token (`#<token>`: 16+ characters
+  with letters and digits, or 32+, base64 padding allowed) is redacted, a
+  heading anchor such as `#step-1-install` is not. Words, numbers (with an
+  extension), env-style names (`MY_SECRET_2024`) and versioned names
+  (`endpoint1`) are kept, and an `auth` or `sig` segment hides nothing after it.
   The engine's digest of the whole input still
   binds the approval to what runs.
 - **Receipts keep no tokens.** The durable receipt of a sent request drops

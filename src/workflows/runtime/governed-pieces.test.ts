@@ -1820,6 +1820,10 @@ describe('#961: the core HTTP piece is governed by method', () => {
       ['https://n8n.example.test/webhook-test/550e8400-e29b-41d4-a716-446655440000', 'https://n8n.example.test/webhook-test/[redacted]'],
       ['https://chat.example.test/hooks/abc%3D%3Dxyz123', 'https://chat.example.test/hooks/[redacted]'],
       ['https://app.test/cb#550e8400-e29b-41d4-a716-446655440000', 'https://app.test/cb#[redacted]'],
+      // A Zapier hook id may hold no digit; a padded base64 fragment is one token.
+      ['https://hooks.zapier.com/hooks/catch/123456/bqpxazk/', 'https://hooks.zapier.com/hooks/catch/123456/[redacted]/'],
+      ['https://app.test/cb#c2VjcmV0dG9rZW4xMjM0NQ==', 'https://app.test/cb#[redacted]'],
+      ['https://hooks.slack.com/services/T0123ABCD/B0123ABCD/XXXXxxxxXXXXxxxx1234#tok1234567890abcdef', 'https://hooks.slack.com/services/T0123ABCD/B0123ABCD/[redacted]#[redacted]'],
     ];
     for (const [raw, shown] of hidden) {
       expect(url(raw)).toBe(shown);
@@ -1845,9 +1849,19 @@ describe('#961: the core HTTP piece is governed by method', () => {
       // Heading anchors.
       'https://github.com/o/r#step-1-install-dependencies',
       'https://docs.example.test/page#section-12-overview',
-      // Slack keeps its team and channel ids; only the secret goes.
+      // Management APIs under a hooks segment, plural collections, env-style names, a name=value fragment.
+      'https://shop.example.test/admin/api/2024-01/webhooks/123456789.json',
+      'https://api.example.test/webhooks/wh_123/events',
+      'https://api.example.test/webhooks/endpoint1/test',
+      'https://api.example.test/v1/hooks/HookName2',
+      'https://api.github.com/repos/o/r/actions/secrets/MY_SECRET_2024',
+      'https://kms.example.test/keys/550e8400-e29b-41d4-a716-446655440000',
+      'https://app.test/doc#page=12',
+      'https://en.example.test/wiki/X#2022_FIFA_World_Cup',
     ]) expect(url(kept)).toBe(kept);
+    // Slack keeps its team and channel ids; only the secret goes.
     expect(url('https://hooks.slack.com/services/T0123ABCD/B0123ABCD/XXXXxxxxXXXXxxxx1234')).toBe('https://hooks.slack.com/services/T0123ABCD/B0123ABCD/[redacted]');
+    expect(url('https://hooks.slack.com/actions/T0123ABCD/1234567890123/AbCdEfGh1234')).toBe('https://hooks.slack.com/actions/T0123ABCD/1234567890123/[redacted]');
   });
 
   test('a wide input whose projection loses the method is a tracked worst case on both sides', async () => {

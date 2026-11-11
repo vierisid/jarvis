@@ -1075,43 +1075,55 @@ const FORM_ENCODED = /^[^\s"'{}<>=&]+=[^\s"'{}<>&]*(?:&[^\s"'{}<>=&]+=[^\s"'{}<>
  */
 const PATH_SECRETS: readonly RegExp[] = [
   // Scheme, optional userinfo (already redacted by then), host with an optional trailing dot and port, any slashes.
-  /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?hooks\.slack\.com\.?(?::\d+)?[\\/]+(?:services|triggers|workflows)(?:[\\/]+[^/\\?#]+)*[\\/]+)([^/\\?#]+)/iu,
+  /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?hooks\.slack\.com\.?(?::\d+)?[\\/]+(?:services|triggers|workflows|actions|commands)(?:[\\/]+[^/\\?#]+)*[\\/]+)([^/\\?#]+)/iu,
   /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?(?:[a-z0-9-]+\.)*discord(?:app)?\.com\.?(?::\d+)?[\\/]+api[\\/]+(?:v\d+[\\/]+)?webhooks[\\/]+[^/\\?#]+[\\/]+)([^/\\?#]+)/iu,
   /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?api\.telegram\.org\.?(?::\d+)?[\\/]+(?:file[\\/]+)?bot)([^/\\?#]+)/iu,
   // Teams incoming webhook: .../webhookb2/<group>@<tenant>/IncomingWebhook/<secret>/<owner>.
+  // Zapier catch hook: /hooks/catch/<account>/<hook id>, a short id that may hold no digit.
+  /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?hooks\.zapier\.com\.?(?::\d+)?[\\/]+hooks[\\/]+catch[\\/]+[^/\\?#]+[\\/]+)([^/\\?#]+)/iu,
   /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?(?:[a-z0-9-]+\.)*webhook\.office\.com\.?(?::\d+)?[\\/]+webhookb2[\\/]+[^/\\?#]+[\\/]+IncomingWebhook[\\/]+)([^/\\?#]+)/iu,
 ];
 
 /** A segment after which every token-shaped segment is a hook secret: `/hooks/<id>/<token>`, `/webhook-test/<uuid>`. */
 const HOOK_MARKER = /^(?:web)?hooks?(?:-test)?$/iu;
 /** A segment naming the one segment after it as a credential: `/with/key/<key>`, `/token/<t>`. */
-const KEY_MARKER = /^(?:(?:api[-_]?)?keys?|apikeys?|tokens?|access[-_]?tokens?|secrets?|passw(?:or)?d)$/iu;
+const KEY_MARKER = /^(?:(?:api[-_]?)?key|apikey|token|access[-_]?token|secret|passw(?:or)?d)$/iu;
 /** A host whose own name says its paths are hook secrets (`hook.eu1.make.com/<token>`, `hooks.zapier.com/hooks/...`). */
 const HOOK_HOST = /^(?:web)?hooks?\./iu;
 const TOKEN_CHARS = /^[A-Za-z0-9._~+=:%-]+$/u;
 const hasLetterAndDigit = (text: string): boolean => /[A-Za-z]/u.test(text) && /\d/u.test(text);
+/** At least two letters and two digits: a random id, not a name with a version (`endpoint1`, `oauth2`). */
+const isMixed = (text: string): boolean => (text.match(/[A-Za-z]/gu)?.length ?? 0) >= 2 && (text.match(/\d/gu)?.length ?? 0) >= 2;
+/** A number with an optional extension (`123456789.json`) or an env-style name (`MY_SECRET_2024`): content. */
+const NAMED_ID = /^\d+(?:\.[a-z]{2,5})?$|^[A-Z][A-Z0-9_]*$/u;
 /**
  * A segment that reads as a token once a marker said one follows: letters and
- * digits mixed (`abcdef1` under a hook, 12+ characters after a key segment, a
- * UUID), or long. Words (`catch`, `messages`), plain numbers (a GitHub hook
- * id) and short versioned names after a key segment (`/key/oauth2`) are content.
+ * digits mixed (8+ characters under a hook, 12+ after a key segment, a UUID),
+ * or 20+ characters. Words (`catch`, `messages`), numbers (a GitHub hook id),
+ * env-style names and versioned names (`endpoint1`, `/key/oauth2`) are content.
  */
 const pathToken = (segment: string, mixedMin: number, cut: boolean): boolean => TOKEN_CHARS.test(segment)
-  && (cut || (segment.length >= mixedMin && hasLetterAndDigit(segment)) || segment.length >= 20);
+  && (cut || (!NAMED_ID.test(segment) && ((segment.length >= mixedMin && isMixed(segment)) || segment.length >= 20)));
 /**
  * A heading anchor: lowercase parts joined by `-`, `_` or `.`, one of them a
  * word no hex string spells (`step-1-install-dependencies`, `section-12-overview`).
  */
-const isAnchor = (fragment: string): boolean => /^[a-z0-9]+(?:[-_.][a-z0-9]+)+$/u.test(fragment)
-  && fragment.split(/[-_.]/u).some((part) => part.length >= 3 && /^[a-z]*[g-z][a-z]*$/u.test(part));
+const isAnchor = (fragment: string): boolean => {
+  const lower = fragment.toLowerCase();
+  return /^[a-z0-9]+(?:[-_.][a-z0-9]+)+$/u.test(lower)
+    && lower.split(/[-_.]/u).some((part) => part.length >= 3 && /^[a-z]*[g-z][a-z]*$/u.test(part));
+};
 /**
  * A fragment that is itself a token (`#<token>`), told from an anchor
  * (`#section-2`, `#step-1-install-dependencies`) or a route (`#/settings`) by
  * shape and length. A fragment the engine cut is judged on what is left of it.
  */
-const fragmentToken = (fragment: string, cut: boolean): boolean => TOKEN_CHARS.test(fragment) && !fragment.includes('=')
-  && !isAnchor(fragment)
-  && ((cut && fragment.length >= 8) || (fragment.length >= 16 && hasLetterAndDigit(fragment)) || fragment.length >= 32);
+const fragmentToken = (raw: string, cut: boolean): boolean => {
+  // Base64 padding is part of a token, not a `name=value` pair.
+  const fragment = raw.replace(/=+$/u, '');
+  return TOKEN_CHARS.test(fragment) && !fragment.includes('=') && !isAnchor(fragment)
+    && ((cut && fragment.length >= 8) || (fragment.length >= 16 && hasLetterAndDigit(fragment)) || fragment.length >= 32);
+};
 
 /**
  * Token-shaped secrets in a URL's path and fragment that no name announces:
@@ -1125,21 +1137,21 @@ const fragmentToken = (fragment: string, cut: boolean): boolean => TOKEN_CHARS.t
  * is hidden on less evidence, since the cut may have shortened it.
  */
 function redactUrlTokens(url: string): string {
-  if (PATH_SECRETS.some((pattern) => pattern.test(url))) return url;
+  const known = PATH_SECRETS.some((pattern) => pattern.test(url));
   const note = CUT_NOTE.exec(url)?.[0] ?? '';
   const text = url.slice(0, url.length - note.length);
   const parts = /^(\s*[a-z][a-z0-9+.-]*:[\\/]+)([^/\\?#]*)([^?#]*)(\?[^#]*)?(#[\s\S]*)?$/iu.exec(text);
   if (!parts) return url;
   const [, scheme, authority, path, query = '', fragment = ''] = parts as unknown as [string, string, string, string, string?, string?];
-  let hooked = HOOK_HOST.test(authority.replace(/^.*@/u, ''));
+  let hooked = !known && HOOK_HOST.test(authority.replace(/^.*@/u, ''));
   let keyNext = false;
   const cutInPath = note !== '' && query === '' && fragment === '';
   const segments = path.split(/([\\/]+)/u);
   const lastSegment = segments.length - 1;
   const redactedPath = segments.map((segment, i) => {
-    if (i % 2 === 1 || segment === '') return segment;
+    if (known || i % 2 === 1 || segment === '') return segment;
     const underMarker = hooked || keyNext;
-    const mixedMin = hooked ? 6 : 12;
+    const mixedMin = hooked ? 8 : 12;
     keyNext = false;
     if (underMarker && pathToken(segment, mixedMin, cutInPath && i === lastSegment)) return REDACTED;
     if (HOOK_MARKER.test(segment)) hooked = true;
