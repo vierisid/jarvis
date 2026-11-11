@@ -1779,7 +1779,8 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | GET | `/api/workflows/pieces` | Engine-extracted catalog |
 | GET | `/api/workflows/pieces/library` | Catalog of installable community pieces |
 | POST | `/api/workflows/pieces/library/:id/install` | Install or update a community piece |
-| DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece |
+| GET | `/api/workflows/pieces/library/:id/dependents` | The enabled workflows (of the caller's project) that use the installed piece, for the confirmation before uninstalling: `{ usedBy, warning? }` |
+| DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece. Never blocked by workflows that use it; the answer names them (`usedBy`, `warning`). Afterwards each enabled workflow that used it lists `blocked` with code `PIECE_REMOVED` (no run, `runId` null) and a sentence naming the step and the piece, and its runs fail with "the <piece> piece it uses was removed. Reinstall it from the Library." |
 | GET | `/api/workflows/connections` | Connections in the default project (no secrets) plus the registered Jarvis sources: `{ connections, jarvisSources }` |
 | POST | `/api/workflows/connections` | Create, or replace by `(pieceName, externalId)`, a connection (encrypted). `{ externalId, displayName, type, pieceName, pieceVersion?, value }` |
 | PATCH | `/api/workflows/connections/:id` | Update that connection in place: `displayName`, `value` (full replacement), `status`. Rotates a token without the delete-then-recreate gap. 404 for an id outside the default project, the same as for an id that does not exist |

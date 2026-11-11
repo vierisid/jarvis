@@ -433,8 +433,10 @@ function webhookReply(workflowId: string, result: unknown): Response {
         ? json(404, { error: 'Workflow is not active', ...(result.fireId ? { fireId: result.fireId } : {}) })
         // The refusal's reason names the workflow's steps and connections:
         // it stays in the owner's delivery record, not in a reply to a sender
-        // who may hold nothing but the URL.
-        : json(200, { ok: true, workflowId, outcome: 'blocked', ...(result.fireId ? { fireId: result.fireId } : {}) });
+        // who may hold nothing but the URL. The sender is still told the
+        // delivery did not run (not a 200 "ok"), so it can retry later.
+        : json(503, { error: 'This workflow cannot run right now. Its owner has been told.', outcome: 'blocked',
+            ...(result.fireId ? { fireId: result.fireId } : {}) }, { 'Retry-After': '300' });
     case 'skipped':
       return json(503, { error: result.reason, ...(result.fireId ? { fireId: result.fireId } : {}) },
         { 'Retry-After': String(result.retryAfterSeconds ?? 30) });

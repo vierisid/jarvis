@@ -701,9 +701,12 @@ describe("webhooks", () => {
     const d = await daemon(Date.now());
     deleteConnection(connection.id);
     const refused = await post(d, flowId, '{"order":7}', { "Idempotency-Key": "o-7" });
-    expect(refused.status).toBe(200);
+    // Not a 200 "ok": the sender is told the delivery did not run, and to try later.
+    expect(refused.status).toBe(503);
+    expect(refused.headers.get("Retry-After")).toBe("300");
     const refusedBody = await refused.json() as Record<string, unknown>;
-    expect(refusedBody).toMatchObject({ ok: true, outcome: "blocked" });
+    expect(refusedBody).toMatchObject({ error: "This workflow cannot run right now. Its owner has been told.", outcome: "blocked" });
+    expect(refusedBody.ok).toBeUndefined();
     // The readiness reason stays in the owner's record, not the sender's reply.
     expect(refusedBody.reason).toBeUndefined();
     expect(listFlowFires(flowId)[0]!.detail?.reason).toEqual(expect.any(String));

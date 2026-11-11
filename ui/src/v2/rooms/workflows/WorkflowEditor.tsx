@@ -114,6 +114,7 @@ import { CANCELED_EFFECT_WARNING } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
 import { modKey } from "../../ui/platform";
 import { NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, stepNotApprovalGated } from "./approval-gate";
+import { plainActionName, plainPieceName } from "../../../../../src/workflows/pieces-library/plain-piece-name";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
 // cursor rightward by NODE_X_STEP; nested branches (loop body / router
@@ -3165,11 +3166,14 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
   const isRouter = step.type === "ROUTER";
   const piece = catalog.find((p) => p.name === step.settings?.pieceName);
   const subAction = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
+  const removedPiece = !!step.settings?.pieceName && !piece && catalog.length > 0
+    && (step.type === "PIECE" || step.type === "PIECE_TRIGGER")
+    && step.settings.pieceName !== "schedule" && step.settings.pieceName !== "webhook";
   const subDisplayName = piece
     ? (isTrigger
         ? piece.triggers.find((t) => t.name === subAction)?.displayName
         : piece.actions.find((a) => a.name === subAction)?.displayName) ?? subAction
-    : subAction;
+    : subAction && removedPiece ? plainActionName(subAction) : subAction;
   const isUnconfigured = step.type === "PIECE" && (!step.settings?.pieceName || !step.settings.actionName);
   const notApprovalGated = stepNotApprovalGated(step, catalog);
 
@@ -3335,7 +3339,9 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
           <span className="wf-node__piece">Custom JavaScript</span>
         ) : step.settings?.pieceName ? (
           <>
-            <span className="wf-node__piece">{piece?.displayName ?? step.settings.pieceName}</span>
+            <span className="wf-node__piece" title={removedPiece ? "This piece is not installed. Reinstall it from the Library." : undefined}>
+              {piece?.displayName ?? (removedPiece ? `${plainPieceName(step.settings.pieceName)} (removed)` : step.settings.pieceName)}
+            </span>
             {subDisplayName ? <span className="wf-node__sep">·</span> : null}
             {subDisplayName ? <span className="wf-node__action">{subDisplayName}</span> : null}
           </>
