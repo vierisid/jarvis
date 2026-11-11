@@ -14,3 +14,9 @@ test("empty page is empty; malformed rows are a failure, not an empty list", asy
   await expect(recentRunsSource(async () => ({ items: [{ runId: "r" }] })).read(signal())).rejects.toThrow();
   await expect(recentRunsSource(async () => []).read(signal())).rejects.toThrow();
 });
+test("a paused run keeps who it waits on and its resume time, nothing else", async () => {
+  const read = await recentRunsSource(async () => ({ items: [
+    { runId: "a", flowId: "f", flowVersionId: "v", name: "A", status: "PAUSED", startTime: 5, waitingOn: "timer", resumeAt: 99 },
+    { runId: "b", flowId: "g", flowVersionId: "v", name: "B", status: "PAUSED", startTime: 4, waitingOn: "person" }] })).read(signal());
+  expect(read.data?.map(r => [r.waitingOn, r.resumeAt])).toEqual([["timer", 99], ["person", undefined]]);
+});

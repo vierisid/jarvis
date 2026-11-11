@@ -454,6 +454,10 @@ export interface RecentRunRow {
   status: FlowRunStatus;
   startTime: number | null;
   created: number;
+  /** Only set on a PAUSED run: who or what it waits on. */
+  waitingOn?: "person" | "timer" | "other";
+  /** Earliest timer resume time (ms) when waitingOn is "timer". */
+  resumeAt?: number;
 }
 
 /**
@@ -465,7 +469,7 @@ export interface RecentRunRow {
  * The name is the display name of the version the run used.
  */
 export function listRecentRuns(projectId: string, limit: number): RecentRunRow[] {
-  return db()
+  const rows = db()
     .query<{ id: string; flow_id: string; flow_version_id: string; status: FlowRunStatus; start_time: number | null; created: number; display_name: string },
       SQLQueryBindings[]>(
       `SELECT r.id, r.flow_id, r.flow_version_id, r.status, r.start_time, r.created, v.display_name
@@ -480,5 +484,23 @@ export function listRecentRuns(projectId: string, limit: number): RecentRunRow[]
     )
     .all(projectId, limit)
     .map(row => ({ runId: row.id, flowId: row.flow_id, flowVersionId: row.flow_version_id, name: row.display_name,
-      status: row.status, startTime: row.start_time, created: row.created }));
+      status: row.status, startTime: row.start_time, created: row.created } as RecentRunRow));
+  for (const row of rows) if (row.status === "PAUSED") Object.assign(row, pausedOn(row.runId));
+  return rows;
+}
+
+/**
+ * What a paused run waits on, from its unresumed waitpoints. MANUAL is an
+ * approval or input request, so a person. TIMER alone is a delay step and
+ * carries its resume time. Anything else (webhook, hold, deferral) is "other".
+ */
+function pausedOn(runId: string): Pick<RecentRunRow, "waitingOn" | "resumeAt"> {
+  const waits = db().query<{ type: string; resume_date_time: string | null }, SQLQueryBindings[]>(
+    "SELECT type, resume_date_time FROM waitpoint WHERE flow_run_id = ? AND resumed_at IS NULL").all(runId);
+  if (waits.some(w => w.type === "MANUAL")) return { waitingOn: "person" };
+  if (waits.length && waits.every(w => w.type === "TIMER")) {
+    const times = waits.map(w => Date.parse(w.resume_date_time ?? "")).filter(Number.isFinite);
+    return times.length ? { waitingOn: "timer", resumeAt: Math.min(...times) } : { waitingOn: "timer" };
+  }
+  return { waitingOn: "other" };
 }

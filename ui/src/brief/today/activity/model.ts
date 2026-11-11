@@ -5,10 +5,14 @@ import type { RecentActivityItem } from "./RecentActivity";
 export const ACTIVITY_LIMIT = 5;
 
 /** Plain-language run status for Today. Unknown statuses never read as success. */
-export function activityStatus(status: string): string {
+export function activityStatus(status: string, wait?: Pick<RecentWorkflow, "waitingOn" | "resumeAt">, now = Date.now()): string {
   switch (status) {
     case "SUCCEEDED": return "Done";
-    case "PAUSED": return "Waiting for you";
+    // Only a run waiting on a person says "for you". A timer or system wait does not.
+    case "PAUSED":
+      if (wait?.waitingOn === "person") return "Waiting for you";
+      if (wait?.waitingOn === "timer" && wait.resumeAt !== undefined) return `Waiting until ${timeLabel(wait.resumeAt, now)}`;
+      return "Waiting";
     case "RUNNING": case "QUEUED": return "Running";
     case "STOPPED": return "Stopped";
     case "FAILED": case "TIMEOUT": case "INTERNAL_ERROR": case "QUOTA_EXCEEDED": case "MEMORY_LIMIT_EXCEEDED": case "SCHEDULE_FAILURE": return "Failed";
@@ -27,7 +31,7 @@ function timeLabel(at: number, now: number): string {
 export function runActivityItems(runs: readonly RecentWorkflow[], now = Date.now()): RecentActivityItem[] {
   return runs.filter(run => run.environment === "PRODUCTION").map(run => ({
     activityId: `run:${run.runId}`, title: run.name, occurredAt: run.at, timeLabel: timeLabel(run.at, now),
-    detail: activityStatus(run.status),
+    detail: activityStatus(run.status, run, now),
     destination: { room: "workflow" as const, selection: { flowId: run.flowId, versionId: run.versionId, runId: run.runId } },
   }));
 }

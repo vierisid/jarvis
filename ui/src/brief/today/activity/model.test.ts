@@ -6,8 +6,8 @@ const run = (over: Partial<RecentWorkflow>): RecentWorkflow => ({ flowId: "f", v
   result: "Run completed", at: Date.parse("2026-11-10T09:30:00Z"), environment: "PRODUCTION", ...over });
 
 test("runs read as plain statuses, and test runs never appear", () => {
-  expect(["SUCCEEDED", "FAILED", "PAUSED", "RUNNING", "TIMEOUT", "WHATEVER"].map(activityStatus))
-    .toEqual(["Done", "Failed", "Waiting for you", "Running", "Failed", "Status unknown"]);
+  expect(["SUCCEEDED", "FAILED", "PAUSED", "RUNNING", "TIMEOUT", "WHATEVER"].map(s => activityStatus(s)))
+    .toEqual(["Done", "Failed", "Waiting", "Running", "Failed", "Status unknown"]);
   const items = runActivityItems([run({ runId: "a" }), run({ runId: "t", environment: "TESTING" })]);
   expect(items.map(item => item.activityId)).toEqual(["run:a"]);
   expect(items[0]).toMatchObject({ title: "Inbox brief", detail: "Done", destination: { room: "workflow", selection: { flowId: "f", versionId: "v", runId: "a" } } });
@@ -31,4 +31,14 @@ test("empty means no runs and no outcomes; unavailable runs are not an empty lis
   expect(mergeActivity({ status: "unavailable", reason: "down" }, { status: "empty" }).status).toBe("unavailable");
   expect(mergeActivity({ status: "loading" }, { status: "empty" }).status).toBe("loading");
   expect(mergeActivity({ status: "stale", data: [run({})], reason: "late" }, { status: "empty" }).status).toBe("stale");
+});
+
+test("only a run waiting on a person says it waits for you; a timer shows its time", () => {
+  const now = Date.parse("2026-11-10T12:00:00Z"), at = Date.parse("2026-11-10T14:05:00Z");
+  expect(activityStatus("PAUSED", { waitingOn: "person" }, now)).toBe("Waiting for you");
+  expect(activityStatus("PAUSED", { waitingOn: "timer", resumeAt: at }, now))
+    .toBe(`Waiting until ${new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`);
+  expect(activityStatus("PAUSED", { waitingOn: "timer" }, now)).toBe("Waiting");
+  expect(activityStatus("PAUSED", { waitingOn: "other" }, now)).toBe("Waiting");
+  expect(runActivityItems([run({ status: "PAUSED", waitingOn: "timer", resumeAt: at })], now)[0]?.detail).toContain("Waiting until");
 });

@@ -3506,6 +3506,32 @@ describe("#652: the runs listing says where the next page starts", () => {
     expect((await read("")).items.find((row) => row.runId === latestA.id)?.name).toBe("Alpha renamed");
   });
 
+  test("a paused run in the recent-runs read says whether it waits on a person or a timer", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const { createWaitpoint } = await import("../db/repos/waitpoint");
+    const make = (name: string) => {
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: name,
+        trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+      const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "PAUSED" });
+      return { flow, run };
+    };
+    const timer = make("Timer flow"), person = make("Person flow"), hook = make("Hook flow");
+    const resume = new Date(Date.now() + 3600_000).toISOString();
+    createWaitpoint({ flowRunId: timer.run.id, projectId: "proj", stepName: "delay", type: "TIMER", resumeDateTime: resume });
+    createWaitpoint({ flowRunId: person.run.id, projectId: "proj", stepName: "ask", type: "MANUAL" });
+    createWaitpoint({ flowRunId: hook.run.id, projectId: "proj", stepName: "hook", type: "WEBHOOK" });
+    const res = await callJson(routes["/api/workflow-runs/recent"]?.GET, reqWithParams("GET", "http://x/api/workflow-runs/recent?limit=50", {}));
+    const items = (res.body as { items: Array<{ runId: string; waitingOn?: string; resumeAt?: number }> }).items;
+    const of = (id: string) => items.find(row => row.runId === id);
+    expect(of(timer.run.id)).toMatchObject({ waitingOn: "timer", resumeAt: Date.parse(resume) });
+    expect(of(person.run.id)).toMatchObject({ waitingOn: "person" });
+    expect(of(person.run.id)?.resumeAt).toBeUndefined();
+    expect(of(hook.run.id)).toMatchObject({ waitingOn: "other" });
+  });
+
   test("following nextOffset from the start visits every run once, newest first", async () => {
     const { flowId, ids } = await flowWithRuns(105);
     const seen: string[] = [];

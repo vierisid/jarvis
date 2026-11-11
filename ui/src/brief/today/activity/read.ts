@@ -20,7 +20,9 @@ export function recentRunsSource(get: GetJson): Source<readonly RecentWorkflow[]
       if (!text(item?.runId) || !text(item.flowId) || !text(item.flowVersionId) || !text(item.status) || !Number.isFinite(at)) throw new ReadFailure("invalid_snapshot");
       // Identity, status and time only. Nothing else on the row is ever read.
       return { flowId: item.flowId, versionId: item.flowVersionId, runId: item.runId, name: text(item.name) ? item.name : item.flowId,
-        status: item.status, result: "", at, environment: "PRODUCTION" as const };
+        status: item.status, result: "", at, environment: "PRODUCTION" as const,
+        ...(item.status === "PAUSED" && ["person", "timer", "other"].includes(item.waitingOn) ? { waitingOn: item.waitingOn as "person" | "timer" | "other" } : {}),
+        ...(item.status === "PAUSED" && item.waitingOn === "timer" && Number.isFinite(item.resumeAt) ? { resumeAt: item.resumeAt as number } : {}) };
     });
     return { data: data.length ? data : null, empty: !data.length, asOf: Date.now() };
   } };

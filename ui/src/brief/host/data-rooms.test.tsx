@@ -74,7 +74,7 @@ test('Today recent activity lists real workflow runs with plain statuses and ope
     requested.push(path);
     if (path === '/api/brief/goals') return Response.json({ state: 'empty', data: [], asOf: 1 });
     if (path === '/api/brief/initial-goal') return Response.json({ state: 'none' });
-    if (path === '/api/workflow-runs/recent?limit=5') return Response.json({ items: [...extra, runFor('ok', 'SUCCEEDED', 3000), runFor('bad', 'FAILED', 2000), runFor('wait', 'PAUSED', 1000)] });
+    if (path === '/api/workflow-runs/recent?limit=5') return Response.json({ items: [...extra, runFor('ok', 'SUCCEEDED', 3000), runFor('bad', 'FAILED', 2000), { ...runFor('wait', 'PAUSED', 1000), waitingOn: 'person' }] });
     return Response.json({ state: 'unavailable' }, { status: 503 });
   }) as unknown as typeof fetch);
   const reconciliation = new BriefReconciliationClient({ capabilities: async () => caps, pollMs: 3_600_000 });
