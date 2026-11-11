@@ -5,6 +5,7 @@ import {
    getCorrectedFormat,
   optionalTimeFormats,
   parseDate,
+  formatDate,
   timeFormat,
   timeFormatDescription,
   timeParts,
@@ -118,9 +119,9 @@ export const addSubtractDateAction = createAction({
     }
 
     if (timeZone) {
-      return { result: AfterDate.tz(timeZone).format(outputFormat) };
+      return { result: formatDate(AfterDate.tz(timeZone), outputFormat) };
     } else {
-      return { result: AfterDate.format(outputFormat) };
+      return { result: formatDate(AfterDate, outputFormat) };
     }
   },
 });
@@ -174,7 +175,8 @@ function addSubtractTime(date: Date, expression: string, timeZone?: string): day
   }
   
   // Create timezone-aware dayjs object if timezone is provided
-  let dayjsDate = timeZone ? apDayjs(date).tz(timeZone) : apDayjs(date);
+  // Jarvis: without a zone the date is worked in UTC, not the daemon's own zone.
+  let dayjsDate = timeZone ? apDayjs(date).tz(timeZone) : apDayjs.utc(date);
   
   for (let i = 0; i < numbers.length; i++) {
     let val = units[i].toLowerCase();
