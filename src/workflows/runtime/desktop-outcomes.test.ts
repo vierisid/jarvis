@@ -116,8 +116,12 @@ describe('desktop outcome API and durable receipts', () => {
     const f = fixture(true);
     const response = await f.call();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ toolName: 'desktop_list_windows', result: 'Desktop windows', outcome: { status: 'succeeded', verification: { status: 'unverified', reason: 'no_supported_postcondition' } } });
-    expect(listWorkflowEffects(f.run.id)[0]?.status).toBe('succeeded');
+    // A direct desktop read reaches the flow framed as untrusted content
+    // (#1314, owner decision); the receipt keeps the tool's own value.
+    expect(await response.json()).toEqual({ toolName: 'desktop_list_windows',
+      result: expect.stringMatching(/^\[Content from desktop_list_windows[\s\S]*<<<UNTRUSTED.CONTENT[^\n]*\nDesktop windows\n[\s\S]*UNTRUSTED.CONTENT>>>$/),
+      outcome: { status: 'succeeded', verification: { status: 'unverified', reason: 'no_supported_postcondition' } } });
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded', result: 'Desktop windows' });
   });
 
   for (const [result, status, code, http] of [
