@@ -45,6 +45,7 @@ import { noOpCodeSandbox } from '../activepieces/packages/server/engine/src/lib/
 import { runFailure } from './run-failure';
 import { LLMProviderError } from '../../llm/provider';
 import { getDb } from '../../vault/schema';
+import { listUnreadDashboardNotifications, recordDashboardNotification } from '../../vault/dashboard-notifications';
 
 beforeEach(() => { initWorkflowDb(':memory:'); });
 afterEach(() => { closeWorkflowDb(); });
@@ -784,7 +785,8 @@ describe('workflow effect boundary', () => {
     const shown: string[] = [];
     f.options.sendDesktop = async (_title, body) => { shown.push(body); return true; };
     const reply = await f.backends.notify!({ message: 'hello', channels: ['auto'], priority: 'normal' }, f.context);
-    expect(reply).toEqual({ delivered: ['desktop'], failed: [], unknown: [] });
+    // The dashboard copy is saved for the next visit, so it counts as delivered too.
+    expect(reply).toEqual({ delivered: ['dashboard', 'desktop'], failed: [], unknown: [] });
     expect(shown).toEqual(['hello']);
     expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded',
       arguments: { channels: ['dashboard'], autoDashboard: true, fallback: 'desktop' }, target: { fallback: 'desktop' } });
@@ -792,16 +794,16 @@ describe('workflow effect boundary', () => {
 
   test('a notification sent nowhere fails the step with a typed outcome and records it', async () => {
     const f = fixture('notify');
-    f.options.wsService = { broadcastNotificationToDashboard: () => 0 } as any;
     f.options.channelService.sendWorkflowNotification = async () => { throw Object.assign(new Error('Forbidden: bot was blocked'), { status: 403 }); };
-    const req = { message: 'hello', channels: ['dashboard', 'telegram'], priority: 'normal' as const };
+    // Desktop is not wired in this fixture; the dashboard now always delivers, so it cannot be the failing one.
+    const req = { message: 'hello', channels: ['desktop', 'telegram'], priority: 'normal' as const };
     const error = await f.backends.notify!(req, f.context).catch(e => e);
     expect(error).toBeInstanceOf(ActionOutcomeError);
     expect(error.outcome).toMatchObject({ status: 'error', code: 'DELIVERY_FAILED', effect: 'not_started' });
-    expect(error.outcome.message).toContain('dashboard (no dashboard was open)');
+    expect(error.outcome.message).toContain('desktop (desktop notifications not available');
     expect(error.outcome.message).toContain('telegram (Forbidden: bot was blocked)');
     // The reply still reports each channel (review suggestion).
-    expect(error.report.failed.map((f: { channel: string }) => f.channel)).toEqual(['dashboard', 'telegram']);
+    expect(error.report.failed.map((f: { channel: string }) => f.channel)).toEqual(['telegram', 'desktop']);
     expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'failed', outcome: { code: 'DELIVERY_FAILED' } });
     // A replay returns the recorded outcome; nothing is sent again.
     let sends = 0;
@@ -810,13 +812,53 @@ describe('workflow effect boundary', () => {
     expect(sends).toBe(0);
   });
 
+  // The dashboard channel stores the notification, so it reaches the owner
+  // even when no tab is open at the time (audit N1 part b).
+  test('a dashboard notification with no tab open succeeds and is stored as unread', async () => {
+    const f = fixture('notify');
+    f.options.wsService = { broadcastNotificationToDashboard: () => 0 } as any;
+    const reply = await f.backends.notify!({ message: 'Stand-up at 9', channels: ['dashboard'], priority: 'high' }, f.context);
+    expect(reply).toEqual({ delivered: ['dashboard'], failed: [], unknown: [] });
+    const unread = listUnreadDashboardNotifications();
+    expect(unread).toHaveLength(1);
+    expect(unread[0]).toMatchObject({ message: 'Stand-up at 9', priority: 'urgent', run_id: f.run.id, workflow_id: f.run.flowId, read_at: null });
+  });
+
+  // #1344 review: once the row is saved the owner has it, so a Kill that stops
+  // the live toast afterwards must not report the notification as never sent
+  // (that would release its key for a later run to save it again).
+  test('a Kill after the notification was saved and before the live toast is not reported as not sent', async () => {
+    const f = fixture('notify');
+    f.options.recordDashboardNotification = input => { const row = recordDashboardNotification(input); f.emergency.kill(); return row; };
+    const error = await f.backends.notify!({ message: 'Saved, then killed', channels: ['dashboard'], priority: 'normal', idempotencyKey: 'k1' }, f.context).catch(e => e);
+    expect(error).toBeInstanceOf(ActionOutcomeError);
+    expect(error.outcome).toMatchObject({ code: 'DELIVERY_UNCERTAIN', effect: 'may_have_occurred' });
+    expect(listUnreadDashboardNotifications().map(row => row.message)).toEqual(['Saved, then killed']);
+    // The live toast was stopped by the Kill.
+    expect(f.calls).toHaveLength(0);
+  });
+
+  test('an open tab gets the live toast under the stored id, and the same notification is stored once', async () => {
+    const f = fixture('notify');
+    await f.backends.notify!({ message: 'Live and saved', channels: ['dashboard'], priority: 'normal', idempotencyKey: 'daily:9am' }, f.context);
+    const [text, priority, storedId] = f.calls[0] as [string, string, string];
+    expect([text, priority]).toEqual(['Live and saved', 'normal']);
+    expect(listUnreadDashboardNotifications().map(row => row.id)).toEqual([storedId]);
+    // The same key in a later run is a duplicate: nothing more is stored or toasted.
+    const next = createFlowRun({ flowId: f.run.flowId, flowVersionId: f.version.id, status: 'RUNNING' });
+    const duplicate = await f.backends.notify!({ message: 'Live and saved', channels: ['dashboard'], priority: 'normal', idempotencyKey: 'daily:9am' }, { ...f.context, runId: next.id });
+    expect(duplicate).toMatchObject({ deduplicated: true });
+    expect(listUnreadDashboardNotifications()).toHaveLength(1);
+    expect(f.calls).toHaveLength(1);
+  });
+
   test('a channel that timed out is reported unknown, and the step does not fail', async () => {
     const f = fixture('notify');
     f.options.wsService = { broadcastNotificationToDashboard: () => 0 } as any;
     const timeout = Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
     f.options.channelService.sendWorkflowNotification = async () => { throw timeout; };
     const reply = await f.backends.notify!({ message: 'hello', channels: ['dashboard', 'telegram'], priority: 'normal' }, f.context);
-    expect(reply).toEqual({ delivered: [], failed: [{ channel: 'dashboard', error: 'no dashboard was open' }],
+    expect(reply).toEqual({ delivered: ['dashboard'], failed: [],
       unknown: [{ channel: 'telegram', error: 'The operation was aborted.' }] });
     expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded', result: reply });
   });
