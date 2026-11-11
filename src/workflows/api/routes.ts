@@ -2,7 +2,10 @@ import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryC
 import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import type { WorkflowContext } from '../../brief/workflow-context';
-import { editorVersion } from './editor-version';
+import { editorVersion, versionAsShown } from './editor-version';
+import { runAsShown } from '../runtime/step-credentials';
+import type { FlowRun } from '../db/repos/flow-run';
+import type { FlowTriggerNode } from '../db/repos/flow-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
 import { requireWorkflowContext } from '../../brief/workflow-context-routes';
 import { WorkflowInspectionError } from '../../brief/inspection-values';
@@ -1715,7 +1718,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           if (!scopedFlow(req, id)) return err("flow not found", 404);
-          return ok(listVersions(id));
+          return ok(listVersions(id).map(versionAsShown));
         }),
       POST: (req) =>
         trapErrors(async () => {
@@ -1957,7 +1960,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             }
           }
           const v = withOwnedFlowVersion(id, versionId, () => setSampleDataEntry(versionId, stepName, output));
-          return ok({ versionId: v.id, sampleData: v.sampleData });
+          return ok({ versionId: v.id, sampleData: versionAsShown(v).sampleData });
         }),
       DELETE: (req) =>
         trapErrors(() => {
@@ -1971,7 +1974,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           ).params;
           if (!scopedFlow(req, id)) return versionNotInScope();
           const v = withOwnedFlowVersion(id, versionId, () => replaceSampleData(versionId, null));
-          return ok({ versionId: v.id, sampleData: v.sampleData });
+          return ok({ versionId: v.id, sampleData: versionAsShown(v).sampleData });
         }),
     },
 
@@ -2319,7 +2322,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             offset,
           };
           if (status) opts.status = status;
-          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run) }));
+          const graphs = new Map<string, FlowTriggerNode | undefined>();
+          const items = listRuns(opts).map(run => ({ ...shownRun(run, graphs), failure: runFailure(run) }));
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
@@ -2416,7 +2420,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
-          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run) }) : err("run not found", 404);
+          return run ? ok({ ...shownRun(run), fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run) }) : err("run not found", 404);
         }),
     },
 
@@ -2656,4 +2660,15 @@ function validateConnectionValueShape(
     default:
       return null;
   }
+}
+
+/**
+ * A run as the dashboard is shown it: no generated password and no webhook
+ * credential header, also in rows stored before the trigger withheld them
+ * (`runAsShown`). Read side only; the stored row is not rewritten. `graphs`
+ * caches each version's graph across a page of runs.
+ */
+function shownRun(run: FlowRun, graphs = new Map<string, FlowTriggerNode | undefined>()): FlowRun {
+  if (!graphs.has(run.flowVersionId)) graphs.set(run.flowVersionId, getFlowVersion(run.flowVersionId)?.trigger);
+  return runAsShown(run, graphs.get(run.flowVersionId));
 }

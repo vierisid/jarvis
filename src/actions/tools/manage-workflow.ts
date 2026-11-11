@@ -3,7 +3,7 @@ import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards'
 import { decideRunRecovery, getRunRecovery } from '../../workflows/runtime/recovery';
 import { getWorkflowDb } from '../../workflows/db';
 import { assistantWebhookSecretRefusal } from '../../workflows/runner/triggers/webhook-secret';
-import { redactFailedStepMessage, redactRunSteps, versionAsModelSees } from '../../workflows/runtime/step-credentials';
+import { redactFailedStepMessage, runAsShown, versionAsModelSees } from '../../workflows/runtime/step-credentials';
 import { resolveOnboardingOutcome } from '../../workflows/runtime/onboarding-service';
 import { onboardingResource } from '../../workflows/runtime/customer-onboarding';
 import { randomUUID } from 'node:crypto';
@@ -1707,7 +1707,11 @@ async function actResolveEffect(project: string, params: Record<string, unknown>
   return { receipt };
 }
 
-function summarizeRun(run: FlowRun, includeSteps = false): Record<string, unknown> {
+function summarizeRun(stored: FlowRun, includeSteps = false): Record<string, unknown> {
+  // Generated passwords and webhook credential headers, including those in
+  // rows stored before the trigger withheld them, are not shown (read side).
+  const trigger = getFlowVersion(stored.flowVersionId)?.trigger;
+  const run = runAsShown(stored, trigger);
   // Q-05: a connection that changed under the run is refused by the engine's
   // fetch, which reports only a bare loading error; the reason lives here.
   const bindingRefusals = (run.connectionBindings ?? []).filter(binding => binding.refusal)
@@ -1723,10 +1727,10 @@ function summarizeRun(run: FlowRun, includeSteps = false): Record<string, unknow
     durationMs: run.startTime && run.finishTime ? run.finishTime - run.startTime : null,
     stepsCount: run.stepsCount,
     failedStep: run.failedStep?.errorMessage
-      ? { ...run.failedStep, errorMessage: redactFailedStepMessage(run.failedStep.name, run.failedStep.errorMessage, getFlowVersion(run.flowVersionId)?.trigger) }
+      ? { ...run.failedStep, errorMessage: redactFailedStepMessage(run.failedStep.name, run.failedStep.errorMessage, trigger) }
       : run.failedStep,
     ...(bindingRefusals.length ? { bindingRefusals } : {}),
     // Rows recorded before the worker handler redacted step inputs still hold them (#1153).
-    ...(includeSteps ? { steps: redactRunSteps(run.steps, getFlowVersion(run.flowVersionId)?.trigger) } : {}),
+    ...(includeSteps ? { steps: run.steps } : {}),
   };
 }

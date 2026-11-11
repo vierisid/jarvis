@@ -885,6 +885,41 @@ describe("workflow API: runs", () => {
   });
 });
 
+describe("workflow API: what a run and its sample data show (read side)", () => {
+  test("webhook credential headers stored before redaction are withheld; the stored row keeps them", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion, setSampleDataEntry } = await import("../db/repos/flow-version");
+    const { createFlowRun, updateRun, getFlowRun } = await import("../db/repos/flow-run");
+    const { DEFAULT_IDS } = await import("../db/schema");
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const v = createDraftVersion({ flowId: flow.id, displayName: "hooked", trigger: {
+      type: "PIECE_TRIGGER", name: "trigger", displayName: "Webhook", settings: { pieceName: "webhook", triggerName: "catch_webhook", input: {} },
+      nextAction: { type: "PIECE", name: "make_pw", displayName: "Password", settings: { pieceName: "@activepieces/piece-crypto", actionName: "generate-password", input: { length: 20 } } },
+    } as unknown as Record<string, unknown> });
+    const triggerOutput = { type: "PIECE_TRIGGER", status: "SUCCEEDED", input: {}, output: { _webhook: { headers: { authorization: "Bearer OLD-HEADER-SECRET-1", "x-github-event": "push" } } } };
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id, environment: "TESTING" });
+    updateRun(run.id, { status: "SUCCEEDED", steps: { trigger: { output: triggerOutput } } });
+    setSampleDataEntry(v.id, "trigger", triggerOutput);
+    const leaks = ["OLD-HEADER-SECRET-1"];
+    const responses = [
+      await callJson(routes["/api/workflow-runs/:runId"]?.GET, reqWithParams("GET", `http://x/api/workflow-runs/${run.id}`, { runId: run.id })),
+      await callJson(routes["/api/workflows/:id/runs"]?.GET, reqWithParams("GET", `http://x/api/workflows/${flow.id}/runs`, { id: flow.id })),
+      await callJson(routes["/api/workflows/:id"]?.GET, reqWithParams("GET", `http://x/api/workflows/${flow.id}`, { id: flow.id })),
+      await callJson(routes["/api/workflows/:id/versions"]?.GET, reqWithParams("GET", `http://x/api/workflows/${flow.id}/versions`, { id: flow.id })),
+      await callJson(routes["/api/workflows/:id/versions/:versionId"]?.GET, reqWithParams("GET", `http://x/api/workflows/${flow.id}/versions/${v.id}`, { id: flow.id, versionId: v.id })),
+    ];
+    for (const { status, body } of responses) {
+      expect(status).toBe(200);
+      const text = JSON.stringify(body);
+      for (const leak of leaks) expect(text).not.toContain(leak);
+      expect(text).toContain('"x-github-event":"push"');
+    }
+    // Not rewritten: what a resumed run rebuilds its steps from still holds the real values.
+    const stored = JSON.stringify(getFlowRun(run.id)!.steps);
+    for (const leak of leaks) expect(stored).toContain(leak);
+  });
+});
+
 describe("workflow API: waitpoint resume", () => {
   test("POST /api/webhooks/waitpoints/:id enqueues RUN_FLOW(executionType=RESUME) and marks waitpoint resumed", async () => {
     const { createFlow, setPublishedVersion, updateFlowStatus } = await import(
