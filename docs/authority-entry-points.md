@@ -97,6 +97,24 @@ The controller is the one source of truth: the engine's copy of the state is
 updated on every change, and accepting a learning suggestion no longer writes
 it back, so a Kill survives a restart.
 
+A stop takes effect in memory before it is saved. If the save fails (a full
+disk), the stop stays in effect, the control answers `saved: false` with a
+plain `warning` saying it will not survive a restart, `/api/authority/status`
+reports `emergency_saved: false`, and the daemon retries the save every few
+seconds with the current state until it works.
+
+## When nothing can be saved
+
+A full disk (or a refused write) stops every write, not reads. The daemon
+records the first failed write and `/api/health` reports
+`storage: { writable: false, reason, message }`, which the dashboard shows as a
+banner ("Jarvis cannot save: the disk is full"). While storage is not writable
+the run worker stops claiming jobs and probes with one small write every 1 to
+10 seconds instead of retrying four times a second; queued runs wait and drain
+exactly once saving works again. API errors caused by a refused write answer
+with the plain message and `code: "storage_full"` or `"storage_unwritable"`,
+never SQLite text.
+
 ## Outcomes stay distinct
 
 An approved request ends as one of: executed (`committed`), failed, blocked

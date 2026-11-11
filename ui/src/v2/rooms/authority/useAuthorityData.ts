@@ -304,6 +304,9 @@ export function useAuthorityData() {
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         refresh();
+        // The change is in effect even when it could not be saved; say so.
+        const body = await resp.json().catch(() => null) as { saved?: boolean; warning?: string } | null;
+        if (body && body.saved === false && typeof body.warning === "string") return { ok: true, message: body.warning };
         return { ok: true, message: `Emergency: ${transition}.` };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };
