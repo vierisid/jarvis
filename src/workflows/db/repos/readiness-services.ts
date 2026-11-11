@@ -16,6 +16,8 @@ export interface ReadinessServices {
   credentials?: CredentialResolver;
   tool?: ReadinessContext['tool'];
   roles?: ReadinessContext['roles'];
+  /** A specialist's tool entries, for whether its delegations act on the computer (#1314 M2). */
+  roleTools?: (roleId: string) => readonly string[] | null;
   /** Enrolled sidecars, most recently enrolled first, each with its persisted capabilities. */
   machines?: () => SidecarInfo[];
   /** False when local tools are disabled, so no step may run on this computer. */

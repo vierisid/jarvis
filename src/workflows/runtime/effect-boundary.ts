@@ -1,4 +1,5 @@
 import type { ToolRegistry } from '../../actions/tools/registry';
+import { uiCardSentence, type UiCard } from './ui-card';
 import { collectActionVerification } from '../../actions/action-verification';
 import type { ActionOutcome } from '../../actions/action-outcome';
 import { projectDocument } from './decision-document';
@@ -19,7 +20,7 @@ import { ActionOutcomeError, type ActionFailure } from '../../actions/action-out
 import { getFlowRun } from '../db/repos/flow-run';
 import { createWaitpoint, getWaitpoint } from '../db/repos/waitpoint';
 import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
-import { canonicalJson, digest, resolveEffectContext, STEP_INPUT_NOT_FIXED, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
+import { canonicalJson, digest, resolveEffectContext, STEP_INPUT_NOT_FIXED, STEP_INPUT_MISMATCH, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
 import { aboveLevelMayAsk, governedCategoriesFor, substituteAboveLevel } from '../../authority/tool-action-map';
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
 import { budgetCap, budgetOf, deferredAhead, deferredAheadLimit, waitingWorkflowCards } from './deferred-cards';
@@ -74,6 +75,8 @@ export interface EffectInvocation {
   reviewRegistry?: ToolRegistry;
   /** Display only: what a reviewed browser call acts on, for its card. Never matched on. */
   reviewSubject?: { origin?: string; element?: string };
+  /** Display only: a reviewed UI call's card, values and computer included (#1314). Never matched on. */
+  uiCard?: UiCard;
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown>; bindings?: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
   /**
@@ -204,7 +207,9 @@ const refused = (error: PolicyRefusal): ActionFailure =>
 export const GOVERNANCE_REFUSALS: ReadonlySet<string> = new Set(['EMERGENCY_STOPPED', 'RUN_NOT_RUNNING', 'AUTHORITY_DENIED',
   'APPROVAL_DENIED', 'APPROVAL_EXPIRED', 'APPROVAL_WITHDRAWN', 'APPROVAL_REQUIRED', 'WORKFLOW_CHANGED', 'CARD_CANNOT_SHOW',
   // A step whose tool run data would choose cannot run as written (#1152).
-  STEP_INPUT_NOT_FIXED]);
+  STEP_INPUT_NOT_FIXED,
+  // A call whose params are not the ones its step states (#1314).
+  STEP_INPUT_MISMATCH]);
 
 /** The durable identity of an effect: one per run, step, loop position and route. */
 export const workflowEffectId = (runId: string, stepName: string, executionPath: Array<[string, number]>, route: string) =>
@@ -572,7 +577,12 @@ export class WorkflowEffectBoundary {
           // is labelled with the category the decision was made on.
           // A tool with no adapter target of its own still names its review
           // sentence through `confirmation`.
-          const intent = typeof record.target.intent === 'string' ? record.target.intent : input.confirmation?.intent;
+          // A reviewed UI call's card is its own sentence, with every value
+          // and the computer (#1314). On the delegated route the gate's
+          // generic sentence stays in the target, where its dispatch fence
+          // compares it; the direct route's target carries none.
+          const intent = input.uiCard ? uiCardSentence(input.uiCard)
+            : typeof record.target.intent === 'string' ? record.target.intent : input.confirmation?.intent;
           request = approvals.createRequest({ agentId: `workflow:${record.runId}`,
             agentName: `Workflow: ${flowLabel}${input.principal ? ` as ${input.principal.agentRoleId}` : ''}`,
             toolName: input.toolName, toolArguments: record.arguments, actionCategory: decision.actionCategory,
@@ -587,6 +597,7 @@ export class WorkflowEffectBoundary {
               // auto-approval cannot satisfy this card.
               ...(input.confirmation ? { confirm: input.confirmation.confirm } : {}),
               ...(input.reviewSubject && Object.keys(input.reviewSubject).length ? { reviewSubject: input.reviewSubject } : {}),
+              ...(input.uiCard ? { uiCard: input.uiCard } : {}),
               ...(intent ? { intent } : {}),
               // What a Telegram or Discord card says instead (#1152): a start
               // card's chat sentence names its input's fields, never values.
