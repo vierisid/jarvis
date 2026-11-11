@@ -7,6 +7,12 @@
  */
 import { failureCause } from '../../failures/cause';
 import type { FlowRun } from '../db/repos/flow-run';
+import { expressionFailureGuidance, loopInputFailure } from './expression-failure';
+
+/** The reason a screen shows: the fixed advice for an expression that failed on its data, else the step's own cause. */
+function readableCause(message: unknown): string | null {
+  return loopInputFailure(message)?.text('A loop in this workflow') ?? expressionFailureGuidance(message) ?? failureCause(message);
+}
 
 type Record_ = Record<string, unknown>;
 const isRecord = (value: unknown): value is Record_ => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -20,7 +26,7 @@ function cleanStep(value: unknown): unknown {
   const inner = isRecord(value.output) && stepLike(value.output) && Object.keys(value).length === 1 ? value.output : value;
   let step = inner;
   if (stepLike(inner) && inner.errorMessage !== undefined && inner.errorMessage !== null) {
-    const cause = failureCause(inner.errorMessage);
+    const cause = readableCause(inner.errorMessage);
     step = { ...inner, errorMessage: cause ?? 'The step failed.' };
   }
   if (stepLike(inner) && inner.type === 'LOOP_ON_ITEMS' && isRecord(inner.output) && Array.isArray(inner.output.iterations)) {
@@ -49,5 +55,5 @@ export function publicRun<T extends FlowRun>(run: T): T {
   const message = failed?.errorMessage;
   if (steps === run.steps && message === undefined) return run;
   return { ...run, steps: steps as T['steps'],
-    ...(failed && message !== undefined ? { failedStep: { ...failed, errorMessage: failureCause(message) ?? 'The step failed.' } } : {}) };
+    ...(failed && message !== undefined ? { failedStep: { ...failed, errorMessage: readableCause(message) ?? 'The step failed.' } } : {}) };
 }

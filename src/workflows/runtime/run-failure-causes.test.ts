@@ -181,3 +181,21 @@ describe('an agent step whose AI provider refused the key', () => {
     expect(failureText(failure)).not.toContain('may or may not');
   });
 });
+
+describe('what a screen shows as the failed step message', () => {
+  test('an expression size failure reads as the size advice, not the engine boilerplate', () => {
+    const run = failedRun(piece('@jarvispieces/piece-jarvis-notify', 'notify', 'Tell me'), report('step_1',
+      'Unsupported workflow expression: output size limit in {{ b1 }}. Workflow expressions are data only: property paths, literals, arithmetic'));
+    const shown = publicRun(run).failedStep!.errorMessage!;
+    expect(shown).toContain("larger or more deeply nested than a workflow step can carry");
+    expect(shown).not.toMatch(/Workflow expressions are data only|\{\{/);
+  });
+
+  test('an engine failure on a loop list reads as plain advice', () => {
+    const run = updateRun(failedRun(piece('@jarvispieces/piece-jarvis-notify', 'notify', 'Tell me'), 'x').id, { status: 'INTERNAL_ERROR',
+      failedStep: { name: '<engine>', displayName: 'engine', errorMessage: 'executeFlow(run r) -> INTERNAL_ERROR: WorkflowExpressionError: Unsupported workflow expression: array size limit in {{ trigger.items }}. Workflow' } })!;
+    const shown = publicRun(run).failedStep!.errorMessage!;
+    expect(shown).toContain('10,000 values');
+    expect(shown).not.toMatch(/INTERNAL_ERROR|executeFlow/);
+  });
+});

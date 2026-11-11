@@ -28,7 +28,7 @@ import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-e
 import { walkFlowNodes } from '../db/flow-graph';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import { nodeConnectionReferences, type RunConnectionBindingView } from '../db/repos/binding-pins';
-import { expressionFailureGuidance, failedOnMissingReference } from './expression-failure';
+import { expressionFailureGuidance, failedOnMissingReference, loopInputFailure } from './expression-failure';
 import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_REJECTED_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, isHumanInputStep } from './human-input-contract';
 import { IN_RUN_STEP_PIECES } from './step-admission';
 import { WORKFLOW_SKILL_NOT_FOUND_CODE, WORKFLOW_TOOL_UNSUPPORTED_CODE } from './effect-capabilities';
@@ -203,6 +203,19 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   if (run.status === 'STOPPED') {
     const sent = otherSteps(run, records, graph) !== 'no' || run.cancellation?.inFlightMayHaveCompleted === true;
     return projectFailure({ source: 'cancellation', dispatched: sent }, { label: 'The run', sideEffects: sent }, links);
+  }
+  if (step?.name === '<engine>') {
+    const input = loopInputFailure(step.errorMessage);
+    if (input) {
+      // The engine reads a loop's list before the loop has a record, so it ends the run with no step. The loop
+      // is found from the graph; reading its list did nothing, and the steps before it may have.
+      const flat = (text: unknown) => typeof text === 'string' ? text.replace(/\s+/gu, '') : '';
+      const loop = graph.find(n => n.type === 'LOOP_ON_ITEMS' && flat(n.settings?.items).includes(flat(input.expression)));
+      const named = loop ? { ...links, stepName: loop.name } : links;
+      const label = loop ? `The step "${loop.displayName}"` : 'The run';
+      return withOtherSteps(projectFailure({ source: 'local', message: input.text(loop ? 'This loop' : 'A loop in this workflow') },
+        { label, sideEffects: false }, named), otherSteps(run, records, graph, loop?.name), 'Steps before it');
+    }
   }
   if (!step || step.name === '<engine>') {
     return projectFailure({ source: 'unknown', message: step?.errorMessage ?? `The run ended ${run.status}` },
