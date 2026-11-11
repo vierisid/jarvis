@@ -9,7 +9,7 @@
  * `JARVIS_TEST_ENGINE_BUILD=1`.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
@@ -21,7 +21,7 @@ import { CredentialResolver } from '../credentials/adapter';
 import { SandboxApi } from '../sandbox-api/server';
 import { buildEngineBundle, ENGINE_BUILD_PATHS, findCachedBundle } from '../runner/engine-runtime/build';
 import { buildPiece } from '../runner/engine-runtime/build-pieces';
-import { EngineRuntime } from '../runner/engine-runtime/engine-runtime';
+import { EngineRuntime, type EngineHandle } from '../runner/engine-runtime/engine-runtime';
 import { redactRunSteps, versionAsModelSees } from './step-credentials';
 import { buildPieceCatalog, metadataToCatalogEntry, PieceCatalog, type PieceLookup } from './piece-catalog';
 import { dynamicSchemaFor, resolveDynamicSchemas, withResolvedPropertySchemas, type DynamicSchemaTable } from './dynamic-property-schemas';
@@ -142,6 +142,46 @@ describe('refresher combinations', () => {
     } }, async (_name, input) => { asked.push(input); return { x: { type: 'SHORT_TEXT' } }; });
     expect(Object.keys(tables ?? {})).toEqual(['byMode']);
     expect(asked).toEqual([{}, { mode: 'a' }, { mode: 'b' }]);
+  });
+});
+
+describe('the catalog build', () => {
+  test('a piece whose dynamic properties failed to resolve is not cached, so the next build tries again', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dynamic-schemas-cache-'));
+    try {
+      mkdirSync(join(root, 'http'));
+      writeFileSync(join(root, 'http', 'package.json'), JSON.stringify({ name: HTTP, version: '0.0.1' }));
+      const cacheFile = join(root, 'cache.json');
+      let fail = true;
+      const handle = {
+        async extractPieceMetadata() {
+          return { name: HTTP, displayName: 'HTTP', description: '', actions: { send_request: { name: 'send_request', displayName: 'Send', description: '', props: {
+            authType: { type: 'STATIC_DROPDOWN', displayName: 'Authentication', required: true, options: { options: [{ value: 'BEARER_TOKEN' }] } },
+            authFields: { type: 'DYNAMIC', displayName: 'Authentication Fields', required: false, refreshers: ['authType'] },
+          } } } };
+        },
+        async executeDynamicProperty() {
+          if (fail) throw new Error('engine busy');
+          return bearer;
+        },
+        async release() { /* noop */ },
+      } as unknown as EngineHandle;
+      let acquires = 0;
+      const runtime = { acquire: async () => (acquires++, handle) } as unknown as EngineRuntime;
+      const build = () => buildPieceCatalog({ runtime, pieceRoots: [root], cacheFile, cacheKey: 'v1', reporter: () => {} });
+      const first = await build();
+      expect(first.catalog.get(HTTP)!.actions.send_request!.dynamicSchemas).toBeUndefined();
+      expect(existsSync(cacheFile) ? Object.keys((JSON.parse(readFileSync(cacheFile, 'utf8')) as { pieces: object }).pieces) : []).toEqual([]);
+      fail = false;
+      const second = await build();
+      expect(acquires).toBe(2);
+      expect(dynamicSchemaFor(second.catalog.get(HTTP)!.actions.send_request!.dynamicSchemas!.authFields!, { authType: 'BEARER_TOKEN' })).toEqual(bearer);
+      // Now complete, it is cached: a third build does not start an engine.
+      await build();
+      expect(acquires).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

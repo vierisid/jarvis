@@ -655,11 +655,11 @@ export async function buildPieceCatalog(
             `extract ${piece.name}@${piece.version} timed out after ${pieceTimeoutMs}ms`,
           );
           const entry = { ...metadataToCatalogEntry(meta), version: piece.version };
-          if (DYNAMIC_SCHEMA_PIECES.has(piece.name)) {
-            await attachDynamicSchemas(handle, piece, meta, entry, pieceTimeoutMs, reporter);
-          }
+          const resolved = !DYNAMIC_SCHEMA_PIECES.has(piece.name)
+            || await attachDynamicSchemas(handle, piece, meta, entry, pieceTimeoutMs, reporter);
           out.push(entry);
-          userEntries[`${piece.name}@${piece.version}`] = { contentHash, entry };
+          // An entry missing a schema that failed to resolve is not cached, so the next build tries again.
+          if (resolved) userEntries[`${piece.name}@${piece.version}`] = { contentHash, entry };
           extracted++;
           consecutiveTimeouts = 0;
         } catch (e) {
@@ -774,6 +774,7 @@ export async function buildPieceCatalog(
  * Resolve the dynamic properties of a piece whose resolvers read only their
  * sibling values. A property that fails to resolve is left out, so the step
  * keeps the readiness message that says what to do; it never fails the piece.
+ * False when any failed, so the entry is not cached in that state.
  */
 async function attachDynamicSchemas(
   handle: EngineHandle,
@@ -782,7 +783,8 @@ async function attachDynamicSchemas(
   entry: PieceCatalogEntry,
   timeoutMs: number,
   reporter: (msg: string) => void,
-): Promise<void> {
+): Promise<boolean> {
+  let complete = true;
   const groups: Array<[Record<string, RawActionOrTrigger> | undefined, Record<string, PieceCatalogAction> | undefined]> = [
     [meta.actions, entry.actions],
     [meta.triggers, entry.triggers],
@@ -805,10 +807,12 @@ async function attachDynamicSchemas(
         ));
         if (tables) target.dynamicSchemas = tables;
       } catch (e) {
+        complete = false;
         reporter(`resolve dynamic properties of ${piece.name}.${key} failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
   }
+  return complete;
 }
 
 /**
