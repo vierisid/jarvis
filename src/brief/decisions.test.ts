@@ -87,7 +87,7 @@ test('an accepted manual step can be finished or dropped from the queue, and onl
   expect((await read()).items).toHaveLength(0);
 });
 
-test('workflow work and blocked work are not offered a finish action', () => {
+test('workflow work and blocked work are not offered a finish action', async () => {
   const e = effect('succeeded');
   const flowWork = createWorkItem({ title: 'Runs itself', mode: 'workflow', workflowId: e.flow.id, workflowVersionId: e.version.id });
   decideWorkItem(flowWork.id, { outcome: 'accepted', reason: 'Yes' });
@@ -95,6 +95,12 @@ test('workflow work and blocked work are not offered a finish action', () => {
   const held = createWorkItem({ title: 'Waiting on someone' });
   decideWorkItem(held.id, { outcome: 'accepted', reason: 'Yes' }); setWorkBlocker(held.id, { reason: 'Waiting' });
   expect(queue.get(`work:${held.id}`).supportedActions).toEqual(['inspect']);
+  // A finish never settles a permission card or a proposal: the server refuses what it did not offer.
+  const card = queue.get(`approval:${approval('workflow').id}`), proposal = queue.get(`work:${createWorkItem({ title: 'Not yet accepted' }).id}`);
+  for (const target of [card, proposal]) for (const action of ['mark_done', 'not_doing'] as const) {
+    await expect(queue.resolve(target.decisionId, { revision: target.revision, action, reason: 'Done' })).rejects.toMatchObject({ status: 409, code: 'unsupported_action' });
+  }
+  expect(queue.get(card.decisionId).approval?.status).toBe('pending');
 });
 
 test('approval, effect detail and run detail share one identity; no duplicate blocked work card', async () => {
