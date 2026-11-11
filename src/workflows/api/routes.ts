@@ -3,6 +3,7 @@ import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion } from './editor-version';
+import { FLOW_DISPLAY_NAME_MAX_CHARS, isBlankWorkflowName, UNTITLED_WORKFLOW_NAME } from '../display-name';
 import type { BriefCapabilities } from '../../brief/capabilities';
 import { requireWorkflowContext } from '../../brief/workflow-context-routes';
 import { WorkflowInspectionError } from '../../brief/inspection-values';
@@ -35,6 +36,7 @@ import { WorkflowInspectionError } from '../../brief/inspection-values';
  */
 
 import { DEFAULT_IDS, getWorkflowDb } from '../db';
+import { NOT_ONE_LINE } from '../../vault/commitment-text.ts';
 import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
 import { OnboardingResolutionError, resolveOnboardingOutcome, runOnboardingOutcomes } from '../runtime/onboarding-service';
 import { runFailure } from '../runtime/run-failure';
@@ -563,8 +565,9 @@ async function readWriteBody(
 }
 
 /**
- * Ceiling on a version's `displayName`, which is what `manage_workflow`'s
- * `summarizeFlow` reports as a flow's `name` (#598).
+ * Ceiling on a version's `displayName` (`FLOW_DISPLAY_NAME_MAX_CHARS` in
+ * `../display-name.ts`), which is what `manage_workflow`'s `summarizeFlow`
+ * reports as a flow's `name` (#598).
  *
  * `name` is the half of #598 that is easy to wave through, because a workflow
  * name looks operator-written. It is not: this route family let a caller write
@@ -578,27 +581,32 @@ async function readWriteBody(
  * dashboard may reasonably carry a longer name than the prompt wants to spend
  * tokens on, and the two caps answer different questions.
  */
-const FLOW_DISPLAY_NAME_MAX_CHARS = 512;
-
 /**
- * True when a name has nothing a person can see: only whitespace, control,
- * zero-width or bidi format characters (U+200B, U+202E, U+FEFF), or lone
- * surrogates. Kept separate from any character-class rule on the name. The
- * Brief list applies the same test to rows already stored
- * (`ui/src/brief/workflows/manage-list/model.ts`).
- */
-const NO_VISIBLE_CHARACTER = /^[\s\p{Cc}\p{Cf}\p{Cs}\p{Z}]*$/u;
-
-/**
- * The caller's `displayName`, trimmed, or the refusal. A name that is only
- * whitespace is refused like an empty one: it renders as a blank row, and the
- * All workflows page used to fail to load while one existed. Same shape as
+ * The caller's `displayName`, trimmed, or the refusal. Same shape as
  * `readWriteBody`, and it returns the NARROWED string so a caller cannot
- * validate and then pass the unnarrowed value on.
+ * validate and then pass the unnarrowed value on. The blank rule and the cap
+ * live in `../display-name.ts`, shared with the model tools, the stored form
+ * (`storedDisplayName`) and the Brief list.
+ *
+ * A name with no visible character (whitespace, controls, zero-width or bidi
+ * format characters, lone surrogates) is refused like an empty one: it renders
+ * as a blank row, and the All workflows page used to fail to load while one
+ * existed. A name is one line of plain text: a control character in it (NUL, a
+ * bell, an escape, a line break, C1, the line and paragraph separators) breaks
+ * lists and logs, and a lone surrogate is not text. The rule a task's text is
+ * stored under (vault/commitment-text.ts). Refused as a plain 400.
+ *
+ * `flowId` names the flow a version route writes to. A name that flow already
+ * stores is let through both rules, so a workflow named before they existed
+ * can still be saved: the editor sends the current name with every save, and
+ * refusing it would lock the workflow until it was renamed. A carried blank
+ * name is stored as "Untitled workflow", the name the list already shows.
  */
-function validDisplayName(raw: unknown): { name: string } | { error: Response } {
+function validDisplayName(raw: unknown, flowId?: string): { name: string } | { error: Response } {
   const name = typeof raw === "string" ? raw.trim() : "";
-  if (NO_VISIBLE_CHARACTER.test(name)) {
+  const stored = () => !!flowId && nameStoredOnFlow(flowId, typeof raw === "string" ? raw : "");
+  if (isBlankWorkflowName(name)) {
+    if (typeof raw === "string" && stored()) return { name: UNTITLED_WORKFLOW_NAME };
     return { error: err("displayName is required and must be a non-empty string") };
   }
   if (name.length > FLOW_DISPLAY_NAME_MAX_CHARS) {
@@ -609,7 +617,14 @@ function validDisplayName(raw: unknown): { name: string } | { error: Response } 
       ),
     };
   }
+  if ((!name.isWellFormed() || NOT_ONE_LINE.test(name)) && !stored()) {
+    return { error: err("displayName cannot contain control characters") };
+  }
   return { name };
+}
+
+function nameStoredOnFlow(flowId: string, name: string): boolean {
+  return getWorkflowDb().query("SELECT 1 FROM flow_version WHERE flow_id = ? AND display_name = ? LIMIT 1").get(flowId, name) !== null;
 }
 
 /**
@@ -1747,7 +1762,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!scopedFlow(req, id)) return err("flow not found", 404);
           // Used to be a bare truthiness check, so a non-string of any length
           // reached the column that becomes a flow's model-facing `name` (#598).
-          const named = validDisplayName(body.displayName);
+          const named = validDisplayName(body.displayName, id);
           if ("error" in named) return named.error;
           // `uiMeta` is checked BEFORE the insert, not after (#632). There is
           // no transaction around the two writes below, so a malformed `uiMeta`
@@ -1868,12 +1883,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // transaction, so a bad name cannot half-apply a patch.
           const uiMeta = body.uiMeta;
           if (body.displayName !== undefined) {
-            const named = validDisplayName(body.displayName);
+            const named = validDisplayName(body.displayName, scopedFlow(req, id) ? id : undefined);
             if ("error" in named) return named.error;
             // The NARROWED value goes on, so this cannot validate one string
-            // and forward another. Identical today because the validator
-            // transforms nothing; the point is that it stays true if it ever
-            // does.
+            // and forward another: the validator trims, and maps a carried
+            // blank name to "Untitled workflow".
             versionPatch.displayName = named.name;
           }
           const v = withOwnedFlowVersion(id, versionId, () => {
