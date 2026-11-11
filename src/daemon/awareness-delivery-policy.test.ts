@@ -314,3 +314,34 @@ test('a dropped research result does not leave its issue muted when awareness co
   policy.handleEvent({ type: 'suggestion_ready', data: { title: 'Error', body: 'Synthetic', issueKey: screenIssueKey('error', 'Terminal', 'Synthetic screen error') }, timestamp: 2 });
   expect(priorities).toEqual(['urgent']);
 });
+
+// #1314 follow-up: the research turn is held by the switch and kept off the
+// background agent's primary history; voice and channel retries stop at the flip.
+test('error and struggle research run as screen-derived background turns', async () => {
+  const f = fixture('0');
+  const options: unknown[] = [];
+  f.deps.agent = () => ({ handleMessage: async (_text: string, _channel?: string, turn?: unknown) => { options.push(turn); return 'A synthetic solution long enough to announce.'; },
+    lastTurnRequestedApproval: () => false });
+  const policy = new AwarenessDeliveryPolicy(f.deps, '0');
+  policy.handleEvent(event('error_detected'));
+  policy.handleEvent(event('struggle_detected'));
+  await Bun.sleep(0);
+  expect(options).toEqual([{ screenDerived: true }, { screenDerived: true }]);
+});
+
+test('an awareness event that arrives after awareness was turned off gets no automatic assistance', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  for (const accepted of [0, 1]) for (const type of ['error_detected', 'struggle_detected', 'suggestion_ready'] as const) {
+    const f = fixture('0', accepted), observed: unknown[] = [];
+    f.eventBus.subscribe(AWARENESS_EVENT_TYPE_MAP[type]!, e => { observed.push(e); });
+    const policy = new AwarenessDeliveryPolicy(f.deps, '0');
+    try {
+      setScreenCaptureEnabledSource(() => false);
+      policy.handleEvent(event(type)); await Bun.sleep(0);
+    } finally { setScreenCaptureEnabledSource(null); }
+    expect({ type, accepted, calls: f.calls, chat: f.messages.filter(m => m.type === 'chat') })
+      .toEqual({ type, accepted, calls: { research: 0, reactor: 0, coalescer: 0, voice: 0, desktop: 0, channels: 0 }, chat: [] });
+    // The workflow event and its card signal are not assistance; they stay as before.
+    expect(observed).toHaveLength(1);
+  }
+});

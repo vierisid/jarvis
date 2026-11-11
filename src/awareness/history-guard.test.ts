@@ -40,3 +40,18 @@ test('the routine composer the daemon builds holds every model call while awaren
   const daemon = await Bun.file(new URL('../daemon/index.ts', import.meta.url)).text();
   expect(daemon).toContain('new SuggestionComposer(\n          // Every model call of a composition stops once awareness is off (#1314 review).\n          heldComposition(compositionDependencies, composePersistedFlow),');
 });
+
+test('the background agent turn is held at its provider retry and fallback boundary too (#1314 follow-up)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  let on = true; const sends: string[] = [];
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    const state = { held: false };
+    // LLMManager.chatTier(tier, subsystem, messages, options) asks options.checkDeadline before each provider attempt.
+    const llm = awarenessHeldLlm({ async chatTier(_tier: string, _subsystem: string, _messages: unknown[], options?: { checkDeadline?: () => void; tools?: unknown[] }) {
+      options?.checkDeadline?.(); sends.push(`a:${options?.tools?.length}`); on = false; options?.checkDeadline?.(); sends.push('b'); return {}; } }, state);
+    await expect(llm.chatTier('medium', 'chat_orchestrator', [], { tools: [1] })).rejects.toBeInstanceOf(AwarenessHeldError);
+    // The caller's options are kept; only the deadline hook is added.
+    expect(sends).toEqual(['a:1']); expect(state.held).toBe(true);
+  } finally { setScreenCaptureEnabledSource(null); }
+});

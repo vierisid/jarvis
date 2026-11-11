@@ -65,6 +65,10 @@ export class AwarenessDeliveryPolicy {
     // Capture, card/inbox signals and explicit workflow subscriptions remain active.
     // Never feed ambient awareness into an automatic assistant in quiet mode.
     if (this.quiet) return;
+    // An event that arrives after awareness was turned off (a capture still in
+    // flight, #1314 follow-up) gets no automatic assistance: nothing researched,
+    // reacted to, shown, toasted or spoken.
+    if (!awarenessHistoryVisible()) return;
     const bgAgent = this.deps.agent();
     const screenAlerts = this.screenAlerts;
 
@@ -131,7 +135,8 @@ export class AwarenessDeliveryPolicy {
           wrapUntrusted(errorText, 'screen text (OCR)') + '\n\n' +
           `Search the web and vault for a solution. Be concise and actionable. ` +
           `Start your response with the fix, not a question.`,
-          'awareness'
+          // Held by the switch, on a thread of its own (#1314 follow-up).
+          'awareness', { screenDerived: true },
         ).then(solution => {
           // Awareness turned off while the research ran (#1314): its result is screen-derived, so nothing is shown, sent or spoken.
           if (!awarenessHistoryVisible()) { screenAlerts.researchEnded(errorKey); return; }
@@ -198,7 +203,7 @@ export class AwarenessDeliveryPolicy {
           wrapUntrusted(ocrPreview.slice(0, 800), 'screen text (OCR)') + '\n\n' +
           `Search for solutions to any errors visible. Check documentation for the relevant language/framework. ` +
           `Provide a specific, actionable fix. Start with the solution, not a question.`,
-          'awareness'
+          'awareness', { screenDerived: true },
         ).then(solution => {
           // Awareness turned off while the research ran (#1314): its result is screen-derived, so nothing is shown, sent or spoken.
           if (!awarenessHistoryVisible()) { screenAlerts.researchEnded(struggleKey); return; }

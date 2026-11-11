@@ -51,6 +51,10 @@ export function awarenessHeldLlm<T extends object>(llm: T, state?: { held: boole
           args = [{ ...input, checkDeadline: held(input.checkDeadline) }, ...args.slice(1)];
         } else if (key === 'chatTools') {
           const next = [...args]; next[3] = held(args[3]); args = next;
+        } else if (key === 'chatTier') {
+          // LLMManager.chatTier(tier, subsystem, messages, options): the background agent's turn (#1314 follow-up).
+          const options = (args[3] && typeof args[3] === 'object' ? args[3] : {}) as { checkDeadline?: unknown };
+          const next = [...args]; next[3] = { ...options, checkDeadline: held(options.checkDeadline) }; args = next;
         }
         return (value as (...a: unknown[]) => unknown).apply(target, args);
       };

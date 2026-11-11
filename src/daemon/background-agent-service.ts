@@ -38,6 +38,20 @@ import { findContent } from '../vault/content-pipeline.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { BackgroundThrottled, currentAdmission, runWithAdmission } from '../llm/background-budget.ts';
 import { commitmentPromptLine } from '../vault/commitment-text.ts';
+import { AwarenessHeldError, awarenessHeldLlm, awarenessHistoryVisible } from '../awareness/history-guard.ts';
+
+/** How one background turn runs. */
+export interface BackgroundTurnOptions {
+  /**
+   * The prompt carries what was read from the screen (#1314 follow-up). The
+   * turn starts only while screen awareness is on, each of its model calls
+   * and tool runs stops once it is turned off, and it runs on a thread of its
+   * own: the screen text never enters the primary history that later
+   * background turns re-send. A turn held by the switch rejects with
+   * AwarenessHeldError.
+   */
+  screenDerived?: boolean;
+}
 
 const BG_CDP_PORT = 9223;
 const BG_PROFILE_DIR = join(homedir(), '.jarvis', 'browser', 'bg-profile');
@@ -208,7 +222,7 @@ export class BackgroundAgentService implements Service, IAgentService {
   /**
    * Handle a reactive event message (from EventReactor / CommitmentExecutor).
    */
-  async handleMessage(text: string, channel: string = 'system'): Promise<string> {
+  async handleMessage(text: string, channel: string = 'system', options: BackgroundTurnOptions = {}): Promise<string> {
     // Don't START a background reaction once draining; count it in-flight
     // otherwise so the graceful drain awaits it too (same as the primary turns).
     if (activeTurns.isDraining) return 'skipped: draining';
@@ -222,20 +236,34 @@ export class BackgroundAgentService implements Service, IAgentService {
     // gated turn can now sit on an approval for a while, so two turns must
     // never interleave on it. Each caller waits for the turns queued before
     // it instead of a bounded busy-wait that gave up and ran concurrently.
+    // Set when the switch refused one of the turn's model calls: the provider
+    // layer may have turned that refusal into an ordinary failure.
+    const held = { held: false };
     const run = async (): Promise<string> => {
+      // A screen-derived turn queued behind others starts only if awareness is still on.
+      if (options.screenDerived && !awarenessHistoryVisible()) throw new AwarenessHeldError();
       this.busy = true;
       this.currentTurn = { approvalIds: [] };
       try {
         const systemPrompt = this.buildSystemPromptParts(channel);
+        const hold = options.screenDerived ? {
+          llm: awarenessHeldLlm(this.llmManager, held),
+          checkpoint: () => { if (!awarenessHistoryVisible()) { held.held = true; throw new AwarenessHeldError(); } },
+        } : null;
+        // Own empty thread: read, never written, so the primary history keeps none of it.
+        const thread = options.screenDerived ? { history: [] } : null;
         // Inside `run`, not around handleMessage: turns are chained, and a
         // queued turn runs in whichever context resolved the one before it.
-        const turn = () => runWithOrigin('background', () => this.orchestrator.processMessage(systemPrompt, text));
+        const turn = () => runWithOrigin('background', () =>
+          this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, null, thread, null, hold));
         return await runWithAdmission(admission, turn);
       } catch (err) {
         // A refused admission is not an answer. Returned as text it would be
         // spoken as an error "fix", broadcast as a reaction, or recorded as a
         // commitment's completed result; callers' failure paths handle it.
         if (err instanceof BackgroundThrottled) throw err;
+        // Nor is a turn the awareness switch stopped, however the refusal surfaced.
+        if (err instanceof AwarenessHeldError || held.held) throw new AwarenessHeldError();
         console.error('[BackgroundAgent] Message error:', err);
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       } finally {
