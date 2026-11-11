@@ -11,7 +11,7 @@ import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { Service, ServiceStatus } from './services.ts';
 import type { AgentService } from './agent-service.ts';
 import type { CommitmentExecutor } from './commitment-executor.ts';
-import type { ChannelService } from './channel-service.ts';
+import type { BroadcastDelivery, ChannelService } from './channel-service.ts';
 import type { Commitment } from '../vault/commitments.ts';
 import type { ContentItem } from '../vault/content-pipeline.ts';
 import { splitIntoSentences, type STTProvider, type TTSProvider } from '../comms/voice.ts';
@@ -902,12 +902,14 @@ export class WebSocketService implements Service {
    * Used by EventReactor for immediate event reactions.
    * Urgent notifications are also pushed to all external channels.
    */
-  broadcastNotification(text: string, priority: 'urgent' | 'normal' | 'low'): void {
+  broadcastNotification(text: string, priority: 'urgent' | 'normal' | 'low', delivery?: Pick<BroadcastDelivery, 'shouldContinue'>): void {
     this.broadcastNotificationToDashboard(text, priority);
 
     // Legacy proactive notifications intentionally fan out to external channels.
+    // `delivery.shouldContinue` stops that copy's sends and retries once its
+    // sender may no longer send (screen-derived help, #1314 follow-up).
     if (priority === 'urgent' && this.channelService) {
-      this.channelService.broadcastToAll(`[URGENT] ${text}`).catch(err =>
+      this.channelService.broadcastToAll(`[URGENT] ${text}`, undefined, delivery?.shouldContinue ? { shouldContinue: delivery.shouldContinue } : undefined).catch(err =>
         console.error('[WSService] Channel broadcast error:', err)
       );
     }

@@ -1,5 +1,5 @@
 import type { AwarenessEvent, Suggestion } from '../awareness/types.ts';
-import { awarenessHistoryVisible } from '../awareness/history-guard.ts';
+import { AwarenessHeldError, awarenessHistoryVisible } from '../awareness/history-guard.ts';
 import type { BackgroundAgentService } from './background-agent-service.ts';
 import type { ChannelService } from './channel-service.ts';
 import type { WebSocketService } from './ws-service.ts';
@@ -45,6 +45,10 @@ export class AwarenessDeliveryPolicy {
 
   handleEvent(event: AwarenessEvent): void {
     const { sockets: wsService, channels: channelService, reactor, coalescer, eventBus: sharedEventBus } = this.deps;
+    // An event that arrives after awareness was turned off (a capture still in
+    // flight, #1314 follow-up) carries what was read from the screen: it is
+    // dropped, so no flow, dashboard, model, channel, toast or voice gets it.
+    if (!awarenessHistoryVisible()) return;
     const awarenessWarnedTypes = this.awarenessWarnedTypes;
     const sendDesktopNotification = this.deps.desktop ?? defaultDesktop;
     // Republish onto the workflow event bus so flows with `on_event`
@@ -65,10 +69,6 @@ export class AwarenessDeliveryPolicy {
     // Capture, card/inbox signals and explicit workflow subscriptions remain active.
     // Never feed ambient awareness into an automatic assistant in quiet mode.
     if (this.quiet) return;
-    // An event that arrives after awareness was turned off (a capture still in
-    // flight, #1314 follow-up) gets no automatic assistance: nothing researched,
-    // reacted to, shown, toasted or spoken.
-    if (!awarenessHistoryVisible()) return;
     const bgAgent = this.deps.agent();
     // Asked at each sentence and each send retry: a flip mid-delivery stops what is left.
     const stillOn = { shouldContinue: awarenessHistoryVisible };
@@ -103,7 +103,7 @@ export class AwarenessDeliveryPolicy {
         wsService.broadcastNotification(text, 'normal');
       } else if (hasWsClients) {
         // Primary: deliver via WebSocket + voice
-        wsService.broadcastNotification(text, 'urgent');
+        wsService.broadcastNotification(text, 'urgent', stillOn);
         sendDesktopNotification(`JARVIS: ${title}`, body, { urgency: 'normal' });
         wsService.broadcastProactiveVoice(body, stillOn).catch(err =>
           console.error('[Daemon] Awareness TTS error:', err)
@@ -152,7 +152,7 @@ export class AwarenessDeliveryPolicy {
               wsService.broadcastNotification(solutionText, 'normal');
               return;
             }
-            wsService.broadcastNotification(solutionText, 'urgent');
+            wsService.broadcastNotification(solutionText, 'urgent', stillOn);
             sendDesktopNotification(`JARVIS: ${heading}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
             // Strip markdown for TTS; voice should sound natural
             const voiceText = solution
@@ -181,7 +181,8 @@ export class AwarenessDeliveryPolicy {
           }
         }).catch(err => {
           screenAlerts.researchEnded(errorKey);
-          console.error('[Daemon] Error auto-research failed:', err instanceof Error ? err.message : err);
+          if (err instanceof AwarenessHeldError) console.log('[Daemon] Error auto-research held: screen awareness is off');
+          else console.error('[Daemon] Error auto-research failed:', err instanceof Error ? err.message : err);
         });
       }
     }
@@ -218,7 +219,7 @@ export class AwarenessDeliveryPolicy {
               wsService.broadcastNotification(solutionText, 'normal');
               return;
             }
-            wsService.broadcastNotification(solutionText, 'urgent');
+            wsService.broadcastNotification(solutionText, 'urgent', stillOn);
             sendDesktopNotification(`JARVIS: ${heading}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
             const voiceText = solution
               .replace(/#{1,6}\s*/g, '')
@@ -243,7 +244,8 @@ export class AwarenessDeliveryPolicy {
           }
         }).catch(err => {
           screenAlerts.researchEnded(struggleKey);
-          console.error('[Daemon] Struggle auto-research failed:', err instanceof Error ? err.message : err);
+          if (err instanceof AwarenessHeldError) console.log('[Daemon] Struggle auto-research held: screen awareness is off');
+          else console.error('[Daemon] Struggle auto-research failed:', err instanceof Error ? err.message : err);
         });
       }
     }

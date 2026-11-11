@@ -282,6 +282,21 @@ describe('proactive TTS and live realtime sessions', () => {
     expect(reached).toBe(0);
   });
 
+  test("an urgent notification's channel echo carries its sender's stop check (#1314 follow-up)", async () => {
+    const { svc } = makeService();
+    const echoes: Array<{ text: string; delivery?: { shouldContinue?: () => boolean } }> = [];
+    svc.setChannelService({ broadcastToAll: async (text: string, _send?: unknown, delivery?: { shouldContinue?: () => boolean }) => {
+      echoes.push({ text, ...(delivery ? { delivery } : {}) }); } } as never);
+    let allowed = true;
+    svc.broadcastNotification('Fix for error', 'urgent', { shouldContinue: () => allowed });
+    svc.broadcastNotification('Commitment overdue', 'urgent');
+    expect(echoes.map(e => e.text)).toEqual(['[URGENT] Fix for error', '[URGENT] Commitment overdue']);
+    expect(echoes[0]!.delivery?.shouldContinue?.()).toBe(true);
+    allowed = false;
+    expect(echoes[0]!.delivery?.shouldContinue?.()).toBe(false);
+    expect(echoes[1]!.delivery).toBeUndefined();
+  });
+
   test('a speaker already stopped says nothing and opens no audio session', async () => {
     const listener = fakeClient();
     const { svc, synthesized } = withClients(listener);

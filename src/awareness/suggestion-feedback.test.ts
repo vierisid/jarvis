@@ -390,7 +390,7 @@ test('a held call that comes back as a thrown error still goes back to the queue
   expect(job).toMatchObject({ state: 'queued', attempts: 0 });
 });
 
-test('through the daemon wiring, awareness off and back on within one composition holds the job, unspent (#1314 follow-up)', async () => {
+test('through heldComposition as the daemon builds it, awareness off and back on within one composition holds the job, unspent (#1314 follow-up)', async () => {
   const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
   const { heldComposition } = await import('./history-guard.ts');
   let on = true; const sent: string[] = [];
