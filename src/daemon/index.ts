@@ -1,4 +1,5 @@
 import { dropboxStatus } from "../integrations/dropbox-connection";
+import { heldComposition } from '../awareness/history-guard.ts';
 import { registerNavigationCompatibility } from '../brief/registrations/navigation-compatibility';
 import { registerReconciliation } from '../brief/registrations/reconciliation';
 import { registerOnboarding } from '../brief/registrations/onboarding';
@@ -73,6 +74,7 @@ import { registerWorkflowComposition } from '../brief/registrations/workflow-com
 import { ProfileSettings } from '../brief/profile-settings';
 import { registerProfileSettings } from '../brief/registrations/profile-settings';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
+import { switchedOffCard, workflowToolDeclarationRefusal, workflowToolSwitchRefusal } from '../workflows/runtime/workflow-ui-tools';
 import { setDeletedWorkflowCardListener } from '../workflows/db/repos/flow-deletion';
 import { pinUnpinnedEnabledFlows } from '../workflows/db/repos/binding-pins';
 import { mkdirSync, existsSync } from "node:fs";
@@ -205,7 +207,7 @@ import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded } fr
 import { createSidecarOfflineNotifier } from "./sidecar-offline-notice.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
 import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
-import { bindDesktopSwitch, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled } from "../actions/tools/desktop-guard.ts";
+import { bindDesktopSwitch, bindScreenCaptureSwitch, desktopEnabledFromSection, desktopValueNeedsWarning, isDesktopEnabled, isScreenCaptureEnabled } from "../actions/tools/desktop-guard.ts";
 import { osFamily } from "../util/execution-environment.ts";
 import { isLocalBrowserDisabled, isNoLocalTools } from "../actions/tools/local-tools-guard.ts";
 
@@ -1009,6 +1011,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 5. Create real services
     const agentService = new AgentService(jarvisConfig);
+    // Assigned once the approval manager exists (#1314 m6); a switch turned
+    // off before then has no workflow cards of this process to close.
+    let closeSwitchedOffWorkflowCards: () => void = () => {};
     agentService.setResearchQueue(researchQueue);
     const observerService = config.noLocalTools
       ? null
@@ -2140,6 +2145,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           persistAwarenessChoice(nextEnabled);
           // Toggle live awareness service if it exists.
           if (awarenessService) awarenessService.toggle(nextEnabled);
+          if (!nextEnabled) closeSwitchedOffWorkflowCards();
           // Push visual: blinded = !enabled.
           // Awareness drops every capture while desktop.enabled is off (#905),
           // so turning it on then still leaves the pebble blind, and says so.
@@ -2361,7 +2367,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!re.test(t)) return false;
         // No region capture while desktop.enabled is off (#905): the turn goes
         // on without one, and the pebble's directives say why.
-        if (!isDesktopEnabled()) return false;
+        // Nor while screen awareness is off (#1314): a region is a screenshot.
+        if (!isDesktopEnabled() || !isScreenCaptureEnabled()) return false;
 
         // The runResponseCycle caller already claimed the pendingSummons
         // slot for this turn (summon hotkey → listening → audio.session_end
@@ -4279,7 +4286,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!pending) return;
         // The switch was turned off while the overlay was up (#905): the image
         // is dropped unread and the flow ends as a cancel would.
-        if (!isDesktopEnabled()) {
+        if (!isDesktopEnabled() || !isScreenCaptureEnabled()) {
           pendingRegionByPebble.delete(sidecarId);
           pending.ctrl.cancelled = true;
           await setState(sidecarId, 'idle', '');
@@ -4402,6 +4409,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       emergency_state: authorityConfig.emergency_state ?? 'normal',
     });
     const approvalManager = new ApprovalManager();
+    // A workflow card for a tool a switch just turned off (desktop control,
+    // or screen awareness for the screenshot tools) is closed, not left
+    // waiting to be approved into a refusal (#1314 m6).
+    closeSwitchedOffWorkflowCards = () => {
+      approvalManager.closeWorkflowCards(switchedOffCard(agentService?.getOrchestrator().getToolRegistry()), 'switched-off');
+    };
     const auditTrail = new AuditTrail();
     const learner = new AuthorityLearner(authorityConfig.learning?.suggest_threshold ?? 5);
     const emergencyController = new EmergencyController();
@@ -4582,6 +4595,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // enabled flag is the one knob with a live setter today.
     settingsReload.registerApplier('awareness', async (cfg) => {
       awarenessService?.toggle(cfg.awareness?.enabled !== false);
+      if (cfg.awareness?.enabled === false) closeSwitchedOffWorkflowCards();
       // The glyph follows the stored choice too, on every pebble (#1157).
       // Not awaited: appliers run in one serialized queue, and a sidecar RPC can take 30s to give up.
       void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
@@ -4592,6 +4606,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // already running is stopped here: a skill recording's input hooks on the
     // sidecar. The pebble glyph follows too, as it does for awareness.
     settingsReload.registerApplier('desktop', async (cfg) => {
+      if (!isDesktopEnabled()) closeSwitchedOffWorkflowCards();
       if (!isDesktopEnabled() && endRecordingForDesktopOff()) {
         console.log('[Tools] desktop.enabled turned off: the running skill recording was stopped and discarded.');
       }
@@ -5280,9 +5295,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       credentials: credentialResolver,
       tool: name => {
         const tool = agentService.getOrchestrator().getToolRegistry()?.list().find(t => t.name === name);
-        return tool ? { params: Object.entries(tool.parameters).map(([name, param]) => ({ name, ...param })) } : null;
+        return tool ? { params: Object.entries(tool.parameters).map(([name, param]) => ({ name, ...param })),
+          workflowRefusal: workflowToolDeclarationRefusal(tool), switchRefusal: workflowToolSwitchRefusal(tool) } : null;
       },
       roles: () => new Set(agentService.getSpecialists().keys()),
+      roleTools: (id) => agentService.getSpecialists().get(id)?.tools ?? null,
       // Q-05: the computers a workflow can be pinned to, and whether this one may run local tools.
       // `--no-local-tools` reaches the tools only later in startup (9b), after
       // the pin pass below, so the flag is read here as well.
@@ -5410,6 +5427,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 9b-ter. desktop.enabled (#905). Bound to the live config object, which
     // Settings changes in place (#1159): see desktop-guard.ts.
     bindDesktopSwitch(jarvisConfig);
+    // Screen awareness covers the screenshot tools too (#1314 m6): read live, like the desktop switch.
+    bindScreenCaptureSwitch(jarvisConfig as { awareness?: unknown });
     {
       const stored: unknown = jarvisConfig.desktop;
       if (desktopValueNeedsWarning(stored)) {
@@ -5549,6 +5568,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               toolRegistry.list(cat).map((t) => ({
                 name: t.name,
                 description: t.description,
+                workflowRefusal: workflowToolDeclarationRefusal(t) ?? workflowToolSwitchRefusal(t)?.message ?? null,
                 params: Object.entries(t.parameters).map(([name, p]) => ({
                   name,
                   type: p.type,
@@ -5630,7 +5650,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           briefPreparedOpportunities?.start();
         }
         suggestionComposer = new SuggestionComposer(
-          request => composePersistedFlow(compositionDependencies(), request),
+          // Every model call of a composition stops once awareness is off (#1314 review).
+          heldComposition(compositionDependencies, composePersistedFlow),
           undefined,
           () => backgroundBudgetStatus().state === 'ready',
         );

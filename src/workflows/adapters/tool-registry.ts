@@ -9,8 +9,30 @@ import type {
   PieceToolRegistry,
 } from "../jarvis-pieces/types";
 import type { ToolRegistry } from "../../actions/tools/registry";
-import { dropTrustedTrailer } from "../../roles/untrusted.ts";
+import { dropTrustedTrailer, isUntrustedSourceTool, markUntrustedToolBlocks, markUntrustedToolResult } from "../../roles/untrusted.ts";
+import { isToolResult } from "../../actions/tools/registry";
 import { withoutTemplateDelivery } from "../../actions/tools/template-delivery-scope.ts";
+
+/**
+ * A DIRECT browser or desktop step's result, framed as untrusted content
+ * (owner decision on #1314). The #573 decision below keeps every other tool's
+ * result byte-exact; it does not hold for the computer: a page or a window is
+ * written by whoever controls it, the same text the chat path frames, and a
+ * flow that reads a screen does so to hand it to something that decides. So
+ * navigate and the reads come back as the chat model would see them. The
+ * effect receipt keeps the tool's own value; only what the step receives is
+ * framed, on every return including a replay. A value that is neither text
+ * nor content blocks is framed as its JSON, so no field of it reaches the
+ * flow unframed. Tools the chat path does not frame (desktop_screenshot,
+ * capture_screen) are not framed here either.
+ */
+export function frameComputerStepResult(name: string, category: string | undefined, value: unknown): unknown {
+  if (!isUntrustedSourceTool(name, category)) return value;
+  if (typeof value === 'string') return markUntrustedToolResult(name, category, value);
+  if (isToolResult(value)) return { ...value, content: markUntrustedToolBlocks(name, category, value.content) };
+  if (value === null || value === undefined) return value;
+  return markUntrustedToolResult(name, category, JSON.stringify(value));
+}
 
 export class JarvisToolRegistryAdapter implements PieceToolRegistry {
   constructor(private readonly registry: ToolRegistry) {}
@@ -33,6 +55,10 @@ export class JarvisToolRegistryAdapter implements PieceToolRegistry {
     // expressions and by other steps, and it reaches a model only somewhere
     // else. goals/rhythm.ts already frames workflow-derived content that way --
     // at the prompt, not at the tool (see its note on `blocker.reason`).
+    //
+    // (A DIRECT browser or desktop step is the exception, framed by its
+    // caller with `frameComputerStepResult` above, owner decision on #1314.
+    // This adapter stays byte-exact for everything it returns.)
     //
     // Eight tools a step can name ARE untrusted sources: read_file,
     // get_clipboard, browser_snapshot, browser_screenshot, desktop_snapshot,
