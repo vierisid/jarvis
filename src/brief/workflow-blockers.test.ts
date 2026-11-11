@@ -6,10 +6,10 @@ const issue = (message: string, extra: Record<string, unknown> = {}) =>
 
 test('a step name cannot reorder, hide or break out of the sentence', () => {
   const named = (name: string) => () => name;
-  const rlo = explainBlocker([issue('Bad value')], named('cv‮gpj.exe​ "now" \n\n ok')).reason;
+  const rlo = explainBlocker([issue('Bad value')], named('cv\u202Egpj.exe\u200B "now" \n\n ok')).reason;
   expect(rlo).toBe(`Fix "cvgpj.exe 'now' ok" first: Bad value.`);
-  expect(explainCodeSteps(['a'], named('​⁦')).reason).toBe('a step without a name runs code and needs your permission first.');
-  const app = explainBlocker([issue('x', { connect: { app: 'Hub‮Spot' } })], named('Send')).reason;
+  expect(explainCodeSteps(['a'], named('\u200B\u2066')).reason).toBe('a step without a name runs code and needs your permission first.');
+  const app = explainBlocker([issue('x', { connect: { app: 'Hub\u202ESpot' } })], named('Send')).reason;
   expect(app).toBe('Connect a HubSpot account for "Send" first.');
 });
 
