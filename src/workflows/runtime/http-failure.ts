@@ -11,7 +11,9 @@
  * the same rules as the approval card and the receipt (`redactCredentials`)
  * before any of it is shown, and only the first part is kept. It is quoted,
  * so it never reads as Jarvis's own words, and frame delimiters in it are
- * defanged as in every other receipt text (`boundedReceiptText`).
+ * defanged as in every other receipt text (`boundedReceiptText`). A web page
+ * is not quoted as markup: the failure names the page's title, or the text a
+ * reader would see, never tags, scripts or styles.
  */
 import { STATUS_CODES } from 'node:http';
 import { boundedReceiptText } from '../../roles/untrusted';
@@ -58,6 +60,48 @@ export function bodyExcerpt(body: unknown): string {
   return boundedReceiptText(text.length > FAILURE_BODY_CHARS ? `${text.slice(0, FAILURE_BODY_CHARS)}...` : text, FAILURE_BODY_CHARS + 3);
 }
 
+/** Whether a response body is a web page (an error page from a server or a proxy), not JSON or plain text. */
+function looksLikeHtml(text: string): boolean {
+  const head = text.slice(0, 2000);
+  return /^\s*(?:<!doctype\s+html|<html[\s>]|<head[\s>]|<body[\s>])/iu.test(head)
+    || (/<html[\s>]/iu.test(head) && /<\/(?:html|body|head|title)>/iu.test(text));
+}
+
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+
+function decodeEntities(text: string): string {
+  return text.replace(/&(?:#(\d{1,6})|#x([0-9a-f]{1,5})|([a-z]{2,6}));/giu, (whole, dec: string | undefined, hex: string | undefined, name: string | undefined) => {
+    if (name) return ENTITIES[name.toLowerCase()] ?? whole;
+    const code = dec !== undefined ? Number(dec) : parseInt(hex!, 16);
+    return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : whole;
+  });
+}
+
+/** Tags, scripts, styles and comments out; what is left is what a reader would see. */
+function visibleText(html: string): string {
+  const stripped = html
+    .replace(/<!--[\s\S]*?(?:-->|$)/gu, ' ')
+    .replace(/<(script|style|noscript|template|head)\b[\s\S]*?(?:<\/\1\s*>|$)/giu, ' ')
+    .replace(/<[^>]*>?/gu, ' ');
+  return decodeEntities(stripped).replace(/\s+/gu, ' ').trim();
+}
+
+/**
+ * What a web page body says in words: `titled "..."` when it has a title,
+ * else the text a reader would see, else nothing. Redacted and cut like any
+ * other excerpt. Null when the body is not a web page.
+ */
+function htmlSummary(body: unknown): { titled?: string; said?: string } | null {
+  if (typeof body !== 'string' || !looksLikeHtml(body)) return null;
+  let safe: string;
+  try { const redacted = redactCredentials(body); safe = typeof redacted === 'string' ? redacted : body; } catch { return {}; }
+  const title = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/iu.exec(safe)?.[1];
+  const titled = title === undefined ? '' : bodyExcerpt(decodeEntities(title.replace(/<[^>]*>/gu, ' ')));
+  if (titled) return { titled };
+  const said = bodyExcerpt(visibleText(safe));
+  return said ? { said } : {};
+}
+
 /** The server's own words, quoted, so they are never read as Jarvis's. */
 function quoted(text: string): string {
   return `"${text.replaceAll('"', "'")}"`;
@@ -85,6 +129,11 @@ export function describeHttpFailure(failure: HttpFailure, request: { url: string
   const status = failure.status ?? 0;
   const reason = STATUS_CODES[status];
   const head = `The server answered ${status}${reason ? ` ${reason}` : ''}.`;
+  const page = htmlSummary(failure.body);
+  if (page) {
+    if (page.titled) return `${head} It sent a web page titled ${quoted(page.titled)}.`;
+    return page.said ? `${head} It sent a web page that said: ${quoted(page.said)}` : `${head} It sent a web page.`;
+  }
   const excerpt = bodyExcerpt(failure.body);
   return excerpt ? `${head} It said: ${quoted(excerpt)}` : head;
 }
