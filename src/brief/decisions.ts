@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { getDb } from '../vault/schema';
 import { approvalIntentFromContext, DASHBOARD_DECIDER, executionState } from '../authority/approval';
 import { applyApprovalDecision, applyExecutionResolution, heldApprovalMessage, type ApprovalDecisionDeps } from '../daemon/approval-decision';
-import { checkWorkResult, decideWorkItem, getWorkItem } from '../goals/work-items';
+import { checkWorkResult, decideWorkItem, getWorkItem, NEEDS_YOU_DONE_REF, NEEDS_YOU_NOT_DOING_REF, WorkItemError } from '../goals/work-items';
 import { DEFAULT_IDS } from '../workflows/db/index';
 import { getFlowInProject } from '../workflows/db/repos/flow';
 import { getFlowVersion } from '../workflows/db/repos/flow-version';
@@ -339,18 +339,25 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
     // guard checks this projection in that same write transaction, including
     // changes by legacy surfaces or another process. Never wrap tool execution.
     const authority = { ...this.authority, assertCurrent: validate };
-    if (finish) this.db.transaction(() => {
-      validate();
-      // The user's own words are the evidence of an explicit result check. Doing it
-      // is a passed check; not doing it is a failed one, which never counts as saved time.
-      checkWorkResult(item.workItemId!, { verdict: body.action === 'mark_done' ? 'passed' : 'failed', summary: body.reason,
-        evidence: [{ ref: 'dashboard:needs-you', description: body.reason }] });
-    }).immediate();
-    else if (intent) this.db.transaction(() => {
-      validate();
-      decideWorkItem(item.workItemId!, { outcome: body.action === 'accept_intent' ? 'accepted' : 'rejected', reason: body.reason });
-    }).immediate();
-    else if (body.action === 'approve_permission' || body.action === 'reject_permission') {
+    if (intent) {
+      try {
+        this.db.transaction(() => {
+          validate();
+          if (finish) {
+            // The user's own words are the evidence of an explicit result check. Doing it
+            // is a passed check; not doing it is a failed one, which never counts as saved time.
+            // Its ref keeps a choice not to do it apart from a failed attempt (next-action).
+            const done = body.action === 'mark_done';
+            checkWorkResult(item.workItemId!, { verdict: done ? 'passed' : 'failed', summary: body.reason,
+              evidence: [{ ref: done ? NEEDS_YOU_DONE_REF : NEEDS_YOU_NOT_DOING_REF, description: body.reason! }] });
+          } else decideWorkItem(item.workItemId!, { outcome: body.action === 'accept_intent' ? 'accepted' : 'rejected', reason: body.reason });
+        }).immediate();
+      } catch (e) {
+        // A refusal from the work item (such as a reason with no visible text) is the caller's to fix, not an unknown outcome.
+        if (e instanceof WorkItemError) throw new DecisionError(e.message, e.status, e.status === 409 ? 'revision_conflict' : 'invalid_request');
+        throw e;
+      }
+    } else if (body.action === 'approve_permission' || body.action === 'reject_permission') {
       const result = await applyApprovalDecision(body.action === 'approve_permission' ? 'approve' : 'deny', item.approval!.approvalId, DASHBOARD_DECIDER, authority);
       if (result.status === 'already_decided') throw new DecisionError('Decision already changed', 409, 'revision_conflict');
       // Pause holds and Kill stops (Q-08): the card stays pending and says why.

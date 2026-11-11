@@ -11,7 +11,7 @@ import { EmergencyController, setActiveEmergencyController } from '../authority/
 import { AuditTrail } from '../authority/audit';
 import { DeferredExecutor } from '../authority/deferred-executor';
 import type { ToolRegistry } from '../actions/tools/registry';
-import { createWorkItem, decideWorkItem, checkWorkResult, getWorkItem, setWorkBlocker } from '../goals/work-items';
+import { createWorkItem, decideWorkItem, checkWorkResult, getWorkItem, setWorkBlocker, NEEDS_YOU_DONE_REF, NEEDS_YOU_NOT_DOING_REF } from '../goals/work-items';
 import { createFlow } from '../workflows/db/repos/flow';
 import { createDraftVersion, lockVersion, getFlowVersion } from '../workflows/db/repos/flow-version';
 import { createFlowRun, updateRun, getFlowRun } from '../workflows/db/repos/flow-run';
@@ -73,13 +73,17 @@ test('an accepted manual step can be finished or dropped from the queue, and onl
   expect(item).toMatchObject({ state: 'ready', workStatus: 'ready' });
   expect(item.supportedActions).toEqual(['mark_done', 'not_doing', 'inspect']);
   await expect(queue.resolve(item.decisionId, { revision: item.revision, action: 'mark_done' })).rejects.toMatchObject({ status: 400 });
+  // Words with nothing visible in them are the caller's to fix, not an unknown outcome (a 503).
+  await expect(queue.resolve(item.decisionId, { revision: item.revision, action: 'mark_done', reason: '\u200e' })).rejects.toMatchObject({ status: 400, code: 'invalid_request' });
   expect(getWorkItem(done.id).status).toBe('ready');
   const finished = await queue.resolve(item.decisionId, { revision: item.revision, action: 'mark_done', reason: 'Sent it to Anna' });
   expect(finished).toMatchObject({ state: 'verified', workStatus: 'verified', supportedActions: ['inspect'] });
-  expect(getWorkItem(done.id).resultCheck).toMatchObject({ verdict: 'passed', checkedBy: 'user', summary: 'Sent it to Anna' });
+  expect(getWorkItem(done.id).resultCheck).toMatchObject({ verdict: 'passed', checkedBy: 'user', summary: 'Sent it to Anna',
+    evidence: [{ ref: NEEDS_YOU_DONE_REF, description: 'Sent it to Anna' }] });
   const other = queue.get(`work:${dropped.id}`);
   await queue.resolve(other.decisionId, { revision: other.revision, action: 'not_doing', reason: 'Not worth it' });
-  expect(getWorkItem(dropped.id)).toMatchObject({ status: 'failed', resultCheck: { verdict: 'failed' } });
+  // Not doing it never counts as done, and its ref keeps it apart from a failed attempt.
+  expect(getWorkItem(dropped.id)).toMatchObject({ status: 'failed', resultCheck: { verdict: 'failed', evidence: [{ ref: NEEDS_YOU_NOT_DOING_REF }] } });
   expect((await read()).items).toHaveLength(0);
 });
 

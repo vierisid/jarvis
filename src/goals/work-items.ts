@@ -39,6 +39,13 @@ export type WorkItem = {
   status: 'proposed' | 'rejected' | 'ready' | 'running' | 'blocked' | 'needs_check' | 'verified' | 'failed';
   createdAt: number; updatedAt: number;
 };
+/**
+ * The evidence ref of a result the founder gave in Needs you: they did it, or
+ * chose not to do it. Not doing it is a failed check, so it never counts as an
+ * outcome, but it is a decision, not a failed attempt, and reads as one.
+ */
+export const NEEDS_YOU_DONE_REF = 'dashboard:needs-you:done';
+export const NEEDS_YOU_NOT_DOING_REF = 'dashboard:needs-you:not-doing';
 
 export class WorkItemError extends Error {
   constructor(message: string, public status = 400) { super(message); }
