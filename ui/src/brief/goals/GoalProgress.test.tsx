@@ -8,7 +8,7 @@ import type { GoalsController } from "./controller";
 let React: typeof import("react"), createRoot: typeof import("react-dom/client").createRoot;
 let Room: typeof import("./GoalsRoom").GoalsRoom, Controller: typeof import("./controller").GoalsController;
 let host: HTMLDivElement, root: Root, controller: GoalsController, shell: BriefShellPort;
-let goals: any[], calls: Array<{ path: string; body: any }>, refused: Response | null;
+let goals: any[], calls: Array<{ path: string; body: any }>, refused: Response | null, committed: Set<string>, loseReply: boolean;
 const wait = () => new Promise((resolve) => setTimeout(resolve, 10));
 
 const goal = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -23,9 +23,21 @@ function respond(body: unknown, status = 200) {
 }
 const server = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const path = String(input), body = init?.body ? JSON.parse(String(init.body)) : null;
-  if (init?.method !== "POST") return respond({ state: "ready", data: structuredClone(goals) });
+  if (init?.method !== "POST") {
+    const asked = new URL(path, "http://host").searchParams.get("requestId");
+    if (asked !== null) return respond({ receipt: committed.has(asked) ? { requestId: asked } : null });
+    return respond({ state: "ready", data: structuredClone(goals) });
+  }
   calls.push({ path, body });
   if (refused) return refused.clone();
+  if (body?.requestId && committed.has(body.requestId)) return respond({ code: "MEASUREMENT_CONFLICT", error: "Request ID already has a different measurement" }, 409);
+  const reply = await commit(path, body);
+  if (reply.ok && body?.requestId) committed.add(body.requestId);
+  // The server commits, then the reply never arrives.
+  if (loseReply) { loseReply = false; throw new TypeError("network"); }
+  return reply;
+}) as typeof fetch;
+async function commit(path: string, body: any): Promise<Response> {
   const target = goals.find((g) => path.includes(`/${g.goalId}/`) || path.includes(`/${g.goalId}`));
   if (!target) return respond({ error: "missing" }, 404);
   if (path.endsWith("/status")) { target.status = body.status; return respond(target); }
@@ -48,7 +60,7 @@ const server = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return respond({ ok: true });
   }
   return respond({}, 404);
-}) as typeof fetch;
+}
 
 beforeAll(async () => {
   GlobalRegistrator.register();
@@ -60,7 +72,7 @@ beforeAll(async () => {
 });
 afterAll(() => GlobalRegistrator.unregister());
 beforeEach(async () => {
-  calls = []; refused = null; goals = [];
+  calls = []; refused = null; goals = []; committed = new Set(); loseReply = false;
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   shell = { mode: "live", theme: "light", sidebar: "expanded", chatOpen: false, setTheme() {}, setSidebar() {}, setChatOpen() {},
     route: { room: "goals", selection: {} }, navigate: (route) => { shell = { ...shell, route }; } } as BriefShellPort;
@@ -176,4 +188,42 @@ test("a refused save shows plain words, never the server's text", async () => {
   await type("New value", "abc");
   await submit();
   expect(host.querySelector('[role="alert"]')?.textContent).toBe("Enter the new value as a number.");
+});
+
+test("a save whose reply was lost is recovered from its receipt, and a retry does not count twice", async () => {
+  goals = [goal("sales", { measurementRevision: 1, measurementDefinition: { unit: "euros", baseline: 0, target: 1000, basis: "reported" } })];
+  await open();
+  await click("Log progress");
+  await type("New value", "250");
+  loseReply = true;
+  await submit();
+  expect(calls).toHaveLength(1);
+  expect(host.textContent).toContain("Saved 250 euros.");
+  expect(host.textContent).toContain("250 / 1,000 euros");
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+test("a measure is only offered for change where the server can keep its history", async () => {
+  goals = [
+    goal("sales", { measurementRevision: 2, measurementDefinition: { unit: "euros", baseline: 0, target: 1000, basis: "reported" },
+      measurement: reading(null, 300, 1000, "euros"), progress: { value: 0.3, basis: "measurement", rollup: "independent" } }),
+  ];
+  await open();
+  expect(button("Log progress")).toBeTruthy();
+  // A typed measure with logged values cannot be redefined without a new value.
+  expect(button("Change how it is measured") === undefined).toBe(true);
+});
+
+test("a counted goal stays counted, keeps what it counts once it has entries, and keeps its starting count", async () => {
+  goals = [goal("pilots", { counted: 1, measurementRevision: 3, measurementDefinition: { unit: "pilots", baseline: 2, target: 6, basis: "observations" },
+    measurement: reading(null, 3, 6, "pilots"), progress: { value: 0.25, basis: "measurement", rollup: "independent" } })];
+  await open();
+  await click("Change how it is measured");
+  expect(host.querySelector("form")!.querySelector("select") === null).toBe(true);
+  const unit = [...host.querySelectorAll("input")].find((i) => host.querySelector(`label[for="${i.id}"]`)?.textContent === "What you measure")!;
+  expect(unit?.disabled).toBe(true);
+  await type("Target", "8");
+  await submit();
+  expect(calls[0]!.path).toBe("/api/brief/goals/pilots/measurement/counted");
+  expect(calls[0]!.body).toMatchObject({ revision: 3, definition: { unit: "pilots", baseline: 2, target: 8 } });
 });

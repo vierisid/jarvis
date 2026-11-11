@@ -130,30 +130,37 @@ function EntryForm({ goal, controller, onDone, onCancel }: FormProps) {
 
 function DefineForm({ goal, controller, onDone, onCancel }: FormProps) {
   const existing = goal.measurementDefinition;
-  const [kind, setKind] = useState<"number" | "count">(measureKind(goal) === "count" ? "count" : "number");
+  // The server keeps a counted goal counted, and keeps what it counts once it has entries.
+  const counted = measureKind(goal) === "count", unitLocked = counted && !!goal.measurement;
+  const [kind, setKind] = useState<"number" | "count">(counted ? "count" : "number");
   const [unit, setUnit] = useState(existing?.unit ?? "");
   const [baseline, setBaseline] = useState(existing ? String(existing.baseline) : "0");
   const [target, setTarget] = useState(existing ? String(existing.target) : "");
   const attempt = useAttempt();
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    const label = unit.trim(), from = kind === "count" ? 0 : Number(baseline), to = Number(target);
+    // A counted goal keeps the starting count it was defined with; this form has no field for it.
+    const label = unit.trim(), from = kind === "count" ? (counted ? existing!.baseline : 0) : Number(baseline), to = Number(target);
     if (!label || label.length > UNIT_MAX || hasControl(label)) return attempt.setError("Say what you measure, in a few words (for example: customers, euros).");
     if (target.trim() === "" || !Number.isFinite(to) || (kind === "number" && (baseline.trim() === "" || !Number.isFinite(from))))
       return attempt.setError("Enter the numbers you start from and aim for.");
-    if (kind === "count" && (!Number.isInteger(to) || to < 1 || to > COUNT_MAX)) return attempt.setError(`The target must be a whole number from 1 to ${COUNT_MAX}.`);
+    if (kind === "count" && (!Number.isInteger(to) || to <= from || to < 1 || to > COUNT_MAX)) return attempt.setError(`The target must be a whole number from ${Math.max(1, from + 1)} to ${COUNT_MAX}.`);
     if (kind === "number" && from === to) return attempt.setError("The target must differ from where you start.");
     void attempt.save((requestId) => controller.defineMeasure(goal, { requestId, kind, unit: label, baseline: from, target: to }),
       "Saved. You can log progress now.", onDone);
   };
   return (
     <form onSubmit={submit} noValidate>
-      <BriefSelect label="How do you measure it?" value={kind} disabled={attempt.busy}
-        onChange={(e) => { setKind(e.target.value as "number" | "count"); attempt.edited(); }}>
-        <option value="number">A number I update</option>
-        <option value="count">A count of things</option>
-      </BriefSelect>
-      <BriefInput label="What you measure" value={unit} maxLength={UNIT_MAX} disabled={attempt.busy}
+      {!counted && (
+        <BriefSelect label="How do you measure it?" value={kind} disabled={attempt.busy}
+          hint={kind === "count" ? "A count cannot be switched back to a number later." : undefined}
+          onChange={(e) => { setKind(e.target.value as "number" | "count"); attempt.edited(); }}>
+          <option value="number">A number I update</option>
+          <option value="count">A count of things</option>
+        </BriefSelect>
+      )}
+      <BriefInput label="What you measure" value={unit} maxLength={UNIT_MAX} disabled={attempt.busy || unitLocked}
+        hint={unitLocked ? "This stays the same once the count has entries." : undefined}
         placeholder={kind === "count" ? "customers" : "euros"} onChange={(e) => { setUnit(e.target.value); attempt.edited(); }} />
       {kind === "number" && (
         <BriefInput label="Starting value" inputMode="decimal" value={baseline} disabled={attempt.busy}

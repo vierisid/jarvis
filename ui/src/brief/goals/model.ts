@@ -173,6 +173,8 @@ export function nextGoalRoute(
 
 export const GOAL_CONFLICT_TEXT = "This goal changed since you opened it. Refresh and try again.";
 export const GOAL_SAVE_FAILED_TEXT = "That did not save. Try again.";
+export const GOAL_COUNTED_TEXT = "This goal is counted from its entries. Add an entry instead.";
+export const GOAL_MEASURE_LOCKED_TEXT = "This goal already has logged values, so how it is measured cannot change here.";
 /** How a goal is measured, in the words the room uses. */
 export function measureKind(goal: GoalDatum): "none" | "number" | "count" {
   const definition = goal.measurementDefinition;

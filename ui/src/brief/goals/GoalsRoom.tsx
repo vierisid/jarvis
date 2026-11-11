@@ -187,7 +187,8 @@ function ConnectedGoals({
         >
           {kind === "none" ? "Set how to measure this" : "Log progress"}
         </BriefButton>
-        {kind !== "none" && (
+        {/* A typed measure with logged values cannot be redefined without a new value; counted ones keep their entries. */}
+        {(kind === "count" || (kind === "number" && !goal.measurement)) && (
           <BriefButton
             variant="text"
             size="sm"

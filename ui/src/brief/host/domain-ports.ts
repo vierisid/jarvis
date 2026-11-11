@@ -1,5 +1,5 @@
 import type { GoalsPort, GoalPath, GoalDatum, GoalWrite, GoalWritesPort } from '../goals/model';
-import { GOAL_CONFLICT_TEXT, GOAL_SAVE_FAILED_TEXT } from '../goals/model';
+import { GOAL_CONFLICT_TEXT, GOAL_COUNTED_TEXT, GOAL_MEASURE_LOCKED_TEXT, GOAL_SAVE_FAILED_TEXT } from '../goals/model';
 import type { OpportunitiesPort, FinishedOpportunity } from '../opportunities/model';
 import type { DecisionsPort, DecisionView } from '../decisions/model';
 import type { MemoryPort } from '../memory/stream/model';
@@ -29,24 +29,34 @@ export function createDomainPorts(scopeId: string, http: HostTransport, storage:
     return result;
   }
   /** Plain words for a refused goal write. The server's own text names fields and revisions, so it is never shown. */
-  function refusal(status: number, error: unknown): GoalWrite {
+  function refusal(status: number, error: unknown, defining = false): GoalWrite {
     const reason = typeof error === 'string' ? error : '';
     if (status === 409) {
       if (/already counted/.test(reason)) return { ok: false, message: 'That is already counted. Use a different name.' };
-      if (/later measurement time/.test(reason)) return { ok: false, message: 'Pick a time after your last update.' };
+      if (/counted from its cited entries/.test(reason)) return { ok: false, message: GOAL_COUNTED_TEXT };
+      if (/keeps its unit once it has entries/.test(reason)) return { ok: false, message: 'A count keeps what it counts once it has entries.' };
+      // A typed measure with logged values only changes together with a new value.
+      if (/later measurement time/.test(reason)) return { ok: false, message: defining ? GOAL_MEASURE_LOCKED_TEXT : 'Pick a time after your last update.' };
       return { ok: false, message: GOAL_CONFLICT_TEXT };
     }
-    if (/title: must be/.test(reason)) return { ok: false, message: 'Titles can be up to 200 characters. Shorten it and try again.' };
     if (status === 400) return { ok: false, message: 'That did not save. Check what you entered and try again.' };
     return { ok: false, message: GOAL_SAVE_FAILED_TEXT };
   }
-  async function send(path: string, body: unknown): Promise<GoalWrite> {
+  /** Whether the server already holds this request, so a lost reply or a retry is not reported as a failure. */
+  async function saved(receipt: string, requestId: string): Promise<boolean> {
+    try { return !!(await http.json(`${receipt}?requestId=${encodeURIComponent(requestId)}`))?.receipt; }
+    catch { return false; }
+  }
+  async function send(path: string, body: unknown, recover?: { receipt: string; requestId: string; defining?: boolean }): Promise<GoalWrite> {
+    let result: GoalWrite;
     try {
       const response = await http.request(path, post(body));
       if (response.ok) return { ok: true };
       const reply = await response.json().catch(() => null) as { error?: unknown } | null;
-      return refusal(response.status, reply?.error);
-    } catch { return { ok: false, message: GOAL_SAVE_FAILED_TEXT }; }
+      result = refusal(response.status, reply?.error, recover?.defining);
+      if (response.status === 400) return result;
+    } catch { result = { ok: false, message: GOAL_SAVE_FAILED_TEXT }; }
+    return recover && await saved(recover.receipt, recover.requestId) ? { ok: true } : result;
   }
   const goalPath = (goal: GoalDatum) => `/api/brief/goals/${encodeURIComponent(goal.goalId)}`;
   /** A person typing a number is the source: one evidence version per request, so no two saves collide. */
@@ -57,20 +67,24 @@ export function createDomainPorts(scopeId: string, http: HostTransport, storage:
       if (!definition) return Promise.resolve({ ok: false, message: GOAL_SAVE_FAILED_TEXT });
       remember('goal-measurement', { requestId });
       return send(`${goalPath(goal)}/measurement`, { requestId, revision: goal.measurementRevision ?? 0,
-        measurement: { unit: definition.unit, baseline: definition.baseline, target: definition.target, value, measuredAt, evidence: typed(requestId) } });
+        measurement: { unit: definition.unit, baseline: definition.baseline, target: definition.target, value, measuredAt, evidence: typed(requestId) } },
+        { receipt: `${goalPath(goal)}/measurement`, requestId });
     },
     addEntry(goal, { requestId, note, link }) {
       remember('goal-entry', { requestId });
       return send(`${goalPath(goal)}/observations`, { requestId,
-        entry: { kind: 'counted', subject: note, observedAt: Date.now(), source: { id: link || typed(requestId).id, revision: requestId }, corrects: null } });
+        entry: { kind: 'counted', subject: note, observedAt: Date.now(), source: { id: link || typed(requestId).id, revision: requestId }, corrects: null } },
+        { receipt: `${goalPath(goal)}/observations`, requestId });
     },
     defineMeasure(goal, { requestId, kind, unit, baseline, target }) {
       remember('goal-define', { requestId });
       const revision = goal.measurementRevision ?? 0;
+      // A counted definition's receipt is recovered like any measurement's.
+      const recover = { receipt: `${goalPath(goal)}/measurement`, requestId, defining: true };
       return kind === 'count'
-        ? send(`${goalPath(goal)}/measurement/counted`, { requestId, revision, definition: { unit, baseline, target } })
+        ? send(`${goalPath(goal)}/measurement/counted`, { requestId, revision, definition: { unit, baseline, target } }, recover)
         : send(`${goalPath(goal)}/measurement`, { requestId, revision,
-          measurement: { unit, baseline, target, value: null, measuredAt: null, evidence: null } });
+          measurement: { unit, baseline, target, value: null, measuredAt: null, evidence: null } }, recover);
     },
     activate: goal => send(`/api/goals/${encodeURIComponent(goal.goalId)}/status`, { status: 'active' }),
   };
