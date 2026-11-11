@@ -336,11 +336,16 @@ test('run detail says who started the run and names steps as the workflow does',
   expect(triggerOf('dashboard')).toBe('Started by you');
   expect(triggerOf('trigger:webhook')).toBe('Webhook');
   expect(triggerOf('trigger:cron')).toBe('Schedule');
+  expect(triggerOf('trigger:engine')).toBe('App trigger');
+  expect(triggerOf('dashboard:test-from-here')).toBe('Started by you');
+  expect(triggerOf('assistant:manage_workflow')).toBe('Started by Jarvis');
+  expect(triggerOf('workflow:run_workflow')).toBe('Another workflow');
+  expect(triggerOf('work_item:w1:decision:d1')).toBe('Accepted work proposal');
   expect(triggerOf('something:else')).toBe('Unknown');
   // No label and no trigger: only a person can have started it.
   expect(triggerOf(undefined)).toBe('Started by you');
   const piece = createDraftVersion({ flowId, displayName: 'Piece', trigger: { name: 'trigger', type: 'PIECE_TRIGGER', displayName: 'Catch hook', settings: {},
-    nextAction: { name: 'step_1', type: 'CODE', displayName: 'Tidy the names', settings: { sourceCode: { code: 'x', packageJson: '{}' } } } } });
+    nextAction: { name: 'step_1', type: 'CODE', displayName: 'Tidy\u202E the\n  names\u202C', settings: { sourceCode: { code: 'x', packageJson: '{}' } } } } });
   const locked = lockVersion(piece.id).id;
   const r = createFlowRun({ flowId, flowVersionId: locked }); updateRun(r.id, { status: 'SUCCEEDED', steps: { trigger: { status: 'SUCCEEDED' }, step_1: { status: 'SUCCEEDED' }, gone: { status: 'SUCCEEDED' } } });
   const d = service.detail(flowId, r.id);

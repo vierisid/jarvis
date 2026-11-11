@@ -6,6 +6,7 @@ import { assertCodeStepsAllowed } from '../workflows/db/repos/flow-code-steps';
 import { assertVersionReady } from '../workflows/db/repos/flow-readiness';
 import { getFlowRun } from '../workflows/db/repos/flow-run';
 import { runFailure } from '../workflows/runtime/run-failure';
+import { forCard } from '../util/card-text';
 import { getRunRecovery } from '../workflows/runtime/recovery';
 import { bindingDrift, runConnectionBindingViews, type BindingDrift } from '../workflows/db/repos/binding-pins';
 import { boundedJson, canonicalManualPayload, inspectionId, inspectionValue, INSPECTION_LIMITS as LIMIT,
@@ -25,21 +26,31 @@ const states: Record<string, InspectionRunStatus> = { QUEUED: 'queued', RUNNING:
 const status = (v: string): InspectionRunStatus => Object.hasOwn(states, v) ? states[v]! : (['FAILED','TIMEOUT','INTERNAL_ERROR','QUOTA_EXCEEDED','MEMORY_LIMIT_EXCEEDED','SCHEDULE_FAILURE'].includes(v) ? 'failed' : 'uncertain');
 /** Who started the run, in words a person reads. `triggeredBy` is the run's own record (every writer sets a
  * short tag; see POST /:id/run). A run with no tag falls back to the workflow's trigger: one with no
- * trigger can only be started by hand. Anything else is "Unknown", never a guess. */
+ * trigger can only be started by hand. Anything else is "Unknown", never a guess. Only the kind of
+ * starter is shown: never a person, a guest or a webhook sender. */
 function runTriggerLabel(triggeredBy: string | null, trigger: Record<string, unknown> | undefined): string {
   if (triggeredBy === 'trigger:cron') return 'Schedule';
   if (triggeredBy === 'trigger:webhook') return 'Webhook';
   if (triggeredBy === 'trigger:event') return 'Jarvis event';
-  if (triggeredBy && ['brief_manual', 'dashboard', 'editor:run'].includes(triggeredBy)) return 'Started by you';
+  if (triggeredBy === 'trigger:engine') return 'App trigger';
+  if (triggeredBy && ['brief_manual', 'dashboard', 'dashboard:test-from-here', 'editor:run'].includes(triggeredBy)) return 'Started by you';
   if (triggeredBy?.startsWith('assistant:')) return 'Started by Jarvis';
+  if (triggeredBy === 'workflow:run_workflow') return 'Another workflow';
+  if (triggeredBy?.startsWith('work_item:')) return 'Accepted work proposal';
   if (!triggeredBy && trigger?.type === 'EMPTY') return 'Started by you';
   return 'Unknown';
 }
 const STEP_TITLE_MAX = 120;
-/** The workflow's own name for a step, from the version the run used. Not run data, so it is not redacted. */
-function stepDisplayName(nodes: Record<string, unknown>[] | null, name: string): string | null {
-  const title = nodes?.find(n => n.name === name)?.displayName;
-  return typeof title === 'string' && title.trim() ? title.trim().slice(0, STEP_TITLE_MAX) : null;
+/** The workflow's own name for each step, from the version the run used. Not run data, so it is not
+ * redacted, but it is free text (a drafted workflow's names can come from the model): `forCard` drops
+ * invisible and bidi control characters and caps it, as for every other label a person reads. */
+function stepDisplayNames(nodes: Record<string, unknown>[] | null): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const n of nodes ?? []) {
+    const title = typeof n.displayName === 'string' ? forCard(n.displayName, STEP_TITLE_MAX) : '';
+    if (title && typeof n.name === 'string') names.set(n.name, title);
+  }
+  return names;
 }
 const runColumns = 'id, flow_id, flow_version_id, project_id, status, environment, created, start_time, finish_time, updated';
 /** One short label for Runs, Context and the start receipt (#1100). The full ID
@@ -313,7 +324,7 @@ export class WorkflowContext {
   }
   private detailRow(r: RunRow, nodes: Record<string, unknown>[] | null, context: InspectionContext): InspectionRunDetail {
     const row = this.db.query<{ steps: string | null }, [string]>('SELECT substr(steps,1,4000001) AS steps FROM flow_run WHERE id=?').get(r.id)!;
-    const steps = boundedJson(row.steps), entries: Array<[string, unknown, string, string]> = [];
+    const steps = boundedJson(row.steps), entries: Array<[string, unknown, string, string]> = [], titles = stepDisplayNames(nodes);
     if (steps !== undefined && !object(steps)) throw new WorkflowInspectionError('record_unavailable', 503);
     const pending: Array<{ path: string; label: string; value: unknown }> = [{ path: '', label: '', value: steps }];
     while (pending.length) {
@@ -327,7 +338,7 @@ export class WorkflowContext {
           && typeof raw.output.type === 'string' && typeof raw.output.status === 'string' ? raw.output : raw;
         const path = opaque(JSON.stringify([part.path, name]));
         const label = (part.label + safeName(name, 'unknown')).slice(0, 450);
-        entries.push([label, step, path, (part.label === '' && stepDisplayName(nodes, name)) || `Step ${label}`]); this.boundedRows(entries);
+        entries.push([label, step, path, (part.label === '' && titles.get(name)) || `Step ${label}`]); this.boundedRows(entries);
         if (object(step) && step.type === 'LOOP_ON_ITEMS' && object(step.output) && Array.isArray(step.output.iterations)) {
           if (step.output.iterations.length + pending.length > LIMIT.rows) throw new WorkflowInspectionError('inspection_capacity', 413);
           step.output.iterations.forEach((value, i) => pending.push({ path: opaque(JSON.stringify([path, i])), label: label + `-iteration-${i + 1}-`, value }));
