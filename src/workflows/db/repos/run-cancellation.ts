@@ -22,6 +22,17 @@ export function getRunCancellation(runId: string): RunCancellation | null {
   } : null;
 }
 
+/** The outcome of an approved effect whose connection changed after the card was raised. */
+export const CONNECTION_CHANGED_CODE = 'CONNECTION_CHANGED_AFTER_REQUEST';
+const CONNECTION_CHANGED_MESSAGE = 'The connection changed after you were asked, so this was not sent';
+
+/** Whether this run was refused a connection it had already used (Q-05): its credential was replaced during the run. */
+export function runWasRefusedConnection(runId: string): boolean {
+  return getWorkflowDb().query<{ record: string }, [string]>(
+    'SELECT record FROM workflow_run_connection_binding WHERE run_id = ?').all(runId)
+    .some(row => !!(JSON.parse(row.record) as { refusal?: unknown }).refusal);
+}
+
 /**
  * Caller holds the transaction and has established that the run cannot
  * continue. Returns the ids of the cards it closed, so a caller that can reach
@@ -30,6 +41,9 @@ export function getRunCancellation(runId: string): RunCancellation | null {
 function retireRunWaits(runId: string, ts: number, canceled: boolean): string[] {
   const db = getWorkflowDb();
   const closed: string[] = [];
+  // The credential behind a connection was replaced after the run had used it
+  // (Q-05), so nothing that needed it was sent.
+  const connectionRefused = !canceled && runWasRefusedConnection(runId);
   // Pending effects provably never dispatched. Leave in-flight and final
   // effects alone: cleanup cannot certify rollback or replace their receipts.
   for (const effect of listWorkflowEffects(runId)) {
@@ -44,6 +58,12 @@ function retireRunWaits(runId: string, ts: number, canceled: boolean): string[] 
       effect.error = canceled ? 'Workflow canceled between slices; earlier slices ran' : 'Workflow ended between slices; earlier slices ran';
       effect.outcome = { status: 'blocked', code: canceled ? 'WORKFLOW_CANCELED' : 'WORKFLOW_FINISHED',
         message: effect.error, effect: 'may_have_occurred' };
+    } else if (!canceled && effect.approvalId && connectionRefused) {
+      // Approved, then the run could not load its connection: the credential was
+      // replaced after the card was raised, so nothing was handed out or sent.
+      effect.status = 'blocked';
+      effect.error = CONNECTION_CHANGED_MESSAGE;
+      effect.outcome = { status: 'blocked', code: CONNECTION_CHANGED_CODE, message: effect.error, effect: 'not_started' };
     } else {
       effect.status = 'blocked';
       effect.error = canceled ? 'Workflow canceled before dispatch' : 'Workflow ended before dispatch';

@@ -23,7 +23,7 @@ import { tracksPieceCompletion } from '../runtime/piece-effects';
 import type { Job } from "../db/repos/job-queue";
 import type { JobHandler } from "../queue/worker";
 import { ensureRunExecutionConfig, getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
-import { cancelFlowRun, getRunCancellation } from "../db/repos/run-cancellation";
+import { cancelFlowRun, getRunCancellation, retireTerminalRunWaits, runWasRefusedConnection } from "../db/repos/run-cancellation";
 import { assertRunIngredientsReady, WorkflowReadinessError } from "../db/repos/flow-readiness";
 import { watchRunCancellation, withRunCancellation } from "../runtime/cancellation";
 import { signalRunEnded } from "../runtime/cancellation-signals";
@@ -155,6 +155,11 @@ export interface CreateRunFlowHandlerOptions {
    * after its final state is written (#1080). A throw is logged, never the run's.
    */
   onRunEnded?: (runId: string) => void;
+  /**
+   * Called for each approval card closed when a run ended with an effect that
+   * never dispatched, so the surfaces showing it update at once (G-6).
+   */
+  onCardClosed?: (approvalId: string) => void;
 }
 
 /**
@@ -423,6 +428,13 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
           // A run that finished on its own releases the background tasks it
           // started (#1018); a stopped one already cancelled them.
           if (ended.status !== "STOPPED") signalRunEnded(runId);
+          // A run refused a connection it had already used (the credential was
+          // replaced after an approval) never sent what was approved. Its effect
+          // settles now as not started, not at the next sweep, so the card and
+          // the effect do not read pending meanwhile (G-6). Any other failed run
+          // is left to that sweep.
+          try { if (ended.status !== "STOPPED" && runWasRefusedConnection(runId)) retireTerminalRunWaits(runId).forEach(id => opts.onCardClosed?.(id)); }
+          catch (retireError) { console.warn(`[run-flow ${runId}] could not settle its undispatched effects: ${(retireError as Error).message}`); }
           opts.onRunEnded?.(runId);
         }
       } catch (hookError) { console.error(`[run-flow ${runId}] run-ended hook failed:`, hookError); }

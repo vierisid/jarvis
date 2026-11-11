@@ -106,6 +106,17 @@ resolver found it is refused the same way rather than handed out unbound.
 Re-enabling the flow accepts a change for later runs, never for a run already
 under way.
 
+An approval granted before a connection's credential was replaced does not
+send with the new one. The step cannot load the connection, the run fails, and
+the moment it ends the step's effect settles as blocked and not started
+(`CONNECTION_CHANGED_AFTER_REQUEST`), its card closes, and the run says the
+connection changed after the request and nothing was sent. An approved effect
+of any other failed run that was never dispatched is settled by the periodic
+sweep, as `WORKFLOW_FINISHED`. An effect already dispatching is never settled
+either way: it may have gone out, so it stays uncertain for a person to check.
+Saving a connection with the same credential again is not a replacement and
+changes nothing, before or after a request.
+
 The engine reports any refused fetch as a bare loading error, so the reason is
 shown where people look: `GET /api/workflow-runs/:runId` (`connectionBindings`:
 the connection, its kind and any refusal, never a grant's fingerprint) and
