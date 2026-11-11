@@ -923,14 +923,17 @@ export class WebSocketService implements Service {
   /**
    * Dashboard delivery only. Governed callers authorize external recipients
    * separately. Returns how many dashboard sockets accepted it (0: none open).
+   * `storedId` is the id of the saved copy, so a tab shows it once.
    */
-  broadcastNotificationToDashboard(text: string, priority: 'urgent' | 'normal' | 'low'): number {
+  broadcastNotificationToDashboard(text: string, priority: 'urgent' | 'normal' | 'low', storedId?: string): number {
     const message: WSMessage = {
-      id: crypto.randomUUID(),
+      id: storedId ?? crypto.randomUUID(),
       type: 'chat',
       payload: {
         text,
         source: 'proactive',
+        // Also in the unread list: the dashboard marks it read there too.
+        ...(storedId ? { stored: true } : {}),
       },
       priority,
       timestamp: Date.now(),

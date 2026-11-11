@@ -1832,8 +1832,18 @@ export class BrowserController {
    * "Escape", "Tab", "ArrowDown", "Ctrl+K", "Shift+Enter". Keys go to the
    * currently focused element.
    */
-  async pressKey(combo: string): Promise<string> {
+  async pressKey(combo: string, reviewedLoaderId?: string): Promise<string> {
     await this.ensureConnected();
+    // A key press reviewed on one document (#1314) is sent only while the
+    // live page is still that document: read now, not from the last snapshot.
+    if (reviewedLoaderId !== undefined) {
+      let now: { loaderId: string };
+      try { now = await this.readFrameState(); }
+      catch { return browserActionFailure('Error: Could not confirm the browser is still on the page this key press was reviewed on, so nothing was done.'); }
+      if (!reviewedLoaderId || now.loaderId !== reviewedLoaderId) {
+        return browserActionFailure('Error: The browser is no longer on the page this key press was reviewed on, so nothing was done. Start a new run and review the current page.');
+      }
+    }
 
     const parsed = parseKeyCombo(combo);
     if (!parsed) {
@@ -2419,15 +2429,23 @@ export class BrowserController {
    * message names something the user can act on, and the alternative is
    * executing a click whose id now means a different element.
    */
+  /** The document the current element map came from, for a guard to carry (#1314). */
+  reviewedLoaderId(): string {
+    return this.elementDoc.loaderId;
+  }
+
   captureApprovalGuard(
     allowInitialConnection = false,
-    opts: { bindDocument?: boolean } = {},
+    opts: { bindDocument?: boolean; bindLoader?: boolean } = {},
   ): () => boolean {
     const epoch = this.approvalEpoch;
     const connected = this._connected;
+    // `bindLoader` (#1314) binds the document alone, not the id map: for a
+    // call that addresses no element (a workflow key press), so another
+    // snapshot of the same page does not retire it, while a navigation does.
     const surface = opts.bindDocument
-      ? { loaderId: this.elementDoc.loaderId, gen: this.snapshotGen }
-      : null;
+      ? { loaderId: this.elementDoc.loaderId, gen: this.snapshotGen as number | null }
+      : opts.bindLoader ? { loaderId: this.elementDoc.loaderId, gen: null } : null;
     // AN EMPTY SURFACE IS NOT A SURFACE, and the same rule this change puts in
     // `assertSamePage` and `documentMovedReason` applies to the thing that
     // CAPTURES one. Reachable in two ordinary calls: snapshot, then
@@ -2442,7 +2460,7 @@ export class BrowserController {
         ? this._connected && this.cdp.isOpen && !!this.requestGuard?.isOpen
         : allowInitialConnection && !this._connected;
       if (!live) return false;
-      if (surface && (surface.loaderId !== this.elementDoc.loaderId || surface.gen !== this.snapshotGen)) {
+      if (surface && (surface.loaderId !== this.elementDoc.loaderId || (surface.gen !== null && surface.gen !== this.snapshotGen))) {
         return false;
       }
       return true;

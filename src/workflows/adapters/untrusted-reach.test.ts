@@ -51,7 +51,10 @@ import {
   BOUNDED_TOOL_NAMES,
   GATED_TOOL_NAMES,
   OPAQUE_TOOL_NAMES,
+  toolEffectCapability,
 } from '../runtime/effect-capabilities.ts';
+import { ActionOutcomeError } from '../../actions/action-outcome.ts';
+import { WORKFLOW_REVIEWED_UI_TOOLS } from '../runtime/workflow-ui-tools.ts';
 import { isUntrustedSourceTool, markUntrustedToolResult } from '../../roles/untrusted.ts';
 import { buildProductionRegistry } from '../../actions/tools/production-registry.ts';
 import { JarvisToolRegistryAdapter } from './tool-registry.ts';
@@ -110,6 +113,19 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
   desktop_find_element: true,
   desktop_list_windows: true,
   run_skill: true,
+  // The reviewed computer actions (#1314): each pauses for a dashboard click
+  // under a live guard, and their results are untrusted sources. A DIRECT
+  // step's result is framed (`frameComputerStepResult`, owner decision on
+  // #1314): the #573 byte-exact rule does not cover the computer.
+  browser_navigate: true,
+  browser_click: true,
+  browser_type: true,
+  browser_press_key: true,
+  browser_hover: true,
+  browser_scroll: true,
+  desktop_launch_app: true,
+  desktop_focus_window: true,
+  desktop_click: true,
   // Not untrusted sources. capture_screen and desktop_screenshot taint a chat
   // turn but are not framed even there, so no framing decision reaches them.
   capture_screen: false,
@@ -356,8 +372,31 @@ const REVIEWED_STEP_OUTPUT_READERS = [
 
 describe('#573 premise 1: the reachable tool set is closed and known', () => {
   test('the reachable set is exactly the reviewed table', () => {
-    const reachable = [...BOUNDED_TOOL_NAMES, ...GATED_TOOL_NAMES].sort();
+    const reachable = [...BOUNDED_TOOL_NAMES, ...GATED_TOOL_NAMES, ...WORKFLOW_REVIEWED_UI_TOOLS].sort();
     expect(reachable).toEqual(Object.keys(REVIEWED_REACHABLE).sort());
+  });
+
+  /**
+   * Reachability MEASURED, not inferred from set membership (#1314 review M4):
+   * every tool in the production registry is put to the direct-step
+   * admission, `toolEffectCapability`, and the ones it admits are the
+   * reachable set. Set membership said "opaque, so unreachable" while the
+   * live-review branch admitted nine UI actions ahead of the opaque refusal.
+   * `run_skill` needs a skill to resolve, so a refusal that is not one of the
+   * two typed "unsupported" answers still counts as reachable.
+   */
+  test('the direct-step admission admits exactly the reviewed table', async () => {
+    const { tools } = await buildProductionRegistry();
+    const admitted: string[] = [];
+    for (const tool of tools) {
+      try { toolEffectCapability(tool, {}); admitted.push(tool.name); }
+      catch (error) {
+        const unsupported = (error instanceof ActionOutcomeError && error.outcome.code === 'WORKFLOW_TOOL_UNSUPPORTED')
+          || /no declared Authority action/.test(String(error));
+        if (!unsupported) admitted.push(tool.name);
+      }
+    }
+    expect(admitted.sort()).toEqual(Object.keys(REVIEWED_REACHABLE).sort());
   });
 
   test('nothing is both reachable and refused as opaque', () => {
@@ -366,15 +405,20 @@ describe('#573 premise 1: the reachable tool set is closed and known', () => {
   });
 
   /**
-   * A name LEAVING the opaque set is the quiet way to widen the reachable set,
-   * so the refusals are pinned too. `browser_navigate` is the one that matters
-   * most: it is the only tool that can point the browser at an arbitrary URL
-   * directly. (`run_skill` can still navigate through a recorded skill step, so
-   * this is not a claim that a flow cannot navigate -- see the docs.)
+   * Opaque-set membership is no longer the whole refusal (#1314): the nine
+   * reviewed UI actions are opaque AND reachable through the live-review
+   * branch. So the refusal is pinned by behaviour: without a live approval
+   * guard, `browser_navigate` (the one tool that points the browser at an
+   * arbitrary URL directly) is refused, and so are the shell and skill family
+   * whatever they carry.
    */
-  test('the opaque refusals still include the navigate and shell family', () => {
+  test('without a live review guard the navigate and shell family is refused', async () => {
+    const { tools } = await buildProductionRegistry();
+    const byName = new Map(tools.map((t) => [t.name, t]));
     for (const name of ['browser_navigate', 'browser_evaluate', 'run_command', 'record_skill']) {
+      const tool = byName.get(name)!;
       expect(`${name}:opaque=${OPAQUE_TOOL_NAMES.has(name)}`).toBe(`${name}:opaque=true`);
+      expect(() => toolEffectCapability({ ...tool, captureApprovalGuard: undefined }, {})).toThrow(/WORKFLOW_TOOL_UNSUPPORTED/);
     }
   });
 
@@ -411,9 +455,15 @@ describe('#573 premise 1: the reachable tool set is closed and known', () => {
   });
 
   /** Non-vacuous: the decision would be trivial if nothing reachable were untrusted. */
-  test('the untrusted-source subset is the eight tools the decision is about', () => {
+  // The eight are what the #573 decision is about: the ADAPTER returns them
+  // byte-exact. On a direct step the browser and desktop ones among them are
+  // framed by the route (`frameComputerStepResult`, owner decision on #1314);
+  // read_file, get_clipboard and run_skill are not.
+  test('the untrusted-source subset is the eight #573 tools plus the nine framed computer actions', () => {
     const untrusted = Object.entries(REVIEWED_REACHABLE).filter(([, v]) => v).map(([n]) => n);
-    expect(untrusted.length).toBe(8);
+    const computer = untrusted.filter((n) => WORKFLOW_REVIEWED_UI_TOOLS.has(n));
+    expect(computer.sort()).toEqual([...WORKFLOW_REVIEWED_UI_TOOLS].sort());
+    expect(untrusted.length - computer.length).toBe(8);
   });
 
   /**
