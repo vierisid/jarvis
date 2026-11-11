@@ -276,7 +276,9 @@ export const REVIEWED_UI_TOOLS: ReadonlySet<string> = new Set([
 
 export function rawUiGate(toolName: string, params: Record<string, unknown>): ToolGate | null {
   if (!REVIEWED_UI_TOOLS.has(toolName)) return null;
-  if (toolName === 'ui_act' && params.action === 'get_value') return null;
+  // Reading an element's value is a read, not an action: ui_act's get_value
+  // and desktop_click's (#1314 m11) alike. Their floor category stays.
+  if ((toolName === 'ui_act' || toolName === 'desktop_click') && params.action === 'get_value') return null;
   // Arguments are already present on the approval card. Do not duplicate
   // typed text, file contents or arbitrary expressions in the intent/logs.
   const element = typeof params.element_id === 'number' ? ` on element [${params.element_id}]` : '';
@@ -287,15 +289,24 @@ export function rawUiGate(toolName: string, params: Record<string, unknown>): To
   };
 }
 
-/** Workflow browser navigation can pause only with a live review guard.
+export const WORKFLOW_REVIEWED_UI_TOOLS: ReadonlySet<string> = new Set([
+  'browser_navigate', 'browser_click', 'browser_type', 'browser_press_key',
+  'browser_hover', 'browser_scroll',
+  'desktop_launch_app', 'desktop_focus_window', 'desktop_click',
+]);
+
+/** Workflow UI actions can pause only with a live review guard.
  * No durable screen identity is invented: restart/stale guards refuse dispatch.
  */
-export function workflowBrowserReview(tool: { captureApprovalGuard?: unknown } | undefined, name: string): boolean {
-  return ['browser_navigate', 'browser_click', 'browser_scroll'].includes(name)
-    && typeof tool?.captureApprovalGuard === 'function';
+export function workflowUiReview(tool: { captureApprovalGuard?: unknown } | undefined, name: string,
+  params: Record<string, unknown> = {}): boolean {
+  return WORKFLOW_REVIEWED_UI_TOOLS.has(name) && typeof tool?.captureApprovalGuard === 'function'
+    && rawUiGate(name, params) !== null;
 }
 
-/** Bounded browser reads can request permission above the agent's autonomous level. */
-export function workflowBrowserRead(name: string): boolean {
-  return name === 'browser_snapshot' || name === 'browser_screenshot';
+/** Bounded UI reads can request permission above the agent's autonomous level. */
+export function workflowUiRead(name: string, params: Record<string, unknown> = {}): boolean {
+  return ['browser_snapshot', 'browser_screenshot', 'desktop_snapshot', 'desktop_screenshot',
+    'desktop_list_windows', 'desktop_find_element'].includes(name)
+    || (name === 'desktop_click' && params.action === 'get_value');
 }

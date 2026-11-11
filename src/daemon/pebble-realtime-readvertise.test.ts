@@ -63,10 +63,18 @@ describe('wireRealtimeReadvertisement', () => {
   });
 
   test('another section changing does not re-push', async () => {
-    coordinator.sectionChanged('awareness');
+    coordinator.sectionChanged('stt');
     await coordinator.whenIdle();
     await wiring.settled();
     expect(pushes).toBe(0);
+  });
+
+  // #1314 review: the advertised tools follow both switches.
+  for (const section of ['awareness', 'desktop'] as const) test(`${section} changing re-pushes the tool list`, async () => {
+    coordinator.sectionChanged(section);
+    await coordinator.whenIdle();
+    await wiring.settled();
+    expect(pushes).toBe(1);
   });
 
   test('a full reload re-pushes too (SIGHUP and POST /api/config/reload)', async () => {
