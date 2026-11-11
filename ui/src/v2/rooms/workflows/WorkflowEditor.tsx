@@ -406,6 +406,33 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
     setNodes(baseNodes);
   }, [baseNodes, setNodes]);
 
+  // A step added from the panel can land off screen. When exactly one node
+  // appears, pan (never rescale) just enough to bring it into view.
+  const seenNodeIdsRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const ids = new Set(baseNodes.map((n) => n.id));
+    const before = seenNodeIdsRef.current;
+    seenNodeIdsRef.current = ids;
+    if (!before || before.size === 0) return;
+    const added = baseNodes.filter((n) => !before.has(n.id));
+    if (added.length !== 1) return;
+    const target = added[0]!;
+    window.requestAnimationFrame(() => {
+      const instance = rfInstanceRef.current, canvas = canvasRef.current;
+      if (!instance || !canvas || canvas.clientWidth === 0) return;
+      const view = instance.getViewport();
+      const left = target.position.x * view.zoom + view.x, top = target.position.y * view.zoom + view.y;
+      const right = left + 280 * view.zoom, bottom = top + 84 * view.zoom;
+      const margin = 40;
+      let { x, y } = view;
+      if (left < margin) x += margin - left;
+      else if (right > canvas.clientWidth - margin) x -= right - (canvas.clientWidth - margin);
+      if (top < margin) y += margin - top;
+      else if (bottom > canvas.clientHeight - margin) y -= bottom - (canvas.clientHeight - margin);
+      if (x !== view.x || y !== view.y) void instance.setViewport({ ...view, x, y }, { duration: 200 });
+    });
+  }, [baseNodes]);
+
   // Capture the ReactFlowInstance so right-click handlers can translate
   // the cursor's screen coordinates into the canvas's flow coordinates
   // for orphan placement.
@@ -1573,7 +1600,20 @@ export function NodeSettingsPopover({
   // correct on first paint -- no flicker from initial click coords to
   // clamped coords.
   useLayoutEffect(() => {
-    if (!inline) setPos(clampToViewport(anchor, ref.current ?? undefined));
+    if (inline) return;
+    const place = () => setPos((prev) => {
+      const next = clampToViewport(anchor, ref.current ?? undefined);
+      return prev.left === next.left && prev.top === next.top ? prev : next;
+    });
+    place();
+    // The panel grows when another tab or a longer form is opened. Place it
+    // again then, or its lower part (the Test button) ends up below the screen.
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(place);
+    observer.observe(el);
+    window.addEventListener("resize", place);
+    return () => { observer.disconnect(); window.removeEventListener("resize", place); };
   }, [anchor, inline]);
 
   // Outside-click. Defer registration one tick so the same click that
@@ -3525,7 +3565,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
     {name:'cron_expression',label:'Schedule (cron)',type:'string' as const,required:true,description:'Choose the execution time before running. For weekdays, use minute hour * * 1-5. For the last weekday of each month at 17:00, use 0 17 LW * *.'},
     {name:'timezone',label:'Timezone',type:'string' as const,required:false,description:'IANA timezone. Empty uses the timezone configured for Jarvis.'},
-    {name:'dst_policy',label:'Daylight-saving policy',type:'string' as const,required:false,description:'skip_missing_first_repeated skips nonexistent local times and uses only the first repeated time, including after restart. Omitted or shift_missing_once retains legacy spring shifting.'},
+    {name:'dst_policy',label:'When the clocks change',type:'enum' as const,required:false,description:'What to do with a time that does not exist in spring or happens twice in autumn. Leave it unset to run a missing time once, right after the clocks jump.',options:[{value:'shift_missing_once',label:'Run a missing time once, right after the jump'},{value:'skip_missing_first_repeated',label:'Skip a missing time, and run a repeated time only once'}]},
   ]} : requestWebhook ? { fields: [
     { name: 'request_id_field', label: 'Request ID field', type: 'string' as const, required: true, description: 'Stable request ID path. Repeated requests are accepted once; no email is required.' },
     ...Object.keys(formInput).filter(key => !['request_id_field', 'secret'].includes(key)).map(key => ({ name: key, label: key, type: 'string' as const, required: false })),
@@ -3583,8 +3623,9 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
 
       {isManual ? (
         <p className="wf-props__hint">
-          Manual triggers fire only when you POST to <code>/api/workflows/:id/run</code>. Pick
-          Schedule, Webhook, or Event above to fire automatically.
+          A manual workflow runs when you press Run. Add a field below for each value you want
+          to give it, then use it in a later step by choosing it from "Insert variable". Pick
+          Schedule, Webhook or Event above to run it automatically instead.
         </p>
       ) : null}
 
@@ -3735,6 +3776,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         retryOnFailure={!!step.settings?.errorHandlingOptions?.retryOnFailure?.value}
         onSetErrorHandling={onSetErrorHandling}
         stepName={step.name}
+        configuredInput={step.settings?.input}
         sampleData={props.sampleData}
         sampleInput={props.sampleInput}
         // Declared output from the piece catalog -- exposed so the
@@ -3770,7 +3812,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
           onValueChange={setTab}
           items={[
             { value: "Configure", label: "Configure", content: <WorkflowReadOnlyContext.Provider value={!!props.readOnly}><fieldset className="wf-props__configuration" disabled={props.readOnly}>{configure}</fieldset></WorkflowReadOnlyContext.Provider> },
-            { value: "Input", label: "Input", content: <><h3 className="wf-io-title">Configured input</h3><pre className="wf-io-value">{JSON.stringify(step.settings?.input ?? {}, null, 2)}</pre><SampleInputSection stepName={step.name} sampleInput={props.sampleInput} isLocked={props.isLocked} onSetSampleInput={props.onSetSampleInput} /></> },
+            { value: "Input", label: "Input", content: <><h3 className="wf-io-title">Configured input</h3><pre className="wf-io-value">{JSON.stringify(step.settings?.input ?? {}, null, 2)}</pre><SampleInputSection stepName={step.name} configuredInput={step.settings?.input} sampleInput={props.sampleInput} isLocked={props.isLocked} onSetSampleInput={props.onSetSampleInput} /></> },
             { value: "Output", label: "Output", content: <SampleDataSection stepName={step.name} sampleData={props.sampleData} declaredSample={selectedSubAction?.sampleData ?? selectedSubAction?.outputSample} isLocked={props.isLocked} isTriggerStep={isTriggerStep} onSetSampleData={props.onSetSampleData} onTestFromHere={props.onTestFromHere} /> },
           ]}
         />
@@ -3794,6 +3836,7 @@ function AdvancedSettings(props: {
   retryOnFailure: boolean;
   onSetErrorHandling: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
   stepName: string;
+  configuredInput?: Record<string, unknown>;
   sampleData: unknown | undefined;
   sampleInput: unknown | undefined;
   declaredSample: unknown | undefined;
@@ -3827,6 +3870,7 @@ function AdvancedSettings(props: {
           {!props.configurationOnly && <>
           <SampleInputSection
             stepName={props.stepName}
+            configuredInput={props.configuredInput}
             sampleInput={props.sampleInput}
             isLocked={props.isLocked}
             onSetSampleInput={props.onSetSampleInput}
@@ -4082,13 +4126,23 @@ function ErrorHandlingSection({
  * The trigger step also accepts sample data -- that becomes the trigger
  * payload visible to the first action. The button label adapts.
  */
+/** A hint for the sample-input box that names this step's own fields. */
+export function sampleInputPlaceholder(configured: Record<string, unknown> | undefined): string {
+  const keys = Object.keys(configured ?? {}).filter((key) => key !== "auth").slice(0, 2);
+  if (keys.length === 0) return '{"field": "value"}';
+  return `{${keys.map((key) => `"${key}": "..."`).join(", ")}}`;
+}
+
 function SampleInputSection({
   stepName,
   sampleInput,
   isLocked,
   onSetSampleInput,
+  configuredInput,
 }: {
   stepName?: string;
+  /** The step's saved input, used only to name its fields in the placeholder. */
+  configuredInput?: Record<string, unknown>;
   sampleInput: unknown | undefined;
   isLocked: boolean;
   onSetSampleInput: (input: Record<string, unknown> | null) => Promise<{ ok: boolean; message: string }>;
@@ -4180,7 +4234,7 @@ function SampleInputSection({
         rows={5}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder='{"toolName": "get_clipboard"}'
+        placeholder={sampleInputPlaceholder(configuredInput)}
         disabled={isLocked}
         spellCheck={false}
       />
@@ -5280,8 +5334,8 @@ function FreeformInputs({
   return (
     <>
       <p className="wf-props__hint">
-        This piece doesn't declare an input schema. Values are stored as strings; use{" "}
-        <code>{`{{step_1.field}}`}</code> templates for typed references.
+        This step has no fixed fields. Type a name below to add one. To use a value from an
+        earlier step, choose it from "Insert variable" when you click the value.
       </p>
       {inputEntries.length === 0 ? (
         <p className="wf-props__hint">No inputs yet. Add one below.</p>

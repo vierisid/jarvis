@@ -321,17 +321,14 @@ export function FlowRow({ flow, selected, triggerWarning, onSelect, onEdit, onRu
     <li
       className={`wf-list__row ${selected ? "wf-list__row--selected" : ""}`}
       onClick={onSelect}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect();
-        }
-      }}
     >
       <div className="wf-list__main">
-        <div className="wf-list__title">{flow.displayName ?? flow.id}</div>
+        {/* The row itself is not a button: it holds Edit, Run and the rest, and a
+            button inside a button is not valid for keyboards or screen readers.
+            The name is the keyboard and screen-reader way to select it. */}
+        <button type="button" className="wf-list__title wf-list__title--button" aria-pressed={selected} onClick={(e) => { e.stopPropagation(); onSelect(); }}>
+          {flow.displayName ?? flow.id}
+        </button>
         <div className="wf-list__meta">
           <Chip tone={STATUS_TONE[flow.status]}>{flow.status === "ENABLED" ? "Enabled" : "Disabled"}</Chip>
           {flow.publishedVersionId ? (

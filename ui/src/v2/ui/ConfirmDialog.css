@@ -33,6 +33,8 @@
   color: var(--ink);
   line-height: 1.3;
   text-wrap: balance;
+  /* A long name has no spaces to break at. */
+  overflow-wrap: anywhere;
 }
 .jconfirm__body {
   font-size: 13px;
@@ -40,6 +42,7 @@
   color: var(--ink3);
   margin-top: 8px;
   white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 .jconfirm__actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }
 

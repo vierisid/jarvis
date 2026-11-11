@@ -20,6 +20,7 @@ import { chosenScheduleZone } from '../../../../../src/workflows/runner/triggers
 import type { ConnectionMeta } from "./useConnections";
 import {
   detectTriggerKind,
+  TRIGGER_KINDS,
   makeEmptyStash,
   transitionTriggerKind,
   type TriggerKind,
@@ -1015,6 +1016,10 @@ export function useWorkflowEditor(flowId: string | null) {
       triggerSettingsStashRef.current = nextStash;
       next.type = type;
       next.settings = settings;
+      // The node is titled after its kind ("Manual", "Schedule"...). Follow the
+      // switch, but keep a title the person typed.
+      const labelOf = (k: string): string | undefined => TRIGGER_KINDS.find((m) => m.kind === k)?.label;
+      if (!prev.displayName || prev.displayName === labelOf(currentKind)) next.displayName = labelOf(kind) ?? prev.displayName;
       return next;
     });
     setDirty(true);
@@ -1063,6 +1068,9 @@ export function useWorkflowEditor(flowId: string | null) {
         if (isTrigger) settings.triggerName = actionName;
         else settings.actionName = actionName;
         target.settings = settings;
+        // A step still carrying the placeholder name is named after what it
+        // now does. A name the person chose is never overwritten.
+        if (sub?.displayName && (!target.displayName || target.displayName === "New step")) target.displayName = sub.displayName;
       });
     },
     [catalog, connections, mutateAnyStep, snapshotForUndo],

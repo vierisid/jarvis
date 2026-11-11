@@ -1912,6 +1912,7 @@ Notable behaviors a contributor should know:
 - Inputs accept `{{step.field}}` templates and render them as chips inline.
 - The variable picker opens on input focus and lists predecessor outputs (drawn from `outputSample`). Drag-to-insert or click-to-insert; the chip is placed at the caret.
 - Per-step sample input override is stored in `flow_version.sample_input`; a run-from-here (`stepNameToTest`) passes it to the engine as `sampleInputOverride`, which replaces that step's `settings.input` (`engine-flow-executor.ts`). Used by the "test this step" affordance.
+- A step chosen for a blank placeholder is named after its action unless a name was already set, and switching the trigger kind retitles a node still carrying the old kind's default title. A step added off screen is panned into view (never rescaled). The settings panel is placed again whenever it grows, so it stays inside the window.
 - Right-click on a node opens delete + error-handling options. Right-click on the canvas opens add-piece. Background tap dismisses popovers.
 - Connection picker auto-fills the first available connection for the piece's auth type.
 - The editor's runs panel (`useFlowRuns.ts`) polls adaptively: every 2s while any run is QUEUED, RUNNING or PAUSED, every 8s otherwise, and not at all while the tab is hidden. The room-level list (`useWorkflowsData.ts`) polls every 8s.

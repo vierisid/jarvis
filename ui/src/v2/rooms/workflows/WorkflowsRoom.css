@@ -676,3 +676,16 @@
 .wf-detail__host-list code { overflow-wrap: anywhere; }
 .wf-detail__host-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 1 100%; }
 .wf-detail__host-add input { flex: 1 1 160px; min-width: 0; }
+
+/* The workflow name inside a list row is a real button, drawn like the title. */
+.wf-list__title--button {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.wf-list__title--button:focus-visible { outline: 2px solid var(--ink-1); outline-offset: 2px; }

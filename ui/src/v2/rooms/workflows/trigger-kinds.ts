@@ -58,7 +58,7 @@ export const TRIGGER_KINDS: ReadonlyArray<TriggerKindMeta> = [
   {
     kind: "manual",
     label: "Manual",
-    description: "Run on demand via POST /api/workflows/:id/run",
+    description: "Run it yourself with the Run button",
     pieceName: null,
     triggerName: null,
   },
