@@ -264,6 +264,9 @@ let awarenessService: import('../awareness/service.ts').AwarenessService | null 
 // Starts the awareness service when screen awareness is turned on after a boot
 // with it off (owner decision 2026-11-11); a no-op until post-setup is wired.
 let startAwarenessIfNeeded: () => Promise<void> = async () => {};
+// The awareness start in flight, if any: shutdown waits for it, so a start
+// begun from the switch cannot leave a service running after stop.
+let awarenessStarting: Promise<void> | null = null;
 let goalService: import('../goals/service.ts').GoalService | null = null;
 let workflowWorker: WorkflowWorker | null = null;
 let triggerManager: TriggerManager | null = null;
@@ -523,7 +526,8 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
       goalService = null;
     }
 
-    // Stop awareness service
+    // Stop awareness service (one still starting first finishes, then stops)
+    await awarenessStarting;
     if (awarenessService) {
       await awarenessService.stop();
       awarenessService = null;
@@ -2148,7 +2152,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           persistAwarenessChoice(nextEnabled);
           // Toggle the live awareness service, or start it when it was off at boot.
           if (awarenessService) awarenessService.toggle(nextEnabled);
-          else if (nextEnabled) await startAwarenessIfNeeded();
+          else if (nextEnabled) {
+            await startAwarenessIfNeeded();
+            // Pressed again while it started: that press owns the pushes and
+            // the answer, and this one must not overwrite them with "on".
+            if ((jarvisConfig.awareness?.enabled ?? true) !== nextEnabled) return;
+          }
           if (!nextEnabled) closeSwitchedOffWorkflowCards();
           // Push visual: blinded = !enabled.
           // Awareness drops every capture while desktop.enabled is off (#905),
@@ -5872,7 +5881,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // the original inline block.
     // One start at a time: boot, onboarding and a switch turned on can race,
     // and each start would wire its own sidecar listeners.
-    let awarenessStarting: Promise<void> | null = null;
     const startAwarenessService = (): Promise<void> => {
       if (awarenessService) return Promise.resolve();
       awarenessStarting ??= startAwarenessServiceNow().finally(() => { awarenessStarting = null; });

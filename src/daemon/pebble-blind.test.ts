@@ -92,7 +92,9 @@ test('the daemon pushes the observer pause on connect, on the long-press, and fr
 test('the long-press and the awareness applier start the service when awareness was off at boot', () => {
   const index = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
   const toggle = index.slice(index.indexOf("event.event_type !== 'pebble.blind_toggle'"), index.indexOf("console.log(`[ambient-ui] blind toggle"));
-  expect(toggle).toContain('if (awarenessService) awarenessService.toggle(nextEnabled);\n          else if (nextEnabled) await startAwarenessIfNeeded();');
+  expect(toggle).toContain('if (awarenessService) awarenessService.toggle(nextEnabled);\n          else if (nextEnabled) {\n            await startAwarenessIfNeeded();');
+  // A second press while it started owns the pushes: this one must not push "on" after it (review AWR-001).
+  expect(toggle).toContain('if ((jarvisConfig.awareness?.enabled ?? true) !== nextEnabled) return;');
   // Started before the observer pause is pushed, so the unpause meets a running service.
   expect(toggle.indexOf('await startAwarenessIfNeeded()')).toBeLessThan(toggle.indexOf('pushObserverPause('));
   const awareness = index.slice(index.indexOf("settingsReload.registerApplier('awareness'"), index.indexOf("settingsReload.registerApplier('desktop'"));
@@ -101,5 +103,7 @@ test('the long-press and the awareness applier start the service when awareness 
   expect(index).toContain('startAwarenessIfNeeded = postSetupServices.startAwarenessIfNeeded;');
   // One start at a time, and a switch turned off while it started is applied to it.
   expect(index).toContain('awarenessStarting ??= startAwarenessServiceNow()');
+  // Shutdown waits for a start in flight before it stops the service (review AWR-002).
+  expect(index).toMatch(/await awarenessStarting;\n\s+if \(awarenessService\) \{\n\s+await awarenessService\.stop\(\);/);
   expect(index).toMatch(/awarenessService = svc;\n\s+apiContext\.awarenessService = svc;\n[^\n]*\n\s+if \(jarvisConfig\.awareness\?\.enabled === false\) svc\.toggle\(false\);/);
 });
