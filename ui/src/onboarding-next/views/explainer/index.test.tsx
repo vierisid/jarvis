@@ -68,9 +68,11 @@ describe("ON-U-02 optional explainer", () => {
     expect(host.querySelector("input")).toBeNull();
     expect(networkCalls).toBe(0);
   });
-  test("copy stays within what Awareness does: asks first, drafts on yes, no automatic or measured claims", () => {
+  test("copy stays within what Awareness does: asks before anything runs, no automatic or measured claims", () => {
     const text = [explainerCopy.description, ...explainerCopy.steps.flatMap(s => [s.title, s.description])].join(" ");
-    expect(explainerCopy.description).toContain("Nothing is built until you say yes");
+    expect(explainerCopy.description).toContain("Nothing runs until you say yes");
+    // Prepared opportunities draft before asking, so the "on" copy must not promise nothing is drafted or built first.
+    expect(text).not.toMatch(/nothing is (?:built|drafted)|say yes and Jarvis drafts/i);
     expect(text).toMatch(/for you to review/);
     // Research/reading contexts are excluded by the routine classifier, so they cannot be the example.
     expect(text).not.toMatch(/\b(?:research|reading)\b/i);
@@ -85,7 +87,9 @@ describe("ON-U-02 optional explainer", () => {
     await mount({ suggestions });
     expect(host.textContent).not.toMatch(/asks whether to turn|looks for multi-step routines|Jarvis notices/);
     expect(host.textContent).toContain("Describe a recurring job in Workflows and Jarvis builds it with you.");
-    expect(host.textContent).toContain("Suggestions are off on this Jarvis");
+    expect(host.textContent).toContain("Prepared opportunities are off on this Jarvis");
+    // With Awareness on, a routine question can still arrive, so the copy must not say suggestions are off.
+    expect(host.textContent).not.toMatch(/suggestions are off/i);
     expect(Array.from(host.querySelectorAll("li h2")).map(el => el.textContent)).toEqual(["You describe the job", "A workflow takes shape", "Your goal moves forward"]);
     expect(host.querySelectorAll("li").length).toBe(3);
     expect(host.querySelectorAll("button").length).toBe(2);
