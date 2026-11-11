@@ -34,6 +34,8 @@ export type NotificationItem = {
   unread: boolean;
   /** A system notice Jarvis sent on its own, as opposed to a client warning. */
   proactive?: boolean;
+  /** Also saved on the daemon: reading it tells the daemon, so it stays read after a reload. */
+  stored?: boolean;
 };
 
 export interface NotificationCenterInput {
@@ -59,6 +61,12 @@ function loadReadSet(): Set<string> {
   } catch {
     return new Set();
   }
+}
+
+/** Best effort: the local read set already hides it here; the daemon copy keeps other visits in step. */
+function markStoredRead(id: string): void {
+  if (typeof fetch === "undefined") return;
+  void fetch(`/api/dashboard-notifications/${encodeURIComponent(id)}/read`, { method: "POST" }).catch(() => {});
 }
 
 function saveReadSet(set: Set<string>): void {
@@ -159,6 +167,7 @@ export function useNotificationCenter({
         tone: n.level === "warning" ? "warn" : "neutral",
         unread: !readSet.has(n.id),
         ...(n.source === "proactive" ? { proactive: true } : {}),
+        ...(n.stored ? { stored: true } : {}),
       });
     }
 
@@ -179,15 +188,17 @@ export function useNotificationCenter({
   );
 
   const markRead = useCallback((id: string) => {
+    if (items.some((item) => item.id === id && item.stored)) markStoredRead(id);
     setReadSet((prev) => {
       if (prev.has(id)) return prev;
       const next = new Set(prev);
       next.add(id);
       return next;
     });
-  }, []);
+  }, [items]);
 
   const markAllRead = useCallback(() => {
+    for (const item of items) if (item.stored && item.unread) markStoredRead(item.id);
     setReadSet((prev) => {
       // Only add ids that exist in the current items list — avoids
       // accumulating dead ids in localStorage.

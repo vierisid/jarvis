@@ -482,7 +482,8 @@ describe('a tool that returns an image (#709)', () => {
       toolRegistry: imageRegistry(), maxIterations: 3 });
     const trace = extractToolCallsTrace(result.messages, 2000, new Set(result.failedToolCalls ?? []));
     expect(trace).toEqual([expect.objectContaining({ name: 'desktop_screenshot', result: expect.stringContaining('Desktop screenshot captured.') })]);
-    expect(delegationOutcome({ status: 'succeeded', toolCalls: trace } as never, ['desktop_screenshot'])).toEqual({ status: 'succeeded' });
+    expect(delegationOutcome({ status: 'completed', toolCalls: trace } as never, ['desktop_screenshot']))
+      .toMatchObject({ code: 'DESKTOP_TASK_UNCONFIRMED' });
   });
 
   test('a pause mid-batch writes down no base64 and does not claim the model saw the picture', async () => {

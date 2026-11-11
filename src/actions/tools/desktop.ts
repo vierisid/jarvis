@@ -9,6 +9,7 @@
  * handles platform-specific implementation details internally.
  */
 
+import { isScreenCaptureEnabled, withoutScreenText } from './desktop-guard.ts';
 import { recordActionVerification, observedWindow } from '../action-verification';
 import type { AppController, UIElement, WindowInfo } from '../app-control/interface.ts';
 import { getAppController } from '../app-control/interface.ts';
@@ -636,8 +637,11 @@ export const desktopLaunchAppTool: ToolDefinition = {
   execute: async (params) => {
     const target = resolveDesktopTarget(params.target, 'desktop', 'desktop_launch_app');
     if (target) {
-      const { text, reply } = await routeToSidecarActionReply(target, 'launch_app', params, 'desktop');
+      const { text: replyText, reply } = await routeToSidecarActionReply(target, 'launch_app', params, 'desktop');
       recordActionVerification('desktop_launch_app', observedWindow(reply));
+      // With screen awareness off the app opens, but what its window says is not read back (#1314 review).
+      const shown = withoutScreenText(reply);
+      const text = shown === reply ? replyText : JSON.stringify(shown, null, 2);
       const directive = launchDirective(reply);
       return directive ? withTrustedTrailer(text, directive) : text;
     }
@@ -647,7 +651,7 @@ export const desktopLaunchAppTool: ToolDefinition = {
       }
       const result = await controller.launchApp(params.executable as string, params.args as string | undefined);
       recordActionVerification('desktop_launch_app', observedWindow(result));
-      return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+      return typeof result === 'string' ? result : JSON.stringify(withoutScreenText(result), null, 2);
     });
   },
 };
@@ -717,7 +721,9 @@ export const desktopFocusWindowTool: ToolDefinition = {
   execute: async (params) => {
     const target = resolveDesktopTarget(params.target, 'desktop', 'desktop_focus_window');
     if (target) {
-      return routeToSidecar(target, 'focus_window', params, 'desktop');
+      const out = await routeToSidecar(target, 'focus_window', params, 'desktop');
+      // The window comes to the front; its title is not read back while screen awareness is off (#1314 review).
+      return isScreenCaptureEnabled() ? out : `Focused window PID ${params.pid as number} (its title is hidden: screen awareness is off).`;
     }
     return executeLocal(async (controller) => {
       await controller.focusWindow(params.pid as number);
