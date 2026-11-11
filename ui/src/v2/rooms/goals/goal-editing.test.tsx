@@ -340,3 +340,9 @@ test('a server refusal of a new goal is shown in plain words inside the dialog t
   await fill(dialog.querySelector<HTMLInputElement>('input[type="text"]')!, 'Fine title'); await click('Create', dialog);
   expect(host.querySelector('.v2-goals__toast')?.textContent).toBe('Titles can be up to 200 characters. Shorten it and try again.');
 });
+test('a goal whose title was saved before the 200 character cap can still move its deadline', async () => {
+  goal={...goal,title:'x'.repeat(250)};
+  await render();await select();await click('Edit title and deadline');
+  await fill(host.querySelector<HTMLInputElement>('form input[type="date"]')!,'2027-03-01');await click('Save details');
+  expect(writes).toEqual([{method:'PATCH',body:{deadline:new Date(2027,2,1,23,59).getTime()}}]);
+});
