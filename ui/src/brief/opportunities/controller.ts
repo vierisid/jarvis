@@ -1,3 +1,4 @@
+import { AWARENESS_OFF_TEXT, AwarenessOffError } from "../host/http";
 import {
   activeProposal,
   approvalBlock,
@@ -123,12 +124,24 @@ export class OpportunitiesController {
         .filter((x) => !this.state.attempts.has(x.proposal.proposalId));
       // Reserve pending/acknowledged slots even when the read omits terminal proposals.
       // Other rows still receive the provider's fresh content and ordering.
+      // Awareness off (#1314): nothing derived from captures stays on screen,
+      // not even a proposal with an action in flight. Its attempt is kept and
+      // its row comes back with the next read once awareness is on again.
+      if (read.status === "unavailable" && read.reason === AWARENESS_OFF_TEXT) {
+        // A transition in progress would hide the next selection (#1314 review).
+        this.publish({ read, rows: [], selectedId: null, refreshing: false, phase: "rest" });
+        return;
+      }
       this.state.rows.forEach((row, index) => {
         const id = row.proposal.proposalId;
         const attempt = this.state.attempts.get(id);
         if (attempt && !this.completed.has(id))
           rows.splice(Math.min(index, rows.length), 0, attempt.item);
       });
+      // Attempts whose rows were cleared by an unavailable read come back at the end.
+      for (const [id, attempt] of this.state.attempts)
+        if (!this.completed.has(id) && !rows.some((x) => x.proposal.proposalId === id))
+          rows.push(attempt.item);
       const selectedId = rows.some(
         (x) => x.proposal.proposalId === this.state.selectedId,
       )
@@ -199,12 +212,29 @@ export class OpportunitiesController {
       state: "sending",
     };
     this.updateAttempt(id, attempt);
+    const generation = this.generation;
     try {
       this.receive(attempt, await this.port.act(attempt.request));
-    } catch {
-      if (!this.retired)
-        this.updateAttempt(id, { ...attempt, state: "unknown" });
+    } catch (error) {
+      if (this.retired) return;
+      // Refused before anything was applied (#1314 review): a definite
+      // refusal, which the next ready read clears, never an unknown outcome.
+      if (error instanceof AwarenessOffError) {
+        this.updateAttempt(id, { ...attempt, state: "refused", reason: AWARENESS_OFF_TEXT });
+        this.awarenessOff(generation);
+      } else this.updateAttempt(id, { ...attempt, state: "unknown" });
     }
+  }
+  /**
+   * The server said awareness is off (#1314 review): the room shows nothing
+   * derived from captures, as an awareness-off read does. A read that landed
+   * after the refused call was sent knows better than the refusal, so then
+   * the server is asked again instead.
+   */
+  private awarenessOff(generation: number) {
+    if (generation !== this.generation) { void this.refresh(); return; }
+    this.generation++;
+    this.publish({ read: { status: "unavailable", reason: AWARENESS_OFF_TEXT }, rows: [], selectedId: null, refreshing: false, phase: "rest" });
   }
   async recover(id: string) {
     const attempt = this.state.attempts.get(id);
@@ -219,11 +249,14 @@ export class OpportunitiesController {
     )
       return;
     this.updateAttempt(id, { ...attempt, checking: true });
+    const generation = this.generation;
     try {
       this.receive(attempt, await this.port.recover(attempt.request));
-    } catch {
-      if (!this.retired)
-        this.updateAttempt(id, { ...attempt, checking: false });
+    } catch (error) {
+      if (this.retired) return;
+      // The outcome is still unknown; only the screen follows the switch (#1314 review).
+      this.updateAttempt(id, { ...attempt, checking: false });
+      if (error instanceof AwarenessOffError) this.awarenessOff(generation);
     }
   }
   private receive(

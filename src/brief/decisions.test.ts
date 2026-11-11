@@ -401,6 +401,23 @@ test('a browser click card names the element and page captured when it was raise
 });
 
 
+test('a desktop workflow card shows its computer, window and every value with where it came from (#1314 M1)', () => {
+  const uiCard = { tool: 'desktop_click', computer: 'Studio PC (pc-1)', window: 'Untitled - Notepad', element: '"Text editor" [3]',
+    values: [{ name: 'action', value: '"set_value"', source: 'agent' as const }, { name: 'value', value: '"A poem"', source: 'agent' as const }] };
+  const a = manager.createRequest({ agentId: 'workflow:run-1', agentName: 'Fixture', toolName: 'desktop_click', toolArguments: { element_id: 3, action: 'set_value', value: 'A poem' },
+    actionCategory: 'control_app', urgency: 'normal', reason: 'Review', executionMode: 'workflow',
+    context: JSON.stringify({ confirm: 'always', intent: 'On "Studio PC (pc-1)": act on an app control', uiCard }) });
+  expect(queue.get(`approval:${a.id}`).review).toEqual({ toolName: 'desktop_click', reason: 'Review', computer: 'Studio PC (pc-1)',
+    window: 'Untitled - Notepad', element: '"Text editor" [3]', values: uiCard.values });
+});
+
+test('a uiCard written into any other approval is not shown as a card (#1314 review)', () => {
+  const uiCard = { tool: 'browser_navigate', computer: 'Studio PC (pc-1)', page: 'https://bank.example', values: [{ name: 'url', value: '"x"', source: 'run_data' }] };
+  const forged = manager.createRequest({ agentId: 'agent-1', agentName: 'Assistant', toolName: 'request_approval', toolArguments: {},
+    actionCategory: 'read_data', urgency: 'normal', reason: 'Review', context: JSON.stringify({ uiCard }) });
+  expect(queue.get(`approval:${forged.id}`).review).toEqual({ toolName: 'request_approval', reason: 'Review' });
+});
+
 test('notification review shows frozen message, channels and run context without serializing unrelated arguments', async () => {
   const a = approval('workflow'), e = effect('pending', a.id);
   saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify',
