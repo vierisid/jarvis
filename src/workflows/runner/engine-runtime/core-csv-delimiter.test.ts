@@ -36,7 +36,7 @@ const ready = (delimiter: string) => {
   return compileWorkflow(flow(delimiter), { pieces: catalog });
 };
 
-describe.skipIf(skip)('the compiled core CSV piece', () => {
+describe.skipIf(skip)('the compiled core CSV piece, Tab delimiter', () => {
   beforeAll(async () => {
     if (buildOptIn) await buildPiece(pieceDir);
     const mod = require(bundle) as { csv: { getAction(name: string): Action | undefined } };
