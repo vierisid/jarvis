@@ -437,6 +437,11 @@ test('delegated agent tool calls inherit the same run binding', async () => {
     pieceName: '@jarvispieces/piece-jarvis-agent', pieceVersion: '0.0.1', actionName: 'delegate', input: {},
   } };
   updateDraftVersion(f.version.id, { trigger: { name: 'trigger', type: 'EMPTY', nextAction: action } });
+  // A delegated agent reaches the screen only on a computer a person chose
+  // (#1314): the flow is pinned to `a`, as enabling it pins it. Unpinned, the
+  // same calls are refused before any dispatch (delegated-approval.test.ts).
+  getWorkflowDb().run('UPDATE flow SET binding_pins = ? WHERE id = ?', [JSON.stringify({ schemaVersion: 1, versionId: f.version.id,
+    pinnedAt: Date.now(), connections: {}, machine: { sidecarId: 'a', name: 'Computer a' } }), f.flow.id]);
   const backend = buildSandboxServiceBackends({ ...f.options,
     agentSpecialists: new Map([[role.id, role]]) as any,
     agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), getProfileFor: () => null, getTaintGating: () => null, reapAgent: () => {}, spawnSubAgent: () => ({
