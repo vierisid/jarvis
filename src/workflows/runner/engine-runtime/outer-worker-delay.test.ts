@@ -145,4 +145,57 @@ describe("Outer worker: real delay pause and timer continuation", () => {
     await worker().drain();
     expect(executions).toEqual(["BEGIN", "RESUME"]);
   }, 90_000);
+
+  /** Runs one delay step with the given input to the end of its first slice. */
+  const runDelay = async (actionName: string, input: Record<string, unknown>) => {
+    const flow = createFlow();
+    const trigger: FlowTriggerNode = {
+      name: "trigger", type: "PIECE_TRIGGER", displayName: "Manual",
+      settings: { pieceName: "@jarvispieces/piece-jarvis-test", pieceVersion: "0.0.1", triggerName: "manual", input: {} },
+      nextAction: {
+        name: "wait", type: "PIECE", displayName: "Delay",
+        settings: { pieceName: "@activepieces/piece-delay", pieceVersion: "0.3.27", actionName, input },
+      },
+    };
+    const version = createDraftVersion({ flowId: flow.id, displayName: "delay-limits", trigger });
+    updateDraftVersion(version.id, { trigger, valid: true });
+    lockVersion(version.id);
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, environment: "PRODUCTION" });
+    enqueue({ jobType: RUN_FLOW, flowRunId: run.id, maxAttempts: 1, payload: { runId: run.id } });
+    const handler = createRunFlowHandler({ executor: new EngineFlowExecutor(runtime!) });
+    await new Worker({ handlers: { [RUN_FLOW]: handler } }).drain();
+    rmSync(resolve(workflowLogsBase(), `${run.id}.bin`), { force: true });
+    return { run: getFlowRun(run.id)!, waits: listWaitpointsByFlowRun(run.id, false) };
+  };
+  const failureText = (run: { steps?: unknown }) => JSON.stringify(run.steps);
+
+  test.skipIf(skip)("a delay too large for a date is refused by the cap, never parked without a resume time", async () => {
+    // 1e8 days and more overflow the Date range; 1e308 days overflows the millisecond conversion itself.
+    for (const amount of [1e8, 1e9, 8e15]) {
+      const { run, waits } = await runDelay("delayFor", { unit: "days", delayFor: amount });
+      expect(run.status).toBe("FAILED");
+      expect(waits).toHaveLength(0);
+      expect(failureText(run)).toContain("cannot be paused for more than 30 days");
+    }
+    const huge = await runDelay("delayFor", { unit: "days", delayFor: 1e308 });
+    expect(huge.run.status).toBe("FAILED");
+    expect(huge.waits).toHaveLength(0);
+    expect(failureText(huge.run)).toContain("The delay amount is too large");
+    // The existing cap behaviour is unchanged: 31 days parks, 45 days is refused.
+    const within = await runDelay("delayFor", { unit: "days", delayFor: 31 });
+    expect(within.run.status).toBe("PAUSED");
+    expect(within.waits[0]!.resumeDateTime).not.toBeNull();
+    const over = await runDelay("delayFor", { unit: "days", delayFor: 45 });
+    expect(over.run.status).toBe("FAILED");
+    expect(failureText(over.run)).toContain("cannot be paused for more than 30 days");
+  }, 120_000);
+
+  test.skipIf(skip)("delay_until with a value that is not a date fails in plain words", async () => {
+    const { run, waits } = await runDelay("delay_until", { delayUntilTimestamp: "not a date" });
+    expect(run.status).toBe("FAILED");
+    expect(waits).toHaveLength(0);
+    const text = failureText(run);
+    expect(text).toContain("The date to wait until is not a valid date: not a date");
+    expect(text).not.toContain('"delayUntilTimestamp": [');
+  }, 60_000);
 });

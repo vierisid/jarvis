@@ -39,3 +39,26 @@ export function resolvedInputIssues(
   if (requireAuth && hasAuth && emptyInput(input.auth)) errors.auth = ['A resolved connection is required'];
   return errors;
 }
+
+/**
+ * A plain sentence when a date input holds a value that is not a date, else
+ * null. The engine's date processor turns such a value into nothing, so the
+ * failure would otherwise read as a cut-off JSON fragment of the property map.
+ */
+export function invalidDateMessage(
+  errors: Record<string, unknown>,
+  props: Record<string, { type: string; displayName?: string }>,
+  originalInput: Record<string, unknown>,
+  actionName: string,
+): string | null {
+  for (const name of Object.keys(errors)) {
+    if (props[name]?.type !== 'DATE_TIME') continue;
+    const raw = originalInput[name];
+    if (emptyInput(raw)) continue;
+    let shown: string;
+    try { shown = typeof raw === 'string' ? raw : JSON.stringify(raw) ?? String(raw); } catch { shown = String(raw); }
+    const what = actionName === 'delay_until' ? 'The date to wait until' : `The date in "${props[name]?.displayName ?? name}"`;
+    return `${what} is not a valid date: ${shown.length > 80 ? `${shown.slice(0, 80)}...` : shown}`;
+  }
+  return null;
+}

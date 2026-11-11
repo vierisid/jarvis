@@ -52,12 +52,26 @@ export const delayForAction = createAction({
     }),
   },
   async run(ctx) {
+    // === JARVIS PATCH: an amount that is not a finite number is refused in plain words ===
+    // Infinity passes `z.number().min(0)`, and an amount too large to hold in
+    // milliseconds is Infinity after the unit conversion. Either one used to
+    // reach the wait with no usable resume time.
+    const amount = ctx.propsValue.delayFor;
+    if (typeof amount !== 'number' || !Number.isFinite(amount)) {
+      throw new Error(`The delay amount is not a usable number: ${String(amount).slice(0, 80)}`);
+    }
+    // === END JARVIS PATCH ===
     await propsValidation.validateZod(ctx.propsValue, {
       delayFor: z.number().min(0),
     });
 
     const unit = ctx.propsValue.unit ?? TimeUnit.SECONDS;
     const delayInMs = calculateDelayInMs(ctx.propsValue.delayFor, unit);
+    // === JARVIS PATCH: see above; a finite amount can still overflow the conversion ===
+    if (!Number.isFinite(delayInMs)) {
+      throw new Error(`The delay amount is too large: ${String(amount).slice(0, 80)}`);
+    }
+    // === END JARVIS PATCH ===
     if (ctx.executionType == ExecutionType.RESUME) {
       return {
         delayForInMs: delayInMs,
