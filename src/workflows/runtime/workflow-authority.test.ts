@@ -1241,17 +1241,16 @@ test('an uncertain identity is not a completed receipt and cannot skip approval 
   expect(f.calls).toHaveLength(1);
 });
 
-// Founder decision: a notification that only reaches the owner on their own
-// devices is not a message to anyone else, so it asks for no approval.
+// A notification that only shows the owner a notice on their own screen is
+// not a message to anyone else, so it asks for no approval.
 describe('owner-only notifications', () => {
   const ownerRequest = (channels: string[], idempotencyKey?: string) =>
     ({ message: 'Stand-up at 9', channels, priority: 'normal' as const, ...(idempotencyKey ? { idempotencyKey } : {}) });
 
-  for (const channels of [['dashboard'], ['desktop'], ['voice'], ['dashboard', 'desktop', 'voice']]) {
+  for (const channels of [['dashboard'], ['desktop'], ['dashboard', 'desktop']]) {
     test(`${channels.join('+')} delivers with send_message governed, no approval, and keeps its effect row`, async () => {
       const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
       f.options.sendDesktop = async () => { f.calls.push('desktop'); return true; };
-      f.options.wsService.broadcastProactiveVoice = async () => { f.calls.push('voice'); return 1; };
       const services = buildSandboxServiceBackends(f.options);
       const reply = await services.notify!(ownerRequest(channels), f.context);
       expect(reply.approval).toBeUndefined();
@@ -1262,7 +1261,8 @@ describe('owner-only notifications', () => {
     });
   }
 
-  for (const channels of [['telegram'], ['discord'], ['dashboard', 'telegram'], ['auto']]) {
+  // Voice is spoken aloud to whoever is in the room, so it stays a governed send.
+  for (const channels of [['telegram'], ['discord'], ['voice'], ['dashboard', 'voice'], ['dashboard', 'telegram'], ['auto']]) {
     test(`${channels.join('+')} still asks for approval`, async () => {
       const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
       const reply = await f.backends.notify!(ownerRequest(channels), f.context);
@@ -1270,6 +1270,17 @@ describe('owner-only notifications', () => {
       expect(f.calls).toHaveLength(0);
     });
   }
+
+  test('a read_data context rule naming workflow_notify makes owner-only notifications ask, and nothing else', async () => {
+    const f = fixture('notify');
+    f.authority.addContextRule({ id: 'ask-self-notify', action: 'read_data', condition: 'tool_name',
+      params: { tool_name: 'workflow_notify' }, effect: 'require_approval', description: 'Ask before notifying me' });
+    const reply = await f.backends.notify!(ownerRequest(['dashboard']), f.context);
+    expect(reply.approval?.approvalId).toBeTruthy();
+    expect(f.calls).toHaveLength(0);
+    expect(f.authority.checkAuthority({ agentId: 'workflow:x', agentRoleId: 'workflow-default', agentAuthorityLevel: 0,
+      toolName: 'workflow_context', toolCategory: 'context', actionCategory: 'read_data', temporaryGrants: new Map(), profile: null }).requiresApproval).toBe(false);
+  });
 
   test('Pause holds an owner-only notification and Kill refuses it', async () => {
     const f = fixture('notify');

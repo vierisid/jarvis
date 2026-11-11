@@ -135,7 +135,7 @@ until someone sends it, but it is addressed, so it is checked like a send.
 | Step | Effect for the check |
 | --- | --- |
 | Trigger | Reads |
-| Notify | `send_message` to its stated channels |
+| Notify | `send_message` to its stated channels (at run time Authority judges a dashboard- or desktop-only notify as `read_data`; this check stays stricter) |
 | Ask, context, regex, validate | `read_data` |
 | Bounded tool (`effect-capabilities.ts`) | Its `TOOL_ACTION_MAP` category |
 | Governed piece action (`piece-effects.ts`) | The adapter's category for that action |
