@@ -70,7 +70,8 @@ export interface ConnectionsState {
       status?: "ACTIVE" | "MISSING" | "ERROR";
     },
   ) => Promise<{ ok: boolean; message: string }>;
-  remove: (id: string) => Promise<{ ok: boolean; message: string }>;
+  /** `warning` names the published workflows that used the deleted connection. */
+  remove: (id: string) => Promise<{ ok: boolean; message: string; warning?: string }>;
 }
 
 export function useConnections(): ConnectionsState {
@@ -159,7 +160,7 @@ export function useConnections(): ConnectionsState {
         }
         const deleted = (await r.json().catch(() => ({}))) as { warning?: string };
         await refresh();
-        return { ok: true, message: deleted.warning ? `Deleted. ${deleted.warning}` : "deleted" };
+        return { ok: true, message: "deleted", ...(typeof deleted.warning === "string" ? { warning: deleted.warning } : {}) };
       } catch (e) {
         return { ok: false, message: (e as Error).message };
       }

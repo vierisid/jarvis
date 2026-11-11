@@ -146,7 +146,7 @@ export function ConnectionsPanel(): React.ReactElement {
                 const note = usage?.warning ? `\n\n${usage.warning}` : "";
                 if (!await confirmDialog(`Delete connection "${c.displayName}"? Secrets are removed permanently.${note}`)) return;
                 const r = await conn.remove(c.id);
-                flash(r.ok ? "ok" : "warn", r.ok ? `Deleted "${c.displayName}"${r.message.startsWith("Deleted. ") ? `. ${r.message.slice(9)}` : ""}` : `Delete failed: ${r.message}`);
+                flash(r.ok ? "ok" : "warn", r.ok ? `Deleted "${c.displayName}"${r.warning ? `. ${r.warning}` : ""}` : `Delete failed: ${r.message}`);
               }}
               onUpdate={async (patch) => {
                 const r = await conn.update(c.id, patch);
