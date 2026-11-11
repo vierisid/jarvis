@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../db";
-import { getFlow } from "../db/repos/flow";
+import { getFlow, updateFlowStatus } from "../db/repos/flow";
+import { graphHasSteps, NO_STEPS_MESSAGE, WorkflowReadinessError } from "../db/repos/flow-readiness";
 import { getFlowVersion, getLatestDraft, listVersions } from "../db/repos/flow-version";
 import { createWorkflowRoutes, type WorkflowRouteMap } from "./routes";
 
@@ -31,10 +32,11 @@ const withStep = (flowId: string, versionId: string) =>
   call("/api/workflows/:id/versions/:versionId", "PATCH", { id: flowId, versionId }, { trigger: { name: "trigger", type: "EMPTY", nextAction: STEP } });
 
 describe("a workflow with only a trigger cannot be turned on", () => {
-  test("publish refuses with a plain 400 that says to add a step, and changes nothing", async () => {
+  test("publish refuses with a readiness 422 that says to add a step, and changes nothing", async () => {
     const { flowId, versionId } = await freshFlow();
     const result = await call("/api/workflows/:id/publish", "POST", { id: flowId }, {});
-    expect(result.status).toBe(400);
+    expect(result.status).toBe(422);
+    expect(result.body).toMatchObject({ code: "WORKFLOW_NOT_READY", ready: false, issues: [{ node: "trigger", path: "graph", code: "NO_STEPS", message: NO_STEPS_MESSAGE }] });
     expect(result.body.error).toContain("no steps");
     expect(result.body.error).toContain("Add at least one step");
     expect(getFlow(flowId)).toMatchObject({ status: "DISABLED", published_version_id: null });
@@ -51,20 +53,49 @@ describe("a workflow with only a trigger cannot be turned on", () => {
 
   test("an explicit trigger-only version is refused too, and an invalid graph still gets its own refusal", async () => {
     const { flowId, versionId } = await freshFlow();
-    expect((await call("/api/workflows/:id/publish", "POST", { id: flowId }, { versionId })).status).toBe(400);
+    const empty = await call("/api/workflows/:id/publish", "POST", { id: flowId }, { versionId });
+    expect(empty.status).toBe(422);
+    expect(empty.body.issues.map((i: { code: string }) => i.code)).toEqual(["NO_STEPS"]);
     await call("/api/workflows/:id/versions/:versionId", "PATCH", { id: flowId, versionId },
       { trigger: { name: "trigger", type: "EMPTY", nextAction: { ...STEP, settings: { executionType: "NOPE" } } } });
-    expect((await call("/api/workflows/:id/publish", "POST", { id: flowId }, {})).status).toBe(422);
+    const broken = await call("/api/workflows/:id/publish", "POST", { id: flowId }, {});
+    expect(broken.status).toBe(422);
+    expect(broken.body.issues.map((i: { code: string }) => i.code)).not.toContain("NO_STEPS");
   });
 
   test("turning it on by PATCH status is refused the same way", async () => {
     const { flowId, versionId } = await freshFlow();
     const result = await call("/api/workflows/:id", "PATCH", { id: flowId }, { status: "ENABLED" });
-    expect(result.status).toBe(400);
+    expect(result.status).toBe(422);
+    expect(result.body.issues[0]).toMatchObject({ code: "NO_STEPS" });
     expect(result.body.error).toContain("Add at least one step");
     expect(getFlow(flowId)!.status).toBe("DISABLED");
     await withStep(flowId, versionId);
     expect((await call("/api/workflows/:id", "PATCH", { id: flowId }, { status: "ENABLED" })).status).toBe(200);
+  });
+
+  test("the status write with requireSteps refuses, rolls back and leaves the flow off", async () => {
+    const { flowId, versionId } = await freshFlow();
+    expect(() => updateFlowStatus(flowId, "ENABLED", { requireSteps: true })).toThrow(WorkflowReadinessError);
+    expect(getFlow(flowId)!.status).toBe("DISABLED");
+    await withStep(flowId, versionId);
+    updateFlowStatus(flowId, "ENABLED", { requireSteps: true });
+    expect(getFlow(flowId)!.status).toBe("ENABLED");
+  });
+
+  test("an already enabled trigger-only workflow can still be turned off", async () => {
+    const { flowId } = await freshFlow();
+    getWorkflowDb().run("UPDATE flow SET status = 'ENABLED' WHERE id = ?", [flowId]);
+    const result = await call("/api/workflows/:id", "PATCH", { id: flowId }, { status: "DISABLED" });
+    expect(result.status).toBe(200);
+    expect(getFlow(flowId)!.status).toBe("DISABLED");
+  });
+
+  test("graphHasSteps reads only an object nextAction as a step", () => {
+    expect(graphHasSteps({ type: "EMPTY", nextAction: STEP })).toBe(true);
+    for (const g of [null, undefined, "x", [], { type: "EMPTY" }, { nextAction: null }, { nextAction: [] }, { nextAction: "step" }]) {
+      expect(graphHasSteps(g)).toBe(false);
+    }
   });
 });
 

@@ -300,7 +300,11 @@ describe("manage_workflow tool", () => {
   });
 
   test("enable / disable round-trip", async () => {
-    await call("create", { name: "toggle", empty: true });
+    const created = (await call("create", { name: "toggle", empty: true })) as { id: string };
+    // A workflow with only its trigger is not turned on from chat either.
+    await expect(call("enable", { flow: "toggle" })).rejects.toThrow(/no steps yet/);
+    expect(getFlow(created.id)!.status).toBe("DISABLED");
+    giveSteps(created.id);
     let st = (await call("enable", { flow: "toggle" })) as { status: string };
     expect(st.status).toBe("ENABLED");
     st = (await call("disable", { flow: "toggle" })) as { status: string };
@@ -312,6 +316,7 @@ describe("manage_workflow tool", () => {
     const { recordFire } = await import("../../workflows/db/repos/trigger-fire.ts");
     const { TURNED_OFF_REASON } = await import("../../workflows/db/repos/flow-turn-off.ts");
     const created = (await call("create", { name: "ledger", empty: true })) as { id: string };
+    giveSteps(created.id);
     await call("enable", { flow: "ledger" });
     const run = createFlowRun({ flowId: created.id, flowVersionId: getLatestDraft(created.id)!.id, status: "PAUSED" });
     recordFire({ flowId: created.id, source: "schedule", scheduledFor: 1_000, outcome: "missed", detail: { reason: "The schedule was not running at that time" } });

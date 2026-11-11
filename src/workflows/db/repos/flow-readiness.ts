@@ -1,6 +1,6 @@
 import { getWorkflowDb } from '../index';
 import { compileWorkflow, type ReadinessContext, type WorkflowReadiness } from '../../runtime/workflow-readiness';
-import { assertFlowVersionOwnership, FlowVersionRequestError } from './flow-version-ownership';
+import { assertFlowVersionOwnership } from './flow-version-ownership';
 import { workflowReadinessServices } from './readiness-services';
 import { isTurnedOff } from './flow-turn-off';
 import { bindingPinIssues } from './binding-pins';
@@ -256,18 +256,27 @@ export function assertFlowReady(flowId: string, mode: BindingPinMode = {}): void
 }
 /** What a person reads when a workflow with only a trigger is turned on. */
 export const NO_STEPS_MESSAGE = 'This workflow has no steps yet. Add at least one step after the trigger, then turn it on.';
+/** Whether a stored graph has a step after its trigger. Anything unreadable has none. */
+export function graphHasSteps(trigger: unknown): boolean {
+  const next = trigger !== null && typeof trigger === 'object' ? (trigger as { nextAction?: unknown }).nextAction : null;
+  return next !== null && typeof next === 'object' && !Array.isArray(next);
+}
 /**
  * Turning a workflow on needs something for it to do. A graph that is only a
  * trigger passes `compileWorkflow` (a fresh draft is a valid place to start
- * editing) but would run to a green SUCCEEDED with nothing done. Activation
- * only: drafts and the editor keep accepting a trigger-only graph.
+ * editing, and runs and trigger registration still accept it) but would run to
+ * a green SUCCEEDED with nothing done. Activation only: drafts, the editor and
+ * the composer keep accepting a trigger-only graph. The refusal has the
+ * readiness shape (422, one `NO_STEPS` issue on the trigger), like the missing
+ * version refusal in `assertFlowReady`.
  */
 export function assertVersionHasSteps(versionId: string): void {
   const row = getWorkflowDb().query<{ trigger: string }, [string]>('SELECT trigger FROM flow_version WHERE id = ?').get(versionId);
   let trigger: unknown = null;
   try { trigger = row ? JSON.parse(row.trigger) : null; } catch { /* unreadable graphs fail readiness first */ }
-  const next = trigger !== null && typeof trigger === 'object' ? (trigger as { nextAction?: unknown }).nextAction : null;
-  if (next === null || typeof next !== 'object' || Array.isArray(next)) throw new FlowVersionRequestError(NO_STEPS_MESSAGE, 400);
+  if (!graphHasSteps(trigger)) {
+    throw new WorkflowReadinessError({ ready: false, runtimeChecks: [], issues: [{ node: 'trigger', path: 'graph', code: 'NO_STEPS', message: NO_STEPS_MESSAGE }] });
+  }
 }
 /** `assertVersionHasSteps` for the version a flow would run when enabled. */
 export function assertFlowHasSteps(flowId: string): void {

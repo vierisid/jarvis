@@ -65,7 +65,7 @@ import {
   type UpdateDraftVersionInput,
 } from "../db/repos/flow-version";
 import { publishFlowVersion } from "../db/repos/flow-publication";
-import { assertFlowHasSteps, assertVersionReady, versionReadiness, WorkflowReadinessError } from '../db/repos/flow-readiness';
+import { assertVersionReady, versionReadiness, WorkflowReadinessError } from '../db/repos/flow-readiness';
 import { assertCodeStepsAllowed, CodeStepsRefusedError } from "../db/repos/flow-code-steps";
 import { getFlowReadHosts, setFlowReadHosts } from "../db/repos/flow-read-hosts";
 import { normalizeReadHosts, readHostsOfRow } from "../db/read-hosts";
@@ -1672,19 +1672,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const rejected = metadataRejection(body.metadata);
           if (rejected) return err(rejected.message, rejected.status);
-          if (body.status !== undefined) {
-            const status = body.status;
-            const write = getWorkflowDb().transaction(() => {
-              const result = updateFlowStatus(id, status);
-              // Turning on a workflow with nothing after its trigger is refused, as on publish. It is
-              // checked after the status write, inside its transaction, so a removed workflow still
-              // answers its own 409 first and an empty one leaves nothing changed.
-              if (status === "ENABLED") assertFlowHasSteps(id);
-              return result;
-            });
-            // Turning a workflow off stops its queued and waiting runs (Q-06).
-            if (write().turnedOff) stopRunsOfTurnedOffFlow(id);
-          }
+          // Turning a workflow off stops its queued and waiting runs (Q-06).
+          if (body.status !== undefined && updateFlowStatus(id, body.status, { requireSteps: true }).turnedOff) stopRunsOfTurnedOffFlow(id);
           if (body.metadata !== undefined) updateFlowMetadata(id, body.metadata);
           if (body.status !== undefined) refreshTrigger(id);
           const flow = scopedFlow(req, id);
