@@ -17,6 +17,14 @@ export type AuthorityDecisionType = 'allowed' | 'denied' | 'approval_required';
  */
 export type ResolutionChannel = 'click' | 'voice' | 'chat' | 'notification' | 'system';
 
+/**
+ * How a side effect ended, written on the row that settles it:
+ * `succeeded` ran, `failed` ran and errored, `not_started` was refused or
+ * denied before anything ran, `unknown` may have run, and `dispatched` was
+ * handed to its provider with the receipt still to come.
+ */
+export type AuditOutcome = 'succeeded' | 'failed' | 'not_started' | 'unknown' | 'dispatched';
+
 export type AuditEntry = {
   id: string;
   agent_id: string;
@@ -29,6 +37,25 @@ export type AuditEntry = {
   execution_time_ms: number | null;
   created_at: number;
   channel: ResolutionChannel | null;
+  effect_id?: string | null;
+  outcome?: AuditOutcome | null;
+  /** The device or session that decided: `dashboard:<device id>`, or the surface name. */
+  decided_by?: string | null;
+  entry_key?: string | null;
+};
+
+/**
+ * One owner-facing entry: every row of one side effect read as one. The ledger
+ * itself is append-only (a decision, a dispatch and a receipt are separate
+ * rows); this is how it is read.
+ */
+export type AuditLedgerEntry = AuditEntry & {
+  /** Rows written for this entry. */
+  events: number;
+  /** When the last row was written. */
+  updated_at: number;
+  /** The name of the enrolled device named in `decided_by`, when it is still enrolled. */
+  decided_device?: string | null;
 };
 
 export class AuditTrail {
@@ -46,14 +73,29 @@ export class AuditTrail {
     execution_time_ms?: number | null;
     /** Resolution channel for forensics. Optional; defaults to null. */
     channel?: ResolutionChannel | null;
+    /** The workflow effect this row belongs to. Found from `approval_id` when omitted. */
+    effect_id?: string | null;
+    /** How the effect ended, on the row that settles it. */
+    outcome?: AuditOutcome | null;
+    /** The device or session that decided, on a decision row. */
+    decided_by?: string | null;
   }): AuditEntry {
     const db = getDb();
     const id = generateId();
     const now = Date.now();
+    // A decision row knows its approval, not its effect: the link is found so
+    // the decision lands in the same entry as the effect it decided.
+    let effectId = entry.effect_id ?? null;
+    if (!effectId && entry.approval_id) {
+      try {
+        effectId = (db.query('SELECT id FROM workflow_effect WHERE approval_id = ?').get(entry.approval_id) as { id: string } | null)?.id ?? null;
+      } catch { /* No workflow tables: not a workflow approval. */ }
+    }
+    const entryKey = effectId ?? entry.approval_id ?? id;
 
     db.run(
-      `INSERT INTO audit_trail (id, agent_id, agent_name, tool_name, action_category, authority_decision, approval_id, executed, execution_time_ms, created_at, channel)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO audit_trail (id, agent_id, agent_name, tool_name, action_category, authority_decision, approval_id, executed, execution_time_ms, created_at, channel, effect_id, outcome, decided_by, entry_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         entry.agent_id,
@@ -66,6 +108,10 @@ export class AuditTrail {
         entry.execution_time_ms ?? null,
         now,
         entry.channel ?? null,
+        effectId,
+        entry.outcome ?? null,
+        entry.decided_by ?? null,
+        entryKey,
       ]
     );
 
@@ -81,11 +127,16 @@ export class AuditTrail {
       execution_time_ms: entry.execution_time_ms ?? null,
       created_at: now,
       channel: entry.channel ?? null,
+      effect_id: effectId,
+      outcome: entry.outcome ?? null,
+      decided_by: entry.decided_by ?? null,
+      entry_key: entryKey,
     };
   }
 
   /**
-   * Query audit entries with filters.
+   * Query audit rows with filters, one per write. `queryEntries` is the owner's
+   * view, one per side effect.
    */
   query(filters?: {
     agentId?: string;
@@ -129,7 +180,86 @@ export class AuditTrail {
   }
 
   /**
-   * Get aggregate statistics.
+   * The ledger as the owner reads it: one entry per side effect (a workflow
+   * effect, or an approval), not one per row written. An entry carries the
+   * first row's identity, `authority_decision` `denied` when any row denied,
+   * the `outcome` of the last row that settled it, who decided, and how many
+   * rows back it. `executed` is 1 only when the outcome is `succeeded`; an
+   * entry with no settling row (written before outcomes were recorded) keeps
+   * what its rows said.
+   */
+  queryEntries(filters?: {
+    agentId?: string;
+    action?: ActionCategory;
+    tool?: string;
+    decision?: AuthorityDecisionType;
+    since?: number;
+    limit?: number;
+  }): AuditLedgerEntry[] {
+    const db = getDb();
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (filters?.agentId) { conditions.push('f.agent_id = ?'); values.push(filters.agentId); }
+    if (filters?.action) { conditions.push('f.action_category = ?'); values.push(filters.action); }
+    if (filters?.tool) { conditions.push('f.tool_name = ?'); values.push(filters.tool); }
+    if (filters?.since) { conditions.push('f.created_at >= ?'); values.push(filters.since); }
+    if (filters?.decision) {
+      conditions.push(`(CASE WHEN g.any_denied = 1 THEN 'denied' ELSE f.authority_decision END) = ?`);
+      values.push(filters.decision);
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const limit = filters?.limit ?? 100;
+    const rows = db.query(
+      `SELECT f.*, g.events, g.last_at, g.any_denied, g.any_executed,
+         (SELECT o.outcome FROM audit_trail o WHERE o.entry_key = g.k AND o.outcome IS NOT NULL
+            ORDER BY o.created_at DESC, o.rowid DESC LIMIT 1) AS final_outcome,
+         (SELECT d.decided_by FROM audit_trail d WHERE d.entry_key = g.k AND d.decided_by IS NOT NULL
+            ORDER BY d.created_at DESC, d.rowid DESC LIMIT 1) AS final_decided_by,
+         (SELECT c.channel FROM audit_trail c WHERE c.entry_key = g.k AND c.channel IS NOT NULL
+            ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1) AS final_channel,
+         (SELECT x.execution_time_ms FROM audit_trail x WHERE x.entry_key = g.k AND x.execution_time_ms IS NOT NULL
+            ORDER BY x.created_at DESC, x.rowid DESC LIMIT 1) AS final_time
+       FROM (SELECT COALESCE(entry_key, id) AS k, MIN(rowid) AS first_rowid, COUNT(*) AS events, MAX(created_at) AS last_at,
+               MAX(authority_decision = 'denied') AS any_denied, MAX(executed) AS any_executed
+             FROM audit_trail GROUP BY COALESCE(entry_key, id)) g
+       JOIN audit_trail f ON f.rowid = g.first_rowid
+       ${where}
+       ORDER BY f.created_at DESC, f.rowid DESC LIMIT ?`,
+    ).all(...[...values, limit] as any[]) as Array<AuditEntry & {
+      events: number; last_at: number; any_denied: number; any_executed: number;
+      final_outcome: AuditOutcome | null; final_decided_by: string | null; final_channel: ResolutionChannel | null; final_time: number | null;
+    }>;
+    return rows.map(({ events, last_at, any_denied, any_executed, final_outcome, final_decided_by, final_channel, final_time, ...row }) => {
+      const outcome = final_outcome ?? row.outcome ?? null;
+      const decidedBy = final_decided_by ?? row.decided_by ?? null;
+      return {
+        ...row,
+        authority_decision: any_denied ? 'denied' as const : row.authority_decision,
+        executed: outcome ? (outcome === 'succeeded' ? 1 : 0) : any_executed ? 1 : 0,
+        outcome,
+        decided_by: decidedBy,
+        decided_device: this.deviceName(decidedBy),
+        channel: final_channel ?? row.channel ?? null,
+        execution_time_ms: final_time ?? row.execution_time_ms ?? null,
+        events,
+        updated_at: last_at,
+      };
+    });
+  }
+
+  /** The name of the enrolled device in `dashboard:<device id>`, or null. */
+  private deviceName(decidedBy: string | null): string | null {
+    const id = decidedBy?.startsWith('dashboard:') ? decidedBy.slice('dashboard:'.length) : null;
+    if (!id) return null;
+    try {
+      return (getDb().query('SELECT name FROM sidecars WHERE id = ?').get(id) as { name: string } | null)?.name ?? null;
+    } catch { return null; }
+  }
+
+  /**
+   * Aggregate statistics over entries, not rows: one approved notification is
+   * one, however many rows it wrote. Counted by the entry's own decision
+   * (`denied` when any row denied) and by how it ended.
    */
   getStats(since?: number): {
     total: number;
@@ -137,17 +267,18 @@ export class AuditTrail {
     denied: number;
     approvalRequired: number;
     byCategory: Record<string, number>;
+    byOutcome: Record<string, number>;
   } {
     const db = getDb();
-    const sinceClause = since ? `WHERE created_at >= ${since}` : '';
-
-    const totals = db.query(
-      `SELECT authority_decision, COUNT(*) as count FROM audit_trail ${sinceClause} GROUP BY authority_decision`
-    ).all() as { authority_decision: string; count: number }[];
-
-    const categories = db.query(
-      `SELECT action_category, COUNT(*) as count FROM audit_trail ${sinceClause} GROUP BY action_category`
-    ).all() as { action_category: string; count: number }[];
+    const having = since ? `HAVING MIN(created_at) >= ${Math.floor(Number(since))}` : '';
+    // The bare columns come from the row `MIN(rowid)` picks: the entry's first row.
+    const groups = db.query(
+      `SELECT MIN(rowid) AS first_rowid, authority_decision, action_category,
+         MAX(authority_decision = 'denied') AS any_denied, MAX(executed) AS any_executed,
+         (SELECT o.outcome FROM audit_trail o WHERE o.entry_key = COALESCE(a.entry_key, a.id) AND o.outcome IS NOT NULL
+            ORDER BY o.created_at DESC, o.rowid DESC LIMIT 1) AS final_outcome
+       FROM audit_trail a GROUP BY COALESCE(entry_key, id) ${having}`,
+    ).all() as { authority_decision: string; action_category: string; any_denied: number; any_executed: number; final_outcome: string | null }[];
 
     const stats = {
       total: 0,
@@ -155,19 +286,18 @@ export class AuditTrail {
       denied: 0,
       approvalRequired: 0,
       byCategory: {} as Record<string, number>,
+      byOutcome: {} as Record<string, number>,
     };
-
-    for (const row of totals) {
-      stats.total += row.count;
-      if (row.authority_decision === 'allowed') stats.allowed = row.count;
-      if (row.authority_decision === 'denied') stats.denied = row.count;
-      if (row.authority_decision === 'approval_required') stats.approvalRequired = row.count;
+    for (const group of groups) {
+      stats.total += 1;
+      const decision = group.any_denied ? 'denied' : group.authority_decision;
+      if (decision === 'allowed') stats.allowed += 1;
+      if (decision === 'denied') stats.denied += 1;
+      if (decision === 'approval_required') stats.approvalRequired += 1;
+      stats.byCategory[group.action_category] = (stats.byCategory[group.action_category] ?? 0) + 1;
+      const outcome = group.final_outcome ?? (group.any_denied ? 'not_started' : group.any_executed ? 'succeeded' : 'pending');
+      stats.byOutcome[outcome] = (stats.byOutcome[outcome] ?? 0) + 1;
     }
-
-    for (const row of categories) {
-      stats.byCategory[row.action_category] = row.count;
-    }
-
     return stats;
   }
 }

@@ -24,6 +24,8 @@ export interface ApprovalDecisionDeps {
   wsService?: { broadcastApprovalUpdate(request: ApprovalRequest): void } | null;
   /** Records each decision with the surface it came from (Q-08). */
   auditTrail?: Pick<AuditTrail, 'log'> | null;
+  /** The enrolled device whose dashboard session decided, when one did. Audit only. */
+  decidedDevice?: string | null;
 }
 
 /** The audit channel a decision surface writes (Q-08). */
@@ -42,6 +44,10 @@ function auditDecision(deps: ApprovalDecisionDeps, request: ApprovalRequest, dec
       action_category: request.action_category as ActionCategory,
       authority_decision: decision === 'approve' ? 'allowed' : 'denied',
       approval_id: request.id, executed: false, channel: resolutionChannel(decidedBy),
+      // Which device decided: `dashboard` alone cannot tell two of them apart.
+      decided_by: deps.decidedDevice ? `${decidedBy}:${deps.decidedDevice}` : decidedBy,
+      // A denial settles the entry: nothing will run.
+      ...(decision === 'deny' ? { outcome: 'not_started' as const } : {}),
     });
   } catch (err) {
     console.warn('[Approval] could not audit a decision:', err instanceof Error ? err.message : err);

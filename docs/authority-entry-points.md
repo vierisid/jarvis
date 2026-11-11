@@ -108,6 +108,27 @@ decision a person makes is audited with its surface, and every receipt with
 its outcome. A card closed without a person (Kill, a cancelled task, the
 24-hour expiry) is recorded on the card: its status, and who closed it.
 
+## The audit ledger
+
+The ledger (`audit_trail`) is append-only. A side effect writes a row when it
+is asked, a row when it is decided and a row when it settles, and no row is
+ever rewritten. Rows are linked, not merged: each carries `effect_id` (the
+workflow effect, found from the approval for a decision row), `outcome` on the
+row that settles it, and `decided_by` on a decision row (`dashboard:<device id>`
+for a dashboard session, otherwise the surface).
+
+The owner reads one entry per side effect. `GET /api/authority/audit` returns
+entries (first row's identity; `denied` when any row denied; `outcome` of the
+last settling row; `executed` is 1 only when the outcome is `succeeded`;
+`events` rows behind it; `decided_by` and the device's name). `?rows=all`
+returns every row. `GET /api/authority/audit/stats` counts entries, with a
+`byOutcome` breakdown. An entry's outcome is one of `succeeded`, `failed`,
+`not_started` (refused or denied before anything ran), `unknown`, or
+`dispatched` (a piece's send was handed to the engine and no receipt has said
+how it ended). A send the engine's egress guard refused reads `not_started`,
+not executed. Entries written before outcomes were recorded keep what their
+rows said. Entries are grouped by effect, else by approval, else by row.
+
 ## Limits
 
 - Voice cannot grant or revoke Authority permissions; those remain clicks.
