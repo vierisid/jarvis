@@ -581,23 +581,35 @@ async function readWriteBody(
 const FLOW_DISPLAY_NAME_MAX_CHARS = 512;
 
 /**
- * The caller's `displayName`, or the refusal. Same shape as
+ * True when a name has nothing a person can see: only whitespace, control,
+ * zero-width or bidi format characters (U+200B, U+202E, U+FEFF), or lone
+ * surrogates. Kept separate from any character-class rule on the name. The
+ * Brief list applies the same test to rows already stored
+ * (`ui/src/brief/workflows/manage-list/model.ts`).
+ */
+const NO_VISIBLE_CHARACTER = /^[\s\p{Cc}\p{Cf}\p{Cs}\p{Z}]*$/u;
+
+/**
+ * The caller's `displayName`, trimmed, or the refusal. A name that is only
+ * whitespace is refused like an empty one: it renders as a blank row, and the
+ * All workflows page used to fail to load while one existed. Same shape as
  * `readWriteBody`, and it returns the NARROWED string so a caller cannot
  * validate and then pass the unnarrowed value on.
  */
 function validDisplayName(raw: unknown): { name: string } | { error: Response } {
-  if (typeof raw !== "string" || raw.length === 0) {
+  const name = typeof raw === "string" ? raw.trim() : "";
+  if (NO_VISIBLE_CHARACTER.test(name)) {
     return { error: err("displayName is required and must be a non-empty string") };
   }
-  if (raw.length > FLOW_DISPLAY_NAME_MAX_CHARS) {
+  if (name.length > FLOW_DISPLAY_NAME_MAX_CHARS) {
     return {
       error: err(
-        `displayName is ${raw.length} characters; the limit is ${FLOW_DISPLAY_NAME_MAX_CHARS}`,
+        `displayName is ${name.length} characters; the limit is ${FLOW_DISPLAY_NAME_MAX_CHARS}`,
         413,
       ),
     };
   }
-  return { name: raw };
+  return { name };
 }
 
 /**

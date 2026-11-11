@@ -551,7 +551,8 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           //     short-circuits the silent-empty-flow failure mode the
           //     user reported. The error message walks the agent toward
           //     the right next call.
-          const name = requireString(params, "name");
+          const name = requireString(params, "name").trim();
+          if (!name) throw new Error("'name' parameter is required and must be a non-empty string");
           const description = typeof params["description"] === "string" ? params["description"].trim() : "";
           if (description.length > 0) {
             const composed = await actCompose(name, description, deps, project, params["contract"], params["install_missing"] !== false, undefined, approvedInstalls(params, deps));

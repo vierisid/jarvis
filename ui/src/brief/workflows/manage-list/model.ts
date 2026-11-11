@@ -68,6 +68,12 @@ export interface WorkflowManagementPort {
 const text = (s: unknown, max = 4000): s is string =>
   typeof s === "string" && s.length <= max;
 const id = (s: unknown): s is string => text(s, 500) && !!s.trim();
+/** Shown for a workflow stored with an empty or whitespace-only name. Older
+ * installs can hold one: the create route used to accept "   ". */
+export const UNTITLED_WORKFLOW = "Untitled workflow";
+/** No visible character: whitespace, control, zero-width or bidi format
+ * characters, lone surrogates. Same test as the create route. */
+const NO_VISIBLE_CHARACTER = /^[\s\p{Cc}\p{Cf}\p{Cs}\p{Z}]*$/u;
 const fail = (): never => {
   throw Error("Invalid workflow management projection");
 };
@@ -78,7 +84,6 @@ export function validateWorkflow(w: ManagedWorkflow): ManagedWorkflow {
     !(w.versionId === null || id(w.versionId)) ||
     !id(w.revision) ||
     !text(w.name) ||
-    !w.name.trim() ||
     !text(w.description) ||
     !text(w.trigger) ||
     !["ENABLED", "DISABLED"].includes(w.activation) ||
@@ -96,7 +101,7 @@ export function validateWorkflow(w: ManagedWorkflow): ManagedWorkflow {
     flowId: w.flowId,
     versionId: w.versionId,
     revision: w.revision,
-    name: w.name,
+    name: NO_VISIBLE_CHARACTER.test(w.name) ? UNTITLED_WORKFLOW : w.name,
     description: w.description,
     trigger: w.trigger,
     activation: w.activation,
@@ -107,14 +112,26 @@ export function validateWorkflow(w: ManagedWorkflow): ManagedWorkflow {
       : null,
   };
 }
+/** One malformed row must not take the whole list down: it is left out and
+ * counted, so the room can say plainly that some could not be shown. A wrong
+ * owner or a duplicate ID still fails the whole list, because then the list
+ * itself cannot be trusted. */
 export function validateList(
   list: WorkflowList,
   scopeId: string,
-): WorkflowList {
+): WorkflowList & { skipped: number } {
   if (!list || list.scopeId !== scopeId || !Array.isArray(list.items)) fail();
-  const items = list.items.map(validateWorkflow);
+  const items: ManagedWorkflow[] = [];
+  let skipped = 0;
+  for (const raw of list.items) {
+    try {
+      items.push(validateWorkflow(raw));
+    } catch {
+      skipped++;
+    }
+  }
   if (new Set(items.map((w) => w.flowId)).size !== items.length) fail();
-  return { scopeId, items };
+  return { scopeId, items, skipped };
 }
 export function validateResult(
   result: ManageResult,

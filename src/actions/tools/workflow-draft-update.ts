@@ -109,8 +109,8 @@ export function updateSavedDraft(input: {
     const validation = compileWorkflow(graph, { ...input.context, phase: 'composition' });
     if (!validation.ready) fail('edited graph is invalid: ' + validation.issues.slice(0, 5).map(i => `${i.node} (${i.path}): ${i.message}`).join('; '));
     input.validateContract?.(graph);
-    const changed = JSON.stringify(graph) !== JSON.stringify(version.trigger) || input.name !== undefined && input.name !== version.displayName;
+    const changed = JSON.stringify(graph) !== JSON.stringify(version.trigger) || input.name !== undefined && input.name.trim() !== version.displayName;
     if (!changed) return { version, changed: false };
-    return { version: updateDraftVersion(version.id, { trigger: graph, ...(typeof input.name === 'string' ? { displayName: input.name } : {}) }), changed: true };
+    return { version: updateDraftVersion(version.id, { trigger: graph, ...(typeof input.name === 'string' ? { displayName: input.name.trim() } : {}) }), changed: true };
   }).immediate();
 }

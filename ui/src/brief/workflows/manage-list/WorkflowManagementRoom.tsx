@@ -228,6 +228,13 @@ function BoundManagement({
                 : "Workflows could not be loaded. Your pending changes are retained."}
         </p>
       )}
+      {state.skipped > 0 && (
+        <p role="status" className="brief-management-notice">
+          {state.skipped === 1
+            ? "One workflow could not be shown."
+            : `${state.skipped} workflows could not be shown.`}
+        </p>
+      )}
       <div
         className="brief-management-scroll"
         tabIndex={0}

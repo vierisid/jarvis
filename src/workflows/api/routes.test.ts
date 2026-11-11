@@ -274,6 +274,33 @@ describe("#598: flow metadata is validated and bounded on the way in", () => {
     expect((await create({ displayName: "N".repeat(512) })).status).toBe(201);
   });
 
+  test("a whitespace-only displayName is refused and a padded one is stored trimmed", async () => {
+    expect((await create({ displayName: "   " })).status).toBe(400);
+    expect((await create({ displayName: "\t\n " })).status).toBe(400);
+    for (const invisible of ["\u200b\u200b", "\u202e", "\ufeff", "\u0000", "\ud800", " \u200d\u2060 "])
+      expect((await create({ displayName: invisible })).status).toBe(400);
+    expect((await create({ displayName: "a\u200bb" })).status).toBe(201);
+    const padded = await create({ displayName: "  Weekly digest  " });
+    expect(padded.status).toBe(201);
+    expect((padded.body as { version: { displayName: string } }).version.displayName).toBe("Weekly digest");
+
+    const id = await makeFlow();
+    const postVersion = (b: unknown) =>
+      callJson(
+        routes["/api/workflows/:id/versions"]?.POST,
+        reqWithParams("POST", `http://x/api/workflows/${id}/versions`, { id }, b),
+      );
+    expect((await postVersion({ displayName: "   " })).status).toBe(400);
+    const made = await postVersion({ displayName: " v2 " });
+    expect((made.body as { displayName: string }).displayName).toBe("v2");
+    const versionId = (made.body as { id: string }).id;
+    const patched = await callJson(
+      routes["/api/workflows/:id/versions/:versionId"]?.PATCH,
+      reqWithParams("PATCH", `http://x/api/workflows/${id}/versions/${versionId}`, { id, versionId }, { displayName: "   " }),
+    );
+    expect(patched.status).toBe(400);
+  });
+
   test("displayName is bounded on both version write routes too", async () => {
     const id = await makeFlow();
     const postVersion = (b: unknown) =>
