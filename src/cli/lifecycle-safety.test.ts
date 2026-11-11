@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   clearLaunchRecord,
+  detachedDaemonArgs,
   ensurePortReleased,
+  isPortFree,
   isOwnJarvisCommand,
   parsePortArg,
   readLaunchRecord,
@@ -68,6 +70,26 @@ describe('ensurePortReleased leaves unrelated listeners alone', () => {
   });
 });
 
+describe('ensurePortReleased before SIGKILL', () => {
+  test('proves the pid is still ours again, so a pid reused during the wait is not killed', async () => {
+    const child = Bun.spawn(
+      ['bun', '-e', 'process.on("SIGTERM", () => {}); const s = Bun.serve({ port: 0, fetch: () => new Response("x") }); console.log(s.port); setInterval(() => {}, 1000);'],
+      { stdout: 'pipe', stderr: 'ignore' },
+    );
+    children.push(child);
+    const { value } = await child.stdout.getReader().read();
+    const port = Number.parseInt(new TextDecoder().decode(value).trim(), 10);
+    let asked = 0;
+
+    // Ours when first looked at, someone else's by the time SIGTERM has been ignored.
+    const result = await ensurePortReleased(port, process.pid, async (p) => p === child.pid && ++asked === 1);
+
+    expect(asked).toBe(2);
+    expect(result.forced).toEqual([]);
+    expect(() => process.kill(child.pid, 0)).not.toThrow();
+  }, 10_000);
+});
+
 describe('isOwnJarvisCommand', () => {
   test('matches this install by real path, including through a symlink', () => {
     const link = join(SANDBOX, 'bin-link', 'jarvis');
@@ -129,5 +151,37 @@ describe('isOwnJarvisCommand with a relative path', () => {
   test('is read from the process directory, not ours', () => {
     expect(isOwnJarvisCommand(['bun', '--no-env-file', 'run', 'bin/jarvis.ts', 'start'], ENTRY, join(ENTRY, '..', '..'))).toBe(true);
     expect(isOwnJarvisCommand(['bun', 'run', 'bin/jarvis.ts', 'start'], ENTRY, SANDBOX)).toBe(false);
+  });
+});
+
+describe('start -d hands its child every option', () => {
+  test('--no-local-tools, --data-dir, --port and --system-config reach the detached daemon', () => {
+    expect(detachedDaemonArgs('/x/bin/jarvis.ts', {
+      port: 3195, dataDir: '/d', noLocalTools: true, systemConfigPath: '/etc/j.yaml',
+    })).toEqual([
+      '/x/bin/jarvis.ts', 'start', '--no-open', '--port', '3195', '--data-dir', '/d', '--no-local-tools', '--system-config', '/etc/j.yaml',
+    ]);
+    expect(detachedDaemonArgs('/x/bin/jarvis.ts', { noLocalTools: false })).toEqual(['/x/bin/jarvis.ts', 'start', '--no-open']);
+  });
+});
+
+describe('isPortFree', () => {
+  test('a port held on 0.0.0.0 is busy; a free one is free', async () => {
+    const { port } = await startUnrelatedListener();
+    expect(await isPortFree(port)).toBe(false);
+    const probe = Bun.serve({ port: 0, fetch: () => new Response('') });
+    const freed = probe.port!;
+    probe.stop(true);
+    expect(await isPortFree(freed)).toBe(true);
+  });
+
+  test('a listener on ::1 only does not block the 0.0.0.0 bind the daemon makes', async () => {
+    let held: ReturnType<typeof Bun.serve>;
+    try { held = Bun.serve({ hostname: '::1', port: 0, fetch: () => new Response('') }); } catch { return; /* no IPv6 here */ }
+    try {
+      expect(await isPortFree(held.port!)).toBe(true);
+    } finally {
+      held.stop(true);
+    }
   });
 });

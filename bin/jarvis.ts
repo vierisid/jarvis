@@ -23,7 +23,7 @@ import { existsSync, openSync, readFileSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { acquireLock, releaseLock, releaseLockIfUnheld, isLocked, readLockedPort, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
-import { clearLaunchRecord, daemonOwnsPort, describeDashboard, ensurePortReleased, isPortFree, parsePortArg, readLaunchRecord, resolveDashboardTarget, resolveStopPort, restartStartArgs, writeLaunchRecord } from '../src/cli/lifecycle.ts';
+import { clearLaunchRecord, daemonOwnsPort, describeDashboard, detachedDaemonArgs, ensurePortReleased, isPortFree, parsePortArg, readLaunchRecord, resolveDashboardTarget, resolveStopPort, restartStartArgs, writeLaunchRecord } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
 import { loadConfig } from '../src/config/loader.ts';
 import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
@@ -198,7 +198,11 @@ async function cmdStart(args: string[]): Promise<void> {
     // DRAIN before exiting. A `process.exit(0)` from the CLI would preempt that
     // async teardown mid-flight. The OS auto-releases the flock on exit anyway.
     process.on('exit', () => { releaseLock(); clearLaunchRecord(); });
-    writeLaunchRecord({ pid: process.pid, detached: false, noOpen, noLocalTools, port, dataDir, systemConfigPath });
+    // A record already under this pid is the one `start -d` wrote for us as its
+    // detached child; keep it, or `restart` would come back in the foreground.
+    if (!readLaunchRecord(process.pid)) {
+      writeLaunchRecord({ pid: process.pid, detached: false, noOpen, noLocalTools, port, dataDir, systemConfigPath });
+    }
 
     const { startDaemon } = await import('../src/daemon/index.ts');
     await startDaemon({ port, dataDir, noLocalTools, systemConfigPath });
@@ -230,13 +234,7 @@ async function cmdStart(args: string[]): Promise<void> {
 
     const logPath = getLogPath();
 
-    const daemonArgs = [join(PACKAGE_ROOT, 'bin/jarvis.ts'), 'start', '--no-open'];
-    if (port) daemonArgs.push('--port', String(port));
-    // Forward --system-config into the detached child: without this, a hosted
-    // `jarvis start -d` would re-enter cmdStart in the child with no flag,
-    // and the daemon would (silently) fall back to ~/.jarvis/config.yaml,
-    // defeating the whole point of the flag.
-    if (systemConfigPath) daemonArgs.push('--system-config', systemConfigPath);
+    const daemonArgs = detachedDaemonArgs(join(PACKAGE_ROOT, 'bin/jarvis.ts'), { port, dataDir, noLocalTools, systemConfigPath });
 
     // We redirect the child's stdout AND stderr into logPath. If
     // daemon.log_file_path names this same file the child does NOT install its
@@ -253,6 +251,14 @@ async function cmdStart(args: string[]): Promise<void> {
       env: { ...process.env },
     });
     child.unref();
+    // Recorded now, under the child's pid, rather than only once it answers:
+    // a start that is interrupted or outlasts the wait below still leaves a
+    // daemon that `restart` must bring back detached. Any record already there
+    // is a dead daemon's (nothing holds the lock), and the child keeps this one
+    // instead of writing its own foreground record.
+    clearLaunchRecord();
+    const launch = { detached: true, noOpen, noLocalTools, port, dataDir, systemConfigPath };
+    if (child.pid !== undefined) writeLaunchRecord({ pid: child.pid, ...launch });
     let childExited = false;
     child.on('exit', () => { childExited = true; });
 
@@ -270,7 +276,7 @@ async function cmdStart(args: string[]): Promise<void> {
     }
 
     if (runningPid) {
-      writeLaunchRecord({ pid: runningPid, detached: true, noOpen, noLocalTools, port, dataDir, systemConfigPath });
+      if (runningPid !== child.pid) writeLaunchRecord({ pid: runningPid, ...launch });
       console.log(c.green(`✓ JARVIS daemon started (PID ${runningPid})`));
       console.log(c.dim(`  Dashboard: ${dashboard.label}`));
       console.log(c.dim(`  Logs:      ${logPath}`));

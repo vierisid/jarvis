@@ -174,6 +174,11 @@ export async function ensurePortReleased(
       continue;
     }
 
+    // Two seconds is long enough for the pid to have been freed and handed to
+    // someone else: prove it is still ours before the signal that cannot be
+    // caught.
+    if (!await isOurs(pid)) continue;
+
     try {
       process.kill(pid, 'SIGKILL');
       if (await waitForExit(pid, 1000)) {
@@ -195,12 +200,17 @@ export async function ensurePortReleased(
   };
 }
 
-/** True when nothing is bound to `port` (checked by binding it, as the daemon will). */
+/**
+ * True when nothing is bound to `port` (checked by binding it the way the
+ * daemon will: Bun.serve with no hostname takes 0.0.0.0). A plain
+ * `listen({ port })` takes `::` instead, which also collides with a listener on
+ * ::1 only and would refuse a port the daemon could have bound.
+ */
 export function isPortFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const server = createServer();
     server.once('error', () => resolve(false));
-    server.listen({ port }, () => server.close(() => resolve(true)));
+    server.listen({ port, host: '0.0.0.0' }, () => server.close(() => resolve(true)));
   });
 }
 
@@ -250,6 +260,30 @@ export function parsePortArg(args: string[]): { port: number | undefined } | { e
   const port = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : NaN;
   if (!Number.isInteger(port) || port < 1 || port > 65535) return { error: message };
   return { port };
+}
+
+/**
+ * The command line `jarvis start -d` hands its detached child, which re-enters
+ * `start` in the foreground. Every option that changes what the daemon does
+ * must be forwarded: `--no-local-tools` used to be dropped here, so
+ * `start -d --no-local-tools` ran a daemon WITH local tools, and `--data-dir`
+ * pointed it at the default data dir.
+ */
+export function detachedDaemonArgs(entry: string, opts: {
+  port?: number;
+  dataDir?: string;
+  noLocalTools: boolean;
+  systemConfigPath?: string;
+}): string[] {
+  const args = [entry, 'start', '--no-open'];
+  if (opts.port) args.push('--port', String(opts.port));
+  if (opts.dataDir) args.push('--data-dir', opts.dataDir);
+  if (opts.noLocalTools) args.push('--no-local-tools');
+  // Without this a hosted `jarvis start -d` would re-enter cmdStart in the
+  // child with no flag, and the daemon would (silently) fall back to
+  // ~/.jarvis/config.yaml, defeating the whole point of the flag.
+  if (opts.systemConfigPath) args.push('--system-config', opts.systemConfigPath);
+  return args;
 }
 
 /** How the running daemon was started, so `jarvis restart` can start it the same way. */
