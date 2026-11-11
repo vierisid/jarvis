@@ -9,9 +9,12 @@
  *
  * The response body is what the server chose to send, so it is redacted with
  * the same rules as the approval card and the receipt (`redactCredentials`)
- * before any of it is shown, and only the first part is kept.
+ * before any of it is shown, and only the first part is kept. It is quoted,
+ * so it never reads as Jarvis's own words, and frame delimiters in it are
+ * defanged as in every other receipt text (`boundedReceiptText`).
  */
 import { STATUS_CODES } from 'node:http';
+import { boundedReceiptText } from '../../roles/untrusted';
 import { redactCredentials } from './piece-effects';
 
 /** How much of a response body a failure sentence quotes. */
@@ -30,8 +33,16 @@ export interface HttpFailure {
 
 /** A timeout, as axios and Node name one. */
 function timedOut(code: string | undefined): boolean {
-  return code === 'ECONNABORTED' || code === 'ETIMEDOUT' || code === 'ERR_CANCELED';
+  return code === 'ECONNABORTED' || code === 'ETIMEDOUT';
 }
+
+/**
+ * Errors raised before a connection to the server existed: the name did not
+ * resolve, or the address refused or could not be routed to. Anything else
+ * with no response (a reset, a closed socket, a TLS or redirect failure) may
+ * have come after the request was written, so it is not called unreachable.
+ */
+const NOT_CONNECTED = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH']);
 
 /** The first part of a response body as one redacted line of text, or ''. */
 export function bodyExcerpt(body: unknown): string {
@@ -44,7 +55,12 @@ export function bodyExcerpt(body: unknown): string {
     return '';
   }
   text = text.replace(/\s+/gu, ' ').trim();
-  return text.length > FAILURE_BODY_CHARS ? `${text.slice(0, FAILURE_BODY_CHARS)}...` : text;
+  return boundedReceiptText(text.length > FAILURE_BODY_CHARS ? `${text.slice(0, FAILURE_BODY_CHARS)}...` : text, FAILURE_BODY_CHARS + 3);
+}
+
+/** The server's own words, quoted, so they are never read as Jarvis's. */
+function quoted(text: string): string {
+  return `"${text.replaceAll('"', "'")}"`;
 }
 
 function hostOf(url: string): string {
@@ -63,13 +79,14 @@ export function describeHttpFailure(failure: HttpFailure, request: { url: string
         ? `The request timed out after ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`
         : 'The request timed out.';
     }
-    return `Could not reach ${hostOf(request.url)}.`;
+    if (failure.code !== undefined && NOT_CONNECTED.has(failure.code)) return `Could not reach ${hostOf(request.url)}.`;
+    return `The connection to ${hostOf(request.url)} failed before an answer came back${failure.code ? ` (${failure.code})` : ''}.`;
   }
   const status = failure.status ?? 0;
   const reason = STATUS_CODES[status];
   const head = `The server answered ${status}${reason ? ` ${reason}` : ''}.`;
   const excerpt = bodyExcerpt(failure.body);
-  return excerpt ? `${head} It said: ${excerpt}` : head;
+  return excerpt ? `${head} It said: ${quoted(excerpt)}` : head;
 }
 
 /** A 408, 429, any 5xx, or no response at all: worth sending again. 4xx otherwise is not. */
@@ -138,5 +155,5 @@ export function graphqlErrorMessage(body: unknown): string | null {
     : first !== null && typeof first === 'object' && typeof (first as { message?: unknown }).message === 'string' ? (first as { message: string }).message
     : '';
   const text = bodyExcerpt(raw);
-  return text ? `The GraphQL server reported an error: ${text}` : 'The GraphQL server reported an error.';
+  return text ? `The GraphQL server reported an error: ${quoted(text)}` : 'The GraphQL server reported an error.';
 }

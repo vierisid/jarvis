@@ -401,8 +401,8 @@ export const httpSendRequestAction = createAction({
             return fail();
           }
           case 'retry_5xx': {
-            if (failure.hasResponse && failure.status !== undefined && failure.status < 500 && failure.status !== 408 && failure.status !== 429) {
-              return continuedFailure(failure, message); // a 4xx: the flow continues
+            if (failure.hasResponse && failure.status !== undefined && failure.status < 500) {
+              return continuedFailure(failure, message); // below 500, 408 and 429 included: the flow continues, as before
             }
             if (retry) continue;
             return fail();
