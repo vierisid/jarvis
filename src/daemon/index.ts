@@ -143,6 +143,7 @@ import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
 import { channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
+import { approvalHeldByAwareness } from "../authority/approval-provenance.ts";
 import { sendDesktopNotification, sendDesktopNotificationReceipt } from "../comms/desktop-notify.ts";
 import { channelLabel, failureText, projectFailure } from "../failures/projection.ts";
 import { bindingRefusalNotifier, workflowRunNotice } from "../workflows/runtime/binding-refusals.ts";
@@ -4611,6 +4612,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       if (awarenessService) awarenessService.toggle(cfg.awareness?.enabled !== false);
       else if (cfg.awareness?.enabled !== false) await startAwarenessIfNeeded();
       if (cfg.awareness?.enabled === false) closeSwitchedOffWorkflowCards();
+      // Back on: the screen-derived approval cards held while it was off go out now.
+      else void approvalDelivery.resumeHeld((id) => approvalManager.getRequest(id));
       // The glyph follows the stored choice too, on every pebble (#1157).
       // Not awaited: appliers run in one serialized queue, and a sidecar RPC can take 30s to give up.
       void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
@@ -4744,6 +4747,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (sidecarManager.getConnectedSidecars().length === 0) return;
         for (const req of approvalManager.getPending()) {
           if (notifiedApprovalIds.has(req.id)) continue;
+          // Held while screen awareness is off (#1314 follow-up): not shown,
+          // and not marked as notified, so it is if awareness comes back soon.
+          if (approvalHeldByAwareness(req)) continue;
           notifiedApprovalIds.add(req.id);
           if (Date.now() - req.created_at > 60_000) continue; // skip the backlog
           // Approve/Deny only when the toast can show the full request.

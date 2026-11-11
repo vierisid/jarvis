@@ -187,6 +187,18 @@ test('notification permission renders the reviewed message, destination and occu
   transport.stop();
 });
 
+// #1314 follow-up: a screen-derived permission held while screen awareness is off says so.
+test('a held permission says it is held while screen awareness is off, in the list and on the card', async () => {
+  const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const held = 'Held while screen awareness is off: this request came from what was on your screen. Turn screen awareness back on to approve it; it is still waiting.';
+  const row = { decisionId: 'approval:held', revision: 'r', kind: 'permission', state: 'pending', title: 'Send a reply', held,
+    review: { toolName: 'send_email', reason: 'Approval required' }, supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
+  expect(host.querySelector('.brief-decision-hint')?.textContent).toBe('Held while screen awareness is off.');
+  expect(host.querySelector('.brief-decision-document [role="note"]')?.textContent).toBe(held);
+  transport.stop();
+});
+
 test('permission list reports its real count to suppress the unrelated document empty state', async () => {
   const counts: (number | null)[] = [];
   const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);

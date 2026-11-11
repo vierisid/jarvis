@@ -39,6 +39,7 @@ import { runWithOrigin } from '../llm/origin.ts';
 import { BackgroundThrottled, currentAdmission, runWithAdmission } from '../llm/background-budget.ts';
 import { commitmentPromptLine } from '../vault/commitment-text.ts';
 import { AwarenessHeldError, awarenessHeldLlm, awarenessHistoryVisible } from '../awareness/history-guard.ts';
+import { runWithApprovalProvenance } from '../authority/approval-provenance.ts';
 
 /** How one background turn runs. */
 export interface BackgroundTurnOptions {
@@ -254,8 +255,11 @@ export class BackgroundAgentService implements Service, IAgentService {
         const thread = options.screenDerived ? { history: [] } : null;
         // Inside `run`, not around handleMessage: turns are chained, and a
         // queued turn runs in whichever context resolved the one before it.
+        const runTurn = () => this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, null, thread, null, hold);
+        // Every approval a screen-derived turn raises is marked so at creation:
+        // it is held while screen awareness is off (#1314 follow-up).
         const turn = () => runWithOrigin('background', () =>
-          this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, null, thread, null, hold));
+          options.screenDerived ? runWithApprovalProvenance('screen', runTurn) : runTurn());
         return await runWithAdmission(admission, turn);
       } catch (err) {
         // A refused admission is not an answer. Returned as text it would be

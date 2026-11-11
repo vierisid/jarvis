@@ -13,6 +13,7 @@ import type { OnboardingRuntime } from '../onboarding-next/runtime/runtime.ts';
 import { DEBUG_RPC_HEADER, debugRpcGate, debugRpcTokenMatches } from './debug-rpc-gate.ts';
 import type { HealthMonitor } from './health.ts';
 import { applyApprovalDecision, applyExecutionResolution, heldApprovalMessage } from './approval-decision.ts';
+import { approvalHeldByAwareness, AWARENESS_HELD_APPROVAL_MESSAGE } from '../authority/approval-provenance.ts';
 import { executionState } from '../authority/approval.ts';
 import { createWorkItemRoutes } from '../goals/work-item-routes.ts';
 import { isPermissionName, readSystemPermissions, requestSystemPermission } from './system-permissions.ts';
@@ -3693,6 +3694,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const enriched = rows.map((r) => ({
           ...r,
           execution_state: executionState(r),
+          // A screen-derived request while screen awareness is off: approving waits (#1314 follow-up).
+          held: r.status === 'pending' && approvalHeldByAwareness(r) ? AWARENESS_HELD_APPROVAL_MESSAGE : null,
           impact: impactFromCategory(r.action_category as ActionCategory),
           // `intent` is the joined sentence; since #792 `intent_action` and
           // `intent_reason` carry its two parts apart, so a card can show the

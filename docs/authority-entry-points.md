@@ -74,6 +74,15 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
   refuses an approval from anywhere else.
 - **One dispatch.** The decision is a compare-and-set and execution takes one
   claim, so two surfaces deciding at once run it once.
+- **Where it came from.** A request raised by a screen-derived background
+  turn (error and struggle research, the event reactor's turns on awareness
+  events) is marked so when it is created. While screen awareness is off it
+  is held: no card is delivered to the dashboard, a chat channel or a
+  notification, and one being sent stops before its next retry; approving it
+  waits, the card stays pending and says it is held while screen awareness is
+  off (denying still works); and the executor refuses to run it, taking no
+  claim. When awareness is back on it is approvable again, and the cards held
+  meanwhile are delivered. Every other request is unchanged.
 
 ## Pause and Kill
 

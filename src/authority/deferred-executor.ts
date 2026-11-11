@@ -20,6 +20,7 @@ import { boundedReceiptText, splitToolReturn } from '../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../actions/tools/template-delivery-scope.ts';
 import { runAsReviewed } from '../actions/tools/reviewed-call-scope.ts';
 import { runAsApproved } from './approved-action-scope.ts';
+import { approvalHeldByAwareness, AWARENESS_HELD_APPROVAL_MESSAGE } from './approval-provenance.ts';
 
 // Defined next to substituteAboveLevel, which writes it; re-exported here,
 // where the approval learner reads it.
@@ -38,6 +39,12 @@ export type ApprovedReceipt = {
   outside?: string;
   /** Repo-authored text a tool handed over to sit AFTER the frame (#708). */
   trailer?: string;
+  /**
+   * Set when nothing ran because the request is held (#1314 follow-up): a
+   * screen-derived request while screen awareness is off. Not claimed; a
+   * deferred row is put back to pending, so it can be approved again.
+   */
+  held?: 'awareness_off';
 };
 
 /**
@@ -229,6 +236,14 @@ export class DeferredExecutor {
 
     if (!this.toolRegistry) {
       return { claimed: false, result: 'Error: No tool registry configured' };
+    }
+
+    // Raised from what was on the screen, and screen awareness is off now
+    // (#1314 follow-up): refused before the claim, so nothing ran and nothing
+    // is recorded as a run. A deferred row goes back to pending, not denied.
+    if (approvalHeldByAwareness(request)) {
+      this.approvalManager.reopenUnclaimed(requestId);
+      return { claimed: false, held: 'awareness_off', result: `Approved action ${request.tool_name} was NOT executed: ${AWARENESS_HELD_APPROVAL_MESSAGE}` };
     }
 
     // One executor per approval. A second caller, or a daemon restarted after

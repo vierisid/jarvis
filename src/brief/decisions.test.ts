@@ -19,6 +19,8 @@ import { saveWorkflowEffect, getWorkflowEffect, claimWorkflowEffect, type Workfl
 import { WorkflowEffectBoundary, type EffectInvocation } from '../workflows/runtime/effect-boundary';
 import { resumeResolvedWorkflowEffects } from '../workflows/runtime/effect-approval-scheduler';
 import { DecisionQueue } from './decisions';
+import { runWithApprovalProvenance, AWARENESS_HELD_APPROVAL_MESSAGE } from '../authority/approval-provenance';
+import { setScreenCaptureEnabledSource } from '../actions/tools/desktop-guard';
 
 let directory: string, file: string, queue: DecisionQueue, manager: ApprovalManager, executor: DeferredExecutor;
 let calls: number;
@@ -347,6 +349,30 @@ test('Pause holds and Kill refuses a Brief approval: the card stays pending and 
       controller.reset();
     }
   } finally { setActiveEmergencyController(null); }
+});
+
+// #1314 follow-up (owner decision 2026-11-11): a screen-derived request is held while screen awareness is off.
+test('a screen-derived card says it is held while screen awareness is off, waits on approve, and is approvable once it is back on', async () => {
+  let on = true; setScreenCaptureEnabledSource(() => on);
+  try {
+    const a = runWithApprovalProvenance('screen', () => approval());
+    const plain = approval();
+    expect(queue.get(`approval:${a.id}`).held).toBeUndefined();
+    on = false;
+    const item = queue.get(`approval:${a.id}`);
+    expect(item.held).toBe(AWARENESS_HELD_APPROVAL_MESSAGE);
+    expect(item.supportedActions).toContain('reject_permission');
+    expect(queue.get(`approval:${plain.id}`).held).toBeUndefined();
+    await expect(queue.resolve(item.decisionId, { revision: item.revision, action: 'approve_permission' })).rejects.toMatchObject({ status: 409, code: 'held' });
+    expect(manager.getRequest(a.id)!.status).toBe('pending'); expect(calls).toBe(0);
+    on = true;
+    const back = queue.get(`approval:${a.id}`);
+    // The switch changes the card, so an approve read while it was off is stale.
+    expect(back.revision).not.toBe(item.revision);
+    expect(back.held).toBeUndefined();
+    await queue.resolve(back.decisionId, { revision: back.revision, action: 'approve_permission' });
+    expect(calls).toBe(1);
+  } finally { setScreenCaptureEnabledSource(null); }
 });
 
 test('a click-only card is approvable from the Brief queue as a dashboard click (Q-08)', async () => {

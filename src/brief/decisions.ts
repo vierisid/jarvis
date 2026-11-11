@@ -15,6 +15,7 @@ import type { BriefWorkflowRef } from './contracts';
 import type { DecisionAction, DecisionQuery, DecisionResolution, QueuedDecision } from './decision-contracts';
 import { ensureDecisionSchema } from './decision-schema';
 import { WORKFLOW_REVIEWED_UI_TOOLS } from '../authority/ui-intent';
+import { approvalHeldByAwareness, AWARENESS_HELD_APPROVAL_MESSAGE } from '../authority/approval-provenance';
 
 export class DecisionError extends Error {
   constructor(message: string, readonly status = 400, readonly code = 'invalid_request') { super(message); }
@@ -182,6 +183,9 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
         // here too, decided as DASHBOARD_DECIDER through the same executor path.
         item.actions = ['approve', 'reject', 'inspect'];
         item.supportedActions = ['approve_permission', 'reject_permission', 'inspect'];
+        // Raised from the screen, with screen awareness off: approving waits
+        // and says so; rejecting still works (#1314 follow-up).
+        if (approvalHeldByAwareness(approval)) item.held = AWARENESS_HELD_APPROVAL_MESSAGE;
       } else if (approval.execution_mode !== 'workflow' && approval.status === 'approved' &&
         ['unknown', 'not_started'].includes(approval.execution_outcome ?? '') && !linked.rows.length) {
         item.kind = 'recovery';
