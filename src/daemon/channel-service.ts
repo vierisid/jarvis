@@ -502,11 +502,12 @@ export class ChannelService implements Service {
   async tryBroadcastToChannels(
     channels: string[],
     text: string,
+    options: RoutePerChannelOptions = {},
   ): Promise<ChannelDeliveryReport> {
     return routePerChannel(channels, text, {
       getAdapter: (name) => this.manager.getChannel(name) ?? null,
       getLastRecipient: (name) => this.getBroadcastRecipient(name),
-    });
+    }, options);
   }
 
   /**
@@ -1026,10 +1027,19 @@ export interface ChannelRouterServices {
   getLastRecipient: (name: string) => string | null;
 }
 
+/**
+ * `shouldContinue` is asked before each send (#1314 review): a caller whose
+ * permission to send can lapse while one channel is tried (screen awareness
+ * turned off during an opportunity's delivery) stops before the next one.
+ * A channel not tried is reported failed, so nothing reads as sent.
+ */
+export interface RoutePerChannelOptions { shouldContinue?: () => boolean }
+
 export async function routePerChannel(
   channels: string[],
   text: string,
   services: ChannelRouterServices,
+  options: RoutePerChannelOptions = {},
 ): Promise<ChannelDeliveryReport> {
   const delivered: string[] = [];
   const failed: { channel: string; error: string }[] = [];
@@ -1060,6 +1070,10 @@ export async function routePerChannel(
       checkpointExecution();
     } catch (err) {
       failed.push({ channel: name, error: err instanceof Error ? err.message : String(err) });
+      continue;
+    }
+    if (options.shouldContinue && !options.shouldContinue()) {
+      failed.push({ channel: name, error: 'held: the sender stopped before this channel was tried' });
       continue;
     }
     try {
