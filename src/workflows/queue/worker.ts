@@ -105,7 +105,7 @@ export class Worker {
     while (true) {
       // Paused or stopped: queued work waits (Q-08).
       if (emergencyHold()) return processed;
-      const job = claimNextJob({ leaseMs: this.leaseMs, serializeFlows: true });
+      const job = claimNextJob({ leaseMs: this.leaseMs });
       if (!job) return processed;
       await this.handle(job);
       processed++;
