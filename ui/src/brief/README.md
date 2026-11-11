@@ -191,6 +191,13 @@ mounted live yet; a composition root wires it after the rooms it targets are rea
 - `notifications.ts` and `AttentionRoutes.tsx` route approvals, failures and updates from the existing
   notification owner's rows, outside the conversation. A row is marked read only after its
   destination opened, by `source` plus `id`.
+- A workflow's dashboard notification is saved by the daemon (`dashboard_notifications`, newest 200
+  and 30 days). `useWebSocket` loads the unread ones when the socket opens and merges them by id with
+  the live message, so they join the same list, badge and toast as any proactive notice. Marking one
+  read in that list also marks it read on the daemon (`stored` on the notice).
+  The toast announces each new unread notice once (ids remembered in `jarvis:notif-toasted`), for a
+  few seconds, and stays inside the viewport. Timing out or opening the list never marks it read: it
+  stays in Needs you. Dismiss marks it read, as it did before.
 - `devices.ts` hands a device off to Settings > Sidecar with `sidecarId`. It never updates, revokes or
   enrolls.
 - Retained links use `?briefMaintenance=1&settingsTab=<tab>#/_room_settings`. `settingsTabFromHref`
