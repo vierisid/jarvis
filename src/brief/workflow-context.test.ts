@@ -187,9 +187,28 @@ test('legacy giant source, aggregate receipts and row counts are refused before 
   expect(large.steps).toEqual([]); expect(large.inspection.note).toContain('more step data than can be shown');
   db.run('UPDATE flow_run SET steps=NULL WHERE id=?', [r.id]);
   for (let i = 0; i < 201; i++) saveWorkflowEffect({ ...effect(r.id), id: `effect-${i}` });
-  expect(() => service.detail(flowId, r.id)).toThrow('inspection_capacity');
+  // Too many receipts to read is shown as too large (status stays), never refused: the page must stay up.
+  expect(service.detail(flowId, r.id).inspection.note).toContain('too large to show here');
   db.run('DELETE FROM workflow_effect'); saveWorkflowEffect({ ...effect(r.id), result: 'x'.repeat(INSPECTION_LIMITS.sourceBytes) });
-  expect(() => service.detail(flowId, r.id)).toThrow('inspection_capacity');
+  expect(service.detail(flowId, r.id).inspection.note).toContain('too large to show here');
+});
+test('a run too large to show keeps the canvas, version and its status, failure and timings', () => {
+  const r = run(); updateRun(r.id, { status: 'FAILED', failedStep: { name: 'b2', displayName: 'Join', message: 'It broke.' } as never });
+  for (let i = 0; i < 201; i++) saveWorkflowEffect({ ...effect(r.id), id: `effect-${i}` });
+  const selection = service.selection(flowId, versionId, r.id);
+  expect(selection.canvas.status).toBe('ready');
+  const detail = selection.run!;
+  expect(detail).toMatchObject({ runId: r.id, status: 'uncertain', steps: [], effects: [], waits: [] }); expect(detail.summary).toContain('Join');
+  expect(detail.createdAt).toBe(getFlowRun(r.id)!.created);
+  expect(detail.inspection.note).toContain('This run is too large to show here');
+  expect(selection.context.groups.bindings.status).toBe('unavailable');
+});
+test('a run whose steps outgrow one answer is shown without them, not refused', () => {
+  const r = run();
+  const wide = Object.fromEntries(Array.from({ length: 30 }, (_, k) => [`k${k}`, { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6 }]));
+  updateRun(r.id, { steps: Object.fromEntries(Array.from({ length: 150 }, (_, i) => [`s${i}`, { status: 'SUCCEEDED', input: wide, output: wide }])) });
+  const detail = service.selection(flowId, versionId, r.id).run!;
+  expect(detail.steps).toEqual([]); expect(detail.inspection.note).toContain('too large to show here');
 });
 test('deep/wide values are bounded and explicitly partial', () => {
   const field = inspectionValue('Output', Array.from({ length: 1000 }, () => ({ secret: 'private' })));
