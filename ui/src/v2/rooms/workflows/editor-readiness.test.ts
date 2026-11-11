@@ -20,3 +20,14 @@ test('zone gaps agree with server readiness: only a chosen zone is checked', () 
   // The server reads the first non-empty of the three cron keys.
   expect(gaps({ cron_expression: '', cronExpression: '0 9 * * *' })).toEqual([]);
 });
+test('a declared whitespace dropdown choice is filled in, as on the server; other blanks are still gaps', () => {
+  const catalog = [{ name: 'csv', displayName: 'CSV', description: '', triggers: [], actions: [{ name: 'convert_csv_to_json', displayName: '', description: '', inputSchema: { fields: [
+    { name: 'delimiter_type', label: 'Delimiter Type', type: 'enum' as const, required: true, options: [{ value: ',', label: 'Comma' }, { value: '\t', label: 'Tab' }] },
+    { name: 'csv_text', label: 'CSV Text', type: 'long_text' as const, required: true },
+  ] } }] }];
+  const csvGaps = (input: Record<string, unknown>) => collectValidationGaps(flattenSteps({ name: 'trigger', type: 'EMPTY',
+    nextAction: { name: 'step_1', type: 'PIECE', settings: { pieceName: 'csv', actionName: 'convert_csv_to_json', input } } } as never), catalog).map(x => x.fieldName);
+  expect(csvGaps({ delimiter_type: '\t', csv_text: 'a' })).toEqual([]);
+  expect(csvGaps({ delimiter_type: ' ', csv_text: '   ' })).toEqual(['delimiter_type', 'csv_text']);
+  expect(csvGaps({ delimiter_type: '', csv_text: '\t' })).toEqual(['delimiter_type', 'csv_text']);
+});

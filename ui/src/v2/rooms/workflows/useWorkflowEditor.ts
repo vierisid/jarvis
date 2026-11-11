@@ -17,6 +17,7 @@ import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../../../../src/lib/cron-scheduler';
 import { chosenScheduleZone } from '../../../../../src/workflows/runner/triggers/schedule-zone';
+import { emptyFieldInput } from '../../../../../src/workflows/runtime/input-validation';
 import type { ConnectionMeta } from "./useConnections";
 import {
   detectTriggerKind,
@@ -1665,7 +1666,9 @@ export function collectValidationGaps(steps: FlatStep[], catalog: PieceCatalogEn
     for (const field of schema.fields) {
       if (!field.required) continue;
       const v = input[field.name];
-      if (empty(v)) {
+      // A declared dropdown choice that is only whitespace (the CSV Tab
+      // delimiter) is a value, as on the server (workflow-readiness.ts).
+      if (emptyFieldInput(field, v)) {
         gaps.push({
           stepName: step.name,
           stepDisplayName: step.displayName ?? step.name,
