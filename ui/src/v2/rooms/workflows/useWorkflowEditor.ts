@@ -29,6 +29,7 @@ import {
   addStepToHead as treeAddStepToHead,
   allReachableNames,
   applySchemaDefaults,
+  buildControlFlowStep,
   cloneTrigger,
   connectSteps as treeConnectSteps,
   disconnectEdge as treeDisconnectEdge,
@@ -36,6 +37,7 @@ import {
   nextStepName,
   flattenSteps,
   insertStepAfter as treeInsertStepAfter,
+  isBlankStep,
   isSourceHandleConnected,
   parseSourceHandle,
   removeStep,
@@ -919,68 +921,37 @@ export function useWorkflowEditor(flowId: string | null) {
       kind: "LOOP_ON_ITEMS" | "IF" | "ROUTER",
     ): string | null => {
       const newName = nextEditorStepName();
-
-      let newStep: FlowStepNode;
-      if (kind === "LOOP_ON_ITEMS") {
-        newStep = {
-          name: newName,
-          type: "LOOP_ON_ITEMS",
-          displayName: "Loop on items",
-          settings: { items: "" },
-        };
-      } else if (kind === "IF") {
-        newStep = {
-          name: newName,
-          type: "ROUTER",
-          displayName: "If",
-          settings: {
-            executionType: "EXECUTE_FIRST_MATCH",
-            routerKind: "if",
-            branches: [
-              {
-                branchName: "True",
-                branchType: "CONDITION",
-                // Seed one empty condition so the panel opens with a
-                // ready-to-fill row rather than an "Add condition"
-                // button. Default operator is TEXT_EXACTLY_MATCHES
-                // since that's the most-common IF use case ("if
-                // {{step.field}} equals X").
-                conditions: [
-                  [{ firstValue: "", operator: "TEXT_EXACTLY_MATCHES", secondValue: "" }],
-                ],
-              },
-              { branchName: "False", branchType: "FALLBACK" },
-            ],
-          },
-          children: [null, null],
-        };
-      } else {
-        newStep = {
-          name: newName,
-          type: "ROUTER",
-          displayName: "Router",
-          settings: {
-            executionType: "EXECUTE_FIRST_MATCH",
-            routerKind: "router",
-            branches: [
-              {
-                branchName: "Branch 1",
-                branchType: "CONDITION",
-                conditions: [
-                  [{ firstValue: "", operator: "TEXT_EXACTLY_MATCHES", secondValue: "" }],
-                ],
-              },
-              { branchName: "Else", branchType: "FALLBACK" },
-            ],
-          },
-          children: [null, null],
-        };
-      }
+      const newStep = buildControlFlowStep(newName, kind);
       setDraftOrphans((prev) => [...prev, { node: newStep, x: flowPos.x, y: flowPos.y }]);
       setDirty(true);
       return newName;
     },
     [nextEditorStepName],
+  );
+
+  /**
+   * Turn a blank "Add next step" placeholder into a control-flow step in
+   * place, keeping its name, its place in the chain and whatever follows it.
+   * Returns false, and changes nothing, when the target is not blank (it has a
+   * piece, an action or inputs): swapping the type of a configured step would
+   * silently drop its settings, so the caller drops a loose node instead.
+   */
+  const replaceBlankStepWithControlFlow = useCallback(
+    (stepName: string, kind: "LOOP_ON_ITEMS" | "IF" | "ROUTER"): boolean => {
+      const target = (draftTrigger ? findStep(draftTrigger, stepName) : null)
+        ?? draftOrphans.map((o) => findStep(o.node, stepName)).find((s) => s) ?? null;
+      if (!target || !isBlankStep(target)) return false;
+      snapshotForUndo(`turn ${stepName} into ${kind}`);
+      mutateAnyStep(stepName, (step) => {
+        const built = buildControlFlowStep(step.name, kind);
+        step.type = built.type;
+        step.displayName = built.displayName;
+        step.settings = built.settings;
+        if (built.children) step.children = built.children;
+      });
+      return true;
+    },
+    [draftTrigger, draftOrphans, mutateAnyStep, snapshotForUndo],
   );
 
   /**
@@ -1513,6 +1484,7 @@ export function useWorkflowEditor(flowId: string | null) {
     stepPositions,
     createOrphanStep,
     createOrphanControlFlowStep,
+    replaceBlankStepWithControlFlow,
     save,
     reset,
     setStepSampleData,

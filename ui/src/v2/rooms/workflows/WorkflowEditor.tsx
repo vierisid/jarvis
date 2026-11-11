@@ -101,7 +101,7 @@ import {
   type PieceCatalogEntry,
   type PieceInputField,
 } from "./useWorkflowEditor";
-import { flattenSteps, pathToStep, withoutChosenZone } from "./tree";
+import { flattenSteps, isBlankStep, pathToStep, withoutChosenZone } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
 import { fetchFlowsForPicker, type FlowPickerEntry } from "./flow-picker-data";
@@ -281,6 +281,28 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
       node?.focus({preventScroll:true});
     });
   }, [workspace,selectedStepName]);
+
+  /**
+   * A step just added from the settings panel is a blank placeholder. Ask what
+   * it should be straight away, so a keyboard user can add a step, pick a
+   * piece, Loop, If or Router, and have it already in the chain without a
+   * mouse. Escape leaves the blank step where it is.
+   */
+  const chooseForNewStep = useCallback((created: string | null): void => {
+    if (!created) return;
+    if (workspace) setSelectedStepName(created);
+    else closePopover();
+    setLibraryPicker({ screen: popoverAnchor ?? { x: 100, y: 100 }, flow: { x: 0, y: 0 }, replaceStepName: created });
+  }, [workspace, closePopover, popoverAnchor]);
+
+  /** Put keyboard focus back on a node once the chooser has closed. */
+  const focusNode = useCallback((name: string): void => {
+    // Two frames: the chooser unmounts and the node re-renders first.
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const node = Array.from(rootRef.current?.querySelectorAll<HTMLElement>(".react-flow__node") ?? []).find((el) => el.dataset.id === name);
+      node?.focus({ preventScroll: true });
+    }));
+  }, []);
 
   // Auto-close the run-detail popover when overlay mode is exited or the
   // node it references is no longer in the graph. Keeps the popover from
@@ -601,14 +623,16 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
       // popover should also disable interaction visually but defending
       // here too in case a stale event sneaks through.
       if (pendingInstall) return;
-      // Replace-mode (clicking an empty piece) only makes sense for a
-      // piece-action pick. Control-flow nodes have a different identity
-      // and can't be slotted into a PIECE shell; route them to a new
-      // orphan instead of silently swapping types.
+      // Replace-mode (clicking an empty piece). A blank placeholder becomes
+      // the control-flow step in place, in the chain. A step that already has
+      // a piece, an action or inputs is not swapped silently (its settings
+      // would be lost): the control-flow step lands as a loose node instead.
       const replaceStepName = libraryPicker.replaceStepName ?? null;
       if (entry.kind === "control-flow") {
-        editor.createOrphanControlFlowStep(libraryPicker.flow, entry.controlType);
+        const replaced = !!replaceStepName && editor.replaceBlankStepWithControlFlow(replaceStepName, entry.controlType);
+        if (!replaced) editor.createOrphanControlFlowStep(libraryPicker.flow, entry.controlType);
         closeLibraryPicker();
+        if (replaced && replaceStepName) focusNode(replaceStepName);
         return;
       }
       if (entry.kind === "piece-action") {
@@ -618,6 +642,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
           editor.createOrphanStep(libraryPicker.flow, entry.piece.name, entry.action.name);
         }
         closeLibraryPicker();
+        if (replaceStepName) focusNode(replaceStepName);
         return;
       }
       // piece-uninstalled: install, refresh, place.
@@ -689,7 +714,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
         }
       })();
     },
-    [editor, library, libraryPicker, closeLibraryPicker, pendingInstall],
+    [editor, library, libraryPicker, closeLibraryPicker, focusNode, pendingInstall],
   );
 
   /**
@@ -870,13 +895,21 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
 
       <div className="wf-editor__body" inert={workspace && workspaceSaving} aria-busy={workspace && workspaceSaving || undefined}>
       <section ref={canvasRef} className="wf-editor__canvas" aria-label="Workflow graph" onKeyDownCapture={event => {
-        if (!workspace || !(event.target instanceof HTMLElement) || !event.target.matches(".react-flow__node")) return;
-        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closePopover(); return; }
+        if (!(event.target instanceof HTMLElement) || !event.target.matches(".react-flow__node")) return;
+        if (event.key === "Escape") { if (!workspace) return; event.preventDefault(); event.stopPropagation(); closePopover(); return; }
         if (event.key !== "Enter" && event.key !== " ") return;
         const id = event.target.dataset.id;
         if (!id) return;
         event.preventDefault(); event.stopPropagation();
         const rect = event.target.getBoundingClientRect();
+        // A blank placeholder opens the chooser, as clicking it does, so a
+        // piece, Loop, If or Router can be placed from the keyboard.
+        const focused = editor.allSteps.find((entry) => entry.step.name === id)?.step;
+        if (!workspace && !readOnly && focused && isBlankStep(focused)) {
+          closePopover();
+          setLibraryPicker({ screen: { x: rect.right, y: rect.top }, flow: { x: 0, y: 0 }, replaceStepName: id });
+          return;
+        }
         setSelectedStepName(id); setPopoverAnchor({x:rect.right,y:rect.top});
         window.requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(".wf-popover[data-open=true] .wf-popover__close")?.focus({preventScroll:true}));
       }}>
@@ -1035,10 +1068,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
               if (!trimmed) return;
               editor.updateStep(selectedStep.name, { displayName: trimmed });
             }}
-            onAddStepAfter={() => {
-              const created = editor.insertStepAfter(selectedStep.name);
-              if (created) setSelectedStepName(created);
-            }}
+            onAddStepAfter={() => chooseForNewStep(editor.insertStepAfter(selectedStep.name))}
             onDelete={async () => {
               if (await confirmDialog(`Delete step "${selectedStep.displayName ?? selectedStep.name}"?`)) {
                 editor.deleteStep(selectedStep.name);
@@ -1047,10 +1077,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             }}
             // LOOP-specific
             onSetLoopItems={(items) => editor.setLoopItems(selectedStep.name, items)}
-            onAddStepToLoopBody={() => {
-              const created = editor.addStepToHead({ kind: "loop", parentName: selectedStep.name });
-              if (created) setSelectedStepName(created);
-            }}
+            onAddStepToLoopBody={() => chooseForNewStep(editor.addStepToHead({ kind: "loop", parentName: selectedStep.name }))}
             // ROUTER-specific
             onSetRouterExecutionType={(t) => editor.setRouterExecutionType(selectedStep.name, t)}
             onAddRouterBranch={(name) => editor.addRouterBranch(selectedStep.name, name)}
@@ -1058,10 +1085,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             onSetBranchConditions={(idx, conditions) =>
               editor.setBranchConditions(selectedStep.name, idx, conditions)
             }
-            onAddStepToBranch={(branchName) => {
-              const created = editor.addStepToHead({ kind: "branch", parentName: selectedStep.name, branchName });
-              if (created) setSelectedStepName(created);
-            }}
+            onAddStepToBranch={(branchName) => chooseForNewStep(editor.addStepToHead({ kind: "branch", parentName: selectedStep.name, branchName }))}
             sampleData={editor.version?.sampleData?.[selectedStep.name]}
             sampleInput={editor.version?.sampleInput?.[selectedStep.name]}
             isLocked={editor.version?.state === "LOCKED"}
