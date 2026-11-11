@@ -96,7 +96,7 @@ import {
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { deleteWorkflow } from "../db/repos/flow-deletion";
-import { dependentsSentence, missingDependency, workflowsCalling, workflowsUsingConnection } from "../db/repos/flow-dependents";
+import { connectionDependents, dependentsSentence, missingDependency, workflowsCalling } from "../db/repos/flow-dependents";
 import { claimContinuation } from "../runtime/continuation";
 import { flowBindingBlock } from "../runtime/binding-refusals";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
@@ -1311,10 +1311,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       GET: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const project = callerProject(req);
-          const connection = getConnectionInProject(project, id);
-          if (!connection) return err("connection not found", 404);
-          const usedBy = workflowsUsingConnection(project, connection.externalId);
+          const usedBy = connectionDependents(callerProject(req), id);
+          if (!usedBy) return err("connection not found", 404);
           const warning = dependentsSentence("connection", usedBy);
           return ok({ usedBy, ...(warning ? { warning } : {}) });
         }),
@@ -1325,9 +1323,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const project = callerProject(req);
           // Read before the row goes: the published workflows bound to it
-          // are told to the caller, since their steps keep naming it.
-          const connection = getConnectionInProject(project, id);
-          const usedBy = connection ? workflowsUsingConnection(project, connection.externalId) : [];
+          // are told to the caller, since their steps keep naming it. Read
+          // without decrypting it, so an unreadable connection still deletes.
+          const usedBy = connectionDependents(project, id) ?? [];
           if (!deleteConnectionInProject(project, id)) return err("connection not found", 404);
           const warning = dependentsSentence("connection", usedBy);
           return ok({ id, deleted: true, usedBy, ...(warning ? { warning } : {}) });
@@ -1718,7 +1716,6 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // effects to be recorded, and removes what the flow leaves (run
           // logs, step files, store keys, the cards of ended runs). An effect
           // still in flight after the wait answers 409 and the flow stays.
-          const usedBy = workflowsCalling(project, id);
           const outcome = await deleteWorkflow(project, id);
           if (outcome.status === "not_found") return err("flow not found", 404);
           if (outcome.status === "stopping") {
@@ -1731,6 +1728,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             }, 409);
           }
           refreshTrigger(id);
+          // Read once the delete went through, after its wait for in-flight
+          // effects, and only in the caller's project.
+          const usedBy = workflowsCalling(project, id);
           const warning = dependentsSentence("workflow", usedBy);
           return ok({ ok: true, usedBy, ...(warning ? { warning } : {}) });
         }),

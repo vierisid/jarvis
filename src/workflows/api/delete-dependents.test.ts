@@ -26,8 +26,8 @@ const call = async (handler: unknown, method: string, id?: string) => {
 };
 
 /** A published, enabled workflow whose only step is `step`. */
-function published(name: string, step?: Record<string, unknown>) {
-  const flow = createFlow();
+function published(name: string, step?: Record<string, unknown>, projectId?: string) {
+  const flow = createFlow(projectId ? { projectId } : {});
   const version = createDraftVersion({ flowId: flow.id, displayName: name, trigger: { name: "trigger", type: "EMPTY", settings: {},
     ...(step ? { nextAction: { ...step, name: "step_1", displayName: "Do the thing", valid: true } } : {}) } as never });
   lockVersion(version.id);
@@ -89,4 +89,56 @@ test("a draft that is not published is not named as a dependent", async () => {
   const draft = createFlow();
   createDraftVersion({ flowId: draft.id, displayName: "Draft caller", trigger: { name: "trigger", type: "EMPTY", settings: {}, nextAction: { ...callsChild(child.id), name: "step_1" } } as never });
   expect((await call(routes["/api/workflows/:id/dependents"]?.GET, "GET", child.id)).body.usedBy).toEqual([]);
+});
+
+test("a connection whose secret cannot be decrypted any more still previews and deletes", async () => {
+  const conn = upsertConnection({ externalId: "stale-key", displayName: "Stale", type: "SECRET_TEXT", pieceName: "@activepieces/piece-foo", pieceVersion: "0.0.1", value: { secret_text: "s" } });
+  const user = published("Uses stale", usesConnection("stale-key"));
+  // The key it was sealed with is gone (a restored backup, a reset key file).
+  setEncryptionKey(Buffer.alloc(32, 0x34));
+  const preview = await call(routes["/api/workflows/connections/:id/dependents"]?.GET, "GET", conn.id);
+  expect(preview.status).toBe(200);
+  expect(preview.body.usedBy).toEqual([{ id: user.id, name: "Uses stale" }]);
+  const del = await call(routes["/api/workflows/connections/:id"]?.DELETE, "DELETE", conn.id);
+  expect(del.status).toBe(200);
+  expect(del.body.usedBy).toEqual([{ id: user.id, name: "Uses stale" }]);
+});
+
+test("a Jarvis step's account field counts as binding the connection, as the run's connection scope reads it", async () => {
+  const stripe = upsertConnection({ externalId: "acct-stripe", displayName: "Stripe", type: "SECRET_TEXT", pieceName: "@activepieces/piece-stripe", pieceVersion: "0.0.1", value: { secret_text: "s" } });
+  const refunds = published("Refunds", { type: "PIECE", settings: { pieceName: "@jarvispieces/piece-jarvis-refund", actionName: "approval_refund", input: { stripeConnection: "acct-stripe" } } });
+  const preview = await call(routes["/api/workflows/connections/:id/dependents"]?.GET, "GET", stripe.id);
+  expect(preview.body.usedBy).toEqual([{ id: refunds.id, name: "Refunds" }]);
+  await call(routes["/api/workflows/connections/:id"]?.DELETE, "DELETE", stripe.id);
+  expect((await listed(refunds.id)).blocked).toMatchObject({ code: "DEPENDENCY_MISSING",
+    message: 'The step "Do the thing" uses the connection "acct-stripe", which was deleted. Connect it again.' });
+});
+
+test("deleting one of two connections that share an external id names nobody, since the other still resolves it", async () => {
+  const first = upsertConnection({ externalId: "shared-id", displayName: "A", type: "SECRET_TEXT", pieceName: "@activepieces/piece-foo", pieceVersion: "0.0.1", value: { secret_text: "s" } });
+  upsertConnection({ externalId: "shared-id", displayName: "B", type: "SECRET_TEXT", pieceName: "@activepieces/piece-bar", pieceVersion: "0.0.1", value: { secret_text: "s" } });
+  const user = published("Uses shared", usesConnection("shared-id"));
+  const del = await call(routes["/api/workflows/connections/:id"]?.DELETE, "DELETE", first.id);
+  expect(del.body).toEqual({ id: first.id, deleted: true, usedBy: [] });
+  expect((await listed(user.id)).blocked).toBeNull();
+});
+
+test("another project's workflows that name the same id are never named", async () => {
+  const child = published("Child");
+  published("Elsewhere", callsChild(child.id), "other-project");
+  expect((await call(routes["/api/workflows/:id/dependents"]?.GET, "GET", child.id)).body.usedBy).toEqual([]);
+  const del = await call(routes["/api/workflows/:id"]?.DELETE, "DELETE", child.id);
+  expect(del.body).toEqual({ ok: true, usedBy: [] });
+});
+
+test("a workflow name cannot add lines to the confirmation or reorder it", async () => {
+  const child = published("Child");
+  published("Weekly\n\nNothing else uses this.\u202e", callsChild(child.id));
+  const preview = await call(routes["/api/workflows/:id/dependents"]?.GET, "GET", child.id);
+  expect(preview.body.warning).toBe('"Weekly Nothing else uses this." calls this workflow and will need setup.');
+});
+
+test("a step whose workflow is computed when it runs is not reported as calling a deleted workflow", async () => {
+  const caller = published("Computed", { type: "PIECE", settings: { pieceName: "@jarvispieces/piece-jarvis-trigger", actionName: "run_workflow", input: { flow: "{{trigger.body.flow}}" } } });
+  expect((await listed(caller.id)).blocked).toBeNull();
 });
