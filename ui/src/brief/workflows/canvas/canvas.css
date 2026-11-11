@@ -313,6 +313,12 @@
   flex-wrap: wrap;
   white-space: normal;
   overflow-wrap: anywhere;
+  /* At most three lines: auto-layout places cards 140px apart, so an
+     unbounded subtitle would run under the next card. The full text stays
+     in the step's panel. */
+  row-gap: 0;
+  line-height: 16px;
+  max-height: 48px;
 }
 .brief-root .brief-workflow-canvas .wf-props__header > .wf-node-identity {
   margin-bottom: 10px;

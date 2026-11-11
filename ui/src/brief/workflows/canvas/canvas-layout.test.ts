@@ -22,3 +22,11 @@ test("node subtitles wrap instead of being cut mid-word", () => {
   expect(body).toContain("white-space: normal");
   expect(body).toContain("overflow-wrap: anywhere");
 });
+
+test("a node subtitle stops at three lines so it never runs under the next card", () => {
+  const body = rule(".brief-root .brief-workflow-canvas .wf-node__body");
+  // Auto-layout spaces cards 140px apart; a card is 84px before its subtitle grows.
+  expect(body).toContain("row-gap: 0");
+  expect(body).toContain("line-height: 16px");
+  expect(body).toContain("max-height: 48px");
+});
