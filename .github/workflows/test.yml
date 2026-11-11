@@ -158,7 +158,16 @@ jobs:
       # #683: release.yml waits for the release it dispatches. The watcher only
       # runs on a real release, so it is tested here against a fake gh.
       - run: .github/scripts/watch-release-run.test.sh
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xdotool && echo JARVIS_REQUIRE_XDOTOOL_SHIM=1 >> "$GITHUB_ENV" # linux.test.ts runs the real xdotool's argument parsing (#518)
+      # linux.test.ts runs the real xdotool's argument parsing (#518). When
+      # security.ubuntu.com cannot be reached (2026-11-11: hours of DNS
+      # failures on the runners) the install falls back to the release
+      # pocket, which the archive mirror serves; xdotool's arguments do not
+      # change between the two.
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends xdotool \
+            || sudo apt-get install -y -qq --no-install-recommends -t "$(lsb_release -cs)" xdotool
+          echo JARVIS_REQUIRE_XDOTOOL_SHIM=1 >> "$GITHUB_ENV"
       # --retry=2 (3 attempts per test), NOT a retry around the whole step.
       # Every flake this suite has produced in CI is a per-test hook timing out
       # on a loaded runner -- a headless Chromium slow to answer CDP
