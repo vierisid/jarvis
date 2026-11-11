@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { getDb } from '../vault/schema';
 import { approvalIntentFromContext, DASHBOARD_DECIDER, executionState } from '../authority/approval';
 import { applyApprovalDecision, applyExecutionResolution, heldApprovalMessage, type ApprovalDecisionDeps } from '../daemon/approval-decision';
-import { decideWorkItem, getWorkItem } from '../goals/work-items';
+import { checkWorkResult, decideWorkItem, getWorkItem } from '../goals/work-items';
 import { DEFAULT_IDS } from '../workflows/db/index';
 import { getFlowInProject } from '../workflows/db/repos/flow';
 import { getFlowVersion } from '../workflows/db/repos/flow-version';
@@ -200,6 +200,9 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       linked = this.effects('run_id', runId ?? '');
       if (linked.unresolved) item.state = linked.unresolved;
       if (work.status === 'proposed' && !linked.unresolved) item.supportedActions = ['accept_intent', 'reject_intent', 'inspect'];
+      // An accepted step the founder does themselves ends in their own word: done, or not doing it.
+      // Workflow work finishes through its run, so it is not offered here.
+      else if (work.status === 'ready' && work.mode === 'manual' && !linked.unresolved) item.supportedActions = ['mark_done', 'not_doing', 'inspect'];
     } else {
       linked = this.effects('id', sourceId);
       const effect = linked.rows[0]!;
@@ -328,14 +331,22 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       if (body.action === ('inspect' as DecisionAction) || !current.supportedActions.includes(body.action)) throw new DecisionError('Action is not supported for this revision', 409, 'unsupported_action');
     };
     validate();
-    const intent = body.action === 'accept_intent' || body.action === 'reject_intent';
+    const finish = body.action === 'mark_done' || body.action === 'not_doing';
+    const intent = body.action === 'accept_intent' || body.action === 'reject_intent' || finish;
     if (intent ? !text(body.reason, 10_000) || body.note !== undefined : body.reason !== undefined) throw new DecisionError('Intent decisions require a reason; permission decisions do not accept one');
     if (body.note !== undefined && (body.action !== 'close_without_running' || !text(body.note, 500))) throw new DecisionError('Only closing accepts a note of at most 500 characters');
     // The existing writers commit approval/claims before dispatch. The optional
     // guard checks this projection in that same write transaction, including
     // changes by legacy surfaces or another process. Never wrap tool execution.
     const authority = { ...this.authority, assertCurrent: validate };
-    if (intent) this.db.transaction(() => {
+    if (finish) this.db.transaction(() => {
+      validate();
+      // The user's own words are the evidence of an explicit result check. Doing it
+      // is a passed check; not doing it is a failed one, which never counts as saved time.
+      checkWorkResult(item.workItemId!, { verdict: body.action === 'mark_done' ? 'passed' : 'failed', summary: body.reason,
+        evidence: [{ ref: 'dashboard:needs-you', description: body.reason }] });
+    }).immediate();
+    else if (intent) this.db.transaction(() => {
       validate();
       decideWorkItem(item.workItemId!, { outcome: body.action === 'accept_intent' ? 'accepted' : 'rejected', reason: body.reason });
     }).immediate();

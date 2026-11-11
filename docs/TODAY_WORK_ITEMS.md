@@ -62,6 +62,13 @@ its legacy active goal-row response for existing clients and independent rhythms
    Check, progress and commitment completion commit atomically. A second check
    returns 409; retrieve the existing result after an uncertain HTTP response.
 
+The Needs you queue (`POST /api/brief/decisions/:id/resolve`) finishes accepted
+manual work that is `ready` and unblocked, using the result route above. `mark_done`
+records a passed check and `not_doing` a failed one. Both require a `reason`, which
+becomes the check summary and its only evidence, so a bare click never verifies work.
+Neither records time: minutes saved come only from workflow work with recorded time
+evidence, and a failed check never counts. Workflow work finishes through its run.
+
 Due dates on linked commitments are metadata. Legacy commitment scheduling,
 automatic due events and reminder context exclude linked work, regardless of its
 decision or mode. Workflow work starts through the linked run endpoint; manual
