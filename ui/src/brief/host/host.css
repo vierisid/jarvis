@@ -18,11 +18,12 @@
 .brief-root .brief-attention-item h3 { margin: 0; font-size: 16px; }
 .brief-root .brief-attention-item p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
 .brief-root .brief-attention-item button { min-height: 44px; color: var(--brief-focus); }
-.brief-root.brief-host-toast { position: fixed; bottom: 28px; right: 88px; z-index: 100; width: min(420px, calc(100vw - 40px)); padding: 24px; background: var(--brief-paper); color: var(--brief-ink); border: 1px solid var(--brief-paper-edge); border-radius: var(--brief-corner-card); box-shadow: 0 8px 24px var(--brief-menu-shadow); }
-.brief-host-toast p { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
-.brief-host-toast button { padding: 12px; min-height: 44px; cursor: pointer; }
-.brief-host-toast button:focus-visible { outline: 2px solid var(--brief-focus); }
-@media (max-width: 640px) { .brief-host-toast { right: 20px; bottom: 80px; } }
+.brief-root.brief-host-toast { position: fixed; bottom: 20px; right: 20px; z-index: 100; box-sizing: border-box; width: min(360px, calc(100vw - 40px)); padding: 16px; background: var(--brief-paper); color: var(--brief-ink); border: 1px solid var(--brief-paper-edge); border-radius: var(--brief-corner-card); box-shadow: 0 8px 24px var(--brief-menu-shadow); }
+.brief-root.brief-host-toast p { max-height: 96px; margin: 8px 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.brief-root.brief-host-toast .brief-host-toast-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.brief-root.brief-host-toast button { padding: 8px 12px; min-height: 44px; cursor: pointer; }
+.brief-root.brief-host-toast button:focus-visible { outline: 2px solid var(--brief-focus); }
+@media (max-width: 640px) { .brief-root.brief-host-toast { bottom: 72px; } }
 
 .brief-root .brief-host-pending .brief-decision-document p { margin: 0 0 18px; max-width: 70ch; }
 .brief-root .brief-host-pending .brief-decision-subtitle { margin: 4px 0 0; color: var(--brief-secondary); font-size: 14px; }
