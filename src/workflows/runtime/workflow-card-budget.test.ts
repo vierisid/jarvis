@@ -83,12 +83,12 @@ function services(approvals: ApprovalManager, governed: string[] = DEFAULT_GOVER
         ? { content: 'done', finish_reason: 'end_turn', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 } }
         : { content: '', finish_reason: 'tool_use', tool_calls: [{ id: 'call-1', name: call.name, arguments: call.args }], usage: { input_tokens: 1, output_tokens: 1 } },
     } as never,
-    channelService: {} as never, wsService: {} as never });
+    channelService: { getBroadcastRecipient: () => 'recipient', getChannelStatus: () => ({}) } as never, wsService: {} as never });
 }
 
 const ctx = (runId: string, stepName: string) => ({ runId, projectId: DEFAULT_IDS.project, stepName, executionPath: [] as Array<[string, number]> });
 const notifyIn = (s: ReturnType<typeof services>, runId: string) =>
-  s.notify!({ message: 'hi', channels: ['dashboard'], priority: 'normal' }, ctx(runId, 'notify'));
+  s.notify!({ message: 'hi', channels: ['telegram'], priority: 'normal' }, ctx(runId, 'notify'));
 const delegateIn = (s: ReturnType<typeof services>, runId: string) =>
   s.agentDelegate!({ goal: 'Coordinate', role: ROLE.id }, ctx(runId, 'delegate'));
 const pendingOf = (approvals: ApprovalManager, category: string) =>
@@ -447,7 +447,7 @@ describe('every governed workflow card counts against its flow\'s budget (#1039)
     const looped = flow('Looping notifier', { name: 'loop', type: 'LOOP_ON_ITEMS', displayName: 'loop', settings: { items: '{{trigger.items}}' },
       firstLoopAction: { name: 'notify', type: 'PIECE', displayName: 'notify',
         settings: { pieceName: '@jarvispieces/piece-jarvis-notify', pieceVersion: '0.0.1', actionName: 'notify', input: { message: 'hi' } } } } as never);
-    const pass = (runId: string, i: number) => s.notify!({ message: 'hi', channels: ['dashboard'], priority: 'normal' },
+    const pass = (runId: string, i: number) => s.notify!({ message: 'hi', channels: ['telegram'], priority: 'normal' },
       { runId, projectId: DEFAULT_IDS.project, stepName: 'notify', executionPath: [['loop', i]] as Array<[string, number]> });
     const carded: string[] = [];
     for (let i = 0; i < maxWaitingWorkflowCards(); i++) carded.push((await pass(looped.newRun().id, 0)).approval!.approvalId);

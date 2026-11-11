@@ -472,7 +472,7 @@ describe('prepared proposal qualification', () => {
 
   test('a graph the dry runner supports needs a successful sample of this exact version', () => {
     const notifyOnly = prepare(schedule(step('commitments', JARVIS + 'context', 'commitments_list', {},
-      step('tell_me', JARVIS + 'notify', 'notify', { message: 'Follow up on {{commitments}}', channels: ['dashboard'] }))));
+      step('tell_me', JARVIS + 'notify', 'notify', { message: 'Follow up on {{commitments}}', channels: ['telegram'] }))));
     expect(drySupport(notifyOnly.version.trigger)).toBeNull();
     const effects = [{ step: 'tell_me', approval: 'asks_first' as const, sample: 'simulated' as const }];
     const request = proposal(notifyOnly, { preview: { basis: 'sandbox_sample', runId: null, effects } });
@@ -509,6 +509,12 @@ describe('Authority predictions match the effect boundary', () => {
     call: (b: any, ctx: any) => Promise<any> }> = {
     notify: { piece: JARVIS + 'notify', action: 'notify', input: { message: 'Hi', channels: ['dashboard'] },
       call: (b: any, ctx: any) => b.notify({ message: 'Hi', channels: ['dashboard'], priority: 'normal' }, ctx) },
+    // Telegram can reach other people, so it is judged as a send; dashboard-only (above) is the owner's own.
+    'notify to Telegram': { piece: JARVIS + 'notify', action: 'notify', input: { message: 'Hi', channels: ['telegram'] },
+      call: (b: any, ctx: any) => b.notify({ message: 'Hi', channels: ['telegram'], priority: 'normal' }, ctx) },
+    // Voice is spoken aloud to the room, so it is judged as a send too.
+    'notify by voice': { piece: JARVIS + 'notify', action: 'notify', input: { message: 'Hi', channels: ['voice'] },
+      call: (b: any, ctx: any) => b.notify({ message: 'Hi', channels: ['voice'], priority: 'normal' }, ctx) },
     ask: { piece: JARVIS + 'ask', action: 'ask', input: { prompt: 'Summarise' }, call: (b: any, ctx: any) => b.llmChat({ prompt: 'Summarise' }, ctx) },
     context: { piece: JARVIS + 'context', action: 'vault_search', input: { query: 'ana' },
       call: (b: any, ctx: any) => b.contextProvider.vaultSearch({ query: 'ana' }, ctx) },
