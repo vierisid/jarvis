@@ -1,4 +1,5 @@
 import { prepareSubmission, type SubmissionConfig } from '../../runtime/form-submission';
+import { isSchemedCredential, isSecretName, REDACTED } from '../../runtime/piece-effects';
 /**
  * WebhookManager — manages inbound webhook endpoints for workflow triggers
  *
@@ -113,6 +114,37 @@ async function computeHmac(secret: string, body: string): Promise<string> {
   return Array.from(new Uint8Array(signature))
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+/**
+ * Header names whose value is withheld, besides every name `isSecretName`
+ * judges a credential's (`Authorization`, `Cookie`, `X-Api-Key`,
+ * `X-Goog-Api-Key`, `X-Auth-Key`, `Stripe-Signature`, ...). Run-together
+ * names it would miss (`X-Shopify-Hmac-Sha256`, `X-Hubsignature`), and the
+ * Jarvis timestamp, which only means something next to its signature.
+ */
+const SECRET_HEADER_NAME = /token|secret|signature|password|hmac/iu;
+const CREDENTIAL_HEADERS = new Set(['x-jarvis-timestamp']);
+/** Names `isSecretName` takes for a credential (`key`) that only name a delivery. */
+const DELIVERY_KEY_HEADERS = new Set(['idempotency-key', 'x-idempotency-key']);
+
+/**
+ * The request headers a workflow and its run history may see. A credential
+ * header keeps its name but not its value: a run is read by the dashboard
+ * and the assistant and copied into sample data, and a step could pass the
+ * value on. Judged by name (case-insensitive, Headers lower-cases it) and by
+ * shape: a `Bearer x` or `Basic x` value is withheld under any name.
+ * Signature checks and delivery identity read the raw request before this.
+ */
+export function redactedHeaders(headers: Headers): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of headers.entries()) {
+    const key = name.toLowerCase();
+    const secret = !DELIVERY_KEY_HEADERS.has(key)
+      && (CREDENTIAL_HEADERS.has(key) || SECRET_HEADER_NAME.test(key) || isSecretName(key) || isSchemedCredential(value));
+    out[name] = secret ? REDACTED : value;
+  }
+  return out;
 }
 
 // ── WebhookManager ──
@@ -414,7 +446,7 @@ export class WebhookManager {
       url: req.url,
       query: fieldsOf(new URL(req.url).searchParams),
       timestamp: Date.now(),
-      headers: Object.fromEntries(req.headers.entries()),
+      headers: redactedHeaders(req.headers),
     };
 
     // Fire callback. It records the delivery and says what became of it.

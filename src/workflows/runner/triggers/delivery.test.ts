@@ -33,7 +33,7 @@ import { createRunFlowHandler, RUN_FLOW } from "../handler";
 import { TriggerManager } from "./manager";
 import { scheduleZoneWarning } from "./schedule-zone";
 import { TIMESTAMPED_REPEAT_WINDOW_MS, WEBHOOK_TIMESTAMP_TOLERANCE_S } from "./webhook-secret";
-import { webhookDelivery, WEBHOOK_OFF_LOOKUPS_PER_MINUTE, WORKFLOW_OFF_MESSAGE } from "./webhook";
+import { redactedHeaders, webhookDelivery, WEBHOOK_OFF_LOOKUPS_PER_MINUTE, WORKFLOW_OFF_MESSAGE } from "./webhook";
 import { getScheduleWatch, setScheduleWatch } from "../../db/repos/trigger-fire";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
 import { createWaitpoint } from "../../db/repos/waitpoint";
@@ -638,6 +638,47 @@ describe("webhooks", () => {
     await post(d, plain.flowId, body);
     expect(runsOf(plain.flowId)).toHaveLength(2);
     await d.stop();
+  });
+
+  test("sender credentials in headers are redacted in the stored run and in the trigger data, and a signed request still verifies", async () => {
+    const { flowId } = webhook({ secret: SECRET });
+    const d = await daemon(Date.now());
+    const body = '{"order":1}';
+    const response = await post(d, flowId, body, {
+      ...(await timestamped(SECRET, body)),
+      "Content-Type": "application/json", "X-GitHub-Event": "push",
+      Authorization: "Bearer sk-live-sender-secret", Cookie: "session=cookie-secret", "X-Hub-Signature-256": "sha256=provider-signature",
+      "X-Api-Key": "key-secret", "X-Custom-Token": "custom-secret",
+    });
+    expect(await response.json()).toMatchObject({ outcome: "started" });
+    // What the queue hands the run as trigger data, and what the run records.
+    const stored = JSON.stringify([claimNextJob(), runsOf(flowId)]);
+    expect(stored).toContain("push");
+    for (const leaked of ["sk-live-sender-secret", "cookie-secret", "provider-signature", "key-secret", "custom-secret"]) expect(stored).not.toContain(leaked);
+    expect(stored).toContain("[redacted]");
+    expect(stored).toContain('content-type');
+    expect(stored).toContain('application/json');
+    expect(stored).toContain('"x-github-event":"push"');
+    expect(JSON.stringify(listFlowFires(flowId))).not.toContain("sender-secret");
+    await d.stop();
+  });
+
+  test("credential headers are withheld by name in any case and by value shape, and delivery and event headers are kept", () => {
+    const out = redactedHeaders(new Headers({
+      AUTHORIZATION: "Basic dXNlcjpwYXNz", "Proxy-Authorization": "Basic cHJveHk6cHc=", Cookie: "a=b", "Set-Cookie": "c=d",
+      "X-Api-Key": "k1", "X-Goog-Api-Key": "k2", "X-Auth-Key": "k3", "X-Functions-Key": "k4", Apikey: "k5",
+      "X-Shopify-Hmac-Sha256": "h1", "Stripe-Signature": "t=1,v1=s", "X-Hub-Signature-256": "sha256=s", "X-Paypal-Transmission-Sig": "s",
+      "X-Gitlab-Token": "t1", "X-Jarvis-Signature": "s", "X-Jarvis-Timestamp": "1700000000", "X-Session-Id": "sess",
+      "X-Forwarded-Credential": "Bearer abcdefgh12345678", "X-Custom": "Bearer abcdefgh12345678",
+      "Content-Type": "application/json", "User-Agent": "GitHub-Hookshot/1", "X-GitHub-Event": "push", "X-GitHub-Delivery": "d-1",
+      "Idempotency-Key": "i-1", "X-Request-Id": "r-1", "X-Note": "Basic membership",
+    }));
+    const withheld = ["authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "x-goog-api-key", "x-auth-key",
+      "x-functions-key", "apikey", "x-shopify-hmac-sha256", "stripe-signature", "x-hub-signature-256", "x-paypal-transmission-sig",
+      "x-gitlab-token", "x-jarvis-signature", "x-jarvis-timestamp", "x-session-id", "x-forwarded-credential", "x-custom"];
+    for (const name of withheld) expect([name, out[name]]).toEqual([name, "[redacted]"]);
+    expect(out).toMatchObject({ "content-type": "application/json", "user-agent": "GitHub-Hookshot/1", "x-github-event": "push",
+      "x-github-delivery": "d-1", "idempotency-key": "i-1", "x-request-id": "r-1", "x-note": "Basic membership" });
   });
 
   test("a workflow turned off answers 404 and starts nothing", async () => {
