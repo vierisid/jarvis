@@ -202,6 +202,45 @@ export function workflowExpressionReferences(script: string): Set<string> {
   return references;
 }
 
+/** References that sit inside a `??`, where the author wrote for an absent value:
+ * `{{a ?? 'none'}}` and `{{a ?? b}}` guard `a` (and `b`); `{{a + b}}` guards
+ * nothing. Never reads values or executes the expression. */
+export function workflowExpressionGuardedReferences(script: string): Set<string> {
+  const guarded = new Set<string>();
+  const roots = (start: Node, into: Set<string>) => {
+    const pending = [start];
+    while (pending.length) {
+      const node = pending.pop()!;
+      switch (node.kind) {
+        case 'reference': into.add(node.name); break;
+        case 'array': pending.push(...node.items); break;
+        case 'object': pending.push(...node.entries.map(([, value]) => value)); break;
+        case 'member': pending.push(node.object, node.key); break;
+        case 'unary': pending.push(node.value); break;
+        case 'binary': pending.push(node.left, node.right); break;
+        case 'conditional': pending.push(node.condition, node.yes, node.no); break;
+        case 'flatten': pending.push(node.data, node.path); break;
+      }
+    }
+  };
+  const pending = [new Parser(tokenize(script)).parse()];
+  while (pending.length) {
+    const node = pending.pop()!;
+    switch (node.kind) {
+      case 'array': pending.push(...node.items); break;
+      case 'object': pending.push(...node.entries.map(([, value]) => value)); break;
+      case 'member': pending.push(node.object, node.key); break;
+      case 'unary': pending.push(node.value); break;
+      case 'binary':
+        if (node.operator === '??') roots(node, guarded); else pending.push(node.left, node.right);
+        break;
+      case 'conditional': pending.push(node.condition, node.yes, node.no); break;
+      case 'flatten': pending.push(node.data, node.path); break;
+    }
+  }
+  return guarded;
+}
+
 /** True when a property name is computed from data (`a[b.c]`) rather than written
  * out. Such a name can only be checked against the forbidden list when it runs. */
 export function workflowExpressionHasComputedKey(script: string): boolean {

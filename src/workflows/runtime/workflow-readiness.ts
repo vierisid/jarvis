@@ -32,7 +32,7 @@ import {managedTrelloIssue} from './managed-trello';
 import {managedSlackIssue} from './managed-slack';
 import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
-import { evaluateWorkflowExpression, workflowExpressionHasComputedKey, workflowExpressionReferences } from './safe-expression';
+import { evaluateWorkflowExpression, workflowExpressionGuardedReferences, workflowExpressionHasComputedKey, workflowExpressionReferences } from './safe-expression';
 import { emptyInput, inputIssue } from './input-validation';
 import { declaredDependencies } from './code-step-manifest';
 import { canonicalZone, chosenScheduleZone, effectiveScheduleZone, statedScheduleZone } from '../runner/triggers/schedule-zone';
@@ -103,6 +103,7 @@ const UNKNOWN_INPUT = Symbol('runtime input');
 export const CONNECTION_SOURCE = /^connections(?:\.([\w:-]+)|\['([^']+)'\])$/;
 const UNARY = new Set(['BOOLEAN_IS_TRUE', 'BOOLEAN_IS_FALSE', 'LIST_IS_EMPTY', 'LIST_IS_NOT_EMPTY', 'EXISTS', 'DOES_NOT_EXIST']);
 
+const DEFAULT_VALUE_STEP = { pieceName: '@activepieces/piece-text-helper', actionName: 'defaultValue' };
 const COMPUTED_KEY_CHECK = 'A property name taken from run data is checked when the flow runs. Names that reach into object internals are refused then.';
 const RUN_SKILL_NAME_CHECK = 'The skill name is taken from run data. Jarvis can only show you what the skill will do once the run has a name, so it is checked and reviewed then. Writing the name in the step lets you review it before the flow runs.';
 
@@ -129,6 +130,23 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
   for (const n of walkFlowNodes(object(trigger) ? trigger as FlowTriggerNode : null)) {
     if (n.type === 'LOOP_ON_ITEMS' && n.firstLoopAction) for (const inner of walkFlowNodes(n.firstLoopAction)) refundLoopBodies.add(inner);
   }
+  // Loop steps and everything inside a loop body: data that differs from one pass to the next.
+  const loopVarying = new Set<string>();
+  for (const n of walkFlowNodes(object(trigger) ? trigger as FlowTriggerNode : null)) {
+    if (n.type !== 'LOOP_ON_ITEMS') continue;
+    loopVarying.add(String(n.name));
+    if (n.firstLoopAction) for (const inner of walkFlowNodes(n.firstLoopAction)) loopVarying.add(String(inner.name));
+  }
+  // Steps inside a router branch, seen from a step after the router: they ran only if that branch was taken.
+  const branchOnly = new Set<string>();
+  /** A non-empty key that names nothing from the loop, so every pass would use the same one. */
+  const constantKey = (key: unknown): boolean => {
+    if (typeof key !== 'string' || !key.trim()) return false;
+    for (const match of key.matchAll(/\{\{(.*?)\}\}/g)) {
+      try { if ([...workflowExpressionReferences(match[1]!.trim())].some(ref => loopVarying.has(ref))) return false; } catch { return false; }
+    }
+    return true;
+  };
   let count = 0, inputVisits = 0, schemaVisits = 0, runtimeCount = 0, previewFound = false;
   const issue = (node: string, path: string, code: string, message: string, allowedPieces?: readonly string[]) => {
     if (issues.length < 100) issues.push({ node, path, code, message, ...(allowedPieces ? { allowedPieces: [...allowedPieces] } : {}) });
@@ -179,6 +197,12 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         const refs = workflowExpressionReferences(source);
         for (const ref of refs) if (ref !== 'connections' && !scope.has(ref)) {
           issue(node, path, 'REFERENCE_SCOPE', `Reference "${ref}" is missing, later in the graph, or outside this branch/loop scope`);
+        }
+        // A fallback keeps it publishable: `??`, or the default-value step reading exactly one reference.
+        const guarded = DEFAULT_VALUE_STEP.pieceName === pieceName && stepSettings.actionName === DEFAULT_VALUE_STEP.actionName && path === 'settings.input.value' && value === match[0]
+          ? refs : workflowExpressionGuardedReferences(source);
+        for (const ref of refs) if (scope.has(ref) && branchOnly.has(ref) && !guarded.has(ref)) {
+          issue(node, path, 'REFERENCE_BRANCH', `"${ref}" is inside a branch that does not run every time, so it has no value on runs that take another branch. Move this step into the branch, or give the reference a fallback such as {{${ref} ?? 'none'}}`);
         }
         if (refs.has('connections')) issue(node, path, 'CONNECTION_BINDING', "Use a complete {{connections.id}} or {{connections['id']}} binding");
         else if (refs.size) runtime(node, path, 'expression', 'Resolve data at runtime; an absent value must fail before dispatch (use an explicit fallback for optional data)');
@@ -260,7 +284,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       // not executed by a single-step preview and may still be unfinished.
       if (type === 'LOOP_ON_ITEMS' && raw.firstLoopAction != null) visit(raw.firstLoopAction, new Set([...scope, node]), false, depth + 1);
       if (type === 'ROUTER' && Array.isArray(raw.children)) for (const child of raw.children) {
-        if (child != null) for (const name of visit(child, new Set(scope), false, depth + 1)) continuation.add(name);
+        if (child != null) for (const name of visit(child, new Set(scope), false, depth + 1)) { continuation.add(name); if (!scope.has(name)) branchOnly.add(name); }
       }
       return raw.nextAction != null ? visit(raw.nextAction, continuation, false, depth) : continuation;
     }
@@ -376,6 +400,9 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     if (!root && isPiece('jarvis-subflow') && settings.actionName === 'call' && object(input)) {
       if (!emptyInput(input.outputSchema)) try {parseOutputSchema(input.outputSchema);} catch(e) {issue(node,'settings.input.outputSchema','INPUT_TYPE',(e as Error).message);}
       if (!emptyInput(input.timeoutSeconds) && (!Number.isInteger(input.timeoutSeconds)||Number(input.timeoutSeconds)<1||Number(input.timeoutSeconds)>86400)) issue(node,'settings.input.timeoutSeconds','INPUT_TYPE','Child timeout must be 1-86400 seconds');
+      if (refundLoopBodies.has(raw) && constantKey(input.invocationKey)) {
+        issue(node, 'settings.input.invocationKey', 'INPUT_TYPE', 'The invocation key is the same on every pass of the loop, so the second pass is refused. Include something that changes per item, such as {{loop.item.id}} or {{loop.index}}');
+      }
       runtime(node,'settings.input.invocationKey','piece-input','Persist child invocation and validated output across parent retries; refuse changed payload/configuration under the same key');
       runtime(node,'settings.input.flow','workflow-binding','Pin child version, apply Authority, validate returned JSON, preserve absolute deadline and expose failure/timeout explicitly');
     }
@@ -671,7 +698,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
               }
             }
           }
-          if (raw.children[i] != null) for (const name of visit(raw.children[i], new Set(scope), false, depth + 1)) continuation.add(name);
+          if (raw.children[i] != null) for (const name of visit(raw.children[i], new Set(scope), false, depth + 1)) { continuation.add(name); if (!scope.has(name)) branchOnly.add(name); }
         });
       }
     } else if (raw.children !== undefined) issue(node, 'children', 'GRAPH', 'Only ROUTER may have branch children');

@@ -1152,6 +1152,14 @@ Not supported: method calls (`.map`, `.split`, `.toUpperCase`), constructors
 (`new Date()`), `JSON.parse`, assignment, spread, globals, and prototype access.
 A written property name (`a.constructor` or `a['constructor']`) is refused when the flow is saved. A property name taken from run data (`a[b.key]`) is checked when the flow runs.
 
+A step after a router cannot read a step inside one of its branches, because
+that step ran only if its branch was taken. Publishing is refused unless the
+reference has a fallback (`{{a.out ?? 'none'}}`) or is the single value of a
+Default value step. A child call inside a loop is refused unless its invocation
+key uses something that changes per item (`{{loop.item.id}}`, `{{loop.index}}`),
+because the second pass would reuse the first pass's key with different data.
+A reused key that reaches run time is recorded as not started.
+
 An unsupported expression now **fails the step loudly** instead of silently
 resolving to an empty string, and the error quotes the expression that failed.
 Flows that relied on a JavaScript method in an input need the value reshaped
