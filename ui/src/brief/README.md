@@ -688,7 +688,9 @@ actions only change local fixture state.
   recovery row per run. The entry says plainly how many are waiting and that answering a request
   above lets the next one ask. The count rule: a held entry is a note, not a decision. It is not
   counted in the Needs you count, Today's queue count or the sidebar badge, and it is never offered
-  to the document room. Only entries that ask the owner for something count.
+  to the document room. Only entries that ask the owner for something count. A held run stopped
+  by Kill, turn-off or cancel before its step ever asked leaves no row either: nothing was sent and
+  nothing is asked (the #1364 rule), and an accepted commitment's work card shows again.
 - Wiring (not done here): aggregate every F-12 `GET /api/brief/decisions` page and restart on
   `queue_changed`; join each item with F-14 `GET /api/brief/decisions/:id/document` only when the
   revisions match. POST the F-14 document endpoint with `{ requestId, revision, action }` plus

@@ -37,6 +37,18 @@ const text = (value: unknown, max = 256): value is string => typeof value === 's
 const DENIED_EFFECT = `(e.status = 'blocked' AND json_extract(e.record, '$.decision') = 'denied'
   AND EXISTS (SELECT 1 FROM approval_requests da WHERE da.id = e.approval_id AND da.status = 'denied'))`;
 /**
+ * A step that waited for a place behind its flow's card budget and was stopped
+ * with its run (Kill, turn-off, cancel) before it ever raised a card: the run
+ * stop records it `not_started`. Nothing happened and there is nothing to
+ * decide, as #1364 rules for a run stopped before any step ran, so it is not
+ * queued and does not keep an accepted commitment's work card hidden. Without
+ * this a Kill would turn one held group back into one raw row per run.
+ */
+const NEVER_ASKED_EFFECT = `(e.status = 'blocked' AND e.approval_id IS NULL
+  AND json_extract(e.record, '$.deferral.budget') IS NOT NULL
+  AND json_extract(e.record, '$.outcome.effect') = 'not_started'
+  AND json_extract(e.record, '$.outcome.code') IN ('WORKFLOW_CANCELED','WORKFLOW_FINISHED'))`;
+/**
  * Every unresolved queue source, in sort-key order. Binds `?1` (run filter or
  * null) and `?6` (the queue's project); effects outside that project never appear.
  */
@@ -54,16 +66,20 @@ const DECISION_CANDIDATES = `
           LEFT JOIN flow_run r ON r.id = w.run_id
           WHERE (w.decision IS NULL OR (json_extract(w.decision, '$.outcome') = 'accepted' AND w.result_check IS NULL
             AND (r.status IS NULL OR r.status NOT IN ('RUNNING','QUEUED'))))
-            AND NOT EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = w.run_id AND e.status != 'succeeded' AND NOT ${DENIED_EFFECT})
+            AND NOT EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = w.run_id AND e.status != 'succeeded' AND NOT ${DENIED_EFFECT}
+              AND NOT ${NEVER_ASKED_EFFECT})
             AND (?1 IS NULL OR w.run_id = ?1)
           UNION ALL
           SELECT 'effect:' || e.id, json_extract(e.record, '$.createdAt') FROM workflow_effect e
           JOIN flow_run sr ON sr.id = e.run_id JOIN flow sf ON sf.id = sr.flow_id AND sf.project_id = ?6
           WHERE e.status != 'succeeded' AND NOT EXISTS (SELECT 1 FROM approval_requests a WHERE a.id = e.approval_id)
-            AND NOT (${HELD_RUN_EFFECT})
+            AND NOT (${HELD_RUN_EFFECT}) AND NOT ${NEVER_ASKED_EFFECT}
             AND (?1 IS NULL OR e.run_id = ?1)
           UNION ALL
-          SELECT 'held:' || sr.flow_id, min(json_extract(e.record, '$.createdAt')) FROM workflow_effect e
+          -- Sorted first (created 0), not by its oldest run: that age moves as
+          -- runs are released, and a sort key that moves without a generation
+          -- bump would repeat the entry across pages. The UI shows it apart.
+          SELECT 'held:' || sr.flow_id, 0 FROM workflow_effect e
           JOIN flow_run sr ON sr.id = e.run_id JOIN flow sf ON sf.id = sr.flow_id AND sf.project_id = ?6
           WHERE ${HELD_RUN_EFFECT} AND (?1 IS NULL OR e.run_id = ?1)
           GROUP BY sr.flow_id
@@ -318,9 +334,11 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
     return this.db.transaction(() => {
       const key = this.db.query<Key, [null, string, null, null, null, string]>(`${DECISION_CANDIDATES}
         SELECT * FROM ordered WHERE id = 'work:' || ?2 OR EXISTS (
-          SELECT 1 FROM commitment_work w JOIN workflow_effect e ON e.run_id = w.run_id
+          SELECT 1 FROM commitment_work w JOIN workflow_effect e ON e.run_id = w.run_id JOIN flow_run sr ON sr.id = e.run_id
           WHERE w.work_id = ?2 AND (ordered.id = 'effect:' || e.id OR ordered.id = 'approval:' || e.approval_id
-            OR ordered.id = (SELECT decision_id FROM brief_decision_document WHERE approval_id=e.approval_id))
+            OR ordered.id = (SELECT decision_id FROM brief_decision_document WHERE approval_id=e.approval_id)
+            -- A run held behind its flow's card limit is represented by its flow's held group.
+            OR (ordered.id = 'held:' || sr.flow_id AND ${HELD_RUN_EFFECT}))
         ) ORDER BY position, created, id LIMIT 1`).get(null, workId, null, null, null, this.projectId);
       if (!key) throw new DecisionError('Work no longer has an unresolved queue item', 409, 'work_not_queued');
       if (created) {
