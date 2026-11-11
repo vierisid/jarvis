@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
-import { createEntity, getEntity } from '../vault/entities.ts';
+import { createEntity, getEntity, updateEntity } from '../vault/entities.ts';
+import { createFact } from '../vault/facts.ts';
 import { createRelationship } from '../vault/relationships.ts';
 import { ENTITY_NAME_MAX_CHARS, RELATIONSHIP_TYPE_MAX_CHARS } from '../vault/input-limits.ts';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
@@ -23,7 +24,7 @@ test('an entity name over the limit is refused with a 400 and nothing is stored'
   expect((await post('/api/vault/entities', { name: 'x'.repeat(ENTITY_NAME_MAX_CHARS), type: 'person' })).status).toBe(200);
 });
 
-test.each(['a\u0000b', 'a\u0007b', 'a\u001bb', 'a\nb', 'a\tb', 'a\u007fb'])('an entity name with a control character is refused: %j', async name => {
+test.each(['a\u0000b', 'a\u0007b', 'a\u001bb', 'a\nb', 'a\tb', 'a\u007fb', 'a\u0085b', 'a\u009bb', 'a\u2028b', 'a\u2029b'])('an entity name with a control character or separator is refused: %j', async name => {
   const response = await post('/api/vault/entities', { name, type: 'person' });
   expect(response.status).toBe(400);
   expect((await response.json()).error).toContain('control characters');
@@ -65,4 +66,40 @@ test('an entity name stored before the limit still reads back in full', () => {
   getDb().prepare('INSERT INTO entities (id, type, name, properties, created_at, updated_at, source) VALUES (?, ?, ?, NULL, 1, 1, NULL)')
     .run(id, 'person', 'L'.repeat(5000));
   expect(getEntity(id)!.name).toHaveLength(5000);
+});
+
+test('an entity name with a lone surrogate, or nothing visible, is refused', async () => {
+  expect((await post('/api/vault/entities', { name: 'a\ud800b', type: 'person' })).status).toBe(400);
+  expect((await post('/api/vault/entities', { name: '   ', type: 'person' })).status).toBe(400);
+  expect((await post('/api/vault/entities', { name: '‮⁦', type: 'person' })).status).toBe(400);
+  expect(count('entities')).toBe(0);
+});
+
+test.each(['דנה כהן', 'محمد علي', 'می‌خواهم', '山田太郎',
+  'Family \u{1F468}‍\u{1F469}‍\u{1F467} ❤️', '\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F} team'])(
+  'a name in any script, with ZWNJ, ZWJ, variation selectors or a flag tag sequence, is stored as written: %j', async name => {
+    const response = await post('/api/vault/entities', { name, type: 'person' });
+    expect(response.status).toBe(200);
+    expect((await response.json()).name).toBe(name);
+  });
+
+test('the characters that reorder text are dropped from a stored name', async () => {
+  const response = await post('/api/vault/entities', { name: 'cv‮gpj.exe', type: 'tool' });
+  expect(response.status).toBe(200);
+  expect((await response.json()).name).toBe('cvgpj.exe');
+});
+
+test('a corrected fact value is held to the same rule as a new one', async () => {
+  const id = createEntity('person', 'Ada').id;
+  const fact = createFact(id, 'note', 'old', { source: 'user' });
+  const correct = (object: string) => routes()['/api/vault/facts/:id/correct']!.POST!(Object.assign(new Request('http://localhost/x', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed: true, reason: 'typo', object }),
+  }), { params: { id: fact.id } }));
+  expect((await correct('bad\u0000value')).status).toBe(400);
+  expect((await correct('fine\nvalue')).status).toBe(200);
+});
+
+test('renaming an entity from an internal writer cleans the name too', () => {
+  const id = createEntity('person', 'Ada').id;
+  expect(updateEntity(id, { name: 'Ada\nLovelace' })!.name).toBe('Ada Lovelace');
 });

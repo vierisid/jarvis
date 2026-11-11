@@ -45,7 +45,7 @@ import { authorityConfigPatchError, isActionCategory } from '../authority/config
 import { findEntities, getEntity, searchEntitiesByName, createEntity, listEntityNames } from '../vault/entities.ts';
 import { matchEntityByName } from './room-action-targets.ts';
 import { findFacts, createFact, FactInputError, FACT_TEXT_LIMIT } from '../vault/facts.ts';
-import { refuseVaultText, ENTITY_NAME_MAX_CHARS, RELATIONSHIP_TYPE_MAX_CHARS } from '../vault/input-limits.ts';
+import { refuseVaultText, cleanVaultText, ENTITY_NAME_MAX_CHARS, FACT_PREDICATE_MAX_CHARS, RELATIONSHIP_TYPE_MAX_CHARS } from '../vault/input-limits.ts';
 import { createFactDecisionRoutes } from '../vault/fact-routes.ts';
 import { findRelationships, getEntityRelationships, createRelationship } from '../vault/relationships.ts';
 import { listFlows } from '../workflows/db/repos/flow.ts';
@@ -514,6 +514,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!body.name || typeof body.name !== 'string') return error('name is required', 400);
           const badName = refuseVaultText(body.name, 'name', ENTITY_NAME_MAX_CHARS);
           if (badName) return error(badName, 400);
+          // Nothing a person can see once the characters that hide text are gone.
+          if (!cleanVaultText(body.name, ENTITY_NAME_MAX_CHARS).trim()) return error('name is required', 400);
           if (!body.type || !VALID_ENTITY_TYPES.has(body.type)) {
             return error(`type must be one of: ${Array.from(VALID_ENTITY_TYPES).join(', ')}`, 400);
           }
@@ -609,7 +611,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (typeof body.predicate !== 'string' || typeof body.object !== 'string') {
             return error('predicate and object must be text', 400);
           }
-          const badFact = refuseVaultText(body.predicate, 'predicate', 200)
+          const badFact = refuseVaultText(body.predicate, 'predicate', FACT_PREDICATE_MAX_CHARS)
             ?? refuseVaultText(body.object, 'object', FACT_TEXT_LIMIT, true);
           if (badFact) return error(badFact, 400);
           const subject = getEntity(body.subject_id);

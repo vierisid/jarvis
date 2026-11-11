@@ -158,7 +158,7 @@ export function updateEntity(
 
   if (updates.name !== undefined) {
     fields.push('name = ?');
-    params.push(updates.name);
+    params.push(cleanVaultText(String(updates.name), ENTITY_NAME_MAX_CHARS));
   }
 
   if (updates.type !== undefined) {
