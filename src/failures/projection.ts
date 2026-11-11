@@ -116,6 +116,10 @@ const OFFLINE_CODES = new Set(['WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_MACHINE_UNA
 // Task failures can follow successful browser navigation. Preserve that uncertainty
 // while still naming the account/setup action the user needs to take.
 const BROWSER_TASK_FAILURES: Record<string, { category: FailureCategory; why: string; step: RecoveryStep }> = {
+  DESKTOP_SIGN_IN_REQUIRED: { category: 'missing_binding', why: 'the desktop app requires sign-in. Sign in there before starting a new run', step: 'ask_again' },
+  DESKTOP_SETUP_REQUIRED: { category: 'missing_binding', why: 'the requested desktop control or task needs setup. Inspect the app and run details', step: 'open_details' },
+  DESKTOP_TASK_UNCONFIRMED: { category: 'missing_binding', why: 'the desktop task did not confirm completion. Inspect the app before trying again', step: 'open_details' },
+  DESKTOP_TASK_INCOMPLETE: { category: 'missing_binding', why: 'the desktop task could not complete the requested work. Inspect the app before trying again', step: 'open_details' },
   BROWSER_SIGN_IN_REQUIRED: { category: 'missing_binding', why: 'sign-in is required in the Jarvis browser. Sign in there, confirm the intended account, then start a new run', step: 'ask_again' },
   BROWSER_SETUP_REQUIRED: { category: 'missing_binding', why: 'the browser account or requested scope needs setup. Confirm the account and scope before starting a new run', step: 'ask_again' },
   BROWSER_TASK_UNCONFIRMED: { category: 'missing_binding', why: 'the browser task did not confirm completion. Inspect the browser and run details before trying again', step: 'open_details' },
@@ -125,7 +129,12 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   // #1242: the child or run_workflow target was turned off; nothing was started.
   FLOW_TURNED_OFF: { category: 'missing_binding', why: 'the workflow it calls is turned off. Turn that workflow on again, or choose another one', step: 'edit_and_run_again' },
   WORKFLOW_BROWSER_REVIEW_STALE: { category: 'missing_binding', why: 'the reviewed browser session changed or Jarvis restarted', step: 'ask_again' },
+  // #1314: a switch turned off while a run was going; turning it back on fixes it.
+  DESKTOP_DISABLED: { category: 'missing_binding', why: 'desktop control is turned off. Turn it on in Settings > General > Desktop control, then run it again', step: 'run_again' },
+  SCREEN_CAPTURE_DISABLED: { category: 'missing_binding', why: 'screen awareness is turned off, and it takes screenshots. Turn awareness on, then run it again', step: 'run_again' },
   WORKFLOW_MACHINE_REPLACED: { category: 'missing_binding', why: 'the computer it was enabled for is no longer enrolled', step: 'accept_binding_change' },
+  // #1314 M2: a browser or desktop action needs a computer a person chose.
+  WORKFLOW_MACHINE_UNPINNED: { category: 'missing_binding', why: 'its browser or desktop steps have no pinned computer. Enable the workflow to pin its computer, or name the computer in the step', step: 'accept_binding_change' },
   WORKFLOW_FACT_STALE: { category: 'missing_binding', why: 'a recipient it sends to is no longer current in memory', step: 'update_recipient' },
   WORKFLOW_FACT_AMBIGUOUS: { category: 'missing_binding', why: 'memory holds conflicting values for a recipient it sends to', step: 'update_recipient' },
   SIDECAR_TOO_OLD_FOR_REVIEWED_ACTION: { category: 'missing_binding', why: 'the Jarvis app on that computer is too old for this approved action', step: 'update_desktop_app' },
@@ -156,7 +165,7 @@ const APPROVAL_WHY: Record<string, string> = {
 /** A notification that was sent on no channel at all (the notify step's own outcome). */
 const DELIVERY_FAILED = 'DELIVERY_FAILED';
 /** Readiness issues that name a binding rather than invalid input. */
-const BINDING_ISSUES = new Set(['CONNECTION_BINDING', 'WORKFLOW_BINDING', 'TOOL_BINDING', 'ROLE_BINDING', 'BINDING_STALE']);
+const BINDING_ISSUES = new Set(['CONNECTION_BINDING', 'WORKFLOW_BINDING', 'TOOL_BINDING', 'ROLE_BINDING', 'BINDING_STALE', 'WORKFLOW_MACHINE_UNPINNED']);
 /** A connection or computer that changed since the workflow was enabled (Q-05): accepted by enabling it again. */
 const STALE_BINDING_ISSUE = 'BINDING_STALE';
 
@@ -264,7 +273,7 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
       const browserTask = code ? BROWSER_TASK_FAILURES[code] : undefined;
       if (browserTask) return build(browserTask.category, o.effect === 'not_started' ? 'none' : 'unknown',
         `${s} did not complete because ${browserTask.why}.`,
-        o.effect === 'not_started' ? NOTHING : 'The requested task was not completed. Browser actions may already have occurred.',
+        o.effect === 'not_started' ? NOTHING : `The requested task was not completed. ${code?.startsWith('DESKTOP_') ? 'Desktop' : 'Browser'} actions may already have occurred.`,
         [browserTask.step, 'open_details'], links, code, detail);
       // Whatever the code, an outcome that may have occurred is uncertain: never "nothing happened".
       if (o.status === 'unknown' || o.effect === 'may_have_occurred') {
@@ -277,6 +286,14 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
       }
       if (code === 'SETUP_REQUIRED') {
         return build('missing_binding', 'none', `${s} did not run: finish setting up Jarvis first.`, NOTHING, ['connect'], links, code, detail);
+      }
+      if (code === 'WORKFLOW_TOOL_UNSUPPORTED') {
+        return build('invalid_input', 'none', `${s} did not run: this action is not supported by the workflow's execution path.`, NOTHING,
+          ['edit_and_run_again'], links, code, detail);
+      }
+      if (code === 'WORKFLOW_UI_REVIEW_STALE') {
+        return build('not_started', 'none', `${s} did not run: the reviewed app or browser session is no longer current.`, NOTHING,
+          ['run_again'], links, code, detail);
       }
       if (code === DELIVERY_FAILED) {
         return build('delivery_failed', 'none', `${s} was not sent.`, 'It was not sent on any channel.', ['resend'], links, code, detail);
@@ -313,6 +330,19 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
       const codes = evidence.issues.map(issue => issue.code);
       const binding = codes.find(c => BINDING_ISSUES.has(c));
       const detail = evidence.issues.map(issue => `${issue.code}${issue.message ? `: ${issue.message}` : ''}`).join('\n');
+      // #1314: a computer step with no computer a person chose, said with the fix.
+      if (codes.includes('WORKFLOW_MACHINE_UNPINNED')) return build('missing_binding', 'none',
+        `${s} did not run because ${NAMED_REFUSALS.WORKFLOW_MACHINE_UNPINNED!.why}.`, NOTHING,
+        ['accept_binding_change'], links, 'WORKFLOW_MACHINE_UNPINNED', detail);
+      // #1314: a tool whose switch is off is not an unsupported action; turning the switch on fixes it.
+      const switched = codes.find(c => c === 'DESKTOP_DISABLED' || c === 'SCREEN_CAPTURE_DISABLED');
+      if (switched) return build('missing_binding', 'none', switched === 'DESKTOP_DISABLED'
+        ? `${s} did not run: desktop control is turned off. Turn it on in Settings > General > Desktop control, then run it again.`
+        : `${s} did not run: screen awareness is turned off, and it takes screenshots. Turn awareness on, then run it again.`,
+        NOTHING, ['run_again'], links, switched, detail);
+      if (codes.includes('WORKFLOW_TOOL_UNSUPPORTED')) return build('invalid_input', 'none',
+        `${s} did not run: it contains an action that is not supported in this workflow.`, NOTHING,
+        ['edit_and_run_again'], links, 'WORKFLOW_TOOL_UNSUPPORTED', detail);
       if (codes.includes(STALE_BINDING_ISSUE)) {
         return build('missing_binding', 'none', `${s} did not run: a connection or computer it uses changed since it was enabled.`, NOTHING,
           ['accept_binding_change'], links, STALE_BINDING_ISSUE, detail);
