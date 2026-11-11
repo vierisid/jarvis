@@ -144,7 +144,14 @@ const MAX_DEPTH = 12;
 /** Values a call may walk before what is left is withheld rather than printed unchecked. */
 const NODE_BUDGET = 20_000;
 
-type Walk = { seen: WeakMap<object, unknown>; budget: number };
+/**
+ * `active` holds the values being walked (a reference to one is a cycle);
+ * `cycled` the ones a cycle reached. In a first walk a cycle keeps the value
+ * itself, so a log with nothing to hide prints as before; if a value a cycle
+ * reached was then copied, its copy would still reach the original, so the
+ * call is walked again `strict`, a cycle printing as a marker.
+ */
+type Walk = { seen: WeakMap<object, unknown>; active: WeakSet<object>; cycled: object[]; strict: boolean; budget: number };
 
 /**
  * A value with every request error in it replaced by its summary and every
@@ -159,11 +166,17 @@ function sanitize(value: unknown, depth: number, walk: Walk): unknown {
   try {
     if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return value;
     if (isRequestError(value)) return summary(value);
-    // Seen before: what it became then; inside itself (a cycle), the object itself.
+    // Seen before: what it became then; inside itself (a cycle), the object itself, or a marker when strict.
+    if (walk.active.has(value)) {
+      if (walk.strict) return '[circular value]';
+      walk.cycled.push(value);
+      return value;
+    }
     if (walk.seen.has(value)) return walk.seen.get(value);
     if (depth >= MAX_DEPTH || --walk.budget < 0) return '[nested value withheld]';
-    walk.seen.set(value, value);
-    const result = sanitizeFresh(value, depth, walk);
+    walk.active.add(value);
+    let result: unknown;
+    try { result = sanitizeFresh(value, depth, walk); } finally { walk.active.delete(value); }
     walk.seen.set(value, result);
     return result;
   } catch {
@@ -173,8 +186,9 @@ function sanitize(value: unknown, depth: number, walk: Walk): unknown {
 
 function sanitizeFresh(value: Record<string, unknown>, depth: number, walk: Walk): unknown {
   if (value instanceof Map) {
-    const entries = [...value.entries()].map(([k, v]) => [sanitize(k, depth + 1, walk), sanitize(v, depth + 1, walk)] as const);
-    return entries.some(([k, v], i) => { const [k0, v0] = [...value.entries()][i]!; return k !== k0 || v !== v0; }) ? new Map(entries) : value;
+    const original = [...value.entries()];
+    const entries = original.map(([k, v]) => [sanitize(k, depth + 1, walk), sanitize(v, depth + 1, walk)] as const);
+    return entries.some(([k, v], i) => k !== original[i]![0] || v !== original[i]![1]) ? new Map(entries) : value;
   }
   if (value instanceof Set) {
     const items = [...value.values()];
@@ -225,8 +239,13 @@ function sanitizeFresh(value: Record<string, unknown>, depth: number, walk: Walk
  * as before. Never throws.
  */
 export function redactEngineLogArgs(args: readonly unknown[]): unknown[] {
-  const walk: Walk = { seen: new WeakMap(), budget: NODE_BUDGET };
-  return args.map((arg) => sanitize(arg, 0, walk));
+  const walkWith = (strict: boolean): { walk: Walk; out: unknown[] } => {
+    const walk: Walk = { seen: new WeakMap(), active: new WeakSet(), cycled: [], strict, budget: NODE_BUDGET };
+    return { walk, out: args.map((arg) => sanitize(arg, 0, walk)) };
+  };
+  const first = walkWith(false);
+  // A copy that a cycle links back to an original would print the original's secrets.
+  return first.walk.cycled.some((value) => first.walk.seen.get(value) !== value) ? walkWith(true).out : first.out;
 }
 
 type Writable = { write: (chunk: unknown, ...rest: unknown[]) => boolean };

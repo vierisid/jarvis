@@ -118,6 +118,21 @@ describe('engine console redaction', () => {
     expect(text).toContain('outer');
   });
 
+  test('a cycle back to a value that was copied never reaches the original', () => {
+    const error = new HttpError({ password: 'BODY-SECRET' }, axiosError() as never);
+    const ctx: Record<string, unknown> = { name: 'ctx', error };
+    ctx.self = ctx;
+    const outer: Record<string, unknown> = { error };
+    outer.inner = { outer };
+    const text = printed([ctx, outer]);
+    for (const secret of SECRETS) expect(text).not.toContain(secret);
+    expect(text).toContain('[circular value]');
+    // A cycle with nothing to hide still prints as itself.
+    const plain: Record<string, unknown> = { n: 1 };
+    plain.self = plain;
+    expect(redactEngineLogArgs([plain])[0]).toBe(plain);
+  });
+
   test('line structure: only the line with the serialized request is cut, later lines and line ends are kept', () => {
     expect(redactEngineText('line1 {"requestBody":1}\nline2 important\n')).toBe('line1 [request and response bodies withheld]\nline2 important\n');
     expect(redactEngineText('a {\n  "response": {\n    "status": 401,\n    "body": "RESP-SECRET"\n  }\n}\nnext\n'))
