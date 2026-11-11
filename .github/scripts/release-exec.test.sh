@@ -1787,7 +1787,7 @@ ${found}"
 		$'expected $NPM_VERSION"; exit 1; }\n\n      - uses: actions/download-artifact' $'expected $NPM_VERSION"; exit 1; }\n          npm -g install left-pad\n\n      - uses: actions/download-artifact' \
 		'publish-brain: installs dependencies while the sidecar publish may still be running'
 	mutant 'a second dependency-code job beside the sidecar build (#952 review)' \
-		$'  pack-brain:\n    needs: [validate-tag, test, smoke-image]\n' $'  lint-extra:\n    needs: [validate-tag, smoke-image]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n    steps:\n      - run: bun install --frozen-lockfile\n  pack-brain:\n    needs: [validate-tag, test, smoke-image]\n' \
+		$'  pack-brain:\n    needs: [validate-tag, test, smoke-image]\n' $'  lint-extra:\n    needs: [validate-tag, smoke-image]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - run: bun install --frozen-lockfile\n  pack-brain:\n    needs: [validate-tag, test, smoke-image]\n' \
 		'lint-extra: installs dependencies while the sidecar build may still be running'
 	mutant 'the exempt npm install pointed somewhere else by a job env (#952 review)' \
 		$'  publish-brain:\n    needs: [validate-tag, sidecar-build, pack-brain]\n' $'  publish-brain:\n    needs: [validate-tag, sidecar-build, pack-brain]\n    env:\n      NPM_VERSION: "file:/tmp/x"\n' \
@@ -1827,8 +1827,8 @@ fi
 	MUTANT_MODE=image
 	# Authority (#868): nothing before the approval chain can write to a registry.
 	mutant 'the build job given packages: write again (#868)' \
-		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: write\n' \
+		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n' \
+		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n      packages: write\n' \
 		'build-image: holds packages: write'
 	mutant 'the build job logging in to GHCR again (#868)' \
 		'      - name: Generate Docker metadata' $'      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0\n        with:\n          registry: ghcr.io\n      - name: Generate Docker metadata' \
@@ -1837,12 +1837,12 @@ fi
 		'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar' '          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true' \
 		'build-image: a build step pushes or exports to a registry'
 	mutant 'the build job given a packages scope of any kind (#868)' \
-		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: read\n' \
+		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n' \
+		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n      packages: read\n' \
 		'build-image: permissions must be exactly contents: read'
 	mutant 'the smoke job given a packages scope (#868)' \
-		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: read\n' \
+		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n' \
+		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n      packages: read\n' \
 		'smoke-image: permissions must be exactly contents: read'
 	# The download-artifact pin is READ OUT of the workflow, never spelled here.
 	# Dependabot bumps it, and an anchor carrying the SHA turns every bump into
@@ -1884,8 +1884,8 @@ fi
 		"$DL_FROM" "$DL_TO_LOGIN" \
 		'smoke-image: logs in to a registry'
 	mutant 'a third job holding packages: write (#680)' \
-		$'  github-release:\n    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]\n    if: ${{ !cancelled() && needs.validate-tag.result == \'success\' && needs.sidecar-build.result == \'success\' && needs.publish-docker.result == \'success\' && (needs.publish-sidecar.result == \'success\' || (needs.publish-sidecar.result == \'skipped\' && needs.sidecar-build.outputs.released == \'false\' && needs.sidecar-build.outputs.digests == \'\')) }}\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write' \
-		$'  github-release:\n    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]\n    if: ${{ !cancelled() && needs.validate-tag.result == \'success\' && needs.sidecar-build.result == \'success\' && needs.publish-docker.result == \'success\' && (needs.publish-sidecar.result == \'success\' || (needs.publish-sidecar.result == \'skipped\' && needs.sidecar-build.outputs.released == \'false\' && needs.sidecar-build.outputs.digests == \'\')) }}\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write\n      packages: write' \
+		$'  github-release:\n    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]\n    if: ${{ !cancelled() && needs.validate-tag.result == \'success\' && needs.sidecar-build.result == \'success\' && needs.publish-docker.result == \'success\' && (needs.publish-sidecar.result == \'success\' || (needs.publish-sidecar.result == \'skipped\' && needs.sidecar-build.outputs.released == \'false\' && needs.sidecar-build.outputs.digests == \'\')) }}\n    runs-on: ubuntu-24.04\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write' \
+		$'  github-release:\n    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]\n    if: ${{ !cancelled() && needs.validate-tag.result == \'success\' && needs.sidecar-build.result == \'success\' && needs.publish-docker.result == \'success\' && (needs.publish-sidecar.result == \'success\' || (needs.publish-sidecar.result == \'skipped\' && needs.sidecar-build.outputs.released == \'false\' && needs.sidecar-build.outputs.digests == \'\')) }}\n    runs-on: ubuntu-24.04\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write\n      packages: write' \
 		'github-release: holds packages: write'
 	mutant 'a docker push from a run: step in the build job (#680)' \
 		'      - name: Upload the archive' $'      - run: docker push ghcr.io/vierisid/jarvis:latest\n      - name: Upload the archive' \
@@ -2153,19 +2153,51 @@ else
 	mkdir -p "${WORK}/dbin"
 	# docker stub: records each call; `imagetools inspect` answers
 	# $STUB_INSPECT; `create --dry-run` prints $STUB_PLANNED (default
-	# "index", which hashes to D1); `load -i x` computes the image ID docker
-	# would (the sha256 of the config named in manifest.json) and `image
-	# inspect` returns it, or $STUB_ID when set.
+	# "index", which hashes to D1); `info` describes the image store named by
+	# $STUB_STORE (classic, the default, and containerd as the ubuntu-24.04
+	# and ubuntu-26.04 runners reported them; anything else is printed as the
+	# info JSON itself; STUB_INFO_FAIL makes it fail); `load -i x` computes the
+	# image ID that store would report and `image inspect` returns it, or
+	# $STUB_ID when set. Classic: the sha256 of the config named in
+	# manifest.json. containerd: the sha256 of the Docker schema 2 manifest
+	# containerd v2.2.3 writes (core/images/archive/importer.go) over the
+	# config and layers as found in the tar, hashed and sized here, with the
+	# layer media type gzip when the bytes start with the gzip magic (real
+	# containerd also says gzip for zstd; the step refuses every layer that
+	# is not an OCI gzip layer before loading, so that is not modelled). This model, run on the amd64
+	# config and layers of run 42868738162, gives the ID that run reported.
 	cat >"${WORK}/dbin/docker" <<'EOF'
 #!/usr/bin/env bash
 printf 'docker %s\n' "$*" >>"$DOCKER_LOG"
 if [ "$1 $2 $3" = "buildx imagetools inspect" ]; then printf '%s\n' "$STUB_INSPECT"; exit 0; fi
 if [ "$1 $2 $3 $4" = "buildx imagetools create --dry-run" ]; then printf '%s\n' "${STUB_PLANNED-index}"; exit 0; fi
+if [ "$1" = info ]; then
+	[ -z "${STUB_INFO_FAIL:-}" ] || exit 1
+	case "${STUB_STORE:-classic}" in
+	classic) printf '%s\n' '{"Driver":"overlay2","DriverStatus":[["Backing Filesystem","extfs"],["Supports d_type","true"],["Using metacopy","false"],["Native Overlay Diff","false"],["userxattr","false"]]}' ;;
+	containerd) printf '%s\n' '{"Driver":"overlayfs","DriverStatus":[["driver-type","io.containerd.snapshotter.v1"]]}' ;;
+	*) printf '%s\n' "$STUB_STORE" ;;
+	esac
+	exit 0
+fi
 if [ "$1" = load ]; then
 	t="$(mktemp -d)"
 	tar -xf "$3" -C "$t" || exit 1
 	cfg="$(jq -r '.[0].Config' "$t/manifest.json")" || exit 1
-	printf 'sha256:%s\n' "$(sha256sum "$t/$cfg" | cut -d' ' -f1)" >"$DOCKER_STATE"
+	if [ "${STUB_STORE:-classic}" = containerd ]; then
+		d() { printf '{"mediaType":"%s","digest":"sha256:%s","size":%s}' "$1" "$(sha256sum "$2" | cut -d' ' -f1)" "$(stat -c %s "$2")"; }
+		m="{\"schemaVersion\":2,\"mediaType\":\"application/vnd.docker.distribution.manifest.v2+json\",\"config\":$(d application/vnd.docker.container.image.v1+json "$t/$cfg"),\"layers\":["
+		sep=""
+		while read -r l; do
+			if [ "$(head -c2 "$t/$l" | od -An -tx1 | tr -d ' \n')" = 1f8b ]; then mt=application/vnd.docker.image.rootfs.diff.tar.gzip; else mt=application/vnd.docker.image.rootfs.diff.tar; fi
+			m+="${sep}$(d "$mt" "$t/$l")"
+			sep=,
+		done < <(jq -r '.[0].Layers[]' "$t/manifest.json")
+		printf 'sha256:%s\n' "$(printf '%s]}' "$m" | sha256sum | cut -d' ' -f1)" >"$DOCKER_STATE"
+	else
+		printf 'sha256:%s\n' "$(sha256sum "$t/$cfg" | cut -d' ' -f1)" >"$DOCKER_STATE"
+	fi
+	rm -rf "$t"
 	exit 0
 fi
 if [ "$1 $2" = "image inspect" ]; then
@@ -2288,22 +2320,29 @@ calls: $(cat "${WORK}/docker.log")"
 		no "push script: moves no tag when the index read back is not the archive one" "$(cat "${WORK}/docker.log")"
 	fi
 
-	# The archive load, against a hand-built two-platform OCI layout.
-	# make_layout [amd64 count] [layer digest]: writes ${WORK}/oci/release-image.oci.tar and
-	# sets IDX (the index digest), CFG (the amd64 config digest), ARC (the
+	# The archive load, against a hand-built two-platform OCI layout, its
+	# config and layers named with media type and size as buildkit writes
+	# them, and its two layers real gzip streams.
+	# make_layout [amd64 count] [layer digest] [layer media type] [config
+	# size suffix, e.g. ".0", written after the config size]: writes
+	# ${WORK}/oci/release-image.oci.tar and sets IDX (the index digest), MAN
+	# (the amd64 manifest digest), CFG (the amd64 config digest), ARC (the
 	# archive sha256).
 	make_layout() {
-		local n="${1:-1}" L="${WORK}/oci/l"
+		local n="${1:-1}" L="${WORK}/oci/l" lmt="${3:-application/vnd.oci.image.layer.v1.tar+gzip}" sfx="${4:-}"
 		rm -rf "${WORK}/oci" && mkdir -p "$L/blobs/sha256"
-		put() { local h; h="$(printf '%s' "$1" | sha256sum | cut -d' ' -f1)"; printf '%s' "$1" >"$L/blobs/sha256/$h"; printf 'sha256:%s' "$h"; }
-		local layer cfg man arm i entries=""
-		layer="${2:-$(put 'layer bytes')}"
+		putf() { local h; h="$(sha256sum "$1" | cut -d' ' -f1)"; mv "$1" "$L/blobs/sha256/$h"; printf 'sha256:%s' "$h"; }
+		put() { printf '%s' "$1" >"${WORK}/oci/blob" && putf "${WORK}/oci/blob"; }
+		size() { stat -c %s "$L/blobs/sha256/${1#sha256:}"; }
+		local layer layer2 cfg man arm i entries=""
+		printf 'layer bytes' | gzip -n >"${WORK}/oci/blob" && layer2="$(putf "${WORK}/oci/blob")"
+		if [ -n "${2:-}" ]; then layer="$2"; else printf 'more layer bytes' | gzip -n >"${WORK}/oci/blob" && layer="$(putf "${WORK}/oci/blob")"; fi
 		cfg="$(put '{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}')"
-		man="$(put "{\"schemaVersion\":2,\"config\":{\"digest\":\"$cfg\"},\"layers\":[{\"digest\":\"$layer\"}]}")"
+		man="$(put "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"config\":{\"mediaType\":\"application/vnd.oci.image.config.v1+json\",\"digest\":\"$cfg\",\"size\":$(size "$cfg")${sfx}},\"layers\":[{\"mediaType\":\"application/vnd.oci.image.layer.v1.tar+gzip\",\"digest\":\"$layer2\",\"size\":$(size "$layer2")},{\"mediaType\":\"$lmt\",\"digest\":\"$layer\",\"size\":$(size "$layer" 2>/dev/null || echo 0)}]}")"
 		arm="$(put "{\"schemaVersion\":2,\"config\":{\"digest\":\"$cfg\"},\"layers\":[]}")"
 		for i in $(seq 1 "$n"); do entries+="{\"digest\":\"$man\",\"platform\":{\"os\":\"linux\",\"architecture\":\"amd64\"}},"; done
 		IDX="$(put "{\"schemaVersion\":2,\"manifests\":[${entries}{\"digest\":\"$arm\",\"platform\":{\"os\":\"linux\",\"architecture\":\"arm64\"}}]}")"
-		CFG="$cfg"
+		CFG="$cfg" MAN="$man"
 		printf '{"manifests":[{"digest":"%s"}]}' "$IDX" >"$L/index.json"
 		tar -cf "${WORK}/oci/release-image.oci.tar" -C "$L" index.json blobs
 		ARC="$(sha256sum "${WORK}/oci/release-image.oci.tar" | cut -d' ' -f1)"
@@ -2314,16 +2353,20 @@ calls: $(cat "${WORK}/docker.log")"
 		rm -rf "${WORK}/rt" && mkdir -p "${WORK}/rt/release-image"
 		cp "${WORK}/oci/release-image.oci.tar" "${WORK}/rt/release-image/"
 		: >"${WORK}/docker.log"
+		: >"${WORK}/docker.state"
 		(cd "$WORK" && env -i PATH="${WORK}/dbin:$PATH" DOCKER_LOG="${WORK}/docker.log" DOCKER_STATE="${WORK}/docker.state" \
 			RUNNER_TEMP="${WORK}/rt" DIGEST="$IDX" ARCHIVE_SHA256="$ARC" GATE_IMAGE_TAG=jarvis:gate STUB_ID="${3:-}" \
-			bash -e -c "$LOAD") >"${WORK}/load.out" 2>&1
+			${STUB_STORE+STUB_STORE="$STUB_STORE"} ${STUB_INFO_FAIL+STUB_INFO_FAIL=1} \
+			bash -e -c "${LOAD_UNDER_TEST-$LOAD}") >"${WORK}/load.out" 2>&1
 		local rc=$?
 		if { [ "$want" = 0 ] && [ "$rc" -eq 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -ne 0 ]; }; then
-			ok "smoke-image load: $label"
+			[ -n "${LOAD_QUIET:-}" ] || ok "smoke-image load: $label"
 		else
-			no "smoke-image load: $label" "exit ${rc}: $(cat "${WORK}/load.out")"
+			LOAD_MISSES=$((LOAD_MISSES + 1))
+			[ -n "${LOAD_QUIET:-}" ] || no "smoke-image load: $label" "exit ${rc}: $(cat "${WORK}/load.out")"
 		fi
 	}
+	LOAD_MISSES=0
 	make_layout
 	run_load 0 "loads the amd64 image of the reported index"
 	if grep -q '^docker load -i ' "${WORK}/docker.log" && [ "$(cat "${WORK}/docker.state")" = "$CFG" ]; then
@@ -2377,6 +2420,181 @@ calls: $(cat "${WORK}/docker.log")"
 	ARC="$(sha256sum "${WORK}/oci/release-image.oci.tar" | cut -d' ' -f1)"
 	run_load 1 "refuses a stray entry listed first, ahead of thousands of valid ones"
 	if [ ! -d "${WORK}/rt/release-image/layout" ]; then ok "smoke-image load: unpacks nothing from that archive"; else no "smoke-image load: unpacks nothing from that archive"; fi
+
+	# The image store decides which ID docker load reports, so the step reads
+	# it and expects exactly one ID per store (run 42868738162, where
+	# ubuntu-latest became ubuntu-26.04 with the containerd image store; the
+	# release jobs are pinned to ubuntu-24.04 since, and both stores stay
+	# covered for when that pin moves).
+	# store_cases: every case below, counting misses in LOAD_MISSES; the
+	# mutants after it run the same cases against a broken step.
+	loaded() { grep -q '^docker load' "${WORK}/docker.log"; }
+	store_cases() {
+		local cid
+		# The ID the containerd store reports for make_layout, from the stub
+		# model of containerd, independent of the step under test.
+		make_layout
+		rm -rf "${WORK}/cm" && mkdir -p "${WORK}/cm/x" && tar -xf "${WORK}/oci/release-image.oci.tar" -C "${WORK}/cm/x"
+		jq -c '[{Config: ("blobs/sha256/" + (.config.digest | ltrimstr("sha256:"))), Layers: [.layers[].digest | "blobs/sha256/" + ltrimstr("sha256:")]}]' \
+			"${WORK}/cm/x/blobs/sha256/${MAN#sha256:}" >"${WORK}/cm/x/manifest.json"
+		tar -cf "${WORK}/cm/a.tar" -C "${WORK}/cm/x" manifest.json blobs
+		: >"${WORK}/docker.state"
+		env -i PATH="${WORK}/dbin:$PATH" DOCKER_LOG="${WORK}/cm/log" DOCKER_STATE="${WORK}/docker.state" STUB_STORE=containerd docker load -i "${WORK}/cm/a.tar"
+		cid="$(cat "${WORK}/docker.state")"
+		[[ "$cid" =~ ^sha256:[0-9a-f]{64}$ ]] && [ "$cid" != "$CFG" ] && [ "$cid" != "$MAN" ] || LOAD_MISSES=$((LOAD_MISSES + 1))
+		# classic: the config digest and nothing else.
+		run_load 0 "classic image store: loads when the ID is the amd64 config"
+		[ "$(cat "${WORK}/docker.state")" = "$CFG" ] || LOAD_MISSES=$((LOAD_MISSES + 1))
+		run_load 1 "classic image store: refuses the amd64 manifest digest as the ID" "$MAN"
+		run_load 1 "classic image store: refuses the ID the containerd store would report" "$cid"
+		run_load 1 "classic image store: refuses an arbitrary ID" "sha256:$(printf 'y' | sha256sum | cut -d' ' -f1)"
+		# containerd: the digest of the manifest docker load writes, and
+		# nothing else, not even the OCI manifest it came from.
+		STUB_STORE=containerd run_load 0 "containerd image store: loads when the ID is the manifest docker load writes over the config and layers"
+		[ "$(cat "${WORK}/docker.state")" = "$cid" ] || LOAD_MISSES=$((LOAD_MISSES + 1))
+		STUB_STORE=containerd run_load 1 "containerd image store: refuses the amd64 config digest as the ID" "$CFG"
+		STUB_STORE=containerd run_load 1 "containerd image store: refuses the amd64 OCI manifest digest as the ID" "$MAN"
+		STUB_STORE=containerd run_load 1 "containerd image store: refuses an arbitrary ID" "sha256:$(printf 'y' | sha256sum | cut -d' ' -f1)"
+		# A layer the rebuilt manifest cannot describe: refused before loading.
+		make_layout 1 "" application/vnd.oci.image.layer.v1.tar
+		STUB_STORE=containerd run_load 1 "containerd image store: refuses an amd64 layer that is not an OCI gzip layer"
+		! loaded || LOAD_MISSES=$((LOAD_MISSES + 1))
+		# Bytes under a checked name that do not hash to it: the ID must not
+		# follow them. The config on both stores, a layer on containerd (the
+		# classic stub hashes only the config).
+		make_layout
+		printf 'not the config' >"${WORK}/oci/l/blobs/sha256/${CFG#sha256:}"
+		tar -cf "${WORK}/oci/release-image.oci.tar" -C "${WORK}/oci/l" index.json blobs
+		ARC="$(sha256sum "${WORK}/oci/release-image.oci.tar" | cut -d' ' -f1)"
+		run_load 1 "classic image store: refuses a config blob whose bytes are not its digest"
+		STUB_STORE=containerd run_load 1 "containerd image store: refuses a config blob whose bytes are not its digest"
+		make_layout
+		jq -r '.layers[0].digest' "${WORK}/oci/l/blobs/sha256/${MAN#sha256:}" >"${WORK}/oci/ld"
+		printf 'not the layer' | gzip -n >"${WORK}/oci/l/blobs/sha256/$(sed 's/^sha256://' "${WORK}/oci/ld")"
+		tar -cf "${WORK}/oci/release-image.oci.tar" -C "${WORK}/oci/l" index.json blobs
+		ARC="$(sha256sum "${WORK}/oci/release-image.oci.tar" | cut -d' ' -f1)"
+		STUB_STORE=containerd run_load 1 "containerd image store: refuses a layer blob whose bytes are not its digest"
+		# A size Go would print differently from the manifest (12419.0 for
+		# 12419): refused before loading, saying why.
+		make_layout 1 "" "" .0
+		STUB_STORE=containerd run_load 1 "containerd image store: refuses a manifest size not written as a whole number"
+		! loaded || LOAD_MISSES=$((LOAD_MISSES + 1))
+		grep -qF 'cannot rebuild the manifest the containerd image store writes' "${WORK}/load.out" || LOAD_MISSES=$((LOAD_MISSES + 1))
+		# Unknown stores: refused before anything is loaded.
+		make_layout
+		STUB_STORE='{"Driver":"vfs","DriverStatus":[]}' run_load 1 "refuses an image store it does not know (vfs)"
+		! loaded || LOAD_MISSES=$((LOAD_MISSES + 1))
+		grep -qF 'an image store this step does not know' "${WORK}/load.out" || LOAD_MISSES=$((LOAD_MISSES + 1))
+		STUB_STORE='{"Driver":"overlay2","DriverStatus":[["driver-type","io.containerd.snapshotter.v2"]]}' run_load 1 "refuses a containerd snapshotter it does not know"
+		! loaded || LOAD_MISSES=$((LOAD_MISSES + 1))
+		STUB_STORE='{"Driver":"overlayfs","DriverStatus":[["driver-type","io.containerd.snapshotter.v1"],["driver-type","io.containerd.snapshotter.v1"]]}' run_load 1 "refuses a store that names its driver type twice"
+		! loaded || LOAD_MISSES=$((LOAD_MISSES + 1))
+		STUB_STORE='{"Driver":"overlay2"}' run_load 0 "classic image store: an overlay2 store with no driver status is classic"
+		STUB_STORE='{}' run_load 1 "refuses a docker info that names no storage driver"
+		! loaded || LOAD_MISSES=$((LOAD_MISSES + 1))
+		STUB_INFO_FAIL=1 run_load 1 "refuses when docker info fails"
+		! loaded || LOAD_MISSES=$((LOAD_MISSES + 1))
+		# Known answer: the amd64 manifest of run 42868738162 (config, then
+		# 25 gzip layers, by digest and size), whose image docker load on the
+		# containerd store reported as sha256:afb8de5a... . The blobs are
+		# empty stand-ins; only the manifest feeds the expected ID.
+		local L="${WORK}/oci/l" h sz first=1 cfgj="" layj="" sep=""
+		rm -rf "${WORK}/oci" && mkdir -p "$L/blobs/sha256"
+		while read -r h sz; do
+			: >"$L/blobs/sha256/$h"
+			if [ -n "$first" ]; then cfgj="{\"mediaType\":\"application/vnd.oci.image.config.v1+json\",\"digest\":\"sha256:$h\",\"size\":$sz}"; first=""
+			else layj+="${sep}{\"mediaType\":\"application/vnd.oci.image.layer.v1.tar+gzip\",\"digest\":\"sha256:$h\",\"size\":$sz}"; sep=,; fi
+		done <<'PAIRS'
+213d3556649158fe55ef527359ac0a514c75e56403539725f3781ef2acf5a3f6 12419
+6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 29792658
+68118f7307e010844e88d59ee86e6990ae73a396844d67da97ef3627f7495d71 4186156
+16e7fb4da3c26d8c4d5f89c329dd3f390b6444c27f60be3885c26293bce7c5e2 296
+15b06cb96287ed866730cfff572ae8a9a01c7e33389206e7752b08dc5883d099 37456727
+05d1665ddfbafecceb6ba59648b7b82c8c85be12ba83da09240d05938b6a4039 184
+47ce961b691020289f5cb2621ee6938c0b92b9b90c863131639c2c6178dc3374 3402
+b47b60e8766aff7bd7624aa35f6931c6be5fb2094c0ad3a6691f3cef0e1267b7 138
+3682124fb008b1bed3513eca4402f024a6cb717f9b6cd3abc471c91e0e643356 50055493
+0b529c179722969831bee6a9502ea7f60a1d437a29dadb10ca4c0a135034648a 93
+65ec3a4c632f5fea82fb29b04fdb83312c80216e808bec873c24ffd721346cb5 79019806
+752f25404d0e74b7e2cee91a029b085a53de83a92bbf017faf0b3ea97cc999bd 8796260
+16b7f48981dd848f5e7283ec00aa8abcbc5366d46566fdb1cb8e57a923ff0714 10634
+011da9863088376cfddef918f6b6a700735b768a5a09b13ac5eadac1dacace60 18373
+78ba78fbdeb63cadebbb32c8c7093bf9001f5362083399d1ea278eb1c8639365 1839372
+228fd82a6798575085f463ddcf5b5bf47145efb02c21c20d04217e28c868aab3 13609251
+c2e5acf14393ef1d936eae7b2080bf9ff8e36f808c3e9bd3471892a76c8ddd60 1656
+55eae5f89e90591fe563610cd9a4cff857121f1b91598ec0942ff1946448c3df 522
+54dc31a68967c3ce14d2466b40253098cc8a96feb7578d8d65a6df26c7057724 73886
+f05ee2af82baf596ed862e4b233787528e9e4eb2ec06936c46be974cb76d72f9 1686434
+6c86ce7b6bfe1da3a53c479c8a9646945759ba897a3989775f14d8f9c0acdafd 5664746
+198fc3ebfce1f741010be5ac660a2398f24f9a22486bdf3d411cadfb4a0db0f3 569880
+f9de306978f686c3f1f3d12440795499bb3fb720ad41a7325de65edacd173e80 177
+d15caf5ee277eb69562f179c13cbc1f872629fe98b06003ca874c02456961d8e 1163
+3b950ffa57b51e662398918b57c7949b31177ed7d1a40bcf6ccf7b6da7ec61f5 179
+4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1 32
+PAIRS
+		printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":%s,"layers":[%s]}' "$cfgj" "$layj" >"${WORK}/oci/m"
+		MAN="sha256:$(sha256sum "${WORK}/oci/m" | cut -d' ' -f1)" && mv "${WORK}/oci/m" "$L/blobs/sha256/${MAN#sha256:}"
+		printf '{"schemaVersion":2,"manifests":[{"digest":"%s","platform":{"os":"linux","architecture":"amd64"}}]}' "$MAN" >"${WORK}/oci/i"
+		IDX="sha256:$(sha256sum "${WORK}/oci/i" | cut -d' ' -f1)" && mv "${WORK}/oci/i" "$L/blobs/sha256/${IDX#sha256:}"
+		printf '{"manifests":[{"digest":"%s"}]}' "$IDX" >"$L/index.json"
+		tar -cf "${WORK}/oci/release-image.oci.tar" -C "$L" index.json blobs
+		ARC="$(sha256sum "${WORK}/oci/release-image.oci.tar" | cut -d' ' -f1)"
+		STUB_STORE=containerd run_load 0 "containerd image store: accepts the ID Docker 29.4.2 reported for the amd64 image of run 42868738162" \
+			sha256:afb8de5a1f268b5a92852ee144885382931e337c0d75485dd2c468fe5e408fa3
+		STUB_STORE=containerd run_load 1 "containerd image store: refuses that run config digest as the ID" \
+			sha256:213d3556649158fe55ef527359ac0a514c75e56403539725f3781ef2acf5a3f6
+		run_load 1 "classic image store: refuses that run containerd ID" \
+			sha256:afb8de5a1f268b5a92852ee144885382931e337c0d75485dd2c468fe5e408fa3
+	}
+	LOAD_MISSES=0
+	store_cases
+	if [ "$LOAD_MISSES" = 0 ]; then ok "smoke-image load: the side checks of the image store cases hold"; else no "smoke-image load: the side checks of the image store cases hold" "${LOAD_MISSES} missed"; fi
+	# Mutants of the step: each must make at least one case above miss, or
+	# the cases do not pin the rule it breaks.
+	# load_mutant <label> <from> <to> [<from> <to>]...
+	load_mutant() {
+		local label="$1" m="$LOAD"
+		shift
+		while [ "$#" -ge 2 ]; do
+			if [[ "$m" != *"$1"* ]]; then no "smoke-image load mutant applies: ${label}" "anchor not found: ${1}"; return; fi
+			m="${m/"$1"/"$2"}"
+			shift 2
+		done
+		LOAD_MISSES=0
+		LOAD_UNDER_TEST="$m" LOAD_QUIET=1 store_cases
+		if [ "$LOAD_MISSES" -gt 0 ]; then ok "smoke-image load: a step that ${label} is caught"; else no "smoke-image load: a step that ${label} is caught"; fi
+	}
+	load_mutant 'compares the manifest, not the config, on the classic store' \
+		'classic) want="$config" ;;' 'classic) want="$manifest" ;;'
+	load_mutant 'compares the config on the containerd store' \
+		$'want="sha256:$(sha256sum <"${dir}/docker-manifest.json" | cut -d\x27 \x27 -f1)"' 'want="$config"'
+	load_mutant 'compares the OCI manifest digest on the containerd store' \
+		$'want="sha256:$(sha256sum <"${dir}/docker-manifest.json" | cut -d\x27 \x27 -f1)"' 'want="$manifest"'
+	load_mutant 'treats an unknown store as classic' \
+		'elif $t == [] and .Driver == "overlay2" then "classic"' 'elif true then "classic"'
+	load_mutant 'treats any driver type as containerd' \
+		'if $t == ["io.containerd.snapshotter.v1"] then "containerd"' 'if ($t | length) > 0 then "containerd"'
+	load_mutant 'accepts any loaded ID' \
+		'[ "$got" = "$want" ]' '[ -n "$got" ]'
+	load_mutant 'accepts the ID of either store' \
+		'[ "$got" = "$want" ]' '[ "$got" = "$want" ] || [ "$got" = "$config" ]'
+	load_mutant 'drops the media type of a layer from the rebuilt manifest' \
+		'then {mediaType: "application/vnd.docker.image.rootfs.diff.tar.gzip", digest: .digest, size: .size}' 'then {digest: .digest, size: .size}'
+	load_mutant 'expects the hash of the config bytes, not the checked digest, on the classic store' \
+		'classic) want="$config" ;;' $'classic) want="sha256:$(sha256sum <"$(blob "$config")" | cut -d\x27 \x27 -f1)" ;;'
+	load_mutant 'rebuilds the containerd manifest from the config bytes, not the checked digest' \
+		"jq -cj '{schemaVersion" $'jq -cj --arg cd "sha256:$(sha256sum <"$(blob "$config")" | cut -d\x27 \x27 -f1)" \x27{schemaVersion' \
+		'digest: .config.digest, size: .config.size' 'digest: $cd, size: .config.size'
+	load_mutant 'rebuilds the containerd manifest from the layer bytes, not the checked digests' \
+		"jq -cj '{schemaVersion" $'jq -cj --argjson ld "$(jq -r \x27.layers[].digest\x27 "$(blob "$manifest")" | while read -r d; do printf \x27"sha256:%s"\n\x27 "$(sha256sum <"$(blob "$d")" | cut -d\x27 \x27 -f1)"; done | jq -s .)" \x27{schemaVersion' \
+		'layers: [.layers[] | if' 'layers: [.layers | to_entries[] | .key as $i | .value | .digest = $ld[$i] | if'
+	load_mutant 'does not require whole-number sizes' \
+		'all(tojson | test("^[0-9]+$"))' 'true'
+	load_mutant 'accepts a layer that is not gzip' \
+		'if .mediaType == "application/vnd.oci.image.layer.v1.tar+gzip"' 'if true'
+	load_mutant 'loads before it knows the store' \
+		$'info="$(docker info --format \x27{{json .}}\x27)"' $'docker load -i "${dir}/amd64.tar"\ninfo="$(docker info --format \x27{{json .}}\x27)"'
+	unset LOAD_UNDER_TEST
 fi
 # The standalone archive check publish-docker runs before its login, verbatim.
 PVERIFY="$(yq step publish-docker 'Verify the archive')" || PVERIFY=""
@@ -2516,8 +2734,8 @@ fi
 		"    if: \${{ !cancelled() && needs.validate-tag.result == 'success' && needs.build-image.result == 'success' && needs.smoke-image.result == 'success' && needs.sidecar-build.result == 'success' && needs.publish-brain.result == 'success' && (needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}"$'\n' '' \
 		'a brain-only release, sidecar/VERSION already on npm (v0.17.2)'
 	mutant 'publish-docker taking any skipped sidecar publish as done' \
-		"(needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}"$'\n    runs-on: ubuntu-latest\n    # No checkout' \
-		"(needs.publish-sidecar.result == 'success' || needs.publish-sidecar.result == 'skipped') }}"$'\n    runs-on: ubuntu-latest\n    # No checkout' \
+		"(needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}"$'\n    runs-on: ubuntu-24.04\n    # No checkout' \
+		"(needs.publish-sidecar.result == 'success' || needs.publish-sidecar.result == 'skipped') }}"$'\n    runs-on: ubuntu-24.04\n    # No checkout' \
 		'publish-sidecar skipped while a sidecar release was due'
 	mutant 'publish-docker no longer checking the brain publish' \
 		"needs.sidecar-build.result == 'success' && needs.publish-brain.result == 'success' && " "needs.sidecar-build.result == 'success' && " \
@@ -2635,11 +2853,11 @@ fi
 	mutant 'the signed Windows binary unchecked (#781)' \
 		'          SHA_WIN32_X64: ${{ needs.sign-sidecar-windows.outputs.sha256 }}' ''
 	mutant 'two legs back in one matrix, sharing one outputs block (#781 review)' \
-		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n' \
-		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n          - goos: linux\n            goarch: arm64\n            npm_pkg: linux-arm64\n            runner: ubuntu-24.04-arm\n            setup: linux\n'
+		$'            npm_pkg: linux-x64\n            runner: ubuntu-24.04\n            setup: linux\n' \
+		$'            npm_pkg: linux-x64\n            runner: ubuntu-24.04\n            setup: linux\n          - goos: linux\n            goarch: arm64\n            npm_pkg: linux-arm64\n            runner: ubuntu-24.04-arm\n            setup: linux\n'
 	mutant 'a second matrix axis beside the one include entry, two legs again (#781 re-review)' \
-		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n' \
-		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n        shard: [a, b]\n'
+		$'            npm_pkg: linux-x64\n            runner: ubuntu-24.04\n            setup: linux\n' \
+		$'            npm_pkg: linux-x64\n            runner: ubuntu-24.04\n            setup: linux\n        shard: [a, b]\n'
 	mutant 'a leg job whose output is not its digest step (#781)' \
 		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}' \
 		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.other.outputs.sha256 }}'
@@ -3097,7 +3315,7 @@ done
 	mutant 'the signed digest taken before signing (#779)' \
 		'      - name: Sign installer (Cloud KMS)' $'      - id: digest\n        run: "true"\n      - name: Sign installer (Cloud KMS)'
 	mutant 'a matrix on the macOS installer build, sharing its digest output (#779 re-review)' \
-		$'    runs-on: macos-latest\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout' $'    runs-on: macos-latest\n    strategy:\n      matrix:\n        include:\n          - arch: universal\n        shard: [a, b]\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout'
+		$'    runs-on: macos-26\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout' $'    runs-on: macos-26\n    strategy:\n      matrix:\n        include:\n          - arch: universal\n        shard: [a, b]\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout'
 	mutant 'the signed digest step allowed to fail (#779 re-review)' \
 		$'      # The SIGNED installer\'s digest: signing changes the bytes, and publish\n      # takes the artifact only by this.\n      - name: Digest\n        id: digest\n' $'      # The SIGNED installer\'s digest: signing changes the bytes, and publish\n      # takes the artifact only by this.\n      - name: Digest\n        id: digest\n        continue-on-error: true\n'
 	mutant 'the publish check switched off on its own (#779)' \
@@ -3280,8 +3498,8 @@ done
 	mutant 'the sidecar signer verifying in place again, in the job holding id-token (#817)' \
 		'scripts/sign-windows.sh --defer-verify "${SIDECAR_BIN}.exe"' 'scripts/sign-windows.sh "${SIDECAR_BIN}.exe"'
 	mutant 'the sidecar signature check given id-token (#817)' \
-		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n'
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n' \
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n      id-token: write\n'
 	mutant 'the sidecar signer reporting it never signs, so the check always skips (#817)' \
 		'      signed: ${{ steps.winsign.outputs.ready }}' '      signed: "false"'
 	mutant 'the sidecar signature check verifying an artifact other than the one that ships (#817)' \
@@ -3333,8 +3551,8 @@ done
 	mutant 'the installer signature check allowed to fail (#817)' \
 		$'      - name: Verify the Authenticode signature\n        if: needs.sign-windows.outputs.signed == \'true\'' $'      - name: Verify the Authenticode signature\n        continue-on-error: true\n        if: needs.sign-windows.outputs.signed == \'true\''
 	mutant 'the installer signature check given a write scope (#817)' \
-		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write\n'
+		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n' \
+		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: write\n'
 	mutant 'the installer signature check run without its publisher pin (#817)' \
 		$'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n          # Sectigo' $'          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n          # Sectigo'
 	mutant 'the installer signer allowed to fail as a whole (#817 review)' \
@@ -3667,10 +3885,10 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW
 		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS "${SIDECAR_BIN}.exe"\n' '' \
 		'verify-sidecar-windows: step "Verify the Authenticode signature" does not run require-signing-pin.sh'
 	mutant 'the sidecar macOS leg told it is a linux build (#922 review)' \
-		$'            npm_pkg: darwin-arm64\n            runner: macos-latest\n            setup: darwin\n' $'            npm_pkg: darwin-arm64\n            runner: macos-latest\n            setup: linux\n' \
+		$'            npm_pkg: darwin-arm64\n            runner: macos-26\n            setup: darwin\n' $'            npm_pkg: darwin-arm64\n            runner: macos-26\n            setup: linux\n' \
 		'build-sidecar-darwin-arm64: builds with SETUP'
 	mutant 'a new sidecar job linking a pin outside the gate (#922 review)' \
-		$'  # --- Windows: cross-compile (no OIDC) ---\n' $'  sneaky:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Build\n        run: go build -ldflags "-X x.expectedTeamID=" .\n  # --- Windows: cross-compile (no OIDC) ---\n' \
+		$'  # --- Windows: cross-compile (no OIDC) ---\n' $'  sneaky:\n    runs-on: ubuntu-24.04\n    steps:\n      - name: Build\n        run: go build -ldflags "-X x.expectedTeamID=" .\n  # --- Windows: cross-compile (no OIDC) ---\n' \
 		'sneaky: step "Build" links a signer pin'
 	mutant 'the sidecar signature check told it is a dry run (#922)' \
 		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n' $'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    env:\n      DRY_RUN: "true"\n' \
@@ -3860,7 +4078,7 @@ done
 		$'          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Jarvis.app"' $'          APPLE_TEAM_ID: ABCDE12345\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Jarvis.app"' \
 		'the signature check env must be exactly'
 	mutant 'the sidecar team check given a secret (#921)' \
-		$'    if: needs.resolve.outputs.build == \'true\'\n    runs-on: macos-latest\n    permissions:\n      contents: read\n    steps:\n      # For require-signing-pin.sh and verify-macos-signature.sh.' $'    if: needs.resolve.outputs.build == \'true\'\n    runs-on: macos-latest\n    permissions:\n      contents: read\n    env:\n      X: ${{ secrets.ASC_KEY_ID }}\n    steps:\n      # For require-signing-pin.sh and verify-macos-signature.sh.' \
+		$'    if: needs.resolve.outputs.build == \'true\'\n    runs-on: macos-26\n    permissions:\n      contents: read\n    steps:\n      # For require-signing-pin.sh and verify-macos-signature.sh.' $'    if: needs.resolve.outputs.build == \'true\'\n    runs-on: macos-26\n    permissions:\n      contents: read\n    env:\n      X: ${{ secrets.ASC_KEY_ID }}\n    steps:\n      # For require-signing-pin.sh and verify-macos-signature.sh.' \
 		'verify-sidecar-darwin: reads a secret'
 	mutant 'the sidecar team check run on the unsigned bundles (#921)' \
 		$'          name: sidecar-darwin-x64\n          path: ${{ runner.temp }}/signed/darwin-x64' $'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/signed/darwin-x64' \
