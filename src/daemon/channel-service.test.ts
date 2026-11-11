@@ -908,6 +908,17 @@ describe("#852: only a sender the allow-list names becomes the broadcast recipie
     expect(svc.getBroadcastRecipient("telegram")).toBeNull();
   });
 
+  test("the service passes a sender's stop check on to the channel loop (#1314 review)", async () => {
+    initDatabase(":memory:");
+    const { svc, telegram, handle } = await setup({ telegram: [42] });
+    await handle(msg("telegram", 42, "42", true));
+    const routed = await svc.tryBroadcastToChannels(["telegram"], "held", { shouldContinue: () => false });
+    expect(telegram.sent).toEqual([]);
+    expect(routed.delivered).toEqual([]);
+    await svc.tryBroadcastToChannels(["telegram"], "sent");
+    expect(telegram.sent).toEqual([{ to: "42", text: "sent" }]);
+  });
+
   test("#852 review: a listed user writing in a group or server channel does not send the cards there", async () => {
     initDatabase(":memory:");
     const { svc, telegram, discord, handle } = await setup({ telegram: [42], discord: [OWNER] });
@@ -1247,4 +1258,20 @@ describe("#890: whether each channel has anywhere to send approval requests", ()
       discord: { hasRecipient: false, reason: "no_direct_message" },
     })).toBe("Telegram will not receive approval requests or notifications: no user ID is listed for it. Discord will not receive approval requests or notifications until the channel's owner, the first allowed user ID, sends the bot a direct message (again, if they did before). A bot cannot start a chat with someone who has never messaged it.");
   });
+});
+
+test("a sender whose permission lapses while one channel is tried stops before the next (#1314 review)", async () => {
+  let allowed = true;
+  const tg = new FakeAdapter({ connected: true });
+  const discord = new FakeAdapter({ connected: true });
+  // Telegram's send is where the switch flips.
+  const send = tg.sendMessage.bind(tg);
+  tg.sendMessage = async (to: string, text: string) => { allowed = false; await send(to, text); throw new Error("telegram refused"); };
+  const res = await routePerChannel(["telegram", "discord"], "Opportunity", makeServices({
+    adapters: { telegram: tg, discord }, recipients: { telegram: "tg-user", discord: "dc-user" },
+  }), { shouldContinue: () => allowed });
+  expect(discord.sent).toEqual([]);
+  expect(res.delivered).toEqual([]);
+  // Telegram's own outcome is its send's; discord was never tried.
+  expect(res.failed.find(f => f.channel === "discord")?.error).toContain("held");
 });

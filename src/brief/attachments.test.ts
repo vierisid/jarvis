@@ -131,3 +131,20 @@ test('a mixed invalid batch rolls back the earlier bindings and all canonical me
   expect(f.provider.repository.find(f.a, 'large-a')?.state).toBe('ready');
   expect(f.turns.pending()).toEqual([]);
 });
+
+test('no screenshot is taken while screen awareness or desktop control is off (#1314 m6)', async () => {
+  const { setScreenCaptureEnabledSource, setDesktopEnabledSource } = await import('../actions/tools/desktop-guard');
+  let calls = 0;
+  const sidecar = {
+    getSidecar: () => ({ connected: true, capabilities: ['screenshot'], unavailable_capabilities: [] }),
+    async dispatchRPC() { calls++; return { _binary: { data: fixturePng().toString('base64'), mime_type: 'image/png' } }; },
+  } as unknown as Pick<SidecarManager, 'getSidecar' | 'dispatchRPC'>;
+  const f = fixture(sidecar);
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    await expect(f.provider.capture(f.a, 'screen-1', 'device', true)).rejects.toThrow('Screen awareness is turned off');
+    setScreenCaptureEnabledSource(null); setDesktopEnabledSource(() => false);
+    await expect(f.provider.capture(f.a, 'screen-2', 'device', true)).rejects.toThrow('Desktop control is turned off');
+    expect(calls).toBe(0);
+  } finally { setScreenCaptureEnabledSource(null); setDesktopEnabledSource(null); }
+});

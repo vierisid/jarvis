@@ -8,7 +8,7 @@
  * outcome when the skill cannot run or stops part way.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../db';
+import { initWorkflowDb, closeWorkflowDb, getWorkflowDb, DEFAULT_IDS } from '../db';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun } from '../db/repos/flow-run';
@@ -74,6 +74,9 @@ function fixture(governed: string[] = []) {
       pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1', actionName: 'invoke', input: { toolName: 'run_skill' },
     } },
   } });
+  // A skill replays clicks and typing, so it runs on a computer a person chose (#1314): pinned as enabling pins it.
+  getWorkflowDb().run('UPDATE flow SET binding_pins = ? WHERE id = ?', [JSON.stringify({ schemaVersion: 1, versionId: version.id,
+    pinnedAt: Date.now(), connections: {}, machine: { sidecarId: 'pc-1', name: 'Office PC' } }), flow.id]);
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
   const registry = new ToolRegistry();
   registry.register(runSkillTool);
@@ -230,4 +233,30 @@ describe('run_skill as a workflow effect', () => {
     await expect(f.invoke({ name: 'two-steps' })).rejects.toBeInstanceOf(ActionOutcomeError);
     expect(calls.filter((c) => c.method === 'browser_ax_click')).toHaveLength(1);
   });
+});
+
+
+test('a skill replays only on a computer a person chose (#1314 review)', async () => {
+  const calls: Call[] = [];
+  fakeSidecar(calls);
+  gmailSkill();
+  const f = fixture();
+  getWorkflowDb().run('UPDATE flow SET binding_pins = NULL');
+  await expect(f.invoke({ name: 'gmail-send', params: { subject: 'x' } })).rejects.toMatchObject({ outcome: { code: 'WORKFLOW_MACHINE_UNPINNED', effect: 'not_started' } });
+  expect(calls).toHaveLength(0);
+});
+
+test('a skill step with a written computer runs only when the call asks for that same computer (#1314 review)', async () => {
+  const calls: Call[] = [];
+  fakeSidecar(calls);
+  gmailSkill();
+  const f = fixture();
+  getWorkflowDb().run('UPDATE flow SET binding_pins = NULL');
+  getWorkflowDb().run(`UPDATE flow_version SET trigger = json_set(trigger, '$.nextAction.settings.input.params', json('{"name":"gmail-send","target":"pc-1"}'))`);
+  // Another computer, sent beside the step's name: not the step's.
+  await expect(f.invoke({ name: 'gmail-send', params: { subject: 'x' }, target: 'pc-2' }))
+    .rejects.toMatchObject({ outcome: { code: 'WORKFLOW_MACHINE_UNPINNED', effect: 'not_started' } });
+  // The step's own computer passes the pin check (whatever Authority then decides).
+  const own = await Promise.resolve(f.invoke({ name: 'gmail-send', params: { subject: 'x' }, target: 'pc-1' })).catch(error => error);
+  expect((own as { outcome?: { code?: string } })?.outcome?.code).not.toBe('WORKFLOW_MACHINE_UNPINNED');
 });

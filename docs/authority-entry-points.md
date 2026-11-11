@@ -53,7 +53,8 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
 | Timer, approval, resume URL | One continuation per pause | | Wait (resume URL 503) | Runs stopped |
 | Governed workflow step (Jarvis pieces, verified pieces, child workflow, delegated agent) | Authority as the workflow or its delegate | Version digest, full-input digest, permissions, approval, emergency, all again before the claim | Parks on a HOLD waitpoint | Blocked; the run is stopped |
 | Community piece, CODE step | Opt-in (Library install, per-workflow CODE grant) | | Parks on a HOLD waitpoint | Does not run |
-| Raw UI and desktop actions | Mandatory dashboard review | Click on the dashboard only | Refused | Refused |
+| Raw UI and desktop actions (chat) | Mandatory dashboard review | Click on the dashboard only | Refused | Refused |
+| Workflow browser or desktop action (direct `jarvis-tool` step or delegated agent, #1314) | Readiness (no templated computer, tool available under desktop.enabled and awareness), params held to the step, pinned or literally named computer, card that shows every value | Click on the dashboard only, with the live guard, within five minutes for navigate, scroll and key press | Parks on a HOLD waitpoint | Blocked; the run is stopped |
 
 ## What an approval binds
 

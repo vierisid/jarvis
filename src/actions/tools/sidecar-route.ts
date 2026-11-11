@@ -955,7 +955,7 @@ export function remoteSnapshotGenerationCount(): number {
 // navigate's generation landed under "suppressed", and the chat's next card,
 // for an id from the very page the navigate returned, was refused.
 function readerKey(sidecarId: string): string {
-  return `${sidecarId}\u0000${currentReviewedExecution()?.reader ?? currentSnapshotReader()}`;
+  return `${sidecarId}\u0000${currentLoopSnapshotReadLog()?.isolatedReader ?? currentReviewedExecution()?.reader ?? currentSnapshotReader()}`;
 }
 
 /**
@@ -965,6 +965,8 @@ function readerKey(sidecarId: string): string {
  * under the reader that raised its card.
  */
 export function currentSnapshotReader(): string {
+  const isolated = currentLoopSnapshotReadLog()?.isolatedReader;
+  if (isolated) return isolated;
   const scope = currentTemplateDeliveryScope();
   return !scope ? 'default' : scope.kind === 'named' ? `named:${scope.id}` : 'suppressed';
 }
@@ -984,6 +986,12 @@ export function currentSnapshotReader(): string {
  * other reader's map. Those readers already have their own keys.
  */
 export function currentSnapshotReadLog(): SnapshotReadLog | undefined {
+  // Direct workflow steps own a run-local log across requests. Suppressing
+  // playbooks must not suppress that ownership. A resumed approved navigate
+  // writes to the run executing it, even though workflow approvals detach
+  // their original model-loop readLog in ApprovalManager.getUiExecution.
+  const own = currentLoopSnapshotReadLog();
+  if (own?.isolatedReader) return own;
   const reviewed = currentReviewedExecution();
   if (reviewed) return reviewed.readLog;
   return currentSnapshotReader() === 'default' ? currentLoopSnapshotReadLog() : undefined;
@@ -998,7 +1006,7 @@ export function remoteSnapshotGeneration(sidecarId: string): string | null {
   if (log?.generations.has(sidecarId)) return log.generations.get(sidecarId) ?? null;
   // A resumed loop that replays snapshot replies it holds no generation for
   // binds nothing, rather than whatever another reader took during the pause.
-  if (log?.resumedWithReads) return null;
+  if (log?.resumedWithReads || log?.isolatedReader) return null;
   return remoteSnapshotGenerations.get(readerKey(sidecarId)) ?? null;
 }
 

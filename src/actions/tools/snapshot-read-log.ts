@@ -46,6 +46,10 @@
  * NOT A GRANT. Like the delivery scope it sits beside, nothing here permits
  * anything: an entry only decides which generation a card copies, and the
  * sidecar does the comparing.
+ *
+ * Direct workflow browser steps use an isolated reader per run. Their log is
+ * live across step requests, independent of playbook suppression, and has no
+ * shared-reader fallback. Lost logs cannot be reconstructed from receipts.
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -58,6 +62,9 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  */
 export type SnapshotReadLog = {
   readonly generations: Map<string, string | null>;
+  /** A trusted non-chat reader, such as a workflow run. Its own reads survive
+   * delivery suppression and never fall back to another reader's snapshot. */
+  readonly isolatedReader?: string;
   /**
    * The loop RESUMED a buffer that already holds snapshot replies -- a paused
    * `processTaskCall` replays its whole conversation, tool results included --
@@ -82,9 +89,10 @@ export type SnapshotReadLog = {
 
 const store = new AsyncLocalStorage<SnapshotReadLog>();
 
-/** A fresh, empty log for one model loop. */
-export function newSnapshotReadLog(opts: { resumedWithReads?: boolean } = {}): SnapshotReadLog {
-  return { generations: new Map(), resumedWithReads: opts.resumedWithReads === true, localGeneration: undefined };
+/** A fresh, empty log for one model loop or isolated workflow reader. */
+export function newSnapshotReadLog(opts: { resumedWithReads?: boolean; isolatedReader?: string } = {}): SnapshotReadLog {
+  return { generations: new Map(), resumedWithReads: opts.resumedWithReads === true, localGeneration: undefined,
+    ...(opts.isolatedReader ? { isolatedReader: opts.isolatedReader } : {}) };
 }
 
 /** Run `fn` as part of the loop that owns `log`. */
