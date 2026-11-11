@@ -89,6 +89,7 @@ import { isCommunityAction } from './step-admission';
 import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
 import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
 import { getFlowRun } from '../db/repos/flow-run';
+import { recordDashboardNotification } from '../../vault/dashboard-notifications';
 import { getFlowReadHosts } from '../db/repos/flow-read-hosts';
 import { boundedReceiptText } from '../../roles/untrusted';
 import { evaluateLlmOutput } from './llm-output-contract';
@@ -174,6 +175,12 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
    * the toast may already be up. The daemon passes the desktop receipt.
    */
   sendDesktop?: (title: string, body: string) => Promise<boolean | 'unknown'>;
+  /**
+   * Where a dashboard notification is saved; defaults to the vault's table.
+   * Fixtures that must not write the owner's list pass their own, and one that
+   * throws is a notification that was not stored.
+   */
+  recordDashboardNotification?: typeof recordDashboardNotification;
   /** Recent-events buffer for `jarvis-trigger:on_event` polling. */
   eventBuffer: WorkflowEventBuffer;
   /**
@@ -666,8 +673,8 @@ export function buildSandboxServiceBackends(
     : undefined;
 
   const notifierDeps: NotifierDeps = {
-    broadcastToDashboard: (text, priority) =>
-      opts.wsService.broadcastNotificationToDashboard(text, priority),
+    broadcastToDashboard: (text, priority, storedId) =>
+      opts.wsService.broadcastNotificationToDashboard(text, priority, storedId),
     // Real per-channel routing: tryBroadcastToChannels iterates the requested
     // names, dispatches each to its adapter, and reports delivered/failed
     // independently. A flow that says "telegram" only goes to telegram (with
@@ -817,7 +824,16 @@ export function buildSandboxServiceBackends(
         try {
           const recipients = args.recipients as Record<string, string | null>;
           const guardedNotifier = new JarvisNotifierAdapter({ ...notifierDeps,
-            broadcastToDashboard: (text, priority) => { checkpoint(); return sent(() => opts.wsService.broadcastNotificationToDashboard(text, priority)); },
+            recordDashboard: (text, priority) => {
+              checkpoint();
+              const id = (opts.recordDashboardNotification ?? recordDashboardNotification)({ message: text, priority, workflowId: currentRun?.flowId ?? null, runId: ctx.runId }).id;
+              // Saved: it is in the owner's list now. A Pause, Kill or cancel
+              // that stops the live toast after this must not report it as
+              // never sent, nor release the key for a later run to save again.
+              mayHaveArrived = true;
+              return id;
+            },
+            broadcastToDashboard: (text, priority, storedId) => { checkpoint(); return sent(() => opts.wsService.broadcastNotificationToDashboard(text, priority, storedId)); },
             broadcastToChannels: async (channels, text) => {
               const report: ChannelDeliveryReport = { delivered: [], failed: [], unknown: [] };
               for (const channel of channels) {

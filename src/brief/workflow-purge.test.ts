@@ -17,6 +17,7 @@ import { createManageWorkflowTool } from '../actions/tools/manage-workflow';
 import { WorkflowRemoval, WORKFLOW_REMOVAL_LIMITS } from './workflow-removal';
 import { beginEffectDispatch } from '../workflows/runtime/effect-inflight';
 import { deleteFlowHistoryBatch, FLOW_DELETE_BATCH } from '../workflows/db/repos/flow-deletion';
+import { listUnreadDashboardNotifications, recordDashboardNotification } from '../vault/dashboard-notifications';
 import type { WorkflowManageCommand, WorkflowPurgeCommand } from './workflow-removal-contracts';
 
 let dir: string, file: string, service: WorkflowRemoval, clock: number, saved: string | undefined, savedData: string | undefined, closed: string[];
@@ -112,6 +113,9 @@ test('a restored workflow is purged with its versions, runs and run payloads; it
   mkdirSync(join(files, other.flow.id), { recursive: true }); writeFileSync(join(logs, `${otherRun.id}.bin`), 'state');
   const otherJob = enqueue({ jobType: 'RUN_FLOW', payload: { runId: otherRun.id }, flowId: other.flow.id, flowVersionId: other.version.id, flowRunId: otherRun.id });
   const commandsBefore = count('SELECT COUNT(*) AS n FROM brief_workflow_commands WHERE flow_id = ?', flow.id);
+  // Saved dashboard notifications (#1344): this workflow's go, another's stay.
+  recordDashboardNotification({ message: 'from this flow', priority: 'normal', workflowId: flow.id, runId: finished.id });
+  const otherNotice = recordDashboardNotification({ message: 'from the other flow', priority: 'normal', workflowId: other.flow.id, runId: otherRun.id });
 
   const c = purgeCommand(flow.id), result = purge(c);
   expect(result).toMatchObject({ status: 'accepted', action: 'purge', flowId: flow.id, requestId: c.requestId, purge: { flowId: flow.id, generation: 1 } });
@@ -128,6 +132,7 @@ test('a restored workflow is purged with its versions, runs and run payloads; it
     .toEqual([`foreign:flow_${flow.id}/k`, `${DEFAULT_IDS.project}:flow_${flow.id}x/k`, `${DEFAULT_IDS.project}:flow_other/k`,
       `${DEFAULT_IDS.project}:project-key`, `${DEFAULT_IDS.project}:testflow_${flow.id}x/k`].sort());
   expect(getJob(stale.id)).toBeNull();
+  expect(listUnreadDashboardNotifications().map(n => n.id)).toEqual([otherNotice.id]);
   // Every card of a stopped run, and of a run that ended before it parked, is closed and reported (#1039).
   expect(approvalStatus(card)).toBe('denied'); expect(approvalStatus(orphanCard)).toBe('denied');
   expect(closed.sort()).toEqual([card, orphanCard].sort());

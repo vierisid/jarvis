@@ -16,6 +16,7 @@ import { saveWorkflowEffect, type WorkflowEffect } from "./workflow-effect";
 import { createWorkflowRoutes } from "../../api/routes";
 import { createManageWorkflowTool } from "../../../actions/tools/manage-workflow";
 import { beginEffectDispatch } from "../../runtime/effect-inflight";
+import { listUnreadDashboardNotifications, recordDashboardNotification } from "../../../vault/dashboard-notifications";
 import { deleteWorkflow, FLOW_DELETE_BATCH, FLOW_DELETE_WAIT_MS, setDeletedWorkflowCardListener } from "./flow-deletion";
 
 let dir: string, savedData: string | undefined;
@@ -66,6 +67,9 @@ function leftovers(flowId: string, versionId: string) {
   store(`testflow_${flowId}/k`);
   store("project-key");
   const job = enqueue({ jobType: "RUN_FLOW", payload: { runId: finished.id }, flowRunId: finished.id });
+  // A saved dashboard notification of this workflow, and one of another (#1344).
+  const notice = recordDashboardNotification({ message: "from this flow", priority: "normal", workflowId: flowId, runId: finished.id });
+  const otherNotice = recordDashboardNotification({ message: "from another flow", priority: "normal", workflowId: "other-flow" });
   const logs = join(dir, "data", "workflow-logs"), files = join(dir, "data", "workflow-files");
   mkdirSync(logs, { recursive: true });
   mkdirSync(join(files, flowId, "step"), { recursive: true });
@@ -79,6 +83,8 @@ function leftovers(flowId: string, versionId: string) {
       for (const table of ["workflow_file", "open_failure"]) expect(count(`SELECT COUNT(*) AS n FROM ${table} WHERE flow_id = ?`, flowId)).toBe(0);
       expect((db().query("SELECT key FROM store_entry").all() as Array<{ key: string }>).map((r) => r.key)).toEqual(["project-key"]);
       expect(getJob(job.id)).toBeNull();
+      expect(listUnreadDashboardNotifications().map((n) => n.id)).toEqual([otherNotice.id]);
+      expect(notice.id).not.toBe(otherNotice.id);
       expect(existsSync(join(logs, `${finished.id}.bin`))).toBe(false);
       expect(existsSync(join(files, flowId))).toBe(false);
       // The card of a run that ended before it parked is closed, not left approvable (#1039).
