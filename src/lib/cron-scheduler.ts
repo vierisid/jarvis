@@ -156,7 +156,7 @@ export function validateCronExpression(expression: string): void {
  * weekdays repeat exactly every cycle, so an expression with no time inside it
  * never fires, and one that has a time has it inside it however rare it is
  * (a leap day is up to 8 years apart, a leap day that must be a Monday up to
- * 40). Scheduling and validation use this one definition.
+ * 40). Both nextRun paths use this one bound.
  */
 const CRON_LOOKAHEAD_DAYS = 146_097;
 const CRON_LOOKAHEAD_MS = CRON_LOOKAHEAD_DAYS * 24 * 60 * 60_000;
@@ -368,6 +368,24 @@ function zoneFormatter(zone: string): Intl.DateTimeFormat {
   });
 }
 
+/**
+ * Whole days nextRun can jump past from a day `wc` that does not match,
+ * without stepping over one that might: to two days before the next day of
+ * the month the expression names, or before the next month when this month
+ * is not named. Two days of slack keep a jump of that many 24-hour spans on
+ * or before the target's eve even where a zone moved its date line (Samoa
+ * skipped a whole day); `startOfNextLocalDay` and the loop do the rest day by
+ * day. Without it a far search walks every day of the 400-year bound.
+ */
+function daysPassedOver(parsed: ParsedCron, wc: WallClock): number {
+  const monthDays = new Date(Date.UTC(wc.year, wc.month, 0)).getUTCDate();
+  // LW falls on one of the last three days of the month.
+  const target = !parsed.months.includes(wc.month) ? monthDays + 1
+    : parsed.lastWeekday ? monthDays - 2
+    : Math.min(parsed.daysOfMonth.find((d) => d > wc.dom) ?? monthDays + 1, monthDays + 1);
+  return Math.max(0, target - wc.dom - 2);
+}
+
 /** Local calendar date as a single comparable number (yyyymmdd). */
 function localDateKey(wc: WallClock): number {
   return wc.year * 10_000 + wc.month * 100 + wc.dom;
@@ -487,9 +505,7 @@ export class CronScheduler {
       start.setMinutes(start.getMinutes() + 1);
 
       // Search one 400-year cycle ahead (minute-by-minute is too slow; step by minute smartly)
-      const limit = new Date(from);
-      limit.setFullYear(limit.getFullYear() + 400);
-      if (limitMs !== undefined && limitMs < limit.getTime()) limit.setTime(limitMs);
+      const limit = new Date(Math.min(from.getTime() + CRON_LOOKAHEAD_MS, limitMs ?? Number.MAX_SAFE_INTEGER));
 
       const candidate = new Date(start);
 
@@ -575,7 +591,7 @@ export class CronScheduler {
       while (ts < limit && ++guard < 600_000) {
         const wc = wallClock(new Date(ts), zone);
         if (!matchesDay(parsed, wc)) {
-          ts = startOfNextLocalDay(ts, zone);
+          ts = startOfNextLocalDay(ts + daysPassedOver(parsed, wc) * 86_400_000, zone);
           continue;
         }
         if (!hours.includes(wc.hour)) {
