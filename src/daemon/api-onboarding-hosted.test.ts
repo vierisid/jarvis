@@ -45,6 +45,7 @@ function makeCtx(config: JarvisConfig): ApiContext {
       getLLMManager: () => new Proxy({}, {
         get: (_t, prop) => (prop === 'getProviderNames' ? () => [] : () => null),
       }),
+      syncConversationTier: () => {},
     } as unknown as ApiContext['agentService'],
   } as ApiContext;
 }

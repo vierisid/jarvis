@@ -4560,6 +4560,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     settingsReload.registerApplier('llm', async (cfg) => {
       const { hotReloadLLMProviders } = await import('./llm-settings.ts');
       hotReloadLLMProviders(cfg, agentService.getLLMManager());
+      agentService.syncConversationTier();
       // `mergeLLMSettingsIntoConfig` REPLACES `config.llm.providers` rather
       // than mutating it, so the orchestrator's boot-time reference is
       // detached on every reload. Re-hand it, or the tool filter keeps

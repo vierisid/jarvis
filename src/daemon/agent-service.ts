@@ -1127,34 +1127,53 @@ export class AgentService implements Service, IAgentService {
     // Phase 4: initialize conv-tier infrastructure ONLY when the user has
     // configured llm.tiers.conversation. Otherwise we stay in classic
     // single-orchestrator mode (and handleMessage uses this.orchestrator).
-    if (this.llmManager.hasConversationTier()) {
-      // Persist task records so paused (needs_input) tasks survive daemon
-      // restarts. getDb is called lazily (resolver function) so a DB re-open
-      // between hot-reloads stays consistent. hydrate() runs immediately to
-      // reconcile any tasks that were in-flight at shutdown.
+    this.syncConversationTier();
+  }
+
+  /**
+   * Make the router-first conversation layer match the tier map. Called at
+   * boot and again after every provider/tier hot reload: the orchestrator is
+   * built from the tier map, so a save that adds or removes the conversation
+   * tier changes which chat path runs. Without this a "saved and applied"
+   * multi-tier setting kept chatting through the old path until restart.
+   * Turns already running keep the orchestrator they started with.
+   */
+  syncConversationTier(): void {
+    const wanted = this.llmManager.hasConversationTier();
+    if (!wanted) {
+      if (this.convOrchestrator) {
+        this.convOrchestrator = null;
+        console.log('[AgentService] Conversation tier removed - classic orchestrator mode.');
+      } else {
+        console.log('[AgentService] No conversation tier - classic orchestrator mode.');
+      }
+      return;
+    }
+    if (this.convOrchestrator) return;
+    // Persist task records so paused (needs_input) tasks survive daemon
+    // restarts. getDb is called lazily (resolver function) so a DB re-open
+    // between hot-reloads stays consistent. hydrate() runs immediately to
+    // reconcile any tasks that were in-flight at shutdown.
+    if (!this.taskRegistry) {
       this.taskRegistry = new TaskRegistry({ db: () => { try { return getDb(); } catch { return null; } } });
       this.taskRegistry.hydrate();
-      // Task runner: route delegations through the primary orchestrator so
-      // task tiers run with the full tool registry, role prompt, authority
-      // gating, and Jarvis-specific feature knowledge. Uses processTaskCall
-      // (not processMessage) so the LLM has access to the
-      // `ask_for_clarification` tool for pause/resume and the conversation
-      // buffer is scoped to one task (not polluting the primary agent's
-      // global history).
-      const runner = this.taskRunner();
-      this.taskDispatcher = new TaskDispatcher(this.llmManager, this.taskRegistry, runner);
-      this.dialogueCompactor = new DialogueCompactor(this.llmManager);
-      const persona = this.buildPersona();
-      this.convOrchestrator = new ConvOrchestrator(
-        this.llmManager,
-        this.taskRegistry,
-        this.taskDispatcher,
-        persona,
-      );
-      console.log('[AgentService] Conversation tier configured - router-first mode active.');
-    } else {
-      console.log('[AgentService] No conversation tier - classic orchestrator mode.');
     }
+    // Task runner: route delegations through the primary orchestrator so
+    // task tiers run with the full tool registry, role prompt, authority
+    // gating, and Jarvis-specific feature knowledge. Uses processTaskCall
+    // (not processMessage) so the LLM has access to the
+    // `ask_for_clarification` tool for pause/resume and the conversation
+    // buffer is scoped to one task (not polluting the primary agent's
+    // global history).
+    this.taskDispatcher ??= new TaskDispatcher(this.llmManager, this.taskRegistry, this.taskRunner());
+    this.dialogueCompactor ??= new DialogueCompactor(this.llmManager);
+    this.convOrchestrator = new ConvOrchestrator(
+      this.llmManager,
+      this.taskRegistry,
+      this.taskDispatcher,
+      this.buildPersona(),
+    );
+    console.log('[AgentService] Conversation tier configured - router-first mode active.');
   }
 
   /**
