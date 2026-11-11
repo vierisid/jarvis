@@ -5,6 +5,7 @@
  * to the AgentService and relays streamed responses back to clients.
  */
 
+import { isAddressInUseError, PortUnavailableError, portInUseMessage } from './port-check.ts';
 import type { ServerWebSocket } from 'bun';
 import { withMemoryRecall } from '../vault/memory-use-context.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
@@ -580,8 +581,12 @@ export class WebSocketService implements Service {
   // dashboard clicks. See gateVoiceApprovalResolution + resolveLatestPendingByVoice.
   private auditTrail: AuditTrail | null = null;
 
+  /** Listening on a unix socket: no TCP port to be busy. */
+  private readonly unixMode: boolean;
+
   constructor(port: number, agentService: AgentService, unixPath?: string, hostname?: string) {
     this.port = port;
+    this.unixMode = unixPath !== undefined;
     this.agentService = agentService;
     this.wsServer = new WebSocketServer(port, unixPath, hostname);
     this.streamRelay = new StreamRelay(this.wsServer, message => this.broadcastLegacyChat(message));
@@ -737,8 +742,14 @@ export class WebSocketService implements Service {
         onDisconnect: (ws) => this.handleClientDisconnect(ws),
       });
 
-      // Start the server
-      this.wsServer.start();
+      // Start the server. A port taken between the early check and now (or a
+      // unix socket path in use) says which port and what to do, not Bun's stack.
+      try {
+        this.wsServer.start();
+      } catch (error) {
+        if (isAddressInUseError(error) && !this.unixMode) throw new PortUnavailableError(this.port, 'in_use', portInUseMessage(this.port, null));
+        throw error;
+      }
 
       // Periodic sweep of abandoned voice-confirmation cards. Without this,
       // an active client that receives a clarifier and then ignores it

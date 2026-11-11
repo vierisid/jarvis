@@ -810,6 +810,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     process.exit(1);
   }
 
+  // A taken port is found now, in a moment, rather than after the whole boot
+  // as a raw EADDRINUSE stack. Unix-socket mode binds no TCP port.
+  if (listen.kind === 'tcp') {
+    const { assertPortFree, PortUnavailableError } = await import('./port-check.ts');
+    try {
+      await assertPortFree(port, localIntegration ? '127.0.0.1' : undefined);
+    } catch (err) {
+      if (err instanceof PortUnavailableError) {
+        console.error(`\n[Daemon] ${err.message}\n`);
+        process.exit(1);
+      }
+      throw err;
+    }
+  }
+
   // Record the actual bound port in the lockfile so `jarvis stop` knows which
   // port to verify even when the daemon was started with --port, JARVIS_PORT,
   // or a mid-run config change. No-op if we don't hold the lock (e.g. tests).
@@ -6279,7 +6294,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     console.log('');
 
   } catch (error) {
-    console.error('[Daemon] Fatal error during startup:', error);
+    // A taken port arrives as plain words with the next step, not a stack.
+    const { PortUnavailableError } = await import('./port-check.ts');
+    if (error instanceof PortUnavailableError) console.error(`\n[Daemon] ${error.message}\n`);
+    else console.error('[Daemon] Fatal error during startup:', error);
     process.exit(1);
   }
 }
