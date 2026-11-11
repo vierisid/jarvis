@@ -28,7 +28,7 @@ import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-e
 import { walkFlowNodes } from '../db/flow-graph';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import { nodeConnectionReferences, type RunConnectionBindingView } from '../db/repos/binding-pins';
-import { expressionFailureGuidance, failedOnMissingReference, loopInputFailure } from './expression-failure';
+import { expressionFailureGuidance, failedOnMissingReference, loopInputFailure, missingReference } from './expression-failure';
 import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_REJECTED_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, isHumanInputStep } from './human-input-contract';
 import { IN_RUN_STEP_PIECES } from './step-admission';
 import { WORKFLOW_SKILL_NOT_FOUND_CODE, WORKFLOW_TOOL_UNSUPPORTED_CODE } from './effect-capabilities';
@@ -105,7 +105,8 @@ function withOtherSteps(failure: UserFailure, other: 'yes' | 'maybe' | 'no', bef
   const said = other === 'yes' ? `${before} had already run.` : `${before} may already have run.`;
   const own = failure.next.map(n => n.step).filter(step => step !== 'run_again' && step !== 'open_details');
   return { ...failure, effect: failure.effect === 'none' ? (other === 'yes' ? 'partial' : 'unknown') : failure.effect,
-    outcome: `${failure.outcome === NOTHING_DONE ? itself : failure.outcome} ${said}`,
+    // "Nothing was done." is about this step only once earlier steps ran, so it says so; a cause after it stays.
+    outcome: `${failure.outcome.startsWith(NOTHING_DONE) ? `${itself}${failure.outcome.slice(NOTHING_DONE.length)}` : failure.outcome} ${said}`,
     next: recoverySteps(...own, 'check_earlier_steps', 'open_details') };
 }
 
@@ -177,6 +178,30 @@ function unsupportedToolRefusal(node: FlowTriggerNode | undefined, message: stri
     && !message.includes(`Unsupported direct workflow capability: ${tool} has opaque code/UI effects`)) return null;
   return { status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started',
     message: 'This tool was not supported by the workflow execution path used by this run.' };
+}
+
+/** Every string in a step's settings, whitespace removed. */
+function settingStrings(value: unknown, out: string[] = []): string[] {
+  if (typeof value === 'string') out.push(value.replace(/\s+/gu, ''));
+  else if (Array.isArray(value)) for (const item of value) settingStrings(item, out);
+  else if (value && typeof value === 'object') for (const item of Object.values(value)) settingStrings(item, out);
+  return out;
+}
+
+/**
+ * Whether the engine stopped this step while resolving its input, read from the
+ * run's structure rather than from the error text alone: the engine records a
+ * step's resolved input only after resolving it, so the step has no record or
+ * one with an empty input, and the reference the error names is in the step's
+ * own settings.
+ */
+function stoppedResolvingInput(run: FlowRun, node: FlowTriggerNode, message: string): boolean {
+  const entry = run.steps?.[node.name] as { output?: unknown; input?: unknown } | undefined;
+  const record = (entry?.output && typeof entry.output === 'object' && 'status' in entry.output ? entry.output : entry) as { input?: unknown } | undefined;
+  const input = record?.input;
+  if (record && !(input && typeof input === 'object' && Object.keys(input).length === 0)) return false;
+  const named = missingReference(message);
+  return named !== null && settingStrings(node.settings).some(text => text.includes(named));
 }
 
 /** A step that makes no call outside Jarvis: its piece only works on data inside the run. */
@@ -279,7 +304,11 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
     // inside a loop may have run in an earlier round, so only a step that makes
     // no outside call at all is read this way there.
     const noOutsideCall = !!node && makesNoOutsideCall(node);
-    const beforeDispatch = !!node && failedOnMissingReference(message) && !own.some(dispatched) && (!untracked(node) || !inLoopBody(graph, node));
+    // A step with no effect record has only its error text to say where it stopped, and an outside
+    // piece can put any text there: it counts only when the step record shows its input was never
+    // resolved and the reference it names is one the step's own settings read.
+    const beforeDispatch = !!node && failedOnMissingReference(message) && !own.some(dispatched)
+      && (!untracked(node) || (!inLoopBody(graph, node) && stoppedResolvingInput(run, node, message)));
     evidence = noOutsideCall || beforeDispatch ? { source: 'local', message } : { source: 'unknown', message };
     // A record still pending (waiting on approval, or refused before its claim) never dispatched.
     sideEffects = own.some(dispatched) || !node || (untracked(node) && !noOutsideCall && !beforeDispatch);
@@ -291,7 +320,7 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   // advice changes; what took effect is read from the evidence above.
   const guidance = outcome ? null : expressionFailureGuidance(step.errorMessage);
   return guidance ? { ...reading, next: [{ step: 'edit_and_run_again', label: guidance },
-    ...reading.next.filter(n => n.step !== 'run_again' && n.step !== 'edit_and_run_again')] } : reading;
+    ...reading.next.filter(n => n.step !== 'run_again' && n.step !== 'edit_and_run_again' && n.step !== 'fix_step')] } : reading;
 }
 
 /**

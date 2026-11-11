@@ -59,7 +59,7 @@ export function expressionFailureGuidance(message: unknown): string | null {
   return (reason !== null && Object.hasOwn(GUIDANCE, reason) ? GUIDANCE[reason] : undefined) ?? OTHER;
 }
 
-const MISSING_REFERENCE = /^"\{\{.+\}\}" has no value in this run\.$/su;
+const MISSING_REFERENCE = /^"\{\{(.+)\}\}" has no value in this run\.$/su;
 
 /**
  * Whether a step failed because an input reference had no value in this run
@@ -69,8 +69,17 @@ const MISSING_REFERENCE = /^"\{\{.+\}\}" has no value in this run\.$/su;
  * and then reported an error that merely quotes it does not.
  */
 export function failedOnMissingReference(message: unknown): boolean {
+  return missingReference(message) !== null;
+}
+
+/**
+ * The reference a missing-reference failure names, whitespace removed and
+ * without the "..." of a long one cut short, or null for any other failure.
+ */
+export function missingReference(message: unknown): string | null {
   const cause = failureCause(message, 1000);
-  return cause !== null && MISSING_REFERENCE.test(cause);
+  const named = cause === null ? null : MISSING_REFERENCE.exec(cause)?.[1];
+  return named ? named.replace(/\.\.\.$/u, '').replace(/\s+/gu, '') || null : null;
 }
 
 /** The wrapper the engine runtime puts around an error that ended the whole run, not one step. */

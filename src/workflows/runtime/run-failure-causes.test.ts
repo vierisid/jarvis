@@ -68,7 +68,7 @@ describe('a step that makes no outside call failed', () => {
     const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING', startTime: Date.now() });
     const failed = updateRun(run.id, { status: 'FAILED', steps: { first: { output: { type: 'PIECE', status: 'SUCCEEDED', input: {} } } },
       failedStep: { name: 'second', displayName: 'Divide', errorMessage: report('second', 'Second number cannot be zero') } })!;
-    expect(runFailure(failed)).toMatchObject({ effect: 'partial', outcome: 'Nothing was done. Second number cannot be zero. Steps before it had already run.' });
+    expect(runFailure(failed)).toMatchObject({ effect: 'partial', outcome: 'This step did nothing. Second number cannot be zero. Steps before it had already run.' });
   });
 });
 
@@ -107,8 +107,11 @@ describe('the cause reaches the person and the stack never does', () => {
 describe('a reference with no value', () => {
   const missing = '"{{trigger.body.name}}" has no value in this run.';
 
+  const post = (input: Record<string, unknown> = { text: 'Hi {{ trigger.body.name }}' }) =>
+    ({ ...piece('@activepieces/piece-slack', 'send_message', 'Post'), settings: { pieceName: '@activepieces/piece-slack', pieceVersion: '0.0.1', actionName: 'send_message', input } });
+
   test('names the reference and says nothing was done, even for a step that can call out', () => {
-    const failure = runFailure(failedRun(piece('@activepieces/piece-slack', 'send_message', 'Post'), report('step_1', missing)))!;
+    const failure = runFailure(failedRun(post(), report('step_1', missing)))!;
     expect(failure).toMatchObject({ effect: 'none', headline: 'The step "Post" failed.',
       outcome: 'Nothing was done. "{{trigger.body.name}}" has no value in this run.' });
     expect(failure.next.map(n => n.step)).toEqual(['fix_step', 'open_details']);
@@ -120,6 +123,25 @@ describe('a reference with no value', () => {
     expect(failure.links.stepName).toBe('router');
     expect(failure.headline).toBe('The step "Check the plan" failed.');
     expect(failure.outcome).toContain('"{{trigger.body.name}}" has no value in this run.');
+  });
+
+  test('the same when the engine recorded the step with no resolved input', () => {
+    const failure = runFailure(failedRun(post(), report('step_1', missing), { step_1: { output: { type: 'PIECE', status: 'FAILED', input: {} } } }))!;
+    expect(failure.effect).toBe('none');
+  });
+
+  test('an outside step that resolved its input and then returned that sentence is not read as having done nothing', () => {
+    // A server's reply can say anything; the step record shows the input was resolved, so the step ran.
+    // The engine pretty-prints an error whose message is JSON, with no class name before it.
+    const reply = `engine executor: run r1 ended FAILED at step "step_1": ${JSON.stringify({ message: missing }, null, 2)}\n${WORKFLOW_RETRY_GUIDANCE}`;
+    const failure = runFailure(failedRun(post(), reply,
+      { step_1: { output: { type: 'PIECE', status: 'FAILED', input: { text: 'Hi Ana' } } } }))!;
+    expect(failure.effect).toBe('unknown');
+  });
+
+  test('an outside step whose error names a reference its settings do not read is not read as having done nothing', () => {
+    const failure = runFailure(failedRun(post({ text: 'Hello' }), report('step_1', missing)))!;
+    expect(failure.effect).toBe('unknown');
   });
 
   test('a step that did something and then quotes that sentence is not read as having done nothing', () => {
