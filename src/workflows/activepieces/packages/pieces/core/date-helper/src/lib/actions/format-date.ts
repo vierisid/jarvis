@@ -6,6 +6,7 @@ import {
   timeFormatDescription,
   timeZoneOptions,
   getCorrectedFormat,
+  formatDate,
 } from '../common';
 
 export const formatDateAction = createAction({
@@ -90,7 +91,9 @@ function changeDateFormat(
   outputFormat: string,
   outputTimeZone: string
 ): string {
-  const parsedDate = parseDate(inputDate, inputFormat);
-  
-  return parsedDate.tz(inputTimeZone, true).tz(outputTimeZone).format(outputFormat);
+  // Jarvis: the input is read as an instant (an offset in the text wins over the
+  // From Time Zone), then shown in the To Time Zone.
+  const parsedDate = parseDate(inputDate, inputFormat, inputTimeZone);
+
+  return formatDate(parsedDate.tz(outputTimeZone), outputFormat);
 }
