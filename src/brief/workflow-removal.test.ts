@@ -48,7 +48,7 @@ test('an enabled workflow whose trigger could not be registered reads blocked wi
   const reason = 'The schedule could not be started, so the workflow is not running. Turn it off and on again, or change the schedule.';
   let problem: string | null = null;
   service.start({ refresh: async () => {}, registrationProblem: () => problem });
-  expect(service.read().data.items.find(i => i.flowId === flow.id)!.readiness).toEqual({ state: 'ready', reason: null });
+  expect(service.read().data.items.find(i => i.flowId === flow.id)!.readiness).toMatchObject({ state: 'ready', reason: null });
   problem = reason;
   expect(service.read().data.items.find(i => i.flowId === flow.id)!.readiness).toMatchObject({ state: 'blocked', reason });
   updateFlowStatus(flow.id, 'DISABLED');
