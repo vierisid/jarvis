@@ -132,7 +132,9 @@ function AuthorityBody({ controller }: { controller: AuthorityController }) {
               On asks for approval before these actions, even when the level
               allows them. Off uses the authority level and other rules:
               overrides, context rules and the approval asked after Jarvis reads
-              outside content still apply.
+              outside content still apply. A rule that says Always allow skips
+              this approval for its action, but a matching Deny rule always
+              wins over any Allow, whatever order they were added in.
             </p>
             <div className="brief-authority-categories">
               {[ACTION_CATEGORIES.slice(0, 7), ACTION_CATEGORIES.slice(7)].map(

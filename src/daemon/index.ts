@@ -131,6 +131,7 @@ import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService, isChannelGuestThread } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
+import { authorityConfigWarnings } from "../authority/config-validation.ts";
 import { ApprovalManager, approvalNeedsClick, executionState, onApprovalDeadlineExpired, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
 import { applyEmergencyState } from "./emergency-state.ts";
 import { AuditTrail } from "../authority/audit.ts";
@@ -4408,6 +4409,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       learning: authorityConfig.learning ?? { enabled: true, suggest_threshold: 5 },
       emergency_state: authorityConfig.emergency_state ?? 'normal',
     });
+    // A saved value the engine has to clamp is reported, never refused.
+    for (const warning of authorityConfigWarnings(authorityConfig)) console.warn(`[Authority] ${warning}`);
     const approvalManager = new ApprovalManager();
     // A workflow card for a tool a switch just turned off (desktop control,
     // or screen awareness for the screenshot tools) is closed, not left

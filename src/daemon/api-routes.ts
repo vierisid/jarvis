@@ -40,7 +40,7 @@ import { applyQuickOverride } from '../authority/quick-override.ts';
 import { desktopEnabledFromSection, isScreenCaptureEnabled } from '../actions/tools/desktop-guard.ts';
 import { awarenessHistoryHidden as awarenessHistoryHiddenAs } from '../awareness/history-guard.ts';
 import type { ActionCategory } from '../roles/authority.ts';
-import { authorityConfigPatchError, isActionCategory } from '../authority/config-validation.ts';
+import { authorityConfigPatchError, authorityConfigWarnings, backgroundPatchError, isActionCategory, quickOverrideError } from '../authority/config-validation.ts';
 
 import { findEntities, getEntity, searchEntitiesByName, createEntity, listEntityNames } from '../vault/entities.ts';
 import { matchEntityByName } from './room-action-targets.ts';
@@ -4273,7 +4273,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!ctx.authorityEngine) return json({});
         // `background` is not part of the engine's config: it is the extra
         // restriction set the background agent's profile is built from.
-        return json({ ...ctx.authorityEngine.getConfig(), background: ctx.config.authority?.background });
+        const config = ctx.authorityEngine.getConfig();
+        const warnings = authorityConfigWarnings({ ...config, background: ctx.config.authority?.background });
+        return json({ ...config, background: ctx.config.authority?.background, ...(warnings.length ? { warnings } : {}) });
       },
       POST: async (req: Request) => {
         if (!ctx.authorityEngine) return error('Authority engine not configured', 500);
@@ -4281,8 +4283,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const body = await req.json() as Record<string, unknown>;
           // Checked before anything is applied: a level that is not a number
           // used to pass every level check (Q-08).
-          const invalid = authorityConfigPatchError(body);
+          const invalid = authorityConfigPatchError(body, ctx.authorityEngine.getConfig());
           if (invalid) return error(invalid);
+          if (body.background !== undefined) {
+            const badBackground = backgroundPatchError(body.background);
+            if (badBackground) return error(badBackground);
+          }
           const currentConfig = ctx.authorityEngine.getConfig();
 
           // Merge updates into current config
@@ -4298,14 +4304,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // on apply; here only the shape is checked so a bad body is a 400.
           let background = ctx.config.authority?.background;
           if (body.background !== undefined) {
-            const b = body.background as Record<string, unknown> | null;
-            if (b === null || typeof b !== 'object' || Array.isArray(b)) return error('background must be an object');
-            if (b.governed_categories !== undefined && !Array.isArray(b.governed_categories)) {
-              return error('background.governed_categories must be a list');
-            }
-            if (b.level_cap !== undefined && typeof b.level_cap !== 'number') {
-              return error('background.level_cap must be a number');
-            }
+            const b = body.background as Record<string, unknown>;
             // Merge over the stored value so sending one field keeps the other.
             background = {
               ...background,
@@ -4370,6 +4369,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!validActions.includes(body.action)) {
             return error(`Invalid action: ${body.action}`, 400);
           }
+          const badRole = quickOverrideError(body);
+          if (badRole) return error(badRole, 400);
 
           // Single source of truth for the merge logic - shared with
           // the unit test in quick-override.test.ts so they can't drift.

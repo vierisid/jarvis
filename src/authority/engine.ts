@@ -2,11 +2,20 @@
  * Authority Engine — Central decision maker for tool execution authorization.
  *
  * Decision order:
- * 1. Temporary grants (parent escalation) → allow
- * 2. Per-action overrides for this role → explicit allow/deny
- * 3. Context rules (time-based, tool-name-based) → allow/deny/require_approval
- * 4. Numeric level check: level >= AUTHORITY_REQUIREMENTS[action]
- * 5. Governed category check: if allowed but governed → requiresApproval
+ * 1. Temporary grants (parent escalation) -> allow
+ * 2. A per-action override that denies -> deny
+ * 3. A matching context rule that denies -> deny, whatever allow overrides or
+ *    allow rules also match and whatever order the rules are in
+ * 4. A per-action override that allows (or allows with approval) -> that
+ * 5. Context rules (time-based, tool-name-based) that match -> require_approval,
+ *    else allow. Among matching rules the stricter effect wins, never the
+ *    first listed: deny, then require_approval, then allow.
+ * 6. Numeric level check: level >= AUTHORITY_REQUIREMENTS[action]
+ * 7. Governed category check: if allowed but governed -> requiresApproval
+ *
+ * So a deny always wins over an allow, whichever rule is listed first, and an
+ * "always allow" override (global or for a role) skips the level check and the
+ * governed switch for its action but never beats a matching deny rule.
  */
 
 import type { ActionCategory } from '../roles/authority.ts';
@@ -127,17 +136,32 @@ export class AuthorityEngine {
       };
     }
 
-    // 2. Check per-action overrides for this role
+    // 2. Check per-action overrides for this role. A denying override is final.
     const override = this.findOverride(actionCategory, agentRoleId);
+    if (override && !override.allowed) {
+      return {
+        allowed: false,
+        requiresApproval: false,
+        reason: `Explicitly denied by override for ${agentRoleId || 'global'}`,
+        actionCategory,
+      };
+    }
+
+    // 3. Context rules. Every matching rule is read, and the strictest effect
+    // wins (deny, then require_approval, then allow), so the order the rules
+    // were saved in never decides. A matching deny rule also beats an allowing
+    // override: an "always allow" never reaches past an explicit deny.
+    const contextResult = this.evaluateContextRules(actionCategory, toolName);
+    if (contextResult?.effect === 'deny') {
+      return {
+        allowed: false,
+        requiresApproval: false,
+        reason: contextResult.description,
+        actionCategory,
+        contextRule: contextResult.id,
+      };
+    }
     if (override) {
-      if (!override.allowed) {
-        return {
-          allowed: false,
-          requiresApproval: false,
-          reason: `Explicitly denied by override for ${agentRoleId || 'global'}`,
-          actionCategory,
-        };
-      }
       if (override.requires_approval) {
         return {
           allowed: true,
@@ -153,19 +177,7 @@ export class AuthorityEngine {
         actionCategory,
       };
     }
-
-    // 3. Check context rules
-    const contextResult = this.evaluateContextRules(actionCategory, toolName);
     if (contextResult) {
-      if (contextResult.effect === 'deny') {
-        return {
-          allowed: false,
-          requiresApproval: false,
-          reason: contextResult.description,
-          actionCategory,
-          contextRule: contextResult.id,
-        };
-      }
       if (contextResult.effect === 'require_approval') {
         return {
           allowed: true,
@@ -186,7 +198,7 @@ export class AuthorityEngine {
       }
     }
 
-    // 4. Numeric level check
+    // 6. Numeric level check
     // Use the higher of the agent's role level and the config's default_level,
     // so the dashboard authority slider acts as the effective authority floor.
     // A level that is not a number counts for nothing: `NaN < required` is
@@ -204,7 +216,7 @@ export class AuthorityEngine {
       };
     }
 
-    // 5. Governed category check — if level is sufficient but action is governed, require approval
+    // 7. Governed category check: if level is sufficient but action is governed, require approval
     if (this.config.governed_categories.includes(actionCategory)) {
       return {
         allowed: true,
@@ -323,35 +335,50 @@ export class AuthorityEngine {
     return global ?? null;
   }
 
+  /**
+   * The matching context rule that decides, or null. All matching rules for
+   * the action are read; the strictest effect wins and, among equals, the first
+   * listed (deny, then require_approval, then allow).
+   */
   private evaluateContextRules(action: ActionCategory, toolName: string): ContextRule | null {
+    const strictness: Record<ContextRule['effect'], number> = { deny: 2, require_approval: 1, allow: 0 };
+    let winner: ContextRule | null = null;
     for (const rule of this.config.context_rules) {
       if (rule.action !== action) continue;
-
+      let matches = false;
       switch (rule.condition) {
-        case 'time_range': {
-          const now = new Date();
-          const hour = now.getHours();
-          const startHour = (rule.params.start_hour as number) ?? 0;
-          const endHour = (rule.params.end_hour as number) ?? 24;
-          if (hour >= startHour && hour < endHour) {
-            return rule;
-          }
+        case 'time_range':
+          matches = timeRangeMatches(new Date().getHours(), rule.params);
           break;
-        }
         case 'tool_name': {
           const toolPattern = rule.params.tool_name as string;
-          if (toolPattern && (toolName === toolPattern || toolName.startsWith(toolPattern))) {
-            return rule;
-          }
+          matches = !!toolPattern && (toolName === toolPattern || toolName.startsWith(toolPattern));
           break;
         }
-        case 'always': {
-          return rule;
-        }
+        case 'always':
+          matches = true;
+          break;
       }
+      if (matches && (!winner || (strictness[rule.effect] ?? 0) > (strictness[winner.effect] ?? 0))) winner = rule;
     }
-    return null;
+    return winner;
   }
+}
+
+/**
+ * Whether `hour` (0 to 23) falls in a rule's window. The window runs from
+ * `start_hour` up to, not including, `end_hour`, and wraps past midnight when
+ * it ends before it starts: start 22, end 6 covers 22:00 to 05:59, and
+ * start 15, end 14 covers every hour except 14. A start equal to the end
+ * covers no hour. A missing start is 0 and a missing end is 24. Hours that
+ * are not numbers fall back to those; a saved config is clamped, never refused.
+ */
+export function timeRangeMatches(hour: number, params: Record<string, unknown>): boolean {
+  const hourParam = (value: unknown, fallback: number): number =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(24, Math.floor(value))) : fallback;
+  const start = hourParam(params.start_hour, 0);
+  const end = hourParam(params.end_hour, 24);
+  return start <= end ? hour >= start && hour < end : hour >= start || hour < end;
 }
 
 /**

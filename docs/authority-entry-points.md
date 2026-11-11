@@ -75,6 +75,33 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
 - **One dispatch.** The decision is a compare-and-set and execution takes one
   claim, so two surfaces deciding at once run it once.
 
+## How rules are read
+
+Order of decision, first match wins: a temporary grant; an override that
+denies; a matching context rule that denies; an override that allows (or
+allows with approval); a matching context rule that asks, then one that
+allows; the level; the governed switch. So a deny always wins over an allow,
+whichever was saved first, and an always-allow override, global or for one
+role, skips the level and the governed switch for its action but never beats a
+matching deny rule. Among matching context rules the strictest effect wins
+(deny, then require approval, then allow), not the first listed.
+
+A time-range rule runs from `start_hour` up to, not including, `end_hour`, in
+whole hours of the machine's local time. A window that ends before it starts
+crosses midnight: start 22, end 6 is 22:00 to 05:59; start 15, end 14 is every
+hour but 14. Start equal to end covers no hour.
+
+`POST /api/authority/config` and `quick-override` answer 400 in plain words,
+and change nothing, for: a time-range hour that is not a whole number from 0
+to 23 (an end of 24 means the end of the day), a `tool_name` rule with no tool
+name, `background.governed_categories` with an unknown category,
+`background.level_cap` outside 1 to 10, and a `role_id` that is not a role name.
+A context rule saved unchanged is not checked again, so a rule saved by an
+earlier version never blocks another edit. A saved config with such a value
+still loads (hours clamp to 0 to 24, unknown categories are ignored) and is
+reported: in the daemon log at start, and as `warnings` on
+`GET /api/authority/config`.
+
 ## Pause and Kill
 
 Pause holds. Nothing new starts or continues: agents' tools are refused,
