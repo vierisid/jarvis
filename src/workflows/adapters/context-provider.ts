@@ -33,6 +33,7 @@ import type {
 import { findEntities, getEntity, type Entity, type EntityType } from "../../vault/entities";
 import { findCommitments, type Commitment, type CommitmentStatus as VaultCommitmentStatus } from "../../vault/commitments";
 import { getRecentCaptures } from "../../vault/awareness";
+import { isScreenCaptureEnabled } from "../../actions/tools/desktop-guard";
 import type { ScreenCaptureRow } from "../../awareness/types";
 
 export class JarvisContextProviderAdapter implements PieceContextProvider {
@@ -51,6 +52,9 @@ export class JarvisContextProviderAdapter implements PieceContextProvider {
   }
 
   async awarenessRecent(input: AwarenessRecentInput): Promise<AwarenessActivitySnapshot[]> {
+    // Screen awareness off hides its recorded history from flows too (owner
+    // decision on #1314): no activity, nothing deleted, back when it is on.
+    if (!isScreenCaptureEnabled()) return [];
     const limit = input.limit ?? 25;
     const rows = getRecentCaptures(limit);
     const since = input.since;

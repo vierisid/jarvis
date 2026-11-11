@@ -40,7 +40,7 @@ import { runFailure } from './run-failure';
  * BINDING_STALE); REPLACED is the run that started just before that.
  */
 export const BINDING_FAILURE_CODES: ReadonlySet<string> = new Set([
-  'WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_MACHINE_UNAVAILABLE', 'WORKFLOW_MACHINE_REPLACED',
+  'WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_MACHINE_UNAVAILABLE', 'WORKFLOW_MACHINE_REPLACED', 'WORKFLOW_MACHINE_UNPINNED',
   'WORKFLOW_FACT_STALE', 'WORKFLOW_FACT_AMBIGUOUS',
 ]);
 
@@ -112,7 +112,7 @@ export function flowBindingBlock(flow: { id: string; project_id: string; status:
   return run ? blockOf(run) : null;
 }
 
-const MACHINE_CODES = new Set(['WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_MACHINE_UNAVAILABLE', 'WORKFLOW_MACHINE_REPLACED']);
+const MACHINE_CODES = new Set(['WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_MACHINE_UNAVAILABLE', 'WORKFLOW_MACHINE_REPLACED', 'WORKFLOW_MACHINE_UNPINNED']);
 /** A refusal whose computer or step its record does not name: any working computer, or any working recipient step, clears it. */
 const ANY_MACHINE = 'machine:*';
 const ANY_RECIPIENT = 'fact:*';

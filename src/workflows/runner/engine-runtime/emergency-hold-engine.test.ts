@@ -296,7 +296,7 @@ describe("A step past its flow's card budget waits, then asks, against the real 
       auditTrail: new AuditTrail(),
       eventBuffer: new WorkflowEventBuffer(),
       approvalManager: approvals,
-      channelService: { getChannelStatus: () => ({}), tryBroadcastToChannels: async () => ({ delivered: [], failed: [] }) } as never,
+      channelService: { getChannelStatus: () => ({ telegram: true }), getBroadcastRecipient: () => "fixture", tryBroadcastToChannels: async () => ({ delivered: ["telegram"], failed: [] }) } as never,
       wsService: { broadcastNotificationToDashboard: () => {} } as never,
     });
     api = new SandboxApi({ services: backends });
@@ -320,7 +320,8 @@ describe("A step past its flow's card budget waits, then asks, against the real 
       settings: { ...TEST_PIECE, triggerName: "manual", input: {} },
       nextAction: {
         name: "notify", type: "PIECE", displayName: "Notify",
-        settings: { ...NOTIFY_PIECE, actionName: "notify", input: { message: "hi", channels: ["dashboard"], priority: "normal" } },
+        // Telegram stays governed (it can reach other people), so each run still raises a card.
+        settings: { ...NOTIFY_PIECE, actionName: "notify", input: { message: "hi", channels: ["telegram"], priority: "normal" } },
       },
     };
     const version = createDraftVersion({ flowId: flow.id, displayName: "busy notifier", trigger });
