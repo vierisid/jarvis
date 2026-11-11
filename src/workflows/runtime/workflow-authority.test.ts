@@ -45,7 +45,7 @@ import { noOpCodeSandbox } from '../activepieces/packages/server/engine/src/lib/
 import { runFailure } from './run-failure';
 import { LLMProviderError } from '../../llm/provider';
 import { getDb } from '../../vault/schema';
-import { listUnreadDashboardNotifications } from '../../vault/dashboard-notifications';
+import { listUnreadDashboardNotifications, recordDashboardNotification } from '../../vault/dashboard-notifications';
 
 beforeEach(() => { initWorkflowDb(':memory:'); });
 afterEach(() => { closeWorkflowDb(); });
@@ -822,6 +822,20 @@ describe('workflow effect boundary', () => {
     const unread = listUnreadDashboardNotifications();
     expect(unread).toHaveLength(1);
     expect(unread[0]).toMatchObject({ message: 'Stand-up at 9', priority: 'urgent', run_id: f.run.id, workflow_id: f.run.flowId, read_at: null });
+  });
+
+  // #1344 review: once the row is saved the owner has it, so a Kill that stops
+  // the live toast afterwards must not report the notification as never sent
+  // (that would release its key for a later run to save it again).
+  test('a Kill after the notification was saved and before the live toast is not reported as not sent', async () => {
+    const f = fixture('notify');
+    f.options.recordDashboardNotification = input => { const row = recordDashboardNotification(input); f.emergency.kill(); return row; };
+    const error = await f.backends.notify!({ message: 'Saved, then killed', channels: ['dashboard'], priority: 'normal', idempotencyKey: 'k1' }, f.context).catch(e => e);
+    expect(error).toBeInstanceOf(ActionOutcomeError);
+    expect(error.outcome).toMatchObject({ code: 'DELIVERY_UNCERTAIN', effect: 'may_have_occurred' });
+    expect(listUnreadDashboardNotifications().map(row => row.message)).toEqual(['Saved, then killed']);
+    // The live toast was stopped by the Kill.
+    expect(f.calls).toHaveLength(0);
   });
 
   test('an open tab gets the live toast under the stored id, and the same notification is stored once', async () => {

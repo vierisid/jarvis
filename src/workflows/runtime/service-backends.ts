@@ -824,7 +824,15 @@ export function buildSandboxServiceBackends(
         try {
           const recipients = args.recipients as Record<string, string | null>;
           const guardedNotifier = new JarvisNotifierAdapter({ ...notifierDeps,
-            recordDashboard: (text, priority) => { checkpoint(); return (opts.recordDashboardNotification ?? recordDashboardNotification)({ message: text, priority, workflowId: currentRun?.flowId ?? null, runId: ctx.runId }).id; },
+            recordDashboard: (text, priority) => {
+              checkpoint();
+              const id = (opts.recordDashboardNotification ?? recordDashboardNotification)({ message: text, priority, workflowId: currentRun?.flowId ?? null, runId: ctx.runId }).id;
+              // Saved: it is in the owner's list now. A Pause, Kill or cancel
+              // that stops the live toast after this must not report it as
+              // never sent, nor release the key for a later run to save again.
+              mayHaveArrived = true;
+              return id;
+            },
             broadcastToDashboard: (text, priority, storedId) => { checkpoint(); return sent(() => opts.wsService.broadcastNotificationToDashboard(text, priority, storedId)); },
             broadcastToChannels: async (channels, text) => {
               const report: ChannelDeliveryReport = { delivered: [], failed: [], unknown: [] };
