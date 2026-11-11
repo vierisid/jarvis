@@ -4617,9 +4617,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         if (!ctx.awarenessService) return error('Awareness service not available', 503);
         try {
-          const body = await req.json() as { enabled: boolean };
-          ctx.awarenessService.toggle(body.enabled);
-          return json({ ok: true, enabled: body.enabled });
+          const body = await req.json() as { enabled?: unknown } | null;
+          // Only a real true or false. Screen watching must never start from a
+          // string like "false" that happens to be truthy.
+          const enabled = body?.enabled;
+          if (typeof enabled !== 'boolean') return error('enabled must be true or false', 400);
+          ctx.awarenessService.toggle(enabled);
+          return json({ ok: true, enabled });
         } catch {
           return error('Invalid request body');
         }
