@@ -70,7 +70,7 @@ function effectStatus(effect: WorkflowEffect): 'unknown' | 'not_started' | 'comp
  * outputs require their exact path and are deliberately not guessed. */
 function lookupCandidate(effect: WorkflowEffect, run: FlowRun): WorkflowEffect {
   if (effect.result !== undefined || effect.route !== 'piece-dispatch' || effect.executionPath.length) return effect;
-  const step = run.steps?.[effect.stepName] as { status?: unknown; output?: unknown } | undefined;
+  const step = (run.steps && Object.hasOwn(run.steps, effect.stepName) ? run.steps[effect.stepName] : undefined) as { status?: unknown; output?: unknown } | undefined;
   return step?.status === 'SUCCEEDED' && step.output !== undefined ? { ...effect, result: step.output } : effect;
 }
 

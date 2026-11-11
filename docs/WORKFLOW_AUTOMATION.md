@@ -1239,6 +1239,11 @@ ternaries, and `flattenNestedKeys(data, path)`.
 Not supported: method calls (`.map`, `.split`, `.toUpperCase`), constructors
 (`new Date()`), `JSON.parse`, assignment, spread, globals, and prototype access.
 
+A step may have any name the readiness check allows, including `toString`,
+`valueOf` or `hasOwnProperty`. The engine finds a step among the steps the run
+recorded (`ownStep`), never among `Object.prototype`'s members; only
+`__proto__`, `prototype`, `constructor` and `connections` stay reserved.
+
 An unsupported expression now **fails the step loudly** instead of silently
 resolving to an empty string, and the error quotes the expression that failed.
 Flows that relied on a JavaScript method in an input need the value reshaped
