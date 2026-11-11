@@ -812,6 +812,14 @@ describe("through the engine, as production runs triggers", () => {
     await d.stop();
   });
 
+  test("a trigger whose schedule fails but whose webhook still delivers is not said to be not running", async () => {
+    const p = pieceSchedule("0 0 29 2 *", "UTC", true);
+    const { engine } = stubEngine({ enable: { listeners: [{ events: ["x"], identifierValue: "x" }], scheduleOptions: { cronExpression: "0 0 31 2 *", timezone: "UTC" } } });
+    const d = await daemon(at("2026-11-11T12:00:00Z"), engine);
+    expect(d.manager.registrationProblem(p.flowId)).toBeNull();
+    await d.stop();
+  });
+
   test("a schedule piece step left at its pre-filled UTC fires at Jarvis's wall time, and says so", async () => {
     setCronTimezone("Europe/Rome");
     const p = pieceSchedule("0 9 * * *", "UTC");

@@ -83,13 +83,13 @@ interface TriggerNode {
   };
 }
 
+/** What a founder reads when a schedule could not be started. The log keeps the technical error. */
+const SCHEDULE_NOT_RUNNING = "The schedule could not be started, so the workflow is not running. Turn it off and on again, or change the schedule.";
+
 /**
  * Queued jobs beyond which webhook ingress is refused (503, Retry-After) and
  * any webhook fire that slipped past the probe is dropped with a log line.
  */
-/** What a founder reads when a schedule could not be started. The log keeps the technical error. */
-const SCHEDULE_NOT_RUNNING = "The schedule could not be started, so the workflow is not running. Turn it off and on again, or change the schedule.";
-
 export const MAX_QUEUED_WEBHOOK_RUNS = 500;
 
 type SubscriptionKind = "cron" | "webhook" | "event" | "engine";
@@ -673,7 +673,6 @@ export class TriggerManager {
         this.log(
           `flow ${flow.id}: failed to schedule engine cron "${schedule.cronExpression}": ${(e as Error).message}`,
         );
-        this.notRunning.set(flow.id, SCHEDULE_NOT_RUNNING);
       }
     }
     if (listeners && listeners.length > 0) {
@@ -707,9 +706,12 @@ export class TriggerManager {
       teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown, webhookTearDown),
     };
     this.subs.set(flow.id, sub);
+    // A schedule that could not be started, with nothing else to deliver,
+    // means the workflow is not running at all. One whose webhook still
+    // delivers keeps the sub's warning instead (register() cleared any old reason).
+    if (noSubscription && schedule?.cronExpression) this.notRunning.set(flow.id, SCHEDULE_NOT_RUNNING);
     if (noSubscription) this.scheduleEnableRetry(flow.id, 'No trigger subscription could be registered');
     else this.clearEnableRetry(flow.id);
-    if (!noSubscription && cronTearDown) this.notRunning.delete(flow.id);
   }
 
   /**
