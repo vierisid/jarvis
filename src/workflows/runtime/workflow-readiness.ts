@@ -715,8 +715,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
 /**
  * What is wrong with a form's fields, in plain words, or null. The run applies
  * the same rule (human-input-contract.ts). Text that run data fills in is
- * stood in for by a placeholder; a field whose type or required flag comes from
- * run data is left to the run.
+ * stood in for by a placeholder; a field whose type, required flag or options
+ * come from run data, or a whole field that does, is left to the run.
  */
 function formFieldsIssue(value: unknown): string | null {
   let fields: unknown = value;
@@ -728,7 +728,10 @@ function formFieldsIssue(value: unknown): string | null {
   let n = 0;
   const fill = (v: unknown): unknown => typeof v === 'string' && v.includes('{{') ? `x${++n}` : Array.isArray(v) ? v.map(fill) : v;
   if (Array.isArray(fields)) {
-    if (fields.some(f => object(f) && (typeof f.type === 'string' && f.type.includes('{{') || typeof f.required === 'string' && f.required.includes('{{')))) return null;
+    // A whole field, or a part that is not text (its type, required flag or
+    // select options), may be filled by run data with a value of any shape.
+    const fromRunData = (v: unknown) => typeof v === 'string' && v.includes('{{');
+    if (fields.some(f => fromRunData(f) || object(f) && (fromRunData(f.type) || fromRunData(f.required) || fromRunData(f.options)))) return null;
     fields = fields.map(f => object(f) ? Object.fromEntries(Object.entries(f).map(([k, v]) => [k, fill(v)])) : f);
   }
   try { formFields(fields); return null; } catch (error) { return (error as Error).message; }

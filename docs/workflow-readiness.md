@@ -114,9 +114,11 @@ what is supported (`TOOL_UNSUPPORTED`), the same rule `toolEffectCapability` app
 time. A `run_skill` whose parameters come from run data is checked when it runs.
 A form step's fields get the run's own validation (`formFields`), reported in plain
 words: each field needs a `key` (`name` is accepted for it), a label, a type and `required`.
-A step that works on a computer (a bounded tool) while no enrolled computer is online
-is still ready, because one may be online by the time it runs, but carries a `computer`
-runtime check telling the person to open the desktop app. A run that finds its computer
+A step that works on a computer (a bounded tool) while the computer a run would use is
+offline (the pinned one, or for an unpinned flow any computer, with local tools off) is
+still ready, because it may be online by the time it runs, but carries a `computer`
+runtime check telling the person to open the desktop app. A computer that is briefly
+asleep never makes a workflow not ready. A run that finds its computer
 offline fails with the device name and the same instruction, never its id.
 
 Readiness does not grant Authority approval, prove business intent, guarantee

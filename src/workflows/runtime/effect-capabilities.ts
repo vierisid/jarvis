@@ -279,6 +279,11 @@ export function workflowStepToolRefusal(tool: ToolDefinition, params: Record<str
   if (GATED_TOOLS.has(tool.name) && !tool.workflowEffect) {
     return `${tool.name} needs the name of a skill saved on this Jarvis, and that skill was not found. Check the skill name in the step's parameters.`;
   }
-  const supported = [...BOUNDED_TOOLS, ...GATED_TOOLS, ...WORKFLOW_REVIEWED_UI_TOOLS].join(', ');
-  return `A workflow step cannot run ${tool.name}, because Jarvis cannot show you beforehand what it would do. Workflow steps can use these tools: ${supported}.`;
+  const supported = [...BOUNDED_TOOLS, ...GATED_TOOLS, ...WORKFLOW_REVIEWED_UI_TOOLS];
+  // A supported tool refused for what this call asks (desktop_click reading a
+  // value, say): naming it in the list of supported tools would contradict the refusal.
+  if (supported.includes(tool.name)) {
+    return `A workflow step cannot run ${tool.name} with these parameters, because Jarvis cannot show you beforehand what it would do. Change the step's parameters, or let an agent step do it.`;
+  }
+  return `A workflow step cannot run ${tool.name}, because Jarvis cannot show you beforehand what it would do. Workflow steps can use these tools: ${supported.join(', ')}.`;
 }

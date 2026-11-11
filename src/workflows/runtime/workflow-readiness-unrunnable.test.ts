@@ -4,7 +4,7 @@ import { PieceCatalog } from './piece-catalog';
 import { workflowStepToolRefusal } from './effect-capabilities';
 import { workflowToolDeclarationRefusal } from './workflow-ui-tools';
 import { formFields } from './human-input-contract';
-import { initWorkflowDb, closeWorkflowDb } from '../db';
+import { initWorkflowDb, closeWorkflowDb, getWorkflowDb } from '../db';
 import { configureWorkflowReadiness, graphReadiness } from '../db/repos/flow-readiness';
 import { createFlow } from '../db/repos/flow';
 import type { ToolDefinition } from '../../actions/tools/registry';
@@ -52,7 +52,7 @@ test('run_skill with an unknown skill is refused, a known one and a run-data one
 
 // The daemon's lookup: the name-based refusal (#1314) and this check side by side.
 const daemonLookup = (name: string) => {
-  const t = name === 'browser_click' ? tool('browser_click', { captureApprovalGuard: () => null } as any) : registry.get(name);
+  const t = name === 'browser_click' || name === 'desktop_click' ? tool(name, { captureApprovalGuard: () => null } as any) : registry.get(name);
   return t ? { params: [], workflowRefusal: workflowToolDeclarationRefusal(t), switchRefusal: null,
     unsupported: (params: Record<string, unknown> | null) => workflowStepToolRefusal(t, params) } : null;
 };
@@ -64,6 +64,11 @@ test('with the daemon lookup each cause is reported once, and a reviewed UI tool
   expect(codes('run_skill', { name: 'missing' })).toEqual(['TOOL_UNSUPPORTED']);
   expect(codes('run_skill', { name: 'known' })).toEqual([]);
   expect(codes('browser_click', { element_id: 3 })).toEqual([]);
+  // A supported tool refused for what the call asks is not told it is supported.
+  const read = compileWorkflow(invoke('desktop_click', { action: 'get_value', element_id: 3 }), { pieces: catalog, tool: daemonLookup })
+    .issues.find(i => i.code === 'TOOL_UNSUPPORTED')!;
+  expect(read.message).toContain('desktop_click with these parameters');
+  expect(read.message).not.toContain('can use these tools');
 });
 
 test('form fields in the natural shape are checked at readiness in plain words', () => {
@@ -79,6 +84,9 @@ test('form fields in the natural shape are checked at readiness in plain words',
   expect(compileWorkflow(ask(JSON.stringify([{ label: 'A', type: 'text', required: true }])), ctx).ready).toBe(false);
   // Text filled in by run data does not trip the check.
   expect(compileWorkflow(ask([{ key: 'a', label: '{{trigger.q}}', type: 'text', required: true }]), ctx).ready).toBe(true);
+  // Options, or a whole field, from run data are the run's to check: any shape may arrive.
+  expect(compileWorkflow(ask([{ key: 'a', label: 'A', type: 'select', required: true, options: '{{trigger.choices}}' }]), ctx).ready).toBe(true);
+  expect(compileWorkflow(ask(['{{trigger.field}}']), ctx).ready).toBe(true);
 });
 
 test('name is accepted for key and saved as key', () => {
@@ -101,12 +109,32 @@ test('a file tool step warns when no computer is online, and stays publishable',
 
 beforeEach(() => initWorkflowDb(':memory:'));
 afterEach(() => closeWorkflowDb());
-test('the live readiness context reports whether an enrolled computer is online', () => {
-  const machines: any[] = [{ id: 'a', name: 'Desk', connected: false }];
-  configureWorkflowReadiness({ pieces: catalog, tool: lookup, machines: () => machines, localTools: () => true });
+test('the live readiness context asks about the computer a run would use', () => {
+  const machines: any[] = [{ id: 'a', name: 'Desk', connected: false }, { id: 'b', name: 'Laptop', connected: false }];
+  const local = { on: false };
+  configureWorkflowReadiness({ pieces: catalog, tool: lookup, machines: () => machines, localTools: () => local.on });
   const flow = createFlow({});
-  const warns = () => graphReadiness(flow.id, invoke('read_file', { path: '/tmp/a' })).runtimeChecks.some(c => c.guard === 'computer');
+  const readiness = () => graphReadiness(flow.id, invoke('read_file', { path: '/tmp/a' }));
+  const warns = () => readiness().runtimeChecks.some(c => c.guard === 'computer');
+  // Unpinned: any connected computer takes it, else this one while local tools are on.
   expect(warns()).toBe(true);
+  machines[1].connected = true;
+  expect(warns()).toBe(false);
+  machines[1].connected = false;
+  local.on = true;
+  expect(warns()).toBe(false);
+  // Pinned: only the pinned computer counts, and an asleep one never refuses.
+  const pin = (machine: unknown) => getWorkflowDb().query('UPDATE flow SET binding_pins = ? WHERE id = ?')
+    .run(JSON.stringify({ schemaVersion: 1, versionId: 'v', pinnedAt: 0, connections: {}, machine }), flow.id);
+  pin({ sidecarId: 'a', name: 'Desk' });
+  machines[1].connected = true;
+  expect(warns()).toBe(true);
+  expect(readiness().ready).toBe(true);
   machines[0].connected = true;
   expect(warns()).toBe(false);
+  pin({ sidecarId: null, name: 'this computer' });
+  machines[0].connected = machines[1].connected = false;
+  expect(warns()).toBe(false);
+  local.on = false;
+  expect(warns()).toBe(true);
 });
