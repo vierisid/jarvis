@@ -87,6 +87,9 @@ interface TriggerNode {
  * Queued jobs beyond which webhook ingress is refused (503, Retry-After) and
  * any webhook fire that slipped past the probe is dropped with a log line.
  */
+/** What a founder reads when a schedule could not be started. The log keeps the technical error. */
+const SCHEDULE_NOT_RUNNING = "The schedule could not be started, so the workflow is not running. Turn it off and on again, or change the schedule.";
+
 export const MAX_QUEUED_WEBHOOK_RUNS = 500;
 
 type SubscriptionKind = "cron" | "webhook" | "event" | "engine";
@@ -201,6 +204,13 @@ export class TriggerManager {
   private readonly onRegistrationBlocked: TriggerManagerDeps['onRegistrationBlocked'];
   private readonly registrationFailures = new Map<string, string>();
   /**
+   * Why an enabled flow's trigger is not running, in words a founder can read:
+   * a schedule that could not be started, or a registration retried until it
+   * was given up. Shown as the workflow's blocked reason (`registrationProblem`)
+   * so it does not read "On" while nothing happens.
+   */
+  private readonly notRunning = new Map<string, string>();
+  /**
    * The last live readiness refusal per flow. A schedule tick or a pre-poll
    * check carries no input of its own, so a repeat of the same refusal is
    * one failed run plus a counted blocked row, not a failed run per minute.
@@ -249,6 +259,14 @@ export class TriggerManager {
     return this.inFlight.has(flowId) || this.enableRetries.has(flowId) ? 'pending' : 'blocked';
   }
 
+  /**
+   * Why a flow that is on is not running, or null: its trigger could not be
+   * registered and is not being retried. Plain words, for the workflow list.
+   */
+  registrationProblem(flowId: string): string | null {
+    return this.notRunning.get(flowId) ?? null;
+  }
+
   /** Public surface for the webhook ingress route. */
   webhookManager(): WebhookManager {
     return this.webhooks;
@@ -289,6 +307,7 @@ export class TriggerManager {
     }
     this.subs.clear();
     this.registrationFailures.clear();
+    this.notRunning.clear();
     this.cron.cancelAll();
     this.log("stopped");
   }
@@ -401,6 +420,7 @@ export class TriggerManager {
       return;
     }
     this.registrationFailures.delete(flow.id);
+    this.notRunning.delete(flow.id);
     const pieceName = trigger.type === "PIECE_TRIGGER" ? trigger.settings?.pieceName : undefined;
     // Only a schedule is owed its times: a flow switched to another trigger
     // and back must not have the gap reported as missed.
@@ -444,6 +464,7 @@ export class TriggerManager {
     // version.
     this.clearEnableRetry(flowId);
     this.registrationFailures.delete(flowId);
+    this.notRunning.delete(flowId);
     this.liveRefusals.delete(flowId);
     this.untold.delete(flowId);
     const sub = this.subs.get(flowId);
@@ -495,6 +516,7 @@ export class TriggerManager {
       });
     } catch (e) {
       this.log(`flow ${flowId}: failed to schedule cron "${expression}": ${(e as Error).message}`);
+      this.notRunning.set(flowId, SCHEDULE_NOT_RUNNING);
     }
   }
 
@@ -651,6 +673,7 @@ export class TriggerManager {
         this.log(
           `flow ${flow.id}: failed to schedule engine cron "${schedule.cronExpression}": ${(e as Error).message}`,
         );
+        this.notRunning.set(flow.id, SCHEDULE_NOT_RUNNING);
       }
     }
     if (listeners && listeners.length > 0) {
@@ -686,6 +709,7 @@ export class TriggerManager {
     this.subs.set(flow.id, sub);
     if (noSubscription) this.scheduleEnableRetry(flow.id, 'No trigger subscription could be registered');
     else this.clearEnableRetry(flow.id);
+    if (!noSubscription && cronTearDown) this.notRunning.delete(flow.id);
   }
 
   /**
@@ -705,6 +729,7 @@ export class TriggerManager {
     const delay = this.enableRetryDelaysMs[attempt];
     if (delay === undefined) {
       this.enableRetries.delete(flowId);
+      if (!this.notRunning.has(flowId)) this.notRunning.set(flowId, "Jarvis could not start this workflow's trigger, so it is not running. Turn it off and on again to try once more.");
       this.log(
         `flow ${flowId}: ${source} failed: ${reason} -- giving up after ${total} ` +
           `retries; the flow is NOT firing. Re-enable it (or restart the daemon) once the engine is healthy`,

@@ -151,6 +151,17 @@ export function validateCronExpression(expression: string): void {
 }
 
 /**
+ * How far ahead the next time of a schedule is looked for: one Gregorian
+ * cycle, 400 years, which is a whole number of weeks. Calendar dates and
+ * weekdays repeat exactly every cycle, so an expression with no time inside it
+ * never fires, and one that has a time has it inside it however rare it is
+ * (a leap day is up to 8 years apart, a leap day that must be a Monday up to
+ * 40). Scheduling and validation use this one definition.
+ */
+const CRON_LOOKAHEAD_DAYS = 146_097;
+const CRON_LOOKAHEAD_MS = CRON_LOOKAHEAD_DAYS * 24 * 60 * 60_000;
+
+/**
  * Parse a full 5-field cron expression into its component arrays.
  */
 function parseExpression(expression: string): {
@@ -461,7 +472,7 @@ export class CronScheduler {
    * Calculate the next execution time for a cron expression.
    * @param expression - 5-field cron expression
    * @param from - start searching from this date (default: now)
-   * @returns Date of next execution, or null if none found within 1 year
+   * @returns Date of next execution, or null if it never fires (see CRON_LOOKAHEAD_DAYS)
    */
   static nextRun(expression: string, from: Date = new Date(), limitMs?: number, zone: string | null = cronTimezone, dstPolicy?: CronDstPolicy): Date | null {
     validateCronDstPolicy(dstPolicy);
@@ -475,9 +486,9 @@ export class CronScheduler {
       start.setSeconds(0, 0);
       start.setMinutes(start.getMinutes() + 1);
 
-      // Search up to 1 year ahead (minute-by-minute is too slow; step by minute smartly)
+      // Search one 400-year cycle ahead (minute-by-minute is too slow; step by minute smartly)
       const limit = new Date(from);
-      limit.setFullYear(limit.getFullYear() + 1);
+      limit.setFullYear(limit.getFullYear() + 400);
       if (limitMs !== undefined && limitMs < limit.getTime()) limit.setTime(limitMs);
 
       const candidate = new Date(start);
@@ -558,7 +569,7 @@ export class CronScheduler {
 
       // Start from the next whole minute.
       let ts = Math.floor(from.getTime() / 60_000) * 60_000 + 60_000;
-      const limit = Math.min(from.getTime() + 366 * 24 * 60 * 60_000, limitMs ?? Number.MAX_SAFE_INTEGER);
+      const limit = Math.min(from.getTime() + CRON_LOOKAHEAD_MS, limitMs ?? Number.MAX_SAFE_INTEGER);
       let guard = 0;
 
       while (ts < limit && ++guard < 600_000) {
