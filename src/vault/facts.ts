@@ -132,8 +132,31 @@ export function getFact(id: string): Fact | null {
   const row = getDb().query<FactRow, [string]>('SELECT * FROM facts WHERE id = ?').get(id);
   return row ? decorate(row) : null;
 }
-export function findFacts(query: { subject_id?: string; predicate?: string; object?: string; includeSuperseded?: boolean; scope?: string }): Fact[] {
+/** A fact the owner kept private stays private when its value is revised, so a correction cannot leak it. */
+function inheritPrivacy(old: Pick<FactRow, 'is_private'>, nextId: string): void {
+  if (old.is_private) getDb().run('UPDATE facts SET is_private = 1 WHERE id = ?', [nextId]);
+}
+/**
+ * The owner's Keep private switch. A private fact stays visible to the owner in
+ * Memory but is left out of everything sent to an AI model. Profile answers are
+ * the one exception: they reach prompts from the Profile settings, so the switch
+ * would promise more than it does.
+ */
+export function setFactPrivate(id: string, isPrivate: boolean): Fact {
+  return getDb().transaction(() => {
+    const fact = getFact(id); if (!fact) throw new FactInputError('Fact not found', 404);
+    if (fact.source === 'user_profile') {
+      throw new FactInputError('This comes from your profile answers. Change or clear the answer in Profile settings.', 409);
+    }
+    getDb().run('UPDATE facts SET is_private = ? WHERE id = ?', [isPrivate ? 1 : 0, id]);
+    return getFact(id)!;
+  }).immediate();
+}
+export function findFacts(query: { subject_id?: string; predicate?: string; object?: string; includeSuperseded?: boolean; scope?: string;
+  /** Leave out facts the owner kept private: set by every caller that feeds a prompt or a notification. */
+  excludePrivate?: boolean }): Fact[] {
   const conditions: string[] = [], params: string[] = [];
+  if (query.excludePrivate) conditions.push('is_private = 0');
   if (!query.includeSuperseded) conditions.push("status != 'superseded'");
   if (query.subject_id) { conditions.push('subject_id = ?'); params.push(query.subject_id); }
   if (query.predicate) { conditions.push('predicate_key = ?'); params.push(predicateKey(query.predicate)); }
@@ -168,6 +191,7 @@ export function correctFact(id: string, object: string, reason: string): Fact {
       scope: old.scope, validFrom: old.valid_from, validTo: old.valid_to,
     });
     if (replacement.id !== old.id) getDb().run("UPDATE facts SET status = 'superseded', superseded_by = ? WHERE id = ?", [replacement.id, old.id]);
+    inheritPrivacy(old, replacement.id);
     reconcileFacts(getDb(), old.subject_id, old.predicate_key, old.scope);
     syncUserProfileFactCorrection(old, replacement.object);
     return getFact(replacement.id)!;
@@ -183,6 +207,7 @@ export function updateFact(id: string, updates: Partial<Pick<Fact, 'predicate' |
       sourceRef: `revision:${old.id}`, scope: old.scope, validFrom: old.valid_from, validTo: old.valid_to,
     });
     if (next.id !== old.id) getDb().run("UPDATE facts SET status = 'superseded', superseded_by = ? WHERE id = ?", [next.id, old.id]);
+    inheritPrivacy(old, next.id);
     reconcileFacts(getDb(), old.subject_id, old.predicate_key, old.scope);
     reconcileFacts(getDb(), next.subject_id, next.predicate_key, next.scope);
     return getFact(next.id);

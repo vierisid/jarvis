@@ -119,7 +119,7 @@ export class MemoryStream {
       const href = `/api/brief/memory/${encodeURIComponent(row.id)}`;
       items.set(row.id, { factId: row.id, sourceId: null, sentence: `${row.subject_name} ${row.predicate} ${row.object}`,
         revision, ...(usageCoverage ? { usageCoverage } : {}), subjectId: row.subject_id, scope: row.scope, updatedAt, basis, status: row.status,
-        validity: { from: row.valid_from, to: row.valid_to }, sourceSummary: { labels, evidenceCount: ev.length },
+        validity: { from: row.valid_from, to: row.valid_to }, sourceSummary: { labels, evidenceCount: ev.length }, private: row.is_private === 1,
         provenance: ev.map(e => ({ kind: 'source', id: e.id, revision: digest(e) })), uses: factUses,
         permissions: { canRead: true, canCorrect: row.status !== 'superseded' && this.correctionAvailable(), canForget: this.forget?.readiness() === 'ready' },
         detailHref: href, historyHref: `${href}/history`, supersededBy: row.superseded_by });

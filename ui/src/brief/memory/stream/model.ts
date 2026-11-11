@@ -17,6 +17,8 @@ export interface MemoryItem extends BriefMemory {
   updatedAt: number;
   validity: { from: number | null; to: number | null };
   sourceSummary: { labels: string[]; evidenceCount: number };
+  /** Optional: an older daemon does not send it. */
+  private?: boolean;
   detailHref: string;
   historyHref: string;
   supersededBy: string | null;

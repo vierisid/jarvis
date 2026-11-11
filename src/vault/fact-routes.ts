@@ -1,4 +1,4 @@
-import { correctFact, verifyFact, getFact, FactInputError, factText } from './facts.ts';
+import { correctFact, verifyFact, getFact, setFactPrivate, FactInputError, factText } from './facts.ts';
 
 type FactRequest = Request & { params: { id: string } };
 /** Every neighbouring /api route answers through the daemon's CORS-scoped
@@ -27,6 +27,20 @@ async function decide(req: FactRequest, action: 'confirm' | 'correct', json: Fac
       error instanceof FactInputError ? error.status : 500);
   }
 }
+async function setPrivacy(req: FactRequest, json: FactResponder): Promise<Response> {
+  try {
+    const text = await req.text();
+    if (text.length > 1000) throw new FactInputError('Request too large');
+    let input: Record<string, unknown>;
+    try { input = JSON.parse(text); } catch { throw new FactInputError('Invalid JSON'); }
+    if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => key !== 'private')
+        || typeof input.private !== 'boolean') throw new FactInputError('Send {"private": true} or {"private": false}');
+    return json(setFactPrivate(req.params.id, input.private));
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : 'Could not save fact' },
+      error instanceof FactInputError ? error.status : 500);
+  }
+}
 export function createFactDecisionRoutes(json: FactResponder = plain) {
   return {
     '/api/vault/facts/:id': { GET: (req: FactRequest) => {
@@ -35,5 +49,6 @@ export function createFactDecisionRoutes(json: FactResponder = plain) {
     } },
     '/api/vault/facts/:id/confirm': { POST: (req: FactRequest) => decide(req, 'confirm', json) },
     '/api/vault/facts/:id/correct': { POST: (req: FactRequest) => decide(req, 'correct', json) },
+    '/api/vault/facts/:id/private': { POST: (req: FactRequest) => setPrivacy(req, json) },
   };
 }

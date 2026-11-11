@@ -22,6 +22,10 @@ export type DecisionResult =
   | { state: "saved"; factId: string }
   | ReadFailure
   | { state: "unknown"; reason: string };
+export type PrivacyResult =
+  | { state: "saved" }
+  | ReadFailure
+  | { state: "unknown"; reason: string };
 /** Host-scoped structural seam. Neither a new writer nor an implicit fixture fallback.
  * Review and correct only: Forget is not offered until F-19 / Q-16 land on main. */
 export interface MemoryDetailPort {
@@ -33,6 +37,12 @@ export interface MemoryDetailPort {
     command: DecisionCommand,
     signal: AbortSignal,
   ): Promise<DecisionResult>;
+  /** Keep a fact out of what is sent to an AI model, or let it back in. It stays visible in Memory either way. */
+  setPrivate(
+    factId: string,
+    value: boolean,
+    signal: AbortSignal,
+  ): Promise<PrivacyResult>;
 }
 const record = (value: unknown): value is Record<string, any> =>
   !!value && typeof value === "object" && !Array.isArray(value);

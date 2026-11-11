@@ -25,6 +25,19 @@ export function FactDetails({ fact }: { fact: Fact }) {
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not save'); }
     finally { saving.current = false; setBusy(false); }
   }
+  async function togglePrivate() {
+    if (saving.current) return;
+    saving.current = true; setBusy(true); setError('');
+    try {
+      const response = await fetch(`/api/vault/facts/${encodeURIComponent(fact.id)}/private`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ private: fact.is_private !== 1 }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not save. Try again.');
+      window.dispatchEvent(new Event('vault-facts-updated'));
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not save'); }
+    finally { saving.current = false; setBusy(false); }
+  }
   async function loadHistory() {
     try {
       const response = await fetch(`/api/vault/facts?subject_id=${encodeURIComponent(fact.subject_id)}&include_superseded=true`);
@@ -36,7 +49,7 @@ export function FactDetails({ fact }: { fact: Fact }) {
   return <>
     <div className="v2-mem__fact-pred">{fact.predicate}</div>
     <div className="v2-mem__fact-obj">{fact.object}</div>
-    <div className="v2-mem__fact-meta">{fact.basis} · {fact.status}{!appliesAt(fact) && ' · outside recorded validity'} · {(fact.confidence * 100).toFixed(0)}% confidence · {fact.source || 'Source unspecified'}</div>
+    <div className="v2-mem__fact-meta">{fact.basis} · {fact.status}{!appliesAt(fact) && ' · outside recorded validity'} · {(fact.confidence * 100).toFixed(0)}% confidence · {fact.source || 'Source unspecified'}{fact.is_private === 1 && ' · Private'}</div>
     <details>
       <summary>Source and dates</summary>
       <p>Recorded: {time(fact.created_at)}<br />Confirmed: {time(fact.verified_at)}<br />
@@ -49,7 +62,11 @@ export function FactDetails({ fact }: { fact: Fact }) {
     {!mode && fact.status !== 'superseded' && <div className="v2-mem__fact-controls">
       {(fact.basis !== 'confirmed' || fact.status === 'contested') && <button type="button" onClick={() => { setError(''); setMode('confirm'); }}>Confirm fact</button>}
       <button type="button" onClick={() => { setError(''); setMode('correct'); }}>Correct fact</button>
+      <button type="button" disabled={busy} onClick={togglePrivate}>{fact.is_private === 1 ? 'Allow in AI context' : 'Keep private'}</button>
     </div>}
+    {!mode && fact.status !== 'superseded' && <p className="v2-mem__fact-privacy">{fact.is_private === 1
+      ? 'Private: this stays in your Memory but is never sent to the AI model.'
+      : 'Keep private leaves this fact out of everything sent to the AI model. It stays visible here.'}</p>}
     {mode && <form className="v2-mem__fact-review" onSubmit={submit}>
       <fieldset disabled={busy}>
         <legend>{mode === 'correct' ? 'Correct this fact' : 'Confirm this value'}</legend>

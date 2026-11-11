@@ -28,6 +28,8 @@ export interface FactRow {
   predicate_key: string; value_key: string; scope: string;
   valid_from: number | null; valid_to: number | null;
   status: FactState; superseded_by: string | null;
+  /** 1 when the owner chose to keep this fact out of everything sent to an AI model. Absent on rows built by hand. */
+  is_private?: number;
 }
 export function samePeriod(a: FactRow, b: FactRow): boolean {
   return a.valid_from === b.valid_from && a.valid_to === b.valid_to;

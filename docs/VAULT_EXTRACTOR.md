@@ -57,6 +57,10 @@ const result = await extractAndStore(
 );
 ```
 
+#### Private facts
+
+The owner can mark any fact **private** in the Memory room (`POST /api/vault/facts/:id/private` with `{"private": true|false}`). A private fact stays visible to the owner in Memory and in the fact APIs, and is left out of everything that feeds an AI prompt or a notification: recall (`retrieveForMessage` and `isCurrentRecallFact`) and the awareness knowledge suggestion (`findFacts({ excludePrivate: true })`). Any new code that puts facts into a prompt must exclude private facts the same way. A correction or revision of a private fact stays private. Facts that come from the owner's profile answers cannot be made private, because profile answers reach prompts from Profile settings; the route answers 409 with the next step. The column is `facts.is_private INTEGER NOT NULL DEFAULT 0`, additive.
+
 ## Data Structures
 
 ### ExtractionResult

@@ -38,11 +38,11 @@ beforeEach(() => {
     if (url.pathname === '/api/vault/facts') return NativeResponse.json(findFacts({
       subject_id: url.searchParams.get('subject_id') ?? undefined, includeSuperseded: url.searchParams.get('include_superseded') === 'true',
     }));
-    const match = url.pathname.match(/^\/api\/vault\/facts\/([^/]+)\/(confirm|correct)$/);
+    const match = url.pathname.match(/^\/api\/vault\/facts\/([^/]+)\/(confirm|correct|private)$/);
     if (match) {
       if (failSave) return NativeResponse.json({ error: 'Save unavailable' }, { status: 500 });
       const request = Object.assign(new NativeRequest(url, { method: 'POST', body: opts.body }), { params: { id: match[1]! } });
-      const route = match[2] === 'confirm' ? routes['/api/vault/facts/:id/confirm'] : routes['/api/vault/facts/:id/correct'];
+      const route = match[2] === 'confirm' ? routes['/api/vault/facts/:id/confirm'] : match[2] === 'private' ? routes['/api/vault/facts/:id/private'] : routes['/api/vault/facts/:id/correct'];
       const result = await route.POST(request);
       if (loseResponse) { loseResponse = false; throw new Error('Response lost. Please retry.'); }
       return result;
@@ -123,4 +123,17 @@ test.each([['Jamie', 'Sam'], ['jamie', 'Jamie']])('Memory profile correction %s 
   expect(queryFact(after, 'preferred_name')?.object).toBe(after);
   expect(queryFact(after, 'name')?.object).toBe(after);
   expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+test('Keep private leaves a fact out of recall, says what that means, and can be undone', async () => {
+  await mount(); expect(getKnowledgeForMessage('Alex editor')).toContain('preferred_editor: Vim');
+  expect(host.textContent).toContain('Keep private leaves this fact out of everything sent to the AI model. It stays visible here.');
+  await act(async () => button('Keep private').click());
+  expect(getFact(oldId)?.is_private).toBe(1);
+  expect(getKnowledgeForMessage('Alex editor')).not.toContain('Vim');
+  expect(host.textContent).toContain('Private: this stays in your Memory but is never sent to the AI model.');
+  expect(host.textContent).toContain('· Private');
+  await act(async () => button('Allow in AI context').click());
+  expect(getFact(oldId)?.is_private).toBe(0);
+  expect(getKnowledgeForMessage('Alex editor')).toContain('preferred_editor: Vim');
 });
