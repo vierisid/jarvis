@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, initWorkflowDb } from "../db/index";
 import { createFlow } from "../db/repos/flow";
 import { createDraftVersion } from "../db/repos/flow-version";
+import { getStoreEntry, putStoreEntry } from "../db/repos/store-entry";
 import { createFlowRun } from "../db/repos/flow-run";
 import { claimNextJob, completeJob, enqueue, getJob, queueWait } from "../db/repos/job-queue";
 import { RESUME_PRIORITY } from "../runtime/continuation";
@@ -10,9 +11,14 @@ import { Worker, WORKFLOW_WORKER_CONCURRENCY } from "./worker";
 beforeEach(() => initWorkflowDb(":memory:"));
 afterEach(() => closeWorkflowDb());
 
-function newFlow() {
+function storeStep(scope: string) {
+  return { name: "trigger", type: "EMPTY", displayName: "Manual", settings: {}, nextAction: { name: "step_1", type: "PIECE", displayName: "append",
+    settings: { pieceName: "@activepieces/piece-store", actionName: "append", input: { key: "shared", value: "x", store_scope: scope } } } };
+}
+function newFlow(scope?: string) {
   const flow = createFlow();
-  const version = createDraftVersion({ flowId: flow.id, displayName: "fairness" });
+  const version = createDraftVersion({ flowId: flow.id, displayName: "fairness",
+    ...(scope ? { trigger: storeStep(scope) } : {}) } as Parameters<typeof createDraftVersion>[0]);
   return { flow, version };
 }
 function queueRun(flow: { id: string }, version: { id: string }, extra: { priority?: number } = {}) {
@@ -93,5 +99,38 @@ describe("run queue fairness", () => {
     expect(queueWait(mine.run.id)).toEqual({ ahead: 1 });
     expect(queueWait(running.run.id)).toBeNull();
     expect(getJob(ahead.job.id)?.status).toBe("RUNNING");
+  });
+
+  // The store piece's append is read, change, write as separate calls.
+  async function appendAll(scopeA: string, scopeB: string, each: number) {
+    const a = newFlow(scopeA), b = newFlow(scopeB);
+    for (let i = 0; i < each; i++) { queueRun(a.flow, a.version); queueRun(b.flow, b.version); }
+    const worker = new Worker({
+      pollIntervalMs: 2, log: () => undefined,
+      handlers: { RUN_FLOW: async () => {
+        const old = (getStoreEntry("p", "shared")?.value as string | undefined) ?? "";
+        await tick(5);
+        putStoreEntry("p", "shared", old + "x");
+      } },
+    });
+    worker.start({ concurrency: 3 });
+    for (let i = 0; i < 200 && ((getStoreEntry("p", "shared")?.value as string | undefined)?.length ?? 0) < each * 2; i++) await tick(20);
+    await worker.stop();
+    return (getStoreEntry("p", "shared")?.value as string | undefined)?.length ?? 0;
+  }
+
+  test("two different workflows appending to the project store at once lose nothing", async () => {
+    expect(await appendAll("COLLECTION", "COLLECTION", 6)).toBe(12);
+  });
+
+  test("a scope chosen from data is treated as the project store too", async () => {
+    expect(await appendAll("{{trigger.scope}}", "COLLECTION", 6)).toBe(12);
+  });
+
+  test("workflows that only use their own store scope still run side by side", async () => {
+    const a = newFlow("FLOW"), b = newFlow("FLOW");
+    queueRun(a.flow, a.version); queueRun(b.flow, b.version);
+    expect(claimNextJob({ serializeFlows: true })).not.toBeNull();
+    expect(claimNextJob({ serializeFlows: true })).not.toBeNull();
   });
 });

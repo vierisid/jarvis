@@ -85,7 +85,9 @@ export interface ClaimOptions {
   /**
    * Skip a RUN_FLOW job whose workflow already has a RUN_FLOW job running, so
    * several workers never execute two runs of one workflow at once. Jobs of
-   * one workflow keep the order they had with a single worker.
+   * one workflow keep the order they had with a single worker. Runs whose
+   * graph may use the project-wide store also wait for each other (see
+   * usesSharedStore).
    */
   serializeFlows?: boolean;
 }
@@ -133,6 +135,43 @@ function rowToJob<P = Record<string, unknown>>(row: JobRow): Job<P> {
 /** The workflow a RUN_FLOW job belongs to: its own column, else its run's. */
 const JOB_FLOW = (alias: string) =>
   `COALESCE(${alias}.flow_id, (SELECT fr.flow_id FROM flow_run fr WHERE fr.id = ${alias}.flow_run_id))`;
+
+const JOB_VERSION = (alias: string) =>
+  `COALESCE(${alias}.flow_version_id, (SELECT fr.flow_version_id FROM flow_run fr WHERE fr.id = ${alias}.flow_run_id))`;
+
+/**
+ * Whether a version's graph has a store step that may use the PROJECT-wide
+ * ("COLLECTION") store: its append, add_to_list and remove_from_list read the
+ * value, change it and write it back as separate calls, so two workflows doing
+ * that on one key at once can lose an update. Deliberately an over-estimate
+ * (any store step naming COLLECTION, or choosing its scope from data): a wrong
+ * yes only makes such runs wait for each other. Cached per version; a draft
+ * is re-read when it changes.
+ */
+const sharedStoreCache = new Map<string, { updated: number; shared: boolean }>();
+function usesSharedStore(versionId: string): boolean {
+  const row = db()
+    .query<{ trigger: string; updated: number }, [string]>(`SELECT trigger, updated FROM flow_version WHERE id = ?`)
+    .get(versionId);
+  if (!row) return false;
+  const hit = sharedStoreCache.get(versionId);
+  if (hit && hit.updated === row.updated) return hit.shared;
+  const shared = row.trigger.includes("piece-store")
+    && (row.trigger.includes("COLLECTION") || /"store_scope"\s*:\s*"[^"]*\{\{/.test(row.trigger));
+  if (sharedStoreCache.size > 2000) sharedStoreCache.clear();
+  sharedStoreCache.set(versionId, { updated: row.updated, shared });
+  return shared;
+}
+
+/** Version ids of queued runs that must wait because a shared-store run is running. */
+function blockedSharedStoreVersions(): string[] {
+  const versionIds = (status: string) => db()
+    .query<{ v: string | null }, [string, string]>(
+      `SELECT DISTINCT ${JOB_VERSION("j")} AS v FROM workflow_job j WHERE j.job_type = ? AND j.status = ?`)
+    .all(RUN_FLOW, status).map((r) => r.v).filter((v): v is string => !!v);
+  if (!versionIds("RUNNING").some(usesSharedStore)) return [];
+  return versionIds("QUEUED").filter(usesSharedStore);
+}
 
 /** Jobs waiting to run. Used to refuse public ingress once a backlog builds. */
 export function countQueued(): number {
@@ -210,8 +249,9 @@ export function claimNextJob<P = Record<string, unknown>>(opts: ClaimOptions = {
     // Older chat jobs may already be queued for a second attempt. Retire
     // those before claiming anything, even when boot recovery wasn't called.
     retireWorkflowRetries(now, false);
+    const blocked = opts.serializeFlows ? blockedSharedStoreVersions() : [];
     const row = db()
-      .query<JobRow, [JobStatus, number, number, number, number, string]>(
+      .query<JobRow, [JobStatus, number, number, number, number, string, string]>(
         `UPDATE workflow_job
        SET status = ?, attempt = attempt + 1, locked_until = ?, updated = ?
        WHERE id = (
@@ -220,13 +260,14 @@ export function claimNextJob<P = Record<string, unknown>>(opts: ClaimOptions = {
             OR (status = 'RUNNING' AND locked_until IS NOT NULL AND locked_until <= ? AND job_type != ?))
            ${opts.serializeFlows ? `AND NOT (job_type = '${RUN_FLOW}' AND ${JOB_FLOW("workflow_job")} IS NOT NULL
              AND EXISTS (SELECT 1 FROM workflow_job busy WHERE busy.status = 'RUNNING' AND busy.job_type = '${RUN_FLOW}'
-               AND busy.id != workflow_job.id AND ${JOB_FLOW("busy")} = ${JOB_FLOW("workflow_job")}))` : ""}
+               AND busy.id != workflow_job.id AND ${JOB_FLOW("busy")} = ${JOB_FLOW("workflow_job")}))
+             AND NOT (job_type = '${RUN_FLOW}' AND ${JOB_VERSION("workflow_job")} IN (SELECT value FROM json_each(?)))` : "AND ? IS NOT NULL"}
          ORDER BY priority DESC, scheduled_at ASC, created ASC
          LIMIT 1
        )
        RETURNING *`,
       )
-      .get("RUNNING", leaseUntil, now, now, now, RUN_FLOW);
+      .get("RUNNING", leaseUntil, now, now, now, RUN_FLOW, JSON.stringify(blocked));
     return row ? rowToJob<P>(row) : null;
   })();
 }
