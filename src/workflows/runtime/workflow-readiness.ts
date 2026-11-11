@@ -9,6 +9,7 @@ import { MEETING_ACCOUNTS, meetingSetup } from './meeting-briefs';
 import { MANAGED_HUBSPOT_REFUSAL } from '../meeting-accounts';
 import { REFUND_REQUIRED, refundSetup } from './refund';
 import { walkFlowNodes } from '../db/flow-graph';
+import { workflowToolRefusal, workflowUiStepRefusals, type WorkflowMachineView } from './workflow-ui-tools';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import { REFUND_ACCOUNTS, REFUND_LOOP_REFUSAL, REFUND_PIECE, isRefundAction, managedRefundRefusal, type RefundAccountField } from '../refund-accounts';
 import { IMPORT_REQUIRED, importSetup } from './contact-import';
@@ -73,8 +74,12 @@ export interface ReadinessContext {
    */
   connection?: (externalId: string, pieceName: string, path: string, settings: Record<string, unknown>, nodeType?: unknown) => string | ConnectionRefusal | null;
   workflow?: (id: string) => string | null;
-  tool?: (name: string) => { params: Array<{ name: string; type: string; required: boolean; enum?: string[] }> } | null;
+  tool?: (name: string) => { params: Array<{ name: string; type: string; required: boolean; enum?: string[] }>; workflowRefusal?: string | null;
+    /** A switch that has the tool turned off (#1314 m6). */
+    switchRefusal?: { code: string; message: string } | null } | null;
   roles?: () => ReadonlySet<string>;
+  /** The enrolled computers, for the reviewed-UI step checks (#1314). */
+  machines?: () => readonly WorkflowMachineView[];
 }
 
 const object = (value: unknown): value is Record<string, any> =>
@@ -458,6 +463,17 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         catch (error) { issue(node, 'settings.input.outputSchema', 'OUTPUT_SCHEMA', (error as Error).message); }
       }
     }
+    if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input)) {
+      const refusal = typeof input.toolName === 'string' ? workflowToolRefusal(input.toolName) : null;
+      if (refusal) issue(node, 'settings.input.toolName', 'WORKFLOW_TOOL_UNSUPPORTED', refusal);
+      if (typeof input.toolName === 'string') {
+        let machines: readonly WorkflowMachineView[] | undefined;
+        try { machines = context.machines?.(); } catch { machines = undefined; }
+        for (const found of workflowUiStepRefusals(input.toolName, input.params, machines)) {
+          issue(node, found.path, found.code ?? 'WORKFLOW_TOOL_UNSUPPORTED', found.message);
+        }
+      }
+    }
     if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input) && context.phase !== 'composition') {
       const name = { value: input.toolName };
       // Named in the workflow, never by a template: run data choosing the tool
@@ -468,6 +484,8 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         const tool = context.tool?.(name.value);
         if (!tool) issue(node, 'settings.input.toolName', 'TOOL_BINDING', context.tool ? 'Unknown tool' : 'Tool inventory is unavailable');
         else {
+          if (tool.workflowRefusal) issue(node, 'settings.input.toolName', 'WORKFLOW_TOOL_UNSUPPORTED', tool.workflowRefusal);
+          if (tool.switchRefusal) issue(node, 'settings.input.toolName', tool.switchRefusal.code, tool.switchRefusal.message);
           let params = staticInput(input.params ?? {});
           if (params.known && typeof params.value === 'string') {
             try { params = { known: true, value: JSON.parse(params.value) }; } catch { /* report below */ }

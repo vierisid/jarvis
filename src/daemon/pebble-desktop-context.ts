@@ -7,7 +7,7 @@
  * handles as a failed best-effort read.
  */
 
-import { isDesktopEnabled } from '../actions/tools/desktop-guard.ts';
+import { isDesktopEnabled, isScreenCaptureEnabled } from '../actions/tools/desktop-guard.ts';
 
 /** `SidecarManager.dispatchRPC`, narrowed to what these reads use. */
 export type PebbleDesktopDispatch = (sidecarId: string, method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -35,7 +35,8 @@ export type ScreenshotInfo = {
 };
 
 export async function fetchPebbleScreenshot(dispatch: PebbleDesktopDispatch, sidecarId: string): Promise<ScreenshotInfo | null> {
-  if (!isDesktopEnabled()) return null;
+  // Screen awareness off means no screen capture either (#1314 m6).
+  if (!isDesktopEnabled() || !isScreenCaptureEnabled()) return null;
   try {
     const result = await Promise.race<unknown>([
       // compact: true -> sidecar downscales to <=1600 wide and
@@ -75,7 +76,8 @@ export async function fetchPebbleScreenshot(dispatch: PebbleDesktopDispatch, sid
 // "where do I click for X?" without the user having to specify
 // the app. Returns null on any failure -- best-effort context.
 export async function fetchPebbleForegroundApp(dispatch: PebbleDesktopDispatch, sidecarId: string): Promise<{ title: string; processName?: string } | null> {
-  if (!isDesktopEnabled()) return null;
+  // Screen awareness off means no screen capture either (#1314 m6).
+  if (!isDesktopEnabled() || !isScreenCaptureEnabled()) return null;
   try {
     const result = await Promise.race<unknown>([
       dispatch(sidecarId, 'list_windows', {}),
