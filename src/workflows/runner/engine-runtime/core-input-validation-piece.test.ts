@@ -57,6 +57,21 @@ describe.skipIf(skip)('the compiled core XML and crypto pieces', () => {
     expect(out).toContain('<caf\u00E9-1.b');
   });
 
+  test('JSON to XML escapes attribute values, so a value cannot add elements of its own', async () => {
+    const out = (await xml({ a: { attr: { id: 'x"><injected/><y z="', note: 'a&b\nc' }, b: 1 } })) as string;
+    expect(out).toBe('<a><b id="x&quot;&gt;&lt;injected/&gt;&lt;y z=&quot;" note="a&amp;b&#10;c">1</b></a>');
+  });
+
+  test('JSON to XML refuses an attribute field that is not an object, a nested attribute value and control characters', async () => {
+    await expect(xml({ a: { attr: 'abc', b: 1 } })).rejects.toThrow(/The attribute field "attr" of "a" must be an object/);
+    await expect(xml({ a: { attr: ['q'], b: 1 } })).rejects.toThrow(/must be an object/);
+    await expect(xml({ a: { attr: { id: { n: 1 } }, b: 1 } })).rejects.toThrow(/The attribute "id" of "a" must be text/);
+    await expect(xml({ a: 'bell\u0007' })).rejects.toThrow(/The value of "a" has a control character/);
+    await expect(xml({ 'a\u00D7b': 1 })).rejects.toThrow(/cannot be used as an XML tag name/);
+    // A long key is cut short in the message.
+    await expect(xml({ [`1${'k'.repeat(500)}`]: 1 })).rejects.toThrow(/^"1k{59}\.\.\." cannot be used as an XML tag name/);
+  });
+
   test('Base64 Decode refuses text that is not base64 instead of returning garbage', async () => {
     for (const text of ['not base64!', 'hello world', '@@@@', 'abcde']) {
       await expect(b64(text)).rejects.toThrow('The text is not valid base64');
