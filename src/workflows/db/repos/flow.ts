@@ -148,6 +148,20 @@ export function listFlows(
 }
 
 /**
+ * Every flow of a project, newest first, in ONE query. `listFlows` is a page
+ * (default 100); a caller that means "all of them" (trigger registration at
+ * startup, a name lookup) must not use it or it silently stops at the page
+ * size. SQLite reads `LIMIT -1` as no limit, and a single synchronous read is
+ * a consistent snapshot even when the caller awaits between rows.
+ */
+export function listAllFlows(
+  projectId: string = DEFAULT_IDS.project,
+  opts: { status?: FlowStatus } = {},
+): FlowRow[] {
+  return listFlows(projectId, { ...opts, limit: -1, offset: 0 });
+}
+
+/**
  * Set the flow's status. Turning an ENABLED flow off stamps `disabled_at`, and
  * the caller then stops the runs it had started (repos/flow-turn-off.ts,
  * Q-06); `turnedOff` says whether this call did that.

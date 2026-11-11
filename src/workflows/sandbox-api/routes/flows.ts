@@ -14,7 +14,7 @@
  * far below the cap).
  */
 
-import { listFlows, parseFlowMetadata } from "../../db/repos/flow";
+import { listAllFlows, parseFlowMetadata } from "../../db/repos/flow";
 import { getFlowVersion } from "../../db/repos/flow-version";
 import { json, err, type RouteContext, type RouteHandler } from "./shared";
 
@@ -26,7 +26,7 @@ export const populatedFlowsRoute: RouteHandler = async (ctx: RouteContext) => {
     : null;
 
   const projectId = ctx.claims.projectId;
-  const allFlows = listFlows(projectId);
+  const allFlows = listAllFlows(projectId);
   const filtered = externalIds
     ? allFlows.filter((f) => externalIds.includes(f.external_id))
     : allFlows;

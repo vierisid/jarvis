@@ -84,6 +84,27 @@ describe("TriggerManager: lifecycle", () => {
     expect(tm.list()).toEqual([]);
   });
 
+  test("start registers every enabled flow, not only the first 1,000", async () => {
+    // Rows are inserted directly: the API publishes one flow at a time and is slow.
+    const total = 1205;
+    const trigger = { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType: "test.evt" } } };
+    const ids: string[] = [];
+    getWorkflowDb().transaction(() => {
+      for (let i = 0; i < total; i++) {
+        const flow = createFlow();
+        const version = createDraftVersion({ flowId: flow.id, displayName: `bulk ${i}`, trigger });
+        getWorkflowDb().run("UPDATE flow SET status = 'ENABLED', published_version_id = ? WHERE id = ?", [version.id, flow.id]);
+        ids.push(flow.id);
+      }
+    })();
+    const tm = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent });
+    await tm.start();
+    const registered = new Set(tm.list().map((t) => t.flowId));
+    expect(registered.size).toBe(total);
+    for (const id of ids) expect(registered.has(id)).toBe(true);
+    await tm.stop();
+  }, 60_000);
+
   test("EMPTY trigger: nothing registered", async () => {
     publishFlowWithTrigger("manual flow", { name: "trigger", type: "EMPTY", settings: {} });
     const tm = new TriggerManager({

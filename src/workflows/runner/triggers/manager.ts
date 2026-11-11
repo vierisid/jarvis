@@ -46,7 +46,7 @@ import {
 import { WebhookManager, type WebhookDelivery, type WebhookFireResult } from "./webhook";
 import { webhookScheme } from "./webhook-secret";
 import type { WorkflowEventBus } from "../../runtime/event-bus";
-import { getFlow, listFlows, type FlowRow } from "../../db/repos/flow";
+import { getFlow, listAllFlows, type FlowRow } from "../../db/repos/flow";
 import {
   getFlowVersion,
   getLatestDraft,
@@ -262,7 +262,7 @@ export class TriggerManager {
       this.pruneTimer = setInterval(prune, 24 * 60 * 60_000);
       (this.pruneTimer as unknown as { unref?: () => void }).unref?.();
     }
-    const flows = listFlows(undefined, { status: "ENABLED", limit: 1000 });
+    const flows = listAllFlows(undefined, { status: "ENABLED" });
     for (const flow of flows) {
       // Through the per-flow lock, re-reading the flow: one turned off while
       // startup worked through the others is not registered again.

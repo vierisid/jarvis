@@ -60,6 +60,7 @@ import {
   getFlow,
   getFlowInProject,
   listFlows,
+  listAllFlows,
   parseFlowMetadata,
   updateFlowStatus,
   type FlowRow,
@@ -912,7 +913,7 @@ function resolveFlow(project: string, ref: string): FlowRow {
   if (direct) return direct;
   const target = ref.trim().toLowerCase();
   // Match against the display name on the latest published or draft version.
-  for (const flow of listFlows(project, { limit: 1000 })) {
+  for (const flow of listAllFlows(project)) {
     const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
     if (!versionId) continue;
     const version = getFlowVersion(versionId);
@@ -1652,7 +1653,7 @@ async function actContinueSetup(compositionId: string, givenAnswers: unknown, in
 function findFlowByDisplayName(project: string, name: string): FlowRow | null {
   const target = name.trim().toLowerCase();
   if (!target) return null;
-  for (const flow of listFlows(project, { limit: 1000 })) {
+  for (const flow of listAllFlows(project)) {
     const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
     if (!versionId) continue;
     const version = getFlowVersion(versionId);
