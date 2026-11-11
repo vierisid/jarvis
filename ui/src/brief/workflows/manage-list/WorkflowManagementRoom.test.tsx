@@ -209,6 +209,9 @@ test("a blank-named workflow shows as Untitled and a broken row is reported with
   expect(row("meeting")).toBeNull();
   expect(row("investor")).toBeTruthy();
   expect(host.textContent).toContain("One workflow could not be shown.");
+  // Not hidden silently: the broken row can be opened to repair it.
+  await click("Open the workflow that could not be shown");
+  expect(shell.route).toEqual({ room: "workflow", selection: { flowId: "meeting" } });
 });
 test("no removed date, subtitle, footer, global creation control or irreversible route appears", async () => {
   await render();

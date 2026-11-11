@@ -229,11 +229,30 @@ function BoundManagement({
         </p>
       )}
       {state.skipped > 0 && (
-        <p role="status" className="brief-management-notice">
-          {state.skipped === 1
-            ? "One workflow could not be shown."
-            : `${state.skipped} workflows could not be shown.`}
-        </p>
+        <div role="status" className="brief-management-notice">
+          <p>
+            {state.skipped === 1
+              ? "One workflow could not be shown."
+              : `${state.skipped} workflows could not be shown.`}{" "}
+            {state.broken.length
+              ? "Open it to check its name and steps, then refresh."
+              : "Refresh the list. If it stays, open the workflow from Workflows to repair it."}
+          </p>
+          {state.broken.map((flowId, i) => (
+            <BriefButton
+              key={flowId}
+              variant="secondary"
+              data-broken-flow={flowId}
+              onClick={() =>
+                shell.navigate({ room: "workflow", selection: { flowId } })
+              }
+            >
+              {state.broken.length === 1
+                ? "Open the workflow that could not be shown"
+                : `Open workflow ${i + 1} that could not be shown`}
+            </BriefButton>
+          ))}
+        </div>
       )}
       <div
         className="brief-management-scroll"

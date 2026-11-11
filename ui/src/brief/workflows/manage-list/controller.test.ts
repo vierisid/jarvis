@@ -536,4 +536,17 @@ test("one malformed row is left out and counted, and the others still load", asy
     all.slice(1).map((w) => w.flowId),
   );
   expect(snap.skipped).toBe(1);
+  expect(snap.broken).toEqual([all[0]!.flowId]);
+});
+test("a malformed row without a usable ID is counted but offers no link", async () => {
+  const f = makeManagementFixture(),
+    all = [...f.records.values()],
+    items = [{ ...all[0]!, flowId: "  " }, ...all.slice(1)];
+  const c = new WorkflowManagementController(MANAGEMENT_SCOPE, "fixture", {
+    read: async () => ({ status: "ready", data: { scopeId: MANAGEMENT_SCOPE, items } }),
+  });
+  c.setAccess(true);
+  await c.load();
+  expect(c.getSnapshot().skipped).toBe(1);
+  expect(c.getSnapshot().broken).toEqual([]);
 });
