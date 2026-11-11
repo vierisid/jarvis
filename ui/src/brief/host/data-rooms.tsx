@@ -1,5 +1,5 @@
 import { useHumanInputCount } from './HumanInputs';
-import { NeedsYouContext, documentDecisionCount } from './needs-you';
+import { NeedsYouContext, documentDecisionCount, isHeldNote } from './needs-you';
 import React, { useContext, useState } from 'react';
 import { StoredNoticesContext } from '../navigation/StoredNoticesContext';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
@@ -169,7 +169,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     const stored = useContext(StoredNoticesContext);
     const [ownCount, setOtherCount] = useState<number | null>(null);
     // With the workspace around, its read decides; the list reports its own count only when rendered alone.
-    const otherCount = shared ? shared.others?.length ?? null : ownCount;
+    const otherCount = shared ? shared.others?.filter(row => !isHeldNote(row)).length ?? null : ownCount;
     const onlyOther = onlyOtherDecisions(all, otherCount === null ? null : otherCount + humanPending);
     const count = shared?.count ?? 0;
     return <>{onlyOther ? <><header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header>{stored.list}</> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}

@@ -1,7 +1,7 @@
 import { confirmDialog } from '../../v2/ui/ConfirmDialog';
 import { inputDialog } from './InputDialog';
 import React, { useContext, useEffect, useState, useSyncExternalStore } from 'react';
-import { NeedsYouContext, askedAt, isInProgress, pendingByWorkflow, plainDecisionTitle, relativeTime, siblingNote, useOtherDecisions, workflowLabel } from './needs-you';
+import { NeedsYouContext, askedAt, isHeldNote, isInProgress, pendingByWorkflow, plainDecisionTitle, relativeTime, siblingNote, useOtherDecisions, workflowLabel } from './needs-you';
 import type { QueuedDecision, DecisionAction } from '../../../../src/brief/decision-contracts';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import type { MemoryDetailController } from '../memory/detail/controller';
@@ -53,7 +53,8 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
   const [message, setMessage] = useState(''), [pending, setPending] = useState(false);
   const [selected, select] = useState<string | null>(null);
   // null while loading or failed: an unknown permission list is not an empty one.
-  useEffect(() => { onCount?.(enabled ? rows?.length ?? null : 0); }, [rows, enabled, onCount]);
+  // Held runs (a workflow's runs waiting behind its card limit) are a note, not decisions: never counted.
+  useEffect(() => { onCount?.(enabled ? rows ? rows.filter(r => !isHeldNote(r)).length : null : 0); }, [rows, enabled, onCount]);
   useEffect(() => { if (source.failed) setMessage('Decision status is unavailable. Reconnect before acting.'); }, [source.failed]);
   const list = React.useRef<HTMLElement>(null), restoreFocus = React.useRef(false);
   useEffect(() => {
@@ -79,8 +80,10 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
   };
   if (!enabled) return null;
   // Approved items waiting to run are not asking anything of the user: they sit in their own group below.
-  const asking = rows?.filter(r => !isInProgress(r)) ?? [], running = rows?.filter(isInProgress) ?? [];
-  const row = rows?.find(r => r.decisionId === selected) ?? asking[0] ?? running[0];
+  // Held runs are a note under the lists, never selectable.
+  const held = rows?.filter(isHeldNote) ?? [], asks = rows?.filter(r => !isHeldNote(r)) ?? [];
+  const asking = asks.filter(r => !isInProgress(r)), running = asks.filter(isInProgress);
+  const row = asks.find(r => r.decisionId === selected) ?? asking[0] ?? running[0];
   const title = (r: QueuedDecision) => browserCardTitle(r)?.heading ?? plainDecisionTitle(r);
   const actions = row?.supportedActions.filter(a => a !== 'inspect') ?? [];
   const primary = actions.find(a => ['approve_permission', 'accept_intent', 'execute_once'].includes(a));
@@ -137,6 +140,7 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
         </div></footer>
       </article>
     </div>}
+    {held.map(item => <p key={item.decisionId} className="brief-decision-hint">{item.title}</p>)}
     {message && <p role="status">{message}</p>}{rows === null && <BriefButton disabled={pending} onClick={source.reload}>Recheck decisions</BriefButton>}
   </section>;
 }

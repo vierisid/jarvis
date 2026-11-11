@@ -19,7 +19,7 @@ export const documentDecisionCount = (rows: ReadonlyArray<{ actions: readonly un
   rows?.filter(row => row.actions.length > 0).length ?? 0;
 
 /** A grouped note for runs held behind a workflow's card limit (#1365): read-only, never a decision. */
-export const isHeldNote = (row: Pick<QueuedDecision, 'kind'>) => (row.kind as string) === 'held';
+export const isHeldNote = (row: Pick<QueuedDecision, 'kind'>) => row.kind === 'held';
 
 /** Rows that still ask something of the user. An unknown (unread) other list counts as none. */
 export const needsAttention = (rows: readonly QueuedDecision[] | null) => rows?.filter(row => !isInProgress(row) && !isHeldNote(row)) ?? [];

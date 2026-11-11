@@ -306,3 +306,39 @@ test('publishing from the existing canvas route reloads authoritative state and 
     expect(button('Publish version')).toBeUndefined(); expect(button('Edit a new draft')).toBeTruthy();
   } finally { rooms.retire(); transport.stop(); }
 });
+
+test('held runs show as one plain sentence and never count as something that needs the owner', async () => {
+  const counts: (number | null)[] = [];
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const sentence = '21 more runs of Morning reminder are waiting. Answer a request above to let the next one ask.';
+  const rows = [
+    { decisionId: 'approval:a', revision: 'r', kind: 'permission', state: 'pending', title: 'Send notification: hi', supportedActions: ['approve_permission', 'inspect'] },
+    { decisionId: 'held:f', revision: 'r', kind: 'held', state: 'pending', title: sentence, held: { workflowName: 'Morning reminder', count: 21 }, supportedActions: ['inspect'] },
+  ];
+  await React.act(async () => root.render(<Commands.PendingDecisions http={http} read={async () => rows as any} enabled changed={() => {}} onCount={count => counts.push(count)} />));
+  expect(counts.at(-1)).toBe(1);
+  expect(host.textContent).toContain(sentence);
+  expect(host.querySelectorAll('.brief-decision-choice')).toHaveLength(1);
+  http.stop();
+});
+
+test('a held group is never read as a decision by the document list, and the permission list still receives it as a note', async () => {
+  const { createDomainPorts } = await import('./domain-ports');
+  const rows = [
+    { decisionId: 'approval:a', revision: 'r', kind: 'permission', supportedActions: ['approve_permission', 'inspect'] },
+    { decisionId: 'held:f', revision: 'r', kind: 'held', supportedActions: ['inspect'] },
+  ];
+  const asked: string[] = [];
+  const http = createHostTransport((async (path: string) => {
+    if (path.startsWith('/api/brief/decisions?')) return Response.json({ state: 'ready', data: { items: rows, nextCursor: null } });
+    const id = decodeURIComponent(path.split('/')[4]!); asked.push(id);
+    return Response.json({ decision: { decisionId: id, revision: 'r', title: 'x', kind: 'permission' }, actions: [], state: 'pending', options: null });
+  }) as unknown as typeof fetch);
+  const ports = createDomainPorts('scope', http, { setItem() {} });
+  expect((await ports.otherDecisions()).map(row => row.decisionId)).toEqual(['approval:a', 'held:f']);
+  const read = await ports.decisions.read();
+  expect(read.status === 'ready' ? read.data.map(view => view.paper.decision.decisionId) : []).toEqual(['approval:a']);
+  expect(read.status === 'ready' && read.data[0]!.paper.queueCount).toBe(1);
+  expect(asked).not.toContain('held:f');
+  http.stop();
+});
