@@ -1,6 +1,6 @@
 import { getWorkflowDb } from '../index';
 import { compileWorkflow, type ReadinessContext, type WorkflowReadiness } from '../../runtime/workflow-readiness';
-import { assertFlowVersionOwnership } from './flow-version-ownership';
+import { assertFlowVersionOwnership, FlowVersionRequestError } from './flow-version-ownership';
 import { workflowReadinessServices } from './readiness-services';
 import { isTurnedOff } from './flow-turn-off';
 import { bindingPinIssues } from './binding-pins';
@@ -253,6 +253,28 @@ export function assertFlowReady(flowId: string, mode: BindingPinMode = {}): void
   if (!row) throw new Error('flow not found');
   if (!row.version_id) throw new WorkflowReadinessError({ ready: false, runtimeChecks: [], issues: [{ node: 'trigger', path: 'graph', code: 'VERSION', message: 'Create a workflow version before enabling it' }] });
   assertVersionReady(flowId, row.version_id, undefined, mode);
+}
+/** What a person reads when a workflow with only a trigger is turned on. */
+export const NO_STEPS_MESSAGE = 'This workflow has no steps yet. Add at least one step after the trigger, then turn it on.';
+/**
+ * Turning a workflow on needs something for it to do. A graph that is only a
+ * trigger passes `compileWorkflow` (a fresh draft is a valid place to start
+ * editing) but would run to a green SUCCEEDED with nothing done. Activation
+ * only: drafts and the editor keep accepting a trigger-only graph.
+ */
+export function assertVersionHasSteps(versionId: string): void {
+  const row = getWorkflowDb().query<{ trigger: string }, [string]>('SELECT trigger FROM flow_version WHERE id = ?').get(versionId);
+  let trigger: unknown = null;
+  try { trigger = row ? JSON.parse(row.trigger) : null; } catch { /* unreadable graphs fail readiness first */ }
+  const next = trigger !== null && typeof trigger === 'object' ? (trigger as { nextAction?: unknown }).nextAction : null;
+  if (next === null || typeof next !== 'object' || Array.isArray(next)) throw new FlowVersionRequestError(NO_STEPS_MESSAGE, 400);
+}
+/** `assertVersionHasSteps` for the version a flow would run when enabled. */
+export function assertFlowHasSteps(flowId: string): void {
+  const row = getWorkflowDb().query<{ version_id: string | null }, [string]>(
+    `SELECT COALESCE(f.published_version_id, (SELECT version_id FROM brief_workflow_draft_selection WHERE flow_id = f.id)) AS version_id FROM flow f WHERE id = ?`,
+  ).get(flowId);
+  if (row?.version_id) assertVersionHasSteps(row.version_id);
 }
 export function assertLiveDraftReady(flowId: string, trigger: unknown): void {
   const row = getWorkflowDb().query<{ status: string; published_version_id: string | null }, [string]>(

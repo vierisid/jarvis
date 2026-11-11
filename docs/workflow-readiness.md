@@ -6,6 +6,15 @@ persisted graph. Trigger registration also checks existing enabled records at
 startup. Incomplete disabled drafts can still be saved. A submitted `valid`
 flag cannot mark a broken graph ready.
 
+A graph that is only a trigger is a valid draft but is not publishable: it
+would run to a green success having done nothing. Publish (HTTP, chat) and the
+HTTP status switch to ENABLED answer 400 "no steps" until at least one step
+follows the trigger. The check is separate from readiness (it is a 400 on the
+request, not a 422 issue list) and applies only to turning a workflow on. A
+version write (create or patch) answers 400 when `trigger` is present but is not
+an object; leaving it out still seeds the empty default. The chat tool's own
+enable action and the Brief restore path are not covered.
+
 Run admission also compares the connections and computer a flow was enabled
 against with what they resolve to now. A replaced credential, a connection
 deleted and created again, a reconnected Google account or a computer no longer

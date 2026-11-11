@@ -65,7 +65,7 @@ import {
   type UpdateDraftVersionInput,
 } from "../db/repos/flow-version";
 import { publishFlowVersion } from "../db/repos/flow-publication";
-import { assertVersionReady, versionReadiness, WorkflowReadinessError } from '../db/repos/flow-readiness';
+import { assertFlowHasSteps, assertVersionReady, versionReadiness, WorkflowReadinessError } from '../db/repos/flow-readiness';
 import { assertCodeStepsAllowed, CodeStepsRefusedError } from "../db/repos/flow-code-steps";
 import { getFlowReadHosts, setFlowReadHosts } from "../db/repos/flow-read-hosts";
 import { normalizeReadHosts, readHostsOfRow } from "../db/read-hosts";
@@ -1672,6 +1672,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const rejected = metadataRejection(body.metadata);
           if (rejected) return err(rejected.message, rejected.status);
+          // Turning on a workflow with nothing after its trigger is refused, as on publish.
+          if (body.status === "ENABLED") assertFlowHasSteps(id);
           // Turning a workflow off stops its queued and waiting runs (Q-06).
           if (body.status !== undefined && updateFlowStatus(id, body.status).turnedOff) stopRunsOfTurnedOffFlow(id);
           if (body.metadata !== undefined) updateFlowMetadata(id, body.metadata);

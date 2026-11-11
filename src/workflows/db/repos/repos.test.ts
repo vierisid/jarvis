@@ -52,6 +52,9 @@ afterEach(() => {
   setEncryptionKey(null);
 });
 
+// The smallest step that needs no piece catalog, so a publishable graph can be built in a bare test database.
+const ROUTER_STEP = { name: "step_1", type: "ROUTER", settings: { executionType: "EXECUTE_FIRST_MATCH", branches: [{ branchType: "FALLBACK", branchName: "Otherwise" }] }, children: [null] };
+
 describe("flow repo", () => {
   test("createFlow uses the default project and creates a DISABLED flow", () => {
     const flow = createFlow();
@@ -73,7 +76,7 @@ describe("flow repo", () => {
 
   test("updateFlowStatus and setPublishedVersion mutate fields", () => {
     const flow = createFlow();
-    const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: "Published", trigger: { name: "trigger", type: "EMPTY" } }).id);
+    const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: "Published", trigger: { name: "trigger", type: "EMPTY", nextAction: ROUTER_STEP } }).id);
     setPublishedVersion(flow.id, version.id);
     updateFlowStatus(flow.id, "ENABLED");
     const got = getFlow(flow.id);
