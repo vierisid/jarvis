@@ -298,6 +298,18 @@ export class WorkflowEffectBoundary {
         saveWorkflowEffect(effect);
       }
     }
+    // A notification recorded as a governed send before #1331 judged it as one,
+    // and parked on a card. A notice that only reaches the owner is a read now.
+    // Same request, same version, same tool, and the new judgement is the looser
+    // one: the owner's answer on the old card still stands for the same step, so
+    // it is matched once and bound to the new category from then on. Any other
+    // change of category stays a changed effect.
+    if (effect && input.route === 'notify' && effect.route === 'notify' && effect.toolName === input.toolName
+      && effect.actionCategory === 'send_message' && input.category === 'read_data'
+      && effect.requestDigest === digest(input.request) && effect.versionDigest === resolved.versionDigest) {
+      effect.actionCategory = input.category;
+      saveWorkflowEffect(effect);
+    }
     if (effect && (effect.requestDigest !== digest(input.request) || effect.versionDigest !== resolved.versionDigest
       || effect.toolName !== input.toolName || effect.actionCategory !== input.category)) {
       throw new Error('Workflow effect changed since it was recorded; start a new run for new arguments or version');
