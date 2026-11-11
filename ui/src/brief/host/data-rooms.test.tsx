@@ -64,10 +64,22 @@ test('Needs you never shows an all-clear while the independent permission list h
   expect(Rooms.onlyOtherDecisions(snap('stale', [{ actions: [] }], { reason: 'down' }), 2)).toBe(false);
 });
 
-test('Today counts document decisions, other queued decisions and workflow inputs, and an unread queue is unknown', () => {
+test('Today counts document decisions, other queued decisions and the attention list, and any unread source is unknown', () => {
   const doc = (n: number) => Array.from({ length: n }, () => ({ actions: [{}] }));
-  expect(Rooms.waitingOnOwner(undefined, 0, 0)).toBe(0);
+  expect(Rooms.waitingOnOwner([], 0, 0)).toBe(0);
   expect(Rooms.waitingOnOwner([...doc(2), { actions: [] }], 3, 4)).toBe(9);
-  expect(Rooms.waitingOnOwner(null, 20, 0)).toBe(20);
+  expect(Rooms.waitingOnOwner([], 20, 0)).toBe(20);
   expect(Rooms.waitingOnOwner(doc(1), null, 0)).toBeNull();
+  expect(Rooms.waitingOnOwner(null, 0, 0)).toBeNull();
+  expect(Rooms.waitingOnOwner([], 0, null)).toBeNull();
+});
+test('Today counts document decisions only from a settled read or cached rows', () => {
+  const snap = (state: string, data: unknown, extra: object = {}) => ({ state, data, asOf: 1, refreshing: false, reason: null, ...extra }) as any;
+  expect(Rooms.settledDocuments(snap('empty', null))).toEqual([]);
+  expect(Rooms.settledDocuments(snap('ready', [{ actions: [{}] }]))).toEqual([{ actions: [{}] }]);
+  expect(Rooms.settledDocuments(snap('stale', [{ actions: [{}] }], { reason: 'down' }))).toEqual([{ actions: [{}] }]);
+  expect(Rooms.settledDocuments(snap('stale', null, { refreshing: true }))).toEqual([]);
+  expect(Rooms.settledDocuments(snap('loading', null, { asOf: null }))).toBeNull();
+  expect(Rooms.settledDocuments(snap('unavailable', null, { reason: 'down' }))).toBeNull();
+  expect(Rooms.settledDocuments(snap('stale', null, { reason: 'down' }))).toBeNull();
 });

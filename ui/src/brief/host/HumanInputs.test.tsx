@@ -62,6 +62,22 @@ test('the queue does not poll while the decisions capability is off', async () =
   await React.act(async () => root.render(<Probe enabled={false} />)); expect(reads).toBe(0);
   await React.act(async () => root.render(<Probe enabled />)); expect(reads).toBe(1);
 });
+test('the queue reports loaded only after a successful read, so an unread queue is never counted as empty', async () => {
+  let fail = true, loaded: boolean | undefined, refresh = async () => {};
+  const http = createHostTransport((async () => fail ? new Response('down', { status: 500 }) : Response.json({ requests: [] })) as unknown as typeof fetch);
+  function Probe() { const queue = Forms.useHumanInputQueue(http); loaded = queue.loaded; refresh = queue.refresh; return null; }
+  await React.act(async () => root.render(<Probe />)); await React.act(async () => { await refresh(); }); expect(loaded).toBe(false);
+  fail = false; await React.act(async () => { await refresh(); }); expect(loaded).toBe(true);
+});
+test('Today waits on input requests, voice confirmations and live approvals the decisions list does not show', () => {
+  const live = { connected: true, inputsKnown: true, inputs: 0, clarifiers: 0, repeatBacks: 0, approvals: 0, decisionsListed: true };
+  expect(Forms.ownerAttentionCount(live)).toBe(0);
+  expect(Forms.ownerAttentionCount({ ...live, inputs: 1, clarifiers: 1, repeatBacks: 1 })).toBe(3);
+  expect(Forms.ownerAttentionCount({ ...live, approvals: 2 })).toBe(0);
+  expect(Forms.ownerAttentionCount({ ...live, approvals: 2, decisionsListed: false })).toBe(2);
+  expect(Forms.ownerAttentionCount({ ...live, connected: false })).toBeNull();
+  expect(Forms.ownerAttentionCount({ ...live, inputsKnown: false })).toBeNull();
+});
 
 test('request links resolve to the actual Brief run route with the selected run and version', async () => {
   const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);

@@ -1,6 +1,6 @@
 import { EmergencyStatusBanner, EmergencyStatusContext, useEmergencyStatus } from './EmergencyStatus';
 import { humanRequestNeedsAttention } from '../../../../src/workflows/runtime/human-input-contract';
-import { HumanInputsContext, HumanInputInbox, useHumanInputQueue, hasLocalDraft } from './HumanInputs';
+import { HumanInputsContext, OwnerAttentionContext, ownerAttentionCount, HumanInputInbox, useHumanInputQueue, hasLocalDraft } from './HumanInputs';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { DashboardEntry, BriefHost } from '../entry/DashboardEntry';
@@ -176,6 +176,9 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   const emergency = useEmergencyStatus(host.transport, owner.emergencyRevision);
   const humanInputs = useHumanInputQueue(host.transport, isBriefCapabilityEnabled(host.capabilities(), 'decisions'));
   const humanPending = humanInputs.requests.filter(r => humanRequestNeedsAttention(r) || hasLocalDraft(r)).length;
+  // What Today's all-clear must also wait for; Needs you shows all of it. Unknown is null.
+  const ownerAttention = ownerAttentionCount({ connected: owner.isConnected, inputsKnown: !!humanInputs.loaded && !humanInputs.error, inputs: humanPending,
+    clarifiers: owner.clarifiers.length, repeatBacks: owner.repeatBacks.length, approvals: owner.approvals.length, decisionsListed: isBriefCapabilityEnabled(host.capabilities(), 'decisions') });
   const [attentionMessage, setAttentionMessage] = useState('');
   const resolveAttention = async (kind: 'clarifier' | 'repeat-back', id: string, decision: 'confirm' | 'cancel') => {
     try {
@@ -206,7 +209,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     return { ...host.rooms, 'needs-you': { ...host.rooms['needs-you']!, Body: ({ shell }: { shell: BriefShellPort }) => <><Body shell={shell} />{latest.current}</> } };
   }, [host]);
   const RetainedBody = retained ? getRoomBody(retained) : null;
-  return <EmergencyStatusContext.Provider value={emergency}><HumanInputsContext.Provider value={{ pending: humanPending }}><RoomActionBridge requests={owner.roomActionRequests} ack={owner.ackRoomActionRequests}
+  return <EmergencyStatusContext.Provider value={emergency}><HumanInputsContext.Provider value={{ pending: humanPending }}><OwnerAttentionContext.Provider value={ownerAttention}><RoomActionBridge requests={owner.roomActionRequests} ack={owner.ackRoomActionRequests}
     forceIdle={() => {}} wsRef={owner.wsRef} beforeDispatch={async request => {
       if (!host.active()) return false;
       const result = await host.navigation.intent(request.room, true);
@@ -237,5 +240,5 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
         <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>View notifications</button>
         <button onClick={() => notices.markRead(notice.id)}>Dismiss</button></aside>;
     })()}
-  </HumanInputsContext.Provider></EmergencyStatusContext.Provider>;
+  </OwnerAttentionContext.Provider></HumanInputsContext.Provider></EmergencyStatusContext.Provider>;
 }

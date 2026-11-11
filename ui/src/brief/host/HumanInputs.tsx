@@ -6,11 +6,13 @@ import { post } from './http';
 import { briefHash } from '../entry/route';
 import './human-inputs.css';
 import { draftKey, instanceKey, rememberDraft, forgetDraft, localDraftRequests, localDraftIds, filled, storedAnswers, answerOnlyDrafts, forgetStoredDraft } from './human-input-drafts';
-type HumanInputQueue = { requests: HumanRequest[]; error: string; refresh(): Promise<void>; historyCursor?: string | null; unavailable?: string[] };
+type HumanInputQueue = { requests: HumanRequest[]; error: string; refresh(): Promise<void>; historyCursor?: string | null; unavailable?: string[];
+  /** False until the first read succeeds (or while the capability is off): an unread queue is not an empty one. */
+  loaded?: boolean };
 /** Polls only while the decisions capability is on, like the other Needs you lists. */
 export function useHumanInputQueue(http: HostTransport, enabled = true): HumanInputQueue {
   const [requests, setRequests] = useState<HumanRequest[]>([]), [error, setError] = useState('');
-  const [historyCursor, setHistoryCursor] = useState<string | null>(null), [unavailable, setUnavailable] = useState<string[]>([]);
+  const [historyCursor, setHistoryCursor] = useState<string | null>(null), [unavailable, setUnavailable] = useState<string[]>([]), [loaded, setLoaded] = useState(!enabled);
   const active = useRef(true), reading = useRef(false);
   // Requests read for local drafts beyond the recent page, by id; null once the
   // server said it has no such request. A request outside the page is closed (a
@@ -40,22 +42,34 @@ export function useHumanInputQueue(http: HostTransport, enabled = true): HumanIn
       const gone = [...cache.entries()].filter(([, r]) => r === null).map(([id]) => id);
       if (active.current) {
         setRequests([...value.requests, ...recovered]); setHistoryCursor(value.historyCursor ?? null);
-        setUnavailable(previous => previous.length === gone.length && previous.every((id, i) => id === gone[i]) ? previous : gone); setError('');
+        setUnavailable(previous => previous.length === gone.length && previous.every((id, i) => id === gone[i]) ? previous : gone); setError(''); setLoaded(true);
       }
     } catch { if (active.current && !http.signal.aborted) setError('Workflow requests could not be refreshed. Reconnect and check again.'); }
     finally { reading.current = false; }
   };
   useEffect(() => {
-    if (!enabled) { setRequests([]); setError(''); return; }
-    active.current = true; void refresh();
+    if (!enabled) { setRequests([]); setError(''); setLoaded(true); return; }
+    active.current = true; setLoaded(false); void refresh();
     const timer = setInterval(() => void refresh(), 5000);
     const focus = () => void refresh(); window.addEventListener('focus', focus);
     return () => { active.current = false; clearInterval(timer); window.removeEventListener('focus', focus); };
   }, [http, enabled]);
-  return { requests, error, refresh, historyCursor, unavailable };
+  return { requests, error, refresh, historyCursor, unavailable, loaded };
 }
 export const HumanInputsContext = createContext({ pending: 0 });
 export const useHumanInputCount = () => useContext(HumanInputsContext).pending;
+/**
+ * Everything waiting in Needs you that Today's own reads cannot see: workflow input requests, voice
+ * confirmations, and live approvals while the decisions list is off. null while any of it is unknown
+ * (socket down, input queue unread or failing), so Today never shows an all-clear by default.
+ */
+export const OwnerAttentionContext = createContext<number | null>(null);
+export const useOwnerAttention = () => useContext(OwnerAttentionContext);
+export function ownerAttentionCount(live: { connected: boolean; inputsKnown: boolean; inputs: number; clarifiers: number; repeatBacks: number; approvals: number; decisionsListed: boolean }): number | null {
+  if (!live.connected || !live.inputsKnown) return null;
+  // Live approvals reach Needs you through the decisions list when that capability is on; only count them here otherwise.
+  return live.inputs + live.clarifiers + live.repeatBacks + (live.decisionsListed ? 0 : live.approvals);
+}
 export function HumanInputForm({ request, http, changed, focused = false, recoveryOnly = false, onAnswers }: {
   request: HumanRequest; http: HostTransport; changed(): Promise<void>; focused?: boolean; recoveryOnly?: boolean;
   /** Told what this card holds in memory, so the inbox can tell an unsent answer from an empty card. */
