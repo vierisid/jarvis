@@ -21,9 +21,12 @@ export interface WorkflowStatusWords {
 export const WORKFLOW_SAVE_ACTION = "Save and turn on";
 export function workflowStatusWords(f: WorkflowStatusFacts): WorkflowStatusWords {
   const state = f.activation === "ENABLED" ? "On" : "Off";
-  const note = f.readiness === "blocked" ? "Needs setup"
+  // While On, a draft that is not live says so first: setup gaps in that draft
+  // do not stop the running version, so On plus Needs setup would read as if
+  // the live workflow were broken. The page shows the draft's setup separately.
+  const note = f.draftChangesNotLive && state === "On" ? "Draft changes not live yet"
+    : f.readiness === "blocked" ? "Needs setup"
     : f.readiness === "unknown" ? "Setup status unknown"
-    : f.draftChangesNotLive && state === "On" ? "Draft changes not live yet"
     : null;
   return { state, note, line: note ? `${state} · ${note}` : state };
 }

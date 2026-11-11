@@ -712,3 +712,29 @@ test('U2: the page header says On or Off and Draft changes not live yet, never S
   expect(await feedback({ status: 'ENABLED', publishedVersionId: 'older' })).toBe('On · Draft changes not live yet');
   expect([...host.querySelectorAll('button')].some(b => b.textContent?.includes('Save and turn on'))).toBe(true);
 });
+
+test('U2: a live workflow whose draft needs setup reads On · Draft changes not live yet, with setup shown apart', async () => {
+  const { WorkflowCanvasRoom } = await import('./WorkflowCanvasRoom');
+  fixture = makeCanvasFixture(false);
+  const saved = fixture.snapshot().version;
+  saved.trigger = { name: 'trigger', displayName: 'Receive form submissions', type: 'PIECE_TRIGGER',
+    settings: { pieceName: 'webhook', input: { submission_id_field: '', submission_email_field: '', secret: 'fixture-signature' } } };
+  await fixture.request(`/api/workflows/meeting/versions/${fixture.versionId}`, { method: 'PATCH', body: JSON.stringify({ ...saved, uiMeta: fixture.snapshot().uiMeta }) });
+  const shell = { mode: 'preview', route: { room: 'workflow', selection: { flowId: 'meeting' } }, navigate() {} } as unknown as BriefShellPort;
+  const feedback = async (flow: Record<string, unknown>) => {
+    const binding = { source: 'fixture' as const, scopeId: 'canvas-test', flowId: 'meeting', versionId: fixture.versionId, capabilities: caps,
+      request: fixture.request, permissions: { id: 'meeting', displayName: 'Meeting', codeSteps: { enabled: false, grantedBy: null, grantedAt: null }, ...flow } as any,
+      publish: async () => {} };
+    await React.act(async () => root.render(<WorkflowCanvasRoom shell={shell} binding={binding} />));
+    await React.act(async () => new Promise(r => setTimeout(r, 50)));
+    return host.querySelector('.brief-canvas-feedback')!.textContent;
+  };
+  // The running published version is not what needs setup, so On is not qualified by it.
+  expect(await feedback({ status: 'ENABLED', publishedVersionId: 'older' })).toBe('On · Draft changes not live yet');
+  expect([...host.querySelectorAll('.brief-canvas-setup > summary')].map(s => s.textContent)).toContain('Needs setup');
+  const save = [...host.querySelectorAll('button')].find(b => b.textContent?.includes('Save and turn on'))!;
+  expect(save.disabled).toBe(true);
+  // Off, or never published: the setup gap is what stands between this draft and On.
+  expect(await feedback({ status: 'DISABLED', publishedVersionId: 'older' })).toBe('Off · Needs setup');
+  expect(await feedback({ status: 'DISABLED', publishedVersionId: null })).toBe('Off · Needs setup');
+});

@@ -10,9 +10,9 @@ test("every combination maps to On or Off with at most one note, never old words
       for (const readiness of readies) {
         const w = workflowStatusWords({ activation, draftChangesNotLive, readiness });
         expect(w.state).toBe(activation === "ENABLED" ? "On" : "Off");
-        const expectedNote = readiness === "blocked" ? "Needs setup"
+        const expectedNote = draftChangesNotLive && activation === "ENABLED" ? "Draft changes not live yet"
+          : readiness === "blocked" ? "Needs setup"
           : readiness === "unknown" ? "Setup status unknown"
-          : draftChangesNotLive && activation === "ENABLED" ? "Draft changes not live yet"
           : null;
         expect(w.note).toBe(expectedNote);
         expect(w.line).toBe(expectedNote ? `${w.state} · ${expectedNote}` : w.state);
