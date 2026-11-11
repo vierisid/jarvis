@@ -69,10 +69,10 @@ test('the queue reports loaded only after a successful read, so an unread queue 
   await React.act(async () => root.render(<Probe />)); await React.act(async () => { await refresh(); }); expect(loaded).toBe(false);
   fail = false; await React.act(async () => { await refresh(); }); expect(loaded).toBe(true);
 });
-test('Today waits on input requests, voice confirmations and live approvals the decisions list does not show', () => {
-  const live = { connected: true, inputsKnown: true, inputs: 0, clarifiers: 0, repeatBacks: 0, approvals: 0, decisionsListed: true };
+test('Today waits on input requests, unread workflow messages, voice confirmations and live approvals the decisions list does not show', () => {
+  const live = { connected: true, inputsKnown: true, inputs: 0, stored: 0, clarifiers: 0, repeatBacks: 0, approvals: 0, decisionsListed: true };
   expect(Forms.ownerAttentionCount(live)).toBe(0);
-  expect(Forms.ownerAttentionCount({ ...live, inputs: 1, clarifiers: 1, repeatBacks: 1 })).toBe(3);
+  expect(Forms.ownerAttentionCount({ ...live, inputs: 1, stored: 1, clarifiers: 1, repeatBacks: 1 })).toBe(4);
   expect(Forms.ownerAttentionCount({ ...live, approvals: 2 })).toBe(0);
   expect(Forms.ownerAttentionCount({ ...live, approvals: 2, decisionsListed: false })).toBe(2);
   expect(Forms.ownerAttentionCount({ ...live, connected: false })).toBeNull();

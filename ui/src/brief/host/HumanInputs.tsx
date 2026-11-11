@@ -60,15 +60,15 @@ export const HumanInputsContext = createContext({ pending: 0 });
 export const useHumanInputCount = () => useContext(HumanInputsContext).pending;
 /**
  * Everything waiting in Needs you that Today's own reads cannot see: workflow input requests, voice
- * confirmations, and live approvals while the decisions list is off. null while any of it is unknown
+ * confirmations, unread messages from workflows, and live approvals while the decisions list is off. null while any of it is unknown
  * (socket down, input queue unread or failing), so Today never shows an all-clear by default.
  */
 export const OwnerAttentionContext = createContext<number | null>(null);
 export const useOwnerAttention = () => useContext(OwnerAttentionContext);
-export function ownerAttentionCount(live: { connected: boolean; inputsKnown: boolean; inputs: number; clarifiers: number; repeatBacks: number; approvals: number; decisionsListed: boolean }): number | null {
+export function ownerAttentionCount(live: { connected: boolean; inputsKnown: boolean; inputs: number; stored: number; clarifiers: number; repeatBacks: number; approvals: number; decisionsListed: boolean }): number | null {
   if (!live.connected || !live.inputsKnown) return null;
   // Live approvals reach Needs you through the decisions list when that capability is on; only count them here otherwise.
-  return live.inputs + live.clarifiers + live.repeatBacks + (live.decisionsListed ? 0 : live.approvals);
+  return live.inputs + live.stored + live.clarifiers + live.repeatBacks + (live.decisionsListed ? 0 : live.approvals);
 }
 export function HumanInputForm({ request, http, changed, focused = false, recoveryOnly = false, onAnswers }: {
   request: HumanRequest; http: HostTransport; changed(): Promise<void>; focused?: boolean; recoveryOnly?: boolean;

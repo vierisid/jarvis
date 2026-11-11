@@ -185,7 +185,7 @@ export type ToolDefinition = {
    * never reconnect or select a replacement subject when validation fails.
    * It may also carry what it bound (`reviewed`), which the approval executor
    * hands the one execution it buys (#676). */
-  captureApprovalGuard?: (params: Record<string, unknown>) => ApprovalGuard;
+  captureApprovalGuard?: (params: Record<string, unknown>, opts?: { workflow?: boolean }) => ApprovalGuard;
   /** Display only: what a reviewed call would act on (page origin, element), read when its card is raised. */
   reviewSubject?: (params: Record<string, unknown>) => { origin?: string; element?: string };
 };

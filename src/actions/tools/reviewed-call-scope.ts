@@ -55,6 +55,13 @@ export type ReviewedExecution = {
    */
   readonly localSnapshotGen?: number;
   /**
+   * The LOCAL document a workflow key press was reviewed on (#1314): the
+   * guard compares the controller's record of it, the key press compares the
+   * live page's loader id before it sends anything, so a page that navigated
+   * by itself after review is refused even with no snapshot in between.
+   */
+  readonly localLoaderId?: string;
+  /**
    * The snapshot reader that raised the card (`currentSnapshotReader` in
    * sidecar-route.ts), so a snapshot the approved call itself takes -- an
    * approved `browser_navigate` -- is recorded as THAT reader's and not as
