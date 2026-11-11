@@ -31,6 +31,11 @@ export type CronOccurrence = {
   lateMs: number;
   /** The named minute did not exist because clocks jumped forward; it fires once, right after the jump. */
   shifted?: true;
+  /**
+   * Set on the later times of the startup catch-up: each is owed its own run,
+   * so the one delivered just before it is no reason to skip it as stacked.
+   */
+  afterEarlier?: true;
 };
 
 /** Missed occurrences older than the newest `CRON_MISSED_LISTED`, counted rather than listed. */
@@ -667,7 +672,7 @@ export class CronScheduler {
       if (handledOrder.length > 1_024) handled.delete(handledOrder.shift()!);
     };
 
-    const tick = (nowMs: number): void => {
+    const tick = (nowMs: number, catchUp = false): void => {
       const current = Math.floor(nowMs / 60_000);
       if (current <= evaluatedThrough) {
         // Same minute again, or a small step back: nothing new is due. A clock
@@ -702,9 +707,9 @@ export class CronScheduler {
           console.error(`[CronScheduler] Job "${id}" missed-occurrence handler threw:`, err);
         }
       }
-      for (const occurrence of due) {
+      for (const [index, occurrence] of due.entries()) {
         remember(occurrence.key);
-        run(occurrence);
+        run(catchUp && index > 0 ? { ...occurrence, afterEarlier: true } : occurrence);
       }
       // A minute that clocks skipped when they jumped forward fires once,
       // right after the jump. Only while ticking normally: a jump during a
@@ -734,6 +739,14 @@ export class CronScheduler {
       handle,
       tick,
     });
+
+    // A schedule resumed from a stored watch (`dueAfter`) owes the times since
+    // then: run them now, not at the next interval, or a time near the end of
+    // its grace window ages out first. Deferred so the caller finishes
+    // registering the job before its callback runs.
+    if (options.dueAfter !== undefined) {
+      setTimeout(() => { if (this.jobs.get(id)?.handle === handle) tick(this.now(), true); }, 0);
+    }
 
     console.log(`[CronScheduler] Scheduled job "${id}" (${expression}), next run: ${nextRun.toISOString()}`);
   }

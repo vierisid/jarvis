@@ -398,6 +398,31 @@ describe("schedules, in Jarvis's configured time zone", () => {
     await d.stop();
   });
 
+  test("a restart runs the times still within the grace window at once, each late, and the next on-time tick is not swallowed", async () => {
+    setCronTimezone("UTC");
+    const { flowId } = schedule("* * * * *");
+    let d = await daemon(at("2026-10-07T09:33:20Z"));
+    d.tick(flowId, "2026-10-07T09:33:30Z");
+    finishAll(flowId);
+    await d.stop();
+    d = await daemon(at("2026-10-07T09:36:25Z")); // down three minutes; no tick is driven by hand
+    await settle();
+    // 09:34 is 145 s old and missed; 09:35 (85 s) and 09:36 (25 s) run, without waiting for a minute boundary.
+    expect(listFlowFires(flowId).map(f => [f.dedupeKey, f.label])).toEqual([
+      ["2026-10-07T09:36", "queued"],
+      ["2026-10-07T09:35", "delayed"],
+      ["2026-10-07T09:34", "missed"],
+      ["2026-10-07T09:33", "completed"],
+    ]);
+    expect(runsOf(flowId)).toHaveLength(3);
+    finishAll(flowId);
+    d.tick(flowId, "2026-10-07T09:37:02Z");
+    expect(listFlowFires(flowId)[0]).toMatchObject({ dedupeKey: "2026-10-07T09:37", lateMs: 2_000 });
+    expect(listFlowFires(flowId)[0]!.label).not.toBe("skipped");
+    expect(runsOf(flowId)).toHaveLength(4);
+    await d.stop();
+  });
+
   test("a long sleep lists the newest 100 missed times, counts the older ones in one row, and runs the one still due", async () => {
     setCronTimezone("UTC");
     const { flowId } = schedule("* * * * *");
@@ -855,6 +880,30 @@ describe("through the engine, as production runs triggers", () => {
       ["skipped", "America/New_York@2026-03-09T02:30"],
       ["delayed", "America/New_York@2026-03-08T02:30"],
     ]);
+    await d.stop();
+  });
+
+  test("an engine schedule restarted after downtime runs every time still owed, one after another, and then its next tick", async () => {
+    setCronTimezone("UTC");
+    const p = pieceSchedule("* * * * *", "UTC");
+    const { engine } = stubEngine({ enable: p.enable, poll: async () => { await new Promise((r) => setTimeout(r, 1)); return [{}]; } });
+    let d = await daemon(at("2026-10-07T09:33:20Z"), engine);
+    await d.poll(p.flowId, "2026-10-07T09:33:30Z");
+    finishAll(p.flowId);
+    await d.stop();
+    d = await daemon(at("2026-10-07T09:36:25Z"), engine);
+    await settle();
+    await settle();
+    // 09:35 (85 s old) and 09:36 both run; neither is skipped as a check still running.
+    expect(listFlowFires(p.flowId).filter(f => f.scheduledFor! > at("2026-10-07T09:34:59Z")).map(f => [f.dedupeKey, f.label])).toEqual([
+      ["2026-10-07T09:36", "queued"],
+      ["2026-10-07T09:35", "delayed"],
+    ]);
+    expect(runsOf(p.flowId)).toHaveLength(3);
+    finishAll(p.flowId);
+    await d.poll(p.flowId, "2026-10-07T09:37:02Z");
+    expect(runsOf(p.flowId)).toHaveLength(4);
+    expect(listFlowFires(p.flowId).some(f => f.label === "skipped")).toBe(false);
     await d.stop();
   });
 

@@ -20,6 +20,26 @@ function job(expression: string, startIso: string) {
 }
 
 describe("CronScheduler occurrences", () => {
+  test("a schedule resumed from a watch runs the times owed at once, not at the next interval, and a stale registration does not", async () => {
+    setCronTimezone("UTC");
+    setSystemTime(new Date(at("2026-10-07T09:36:25Z")));
+    scheduler = new CronScheduler();
+    const fired: CronOccurrence[] = [];
+    scheduler.schedule("j", "* * * * *", (o) => fired.push(o), { dueAfter: at("2026-10-07T09:34:25Z") });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // 09:35 is 85 s old and 09:36 is 25 s old: both run now, the later one marked as following.
+    expect(fired).toEqual([
+      { at: at("2026-10-07T09:35:00Z"), key: "2026-10-07T09:35", lateMs: 85_000 },
+      { at: at("2026-10-07T09:36:00Z"), key: "2026-10-07T09:36", lateMs: 25_000, afterEarlier: true },
+    ]);
+    scheduler.cancelAll();
+    const cancelled: CronOccurrence[] = [];
+    scheduler.schedule("j", "* * * * *", (o) => cancelled.push(o), { dueAfter: at("2026-10-07T09:34:25Z") });
+    scheduler.cancel("j");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(cancelled).toEqual([]);
+  });
+
   test("each fires once, named by its wall-clock minute in the configured zone", () => {
     setCronTimezone("Asia/Kolkata");
     const { fired, tick } = job("0 9 * * *", "2026-10-07T03:29:00Z");
