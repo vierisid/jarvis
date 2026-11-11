@@ -19,6 +19,11 @@ const labels: Record<DecisionAction, string> = { accept_intent: 'Accept next ste
  */
 export function browserCardTitle(r: Pick<QueuedDecision, 'review'>): { heading: string; kind: string } | null {
   const review = r.review;
+  // A desktop card (#1314) names the computer first: Jarvis knows it, the window title is the app's.
+  if (review?.toolName.startsWith('desktop_') && review.computer) {
+    const verb: Record<string, string> = { desktop_launch_app: 'open an app', desktop_focus_window: 'bring a window to the front', desktop_click: 'act on an app control' };
+    return verb[review.toolName] ? { heading: `On ${review.computer}: ${verb[review.toolName]}`, kind: 'Use an app on your computer' } : null;
+  }
   if (!review?.toolName.startsWith('browser_')) return null;
   // The browser-reported origin goes FIRST: the element label is page text,
   // so nothing it says can sit where the origin is read.
@@ -26,6 +31,9 @@ export function browserCardTitle(r: Pick<QueuedDecision, 'review'>): { heading: 
   switch (review.toolName) {
     case 'browser_click': return { heading: on(`click ${review.element ?? 'an element'}`), kind: 'Interact with the browser' };
     case 'browser_scroll': return { heading: on('scroll the page'), kind: 'Scroll the browser page' };
+    case 'browser_type': return { heading: on(`type into ${review.element ?? 'an element'}`), kind: 'Type in the browser' };
+    case 'browser_hover': return { heading: on(`hover over ${review.element ?? 'an element'}`), kind: 'Interact with the browser' };
+    case 'browser_press_key': return { heading: on('press a key'), kind: 'Press a key in the browser' };
     case 'browser_navigate': return { heading: review.origin ? `Open ${review.origin}` : 'Open a browser page', kind: 'Open a browser page' };
     case 'browser_snapshot': return { heading: on('read the page'), kind: 'Read the browser page' };
     case 'browser_screenshot': return { heading: on('view the page'), kind: 'View the browser' };
@@ -101,7 +109,13 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
               {row.review.fallback === 'desktop' && <><br />If no dashboard is open: desktop notification</>}</p></>}
           {row.review?.origin && <p><strong>Website</strong><br />{row.review.origin}</p>}
           {row.review?.element && <p><strong>Element</strong><br />{row.review.element}</p>}
-          {row.review?.target && <p><strong>Computer</strong><br />{row.review.target}</p>}
+          {row.review?.computer ? <p><strong>Computer</strong><br />{row.review.computer}</p>
+            : row.review?.target && <p><strong>Computer</strong><br />{row.review.target}</p>}
+          {row.review?.window && <p><strong>Window</strong><br />{row.review.window}</p>}
+          {row.review?.values && row.review.values.length > 0 && <><p><strong>Values</strong></p>
+            <dl className="brief-decision-values">{row.review.values.map(v => <React.Fragment key={v.name}>
+              <dt>{v.name}{v.source === 'run_data' ? ' (from run data)' : v.source === 'agent' ? ' (chosen by the agent)' : ''}</dt>
+              <dd style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{v.value}</dd></React.Fragment>)}</dl></>}
           <p>{asksPermission(row) ? 'Jarvis needs your permission for this action before it can continue.' : row.title}</p>
           {browserCardTitle(row) && <p>{row.title}</p>}
           {row.review?.toolName.startsWith('browser_') && <p>The browser uses a separate Jarvis profile. If the site asks you to sign in, complete sign-in in that browser before starting a new run.</p>}

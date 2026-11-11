@@ -30,7 +30,7 @@ let routes: WorkflowRouteMap;
 // developer's real key file (and generates one into their live data dir).
 beforeEach(() => {
   initWorkflowDb(":memory:");
-  configureWorkflowReadiness({ tool: name => name === "run_command" ? { params: [{ name: "command", type: "string", required: true }] } : null, pieces: new PieceCatalog([...sampleCatalog().list(),
+  configureWorkflowReadiness({ tool: name => name === "desktop_launch_app" ? { params: [{ name: "executable", type: "string", required: true }] } : null, pieces: new PieceCatalog([...sampleCatalog().list(),
     { name: 'jarvis-tool', displayName: '', description: '', actions: { invoke: { name: 'invoke', displayName: '', description: '' } } },
   ]) });
   setEncryptionKey(Buffer.alloc(32, 0x12));
@@ -710,7 +710,7 @@ describe("workflow API: versions", () => {
             settings: {
               pieceName: "jarvis-tool",
               actionName: "invoke",
-              input: { toolName: "run_command", params: { command: "notepad.exe" } },
+              input: { toolName: "desktop_launch_app", params: { executable: "notepad.exe" } },
             },
           },
         },

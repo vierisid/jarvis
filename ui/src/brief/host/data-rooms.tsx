@@ -1,5 +1,6 @@
 import { useHumanInputCount } from './HumanInputs';
-import React, { useState } from 'react';
+import React, { useContext, useState } from 'react';
+import { StoredNoticesContext } from '../navigation/StoredNoticesContext';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import { PendingDecisions, ForgetMemory } from './canonical-commands';
 import type { BriefRoomRegistry, BriefShellPort, BriefReadState } from '../contracts';
@@ -33,7 +34,7 @@ import { ReadFailure, type Snapshot, type Source } from '../reconciliation/resou
 import { outcomesSource } from '../reconciliation/sources';
 import { createDomainPorts } from './domain-ports';
 import type { HostTransport } from './http';
-import { post } from './http';
+import { post, AWARENESS_OFF_TEXT } from './http';
 
 function view<T, U>(state: Snapshot<T>, map: (data: T) => U): BriefReadState<U> {
   if ((state.state === 'ready' || state.state === 'stale') && state.data !== null)
@@ -48,10 +49,13 @@ export function todayDecisionSnapshot<T>(state: Snapshot<T>): Snapshot<T> {
   return state.state === 'stale' && state.data === null && state.asOf !== null && state.refreshing && state.reason === null
     ? { ...state, state: 'empty' } : state;
 }
-function source<T>(domains: Source<T>['domains'], capability: Source<T>['capability'], read: () => Promise<BriefReadState<T>>): Source<T> {
+/** Exported for its test: how a domain port's read becomes a reconciled source. */
+export function source<T>(domains: Source<T>['domains'], capability: Source<T>['capability'], read: () => Promise<BriefReadState<T>>): Source<T> {
   return { domains, capability, read: async signal => {
     const value = await read(); signal.throwIfAborted();
     if (value.status === 'empty') return { data: null, empty: true, asOf: Date.now() };
+    // Awareness off (#1314): say so, and clear what was shown before rather than keep it as stale.
+    if (value.status === 'unavailable' && value.reason === AWARENESS_OFF_TEXT) throw new ReadFailure(AWARENESS_OFF_TEXT, true);
     if (value.status !== 'ready') throw new ReadFailure('source_unavailable');
     return { data: value.data, empty: false, asOf: Date.now() };
   } };
@@ -166,9 +170,10 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   function NeedsYou({ shell }: { shell: BriefShellPort }) {
     const all = useBriefProjection(decisionRead);
     const humanPending = useHumanInputCount();
+    const stored = useContext(StoredNoticesContext);
     const [otherCount, setOtherCount] = useState<number | null>(null);
     const onlyOther = onlyOtherDecisions(all, otherCount === null ? null : otherCount + humanPending);
-    return <>{onlyOther ? <header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
+    return <>{onlyOther ? <><header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header>{stored.list}</> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
       <PendingDecisions onCount={setOtherCount} selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
   }
   const rooms: BriefRoomRegistry = {
