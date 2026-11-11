@@ -134,7 +134,7 @@ export const stepFilesUploadRoute: RouteHandler = async (ctx: RouteContext) => {
   } catch (error) {
     try { deleteWorkflowFile(fileRow.id); } catch { /* nothing more to undo */ }
     console.error("[step-files] could not write file:", (error as NodeJS.ErrnoException).code ?? "unknown");
-    return err("The file could not be saved. Nothing was stored. Try a shorter file name.", 500);
+    return err("The file could not be saved. Nothing was stored.", 500);
   }
 
   return json({
