@@ -208,3 +208,17 @@ test("Check result reads an unconfirmed Run's receipt, opens its run and unlocks
   expect(button("Check result")).toBeUndefined();
   expect(fixture.stats().requests).toBe(1);
 });
+
+test("a turned-off workflow's Run control says so and offers to run it once", async () => {
+  const { WorkflowRunsController } = await import("./controller");
+  const off = new WorkflowRunsController(RUN_SCOPE, fixture.controller.port, undefined, true);
+  await render({ ...binding(), controller: off });
+  expect(button("Run once anyway")).toBeTruthy();
+  expect(button("Run workflow")).toBeUndefined();
+  expect(text()).toContain("This workflow is off. You can still run it once yourself; it stays off afterwards.");
+  expect(button("Run once anyway").getAttribute("aria-describedby")).toBe("brief-run-off-note");
+  off.retire();
+  await render();
+  expect(button("Run workflow")).toBeTruthy();
+  expect(text()).not.toContain("This workflow is off");
+});

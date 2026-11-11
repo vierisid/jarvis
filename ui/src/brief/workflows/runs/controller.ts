@@ -57,6 +57,8 @@ export class WorkflowRunsController {
     scope: RunScope,
     readonly port: WorkflowRunsPort,
     pending?: ManualRunRequest,
+    /** True when the workflow is turned off: a manual run is still allowed, once, and says so. */
+    readonly workflowOff = false,
   ) {
     this.scope = { ...scope };
     // A request journaled before a reload stays uncertain and locked until an
@@ -461,7 +463,9 @@ export class WorkflowRunsController {
     this.emit({
       submission: "accepted",
       loadingMore: false,
-      message: "Run requested.",
+      message: this.workflowOff
+        ? "Started one run. The workflow is still off."
+        : "Run requested.",
       history: {
         status: "ready",
         data: {

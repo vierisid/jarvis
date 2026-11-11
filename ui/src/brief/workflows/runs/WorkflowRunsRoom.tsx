@@ -155,11 +155,17 @@ function BoundRuns({
             variant="primary"
             onClick={() => void start()}
             disabled={!store.canRun}
+            aria-describedby={store.workflowOff ? "brief-run-off-note" : undefined}
           >
-            {state.submission === "pending" ? "Requesting…" : "Run workflow"}
+            {state.submission === "pending" ? "Requesting…" : store.workflowOff ? "Run once anyway" : "Run workflow"}
           </BriefButton>
         }
       />
+      {store.workflowOff && (
+        <p id="brief-run-off-note" className="brief-runs-off-note">
+          This workflow is off. You can still run it once yourself; it stays off afterwards.
+        </p>
+      )}
       <div className="brief-runs-feedback" role="status">
         {state.message}
       </div>

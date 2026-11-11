@@ -115,3 +115,35 @@ test('an editable draft never inherits a journaled request', () => {
   const draft = value.controllers(flowId, versionId, true).runs;
   expect(draft.getSnapshot().submission).toBe('idle'); expect(draft.canCheck).toBe(false);
 });
+
+test('a run by hand of a turned-off workflow asks first, says it ran once, and sends nothing when declined', async () => {
+  const asked: string[] = [];
+  const build = (answer: boolean, run: Answer) => {
+    const posts: string[] = [];
+    const transport = createHostTransport((async (path: string, init: RequestInit = {}) => {
+      if (init.method === 'POST') posts.push(String(path));
+      if (String(path).includes('/runs')) return Response.json({ status: 'ready', data: { items: [], nextCursor: null, total: null } });
+      return run(String(path), init);
+    }) as unknown as typeof fetch);
+    const value = createWorkflowRooms({ scopeId, transport, capabilities, storage: storage(), dirty: () => {}, runInput: async () => ({}),
+      confirm: async (message: string) => { asked.push(message); return answer; } });
+    live.push(value);
+    return { posts, runs: value.controllers(flowId, versionId, false, true, true).runs };
+  };
+  const declined = build(false, () => { throw Error('must not send'); });
+  expect(declined.runs.workflowOff).toBe(true);
+  await declined.runs.start();
+  expect(declined.posts).toEqual([]); expect(declined.runs.getSnapshot().submission).toBe('idle');
+  expect(asked[0]).toContain('turned off'); expect(asked[0]).toContain('once anyway');
+  const accepted = build(true, (_p, init) => { const requestId = JSON.parse(String(init.body)).brief.requestId;
+    return Response.json({ status: 'accepted', requestId, run: summary(requestId) }, { status: 202 }); });
+  await accepted.runs.start();
+  expect(accepted.posts.length).toBe(1);
+  expect(accepted.runs.getSnapshot().message).toBe('Started one run. The workflow is still off.');
+  // A workflow that is on never asks and keeps the plain message.
+  const before = asked.length;
+  const on = rooms(storage(), (_p, init) => { const requestId = JSON.parse(String(init.body)).brief.requestId;
+    return Response.json({ status: 'accepted', requestId, run: summary(requestId) }, { status: 202 }); });
+  await on.runs.start();
+  expect(asked.length).toBe(before); expect(on.runs.getSnapshot().message).toBe('Run requested.');
+});
