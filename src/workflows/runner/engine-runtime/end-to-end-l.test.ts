@@ -225,6 +225,16 @@ describe("Phase L: plumbing smoke (connection resolver + store + run-progress)",
       expect(readiness.issues).toEqual([]);
       expect(readiness.ready).toBe(true);
 
+      // Not requiring a connection must not exempt one that is bound: the
+      // binding is still checked against the saved, governed inventory.
+      const bound = { ...input, auth: "{{connections['not-saved']}}" };
+      const refused = compileWorkflow(
+        { ...graph, nextAction: { ...graph.nextAction, settings: { ...graph.nextAction.settings, input: bound } } },
+        { pieces: new PieceCatalog([entry]), connection: () => "Connection not-saved is not saved" },
+      );
+      expect(refused.ready).toBe(false);
+      expect(refused.issues.map(i => i.code)).toContain("CONNECTION_BINDING");
+
       const { persisted } = await runValidate(input);
       expect(persisted?.status).toBe("SUCCEEDED");
       const step = ((persisted?.steps ?? {}) as Record<string, { output?: { status?: string; output?: Record<string, unknown> } }>)["step_validate"];
