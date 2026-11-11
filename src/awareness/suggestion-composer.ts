@@ -1,5 +1,6 @@
 import { compositionQueueStatus, COMPOSITION_LIMITS } from './composition-budget';
-import { claimOpportunityComposition, nextOwnedQueuedJob } from './composition-leases';
+import { AwarenessHeldError, awarenessHistoryVisible } from './history-guard.ts';
+import { claimOpportunityComposition, holdCompositionLease, nextOwnedQueuedJob } from './composition-leases';
 import { runWithOrigin } from '../llm/origin';
 import { getDb, generateId } from '../vault/schema.ts';
 import { createFlow } from '../workflows/db/repos/flow.ts';
@@ -8,7 +9,8 @@ import type { ComposeResult, ComposeRequest } from '../actions/tools/workflow-co
 import { canonicalSuggestion, type CompositionRequest, type CompositionRow } from './suggestion-feedback.ts';
 
 const COMPOSITION_TIMEOUT_MS = 5 * 60_000;
-export type ComposeSuggestion = (request: ComposeRequest) => Promise<ComposeResult>;
+/** `held` is set when the awareness switch refused one of the job's model calls (#1314 review). */
+export type ComposeSuggestion = (request: ComposeRequest, held?: { held: boolean }) => Promise<ComposeResult>;
 
 export function recoverExpiredCompositions(now = Date.now()): void {
   getDb().run(`UPDATE suggestion_composition_jobs SET state = 'failed', lease_token = NULL, lease_until = 0,
@@ -93,7 +95,8 @@ export class SuggestionComposer {
   }
 
   kick(): void {
-    if (!this.running || this.pending) return;
+    // Compositions send captured evidence to a model: held while awareness is off, picked up when it is on (#1314 review).
+    if (!this.running || this.pending || !awarenessHistoryVisible()) return;
     this.pending = this.drain().catch(error => console.error('[SuggestionComposer]', error)).finally(() => { this.pending = null; });
   }
 
@@ -101,7 +104,8 @@ export class SuggestionComposer {
   async idle(): Promise<void> { await this.pending; }
 
   private async drain(): Promise<void> {
-    while (this.running) {
+    // Re-read each job (#1314 review): awareness turned off mid-drain holds the rest of the queue.
+    while (this.running && awarenessHistoryVisible()) {
       // Recovery consumes no model allowance. A lease surviving a restart must
       // still become retryable when it expires during a resource pause.
       recoverExpiredCompositions();
@@ -109,6 +113,8 @@ export class SuggestionComposer {
       const job = claimSuggestionComposition(this.timeoutMs);
       if (!job) return;
       const active = { job, abort: new AbortController() };
+      // Per job: the composer turns a held call into an ordinary failure, so the switch says so here (#1314 review).
+      const held = { held: false };
       this.active = active;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -117,7 +123,7 @@ export class SuggestionComposer {
         const request = JSON.parse(job.request) as CompositionRequest;
         const result = await Promise.race([
           runWithOrigin('background', () => this.compose({ name: request.name, description: `${request.description}\n\nExpected result: ${request.expectedOutcome}`,
-            signal: active.abort.signal })),
+            signal: active.abort.signal }, held)),
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => active.abort.abort(new Error('Composition timed out. Review the request and retry.')), this.timeoutMs);
             active.abort.signal.addEventListener('abort', () => reject(active.abort.signal.reason), { once: true });
@@ -125,6 +131,8 @@ export class SuggestionComposer {
         ]);
         // A stopped/replaced worker must never write into a reopened database.
         if (!this.running || this.active !== active) return;
+        // Awareness went off mid-job (#1314 review): nothing derived is attached; the job waits, unspent.
+        if (!awarenessHistoryVisible() || held.held) throw new AwarenessHeldError();
         if (result.ok) {
           if (!attachSuggestionDraft(job, result)) failSuggestionComposition(job, 'Composition lease expired. Review the request and retry.');
         } else {
@@ -132,6 +140,13 @@ export class SuggestionComposer {
           failSuggestionComposition(job, result.errors.join('\n') + (installs ? `\nRequired pieces: ${installs}` : ''));
         }
       } catch (error) {
+        // Held while the switch is off, and refunded, only when the hold took (#1314 review): a job dismissed or taken over fails as before.
+        if (this.running && this.active === active && (error instanceof AwarenessHeldError || held.held || !awarenessHistoryVisible())
+          && holdCompositionLease(getDb(), 'suggestion_composition_jobs', job.id, job.lease_token)) {
+          getDb().run(`DELETE FROM suggestion_composition_attempts WHERE rowid = (SELECT rowid FROM suggestion_composition_attempts
+            WHERE job_id = ? ORDER BY started_at DESC LIMIT 1)`, [job.id]);
+          return;
+        }
         if (this.running && this.active === active) failSuggestionComposition(job, error instanceof Error ? error.message : String(error));
       } finally {
         if (timer) clearTimeout(timer);

@@ -423,3 +423,88 @@ test.each([
   };
   expect(matchesReceipt(request, item, wrong as ActionReceipt)).toBe(false);
 });
+
+test("awareness off clears every proposal, an action in flight included, and brings that one back when it is on (#1314)", async () => {
+  const { AWARENESS_OFF_TEXT } = await import("../host/http");
+  const f = makeOpportunitiesFixture();
+  let off = false;
+  const inFlight = deferred<ActionReceipt>();
+  const c = owner({ ...f.port,
+    read: async () => off ? { status: "unavailable", reason: AWARENESS_OFF_TEXT } as OpportunityCollection : f.port.read(),
+    act: () => inFlight.promise });
+  await c.refresh();
+  const id = c.snapshot().rows[0]!.proposal.proposalId;
+  void c.act(id, "approve");
+  await pause();
+  expect(c.snapshot().attempts.has(id)).toBe(true);
+  off = true; await c.refresh();
+  expect(c.snapshot().rows).toEqual([]);
+  expect(c.snapshot().selectedId).toBeNull();
+  expect(c.snapshot().attempts.has(id)).toBe(true);
+  off = false; await c.refresh();
+  expect(c.snapshot().rows.some(x => x.proposal.proposalId === id)).toBe(true);
+});
+
+test("an action refused because awareness is off is a refusal: the row can be acted on again when awareness is back (#1314 review)", async () => {
+  const { AWARENESS_OFF_TEXT, AwarenessOffError } = await import("../host/http");
+  const f = makeOpportunitiesFixture();
+  let off = false;
+  const c = owner({ ...f.port,
+    read: async () => off ? { status: "unavailable", reason: AWARENESS_OFF_TEXT } as OpportunityCollection : f.port.read(),
+    act: async () => { throw new AwarenessOffError(); } });
+  await c.refresh();
+  const id = c.snapshot().rows[0]!.proposal.proposalId;
+  await c.act(id, "approve");
+  expect(c.snapshot().attempts.get(id)?.state).toBe("refused");
+  // Nothing derived from captures stays on screen once the refusal says awareness is off.
+  expect(c.snapshot().rows).toEqual([]);
+  expect(c.snapshot().selectedId).toBeNull();
+  off = true; await c.refresh();
+  off = false; await c.refresh();
+  expect(c.snapshot().attempts.has(id)).toBe(false);
+  expect(c.canAct(id, "approve")).toBe(true);
+});
+
+test("awareness off ends a transition, so the next proposal is shown when it is back (#1314 review)", async () => {
+  const { AWARENESS_OFF_TEXT } = await import("../host/http");
+  const f = makeOpportunitiesFixture();
+  let off = false;
+  const c = owner({ ...f.port,
+    read: async () => off ? { status: "unavailable", reason: AWARENESS_OFF_TEXT } as OpportunityCollection : f.port.read() });
+  await c.refresh();
+  (c as unknown as { publish(p: object): void }).publish({ phase: "exit" });
+  off = true; await c.refresh();
+  expect(c.snapshot().phase).toBe("rest");
+});
+
+test("a late awareness-off refusal does not hide a ready read that came after it (#1314 review)", async () => {
+  const { AwarenessOffError } = await import("../host/http");
+  const f = makeOpportunitiesFixture();
+  let reject!: (e: unknown) => void;
+  const c = owner({ ...f.port, act: () => new Promise((_, r) => { reject = r; }) });
+  await c.refresh();
+  const id = c.snapshot().rows[0]!.proposal.proposalId;
+  const acting = c.act(id, "approve");
+  await c.refresh(); // awareness back on: the server answered ready
+  reject(new AwarenessOffError());
+  await acting;
+  await new Promise((r) => setTimeout(r, 0));
+  expect(c.snapshot().read.status).toBe("ready");
+  expect(c.snapshot().rows.length).toBeGreaterThan(0);
+});
+
+test("a recovery refused because awareness is off clears the room and keeps the attempt (#1314 review)", async () => {
+  const { AwarenessOffError } = await import("../host/http");
+  const f = makeOpportunitiesFixture();
+  const c = owner({ ...f.port, act: async () => { throw new Error("transport lost"); },
+    recover: async () => { throw new AwarenessOffError(); } });
+  await c.refresh();
+  const id = c.snapshot().rows[0]!.proposal.proposalId;
+  await c.act(id, "approve");
+  expect(c.snapshot().attempts.get(id)?.state).toBe("unknown");
+  await c.recover(id);
+  expect(c.snapshot().rows).toEqual([]);
+  expect(c.snapshot().read.status).toBe("unavailable");
+  expect(c.snapshot().attempts.get(id)?.state).toBe("unknown");
+  expect(c.snapshot().attempts.get(id)?.checking).toBe(false);
+});
