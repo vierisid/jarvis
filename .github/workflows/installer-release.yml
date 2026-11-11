@@ -62,7 +62,7 @@ env:
 jobs:
   # ─── Resolve version + idempotency gate ────────────────────────
   resolve:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.v.outputs.version }}
       should_release: ${{ steps.v.outputs.should_release }}
@@ -124,7 +124,7 @@ jobs:
   build-windows:
     needs: resolve
     if: needs.resolve.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -262,7 +262,7 @@ jobs:
   sign-windows:
     needs: [resolve, build-windows]
     if: needs.resolve.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # See "Who can sign" above sign-windows: main and the v* / installer-v*
     # tags only, no reviewers; static, so a dry run is gated as a real run is.
     environment: signing
@@ -407,7 +407,7 @@ jobs:
   verify-windows:
     needs: [resolve, sign-windows]
     if: needs.resolve.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -489,7 +489,7 @@ jobs:
   build-macos:
     needs: resolve
     if: needs.resolve.outputs.should_release == 'true'
-    runs-on: macos-latest
+    runs-on: macos-26
     permissions:
       contents: read
     outputs:
@@ -582,7 +582,7 @@ jobs:
   sign-macos:
     needs: [resolve, build-macos]
     if: needs.resolve.outputs.should_release == 'true'
-    runs-on: macos-latest
+    runs-on: macos-26
     # See "Who can sign" above sign-windows: main and the v* / installer-v*
     # tags only, no reviewers; static, so a dry run is gated as a real run is.
     environment: signing
@@ -802,7 +802,7 @@ jobs:
   verify-macos:
     needs: [resolve, sign-macos]
     if: needs.resolve.outputs.should_release == 'true'
-    runs-on: macos-latest
+    runs-on: macos-26
     permissions:
       contents: read
     steps:
@@ -862,7 +862,7 @@ jobs:
   publish:
     needs: [resolve, sign-windows, verify-windows, sign-macos, verify-macos]
     if: needs.resolve.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The gate (#920). Until now this job held `contents: write` with no
     # environment at all, so a tag push or a dispatch from ANY branch could
     # publish to `installer-latest` with nobody approving it -- including a

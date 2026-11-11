@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   cut:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Above the release-executor watch bound (WATCH_TIMEOUT_SECONDS below,
     # 300 minutes), so the watch fails with a message first; see that step.
     timeout-minutes: 355

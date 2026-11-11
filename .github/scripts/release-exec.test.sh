@@ -1787,7 +1787,7 @@ ${found}"
 		$'expected $NPM_VERSION"; exit 1; }\n\n      - uses: actions/download-artifact' $'expected $NPM_VERSION"; exit 1; }\n          npm -g install left-pad\n\n      - uses: actions/download-artifact' \
 		'publish-brain: installs dependencies while the sidecar publish may still be running'
 	mutant 'a second dependency-code job beside the sidecar build (#952 review)' \
-		$'  pack-brain:\n    needs: [validate-tag, test, smoke-image]\n' $'  lint-extra:\n    needs: [validate-tag, smoke-image]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n    steps:\n      - run: bun install --frozen-lockfile\n  pack-brain:\n    needs: [validate-tag, test, smoke-image]\n' \
+		$'  pack-brain:\n    needs: [validate-tag, test, smoke-image]\n' $'  lint-extra:\n    needs: [validate-tag, smoke-image]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - run: bun install --frozen-lockfile\n  pack-brain:\n    needs: [validate-tag, test, smoke-image]\n' \
 		'lint-extra: installs dependencies while the sidecar build may still be running'
 	mutant 'the exempt npm install pointed somewhere else by a job env (#952 review)' \
 		$'  publish-brain:\n    needs: [validate-tag, sidecar-build, pack-brain]\n' $'  publish-brain:\n    needs: [validate-tag, sidecar-build, pack-brain]\n    env:\n      NPM_VERSION: "file:/tmp/x"\n' \
@@ -1827,8 +1827,8 @@ fi
 	MUTANT_MODE=image
 	# Authority (#868): nothing before the approval chain can write to a registry.
 	mutant 'the build job given packages: write again (#868)' \
-		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: write\n' \
+		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n' \
+		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n      packages: write\n' \
 		'build-image: holds packages: write'
 	mutant 'the build job logging in to GHCR again (#868)' \
 		'      - name: Generate Docker metadata' $'      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0\n        with:\n          registry: ghcr.io\n      - name: Generate Docker metadata' \
@@ -1837,12 +1837,12 @@ fi
 		'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar' '          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true' \
 		'build-image: a build step pushes or exports to a registry'
 	mutant 'the build job given a packages scope of any kind (#868)' \
-		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: read\n' \
+		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n' \
+		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n      packages: read\n' \
 		'build-image: permissions must be exactly contents: read'
 	mutant 'the smoke job given a packages scope (#868)' \
-		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: read\n' \
+		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n' \
+		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n      packages: read\n' \
 		'smoke-image: permissions must be exactly contents: read'
 	# The download-artifact pin is READ OUT of the workflow, never spelled here.
 	# Dependabot bumps it, and an anchor carrying the SHA turns every bump into
@@ -1884,8 +1884,8 @@ fi
 		"$DL_FROM" "$DL_TO_LOGIN" \
 		'smoke-image: logs in to a registry'
 	mutant 'a third job holding packages: write (#680)' \
-		$'  github-release:\n    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]\n    if: ${{ !cancelled() && needs.validate-tag.result == \'success\' && needs.sidecar-build.result == \'success\' && needs.publish-docker.result == \'success\' && (needs.publish-sidecar.result == \'success\' || (needs.publish-sidecar.result == \'skipped\' && needs.sidecar-build.outputs.released == \'false\' && needs.sidecar-build.outputs.digests == \'\')) }}\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write' \
-		$'  github-release:\n    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]\n    if: ${{ !cancelled() && needs.validate-tag.result == \'success\' && needs.sidecar-build.result == \'success\' && needs.publish-docker.result == \'success\' && (needs.publish-sidecar.result == \'success\' || (needs.publish-sidecar.result == \'skipped\' && needs.sidecar-build.outputs.released == \'false\' && needs.sidecar-build.outputs.digests == \'\')) }}\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write\n      packages: write' \
+		$'  github-release:\n    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]\n    if: ${{ !cancelled() && needs.validate-tag.result == \'success\' && needs.sidecar-build.result == \'success\' && needs.publish-docker.result == \'success\' && (needs.publish-sidecar.result == \'success\' || (needs.publish-sidecar.result == \'skipped\' && needs.sidecar-build.outputs.released == \'false\' && needs.sidecar-build.outputs.digests == \'\')) }}\n    runs-on: ubuntu-24.04\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write' \
+		$'  github-release:\n    needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]\n    if: ${{ !cancelled() && needs.validate-tag.result == \'success\' && needs.sidecar-build.result == \'success\' && needs.publish-docker.result == \'success\' && (needs.publish-sidecar.result == \'success\' || (needs.publish-sidecar.result == \'skipped\' && needs.sidecar-build.outputs.released == \'false\' && needs.sidecar-build.outputs.digests == \'\')) }}\n    runs-on: ubuntu-24.04\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write\n      packages: write' \
 		'github-release: holds packages: write'
 	mutant 'a docker push from a run: step in the build job (#680)' \
 		'      - name: Upload the archive' $'      - run: docker push ghcr.io/vierisid/jarvis:latest\n      - name: Upload the archive' \
@@ -2423,7 +2423,9 @@ calls: $(cat "${WORK}/docker.log")"
 
 	# The image store decides which ID docker load reports, so the step reads
 	# it and expects exactly one ID per store (run 42868738162, where
-	# ubuntu-latest became ubuntu-26.04 with the containerd image store).
+	# ubuntu-latest became ubuntu-26.04 with the containerd image store; the
+	# release jobs are pinned to ubuntu-24.04 since, and both stores stay
+	# covered for when that pin moves).
 	# store_cases: every case below, counting misses in LOAD_MISSES; the
 	# mutants after it run the same cases against a broken step.
 	loaded() { grep -q '^docker load' "${WORK}/docker.log"; }
@@ -2732,8 +2734,8 @@ fi
 		"    if: \${{ !cancelled() && needs.validate-tag.result == 'success' && needs.build-image.result == 'success' && needs.smoke-image.result == 'success' && needs.sidecar-build.result == 'success' && needs.publish-brain.result == 'success' && (needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}"$'\n' '' \
 		'a brain-only release, sidecar/VERSION already on npm (v0.17.2)'
 	mutant 'publish-docker taking any skipped sidecar publish as done' \
-		"(needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}"$'\n    runs-on: ubuntu-latest\n    # No checkout' \
-		"(needs.publish-sidecar.result == 'success' || needs.publish-sidecar.result == 'skipped') }}"$'\n    runs-on: ubuntu-latest\n    # No checkout' \
+		"(needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}"$'\n    runs-on: ubuntu-24.04\n    # No checkout' \
+		"(needs.publish-sidecar.result == 'success' || needs.publish-sidecar.result == 'skipped') }}"$'\n    runs-on: ubuntu-24.04\n    # No checkout' \
 		'publish-sidecar skipped while a sidecar release was due'
 	mutant 'publish-docker no longer checking the brain publish' \
 		"needs.sidecar-build.result == 'success' && needs.publish-brain.result == 'success' && " "needs.sidecar-build.result == 'success' && " \
@@ -2851,11 +2853,11 @@ fi
 	mutant 'the signed Windows binary unchecked (#781)' \
 		'          SHA_WIN32_X64: ${{ needs.sign-sidecar-windows.outputs.sha256 }}' ''
 	mutant 'two legs back in one matrix, sharing one outputs block (#781 review)' \
-		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n' \
-		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n          - goos: linux\n            goarch: arm64\n            npm_pkg: linux-arm64\n            runner: ubuntu-24.04-arm\n            setup: linux\n'
+		$'            npm_pkg: linux-x64\n            runner: ubuntu-24.04\n            setup: linux\n' \
+		$'            npm_pkg: linux-x64\n            runner: ubuntu-24.04\n            setup: linux\n          - goos: linux\n            goarch: arm64\n            npm_pkg: linux-arm64\n            runner: ubuntu-24.04-arm\n            setup: linux\n'
 	mutant 'a second matrix axis beside the one include entry, two legs again (#781 re-review)' \
-		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n' \
-		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n        shard: [a, b]\n'
+		$'            npm_pkg: linux-x64\n            runner: ubuntu-24.04\n            setup: linux\n' \
+		$'            npm_pkg: linux-x64\n            runner: ubuntu-24.04\n            setup: linux\n        shard: [a, b]\n'
 	mutant 'a leg job whose output is not its digest step (#781)' \
 		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}' \
 		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.other.outputs.sha256 }}'
@@ -3313,7 +3315,7 @@ done
 	mutant 'the signed digest taken before signing (#779)' \
 		'      - name: Sign installer (Cloud KMS)' $'      - id: digest\n        run: "true"\n      - name: Sign installer (Cloud KMS)'
 	mutant 'a matrix on the macOS installer build, sharing its digest output (#779 re-review)' \
-		$'    runs-on: macos-latest\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout' $'    runs-on: macos-latest\n    strategy:\n      matrix:\n        include:\n          - arch: universal\n        shard: [a, b]\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout'
+		$'    runs-on: macos-26\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout' $'    runs-on: macos-26\n    strategy:\n      matrix:\n        include:\n          - arch: universal\n        shard: [a, b]\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout'
 	mutant 'the signed digest step allowed to fail (#779 re-review)' \
 		$'      # The SIGNED installer\'s digest: signing changes the bytes, and publish\n      # takes the artifact only by this.\n      - name: Digest\n        id: digest\n' $'      # The SIGNED installer\'s digest: signing changes the bytes, and publish\n      # takes the artifact only by this.\n      - name: Digest\n        id: digest\n        continue-on-error: true\n'
 	mutant 'the publish check switched off on its own (#779)' \
@@ -3496,8 +3498,8 @@ done
 	mutant 'the sidecar signer verifying in place again, in the job holding id-token (#817)' \
 		'scripts/sign-windows.sh --defer-verify "${SIDECAR_BIN}.exe"' 'scripts/sign-windows.sh "${SIDECAR_BIN}.exe"'
 	mutant 'the sidecar signature check given id-token (#817)' \
-		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n'
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n' \
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n      id-token: write\n'
 	mutant 'the sidecar signer reporting it never signs, so the check always skips (#817)' \
 		'      signed: ${{ steps.winsign.outputs.ready }}' '      signed: "false"'
 	mutant 'the sidecar signature check verifying an artifact other than the one that ships (#817)' \
@@ -3549,8 +3551,8 @@ done
 	mutant 'the installer signature check allowed to fail (#817)' \
 		$'      - name: Verify the Authenticode signature\n        if: needs.sign-windows.outputs.signed == \'true\'' $'      - name: Verify the Authenticode signature\n        continue-on-error: true\n        if: needs.sign-windows.outputs.signed == \'true\''
 	mutant 'the installer signature check given a write scope (#817)' \
-		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write\n'
+		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n' \
+		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: write\n'
 	mutant 'the installer signature check run without its publisher pin (#817)' \
 		$'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n          # Sectigo' $'          ALLOW_UNPINNED_WINDOWS: ${{ vars.ALLOW_UNPINNED_WINDOWS }}\n          # Sectigo'
 	mutant 'the installer signer allowed to fail as a whole (#817 review)' \
@@ -3883,10 +3885,10 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW
 		$'          ../.github/scripts/require-signing-pin.sh SIGNING_PUBLISHER_CN ALLOW_UNPINNED_WINDOWS "${SIDECAR_BIN}.exe"\n' '' \
 		'verify-sidecar-windows: step "Verify the Authenticode signature" does not run require-signing-pin.sh'
 	mutant 'the sidecar macOS leg told it is a linux build (#922 review)' \
-		$'            npm_pkg: darwin-arm64\n            runner: macos-latest\n            setup: darwin\n' $'            npm_pkg: darwin-arm64\n            runner: macos-latest\n            setup: linux\n' \
+		$'            npm_pkg: darwin-arm64\n            runner: macos-26\n            setup: darwin\n' $'            npm_pkg: darwin-arm64\n            runner: macos-26\n            setup: linux\n' \
 		'build-sidecar-darwin-arm64: builds with SETUP'
 	mutant 'a new sidecar job linking a pin outside the gate (#922 review)' \
-		$'  # --- Windows: cross-compile (no OIDC) ---\n' $'  sneaky:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Build\n        run: go build -ldflags "-X x.expectedTeamID=" .\n  # --- Windows: cross-compile (no OIDC) ---\n' \
+		$'  # --- Windows: cross-compile (no OIDC) ---\n' $'  sneaky:\n    runs-on: ubuntu-24.04\n    steps:\n      - name: Build\n        run: go build -ldflags "-X x.expectedTeamID=" .\n  # --- Windows: cross-compile (no OIDC) ---\n' \
 		'sneaky: step "Build" links a signer pin'
 	mutant 'the sidecar signature check told it is a dry run (#922)' \
 		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n' $'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    env:\n      DRY_RUN: "true"\n' \
@@ -4076,7 +4078,7 @@ done
 		$'          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Jarvis.app"' $'          APPLE_TEAM_ID: ABCDE12345\n          ALLOW_UNPINNED_MACOS: ${{ vars.ALLOW_UNPINNED_MACOS }}\n        run: |\n          set -euo pipefail\n          ../.github/scripts/require-signing-pin.sh APPLE_TEAM_ID ALLOW_UNPINNED_MACOS "Jarvis.app"' \
 		'the signature check env must be exactly'
 	mutant 'the sidecar team check given a secret (#921)' \
-		$'    if: needs.resolve.outputs.build == \'true\'\n    runs-on: macos-latest\n    permissions:\n      contents: read\n    steps:\n      # For require-signing-pin.sh and verify-macos-signature.sh.' $'    if: needs.resolve.outputs.build == \'true\'\n    runs-on: macos-latest\n    permissions:\n      contents: read\n    env:\n      X: ${{ secrets.ASC_KEY_ID }}\n    steps:\n      # For require-signing-pin.sh and verify-macos-signature.sh.' \
+		$'    if: needs.resolve.outputs.build == \'true\'\n    runs-on: macos-26\n    permissions:\n      contents: read\n    steps:\n      # For require-signing-pin.sh and verify-macos-signature.sh.' $'    if: needs.resolve.outputs.build == \'true\'\n    runs-on: macos-26\n    permissions:\n      contents: read\n    env:\n      X: ${{ secrets.ASC_KEY_ID }}\n    steps:\n      # For require-signing-pin.sh and verify-macos-signature.sh.' \
 		'verify-sidecar-darwin: reads a secret'
 	mutant 'the sidecar team check run on the unsigned bundles (#921)' \
 		$'          name: sidecar-darwin-x64\n          path: ${{ runner.temp }}/signed/darwin-x64' $'          name: unsigned-darwin-x64\n          path: ${{ runner.temp }}/signed/darwin-x64' \
