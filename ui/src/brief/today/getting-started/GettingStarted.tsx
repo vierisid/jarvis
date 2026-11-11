@@ -91,8 +91,10 @@ function useJourney(journey: GettingStartedJourney) {
 function Recovery({ journey, error }: { journey: GettingStartedJourney; error: string }) {
   return error ? <div role="alert" className="brief-setup-error"><p>{error}</p><BriefButton variant="secondary" onClick={() => void journey.read()}>Refresh setup actions</BriefButton></div> : null;
 }
-export function GettingStarted({ journey, navigate, goalId, compact = false }: {
+export function GettingStarted({ journey, navigate, goalId, compact = false, waiting }: {
   journey: GettingStartedJourney; navigate(route: BriefRoute): void; goalId?: string; compact?: boolean;
+  /** Items waiting on the owner (decisions, approvals, input requests); null while unknown. Required so the all-clear cannot be shown by default. */
+  waiting: number | null;
 }) {
   const { state, busy, error, workflows } = useJourney(journey);
   const finished = !!state && state.completed.length === GETTING_STARTED_IDS.length && !state.hidden;
@@ -105,8 +107,10 @@ export function GettingStarted({ journey, navigate, goalId, compact = false }: {
   return <div className="brief-setup-sequence">
     {!state ? <section className="brief-today-decision brief-today-decision--fallback" aria-busy={!error || undefined}><h2 className="brief-type-hero-heading">{error ? 'Setup actions unavailable.' : 'Loading your next setup action…'}</h2></section>
       : id ? <SetupPaper key={id} id={id} count={count} disabled={busy || !!error} open={open} />
-      : <section className="brief-setup-done" aria-label="Nothing waiting"><p className="brief-type-body-emphasis">Nothing needs you right now.</p>
-        <BriefButton variant="text" icon={<ArrowRight size={16} />} onClick={() => navigate({ room: workflows === 'none' ? 'workflows' : 'all-workflows', selection: {} })}>{workflows === 'none' ? 'Describe a recurring job' : 'See your workflows'}</BriefButton></section>}
+      : <section className="brief-setup-done" aria-label={waiting === 0 ? 'Nothing waiting' : 'Waiting on you'}>
+        <p className="brief-type-body-emphasis">{waiting === 0 ? 'Nothing needs you right now.' : waiting === null ? 'Checking what needs you…' : `${waiting} ${waiting === 1 ? 'item needs' : 'items need'} you.`}</p>
+        {waiting ? <BriefButton variant="text" icon={<ArrowRight size={16} />} onClick={() => navigate({ room: 'needs-you', selection: {} })}>Open Needs you</BriefButton>
+          : <BriefButton variant="text" icon={<ArrowRight size={16} />} onClick={() => navigate({ room: workflows === 'none' ? 'workflows' : 'all-workflows', selection: {} })}>{workflows === 'none' ? 'Describe a recurring job' : 'See your workflows'}</BriefButton>}</section>}
     <Recovery journey={journey} error={error} />
     {state && id && <div className="brief-setup-controls"><span role="status" className="brief-type-utility brief-secondary">{count} of 10 setup actions complete{busy ? ' · Saving…' : ''}</span>
       {count > 0 && <BriefButton variant="text" size="sm" disabled={busy || !!error} onClick={() => void journey.save({ item: state.completed.at(-1)!, done: false })}>Undo last action</BriefButton>}

@@ -1,5 +1,5 @@
 import { useHumanInputCount } from './HumanInputs';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import { PendingDecisions, ForgetMemory } from './canonical-commands';
 import type { BriefRoomRegistry, BriefShellPort, BriefReadState } from '../contracts';
@@ -67,6 +67,25 @@ export function onlyOtherDecisions(all: Pick<Snapshot<readonly DecisionView[]>, 
   if (!settled || all.data?.some(row => row.actions.length > 0)) return false;
   return otherCount === null || otherCount > 0 || !!all.data?.length;
 }
+/**
+ * Everything that currently asks something of the owner, counted from the sources the sidebar badge and
+ * Needs you already use: document decisions with an action, the other queued decisions (workflow
+ * approvals, permissions, recoveries) and workflow input requests. null while the queued list is unread.
+ */
+export function waitingOnOwner(documents: ReadonlyArray<{ actions: readonly unknown[] }> | null | undefined, others: number | null, humanInputs: number): number | null {
+  return others === null ? null : (documents?.filter(row => row.actions.length > 0).length ?? 0) + others + humanInputs;
+}
+function useOtherDecisionCount(read: () => Promise<readonly unknown[]>, enabled: boolean): number | null {
+  const [count, setCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (!enabled) { setCount(0); return; }
+    let alive = true;
+    const load = async () => { try { const rows = await read(); if (alive) setCount(rows.length); } catch { if (alive) setCount(null); } };
+    void load(); const timer = setInterval(() => void load(), 10000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [read, enabled]);
+  return count;
+}
 export function createDataRooms(host: { scopeId: string; transport: HostTransport; capabilities(): unknown;
   storage: Storage; reconciliation: BriefReconciliationClient; createGoal(): void }) {
   const { scopeId, transport, reconciliation } = host;
@@ -97,6 +116,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     const initialGoal = useBriefProjection(initialGoalRead);
     const g = useBriefProjection(goalRead), d = useBriefProjection(decisionRead), o = useBriefProjection(opportunityRead), outcome = useBriefProjection(outcomes), rec = useBriefProjection(recommendations);
     const decisionSnapshot = todayDecisionSnapshot(d);
+    const waiting = waitingOnOwner(d.data, useOtherDecisionCount(ports.otherDecisions, isBriefCapabilityEnabled(host.capabilities(), 'decisions')), useHumanInputCount());
     const [operation, setOperation] = useState<DecisionOperation>();
     const caps = host.capabilities(), goal = g.data?.find(row => row.goal.status === 'active')
       ?? g.data?.find(row => row.goal.status === 'draft');
@@ -131,7 +151,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
             decisionRead.refresh(); void decisions.refresh();
           } catch { setOperation({ ...request, state: 'unknown', message: 'The decision is not confirmed. Open Needs you to check it.' }); }
         } }} slots={{
-        gettingStarted: isBriefCapabilityEnabled(caps, 'profileSettings') ? <GettingStarted journey={setup} navigate={shell.navigate} goalId={goal?.goal.goalId} compact={decisionSnapshot.state !== 'empty'} /> : undefined,
+        gettingStarted: isBriefCapabilityEnabled(caps, 'profileSettings') ? <GettingStarted journey={setup} navigate={shell.navigate} goalId={goal?.goal.goalId} compact={decisionSnapshot.state !== 'empty'} waiting={waiting} /> : undefined,
         goal: <GoalCard handoff={handoff} onReviewDraft={goal?.goal.status === 'draft' ? () => shell.navigate({ room: 'goals', selection: { goalId: goal.goal.goalId } }) : undefined}
           onPlanUnplanned={initialGoal.data === true ? () => shell.navigate({ room: 'goals', selection: {} }) : undefined} />,
         queueNotice: d.data?.length ? <button onClick={() => shell.navigate({ room: 'needs-you', selection: {} })}>Review {d.data.length} {d.data.length === 1 ? 'request' : 'requests'}</button> : null,

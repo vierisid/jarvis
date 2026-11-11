@@ -18,7 +18,7 @@ beforeEach(()=>{ host=document.createElement('div'); document.body.append(host);
 afterEach(async()=>{await React.act(async()=>root.unmount());journey.retire();host.remove();});afterAll(()=>GlobalRegistrator.unregister());
 const button=(text:string)=>[...host.querySelectorAll<HTMLButtonElement>('button')].find(b=>(b.getAttribute('aria-label')??b.textContent).includes(text))!;
 function navigate(r:BriefRoute){destinations.push(r);route=r;}
-async function render(compact=false){await React.act(async()=>root.render(<div className="brief-root"><UI.GettingStarted journey={journey} navigate={navigate} goalId="existing-goal" compact={compact}/></div>));}
+async function render(compact=false,waiting:number|null=0){await React.act(async()=>root.render(<div className="brief-root"><UI.GettingStarted journey={journey} navigate={navigate} goalId="existing-goal" compact={compact} waiting={waiting}/></div>));}
 async function destination(){await React.act(async()=>root.render(<div className="brief-root"><UI.GettingStartedDestination journey={journey} shell={{route,navigate} as any} canLeave={async()=>allowLeave}><h1>Real page</h1></UI.GettingStartedDestination></div>));}
 async function click(text:string){await React.act(async()=>button(text).click());}
 async function open(){await click('Review setup action');const b=host.querySelector<HTMLButtonElement>('.brief-today-paper-actions button')!;await React.act(async()=>b.click());}
@@ -43,6 +43,14 @@ test('completed setup collapses to one compact row with the next action that fit
   workflowRows=[{id:'f1'}];journey.retire();journey=new UI.GettingStartedJourney(http,window.localStorage,'scope');await render();
   expect(button('Describe a recurring job')).toBeUndefined();await click('See your workflows');expect(route.room).toBe('all-workflows');
   workflowRows=null;journey.retire();journey=new UI.GettingStartedJourney(http,window.localStorage,'scope');await render();expect(button('See your workflows')).toBeDefined();
+});
+test('the all-clear shows only when nothing waits, and otherwise points at Needs you',async()=>{
+  stored={revision:10,completed:[...GETTING_STARTED_IDS],hidden:false};
+  await render(false,20);expect(host.textContent).not.toContain('Nothing needs you');expect(host.textContent).toContain('20 items need you.');
+  await click('Open Needs you');expect(route.room).toBe('needs-you');
+  await render(false,1);expect(host.textContent).toContain('1 item needs you.');
+  await render(false,null);expect(host.textContent).not.toContain('Nothing needs you');
+  await render(false,0);expect(host.textContent).toContain('Nothing needs you right now.');
 });
 test('hover/focus details have a keyboard/touch review control and Escape closes them',async()=>{
   await render();expect(host.querySelector('.brief-today-paper-clip')?.getAttribute('data-raised')).toBe('false');

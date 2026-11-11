@@ -63,3 +63,11 @@ test('Needs you never shows an all-clear while the independent permission list h
   expect(Rooms.onlyOtherDecisions(snap('unavailable', null, { reason: 'down' }), 2)).toBe(false);
   expect(Rooms.onlyOtherDecisions(snap('stale', [{ actions: [] }], { reason: 'down' }), 2)).toBe(false);
 });
+
+test('Today counts document decisions, other queued decisions and workflow inputs, and an unread queue is unknown', () => {
+  const doc = (n: number) => Array.from({ length: n }, () => ({ actions: [{}] }));
+  expect(Rooms.waitingOnOwner(undefined, 0, 0)).toBe(0);
+  expect(Rooms.waitingOnOwner([...doc(2), { actions: [] }], 3, 4)).toBe(9);
+  expect(Rooms.waitingOnOwner(null, 20, 0)).toBe(20);
+  expect(Rooms.waitingOnOwner(doc(1), null, 0)).toBeNull();
+});
