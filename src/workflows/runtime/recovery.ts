@@ -102,7 +102,8 @@ function untrackedSteps(run: FlowRun, effects: WorkflowEffect[]): RecoveryProjec
           }
         });
       }
-      // Jarvis's own pieces (store, delay, ...) leave an effect record when they dispatch; without one nothing left Jarvis.
+      // Jarvis's own pieces (@jarvispieces/: notify, ask, agent, ...) leave an effect record when they dispatch;
+      // without one nothing left Jarvis. The in-run core steps (store, delay) still count, as in run-failure.ts.
       if ((node?.type !== 'PIECE' && node?.type !== 'CODE') || !reachesOutsideUntracked(node)) continue;
       if (step.status === 'FAILED') failedInstances.add(stepName);
       if (step.status === 'SUCCEEDED') continue;
@@ -120,6 +121,20 @@ function untrackedSteps(run: FlowRun, effects: WorkflowEffect[]): RecoveryProjec
     result.push({ stepName: failed, executionPath: null, status: 'unknown' });
   }
   return result;
+}
+/**
+ * The run handler never reached this stopped run. A run gets its start time
+ * when it is requested, so that alone says nothing. The handler begins only a
+ * QUEUED run and records its graph before it moves it to RUNNING and calls the
+ * executor; a stop while QUEUED closes that door (`watchRunCancellation`).
+ * Queued at the stop, no graph recorded, no step and no effect: nothing ran.
+ * The same evidence as trigger-fire's RUN_NEVER_BEGAN.
+ */
+function neverReached(run: FlowRun, effects: WorkflowEffect[]): boolean {
+  if (run.cancellation?.statusAtRequest !== 'QUEUED' || effects.length > 0 || (run.stepsCount ?? 0) > 0
+    || Object.keys(run.steps ?? {}).length > 0) return false;
+  const row = getWorkflowDb().query<{ graph_digest: string | null }, [string]>('SELECT graph_digest FROM flow_run WHERE id = ?').get(run.id);
+  return !!row && row.graph_digest === null;
 }
 export function getRunRecovery(runId: string): RecoveryProjection | null {
   const { run, effects, evidenceVersion } = snapshot(runId);
@@ -144,8 +159,8 @@ export function getRunRecovery(runId: string): RecoveryProjection | null {
   // that began is only cleared by a readable graph that accounts for every
   // recorded step and has no external step that could have run unrecorded.
   const trace = Object.keys(run.steps ?? {}).filter(name => !name.startsWith('<'));
-  const began = run.startTime !== null || trace.length > 0 || run.cancellation?.inFlightMayHaveCompleted === true
-    || (!!run.failedStep && run.failedStep.name !== '<lifecycle>' && run.failedStep.name !== '<readiness>');
+  const began = !neverReached(run, effects) && (run.startTime !== null || trace.length > 0 || run.cancellation?.inFlightMayHaveCompleted === true
+    || (!!run.failedStep && run.failedStep.name !== '<lifecycle>' && run.failedStep.name !== '<readiness>'));
   const graph = began ? walkFlowNodes(getFlowVersion(run.flowVersionId)?.trigger) : [];
   const nothingHappened = !uncertain && !effects.length
     && (!began || (graph.length > 0 && trace.every(name => graph.some(node => node.name === name)) && otherSteps(run, effects, graph) === 'no'));

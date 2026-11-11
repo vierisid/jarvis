@@ -627,10 +627,40 @@ test('project recovery pagination filters by flow ownership before applying the 
 // outside Jarvis has nothing to inspect and must not fill the Needs you inbox.
 test('a queued run stopped by Kill before it started is nothing happened, not uncertain', () => {
   const f = fixture();
-  const queued = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id, status: 'QUEUED' });
-  expect(cancelFlowRun(queued.id, { reason: 'Jarvis was stopped with Kill', reasonLabel: 'Emergency stop' }).accepted).toBe(true);
-  expect(getRunRecovery(queued.id)).toMatchObject({ state: 'nothing_happened', needsAttention: false, effects: [], untrackedSteps: [], canReplay: false });
-  expect(listRunRecoveries().recoveries.map(r => r.runId)).not.toContain(queued.id);
+  // As every start path does, the run gets its start time when it is requested:
+  // that is not evidence it began, even with a Gmail send in its graph.
+  const queued = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id, status: 'QUEUED', startTime: Date.now() });
+  const child = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id, status: 'QUEUED' });
+  for (const run of [queued, child]) {
+    expect(cancelFlowRun(run.id, { reason: 'Jarvis was stopped with Kill', reasonLabel: 'Emergency stop' }).accepted).toBe(true);
+    expect(getRunRecovery(run.id)).toMatchObject({ state: 'nothing_happened', needsAttention: false, effects: [], untrackedSteps: [], canReplay: false });
+    expect(listRunRecoveries().recoveries.map(r => r.runId)).not.toContain(run.id);
+  }
+});
+
+test('a run the handler reached before the stop stays uncertain, even with no trace', () => {
+  const f = fixture();
+  // Queued at the stop, but the handler had recorded its graph: it may have gone on to run the send.
+  const reached = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id, status: 'QUEUED', startTime: Date.now() });
+  getWorkflowDb().run("UPDATE flow_run SET graph_digest = 'fixture' WHERE id = ?", [reached.id]);
+  // Running at the stop, as a production run that streams no progress leaves it.
+  const running = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id, status: 'RUNNING', startTime: Date.now() });
+  for (const run of [reached, running]) {
+    cancelFlowRun(run.id, { reason: 'Jarvis was stopped with Kill', reasonLabel: 'Emergency stop' });
+    expect(getRunRecovery(run.id)).toMatchObject({ state: 'unknown', needsAttention: true });
+    expect(listRunRecoveries().recoveries.map(r => r.runId)).toContain(run.id);
+  }
+});
+
+test('a started run of only Jarvis pieces is nothing happened; an in-run core step still counts', () => {
+  const flow = createFlow({});
+  const step = (pieceName: string) => createDraftVersion({ flowId: flow.id, displayName: 'Kill fixture', trigger: { name: 'trigger', type: 'EMPTY',
+    nextAction: { name: 'step', type: 'PIECE', settings: { pieceName, actionName: 'run', input: {} } } } });
+  const notify = createFlowRun({ flowId: flow.id, flowVersionId: step('@jarvispieces/piece-jarvis-notify').id, status: 'RUNNING', startTime: Date.now() });
+  const delay = createFlowRun({ flowId: flow.id, flowVersionId: step('@activepieces/piece-delay').id, status: 'RUNNING', startTime: Date.now() });
+  cancelFlowRun(notify.id); cancelFlowRun(delay.id);
+  expect(getRunRecovery(notify.id)).toMatchObject({ state: 'nothing_happened', needsAttention: false });
+  expect(getRunRecovery(delay.id)).toMatchObject({ state: 'unknown', needsAttention: true });
 });
 
 test('Kill still lists a run with a dispatching effect, or an untracked step that ran', async () => {
