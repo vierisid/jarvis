@@ -177,7 +177,9 @@ Practical consequences:
   start while awareness is off, stops before its next model call, provider
   retry or tool run once it turns off, runs on a thread of its own so the
   screen text never enters the background agent's history, and a result
-  that finishes after the switch is not shown, toasted or spoken; and a flow's
+  that finishes after the switch is not shown, toasted or spoken; a
+  suggestion's or a fix's spoken copy stops before its next sentence and
+  its channel copy before its next retry; and a flow's
   `awarenessRecent` context returns no activity. Vault entities and goal notes once written from awareness are
   ordinary data and stay visible (owner decision). Nothing is deleted; it shows
   again when awareness is turned back on. Not covered: shell commands

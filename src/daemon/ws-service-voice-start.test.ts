@@ -265,6 +265,30 @@ describe('proactive TTS and live realtime sessions', () => {
     expect(open.json.map((m) => m.type)).toEqual(['tts_start', 'tts_end']);
     expect(open.binary).toHaveLength(1);
   });
+  // #1314 follow-up: screen-derived help keeps no voice once awareness is
+  // turned off; the caller's check is asked at each sentence and chunk.
+  test('a speaker whose permission lapses mid-message stops before the next sentence', async () => {
+    const listener = fakeClient();
+    const { svc } = withClients(listener);
+    const spoken: string[] = [];
+    let allowed = true;
+    (svc as unknown as { ttsProvider: unknown }).ttsProvider = {
+      async *synthesizeStream(text: string) { spoken.push(text); allowed = false; yield Buffer.from(`audio:${text}`); },
+    };
+    const reached = await svc.broadcastProactiveVoice('First sentence here. Second sentence here. Third one.', { shouldContinue: () => allowed });
+    expect(spoken).toEqual(['First sentence here.']);
+    expect(listener.binary).toEqual([]);
+    expect(listener.json.map((m) => m.type)).toEqual(['tts_start', 'tts_end']);
+    expect(reached).toBe(0);
+  });
+
+  test('a speaker already stopped says nothing and opens no audio session', async () => {
+    const listener = fakeClient();
+    const { svc, synthesized } = withClients(listener);
+    expect(await svc.broadcastProactiveVoice('Heads up.', { shouldContinue: () => false })).toBe(0);
+    expect(synthesized()).toBe(0);
+    expect(listener.json).toEqual([]);
+  });
 });
 
 describe('mic frames on a socket with a realtime session', () => {

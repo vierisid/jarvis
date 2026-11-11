@@ -1101,8 +1101,15 @@ export class WebSocketService implements Service {
    * Used for awareness suggestions and other unsolicited voice notifications.
    * Resolves how many clients were sent audio: 0 when it was skipped or no
    * audio was synthesized, so a caller never reports silence as spoken.
+   *
+   * `shouldContinue` is asked before speaking starts, before each sentence
+   * and before each audio chunk is sent (#1314 follow-up): a caller whose
+   * permission to speak can lapse mid-message (screen-derived help once
+   * awareness is turned off) stops there, and the clients get tts_end.
    */
-  async broadcastProactiveVoice(text: string): Promise<number> {
+  async broadcastProactiveVoice(text: string, options: { shouldContinue?: () => boolean } = {}): Promise<number> {
+    const proceed = () => !options.shouldContinue || options.shouldContinue();
+    if (!proceed()) return 0;
     if (!this.ttsProvider || !text) {
       console.log(`[WSService] Proactive TTS skipped: ${!this.ttsProvider ? 'no TTS provider' : 'empty text'}`);
       return 0;
@@ -1155,9 +1162,11 @@ export class WebSocketService implements Service {
       const { splitIntoSentences } = await import('../comms/voice.ts');
       for (const sentence of splitIntoSentences(text)) {
         checkpointExecution();
+        if (!proceed()) break;
         try {
           for await (const chunk of this.ttsProvider.synthesizeStream(sentence)) {
             checkpointExecution();
+            if (!proceed()) break;
             // Send binary audio to the target clients
             for (const ws of owned()) {
               try {

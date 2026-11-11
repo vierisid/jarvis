@@ -70,6 +70,8 @@ export class AwarenessDeliveryPolicy {
     // reacted to, shown, toasted or spoken.
     if (!awarenessHistoryVisible()) return;
     const bgAgent = this.deps.agent();
+    // Asked at each sentence and each send retry: a flip mid-delivery stops what is left.
+    const stillOn = { shouldContinue: awarenessHistoryVisible };
     const screenAlerts = this.screenAlerts;
 
     // Route awareness events through existing event pipeline
@@ -103,13 +105,13 @@ export class AwarenessDeliveryPolicy {
         // Primary: deliver via WebSocket + voice
         wsService.broadcastNotification(text, 'urgent');
         sendDesktopNotification(`JARVIS: ${title}`, body, { urgency: 'normal' });
-        wsService.broadcastProactiveVoice(body).catch(err =>
+        wsService.broadcastProactiveVoice(body, stillOn).catch(err =>
           console.error('[Daemon] Awareness TTS error:', err)
         );
       } else {
         // Fallback: no dashboard clients; deliver via external channels + persistent desktop
         console.log('[Daemon] No WS clients; routing suggestion to external channels');
-        channelService.broadcastToAll(text).catch(err =>
+        channelService.broadcastToAll(text, undefined, stillOn).catch(err =>
           console.error('[Daemon] Channel broadcast error:', err)
         );
         sendDesktopNotification(`JARVIS: ${title}`, body, { urgency: 'critical', expireMs: 30000 });
@@ -167,7 +169,8 @@ export class AwarenessDeliveryPolicy {
             wsService.broadcastProactiveVoice(
               awaiting
                 ? `I need your approval to fix the error in ${appName}. ${voiceText}`
-                : `I found a fix for the error in ${appName}. ${voiceText}`
+                : `I found a fix for the error in ${appName}. ${voiceText}`,
+              stillOn,
             ).then(() =>
               console.log('[Daemon] Error solution TTS delivered')
             ).catch(err =>
@@ -230,7 +233,8 @@ export class AwarenessDeliveryPolicy {
             wsService.broadcastProactiveVoice(
               awaiting
                 ? `I need your approval to help with what you're working on in ${sAppName}. ${voiceText}`
-                : `I found something that might help with what you're working on in ${sAppName}. ${voiceText}`
+                : `I found something that might help with what you're working on in ${sAppName}. ${voiceText}`,
+              stillOn,
             ).catch(err =>
               console.error('[Daemon] Struggle solution TTS failed:', err instanceof Error ? err.message : err)
             );
@@ -253,7 +257,7 @@ export class AwarenessDeliveryPolicy {
     // No toast or spoken copy of a recording once awareness is off (#1314 review).
     if (channel === 'websocket' && !this.quiet && awarenessHistoryVisible()) {
       (this.deps.desktop ?? defaultDesktop)(`JARVIS: ${suggestion.title}`, suggestion.body, { urgency: 'normal' });
-      this.deps.sockets.broadcastProactiveVoice(suggestion.body).catch(err => console.error('[Daemon] Awareness TTS error:', err));
+      this.deps.sockets.broadcastProactiveVoice(suggestion.body, { shouldContinue: awarenessHistoryVisible }).catch(err => console.error('[Daemon] Awareness TTS error:', err));
     }
     return channel;
   }

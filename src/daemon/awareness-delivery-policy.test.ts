@@ -345,3 +345,27 @@ test('an awareness event that arrives after awareness was turned off gets no aut
     expect(observed).toHaveLength(1);
   }
 });
+
+test('legacy voice and channel delivery ask the switch at each sentence and retry', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  const checks: Array<() => boolean> = [];
+  const keep = (options?: { shouldContinue?: () => boolean }) => { if (options?.shouldContinue) checks.push(options.shouldContinue); };
+  for (const accepted of [0, 1]) {
+    const f = fixture('0', accepted);
+    f.deps.sockets = { ...f.deps.sockets, broadcastProactiveVoice: async (_text: string, options?: { shouldContinue?: () => boolean }) => { keep(options); return 1; } };
+    f.deps.channels = { ...f.deps.channels, broadcastToAll: async (_text: string, _send?: unknown, delivery?: { shouldContinue?: () => boolean }) => { keep(delivery); } };
+    const policy = new AwarenessDeliveryPolicy(f.deps, '0');
+    policy.handleEvent(event('suggestion_ready'));
+    policy.handleEvent(event('error_detected'));
+    await Bun.sleep(0); await Bun.sleep(0);
+    if (accepted) await policy.deliverOpportunity(suggestion);
+  }
+  // No clients: the suggestion goes to the channels and the researched fix is spoken;
+  // with clients: the suggestion, the researched fix and the opportunity are spoken.
+  expect(checks).toHaveLength(5);
+  expect(checks.map(check => check())).toEqual([true, true, true, true, true]);
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    expect(checks.map(check => check())).toEqual([false, false, false, false, false]);
+  } finally { setScreenCaptureEnabledSource(null); }
+});

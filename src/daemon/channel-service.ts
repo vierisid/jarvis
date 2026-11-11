@@ -480,8 +480,12 @@ export class ChannelService implements Service {
           // the first send may have arrived, so an approval is not silently
           // lost to a timeout. Every other message is never resent.
           ...(delivery?.approvalCard ? { uncertainRetries: APPROVAL_CARD_UNCERTAIN_RETRIES } : {}),
+          ...(delivery?.shouldContinue ? { shouldContinue: delivery.shouldContinue } : {}),
         }).then((result) => {
-          if (!result.ok) {
+          // Held by its sender: not a delivery failure to report.
+          if (!result.ok && result.held) {
+            console.log(`[ChannelService] Send to ${name} held: its sender stopped${result.mayHaveArrived ? ' (an earlier attempt may have arrived)' : ''}`);
+          } else if (!result.ok) {
             this.reportDeliveryFailure(name, result);
           }
         }),
@@ -1097,10 +1101,16 @@ export const SEND_RETRY_MAX_DELAY_MS = 30_000;
  */
 export const SEND_RETRY_BUDGET_MS = 60_000;
 
-/** How a broadcast is delivered. Only the approval-card path sets anything. */
+/** How a broadcast is delivered. */
 export interface BroadcastDelivery {
   /** An approval card (ApprovalDelivery): one retry after a send that may have arrived. */
   approvalCard?: boolean;
+  /**
+   * Asked before each channel's first send and before each retry (#1314
+   * follow-up): a sender whose permission can lapse (a screen-derived
+   * suggestion once awareness is turned off) sends nothing more after it does.
+   */
+  shouldContinue?: () => boolean;
 }
 
 /** Owner decision (Q-19): "no retry, except approval cards", which get exactly one. */
@@ -1122,11 +1132,13 @@ export interface SendRetryOptions {
    * set it (owner decision), accepting a possible duplicate card over a lost one.
    */
   uncertainRetries?: number;
+  /** Asked before every attempt, the first included; false stops with `held` (#1314 follow-up). */
+  shouldContinue?: () => boolean;
 }
 
 export type SendRetryResult =
   | { ok: true; attempts: number }
-  | { ok: false; attempts: number; error: string; mayHaveArrived: boolean };
+  | { ok: false; attempts: number; error: string; mayHaveArrived: boolean; held?: true };
 
 /**
  * Send a message through an adapter, retrying failures that left nothing
@@ -1166,7 +1178,12 @@ export async function sendWithRetry(
   let sentPart = false;
   let uncertainRetriesLeft = opts?.uncertainRetries ?? 0;
 
+  const stopped = () => opts?.shouldContinue !== undefined && !opts.shouldContinue();
+  const held = (attempts: number): SendRetryResult =>
+    ({ ok: false, attempts, error: 'held: the sender stopped before this attempt', mayHaveArrived: sentPart, held: true });
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (stopped()) return held(attempt - 1);
     try {
       if (opts?.send) await adapter.sendMessage(recipient, currentText, opts.send);
       else await adapter.sendMessage(recipient, currentText);
@@ -1198,6 +1215,8 @@ export async function sendWithRetry(
         return { ok: false, attempts: attempt, error: message, mayHaveArrived: sentPart };
       }
 
+      // Not worth the wait when the sender has already stopped.
+      if (stopped()) return held(attempt);
       console.warn(`[ChannelService] Send to ${adapter.name} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms: ${message}`);
       await sleep(delay);
     }
