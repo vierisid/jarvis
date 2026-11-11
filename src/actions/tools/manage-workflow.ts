@@ -1676,7 +1676,8 @@ function actListRuns(project: string, flowRef: string | undefined, limit: number
   // runs, captured `failedStep` text included.
   const opts: Parameters<typeof listRuns>[0] = { limit, projectId: project };
   if (flow) opts.flowId = flow.id;
-  return listRuns(opts).map((r) => summarizeRun(r));
+  const graphs = new Map<string, FlowTriggerNode | undefined>();
+  return listRuns(opts).map((r) => summarizeRun(r, false, graphs));
 }
 
 function actGetRun(project: string, runId: string): Record<string, unknown> {
@@ -1707,11 +1708,14 @@ async function actResolveEffect(project: string, params: Record<string, unknown>
   return { receipt };
 }
 
-function summarizeRun(stored: FlowRun, includeSteps = false): Record<string, unknown> {
+function summarizeRun(stored: FlowRun, includeSteps = false, graphs = new Map<string, FlowTriggerNode | undefined>()): Record<string, unknown> {
   // Generated passwords and webhook credential headers, including those in
   // rows stored before the trigger withheld them, are not shown (read side).
-  const trigger = getFlowVersion(stored.flowVersionId)?.trigger;
-  const run = runAsShown(stored, trigger);
+  // A list caches each version's graph; a run with no failure message and no
+  // steps to show is not walked at all.
+  if (!graphs.has(stored.flowVersionId)) graphs.set(stored.flowVersionId, getFlowVersion(stored.flowVersionId)?.trigger);
+  const trigger = graphs.get(stored.flowVersionId);
+  const run = includeSteps || stored.failedStep?.errorMessage ? runAsShown(stored, trigger) : stored;
   // Q-05: a connection that changed under the run is refused by the engine's
   // fetch, which reports only a bare loading error; the reason lives here.
   const bindingRefusals = (run.connectionBindings ?? []).filter(binding => binding.refusal)

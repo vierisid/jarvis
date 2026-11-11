@@ -3,7 +3,7 @@ import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion, versionAsShown } from './editor-version';
-import { runAsShown } from '../runtime/step-credentials';
+import { runAsShown, runScrubber, scrubValue } from '../runtime/step-credentials';
 import type { FlowRun } from '../db/repos/flow-run';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
@@ -1903,7 +1903,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // here so future readers know that's by design.
           const locked = withOwnedFlowVersion(id, versionId, () => { assertVersionReady(id, versionId); return lockVersion(versionId); });
           const osWarnings = lockOsWarnings(locked.trigger);
-          return ok(osWarnings.length > 0 ? { ...locked, osWarnings } : locked);
+          return ok(osWarnings.length > 0 ? { ...versionAsShown(locked), osWarnings } : versionAsShown(locked));
         }),
     },
 
@@ -2117,7 +2117,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const { flow, version } = publishFlowVersion(id, body.versionId);
           refreshTrigger(id);
-          return ok({ flow: serializeFlow(flow), version });
+          return ok({ flow: serializeFlow(flow), version: versionAsShown(version) });
         }),
     },
 
@@ -2323,7 +2323,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           };
           if (status) opts.status = status;
           const graphs = new Map<string, FlowTriggerNode | undefined>();
-          const items = listRuns(opts).map(run => ({ ...shownRun(run, graphs), failure: runFailure(run) }));
+          const items = listRuns(opts).map(run => { const shown = shownRun(run, graphs); return { ...shown, failure: runFailure(shown) }; });
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
@@ -2408,9 +2408,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflow-runs/:runId/effects": {
       GET: (req) => trapErrors(async () => {
         const { runId } = (req as RequestWithParams<{ runId: string }>).params;
-        if (!scopedRun(req, runId)) return err('run not found', 404);
+        const run = scopedRun(req, runId);
+        if (!run) return err('run not found', 404);
         const { listWorkflowEffects } = await import('../db/repos/workflow-effect');
-        return ok({ runId, effects: listWorkflowEffects(runId), children: listChildRuns(runId), recovery: getRunRecovery(runId) });
+        // A generated password or an old webhook credential a step sent on is not shown here either.
+        const scrub = runScrubber(run, getFlowVersion(run.flowVersionId)?.trigger);
+        return ok({ runId, effects: scrubValue(listWorkflowEffects(runId), scrub), children: listChildRuns(runId), recovery: getRunRecovery(runId) });
       }),
     },
 
@@ -2420,7 +2423,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
-          return run ? ok({ ...shownRun(run), fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run) }) : err("run not found", 404);
+          const shown = run ? shownRun(run) : null;
+          return shown ? ok({ ...shown, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(shown) }) : err("run not found", 404);
         }),
     },
 

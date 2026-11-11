@@ -922,6 +922,58 @@ describe("workflow API: what a run and its sample data show (read side)", () => 
   });
 });
 
+describe("workflow API: a failed run, its effects, open failures, and lock and publish (read side)", () => {
+  test("a password in a failure message, an effect record and a locked or published version's sample data is withheld", async () => {
+    configureWorkflowReadiness({ pieces: new PieceCatalog([...sampleCatalog().list(),
+      { name: "@activepieces/piece-crypto", displayName: "Crypto", description: "", actions: { "generate-password": { name: "generate-password", displayName: "Generate", description: "" } } }]) });
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion, setSampleDataEntry } = await import("../db/repos/flow-version");
+    const { createFlowRun, updateRun } = await import("../db/repos/flow-run");
+    const { DEFAULT_IDS } = await import("../db/schema");
+    const { getWorkflowDb } = await import("../db/index");
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const v = createDraftVersion({ flowId: flow.id, displayName: "pw", trigger: {
+      type: "EMPTY", name: "trigger", displayName: "Manual", settings: {},
+      nextAction: { type: "PIECE", name: "make_pw", displayName: "Password", settings: { pieceName: "@activepieces/piece-crypto", actionName: "generate-password", input: { length: 20 } } },
+    } as unknown as Record<string, unknown> });
+    const PASSWORD = "GENpw4Secret7Value9xy";
+    const pwOutput = { type: "PIECE", status: "SUCCEEDED", input: { length: 20 }, output: PASSWORD };
+    setSampleDataEntry(v.id, "make_pw", pwOutput);
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id, environment: "PRODUCTION" });
+    updateRun(run.id, { status: "FAILED", finishTime: Date.now(), steps: { make_pw: { output: pwOutput } },
+      failedStep: { name: "send", displayName: "Send", errorMessage: `server rejected password ${PASSWORD}` } });
+    getWorkflowDb().run(`INSERT INTO workflow_effect (id, run_id, status, record) VALUES ('eff1', ?, 'failed', ?)`,
+      [run.id, JSON.stringify({ id: "eff1", runId: run.id, status: "failed", arguments: { password: PASSWORD, to: "ann@example.test" } })]);
+    const bodies: unknown[] = [];
+    for (const [route, url, params] of [
+      ["/api/workflow-runs/:runId", `http://x/api/workflow-runs/${run.id}`, { runId: run.id }],
+      ["/api/workflows/:id/runs", `http://x/api/workflows/${flow.id}/runs`, { id: flow.id }],
+      ["/api/workflow-runs/:runId/effects", `http://x/api/workflow-runs/${run.id}/effects`, { runId: run.id }],
+      ["/api/failures/open", "http://x/api/failures/open", {}],
+    ] as const) {
+      const { status, body } = await callJson(routes[route]?.GET, reqWithParams("GET", url, params as Record<string, string>));
+      expect([route, status]).toEqual([route, 200]);
+      bodies.push(body);
+    }
+    const lock = await callJson(routes["/api/workflows/:id/versions/:versionId/lock"]?.POST,
+      reqWithParams("POST", `http://x/api/workflows/${flow.id}/versions/${v.id}/lock`, { id: flow.id, versionId: v.id }));
+    expect(lock.status).toBe(200);
+    expect(JSON.stringify(lock.body)).toContain('"make_pw"');
+    bodies.push(lock.body);
+    const published = await callJson(routes["/api/workflows/:id/publish"]?.POST,
+      reqWithParams("POST", `http://x/api/workflows/${flow.id}/publish`, { id: flow.id }, { versionId: v.id }));
+    expect(published.status).toBe(200);
+    expect(JSON.stringify(published.body)).toContain('"make_pw"');
+    bodies.push(published.body);
+    const text = JSON.stringify(bodies);
+    expect(text).not.toContain(PASSWORD);
+    // Not vacuous: the failure, the effect and the open failure are there.
+    expect(text).toContain("server rejected password [redacted]");
+    expect(text).toContain("ann@example.test");
+    expect(JSON.stringify(bodies[3])).toContain(run.id);
+  });
+});
+
 describe("workflow API: waitpoint resume", () => {
   test("POST /api/webhooks/waitpoints/:id enqueues RUN_FLOW(executionType=RESUME) and marks waitpoint resumed", async () => {
     const { createFlow, setPublishedVersion, updateFlowStatus } = await import(

@@ -126,6 +126,20 @@ describe('Today work trace', () => {
     expect(getWorkItem(work.id).resultCheck?.runSnapshot?.status).toBe('FAILED');
   });
 
+  test('a failed run blocker shows its message as run history does, without an old webhook credential', () => {
+    const { flow, work } = configuredWork(); accept(work.id);
+    const run = startWorkItemRun(work.id, flow.id);
+    claimNextJob();
+    updateRun(run.id, { status: 'FAILED', finishTime: Date.now(),
+      steps: { trigger: { output: { type: 'EMPTY', status: 'SUCCEEDED', input: {}, output: { _webhook: { headers: { authorization: 'Bearer OLDSECRET4321' } } } } } },
+      failedStep: { name: 'send', displayName: 'Send', errorMessage: 'rejected token OLDSECRET4321' } });
+    expect(getWorkItem(work.id).blocker).toMatchObject({ kind: 'run_failure', reason: 'rejected token [redacted]' });
+    expect(JSON.stringify(getWorkItem(work.id))).not.toContain('OLDSECRET4321');
+    checkWorkResult(work.id, { ...result, verdict: 'failed' });
+    expect(JSON.stringify(getWorkItem(work.id).resultCheck)).not.toContain('OLDSECRET4321');
+    expect(getWorkItem(work.id).resultCheck?.runSnapshot?.id).toBe(run.id);
+  });
+
   test('a crash between waitpoint creation and the pause upload leaves a checkable failure', async () => {
     const { flow, work, goal } = configuredWork(); accept(work.id);
     const run = startWorkItemRun(work.id, flow.id);

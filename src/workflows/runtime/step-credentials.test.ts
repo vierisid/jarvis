@@ -257,3 +257,33 @@ describe('what a run shows of a generated password', () => {
     expect(JSON.stringify(seen)).not.toContain(PASSWORD);
   });
 });
+
+describe('what else a run hides of its secrets, and what it leaves alone', () => {
+  const hook = (headers: Record<string, string>) => ({ trigger: { type: 'EMPTY', status: 'SUCCEEDED', input: {}, output: { _webhook: { headers } } } });
+  const shownText = (steps: Record<string, unknown>) => JSON.stringify(stepsAsShown(steps, graph()).steps);
+
+  test('URL-encoded forms, single cookie values and signatures without their prefix are hidden elsewhere', () => {
+    const text = shownText({ ...hook({ authorization: 'Bearer ab&c=d+e/f12', cookie: 'sid=COOKIEVAL123; theme=dark', 'x-hub-signature-256': 'sha256=abcdef0123456789' }),
+      later: { type: 'PIECE', status: 'SUCCEEDED', input: { url: `https://x.test/?t=${encodeURIComponent('ab&c=d+e/f12')}`, sid: 'COOKIEVAL123', sig: 'abcdef0123456789' }, output: {} } });
+    for (const leak of ['ab%26c%3Dd%2Be%2Ff12', 'COOKIEVAL123', 'abcdef0123456789']) expect(text).not.toContain(leak);
+  });
+
+  test('a timestamp, a number and a placeholder value are withheld in the headers but do not blank ordinary text', () => {
+    const text = shownText({ ...hook({ 'x-jarvis-timestamp': '1731325000', authorization: 'Bearer undefined', 'x-api-key': '123456789' }),
+      later: { type: 'PIECE', status: 'SUCCEEDED', input: { note: 'order 1731325000 placed, value undefined, id 123456789' }, output: {} } });
+    expect(text).toContain('order 1731325000 placed, value undefined, id 123456789');
+    expect(text).toContain('"x-jarvis-timestamp":"[redacted]"');
+  });
+
+  test('thousands of generated passwords in a loop are hidden in one pass', () => {
+    const loop = { name: 'each', type: 'LOOP_ON_ITEMS', settings: {}, firstLoopAction: { name: 'pw', type: 'PIECE',
+      settings: { pieceName: '@activepieces/piece-crypto', actionName: 'generate-password', input: {} } } } as unknown as FlowTriggerNode;
+    const iterations = Array.from({ length: 3000 }, (_, i) => ({ pw: { type: 'PIECE', status: 'SUCCEEDED', input: {}, output: `Pw${i}x7Kq9Lm2Zt` },
+      use: { type: 'PIECE', status: 'SUCCEEDED', input: { body: `password Pw${i}x7Kq9Lm2Zt for user ${i}` }, output: {} } }));
+    const started = performance.now();
+    const shown = JSON.stringify(stepsAsShown({ each: { type: 'LOOP_ON_ITEMS', status: 'SUCCEEDED', input: {}, output: { iterations } } }, graph(loop)).steps);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(shown).not.toMatch(/Pw\d+x7Kq9Lm2Zt/u);
+    expect(shown).toContain('password [redacted] for user 2999');
+  });
+});

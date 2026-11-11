@@ -174,7 +174,7 @@ export function isCredentialHeader(name: string, value: unknown): boolean {
 export function redactHeaderRecord<V>(headers: Record<string, V>): Record<string, V | typeof REDACTED> {
   const out: Record<string, V | typeof REDACTED> = {};
   for (const [name, value] of Object.entries(headers)) {
-    out[name] = isCredentialHeader(name, value) && value !== null && value !== undefined && value !== '' ? REDACTED : value;
+    out[name] = isCredentialHeader(name, value) ? REDACTED : value;
   }
   return out;
 }
@@ -194,12 +194,34 @@ function passwordSteps(trigger: FlowTriggerNode | null | undefined): Set<string>
   return names;
 }
 
-/** Note a secret's text, and the token of a `Bearer x` value, for scrubbing elsewhere. */
-function noteSecret(value: unknown, secrets: Set<string>): void {
+/** Values that are not secrets however they are stored: placeholders a broken sender writes. */
+const PLACEHOLDERS = new Set(['undefined', 'null', 'none', 'false', 'true', 'bearer', 'basic']);
+
+/** Add one form of a secret, if it can be told from ordinary text. */
+function addSecret(text: string, secrets: Set<string>): void {
+  const trimmed = text.trim();
+  if (trimmed.length < SCRUB_MIN || /^\d+$/u.test(trimmed) || PLACEHOLDERS.has(trimmed.toLowerCase()) || trimmed.includes(REDACTED)) return;
+  secrets.add(trimmed);
+  // As a later step may have sent it in a URL or a form body.
+  const encoded = encodeURIComponent(trimmed);
+  if (encoded !== trimmed) secrets.add(encoded);
+}
+
+/**
+ * Note a secret for scrubbing elsewhere in the run: the whole value, the token
+ * of a `Bearer x` value, each value of a `Cookie` header, and a signature
+ * without its `sha256=` prefix. Numbers and placeholders are not noted, so a
+ * timestamp or an `undefined` cannot blank ordinary text.
+ */
+function noteSecret(value: unknown, secrets: Set<string>, header?: string): void {
   if (typeof value !== 'string' || value === REDACTED) return;
-  if (value.length >= SCRUB_MIN) secrets.add(value);
+  addSecret(value, secrets);
   const token = /^\s*\S+\s+(\S+)\s*$/u.exec(value)?.[1];
-  if (token && token.length >= SCRUB_MIN && isSchemedCredential(value)) secrets.add(token);
+  // A credential header's `<scheme> <token>`, or a value shaped so.
+  if (token && (header !== undefined || isSchemedCredential(value))) addSecret(token, secrets);
+  if (header && /cookie/iu.test(header)) for (const pair of value.split(';')) addSecret(pair.slice(pair.indexOf('=') + 1), secrets);
+  const signed = /^[a-z0-9-]{2,16}=(.+)$/iu.exec(value)?.[1];
+  if (signed && header && /sig|hmac/iu.test(header)) addSecret(signed, secrets);
 }
 
 /** Every `_webhook.headers` in a value (trigger data, or a step that passed it on) with its credential headers withheld. */
@@ -209,7 +231,8 @@ function hideWebhookHeaders(value: unknown, secrets: Set<string>, depth: number)
   if (!object(value)) return value;
   return Object.fromEntries(Object.entries(value).map(([key, item]) => {
     if (key === '_webhook' && object(item) && object(item.headers)) {
-      for (const [name, header] of Object.entries(item.headers)) if (isCredentialHeader(name, header)) noteSecret(header, secrets);
+      // The timestamp is withheld by name, but is no secret to find elsewhere.
+      for (const [name, header] of Object.entries(item.headers)) if (isCredentialHeader(name, header) && name.toLowerCase() !== 'x-jarvis-timestamp') noteSecret(header, secrets, name);
       return [key, { ...item, headers: redactHeaderRecord(item.headers) }];
     }
     return [key, hideWebhookHeaders(item, secrets, depth + 1)];
@@ -239,13 +262,40 @@ function hidePasswords(steps: Record<string, unknown>, names: Set<string>, secre
   }));
 }
 
-/** Every string in a value with each secret replaced by `[redacted]`. */
-function scrub(value: unknown, secrets: readonly string[], depth = 0): unknown {
-  if (secrets.length === 0 || depth > 64) return value;
-  if (typeof value === 'string') return secrets.reduce((text, secret) => text.split(secret).join(REDACTED), value);
-  if (Array.isArray(value)) return value.map((item) => scrub(item, secrets, depth + 1));
+/**
+ * Replaces each secret in text with `[redacted]`, in one pass whatever the
+ * number of secrets: candidates are found by their first `SCRUB_MIN`
+ * characters, longest first, so a run with thousands of generated passwords
+ * costs a lookup per character, not a pass per password.
+ */
+export type Scrubber = (text: string) => string;
+function scrubber(secrets: Iterable<string>): Scrubber | null {
+  const byPrefix = new Map<string, string[]>();
+  for (const secret of secrets) {
+    const key = secret.slice(0, SCRUB_MIN);
+    const list = byPrefix.get(key);
+    if (list) list.push(secret); else byPrefix.set(key, [secret]);
+  }
+  if (byPrefix.size === 0) return null;
+  for (const list of byPrefix.values()) list.sort((a, b) => b.length - a.length);
+  return (text) => {
+    if (text.length < SCRUB_MIN) return text;
+    let out = '', from = 0;
+    for (let i = 0; i + SCRUB_MIN <= text.length;) {
+      const hit = byPrefix.get(text.slice(i, i + SCRUB_MIN))?.find((secret) => text.startsWith(secret, i));
+      if (hit) { out += text.slice(from, i) + REDACTED; i += hit.length; from = i; } else i++;
+    }
+    return from === 0 ? text : out + text.slice(from);
+  };
+}
+
+/** Every string in a value scrubbed; unchanged parts keep their identity. */
+export function scrubValue(value: unknown, scrub: Scrubber | null, depth = 0): unknown {
+  if (!scrub || depth > 64) return value;
+  if (typeof value === 'string') return scrub(value);
+  if (Array.isArray(value)) return value.map((item) => scrubValue(item, scrub, depth + 1));
   if (!object(value)) return value;
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrub(item, secrets, depth + 1)]));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrubValue(item, scrub, depth + 1)]));
 }
 
 /**
@@ -257,20 +307,21 @@ function scrub(value: unknown, secrets: readonly string[], depth = 0): unknown {
  *     stored before the webhook trigger withheld them (#1359);
  *   - the output of a password generator step (Crypto: Generate Password);
  *   - either value wherever else the run repeats it (a later step's input or
- *     output, the failed step's message), at least `SCRUB_MIN` long.
+ *     output, the failed step's message), as written or URL-encoded, at
+ *     least `SCRUB_MIN` long and not a bare number. A shorter generated
+ *     password is withheld as its step's output only.
  * `failedMessage` is scrubbed of the same values. Idempotent.
  */
 export function stepsAsShown<S extends Record<string, unknown> | null | undefined>(
   steps: S, trigger: FlowTriggerNode | null | undefined, failedMessage?: string,
-): { steps: S; failedMessage: string | undefined } {
-  if (!object(steps)) return { steps, failedMessage };
+): { steps: S; failedMessage: string | undefined; scrub: Scrubber | null } {
+  if (!object(steps)) return { steps, failedMessage, scrub: null };
   const secrets = new Set<string>();
   const credentialed = redactRunSteps(steps, trigger) as Record<string, unknown>;
   const passwords = passwordSteps(trigger);
   const hidden = hideWebhookHeaders(passwords.size > 0 ? hidePasswords(credentialed, passwords, secrets, 0) : credentialed, secrets, 0);
-  // Longest first, so a token inside a longer `Bearer` value is not cut out of it first.
-  const list = [...secrets].sort((a, b) => b.length - a.length);
-  return { steps: scrub(hidden, list) as S, failedMessage: failedMessage === undefined ? undefined : scrub(failedMessage, list) as string };
+  const scrub = scrubber(secrets);
+  return { steps: scrubValue(hidden, scrub) as S, failedMessage: failedMessage === undefined || !scrub ? failedMessage : scrub(failedMessage), scrub };
 }
 
 /** A run as a person or the model is shown it: `stepsAsShown` over its steps and its failed step's message. */
@@ -280,6 +331,11 @@ export function runAsShown<R extends { steps: Record<string, unknown> | null; fa
   const shown = stepsAsShown(run.steps, trigger, run.failedStep?.errorMessage);
   return { ...run, steps: shown.steps,
     ...(run.failedStep && shown.failedMessage !== undefined ? { failedStep: { ...run.failedStep, errorMessage: shown.failedMessage } } : {}) };
+}
+
+/** What else a run's records must not show of the secrets its steps hold (its effect records): a scrubber, or null when there are none. */
+export function runScrubber(run: { steps: Record<string, unknown> | null }, trigger: FlowTriggerNode | null | undefined): Scrubber | null {
+  return stepsAsShown(run.steps, trigger).scrub;
 }
 
 /**
