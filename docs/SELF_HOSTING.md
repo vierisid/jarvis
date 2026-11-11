@@ -878,6 +878,16 @@ environment (the dashboard and keychain hold LLM keys) keeps it out of that file
 either way, and nothing short of a sandbox keeps the daemon's files from what it
 runs.
 
+### Where Jarvis keeps its files, and a read-only home
+
+An instance that sets `JARVIS_HOME` keeps what it writes inside that folder and starts with a read-only or missing `$HOME` (a container, a locked-down service account):
+
+- Custom web-app templates are read from `<data dir>/webapp-templates`. An earlier install's `~/.jarvis/webapp-templates` is still read when it exists, never written, and the data dir's copy of a template wins.
+- The workflow engine's build cache, the pieces folder, the workflow files folder and the site projects folder stay under `~/.jarvis` as before while that location can be written. When it cannot, and `JARVIS_HOME` is set, each moves inside the data dir (`<data dir>/cache`, `pieces`, `projects`, and so on).
+- Template seeding never stops the daemon: a templates folder that cannot be created or read is skipped with a warning and the built-in templates load.
+
+Optional features that keep their own files under `~/.jarvis`, such as the controlled browser's profile, are not moved.
+
 ### Workflow credential encryption
 
 Workflow connection credentials (`app_connection.value`) are encrypted with

@@ -41,7 +41,8 @@ import {
   symlinkSync,
 } from "node:fs";
 import { resolve, dirname, relative, sep } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
+import { homeJarvisDir } from "../../../util/jarvis-dirs";
 import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { builtinModules } from "node:module";
@@ -62,7 +63,7 @@ const ENGINE_DIR = resolve(VENDOR_PACKAGES, "server/engine");
 // Isolate generated engine/piece outputs when multiple worktrees run tests.
 const CACHE_ROOT = process.env.NODE_ENV === 'test' && process.env.JARVIS_TEST_ENGINE_CACHE_ROOT
   ? resolve(process.env.JARVIS_TEST_ENGINE_CACHE_ROOT)
-  : resolve(homedir(), ".jarvis/cache");
+  : homeJarvisDir("cache");
 const STAGING_DIR = resolve(CACHE_ROOT, "engine-build");
 const BUNDLE_ROOT = resolve(CACHE_ROOT, "engine");
 

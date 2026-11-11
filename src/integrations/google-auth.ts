@@ -21,7 +21,13 @@ const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
  * class actually reads.
  */
 export function googleTokensPath(): string {
-  return path.join(os.homedir(), '.jarvis', 'google-tokens.json');
+  const legacy = path.join(os.homedir(), '.jarvis', 'google-tokens.json');
+  const dataDir = process.env.JARVIS_HOME?.trim();
+  if (!dataDir) return legacy;
+  // An instance with its own data dir keeps its tokens there. One that already
+  // has tokens in the old home location keeps using that file until it moves them.
+  const own = path.join(path.resolve(dataDir), 'google-tokens.json');
+  return !existsSync(own) && existsSync(legacy) ? legacy : own;
 }
 
 export interface ManagedRefresh {
@@ -95,7 +101,7 @@ export class GoogleAuth {
     this.clientId = clientId;
     this.clientSecret = clientSecret;
     this.refreshVia = opts?.refreshVia ?? null;
-    this.tokensPath = opts?.tokensPath ?? path.join(os.homedir(), '.jarvis', 'google-tokens.json');
+    this.tokensPath = opts?.tokensPath ?? googleTokensPath();
     this.redirectUri = opts?.redirectUri ?? 'http://localhost:3142/api/auth/google/callback';
     this.loadTokens();
   }
