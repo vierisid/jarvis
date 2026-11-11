@@ -540,8 +540,8 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   // the websocket transport (the daemon's worker-rpc.ts documents that Bun's
   // upgrade does not complete). So this one code is silenced for the engine
   // process and nothing else: every other warning, deprecation included, still
-  // reaches the log. Supported by Bun 1.3.14 and 1.4.x (measured), so by every
-  // Bun this package allows.
+  // reaches the log. Accepted by Bun 1.3.11 (the oldest this package allows),
+  // 1.3.14 and 1.4.x, checked by running each.
   //
   // `opts.runtime` (tests only, with /bin/true) gets none of these: they are
   // Bun flags, and that binary is not Bun.
