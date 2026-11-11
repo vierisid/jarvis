@@ -54,16 +54,36 @@ function notAFile(value: unknown): Error {
     return new Error(NOT_A_FILE + ' It got ' + describeGot(value) + ' instead.')
 }
 
+/** Decodes base64 held to the download cap; never echoes the value. */
+function decodeBase64(text: string): Buffer {
+    const encoded = text.replace(/\s+/g, '')
+    // base64 carries 3 bytes in 4 characters
+    if (encoded.length > Math.ceil(MAX_RESPONSE_BYTES / 3) * 4) throw new Error(MAX_FILE_MESSAGE)
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw new Error('The base64 text in this field is not valid base64.')
+    return Buffer.from(encoded, 'base64')
+}
+
+/**
+ * A data URL is decoded here, whatever its media type or parameters, so it
+ * never reaches the URL download (which would refuse it as an unlisted host).
+ */
+function dataUrlFile(value: string): ApFile {
+    if (value.length > Math.ceil(MAX_RESPONSE_BYTES / 3) * 4 + 256) throw new Error(MAX_FILE_MESSAGE)
+    const comma = value.indexOf(',')
+    const params = comma === -1 ? [] : value.slice('data:'.length, comma).split(';')
+    if (comma === -1 || !params.slice(1).some((p) => p.trim().toLowerCase() === 'base64')) {
+        throw new Error('A data URL in a file field must be base64 (data:<type>;base64,...).')
+    }
+    const extension = mime.extension(params[0].trim()) || 'bin'
+    return new ApFile('unknown.' + extension, decodeBase64(value.slice(comma + 1)), extension)
+}
+
 /** A string that names a file: a step-file path, an http(s) URL or a data URL. */
-function stringFileShape(value: string): string | null {
+function stringFileShape(value: string): string | ApFile | null {
     if (value.trim() === '') return null
     // Judged exactly as given: a padded or newline-ended path is not a step
     // file, so it never earns the engine credential.
-    if (value.startsWith('data:')) {
-        // base64 carries 3 bytes in 4 characters
-        if (value.length > Math.ceil(MAX_RESPONSE_BYTES / 3) * 4 + 256) throw new Error(MAX_FILE_MESSAGE)
-        return value
-    }
+    if (value.startsWith('data:')) return dataUrlFile(value)
     if (STEP_FILE_PATH.test(value) || /^https?:\/\/\S+$/i.test(value)) return value
     throw notAFile(value)
 }
@@ -77,11 +97,9 @@ function jarvisFileShape(value: unknown): string | ApFile | null {
     if (isString(record.url) && record.url.trim() !== '') return stringFileShape(record.url)
     const name = [record.filename, record.fileName, record.name].find((n): n is string => isString(n) && n.trim() !== '')
     if (isString(record.base64) && name !== undefined) {
-        const encoded = record.base64.replace(/^data:[^,]*;base64,/, '').replace(/\s+/g, '')
-        if (encoded.length > Math.ceil(MAX_RESPONSE_BYTES / 3) * 4) throw new Error(MAX_FILE_MESSAGE)
-        if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw new Error('The base64 text for ' + name + ' is not valid base64.')
+        const data = decodeBase64(record.base64.replace(/^data:[^,]*;base64,/, ''))
         const extension = name.includes('.') ? name.split('.').pop() : undefined
-        return new ApFile(name, Buffer.from(encoded, 'base64'), extension)
+        return new ApFile(name, data, extension)
     }
     throw new Error(NOT_A_FILE + ' It got an object with no file in it instead.')
 }

@@ -893,9 +893,11 @@ HTTP request specifics:
   accepts, for every piece: the bare step-file path (`/v1/step-files/<id>`, what
   zip, PDF, image and QR code steps return), the `{ fileName, url }` object
   Create file returns (so `{{step_1}}` works as well as `{{step_1.url}}`), an
-  `http(s)` URL (held to the read list above), a `data:` URL, and a
-  `{ filename, base64 }` object (`fileName` or `name` also count; the base64 may
-  carry a `data:` prefix). Base64 is held to the same 7.3 MiB cap as a download.
+  `http(s)` URL (held to the read list above), a base64 `data:` URL of any
+  media type (decoded in place, never fetched), and a `{ filename, base64 }`
+  object (`fileName` or `name` also count; the base64 may carry a `data:`
+  prefix). Base64 is held to the same 7.3 MiB cap as a download. The refusal
+  messages never repeat the value or its name.
   Only an exact step-file path earns the engine credential; a padded or
   query-carrying path does not. Any other value (plain text, a number, a list,
   an object with no file) fails the step with "This field needs a file from an
