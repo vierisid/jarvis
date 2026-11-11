@@ -12,13 +12,13 @@ let journey:InstanceType<typeof UI.GettingStartedJourney>, route:BriefRoute, all
 beforeAll(async()=>{ GlobalRegistrator.register(); (globalThis as any).IS_REACT_ACT_ENVIRONMENT=true; React=await import('react'); ({createRoot}=await import('react-dom/client')); UI=await import('./GettingStarted'); });
 beforeEach(()=>{ host=document.createElement('div'); document.body.append(host); root=createRoot(host); stored={revision:0,completed:[],hidden:false};destinations=[];writes=0;fail=false;allowLeave=true;workflowRows=[];route={room:'today',selection:{}};
   window.localStorage.clear();
-  http={ json:async(_path:string,init?:RequestInit)=>{if(_path==='/api/workflows')return workflowRows;if(init?.method==='PATCH'){writes++;if(fail)throw Error('network');const {revision,change}=JSON.parse(init.body as string);if(revision!==stored.revision)throw Error('conflict');stored={revision:revision+1,hidden:change.hidden??stored.hidden,completed:change.item ? GETTING_STARTED_IDS.filter(id=>id===change.item?change.done:stored.completed.includes(id)):stored.completed};} return structuredClone(stored);} } as HostTransport;
+  http={ json:async(_path:string,init?:RequestInit)=>{if(_path==='/api/workflows?limit=1')return workflowRows;if(init?.method==='PATCH'){writes++;if(fail)throw Error('network');const {revision,change}=JSON.parse(init.body as string);if(revision!==stored.revision)throw Error('conflict');stored={revision:revision+1,hidden:change.hidden??stored.hidden,completed:change.item ? GETTING_STARTED_IDS.filter(id=>id===change.item?change.done:stored.completed.includes(id)):stored.completed};} return structuredClone(stored);} } as HostTransport;
   journey=new UI.GettingStartedJourney(http,window.localStorage,'scope');
 });
 afterEach(async()=>{await React.act(async()=>root.unmount());journey.retire();host.remove();});afterAll(()=>GlobalRegistrator.unregister());
 const button=(text:string)=>[...host.querySelectorAll<HTMLButtonElement>('button')].find(b=>(b.getAttribute('aria-label')??b.textContent).includes(text))!;
 function navigate(r:BriefRoute){destinations.push(r);route=r;}
-async function render(compact=false,waiting:number|null=0){await React.act(async()=>root.render(<div className="brief-root"><UI.GettingStarted journey={journey} navigate={navigate} goalId="existing-goal" compact={compact} waiting={waiting}/></div>));}
+async function render(compact=false,waiting:number|null=0,held=false){await React.act(async()=>root.render(<div className="brief-root"><UI.GettingStarted journey={journey} navigate={navigate} goalId="existing-goal" compact={compact} waiting={waiting} held={held}/></div>));}
 async function destination(){await React.act(async()=>root.render(<div className="brief-root"><UI.GettingStartedDestination journey={journey} shell={{route,navigate} as any} canLeave={async()=>allowLeave}><h1>Real page</h1></UI.GettingStartedDestination></div>));}
 async function click(text:string){await React.act(async()=>button(text).click());}
 async function open(){await click('Review setup action');const b=host.querySelector<HTMLButtonElement>('.brief-today-paper-actions button')!;await React.act(async()=>b.click());}
@@ -51,6 +51,11 @@ test('the all-clear shows only when nothing waits, and otherwise points at Needs
   await render(false,1);expect(host.textContent).toContain('1 item needs you.');
   await render(false,null);expect(host.textContent).not.toContain('Nothing needs you');
   await render(false,0);expect(host.textContent).toContain('Nothing needs you right now.');
+});
+test('a paused or stopped workspace never reads as an all-clear, and waiting items still lead',async()=>{
+  stored={revision:10,completed:[...GETTING_STARTED_IDS],hidden:false};
+  await render(false,0,true);expect(host.textContent).not.toContain('Nothing needs you');expect(host.textContent).toContain('Work is on hold until you resume it.');
+  await render(false,2,true);expect(host.textContent).toContain('2 items need you.');expect(button('Open Needs you')).toBeDefined();
 });
 test('hover/focus details have a keyboard/touch review control and Escape closes them',async()=>{
   await render();expect(host.querySelector('.brief-today-paper-clip')?.getAttribute('data-raised')).toBe('false');

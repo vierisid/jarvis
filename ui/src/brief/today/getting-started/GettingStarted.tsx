@@ -52,7 +52,7 @@ export class GettingStartedJourney {
   /** Which next action fits a finished account. A failed read stays 'unknown' and is treated as "has workflows". */
   readWorkflows = async () => {
     try {
-      const rows = await this.transport.json('/api/workflows', { signal: this.life.signal });
+      const rows = await this.transport.json('/api/workflows?limit=1', { signal: this.life.signal });
       this.update({ workflows: Array.isArray(rows) ? rows.length ? 'some' : 'none' : 'unknown' });
     } catch { this.update({ workflows: 'unknown' }); }
   };
@@ -91,10 +91,12 @@ function useJourney(journey: GettingStartedJourney) {
 function Recovery({ journey, error }: { journey: GettingStartedJourney; error: string }) {
   return error ? <div role="alert" className="brief-setup-error"><p>{error}</p><BriefButton variant="secondary" onClick={() => void journey.read()}>Refresh setup actions</BriefButton></div> : null;
 }
-export function GettingStarted({ journey, navigate, goalId, compact = false, waiting }: {
+export function GettingStarted({ journey, navigate, goalId, compact = false, waiting, held = false }: {
   journey: GettingStartedJourney; navigate(route: BriefRoute): void; goalId?: string; compact?: boolean;
   /** Items waiting on the owner (decisions, approvals, input requests); null while unknown. Required so the all-clear cannot be shown by default. */
   waiting: number | null;
+  /** Paused or stopped from emergency controls: the banner says so, and the row never reads as an all-clear. */
+  held?: boolean;
 }) {
   const { state, busy, error, workflows } = useJourney(journey);
   const finished = !!state && state.completed.length === GETTING_STARTED_IDS.length && !state.hidden;
@@ -107,8 +109,9 @@ export function GettingStarted({ journey, navigate, goalId, compact = false, wai
   return <div className="brief-setup-sequence">
     {!state ? <section className="brief-today-decision brief-today-decision--fallback" aria-busy={!error || undefined}><h2 className="brief-type-hero-heading">{error ? 'Setup actions unavailable.' : 'Loading your next setup action…'}</h2></section>
       : id ? <SetupPaper key={id} id={id} count={count} disabled={busy || !!error} open={open} />
-      : <section className="brief-setup-done" aria-label={waiting === 0 ? 'Nothing waiting' : 'Waiting on you'}>
-        <p className="brief-type-body-emphasis">{waiting === 0 ? 'Nothing needs you right now.' : waiting === null ? 'Checking what needs you…' : `${waiting} ${waiting === 1 ? 'item needs' : 'items need'} you.`}</p>
+      : <section className="brief-setup-done" aria-label={waiting === 0 && !held ? 'Nothing waiting' : 'Waiting on you'}>
+        <p className="brief-type-body-emphasis">{waiting ? `${waiting} ${waiting === 1 ? 'item needs' : 'items need'} you.` : held ? 'Work is on hold until you resume it.'
+          : waiting === 0 ? 'Nothing needs you right now.' : 'Checking what needs you…'}</p>
         {waiting ? <BriefButton variant="text" icon={<ArrowRight size={16} />} onClick={() => navigate({ room: 'needs-you', selection: {} })}>Open Needs you</BriefButton>
           : <BriefButton variant="text" icon={<ArrowRight size={16} />} onClick={() => navigate({ room: workflows === 'none' ? 'workflows' : 'all-workflows', selection: {} })}>{workflows === 'none' ? 'Describe a recurring job' : 'See your workflows'}</BriefButton>}</section>}
     <Recovery journey={journey} error={error} />
