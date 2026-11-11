@@ -15,6 +15,7 @@ import type { BriefWorkflowRef } from './contracts';
 import type { DecisionAction, DecisionQuery, DecisionResolution, QueuedDecision } from './decision-contracts';
 import { ensureDecisionSchema } from './decision-schema';
 import { WORKFLOW_REVIEWED_UI_TOOLS } from '../authority/ui-intent';
+import { governedActionReview } from '../authority/governed-review';
 
 export class DecisionError extends Error {
   constructor(message: string, readonly status = 400, readonly code = 'invalid_request') { super(message); }
@@ -218,6 +219,11 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
         item.review.requestedAt = run.startTime ?? run.created;
         // Project only reviewed notification fields from its immutable effect, never generic tool arguments.
         // `title` is the effect's toolName, so only notification rows load their full record.
+        // Any governed piece action (SMTP, HTTP, Gmail, ...): what it will do, from the frozen
+        // arguments the approval is bound to. Redacted and bounded at the effect boundary, and again here.
+        const piece = /^piece:([^/]+)\//u.exec(item.review.toolName);
+        const pieceEffect = piece ? linked.rows.filter(row => row.title === item.review!.toolName).map(row => getWorkflowEffect(row.id)).find(effect => effect?.toolName === item.review!.toolName) : undefined;
+        if (piece && pieceEffect) item.review.action = governedActionReview(piece[1]!, pieceEffect.arguments) ?? undefined;
         const frozen = linked.rows.filter(row => row.title === 'workflow_notify').map(row => getWorkflowEffect(row.id)).find(effect => effect?.route === 'notify' && effect.toolName === 'workflow_notify');
         if (frozen && typeof frozen.arguments.message === 'string' && Array.isArray(frozen.arguments.channels)) {
           item.review.message = frozen.arguments.message.slice(0, 20_000);

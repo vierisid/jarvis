@@ -116,6 +116,9 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
             <dl className="brief-decision-values">{row.review.values.map(v => <React.Fragment key={v.name}>
               <dt>{v.name}{v.source === 'run_data' ? ' (from run data)' : v.source === 'agent' ? ' (chosen by the agent)' : ''}</dt>
               <dd style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{v.value}</dd></React.Fragment>)}</dl></>}
+          {row.review?.action && row.review.action.fields.length > 0 && <><p><strong>What will happen</strong></p>
+            {row.review.action.fields.map((f, i) => <p key={`${f.label}-${i}`} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}><strong>{f.label}</strong><br />{f.value}</p>)}
+            {row.review.action.more > 0 && <p>{row.review.action.more} more {row.review.action.more === 1 ? 'field is' : 'fields are'} not shown.</p>}</>}
           <p>{asksPermission(row) ? 'Jarvis needs your permission for this action before it can continue.' : row.title}</p>
           {browserCardTitle(row) && <p>{row.title}</p>}
           {row.review?.toolName.startsWith('browser_') && <p>The browser uses a separate Jarvis profile. If the site asks you to sign in, complete sign-in in that browser before starting a new run.</p>}

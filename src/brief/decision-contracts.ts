@@ -18,7 +18,9 @@ export interface QueuedDecision extends BriefDecision {
   supportedActions: DecisionAction[];
   review?: { toolName: string; reason: string; target?: string; origin?: string; element?: string; workflowName?: string; requestedAt?: number; message?: string; channels?: string[]; fallback?: 'desktop';
     /** #1314: a reviewed browser/desktop workflow card: the computer, the window, and every value with where it came from. */
-    computer?: string; window?: string; values?: Array<{ name: string; value: string; source: 'workflow' | 'run_data' | 'agent' }> };
+    computer?: string; window?: string; values?: Array<{ name: string; value: string; source: 'workflow' | 'run_data' | 'agent' }>;
+    /** A governed piece action (email, HTTP request, ...): what it will do, from the frozen effect. `more` counts fields not shown. */
+    action?: { fields: Array<{ label: string; value: string }>; more: number } };
   placement: number;
   createdAt: number;
 }

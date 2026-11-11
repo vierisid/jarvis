@@ -462,3 +462,47 @@ test('malformed frozen notification arguments are not projected', () => {
   saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify', arguments: { message: 'Hi', channels: ['dashboard', 7, null] } });
   expect(queue.get(`approval:${a.id}`).review?.channels).toEqual(['dashboard']);
 });
+
+test('a governed email card shows who it goes to, the subject, a body excerpt and the attachments from the frozen effect (G-1)', () => {
+  const tool = 'piece:smtp/send-email';
+  const a = manager.createRequest({ agentId: 'fixture', agentName: 'Fixture', toolName: tool, toolArguments: {},
+    actionCategory: 'send_email', urgency: 'normal', reason: 'send_email is above this agent\'s authority level', context: '', executionMode: 'workflow' });
+  const e = effect('pending', a.id);
+  saveWorkflowEffect({ ...e.record, toolName: tool, actionCategory: 'send_email', route: 'piece', arguments: {
+    from: 'owner@example.test', to: ['alice@example.test'], cc: ['bob@example.test'], bcc: ['secret@example.test'], subject: 'Q4 invoice',
+    body: `pay 1000 EUR to IBAN 123\n${'x'.repeat(2000)}`, body_type: 'plain_text',
+    attachments: [{ file: { filename: 'invoice.pdf', data: '[binary, 21 bytes]' }, name: 'Invoice Q4.pdf' }],
+    customHeaders: { 'X-Api-Key': 'never serialize me' } } });
+  const action = queue.get(`approval:${a.id}`).review?.action;
+  expect(action?.fields.map(f => f.label)).toEqual(['To', 'Subject', 'Cc', 'Bcc', 'From', 'Body', 'Attachments', 'Body type']);
+  const field = (label: string) => action!.fields.find(f => f.label === label)!.value;
+  expect(field('To')).toBe('alice@example.test');
+  expect(field('Cc')).toBe('bob@example.test');
+  expect(field('Bcc')).toBe('secret@example.test');
+  expect(field('Subject')).toBe('Q4 invoice');
+  expect(field('Body').startsWith('pay 1000 EUR to IBAN 123\n')).toBe(true);
+  expect(field('Body').length).toBeLessThanOrEqual(504);
+  expect(field('Attachments')).toBe('Invoice Q4.pdf (21 bytes)');
+  expect(JSON.stringify(queue.get(`approval:${a.id}`))).not.toContain('never serialize me');
+});
+
+test('a governed HTTP card shows the method, URL and body excerpt with credentials as the frozen record redacted them (G-1)', () => {
+  const tool = 'piece:http/send_request';
+  const a = manager.createRequest({ agentId: 'fixture', agentName: 'Fixture', toolName: tool, toolArguments: {},
+    actionCategory: 'send_message', urgency: 'normal', reason: 'Review', context: '', executionMode: 'workflow' });
+  const e = effect('pending', a.id);
+  saveWorkflowEffect({ ...e.record, toolName: tool, route: 'piece', arguments: { method: 'POST', url: 'http://203.0.113.10/hook?token=[redacted]',
+    headers: { Authorization: '[redacted]' }, body: { type: 'json', data: { note: 'hello' } } } });
+  const action = queue.get(`approval:${a.id}`).review?.action;
+  expect(action?.fields).toEqual([{ label: 'Method', value: 'POST' }, { label: 'URL', value: 'http://203.0.113.10/hook?token=[redacted]' },
+    { label: 'Body', value: '{"type":"json","data":{"note":"hello"}}' }]);
+});
+
+test('a governed card strips bidi and format characters from what it shows (G-1)', () => {
+  const tool = 'piece:smtp/send-email';
+  const a = manager.createRequest({ agentId: 'fixture', agentName: 'Fixture', toolName: tool, toolArguments: {},
+    actionCategory: 'send_email', urgency: 'normal', reason: 'Review', context: '', executionMode: 'workflow' });
+  const e = effect('pending', a.id);
+  saveWorkflowEffect({ ...e.record, toolName: tool, arguments: { to: ['a@example.test'], subject: 'Pay ‮evil‬ now​' } });
+  expect(queue.get(`approval:${a.id}`).review?.action?.fields.find(f => f.label === 'Subject')?.value).toBe('Pay evil now');
+});
