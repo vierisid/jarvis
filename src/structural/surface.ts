@@ -8,6 +8,7 @@
  * coverage number that tells the model when to fall back to vision.
  */
 
+import { assertScreenReadAllowed } from '../actions/tools/desktop-guard';
 import { getSidecarManager, autoTargetForCapability } from '../actions/tools/sidecar-route.ts';
 import type { SidecarManager } from '../sidecar/manager.ts';
 import {
@@ -122,6 +123,8 @@ export function computeCoverage(nodes: SemanticNode[]): number {
 }
 
 export async function captureSurface(opts: CaptureOptions): Promise<CaptureResult> {
+  // The read primitive itself refuses while screen awareness is off (#1314 review), so no caller reads a surface past the switch.
+  assertScreenReadAllowed();
   const manager = requireManager();
   const target = resolveTarget(opts.kind, opts.target);
   const sidecar = manager.listSidecars().find((s) => s.id === target || s.name === target);

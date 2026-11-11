@@ -5,7 +5,7 @@ import type { MemoryPort } from '../memory/stream/model';
 import { queryString } from '../memory/stream/model';
 import type { MemoryDetailPort } from '../memory/detail/model';
 import type { HostTransport } from './http';
-import { post } from './http';
+import { AWARENESS_OFF_TEXT, AwarenessOffError, post } from './http';
 
 export function createDomainPorts(scopeId: string, http: HostTransport, storage: Pick<Storage, 'setItem'>) {
   const get = http.json;
@@ -44,7 +44,13 @@ export function createDomainPorts(scopeId: string, http: HostTransport, storage:
   } };
   const opportunities: OpportunitiesPort = {
     read: async () => {
-      const rows = await collection('/api/brief/prepared-opportunities', 'proposalId');
+      let rows: any[];
+      try { rows = await collection('/api/brief/prepared-opportunities', 'proposalId'); }
+      catch (error) {
+        // Built from recorded screen cues: hidden while awareness is off, and said so (#1314).
+        if (error instanceof AwarenessOffError) return { status: 'unavailable', reason: AWARENESS_OFF_TEXT };
+        throw error;
+      }
       const data: FinishedOpportunity[] = rows.map(p => {
         if (!p.specification || typeof p.title !== 'string' || !Array.isArray(p.blockers) || !Array.isArray(p.evidence)) throw new Error('Opportunity unavailable');
         return { proposal: p, canApprove: p.canApprove === true, title: p.title, observation: p.specification.description,
