@@ -1,5 +1,6 @@
 import { useHumanInputCount } from './HumanInputs';
-import React, { useState } from 'react';
+import React, { useContext, useState } from 'react';
+import { StoredNoticesContext } from '../navigation/StoredNoticesContext';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import { PendingDecisions, ForgetMemory } from './canonical-commands';
 import type { BriefRoomRegistry, BriefShellPort, BriefReadState } from '../contracts';
@@ -162,13 +163,14 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   function NeedsYou({ shell }: { shell: BriefShellPort }) {
     const all = useBriefProjection(decisionRead);
     const humanPending = useHumanInputCount();
+    const stored = useContext(StoredNoticesContext);
     const [otherCount, setOtherCount] = useState<number | null>(null);
     const onlyOther = onlyOtherDecisions(all, otherCount === null ? null : otherCount + humanPending);
     // A link's request may sit in either list; only when neither has it is it gone.
     const named = shell.route.selection.approvalId;
     const docsSettled = all.state === 'ready' || all.state === 'empty' || all.state === 'stale';
     const elsewhere = !docsSettled || !!(named && all.data?.some(row => row.paper.decision.approval?.approvalId === named));
-    return <>{onlyOther ? <header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
+    return <>{onlyOther ? <><header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header>{stored.list}</> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
       <PendingDecisions onCount={setOtherCount} elsewhere={elsewhere} selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
   }
   const rooms: BriefRoomRegistry = {

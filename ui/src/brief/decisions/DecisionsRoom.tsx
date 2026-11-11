@@ -1,10 +1,12 @@
 import React, {
   useEffect,
   useLayoutEffect,
+  useContext,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
+import { StoredNoticesContext } from "../navigation/StoredNoticesContext";
 import { FileText, Check, RefreshCw, ArrowUpRight } from "lucide-react";
 import { isBriefCapabilityEnabled } from "../../../../src/brief/capabilities";
 import type { BriefRoomModule, BriefShellPort } from "../contracts";
@@ -76,6 +78,7 @@ function ConnectedDecisions({
     controller.snapshot,
   );
   const reduced = useBriefReducedMotion();
+  const stored = useContext(StoredNoticesContext);
   const list = useRef<HTMLElement>(null),
     paper = useRef<HTMLElement>(null),
     actions = useRef<HTMLDivElement>(null);
@@ -234,6 +237,7 @@ function ConnectedDecisions({
           {state.read.reason}
         </p>
       )}
+      {stored.list}
       {!found ? (
         <div className="brief-decisions-empty" role="status">
           <FileText size={26} />
@@ -242,9 +246,13 @@ function ConnectedDecisions({
               ? "Loading decisions…"
               : ["unavailable", "unsupported"].includes(state.read.status)
                 ? "Decisions are unavailable"
-                : "Nothing needs your review"}
+                : stored.count
+                  ? "No requests waiting"
+                  : "Nothing needs your review"}
           </h2>
-          <p>{state.message}</p>
+          <p>{stored.count && !["loading", "unavailable", "unsupported"].includes(state.read.status)
+            ? `${stored.count} new ${stored.count === 1 ? "message" : "messages"} from your workflows.`
+            : state.message}</p>
         </div>
       ) : (
         <div className="brief-decisions-grid">

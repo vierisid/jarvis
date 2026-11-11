@@ -203,6 +203,21 @@ test("empty is not confused with unavailable", async () => {
   expect(host.textContent).toContain("Decisions are unavailable");
   expect(host.textContent).not.toContain("Nothing needs your review");
 });
+test("unread messages from workflows lead the room and the empty state does not say nothing is waiting", async () => {
+  const { StoredNoticesContext } = await import("../navigation/StoredNoticesContext");
+  f.controller.retire();
+  f = makeDecisionsFixture("empty", 0);
+  await React.act(async () => root.render(
+    <StoredNoticesContext.Provider value={{ count: 1, list: <section aria-label="New messages"><h3>Stand-up</h3></section> }}>
+      <Room shell={shell} binding={binding()} />
+    </StoredNoticesContext.Provider>));
+  await React.act(wait);
+  const order = [...host.querySelectorAll("h1, [aria-label='New messages'], .brief-decisions-empty")].map((el) => el.tagName + (el.getAttribute("aria-label") ?? ""));
+  expect(order).toEqual(["H1", "SECTIONNew messages", "DIV"]);
+  expect(host.textContent).not.toContain("Nothing needs your review");
+  expect(host.textContent).toContain("No requests waiting");
+  expect(host.textContent).toContain("1 new message from your workflows.");
+});
 
 test("keep draft advancement updates the return route instead of reopening the deferred item", async () => {
   await render();
