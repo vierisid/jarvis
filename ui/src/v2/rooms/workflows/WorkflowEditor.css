@@ -1921,6 +1921,8 @@
 .wf-props__sample-status { font-size: 0.78rem; }
 .wf-props__sample-status--ok { color: var(--accent-ok, #5eead4); }
 .wf-props__sample-status--warn { color: var(--accent-warn, #fbbf24); }
+.wf-props__sample-status p { margin: 0.25rem 0 0; }
+.wf-props__sample-result { margin: 0.25rem 0 0; max-height: 10rem; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 0.75rem; color: var(--text-primary, inherit); }
 .wf-props__sample-actions { display: flex; gap: var(--s-1); flex-wrap: wrap; }
 
 /* --- flow_ref widget (workflow picker) ------------------------------ */

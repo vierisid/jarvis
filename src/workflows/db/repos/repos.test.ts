@@ -518,6 +518,17 @@ describe("mergeRunOutputsIntoSampleData (auto-capture)", () => {
     expect(v.sampleData?.bare).toEqual({ b: 2 });
   });
 
+  test("stores what the step returned, not the engine's step record around it", () => {
+    const versionId = newDraft();
+    mergeRunOutputsIntoSampleData(versionId, {
+      step_1: { output: { type: "PIECE", status: "SUCCEEDED", input: { value: 1 }, output: { echo: "hello" } } },
+      step_2: { output: { type: "PIECE", status: "SUCCEEDED", input: {}, output: "text" } },
+    });
+    const v = getFlowVersion(versionId)!;
+    expect(v.sampleData?.step_1).toEqual({ echo: "hello" });
+    expect(v.sampleData?.step_2).toBeUndefined();
+  });
+
   test("does not clobber user-pinned cells", () => {
     const versionId = newDraft();
     setSampleDataEntry(versionId, "step_1", { user: "pinned" });

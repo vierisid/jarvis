@@ -701,10 +701,21 @@ export function mergeRunOutputsIntoSampleData(
     // Pull the inner `output` field if this is a wrapped StepOutput,
     // otherwise treat the value itself as the output (defensive against
     // schema variants).
-    const output =
+    let output =
       raw && typeof raw === "object" && !Array.isArray(raw) && "output" in (raw as Record<string, unknown>)
         ? (raw as { output: unknown }).output
         : raw;
+    // A run records each step as `{ output: StepOutput }`, and the StepOutput
+    // (`{ type, status, input, output }`) holds what the step returned. The
+    // sample is what the step returned, which is what a test feeds to later steps.
+    if (
+      output && typeof output === "object" && !Array.isArray(output)
+      && typeof (output as Record<string, unknown>).type === "string"
+      && typeof (output as Record<string, unknown>).status === "string"
+      && "output" in (output as Record<string, unknown>)
+    ) {
+      output = (output as { output: unknown }).output;
+    }
     if (!output || typeof output !== "object" || Array.isArray(output)) {
       skipped.push({ stepName, reason: "output not a plain object" });
       continue;

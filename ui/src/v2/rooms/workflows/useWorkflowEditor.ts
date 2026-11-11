@@ -1,5 +1,6 @@
 import { jsonInputBase, jsonInputScope, type JsonInputDraft } from './json-input-drafts';
 import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
+import { runStepTest, type StepTestResult } from "./step-test";
 /**
  * Hook for the workflow visual editor.
  *
@@ -240,6 +241,9 @@ interface ActionResult {
 export function useWorkflowEditor(flowId: string | null) {
   const fetch = useWorkflowRequest();
   const savedDisplayName = useRef<string | null>(null);
+  // A step test outlives its click; it stops waiting once the editor closes.
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
   const [catalog, setCatalog] = useState<PieceCatalogEntry[]>([]);
   const [version, setVersion] = useState<FlowVersion | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1370,34 +1374,31 @@ export function useWorkflowEditor(flowId: string | null) {
   );
 
   /**
-   * Kick off a "test from here" run: enqueues a flow run with
-   * `stepNameToTest` set. The engine executes only that step, feeding it
-   * preceding-step outputs from the version's persisted sample data. The
-   * resulting flow_run row shows up in the run-history panel.
+   * "Test this step": save any unsaved edits (the run API tests the saved
+   * draft), run just that step, wait for it and return how it went. The
+   * server fills the step's empty sample output from a passing run; it is
+   * read back here so the Output box shows it.
    */
   const testStepFromHere = useCallback(
-    async (stepName: string): Promise<ActionResult> => {
-      if (!flowId) return { ok: false, message: "no flow loaded" };
-      try {
-        const res = await fetch(`/api/workflows/${flowId}/run`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            triggeredBy: "dashboard:test-from-here",
-            stepNameToTest: stepName,
-            environment: "TESTING",
-          }),
-        });
-        if (!res.ok) {
-          const body = await safeJson(res);
-          return { ok: false, message: body?.error ?? `run failed: ${res.status}` };
-        }
-        return { ok: true, message: `Test run queued for "${stepName}"` };
-      } catch (e) {
-        return { ok: false, message: e instanceof Error ? e.message : String(e) };
-      }
+    async (stepName: string): Promise<StepTestResult> => {
+      if (!flowId) return { ok: false, message: "No workflow is loaded." };
+      const versionId = version?.id;
+      return runStepTest({
+        request: fetch,
+        flowId,
+        stepName,
+        saveFirst: dirty || Object.keys(jsonInputDrafts).length > 0 ? save : null,
+        alive: () => aliveRef.current,
+        finished: async () => {
+          if (!versionId) return;
+          const res = await fetch(`/api/workflows/${flowId}/versions/${versionId}`);
+          if (!res.ok) return;
+          const fresh = (await res.json()) as FlowVersion;
+          setVersion((prev) => (prev && prev.id === fresh.id ? { ...prev, sampleData: fresh.sampleData ?? null } : prev));
+        },
+      });
     },
-    [flowId, fetch],
+    [flowId, version?.id, fetch, dirty, jsonInputDrafts, save],
   );
 
   /** Depth-recursive flatten that includes LOOP body + ROUTER branch children.
