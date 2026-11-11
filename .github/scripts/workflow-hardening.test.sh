@@ -2854,7 +2854,7 @@ if (rule === "prlegs") {
   };
   // In an expression; an if is one whether or not it is wrapped in ${{ }}.
   const READS = /\b(matrix|strategy)\b/;
-  const EXPR = /\$\{\{[^}]*\b(matrix|strategy)\b/;
+  const EXPR = /\$\{\{(?:(?!\}\}).)*?\b(matrix|strategy)\b/s;
   // The only step inputs that may read an env set from the leg, exactly.
   const DERIVEDREADS = { "steps[Build Docker image (validate)].with.tags": "${{ env.IMAGE_TAG }}" };
   // Every string in v with its path; steps by name.
@@ -6661,6 +6661,9 @@ WARNING_LEG=$'          - runner: ubuntu-latest\n            leg: ubuntu-latest,
 	expect_caught 'a build input switched by the image tag that names the leg' prlegs "$WORKFLOWS/docker-build.yml" \
 		$'          push: false\n' $'          push: false\n          no-cache-filters: ${{ endsWith(env.IMAGE_TAG, \x27-1\x27) && \x27all\x27 || \x27\x27 }}\n' \
 		'with.no-cache-filters reads the leg'
+	expect_caught 'a run script reading the leg in an expression with a brace before it' prlegs "$WORKFLOWS/test.yml" \
+		$'          go vet ./...\n' $'          ${{ format(\x27{0}\x27, matrix.early_warning) }} || exit 0\n          go vet ./...\n' \
+		'.run reads matrix'
 	# A script comment that says matrix reads nothing: only expressions do.
 	copy="${WORK}/prlegs-comment.yml"
 	if FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
