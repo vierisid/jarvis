@@ -433,7 +433,7 @@ scripts/notch/fixture.sh approval 3    # three, for the count and the round
 scripts/notch/fixture.sh payment       # an approval that is a payment; no money moves
 scripts/notch/fixture.sh promise 30    # a promise due in 30 s (two minutes when not said)
 scripts/notch/fixture.sh failure       # one failure in the list of open failures
-scripts/notch/fixture.sh elsewhere     # approve the oldest fixture approval as a dashboard click would
+scripts/notch/fixture.sh elsewhere     # approve the fixture approval on the notch as a dashboard click would
 scripts/notch/fixture.sh log           # one line per promise that ran
 ```
 

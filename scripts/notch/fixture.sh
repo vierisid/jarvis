@@ -11,7 +11,7 @@
 #   scripts/notch/fixture.sh payment         an approval that is a payment (no money moves)
 #   scripts/notch/fixture.sh promise [secs]  a promise due in two minutes, or in [secs]
 #   scripts/notch/fixture.sh failure         one failure in the list of open failures
-#   scripts/notch/fixture.sh elsewhere       approve the oldest fixture approval as a dashboard click would
+#   scripts/notch/fixture.sh elsewhere       approve the fixture approval on the notch as a dashboard click would
 #   scripts/notch/fixture.sh log             the lines the promises wrote when they ran
 #
 # It is `jarvis notch fixture` pointed at the test brain: same port, and the
@@ -71,7 +71,7 @@ while true; do
   echo "   4  promise           a promise due in two minutes"
   echo "   5  promise in 20 s   a promise due in twenty seconds"
   echo "   6  failure           one failure in the list of open failures"
-  echo "   7  elsewhere         approve the oldest fixture approval as a dashboard click would"
+  echo "   7  elsewhere         approve the fixture approval on the notch as a dashboard click would"
   echo "   l  log               the lines the promises wrote when they ran"
   echo "   q  quit"
   printf 'Make: '

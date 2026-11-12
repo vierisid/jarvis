@@ -14,9 +14,10 @@
  *   payment   an approval that says it is a payment of a sample amount. It is
  *             a declared intent with nothing behind it: approving it in the
  *             dashboard moves no money and runs nothing.
- *   elsewhere approves the oldest waiting fixture approval the way a click on
- *             its dashboard card does: the same decision function, as the
- *             dashboard. It is for seeing what the notch does when something
+ *   elsewhere approves a waiting fixture approval the way a click on its
+ *             dashboard card does: the same decision function, as the
+ *             dashboard. The one the notch is showing, when it is showing
+ *             one; otherwise the newest. It is for seeing what the notch does when something
  *             is decided somewhere else, on a brain whose dashboard cannot
  *             be reached (one still in first-run setup). It decides fixture
  *             approvals only, never a payment, and nothing else.
@@ -50,6 +51,8 @@ export interface NotchFixtureDeps {
   approvalManager: Pick<ApprovalManager, 'createRequest'> & Partial<Pick<ApprovalManager, 'getPending'>>;
   /** Approves a request as a click on its dashboard card does. Comes back with what the decision function said. */
   approveAsDashboard?: (requestId: string) => Promise<{ status: string }>;
+  /** The approval request the notch is showing now, if it is showing one. */
+  approvalOnNotch?: () => string | null;
   /** Shows a new approval wherever approvals are shown: the dashboard card, and a chat card if a channel is set up. */
   deliverApproval?: (request: ApprovalRequest) => Promise<void> | void;
   /** Records the test failure. Comes back with its sentence. Absent when it cannot be recorded. */
@@ -138,9 +141,13 @@ export function createNotchFixtures(deps: NotchFixtureDeps): NotchFixtures {
     kinds.elsewhere = async () => {
       // Its own approvals only, and never the payment: this is a way to see
       // the notch react, not a way to approve things.
-      const mine = getPending()
+      const waiting = getPending()
         .filter((request) => request.agent_id === NOTCH_FIXTURE_AGENT && request.tool_name === 'get_system_info')
-        .sort((a, b) => a.created_at - b.created_at)[0];
+        .sort((a, b) => b.created_at - a.created_at);
+      // The one on the notch is the one whose line is being watched; with
+      // none there, the newest.
+      const shown = deps.approvalOnNotch?.() ?? null;
+      const mine = waiting.find((request) => request.id === shown) ?? waiting[0];
       if (!mine) throw new Error('No fixture approval is waiting. Make one first: fixture approval.');
       const outcome = await approveAsDashboard(mine.id);
       return outcome.status === 'approved'
