@@ -8,7 +8,7 @@
  * Usage: bun run src/scripts/google-setup.ts
  */
 
-import { GoogleAuth } from '../integrations/google-auth.ts';
+import { GoogleAuth, googleTokensPath } from '../integrations/google-auth.ts';
 import { loadConfig } from '../config/loader.ts';
 import { externalUrl, resolveExternalOrigin } from '../util/external-origin.ts';
 import { GoogleOAuthFlowStore } from '../integrations/google-oauth-flow.ts';
@@ -17,6 +17,19 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/calendar.readonly',
 ];
+
+/**
+ * What the terminal is told once the tokens are on disk: that they were saved,
+ * and where. No part of either token: a prefix is still part of a bearer
+ * credential, and setup output is the kind of thing people paste into a bug
+ * report or a screen share.
+ */
+export function savedTokensReport(tokensPath: string): string[] {
+  return [
+    'Authorization successful!',
+    `Google access and refresh tokens saved to ${tokensPath} (readable only by you).`,
+  ];
+}
 
 async function main() {
   console.log('');
@@ -84,11 +97,12 @@ async function main() {
     rl.close();
   }
 
-  const auth = new GoogleAuth(clientId, clientSecret, { redirectUri });
+  const tokensPath = googleTokensPath();
+  const auth = new GoogleAuth(clientId, clientSecret, { redirectUri, tokensPath });
 
   // Check if already authenticated
   if (auth.isAuthenticated()) {
-    console.log('Already authenticated! Tokens exist at ~/.jarvis/google-tokens.json');
+    console.log(`Already authenticated! Tokens exist at ${tokensPath}`);
     console.log('To re-authenticate, delete that file and run this again.');
     process.exit(0);
   }
@@ -157,11 +171,8 @@ async function main() {
           }
 
           try {
-            const tokens = await auth.exchangeCode(code, { codeVerifier: pendingFlow.codeVerifier });
-            console.log('Authorization successful!');
-            console.log(`Access token: ${tokens.access_token.slice(0, 20)}...`);
-            console.log(`Refresh token: ${tokens.refresh_token.slice(0, 20)}...`);
-            console.log(`Tokens saved to ~/.jarvis/google-tokens.json`);
+            await auth.exchangeCode(code, { codeVerifier: pendingFlow.codeVerifier });
+            for (const line of savedTokensReport(tokensPath)) console.log(line);
 
             setTimeout(() => {
               server.stop();
@@ -196,7 +207,10 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error('Setup failed:', err);
-  process.exit(1);
-});
+// Imported by its test for savedTokensReport; only `bun run` starts the flow.
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error('Setup failed:', err);
+    process.exit(1);
+  });
+}
