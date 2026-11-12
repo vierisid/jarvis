@@ -1944,6 +1944,7 @@ Notable behaviors a contributor should know:
 - LOOP body and ROUTER branches render as indented sub-graphs on the canvas. The tree-aware auto-layout distributes router branches symmetrically around the parent.
 - Inputs accept `{{step.field}}` templates and render them as chips inline.
 - The variable picker opens on input focus and lists predecessor outputs (drawn from `outputSample`). Drag-to-insert or click-to-insert; the chip is placed at the caret.
+- A manual trigger's declared input fields (the names under its settings) are always listed in the picker as `{{trigger.<name>}}`. Starting a run by hand (editor Run, the list's Run, Brief's Run workflow) asks for a value per declared field of the version that will run (in the legacy views the published version, else the latest saved draft, never unsaved edits; in Brief the selected version) in a small form, with a JSON box as an advanced option, and sends the answers as the run's `payload`. A trigger that declares none keeps the single JSON prompt in Brief and sends no payload in the legacy views.
 - Per-step sample input override is stored in `flow_version.sample_input`; a run-from-here (`stepNameToTest`) passes it to the engine as `sampleInputOverride`, which replaces that step's `settings.input` (`engine-flow-executor.ts`). Used by the "test this step" affordance.
 - Right-click on a node opens delete + error-handling options. Right-click on the canvas opens add-piece. Background tap dismisses popovers.
 - Connection picker auto-fills the first available connection for the piece's auth type.
