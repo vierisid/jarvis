@@ -56,8 +56,8 @@ import {
   createDraftVersion,
   discardDraftVersion,
   getFlowVersion,
+  getCurrentVersion,
   getLatestDraft,
-  getNewestVersion,
   listVersions,
   lockVersion,
   replaceSampleData,
@@ -1737,13 +1737,16 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             expectedRevision?: unknown;
           };
           if (!scopedFlow(req, id)) return err("flow not found", 404);
-          // A new draft starts as a copy of the flow's newest version: its
-          // steps, its layout and its name. A client that sends only a name
-          // used to get an empty draft, which then could not be published.
-          const base = getNewestVersion(id);
+          // A new draft starts as a copy of the version the workflow runs: the
+          // published one, else its latest draft (the version every list names
+          // it by). Never the newest row: after an older version is published
+          // again, or a newer one is only locked, the newest is not what runs.
+          // A client that sends only a name used to get an empty draft, which
+          // then could not be published.
+          const source = getCurrentVersion(id);
           // Used to be a bare truthiness check, so a non-string of any length
           // reached the column that becomes a flow's model-facing `name` (#598).
-          const named = validDisplayName(body.displayName ?? base?.displayName);
+          const named = validDisplayName(body.displayName ?? source?.displayName);
           if ("error" in named) return named.error;
           if (body.trigger !== undefined) {
             const shape = refuseDraftGraph(body.trigger);
@@ -1773,13 +1776,18 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
                 throw new FlowVersionRequestError("This workflow changed in another tab or conversation. Your edits are still here. Copy anything you want to keep, then discard and reload the latest draft before saving.", 409);
               }
             }
+            // The copy is of the version read above; one published or
+            // drafted since then is not silently copied in its place.
+            if ((body.trigger === undefined || body.displayName === undefined) && (getCurrentVersion(id)?.id ?? null) !== (source?.id ?? null)) {
+              throw new FlowVersionRequestError("This workflow changed while the draft was being made. Try again.", 409);
+            }
             const created = createDraftVersion({
               flowId: id,
               displayName: named.name,
-              trigger: body.trigger ?? base?.trigger,
+              trigger: body.trigger ?? source?.trigger,
             });
             if (body.uiMeta) upsertFlowVersionUiMeta(created.id, body.uiMeta);
-            else if (body.trigger === undefined && base) cloneFlowVersionUiMeta(base.id, created.id);
+            else if (body.trigger === undefined && source) cloneFlowVersionUiMeta(source.id, created.id);
             return created;
           }).immediate();
           // An enabled flow with nothing published runs its latest draft: its

@@ -160,7 +160,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
     };
     if (!selection) return <section><h1 className="brief-type-room-title">Workflow</h1><p role="status">{error ? 'This workflow version is unavailable. Your selected IDs are retained.' : 'Loading workflow…'}</p>
       {error && brokenDraft && discarding === 'idle' && <p>If this draft cannot be opened, you can throw it away. Anything published stays as it is.</p>}
-      {discarding === 'failed' && <p role="alert">The draft could not be discarded. It may be what a turned-on workflow runs, or have runs recorded. Turn the workflow off or try again.</p>}
+      {discarding === 'failed' && <p role="alert">The draft could not be discarded. It may be what a turned-on workflow runs, have runs recorded, or be the workflow's only version, which is removed with the workflow from All workflows. Turn the workflow off or try again.</p>}
       {discarding === 'asking' && <p role="alert">Discard this draft for good? Its steps cannot be brought back.</p>}
       {error && <BriefButton onClick={() => retry(v => v + 1)}>Check again</BriefButton>}
       {error && brokenDraft && discarding !== 'asking' && <BriefButton onClick={() => setDiscarding('asking')} disabled={discarding === 'working'}>Discard this draft</BriefButton>}

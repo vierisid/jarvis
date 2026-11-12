@@ -344,19 +344,24 @@ export function getLatestDraft(flowId: string): FlowVersion | null {
   return row ? rowToFlowVersion(row) : null;
 }
 
-/** The flow's newest version of any state: the one a new draft starts as a copy of. */
-export function getNewestVersion(flowId: string): FlowVersion | null {
-  const row = db()
-    .query<FlowVersionRow, [string]>(`SELECT * FROM flow_version WHERE flow_id = ? ORDER BY created DESC, rowid DESC LIMIT 1`)
-    .get(flowId);
-  return row ? rowToFlowVersion(row) : null;
+/**
+ * The version the workflow runs and is named by: the published one, else the
+ * latest draft (the same rule as the trigger manager and the workflow lists).
+ * A new draft starts as a copy of it. Not the newest row: publishing an older
+ * version again, or locking a newer one, leaves a newer row that does not run.
+ */
+export function getCurrentVersion(flowId: string): FlowVersion | null {
+  const flow = db().query<{ published_version_id: string | null }, [string]>(`SELECT published_version_id FROM flow WHERE id = ?`).get(flowId);
+  if (!flow) return null;
+  return flow.published_version_id ? getFlowVersion(flow.published_version_id) : getLatestDraft(flowId);
 }
 
 /**
  * Throw away a draft that is not wanted (the way out of a draft that cannot
  * be opened). Only a DRAFT: a locked version is history and the published
- * one is what runs. A draft that runs have been made from, or that an enabled
- * flow with nothing published is running, is kept, and the refusal says why.
+ * one is what runs. A draft that runs have been made from, that an enabled
+ * flow with nothing published is running, or that is the flow's only version
+ * is kept, and the refusal says why.
  */
 export function discardDraftVersion(flowId: string, versionId: string): void {
   db().transaction(() => {
@@ -373,6 +378,11 @@ export function discardDraftVersion(flowId: string, versionId: string): void {
     }
     if (db().query(`SELECT 1 FROM flow_run WHERE flow_version_id = ? LIMIT 1`).get(versionId)) {
       throw new FlowVersionRequestError("This draft has runs recorded against it, so it is kept.", 409);
+    }
+    // A workflow with no version left cannot be opened, edited or named; the
+    // way out of a workflow whose only version is broken is removing it.
+    if (!db().query(`SELECT 1 FROM flow_version WHERE flow_id = ? AND id <> ? LIMIT 1`).get(flowId, versionId)) {
+      throw new FlowVersionRequestError("This is the workflow's only version. Remove the workflow from All workflows instead.", 409);
     }
     db().run(`DELETE FROM flow_version WHERE id = ?`, [versionId]);
     touchFlow(flowId);

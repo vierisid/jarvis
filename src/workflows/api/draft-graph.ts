@@ -21,7 +21,8 @@ function nodeCount(root: Record<string, unknown>): number {
     if (!isObject(node) || seen.has(node)) continue;
     seen.add(node);
     pending.push(node.nextAction, node.firstLoopAction);
-    if (Array.isArray(node.children)) pending.push(...node.children);
+    // A loop, not a spread: a spread of a very long list throws a RangeError.
+    if (Array.isArray(node.children)) for (const child of node.children) pending.push(child);
   }
   return seen.size;
 }

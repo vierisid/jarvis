@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../db";
 import { createFlow, updateFlowStatus } from "../db/repos/flow";
-import { createDraftVersion, getFlowVersion } from "../db/repos/flow-version";
+import { createDraftVersion, getFlowVersion, lockVersion } from "../db/repos/flow-version";
 import { upsertFlowVersionUiMeta } from "../db/repos/flow-version-ui-meta";
 import { publishFlowVersion } from "../db/repos/flow-publication";
 import { createFlowRun } from "../db/repos/flow-run";
@@ -43,9 +43,10 @@ describe("a new draft starts as a copy of the latest version", () => {
     expect(named.status).toBe(201);
     expect(named.body.trigger).toEqual(withStep());
     expect(named.body.uiMeta.positions).toEqual({ wait: { x: 10, y: 20 } });
+    // The workflow's name is the published version's, not an unpublished draft's.
     const unnamed = await post(flow.id, {});
     expect(unnamed.status).toBe(201);
-    expect(unnamed.body.displayName).toBe("Weekly digest v2");
+    expect(unnamed.body.displayName).toBe("Weekly digest");
     expect(unnamed.body.trigger).toEqual(withStep());
   });
 
@@ -55,6 +56,47 @@ describe("a new draft starts as a copy of the latest version", () => {
     createDraftVersion({ flowId: flow.id, displayName: "A", trigger: withStep() as never });
     const own = await post(flow.id, { displayName: "B", trigger: graph() });
     expect(own.body.trigger).toEqual(graph());
+  });
+});
+
+describe("a new draft never starts from a version that does not run", () => {
+  const routerStep = () => graph({ nextAction: { name: "pick", displayName: "Pick", type: "ROUTER", settings: { executionType: "EXECUTE_FIRST_MATCH", branches: [{ branchName: "Otherwise", branchType: "FALLBACK" }] }, children: [null] } });
+
+  test("after an older version is published again, the copy is of that one and keeps the workflow's name", async () => {
+    const flow = createFlow({});
+    const v1 = createDraftVersion({ flowId: flow.id, displayName: "Digest", trigger: withStep() as never });
+    publishFlowVersion(flow.id);
+    const v2 = createDraftVersion({ flowId: flow.id, displayName: "Digest renamed", trigger: routerStep() as never });
+    publishFlowVersion(flow.id, v2.id);
+    publishFlowVersion(flow.id, v1.id);
+    const copy = await post(flow.id, {});
+    expect(copy.status).toBe(201);
+    expect(copy.body.trigger).toEqual(withStep());
+    expect(copy.body.displayName).toBe("Digest renamed");
+  });
+
+  test("a newer version that was only locked is not copied; the published one is", async () => {
+    const flow = createFlow({});
+    createDraftVersion({ flowId: flow.id, displayName: "Live", trigger: withStep() as never });
+    publishFlowVersion(flow.id);
+    const staged = createDraftVersion({ flowId: flow.id, displayName: "Staged", trigger: routerStep() as never });
+    lockVersion(staged.id);
+    const copy = await post(flow.id, {});
+    expect(copy.status).toBe(201);
+    expect(copy.body.trigger).toEqual(withStep());
+    expect(copy.body.displayName).toBe("Live");
+  });
+
+  test("with nothing published, the copy is of the latest draft, the one an enabled workflow runs", async () => {
+    const flow = createFlow({});
+    const first = createDraftVersion({ flowId: flow.id, displayName: "First", trigger: graph() as never });
+    const second = createDraftVersion({ flowId: flow.id, displayName: "Second", trigger: withStep() as never });
+    // The latest draft is the most recently updated one; two writes in one millisecond tie.
+    getWorkflowDb().run("UPDATE flow_version SET updated = ? WHERE id = ?", [1, first.id]);
+    getWorkflowDb().run("UPDATE flow_version SET updated = ? WHERE id = ?", [2, second.id]);
+    const copy = await post(flow.id, {});
+    expect(copy.body.trigger).toEqual(withStep());
+    expect(copy.body.displayName).toBe("Second");
   });
 });
 
@@ -83,6 +125,15 @@ describe("a draft's graph is checked when it is saved", () => {
     expect(tooBig.status).toBe(400);
     expect(tooBig.body.error).toContain("more than 100 steps");
     expect((await patch(flow.id, draft.id, { trigger: chain(99) })).status).toBe(200);
+    expect((await patch(flow.id, draft.id, { trigger: chain(100) })).status).toBe(400);
+  });
+
+  test("a very long branch list is refused with the limit, not a server error", async () => {
+    const flow = createFlow({});
+    const draft = createDraftVersion({ flowId: flow.id, displayName: "Draft", trigger: graph() as never });
+    const wide = await patch(flow.id, draft.id, { trigger: graph({ children: Array.from({ length: 1_200_000 }, () => ({})) }) });
+    expect(wide.status).toBe(400);
+    expect(wide.body.error).toContain("more than 100 steps");
   });
 
   test("an empty draft, a normal graph and a rename still save, and an already saved odd draft still loads", async () => {
@@ -143,6 +194,15 @@ describe("a draft that cannot be opened can be discarded", () => {
     const refused = await discard(live.id, draft.id);
     expect(refused.status).toBe(409);
     expect(refused.body.error).toContain("Turn the workflow off first");
+  });
+
+  test("a workflow's only version is kept: removing the workflow is the way out", async () => {
+    const flow = createFlow({});
+    const only = createDraftVersion({ flowId: flow.id, displayName: "Only", trigger: graph() as never });
+    const refused = await discard(flow.id, only.id);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toContain("only version");
+    expect(getFlowVersion(only.id)).not.toBeNull();
   });
 
   test("another workflow's version is not found", async () => {
