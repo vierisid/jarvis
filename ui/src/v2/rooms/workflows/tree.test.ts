@@ -22,6 +22,7 @@ import {
   applySchemaDefaults,
   buildControlFlowStep,
   isBlankStep,
+  needsPieceChoice,
   withStepInput,
   withoutChosenZone,
 } from "./tree";
@@ -486,6 +487,15 @@ describe("blank placeholders and control-flow steps", () => {
     expect(isBlankStep({ name: "x", type: "PIECE", settings: { input: { a: 1 } } } as FlowStepNode)).toBe(false);
     expect(isBlankStep({ name: "x", type: "PIECE", settings: { pieceName: "p", input: {} } } as FlowStepNode)).toBe(false);
     expect(isBlankStep({ name: "x", type: "LOOP_ON_ITEMS", settings: { items: "" } } as unknown as FlowStepNode)).toBe(false);
+  });
+
+  test("a step with a piece but no action still opens the chooser, but is not blank", () => {
+    const pieceOnly = { name: "x", type: "PIECE", settings: { pieceName: "p", input: {} } } as FlowStepNode;
+    expect(needsPieceChoice(pieceOnly)).toBe(true);
+    expect(isBlankStep(pieceOnly)).toBe(false);
+    expect(needsPieceChoice({ name: "x", type: "PIECE", settings: { input: {} } } as FlowStepNode)).toBe(true);
+    expect(needsPieceChoice({ name: "x", type: "PIECE", settings: { pieceName: "p", actionName: "a", input: {} } } as FlowStepNode)).toBe(false);
+    expect(needsPieceChoice({ name: "x", type: "LOOP_ON_ITEMS", settings: { items: "" } } as unknown as FlowStepNode)).toBe(false);
   });
 
   test("buildControlFlowStep makes a loop, an If (True and False) and a Router (Branch 1 and Else)", () => {

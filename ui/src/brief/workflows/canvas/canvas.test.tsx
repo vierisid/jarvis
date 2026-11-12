@@ -306,6 +306,8 @@ test("a control-flow step picked for a blank placeholder replaces it in the chai
   expect(editor.draftOrphans.length).toBe(orphans);
   const router = editor.allSteps.find((s) => s.step.name === blank)!.step;
   expect(router.type).toBe("ROUTER");
+  // The default "New step" name gives way to what the step now is.
+  expect(router.displayName).toBe("Router");
   expect(router.children).toEqual([null, null]);
   await React.act(async () => editor.undo());
   expect(editor.allSteps.find((s) => s.step.name === blank)!.step.type).toBe("PIECE");

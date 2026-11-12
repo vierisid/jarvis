@@ -101,7 +101,7 @@ import {
   type PieceCatalogEntry,
   type PieceInputField,
 } from "./useWorkflowEditor";
-import { flattenSteps, isBlankStep, pathToStep, withoutChosenZone } from "./tree";
+import { findStep, flattenSteps, needsPieceChoice, pathToStep, withoutChosenZone } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
 import { fetchFlowsForPicker, type FlowPickerEntry } from "./flow-picker-data";
@@ -295,14 +295,29 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
     setLibraryPicker({ screen: popoverAnchor ?? { x: 100, y: 100 }, flow: { x: 0, y: 0 }, replaceStepName: created });
   }, [workspace, closePopover, popoverAnchor]);
 
-  /** Put keyboard focus back on a node once the chooser has closed. */
-  const focusNode = useCallback((name: string): void => {
+  /**
+   * Put keyboard focus back on a node once the chooser has closed. With
+   * `onlyIfLost`, focus moves only when it fell to the page body (the chooser
+   * was closed with Escape or its close button), never away from a field the
+   * person clicked into to dismiss it.
+   */
+  const focusNode = useCallback((name: string, onlyIfLost = false): void => {
     // Two frames: the chooser unmounts and the node re-renders first.
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (onlyIfLost && active && active !== document.body) return;
       const node = Array.from(rootRef.current?.querySelectorAll<HTMLElement>(".react-flow__node") ?? []).find((el) => el.dataset.id === name);
       node?.focus({ preventScroll: true });
     }));
   }, []);
+
+  /** Escape, Close or an outside click on the chooser: a step it was opened
+   *  for stays as it was, and keyboard focus goes back to that step. */
+  const dismissLibraryPicker = useCallback((): void => {
+    const target = libraryPicker?.replaceStepName;
+    closeLibraryPicker();
+    if (target) focusNode(target, true);
+  }, [libraryPicker, closeLibraryPicker, focusNode]);
 
   // Auto-close the run-detail popover when overlay mode is exited or the
   // node it references is no longer in the graph. Keeps the popover from
@@ -701,6 +716,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             editor.createOrphanStep(flow, piece.name, action.name);
           }
           closeLibraryPicker();
+          if (replaceStepName) focusNode(replaceStepName, true);
           setActionMessage({ tone: "ok", text: `${displayName}: ${action.displayName}` });
           window.setTimeout(() => setActionMessage(null), 2500);
         } catch (e) {
@@ -902,12 +918,21 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
         if (!id) return;
         event.preventDefault(); event.stopPropagation();
         const rect = event.target.getBoundingClientRect();
-        // A blank placeholder opens the chooser, as clicking it does, so a
-        // piece, Loop, If or Router can be placed from the keyboard.
-        const focused = editor.allSteps.find((entry) => entry.step.name === id)?.step;
-        if (!workspace && !readOnly && focused && isBlankStep(focused)) {
+        // Enter does what a click does. While a run is overlaid it opens that
+        // step's run detail. An unconfigured step (in the chain or loose)
+        // opens the chooser in the legacy editor, so a piece, Loop, If or
+        // Router can be placed from the keyboard.
+        if (overlayRunId) {
+          setRunDetail({ stepName: id, anchor: { x: rect.right, y: rect.top } });
           closePopover();
-          setLibraryPicker({ screen: { x: rect.right, y: rect.top }, flow: { x: 0, y: 0 }, replaceStepName: id });
+          return;
+        }
+        const focused = [editor.draftTrigger, ...editor.draftOrphans.map((o) => o.node)]
+          .map((root) => (root ? findStep(root, id) : null)).find((s) => s);
+        if (!workspace && !readOnly && focused && needsPieceChoice(focused)) {
+          closePopover();
+          closeRunDetail();
+          setLibraryPicker({ screen: { x: rect.right, y: rect.top }, flow: rfInstanceRef.current?.getNode(id)?.position ?? { x: 0, y: 0 }, replaceStepName: id });
           return;
         }
         setSelectedStepName(id); setPopoverAnchor({x:rect.right,y:rect.top});
@@ -952,10 +977,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
               // place, preserving the step's connections and position.
               const stepData = (n.data ?? {}) as { step?: FlowStepNode };
               const step = stepData.step;
-              const isEmptyPiece =
-                step?.type === "PIECE" &&
-                (!step.settings?.pieceName || !step.settings.actionName);
-              if (isEmptyPiece && !workspace) {
+              if (step && needsPieceChoice(step) && !workspace) {
                 const flowPos = rfInstanceRef.current?.screenToFlowPosition({
                   x: event.clientX,
                   y: event.clientY,
@@ -1155,7 +1177,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
           managed={library.managed}
           installingId={pendingInstall?.id ?? null}
           onPick={onPickFromLibrary}
-          onClose={closeLibraryPicker}
+          onClose={dismissLibraryPicker}
         />
       ) : null}
 

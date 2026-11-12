@@ -931,7 +931,8 @@ export function useWorkflowEditor(flowId: string | null) {
 
   /**
    * Turn a blank "Add next step" placeholder into a control-flow step in
-   * place, keeping its name, its place in the chain and whatever follows it.
+   * place, keeping its name (and a display name the person chose), its place
+   * in the chain and whatever follows it.
    * Returns false, and changes nothing, when the target is not blank (it has a
    * piece, an action or inputs): swapping the type of a configured step would
    * silently drop its settings, so the caller drops a loose node instead.
@@ -945,7 +946,9 @@ export function useWorkflowEditor(flowId: string | null) {
       mutateAnyStep(stepName, (step) => {
         const built = buildControlFlowStep(step.name, kind);
         step.type = built.type;
-        step.displayName = built.displayName;
+        // A name the person typed for the placeholder is kept; the default
+        // "New step" is replaced by what the step now is.
+        if (!step.displayName?.trim() || step.displayName === "New step") step.displayName = built.displayName;
         step.settings = built.settings;
         if (built.children) step.children = built.children;
       });

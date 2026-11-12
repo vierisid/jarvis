@@ -601,7 +601,6 @@ export function chainScopeFor(root: FlowStepNode, stepName: string): ChainScope 
   return null;
 }
 
-
 /**
  * A blank placeholder: the step "Add next step" creates before a piece is
  * chosen. No piece, no action and no inputs, so there is nothing to lose by
@@ -612,6 +611,16 @@ export function isBlankStep(step: FlowStepNode): boolean {
   const settings = step.settings;
   if (settings?.pieceName || settings?.actionName) return false;
   return Object.keys(settings?.input ?? {}).length === 0;
+}
+
+/**
+ * A PIECE step still waiting for its piece or action. Clicking it (or Enter on
+ * it) in the legacy editor opens the chooser instead of the settings. Wider
+ * than `isBlankStep`: a step with a piece but no action counts, and choosing
+ * Loop, If or Router for it still lands as a loose node, so the piece stays.
+ */
+export function needsPieceChoice(step: FlowStepNode): boolean {
+  return step.type === "PIECE" && (!step.settings?.pieceName || !step.settings.actionName);
 }
 
 /**
