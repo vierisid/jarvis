@@ -20,7 +20,7 @@ export interface QueuedDecision extends BriefDecision {
     /** #1314: a reviewed browser/desktop workflow card: the computer, the window, and every value with where it came from. */
     computer?: string; window?: string; values?: Array<{ name: string; value: string; source: 'workflow' | 'run_data' | 'agent' }>;
     /** A governed piece action (email, HTTP request, ...): what it will do, from the frozen effect. `more` counts fields not shown. */
-    action?: { fields: Array<{ label: string; value: string }>; more: number } };
+    action?: { fields: Array<{ label: string; value: string; text?: true; cut?: true }>; more: number } };
   placement: number;
   createdAt: number;
 }
