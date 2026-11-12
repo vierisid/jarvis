@@ -90,11 +90,12 @@ interface TriggerNode {
 export const MAX_QUEUED_WEBHOOK_RUNS = 500;
 
 /**
- * Queue priority of a scheduled run. The queue takes higher priority first and
- * then the oldest, and webhook and manual runs wait at 0, so a schedule's tick
- * goes ahead of any backlog of them instead of being skipped behind it (a tick
- * is skipped while the previous one has not started). Approval continuations
- * share this priority; each group keeps its order among itself.
+ * Queue priority of a scheduled run. Webhook and manual runs wait at 0, so a
+ * schedule's tick goes ahead of a backlog of them instead of being skipped
+ * behind it (a tick is skipped while the previous one has not started). The
+ * lead is bounded (PRIORITY_HEAD_START_MS): a run that has waited longer than
+ * that still goes first, so schedules cannot starve webhooks. Approval and
+ * timer continuations share this priority.
  */
 export const SCHEDULE_RUN_PRIORITY = 1;
 

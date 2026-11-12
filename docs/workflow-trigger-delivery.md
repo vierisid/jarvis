@@ -268,13 +268,19 @@ that started the run, and `manage_workflow get` returns the workflow's
 
 ## Queue order and caps
 
-The queue takes the highest priority first, then the oldest. A scheduled run
-and an approval or timer continuation queue at priority 1; webhook, manual and
-other runs at 0. A schedule's tick therefore goes ahead of any backlog of
-webhook or manual runs instead of being skipped behind it.
+The queue takes the oldest job first, with each step of priority counting as
+ten minutes of waiting. A scheduled run and an approval or timer continuation
+queue at priority 1; webhook, manual and other runs at 0. A schedule's tick
+therefore goes ahead of a backlog of webhook or manual runs queued in the last
+ten minutes instead of being skipped behind it, while a run that has waited
+longer still goes first, so schedules and continuations cannot hold other runs
+back without end. Jobs queued before this order existed are all at 0 and keep
+their order.
 
-Manual starts (`POST /api/workflows/:id/run`) are refused with a plain 503 and
-`Retry-After: 30` once 500 jobs are waiting, the same cap webhook ingress has.
+Manual starts (`POST /api/workflows/:id/run`) are refused with a 429,
+`Retry-After: 30` and a plain message once 500 runs the owner started in the
+project are waiting to start. Trigger runs do not count, so a webhook backlog
+(capped at 500 waiting jobs on its own) never refuses a run started by hand.
 Nothing is created for a refused start.
 
 ## Limits
