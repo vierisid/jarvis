@@ -9,6 +9,7 @@ import {
   deleteFlow,
   getFlow,
   listFlows,
+  listAllFlows,
   parseFlowMetadata,
   setPublishedVersion,
   updateFlowMetadata,
@@ -58,6 +59,13 @@ describe("flow repo", () => {
     expect(flow.project_id).toBe(DEFAULT_IDS.project);
     expect(flow.status).toBe("DISABLED");
     expect(flow.id.length).toBe(21);
+  });
+
+  test("listAllFlows returns every flow where listFlows stops at its page size", () => {
+    for (let i = 0; i < 130; i++) createFlow();
+    expect(listFlows().length).toBe(100);
+    expect(listAllFlows().length).toBe(130);
+    expect(listAllFlows(DEFAULT_IDS.project, { status: "ENABLED" }).length).toBe(0);
   });
 
   test("listFlows orders by updated DESC and respects status filter", async () => {

@@ -532,6 +532,24 @@ describe("SandboxApi routes (B2: connections, store, flows)", () => {
     expect(body.data[0]?.version?.id).toBe(v.id);
   });
 
+  test("GET /v1/engine/populated-flows finds a flow older than the newest 100", async () => {
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const v = createDraftVersion({
+      flowId: flow.id,
+      displayName: "Old",
+      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+    });
+    lockVersion(v.id);
+    setPublishedVersion(flow.id, v.id);
+    getWorkflowDb().run("UPDATE flow SET updated = 0 WHERE id = ?", [flow.id]);
+    for (let i = 0; i < 100; i++) createFlow({ projectId: DEFAULT_IDS.project });
+
+    const r = await authedFetch(`/v1/engine/populated-flows?externalIds=${flow.external_id}`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { data: Array<{ id: string }> };
+    expect(body.data.map((p) => p.id)).toEqual([flow.id]);
+  });
+
   test("GET /v1/engine/populated-flows skips flows without a published version", async () => {
     const flow = createFlow({ projectId: DEFAULT_IDS.project });
     const r = await authedFetch(`/v1/engine/populated-flows?externalIds=${flow.external_id}`);

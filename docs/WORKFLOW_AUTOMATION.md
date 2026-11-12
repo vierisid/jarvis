@@ -1744,6 +1744,8 @@ For the community-pieces curation flow (how a piece reaches the Verified tier, s
 | `webhook` | Routed to `WebhookManager`. Registers `/api/webhooks/<flowId>`. GET and POST both fire. An optional `secret` (the editor's "Signing secret", at least 32 characters when set) makes it refuse any request whose `X-Jarvis-Signature` is not the hex HMAC-SHA256 of `<X-Jarvis-Timestamp>.<raw body>` with a timestamp within 5 minutes; a legacy webhook (saved before #1153, no `signature_scheme: "timestamped"`) also takes a body-only signature. |
 | Engine-managed (anything else) | The piece's trigger logic runs in the engine. `EXECUTE_TRIGGER_HOOK(ON_ENABLE)` returns either `scheduleOptions` (registered with `CronScheduler`) or `listeners` (registered with `WebhookManager`). On disable, `EXECUTE_TRIGGER_HOOK(ON_DISABLE)` runs first; persistent state clears even if the engine call fails. |
 
+At startup `TriggerManager.start()` registers every ENABLED flow of the project, however many there are (`listAllFlows`, one query); a flow that cannot be read is logged and skipped, and the rest still register. A code path that means "all flows" must use `listAllFlows`: `listFlows` is a page and stops at 100 unless told otherwise.
+
 Polling triggers (e.g. Gmail's watch) live in this third category: the engine schedules a cron-driven `RUN` of the trigger's polling logic and emits new items.
 
 ## API surface
