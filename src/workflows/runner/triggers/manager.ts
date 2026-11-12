@@ -56,7 +56,7 @@ import {
   type FlowVersion,
 } from "../../db/repos/flow-version";
 import { getWorkflowDb } from '../../db';
-import { assertVersionReady, WorkflowReadinessError } from '../../db/repos/flow-readiness';
+import { assertVersionReady, codeStepsRevokedMessage, WorkflowReadinessError } from '../../db/repos/flow-readiness';
 import { ungrantedCodeSteps } from "../../db/repos/flow-code-steps";
 import { createFlowRun, updateRun } from "../../db/repos/flow-run";
 import { enqueue, countQueued } from "../../db/repos/job-queue";
@@ -872,11 +872,7 @@ export class TriggerManager {
     const version = getFlowVersion(versionId);
     if (!flow || !version) return null;
     const ungranted = ungrantedCodeSteps(flow, version.trigger);
-    if (!ungranted) return null;
-    const shown = ungranted.slice(0, 3).map((name) => `"${name}"`).join(", ");
-    const more = ungranted.length > 3 ? ` and ${ungranted.length - 3} more` : "";
-    return `This workflow has ${ungranted.length > 1 ? "CODE steps" : "a CODE step"} (${shown}${more}), and CODE steps are not allowed for it any more, so it did not run. `
-      + "Allow CODE steps in the workflow's permissions to run it again.";
+    return ungranted ? codeStepsRevokedMessage(ungranted) : null;
   }
 
   /** Record a delivery refused for the revoked CODE-step permission: one counted row per run of identical refusals. */

@@ -31,6 +31,7 @@ import { ENGINE_BUILD_PATHS } from "./build";
 import { loadedCorePieceDirs } from "./build-pieces";
 import type { EgressPolicy } from "../../runtime/http-egress";
 import { leaseCodeTreeOf, materializeCodeActions } from "./code-materialize";
+import { onCodeStepsRevoked } from "../../runtime/cancellation-signals";
 import {
   ackTimeoutMsForOperation,
   buildExecuteFlowOperation,
@@ -176,6 +177,13 @@ export interface ExecuteFlowOnHandleOptions {
   resumePayload?: Record<string, unknown>;
   /** Prior execution state to restore on RESUME (engine reads steps + tags from it). */
   executionState?: { steps: Record<string, unknown>; tags?: string[] };
+  /**
+   * Called synchronously right before EXECUTE_FLOW is sent, after the CODE
+   * sources are written and their packages installed (which can take a
+   * while). A throw sends nothing. The run's executor rechecks the CODE-step
+   * permission here, so a revoke during the install is not missed (#1426).
+   */
+  beforeSend?: () => void;
 }
 
 export class EngineHandle {
@@ -391,6 +399,8 @@ export class EngineHandle {
     if (opts.executionState !== undefined) baseExecuteFlowOptions.executionState = opts.executionState;
 
     const operation = buildExecuteFlowOperation(baseExecuteFlowOptions);
+    // Nothing awaits between this check and the send.
+    opts.beforeSend?.();
     const reply = await this.send(operation);
     // A non-OK status means the engine bailed out of the operation itself --
     // it threw before (or instead of) recording the failure on the run. It
@@ -711,6 +721,8 @@ export class EngineRuntime {
    * shut down it spawns nothing and parks nothing.
    */
   private closed = false;
+  /** Drops the CODE-revoke subscription at shutdown. */
+  private readonly stopRevokeWatch: () => void;
 
   constructor(opts: EngineRuntimeOptions) {
     this.api = opts.api;
@@ -756,6 +768,23 @@ export class EngineRuntime {
     // still override via `opts.devPieces` for tests.
     this.devPieces = opts.devPieces ?? discoverJarvisDevPieces();
     this.egressPolicy = opts.egressPolicy;
+    // A workflow whose CODE-step permission was taken back keeps no warm
+    // engine (#1426): the process group a CODE step ran under, and anything
+    // it left running there, goes now rather than at the idle timeout.
+    this.stopRevokeWatch = onCodeStepsRevoked((flowId) => this.retireParkedFor(flowId));
+  }
+
+  /** Retire the parked engine if it was spawned for `flowId`. Running engines are the run fence's. */
+  retireParkedFor(flowId: string): boolean {
+    const parked = this.idleEngine;
+    if (!parked) return false;
+    let parkedFlow: unknown = null;
+    try { parkedFlow = (JSON.parse(parked.key) as unknown[])[1]; } catch { parkedFlow = null; }
+    if (parkedFlow !== flowId) return false;
+    this.idleEngine = null;
+    this.clearIdleEvictionTimer();
+    this.retireEngine(parked);
+    return true;
   }
 
   /** Expose for callers that need to resolve files into the same baseCodeDir. */
@@ -1087,6 +1116,7 @@ export class EngineRuntime {
     // and the kill-then-terminate against an already-gone engine surfaces
     // as noise in logs.
     this.closed = true;
+    this.stopRevokeWatch();
     this.clearIdleEvictionTimer();
     this.idleEngine = null;
 

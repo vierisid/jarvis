@@ -24,7 +24,7 @@ import type { Job } from "../db/repos/job-queue";
 import type { JobHandler } from "../queue/worker";
 import { ensureRunExecutionConfig, getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
 import { cancelFlowRun, getRunCancellation } from "../db/repos/run-cancellation";
-import { assertRunIngredientsReady, WorkflowReadinessError } from "../db/repos/flow-readiness";
+import { assertRunCodeStepsAllowed, assertRunIngredientsReady, WorkflowReadinessError } from "../db/repos/flow-readiness";
 import { watchRunCancellation, withRunCancellation } from "../runtime/cancellation";
 import { signalRunEnded } from "../runtime/cancellation-signals";
 import {
@@ -281,6 +281,11 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
     // Set just before the executor is called: until then no step ran.
     let executing = false;
     try {
+      // The CODE-step permission as it is now, for a fresh start and for a
+      // continuation alike: the grant may have been taken back since this run
+      // was queued or paused (#1426). The executor reads it once more just
+      // before the engine is sent the flow.
+      assertRunCodeStepsAllowed(run.flowId, version.trigger);
       assertRunIngredientsReady(run, version.trigger,
         typed.payload.executionType === 'RESUME' ? undefined : typed.payload);
       let payload = typed.payload.payload ?? {};

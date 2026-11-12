@@ -96,7 +96,7 @@ import {
   listWaitpointsByFlowRun,
 } from "../db/repos/waitpoint";
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
-import { stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
+import { stopRunsOfRevokedCodeSteps, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { deleteWorkflow } from "../db/repos/flow-deletion";
 import { claimContinuation } from "../runtime/continuation";
 import { flowBindingBlock } from "../runtime/binding-refusals";
@@ -2053,12 +2053,16 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (typeof body.enabled !== "boolean") {
             return err('enabled must be a boolean ({"enabled": true} permits CODE steps for this flow)', 400);
           }
-          // Revoking does NOT stop a run already in flight or unpublish the
-          // version. It takes the permission away from the next publish,
-          // enable or run, and from the next fire of a webhook, event or
-          // schedule: the trigger manager reads the grant when a delivery
-          // arrives, and the refresh below drops the subscription.
+          // Revoking does not unpublish the version. It takes the permission
+          // away from the next publish, enable or run and from every later
+          // fire (the trigger manager reads it when a delivery arrives, and
+          // the refresh below drops the subscription), and it stops the
+          // flow's queued, waiting and executing runs of a version with a
+          // CODE step (#1426). The write and the stop are synchronous with no
+          // await between them, and every run reads the grant again just
+          // before the engine is sent the flow, so no run slips between them.
           const saved = setFlowCodeStepsEnabled(id, body.enabled, "user");
+          if (!body.enabled) stopRunsOfRevokedCodeSteps(id);
           refreshTrigger(id);
           return ok(serializeFlow(saved));
         }),
