@@ -309,6 +309,7 @@ jobs:
             src/cli/daemon-control.systemd.test.ts \
             src/cli/autostart.test.ts \
             src/cli/stop-port-ownership.test.ts \
+            src/cli/stop-verifies-lock-holder.test.ts \
             src/daemon/pid.test.ts
 
   # ─── Sidecar compile + test gate (cgo) ─────────────────────────

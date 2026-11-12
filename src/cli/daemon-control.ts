@@ -34,9 +34,10 @@ export interface StopResult {
    */
   stopped: boolean;
   /**
-   * Set when a daemon holds the lock but the pid in the lock file is not shown
-   * to be the holder, so nothing was signalled: a daemon in a container (its
-   * pid is from another pid namespace) or a reused pid. `stopped` is false.
+   * Set when a daemon holds the lock but the pid in the lock file could not be
+   * shown to be the holder, so nothing was signalled: a daemon in a container
+   * (its pid is from another pid namespace), one run by another user, or a
+   * reused pid. `stopped` is false.
    */
   notHolder?: true;
 }

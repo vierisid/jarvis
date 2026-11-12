@@ -1,8 +1,9 @@
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stopDaemonGracefully } from './daemon-control.ts';
+import { holdsJarvisLock } from './lifecycle.ts';
 
 /**
  * With a daemon holding the lock, `jarvis stop` (bin/jarvis.ts cmdStop) and
@@ -22,6 +23,7 @@ import { stopDaemonGracefully } from './daemon-control.ts';
 const SANDBOX = mkdtempSync(join(tmpdir(), 'jarvis-stop-holder-'));
 const PACKAGE_ROOT = join(import.meta.dir, '..', '..');
 const PID_MODULE = join(PACKAGE_ROOT, 'src', 'daemon', 'pid.ts');
+const HARDENING_MODULE = join(PACKAGE_ROOT, 'src', 'daemon', 'process-hardening.ts');
 
 type Child = { pid: number; exited: Promise<number>; kill: () => Promise<void> };
 const spawned: Child[] = [];
@@ -91,12 +93,19 @@ function spawnBystander(): Promise<Child> {
  * the lock and staying alive, which is what a reused pid looks like by the
  * time SIGKILL is due: alive, and no longer the lock's holder.
  */
-function spawnHolder(jarvisHome: string, opts: { writePid?: number; onSigterm?: 'let-go' } = {}): Promise<Child> {
+function spawnHolder(jarvisHome: string, opts: { writePid?: number; onSigterm?: 'let-go'; harden?: boolean } = {}): Promise<Child> {
   const script = `
     const { acquireLock, releaseLock } = await import(${JSON.stringify(PID_MODULE)});
     const writePid = Number(process.env.TEST_WRITE_PID || process.pid);
     if (process.env.TEST_ON_SIGTERM === 'let-go') process.on('SIGTERM', () => { releaseLock(); });
     if (!acquireLock(writePid)) { console.log('FAIL'); process.exit(1); }
+    if (process.env.TEST_HARDEN === '1') {
+      // What the daemon does at boot (src/daemon/index.ts), and what makes its
+      // /proc/<pid>/fd unreadable to everyone else.
+      const { hardenProcessInspection } = await import(${JSON.stringify(HARDENING_MODULE)});
+      const outcome = hardenProcessInspection({ log: () => {}, warn: () => {} });
+      if (outcome.kind !== 'hardened') { console.log('NOT-HARDENED ' + JSON.stringify(outcome)); process.exit(1); }
+    }
     console.log('READY');
     setInterval(() => {}, 1 << 30);
   `;
@@ -105,6 +114,7 @@ function spawnHolder(jarvisHome: string, opts: { writePid?: number; onSigterm?: 
     JARVIS_HOME: jarvisHome,
     TEST_WRITE_PID: opts.writePid === undefined ? undefined : String(opts.writePid),
     TEST_ON_SIGTERM: opts.onSigterm,
+    TEST_HARDEN: opts.harden ? '1' : undefined,
   });
 }
 
@@ -149,7 +159,7 @@ describe('`jarvis stop` with a daemon holding the lock', () => {
     expect(code).toBe(1);
     expect(stdout).not.toContain(`Stopping JARVIS daemon (PID ${bystander.pid})`);
     expect(stderr).toContain(`PID ${bystander.pid}`);
-    expect(stderr).toContain('does not hold');
+    expect(stderr).toContain('could not be shown to hold the lock');
   }, 60_000);
 
   test('does not SIGKILL a pid that no longer holds the lock when the drain deadline passes', async () => {
@@ -198,12 +208,57 @@ describe('stopDaemonGracefully', () => {
     process.env.JARVIS_HOME = jarvisHome;
 
     const forced: number[] = [];
-    const result = await stopDaemonGracefully({ timeoutMs: 600, pollIntervalMs: 100, onForce: (pid) => forced.push(pid) });
+    // 3s: the child's SIGTERM handler must have let go of the lock before the
+    // recheck, even on a loaded runner.
+    const result = await stopDaemonGracefully({ timeoutMs: 3000, pollIntervalMs: 100, onForce: (pid) => forced.push(pid) });
 
     expect(forced).toEqual([]);
     expect(alive(holder.pid)).toBe(true);
     expect(result.stopped).toBe(true);
     expect(result.graceful).toBe(false);
     expect(existsSync(lockPath)).toBe(false);
+  }, 60_000);
+});
+
+// The real daemon hardens itself at boot (PR_SET_DUMPABLE 0, Linux only), which
+// makes its /proc/<pid>/fd unreadable even to its own user. The holder check
+// must still recognise it, or no stop could ever signal a default daemon.
+describe.if(process.platform === 'linux')('a hardened daemon (Linux)', () => {
+  test('holdsJarvisLock recognises it', async () => {
+    const { lockPath, jarvisHome } = dataFolder('hardened-holds');
+    const holder = await spawnHolder(jarvisHome, { harden: true });
+    expect(() => readdirSync(`/proc/${holder.pid}/fd`)).toThrow();
+    expect(await holdsJarvisLock(holder.pid, lockPath)).toBe(true);
+  }, 60_000);
+
+  test('`jarvis stop` stops it', async () => {
+    const { home, jarvisHome, lockPath } = dataFolder('hardened-cli');
+    const holder = await spawnHolder(jarvisHome, { harden: true });
+
+    const { code, stdout, stderr } = await runStop(home, jarvisHome);
+
+    expect(code).toBe(0);
+    expect(stderr).not.toContain('not signalled');
+    expect(stdout).toContain('JARVIS daemon stopped.');
+    expect(stdout).toContain(`Stopping JARVIS daemon (PID ${holder.pid})`);
+    await holder.exited;
+    expect(alive(holder.pid)).toBe(false);
+    expect(existsSync(lockPath)).toBe(false);
+  }, 60_000);
+
+  test('stopDaemonGracefully stops it', async () => {
+    const saved = process.env.JARVIS_HOME;
+    const { jarvisHome, lockPath } = dataFolder('hardened-helper');
+    const holder = await spawnHolder(jarvisHome, { harden: true });
+    process.env.JARVIS_HOME = jarvisHome;
+    try {
+      const result = await stopDaemonGracefully({ timeoutMs: 5000, pollIntervalMs: 100 });
+      expect(result).toEqual({ wasRunning: true, pid: holder.pid, graceful: true, stopped: true });
+      await holder.exited;
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.JARVIS_HOME;
+      else process.env.JARVIS_HOME = saved;
+    }
   }, 60_000);
 });

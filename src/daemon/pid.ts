@@ -22,6 +22,7 @@ import {
   fchmodSync,
   fstatSync,
   lstatSync,
+  statSync,
 } from 'node:fs';
 import { cc } from 'bun:ffi';
 import flockSource from './flock.c' with { type: 'file' };
@@ -405,6 +406,49 @@ export function writeLockedPort(port: number): void {
   } catch (err) {
     console.error(`[PID] Failed to record port ${port} in lock file: ${err}`);
   }
+}
+
+/**
+ * Does `pid` hold the flock on the file at `lockPath`? Linux only, from
+ * /proc/locks: true or false when that answers it, null when it cannot (no
+ * /proc/locks, the lock file is gone, or the table could not be read).
+ *
+ * /proc/locks is the kernel's own table of who holds which lock. Unlike
+ * /proc/<pid>/fd it is readable by every user and not ptrace-gated, so it still
+ * answers for the daemon after it hardens itself (PR_SET_DUMPABLE 0, see
+ * process-hardening.ts), which makes its fd folder unreadable to anyone else.
+ * Pids are shown in the reader's own pid namespace, so a holder in another
+ * container never matches. A line reads, for a flock on device 08:40 inode 641284:
+ *
+ *   49: FLOCK  ADVISORY  WRITE 11 08:40:641284 0 EOF
+ *
+ * and a waiter has `->` after the number. Device numbers are hex major:minor;
+ * stat's st_dev is decoded the way glibc's major()/minor() do. Measured on
+ * ext4, on overlayfs and on a bind-mounted Docker volume: the triple matches
+ * stat of the path in every case.
+ */
+export function flockHeldBy(pid: number, lockPath: string = defaultLockPath()): boolean | null {
+  if (process.platform !== 'linux') return null;
+  let table: string;
+  let dev: bigint;
+  let ino: bigint;
+  try {
+    const st = statSync(lockPath, { bigint: true });
+    dev = st.dev;
+    ino = st.ino;
+    table = readFileSync('/proc/locks', 'utf-8');
+  } catch {
+    return null;
+  }
+  const major = ((dev >> 8n) & 0xfffn) | ((dev >> 32n) & ~0xfffn);
+  const minor = (dev & 0xffn) | ((dev >> 12n) & ~0xffn);
+  for (const line of table.split('\n')) {
+    const m = /^\d+:\s+(->\s+)?(\S+)\s+\S+\s+(\S+)\s+(-?\d+)\s+([0-9a-fA-F]+):([0-9a-fA-F]+):(\d+)\s/.exec(line);
+    if (!m || m[1] || m[2] !== 'FLOCK' || m[3] !== 'WRITE') continue;
+    if (Number(m[4]) !== pid) continue;
+    if (BigInt(`0x${m[5]}`) === major && BigInt(`0x${m[6]}`) === minor && BigInt(m[7]!) === ino) return true;
+  }
+  return false;
 }
 
 /**

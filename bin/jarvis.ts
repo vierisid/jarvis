@@ -335,14 +335,16 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
   // namespace's number (1 in the shipped image), which out here is some other
   // process, and a pid can be reused. So signal it only once it is shown to
   // hold this data folder's lock, the same test port cleanup uses.
+  // (A pid could still change hands between this check and the kill; without
+  // pidfds that window cannot be closed, only kept to microseconds.)
   if (!(await holdsJarvisLock(pid))) {
     // It may have exited between the two checks; then there is nothing to stop.
     if (releaseLockIfUnheld()) {
       console.log(c.yellow('JARVIS is not running.'));
       return true;
     }
-    console.error(c.red(`✗ JARVIS is running, but PID ${pid}, named in its lock file, does not hold the lock, so it was not signalled.`));
-    console.error(c.dim('  The daemon may be running in a container or another pid namespace. Stop it where it runs.'));
+    console.error(c.red(`✗ JARVIS is running, but PID ${pid}, named in its lock file, could not be shown to hold the lock, so it was not signalled.`));
+    console.error(c.dim('  The daemon may be running in a container, or as another user. Stop it where it runs, or as its owner or root.'));
     return false;
   }
 

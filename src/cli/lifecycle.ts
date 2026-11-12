@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import os from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import YAML from 'yaml';
-import { getPidPath, readLockedPort, isProcessAlive } from '../daemon/pid.ts';
+import { flockHeldBy, getPidPath, readLockedPort, isProcessAlive } from '../daemon/pid.ts';
 import { readPortSetting, type PortSetting } from '../config/port.ts';
 import { win32SystemExe } from '../util/system-exe.ts';
 
@@ -239,6 +239,12 @@ export async function holdsJarvisLock(pid: number, lockPath: string = getPidPath
     name.endsWith(DELETED_SUFFIX) && spellings.has(name.slice(0, -DELETED_SUFFIX.length));
 
   if (platform === 'linux') {
+    // The kernel's lock table first: it still answers for a daemon that has
+    // hardened itself (PR_SET_DUMPABLE 0, which it does at boot unless
+    // daemon.allow_process_inspection is set), whose /proc/<pid>/fd below is
+    // unreadable to anyone else. The fd walk stays for what the table cannot
+    // show: a lock file already deleted under the daemon.
+    if (flockHeldBy(pid, lockPath) === true) return true;
     const fdDir = `/proc/${pid}/fd`;
     let fds: string[];
     try {
