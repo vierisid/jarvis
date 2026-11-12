@@ -151,7 +151,7 @@ work again, rerun it in Jarvis.
 | Queue full | 503 with `Retry-After` |
 | 100 steps of the workflow already waiting behind its approval cards | 503 with `Retry-After: 60`, recorded as skipped |
 | Signing secret unusable (not text, or the timestamp setting with no secret) | 401 for every request, recorded as blocked in the ledger; never treated as unsigned |
-| Body nested more than 100 levels deep | 400, recorded as blocked in the ledger; nothing runs |
+| JSON body nested more than 100 levels deep (counted on the text, before it is parsed) | 400, recorded as blocked in the ledger; nothing runs |
 | Not recorded | 500 |
 
 ## Events
