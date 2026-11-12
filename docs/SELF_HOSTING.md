@@ -38,6 +38,18 @@ records the port it bound in its lock file, which `jarvis stop` reads first. A
 that port is not Jarvis's either - but `jarvis stop --port N` is still honored,
 for stopping a daemon whose config was edited after it started.
 
+Port cleanup never stops a program that is not Jarvis. With no daemon holding
+the lock, `jarvis stop` still looks at the port, but it signals a listener only
+if that process holds this data folder's lock file open, which the daemon does
+for its whole life (on Linux, also after the lock file was deleted under it).
+Any other listener is left running and named, with the command to see what it
+is (`lsof -nP -iTCP:<port> -sTCP:LISTEN`, or `netstat -ano | findstr :<port>`
+on Windows). The same rule applies after a normal stop: if another program
+holds the port once the daemon has exited, `jarvis stop` and `jarvis restart`
+report the port as still occupied and exit with an error instead of freeing it.
+A program run by another user may not show up at all without root; `sudo lsof
+-nP -iTCP:<port> -sTCP:LISTEN` shows it.
+
 **Access is JWT-only by default.** There is no shared password or token. You
 enroll devices:
 
