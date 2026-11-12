@@ -154,6 +154,28 @@ export function approvalNeedsClick(request: Pick<ApprovalRequest, 'context'>): b
 }
 
 /**
+ * True when approving the request spends money. A payment is approved with a
+ * click on the dashboard, where the whole of it is on screen, and nowhere
+ * else: not by a key, a spoken yes, a notification button or a chat reply.
+ * Denying it is allowed from anywhere.
+ */
+export function approvalIsPayment(request: Pick<ApprovalRequest, 'action_category'>): boolean {
+  return request.action_category === 'make_payment';
+}
+
+/**
+ * Why a request can be approved on the dashboard only, or null when any
+ * surface that can show it whole may approve it. The one place the rule is
+ * written: the decision function, the toast, the chat card, the notch and
+ * the executor's own check all ask here.
+ */
+export function approvalDashboardOnly(request: Pick<ApprovalRequest, 'context' | 'action_category'>): 'click_only' | 'payment' | null {
+  if (approvalNeedsClick(request)) return 'click_only';
+  if (approvalIsPayment(request)) return 'payment';
+  return null;
+}
+
+/**
  * The card sentence a gated tool wrote into the request context, if any.
  *
  * Never for `request_approval`: its `context` is the model's own `context`

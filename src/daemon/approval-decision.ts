@@ -9,12 +9,15 @@
  * allowed only when nothing happened; closing it is always allowed.
  */
 
-import { APPROVAL_SHORT_ID_LENGTH, guardedApprovalWrite, approvalNeedsClick, DASHBOARD_DECIDER, executionState, type ApprovalManager, type ApprovalRequest } from '../authority/approval.ts';
+import { APPROVAL_SHORT_ID_LENGTH, guardedApprovalWrite, approvalDashboardOnly, approvalIsPayment, DASHBOARD_DECIDER, executionState, type ApprovalManager, type ApprovalRequest } from '../authority/approval.ts';
 import { isAgentStopCard, type DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { AuditTrail, ResolutionChannel } from '../authority/audit.ts';
 import { activeEmergencyState } from '../authority/emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { approvalChannelCard, approvalToast, LITERAL_TEXT_CHANNELS, LOOK_ALIKE_REASON } from '../authority/approval-delivery.ts';
+
+/** Who decided, when the yes was given on the desktop notch. */
+export const NOTCH_DECIDER = 'notch';
 
 export interface ApprovalDecisionDeps {
   approvalManager: ApprovalManager;
@@ -31,6 +34,7 @@ export function resolutionChannel(decidedBy: string): ResolutionChannel {
   if (decidedBy === DASHBOARD_DECIDER) return 'click';
   if (decidedBy === 'voice') return 'voice';
   if (decidedBy === 'notification') return 'notification';
+  if (decidedBy === NOTCH_DECIDER) return 'notch';
   if (/^(telegram|discord)(:|$)/.test(decidedBy)) return 'chat';
   return 'system';
 }
@@ -68,9 +72,11 @@ export async function applyApprovalDecision(
   if (action === 'approve') {
     // A card whose effect has to be reviewed on screen (browser and desktop
     // actions) is approved on the dashboard only: a chat reply or a toast
-    // cannot show what it would do (Q-08). The executor refuses it too.
+    // cannot show what it would do (Q-08). So is a payment, whatever could
+    // show it: money moves on a click in the dashboard and nowhere else.
+    // The executor refuses both too.
     const pending = approvalManager.getRequest(requestId);
-    if (pending?.status === 'pending' && decidedBy !== DASHBOARD_DECIDER && approvalNeedsClick(pending)) {
+    if (pending?.status === 'pending' && decidedBy !== DASHBOARD_DECIDER && approvalDashboardOnly(pending) !== null) {
       return { status: 'needs_dashboard', request: pending };
     }
     // Pause holds: nothing new starts, an approval included. The card waits
@@ -119,6 +125,10 @@ export const CHANNEL_APPROVE_REFUSED =
 export const CHANNEL_APPROVE_REFUSED_LOOK_ALIKE =
   `This approval ${LOOK_ALIKE_REASON}, so it cannot be approved from a chat. Open the Jarvis dashboard to check it and decide.`;
 
+/** What it answers when an `approve` names a payment. */
+export const CHANNEL_APPROVE_REFUSED_PAYMENT =
+  'This approval is a payment, and a payment is approved on the Jarvis dashboard only, so it cannot be approved from a chat. Open the dashboard to decide; deny still works here.';
+
 export { LITERAL_TEXT_CHANNELS };
 
 /** What it answers an `approve` from a channel not in `LITERAL_TEXT_CHANNELS` (#814). */
@@ -163,7 +173,10 @@ export async function channelApprovalReply(
   const request = match.request;
   if (action === 'approve') {
     const card = approvalChannelCard(request);
-    if (!card.approvable) return card.refusal === 'look_alike' ? CHANNEL_APPROVE_REFUSED_LOOK_ALIKE : CHANNEL_APPROVE_REFUSED;
+    if (!card.approvable) {
+      return card.refusal === 'payment' ? CHANNEL_APPROVE_REFUSED_PAYMENT
+        : card.refusal === 'look_alike' ? CHANNEL_APPROVE_REFUSED_LOOK_ALIKE : CHANNEL_APPROVE_REFUSED;
+    }
   }
 
   const decidedBy = deciderId && /^[A-Za-z0-9_-]{1,64}$/.test(deciderId) ? `${channel}:${deciderId}` : channel;
@@ -212,7 +225,9 @@ export function heldApprovalMessage(state: 'paused' | 'killed'): string {
  */
 export function notificationDecisionNote(outcome: ApprovalDecisionOutcome): string | null {
   if (outcome.status === 'needs_dashboard') {
-    return 'This one has to be reviewed on screen, so it cannot be approved from a notification. Approve it on the Jarvis dashboard.';
+    return approvalIsPayment(outcome.request)
+      ? 'This one is a payment, so it cannot be approved from a notification. Approve it on the Jarvis dashboard.'
+      : 'This one has to be reviewed on screen, so it cannot be approved from a notification. Approve it on the Jarvis dashboard.';
   }
   if (outcome.status === 'held') return heldApprovalMessage(outcome.state);
   return null;
@@ -226,7 +241,9 @@ export function notificationDecisionNote(outcome: ApprovalDecisionOutcome): stri
 export function channelDecisionReply(outcome: ApprovalDecisionOutcome, request: ApprovalRequest): string {
   if (outcome.status === 'already_decided') return 'Request already decided';
   if (outcome.status === 'needs_dashboard') {
-    return 'This one has to be reviewed on screen, so it cannot be approved from chat. Approve it on the Jarvis dashboard.';
+    return approvalIsPayment(outcome.request)
+      ? 'This one is a payment, so it cannot be approved from chat. Approve it on the Jarvis dashboard.'
+      : 'This one has to be reviewed on screen, so it cannot be approved from chat. Approve it on the Jarvis dashboard.';
   }
   if (outcome.status === 'held') return heldApprovalMessage(outcome.state);
   if (outcome.status === 'denied') return `Denied: ${request.tool_name}`;

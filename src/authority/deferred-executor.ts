@@ -4,7 +4,7 @@
 
 import { collectActionVerification, verificationSummary, type ActionVerification } from '../actions/action-verification';
 import { isToolResult, type ToolRegistry } from '../actions/tools/registry.ts';
-import { guardedApprovalWrite, executionState, approvalIntentFromContext, approvalNeedsClick, approvalPrincipal, DASHBOARD_DECIDER, type ApprovalManager, type ApprovalRequest } from './approval.ts';
+import { guardedApprovalWrite, executionState, approvalIntentFromContext, approvalIsPayment, approvalNeedsClick, approvalPrincipal, DASHBOARD_DECIDER, type ApprovalManager, type ApprovalRequest } from './approval.ts';
 import { ABOVE_LEVEL_SUBSTITUTION, resolveToolGate, severityRank, substituteAboveLevel } from './tool-action-map.ts';
 import { combineDecisions, type AuthorityEngine } from './engine.ts';
 import type { ToolDefinition } from '../actions/tools/registry.ts';
@@ -275,6 +275,11 @@ export class DeferredExecutor {
       // decision surface refuses such an approve; this holds below them all.
       if (approvalNeedsClick(request) && request.decided_by !== DASHBOARD_DECIDER) {
         return this.refuse(request, `Approved action ${request.tool_name} was NOT executed: it must be reviewed and approved on the dashboard, and it was approved from ${request.decided_by ?? 'an unknown surface'}. Ask for it again and approve it on the dashboard.`);
+      }
+      // The same for a payment: it is approved on the dashboard and nowhere
+      // else, and this holds below every surface that should have refused.
+      if (approvalIsPayment(request) && request.decided_by !== DASHBOARD_DECIDER) {
+        return this.refuse(request, `Approved action ${request.tool_name} was NOT executed: it is a payment, which is approved on the dashboard only, and it was approved from ${request.decided_by ?? 'an unknown surface'}. Ask for it again and approve it on the dashboard.`);
       }
       const permissions = this.permissionsRefusal(request, registry.get(request.tool_name), args);
       if (permissions) {

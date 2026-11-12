@@ -1220,6 +1220,37 @@ describe('#791 review: the toast budget fails closed on widths it cannot know', 
  * #813. The "Task complete" toast said why the action needed approval, not
  * what finished.
  */
+describe('a payment is never offered for approval off the dashboard', () => {
+  const payment = (): ApprovalRequest => makeRequest({
+    tool_name: 'request_approval', action_category: 'make_payment', urgency: 'urgent', reason: 'Pay $40.00 to Northwind',
+  });
+
+  test('its toast is review-only, shown whole, and says why', () => {
+    const t = approvalToast(payment());
+    expect(t.approvable).toBe(false);
+    expect(t.kind).toBe('approval_review');
+    expect(t.body).toBe('Pay $40.00 to Northwind');
+    expect(t.meta).toContain('a payment is approved in Jarvis only');
+    expect(t.actions.map((a) => a.id)).toEqual(['review', 'dismiss']);
+  });
+
+  test('its chat card offers only deny, and says why', () => {
+    const card = approvalChannelCard(payment());
+    expect(card.approvable).toBe(false);
+    expect(card.refusal).toBe('payment');
+    expect(card.text).toContain('Intent: Pay $40.00 to Northwind');
+    expect(card.text).toContain('a payment is approved on the Jarvis dashboard only');
+    expect(card.text).not.toContain('approve 3f2a9b1c');
+    expect(card.text).toContain('deny 3f2a9b1c');
+  });
+
+  test('the same sentence under another category is approvable as before', () => {
+    const other: ApprovalRequest = { ...payment(), action_category: 'send_email' };
+    expect(approvalToast(other).approvable).toBe(true);
+    expect(approvalChannelCard(other).approvable).toBe(true);
+  });
+});
+
 describe('#813: the task-complete toast names what was done', () => {
   test('a gated command names the command, not the engine reason', () => {
     const req = makeRequest({

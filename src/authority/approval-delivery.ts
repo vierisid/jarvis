@@ -3,7 +3,7 @@
  * appropriate channels (WebSocket always, Telegram/Discord too).
  */
 
-import { APPROVAL_SHORT_ID_LENGTH, approvalChannelIntentFromContext, approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest } from './approval.ts';
+import { APPROVAL_SHORT_ID_LENGTH, approvalChannelIntentFromContext, approvalIntentFromContext, approvalIsPayment, approvalNeedsClick, type ApprovalRequest } from './approval.ts';
 import { boundedReceiptText } from '../roles/untrusted.ts';
 import { commandForCard } from '../util/card-text.ts';
 import { confusableSkeleton } from './ui-intent.ts';
@@ -749,7 +749,9 @@ export function approvalToast(request: ApprovalRequest): ApprovalToast {
   const fits = toastLines(`${body} · ${impact}`) <= TOAST_APPROVABLE_LINES;
   const lookAlike = fits && toastLookAlike(body);
   const clickOnly = approvalNeedsClick(request);
-  const approvable = fits && !lookAlike && !clickOnly;
+  // A payment is never approved from a notification, however well it fits.
+  const payment = approvalIsPayment(request);
+  const approvable = fits && !lookAlike && !clickOnly && !payment;
   if (approvable) {
     // The reason goes last, after the impact and the tool: it says why
     // approval was needed, and it is the part an OS cut may take.
@@ -769,7 +771,7 @@ export function approvalToast(request: ApprovalRequest): ApprovalToast {
   return {
     id: request.id, kind: 'approval_review', title: `Review in Jarvis: ${tool}`,
     body: shown === body ? body : `${shown.trimEnd()}...`,
-    meta: `${impact} · ${toolLabel} · ${clickOnly ? 'requires on-screen review in Jarvis' : lookAlike ? `${LOOK_ALIKE_REASON}, so check it in Jarvis` : 'too long to approve from a notification'}`, destructive,
+    meta: `${impact} · ${toolLabel} · ${clickOnly ? 'requires on-screen review in Jarvis' : payment && fits && !lookAlike ? 'a payment is approved in Jarvis only' : lookAlike ? `${LOOK_ALIKE_REASON}, so check it in Jarvis` : 'too long to approve from a notification'}`, destructive,
     actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
     approvable,
   };
@@ -1077,7 +1079,9 @@ export function approvalChannelCard(request: ApprovalRequest): { text: string; a
     && approvableText.length <= CHANNEL_CARD_APPROVABLE_MAX_CHARS;
   // Checked only on a card shown whole, like the toast, so it never walks a
   // label the backstop cut.
-  const refusal: ChannelCardRefusal | null = !whole ? 'too_long' : toastLookAlike(intent.shown) ? 'look_alike' : null;
+  const refusal: ChannelCardRefusal | null = !whole ? 'too_long'
+    : toastLookAlike(intent.shown) ? 'look_alike'
+      : approvalIsPayment(request) ? 'payment' : null;
   if (refusal === null) return { approvable: true, refusal, text: approvableText };
   return {
     approvable: false,
@@ -1086,17 +1090,24 @@ export function approvalChannelCard(request: ApprovalRequest): { text: string; a
       ...head,
       refusal === 'too_long'
         ? `This is too long to show whole in one message here, so it cannot be approved from this chat.`
-        : `The intent ${LOOK_ALIKE_REASON}, so it cannot be approved from this chat.`,
+        : refusal === 'payment'
+          ? `This is a payment, and a payment is approved on the Jarvis dashboard only.`
+          : `The intent ${LOOK_ALIKE_REASON}, so it cannot be approved from this chat.`,
       refusal === 'too_long'
         ? `Open the Jarvis dashboard to read all of it and decide, or reply:`
-        : `Open the Jarvis dashboard to check it and decide, or reply:`,
+        : refusal === 'payment'
+          ? `Open the Jarvis dashboard to decide, or reply:`
+          : `Open the Jarvis dashboard to check it and decide, or reply:`,
       `  deny ${shortId}`,
     ].join('\n'),
   };
 }
 
-/** Why a chat approval card offers only `deny`: a line or the card would be cut, or the intent could be a look-alike. */
-export type ChannelCardRefusal = 'too_long' | 'look_alike';
+/**
+ * Why a chat approval card offers only `deny`: a line or the card would be
+ * cut, the intent could be a look-alike, or it is a payment.
+ */
+export type ChannelCardRefusal = 'too_long' | 'look_alike' | 'payment';
 
 /**
  * The longest approval card that can be approved by reply: one that every

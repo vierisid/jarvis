@@ -7,7 +7,7 @@ import { AuditTrail } from '../authority/audit.ts';
 import { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import type { ApprovalRequest } from '../authority/approval.ts';
-import { applyApprovalDecision, channelApprovalReply, CHANNEL_APPROVE_REFUSED, CHANNEL_APPROVE_REFUSED_CHANNEL, CHANNEL_APPROVE_REFUSED_LOOK_ALIKE, LITERAL_TEXT_CHANNELS, notificationApprovalDecision } from './approval-decision.ts';
+import { applyApprovalDecision, channelApprovalReply, CHANNEL_APPROVE_REFUSED, CHANNEL_APPROVE_REFUSED_CHANNEL, CHANNEL_APPROVE_REFUSED_LOOK_ALIKE, CHANNEL_APPROVE_REFUSED_PAYMENT, LITERAL_TEXT_CHANNELS, NOTCH_DECIDER, notificationApprovalDecision } from './approval-decision.ts';
 import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, approvalToast } from '../authority/approval-delivery.ts';
 
 function makeRequest(mgr: ApprovalManager, overrides?: { toolName?: string; executionMode?: 'inline' | 'deferred' }) {
@@ -69,6 +69,25 @@ describe('applyApprovalDecision', () => {
     expect(await notificationApprovalDecision({ id: req.id, kind: 'approval', action: 'approve' }, deps)).toBeNull();
     expect(mgr.getRequest(req.id)?.status).toBe('pending');
     expect(executions).toBe(0);
+  });
+
+  test('a payment cannot be approved through a chat reply or a notification button, and nothing runs', async () => {
+    const req = makeRequest(mgr);
+    getDb().run("UPDATE approval_requests SET action_category = 'make_payment' WHERE id = ?", [req.id]);
+    expect(await channelApprovalReply('approve', req.id.slice(0, 8), 'telegram', deps)).toBe(CHANNEL_APPROVE_REFUSED_PAYMENT);
+    expect(await notificationApprovalDecision({ id: req.id, kind: 'approval', action: 'approve' }, deps)).toBeNull();
+    expect(mgr.getRequest(req.id)?.status).toBe('pending');
+    expect(executions).toBe(0);
+    // Deny still works from the chat.
+    expect(await channelApprovalReply('deny', req.id.slice(0, 8), 'telegram', deps)).toContain('Denied');
+  });
+
+  test('a yes on the notch is audited as the notch', async () => {
+    const audit = new AuditTrail();
+    const req = makeRequest(mgr);
+    expect(await applyApprovalDecision('approve', req.id, NOTCH_DECIDER, { ...deps, auditTrail: audit })).toMatchObject({ status: 'approved', executed: true });
+    expect(mgr.getRequest(req.id)!.decided_by).toBe('notch');
+    expect(getDb().query('SELECT channel FROM audit_trail WHERE approval_id = ?').get(req.id)).toEqual({ channel: 'notch' });
   });
 
   test('approve executes the deferred action and broadcasts', async () => {
