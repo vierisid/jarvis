@@ -371,8 +371,43 @@ test('a hidden tab does not poll the queue, and reads once when it is shown agai
 });
 test('an option is shown without bidi controls', async () => {
   const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
-  const select = { ...request, fields: [{ key: 'pick', label: 'Pick', type: 'select' as const, required: true, options: ['Pay ‮0001'] }] };
+  const select = { ...request, fields: [{ key: 'pick', label: 'Pick', type: 'select' as const, required: true, options: ['Pay \u202E0001'] }] };
   await React.act(async () => root.render(<Forms.HumanInputForm request={select} http={http} changed={async () => {}} />));
   const option = [...host.querySelectorAll('option')].find(o => o.value !== '')!;
-  expect(option.textContent).toBe('Pay 0001'); expect(option.value).toBe('Pay ‮0001');
+  expect(option.textContent).toBe('Pay 0001'); expect(option.value).toBe('Pay \u202E0001');
+});
+test('Show more stops at the largest page the server lists, so a poll never asks for a refused one', async () => {
+  urls2 = []; body2 = () => ({ requests: Array.from({ length: 50 }, (_, i) => pendingRequest(i)), pendingTotal: 1025, historyCursor: null });
+  let latest!: ReturnType<typeof Forms.useHumanInputQueue>;
+  await React.act(async () => root.render(<Probe2 onQueue={queue => { latest = queue; }} />));
+  for (let i = 0; i < 9; i++) await React.act(async () => { latest.showMore!(); });
+  expect(urls2.at(-1)).toBe('/api/workflow-inputs?limit=500');
+  expect(latest.showMore).toBeUndefined();
+  await React.act(async () => { await latest.refresh(); });
+  expect(urls2.every(url => Number(new URL(url, 'http://x').searchParams.get('limit')) <= 500)).toBe(true);
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputInbox queue={latest} http={http} />));
+  expect([...host.querySelectorAll('button')].some(b => b.textContent?.startsWith('Show more'))).toBe(false);
+  expect(host.textContent).toContain('975 more requests are waiting');
+});
+test('turning decisions off forgets the server count, so no badge counts requests nobody can list', async () => {
+  urls2 = []; body2 = () => ({ requests: [], pendingTotal: 30, historyCursor: null });
+  let latest!: ReturnType<typeof Forms.useHumanInputQueue>;
+  function Toggle({ enabled }: { enabled: boolean }) { latest = Forms.useHumanInputQueue(stable2, enabled); return null; }
+  await React.act(async () => root.render(<Toggle enabled />)); expect(latest.pendingTotal).toBe(30);
+  await React.act(async () => root.render(<Toggle enabled={false} />)); expect(latest.pendingTotal).toBeUndefined();
+});
+test('a pending request with a draft past the page is read again on each poll, so an answer elsewhere shows', async () => {
+  sessionStorage.setItem('jarvis:workflow-input:test-request', JSON.stringify({ progress: 'Typed past the page' }));
+  let status: HumanRequest['status'] = 'pending'; const urls: string[] = [];
+  const http = createHostTransport((async (url) => { urls.push(String(url));
+    return Response.json(String(url).endsWith('/test-request') ? { request: { ...request, status } } : { requests: [], pendingTotal: 60, historyCursor: null }); }) as typeof fetch);
+  let queue!: ReturnType<typeof Forms.useHumanInputQueue>;
+  function Probe() { queue = Forms.useHumanInputQueue(http); return null; }
+  await React.act(async () => root.render(<Probe />));
+  expect(queue.requests.find(r => r.id === 'test-request')?.status).toBe('pending');
+  status = 'expired'; await React.act(async () => { await queue.refresh(); });
+  expect(queue.requests.find(r => r.id === 'test-request')?.status).toBe('expired');
+  await React.act(async () => { await queue.refresh(); });
+  expect(urls.filter(url => url.endsWith('/test-request'))).toHaveLength(2);
 });

@@ -168,9 +168,6 @@ const UNDISMISSED_OUTCOME = `h.status IN ('submitted','approved','cancelled') AN
   AND (json_extract(h.record,'$.closureReason')='workflow_changed' OR (h.status!='cancelled' AND (
     NOT EXISTS (SELECT 1 FROM flow_run r WHERE ${INSTANCE_RUN})
     OR EXISTS (SELECT 1 FROM flow_run r WHERE ${INSTANCE_RUN} AND r.status NOT IN ('QUEUED','RUNNING','PAUSED','SUCCEEDED','STOPPED')))))`;
-/** Most pending requests one read returns when the caller names no limit. */
-export const HUMAN_INPUT_LIST_DEFAULT = 100;
-export const HUMAN_INPUT_LIST_MAX = 500;
 /**
  * Persistent terminal results and pending requests are scoped to the signed-in workspace. The
  * pending ones come oldest deadline first, at most `limit` of them; the recent and unacknowledged

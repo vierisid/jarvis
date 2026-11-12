@@ -1,4 +1,5 @@
 /** Shared, credential-free form contract used by the runtime and dashboard. */
+import { withoutCardInvisibles } from '../../util/card-text';
 export const HUMAN_INPUT_PIECE = '@jarvispieces/piece-jarvis-input';
 /**
  * How many requests one workflow may have waiting for an answer at once
@@ -54,18 +55,23 @@ export type HumanRequest = {
   generation?: number; reopenedFrom?: HumanRequest['status'];
 };
 /**
- * Bidirectional controls (embeddings, overrides, isolates, marks): left in a title or question they
- * reorder the text around them, so "Pay <U+202E>0001 EUR" reads as another amount. The Authority
- * sentences strip them (`boundedApprovalLabel`); so does a request when it is shown. The stored
- * request keeps what the workflow wrote.
+ * Most pending requests one `GET /api/workflow-inputs` lists when the caller names no limit, and the
+ * most it lists at all. Shared so the dashboard never asks for a page the server refuses.
  */
-const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
-export const withoutBidiControls = (text: string): string => typeof text === 'string' ? text.replace(BIDI_CONTROLS, '') : text;
-/** The request as a person is shown it: no bidi controls in any text a workflow author chose. */
+export const HUMAN_INPUT_LIST_DEFAULT = 100;
+export const HUMAN_INPUT_LIST_MAX = 500;
+/**
+ * Text a workflow author wrote, as a person is shown it: without the invisible and control
+ * characters a card never shows (`withoutCardInvisibles`, the set `forCard` drops). Left in a title
+ * or question, a bidi override reorders the text around it, so "Pay <U+202E>0001 EUR" reads as
+ * another amount. Line breaks are kept. The stored request keeps what the workflow wrote.
+ */
+export const forHumanDisplay = (text: string): string => typeof text === 'string' ? withoutCardInvisibles(text) : text;
+/** The request as a person is shown it: no hidden characters in any text a workflow author chose. */
 export function humanRequestForDisplay(request: HumanRequest): HumanRequest {
-  return { ...request, title: withoutBidiControls(request.title), prompt: withoutBidiControls(request.prompt),
-    requestKey: withoutBidiControls(request.requestKey), workflowName: withoutBidiControls(request.workflowName),
-    fields: Array.isArray(request.fields) ? request.fields.map(field => ({ ...field, label: withoutBidiControls(field.label) })) : request.fields };
+  return { ...request, title: forHumanDisplay(request.title), prompt: forHumanDisplay(request.prompt),
+    requestKey: forHumanDisplay(request.requestKey), workflowName: forHumanDisplay(request.workflowName),
+    fields: Array.isArray(request.fields) ? request.fields.map(field => ({ ...field, label: forHumanDisplay(field.label) })) : request.fields };
 }
 export function formFields(value: unknown): InputField[] {
   if (!Array.isArray(value) || !value.length || value.length > 20) throw Error('Provide 1–20 input fields');

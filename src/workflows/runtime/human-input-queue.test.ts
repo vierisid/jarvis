@@ -58,12 +58,15 @@ test('each request carries its run outcome, including a shared request waited on
 
 test('a request shows no bidi controls (G-12), while the stored request keeps what the workflow wrote', async () => {
   const { flow, version } = flowWithVersion();
-  const evil = await ask(flow.id, version.id, { title: 'Pay ‮0001 EUR‬ now', prompt: 'Send ⁦100⁩ to ‏bob‎', requestKey: 'k‭x' });
+  const evil = await ask(flow.id, version.id, { title: 'Pay \u202E0001 EUR\u202C now', prompt: 'Send \u2066100\u2069 to \u200Fbob\u200E', requestKey: 'k\u202Dx' });
   const shown = getHumanInput(DEFAULT_IDS.project, evil.requestId)!;
   expect(shown.title).toBe('Pay 0001 EUR now'); expect(shown.prompt).toBe('Send 100 to bob'); expect(shown.requestKey).toBe('kx');
   expect(humanInputQueue(DEFAULT_IDS.project).requests.find(r => r.id === evil.requestId)!.title).toBe('Pay 0001 EUR now');
   const stored = JSON.parse(getWorkflowDb().query<{ record: string }, [string]>('SELECT record FROM workflow_human_request WHERE id=?').get(evil.requestId)!.record);
-  expect(stored.title).toBe('Pay ‮0001 EUR‬ now');
+  expect(stored.title).toBe('Pay \u202E0001 EUR\u202C now');
+  // The whole set a card drops, not only bidi controls: a combining grapheme joiner, tag characters spelling hidden ASCII, a C0 control.
+  const hidden = await ask(flow.id, version.id, { title: 'no\u034Ftes', prompt: 'Approve\u{E0041}\u{E0042} it\u0007', fields: [] });
+  expect(getHumanInput(DEFAULT_IDS.project, hidden.requestId)).toMatchObject({ title: 'notes', prompt: 'Approve it' });
   // Ordinary text, line breaks and non-Latin scripts are untouched.
   const plain = await ask(flow.id, version.id, { title: 'Approve الدفع', prompt: 'Line one\nLine two' });
   expect(getHumanInput(DEFAULT_IDS.project, plain.requestId)).toMatchObject({ title: 'Approve الدفع', prompt: 'Line one\nLine two' });

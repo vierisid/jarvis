@@ -1,5 +1,5 @@
-import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, humanInputQueue, HUMAN_INPUT_LIST_DEFAULT, HUMAN_INPUT_LIST_MAX, resolveHumanInput } from '../runtime/human-input';
-import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
+import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, humanInputQueue, resolveHumanInput } from '../runtime/human-input';
+import { HUMAN_INPUT_LIST_DEFAULT, HUMAN_INPUT_LIST_MAX, HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion } from './editor-version';
