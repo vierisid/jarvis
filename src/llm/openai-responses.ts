@@ -95,7 +95,7 @@ export async function postResponses(base: string, headers: Record<string, string
   return response;
 }
 
-export async function* streamResponses(response: Response): AsyncIterable<LLMStreamEvent> {
+export async function* streamResponses(response: Response, onActivity?: () => void): AsyncIterable<LLMStreamEvent> {
   if (!response.body) throw new LLMProviderError('No OpenAI response body', 'network');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -103,6 +103,8 @@ export async function* streamResponses(response: Response): AsyncIterable<LLMStr
   try {
     while (true) {
       const { value, done } = await reader.read();
+      // Reasoning and argument deltas yield nothing yet; the stream is alive.
+      if (!done) onActivity?.();
       buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';

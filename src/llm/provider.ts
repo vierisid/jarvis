@@ -254,6 +254,14 @@ export type LLMOptions = {
   reserveRetry?: (options: LLMOptions) => LLMOptions;
 };
 
+/**
+ * First-data window for a model served on the user's own hardware (Ollama, a
+ * local OpenAI-compatible server). Loading a model and reading a long prompt
+ * on a CPU sends nothing for minutes; a provider that is truly hung still
+ * fails, just later than a hosted one.
+ */
+export const LOCAL_STREAM_FIRST_DATA_MS = 300_000;
+
 export interface LLMProvider {
   name: string;
   /**
@@ -264,6 +272,13 @@ export interface LLMProvider {
    * the real error with an unrelated "model not found".
    */
   readonly placeholderDefaultModel?: boolean;
+  /**
+   * How long a stream may send nothing before its first data, when the
+   * manager's default is too short. A model on the user's own hardware sends
+   * no bytes while it loads and reads the prompt, which on a CPU can take
+   * minutes; a hosted API answers or streams keepalives well inside that.
+   */
+  readonly streamFirstDataMs?: number;
   chat(messages: LLMMessage[], options?: LLMOptions): Promise<LLMResponse>;
   stream(messages: LLMMessage[], options?: LLMOptions): AsyncIterable<LLMStreamEvent>;
   listModels(): Promise<string[]>;

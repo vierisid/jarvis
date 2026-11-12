@@ -255,7 +255,7 @@ export class OpenAIProvider implements LLMProvider {
     if (usesResponses(this.baseUrl, model)) {
       try {
         const response = await postResponses(this.baseUrl, this.requestHeaders(), compactHistory(messages, calculateHistoryBudget(128000)), options, model, true);
-        yield* streamResponses(response);
+        yield* streamResponses(response, options.onStreamActivity);
       } catch (error) {
         yield { type: 'error', error: error instanceof Error ? error.message : String(error),
           code: error instanceof LLMProviderError ? error.code : 'network',

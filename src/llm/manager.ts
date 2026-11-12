@@ -634,9 +634,11 @@ export class LLMManager {
     let waiting = false;
     let gotEvent = false;
     let stalled: string | null = null;
+    // A provider on the user's own hardware may need longer to start (see LLMProvider.streamFirstDataMs).
+    const firstDataMs = Math.max(this.streamFirstDataMs, provider.streamFirstDataMs ?? 0);
     const arm = () => {
       clearTimeout(timer);
-      const ms = gotEvent ? this.streamIdleMs : this.streamFirstDataMs;
+      const ms = gotEvent ? this.streamIdleMs : firstDataMs;
       timer = setTimeout(() => {
         stalled = `${STREAM_STALL_PREFIX} ${provider.name} sent no data for ${ms >= 1000 ? `${Math.round(ms / 1000)}s` : `${ms}ms`} (timed out)`;
         controller.abort(new LLMProviderError(stalled, 'network'));

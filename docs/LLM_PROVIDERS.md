@@ -354,8 +354,9 @@ const response = await manager.chat(messages);
 
 ### Timeouts
 
-- A non-streaming call is cut off after 90 seconds. A streaming call (chat) is cut off when the provider sends nothing for 90 seconds before the first data, or for 60 seconds between data after that. Time Jarvis spends running a tool between two events never counts.
-- A stalled stream is not retried on the same provider (a hung provider stays hung); the turn fails with "did not answer in time". Chat runs one turn at a time, so a stalled turn holds up the next one for at most that long.
+- A non-streaming call is cut off after 90 seconds. A streaming call (chat) is cut off when the provider sends nothing for 90 seconds before the first data, or for 60 seconds between data after that. Any bytes count as data, including thinking, a tool call's arguments arriving in pieces, and keepalive pings. Time Jarvis spends running a tool between two events never counts.
+- Ollama and OpenAI-compatible endpoints (often a model on your own machine) get 5 minutes before the first data, because loading a model and reading a long prompt on a CPU sends nothing for that long.
+- A stalled stream is not retried on the same provider (a hung provider stays hung). Without a tier map Jarvis moves on to the next provider in the fallback chain if nothing was shown yet; otherwise the turn fails with "did not answer in time". Chat runs one turn at a time, so a stalled turn holds up the next one for at most that long.
 - A workflow Ask step has one overall deadline of 120 seconds across all retries and fallbacks.
 
 ### Provider-Specific Options
