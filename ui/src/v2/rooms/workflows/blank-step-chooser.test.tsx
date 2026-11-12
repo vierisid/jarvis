@@ -67,7 +67,7 @@ test("Enter on a blank step opens the chooser; Escape closes it and puts focus b
   expect(dialog!.contains(document.activeElement)).toBe(true);
   await key(document.activeElement!, "Escape");
   expect(chooser()).toBeNull();
-  expect(document.activeElement).toBe(node("blank"));
+  expect(document.activeElement === node("blank")).toBe(true);
   expect(node("blank")!.textContent).not.toContain("Router");
 });
 
@@ -87,7 +87,7 @@ test("choosing Router from the keyboard replaces the blank step in place and kee
   expect(chooser()).toBeNull();
   // Same node, same place: no loose Router next to a still-blank step.
   expect(host.querySelectorAll(".react-flow__node").length).toBe(before);
-  expect(document.activeElement).toBe(node("blank"));
+  expect(document.activeElement === node("blank")).toBe(true);
   // The name the person gave the placeholder is kept.
   expect(node("blank")!.textContent).toContain("Check stock");
 });
