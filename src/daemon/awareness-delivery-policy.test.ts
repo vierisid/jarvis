@@ -314,3 +314,60 @@ test('a dropped research result does not leave its issue muted when awareness co
   policy.handleEvent({ type: 'suggestion_ready', data: { title: 'Error', body: 'Synthetic', issueKey: screenIssueKey('error', 'Terminal', 'Synthetic screen error') }, timestamp: 2 });
   expect(priorities).toEqual(['urgent']);
 });
+
+// #1314 follow-up: the research turn is held by the switch and kept off the
+// background agent's primary history; voice and channel retries stop at the flip.
+test('error and struggle research run as screen-derived background turns', async () => {
+  const f = fixture('0');
+  const options: unknown[] = [];
+  f.deps.agent = () => ({ handleMessage: async (_text: string, _channel?: string, turn?: unknown) => { options.push(turn); return 'A synthetic solution long enough to announce.'; },
+    lastTurnRequestedApproval: () => false });
+  const policy = new AwarenessDeliveryPolicy(f.deps, '0');
+  policy.handleEvent(event('error_detected'));
+  policy.handleEvent(event('struggle_detected'));
+  await Bun.sleep(0);
+  expect(options).toEqual([{ screenDerived: true }, { screenDerived: true }]);
+});
+
+test('an awareness event that arrives after awareness was turned off is dropped: no flow, card, assistance or delivery', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  for (const accepted of [0, 1]) for (const type of ['error_detected', 'struggle_detected', 'suggestion_ready'] as const) {
+    const f = fixture('0', accepted), observed: unknown[] = [];
+    f.eventBus.subscribe(AWARENESS_EVENT_TYPE_MAP[type]!, e => { observed.push(e); });
+    const policy = new AwarenessDeliveryPolicy(f.deps, '0');
+    try {
+      setScreenCaptureEnabledSource(() => false);
+      policy.handleEvent(event(type)); await Bun.sleep(0);
+    } finally { setScreenCaptureEnabledSource(null); }
+    expect({ type, accepted, calls: f.calls, messages: f.messages, observed })
+      .toEqual({ type, accepted, calls: { research: 0, reactor: 0, coalescer: 0, voice: 0, desktop: 0, channels: 0 }, messages: [], observed: [] });
+  }
+});
+
+test('legacy voice and channel delivery ask the switch at each sentence and retry', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard');
+  const checks: Array<() => boolean> = [];
+  let urgent = 0;
+  const keep = (options?: { shouldContinue?: () => boolean }) => { if (options?.shouldContinue) checks.push(options.shouldContinue); };
+  for (const accepted of [0, 1]) {
+    const f = fixture('0', accepted);
+    f.deps.sockets = { ...f.deps.sockets, broadcastProactiveVoice: async (_text: string, options?: { shouldContinue?: () => boolean }) => { keep(options); return 1; },
+      // An urgent notification is also echoed to the channels (WebSocketService.broadcastNotification).
+      broadcastNotification: (_text: string, priority: string, delivery?: { shouldContinue?: () => boolean }) => { if (priority === 'urgent') { urgent++; keep(delivery); } } };
+    f.deps.channels = { ...f.deps.channels, broadcastToAll: async (_text: string, _send?: unknown, delivery?: { shouldContinue?: () => boolean }) => { keep(delivery); } };
+    const policy = new AwarenessDeliveryPolicy(f.deps, '0');
+    policy.handleEvent(event('suggestion_ready'));
+    policy.handleEvent(event('error_detected'));
+    await Bun.sleep(0); await Bun.sleep(0);
+    if (accepted) await policy.deliverOpportunity(suggestion);
+  }
+  // No clients: the suggestion goes to the channels, the researched fix is spoken and echoed;
+  // with clients: the suggestion and the researched fix are spoken and echoed, the opportunity spoken.
+  expect(urgent).toBe(3);
+  expect(checks).toHaveLength(8);
+  expect(checks.every(check => check())).toBe(true);
+  try {
+    setScreenCaptureEnabledSource(() => false);
+    expect(checks.some(check => check())).toBe(false);
+  } finally { setScreenCaptureEnabledSource(null); }
+});

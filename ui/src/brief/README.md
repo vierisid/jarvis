@@ -682,6 +682,15 @@ actions only change local fixture state.
 - Editing buffers a complete typed email or calendar document. Save does not approve: it yields a new
   revision and approval to review. A read that changes or removes the decision keeps the unsaved
   text and Cancel, and disables Save.
+- Held runs: a workflow whose approval cards are at their limit parks its further runs with no card
+  (`workflows/runtime/deferred-cards.ts`). F-12 lists them as ONE `kind: "held"` entry per workflow
+  (`decisionId` `held:<flowId>`, `held: { workflowName, count }`, inspect only), never as one
+  recovery row per run. The entry says plainly how many are waiting and that answering a request
+  above lets the next one ask. The count rule: a held entry is a note, not a decision. It is not
+  counted in the Needs you count, Today's queue count or the sidebar badge, and it is never offered
+  to the document room. Only entries that ask the owner for something count. A held run stopped
+  by Kill, turn-off or cancel before its step ever asked leaves no row either: nothing was sent and
+  nothing is asked (the #1364 rule), and an accepted commitment's work card shows again.
 - Wiring (not done here): aggregate every F-12 `GET /api/brief/decisions` page and restart on
   `queue_changed`; join each item with F-14 `GET /api/brief/decisions/:id/document` only when the
   revisions match. POST the F-14 document endpoint with `{ requestId, revision, action }` plus

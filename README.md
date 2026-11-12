@@ -110,12 +110,12 @@ jarvis stop                # Stop the brain
 jarvis autostart           # Install a login service on Linux or macOS
 jarvis autostart --status  # Inspect that service
 jarvis update              # Update a Bun global or install-script installation
-jarvis export --out jarvis-backup.tar  # Back up user data (--full adds plaintext secrets)
+jarvis export --out jarvis-backup.tar  # Complete backup: data, keys, installed apps. Written 0600, keep it private
 jarvis restore jarvis-backup.tar       # Restore a backup (stop the brain first)
 jarvis uninstall           # Remove the brain AND delete all its data in ~/.jarvis
 ```
 
-> **Warning:** `jarvis uninstall` deletes `~/.jarvis` (or `JARVIS_HOME`): memory, conversations, workflows, and stored credentials. This includes developer checkouts, where the checkout itself is left in place. Run `jarvis export` first if you might want the data back. It does not remove desktop apps. In Docker it is refused; remove the container (and optionally the `jarvis-data` volume) on the host instead.
+> **Warning:** `jarvis uninstall` deletes `~/.jarvis` (or `JARVIS_HOME`): memory, conversations, workflows, and stored credentials. This includes developer checkouts, where the checkout itself is left in place. Run `jarvis export` first if you might want the data back. The archive holds your keys, so keep it private (see [backup and restore](docs/SELF_HOSTING.md#backup-and-restore)). It does not remove desktop apps. In Docker it is refused; remove the container (and optionally the `jarvis-data` volume) on the host instead.
 
 `jarvis start -d` writes to `~/.jarvis/logs/jarvis.log`. For a service or container, use `journalctl` or `docker logs jarvis`, respectively. See [self-hosting operations](docs/SELF_HOSTING.md#running-under-systemd) for service lifecycle, updates, and logging. Docker images and developer checkouts are updated outside `jarvis update`.
 
