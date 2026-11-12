@@ -80,4 +80,24 @@ describe('step names that Object.prototype also uses', () => {
       expect(JSON.stringify(Object.getOwnPropertyDescriptor(saved.steps, name)?.value)).toContain('reply to first question');
     }, 60_000);
   }
+
+  // The loop lookup (getLoopStepOutput) and the per-iteration state both go through ownStep.
+  test.skipIf(skip)('a loop named valueOf runs a body step named toString on every item', async () => {
+    const loop: FlowTriggerNode = { name: 'valueOf', type: 'LOOP_ON_ITEMS', settings: { items: "{{ ['a', 'b'] }}" }, firstLoopAction: ask('toString', 'item {{valueOf.item}}') };
+    const flow = createFlow();
+    createDraftVersion({ flowId: flow.id, displayName: 'Loop names', trigger: { name: 'trigger', type: 'EMPTY', nextAction: loop } });
+    const before = prompts.length;
+    const response = await createWorkflowRoutes()['/api/workflows/:id/run']!.POST!(Object.assign(
+      new Request('http://local/run', { method: 'POST', body: JSON.stringify({ environment: 'TESTING' }) }), { params: { id: flow.id } }));
+    expect(response.status).toBe(202);
+    const { id } = await response.json() as { id: string };
+    await new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime!) }) } }).drain();
+    const saved = getFlowRun(id)!;
+    expect(saved.failedStep).toBeNull();
+    expect(saved.status).toBe('SUCCEEDED');
+    expect(prompts.slice(before)).toEqual(['item a', 'item b']);
+    const recorded = Object.getOwnPropertyDescriptor(saved.steps, 'valueOf')?.value as { output: { output: { iterations: Record<string, unknown>[] } } };
+    expect(recorded.output.output.iterations).toHaveLength(2);
+    for (const iteration of recorded.output.output.iterations) expect(Object.hasOwn(iteration, 'toString')).toBe(true);
+  }, 60_000);
 });
