@@ -11,8 +11,8 @@
  * going to a file that no longer exists.
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { statSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 
 /** Start over on purpose: lets Jarvis create an empty database next to existing state. */
 export const NEW_DATABASE_FLAG = '--new-database';
@@ -30,17 +30,32 @@ export class DatabaseProblemError extends Error {
 
 const RESTORE_HINT = 'To bring your data back, run: jarvis restore <your-backup-file>';
 
-function nonEmptyDir(dir: string): boolean {
-  try { return readdirSync(dir).length > 0; } catch { return false; }
+/** A regular file with something in it: an empty or stray entry is not saved state. */
+function nonEmptyFile(path: string): boolean {
+  try { const s = statSync(path); return s.isFile() && s.size > 0; } catch { return false; }
 }
 
-/** What in the data folder shows that this install has been used before. */
+/** Files that only an install which has run (or been restored) writes. */
+const STATE_FILES = ['workspace-id', '.secrets.enc', '.secrets.key', 'workflow-encryption.key'] as const;
+/** The enrollment signing keys: a stray file in the folder does not count. */
+const SIDECAR_KEY_FILES = ['private.pem', 'public.pem'] as const;
+
+/**
+ * What shows that this install has been used before. Looked for in the data
+ * folder AND next to the database file: `daemon.db_path` and `--data-dir` can
+ * name different folders, and the state that matters is whichever sits beside
+ * the database Jarvis is about to create.
+ */
 export function installStateEvidence(dataDir: string, dbPath: string): string[] {
   const found: string[] = [];
-  if (existsSync(join(dataDir, 'workspace-id'))) found.push('workspace-id');
-  if (nonEmptyDir(join(dataDir, 'sidecar-keys'))) found.push('sidecar-keys');
-  for (const name of ['.secrets.enc', '.secrets.key']) if (existsSync(join(dataDir, name))) found.push(name);
-  try { if (statSync(`${dbPath}-wal`).size > 0) found.push('jarvis.db-wal'); } catch { /* none */ }
+  const home = resolve(dataDir);
+  const dirs = [...new Set([home, resolve(dirname(dbPath))])];
+  for (const dir of dirs) {
+    const label = (name: string) => (dir === home ? name : join(dir, name));
+    for (const name of STATE_FILES) if (nonEmptyFile(join(dir, name))) found.push(label(name));
+    if (SIDECAR_KEY_FILES.some((name) => nonEmptyFile(join(dir, 'sidecar-keys', name)))) found.push(label('sidecar-keys'));
+  }
+  if (nonEmptyFile(`${dbPath}-wal`)) found.push(`${basename(dbPath)}-wal`);
   return found;
 }
 
@@ -63,13 +78,14 @@ export function inspectDatabaseFile(dbPath: string, dataDir: string): { state: D
  */
 export function assertDatabaseUsable(dbPath: string, dataDir: string, opts: { allowNew?: boolean } = {}): void {
   if (opts.allowNew || process.env[NEW_DATABASE_ENV] === '1') return;
-  const { state } = inspectDatabaseFile(dbPath, dataDir);
+  const { state, evidence } = inspectDatabaseFile(dbPath, dataDir);
   if (state !== 'missing' && state !== 'empty') return;
   throw new DatabaseProblemError(state,
-    `Jarvis found your saved settings in ${dataDir}, but its database file is ${state === 'missing' ? 'missing' : 'empty'}. `
+    `Jarvis found your saved settings (${evidence.join(', ')} in ${dataDir}), but its database file is ${state === 'missing' ? 'missing' : 'empty'} (${dbPath}). `
     + 'It will not start with a new empty database: that would hide your data and lock out your devices.\n'
     + `${RESTORE_HINT}\n`
-    + `To start over on purpose, run: jarvis start ${NEW_DATABASE_FLAG}`);
+    + 'If your database is in another folder, point daemon.db_path in config.yaml at it.\n'
+    + `To start over on purpose, run: jarvis start ${NEW_DATABASE_FLAG} (for a service, set ${NEW_DATABASE_ENV}=1 once)`);
 }
 
 const CORRUPT = /malformed|SQLITE_CORRUPT|not a database|SQLITE_NOTADB/i;

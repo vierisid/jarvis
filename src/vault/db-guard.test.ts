@@ -18,8 +18,9 @@ afterEach(() => { stopWatchingDatabaseFile(); resetDatabaseLost(); closeDb(); rm
 function makeDb(): void { const db = new Database(dbPath, { create: true }); db.exec('CREATE TABLE t (x); INSERT INTO t VALUES (1)'); db.close(); }
 const installState = {
   workspaceId: () => writeFileSync(join(dir, 'workspace-id'), 'abcdefghijklmnopqrstu\n'),
-  sidecarKeys: () => { mkdirSync(join(dir, 'sidecar-keys')); writeFileSync(join(dir, 'sidecar-keys', 'k.pem'), 'x'); },
+  sidecarKeys: () => { mkdirSync(join(dir, 'sidecar-keys')); writeFileSync(join(dir, 'sidecar-keys', 'private.pem'), 'x'); },
   secrets: () => writeFileSync(join(dir, '.secrets.key'), 'k'),
+  workflowKey: () => writeFileSync(join(dir, 'workflow-encryption.key'), 'k'),
 };
 
 describe('a missing or empty database next to other install state', () => {
@@ -60,6 +61,31 @@ describe('a missing or empty database next to other install state', () => {
   test('a real database passes whatever else exists', () => {
     installState.workspaceId(); makeDb();
     expect(() => assertDatabaseUsable(dbPath, dir)).not.toThrow();
+  });
+
+  test('stray or empty entries are not saved state', () => {
+    writeFileSync(join(dir, 'workspace-id'), '');
+    mkdirSync(join(dir, '.secrets.key'));
+    mkdirSync(join(dir, 'sidecar-keys'));
+    writeFileSync(join(dir, 'sidecar-keys', '.DS_Store'), 'junk');
+    writeFileSync(join(dir, 'config.yaml'), 'daemon:\n  port: 3142\n');
+    expect(inspectDatabaseFile(dbPath, dir)).toEqual({ state: 'fresh', evidence: [] });
+    expect(() => assertDatabaseUsable(dbPath, dir)).not.toThrow();
+  });
+
+  test('state next to the database counts even when the data dir names another folder', () => {
+    const dbDir = join(dir, 'home-jarvis');
+    const otherDataDir = join(dir, 'elsewhere');
+    mkdirSync(dbDir); mkdirSync(otherDataDir);
+    writeFileSync(join(dbDir, 'workspace-id'), 'abcdefghijklmnopqrstu\n');
+    const elsewhereDb = join(dbDir, 'jarvis.db');
+    expect(inspectDatabaseFile(elsewhereDb, otherDataDir)).toMatchObject({ state: 'missing', evidence: [join(dbDir, 'workspace-id')] });
+    expect(() => assertDatabaseUsable(elsewhereDb, otherDataDir)).toThrow(DatabaseProblemError);
+  });
+
+  test('the refusal names the database file it looked for', () => {
+    installState.workspaceId();
+    expect(() => assertDatabaseUsable(dbPath, dir)).toThrow(dbPath);
   });
 
   test('a leftover write-ahead log counts as install state', () => {
