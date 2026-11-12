@@ -1711,6 +1711,13 @@ What that means in practice:
   unfinished run goes `FAILED` too, in one transaction, keeping whatever step
   outputs were recorded. It is NOT resumed -- the effects of the interrupted
   step are unknown.
+- A run row and its job are always written in one transaction (manual run
+  route, chat `run`, Brief manual run, triggers, goals, nested runs). A QUEUED
+  run that has no job at all, left by an older crash between the two writes,
+  is closed at boot as `STOPPED` ("did not start and nothing ran"). It is not
+  queued again: the client never got an answer and may have asked a second
+  time. Only runs from before this boot are closed; the prepared dry runner's
+  in-process run has no job and is left alone.
 - A run that had durably PAUSED is the exception: if it still has an open
   waitpoint, or a fresh single-attempt `RESUME` job already queued for it,
   boot recovery leaves it `PAUSED` so the planned continuation still fires.

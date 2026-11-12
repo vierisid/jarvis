@@ -1249,20 +1249,25 @@ function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string
   if (held) throw new Error(held);
   assertCodeStepsAllowed(flow.id, versionId, "run");
   assertVersionReady(flow.id, versionId);
-  const run = createFlowRun({
-    flowId: flow.id,
-    flowVersionId: versionId,
-    triggeredBy: "assistant:manage_workflow",
-    startTime: Date.now(),
-  });
-  // The queue's shared RUN_FLOW policy enforces one attempt for chat too.
-  enqueue({
-    jobType: RUN_FLOW,
-    payload: { runId: run.id, payload: payload ?? {} },
-    flowRunId: run.id,
-    flowId: flow.id,
-    flowVersionId: versionId,
-  });
+  // One transaction: a crash between the run row and its job must not leave a
+  // run QUEUED forever with nothing to start it.
+  const run = getWorkflowDb().transaction(() => {
+    const created = createFlowRun({
+      flowId: flow.id,
+      flowVersionId: versionId,
+      triggeredBy: "assistant:manage_workflow",
+      startTime: Date.now(),
+    });
+    // The queue's shared RUN_FLOW policy enforces one attempt for chat too.
+    enqueue({
+      jobType: RUN_FLOW,
+      payload: { runId: created.id, payload: payload ?? {} },
+      flowRunId: created.id,
+      flowId: flow.id,
+      flowVersionId: versionId,
+    });
+    return created;
+  })();
   return { run_id: run.id, status: "QUEUED", flow_id: flow.id };
 }
 

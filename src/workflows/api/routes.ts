@@ -2238,31 +2238,37 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             stepName: body.stepNameToTest,
             inputOverride: sampleInputOverride?.[body.stepNameToTest] as Record<string, unknown> | undefined,
           } : undefined);
-          const run = createFlowRun({
-            flowId: id,
-            flowVersionId: versionId,
-            environment: body.environment ?? "PRODUCTION",
-            triggeredBy: body.triggeredBy,
-            stepNameToTest: body.stepNameToTest,
-            startTime: Date.now(),
-          });
-          enqueue({
-            jobType: "RUN_FLOW",
-            payload: {
-              runId: run.id,
-              payload: body.payload ?? {},
-              ...(body.stepNameToTest ? { stepNameToTest: body.stepNameToTest } : {}),
-              ...(sampleData ? { sampleData } : {}),
-              ...(sampleInputOverride ? { sampleInputOverride } : {}),
-            },
-            flowRunId: run.id,
-            flowId: id,
-            flowVersionId: versionId,
-            // No auto-retry: flow code with side effects (notify, send
-            // email, hit API) would duplicate on retry. The user gets a
-            // clear FAILED status and clicks Run again if they want.
-            maxAttempts: 1,
-          });
+          // One transaction: a crash between the two writes must not leave a
+          // run QUEUED forever with no job behind it.
+          const { environment, triggeredBy } = body;
+          const run = getWorkflowDb().transaction(() => {
+            const created = createFlowRun({
+              flowId: id,
+              flowVersionId: versionId,
+              environment: environment ?? "PRODUCTION",
+              triggeredBy,
+              stepNameToTest: body.stepNameToTest,
+              startTime: Date.now(),
+            });
+            enqueue({
+              jobType: "RUN_FLOW",
+              payload: {
+                runId: created.id,
+                payload: body.payload ?? {},
+                ...(body.stepNameToTest ? { stepNameToTest: body.stepNameToTest } : {}),
+                ...(sampleData ? { sampleData } : {}),
+                ...(sampleInputOverride ? { sampleInputOverride } : {}),
+              },
+              flowRunId: created.id,
+              flowId: id,
+              flowVersionId: versionId,
+              // No auto-retry: flow code with side effects (notify, send
+              // email, hit API) would duplicate on retry. The user gets a
+              // clear FAILED status and clicks Run again if they want.
+              maxAttempts: 1,
+            });
+            return created;
+          })();
           return ok(run, 202);
         }),
     },
