@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { getDb, generateId } from './schema.ts';
 import { findEntities } from './entities.ts';
 import { reconcileFacts } from './fact-schema.ts';
-import { syncUserProfileFactCorrection } from './user-profile.ts';
+import { isProfileBackedFact, syncUserProfileFactCorrection } from './user-profile.ts';
 import { appliesAt, isSingleValued, predicateKey, valueKey, samePeriod, type FactRow, type FactBasis } from './fact-policy.ts';
 
 export interface FactEvidence {
@@ -139,14 +139,15 @@ function inheritPrivacy(old: Pick<FactRow, 'is_private'>, nextId: string): void 
 /**
  * The owner's Keep private switch. A private fact stays visible to the owner in
  * Memory but is left out of everything sent to an AI model. Profile answers are
- * the one exception: they reach prompts from the Profile settings, so the switch
- * would promise more than it does.
+ * the one exception (isProfileBackedFact): they reach prompts from the Profile
+ * settings, so the switch would promise more than it does. Turning it off is
+ * always allowed.
  */
 export function setFactPrivate(id: string, isPrivate: boolean): Fact {
   return getDb().transaction(() => {
     const fact = getFact(id); if (!fact) throw new FactInputError('Fact not found', 404);
-    if (fact.source === 'user_profile') {
-      throw new FactInputError('This comes from your profile answers. Change or clear the answer in Profile settings.', 409);
+    if (isPrivate && isProfileBackedFact(fact)) {
+      throw new FactInputError('This is part of your profile answers, which are sent to the AI model from Profile settings. Change or clear the answer there.', 409);
     }
     getDb().run('UPDATE facts SET is_private = ? WHERE id = ?', [isPrivate ? 1 : 0, id]);
     return getFact(id)!;

@@ -40,8 +40,9 @@ export function memoryFactRef(fact: Fact, subjectName: string): MemoryFactRef {
 }
 /** Safety at consumption is independent of whether usage telemetry is enabled.
  * Owner decision (F18 I-3): only a fact deleted (or its subject removed) or
- * expired since packing refuses consumption. A correction, confirmation, new
- * evidence or rename passes; the next recall excludes a superseded fact. */
+ * expired since packing refuses consumption, and (#1425) one the owner made
+ * private since. A correction, confirmation, new evidence or rename passes; the
+ * next recall excludes a superseded fact. */
 export function assertCurrentMemoryFacts(db: Database, refs: readonly MemoryFactRef[]): void {
   if (db !== getDb()) throw new MemoryUsageError('Memory context belongs to a replaced vault');
   const now = Date.now();
@@ -50,6 +51,9 @@ export function assertCurrentMemoryFacts(db: Database, refs: readonly MemoryFact
     if (!fact || !entity || (fact.valid_to != null && now >= fact.valid_to)) {
       throw new MemoryUsageError('Memory changed before consumption: a supplied fact was deleted or expired; refresh the context');
     }
+    // Made private after it was packed: refused like a forgotten fact, so a
+    // run or a turn already holding it does not send it again.
+    if (fact.is_private) throw new MemoryUsageError('Memory changed before consumption: a supplied fact was made private; refresh the context');
   }
 }
 const project = (r: Stored): MemoryUseRecord => ({ useId: r.use_id, factId: r.fact_id,

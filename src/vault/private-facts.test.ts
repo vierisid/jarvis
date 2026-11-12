@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { closeDb, getDb, initDatabase } from './schema.ts';
 import { createEntity } from './entities.ts';
-import { correctFact, createFact, findFacts, getFact, setFactPrivate, updateFact } from './facts.ts';
+import { correctFact, createFact, findFacts, getFact, setFactPrivate, updateFact, verifyFact } from './facts.ts';
 import { getKnowledgeForMessage } from './retrieval.ts';
 import { createFactDecisionRoutes } from './fact-routes.ts';
 import { MemoryStream } from '../brief/memory-stream.ts';
+import { getUserProfile, saveUserProfile } from './user-profile.ts';
+import { recordMemoryHandoff, withMemoryRecall } from './memory-use-context.ts';
 
 beforeEach(() => { initDatabase(':memory:', { quiet: true }); });
 afterEach(() => { closeDb(); });
@@ -77,6 +79,46 @@ describe('private facts stay out of every prompt (A-11)', () => {
     const fact = createFact(entity.id, 'preferred_name', 'Ada', { source: 'user_profile' });
     expect(() => setFactPrivate(fact.id, true)).toThrow(/profile/i);
     expect(getFact(fact.id)?.is_private).toBe(0);
+  });
+
+  test('a fact a confirmation or correction would copy into a profile answer cannot be made private', () => {
+    saveUserProfile({ preferred_name: 'Ada' });
+    const owner = findFacts({ predicate: 'preferred_name' })[0]!;
+    // Not from the profile itself, but confirming or correcting it rewrites the Location answer, which every prompt carries.
+    const extracted = createFact(owner.subject_id, 'location_timezone', 'Milan, CET', { source: 'llm_extraction' });
+    expect(() => setFactPrivate(extracted.id, true)).toThrow(/profile answers/);
+    expect(getFact(extracted.id)?.is_private).toBe(0);
+    // Interview and profile evidence count even when the source label says otherwise.
+    const other = createEntity('person', 'Bea Lund', {}, 'dashboard');
+    const backed = createFact(other.id, 'likes', 'tea', { source: 'dashboard' });
+    createFact(other.id, 'likes', 'tea', { source: 'user_profile', sourceRef: 'profile:interview:x', quote: 'tea' });
+    expect(() => setFactPrivate(backed.id, true)).toThrow(/profile answers/);
+  });
+
+  test('a private fact never copies itself into the profile answers, and a profile answer clears the flag', () => {
+    saveUserProfile({ preferred_name: 'Ada' });
+    const owner = findFacts({ predicate: 'preferred_name' })[0]!;
+    const fact = createFact(owner.subject_id, 'location_timezone', 'Milan, CET', { source: 'llm_extraction' });
+    getDb().run('UPDATE facts SET is_private = 1 WHERE id = ?', [fact.id]);
+    verifyFact(fact.id);
+    expect(getUserProfile()?.answers.location_timezone).toBeUndefined();
+    correctFact(fact.id, 'Rome, CET', 'Moved');
+    expect(getUserProfile()?.answers.location_timezone).toBeUndefined();
+    // Typed into Profile settings by the owner, so it reaches prompts: Memory must not call it private.
+    saveUserProfile({ preferred_name: 'Ada', location_timezone: 'Rome, CET' });
+    const current = findFacts({ subject_id: owner.subject_id, predicate: 'location_timezone' }).find(f => f.status !== 'superseded')!;
+    expect(current.object).toBe('Rome, CET');
+    expect(current.is_private).toBe(0);
+  });
+
+  test('a fact made private after it was packed is refused before the provider gets it', () => {
+    const { secret } = seed();
+    withMemoryRecall(() => {
+      const text = ask();
+      expect(text).toContain(SECRET);
+      setFactPrivate(secret.id, true);
+      expect(() => recordMemoryHandoff([{ role: 'system', content: text }])).toThrow(/made private/);
+    });
   });
 
   test('the route validates its body and answers with the saved fact', async () => {
