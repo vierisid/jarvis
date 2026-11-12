@@ -3,8 +3,12 @@
 package main
 
 import (
+	"runtime"
+	"strings"
 	"testing"
 	"time"
+
+	ole "github.com/go-ole/go-ole"
 )
 
 // The video rule stands on being able to read the screen cheaply. This reads
@@ -42,5 +46,39 @@ func TestNotchScreenSamplerReadsAGridFromTheScreen(t *testing.T) {
 	// this limit would be felt.
 	if secondTook > 250*time.Millisecond {
 		t.Fatalf("reading the screen took %v", secondTook)
+	}
+}
+
+// The other two signs, read for real: where the pointer is and whether it is
+// drawn, and which programs are playing sound. Neither may fail or crash on a
+// machine with nothing playing.
+func TestNotchReadsThePointerAndTheProgramsPlayingSound(t *testing.T) {
+	fg, _, _ := procGetForegroundWindow.Call()
+	hidden, elsewhere := notchPointerState(fg)
+	if hidden && elsewhere {
+		t.Fatal("a pointer on another display cannot also be hidden on this one")
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err == nil {
+		defer ole.CoUninitialize()
+	}
+	start := time.Now()
+	programs, err := notchProgramsPlayingSound()
+	took := time.Since(start)
+	if err != nil {
+		t.Skipf("no audio to ask here: %v", err)
+	}
+	for _, p := range programs {
+		if p == "" || p != strings.ToLower(p) {
+			t.Fatalf("program names come back lower case and not empty, got %q", p)
+		}
+	}
+	program, class := notchForeground()
+	t.Logf("pointer hidden %v, elsewhere %v; playing sound: %v (asked in %v); in front: %s (%s), plays sound: %v",
+		hidden, elsewhere, programs, took, program, class, notchAppPlaysSound(program, programs))
+	if took > 250*time.Millisecond {
+		t.Fatalf("asking which programs play sound took %v", took)
 	}
 }

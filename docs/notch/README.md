@@ -51,12 +51,13 @@ itself, and `sidecar.yaml` has no setting for it.
    that is only being read keeps the notch. When in doubt the notch stays.
    - **Windows:** all three must hold. A fullscreen app is in front. Something
      is keeping the display awake, which every player does while it plays. And
-     the picture is seen to be moving by itself (`sidecar/notch_video.go`): a
-     32 by 18 grid of points from the middle of the display changes by a tenth
-     or more, three samples in a row, with no mouse or keyboard input in the
-     last 1.2 seconds. It is over after twelve still samples in a row, about
-     five seconds, or at once when the app leaves fullscreen. The screen is
-     only read while the first two hold.
+     the app is being watched (`sidecar/notch_video.go`): no mouse or keyboard
+     input for 1.2 seconds, the app has hidden the mouse pointer, and either
+     the app is playing sound or the picture has moved in the last 3.2
+     seconds. Two looks in a row, 400 ms apart, hide the notch. Twelve in a row
+     without, about five seconds, bring it back, and leaving fullscreen brings
+     it back at once. A pointer in plain view always keeps the notch: that is
+     what tells a page being read from a film.
    - **macOS:** a fullscreen app is in front, and that app (itself, a helper
      inside its bundle, or the system's WebKit process) is the one asking for
      the display to stay on.
@@ -74,22 +75,28 @@ itself, and `sidecar.yaml` has no setting for it.
   2560 by 1440 display at 100%). Outline points with fractions of a pixel have
   not: they were added after that run, because corners sent on whole pixels
   read as polygons.
-- The fullscreen rule first read "the display is being kept awake" for the
-  whole machine. On the first test machine some other program held the display
-  all day, so a browser put into fullscreen to read lost the notch. That is
-  why Windows now looks at the picture and macOS asks which app is holding.
-  What the picture cannot tell:
-  - A video that does not move, such as a lecture on one slide, gets the notch
-    back after about five seconds until it moves again.
-  - A film the system refuses to hand out to screen readers (some paid
-    streaming) may read as a still, black picture. Not tried yet.
-  - A page that animates a tenth of the screen by itself, with hands off, in a
-    fullscreen browser, while something holds the display, reads as a video.
-  - The notch sits over a film for about two and a half seconds after it goes
-    fullscreen, because the click that started it counts as input.
+- The fullscreen rule was rebuilt twice on evidence from one machine. "The
+  display is being kept awake" alone failed because some other program held
+  the display all day, so a browser in fullscreen lost the notch. "The picture
+  keeps changing" alone failed because much of what people watch barely moves:
+  a fullscreen video kept the notch. What the present rule cannot tell:
+  - A muted video that does not move at all keeps the notch.
+  - The notch stays over a film until the player hides the pointer, about
+    three seconds after the hand leaves the mouse, and returns about five
+    seconds after the pointer is back in view.
+  - With the pointer resting on another display the rule asks for sound and a
+    moving picture together, so a still video keeps the notch then.
+  - An app that hides the pointer while typing and is also playing sound (a
+    document in a fullscreen browser with music in another tab) reads as a
+    video once the typing stops.
+  - A Store app's window belongs to a host process, so for it any program's
+    sound counts.
+  - Sound is asked of the default output device only.
 - The log names the program and window class in front each time the rule
-  hides the notch, and says at start whether the display was already being
-  kept awake (`at start, display kept awake: true`).
+  hides the notch, says at start whether the display was already being kept
+  awake, and while a fullscreen app is in front writes what it saw every two
+  seconds for the first twenty (`looking at chrome: hands off ..., pointer
+  hidden ..., app sound ..., picture change ..., video ...`).
 - **macOS (`sidecar/notch_host_darwin.go`) compiles in CI and has never been
   run.**
 - On Linux the window opens as an ordinary always-on-top panel: no shape, no
