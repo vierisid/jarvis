@@ -4277,6 +4277,7 @@ export function SampleDataSection({
     [sampleData],
   );
   const { text, setText, hasUnsavedEdits, markSaved } = useSampleDraftText(`output:${stepName}`, incomingText);
+  const { sampleDrafts } = useContext(WorkflowEditorEnvironment);
   const [parseError, setParseError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [busy, setBusy] = useState<"save" | "test" | "clear" | "reset" | null>(null);
@@ -4336,6 +4337,12 @@ export function SampleDataSection({
   };
 
   const handleTest = async (): Promise<void> => {
+    // The test feeds the SAVED sample input to the step; an unsaved one on the
+    // Input tab would be ignored and the answer would describe other input.
+    if (sampleDrafts?.has(`input:${stepName}`)) {
+      setTestResult({ ok: false, message: "Not tested: the sample input on the Input tab has unsaved changes. Save or undo them first." });
+      return;
+    }
     setBusy("test");
     setTestResult(null);
     try {

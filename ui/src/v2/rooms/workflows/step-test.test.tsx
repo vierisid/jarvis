@@ -106,3 +106,24 @@ test('a sample output filled in by a test shows in an untouched box, but never r
     expect(box().value).toBe('{"mine": 1}');
   } finally { await React.act(async () => root.unmount()); host.remove(); }
 });
+
+test('a test that pauses for an answer says so instead of passing or failing', async () => {
+  const result = await runStepTest({ request: fakeApi({ id: 'run_1', status: 'PAUSED', steps: {} }, []) as any, flowId: 'f1', stepName: 'step_1', pollMs: 1, saveFirst: null });
+  expect(result).toEqual({ ok: false, message: 'The test is waiting for an answer. Open Runs to see it.' });
+});
+
+test('an unsaved sample input on the Input tab stops the test before it runs', async () => {
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  let tested = 0;
+  await React.act(async () => root.render(<Environment.Provider value={{ request: fetch, portalHost: null, workspace: true, sampleDrafts: new Map([['input:step_1', '{"value": 2}']]) }}>
+    <Sample stepName="step_1" sampleData={undefined} declaredSample={undefined} isLocked={false} isTriggerStep={false}
+      onSetSampleData={async () => ({ ok: true, message: 'Sample data saved' })}
+      onTestFromHere={async () => { tested++; return { ok: true, message: 'Test passed.' }; }} />
+  </Environment.Provider>));
+  try {
+    const test = [...host.querySelectorAll('button')].find(b => b.textContent === 'Test this step')!;
+    await React.act(async () => test.click());
+    expect(tested).toBe(0);
+    expect(host.textContent).toContain('the sample input on the Input tab has unsaved changes');
+  } finally { await React.act(async () => root.unmount()); host.remove(); }
+});
