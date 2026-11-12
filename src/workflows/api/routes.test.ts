@@ -862,6 +862,17 @@ describe("workflow API: runs", () => {
     expect(items[0]!.displayName).toBe("Flow 0");
     const all = await callJson(recent, plainReq("GET", "http://x/api/workflows/recent-runs"));
     expect((all.body as { items: unknown[] }).items).toHaveLength(3);
+
+    // A workflow removed in Brief (pending Undo) leaves Recently run, as it leaves the list.
+    const { getWorkflowDb } = await import("../db/index");
+    getWorkflowDb().run("UPDATE brief_workflow_slots SET receipt_id = 'receipt-test' WHERE flow_id = ?", [ids[0]!]);
+    const afterRemoval = await callJson(recent, plainReq("GET", "http://x/api/workflows/recent-runs"));
+    expect((afterRemoval.body as { items: { flowId: string }[] }).items.map(i => i.flowId)).toEqual([ids[3]!, ids[5]!]);
+
+    // Another project's caller sees none of these runs.
+    const scoped = createWorkflowRoutes({ callerProjectId: () => "proj_other_recent" });
+    const foreign = await callJson(scoped["/api/workflows/recent-runs"]?.GET, plainReq("GET", "http://x/api/workflows/recent-runs"));
+    expect(foreign).toEqual({ status: 200, body: { items: [] } });
   });
 
   test("POST /api/workflow-runs/:runId/cancel cancels the queued job", async () => {

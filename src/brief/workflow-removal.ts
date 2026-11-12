@@ -125,6 +125,8 @@ export class WorkflowRemoval {
   /**
    * One page of the list, newest slot first. The key is the slot position, which never changes for a
    * workflow, so workflows added or removed while a client pages cannot shift or repeat a page.
+   * `position` is the slot table's INTEGER PRIMARY KEY AUTOINCREMENT: unique and never reused, so it is
+   * a total order on its own and needs no tiebreaker (it is the slot's id).
    */
   read(query: { limit?: number; cursor?: string } = {}) {
     this.ready();
