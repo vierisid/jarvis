@@ -105,7 +105,7 @@ These commands refer to the **brain CLI**:
 jarvis status              # Check the running brain
 jarvis doctor              # Check environment and connectivity
 jarvis logs -f             # Follow the log written by jarvis start -d
-jarvis restart             # Restart the brain
+jarvis restart             # Restart the brain with the same mode (-d or not), port and options
 jarvis stop                # Stop the brain
 jarvis autostart           # Install a login service on Linux or macOS
 jarvis autostart --status  # Inspect that service
