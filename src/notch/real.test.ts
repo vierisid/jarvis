@@ -156,6 +156,29 @@ describe('the approval fixture, from the command to Today', () => {
     expect(h.count()).toBe(0);
   });
 
+  test('"elsewhere" decides the approval the notch is showing, not an older one that waits in the count', async () => {
+    const h = harness();
+    await h.real.fixtures.make('approval', {});
+    await h.look();
+    // Left alone: it goes back to the count.
+    await h.answer('fold');
+    await new Promise((r) => setTimeout(r, 5));
+    // A second one arrives and speaks, as in the hand test.
+    await h.real.fixtures.make('approval', {});
+    await h.look();
+    const [older, newer] = [...h.approvals.getPending()].sort((a, b) => a.created_at - b.created_at);
+    expect(h.real.inbox.showing()).toBe(h.real.approvals.itemId(newer!.id));
+    await h.real.fixtures.make('elsewhere', {});
+    expect(h.approvals.getRequest(newer!.id)!.status).toBe('executed');
+    expect(h.approvals.getRequest(older!.id)!.status).toBe('pending');
+    await h.look();
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+    // With nothing on the notch it takes the newest that waits.
+    await h.real.fixtures.make('elsewhere', {});
+    expect(h.approvals.getRequest(older!.id)!.status).toBe('executed');
+  });
+
   test('"elsewhere" never touches the payment, or an approval that is not the fixture\'s own', async () => {
     const h = harness();
     await h.real.fixtures.make('payment', {});

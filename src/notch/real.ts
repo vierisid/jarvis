@@ -134,6 +134,11 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     failure: recordFixtureFailure ? () => { const said = recordFixtureFailure(); news.sync(); return said; } : undefined,
     approvalManager: deps.approvalManager,
     approveAsDashboard: deps.approveAsDashboard,
+    approvalOnNotch: () => {
+      const showing = inbox.showing();
+      const prefix = approvals.itemId('');
+      return showing?.startsWith(prefix) ? showing.slice(prefix.length) : null;
+    },
     deliverApproval: deps.deliverApproval,
     promises: promises && appendFixtureLog
       ? { create: promises.create, look: () => promises.executor.checkAndAnnounce() }
