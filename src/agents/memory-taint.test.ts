@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { initDatabase, closeDb } from '../vault/schema.ts';
+import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
 import { AgentOrchestrator } from './orchestrator.ts';
 import { ToolRegistry, type ToolDefinition } from '../actions/tools/registry.ts';
 import { AuthorityEngine, type AuthorityConfig } from '../authority/engine.ts';
@@ -7,7 +7,8 @@ import { ApprovalManager } from '../authority/approval.ts';
 import { buildTaintGating } from '../authority/taint-gating.ts';
 import type { RoleDefinition } from '../roles/types.ts';
 import { createEntity } from '../vault/entities.ts';
-import { createFact } from '../vault/facts.ts';
+import { createFact, verifyFact } from '../vault/facts.ts';
+import { createRelationship } from '../vault/relationships.ts';
 import { getKnowledgeForMessage, getKnowledgeParts } from '../vault/retrieval.ts';
 import { buildSystemPrompt } from '../roles/prompt-builder.ts';
 import { withMemoryRecall, memoryTaintSource } from '../vault/memory-use-context.ts';
@@ -87,6 +88,49 @@ describe('memory the owner did not enter is outside content (A-2)', () => {
       expect(approvals.getPending()).toHaveLength(0);
     });
   }
+});
+
+describe('what else in recall counts as outside content', () => {
+  beforeEach(() => { initDatabase(':memory:'); });
+  afterEach(() => { closeDb(); });
+  const ask = () => withMemoryRecall(() => {
+    const block = getKnowledgeForMessage('What is the status of Acme Pilot?');
+    return { block, taint: memoryTaintSource() };
+  });
+
+  test('an extracted relationship is framed and taints, though every fact is the owner\'s', () => {
+    const e = createEntity('project', 'Acme Pilot', {}, 'dashboard');
+    createFact(e.id, 'status', 'on track', { source: 'dashboard' });
+    createRelationship(e.id, createEntity('project', 'Other', {}, 'dashboard').id, INJECTED.replace(/ /g, '_'));
+    const { block, taint } = ask();
+    expect(block).toContain('Unverified relationship');
+    expect(block).toContain(UNTRUSTED_OPEN);
+    expect(taint).toBe('memory');
+  });
+
+  test('an extracted entity name is framed and taints, though its fact is the owner\'s', () => {
+    const e = createEntity('project', 'Acme Pilot', {}, 'llm_extraction');
+    createFact(e.id, 'status', 'on track', { source: 'dashboard' });
+    const { block, taint } = ask();
+    expect(block).toContain(UNTRUSTED_OPEN);
+    expect(taint).toBe('memory');
+  });
+
+  test('an extracted fact the owner confirmed, or entered again themselves, is trusted', () => {
+    const e = createEntity('project', 'Acme Pilot', {}, 'dashboard');
+    verifyFact(createFact(e.id, 'status', 'on track', { source: 'llm_extraction' }).id);
+    // A confirmation recorded before confirming rewrote the source label.
+    const legacy = createFact(e.id, 'status', 'pilot phase', { source: 'llm_extraction' });
+    getDb().run('UPDATE facts SET verified_at = ? WHERE id = ?', [Date.now(), legacy.id]);
+    createFact(e.id, 'status', 'budget approved', { source: 'llm_extraction' });
+    createFact(e.id, 'status', 'budget approved', { source: 'dashboard' });
+    const { block, taint } = ask();
+    expect(block).toContain('on track');
+    expect(block).toContain('pilot phase');
+    expect(block).toContain('budget approved');
+    expect(block).not.toContain(UNTRUSTED_OPEN);
+    expect(taint).toBeNull();
+  });
 });
 
 describe('the framed memory block survives prompt assembly', () => {

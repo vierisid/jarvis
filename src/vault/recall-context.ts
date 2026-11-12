@@ -2,7 +2,7 @@ import { memoryFactRef, type MemoryFactRef } from './memory-usage';
 import type { Entity } from './entities.ts';
 import { defangFactText as line, formatFact, MEMORY_USE_RULES } from './fact-format.ts';
 import { wrapUntrusted } from '../roles/untrusted.ts';
-import { isOwnerEnteredFact, MEMORY_TAINT_SOURCE } from './fact-trust.ts';
+import { isOwnerEnteredEntity, isOwnerEnteredFact, MEMORY_TAINT_SOURCE } from './fact-trust.ts';
 import { expandRecallDependencies, isCurrentRecallFact, type RecallFact, type RecallFactDependency } from './recall-ranking.ts';
 
 export type RecallProfile = { entity: Entity; facts: RecallFact[]; hasMore?: boolean;
@@ -14,8 +14,8 @@ export const RECALL_LIMITS = { chars: 12_000, entities: 6, facts: 18, factsPerEn
 // the fact repository. This module only ranks, selects and bounds the block.
 const omission = '\n\n[Additional memory omitted by relevance and context limits; this is not an exhaustive record.]';
 
-/** `outside` is true when the block holds a fact the owner did not enter
- *  themselves. The block is then framed as untrusted content and the turn that
+/** `outside` is true when the block holds a fact, an entity name or a
+ *  relationship the owner did not enter themselves. The block is then framed as untrusted content and the turn that
  *  receives it must be tainted (see `memoryTaintSource`). */
 export type PackedRecall = { text: string; selected: MemoryFactRef[]; included: MemoryFactRef[]; outside?: boolean;
   /** `text` split for a prompt that defangs delimiters in trusted text: `plain` is safe to defang, `framed` is the
@@ -37,8 +37,10 @@ export function packRecallEvidence(profiles: RecallProfile[], maxChars: number =
   const at = Date.now();
   const selected = profiles.slice(0, RECALL_LIMITS.entities);
   const sections = selected.map(profile => ({ header: `**${line(profile.entity.name)}** (${profile.entity.type})`, lines: [] as string[] }));
-  // Room for the frame, only when some candidate could put one in.
-  const mayFrame = selected.some(profile => profile.facts.some(fact => !isOwnerEnteredFact(fact)));
+  // Room for the frame, only when some candidate could put one in. Relationships
+  // carry no source, so any shown relationship is outside content.
+  const mayFrame = selected.some(profile => !isOwnerEnteredEntity(profile.entity) || profile.relationships.length > 0
+    || profile.facts.some(fact => !isOwnerEnteredFact(fact)));
   let length = MEMORY_USE_RULES.length + (mayFrame ? FRAME_RESERVE : 0), count = 0, omitted = profiles.length > selected.length || profiles.some(profile => profile.hasMore);
   const append = (index: number, value: string) => {
     const section = sections[index]!;
@@ -88,12 +90,14 @@ export function packRecallEvidence(profiles: RecallProfile[], maxChars: number =
     for (const [index, rel] of profile.relationships.entries()) {
       if (index >= RECALL_LIMITS.relationshipsPerEntity) { omitted = true; break; }
       const text = rel.direction === 'from' ? `${rel.type} -> ${rel.target}` : `${rel.target} -> ${rel.type} -> ${profile.entity.name}`;
-      append(i, `  - Unverified relationship: ${line(text)}`);
+      if (append(i, `  - Unverified relationship: ${line(text)}`)) outside = true;
     }
     // Judge emptiness on the current-fact view: a subject whose every record is
     // superseded or out of period must read the same as one with no records.
     if (!facts[i]!.length && !profile.relationships.length) append(i, '  - No current facts recorded.');
   }
+  // A shown heading names its entity: an extracted name is outside content too.
+  if (sections.some((section, i) => section.lines.length && !isOwnerEnteredEntity(selected[i]!.entity))) outside = true;
   const body = sections.filter(section => section.lines.length).map(section => section.header + '\n' + section.lines.join('\n')).join('\n\n');
   if (!body) return result(omitted ? MEMORY_USE_RULES + omission : '');
   // Owner-entered memory stays plain. Anything else is another party's words

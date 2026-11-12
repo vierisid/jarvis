@@ -420,7 +420,7 @@ test('relationship context is bounded, stable and unverified', () => {
   for (let i = 0; i < 8; i++) createRelationship(entity.id, createEntity('project', `Project ${i}`).id, 'supports');
   const first = getKnowledgeForMessage('Ari');
   getDb().run('UPDATE relationships SET created_at = -created_at');
-  expect(getKnowledgeForMessage('Ari')).toBe(first);
+  expect(stable(getKnowledgeForMessage('Ari'))).toBe(stable(first));
   expect((first.match(/Unverified relationship/g) ?? []).length).toBe(4);
   expect(first).toContain('omitted');
 });
