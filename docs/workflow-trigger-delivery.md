@@ -59,7 +59,7 @@ in that schedule's zone (`2026-11-01T01:30`), which is the occurrence's identity
 
 | Case | What happens |
 | --- | --- |
-| On time, or up to two minutes late | Runs; lateness over a minute shows as delayed |
+| On time, or up to two minutes late | Runs; lateness over a minute shows as delayed. In normal conditions a time starts within about a second of its minute (the scheduler checks every second) |
 | Later than two minutes (host asleep, process stalled, Jarvis off) | Recorded as missed, not run |
 | A long sleep | The time still within two minutes runs; the newest 100 missed are listed, older ones counted in one row, back seven days |
 | Restart within two minutes after a time | Runs, late, once |
