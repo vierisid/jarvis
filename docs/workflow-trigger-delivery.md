@@ -130,6 +130,12 @@ A workflow that read one of these headers now gets `[redacted]`: authenticate
 the sender with the webhook secret, and keep a credential a step needs in a
 connection, not in the request.
 
+A signing secret must be text. Saving a secret that is a number, boolean, list
+or object, or the timestamp setting on a webhook that had no secret, is refused
+with a plain message, and so is publishing one written some other way. Clearing
+a secret (removing it, or leaving it empty) makes the webhook unsigned, as the
+editor says.
+
 A repeat answers 200 with `outcome: "duplicate"` and the original `runId`;
 nothing runs again. Identical unsigned bodies without an id are separate
 deliveries: pings and button presses repeat on purpose. A provider's manual
@@ -144,6 +150,8 @@ work again, rerun it in Jarvis.
 | Workflow off, changed or gone | 404; a retry after it is turned back on runs |
 | Queue full | 503 with `Retry-After` |
 | 100 steps of the workflow already waiting behind its approval cards | 503 with `Retry-After: 60`, recorded as skipped |
+| Signing secret unusable (not text, or the timestamp setting with no secret) | 401 for every request, recorded as blocked in the ledger; never treated as unsigned |
+| JSON body nested more than 100 levels deep (counted on the text, before it is parsed) | 400, recorded as blocked in the ledger; nothing runs |
 | Not recorded | 500 |
 
 ## Events

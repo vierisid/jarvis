@@ -4,6 +4,7 @@ import { getFlowVersion, getLatestDraft, lockVersion, type FlowVersion } from ".
 import { assertFlowVersionOwnership, FlowVersionRequestError } from "./flow-version-ownership";
 import { assertCodeStepsAllowed } from "./flow-code-steps";
 import { assertVersionReady } from './flow-readiness';
+import { triggerSecretProblem } from '../../runner/triggers/webhook-secret';
 
 /**
  * Publish an owned explicit version, or the latest draft, or with no draft the
@@ -33,6 +34,9 @@ export function publishFlowVersion(flowId: string, versionId?: string): { flow: 
     // rather than per execution, where the refusal would land on a cron tick
     // with nobody reading it.
     assertCodeStepsAllowed(flowId, target.id, "publish");
+    // A webhook meant to be signed must not go live unsigned.
+    const secretProblem = triggerSecretProblem(target.trigger);
+    if (secretProblem) throw new FlowVersionRequestError(secretProblem, 400);
     // Publishing is a person accepting this version's bindings (Q-05):
     // `updateFlowStatus` below pins them, so they are not compared here.
     assertVersionReady(flowId, target.id, undefined, { acceptBindings: true });
