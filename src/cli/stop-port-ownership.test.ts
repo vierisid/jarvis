@@ -39,9 +39,10 @@ afterAll(() => {
  * and keeps the descriptor for its whole life, as acquireLock does in the
  * daemon; with `unlinkLock` it then deletes the file, leaving the descriptor on
  * a deleted inode. `onSigterm` makes it survive SIGTERM: 'ignore' keeps the
- * lock, 'drop-lock' closes it first.
+ * lock, 'drop-lock' closes it first, 'unbind' closes the lock and leaves the
+ * port.
  */
-async function spawnListener(opts: { lockPath?: string; unlinkLock?: boolean; onSigterm?: 'ignore' | 'drop-lock'; prefix?: string[] } = {}): Promise<Listener> {
+async function spawnListener(opts: { lockPath?: string; unlinkLock?: boolean; onSigterm?: 'ignore' | 'drop-lock' | 'unbind'; prefix?: string[] } = {}): Promise<Listener> {
   const script = `
     const { openSync, closeSync, unlinkSync, constants } = require('node:fs');
     const lockPath = process.env.TEST_LOCK_PATH;
@@ -54,6 +55,7 @@ async function spawnListener(opts: { lockPath?: string; unlinkLock?: boolean; on
     if (onSigterm === 'ignore') process.on('SIGTERM', () => {});
     if (onSigterm === 'drop-lock') process.on('SIGTERM', () => { if (lockFd !== null) closeSync(lockFd); lockFd = null; });
     const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('ok') });
+    if (onSigterm === 'unbind') process.on('SIGTERM', () => { server.stop(true); if (lockFd !== null) closeSync(lockFd); lockFd = null; });
     console.log('BOUND:' + server.port);
     setInterval(() => {}, 1 << 30);
   `;
@@ -160,6 +162,30 @@ describe('ensurePortReleased', () => {
     expect(result.forced).toEqual([]);
     expect(result.leftAlone).toEqual([{ pid: proc.pid, command: expect.anything(), reason: 'let-go-of-lock' }]);
     expect(alive(proc.pid)).toBe(true);
+  }, 20_000);
+
+  test('does not name a process that let go of the lock and left the port', async () => {
+    const { lockPath } = dataFolder('let-go-unbind');
+    const proc = await spawnListener({ lockPath, onSigterm: 'unbind' });
+
+    const result = await ensurePortReleased(proc.port, { lockPath });
+
+    expect(result.forced).toEqual([]);
+    expect(result.released).toBe(true);
+    expect(result.leftAlone).toEqual([]);
+    expect(alive(proc.pid)).toBe(true);
+  }, 20_000);
+
+  test.if(process.platform === 'linux')('stops it after its whole data folder was deleted under it', async () => {
+    const { dir, lockPath } = dataFolder('wiped');
+    const daemon = await spawnListener({ lockPath });
+    rmSync(dir, { recursive: true, force: true });
+
+    const result = await ensurePortReleased(daemon.port, { lockPath });
+
+    expect(result.terminated).toEqual([daemon.pid]);
+    expect(result.released).toBe(true);
+    await daemon.exited;
   }, 20_000);
 
   // macOS lsof may or may not still name a deleted file; only Linux promises
@@ -275,27 +301,31 @@ describe('holdsJarvisLock', () => {
 describe('finding the listeners', () => {
   // The child below runs ensurePortReleased with HOME pointing at a folder
   // whose login profile prints numbers. They must not be read as pids (they
-  // used to be: lsof ran through `bash -lc`).
+  // used to be: lsof ran through `bash -lc`). One of them is the pid of a
+  // process this file spawned that holds the lock but is NOT on the port: if
+  // the profile's output were read, it would pass the lock check and be
+  // stopped, so this fails on a return of the login shell.
   test('does not read a login profile greeting as listeners', async () => {
     const home = dataFolder('noisy-home');
-    // Above Linux's largest pid_max, so even a regression of both the parser
-    // and the identity check could not signal anything real.
-    writeFileSync(join(home.dir, '.bash_profile'), 'echo "Agent pid 4194305"\necho 4194305\n');
-    writeFileSync(join(home.dir, '.profile'), 'echo 4194305\n');
+    const bystander = await spawnListener({ lockPath: home.lockPath });
+    // 4194305 is above Linux's largest pid_max, so it can never be a process.
+    writeFileSync(join(home.dir, '.bash_profile'), `echo "Agent pid 4194305"\necho ${bystander.pid}\n`);
+    writeFileSync(join(home.dir, '.profile'), `echo ${bystander.pid}\n`);
     const other = await spawnListener();
     const lifecycle = new URL('./lifecycle.ts', import.meta.url).href;
     const script = `
       const { ensurePortReleased } = await import(${JSON.stringify(lifecycle)});
       const r = await ensurePortReleased(${other.port}, { lockPath: ${JSON.stringify(home.lockPath)} });
-      console.log(JSON.stringify(r.leftAlone.map((l) => l.pid)));
+      console.log(JSON.stringify({ leftAlone: r.leftAlone.map((l) => l.pid), terminated: r.terminated, forced: r.forced }));
     `;
     const env: Record<string, string | undefined> = { ...process.env, HOME: home.dir };
     for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
     const proc = Bun.spawn([process.execPath, '--eval', script], { env, cwd: home.dir, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
     const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     expect(stderr).toBe('');
-    expect(JSON.parse(stdout.trim())).toEqual([other.pid]);
+    expect(JSON.parse(stdout.trim())).toEqual({ leftAlone: [other.pid], terminated: [], forced: [] });
     expect(alive(other.pid)).toBe(true);
+    expect(alive(bystander.pid)).toBe(true);
   }, 30_000);
 });
 

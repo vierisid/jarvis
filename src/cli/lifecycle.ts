@@ -62,9 +62,9 @@ async function captureIfPresent(command: string[]): Promise<string> {
 /**
  * A system tool by absolute path where it is installed in the usual places
  * (lsof is in /usr/sbin on macOS and some Linux distributions, /usr/bin on
- * others; ss likewise), else by name.
+ * others; ss likewise; ps in /bin), else by name.
  */
-function systemTool(name: 'lsof' | 'ss'): string {
+function systemTool(name: 'lsof' | 'ss' | 'ps'): string {
   for (const dir of ['/usr/sbin', '/usr/bin', '/sbin', '/bin']) {
     if (existsSync(`${dir}/${name}`)) return `${dir}/${name}`;
   }
@@ -95,7 +95,7 @@ async function findListeningPids(port: number, currentPid: number): Promise<numb
 
   // Run directly, not through `bash -lc`: a login shell sources the user's
   // profile, and whatever that prints lands in the output parsed below.
-  const lsofOutput = await captureIfPresent([systemTool('lsof'), '-t', `-iTCP:${port}`, '-sTCP:LISTEN']);
+  const lsofOutput = await captureIfPresent([systemTool('lsof'), '-t', '-n', '-P', `-iTCP:${port}`, '-sTCP:LISTEN']);
   const lsofPids = parsePidList(lsofOutput, currentPid);
   if (lsofPids.length > 0) return lsofPids;
 
@@ -126,8 +126,8 @@ export type PortCleanup = {
   /** Jarvis daemons that needed SIGKILL. */
   forced: number[];
   /**
-   * Listeners that could not be identified as the Jarvis daemon for this data
-   * folder, and so were never signalled. Whoever prints the result names them.
+   * Listeners still on the port that were not stopped, each with the reason
+   * (see PortListener). Whoever prints the result names them.
    */
   leftAlone: PortListener[];
 };
@@ -140,10 +140,34 @@ export type PortCleanup = {
  */
 function lockPathSpellings(lockPath: string): Set<string> {
   const spellings = new Set([lockPath]);
-  try {
-    spellings.add(join(realpathSync(dirname(lockPath)), basename(lockPath)));
-  } catch { /* the folder is gone; the path as given is all there is */ }
+  const anchor = nearestExistingFolder(dirname(lockPath));
+  if (anchor !== null) {
+    try {
+      spellings.add(join(realpathSync(anchor.path), anchor.rest, basename(lockPath)));
+    } catch { /* gone while we looked; the path as given is all there is */ }
+  }
   return spellings;
+}
+
+/**
+ * The closest folder at or above `dir` that still exists, and the part of
+ * `dir` below it ('' when `dir` itself exists). The whole data folder can be
+ * deleted under a running daemon (`rm -rf ~/.jarvis` to start over), and the
+ * kernel still names the lock inside it; the folder above it is then what the
+ * deleted file is compared with.
+ */
+function nearestExistingFolder(dir: string): { path: string; rest: string; dev: number } | null {
+  let path = dir;
+  const below: string[] = [];
+  for (;;) {
+    try {
+      return { path, rest: below.length > 0 ? join(...below) : '', dev: statSync(path).dev };
+    } catch { /* missing: try the folder above */ }
+    const parent = dirname(path);
+    if (parent === path) return null;
+    below.unshift(basename(path));
+    path = parent;
+  }
 }
 
 /** Linux appends this to the link of an open file that has since been unlinked. */
@@ -193,7 +217,8 @@ function sameMountNamespace(pid: number): boolean {
  * ends up holding no lock that `jarvis stop` can see. There is no file left to
  * compare with, so on Linux the open file must have no links left, its
  * "<path> (deleted)" link must name our path, it must live on the same device
- * as our data folder, and the process must see the same mount namespace. macOS's lsof may
+ * as our data folder (or, when that folder was deleted too, the closest folder
+ * above it), and the process must see the same mount namespace. macOS's lsof may
  * not name a deleted file at all; then the daemon is not identified, which is
  * the safe way to be wrong.
  *
@@ -206,7 +231,9 @@ export async function holdsJarvisLock(pid: number, lockPath: string = getPidPath
   const platform = os.platform();
   if (platform === 'win32') return false;
   const lock = fileId(lockPath);
-  const folder = fileId(dirname(lockPath));
+  // The data folder, or the closest folder above it when the whole folder was
+  // deleted under the daemon.
+  const folder = nearestExistingFolder(dirname(lockPath));
   const spellings = lockPathSpellings(lockPath);
   const isDeletedLock = (name: string) =>
     name.endsWith(DELETED_SUFFIX) && spellings.has(name.slice(0, -DELETED_SUFFIX.length));
@@ -292,7 +319,7 @@ async function rawProcessName(pid: number): Promise<string | null> {
       ]);
       return output.trim() || null;
     }
-    const output = await captureOutput(['ps', '-o', 'comm=', '-p', String(pid)]);
+    const output = await captureOutput([systemTool('ps'), '-o', 'comm=', '-p', String(pid)]);
     return output.trim() || null;
   } catch {
     return null;
@@ -400,11 +427,15 @@ export async function ensurePortReleased(
     }
   }
 
+  // Name only the ones still on the port. One that was asked to stop and has
+  // since let go of it (or exited and is a zombie nobody has reaped yet) holds
+  // nothing, and "Port N is still held by" would be wrong.
+  const remaining = await findListeningPids(port, currentPid);
   return {
-    released: (await findListeningPids(port, currentPid)).length === 0,
+    released: remaining.length === 0,
     terminated,
     forced,
-    leftAlone,
+    leftAlone: leftAlone.filter((listener) => remaining.includes(listener.pid)),
   };
 }
 
