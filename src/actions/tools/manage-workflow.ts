@@ -3,6 +3,7 @@ import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards'
 import { decideRunRecovery, getRunRecovery } from '../../workflows/runtime/recovery';
 import { getWorkflowDb } from '../../workflows/db';
 import { assistantWebhookSecretRefusal } from '../../workflows/runner/triggers/webhook-secret';
+import { secretLiteralWarnings } from './secret-literals';
 import { redactFailedStepMessage, redactRunSteps, versionAsModelSees } from '../../workflows/runtime/step-credentials';
 import { resolveOnboardingOutcome } from '../../workflows/runtime/onboarding-service';
 import { onboardingResource } from '../../workflows/runtime/customer-onboarding';
@@ -1346,7 +1347,9 @@ function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unk
   // Warnings, not a refusal: the draft may deliberately target a machine that
   // is not enrolled yet, and blocking someone's publish over a heuristic would
   // be worse than the mismatch it prevents.
-  const warnings = publishOsWarnings(target.trigger, deps);
+  // A key typed into a step is stored in plain text: said as it goes live, as
+  // the publish route says it (never a refusal; see secretLiteralWarnings).
+  const warnings = [...publishOsWarnings(target.trigger, deps), ...secretLiteralWarnings(target.trigger)];
   const report = contractRecheck(flow, target.trigger);
   const { flow: updated } = publishFlowVersion(flow.id, target.id);
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
