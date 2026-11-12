@@ -96,6 +96,7 @@ import {
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { deleteWorkflow } from "../db/repos/flow-deletion";
+import { connectionDependents, dependentsSentence, missingDependency, workflowsCalling } from "../db/repos/flow-dependents";
 import { claimContinuation } from "../runtime/continuation";
 import { flowBindingBlock } from "../runtime/binding-refusals";
 import { enabledWorkflowsUsingPiece, uninstallSentence } from "../db/repos/piece-dependents";
@@ -1324,12 +1325,29 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     // id from another project was reachable here while invisible to the list.
     // A mismatch is a 404, not a 403: to this caller the row does not exist,
     // and a distinct answer would confirm the id to someone guessing them.
+    // Who would be affected by deleting it, for the confirmation before DELETE.
+    "/api/workflows/connections/:id/dependents": {
+      GET: (req) =>
+        trapErrors(() => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          const usedBy = connectionDependents(callerProject(req), id);
+          if (!usedBy) return err("connection not found", 404);
+          const warning = dependentsSentence("connection", usedBy);
+          return ok({ usedBy, ...(warning ? { warning } : {}) });
+        }),
+    },
     "/api/workflows/connections/:id": {
       DELETE: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          if (!deleteConnectionInProject(callerProject(req), id)) return err("connection not found", 404);
-          return ok({ id, deleted: true });
+          const project = callerProject(req);
+          // Read before the row goes: the published workflows bound to it
+          // are told to the caller, since their steps keep naming it. Read
+          // without decrypting it, so an unreadable connection still deletes.
+          const usedBy = connectionDependents(project, id) ?? [];
+          if (!deleteConnectionInProject(project, id)) return err("connection not found", 404);
+          const warning = dependentsSentence("connection", usedBy);
+          return ok({ id, deleted: true, usedBy, ...(warning ? { warning } : {}) });
         }),
       // Update an existing connection in place. Used to rotate OAuth tokens
       // / API keys without the delete-then-recreate gap (during which any
@@ -1599,9 +1617,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // #1080: why an enabled workflow is not doing its work, from its
           // latest finished run, so the list can say so. One unreadable run
           // costs its flow the badge, never the whole list.
-          const blockedOf = (flow: Parameters<typeof flowBindingBlock>[0]) => {
-            try { return flowBindingBlock(flow); }
-            catch (error) { console.error(`[workflows] blocked state of ${flow.id} unreadable:`, error); return null; }
+          const blockedOf = (flow: Parameters<typeof missingDependency>[0] & { updated: number }) => {
+            try {
+              // A published workflow whose called workflow or connection was
+              // deleted cannot run, whatever its last run said.
+              const missing = missingDependency(flow);
+              if (missing) return { code: "DEPENDENCY_MISSING", kind: "readiness" as const, message: missing, runId: null, at: flow.updated };
+              return flowBindingBlock(flow);
+            } catch (error) { console.error(`[workflows] blocked state of ${flow.id} unreadable:`, error); return null; }
           };
           return ok(flows.map((flow) => ({ ...serializeFlow(flow), blocked: blockedOf(flow) })));
         }),
@@ -1724,7 +1747,22 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             }, 409);
           }
           refreshTrigger(id);
-          return ok({ ok: true });
+          // Read once the delete went through, after its wait for in-flight
+          // effects, and only in the caller's project.
+          const usedBy = workflowsCalling(project, id);
+          const warning = dependentsSentence("workflow", usedBy);
+          return ok({ ok: true, usedBy, ...(warning ? { warning } : {}) });
+        }),
+    },
+    // Who would be affected by deleting it, for the confirmation before DELETE.
+    "/api/workflows/:id/dependents": {
+      GET: (req) =>
+        trapErrors(() => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
+          const usedBy = workflowsCalling(callerProject(req), id);
+          const warning = dependentsSentence("workflow", usedBy);
+          return ok({ usedBy, ...(warning ? { warning } : {}) });
         }),
     },
 

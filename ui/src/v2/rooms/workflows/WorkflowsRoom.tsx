@@ -261,7 +261,9 @@ export function WorkflowsRoomBody(): React.ReactElement {
                     const msg = hasDraftOnly
                       ? `Delete "${flow.displayName ?? flow.id}"?\n\nThis flow has no published version -- the draft (including any per-step sample data) will be permanently lost.`
                       : `Delete "${flow.displayName ?? flow.id}"?\n\nThe published version and any draft (including per-step sample data) will be permanently lost.`;
-                    if (await confirmDialog(msg)) {
+                    const usage = await fetch(`/api/workflows/${flow.id}/dependents`)
+                      .then((res) => (res.ok ? res.json() : null)).catch(() => null) as { warning?: string } | null;
+                    if (await confirmDialog(usage?.warning ? `${msg}\n\n${usage.warning}` : msg)) {
                       void handleAction("Delete", () => data.deleteFlow(flow.id));
                     }
                   }}
@@ -383,7 +385,7 @@ export function FlowBlockedChip({ flowId, blocked }: { flowId: string; blocked: 
   const open = (): void => { if (runId) focusRun(flowId, runId); };
   const preview = blocked.message.length > 60 ? blocked.message.slice(0, 57) + "..." : blocked.message;
   // A runtime refusal is the last run's outcome, which can clear on its own.
-  const label = blocked.kind === "runtime" ? "Last run refused" : "Blocked";
+  const label = blocked.code === "DEPENDENCY_MISSING" ? "Needs setup" : blocked.kind === "runtime" ? "Last run refused" : "Blocked";
   return (
     <Chip
       tone="warn"

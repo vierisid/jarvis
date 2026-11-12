@@ -757,6 +757,26 @@ not part of the invocation fingerprint: it changes how the parent treats the
 receipt, never what is sent to the child. `require_success` still works after a
 `call`, but a default `call` already fails first.
 
+### Deleting what other workflows use
+
+Deleting a workflow or a connection is never blocked because published
+workflows use it. The delete answers with `usedBy` (the published workflows
+that call the workflow or bind the connection) and a plain `warning` sentence,
+and `GET /api/workflows/:id/dependents` and
+`GET /api/workflows/connections/:id/dependents` give the same list
+beforehand, so the Workflows room can name them in its confirmation. Afterwards an enabled
+workflow that calls a deleted workflow, or binds a deleted connection (a
+`{{connections...}}` binding or a Jarvis step's account field, the same rule a
+run's connection scope reads), lists `blocked` with code `DEPENDENCY_MISSING`
+and a sentence naming the step and what is missing; it has no run, so `runId`
+is null. Only published graphs count: a draft nobody runs is not a dependent,
+and only workflows of the caller's project are read or named. A connection is
+looked up without decrypting it, so one whose secret cannot be read any more
+still deletes; when another connection of the project keeps the same external
+id, nobody is named. A parent already waiting on a child that was deleted
+fails with a sentence saying the child was deleted, not the engine's status
+word.
+
 ### Governed pieces
 
 The ten verified pieces -- gmail, slack, notion, openai, github, google-calendar,

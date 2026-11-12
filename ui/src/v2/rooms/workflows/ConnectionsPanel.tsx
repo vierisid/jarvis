@@ -141,9 +141,12 @@ export function ConnectionsPanel(): React.ReactElement {
               connection={c}
               requestedEdit={setup?.rowId === `account:${c.id}` ? setup.requestId : undefined}
               onDelete={async () => {
-                if (!await confirmDialog(`Delete connection "${c.displayName}"? Secrets are removed permanently.`)) return;
+                const usage = await fetch(`/api/workflows/connections/${c.id}/dependents`)
+                  .then((res) => (res.ok ? res.json() : null)).catch(() => null) as { warning?: string } | null;
+                const note = usage?.warning ? `\n\n${usage.warning}` : "";
+                if (!await confirmDialog(`Delete connection "${c.displayName}"? Secrets are removed permanently.${note}`)) return;
                 const r = await conn.remove(c.id);
-                flash(r.ok ? "ok" : "warn", r.ok ? `Deleted "${c.displayName}"` : `Delete failed: ${r.message}`);
+                flash(r.ok ? "ok" : "warn", r.ok ? `Deleted "${c.displayName}"${r.warning ? `. ${r.warning}` : ""}` : `Delete failed: ${r.message}`);
               }}
               onUpdate={async (patch) => {
                 const r = await conn.update(c.id, patch);
