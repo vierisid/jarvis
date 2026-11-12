@@ -33,6 +33,8 @@ test('allowing CODE steps asks first, says what it allows, and posts only after 
     expect(host.textContent).toContain('CODE steps: not allowed.');
     expect(host.textContent).toContain('webhook, event and schedule triggers stop starting it');
     expect(host.textContent).not.toContain('a schedule already set up');
+    expect(host.textContent).toContain('also stops its runs of such a version that are queued, waiting or going');
+    expect(host.textContent).not.toContain('does not stop a run already going');
     const asked: string[] = [];
     window.confirm = (m?: string) => { asked.push(String(m)); return false; };
     await act(() => button(host, 'Allow CODE steps')!.click());

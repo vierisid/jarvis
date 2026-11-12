@@ -27,7 +27,11 @@
  * that is already published and enabled. Every flow that could be published
  * held the grant (or had it grandfathered), so a fire-time refusal can only
  * follow a revoke. `TriggerManager` reads the grant when a webhook, event or
- * scheduled time arrives and refuses it, which is what "off" has to mean.
+ * scheduled time arrives and refuses it; the RUN_FLOW worker and the engine
+ * executor read it again before a run starts, continues or is sent to the
+ * engine (`assertRunCodeStepsAllowed`); and the revoke itself stops the runs
+ * already queued, waiting or executing (`stopRunsOfRevokedCodeSteps`), which
+ * is what "off" has to mean.
  *
  * Self-contained SQL rather than calls into `flow.ts` / `flow-version.ts`:
  * `flow.updateFlowStatus` calls into here, and a gate that has to be correct

@@ -1100,9 +1100,11 @@ The refusal happens at AUTHORING time, never per execution of a flow that holds 
   later. A published flow always carries the grant, so this can only ever
   decline a flow that was never publishable.
 
-Nothing is refused per execution. That was the flaw in the allowlist cut from
-#459: it refused at run time, so a cron- or webhook-triggered flow published
-successfully and then failed on every fire with nobody there to read why.
+Nothing that holds the grant is refused per execution. That was the flaw in
+the allowlist cut from #459: it refused at run time, so a cron- or
+webhook-triggered flow published successfully and then failed on every fire
+with nobody there to read why. The one per-execution refusal is the owner's
+own revoke, below.
 
 The message names what was refused, which step caused it, and the call that
 grants the permission. A CODE step is found wherever it is -- the walker in
@@ -1131,8 +1133,30 @@ route refreshes the flow's registration so the subscription is dropped
 `blocked` row in the delivery record with `code: "CODE_STEPS_NOT_ENABLED"` and
 a plain reason; repeats fold into one counted row; a webhook sender is answered
 as for a workflow that is not active (404); an event source is not polled.
-It does not unpublish the version and it does not stop a run already in
-flight; disabling the flow does that. The grant is not handed back later: the upgrade backfill is keyed
+
+A revoke also reaches runs that are already past their trigger (#1426):
+
+- The grant route stops the flow's queued, waiting (paused) and executing runs
+  of a version with a CODE step, each with the reason "CODE steps stopped
+  being allowed for this workflow, so this run was stopped." and a `stopped`
+  lifecycle row (`code: "CODE_STEPS_NOT_ENABLED"`). An executing run's engine
+  is stopped through the run fence. A run on a version without a CODE step is
+  left alone. A warm engine parked for the flow is retired, so nothing a CODE
+  step left running in its process group outlives the revoke.
+- The RUN_FLOW worker reads the grant again before it starts or continues a
+  run, from any source (trigger, manual or test-step run, Brief, chat, a
+  parent workflow's child run, a continuation), and the engine executor reads
+  it once more synchronously just before it sends the flow, after the CODE
+  sources are written and their packages installed. A refused run fails with
+  a readiness refusal (`WORKFLOW_NOT_READY`, issue code
+  `CODE_STEPS_NOT_ENABLED`) naming the CODE steps; nothing runs, and an email
+  or attachment it was started for keeps no claim.
+- The write and the stop happen with no await between them, so a run either
+  read the grant before the revoke (and is stopped by it) or reads it after
+  (and is refused).
+
+It does not unpublish the version. Granting again stops nothing and lets new
+runs and deliveries through; a run the revoke stopped stays stopped. The grant is not handed back later: the upgrade backfill is keyed
 on the columns being introduced, so a revoked permission stays revoked across
 restarts. The other side of that key is that a build rolled back below this
 version and then rolled forward again will not re-grandfather a flow published

@@ -86,7 +86,7 @@ export function FlowPermissions({ flow, onChanged, request = fetch }: { flow: Fl
         <p>
           <strong>CODE steps</strong>: {code?.enabled
             ? <>allowed.{grantNote(code.grantedBy, code.grantedAt)}</>
-            : "not allowed. A version with a CODE step cannot be published, enabled or run, and its webhook, event and schedule triggers stop starting it. Turning this off does not stop a run already going; disable the workflow to stop that."}
+            : "not allowed. A version with a CODE step cannot be published, enabled or run, and its webhook, event and schedule triggers stop starting it. Turning this off also stops its runs of such a version that are queued, waiting or going."}
         </p>
         {code ? (code.enabled
           ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => void setCodeSteps(false)}>Stop allowing CODE steps</Button>
