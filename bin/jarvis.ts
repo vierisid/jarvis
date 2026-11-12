@@ -23,7 +23,7 @@ import { existsSync, openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { acquireLock, releaseLock, releaseLockIfUnheld, isLocked, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
-import { describeDashboard, ensurePortReleased, resolveDashboardTarget, resolveStopPort } from '../src/cli/lifecycle.ts';
+import { describeDashboard, describeLeftAlone, ensurePortReleased, resolveDashboardTarget, resolveStopPort } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
 import { loadConfig } from '../src/config/loader.ts';
 import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
@@ -310,15 +310,23 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
       console.log(c.yellow('JARVIS is not running.'));
       return true;
     }
+    // Signals only a daemon that holds this data folder's lock file open (one
+    // whose lock file was deleted under it, say). Any other listener on the
+    // port is someone else's program and is named, never stopped.
     const cleanup = await ensurePortReleased(port);
     if (cleanup.terminated.length > 0 || cleanup.forced.length > 0) {
       const details = cleanup.forced.length > 0
-        ? ` Force-killed lingering listener(s) on port ${port}: ${cleanup.forced.join(', ')}.`
-        : ` Cleaned up lingering listener(s) on port ${port}: ${cleanup.terminated.join(', ')}.`;
-      console.log(c.green(`✓ JARVIS was not locked, but the port is now clear.${details}`));
+        ? ` Force-killed the Jarvis daemon still listening on port ${port}: ${cleanup.forced.join(', ')}.`
+        : ` Stopped the Jarvis daemon still listening on port ${port}: ${cleanup.terminated.join(', ')}.`;
+      // "Clear" only when it is: another program can share the port (one on
+      // 127.0.0.1, another on ::1), and it is named just below.
+      console.log(cleanup.released
+        ? c.green(`✓ JARVIS was not locked, but the port is now clear.${details}`)
+        : c.yellow(`JARVIS was not locked.${details} Port ${port} is still in use.`));
     } else {
       console.log(c.yellow('JARVIS is not running.'));
     }
+    for (const line of describeLeftAlone(port, cleanup.leftAlone)) console.log(c.dim(`  ${line}`));
     return true;
   }
 
@@ -382,13 +390,14 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
     const cleanup = await ensurePortReleased(port);
     if (!cleanup.released) {
       console.error(c.red(`✗ JARVIS stopped but port ${port} is still occupied.`));
+      for (const line of describeLeftAlone(port, cleanup.leftAlone)) console.error(c.dim(`  ${line}`));
       return false;
     }
 
     const details = cleanup.forced.length > 0
-      ? ` Force-killed lingering listener(s) on port ${port}: ${cleanup.forced.join(', ')}.`
+      ? ` Force-killed another Jarvis daemon for this data folder on port ${port}: ${cleanup.forced.join(', ')}.`
       : cleanup.terminated.length > 0
-        ? ` Cleaned up lingering listener(s) on port ${port}: ${cleanup.terminated.join(', ')}.`
+        ? ` Stopped another Jarvis daemon for this data folder on port ${port}: ${cleanup.terminated.join(', ')}.`
         : '';
     console.log(c.green(`✓ JARVIS daemon stopped.${details}`));
     return true;
