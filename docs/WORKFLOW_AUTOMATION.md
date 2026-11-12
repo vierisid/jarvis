@@ -532,7 +532,11 @@ Three things about #598 are load bearing beyond the frame itself:
 - **Both caller-written fields are capped at both ends.** On the way in, the
   write routes reject a `metadata` that is not an object, carries a top-level
   `__proto__` / `constructor` / `prototype` key, or exceeds 16 KB, and reject a
-  `displayName` that is not a non-empty string or exceeds 512 characters. All of
+  `displayName` that is not a non-empty string or exceeds 512 characters, or
+  that holds a control character, a line or paragraph separator or a lone
+  surrogate (a name the flow already stores is let through, so a workflow
+  named before that rule can still be saved; every writer stores a name on one
+  line without the bidi controls, `storedDisplayName`). All of
   that is close to free, because no shipped caller writes `metadata` at all (the
   dashboard POSTs `{ displayName }`, PATCHes `{ status }`, and keeps its editor
   state in `flow_version_ui_meta`) and no real workflow name is that long. A
@@ -1770,6 +1774,51 @@ What that means in practice:
 Durable per-effect receipts and reconciliation-based recovery are follow-up
 work; this policy is containment, not exactly-once execution.
 
+### Step options: "Continue on failure" and "Retry on failure"
+
+The editor offers both on every piece and CODE step (right-click a node, or
+Advanced settings). They are saved as `settings.errorHandlingOptions` and
+`flow-version-adapter.ts` hands them to the engine's own handling
+(`helper/error-handling.ts`). The rules:
+
+- **Continue on failure** is honoured for every piece and CODE step. The step
+  keeps its recorded outcome (`FAILED`, with its message, and no output, so a
+  later step can test `{{step}}` with `DOES_NOT_EXIST`, as the "Add error
+  handling" template does), and the steps after it run. The run ends
+  `SUCCEEDED` with the step still failed: the runs API adds
+  `continuedFailures` (name and display name of each failed step, no error
+  text) to a run and the Runs list, and the dashboard reads "Finished with a
+  failed step" instead of a clean success. The Brief Runs list and run detail
+  show "Finished with a failed step: <step name>" (`note` on the run), and
+  All workflows shows it as the latest run. Effect records and Authority
+  decisions are written the same way as for a failing run. A refusal is never
+  continued past, so it cannot be skipped: a step the daemon refused to run (a
+  denied or held dispatch, `authorizePieceDispatch` failing), and a Jarvis
+  step or approval that heard a refusal from inside its run (a `blocked`
+  outcome such as `APPROVAL_DENIED` or `EMERGENCY_STOPPED`, or an untyped
+  error; `continuableFailure` in `piece-effect-guard.ts`). Such a step goes on
+  only on a typed outcome that ran and failed (`error` or `unknown`).
+- **Continue on failure** does not apply at all to a step that asks a person
+  (Ask for input, Ask for approval, Create approval links, Wait for Approval:
+  `canContinuePastStep` in `step-admission.ts`). A rejection, cancellation or
+  expiry stops the run there, so the steps after it run only after a yes. The
+  adapter drops the option, the editor disables it and hides "Add error
+  handling" for those steps, and readiness reports a non-blocking
+  `CONTINUE_UNAVAILABLE` warning.
+- **Retry on failure** is honoured only for the built-in steps that work on
+  data inside the run (`RETRY_SAFE_PIECES` in `step-admission.ts`: the
+  in-run steps except approval, delay, schedule and store). It tries up to 4
+  times with 2 s, 4 s and 8 s waits. Every other step, CODE steps and every
+  step that can act outside Jarvis included, is run once, so a request is never
+  sent twice; this is the rule that keeps automatic replay of uncertain
+  effects off. The adapter drops the option for those steps, the editor
+  disables the checkbox and says so, and readiness reports a
+  `RETRY_UNAVAILABLE` entry in `warnings` ("Retry is not available for steps
+  that act outside Jarvis, so a request is never sent twice."). A warning does
+  not make a flow not ready, so a flow that saved the option earlier keeps
+  running.
+- The HTTP step's own "On failure" setting is separate and unchanged.
+
 ## Pieces
 
 Two flavors:
@@ -1820,7 +1869,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | POST | `/api/workflows/:id/read-hosts` | Replace this flow's read list, the hosts an HTTP GET or HEAD reaches without asking (`{"hosts": string[]}`, required; bare host names, at most 64; `[]` clears it). A host matches exactly: listing `example.com` does not list `api.example.com`. Optional `expected`: the list the edit started from; 409 when the list has changed since |
 | POST | `/api/workflows/:id/run` | Enqueue a run, 202. `{ environment?, triggeredBy?, stepNameToTest?, payload? }`, or `{ workItemId }` alone |
 | GET | `/api/workflows/:id/runs` | Run history, newest first. `?status`, `?limit` (default 50, max 100), `?offset`; answers `{ items, nextOffset }` |
-| GET | `/api/workflow-runs/:runId` | One run, including its machine binding and cancellation |
+| GET | `/api/workflow-runs/:runId` | One run, including its machine binding, cancellation and `continuedFailures` |
 | GET | `/api/workflow-runs/:runId/effects` | The run's governed effect records, `{ runId, effects }` |
 | GET | `/api/workflow-runs/:runId/waitpoints` | The run's active waitpoints with resume URLs |
 | POST | `/api/workflow-runs/:runId/cancel` | Close the run's dispatch fence (idempotent; `accepted: false` once finished) |

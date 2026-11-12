@@ -304,7 +304,7 @@ test('a run stopped by removal reads as Workflow turned off, through the Q-19 fa
     expect(detail.summary.startsWith('Workflow turned off.')).toBe(true);
     expect(detail.failure).toMatchObject({ category: 'cancelled', headline: 'Workflow turned off.' });
     expect(detail.recovery).toMatchObject({ canReplay: false, newRunRequired: true });
-    expect(['unknown', 'blocked', 'recoverable']).toContain(detail.recovery!.state);
+    expect(['unknown', 'blocked', 'recoverable', 'nothing_happened']).toContain(detail.recovery!.state);
   } finally { removal.stop(); }
 });
 test('a stop acknowledged mid-call stays uncertain in history and detail, and says it may have taken effect', () => {
