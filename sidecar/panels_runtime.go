@@ -199,9 +199,11 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		var wv webview.WebView
 		stopReveal := func() {}
 		stopCloseWatch := func() {}
+		stopNotch := func() {}
 		defer func() {
 			stopCloseWatch()
 			stopReveal()
+			stopNotch()
 			if wv != nil && !panelSharedLoop {
 				wv.Destroy()
 			}
@@ -342,7 +344,7 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				log.Printf("[panels] spawn(%s): Bind(__sidecar_set_clickthrough) failed: %v", spec.ID, err)
 			}
 			if spec.Notch {
-				bindNotch(wv, handle)
+				stopNotch = bindNotch(wv, handle)
 			}
 
 			// Reveal the (hidden) panel once its page has loaded, with a timeout

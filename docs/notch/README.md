@@ -39,7 +39,8 @@ itself, and `sidecar.yaml` has no setting for it.
    access token, exactly as `panel.spawn` does.
 7. **The page cannot cut the window to any shape it likes.** An outline with
    fewer than 3 or more than 720 points, a malformed point, or a point far
-   outside the window is refused whole and the previous shape stays.
+   outside the window is refused whole and the previous shape stays. The page
+   sends two outlines at a time, and one bad outline refuses both.
 8. **Appearing never takes the keyboard.** The window is shown without
    activation. It takes the keyboard only when the page calls
    `__notch_focus(true)`, and gives it back to the window that had it.
@@ -49,8 +50,13 @@ itself, and `sidecar.yaml` has no setting for it.
 
 ## What it does not protect, and what is missing
 
-- The page is a test page (three sizes and a text box), not the notch.
-- The window's edge is cut by a region, so it is not anti-aliased.
+- The page is a test page (four sizes, eyes that follow the pointer, and a text
+  box), not the notch.
+- On Windows the last 1.5 CSS pixels inside the edge belong to the backdrop
+  window, not the page (see "How the edge is drawn"). That band is always
+  black, whatever the page paints there.
+- The smooth edge and the pointer feed are built and unit-tested, and have not
+  yet been seen running on a screen.
 - The fullscreen rule reads "the display is being kept awake" for the whole
   machine. A video playing in another window while a different app is
   fullscreen in front also hides the notch.
@@ -72,9 +78,29 @@ The page talks to the desktop app through three functions on `window`:
 
 | Function | Meaning |
 |---|---|
-| `__notch_set_outline([[x, y], ...])` | The notch's outline, in the window's own pixels (CSS pixels times the display scale). The window is cut to it |
+| `__notch_set_outline(shape, cut)` | Two closed polygons, each `[[x, y], ...]` in the window's own pixels (CSS pixels times the display scale). `shape` is the notch's true outline. `cut` is the same outline 1.5 CSS pixels in. Both are checked; if either is refused, nothing changes |
 | `__notch_focus(true \| false)` | Take the keyboard for a text field, or give it back. Answers whether the notch has it |
 | `__notch_log(text)` | One line in the desktop app's log, for test runs |
+
+and the desktop app calls one function the page defines:
+
+| Function | Meaning |
+|---|---|
+| `window.__notch_cursor(x, y)` | Where the pointer is, in the page's own pixels from the window's top left corner. Sent about 30 times a second, and only when the pointer has moved. The page hears the mouse only inside its outline, so this is how the eyes follow the pointer across the screen |
+
+## How the edge is drawn
+
+A window cut to a polygon has a stepped edge: each pixel is in or out.
+
+- **Windows.** A second window sits directly behind the page's window. It is
+  drawn pixel by pixel with partial transparency along the edge
+  (`sidecar/notch_raster.go` works out how much of each pixel the shape
+  covers), never takes clicks, and never takes the keyboard. The page's window
+  is cut to `cut`, just inside it, so the stepped cut is hidden on black. The
+  two windows are tied together as owner and owned, so they keep their order,
+  and they are shown and hidden together.
+- **macOS.** The page's window is masked by a shape layer, which is smooth
+  already. Only `shape` is used.
 
 ## Trying a build
 
@@ -86,10 +112,11 @@ scripts/notch/try.sh
 ```
 
 - **On WSL** it cross-builds the Windows desktop app into
-  `%USERPROFILE%\JarvisNotchDev`, prints an enrolment token the first time, and
-  starts the brain on port 3143 with its data in `~/.jarvis-notch`. On Windows,
-  quit Jarvis from the tray, then run
-  `%USERPROFILE%\JarvisNotchDev\start-sidecar.cmd` and paste the token.
+  `%USERPROFILE%\JarvisNotchDev`, prints an enrolment token the first time,
+  starts the brain on port 3143 with its data in `~/.jarvis-notch`, and then
+  starts the desktop app. The first time, a window asks for the token. An
+  installed Jarvis has to be quit from the tray first; a test build that is
+  still running is stopped and replaced.
 - **On a Mac** it builds `~/JarvisNotchDev/Jarvis.app` and writes
   `start-sidecar.command` beside it. Quit Jarvis from the menu bar, then run
   that file and paste the token. The Mac path has not been run yet.
@@ -98,6 +125,23 @@ scripts/notch/try.sh
 - `--token` prints a fresh token, `--no-build` skips the desktop app build.
   `NOTCH_DATA_DIR`, `NOTCH_PORT`, `NOTCH_WIN_DIR` and `NOTCH_MAC_DIR` override
   the defaults.
+
+### When Windows refuses the build
+
+A local build of the desktop app is not signed. On a Windows machine with Smart
+App Control switched on, each unsigned program is judged by itself: some builds
+run and some are refused with "An Application Control policy has blocked this
+file". `try.sh` checks for this after building and stops with a message, and
+Windows records it in the event log under Applications and Services Logs,
+Microsoft, Windows, CodeIntegrity, Operational (events 3077 and 3033).
+
+There is no way around it from this side, and there should not be. The choices
+belong to the machine's owner and to whoever holds the signing key:
+
+- test on a Windows machine where Smart App Control is off, or
+- have the test build signed. Release builds are signed in CI by a protected
+  `signing` environment that is limited to `main` and release tags, so a branch
+  build cannot use it as things stand.
 
 With the switch on and a current desktop app connected, the brain prints:
 
