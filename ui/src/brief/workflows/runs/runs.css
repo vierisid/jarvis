@@ -392,3 +392,10 @@
     transition: none !important;
   }
 }
+.brief-root .brief-runs-off-note {
+  margin: 0;
+  padding: 4px 32px 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--brief-secondary);
+}

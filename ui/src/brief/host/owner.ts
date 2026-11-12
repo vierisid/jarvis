@@ -69,7 +69,7 @@ export function createDashboardOwner(initial: HostDescriptor, ports: {
   } });
   const chat = new BriefConversationClient(conversationApi(transport.request), ports.storage, attachmentApi(transport.request));
   const workflow = createWorkflowRooms({ scopeId: initial.scopeId, transport, capabilities, storage: ports.storage,
-    dirty: (key, value) => { if (value) dirty.add(key); else dirty.delete(key); }, runInput: ports.runInput });
+    dirty: (key, value) => { if (value) dirty.add(key); else dirty.delete(key); }, runInput: ports.runInput, confirm: ports.confirm });
   account = createAccountRooms({ scopeId: initial.scopeId, transport, capabilities, storage: ports.storage,
     navigate: destinationPort(navigation).navigate, replayTutorial: ports.replayTutorial, ...device,
     openSetup(action, rowId) {

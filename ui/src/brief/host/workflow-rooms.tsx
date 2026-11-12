@@ -32,6 +32,8 @@ export interface WorkflowHost {
   dirty(key: string, value: boolean): void;
   /** Collect explicit manual input; null means the user cancelled before dispatch. */
   runInput(): Promise<Record<string, unknown> | null>;
+  /** Ask a yes or no question before an action; false means the person said no. */
+  confirm?(message: string): Promise<boolean>;
 }
 /** Controllers belong to the authenticated host, never to room renders. */
 export function createWorkflowRooms(host: WorkflowHost) {
@@ -49,6 +51,8 @@ export function createWorkflowRooms(host: WorkflowHost) {
     reconcile: command => transport.json(`/api/brief/workflows/requests/${encodeURIComponent(command.requestId)}`),
   });
   const selections = new Map<string, { runs: WorkflowRunsController; context: WorkflowContextController }>();
+  // On/off is the workflow's state, not this version's identity: it is not part of
+  // the key, so one controller (and its request journal) serves the version either way.
   function controllers(flowId: string, versionId: string, editable: boolean, needsInput: boolean = true) {
     const key = JSON.stringify([flowId, versionId, editable]); let value = selections.get(key);
     if (value) return value;
@@ -69,6 +73,17 @@ export function createWorkflowRooms(host: WorkflowHost) {
     const runs = new WorkflowRunsController(scope, {
       list: read.list, detail: read.detail,
       ...(!editable ? { start: async (request: ManualRunRequest): Promise<ManualRunResult> => {
+        // A turned-off workflow can still be run by hand, but only on purpose. Read
+        // its state now: it may have been turned off in another window since this
+        // room loaded. Without an answer nothing is sent.
+        const off = await transport.json(`/api/workflows/${encodeURIComponent(flowId)}`).then(
+          (detail: { flow?: { id?: unknown; status?: unknown } } | null) =>
+            detail?.flow?.id === flowId && typeof detail.flow.status === 'string' ? detail.flow.status !== 'ENABLED' : null,
+          () => null);
+        if (off === null) return { status: 'rejected', requestId: request.requestId, message: 'No run started: could not check whether this workflow is on. Try again.' };
+        runs.setWorkflowOff(off);
+        if (off && !(await host.confirm?.('This workflow is turned off.\nRun it once anyway? It will stay off afterwards.')))
+          return { status: 'not_submitted', requestId: request.requestId };
         const payload = needsInput ? await host.runInput() : {};
         if (payload === null || transport.signal.aborted || !isBriefCapabilityEnabled(host.capabilities(), 'workflowContext')) return { status: 'not_submitted', requestId: request.requestId };
         // Persist the identity before dispatch, or do not dispatch at all. One
@@ -141,7 +156,10 @@ export function createWorkflowRooms(host: WorkflowHost) {
         const params = new URLSearchParams({ versionId: version.id }); if (runId) params.set('runId', runId);
         const value = await transport.json(`/api/brief/workflows/${encodeURIComponent(flowId)}/inspection?${params}`, { signal: abort.signal });
         if (value.status !== 'ready' || value.data?.scopeId !== scopeId || value.data.flowId !== flowId || value.data.versionId !== version.id) throw new Error('Inspection unavailable');
-        if (!abort.signal.aborted) setSelection({ flowId, versionId: version.id, title: version.displayName, flow: detail.flow, editable: version.state === 'DRAFT', needsInput: needsManualRunInput(version.trigger), inspection: value.data });
+        if (abort.signal.aborted) return;
+        const editable = version.state === 'DRAFT', needsInput = needsManualRunInput(version.trigger);
+        controllers(flowId, version.id, editable, needsInput).runs.setWorkflowOff(typeof detail.flow?.status === 'string' && detail.flow.status !== 'ENABLED');
+        setSelection({ flowId, versionId: version.id, title: version.displayName, flow: detail.flow, editable, needsInput, inspection: value.data });
       })().catch(() => { if (!abort.signal.aborted) setError(true); });
       return () => abort.abort();
     }, [flowId, versionId, runId, shell.route.room, revision]);

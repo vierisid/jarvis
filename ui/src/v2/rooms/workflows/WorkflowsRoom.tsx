@@ -242,7 +242,22 @@ export function WorkflowsRoomBody(): React.ReactElement {
                   triggerWarning={data.triggerWarnings[flow.id]?.warning}
                   onSelect={() => data.setSelectedFlowId(flow.id)}
                   onEdit={() => data.setEditingFlowId(flow.id)}
-                  onRun={() => handleAction("Run", () => data.runFlow(flow.id))}
+                  onRun={async () => {
+                    // A workflow that is off can still be run by hand, once, on purpose.
+                    if (flow.status !== "ENABLED") {
+                      const go = await confirmDialog(
+                        `"${flow.displayName ?? flow.id}" is turned off.\nRun it once anyway? It will stay off afterwards.`,
+                        { confirmLabel: "Run once", danger: false },
+                      );
+                      if (!go) return;
+                      await handleAction("Run", async () => {
+                        const result = await data.runFlow(flow.id);
+                        return result.ok ? { ...result, message: "Started one run. The workflow is still off." } : result;
+                      });
+                      return;
+                    }
+                    await handleAction("Run", () => data.runFlow(flow.id));
+                  }}
                   onToggle={() =>
                     handleAction(
                       flow.status === "ENABLED" ? "Disable" : "Enable",
@@ -354,8 +369,8 @@ export function FlowRow({ flow, selected, triggerWarning, onSelect, onEdit, onRu
         <Button variant="ghost" size="sm" onClick={onEdit} title="Open visual editor">
           <Icon icon={Pencil} size={14} /> Edit
         </Button>
-        <Button variant="primary" size="sm" onClick={onRun} title="Run now">
-          <Icon icon={Play} size={14} /> Run
+        <Button variant="primary" size="sm" onClick={onRun} title={flow.status === "ENABLED" ? "Run now" : "This workflow is off. Run it once anyway."}>
+          <Icon icon={Play} size={14} /> {flow.status === "ENABLED" ? "Run" : "Run once"}
         </Button>
         <Button variant="ghost" size="sm" onClick={onToggle} title={flow.status === "ENABLED" ? "Disable" : "Enable"}>
           {flow.status === "ENABLED" ? <Icon icon={Pause} size={14} /> : <Icon icon={Play} size={14} />}
