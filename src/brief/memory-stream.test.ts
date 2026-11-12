@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { initDatabase, closeDb, getDb } from '../vault/schema';
-import { createEntity } from '../vault/entities';
+import { createEntity, updateEntity } from '../vault/entities';
 import { createFact, correctFact, deleteFact, verifyFact } from '../vault/facts';
 import { MemoryStream, MEMORY_STREAM_LIMITS, memoryStreamQuery, readableSubject } from './memory-stream';
 import type { MemoryStreamQuery, MemoryStreamPage, MemoryUsageReader } from './memory-stream-contracts';
@@ -288,4 +288,10 @@ test('search matches the words a sentence shows: spaced predicates and non-ASCII
   const f = createFact(createEntity('person', 'Émile').id, 'launch_plan', 'Città di Roma', { source: 'dashboard' });
   for (const q of ['launch plan', 'Émile', 'Émile LAUNCH plan', 'città di roma', 'CITTà'])
     expect((await page({ q })).items.map(i => i.factId)).toEqual([f.id]);
+});
+test('renaming a member subject ends an open cursor as stale, even to a name of the same shape', async () => {
+  for (let i = 0; i < 3; i++) fact(`tea${i}`);
+  const first = await page({ limit: 2 }); now += 1000;
+  updateEntity(subject, { name: 'Ana' });
+  expect(await provider.read({ limit: 2, cursor: first.nextCursor! })).toEqual({ state: 'stale', reason: 'source_changed' });
 });

@@ -52,7 +52,10 @@ Source of truth: `src/brief/contracts.ts`, `capabilities.ts`, `providers.ts` and
   later join no page of it, and a change to a member fact, its evidence, its subject
   or any use record answers `stale` (`source_changed`). Only the use ledger (50,000
   records) and a fact's correction history (100 facts) are capped; over a cap the
-  answer is `unavailable`, never a partial list. Legacy `GET /api/vault/facts`
+  answer is `unavailable`, never a partial list. Search folds ASCII letters only, so a
+  non-ASCII letter matches in the case it was stored in. Extraction bookkeeping the
+  room hides stays out of every page and count, freezes with the cursor (a newly
+  hidden member answers `stale`) and still opens by id. Legacy `GET /api/vault/facts`
   returns every fact unless `limit` (1 to 1000) and `offset` are sent.
   Connections retain their store kind, source/account IDs and permissions. An
   installed library piece does not imply an authenticated account.

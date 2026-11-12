@@ -210,7 +210,7 @@ export class MemoryStream {
       + ${mix('superseded_by')} + ${mix('source')}) AS m FROM facts WHERE rowid <= ?`).get(maxRowid)!;
     const e = this.db.query<Record<string, number>, [number]>(`SELECT count(*) AS n, total(e.recorded_at) AS r, total(${mix('e.source')} + ${mix('e.basis')}) AS m,
       total(COALESCE(e.confidence, 0) * 1000) AS c FROM fact_evidence e JOIN facts f ON f.id = e.fact_id WHERE f.rowid <= ?`).get(maxRowid)!;
-    const s = this.db.query<Record<string, number>, [number]>(`SELECT count(*) AS n, total(${mix('name')}) AS m FROM entities
+    const s = this.db.query<Record<string, number>, [number]>(`SELECT count(*) AS n, total(${mix('name')} + ${mix('type')}) AS m, total(updated_at) AS u FROM entities
       WHERE id IN (SELECT subject_id FROM facts WHERE rowid <= ?)`).get(maxRowid)!;
     return digest([f, e, s, usage.fingerprint, hidden]);
   }
