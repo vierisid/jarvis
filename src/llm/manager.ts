@@ -21,6 +21,8 @@ import {
 } from './tiers.ts';
 import { recordUsage } from './usage.ts';
 import { UsejarvisAIProvider } from './usejarvis.ts';
+import { whenRunnable } from '../authority/emergency.ts';
+import { currentOrigin } from './origin.ts';
 
 /**
  * A failure's hosted detail is shown as authored copy (Brief chat), so it is
@@ -41,6 +43,21 @@ function withMemoryHandoff(provider: LLMProvider): LLMProvider {
   wrapped.chat = (messages, options) => { recordMemoryHandoff(messages); return provider.chat(messages, options); };
   wrapped.stream = (messages, options) => { recordMemoryHandoff(messages); return provider.stream(messages, options); };
   return wrapped;
+}
+
+/**
+ * Background work waits here while Jarvis is paused, when Pause is set to
+ * hold the model loops (authority/emergency.ts, whenRunnable). Before
+ * anything else in a call on purpose: a call held inside the provider
+ * timeout would time out, be counted as a provider failure and put the
+ * provider into backoff, and one held with a budget lease would keep it.
+ *
+ * Only what is tagged as background: the loops nobody is waiting on. The
+ * person's own turn is never held (they are talking to Jarvis, and it
+ * answers that it is paused), and a workflow already parks at its next step.
+ */
+function holdWhilePaused(signal?: AbortSignal): Promise<void> {
+  return currentOrigin() === 'background' ? whenRunnable(signal) : Promise.resolve();
 }
 
 /** Marks an error produced by the manager's stream stall timer. */
@@ -408,6 +425,7 @@ export class LLMManager {
     options?: LLMOptions,
   ): Promise<LLMResponse> {
     options?.signal?.throwIfAborted();
+    await holdWhilePaused(options?.signal);
     const failures: string[] = [];
     let lastFailureCode: LLMErrorCode = 'unknown';
     let lastRetryAfterMs: number | undefined;
@@ -503,6 +521,7 @@ export class LLMManager {
     messages: LLMMessage[],
     options?: LLMOptions,
   ): AsyncIterable<LLMStreamEvent> {
+    await holdWhilePaused(options?.signal);
     const failures: Array<Extract<LLMStreamEvent, { type: 'error' }>> = [];
     const exhaustedProviders = new Set<string>();
     const candidates = this.tierCandidates(tier);
@@ -822,6 +841,7 @@ export class LLMManager {
     options?: LLMOptions
   ): Promise<LLMResponse> {
     options?.signal?.throwIfAborted();
+    await holdWhilePaused(options?.signal);
     const failures: string[] = [];
 
     for (const providerName of this.getProviderSequence(overridePrimary)) {
