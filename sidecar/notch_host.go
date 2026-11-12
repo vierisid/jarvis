@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -108,24 +107,14 @@ func notchTopCentre(screenW, winW int) int {
 	return (screenW - winW) / 2
 }
 
-// notchShouldHide is the whole fullscreen rule: the notch hides when a
-// fullscreen app is in front AND something is keeping the display awake, which
-// is what a playing video does. A browser in fullscreen that is only being
-// read does not hold the display, so the notch stays.
-func notchShouldHide(fullscreenAppInFront, displayKeptAwake bool) bool {
-	return fullscreenAppInFront && displayKeptAwake
-}
-
-// notchIsCaptureOverlay reports whether the program in front is a screen
-// capture tool choosing its area. While it does, it covers the whole screen
-// and is in front, which is exactly what a fullscreen app looks like, and the
-// notch would vanish from under the capture. The names are Windows' own tools.
-func notchIsCaptureOverlay(program string) bool {
-	switch strings.ToLower(program) {
-	case "snippingtool.exe", "screenclippinghost.exe":
-		return true
-	}
-	return false
+// notchShouldHide is the whole fullscreen rule: the notch hides for a
+// fullscreen video and for nothing else. All three must hold: a fullscreen app
+// is in front, something is keeping the display awake (every player does while
+// it plays, so without it there is no need to look further), and the picture
+// is seen to be moving by itself (notch_video.go). A browser in fullscreen
+// that is only being read keeps the notch.
+func notchShouldHide(fullscreenAppInFront, displayKeptAwake, videoPlaying bool) bool {
+	return fullscreenAppInFront && displayKeptAwake && videoPlaying
 }
 
 // bindNotch gives the page its three calls and starts feeding it the pointer's
