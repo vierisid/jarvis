@@ -122,7 +122,7 @@ describe("an agent whose tool calls failed", () => {
   });
 
   test("a model-invented tool name is clipped to one line and an echoed credential is redacted", () => {
-    const invented = "x".repeat(500) + "‮\ninjected";
+    const invented = "x".repeat(500) + "\u202e\ninjected";
     const calls = [
       { name: invented, error: 'Error: no tool named "x" is available.' },
       { name: "http_request", error: "Error: 401 from https://api.example.com/?token=ghp_abcdefghijklmnopqrstuvwxyz0123" },
@@ -131,7 +131,7 @@ describe("an agent whose tool calls failed", () => {
     const notice = failedToolCallNotice(calls);
     expect(notice.warning).toContain("7 of 7 tool calls did not work");
     expect(notice.warning).toContain("and 2 more");
-    expect(notice.warning).not.toContain("‮");
+    expect(notice.warning).not.toContain("\u202e");
     expect(notice.warning).not.toContain("\n");
     expect(notice.warning!.length).toBeLessThan(400);
     expect(notice.toolErrors![0]!.name.length).toBeLessThanOrEqual(67);
