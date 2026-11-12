@@ -1,26 +1,45 @@
 package main
 
-import "sort"
+import (
+	"math"
+	"sort"
+)
 
 // notchCoverage writes, for every pixel of a w by h image, how much of that
 // pixel the polygon covers: 0 for none, 255 for all. It is what gives the
 // notch a smooth edge on a system where a window can only be cut along whole
 // pixels.
 //
-// The method is plain: four sample lines through each pixel row, and along
+// The method is plain: sixteen sample lines through each pixel row, and along
 // each line the exact horizontal overlap of every filled span with every
-// pixel. Even-odd filling, which is right for a simple outline.
-func notchCoverage(dst []uint8, w, h int, pts []notchPoint) {
+// pixel. Even-odd filling, which is right for a simple outline. Sixteen lines
+// give seventeen levels on an edge that runs nearly level, which is where the
+// notch's bottom corners end; four left visible steps there.
+func notchCoverage(dst []uint8, w, h int, pts []notchVertex) {
 	for i := range dst {
 		dst[i] = 0
 	}
 	if w <= 0 || h <= 0 || len(dst) < w*h || len(pts) < 3 {
 		return
 	}
-	const samples = 4
+	const samples = 16
+	// Only the rows the outline reaches need work. The notch is a few dozen
+	// rows of a window that is hundreds tall, and this runs on every frame of
+	// a size change.
+	top, bottom := pts[0].Y, pts[0].Y
+	for _, p := range pts {
+		top, bottom = math.Min(top, p.Y), math.Max(bottom, p.Y)
+	}
+	firstRow, lastRow := int(math.Floor(top)), int(math.Ceil(bottom))
+	if firstRow < 0 {
+		firstRow = 0
+	}
+	if lastRow > h-1 {
+		lastRow = h - 1
+	}
 	acc := make([]float32, w)
 	xs := make([]float64, 0, 16)
-	for y := 0; y < h; y++ {
+	for y := firstRow; y <= lastRow; y++ {
 		for i := range acc {
 			acc[i] = 0
 		}
@@ -30,11 +49,11 @@ func notchCoverage(dst []uint8, w, h int, pts []notchPoint) {
 			xs = xs[:0]
 			for i := range pts {
 				a, b := pts[i], pts[(i+1)%len(pts)]
-				ay, by := float64(a.Y), float64(b.Y)
+				ay, by := a.Y, b.Y
 				if (ay <= sy) == (by <= sy) {
 					continue
 				}
-				ax, bx := float64(a.X), float64(b.X)
+				ax, bx := a.X, b.X
 				xs = append(xs, ax+(sy-ay)*(bx-ax)/(by-ay))
 			}
 			if len(xs) < 2 {

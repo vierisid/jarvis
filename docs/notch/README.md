@@ -49,7 +49,9 @@ itself, and `sidecar.yaml` has no setting for it.
    `__notch_focus(true)`, and gives it back to the window that had it.
 9. **It hides for a fullscreen video and only then:** a fullscreen app in front
    AND something keeping the display awake. A browser in fullscreen that is
-   only being read keeps the notch.
+   only being read keeps the notch. A screen capture choosing its area covers
+   the screen too: while Windows' own capture tools are in front the notch
+   stays exactly as it was.
 
 ## What it does not protect, and what is missing
 
@@ -58,11 +60,18 @@ itself, and `sidecar.yaml` has no setting for it.
 - On Windows the last 1.5 CSS pixels inside the edge belong to the backdrop
   window, not the page (see "How the edge is drawn"). That band is always
   black, whatever the page paints there.
-- The smooth edge and the pointer feed are built and unit-tested, and have not
-  yet been seen running on a screen.
+- The smooth edge and the pointer feed have run on one Windows machine (a
+  2560 by 1440 display at 100%). Outline points with fractions of a pixel have
+  not: they were added after that run, because corners sent on whole pixels
+  read as polygons.
 - The fullscreen rule reads "the display is being kept awake" for the whole
   machine. A video playing in another window while a different app is
-  fullscreen in front also hides the notch.
+  fullscreen in front also hides the notch. Worse, any program that holds the
+  display awake all the time turns the rule into "hide for every fullscreen
+  app". On the first test machine something did hold it throughout. The log
+  says so at start (`at start, display kept awake: true`) and names the
+  program and window class in front each time the rule hides the notch. The
+  signal may have to be replaced.
 - **macOS (`sidecar/notch_host_darwin.go`) has never been compiled or run.**
 - On Linux the window opens as an ordinary always-on-top panel: no shape, no
   focus rule, no fullscreen rule.
@@ -81,7 +90,7 @@ The page talks to the desktop app through three functions on `window`:
 
 | Function | Meaning |
 |---|---|
-| `__notch_set_outline(shape, cut)` | Two closed polygons, each `[[x, y], ...]` in the window's own pixels (CSS pixels times the display scale). `shape` is the notch's true outline. `cut` is the same outline 1.5 CSS pixels in. Both are checked; if either is refused, nothing changes |
+| `__notch_set_outline(shape, cut)` | Two closed polygons, each `[[x, y], ...]` in the window's own pixels (CSS pixels times the display scale). Fractions of a pixel are kept and matter: send a curve as it is, with a point about every pixel and a half, not moved onto whole pixels. `shape` is the notch's true outline. `cut` is the same outline 1.5 CSS pixels in. Both are checked; if either is refused, nothing changes |
 | `__notch_focus(true \| false)` | Take the keyboard for a text field, or give it back. Answers whether the notch has it |
 | `__notch_log(text)` | One line in the desktop app's log, for test runs |
 
@@ -98,7 +107,8 @@ A window cut to a polygon has a stepped edge: each pixel is in or out.
 - **Windows.** A second window sits directly behind the page's window. It is
   drawn pixel by pixel with partial transparency along the edge
   (`sidecar/notch_raster.go` works out how much of each pixel the shape
-  covers), never takes clicks, and never takes the keyboard. The page's window
+  covers, from the outline's exact points), never takes clicks, and never
+  takes the keyboard. The page's window
   is cut to `cut`, just inside it, so the stepped cut is hidden on black. The
   two windows are tied together as owner and owned, so they keep their order,
   and they are shown and hidden together.

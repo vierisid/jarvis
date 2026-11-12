@@ -2,32 +2,52 @@ package main
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 )
 
 func TestNotchOutlineAcceptsAPolygonInsideTheWindow(t *testing.T) {
-	got, err := notchOutline([][]int{{100, 0}, {300, 0}, {300, 40}, {100, 40}}, 760, 600)
+	got, err := notchOutline([][]float64{{100, 0}, {300, 0}, {300, 40}, {100, 40}}, 760, 600)
 	if err != nil {
 		t.Fatalf("a plain rectangle was refused: %v", err)
 	}
-	if len(got) != 4 || got[2] != (notchPoint{X: 300, Y: 40}) {
+	if len(got) != 4 || got[2] != (notchVertex{X: 300, Y: 40}) {
 		t.Fatalf("unexpected outline: %v", got)
 	}
 	// The top corners may sit a little above the screen edge.
-	if _, err := notchOutline([][]int{{100, -16}, {300, -16}, {200, 40}}, 760, 600); err != nil {
+	if _, err := notchOutline([][]float64{{100, -16}, {300, -16}, {200, 40}}, 760, 600); err != nil {
 		t.Fatalf("a point just above the window was refused: %v", err)
+	}
+}
+
+// A curve needs points between pixels. They must arrive as sent, and only the
+// window cut, which can do no better, moves them onto whole pixels.
+func TestNotchOutlineKeepsFractionsAndTheCutRoundsThem(t *testing.T) {
+	got, err := notchOutline([][]float64{{100.25, 0}, {300.5, 0.75}, {200.49, 40.51}}, 760, 600)
+	if err != nil {
+		t.Fatalf("an outline with fractions was refused: %v", err)
+	}
+	if got[0].X != 100.25 || got[1].Y != 0.75 {
+		t.Fatalf("fractions were lost: %v", got)
+	}
+	whole := notchWhole(got)
+	want := []notchPoint{{100, 0}, {301, 1}, {200, 41}}
+	for i := range want {
+		if whole[i] != want[i] {
+			t.Fatalf("point %d rounded to %v, want %v", i, whole[i], want[i])
+		}
 	}
 }
 
 // The page is not trusted to cut the window to any shape it likes. Each of
 // these must be refused whole, so the previous shape stays.
 func TestNotchOutlineRefusesWhatAPageShouldNotSend(t *testing.T) {
-	tooMany := make([][]int, notchOutlineMaxPoints+1)
+	tooMany := make([][]float64, notchOutlineMaxPoints+1)
 	for i := range tooMany {
-		tooMany[i] = []int{i % 700, 10}
+		tooMany[i] = []float64{float64(i % 700), 10}
 	}
-	for name, points := range map[string][][]int{
+	for name, points := range map[string][][]float64{
 		"two points":       {{0, 0}, {10, 10}},
 		"no points":        {},
 		"too many points":  tooMany,
@@ -35,6 +55,8 @@ func TestNotchOutlineRefusesWhatAPageShouldNotSend(t *testing.T) {
 		"far to the right": {{0, 0}, {5000, 10}, {20, 0}},
 		"far below":        {{0, 0}, {10, 5000}, {20, 0}},
 		"far above":        {{0, -500}, {10, 10}, {20, 0}},
+		"not a number":     {{0, 0}, {math.NaN(), 10}, {20, 0}},
+		"without end":      {{0, 0}, {10, math.Inf(1)}, {20, 0}},
 	} {
 		if _, err := notchOutline(points, 760, 600); err == nil {
 			t.Errorf("%s: expected the outline to be refused", name)
@@ -209,4 +231,19 @@ func TestNotchWindowHandlersNeedTheWindowsCapability(t *testing.T) {
 	}
 	notch.usePanels(nil)
 	notch.Configure(false)
+}
+
+// A screen capture covers the screen and is in front, like a fullscreen app.
+// It must not count as one, or the notch vanishes from under the capture.
+func TestNotchLeavesItselfAloneUnderAScreenCapture(t *testing.T) {
+	for _, program := range []string{"SnippingTool.exe", "snippingtool.exe", "ScreenClippingHost.exe"} {
+		if !notchIsCaptureOverlay(program) {
+			t.Errorf("%s is a screen capture tool", program)
+		}
+	}
+	for _, program := range []string{"chrome.exe", "vlc.exe", ""} {
+		if notchIsCaptureOverlay(program) {
+			t.Errorf("%q is not a screen capture tool", program)
+		}
+	}
 }

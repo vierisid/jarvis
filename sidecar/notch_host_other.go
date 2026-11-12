@@ -30,7 +30,7 @@ func platformNotchWindowSize(handle unsafe.Pointer) (int, int) {
 	return notchWindowW, notchWindowH
 }
 
-func platformNotchSetOutline(handle unsafe.Pointer, shape, cut []notchPoint) error {
+func platformNotchSetOutline(handle unsafe.Pointer, shape []notchVertex, cut []notchPoint) error {
 	return fmt.Errorf("the notch's shape is not built for this system yet")
 }
 

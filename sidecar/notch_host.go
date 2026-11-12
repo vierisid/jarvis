@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -45,6 +47,15 @@ const (
 	notchOutlineSlack = 64
 )
 
+// notchVertex is a point of an outline as the page reports it. Fractions of a
+// pixel are kept: a curve whose points are moved onto whole pixels turns into
+// short straight runs, and reads as a polygon however softly its edge is drawn.
+type notchVertex struct {
+	X, Y float64
+}
+
+// notchPoint is a point on whole pixels, which is all a window region can be
+// cut along. It has the layout of a Win32 POINT.
 type notchPoint struct {
 	X, Y int32
 }
@@ -53,25 +64,39 @@ type notchPoint struct {
 // for. A page is not trusted to cut the window to any shape it likes: too few
 // points, too many, or a point far outside the window is refused whole, and the
 // previous shape stays.
-func notchOutline(points [][]int, winW, winH int) ([]notchPoint, error) {
+func notchOutline(points [][]float64, winW, winH int) ([]notchVertex, error) {
 	if len(points) < notchOutlineMinPoints {
 		return nil, fmt.Errorf("an outline needs at least %d points, got %d", notchOutlineMinPoints, len(points))
 	}
 	if len(points) > notchOutlineMaxPoints {
 		return nil, fmt.Errorf("an outline may have at most %d points, got %d", notchOutlineMaxPoints, len(points))
 	}
-	out := make([]notchPoint, 0, len(points))
+	out := make([]notchVertex, 0, len(points))
 	for i, p := range points {
 		if len(p) != 2 {
 			return nil, fmt.Errorf("outline point %d is not [x, y]", i)
 		}
 		x, y := p[0], p[1]
-		if x < -notchOutlineSlack || x > winW+notchOutlineSlack || y < -notchOutlineSlack || y > winH+notchOutlineSlack {
-			return nil, fmt.Errorf("outline point %d (%d, %d) is outside the %dx%d window", i, x, y, winW, winH)
+		// Written so that a value that is not a number fails it too: every
+		// comparison with one is false.
+		inside := x >= -notchOutlineSlack && x <= float64(winW)+notchOutlineSlack &&
+			y >= -notchOutlineSlack && y <= float64(winH)+notchOutlineSlack
+		if !inside {
+			return nil, fmt.Errorf("outline point %d (%g, %g) is outside the %dx%d window", i, x, y, winW, winH)
 		}
-		out = append(out, notchPoint{X: int32(x), Y: int32(y)})
+		out = append(out, notchVertex{X: x, Y: y})
 	}
 	return out, nil
+}
+
+// notchWhole moves an outline onto whole pixels, for the one use that needs
+// them: cutting a window region.
+func notchWhole(outline []notchVertex) []notchPoint {
+	out := make([]notchPoint, len(outline))
+	for i, v := range outline {
+		out[i] = notchPoint{X: int32(math.Round(v.X)), Y: int32(math.Round(v.Y))}
+	}
+	return out
 }
 
 // notchTopCentre is the left edge that centres a window of width winW on a
@@ -91,6 +116,18 @@ func notchShouldHide(fullscreenAppInFront, displayKeptAwake bool) bool {
 	return fullscreenAppInFront && displayKeptAwake
 }
 
+// notchIsCaptureOverlay reports whether the program in front is a screen
+// capture tool choosing its area. While it does, it covers the whole screen
+// and is in front, which is exactly what a fullscreen app looks like, and the
+// notch would vanish from under the capture. The names are Windows' own tools.
+func notchIsCaptureOverlay(program string) bool {
+	switch strings.ToLower(program) {
+	case "snippingtool.exe", "screenclippinghost.exe":
+		return true
+	}
+	return false
+}
+
 // bindNotch gives the page its three calls and starts feeding it the pointer's
 // position. The calls run on the window's own thread, like every other panel
 // binding. The function it returns stops the feed and releases what the
@@ -103,10 +140,11 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 		}
 	}
 	// __notch_set_outline(shape, cut): two closed polygons in device pixels of
-	// the window. shape is the notch's true outline. cut is the same outline
-	// one pixel in: where a platform draws the edge with a second window, the
-	// web view ends there. A platform that masks the web view itself uses shape.
-	bind("__notch_set_outline", func(shape, cut [][]int) error {
+	// the window, fractions allowed. shape is the notch's true outline. cut is
+	// the same outline a little way in: where a platform draws the edge with a
+	// second window, the web view ends there. A platform that masks the web
+	// view itself uses shape.
+	bind("__notch_set_outline", func(shape, cut [][]float64) error {
 		w, h := platformNotchWindowSize(handle)
 		outer, err := notchOutline(shape, w, h)
 		if err != nil {
@@ -118,7 +156,7 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 			log.Printf("[notch] inner outline refused: %v", err)
 			return err
 		}
-		return platformNotchSetOutline(handle, outer, inner)
+		return platformNotchSetOutline(handle, outer, notchWhole(inner))
 	})
 	// __notch_focus(true) takes the keyboard for a text field,
 	// __notch_focus(false) gives it back to whoever had it.

@@ -156,6 +156,7 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 	ticker := time.NewTicker(400 * time.Millisecond)
 	defer ticker.Stop()
 	stoleFocus := false
+	first := true
 	for {
 		select {
 		case <-done:
@@ -167,12 +168,27 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 		}
 		fullscreen := fullscreenAppCovers(w.hwnd)
 		awake := displayKeptAwake()
+		if first {
+			first = false
+			// Worth a line: if this is true with no video playing, some other
+			// program holds the display, and every fullscreen app will hide
+			// the notch on this machine.
+			log.Printf("[notch] at start, display kept awake: %v", awake)
+		}
+		program, class := "", ""
+		if fullscreen {
+			program, class = notchForeground()
+			if notchIsCaptureOverlay(program) {
+				// A screen capture in progress: the notch stays as it was.
+				continue
+			}
+		}
 		hide := notchShouldHide(fullscreen, awake)
 		if hide != w.hidden.Load() {
 			w.hidden.Store(hide)
 			if hide {
 				w.hide()
-				log.Printf("[notch] hidden: a fullscreen app is in front and the display is being kept awake")
+				log.Printf("[notch] hidden: a fullscreen app is in front (%s, window class %s) and the display is being kept awake", program, class)
 			} else {
 				if w.loaded.Load() {
 					w.show()
@@ -187,6 +203,19 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 		}
 		stoleFocus = holds
 	}
+}
+
+// notchForeground names the window in front by its program's file name and
+// its window class. It is for the log, and for telling a screen capture apart
+// from a fullscreen app. The window's title is left out on purpose.
+func notchForeground() (program, class string) {
+	fg, _, _ := procGetForegroundWindow.Call()
+	if fg == 0 {
+		return "", ""
+	}
+	var buf [256]uint16
+	procGetClassNameW.Call(fg, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	return processBaseName(win32GetWindowPid(fg)), syscall.UTF16ToString(buf[:])
 }
 
 // displayKeptAwake reports whether anything on the machine is asking for the
@@ -236,7 +265,7 @@ func platformNotchCursor(handle unsafe.Pointer) (int, int, bool) {
 // notch's true outline, drawn smooth by the backdrop. cut is the same outline
 // one pixel in, which is where the web view ends. Windows owns the region
 // after SetWindowRgn, so nothing is freed here.
-func platformNotchSetOutline(handle unsafe.Pointer, shape, cut []notchPoint) error {
+func platformNotchSetOutline(handle unsafe.Pointer, shape []notchVertex, cut []notchPoint) error {
 	if handle == nil {
 		return fmt.Errorf("nil HWND")
 	}
@@ -250,7 +279,7 @@ func platformNotchSetOutline(handle unsafe.Pointer, shape, cut []notchPoint) err
 		}
 	} else {
 		// No backdrop: the web view carries the whole shape, hard edge and all.
-		cut = shape
+		cut = notchWhole(shape)
 	}
 	rgn, _, _ := procNotchCreatePolygonRgn.Call(
 		uintptr(unsafe.Pointer(&cut[0])), uintptr(len(cut)), notchWinding)
@@ -266,7 +295,7 @@ func platformNotchSetOutline(handle unsafe.Pointer, shape, cut []notchPoint) err
 				minX, maxX = min(minX, p.X), max(maxX, p.X)
 				minY, maxY = min(minY, p.Y), max(maxY, p.Y)
 			}
-			log.Printf("[notch] outline: %d points, box %dx%d at (%d, %d)", len(shape), maxX-minX, maxY-minY, minX, minY)
+			log.Printf("[notch] outline: %d points, box %.1fx%.1f at (%.1f, %.1f)", len(shape), maxX-minX, maxY-minY, minX, minY)
 		}
 	}
 	return nil
@@ -394,7 +423,7 @@ func newNotchBackdrop(x, y, width, height int) (*notchBackdrop, error) {
 
 // paint draws the outline as anti-aliased black and hands it to the window.
 // Black with premultiplied alpha is just the alpha, so coverage is the pixel.
-func (b *notchBackdrop) paint(shape []notchPoint) error {
+func (b *notchBackdrop) paint(shape []notchVertex) error {
 	notchCoverage(b.cover, int(b.w), int(b.h), shape)
 	for i, c := range b.cover {
 		b.pixels[i] = uint32(c) << 24
