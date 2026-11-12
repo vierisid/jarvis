@@ -34,6 +34,8 @@ import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } f
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
 import { emptyInput, inputIssue } from './input-validation';
+import { formFields } from './human-input-contract';
+import { BOUNDED_TOOLS } from './tool-capability';
 import { declaredDependencies } from './code-step-manifest';
 import { canonicalZone, chosenScheduleZone, effectiveScheduleZone, statedScheduleZone } from '../runner/triggers/schedule-zone';
 
@@ -52,7 +54,7 @@ export interface ConnectionRefusal {
 }
 export interface RuntimeCheck extends ReadinessIssue {
   /** The boundary responsible for checking actual data before dispatch. */
-  guard: 'expression' | 'piece-input' | 'tool-input' | 'loop-items' | 'connection' | 'workflow-binding';
+  guard: 'expression' | 'piece-input' | 'tool-input' | 'loop-items' | 'connection' | 'workflow-binding' | 'computer';
 }
 export interface WorkflowReadiness {
   ready: boolean;
@@ -74,9 +76,20 @@ export interface ReadinessContext {
    */
   connection?: (externalId: string, pieceName: string, path: string, settings: Record<string, unknown>, nodeType?: unknown) => string | ConnectionRefusal | null;
   workflow?: (id: string) => string | null;
-  tool?: (name: string) => { params: Array<{ name: string; type: string; required: boolean; enum?: string[] }>; workflowRefusal?: string | null;
+  tool?: (name: string) => {
+    params: Array<{ name: string; type: string; required: boolean; enum?: string[] }>;
+    workflowRefusal?: string | null;
     /** A switch that has the tool turned off (#1314 m6). */
-    switchRefusal?: { code: string; message: string } | null } | null;
+    switchRefusal?: { code: string; message: string } | null;
+    /**
+     * A plain-words refusal when a workflow step cannot run this tool, or null.
+     * `params` is the step's parameters when they are known now, null when run
+     * data decides them. The daemon answers with the boundary's own rule.
+     */
+    unsupported?: (params: Record<string, unknown> | null) => string | null;
+  } | null;
+  /** Whether any enrolled computer is online now (or this one may run tools). Absent: not checked. */
+  computerOnline?: () => boolean;
   roles?: () => ReadonlySet<string>;
   /** The enrolled computers, for the reviewed-UI step checks (#1314). */
   machines?: () => readonly WorkflowMachineView[];
@@ -141,6 +154,16 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     if (++runtimeCount === 501) issue(node, path, 'LIMIT', 'Graph exceeds 500 runtime checks');
     if (runtimeChecks.length < 500) runtimeChecks.push({ node, path, code: 'RUNTIME_CHECK', guard, message });
   };
+
+  /**
+   * A step that works on a computer, with none online to take it: allowed,
+   * because one may be on by the time it runs, but the person is told.
+   */
+  function computerWarning(node: string, toolName: unknown) {
+    if (typeof toolName !== 'string' || !BOUNDED_TOOLS.has(toolName) || !context.computerOnline || context.computerOnline()) return;
+    runtime(node, 'settings.input.toolName', 'computer',
+      'No computer is online right now. This step works on a computer, so open the desktop app on the computer it should use before it runs.');
+  }
 
   function expressions(value: unknown, node: string, path: string, scope: Set<string>, pieceName: string, depth = 0): boolean {
     if (++inputVisits > 20_000) {
@@ -484,13 +507,17 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         const tool = context.tool?.(name.value);
         if (!tool) issue(node, 'settings.input.toolName', 'TOOL_BINDING', context.tool ? 'Unknown tool' : 'Tool inventory is unavailable');
         else {
-          if (tool.workflowRefusal) issue(node, 'settings.input.toolName', 'WORKFLOW_TOOL_UNSUPPORTED', tool.workflowRefusal);
+          // The name-based refusal was reported in the block above; only a different declaration refusal is new.
+          if (tool.workflowRefusal && tool.workflowRefusal !== workflowToolRefusal(name.value)) issue(node, 'settings.input.toolName', 'WORKFLOW_TOOL_UNSUPPORTED', tool.workflowRefusal);
           if (tool.switchRefusal) issue(node, 'settings.input.toolName', tool.switchRefusal.code, tool.switchRefusal.message);
           let params = staticInput(input.params ?? {});
           if (params.known && typeof params.value === 'string') {
             try { params = { known: true, value: JSON.parse(params.value) }; } catch { /* report below */ }
           }
-          if (!params.known) runtime(node, 'settings.input.params', 'tool-input', 'Tool registry validates resolved required parameters and types before execution');
+          // A tool already refused by name above is not refused twice.
+          const refused = tool.workflowRefusal || tool.switchRefusal ? null : tool.unsupported?.(params.known && object(params.value) && !JSON.stringify(params.value).includes('{{') ? params.value : null);
+          if (refused) issue(node, 'settings.input.toolName', 'TOOL_UNSUPPORTED', refused);
+          else if (!params.known) runtime(node, 'settings.input.params', 'tool-input', 'Tool registry validates resolved required parameters and types before execution');
           else if (!object(params.value)) issue(node, 'settings.input.params', 'INPUT_TYPE', 'Tool params must resolve to an object');
           else for (const field of tool.params) {
             const resolved = staticInput(params.value[field.name]);
@@ -504,6 +531,13 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
           }
         }
       }
+    }
+    if (!root && isPiece('jarvis-tool') && settings.actionName === 'invoke' && object(input) && context.phase !== 'composition') {
+      computerWarning(node, input.toolName);
+    }
+    if (!root && isPiece('jarvis-input') && settings.actionName === 'request_input' && object(input)) {
+      const reason = formFieldsIssue(input.fields);
+      if (reason) issue(node, 'settings.input.fields', 'INPUT_TYPE', reason);
     }
     if (!root && isPiece('jarvis-agent') && settings.actionName === 'delegate' && !emptyInput(input?.role) && context.phase !== 'composition') {
       const role = staticInput(input.role);
@@ -676,4 +710,29 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
   visit(trigger, new Set(), true);
   if (context.preview && !previewFound) issue(context.preview.stepName, 'graph', 'PREVIEW_STEP', 'The selected preview step does not exist');
   return { ready: issues.length === 0, issues, runtimeChecks, ...(setupIssues.length ? { setupIssues } : {}) };
+}
+
+/**
+ * What is wrong with a form's fields, in plain words, or null. The run applies
+ * the same rule (human-input-contract.ts). Text that run data fills in is
+ * stood in for by a placeholder; a field whose type, required flag or options
+ * come from run data, or a whole field that does, is left to the run.
+ */
+function formFieldsIssue(value: unknown): string | null {
+  let fields: unknown = value;
+  if (emptyInput(fields)) return null;
+  if (typeof fields === 'string') {
+    if (fields.includes('{{') && /^\s*\{\{[^]*\}\}\s*$/.test(fields)) return null;
+    try { fields = JSON.parse(fields); } catch { return 'The form fields must be a list of fields, each with a key, label, type and required'; }
+  }
+  let n = 0;
+  const fill = (v: unknown): unknown => typeof v === 'string' && v.includes('{{') ? `x${++n}` : Array.isArray(v) ? v.map(fill) : v;
+  if (Array.isArray(fields)) {
+    // A whole field, or a part that is not text (its type, required flag or
+    // select options), may be filled by run data with a value of any shape.
+    const fromRunData = (v: unknown) => typeof v === 'string' && v.includes('{{');
+    if (fields.some(f => fromRunData(f) || object(f) && (fromRunData(f.type) || fromRunData(f.required) || fromRunData(f.options)))) return null;
+    fields = fields.map(f => object(f) ? Object.fromEntries(Object.entries(f).map(([k, v]) => [k, fill(v)])) : f);
+  }
+  try { formFields(fields); return null; } catch (error) { return (error as Error).message; }
 }
