@@ -240,7 +240,9 @@ describe("the engine is spawned so nothing is resolved from outside the bundle (
   test("the engine's url.parse() deprecation warning is silenced and no other warning is", async () => {
     // socket.io-client's long-polling calls url.parse() in a dependency on
     // every engine start. A stand-in bundle does the same call, then raises a
-    // different deprecation: only the first may disappear.
+    // different deprecation: only the first may disappear. Only Bun 1.4.x
+    // raises DEP0169, so on 1.3.x the first two assertions hold without the
+    // flag; CI's Bun is what makes this test bite.
     const dir = scratch("warnings");
     const bundlePath = join(dir, "main.js");
     writeFileSync(bundlePath, [
