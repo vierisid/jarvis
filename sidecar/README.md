@@ -131,6 +131,7 @@ this is a map of **subsystems by filename prefix**, not a file list.
 | `pebble_*` | floating overlay, audio capture, wake word |
 | `panels_*` | frameless always-on-top webview panels |
 | `hotkeys_*` | global hotkeys |
+| `notch*` | the notch: its window, shape and rules, the line to its page, and its keys (off unless the brain turns it on; `docs/notch/README.md`) |
 | `notify_*` | native notifications and their click-through actions |
 | `region_select_*` | interactive screen-region picker |
 | `browser_*` | Chrome control over CDP |

@@ -73,6 +73,7 @@ them — grant these in System Settings › Privacy & Security:
 - **Microphone** — voice + wake word (`NSMicrophoneUsageDescription`).
 - **Screen Recording** — ambient screen awareness (prompted at runtime, no plist key).
 - **Accessibility** — the pebble's global hotkeys (prompted at runtime). Without it the key monitor installs and never fires; the sidecar log says so at registration. The bindings are configurable, so this file deliberately does not name them (see docs/PEBBLE_HOTKEYS.md).
+  With the notch on (`JARVIS_NOTCH=1` in the brain) the same permission also covers the notch's keys, which are read by an event tap; without it they are not watched at all and the notch answers to the mouse only.
 
 ## How it's launched
 

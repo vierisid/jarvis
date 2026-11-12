@@ -222,7 +222,9 @@ export type NotchFromPage =
     option?: string; index?: number; button?: string; row?: string; word?: string; value?: string; text?: string;
   }
   /** A click on the resting notch, or yes with nothing on it. */
-  | { type: 'open' };
+  | { type: 'open' }
+  /** Esc twice: stop everything that is running, and start nothing until told. */
+  | { type: 'stop' };
 
 const ANSWER_ACTS: ReadonlySet<string> = new Set<NotchAnswerAct>([
   'yes', 'no', 'fold', 'pick', 'button', 'go', 'word', 'ask', 'stop', 'undo', 'done',
@@ -234,12 +236,13 @@ const short = (value: unknown, max: number): string | undefined =>
 /**
  * Reads one message from the page. The page is the brain's own, but what
  * arrives has crossed two processes as text, so nothing about it is assumed:
- * anything that is not exactly one of the three messages is null.
+ * anything that is not exactly one of its four messages is null.
  */
 export function parseNotchFromPage(raw: unknown): NotchFromPage | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
   const m = raw as Record<string, unknown>;
   if (m.type === 'open') return { type: 'open' };
+  if (m.type === 'stop') return { type: 'stop' };
   if (m.type === 'hello') {
     return typeof m.v === 'number' && Number.isInteger(m.v) && m.v > 0 ? { type: 'hello', v: m.v } : null;
   }

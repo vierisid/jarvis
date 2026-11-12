@@ -393,3 +393,10 @@ html.notch-window #notch-root { position: absolute; inset: 0; overflow: hidden; 
 /* A numbered list on paper: the number is a narrow column, not the 60px label column. */
 .paper li span.num { width: 14px; }
 .paper li > div { flex: 1 1 auto; min-width: 0; }
+
+/* The pair you are holding, shown the moment you hold it, and armed in citron. */
+.cap.held { display: none; margin-left: 2px; }
+.wrap.att .cap.held, .measure.att .cap.held { display: inline-flex; }
+.nin:has(.hint .duo.talk) .cap.held { display: none; }
+.wrap.att .cap.duo.talk { background: var(--citron); color: var(--citron-ink); box-shadow: none; }
+.wrap.att .cap.duo.talk b + b { box-shadow: inset 1px 0 0 rgba(27,36,0,.28); }

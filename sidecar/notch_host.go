@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -165,6 +166,21 @@ func notchShouldHide(fullscreenAppInFront, displayKeptAwake, videoPlaying bool) 
 // platform set up; the panel calls it on the window's thread once the window's
 // loop has ended and before the web view is destroyed.
 func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
+	// Everything sent into the page is queued for the window's own thread, and
+	// a queue can still hold something when the window is on its way out. On
+	// Windows what is left in it runs while the web view is being taken apart,
+	// after its engine is gone: a script run then is a crash that nothing here
+	// can catch. So every queued call looks at this first, and stop sets it
+	// before anything else.
+	var stopped atomic.Bool
+	inPage := func(script string) {
+		wv.Dispatch(func() {
+			if stopped.Load() {
+				return
+			}
+			wv.Eval(script)
+		})
+	}
 	bind := func(name string, fn any) {
 		if err := wv.Bind(name, fn); err != nil {
 			log.Printf("[notch] Bind(%s) failed: %v", name, err)
@@ -215,9 +231,21 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 	bind("__notch_send", func(text string) error {
 		return notch.fromPage(text)
 	})
-	notch.attachPage(func(script string) {
-		wv.Dispatch(func() { wv.Eval(script) })
+	// __notch_esc(want): whether Esc would do anything on the notch right now.
+	// Only then is it taken from the app in front.
+	bind("__notch_esc", func(want bool) {
+		notch.wantEsc(want)
 	})
+	// __notch_keys(): the two pairs of keys on this machine, for the hints.
+	bind("__notch_keys", func() map[string][]string {
+		pairs := notch.KeyPairs()
+		return map[string][]string{
+			"talk": {notchModName(pairs.Talk[0]), notchModName(pairs.Talk[1])},
+			"yes":  {notchModName(pairs.Yes[0]), notchModName(pairs.Yes[1])},
+		}
+	})
+	notch.attachPage(inPage)
+	notch.watchKeys()
 
 	// The page only hears the mouse inside its own outline, so the pointer's
 	// position and its main button everywhere else have to be told to it.
@@ -241,13 +269,13 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 				continue
 			}
 			lastX, lastY, lastDown, sent = x, y, down, true
-			js := notchCursorScript(x, y, down)
-			wv.Dispatch(func() { wv.Eval(js) })
+			inPage(notchCursorScript(x, y, down))
 		}
 	}()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
+			stopped.Store(true)
 			notch.detachPage()
 			close(quit)
 			<-finished
