@@ -14,6 +14,12 @@
  *   payment   an approval that says it is a payment of a sample amount. It is
  *             a declared intent with nothing behind it: approving it in the
  *             dashboard moves no money and runs nothing.
+ *   elsewhere approves the oldest waiting fixture approval the way a click on
+ *             its dashboard card does: the same decision function, as the
+ *             dashboard. It is for seeing what the notch does when something
+ *             is decided somewhere else, on a brain whose dashboard cannot
+ *             be reached (one still in first-run setup). It decides fixture
+ *             approvals only, never a payment, and nothing else.
  *   failure   one failure in the product's own list of open failures, worded
  *             by the product ("The notch test failed, and Jarvis cannot tell
  *             whether it took effect."). Nothing failed. It stays in the
@@ -41,7 +47,9 @@ export const NOTCH_FIXTURE_ORIGIN = 'notch_fixture';
 export const NOTCH_FIXTURE_LOG = 'notch-fixture.log';
 
 export interface NotchFixtureDeps {
-  approvalManager: Pick<ApprovalManager, 'createRequest'>;
+  approvalManager: Pick<ApprovalManager, 'createRequest'> & Partial<Pick<ApprovalManager, 'getPending'>>;
+  /** Approves a request as a click on its dashboard card does. Comes back with what the decision function said. */
+  approveAsDashboard?: (requestId: string) => Promise<{ status: string }>;
   /** Shows a new approval wherever approvals are shown: the dashboard card, and a chat card if a channel is set up. */
   deliverApproval?: (request: ApprovalRequest) => Promise<void> | void;
   /** Records the test failure. Comes back with its sentence. Absent when it cannot be recorded. */
@@ -124,6 +132,22 @@ export function createNotchFixtures(deps: NotchFixtureDeps): NotchFixtures {
       return `A payment approval is waiting (${request.id.slice(0, 8)}). It is a test: approving it in the dashboard moves no money.`;
     },
   };
+  const approveAsDashboard = deps.approveAsDashboard;
+  const getPending = deps.approvalManager.getPending?.bind(deps.approvalManager);
+  if (approveAsDashboard && getPending) {
+    kinds.elsewhere = async () => {
+      // Its own approvals only, and never the payment: this is a way to see
+      // the notch react, not a way to approve things.
+      const mine = getPending()
+        .filter((request) => request.agent_id === NOTCH_FIXTURE_AGENT && request.tool_name === 'get_system_info')
+        .sort((a, b) => a.created_at - b.created_at)[0];
+      if (!mine) throw new Error('No fixture approval is waiting. Make one first: fixture approval.');
+      const outcome = await approveAsDashboard(mine.id);
+      return outcome.status === 'approved'
+        ? `Approved ${mine.id.slice(0, 8)} the way a click on its dashboard card does.`
+        : `The decision function answered "${outcome.status}" for ${mine.id.slice(0, 8)}: it was not approved here.`;
+    };
+  }
   const failure = deps.failure;
   if (failure) kinds.failure = () => `A test failure is in the list of open failures: "${failure()}" Dismiss it in the dashboard when you are done.`;
   const promises = deps.promises;

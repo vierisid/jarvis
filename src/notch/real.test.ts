@@ -56,6 +56,7 @@ function harness() {
     approve: (id) => applyApprovalDecision('approve', id, NOTCH_DECIDER, deps),
     deliverApproval: (request) => { delivered.push(request.id); },
     openDashboard: (from) => { opened.push(from); },
+    approveAsDashboard: (id) => applyApprovalDecision('approve', id, 'dashboard', deps),
     // The test looks by hand.
     lookMs: 3_600_000,
     log: () => {},
@@ -78,7 +79,7 @@ function harness() {
 describe('the approval fixture, from the command to Today', () => {
   test('makes a real approval a key may answer, shows it where approvals are shown, and a yes runs it once', async () => {
     const h = harness();
-    expect(h.real.fixtures.kinds()).toEqual(['approval', 'payment']);
+    expect(h.real.fixtures.kinds()).toEqual(['approval', 'payment', 'elsewhere']);
     const made = await h.real.fixtures.make('approval', {});
     expect(made).toContain('An approval is waiting');
     const [request] = h.approvals.getPending();
@@ -138,6 +139,31 @@ describe('the approval fixture, from the command to Today', () => {
     expect(await real.fixtures.make('failure', {})).toContain('A test failure is in the list of open failures');
     await settle();
     expect(surface.current().line).toMatchObject({ kind: 'say', mark: 'fail', say: ['The notch test failed, and Jarvis cannot tell whether it took effect.'] });
+  });
+
+  // Steps 2 and 7 of the hand test, on a brain whose dashboard cannot be reached.
+  test('"elsewhere" decides the oldest fixture approval as a dashboard click does, and the notch\'s line leaves by itself', async () => {
+    const h = harness();
+    await expect(h.real.fixtures.make('elsewhere', {})).rejects.toThrow('No fixture approval is waiting');
+    await h.real.fixtures.make('approval', {});
+    await h.look();
+    expect(h.line()?.kind).toBe('offer');
+    expect(await h.real.fixtures.make('elsewhere', {})).toContain('the way a click on its dashboard card does');
+    expect(h.runs).toEqual(['get_system_info']);
+    expect(h.approvals.getHistory({ status: 'executed' })[0]).toMatchObject({ decided_by: 'dashboard' });
+    await h.look();
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(0);
+  });
+
+  test('"elsewhere" never touches the payment, or an approval that is not the fixture\'s own', async () => {
+    const h = harness();
+    await h.real.fixtures.make('payment', {});
+    h.approvals.createRequest({ agentId: 'someone-else', agentName: 'PA', toolName: 'get_system_info', toolArguments: {},
+      actionCategory: 'read_data', urgency: 'normal', reason: 'r', context: '' });
+    await expect(h.real.fixtures.make('elsewhere', {})).rejects.toThrow('No fixture approval is waiting');
+    expect(h.approvals.getPending()).toHaveLength(2);
+    expect(h.runs).toEqual([]);
   });
 
   test('an unknown fixture is refused', async () => {

@@ -34,6 +34,8 @@ export interface NotchRealDeps {
   approvalManager: Pick<ApprovalManager, 'getPending' | 'getRequest' | 'getHistory' | 'createRequest'>;
   /** Approves through the product's one decision function, as the notch. */
   approve(requestId: string): Promise<ApprovalDecisionOutcome>;
+  /** Approves as a click on the dashboard card does. Given only when fixtures may be made, and used by them only. */
+  approveAsDashboard?: (requestId: string) => Promise<ApprovalDecisionOutcome>;
   /** Shows a new approval wherever approvals are shown. Used by the fixtures only. */
   deliverApproval?: (request: ApprovalRequest) => Promise<void> | void;
   /** Opens the dashboard on the machine named, or on every machine showing the notch. */
@@ -131,6 +133,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   const fixtures = createNotchFixtures({
     failure: recordFixtureFailure ? () => { const said = recordFixtureFailure(); news.sync(); return said; } : undefined,
     approvalManager: deps.approvalManager,
+    approveAsDashboard: deps.approveAsDashboard,
     deliverApproval: deps.deliverApproval,
     promises: promises && appendFixtureLog
       ? { create: promises.create, look: () => promises.executor.checkAndAnnounce() }

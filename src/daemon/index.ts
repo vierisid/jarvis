@@ -133,7 +133,7 @@ import { ChannelService, isChannelGuestThread } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
 import { authorityConfigWarnings } from "../authority/config-validation.ts";
-import { ApprovalManager, approvalNeedsClick, executionState, onApprovalDeadlineExpired, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
+import { ApprovalManager, approvalNeedsClick, DASHBOARD_DECIDER, executionState, onApprovalDeadlineExpired, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
 import { applyEmergencyState } from "./emergency-state.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
@@ -4586,6 +4586,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         approvalManager,
         approve: (requestId) => applyApprovalDecision('approve', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
         deliverApproval: (request) => approvalDelivery.deliver(request),
+        // For the hand test, demo gate only: decides one of the fixture's own
+        // approvals as a dashboard click would (src/notch/fixtures.ts).
+        approveAsDashboard: notchDemoState === 'open'
+          ? (requestId) => applyApprovalDecision('approve', requestId, DASHBOARD_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail })
+          : undefined,
         // Esc twice pauses through the same controller as the tray's Pause.
         emergency: emergencyController,
         // A workflow step that stopped to ask a person: a few short options
