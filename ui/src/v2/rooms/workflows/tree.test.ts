@@ -20,6 +20,9 @@ import {
   setLoopItems,
   setRouterExecutionType,
   applySchemaDefaults,
+  buildControlFlowStep,
+  isBlankStep,
+  needsPieceChoice,
   withStepInput,
   withoutChosenZone,
 } from "./tree";
@@ -472,5 +475,34 @@ describe("schedule time zone: pre-filled vs chosen", () => {
     expect(withStepInput({ name: "step_1", type: "PIECE", settings: { pieceName: "some-piece", actionName: "a", input: {} } }, "timezone", "UTC"))
       .not.toHaveProperty("chosenTimezone");
     expect(withStepInput(scheduleStep("@jarvispieces/piece-jarvis-trigger"), "timezone", "UTC")).not.toHaveProperty("chosenTimezone");
+  });
+});
+
+describe("blank placeholders and control-flow steps", () => {
+  test("only an empty PIECE placeholder is blank", () => {
+    const root = fixture();
+    const added = insertStepAfter(root, "trigger")!;
+    expect(isBlankStep(findStep(added.tree, added.newName)!)).toBe(true);
+    expect(isBlankStep(findStep(root, "step_1")!)).toBe(false);
+    expect(isBlankStep({ name: "x", type: "PIECE", settings: { input: { a: 1 } } } as FlowStepNode)).toBe(false);
+    expect(isBlankStep({ name: "x", type: "PIECE", settings: { pieceName: "p", input: {} } } as FlowStepNode)).toBe(false);
+    expect(isBlankStep({ name: "x", type: "LOOP_ON_ITEMS", settings: { items: "" } } as unknown as FlowStepNode)).toBe(false);
+  });
+
+  test("a step with a piece but no action still opens the chooser, but is not blank", () => {
+    const pieceOnly = { name: "x", type: "PIECE", settings: { pieceName: "p", input: {} } } as FlowStepNode;
+    expect(needsPieceChoice(pieceOnly)).toBe(true);
+    expect(isBlankStep(pieceOnly)).toBe(false);
+    expect(needsPieceChoice({ name: "x", type: "PIECE", settings: { input: {} } } as FlowStepNode)).toBe(true);
+    expect(needsPieceChoice({ name: "x", type: "PIECE", settings: { pieceName: "p", actionName: "a", input: {} } } as FlowStepNode)).toBe(false);
+    expect(needsPieceChoice({ name: "x", type: "LOOP_ON_ITEMS", settings: { items: "" } } as unknown as FlowStepNode)).toBe(false);
+  });
+
+  test("buildControlFlowStep makes a loop, an If (True and False) and a Router (Branch 1 and Else)", () => {
+    expect(buildControlFlowStep("a", "LOOP_ON_ITEMS")).toMatchObject({ type: "LOOP_ON_ITEMS", settings: { items: "" } });
+    const branches = (kind: "IF" | "ROUTER") => (buildControlFlowStep("b", kind).settings as { branches: Array<{ branchName: string }> }).branches.map((b) => b.branchName);
+    expect(branches("IF")).toEqual(["True", "False"]);
+    expect(branches("ROUTER")).toEqual(["Branch 1", "Else"]);
+    expect(buildControlFlowStep("b", "IF").children).toEqual([null, null]);
   });
 });
