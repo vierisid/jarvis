@@ -1263,7 +1263,7 @@ export function useWorkflowEditor(flowId: string | null) {
       if (!res.ok) {
         const body = await safeJson(res);
         const names = new Map([draftTrigger, ...draftOrphans.map((o) => o.node)].flatMap((root) => flattenSteps(root).map(({ step }) => [step.name, step.displayName ?? step.name] as const)));
-        return { ok: false, message: refusalMessage(body, (name) => names.get(name)) ?? body?.error ?? `save failed: ${res.status}` };
+        return { ok: false, message: refusalMessage(body, (name) => names.get(name), res.status) ?? body?.error ?? `save failed: ${res.status}` };
       }
       const updated = (await res.json()) as FlowVersion;
       ignoreNextLoadRef.current = true;

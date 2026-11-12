@@ -16,7 +16,7 @@ import {
   type WorkflowRequest,
 } from "../../../v2/rooms/workflows/WorkflowEditorEnvironment";
 import { versionBoundRequest } from "./request";
-import { issueLine, refusalMessage } from "../../../v2/rooms/workflows/readiness-text";
+import { cardName, issueLine, refusalMessage } from "../../../v2/rooms/workflows/readiness-text";
 import "./canvas.css";
 import { WorkflowViewHeader } from "../runs/WorkflowViewHeader";
 
@@ -153,7 +153,8 @@ function CanvasHeader({
     try { await action(); }
     catch (error) {
       // A refusal says what is wrong (a step reads a deleted step's result, a field is empty): say it.
-      const reason = refusalMessage((error as { body?: unknown } | null)?.body, nameOf);
+      const refused = error as { body?: unknown; status?: unknown } | null;
+      const reason = refusalMessage(refused?.body, nameOf, typeof refused?.status === 'number' ? refused.status : undefined);
       setRunMessage(reason ? `${doing} stopped. ${reason}` : 'The version change could not be confirmed. Reopen this workflow to check before trying again.');
     }
     finally { setChanging(false); busy.current = false; }
@@ -167,7 +168,9 @@ function CanvasHeader({
     void binding.request(`/api/workflows/${encodeURIComponent(binding.flowId)}/versions/${encodeURIComponent(savedVersionId)}/readiness`, { signal: abort.signal })
       .then(response => response.ok ? response.json() : null)
       .then(body => { if (!abort.signal.aborted) setServerIssues(body && body.ready === false && Array.isArray(body.issues) ? body.issues : []); })
-      .catch(() => { /* The notice is extra; the server still refuses what is not ready. */ });
+      // The notice is extra (the server still refuses what is not ready), but a list from an
+      // earlier save must not stay up as if it were this one's.
+      .catch(() => { if (!abort.signal.aborted) setServerIssues([]); });
     return () => abort.abort();
   }, [binding.source, binding.request, binding.flowId, binding.versionId, savedVersionId, savedAt, editor.dirty, editor.loading]);
   const setupSteps = [...new Set(editor.validationGaps.map(gap => gap.stepName))].map(name => ({
@@ -317,7 +320,7 @@ function CanvasHeader({
       {!editor.dirty && blockers.length > 0 && <details className="brief-canvas-setup" open>
         <summary>{binding.readOnly ? 'Not ready to run' : 'Not ready to publish'}</summary>
         <ul>{blockers.map((issue, index) => <li key={index}>
-          {typeof issue.node === 'string' && stepTitles.has(issue.node) && <BriefButton size="sm" onClick={() => selectSetupStep(issue.node as string)}>{stepTitles.get(issue.node)}</BriefButton>}
+          {typeof issue.node === 'string' && stepTitles.has(issue.node) && <BriefButton size="sm" onClick={() => selectSetupStep(issue.node as string)}>{cardName(stepTitles.get(issue.node))}</BriefButton>}
           <span>{issueLine(issue, nameOf)}</span>
         </li>)}</ul>
       </details>}

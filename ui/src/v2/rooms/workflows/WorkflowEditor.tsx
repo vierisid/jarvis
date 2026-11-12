@@ -103,6 +103,7 @@ import {
 } from "./useWorkflowEditor";
 import { flattenSteps, pathToStep, withoutChosenZone } from "./tree";
 import { deleteStepPrompt, removeBranchPrompt } from "./destructive-edits";
+import { cardName } from "./readiness-text";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
 import { fetchFlowsForPicker, type FlowPickerEntry } from "./flow-picker-data";
@@ -385,7 +386,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
   /** Ask before deleting, naming the steps that go with it and the steps it would leave broken. */
   const confirmDeleteStep = useCallback((name: string): Promise<boolean> => {
     const step = editorRoots.flatMap((root) => flattenSteps(root)).find((entry) => entry.step.name === name)?.step;
-    return confirmDialog(step ? deleteStepPrompt(editorRoots, step) : `Delete step "${name}"?`);
+    return confirmDialog(step ? deleteStepPrompt(editorRoots, step) : `Delete step "${cardName(name)}"?`);
   }, [editorRoots]);
 
   // Per-step status snapshots for the run currently being overlaid on the

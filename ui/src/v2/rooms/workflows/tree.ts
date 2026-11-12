@@ -14,6 +14,7 @@
  */
 
 import type { FlowStepNode, FlatStep, ChainScope, PieceCatalogEntry, PieceInputSchema } from "./useWorkflowEditor";
+import { workflowExpressionReferences } from "../../../../../src/workflows/runtime/safe-expression";
 
 /* -------------------------------------------------------- clone + walks */
 
@@ -618,12 +619,30 @@ export function stepsOnChain(head: FlowStepNode | null | undefined): FlowStepNod
 }
 
 /** Does a step's input read `name` through a `{{ ... }}` reference (`{{step_1}}`, `{{step_1.field}}`,
- * a condition, a loop's items)? Plain text that only mentions the name does not count. */
+ * a condition, a loop's items)? Plain text that only mentions the name does not count, nor does a
+ * string literal or a property name inside an expression: the references are the ones the engine's
+ * own parser finds (`workflowExpressionReferences`, as readiness and `needsManualRunInput` use). An
+ * expression that does not parse counts when it mentions the name, so the confirm errs on naming. */
 export function stepReferences(step: FlowStepNode, name: string): boolean {
-  const settings = JSON.stringify(step.settings ?? {});
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const reads = new RegExp(`(^|[^\\w.$])${escaped}(?![\\w])`);
-  for (const match of settings.matchAll(/\{\{([\s\S]*?)\}\}/g)) if (reads.test(match[1]!)) return true;
+  const mentions = new RegExp(`(^|[^\\w.$])${escaped}(?![\\w$])`);
+  const pending: unknown[] = [step.settings ?? {}];
+  const seen = new Set<object>();
+  let visited = 0;
+  while (pending.length) {
+    if (++visited > 20_000) return false;
+    const value = pending.pop();
+    if (typeof value === "string") {
+      if (!value.includes("{{")) continue;
+      for (const [, expression] of value.matchAll(/\{\{([\s\S]*?)\}\}/g)) {
+        try { if (workflowExpressionReferences(expression!).has(name)) return true; }
+        catch { if (mentions.test(expression!)) return true; }
+      }
+    } else if (value && typeof value === "object" && !seen.has(value)) {
+      seen.add(value);
+      pending.push(...Object.values(value));
+    }
+  }
   return false;
 }
 
