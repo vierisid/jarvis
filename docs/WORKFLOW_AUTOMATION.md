@@ -952,6 +952,39 @@ HTTP request specifics:
   for the run's list (`GET /v1/jarvis/read-hosts`, engine token) and a file
   URL whose host is not listed, or a redirect off the list, fails the step
   naming the host and the list.
+- **What the card says, and what is refused before it.** An HTTP or GraphQL
+  request's card (and its Needs you entry) says what will happen in words,
+  naming the method, the host and the path ("Jarvis wants to send a POST
+  request to api.stripe.com/v1/refunds", "Jarvis wants to read
+  api.example.com/status", "Jarvis wants to send a GraphQL request to ...").
+  The path is taken from the URL after #1318's redaction, so the query,
+  fragment and userinfo never appear and a webhook's secret segment reads
+  `[redacted]`. A path segment of 20 or more token characters with a digit or
+  mixed case (#1318's Bearer-token shape, narrowed for paths) is masked as
+  `[redacted]` too; a long id such as a UUID is masked with it, and the
+  arguments keep the redacted URL whole. A segment is percent-decoded only
+  when the result is plain (letters, digits and the characters a path may hold
+  unencoded); anything else stays encoded. A `{{...}}` the engine has not
+  resolved reads `[set when the step runs]`, and an unresolved or unparsable
+  host reads "a web address set when the step runs". A sentence over 600
+  characters, or a URL the input projection cut, is refused
+  (`CARD_CANNOT_SHOW`) rather than shown cut. The sentence rides in the effect
+  target's `intent`, like every other per-step card sentence.
+  Its reason line says why in words ("not on the workflow's list of sites it
+  may read without asking", "Sending a request to another server needs your
+  approval") in place of the engine's generic governed-category sentence only;
+  an override's, a context rule's or a profile's reason is shown as before,
+  and so is the engine's own reason for a listed read that asks because reads
+  are governed. A request whose URL names `localhost` or an address the rules above never
+  allow (and, on a hosted install, any private address) is refused before a
+  card is raised: "Jarvis does not send requests to addresses on this computer
+  or local network." A name that only resolves to such an address is still
+  refused by the guard when it connects. A step already recorded (a card
+  raised before the install's rule changed) is not refused early: the guard
+  refuses it when it runs, and a tracked send is recorded as not sent.
+  `parse_url` makes no request, so it
+  never asks and is never held to the read list. The read list refuses the
+  same hosts when a person adds them (400), since a read there could never run.
 - **Read list (#1153).** A body-less GET or HEAD still carries what its URL and
   headers hold to the host it names, so it runs without a card only when that
   host is on the flow's read list (`POST /api/workflows/:id/read-hosts`
