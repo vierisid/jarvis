@@ -364,12 +364,15 @@ export class AgentService implements Service, IAgentService {
     // The existing classic path supports multimodal blocks and scoped history,
     // and seeds the turn's taint from `untrustedSources`, which the conv path
     // does not: a turn that starts on outside content runs there (#1155).
-    if (this.convOrchestrator && !conversation?.attachmentContent?.length && !conversation?.untrustedSources?.length) {
+    // Read once: a hot reload that removes the conversation tier mid-turn
+    // must not pull the orchestrator out from under this turn (#1435).
+    const conv = this.convOrchestrator;
+    if (conv && !conversation?.attachmentContent?.length && !conversation?.untrustedSources?.length) {
       // Both halves travel now (#571). This branch used to drop `siteContext`
       // AND `scope`, which made a project-scoped chat on every hosted install
       // the pre-#561 state exactly: the generic file and shell tools present,
       // and not even the prompt line that used to be their only restraint.
-      return this.streamMessageConv(text, channel, siteContext, scope, contextKey, conversation, carry);
+      return this.streamMessageConv(conv, text, channel, siteContext, scope, contextKey, conversation, carry);
     }
 
     const systemPrompt = this.buildFullSystemPromptParts(channel, text);
@@ -412,6 +415,8 @@ export class AgentService implements Service, IAgentService {
    * then the final verbalization text appears.
    */
   private streamMessageConv(
+    // The orchestrator the turn started with, held for the whole turn.
+    conv: ConvOrchestrator,
     text: string,
     channel: string,
     siteContext?: string,
@@ -425,10 +430,6 @@ export class AgentService implements Service, IAgentService {
   } {
     const self = this;
     const stream = (async function* (): AsyncGenerator<LLMStreamEvent> {
-      if (!self.convOrchestrator) {
-        yield { type: 'error', error: 'Conv orchestrator not initialized' };
-        return;
-      }
       let fullText = '';
       try {
         const identity = self.buildUserIdentityBlock();
@@ -447,7 +448,7 @@ export class AgentService implements Service, IAgentService {
         // generator below yields only text/done events.
         const taskListener = self.convTaskEventListener ?? undefined;
 
-        for await (const event of self.convOrchestrator.streamTurn(text, {
+        for await (const event of conv.streamTurn(text, {
           userIdentity: identity,
           userProfile,
           recentDialogue,
@@ -629,8 +630,9 @@ export class AgentService implements Service, IAgentService {
       return await withMemoryRecall(async () => {
         let response: string;
 
-        if (this.convOrchestrator) {
-          response = await this.handleMessageConv(text, channel, scope, siteContext, undefined, undefined, carry);
+        const conv = this.convOrchestrator;
+        if (conv) {
+          response = await this.handleMessageConv(conv, text, channel, scope, siteContext, undefined, undefined, carry);
         } else {
           const systemPrompt = this.buildFullSystemPromptParts(channel, text);
           if (siteContext) systemPrompt.dynamic += '\n\n' + siteContext;
@@ -724,8 +726,9 @@ export class AgentService implements Service, IAgentService {
           return await this.handleForwardedMessage(text, channel, history, thread.forwarded === true, link);
         }
         let response: string;
-        if (this.convOrchestrator) {
-          response = await this.handleMessageConv(text, channel, null, undefined, history, thread.contextKey, link);
+        const conv = this.convOrchestrator;
+        if (conv) {
+          response = await this.handleMessageConv(conv, text, channel, null, undefined, history, thread.contextKey, link);
         } else {
           const systemPrompt = this.buildFullSystemPromptParts(channel, text);
           response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, null, { history }, link);
@@ -851,6 +854,8 @@ export class AgentService implements Service, IAgentService {
    * delegate or answer directly.
    */
   private async handleMessageConv(
+    // The orchestrator the turn started with, held for the whole turn (#1435).
+    conv: ConvOrchestrator,
     text: string,
     channel: string = 'websocket',
     scope?: TurnToolScope | null,
@@ -862,17 +867,13 @@ export class AgentService implements Service, IAgentService {
     // The turn's taint carry-over, handed to every task it runs.
     carry?: TurnTaintLink | null,
   ): Promise<string> {
-    if (!this.convOrchestrator) {
-      // Should be unreachable - caller checks this.convOrchestrator first.
-      throw new Error('Conv orchestrator not initialized');
-    }
     const identity = this.buildUserIdentityBlock();
     // No caller of handleMessage stores its message first today; this keeps
     // the non-streaming path in step with streamMessageConv, so one that does
     // cannot send it twice (#912). `dialogue` comes already stripped
     // (handleThreadMessage).
     const recentDialogue = dialogue ?? withoutTrailingTurn(await this.loadRecentDialogue(channel), text);
-    const result = await this.convOrchestrator.processTurn(
+    const result = await conv.processTurn(
       text,
       {
         userIdentity: identity,
@@ -1038,7 +1039,9 @@ export class AgentService implements Service, IAgentService {
    * running in classic mode.
    */
   getTaskRegistry(): TaskRegistry | null {
-    return this.taskRegistry;
+    // Kept across a hot reload that removes the conversation tier, so paused
+    // tasks come back when it is re-added; classic mode cannot answer them.
+    return this.convOrchestrator ? this.taskRegistry : null;
   }
 
   // --- Private methods ---
@@ -1127,34 +1130,55 @@ export class AgentService implements Service, IAgentService {
     // Phase 4: initialize conv-tier infrastructure ONLY when the user has
     // configured llm.tiers.conversation. Otherwise we stay in classic
     // single-orchestrator mode (and handleMessage uses this.orchestrator).
-    if (this.llmManager.hasConversationTier()) {
-      // Persist task records so paused (needs_input) tasks survive daemon
-      // restarts. getDb is called lazily (resolver function) so a DB re-open
-      // between hot-reloads stays consistent. hydrate() runs immediately to
-      // reconcile any tasks that were in-flight at shutdown.
+    this.syncConversationTier();
+  }
+
+  /**
+   * Make the router-first conversation layer match the tier map. Called at
+   * boot and again after every provider/tier hot reload: the orchestrator is
+   * built from the tier map, so a save that adds or removes the conversation
+   * tier changes which chat path runs. Without this a "saved and applied"
+   * multi-tier setting kept chatting through the old path until restart.
+   * Turns already running keep the orchestrator they started with (each
+   * entry reads the field once), but the manager is shared: their next model
+   * call already sees the new providers and tier map.
+   */
+  syncConversationTier(): void {
+    const wanted = this.llmManager.hasConversationTier();
+    if (!wanted) {
+      if (this.convOrchestrator) {
+        this.convOrchestrator = null;
+        console.log('[AgentService] Conversation tier removed - classic orchestrator mode.');
+      } else {
+        console.log('[AgentService] No conversation tier - classic orchestrator mode.');
+      }
+      return;
+    }
+    if (this.convOrchestrator) return;
+    // Persist task records so paused (needs_input) tasks survive daemon
+    // restarts. getDb is called lazily (resolver function) so a DB re-open
+    // between hot-reloads stays consistent. hydrate() runs immediately to
+    // reconcile any tasks that were in-flight at shutdown.
+    if (!this.taskRegistry) {
       this.taskRegistry = new TaskRegistry({ db: () => { try { return getDb(); } catch { return null; } } });
       this.taskRegistry.hydrate();
-      // Task runner: route delegations through the primary orchestrator so
-      // task tiers run with the full tool registry, role prompt, authority
-      // gating, and Jarvis-specific feature knowledge. Uses processTaskCall
-      // (not processMessage) so the LLM has access to the
-      // `ask_for_clarification` tool for pause/resume and the conversation
-      // buffer is scoped to one task (not polluting the primary agent's
-      // global history).
-      const runner = this.taskRunner();
-      this.taskDispatcher = new TaskDispatcher(this.llmManager, this.taskRegistry, runner);
-      this.dialogueCompactor = new DialogueCompactor(this.llmManager);
-      const persona = this.buildPersona();
-      this.convOrchestrator = new ConvOrchestrator(
-        this.llmManager,
-        this.taskRegistry,
-        this.taskDispatcher,
-        persona,
-      );
-      console.log('[AgentService] Conversation tier configured - router-first mode active.');
-    } else {
-      console.log('[AgentService] No conversation tier - classic orchestrator mode.');
     }
+    // Task runner: route delegations through the primary orchestrator so
+    // task tiers run with the full tool registry, role prompt, authority
+    // gating, and Jarvis-specific feature knowledge. Uses processTaskCall
+    // (not processMessage) so the LLM has access to the
+    // `ask_for_clarification` tool for pause/resume and the conversation
+    // buffer is scoped to one task (not polluting the primary agent's
+    // global history).
+    this.taskDispatcher ??= new TaskDispatcher(this.llmManager, this.taskRegistry, this.taskRunner());
+    this.dialogueCompactor ??= new DialogueCompactor(this.llmManager);
+    this.convOrchestrator = new ConvOrchestrator(
+      this.llmManager,
+      this.taskRegistry,
+      this.taskDispatcher,
+      this.buildPersona(),
+    );
+    console.log('[AgentService] Conversation tier configured - router-first mode active.');
   }
 
   /**

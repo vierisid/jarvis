@@ -1630,6 +1630,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             const { saveLLMSettings, hotReloadLLMProviders } = await import('./llm-settings.ts');
             saveLLMSettings(ctx.config, body.llm as any);
             hotReloadLLMProviders(ctx.config, ctx.agentService.getLLMManager());
+            ctx.agentService.syncConversationTier();
           }
 
           // 2. STT + TTS + the setup-completed flag in ONE config write.
@@ -1933,6 +1934,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // Hot-reload providers on the shared LLMManager
           const llmManager = ctx.agentService.getLLMManager();
           hotReloadLLMProviders(ctx.config, llmManager);
+          // Chat's router-first layer is built from the tier map: follow it now.
+          ctx.agentService.syncConversationTier();
 
           return json({ ok: true, message: 'LLM configuration saved and applied.' });
         } catch (err) {
