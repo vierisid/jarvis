@@ -7,7 +7,7 @@
  * away: `show` below is the prototype's `show`, and each kind of line maps to
  * one of its `tell`, `propose`, `sheet`, `work` and `sending`.
  */
-import { NOTCH_APPS } from '../../../../src/notch/protocol.ts';
+import { NOTCH_APPS, NOTCH_MOODS } from '../../../../src/notch/protocol.ts';
 import type {
   NotchAnswerAct, NotchApp, NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage, NotchWord,
 } from '../../../../src/notch/protocol.ts';
@@ -569,6 +569,7 @@ export function createNotchSurface(
         case 'state': {
           count = Math.max(0, Math.floor(Number(message.count) || 0));
           shownCount = count;
+          restMood = message.face && (NOTCH_MOODS as readonly string[]).includes(message.face) ? message.face : 'idle';
           if (message.line) {
             edge.appear();
             showLine(structuredClone(message.line), true);
@@ -592,6 +593,12 @@ export function createNotchSurface(
           return;
         case 'rest':
           if (born) rest();
+          return;
+        case 'face':
+          if (!(NOTCH_MOODS as readonly string[]).includes(message.mood)) return;
+          restMood = message.mood;
+          // At rest it shows at once; under a line it waits for the rest.
+          if (born && !cur) eyes.setMood(restMood);
           return;
         case 'count':
           count = Math.max(0, Math.floor(Number(message.count) || 0));

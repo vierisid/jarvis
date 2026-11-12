@@ -12,7 +12,7 @@
  * See docs/notch/README.md and ./protocol.ts.
  */
 import { NOTCH_BIRTHS, NOTCH_PROTOCOL_VERSION, parseNotchFromPage } from './protocol.ts';
-import type { NotchBlock, NotchFromPage, NotchLine, NotchPart, NotchToPage } from './protocol.ts';
+import type { NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage } from './protocol.ts';
 
 /** The desktop app event that carries one message from the page. */
 export const NOTCH_MESSAGE_EVENT = 'notch.message';
@@ -31,6 +31,7 @@ export type NotchUpdate = Omit<Extract<NotchToPage, { type: 'update' }>, 'type' 
 export class NotchSurface {
   private line: NotchLine | null = null;
   private count = 0;
+  private face: NotchMood = 'idle';
   /** Desktop apps whose page has said hello on its present connection. */
   private readonly pages = new Set<string>();
   /** Desktop apps whose page has been seen at all since the brain started. */
@@ -71,6 +72,13 @@ export class NotchSurface {
   setCount(count: number): void {
     this.count = Math.max(0, Math.floor(count));
     this.push({ type: 'count', count: this.count });
+  }
+
+  /** The face the notch has at rest from now on. It is kept, and a page that comes back has it. */
+  setFace(mood: NotchMood): void {
+    if (mood === this.face) return;
+    this.face = mood;
+    this.push({ type: 'face', mood });
   }
 
   /** Changes the line on the notch. Ignored unless `id` is that line. */
@@ -134,6 +142,7 @@ export class NotchSurface {
       }
       this.pages.add(sidecarId);
       const state: NotchToPage = { type: 'state', line: this.line, count: this.count };
+      if (this.face !== 'idle') state.face = this.face;
       // The first time a page appears with nothing to say, the notch is born.
       // A page that comes back, or comes up in the middle of a line, just is.
       if (!this.met.has(sidecarId) && !this.line) {

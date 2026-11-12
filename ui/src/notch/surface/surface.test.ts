@@ -286,6 +286,34 @@ describe('rest, the count and the eyes', () => {
     surface.receive({ type: 'act', eye: false });
     expect($('.nin')?.dataset.eye).toBeUndefined();
   });
+
+  test('a face is the look the notch has at rest, and it comes back after a line', async () => {
+    surface.receive({ type: 'face', mood: 'closed' });
+    expect($('.nin')?.dataset.mood).toBe('closed');
+    show({ id: 's', kind: 'say', say: ['Everything is stopped.'], ms: 60, mood: 'careful' });
+    expect($('.nin')?.dataset.mood).toBe('careful');
+    surface.receive({ type: 'rest' });
+    expect(body()).toBe('rest');
+    expect($('.nin')?.dataset.mood).toBe('closed');
+    // Under a line it waits: the line keeps its own face.
+    show({ id: 'o', kind: 'offer', say: ['Reply?'], yes: 'show', mood: 'curious' });
+    surface.receive({ type: 'face', mood: 'idle' });
+    expect($('.nin')?.dataset.mood).toBe('curious');
+    surface.receive({ type: 'rest' });
+    expect($('.nin')?.dataset.mood).toBe('idle');
+    // A face that is not one is ignored.
+    surface.receive({ type: 'face', mood: 'furious' } as never);
+    expect($('.nin')?.dataset.mood).toBe('idle');
+  });
+
+  test('a page that comes up is told the face along with everything else', () => {
+    surface.destroy();
+    root.replaceChildren();
+    surface = createNotchSurface(root, (message) => sent.push(message), { focus: (take) => focus.push(take), reducedMotion: true });
+    surface.receive({ type: 'state', line: null, count: 2, face: 'closed' });
+    expect(body()).toBe('rest');
+    expect($('.nin')?.dataset.mood).toBe('closed');
+  });
 });
 
 describe('the keys', () => {

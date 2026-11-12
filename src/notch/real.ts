@@ -15,6 +15,8 @@ import type { CommitmentEvent, CommitmentRunner } from '../daemon/commitment-exe
 import { NOTCH_FIXTURE_ORIGIN, createNotchFixtures, notchFixturePromiseRun } from './fixtures.ts';
 import type { NotchFixtures } from './fixtures.ts';
 import { NotchInbox } from './inbox.ts';
+import { attachNotchPause } from './pause.ts';
+import type { NotchPauseDeps } from './pause.ts';
 import { attachNotchPromises } from './promises.ts';
 import type { NotchClock } from './stage.ts';
 import type { NotchSurface } from './surface.ts';
@@ -46,6 +48,8 @@ export interface NotchRealDeps {
   };
   /** How often to look for what is new. */
   lookMs?: number;
+  /** The product's pause: Esc twice pauses through it, and the notch shows its state whoever changed it. */
+  emergency?: NotchPauseDeps['controller'];
   /** The clock the lines on the notch run on. Tests give one they can wind forward. */
   clock?: NotchClock;
   log?: (line: string) => void;
@@ -85,6 +89,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   if (promises && appendFixtureLog) {
     promises.executor.setOriginRunner(NOTCH_FIXTURE_ORIGIN, notchFixturePromiseRun(appendFixtureLog));
   }
+  const stopPause = deps.emergency ? attachNotchPause(surface, inbox, { controller: deps.emergency, log }) : () => {};
   const fixtures = createNotchFixtures({
     approvalManager: deps.approvalManager,
     deliverApproval: deps.deliverApproval,
@@ -108,6 +113,6 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   return {
     inbox, approvals, fixtures,
     showing: () => surface.listening() > 0,
-    stop: () => { clearInterval(timer); stopPromises(); },
+    stop: () => { clearInterval(timer); stopPromises(); stopPause(); },
   };
 }
