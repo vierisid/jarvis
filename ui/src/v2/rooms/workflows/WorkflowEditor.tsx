@@ -103,8 +103,8 @@ import {
 } from "./useWorkflowEditor";
 import { flattenSteps, pathToStep, withoutChosenZone } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
-import { TRIGGER_KINDS, detectTriggerKind, manualTriggerFields } from "./trigger-kinds";
-import { manualRunInput } from "../../../brief/host/InputDialog";
+import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
+import { askManualRunPayload } from "./manual-run-payload";
 import { fetchFlowsForPicker, type FlowPickerEntry } from "./flow-picker-data";
 import { useListNav } from "./use-list-nav";
 import { useLibrary, type LibraryEntry as InstallableLibraryEntry } from "./useLibrary";
@@ -708,14 +708,11 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
       );
       if (!proceed) return;
     }
-    const fields = manualTriggerFields(editor.version?.trigger);
-    let payload: Record<string, unknown> | undefined;
-    if (fields.length) {
-      const entered = await manualRunInput(undefined, fields);
-      if (entered === null) return;
-      payload = entered;
-    }
-    const result = await runs.start(payload);
+    // The fields of the version the server runs (published, else the saved
+    // draft), not of this editor's draft or unsaved edits.
+    const asked = await askManualRunPayload(flowId);
+    if (asked === null) return;
+    const result = await runs.start(asked.payload);
     if (result.ok) {
       setActionMessage({ tone: "ok", text: "Run queued" });
       // Open the panel automatically so the user can watch progress.
@@ -724,7 +721,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
       setActionMessage({ tone: "warn", text: `Run failed: ${result.message}` });
     }
     window.setTimeout(() => setActionMessage(null), 2500);
-  }, [flowId, editor.dirty, editor.hasInvalidJson, editor.version?.trigger, runs]);
+  }, [flowId, editor.dirty, editor.hasInvalidJson, runs]);
 
   // Count of non-terminal runs surfaced as a badge on the Runs button so
   // users see "something's still going" without having to open the panel.
