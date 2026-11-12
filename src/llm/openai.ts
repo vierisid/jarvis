@@ -532,11 +532,12 @@ export class OpenAIProvider implements LLMProvider {
   protected normalizeUsage(usage: OpenAIResponse['usage']): LLMResponse['usage'] {
     // Every wire count is checked first (cleanTokenCount): a gateway that sends
     // null, text, a negative or an absurd number must not turn into NaN here.
-    const cached = cleanTokenCount(usage?.prompt_tokens_details?.cached_tokens);
-    const created = cleanTokenCount(usage?.cache_creation_input_tokens);
+    const from = (field: string) => ({ provider: this.name, field });
+    const cached = cleanTokenCount(usage?.prompt_tokens_details?.cached_tokens, from('cached_tokens'));
+    const created = cleanTokenCount(usage?.cache_creation_input_tokens, from('cache_creation_input_tokens'));
     return {
-      input_tokens: Math.max(0, cleanTokenCount(usage?.prompt_tokens) - cached - created),
-      output_tokens: cleanTokenCount(usage?.completion_tokens),
+      input_tokens: Math.max(0, cleanTokenCount(usage?.prompt_tokens, from('prompt_tokens')) - cached - created),
+      output_tokens: cleanTokenCount(usage?.completion_tokens, from('completion_tokens')),
       ...(usage?.prompt_tokens_details?.cached_tokens !== undefined ? { cache_read_input_tokens: cached } : {}),
       ...(usage?.cache_creation_input_tokens !== undefined ? { cache_creation_input_tokens: created } : {}),
     };

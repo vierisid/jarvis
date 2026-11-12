@@ -399,7 +399,7 @@ export class LLMManager {
           spent,
         );
         // The numbers a provider reports are checked once, here, for every caller.
-        const response = { ...reported, usage: cleanUsage(reported.usage) };
+        const response = { ...reported, usage: cleanUsage(reported.usage, provider.name) };
         addUsage(spent, response.usage);
         recordUsage({
           tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
@@ -490,7 +490,7 @@ export class LLMManager {
           spent,
         )) {
           if (event.type === 'done') {
-            finalResponse = { ...event.response, usage: cleanUsage(event.response.usage) };
+            finalResponse = { ...event.response, usage: cleanUsage(event.response.usage, provider.name) };
             yield { ...event, response: finalResponse };
             continue;
           }
@@ -730,7 +730,7 @@ export class LLMManager {
           if (LLMManager.isDebugging && attempt > 1) {
             console.log(`[DEBUG] LLM ${providerName} succeeded on retry attempt ${attempt}`);
           }
-          return result;
+          return { ...result, usage: cleanUsage(result.usage, providerName) };
         } catch (err) {
           if (err instanceof BackgroundThrottled) throw err;
           options?.signal?.throwIfAborted();
@@ -827,7 +827,7 @@ export class LLMManager {
             if (event.type === 'text' || event.type === 'tool_call') {
               emittedContent = true;
             }
-            yield event;
+            yield event.type === 'done' ? { ...event, response: { ...event.response, usage: cleanUsage(event.response.usage, providerName) } } : event;
           }
 
           if (!hasError) {

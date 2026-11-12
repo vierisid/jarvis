@@ -375,8 +375,10 @@ export class NVIDIAProvider implements LLMProvider {
       content,
       tool_calls,
       usage: {
-        input_tokens: response.usage.prompt_tokens,
-        output_tokens: response.usage.completion_tokens,
+        // A missing usage block is unknown (0), not a lost reply; the manager
+        // checks every count (cleanUsage).
+        input_tokens: response.usage?.prompt_tokens ?? 0,
+        output_tokens: response.usage?.completion_tokens ?? 0,
       },
       model: response.model,
       finish_reason: this.mapFinishReason(choice!.finish_reason),

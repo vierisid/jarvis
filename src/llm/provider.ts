@@ -54,15 +54,46 @@ export const MAX_TOKENS_PER_CALL = 100_000_000;
  * stored, never clamped to a plausible-looking number. Nothing here throws, so
  * a bad number cannot cost a call its record.
  */
-export function cleanTokenCount(value: unknown): number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_TOKENS_PER_CALL ? value : 0;
+export function cleanTokenCount(value: unknown, from?: { provider: string; field: string }): number {
+  const kind = badTokenCountKind(value);
+  if (kind === null) return value as number;
+  if (from && value !== undefined) warnRejectedCount(from.provider, from.field, kind);
+  return 0;
 }
 
-/** `usage` with every count passed through cleanTokenCount. */
-export function cleanUsage(usage: Partial<LLMUsage> | null | undefined): LLMUsage {
-  const out: LLMUsage = { input_tokens: cleanTokenCount(usage?.input_tokens), output_tokens: cleanTokenCount(usage?.output_tokens) };
-  if (usage?.cache_read_input_tokens !== undefined) out.cache_read_input_tokens = cleanTokenCount(usage.cache_read_input_tokens);
-  if (usage?.cache_creation_input_tokens !== undefined) out.cache_creation_input_tokens = cleanTokenCount(usage.cache_creation_input_tokens);
+/** Why `value` is not a token count, or null when it is one. Never the value itself. */
+export function badTokenCountKind(value: unknown): string | null {
+  if (value === null) return 'null';
+  if (typeof value !== 'number') return `not a number (${Array.isArray(value) ? 'list' : typeof value})`;
+  if (!Number.isFinite(value)) return 'not a finite number';
+  if (value < 0) return 'negative';
+  if (!Number.isInteger(value)) return 'fractional';
+  if (value > MAX_TOKENS_PER_CALL) return `above ${MAX_TOKENS_PER_CALL}`;
+  return null;
+}
+
+/** Each provider, field and kind is reported once per process, so a gateway
+ * that is wrong on every call cannot flood the log. Only the kind is logged,
+ * never the value or the body it came in. */
+const rejectedCountsSeen = new Set<string>();
+function warnRejectedCount(provider: string, field: string, kind: string): void {
+  const key = `${provider}|${field}|${kind}`;
+  if (rejectedCountsSeen.has(key)) return;
+  if (rejectedCountsSeen.size >= 200) return;
+  rejectedCountsSeen.add(key);
+  console.warn(`[LLM] ${provider} reported ${field} that is ${kind}; counted as 0 (unknown)`);
+}
+
+/** `usage` with every count passed through cleanTokenCount. With `provider`,
+ * a count that is present but rejected is logged (see warnRejectedCount). */
+export function cleanUsage(usage: Partial<LLMUsage> | null | undefined, provider?: string): LLMUsage {
+  const from = (field: string) => (provider ? { provider, field } : undefined);
+  const out: LLMUsage = {
+    input_tokens: cleanTokenCount(usage?.input_tokens, from('input_tokens')),
+    output_tokens: cleanTokenCount(usage?.output_tokens, from('output_tokens')),
+  };
+  if (usage?.cache_read_input_tokens !== undefined) out.cache_read_input_tokens = cleanTokenCount(usage.cache_read_input_tokens, from('cache_read_input_tokens'));
+  if (usage?.cache_creation_input_tokens !== undefined) out.cache_creation_input_tokens = cleanTokenCount(usage.cache_creation_input_tokens, from('cache_creation_input_tokens'));
   return out;
 }
 

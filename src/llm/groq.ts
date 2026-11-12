@@ -8,7 +8,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
-import { classifyHttpStatus, LLMProviderError, parseRetryAfterMs } from './provider.ts';
+import { classifyHttpStatus, cleanTokenCount, LLMProviderError, parseRetryAfterMs } from './provider.ts';
 type GroqContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
@@ -631,13 +631,16 @@ export class GroqProvider implements LLMProvider {
         // Normalized semantics (see LLMResponse.usage): input_tokens counts
         // only UNCACHED prompt tokens. Groq's automatic prefix caching
         // reports cached tokens OpenAI-style as a subset of prompt_tokens.
+        // Each count is checked first (cleanTokenCount): a missing usage block
+        // or a bad cached figure cannot throw or zero out the prompt count.
         input_tokens: Math.max(
           0,
-          response.usage.prompt_tokens - (response.usage.prompt_tokens_details?.cached_tokens ?? 0),
+          cleanTokenCount(response.usage?.prompt_tokens, { provider: this.name, field: 'prompt_tokens' })
+            - cleanTokenCount(response.usage?.prompt_tokens_details?.cached_tokens, { provider: this.name, field: 'cached_tokens' }),
         ),
-        output_tokens: response.usage.completion_tokens,
-        ...(response.usage.prompt_tokens_details?.cached_tokens !== undefined
-          ? { cache_read_input_tokens: response.usage.prompt_tokens_details.cached_tokens } : {}),
+        output_tokens: cleanTokenCount(response.usage?.completion_tokens, { provider: this.name, field: 'completion_tokens' }),
+        ...(response.usage?.prompt_tokens_details?.cached_tokens !== undefined
+          ? { cache_read_input_tokens: cleanTokenCount(response.usage.prompt_tokens_details.cached_tokens) } : {}),
       },
       model: response.model,
       finish_reason: this.mapFinishReason(choice!.finish_reason),
