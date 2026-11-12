@@ -11,6 +11,7 @@ import { enqueue, getJob } from './job-queue';
 import { saveWorkflowEffect, listWorkflowEffects } from './workflow-effect';
 import { ApprovalManager } from '../../../authority/approval';
 import { setSetting } from '../../../vault/settings';
+import { createCommitment } from '../../../vault/commitments';
 import { workflowLogsBase } from '../../sandbox-api/config';
 import {
   countRunsToPrune, getRunHistoryKeep, JOB_PAYLOAD_KEEP_DAYS, pruneJobPayloads, pruneRunHistory, resetRunHistorySizeCache,
@@ -153,17 +154,17 @@ describe('pruning finished runs', () => {
 });
 
 describe('dropping the input stored on finished jobs', () => {
-  test('after a week, for jobs of ended runs, whatever the setting', () => {
+  test('after a week, for jobs of ended runs, whatever the setting', async () => {
     const f = fixture();
     const old = f.run({ daysAgo: JOB_PAYLOAD_KEEP_DAYS + 3 }), fresh = f.run({ daysAgo: 1 });
-    expect(pruneJobPayloads()).toBe(1);
+    expect(await pruneJobPayloads()).toBe(1);
     expect(getJob(old.jobId)!.payload).toEqual({ runId: old.id });
     expect((getJob(fresh.jobId)!.payload as { payload?: unknown }).payload).toBeDefined();
-    expect(pruneJobPayloads()).toBe(0);
+    expect(await pruneJobPayloads()).toBe(0);
     expect(getRunHistoryKeep()).toBe('forever');
   });
 
-  test('keeps the input of a job whose run is still waiting, and the keys the queue reads', () => {
+  test('keeps the input of a job whose run is still waiting, and the keys the queue reads', async () => {
     const f = fixture();
     const parked = f.run({ daysAgo: 40, status: 'PAUSED' });
     const resume = enqueue({ jobType: 'RUN_FLOW', flowRunId: parked.id, payload: { runId: parked.id, executionType: 'RESUME', waitpointId: 'w1', resumePayload: { a: 1 } } });
@@ -171,10 +172,25 @@ describe('dropping the input stored on finished jobs', () => {
     const ended = f.run({ daysAgo: 40 });
     const endedResume = enqueue({ jobType: 'RUN_FLOW', flowRunId: ended.id, payload: { runId: ended.id, executionType: 'RESUME', waitpointId: 'w2', resumePayload: { a: 1 } } });
     getWorkflowDb().run("UPDATE workflow_job SET status = 'SUCCEEDED', updated = ? WHERE id = ?", [Date.now() - 40 * DAY, endedResume.id]);
-    pruneJobPayloads();
+    await pruneJobPayloads();
     expect(getJob(parked.jobId)!.payload).toMatchObject({ payload: { big: expect.any(String) } });
     expect(getJob(resume.id)!.payload).toMatchObject({ resumePayload: { a: 1 } });
     expect(getJob(endedResume.id)!.payload).toEqual({ runId: ended.id, executionType: 'RESUME', waitpointId: 'w2' });
+  });
+  test('slims a large backlog in batches, one pass over the table, and leaves malformed rows alone', async () => {
+    const f = fixture();
+    const r = f.run({ daysAgo: 30 });
+    const at = Date.now() - 30 * DAY;
+    const ids: string[] = [];
+    for (let i = 0; i < 1200; i++) {
+      const job = enqueue({ jobType: 'RUN_FLOW', flowRunId: r.id, payload: { runId: r.id, payload: { n: i } } });
+      ids.push(job.id);
+    }
+    getWorkflowDb().run("INSERT INTO workflow_job (id, job_type, status, payload, created, updated, scheduled_at) VALUES ('bad', 'RUN_FLOW', 'FAILED', '{not json', ?, ?, ?)", [at, at, at]);
+    getWorkflowDb().run("UPDATE workflow_job SET status = 'SUCCEEDED', updated = ? WHERE id != 'bad'", [at]);
+    expect(await pruneJobPayloads()).toBe(1201);
+    for (const id of [ids[0]!, ids[599]!, ids[1199]!]) expect(getJob(id)!.payload).toEqual({ runId: r.id });
+    expect((getWorkflowDb().query("SELECT payload FROM workflow_job WHERE id = 'bad'").get() as { payload: string }).payload).toBe('{not json');
   });
 });
 
@@ -205,5 +221,46 @@ describe('the daily clean-up', () => {
     await Bun.sleep(150);
     second();
     expect(exists(old.id)).toBe(false);
+  });
+});
+
+describe('history other features still rely on', () => {
+  const effect = (id: string, runId: string, flowId: string, versionId: string) => saveWorkflowEffect({ id, runId, projectId: 'p', flowId, versionId,
+    versionDigest: 'd', stepName: 's', executionPath: [], route: 'notify', toolName: 'workflow_notify', actionCategory: 'send_message',
+    requestDigest: 'r', arguments: {}, target: {}, provenance: {}, decision: 'allowed', reason: '', status: 'unknown', approvalId: null,
+    waitpointId: null, createdAt: Date.now() } as never);
+
+  test('keeps the runs of a removed workflow (only a purge deletes them) and still clears the others', async () => {
+    const f = fixture(), other = fixture();
+    const removed = f.run({ daysAgo: 300 }), plain = other.run({ daysAgo: 300 });
+    getWorkflowDb().run(`INSERT INTO brief_workflow_removals (receipt_id, flow_id, project_id, version_id, before_revision, removed_at, expires_at)
+      VALUES ('rcpt', ?, 'p', NULL, '{}', ?, ?)`, [f.flow.id, Date.now(), Date.now() + DAY]);
+    expect(countRunsToPrune('30d')).toBe(1);
+    expect((await pruneRunHistory('30d')).runs).toBe(1);
+    expect(exists(removed.id)).toBe(true);
+    expect(exists(plain.id)).toBe(false);
+  });
+
+  test('keeps a run whose effect still holds an unresolved cross-run identity, which only its recovery can resolve', async () => {
+    const f = fixture();
+    const uncertain = f.run({ daysAgo: 300, status: 'FAILED' }), settled = f.run({ daysAgo: 300, status: 'FAILED' });
+    effect('wfe_uncertain', uncertain.id, f.flow.id, f.version.id);
+    effect('wfe_settled', settled.id, f.flow.id, f.version.id);
+    getWorkflowDb().run("INSERT INTO workflow_effect_identity (identity, owner, completed) VALUES ('id-1', 'wfe_uncertain', 0), ('id-2', 'wfe_settled', 1)");
+    await pruneRunHistory('30d');
+    expect(exists(uncertain.id)).toBe(true);
+    expect(exists(settled.id)).toBe(false);
+    expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM workflow_effect_identity').get()).toEqual({ n: 2 });
+  });
+
+  test('keeps a run a planned task points at, and a sub-workflow call still waiting on its child', async () => {
+    const f = fixture();
+    const planned = f.run({ daysAgo: 300 }), child = f.run({ daysAgo: 300 }), loose = f.run({ daysAgo: 300 });
+    const work = createCommitment('Planned work');
+    getWorkflowDb().run("INSERT INTO commitment_work (work_id, mode, run_id, updated_at) VALUES (?, 'workflow', ?, ?)", [work.id, planned.id, Date.now()]);
+    getWorkflowDb().run(`INSERT INTO workflow_subflow_call (id, parent_flow_id, fingerprint, child_run_id, effect_id, version_id, version_digest, deadline, schema_json, result_json)
+      VALUES ('call', ?, 'fp', ?, 'e', ?, 'd', 0, '{}', NULL)`, [f.flow.id, child.id, f.version.id]);
+    await pruneRunHistory('30d');
+    expect([planned, child, loose].map((r) => exists(r.id))).toEqual([true, true, false]);
   });
 });

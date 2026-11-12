@@ -16,7 +16,10 @@
  *   - a run still on Today's list of failures to deal with (`open_failure`);
  *   - a run that is the child of a live run, or has a live child, or whose
  *     sub-workflow call has no result yet;
- *   - a run a planned task points at (`commitment_work`).
+ *   - a run a planned task points at (`commitment_work`);
+ *   - a run with an effect whose cross-run identity is still unresolved
+ *     (only that run's recovery can resolve it);
+ *   - a run of a removed workflow, whose history only a purge deletes.
  * The approvals' own rows (the Authority history) and audit rows are not run
  * history and stay.
  *
@@ -81,7 +84,15 @@ function eligibleSql(db: Database): string {
     `NOT EXISTS (SELECT 1 FROM flow_run c WHERE c.parent_run_id = r.id AND c.status IN ${LIVE})`,
     `(r.parent_run_id IS NULL OR NOT EXISTS (SELECT 1 FROM flow_run p WHERE p.id = r.parent_run_id AND p.status IN ${LIVE}))`,
     `NOT EXISTS (SELECT 1 FROM workflow_subflow_call s WHERE s.child_run_id = r.id AND s.result_json IS NULL)`,
+    // An uncertain write's cross-run identity outlives the run, but it is
+    // resolved (mark_done or release) only from that run's recovery: deleting
+    // the run would leave the identity fencing later items for good.
+    `NOT EXISTS (SELECT 1 FROM workflow_effect e JOIN workflow_effect_identity i ON i.owner = e.id AND i.completed = 0 WHERE e.run_id = r.id)`,
   ];
+  // A removed workflow keeps its history until a person purges it (#1096), and
+  // the brief_removed_run_purge trigger aborts any other delete of its runs, so
+  // one such run in a batch would fail every sweep.
+  if (hasTable(db, "brief_workflow_removals")) parts.push(`NOT EXISTS (SELECT 1 FROM brief_workflow_removals rm WHERE rm.flow_id = r.flow_id)`);
   if (hasTable(db, "open_failure")) parts.push(`NOT EXISTS (SELECT 1 FROM open_failure f WHERE f.run_id = r.id)`);
   if (hasTable(db, "approval_requests")) {
     const document = hasTable(db, "brief_decision_document")
@@ -122,7 +133,9 @@ export async function pruneRunHistory(keep: RunHistoryKeep, now = Date.now(), db
     const sql = eligibleSql(db);
     const batch = db.transaction((): { runIds: string[]; jobs: number } => {
       const runIds = db.query<{ id: string }, [number, number]>(
-        `SELECT r.id FROM flow_run r WHERE ${sql} ORDER BY COALESCE(r.finish_time, r.updated) LIMIT ?2`).all(cutoff, RETENTION_BATCH).map((r) => r.id);
+        // No ORDER BY: sorting would weigh every eligible run in each batch,
+        // and the order runs go in does not matter once they are all past the cut.
+        `SELECT r.id FROM flow_run r WHERE ${sql} LIMIT ?2`).all(cutoff, RETENTION_BATCH).map((r) => r.id);
       if (runIds.length === 0) return { runIds, jobs: 0 };
       const ids = JSON.stringify(runIds);
       const jobs = db.run(`DELETE ${JOBS_OF_RUNS}`, [ids]).changes;
@@ -147,19 +160,42 @@ export async function pruneRunHistory(keep: RunHistoryKeep, now = Date.now(), db
 /**
  * Drop the payload copy from finished job rows of ended runs (or of no run),
  * after JOB_PAYLOAD_KEEP_DAYS. Keeps the run id, execution type and waitpoint
- * the queue's own queries read. Returns how many rows were slimmed.
+ * the queue's own queries read. Walks the table once by rowid in batches of
+ * RETENTION_BATCH, letting the event loop go between them, because the first
+ * sweep on an existing install may slim every job it ever ran. Returns how
+ * many rows were slimmed.
  */
-export function pruneJobPayloads(now = Date.now(), db: Database = getWorkflowDb()): number {
+export async function pruneJobPayloads(now = Date.now(), db: Database = getWorkflowDb()): Promise<number> {
   const cutoff = now - JOB_PAYLOAD_KEEP_DAYS * DAY_MS;
-  return db.run(
-    `UPDATE workflow_job SET payload = json_remove(payload, '$.payload', '$.sampleData', '$.sampleInputOverride', '$.resumePayload')
-     WHERE status IN ('SUCCEEDED','FAILED','CANCELED') AND updated < ?1 AND json_valid(payload)
-       AND (json_type(payload, '$.payload') IS NOT NULL OR json_type(payload, '$.sampleData') IS NOT NULL
-            OR json_type(payload, '$.sampleInputOverride') IS NOT NULL OR json_type(payload, '$.resumePayload') IS NOT NULL)
-       AND NOT EXISTS (SELECT 1 FROM flow_run r WHERE r.status IN ${LIVE}
-            AND r.id = COALESCE(workflow_job.flow_run_id, CASE WHEN json_valid(workflow_job.payload) THEN json_extract(workflow_job.payload, '$.runId') END))`,
-    [cutoff],
-  ).changes;
+  let after = 0;
+  let slimmed = 0;
+  for (;;) {
+    const step = db.transaction((): { last: number; changes: number } | null => {
+      const rows = db.query<{ rid: number }, [number, number, number]>(
+        `SELECT rowid AS rid FROM workflow_job
+         -- Unary + keeps the planner on the rowid range: through the status
+         -- index it would sort every finished job again in each batch.
+         WHERE rowid > ?2 AND +status IN ('SUCCEEDED','FAILED','CANCELED') AND updated < ?1 AND json_valid(payload)
+           AND (json_type(payload, '$.payload') IS NOT NULL OR json_type(payload, '$.sampleData') IS NOT NULL
+                OR json_type(payload, '$.sampleInputOverride') IS NOT NULL OR json_type(payload, '$.resumePayload') IS NOT NULL)
+           AND NOT EXISTS (SELECT 1 FROM flow_run r WHERE r.status IN ${LIVE}
+                AND r.id = COALESCE(workflow_job.flow_run_id, CASE WHEN json_valid(workflow_job.payload) THEN json_extract(workflow_job.payload, '$.runId') END))
+         ORDER BY rowid LIMIT ?3`,
+      ).all(cutoff, after, RETENTION_BATCH);
+      if (rows.length === 0) return null;
+      const changes = db.run(
+        `UPDATE workflow_job SET payload = json_remove(payload, '$.payload', '$.sampleData', '$.sampleInputOverride', '$.resumePayload')
+         WHERE rowid IN (SELECT value FROM json_each(?))`,
+        [JSON.stringify(rows.map((r) => r.rid))],
+      ).changes;
+      return { last: rows[rows.length - 1]!.rid, changes };
+    }).immediate();
+    if (!step) break;
+    slimmed += step.changes;
+    after = step.last;
+    await yieldToEventLoop();
+  }
+  return slimmed;
 }
 
 export interface RunHistorySummary {
@@ -222,7 +258,7 @@ export function startRunHistoryRetention(
     if (running) return;
     running = true;
     try {
-      const slimmed = pruneJobPayloads();
+      const slimmed = await pruneJobPayloads();
       if (slimmed > 0) log(`[Retention] Dropped the stored input of ${slimmed} finished job(s) older than ${JOB_PAYLOAD_KEEP_DAYS} days`);
       const keep = getRunHistoryKeep();
       if (keep !== "forever") {

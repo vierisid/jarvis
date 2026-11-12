@@ -1831,14 +1831,17 @@ files with them.
 A run is never deleted while it is queued, running or paused, has an unresolved
 waitpoint or a pending or dispatching effect, is named by an open or approved
 approval card (or a kept decision document), is still on Today's list of
-failures to deal with, has a live parent or live child, or is pointed to by a
-planned task. Approval history and the audit trail are not run history and are
+failures to deal with, has a live parent or live child, is pointed to by a
+planned task, has an effect whose cross-run identity is still unresolved (only
+that run's recovery can resolve it), or belongs to a removed workflow (whose
+history only a purge deletes). Approval history and the audit trail are not run history and are
 not deleted. Today's time-saved and outcome figures cover the current week, so
 the shortest limit (30 days) does not change them.
 
 Separately, and whatever the setting, a finished job row keeps the key fields the
 queue reads (run id, execution type, waitpoint) but drops its copy of the input
-that started it (a webhook body, a manual run's input, sample data) after 7 days.
+that started it (a webhook body, a manual run's input, sample data) after 7 days,
+in batches of 500 rows.
 A job whose run is still live keeps it, because recovery of a run parked by an
 older version reads the original input.
 

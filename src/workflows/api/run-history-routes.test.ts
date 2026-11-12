@@ -53,6 +53,8 @@ test('saving a limit stores it and cleans up now; "forever" deletes nothing', as
   expect(getRunHistoryKeep()).toBe('90d');
   for (let i = 0; i < 50 && getFlowRun(old); i++) await Bun.sleep(20);
   expect(getFlowRun(old)).toBeNull();
+  // Let the background sweep find its last empty batch before afterEach closes the database.
+  await Bun.sleep(50);
   expect(getFlowRun(recent)).not.toBeNull();
 });
 
