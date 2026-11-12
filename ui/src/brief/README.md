@@ -277,7 +277,8 @@ is unchanged.
 - Slots are plain nodes supplied and gated by their owners; the layout invents no fallback cards.
   `slots.goal` renders through `PebbleCompanion` into the one companion slot `PebbleLayout` keeps above
   the conversation, so the goal stays mounted and above Pebble when chat opens. While chat is closed,
-  wheel input over the goal scrolls the room.
+  wheel input over the goal scrolls the room, and the card is placed from where the greeting really
+  sits, so notices above Today (paused, storage, connection) push it down instead of being covered.
 - `today/figma-reference.json` records the source values.
 - Outcomes and Recent activity (`today/outcomes/`, `today/activity/`) are read-only. `Outcomes` and
   `RecentActivity` take an `OutcomeBinding`; `outcomeView` passes it through only when `source` is
