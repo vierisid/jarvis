@@ -113,7 +113,7 @@ import type { CredentialResolver } from "../credentials/adapter";
 import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oauth2";
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
-import type { PieceLookup } from "../runtime/piece-catalog";
+import { userPieces, type PieceLookup } from "../runtime/piece-catalog";
 import { isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
@@ -912,7 +912,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       GET: () =>
         trapErrors(() => {
           if (!opts.pieceRegistry) return ok([]);
-          const list = opts.pieceRegistry.list().map((p) => ({
+          const list = userPieces(opts.pieceRegistry.list()).map((p) => ({
             name: p.name,
             displayName: p.displayName,
             description: p.description,

@@ -23,6 +23,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../../db";
@@ -198,10 +199,13 @@ describe("Phase L: plumbing smoke (connection resolver + store + run-progress)",
       // The action's `auth` input is censored to "**REDACTED**" in the
       // recorded envelope (the engine never echoes connection values back
       // through progress streams) but the resolved value DID reach
-      // context.auth -- proven by the accessToken in the output below.
+      // context.auth -- proven by the token's fingerprint in the output below.
+      // The token itself is never written into step output (run history).
       expect((envelope.input ?? {})["auth"]).toBe("**REDACTED**");
       const output = (envelope.output ?? {}) as Record<string, unknown>;
-      expect(output["accessToken"]).toBe(FAKE_TOKEN);
+      expect(output["accessToken"]).toBe("[redacted]");
+      expect(output["accessTokenFingerprint"]).toBe(createHash("sha256").update(FAKE_TOKEN).digest("hex").slice(0, 16));
+      expect(JSON.stringify(envelope)).not.toContain(FAKE_TOKEN);
       expect(output["storeValue"]).toBe("round-trip-payload");
       expect(output["storeReadBack"]).toBe("round-trip-payload");
       expect(output["projectId"]).toBe(DEFAULT_IDS.project);

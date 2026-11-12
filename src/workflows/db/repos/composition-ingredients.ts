@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_IDS, getWorkflowDb } from '../index';
-import type { PieceLookup } from '../../runtime/piece-catalog';
+import { userPieces, type PieceLookup } from '../../runtime/piece-catalog';
 import { actionContractVersion, ingredientLabel, ingredientPiece, ingredientUsageIssues,
   type CompositionIngredient, type ResolvedCompositionIngredient } from '../../runtime/composition-ingredients';
 
@@ -59,7 +59,7 @@ export class CompositionIngredients {
   /** Safe discovery for a future selector. Only installed/versioned actions are selectable. */
   list(offset = 0, query = '') {
     const choices: Array<{ selection: CompositionIngredient; displayName: string }> = [];
-    for (const piece of this.pieces.list()) {
+    for (const piece of userPieces(this.pieces.list())) {
       if (!piece.version) continue;
       for (const [actionName, action] of Object.entries(piece.actions)) choices.push({
         selection: { kind: 'library-action', id: piece.name, actionName, pieceVersion: piece.version, actionVersion: actionContractVersion(piece, actionName), required: true },
