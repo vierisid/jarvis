@@ -145,20 +145,23 @@ export class NotchInbox {
       this.start(entry, { unasked: true }, null);
       return;
     }
-    if (item.speaks && this.surface.listening() === 0) entry.missed = true;
+    // No notch was up, or everything was held: it gets its say when that ends.
+    if (item.speaks && (this.surface.listening() === 0 || this.holds.size > 0)) entry.missed = true;
     this.pushCount();
   }
 
-  /** A notch has come up. What arrived while there was none gets its say now. */
+  /**
+   * A notch has come up, or a hold has ended. Of what arrived in the
+   * meantime, one gets its say now: an urgent one first, then the oldest.
+   * The others had the same chance and are in the count.
+   */
   private cameUp(): void {
     this.shownCount = -1;
+    if (!this.free()) { this.pushCount(); return; }
     const missed = this.entries.filter((entry) => entry.missed).sort((a, b) => Number(b.item.urgent ?? false) - Number(a.item.urgent ?? false) || a.seq - b.seq);
+    for (const entry of missed) entry.missed = false;
     const first = missed[0];
-    if (first && this.free()) {
-      first.missed = false;
-      this.start(first, { unasked: true }, null);
-      return;
-    }
+    if (first) { this.start(first, { unasked: true }, null); return; }
     this.pushCount();
   }
 
@@ -214,7 +217,8 @@ export class NotchInbox {
   }
 
   release(reason: string): void {
-    this.holds.delete(reason);
+    if (!this.holds.delete(reason)) return;
+    if (this.holds.size === 0) this.cameUp();
   }
 
   /**

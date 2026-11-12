@@ -177,12 +177,18 @@ export type NotchApp = (typeof NOTCH_APPS)[number];
 /** Brain to page. */
 export type NotchToPage =
   /** The answer to hello: everything the notch should be showing, at once. */
-  | { type: 'state'; line: NotchLine | null; count: number; born?: NotchBirth }
+  | { type: 'state'; line: NotchLine | null; count: number; born?: NotchBirth; face?: NotchMood }
   | { type: 'show'; line: NotchLine }
   /** Back to the eyes. */
   | { type: 'rest' }
   /** How many things wait. Shown beside the eyes at rest. */
   | { type: 'count'; count: number }
+  /**
+   * The face the notch has at rest, until told otherwise: `closed` while
+   * everything is stopped. Unlike a mood given with `act`, the brain keeps it,
+   * so a page that comes back has the same face.
+   */
+  | { type: 'face'; mood: NotchMood }
   /**
    * A change to the line on screen, in place: steps done, a new sentence,
    * words heard, or a sheet's content after one of its buttons was pressed.
