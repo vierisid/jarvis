@@ -35,5 +35,8 @@ describe('the notch page route', () => {
     for (const name of ['__notch_set_outline', '__notch_focus', '__notch_log']) {
       expect(sidecar).toContain(`bind("${name}"`);
     }
+    // And one the other way: the desktop app tells the page where the pointer is.
+    expect(html).toContain('window.__notch_cursor = ');
+    expect(sidecar).toContain('window.__notch_cursor&&window.__notch_cursor(');
   });
 });

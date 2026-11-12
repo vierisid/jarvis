@@ -26,12 +26,22 @@ const (
 	notchEsDisplayRequired    = 0x00000002
 	// CreatePolygonRgn fill mode.
 	notchWinding = 2
+	// SetWindowLongPtr index of a top-level window's owner.
+	notchGwlpHwndParent = -8
 )
 
 // notchWindow is what the window's own goroutines share. One notch per
 // process, so one of these.
+//
+// The notch is two windows on Windows. A web view can only be cut along whole
+// pixels, which leaves a stair-stepped edge. So the edge is drawn by a second
+// window underneath: a plain layered window that holds nothing but the black
+// shape, anti-aliased, and lets every click through. The web view is cut one
+// pixel inside that shape, so its own hard edge always lies on black.
 type notchWindow struct {
 	hwnd       uintptr
+	backdrop   *notchBackdrop
+	dpi        int
 	loaded     atomic.Bool    // the page has loaded and may be shown
 	hidden     atomic.Bool    // hidden by the fullscreen rule
 	hasFocus   atomic.Bool    // the page asked for the keyboard and has it
@@ -51,15 +61,14 @@ func notchWindowFor(handle unsafe.Pointer) *notchWindow {
 
 // platformNotchSetUp sizes the window for the display it is on, puts it at the
 // top centre of the main display, cuts it to nothing until the page reports an
-// outline, and starts the fullscreen watch. It runs once, before the page
-// loads, while the window is still hidden.
+// outline, creates the backdrop, and starts the fullscreen watch. It runs once
+// on the window's own thread, before the page loads, while the window is
+// still hidden.
 func platformNotchSetUp(handle unsafe.Pointer, done <-chan struct{}) {
 	if handle == nil {
 		return
 	}
 	hwnd := uintptr(handle)
-	w := &notchWindow{hwnd: hwnd}
-	notchWin.Store(w)
 
 	// Per-monitor DPI: the window is given in logical pixels and Windows
 	// wants physical ones.
@@ -74,14 +83,41 @@ func platformNotchSetUp(handle unsafe.Pointer, done <-chan struct{}) {
 	screenW, screenH := platformGetScreenSize()
 	x := notchTopCentre(screenW, width)
 
+	w := &notchWindow{hwnd: hwnd, dpi: int(dpi)}
+	backdrop, err := newNotchBackdrop(x, 0, width, height)
+	if err != nil {
+		// Without it the notch still works, with a hard edge.
+		log.Printf("[notch] no smooth edge: %v", err)
+	} else {
+		w.backdrop = backdrop
+		// An owned window always stays above its owner, so the web view can
+		// never slip behind its own edge.
+		setWindowLong(hwnd, notchGwlpHwndParent, backdrop.hwnd)
+	}
+	notchWin.Store(w)
+
 	// Nothing shows until the page says what shape it is.
 	_ = platformSetInteractiveRegions(handle, nil)
 	procSetWindowPos.Call(hwnd, hwndTopmost,
 		uintptr(int32(x)), 0, uintptr(int32(width)), uintptr(int32(height)),
 		swpNoActivate)
-	log.Printf("[notch] window %dx%d at (%d, 0) on a %dx%d display, dpi %d", width, height, x, screenW, screenH, dpi)
+	log.Printf("[notch] window %dx%d at (%d, 0) on a %dx%d display, dpi %d, smooth edge: %v",
+		width, height, x, screenW, screenH, dpi, w.backdrop != nil)
 
 	go w.watch(done)
+}
+
+// platformNotchTearDown runs on the window's own thread after its loop has
+// ended, which is the only thread allowed to destroy the backdrop.
+func platformNotchTearDown(handle unsafe.Pointer) {
+	w := notchWindowFor(handle)
+	if w == nil {
+		return
+	}
+	notchWin.CompareAndSwap(w, nil)
+	if w.backdrop != nil {
+		w.backdrop.destroy()
+	}
 }
 
 // platformNotchReveal is called once the page has loaded. The window is shown
@@ -99,12 +135,18 @@ func platformNotchReveal(handle unsafe.Pointer) {
 }
 
 func (w *notchWindow) show() {
+	if w.backdrop != nil {
+		w.backdrop.setVisible(true)
+	}
 	procShowWindow.Call(w.hwnd, notchSwShowNoActivate)
 	procSetWindowPos.Call(w.hwnd, hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
 }
 
 func (w *notchWindow) hide() {
 	procShowWindow.Call(w.hwnd, notchSwHide)
+	if w.backdrop != nil {
+		w.backdrop.setVisible(false)
+	}
 }
 
 // watch applies the fullscreen rule twice a second, and notes in the log when
@@ -117,12 +159,10 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 	for {
 		select {
 		case <-done:
-			notchWin.CompareAndSwap(w, nil)
 			return
 		case <-ticker.C:
 		}
 		if ok, _, _ := procIsWindow.Call(w.hwnd); ok == 0 {
-			notchWin.CompareAndSwap(w, nil)
 			return
 		}
 		fullscreen := fullscreenAppCovers(w.hwnd)
@@ -174,30 +214,59 @@ func platformNotchWindowSize(handle unsafe.Pointer) (int, int) {
 	return int(r.Right - r.Left), int(r.Bottom - r.Top)
 }
 
-// platformNotchSetOutline cuts the window to the polygon. Windows owns the
-// region after SetWindowRgn, so nothing is freed here.
-func platformNotchSetOutline(handle unsafe.Pointer, outline []notchPoint) error {
+// platformNotchCursor is where the pointer is, in the page's own pixels,
+// measured from the window's top left corner. It can be far outside the window.
+func platformNotchCursor(handle unsafe.Pointer) (int, int, bool) {
+	w := notchWindowFor(handle)
+	if w == nil || w.dpi <= 0 {
+		return 0, 0, false
+	}
+	cx, cy, err := platformGetCursorPos()
+	if err != nil {
+		return 0, 0, false
+	}
+	var r w32Rect
+	if ok, _, _ := procGetWindowRect.Call(w.hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
+		return 0, 0, false
+	}
+	return (cx - int(r.Left)) * 96 / w.dpi, (cy - int(r.Top)) * 96 / w.dpi, true
+}
+
+// platformNotchSetOutline draws the shape and cuts the web view. shape is the
+// notch's true outline, drawn smooth by the backdrop. cut is the same outline
+// one pixel in, which is where the web view ends. Windows owns the region
+// after SetWindowRgn, so nothing is freed here.
+func platformNotchSetOutline(handle unsafe.Pointer, shape, cut []notchPoint) error {
 	if handle == nil {
 		return fmt.Errorf("nil HWND")
 	}
-	if len(outline) < notchOutlineMinPoints {
+	if len(shape) < notchOutlineMinPoints || len(cut) < notchOutlineMinPoints {
 		return fmt.Errorf("outline too short")
 	}
+	w := notchWindowFor(handle)
+	if w != nil && w.backdrop != nil {
+		if err := w.backdrop.paint(shape); err != nil {
+			log.Printf("[notch] smooth edge not drawn: %v", err)
+		}
+	} else {
+		// No backdrop: the web view carries the whole shape, hard edge and all.
+		cut = shape
+	}
 	rgn, _, _ := procNotchCreatePolygonRgn.Call(
-		uintptr(unsafe.Pointer(&outline[0])), uintptr(len(outline)), notchWinding)
+		uintptr(unsafe.Pointer(&cut[0])), uintptr(len(cut)), notchWinding)
 	if rgn == 0 {
-		return fmt.Errorf("CreatePolygonRgn failed for %d points", len(outline))
+		return fmt.Errorf("CreatePolygonRgn failed for %d points", len(cut))
 	}
 	procSetWindowRgn.Call(uintptr(handle), rgn, 1)
-	if w := notchWindowFor(handle); w != nil {
+	if w != nil {
 		now := time.Now().UnixMilli()
 		if last := w.outlineLog.Load(); now-last > 2000 && w.outlineLog.CompareAndSwap(last, now) {
-			minX, minY, maxX, maxY := outline[0].X, outline[0].Y, outline[0].X, outline[0].Y
-			for _, p := range outline {
+			minX, minY, maxX, maxY := shape[0].X, shape[0].Y, shape[0].X, shape[0].Y
+			for _, p := range shape {
 				minX, maxX = min(minX, p.X), max(maxX, p.X)
 				minY, maxY = min(minY, p.Y), max(maxY, p.Y)
 			}
-			log.Printf("[notch] outline: %d points, box %dx%d at (%d, %d)", len(outline), maxX-minX, maxY-minY, minX, minY)
+			log.Printf("[notch] outline: %d points, box %dx%d at (%d, %d)", len(shape), maxX-minX, maxY-minY, minX, minY)
 		}
 	}
 	return nil
@@ -241,4 +310,125 @@ func platformNotchFocus(handle unsafe.Pointer, take bool) bool {
 	}
 	log.Printf("[notch] keyboard given back: %v", returned)
 	return false
+}
+
+// ── the backdrop: the notch's shape, drawn smooth ───────────────────────────
+
+type notchBackdrop struct {
+	hwnd   uintptr
+	x, y   int32
+	w, h   int32
+	memDC  uintptr
+	dib    uintptr
+	oldBmp uintptr
+	pixels []uint32
+	cover  []uint8
+}
+
+func notchBackdropWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
+	r, _, _ := procDefWindowProcW.Call(hwnd, uintptr(msg), wParam, lParam)
+	return r
+}
+
+var notchBackdropProc = syscall.NewCallback(notchBackdropWndProc)
+
+// newNotchBackdrop creates the window hidden. It belongs to the calling
+// thread, which must be the one that runs the notch's message loop.
+func newNotchBackdrop(x, y, width, height int) (*notchBackdrop, error) {
+	className, _ := syscall.UTF16PtrFromString("JarvisNotchBackdrop")
+	windowName, _ := syscall.UTF16PtrFromString("Jarvis")
+	hInstance, _, _ := procGetModuleHandleW.Call(0)
+	wc := pblWndClassEx{
+		Size:      uint32(unsafe.Sizeof(pblWndClassEx{})),
+		WndProc:   notchBackdropProc,
+		Instance:  hInstance,
+		ClassName: className,
+	}
+	// ERROR_CLASS_ALREADY_EXISTS is fine on re-registration.
+	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+
+	// Transparent to the mouse as a whole: it is only a picture of the edge.
+	exStyle := uintptr(pblWsExLayered | pblWsExTransparent | pblWsExTopmost | pblWsExNoActivate | pblWsExToolWindow)
+	hwnd, _, err := procCreateWindowExW.Call(
+		exStyle,
+		uintptr(unsafe.Pointer(className)),
+		uintptr(unsafe.Pointer(windowName)),
+		uintptr(pblWsPopup),
+		uintptr(uint32(int32(x))), uintptr(uint32(int32(y))),
+		uintptr(uint32(int32(width))), uintptr(uint32(int32(height))),
+		0, 0, hInstance, 0,
+	)
+	if hwnd == 0 {
+		return nil, fmt.Errorf("CreateWindowExW failed: %v", err)
+	}
+
+	screenDC, _, _ := procGetDC.Call(0)
+	memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
+	procReleaseDC.Call(0, screenDC)
+	bi := pblBitmapInfo{
+		Header: pblBitmapInfoHeader{
+			BiSize:     uint32(unsafe.Sizeof(pblBitmapInfoHeader{})),
+			BiWidth:    int32(width),
+			BiHeight:   -int32(height),
+			BiPlanes:   1,
+			BiBitCount: 32,
+		},
+	}
+	var bits unsafe.Pointer
+	dib, _, _ := procCreateDIBSection.Call(memDC, uintptr(unsafe.Pointer(&bi)), 0, uintptr(unsafe.Pointer(&bits)), 0, 0)
+	if memDC == 0 || dib == 0 || bits == nil {
+		if memDC != 0 {
+			procDeleteDC.Call(memDC)
+		}
+		procDestroyWindow.Call(hwnd)
+		return nil, fmt.Errorf("CreateDIBSection failed for %dx%d", width, height)
+	}
+	oldBmp, _, _ := procSelectObject.Call(memDC, dib)
+	return &notchBackdrop{
+		hwnd: hwnd, x: int32(x), y: int32(y), w: int32(width), h: int32(height),
+		memDC: memDC, dib: dib, oldBmp: oldBmp,
+		pixels: unsafe.Slice((*uint32)(bits), width*height),
+		cover:  make([]uint8, width*height),
+	}, nil
+}
+
+// paint draws the outline as anti-aliased black and hands it to the window.
+// Black with premultiplied alpha is just the alpha, so coverage is the pixel.
+func (b *notchBackdrop) paint(shape []notchPoint) error {
+	notchCoverage(b.cover, int(b.w), int(b.h), shape)
+	for i, c := range b.cover {
+		b.pixels[i] = uint32(c) << 24
+	}
+	const acSrcOver, acSrcAlpha = 0x00, 0x01
+	blend := pblBlendFunction{BlendOp: acSrcOver, SourceConstantAlpha: 255, AlphaFormat: acSrcAlpha}
+	winPt := pblPoint{X: b.x, Y: b.y}
+	winSz := pblSize{CX: b.w, CY: b.h}
+	srcPt := pblPoint{}
+	screenDC, _, _ := procGetDC.Call(0)
+	defer procReleaseDC.Call(0, screenDC)
+	r, _, _ := procUpdateLayeredWindow.Call(b.hwnd, screenDC,
+		uintptr(unsafe.Pointer(&winPt)), uintptr(unsafe.Pointer(&winSz)),
+		b.memDC, uintptr(unsafe.Pointer(&srcPt)), 0,
+		uintptr(unsafe.Pointer(&blend)), pblUlwAlpha)
+	if r == 0 {
+		return fmt.Errorf("UpdateLayeredWindow failed")
+	}
+	return nil
+}
+
+func (b *notchBackdrop) setVisible(visible bool) {
+	if visible {
+		procShowWindow.Call(b.hwnd, notchSwShowNoActivate)
+		procSetWindowPos.Call(b.hwnd, hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+	} else {
+		procShowWindow.Call(b.hwnd, notchSwHide)
+	}
+}
+
+func (b *notchBackdrop) destroy() {
+	procSelectObject.Call(b.memDC, b.oldBmp)
+	procDeleteObjectGdi.Call(b.dib)
+	procDeleteDC.Call(b.memDC)
+	procDestroyWindow.Call(b.hwnd)
+	b.pixels, b.cover = nil, nil
 }

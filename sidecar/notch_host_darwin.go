@@ -247,6 +247,24 @@ static void jarvis_notch_set_outline(void* nswindow_ptr, const double* xy, int n
     });
 }
 
+// The pointer's place in points, from the window's top left corner, y down.
+// Returns 0 when there is no window. Reads only, so it may be called from any
+// thread: NSEvent's mouseLocation is safe off the main thread, and the frame is
+// read through the main queue when the caller is elsewhere.
+static int jarvis_notch_cursor(void* nswindow_ptr, int* x, int* y) {
+    *x = 0;
+    *y = 0;
+    if (!nswindow_ptr) return 0;
+    NSWindow* win = (__bridge NSWindow*)nswindow_ptr;
+    __block NSRect f = NSZeroRect;
+    dispatch_block_t read = ^{ f = win.frame; };
+    if ([NSThread isMainThread]) read(); else dispatch_sync(dispatch_get_main_queue(), read);
+    NSPoint p = [NSEvent mouseLocation];
+    *x = (int)lround(p.x - f.origin.x);
+    *y = (int)lround(NSMaxY(f) - p.y);
+    return 1;
+}
+
 // Returns 1 when the notch has the keyboard afterwards.
 static int jarvis_notch_focus(void* nswindow_ptr, int take) {
     if (!nswindow_ptr) return 0;
@@ -288,10 +306,23 @@ func platformNotchSetUp(handle unsafe.Pointer, done <-chan struct{}) {
 	}
 	C.jarvis_notch_set_up(handle, C.int(notchWindowW), C.int(notchWindowH))
 	log.Printf("[notch] window %dx%d at the top centre of the main display", notchWindowW, notchWindowH)
-	go func() {
-		<-done
-		C.jarvis_notch_tear_down()
-	}()
+}
+
+func platformNotchTearDown(handle unsafe.Pointer) {
+	C.jarvis_notch_tear_down()
+}
+
+// platformNotchCursor is where the pointer is, in the page's own pixels (points
+// on macOS), measured from the window's top left corner.
+func platformNotchCursor(handle unsafe.Pointer) (int, int, bool) {
+	if handle == nil {
+		return 0, 0, false
+	}
+	var x, y C.int
+	if C.jarvis_notch_cursor(handle, &x, &y) == 0 {
+		return 0, 0, false
+	}
+	return int(x), int(y), true
 }
 
 func platformNotchReveal(handle unsafe.Pointer) {
@@ -311,18 +342,21 @@ func platformNotchWindowSize(handle unsafe.Pointer) (int, int) {
 	return int(w), int(h)
 }
 
-func platformNotchSetOutline(handle unsafe.Pointer, outline []notchPoint) error {
+// platformNotchSetOutline masks the web view to the notch's true outline. The
+// mask is a shape layer, which is anti-aliased, so macOS needs no second window
+// for the edge and the inner outline is not used.
+func platformNotchSetOutline(handle unsafe.Pointer, shape, cut []notchPoint) error {
 	if handle == nil {
 		return fmt.Errorf("nil NSWindow*")
 	}
-	if len(outline) < notchOutlineMinPoints {
+	if len(shape) < notchOutlineMinPoints {
 		return fmt.Errorf("outline too short")
 	}
-	xy := make([]C.double, 0, len(outline)*2)
-	for _, p := range outline {
+	xy := make([]C.double, 0, len(shape)*2)
+	for _, p := range shape {
 		xy = append(xy, C.double(p.X), C.double(p.Y))
 	}
-	C.jarvis_notch_set_outline(handle, &xy[0], C.int(len(outline)))
+	C.jarvis_notch_set_outline(handle, &xy[0], C.int(len(shape)))
 	return nil
 }
 
