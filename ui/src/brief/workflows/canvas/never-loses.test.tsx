@@ -94,6 +94,31 @@ test("a copy made from an older revision of the draft is not put back over a new
   fixture = makeCanvasFixture(false);
   await fixture.request(`/api/workflows/meeting/versions/${fixture.versionId}`, { method: "PATCH", body: JSON.stringify({ displayName: "Changed elsewhere", trigger: fixture.snapshot().version.trigger, uiMeta: fixture.snapshot().uiMeta }) });
   await open();
-  expect(feedback()).toBe("Saved draft");
+  expect(feedback()).toContain("were not restored: this draft changed since");
   expect(JSON.stringify(fixture.snapshot().version.trigger)).not.toContain("stale edit");
+  // The copy can never apply again, so it is gone.
+  expect(Object.keys(sessionStorage).filter(k => k.startsWith("jarvis:brief:workflow-edits:"))).toEqual([]);
+});
+
+test("a credential saved in a step is never copied into the tab, and survives the restore and save", async () => {
+  const { version, uiMeta } = fixture.snapshot();
+  (version.trigger as any).nextAction.settings.input.headers = { Authorization: "Bearer saved-credential" };
+  await fixture.request(`/api/workflows/meeting/versions/${fixture.versionId}`, { method: "PATCH", body: JSON.stringify({ displayName: version.displayName, trigger: version.trigger, uiMeta }) });
+  await open();
+  await typeIntoStep("notes", "edit beside a credential");
+  await settle(300);
+  const keys = Object.keys(sessionStorage).filter(k => k.startsWith("jarvis:brief:workflow-edits:v1:s:meeting:"));
+  expect(keys).toHaveLength(1);
+  const copy = sessionStorage.getItem(keys[0]!)!;
+  expect(copy).toContain("edit beside a credential");
+  expect(copy).not.toContain("saved-credential");
+  await React.act(async () => root.render(null));
+  await open();
+  expect(feedback()).toContain("Restored your unsaved edits");
+  expect(feedback()).not.toContain("Enter again");
+  await React.act(async () => button("Save changes").click());
+  await settle();
+  const savedTrigger = JSON.stringify(fixture.snapshot().version.trigger);
+  expect(savedTrigger).toContain("edit beside a credential");
+  expect(savedTrigger).toContain("Bearer saved-credential");
 });

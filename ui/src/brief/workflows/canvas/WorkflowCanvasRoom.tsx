@@ -187,8 +187,11 @@ function CanvasHeader({
   }
   // One line for the state of the draft. A failed save keeps "Unsaved changes" beside its reason:
   // the reason alone would read as if the edits were safe.
-  const restored = editor.dirty && editor.restoredAt
-    ? `Restored your unsaved edits from ${new Date(editor.restoredAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` : "";
+  const keptAt = editor.restored ? new Date(editor.restored.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  const restored = !editor.restored ? ""
+    : editor.restored.stale ? (editor.dirty ? "" : `Unsaved edits from ${keptAt} were not restored: this draft changed since.`)
+    : !editor.dirty ? ""
+    : `Restored your unsaved edits from ${keptAt}.${editor.restored.credentialsDropped ? " Enter again any secret or password typed since the last save; they are not kept in the tab." : ""}`;
   const note = runMessage || message?.text || restored;
   const feedback = editor.loading ? "Loading workflow…"
     : editor.error ? "Workflow unavailable"
