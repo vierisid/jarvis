@@ -1,8 +1,16 @@
 /** Exact replacements fail a vendor sync if the supported expression boundary drifts. */
 export const expressionPatches = {
   "packages/server/engine/src/lib/handler/context/flow-execution-context.ts": [
-    ["import { StepExecutionPath } from './step-execution-path'", "import { StepExecutionPath } from './step-execution-path'\nimport { stepExpressionOutput } from '../../../../../../../../runtime/engine-expression-data'"],
+    ["import { StepExecutionPath } from './step-execution-path'", "import { StepExecutionPath } from './step-execution-path'\nimport { ownStep, stepExpressionOutput } from '../../../../../../../../runtime/engine-expression-data'"],
     ['acc[stepName] = step.output', 'acc[stepName] = stepExpressionOutput(step)'],
+    // A step is looked up among the steps the run recorded, never among Object.prototype's
+    // members: `toString` and the like were taken for finished steps and skipped.
+    ...(['getLoopStepOutput({ stepName }: { stepName: string }): LoopStepOutput | undefined', 'isCompleted({ stepName }: { stepName: string }): boolean', 'isPaused({ stepName }: { stepName: string }): boolean'] as const).map((method) => [
+      `public ${method} {\n        const stateAtPath = executionJournal.getStateAtPath({ path: this.currentPath.path, steps: this.steps })\n${method.startsWith('getLoop') ? '\n' : ''}        const stepOutput = stateAtPath[stepName]`,
+      `public ${method} {\n        const stateAtPath = executionJournal.getStateAtPath({ path: this.currentPath.path, steps: this.steps })\n${method.startsWith('getLoop') ? '\n' : ''}        const stepOutput = ownStep(stateAtPath, stepName)`,
+    ] as const),
+    ['return executionJournal.getStep({ stepName, path: path ?? this.currentPath.path, steps: this.steps })', 'return ownStep(executionJournal.getStateAtPath({ path: path ?? this.currentPath.path, steps: this.steps }), stepName)'],
+    ['if (this.steps[stepName]) acc[stepName] = this.steps[stepName]', 'const recorded = ownStep(this.steps, stepName)\n                if (recorded) acc[stepName] = recorded'],
   ],
 
   'packages/server/engine/src/lib/core/code/no-op-code-sandbox.ts': [
