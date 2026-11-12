@@ -29,6 +29,8 @@ const BLOCKED_WHEN_OFF = {
   send_message: "send messages",
   make_payment: "make payments",
 } as const;
+/** Asking first instead needs the level to clear writing data (#953). */
+const ASK_FLOOR = AUTHORITY_REQUIREMENTS.write_data;
 export function blockedWhenOff(level: number, governed: readonly string[]) {
   return (Object.keys(BLOCKED_WHEN_OFF) as Array<keyof typeof BLOCKED_WHEN_OFF>)
     .filter(
@@ -169,8 +171,10 @@ function AuthorityBody({ controller }: { controller: AuthorityController }) {
                 {CATEGORY_LABELS[category]} is Off and your level (
                 {state.draft!.default_level}) is below the {needs} it needs, so
                 workflow steps that {what} will be blocked, not sent without
-                asking. Turn {CATEGORY_LABELS[category]} On to be asked first,
-                or raise the level.
+                asking, unless an override or rule allows them.{" "}
+                {state.draft!.default_level >= ASK_FLOOR
+                  ? `Turn ${CATEGORY_LABELS[category]} On to be asked first, or raise the level.`
+                  : `Raise the level to at least ${ASK_FLOOR} for Jarvis to ask first.`}
               </p>
             ))}
             <div className="brief-authority-categories">

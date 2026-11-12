@@ -93,18 +93,24 @@ saying why, pending work approvals are denied, and a tool in flight stops at
 its next dispatch checkpoint. Stop agent cards remain available during Pause
 and Kill. Reset does not revive stopped runs or denied work.
 
-While Kill is active Authority settings are read-only: a config write, a quick
-override and accepting a learning suggestion answer 409 ("Jarvis is stopped.
-Reset it first, then change Authority settings.") and change nothing, and the
-Settings page disables its controls and says so. A rule loosened during Kill
-would otherwise go live on Reset without anyone looking at it again. Pause does
-not freeze settings.
+While Kill is active Authority settings are read-only: a config write, an
+Allow quick override and accepting a learning suggestion answer 409 ("Jarvis is
+stopped. Reset it first, then change Authority settings.") and change nothing,
+and the Settings page disables its controls and says so. The state is checked
+again once the request body is read, so a write that races a Kill is refused
+too. A rule loosened during Kill would otherwise go live on Reset without anyone
+looking at it again. A Deny quick override (voice "revoke access") is still
+accepted: an override is checked before every other rule and a Deny is the
+strictest answer, so it can only tighten what Reset brings back. Pause does not
+freeze settings.
 
 When a category in `PIECE_ABOVE_LEVEL_ASKS` (send email, send messages, make
 payments) is Off in Settings and the level is below what it needs, a workflow
-step in it is blocked, never sent without asking: Settings says so next to the
-governed switches, and the failure names the level and the switch that blocked
-it, not a status code.
+step in it is blocked, never sent without asking (unless an override or rule
+allows it): Settings says so next to the governed switches, and the failure
+names the level and the switch that would let Jarvis ask first, not a status
+code. Asking first also needs the level to clear writing data (3); below that
+both say to raise the level.
 
 The controller is the one source of truth: the engine's copy of the state is
 updated on every change, and accepting a learning suggestion no longer writes

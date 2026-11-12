@@ -125,9 +125,23 @@ describe('an Authority refusal names the setting that refused it (G-9)', () => {
   const denied = (message: string) => projectFailure({ source: 'action', outcome: { status: 'blocked', code: 'AUTHORITY_DENIED', message, effect: 'not_started' } },
     { label: 'The step "Send invoice"', sideEffects: false }).headline;
 
-  test('a level shortfall on email says the level, that Send email is Off, and what to do', () => {
+  test('a level shortfall on email says the level, when Jarvis asks first, and what to do', () => {
     expect(denied('Authority denied piece:smtp/send-email: Authority level 3 is below required 7 for send_email')).toBe(
-      'The step "Send invoice" did not run: your Authority level (3) is below the 7 that sending email needs, and Send email is Off in Authority settings, so Jarvis could not ask you first. Turn Send email On to be asked each time, or raise the level.');
+      'The step "Send invoice" did not run: your Authority level (3) is below the 7 that sending email needs. Jarvis asks you first only while Send email is On in Authority settings: turn it On to be asked each time, or raise the level.');
+  });
+  test('below the level that writing data needs, turning the switch On would not help, so it only says to raise the level', () => {
+    const headline = denied('Authority denied piece:smtp/send-email: Authority level 2 is below required 7 for send_email');
+    expect(headline).toContain('below the 7 that sending email needs. Raise the level in Authority settings.');
+    expect(headline).not.toContain('Turn');
+  });
+  test('a role or agent profile limit is not presented as a rule the owner wrote', () => {
+    expect(denied('Authority denied piece:smtp/send-email: background agent: send_email is denied')).toContain('your Authority settings do not allow it');
+    expect(denied('Authority denied piece:smtp/send-email: background agent: level cap 5 is below required 7 for send_email')).toContain('your Authority settings do not allow it');
+  });
+  test('a rule is quoted on one line, defanged and without double quotes', () => {
+    const headline = denied('Authority denied piece:smtp/send-email: No "bulk"\nmail <b>tonight</b>');
+    expect(headline).toContain(`your Authority rule "No 'bulk' mail <b>tonight</b>" blocks it`);
+    expect(headline).not.toContain('\n');
   });
   test('a level shortfall on an action that is never asked about says to raise the level', () => {
     expect(denied('Authority denied piece:gmail/gmail_delete_draft: Authority level 3 is below required 8 for delete_data')).toContain('below the 8 that delete data needs. Raise the level in Authority settings.');

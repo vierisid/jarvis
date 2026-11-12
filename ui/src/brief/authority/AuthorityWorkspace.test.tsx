@@ -317,8 +317,15 @@ test("Send email Off below the level it needs says workflow emails will be block
   expect(note()).not.toContain("will be blocked");
   await click("Send email");
   expect(note()).toContain(
-    "Send email is Off and your level (3) is below the 7 it needs, so workflow steps that send email will be blocked, not sent without asking.",
+    "Send email is Off and your level (3) is below the 7 it needs, so workflow steps that send email will be blocked, not sent without asking, unless an override or rule allows them. Turn Send email On to be asked first, or raise the level.",
   );
+  // Below the level writing data needs, turning the switch On would not make Jarvis ask.
+  await key("Home");
+  expect(note()).toContain(
+    "Send email is Off and your level (1) is below the 7 it needs",
+  );
+  expect(note()).toContain("Raise the level to at least 3 for Jarvis to ask first.");
+  expect(note()).not.toContain("Turn Send email On");
   await click("Send email");
   expect(note()).not.toContain("will be blocked");
   await key("End");

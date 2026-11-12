@@ -20,6 +20,7 @@ import type { ActionFailure } from '../actions/action-outcome';
 import type { LLMErrorCode } from '../llm/provider';
 import { redactSecrets } from '../util/redact';
 import { boundedReceiptText } from '../roles/untrusted';
+import { AUTHORITY_REQUIREMENTS } from '../roles/authority';
 import { HUMAN_INPUT_PENDING_LIMIT } from '../workflows/runtime/human-input-contract';
 
 export type FailureCategory =
@@ -179,15 +180,19 @@ export function authorityWhy(message: string | undefined): string {
   if (level) {
     const asked = ASKED_ACTIONS[level[3]!];
     const base = `your Authority level (${level[1]}) is below the ${level[2]} that ${asked?.what ?? level[3]!.replace(/_/gu, ' ')} needs`;
-    // A step that sends or pays asks first while its setting is On; refused outright means it is Off.
-    return asked && Number(level[1]) >= 3
-      ? `${base}, and ${asked.setting} is Off in Authority settings, so Jarvis could not ask you first. Turn ${asked.setting} On to be asked each time, or raise the level`
+    // A workflow step in these categories asks first instead (#953) only while
+    // its switch is On and the level clears writing data. The refusal does not
+    // say which switch was Off, so this names the condition, not the state.
+    return asked && Number(level[1]) >= AUTHORITY_REQUIREMENTS.write_data
+      ? `${base}. Jarvis asks you first only while ${asked.setting} is On in Authority settings: turn it On to be asked each time, or raise the level`
       : `${base}. Raise the level in Authority settings`;
   }
   if (/Explicitly denied by override/u.test(text)) return 'a Deny override in your Authority settings blocks it. Remove the override to allow it';
-  const rule = /^Authority denied \S+: (.+)$/su.exec(text)?.[1]?.trim();
-  if (rule && !/^(Authority|Denied|Temporarily|Explicitly|Workflow|Emergency)/u.test(rule) && rule.length <= 200) {
-    return `your Authority rule "${rule.replace(/"/gu, "'")}" blocks it`;
+  const rule = /^Authority denied \S+: (.+)$/su.exec(text)?.[1]?.replace(/\s+/gu, ' ').trim();
+  // A role or agent profile's limit (`<label>: level cap ...`, `<label>: x is denied`) is not a rule the owner wrote.
+  const profileLimit = rule !== undefined && /: (level cap \d+ is below required \d+ for \w+|\w+ is denied)$/u.test(rule);
+  if (rule && !profileLimit && !/^(Authority|Denied|Temporarily|Explicitly|Workflow|Emergency)/u.test(rule) && rule.length <= 200) {
+    return `your Authority rule "${boundedReceiptText(redactSecrets(rule), 200).replace(/"/gu, "'")}" blocks it`;
   }
   return 'your Authority settings do not allow it';
 }
