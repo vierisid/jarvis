@@ -11,6 +11,7 @@ import { publishFlowVersion } from './flow-publication';
 import { assertFlowReady, assertVersionReady, configureWorkflowReadiness, versionReadiness, WorkflowReadinessError } from './flow-readiness';
 import { deleteConnection, getConnection, upsertConnection } from './app-connection';
 import { createFlowRun, getFlowRun } from './flow-run';
+import { connectionWasRemoved } from './run-cancellation';
 import { bindingChangesToAccept, bindingDrift, connectionBindings, enforceRunConnectionBinding, listRunConnectionBindings, pinUnpinnedEnabledFlows, readBindingPins } from './binding-pins';
 import { createWorkflowRoutes } from '../../api/routes';
 import { PieceCatalog } from '../../runtime/piece-catalog';
@@ -438,6 +439,17 @@ describe('a run hands out the connection identity it started with', () => {
     expect(enforceRunConnectionBinding(run.id, getFlow(flowId)!.project_id, 'account'))
       .toBe('Connection account was removed while this run asked for it. Its credential was not handed out; start a new run once the connection is right.');
     expect(listRunConnectionBindings(run.id)[0]!.refusal).toBeDefined();
+    // G-6: an approved card on that step then reads as removed, not changed.
+    expect(connectionWasRemoved(listRunConnectionBindings(run.id)[0]!.refusal!.message)).toBe(true);
+  });
+
+  test('a replaced credential is not read as a removed connection (G-6)', () => {
+    connect();
+    const { flowId, versionId } = published(send());
+    const run = createFlowRun({ flowId, flowVersionId: versionId, status: 'RUNNING' });
+    connect('account', 'changed after the run was admitted');
+    enforceRunConnectionBinding(run.id, getFlow(flowId)!.project_id, 'account');
+    expect(connectionWasRemoved(listRunConnectionBindings(run.id)[0]!.refusal!.message)).toBe(false);
   });
 
   test("the run API shows which connection and what happened, never a managed grant's fingerprint", () => {

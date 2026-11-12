@@ -135,8 +135,10 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   WORKFLOW_MACHINE_REPLACED: { category: 'missing_binding', why: 'the computer it was enabled for is no longer enrolled', step: 'accept_binding_change' },
   // #1314 M2: a browser or desktop action needs a computer a person chose.
   WORKFLOW_MACHINE_UNPINNED: { category: 'missing_binding', why: 'its browser or desktop steps have no pinned computer. Enable the workflow to pin its computer, or name the computer in the step', step: 'accept_binding_change' },
-  // G-6: approved, then the run could not load the connection because its credential was replaced after the card was raised.
-  CONNECTION_CHANGED_AFTER_REQUEST: { category: 'missing_binding', why: 'the connection it uses was changed after you were asked, so nothing was sent. Check the connection, then run it again', step: 'accept_binding_change' },
+  // G-6: the card was raised, then the run could not load the connection because its credential was replaced
+  // (accept the change before a new run is admitted) or the connection was removed (set it up again).
+  CONNECTION_CHANGED_AFTER_REQUEST: { category: 'missing_binding', why: 'the connection it uses was changed after you were asked, so nothing was sent', step: 'accept_binding_change' },
+  CONNECTION_REMOVED_AFTER_REQUEST: { category: 'missing_binding', why: 'the connection it uses was removed after you were asked, so nothing was sent', step: 'connect' },
   WORKFLOW_FACT_STALE: { category: 'missing_binding', why: 'a recipient it sends to is no longer current in memory', step: 'update_recipient' },
   WORKFLOW_FACT_AMBIGUOUS: { category: 'missing_binding', why: 'memory holds conflicting values for a recipient it sends to', step: 'update_recipient' },
   SIDECAR_TOO_OLD_FOR_REVIEWED_ACTION: { category: 'missing_binding', why: 'the Jarvis app on that computer is too old for this approved action', step: 'update_desktop_app' },

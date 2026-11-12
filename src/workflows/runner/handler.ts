@@ -433,8 +433,14 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
           // settles now as not started, not at the next sweep, so the card and
           // the effect do not read pending meanwhile (G-6). Any other failed run
           // is left to that sweep.
-          try { if (ended.status !== "STOPPED" && runWasRefusedConnection(runId)) retireTerminalRunWaits(runId).forEach(id => opts.onCardClosed?.(id)); }
+          let closed: string[] = [];
+          try { if (ended.status !== "STOPPED" && runWasRefusedConnection(runId)) closed = retireTerminalRunWaits(runId); }
           catch (retireError) { console.warn(`[run-flow ${runId}] could not settle its undispatched effects: ${(retireError as Error).message}`); }
+          // One surface failing to update never keeps the others from hearing.
+          for (const id of closed) {
+            try { opts.onCardClosed?.(id); }
+            catch (cardError) { console.warn(`[run-flow ${runId}] closed card ${id} update failed: ${(cardError as Error).message}`); }
+          }
           opts.onRunEnded?.(runId);
         }
       } catch (hookError) { console.error(`[run-flow ${runId}] run-ended hook failed:`, hookError); }
