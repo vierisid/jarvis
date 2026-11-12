@@ -160,6 +160,10 @@ export async function runDoctor(): Promise<void> {
     results.push(database);
     if (database.status === 'fail') {
       results.push({ name: 'LLM Provider', status: 'skip', message: 'Not checked: the database file needs attention first' });
+    } else if (database.status === 'warn') {
+      // No database yet: the config file is all there is. Opening one here
+      // would create it, which is the daemon's job on its first start.
+      llmConfig = loaded;
     } else {
       llmConfig = loaded;
       initDatabase(llmConfig.daemon.db_path);
