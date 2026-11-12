@@ -24,6 +24,8 @@ import { NOTCH_QUESTION_LOOK_MS, attachNotchQuestions } from './questions.ts';
 import type { NotchQuestionDeps, NotchQuestions } from './questions.ts';
 import type { NotchClock } from './stage.ts';
 import type { NotchSurface } from './surface.ts';
+import { attachNotchSuggestions } from './suggestions.ts';
+import type { NotchSuggestions } from './suggestions.ts';
 import { notchTodayScript } from './today.ts';
 
 export interface NotchRealDeps {
@@ -75,6 +77,8 @@ export interface NotchReal {
   approvals: NotchApprovals;
   news: NotchNews;
   questions: NotchQuestions | null;
+  /** Where suggestion toasts go while the notch is on: the count. */
+  suggestions: NotchSuggestions;
   fixtures: NotchFixtures;
   /** Whether a notch page is up: then the notch tells the person, and the toasts need not. */
   showing(): boolean;
@@ -146,7 +150,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   timer.unref?.();
 
   return {
-    inbox, approvals, news, questions, fixtures,
+    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures,
     showing: () => surface.listening() > 0,
     stop: () => {
       clearInterval(timer); clearInterval(failureTimer);
