@@ -28,13 +28,14 @@ export const query = createAction({
       displayName: 'URL',
       required: true,
     }),
+    // Jarvis: headers and query params are optional. The piece treats a missing one as empty.
     queryParams: Property.Object({
       displayName: 'Query params',
-      required: true,
+      required: false,
     }),
     headers: Property.Object({
       displayName: 'Headers',
-      required: true,
+      required: false,
     }),
     query: Property.LongText({
       displayName: 'Query',

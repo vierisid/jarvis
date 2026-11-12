@@ -4493,7 +4493,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 /* ---------------------------------------------- schema-aware input forms */
 
-function SchemaInputs({
+export function SchemaInputs({
   schema,
   input,
   onSetInput,
@@ -4665,6 +4665,20 @@ function TypedField({ field, value, onChange }: TypedFieldProps): React.ReactEle
 
   if (field.type === "number") {
     return <NumberField field={field} value={value} onChange={onChange} labelEl={labelEl} isMissing={isMissing} />;
+  }
+
+  // A file field takes the output of an earlier step ({{step_1}}) or a link,
+  // never JSON. A value already saved as an object keeps the JSON box.
+  if (field.type === "json" && field.sourceType === "FILE" && (value === undefined || value === null || typeof value === "string")) {
+    return (
+      <StringField
+        field={{ ...field, placeholder: field.placeholder ?? "Pick a file from an earlier step, or paste a link" }}
+        value={value}
+        onChange={onChange}
+        labelEl={labelEl}
+        isMissing={isMissing}
+      />
+    );
   }
 
   if (field.type === "json") {

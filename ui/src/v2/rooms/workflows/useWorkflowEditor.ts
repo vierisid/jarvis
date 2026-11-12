@@ -168,6 +168,8 @@ export interface PieceInputField {
   placeholder?: string;
   options?: Array<{ value: string; label: string; description?: string; group?: string }>;
   default?: unknown;
+  /** The piece property type this field came from (`FILE`, `OBJECT`, `DYNAMIC`...). */
+  sourceType?: string;
 }
 
 export interface PieceInputSchema {
