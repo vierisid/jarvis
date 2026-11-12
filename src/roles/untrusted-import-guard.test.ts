@@ -111,6 +111,9 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       // so it takes the classic path, which does not compact.
       'vault/conversations.ts',
       'vault/extractor.ts',
+      // Recalled memory the owner did not enter, framed into the prompt (and
+      // tainting the turn). A prompt, so no dispatch cap follows.
+      'vault/recall-context.ts',
     ]);
   });
 

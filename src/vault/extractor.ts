@@ -11,6 +11,7 @@ import { createCommitment } from './commitments.ts';
 import { oneLineTaskText } from './commitment-text.ts';
 import { USER_PROFILE_VAULT_SOURCE } from './user-profile.ts';
 import { wrapUntrusted } from '../roles/untrusted.ts';
+import { readsAsInstruction } from './fact-instruction.ts';
 
 export type ExtractionResult = {
   entities: Array<{ name: string; type: string; properties?: Record<string, unknown> }>;
@@ -286,6 +287,13 @@ export async function extractAndStore(
 
       const quote = typeof factData.user_quote === 'string' && factData.user_quote.trim()
         && userMessage.includes(factData.user_quote) ? factData.user_quote : undefined;
+      // A model-proposed order or permission is believed only when the owner's
+      // own message says it (a verbatim quote that is itself such a statement).
+      // Otherwise it could have come from a page or file read this turn.
+      if (readsAsInstruction(`${predicate} ${object}`) && !(quote && readsAsInstruction(quote))) {
+        console.warn('[Extractor] Dropped a proposed fact that reads as an instruction without the owner saying it');
+        continue;
+      }
       try {
         createFact(subjectId, predicate, object, {
           confidence: Number.isFinite(confidence) && confidence >= 0 && confidence <= 1 ? confidence : 0.5,

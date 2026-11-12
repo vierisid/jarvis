@@ -77,13 +77,23 @@ export function formatKnowledgeContext(profiles: EntityProfile[], maxChars?: num
  * Returns empty string if no relevant knowledge found.
  */
 export function getKnowledgeForMessage(message: string): string {
+  return getKnowledgeParts(message).text;
+}
+
+/**
+ * The same context in two parts. `plain` holds the rules and owner-entered
+ * memory; `framed` holds the block of memory the owner did not enter, already
+ * wrapped as untrusted content. A prompt that defangs delimiters in trusted
+ * text must defang `plain` only: defanging `framed` would unmake its frame.
+ */
+export function getKnowledgeParts(message: string): { text: string; plain: string; framed: string } {
   try {
     const packed = getDb().transaction(() => packRecallEvidence(retrieveForMessage(message)))();
     capturePackedMemory(packed);
-    return packed.text;
+    return { text: packed.text, plain: packed.plain ?? packed.text, framed: packed.framed ?? '' };
   } catch (err) {
     console.error('[Retrieval] Error querying vault:', err);
-    return '';
+    return { text: '', plain: '', framed: '' };
   }
 }
 

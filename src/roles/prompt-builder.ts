@@ -10,6 +10,8 @@ export type PromptContext = {
   recentObservations?: string[];
   agentHierarchy?: string;
   knowledgeContext?: string;
+  /** Memory the owner did not enter, already framed as untrusted content; added verbatim after knowledgeContext. */
+  knowledgeOutside?: string;
   skillIndex?: string;
   availableSpecialists?: string;
   contentPipeline?: string[];
@@ -301,6 +303,13 @@ export function buildSystemPromptParts(role: RoleDefinition, context?: PromptCon
       // A block of its own is wrong for this section (the model is meant to use
       // these facts), so the marker token is what gets neutralised.
       dynamicSections.push(defangDelimiters(context.knowledgeContext));
+      // The framed half is a block of its own with its own nonce, built by
+      // the recall packer from facts the owner did not enter. It is not
+      // defanged: that would break the frame it relies on.
+      if (context.knowledgeOutside) {
+        dynamicSections.push('');
+        dynamicSections.push(context.knowledgeOutside);
+      }
     }
 
     if (context.skillIndex) {
