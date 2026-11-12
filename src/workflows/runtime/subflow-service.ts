@@ -7,10 +7,25 @@ import {createWaitpoint} from '../db/repos/waitpoint';
 import {JarvisWorkflowRunnerAdapter} from '../adapters/workflow-runner';
 import {digest,resolveEffectContext,type WorkflowEffectContext} from './effect-context';
 import {workflowEffectId,type WorkflowEffectBoundary} from './effect-boundary';
-import {SUBFLOW_PIECE,boundedJson,childCallInput} from './subflow-contract';
+import {SUBFLOW_PIECE,boundedJson,childCallInput,childFailureMessage,type ChildResult} from './subflow-contract';
 import {assertRunNotCanceled} from './cancellation';
 import {childTurnedOffOutcome,isTurnedOff} from '../db/repos/flow-turn-off';
+import {ActionOutcomeError} from '../../actions/action-outcome';
+import {boundedApprovalLabel} from '../../authority/approval-delivery';
 import {WorkflowRunnerError} from '../adapters/workflow-runner';
+/** A flow name on a step error: the 512 the HTTP routes cap a `displayName` at, as a start card shows one. */
+const CHILD_NAME_MAX_CHARS=512;
+/**
+ * The child's name as its failure message shows it (#1325): one line, format
+ * characters gone and cut with a visible "..." (`boundedApprovalLabel`), then
+ * quoted as JSON so a quote in the name cannot close its own quotes and forge
+ * the sentence after it, and wrapped in a bidi isolate when it holds non-ASCII
+ * text so right-to-left text cannot reorder the message, as start cards do (#1316).
+ */
+export function childNameShown(name:string):string {
+ const json=JSON.stringify(boundedApprovalLabel(name,CHILD_NAME_MAX_CHARS));
+ return /[^\x00-\x7f]/.test(json)?'"\u2068'+json.slice(1,-1)+'\u2069"':json;
+}
 /** A child turned off after review is a definite refusal before anything started, not an uncertain dispatch. */
 function startChild(...args:Parameters<JarvisWorkflowRunnerAdapter['startNow']>){
  try{return new JarvisWorkflowRunnerAdapter().startNow(...args);}
@@ -26,7 +41,7 @@ function startChild(...args:Parameters<JarvisWorkflowRunnerAdapter['startNow']>)
 export function createSubflowService(effects:WorkflowEffectBoundary,now=Date.now,intentOf?:(flowId:string,versionId:string,payload:unknown)=>{intent:string;channelIntent:string},
  cardRefusal?:(args:Record<string,unknown>)=>string|null){
  return async(input:Record<string,unknown>,ctx:WorkflowEffectContext)=>{
-  const call=childCallInput(input),{run,stepName,executionPath}=resolveEffectContext(ctx,SUBFLOW_PIECE,'call');
+  const call=childCallInput(input),continueOnChildFailure=input.continueOnChildFailure===true,{run,stepName,executionPath}=resolveEffectContext(ctx,SUBFLOW_PIECE,'call');
   const id=digest(['subflow-v1',ctx.projectId,run.flowId,stepName,call.invocationKey]);
   const fingerprint=digest(call),effectId=workflowEffectId(ctx.runId,stepName,executionPath,'subflow');
   const db=getWorkflowDb();
@@ -56,7 +71,12 @@ export function createSubflowService(effects:WorkflowEffectBoundary,now=Date.now
    }).immediate()});
   if(reply.approval)return {approval:reply.approval};
   const saved=getSubflowCall(id);if(!saved||saved.fingerprint!==fingerprint)throw Error('Child invocation receipt unavailable or changed');
-  const result=settleSubflow(id,now());if(result)return result;
+  // Default: a child that failed, timed out or gave no usable result fails this step. The opt-out returns the status object.
+  const settledOutcome=(outcome:ChildResult)=>{
+   if(continueOnChildFailure||outcome.status==='succeeded')return outcome;
+   const version=getFlowVersion(saved.version_id);throw new ActionOutcomeError({status:'error',code:outcome.code??'CHILD_FAILED',message:childFailureMessage(outcome,childNameShown(version?.displayName||call.flow),call.timeoutSeconds),effect:'may_have_occurred'});
+  };
+  const result=settleSubflow(id,now());if(result)return settledOutcome(result);
   return db.transaction(()=>{
    assertRunNotCanceled(ctx.runId);
    const existing=db.query('SELECT w.waitpoint_id FROM workflow_subflow_wait w JOIN waitpoint p ON p.id=w.waitpoint_id WHERE w.call_id=? AND w.parent_run_id=? AND p.resumed_at IS NULL').get(id,ctx.runId) as {waitpoint_id:string}|null;
