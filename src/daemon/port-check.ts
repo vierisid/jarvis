@@ -38,15 +38,36 @@ async function nextFreePort(port: number, host?: string): Promise<number | null>
   return null;
 }
 
+/** How to see which program listens on a port, for this platform. */
+function whoListensCommand(port: number): string {
+  return process.platform === 'win32'
+    ? `netstat -ano | findstr :${port}`
+    : `lsof -nP -iTCP:${port} -sTCP:LISTEN`;
+}
+
+/** A port to suggest when no probed one is known: never outside 1..65535. */
+function fallbackPort(port: number): number {
+  return port < 65535 ? port + 1 : port - 1;
+}
+
+// No "run: jarvis stop" here. When this message is printed the starting
+// Jarvis already holds the lock for its data folder, so the listener is never
+// a Jarvis for this folder; and `jarvis stop` with no lock held clears the
+// port by signalling whatever listens on it, which here is someone else's
+// program.
 export function portInUseMessage(port: number, suggestion: number | null): string {
-  const other = suggestion ?? port + 1;
-  return `Port ${port} is already in use, so Jarvis did not start. Another program is listening on it, `
-    + 'possibly another Jarvis. To stop a Jarvis for this data folder, run: jarvis stop.\n'
+  const other = suggestion ?? fallbackPort(port);
+  return `Port ${port} is already in use, so Jarvis did not start. Another program is listening on it `
+    + `(possibly a Jarvis with a different data folder). To see which one, run: ${whoListensCommand(port)}\n`
     + `To use a different port, run: jarvis start --port ${other}  (or set JARVIS_PORT=${other}, or daemon.port in config.yaml).`;
 }
 
 export function portNotAllowedMessage(port: number): string {
-  return `Jarvis is not allowed to listen on port ${port}. Use a port above 1023, for example: jarvis start --port 3142  (or set JARVIS_PORT, or daemon.port in config.yaml).`;
+  const why = port < 1024
+    ? 'Ports below 1024 need extra permission. Use a port above 1023'
+    : 'The system does not let this user listen on it. Use another port';
+  const example = port === 3142 ? 3143 : 3142;
+  return `Jarvis is not allowed to listen on port ${port}. ${why}, for example: jarvis start --port ${example}  (or set JARVIS_PORT, or daemon.port in config.yaml).`;
 }
 
 /** Throws a PortUnavailableError when the port is busy or not allowed; resolves otherwise. */
