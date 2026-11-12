@@ -101,6 +101,7 @@ import {
   type PieceCatalogEntry,
   type PieceInputField,
 } from "./useWorkflowEditor";
+import type { StepTestResult } from "./step-test";
 import { flattenSteps, pathToStep, withoutChosenZone } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
@@ -3405,7 +3406,7 @@ interface PropertiesPanelProps {
   /** Save the JSON sample input override for this step. Pass null to clear. */
   onSetSampleInput: (input: Record<string, unknown> | null) => Promise<{ ok: boolean; message: string }>;
   /** Trigger a test-from-here run for this step. */
-  onTestFromHere: () => Promise<{ ok: boolean; message: string }>;
+  onTestFromHere: () => Promise<StepTestResult>;
 }
 
 function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
@@ -3801,7 +3802,7 @@ function AdvancedSettings(props: {
   isTriggerStep: boolean;
   onSetSampleData: (output: unknown | null) => Promise<{ ok: boolean; message: string }>;
   onSetSampleInput: (input: Record<string, unknown> | null) => Promise<{ ok: boolean; message: string }>;
-  onTestFromHere: () => Promise<{ ok: boolean; message: string }>;
+  onTestFromHere: () => Promise<StepTestResult>;
 }): React.ReactElement {
   const [open, setOpen] = useState(false);
   return (
@@ -4217,6 +4218,31 @@ function SampleInputSection({
   );
 }
 
+/** The answer to "Test this step": pass or fail, what the step returned, or why it failed. */
+export function StepTestOutcome({ result }: { result: StepTestResult }): React.ReactElement {
+  const test = result.test;
+  // The panel scrolls; the answer must not land below the fold.
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => { box.current?.scrollIntoView?.({ block: "nearest" }); }, [result]);
+  const output = test?.output === undefined ? "" : (typeof test.output === "string" ? test.output : JSON.stringify(test.output, null, 2));
+  return (
+    <div
+      className={`wf-props__sample-status wf-props__sample-status--${result.ok ? "ok" : "warn"}`}
+      role="status"
+      data-testid="step-test-result"
+      ref={box}
+    >
+      <strong>{result.message}</strong>
+      {test?.savedFirst ? <span> Your changes were saved first.</span> : null}
+      {test?.passed ? (
+        output ? <pre className="wf-props__sample-result">{output.length > 4000 ? `${output.slice(0, 4000)}...` : output}</pre>
+          : <span> The step returned nothing.</span>
+      ) : null}
+      {test && !test.passed && test.detail ? <p>{test.detail}</p> : null}
+    </div>
+  );
+}
+
 export function SampleDataSection({
   stepName,
   sampleData,
@@ -4239,7 +4265,7 @@ export function SampleDataSection({
   isLocked: boolean;
   isTriggerStep: boolean;
   onSetSampleData: (output: unknown | null) => Promise<{ ok: boolean; message: string }>;
-  onTestFromHere: () => Promise<{ ok: boolean; message: string }>;
+  onTestFromHere: () => Promise<StepTestResult>;
 }): React.ReactElement {
   // The component is mounted with `key={stepName}` by PropertiesPanel, so
   // selecting a different step gives us a fresh instance with state derived
@@ -4251,9 +4277,12 @@ export function SampleDataSection({
     [sampleData],
   );
   const { text, setText, hasUnsavedEdits, markSaved } = useSampleDraftText(`output:${stepName}`, incomingText);
+  const { sampleDrafts } = useContext(WorkflowEditorEnvironment);
   const [parseError, setParseError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [busy, setBusy] = useState<"save" | "test" | "clear" | "reset" | null>(null);
+  // The outcome of the last test stays until the next one: it is the answer to the click.
+  const [testResult, setTestResult] = useState<StepTestResult | null>(null);
 
   const flash = (tone: "ok" | "warn", t: string): void => {
     setStatus({ tone, text: t });
@@ -4308,10 +4337,16 @@ export function SampleDataSection({
   };
 
   const handleTest = async (): Promise<void> => {
+    // The test feeds the SAVED sample input to the step; an unsaved one on the
+    // Input tab would be ignored and the answer would describe other input.
+    if (sampleDrafts?.has(`input:${stepName}`)) {
+      setTestResult({ ok: false, message: "Not tested: the sample input on the Input tab has unsaved changes. Save or undo them first." });
+      return;
+    }
     setBusy("test");
+    setTestResult(null);
     try {
-      const r = await onTestFromHere();
-      flash(r.ok ? "ok" : "warn", r.message);
+      setTestResult(await onTestFromHere());
     } finally {
       setBusy(null);
     }
@@ -4382,6 +4417,10 @@ export function SampleDataSection({
           {status.text}
         </span>
       ) : null}
+      {busy === "test" ? (
+        <span className="wf-props__sample-status" role="status">Testing this step...</span>
+      ) : null}
+      {testResult ? <StepTestOutcome result={testResult} /> : null}
       <div className="wf-props__sample-actions">
         <Button
           variant="ghost"
@@ -4422,10 +4461,10 @@ export function SampleDataSection({
           title={
             hasUnsavedEdits
               ? "Save your changes first; Test runs the persisted sample data"
-              : "Run JUST this step in isolation using the saved sample input + preceding steps' sample data. Does not run downstream steps."
+              : "Run just this step, as it is on screen, using the sample data of the steps before it. Unsaved changes are saved first. Does not run later steps."
           }
         >
-          {busy === "test" ? "Queuing..." : "Test this step"}
+          {busy === "test" ? "Testing..." : "Test this step"}
         </Button>
       </div>
     </section>
