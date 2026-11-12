@@ -145,6 +145,9 @@ import { buildTaintGating } from "../authority/taint-gating.ts";
 import { NOTCH_DECIDER, applyApprovalDecision, channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
 import { sendDesktopNotification, sendDesktopNotificationReceipt } from "../comms/desktop-notify.ts";
 import { channelLabel, failureText, projectFailure } from "../failures/projection.ts";
+import { recordChatFailure } from "../failures/chat.ts";
+import { listOpenFailures } from "../workflows/runtime/open-failures.ts";
+import { getHumanInput, listHumanInputs, resolveHumanInput } from "../workflows/runtime/human-input.ts";
 import { bindingRefusalNotifier, workflowRunNotice } from "../workflows/runtime/binding-refusals.ts";
 import { ensureUiBuilt } from "./ui-autobuild.ts";
 import { localIntegrationEnabled, buildLocalIntegrationUi } from "./local-integration.ts";
@@ -4523,6 +4526,35 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         deliverApproval: (request) => approvalDelivery.deliver(request),
         // Esc twice pauses through the same controller as the tray's Pause.
         emergency: emergencyController,
+        // A workflow step that stopped to ask a person: a few short options
+        // become a row of choices, approve-or-reject becomes one yes, and
+        // anything longer points at the dashboard. Answered through the
+        // product's own function, which refuses a second answer.
+        questions: {
+          pending: () => listHumanInputs(DEFAULT_IDS.project),
+          get: (id) => getHumanInput(DEFAULT_IDS.project, id),
+          answer: (id, input) => resolveHumanInput(DEFAULT_IDS.project, id, input),
+        },
+        // News: a failure that opens while the notch is up is said once, in
+        // the product's own sentence, and so is a background task that ends.
+        openFailures: () => listOpenFailures(Date.now(), DEFAULT_IDS.project)
+          .map((row) => ({ key: row.failure.key, headline: row.failure.headline })),
+        onTaskEnded: (listener) => {
+          const taskManager = agentService.getTaskManager();
+          if (!taskManager) return false;
+          taskManager.subscribeLifecycle((event, task) => {
+            if (event === 'complete' || event === 'fail') listener(event, task);
+          });
+          return true;
+        },
+        recordFixtureFailure: notchDemoState === 'open'
+          ? () => {
+            const failure = projectFailure({ source: 'unknown', message: 'A test failure made by `jarvis notch fixture failure`. Nothing failed.' },
+              { label: 'The notch test', sideEffects: true }, { requestId: `notch-fixture-${Date.now()}` });
+            recordChatFailure(failure);
+            return failure.headline;
+          }
+          : undefined,
         // Promises: the fuse before one is kept, Esc to cancel, and what came
         // of it. A fixture promise (demo gate only) is kept by one line in a
         // file inside the data directory, not by a model turn.
