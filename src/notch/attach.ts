@@ -25,10 +25,15 @@ export interface NotchSidecar {
 
 export interface AttachNotchOptions {
   enabled: boolean;
+  /** The page the notch shows. It must be on the brain's own origin. */
+  pageUrl?: string;
   log?: (line: string) => void;
 }
 
-/** What `notch.configure` answers. `surface` is "none" until the window exists. */
+/**
+ * What `notch.configure` answers. `surface` is "window" when the desktop app can
+ * open the notch's window, and "none" when it only understands the switch.
+ */
 export interface NotchConfigureResult {
   configured?: boolean;
   enabled?: boolean;
@@ -48,7 +53,17 @@ export function attachNotch(port: NotchSidecarPort, options: AttachNotchOptions)
     port.dispatchRPC(sidecar.id, 'notch.configure', { enabled: true }).then(
       (result) => {
         const answer = (result ?? {}) as NotchConfigureResult;
-        log(`[notch] "${sidecar.name}" ready, surface: ${answer.surface ?? 'unknown'}`);
+        const surface = answer.surface ?? 'unknown';
+        log(`[notch] "${sidecar.name}" ready, surface: ${surface}`);
+        // Only a desktop app that says it has a window is asked to open one.
+        if (surface !== 'window' || !options.pageUrl) return;
+        return port.dispatchRPC(sidecar.id, 'notch.spawn', { url: options.pageUrl }).then(
+          () => log(`[notch] "${sidecar.name}" is showing the notch`),
+          (error: unknown) => {
+            const reason = error instanceof Error ? error.message : String(error);
+            log(`[notch] "${sidecar.name}" could not show the notch: ${reason}`);
+          },
+        );
       },
       (error: unknown) => {
         const reason = error instanceof Error ? error.message : String(error);

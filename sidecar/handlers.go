@@ -117,6 +117,16 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 	}
 
 	if caps[CapNotch] {
+		// The window is a panel, so it needs the panel service. Without one
+		// (no windows capability) the switch is still understood and the
+		// reply says there is no surface.
+		if caps[CapWindows] && panels != nil {
+			notch.usePanels(panels)
+			registry["notch.spawn"] = makeNotchSpawnHandler(notch, panels, brainURL, panelToken)
+			registry["notch.close"] = makeNotchCloseHandler(notch)
+		} else {
+			notch.usePanels(nil)
+		}
 		registry["notch.configure"] = makeNotchConfigureHandler(notch)
 	}
 

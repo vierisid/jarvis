@@ -44,6 +44,29 @@ describe('attachNotch', () => {
     expect(lines).toEqual(['[notch] switch on', '[notch] "desk" ready, surface: none']);
   });
 
+  test('opens the window on a desktop app that says it has one, on the given page', async () => {
+    const fake = fakePort(async () => ({ configured: true, enabled: true, surface: 'window' }));
+    const lines: string[] = [];
+    attachNotch(fake.port, { enabled: true, pageUrl: 'http://localhost:3143/api/notch/spike', log: (line) => lines.push(line) });
+    fake.connect(capable);
+    await settle();
+    expect(fake.calls).toEqual([
+      { sidecarId: 's1', method: 'notch.configure', params: { enabled: true } },
+      { sidecarId: 's1', method: 'notch.spawn', params: { url: 'http://localhost:3143/api/notch/spike' } },
+    ]);
+    expect(lines.at(-1)).toBe('[notch] "desk" is showing the notch');
+  });
+
+  // A desktop app that only understands the switch must not be asked for a
+  // window it cannot open: notch.spawn would come back METHOD_NOT_FOUND.
+  test('does not ask for a window when the desktop app has no surface', async () => {
+    const fake = fakePort(async () => ({ configured: true, enabled: true, surface: 'none' }));
+    attachNotch(fake.port, { enabled: true, pageUrl: 'http://localhost:3143/api/notch/spike', log: () => {} });
+    fake.connect(capable);
+    await settle();
+    expect(fake.calls.map((call) => call.method)).toEqual(['notch.configure']);
+  });
+
   test('never sends notch.* to a desktop app that does not advertise the capability', async () => {
     const fake = fakePort();
     const lines: string[] = [];

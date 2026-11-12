@@ -157,6 +157,7 @@ import {
 } from "../sidecar/first-run.ts";
 import type { ConnectedSidecar } from "../sidecar/types.ts";
 import { attachNotch } from "../notch/attach.ts";
+import { NOTCH_PAGE_PATH, notchRoutes } from "../notch/routes.ts";
 import { notchEnabled } from "../notch/switch.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
@@ -1083,9 +1084,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 6c. Create sidecar manager
     const sidecarManager = new SidecarManager(jarvisConfig.daemon.data_dir.replace('~', os.homedir()));
     const pebbleBlindDeps = { connected: () => sidecarManager.listConnected(), dispatchRPC: sidecarManager.dispatchRPC.bind(sidecarManager) };
-    // The notch ships dark: with JARVIS_NOTCH unset this registers nothing and
-    // no notch.* message is ever sent (docs/notch/README.md).
-    attachNotch(sidecarManager, { enabled: notchEnabled() });
     // A sidecar keeps its observer pause only in memory and starts unpaused:
     // tell every machine that connects (#1159).
     sidecarManager.onSidecarConnected((sc) => {
@@ -1122,6 +1120,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // brain claim the manager signs so localhost / 127.0.0.1 / remote all agree.
     const pebbleBrainWs = buildEnrollmentUrls(brainDomain).brainWs;
     const pebblePanelOrigin = `${pebbleBrainWs.startsWith('wss') ? 'https' : 'http'}://${new URL(pebbleBrainWs).host}`;
+    // The notch ships dark: with JARVIS_NOTCH unset this registers nothing and
+    // no notch.* message is ever sent (docs/notch/README.md).
+    attachNotch(sidecarManager, { enabled: notchEnabled(), pageUrl: `${pebblePanelOrigin}${NOTCH_PAGE_PATH}` });
 
     // 6d. Wire sidecar manager to WebSocket server for WS routing
     wsService.getServer().setSidecarManager(sidecarManager);
@@ -5375,6 +5376,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     const apiRoutes = {
       ...createApiRoutes(apiContext),
+      // Absent unless the notch switch is on.
+      ...notchRoutes(notchEnabled()),
       ...createWorkflowRoutes({
         egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
         recoveryAuthority: authorityEngine,

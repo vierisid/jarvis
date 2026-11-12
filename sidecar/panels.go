@@ -80,6 +80,10 @@ type PanelSpec struct {
 	// transform; the sidecar feeds cursor positions to the page via
 	// __pebble_set_cursor invoked through wv.Eval at ~60fps.
 	Fullscreen bool `json:"fullscreen"`
+	// Notch marks the one panel that hosts the notch (notch_host.go). It is set
+	// only by this app, never decoded from a request: it changes how the window
+	// is placed, shaped, shown and given the keyboard.
+	Notch bool `json:"-"`
 }
 
 // PanelService manages the lifecycle of native panel windows.

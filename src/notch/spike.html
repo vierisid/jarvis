@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Jarvis notch</title>
+<style>
+  /* The whole window is black. The desktop app cuts it to the outline this page
+     reports, so only the notch is ever seen and everything else is not there. */
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { font: 500 13px/1.3 "Segoe UI", system-ui, -apple-system, sans-serif; color: #f4f4f0;
+    -webkit-user-select: none; user-select: none; cursor: default; }
+  #n { position: absolute; top: 0; left: 50%; transform: translateX(-50%); box-sizing: border-box;
+    overflow: hidden; width: 250px; height: 30px; }
+  #row { display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 14px; white-space: nowrap; }
+  #n[data-mode="line"] #row, #n[data-mode="sheet"] #row { height: 44px; }
+  #eyes { display: inline-flex; gap: 6px; flex: none; padding: 6px 2px; cursor: pointer; }
+  #eyes i { width: 5px; height: 10px; border-radius: 2.5px; background: #f4f4f0; animation: blink 4.6s infinite; }
+  @keyframes blink { 0%, 94%, 100% { transform: scaleY(1); } 97% { transform: scaleY(.12); } }
+  #say { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #c9c9c2; }
+  #n[data-mode="rest"] #say, #n[data-mode="rest"] #btns, #n[data-mode="small"] #say { display: none; }
+  #btns { display: inline-flex; gap: 6px; flex: none; margin-left: auto; }
+  button { font: inherit; color: inherit; background: #1b1b19; border: 1px solid #3a3a36; border-radius: 6px;
+    padding: 2px 9px; cursor: pointer; }
+  button:hover { background: #2a2a27; }
+  button[aria-pressed="true"] { background: #d6ff5c; border-color: #d6ff5c; color: #1b2400; }
+  #sheet { padding: 4px 14px 14px; }
+  #box { width: 100%; box-sizing: border-box; font: inherit; color: #f4f4f0; background: #141413;
+    border: 1px solid #3a3a36; border-radius: 6px; padding: 8px 10px; outline: none; }
+  #box:focus { border-color: #d6ff5c; }
+  #diag { margin: 10px 0 0; font: 400 11.5px/1.5 ui-monospace, Consolas, monospace; color: #8d8d86; white-space: pre-wrap; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="n" data-mode="small">
+  <div id="row">
+    <span id="eyes" title="Eyes"><i></i><i></i></span>
+    <span id="say"></span>
+    <span id="btns">
+      <button type="button" data-mode="rest">rest</button>
+      <button type="button" data-mode="small" aria-pressed="true">small</button>
+      <button type="button" data-mode="line">line</button>
+      <button type="button" data-mode="sheet">sheet</button>
+    </span>
+  </div>
+  <div id="sheet" hidden>
+    <input id="box" type="text" autocomplete="off" spellcheck="false" placeholder="Click here and type. Esc gives the keyboard back.">
+    <p id="diag"></p>
+  </div>
+</div>
+<script>
+(() => {
+  // Sizes of the notch in each state, in CSS pixels.
+  const SIZES = { rest: [96, 28], small: [250, 30], line: [540, 44], sheet: [560, 220] };
+  const CORNER = 16, SHOULDER = 8;
+  const n = document.getElementById('n'), say = document.getElementById('say'), sheet = document.getElementById('sheet');
+  const box = document.getElementById('box'), diag = document.getElementById('diag'), eyes = document.getElementById('eyes');
+  const native = (name, ...args) => { const fn = window[name]; return typeof fn === 'function' ? fn(...args) : Promise.resolve(null); };
+  const log = (text) => { native('__notch_log', text); };
+
+  let mode = 'small', w = SIZES.small[0], h = SIZES.small[1], vw = 0, vh = 0, moving = false, sent = '', clicks = 0, hasKeys = false;
+
+  // The outline: two shoulders that meet the screen edge, straight sides, round
+  // bottom corners. Points go clockwise in CSS pixels, then are scaled to the
+  // window's own pixels, which is what the desktop app cuts with.
+  function outline(width, height) {
+    const cx = window.innerWidth / 2, left = cx - width / 2, right = cx + width / 2, pts = [];
+    const arc = (ox, oy, r, from, to) => { for (let i = 0; i <= 6; i++) { const a = from + (to - from) * i / 6; pts.push([ox + r * Math.cos(a), oy + r * Math.sin(a)]); } };
+    pts.push([left - SHOULDER, -2]);
+    arc(left - SHOULDER, SHOULDER, SHOULDER, -Math.PI / 2, 0);
+    arc(left + CORNER, height - CORNER, CORNER, Math.PI, Math.PI / 2);
+    arc(right - CORNER, height - CORNER, CORNER, Math.PI / 2, 0);
+    arc(right + SHOULDER, SHOULDER, SHOULDER, Math.PI, Math.PI * 1.5);
+    pts.push([right + SHOULDER, -2]);
+    const scale = window.devicePixelRatio || 1;
+    return pts.map(([x, y]) => [Math.round(x * scale), Math.round(y * scale)]);
+  }
+  function report() {
+    const pts = outline(w, h), key = JSON.stringify(pts);
+    if (key === sent) return pts.length;
+    sent = key;
+    native('__notch_set_outline', pts);
+    return pts.length;
+  }
+  function describe(points) {
+    diag.textContent = 'display scale ' + (window.devicePixelRatio || 1) + '\nwindow ' + window.innerWidth + ' x ' + window.innerHeight +
+      ' css px\nnotch ' + Math.round(w) + ' x ' + Math.round(h) + ', outline of ' + points + ' points\nclicks in the notch: ' + clicks +
+      '\nkeyboard: ' + (hasKeys ? 'with the notch' : 'with your app');
+  }
+
+  // A spring, so the shape and the cut move together frame by frame.
+  function frame() {
+    const [tw, th] = SIZES[mode], dt = 1 / 60, k = 260, c = 28;
+    vw += ((tw - w) * k - vw * c) * dt; vh += ((th - h) * k - vh * c) * dt;
+    w += vw * dt; h += vh * dt;
+    const done = Math.abs(tw - w) < .3 && Math.abs(th - h) < .3 && Math.abs(vw) < 3 && Math.abs(vh) < 3;
+    if (done) { w = tw; h = th; vw = vh = 0; }
+    n.style.width = w + 'px'; n.style.height = h + 'px';
+    describe(report());
+    if (done) { moving = false; return; }
+    requestAnimationFrame(frame);
+  }
+  function go(next) {
+    if (next !== 'sheet' && hasKeys) giveBack();
+    mode = next; n.dataset.mode = next; sheet.hidden = next !== 'sheet';
+    for (const b of document.querySelectorAll('#btns button')) b.setAttribute('aria-pressed', String(b.dataset.mode === next));
+    say.textContent = next === 'line' ? 'One line. Click right beside me.' : next === 'sheet' ? 'Click the box and type.' : '';
+    log('mode ' + next + ', target ' + SIZES[next].join('x'));
+    if (!moving) { moving = true; requestAnimationFrame(frame); }
+  }
+
+  async function take() {
+    const got = await native('__notch_focus', true);
+    hasKeys = got === true; box.focus(); describe(report());
+    log('keyboard asked for: ' + got + ', the box has focus: ' + (document.activeElement === box));
+  }
+  async function giveBack() {
+    box.blur(); hasKeys = false;
+    await native('__notch_focus', false);
+    describe(report()); log('keyboard given back');
+  }
+
+  document.getElementById('btns').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    clicks++; go(b.dataset.mode);
+  });
+  eyes.addEventListener('click', () => { clicks++; go(mode === 'rest' ? 'small' : 'rest'); });
+  box.addEventListener('pointerdown', () => { if (!hasKeys) take(); });
+  box.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); giveBack(); } });
+  box.addEventListener('input', () => { log('typed, ' + box.value.length + ' characters in the box'); });
+  window.addEventListener('resize', () => { sent = ''; describe(report()); });
+  window.matchMedia('(resolution: ' + (window.devicePixelRatio || 1) + 'dppx)').addEventListener('change', () => { sent = ''; describe(report()); });
+
+  n.style.width = w + 'px'; n.style.height = h + 'px';
+  describe(report());
+  log('page ready: scale ' + (window.devicePixelRatio || 1) + ', window ' + window.innerWidth + 'x' + window.innerHeight +
+    ' css px, bridge ' + (typeof window.__notch_set_outline === 'function' ? 'present' : 'missing'));
+})();
+</script>
+</body>
+</html>
