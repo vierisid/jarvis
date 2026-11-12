@@ -76,3 +76,15 @@ test('a caller abort is not reported as a stall', async () => {
   expect(events.at(-1)).toMatchObject({ type: 'error' });
   expect(JSON.stringify(events)).not.toContain('sent no data');
 });
+
+test('a stream that finishes is not aborted afterwards, one the consumer stops early is', async () => {
+  const signals: AbortSignal[] = [];
+  const { manager } = managerFor((options) => {
+    signals.push(options!.signal!);
+    return (async function* () { yield { type: 'text' as const, text: 'a' }; yield done; })();
+  });
+  await collect(manager.stream(messages));
+  expect(signals[0]!.aborted).toBe(false);
+  for await (const event of manager.stream(messages)) { if (event.type === 'text') break; }
+  expect(signals[1]!.aborted).toBe(true);
+});

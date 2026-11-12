@@ -634,6 +634,7 @@ export class LLMManager {
     let waiting = false;
     let gotEvent = false;
     let stalled: string | null = null;
+    let finished = false;
     // A provider on the user's own hardware may need longer to start (see LLMProvider.streamFirstDataMs).
     const firstDataMs = Math.max(this.streamFirstDataMs, provider.streamFirstDataMs ?? 0);
     const arm = () => {
@@ -663,7 +664,7 @@ export class LLMManager {
           waiting = false;
           clearTimeout(timer);
         }
-        if (step.done) return;
+        if (step.done) { finished = true; return; }
         // An error event from an aborted provider stream is the stall itself.
         if (stalled && step.value.type === 'error') { yield { type: 'error', error: stalled, code: 'network' }; return; }
         gotEvent = true;
@@ -671,8 +672,12 @@ export class LLMManager {
       }
     } finally {
       clearTimeout(timer);
-      if (!controller.signal.aborted) controller.abort();
-      void Promise.resolve(iterator.return?.(undefined)).catch(() => {});
+      // A stream that ran to its end has nothing left to cancel. Aborting it
+      // anyway would mark a finished request's signal as aborted.
+      if (!finished) {
+        if (!controller.signal.aborted) controller.abort();
+        void Promise.resolve(iterator.return?.(undefined)).catch(() => {});
+      }
     }
   }
 
