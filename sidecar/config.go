@@ -124,7 +124,7 @@ func mergeBlockedPaths(existing, extra []string) []string {
 func defaultConfig() SidecarConfig {
 	return SidecarConfig{
 		Capabilities: []SidecarCapability{
-			CapTerminal, CapFilesystem, CapClipboard, CapScreenshot, CapSystemInfo, CapAwareness, CapDesktop, CapBrowser, CapOCR, CapWindows, CapPebble, CapSubPebble,
+			CapTerminal, CapFilesystem, CapClipboard, CapScreenshot, CapSystemInfo, CapAwareness, CapDesktop, CapBrowser, CapOCR, CapWindows, CapPebble, CapSubPebble, CapNotch,
 			CapFileWatch, CapProcesses, CapNotifications,
 		},
 		Terminal: TerminalConfig{
