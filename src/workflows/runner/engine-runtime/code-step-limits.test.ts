@@ -10,6 +10,7 @@ import {
   keepTail,
   noOpCodeSandbox,
   oversizedResultMessage,
+  ranOutOfMemory,
   withMemoryCeiling,
 } from "../../activepieces/packages/server/engine/src/lib/core/code/no-op-code-sandbox";
 
@@ -21,12 +22,13 @@ function step(body: string): { file: string; done: () => void } {
 }
 
 describe("a CODE step's limits", () => {
-  test("the memory ceiling defaults to 4 GiB, can be changed, and 0 or Windows removes it; a bad value keeps the default", () => {
+  test("the memory ceiling defaults to 4 GiB, can be changed, and 0, Windows or macOS (which does not enforce it) removes it; a bad value keeps the default", () => {
     expect(codeStepMemoryCeilingMb({}, "linux")).toBe(CODE_STEP_MEMORY_MB_DEFAULT);
     expect(codeStepMemoryCeilingMb({ AP_CODE_STEP_MEMORY_MB: "512" }, "linux")).toBe(512);
     expect(codeStepMemoryCeilingMb({ AP_CODE_STEP_MEMORY_MB: "0" }, "linux")).toBeNull();
     expect(codeStepMemoryCeilingMb({ AP_CODE_STEP_MEMORY_MB: "lots" }, "linux")).toBe(CODE_STEP_MEMORY_MB_DEFAULT);
     expect(codeStepMemoryCeilingMb({}, "win32")).toBeNull();
+    expect(codeStepMemoryCeilingMb({}, "darwin")).toBeNull();
     const [command, args] = withMemoryCeiling("/usr/bin/bun", ["--eval", "x"], 2048);
     expect(command).toBe("/bin/sh");
     expect(args.slice(-3)).toEqual(["/usr/bin/bun", "--eval", "x"]);
@@ -99,11 +101,51 @@ describe("a CODE step's limits", () => {
 
   test.skipIf(process.platform !== "linux")("the wrapper adds nothing to the step's environment", async () => {
     const { file, done } = step("return Object.keys(process.env).sort();");
+    const previous = process.env.AP_CODE_STEP_MEMORY_MB;
     try {
-      const names = await noOpCodeSandbox.runCodeModule({ codeFilePath: file, inputs: {} }) as string[];
-      expect(names).not.toContain("PWD");
-      expect(names).not.toContain("OLDPWD");
-      expect(names).not.toContain("_");
+      delete process.env.AP_CODE_STEP_MEMORY_MB;
+      const wrapped = await noOpCodeSandbox.runCodeModule({ codeFilePath: file, inputs: {} }) as string[];
+      process.env.AP_CODE_STEP_MEMORY_MB = "0";
+      const direct = await noOpCodeSandbox.runCodeModule({ codeFilePath: file, inputs: {} }) as string[];
+      // Whatever /bin/sh is (dash, or bash, which also exports SHLVL), the step sees the same names as without it.
+      expect(wrapped).toEqual(direct);
+      for (const name of ["PWD", "OLDPWD", "_", "SHLVL"]) expect(wrapped).not.toContain(name);
+      const shellExports = withMemoryCeiling("/bin/true", [], 1)[1][1];
+      for (const name of ["PWD", "OLDPWD", "SHLVL", "_"]) expect(shellExports).toContain(`-u ${name} `);
+    } finally {
+      if (previous === undefined) delete process.env.AP_CODE_STEP_MEMORY_MB; else process.env.AP_CODE_STEP_MEMORY_MB = previous;
+      done();
+    }
+  }, 60_000);
+
+  test("out of memory is said for the runtime's own failure or a crash, never for what the step printed", () => {
+    expect(ranOutOfMemory("RangeError: Out of memory\n    at step.js:1", "", null)).toBe(true);
+    expect(ranOutOfMemory("Error: spawn ENOMEM", "", null)).toBe(true);
+    expect(ranOutOfMemory("Code process exited with code null and signal SIGABRT", "", "SIGABRT")).toBe(true);
+    expect(ranOutOfMemory("Code process exited with code null and signal SIGILL", "Bun has crashed", "SIGILL")).toBe(true);
+    expect(ranOutOfMemory("Code process exited with code 1 and signal null", "ENOMEM out of memory", null)).toBe(false);
+    expect(ranOutOfMemory("Error: api failure", "the API said: out of memory, ENOMEM, allocation failed", null)).toBe(false);
+    expect(ranOutOfMemory("Code process exited with code null and signal SIGTERM", "", "SIGTERM")).toBe(false);
+  });
+
+  test("a step that prints an out-of-memory word and then throws keeps its own error", async () => {
+    const { file, done } = step("console.error('upstream said ENOMEM: out of memory'); throw new Error('api failure');");
+    try {
+      const error = await noOpCodeSandbox.runCodeModule({ codeFilePath: file, inputs: {} }).then(() => null, (e: Error) => e);
+      expect(error!.message).toContain("api failure");
+      expect(error!.message).not.toContain("ran out of memory");
+    } finally { done(); }
+  }, 60_000);
+
+  test.skipIf(process.platform !== "linux")("an over-size result is refused in the step's own process, so it never reaches the engine's memory", async () => {
+    // 200 MB: carried over IPC, parsed and measured here it cost this process about 1 GB of peak memory.
+    const { file, done } = step("return 'x'.repeat(200 * 1024 * 1024);");
+    try {
+      const before = process.resourceUsage().maxRSS;
+      const error = await noOpCodeSandbox.runCodeModule({ codeFilePath: file, inputs: {} }).then(() => null, (e: Error) => e);
+      const grewKb = process.resourceUsage().maxRSS - before;
+      expect(error!.message).toContain("returned 200 MB of data, more than a run can keep (10 MB)");
+      expect(grewKb).toBeLessThan(150 * 1024);
     } finally { done(); }
   }, 60_000);
 

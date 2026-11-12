@@ -217,6 +217,10 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   // egress: a daemon restarted from the model's shell must keep it, or its
   // steps could reach the host's published ports again.
   'JARVIS_HOST_ADDRESSES',
+  // The memory ceiling of a CODE step's child, in MB (no-op-code-sandbox.ts).
+  // Not a credential; a daemon restarted from the model's shell keeps the
+  // ceiling its operator chose.
+  'JARVIS_CODE_STEP_MEMORY_MB',
   // Set on model-directed children by modelExecEnv(), and must survive into
   // what they start: see util/model-exec-marker.ts.
   MODEL_EXEC_MARKER_ENV, MODEL_EXEC_ENV_KEY_FLAG,
