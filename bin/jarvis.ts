@@ -27,7 +27,7 @@ import { describeDashboard, ensurePortReleased, resolveDashboardTarget, resolveS
 import { getInstalledVersion } from '../src/cli/version.ts';
 import { loadConfig } from '../src/config/loader.ts';
 import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
-import { daemonStartFlags, recordStartOptions } from '../src/cli/start-options.ts';
+import { clearStartOptions, daemonStartFlags, readStartOptions, recordStartOptions, restartStartArgs } from '../src/cli/start-options.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
 
@@ -207,8 +207,11 @@ async function cmdStart(args: string[]): Promise<void> {
     // daemon (src/daemon/index.ts) traps them and runs a bounded graceful
     // DRAIN before exiting. A `process.exit(0)` from the CLI would preempt that
     // async teardown mid-flight. The OS auto-releases the flock on exit anyway.
-    process.on('exit', () => releaseLock());
-    // For `jarvis update`, which restarts this daemon and cannot read its argv.
+    // The start-options record goes first: a process that later reuses this
+    // pid must not inherit it.
+    process.on('exit', () => { clearStartOptions(process.pid); releaseLock(); });
+    // For `jarvis update` and `jarvis restart`, which restart this daemon and
+    // cannot read its argv.
     recordStartOptions(process.pid, { port, dataDir, noLocalTools, systemConfigPath });
 
     const { startDaemon } = await import('../src/daemon/index.ts');
@@ -518,6 +521,10 @@ async function cmdRestart(args: string[]): Promise<void> {
   if (warning) console.warn(c.yellow(warning));
 
   const pid = isLocked();
+  // Read before the stop, which removes the record with the daemon: "restart
+  // with same settings" means the flags the running daemon was started with.
+  const recorded = pid ? readStartOptions(pid) : null;
+  const start = restartStartArgs(args, recorded);
   if (pid) {
     if (!await cmdStop()) {
       // A service manager can bring the daemon back under a new pid before the
@@ -538,7 +545,13 @@ async function cmdRestart(args: string[]): Promise<void> {
   // Before the start, not after: with no -d, cmdStart does not return until the
   // daemon exits, and a note printed then would arrive hours late.
   await printLaunchdHandoffNote();
-  await cmdStart(args);
+  if (start.reused.length) {
+    console.log(c.dim(`  Starting with the options it was started with: ${start.reused.join(' ')}`));
+    console.log(c.dim('  (pass any of --port, --data-dir, --no-local-tools, --system-config to start with only those instead)'));
+  } else if (pid && !recorded) {
+    console.log(c.dim('  The stopped daemon did not record its start options; starting with the ones given here.'));
+  }
+  await cmdStart(start.args);
 }
 
 /**
