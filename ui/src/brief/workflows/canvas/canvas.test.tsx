@@ -292,6 +292,57 @@ test("detached chains extend with global IDs and delete only the chosen step", a
   expect(editor.draftOrphans[0]?.node.nextAction?.name).toBe("orphan_child");
 });
 
+test("a step picked for a blank placeholder is named after its action, and a chosen name is kept", async () => {
+  await mount();
+  let blank: string | null = null;
+  await React.act(async () => { blank = editor.insertStepAfter("notes"); });
+  expect(editor.allSteps.find((s) => s.step.name === blank)!.step.displayName).toBe("New step");
+  await React.act(async () => editor.setStepPiece(blank!, "fixture-tools", "prepare"));
+  expect(editor.allSteps.find((s) => s.step.name === blank)!.step.displayName).toBe("Prepare output");
+  await React.act(async () => editor.setStepPiece("notes", "fixture-tools", "prepare"));
+  expect(editor.allSteps.find((s) => s.step.name === "notes")!.step.displayName).toBe("Read meeting notes");
+});
+
+test("a title taken from an action follows the next action, and a catalog name is reduced like card text", async () => {
+  const { CANVAS_CATALOG } = await import("./fixtures");
+  const base = CANVAS_CATALOG[0]!;
+  const tricky = "Send\u202Egpj.exe\u200B\n" + "x".repeat(300);
+  const catalog = [{ ...base, actions: [...base.actions,
+    { ...base.actions[0]!, name: "send", displayName: "Send summary" },
+    { ...base.actions[0]!, name: "tricky", displayName: tricky }] }];
+  await mount(async (input, init) => String(input) === "/api/workflows/pieces" ? Response.json(catalog) : fixture.request(input, init));
+  await React.act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  let blank: string | null = null;
+  await React.act(async () => { blank = editor.insertStepAfter("notes"); });
+  const title = () => editor.allSteps.find((s) => s.step.name === blank)!.step.displayName!;
+  await React.act(async () => editor.setStepPiece(blank!, "fixture-tools", "prepare"));
+  expect(title()).toBe("Prepare output");
+  await React.act(async () => editor.setStepPiece(blank!, "fixture-tools", "send"));
+  expect(title()).toBe("Send summary");
+  await React.act(async () => editor.setStepPiece(blank!, "fixture-tools", "tricky"));
+  expect(title()).toStartWith("Sendgpj.exe x");
+  expect(title()).toEndWith("...");
+  expect(title().length).toBe(120);
+  expect(title()).not.toMatch(/[\u202E\u200B\n]/);
+  await React.act(async () => editor.setStepPiece(blank!, "fixture-tools", "send"));
+  expect(title()).toBe("Send summary");
+  await React.act(async () => editor.updateStep(blank!, { displayName: "My summary" }));
+  await React.act(async () => editor.setStepPiece(blank!, "fixture-tools", "prepare"));
+  expect(title()).toBe("My summary");
+});
+
+test("switching the trigger kind retitles a default title and keeps a typed one", async () => {
+  await mount();
+  await React.act(async () => editor.setTriggerKind("schedule"));
+  expect(editor.draftTrigger!.displayName).toBe("Meeting ends");
+  await React.act(async () => editor.setTriggerKind("manual"));
+  await React.act(async () => editor.updateStep("trigger", { displayName: "Manual" }));
+  await React.act(async () => editor.setTriggerKind("schedule"));
+  expect(editor.draftTrigger!.displayName).toBe("Schedule");
+  await React.act(async () => editor.setTriggerKind("webhook"));
+  expect(editor.draftTrigger!.displayName).toBe("Webhook");
+});
+
 test("discard restores the saved workflow name, not the edited version object", async () => {
   await mount();
   const original = editor.version!.displayName;
