@@ -163,20 +163,17 @@ export function isLocked(lockPath: string = defaultLockPath()): number | null {
       closeSync(fd);
       return null;
     }
-    // Lock held by another process — daemon is running
+    // Lock held by another process: a daemon is running. A held flock is
+    // never stale, whatever pid the file names: the kernel drops the lock when
+    // its holder dies, so a lock left by an earlier container (or a crash) is
+    // one the probe above takes, and lands in the branch before this. In
+    // particular a pid of 1 inside a container is the live daemon itself, the
+    // container's init. This used to treat that as stale and unlink the lock,
+    // so `docker exec <c> jarvis status` reported the running daemon as
+    // stopped, deleted its lock, and let a second daemon start on the same
+    // data folder.
     closeSync(fd);
-    const pid = readPidAt(lockPath);
-
-    // Container safety: if PID is 1 and we're inside a container,
-    // the lock file is stale from a previous container lifecycle
-    if (pid === 1 && isInsideContainer()) {
-      // Only auto-release when probing the default daemon path. A custom
-      // lockPath probe shouldn't be allowed to nuke an arbitrary file.
-      if (lockPath === defaultLockPath()) releaseLock();
-      return null;
-    }
-
-    return pid;
+    return readPidAt(lockPath);
   } catch {
     try { closeSync(fd); } catch { /* already closed */ }
     return null;
@@ -436,15 +433,4 @@ export async function waitForProcessExit(
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
   return !isProcessAlive(pid);
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-function isInsideContainer(): boolean {
-  if (existsSync('/.dockerenv')) return true;
-  try {
-    return readFileSync('/proc/1/cgroup', 'utf-8').includes('docker');
-  } catch {
-    return false;
-  }
 }
