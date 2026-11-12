@@ -10,7 +10,10 @@
  *     place: it does not stand beside it.
  *   - The count is how many wait, not counting the one on the notch.
  *   - An item speaks up once, when it arrives, and only if the notch is free
- *     then. Otherwise it joins the count and says nothing.
+ *     then. Otherwise it joins the count and says nothing. Two exceptions:
+ *     one that arrived while no notch was up speaks when one comes up, and
+ *     one that is urgent (a window to act in is already running) takes the
+ *     notch from whatever has it.
  *   - A line that is turned down, or left alone until it folds, goes back to
  *     the count. Not now is never no.
  *   - Yes at rest starts a round: what waits is gone through one by one, a
@@ -45,6 +48,12 @@ export interface NotchItem {
   class: NotchItemClass;
   /** Speaks up when it arrives, if the notch is free. Without this it only joins the count. */
   speaks?: boolean;
+  /**
+   * It cannot wait for the notch to be free: a window to act in is already
+   * running. It takes the place of whatever is on the notch, which goes back
+   * to the count.
+   */
+  urgent?: boolean;
   /** Said once and then gone, whatever the person does: news, not a question. */
   once?: boolean;
   /** One line for the list of what waits. */
@@ -72,6 +81,8 @@ interface Entry {
   item: NotchItem;
   /** Arrival order. Kept when an item is replaced by another on the same subject. */
   seq: number;
+  /** It would have spoken up when it arrived, but no notch was up to speak on. */
+  missed?: boolean;
 }
 
 interface Round {
@@ -104,6 +115,7 @@ export class NotchInbox {
     this.log = options.log ?? ((line) => console.log(line));
     surface.onAnswer((answer, from) => { this.playing?.stage.heard(answer, from); });
     surface.onOpen(() => { this.opened(); });
+    surface.onHello(() => { this.cameUp(); });
   }
 
   /**
@@ -127,8 +139,32 @@ export class NotchInbox {
       this.start(entry, { unasked: wasPlaying.round === null }, wasPlaying.round);
       return;
     }
-    if (item.speaks && this.free()) this.start(entry, { unasked: true }, null);
-    else this.pushCount();
+    if (item.speaks && this.free()) { this.start(entry, { unasked: true }, null); return; }
+    if (item.speaks && item.urgent && this.playing && this.canShow()) {
+      this.halt();
+      this.start(entry, { unasked: true }, null);
+      return;
+    }
+    if (item.speaks && this.surface.listening() === 0) entry.missed = true;
+    this.pushCount();
+  }
+
+  /** A notch has come up. What arrived while there was none gets its say now. */
+  private cameUp(): void {
+    this.shownCount = -1;
+    const missed = this.entries.filter((entry) => entry.missed).sort((a, b) => Number(b.item.urgent ?? false) - Number(a.item.urgent ?? false) || a.seq - b.seq);
+    const first = missed[0];
+    if (first && this.free()) {
+      first.missed = false;
+      this.start(first, { unasked: true }, null);
+      return;
+    }
+    this.pushCount();
+  }
+
+  /** Nothing forbids showing: no hold, nothing else has the notch, and a page is up. */
+  private canShow(): boolean {
+    return this.holds.size === 0 && !this.options.busy?.() && this.surface.listening() > 0;
   }
 
   /** The thing `id` stood for is over (decided elsewhere, gone, done). True if it was waiting. */
@@ -206,8 +242,7 @@ export class NotchInbox {
   }
 
   private free(): boolean {
-    return !this.playing && this.holds.size === 0 && !this.options.busy?.()
-      && this.surface.listening() > 0 && this.surface.current().line === null;
+    return !this.playing && this.canShow() && this.surface.current().line === null;
   }
 
   private ordered(): Entry[] {
@@ -222,6 +257,7 @@ export class NotchInbox {
   }
 
   private start(entry: Entry, how: { unasked: boolean }, round: Round | null): void {
+    entry.missed = false;
     this.run({ entry, stage: this.stage(entry.item.id, how.unasked), round }, async (stage) => {
       if (entry.item.check && !(await entry.item.check())) return 'gone';
       if (stage.ended()) throw new NotchStageEnded();

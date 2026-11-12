@@ -11,9 +11,12 @@ import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts'
 import type { ApprovalDecisionOutcome } from '../daemon/approval-decision.ts';
 import { NOTCH_APPROVAL_LOOK_MS, attachNotchApprovals } from './approvals.ts';
 import type { NotchApprovals } from './approvals.ts';
-import { createNotchFixtures } from './fixtures.ts';
+import type { CommitmentEvent, CommitmentRunner } from '../daemon/commitment-executor.ts';
+import { NOTCH_FIXTURE_ORIGIN, createNotchFixtures, notchFixturePromiseRun } from './fixtures.ts';
 import type { NotchFixtures } from './fixtures.ts';
 import { NotchInbox } from './inbox.ts';
+import { attachNotchPromises } from './promises.ts';
+import type { NotchClock } from './stage.ts';
 import type { NotchSurface } from './surface.ts';
 import { notchTodayScript } from './today.ts';
 
@@ -27,8 +30,24 @@ export interface NotchRealDeps {
   deliverApproval?: (request: ApprovalRequest) => Promise<void> | void;
   /** Opens the dashboard on the machine named, or on every machine showing the notch. */
   openDashboard?: (sidecarId: string | null) => void;
+  /** Promises: the executor that keeps them, and the store they live in. */
+  promises?: {
+    executor: {
+      subscribe(listener: (event: CommitmentEvent) => void): () => void;
+      cancelExecution(commitmentId: string): boolean;
+      checkAndAnnounce(): void;
+      setOriginRunner(origin: string, run: CommitmentRunner): void;
+    };
+    create(what: string, options: { when_due: number; assigned_to: string; created_from: string }): { id: string; when_due: number | null };
+    /** Promises that were kept, for Today. */
+    kept(): { what: string; completed_at: number | null }[];
+    /** Adds a line to the fixture promise's log. Given only when fixtures may be made. */
+    appendFixtureLog?: (line: string) => void;
+  };
   /** How often to look for what is new. */
   lookMs?: number;
+  /** The clock the lines on the notch run on. Tests give one they can wind forward. */
+  clock?: NotchClock;
   log?: (line: string) => void;
 }
 
@@ -46,9 +65,11 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   const log = deps.log ?? ((line: string) => console.log(line));
   const inbox = new NotchInbox(surface, {
     busy: deps.busy,
+    clock: deps.clock,
     log,
     home: notchTodayScript({
       executedApprovals: (limit) => deps.approvalManager.getHistory({ status: 'executed', limit }),
+      keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
     }),
   });
   const approvals = attachNotchApprovals(inbox, {
@@ -57,9 +78,19 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     openDashboard: deps.openDashboard,
     log,
   });
+  const promises = deps.promises;
+  const stopPromises = promises ? attachNotchPromises(inbox, { executor: promises.executor }) : () => {};
+  // A fixture promise is kept by writing one line, not by a model turn.
+  const appendFixtureLog = promises?.appendFixtureLog;
+  if (promises && appendFixtureLog) {
+    promises.executor.setOriginRunner(NOTCH_FIXTURE_ORIGIN, notchFixturePromiseRun(appendFixtureLog));
+  }
   const fixtures = createNotchFixtures({
     approvalManager: deps.approvalManager,
     deliverApproval: deps.deliverApproval,
+    promises: promises && appendFixtureLog
+      ? { create: promises.create, look: () => promises.executor.checkAndAnnounce() }
+      : undefined,
   });
 
   const look = (): void => {
@@ -77,6 +108,6 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   return {
     inbox, approvals, fixtures,
     showing: () => surface.listening() > 0,
-    stop: () => clearInterval(timer),
+    stop: () => { clearInterval(timer); stopPromises(); },
   };
 }
