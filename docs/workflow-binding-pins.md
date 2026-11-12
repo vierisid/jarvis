@@ -60,9 +60,10 @@ saved connection through `upsertConnection` or the project-scoped
 `updateConnectionById`. Adding a connection (`POST /api/workflows/connections`)
 never replaces one: the same external id for the same piece is a 409 that points
 to Rotate (the `PATCH`), so a secret is only ever replaced on purpose. A new
-connection's name (200 characters) and external id (200) cannot hold control or
-text-direction characters, `type` must be a known type, and `pieceName` a piece
-the install or the Library knows; rows saved earlier keep loading as they are. A
+connection's name (200 characters) and external id (200) cannot hold control,
+line-separator, text-direction or invisible characters (zero-width space, word
+joiner, BOM), `type` must be a known type, and `pieceName` a piece the install
+or the Library knows; rows saved earlier keep loading as they are. A
 rename, a status change or saving the same credential again does not count.
 Jarvis stores no account identity, so a rotated key cannot be told from another
 account pasted under the same name: both pause the flow. Re-encryption (key

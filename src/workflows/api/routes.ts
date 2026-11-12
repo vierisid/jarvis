@@ -1269,9 +1269,6 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!body.value || typeof body.value !== "object" || Array.isArray(body.value)) {
             return err("value must be an object");
           }
-          // Soft schema check per type. Catches the common mistake of saving
-          // an OAUTH2 connection with no `access_token` (the piece would
-          // later fail with a confusing "auth missing" at run time).
           const fieldProblem = refuseConnectionFields({
             externalId: body.externalId,
             displayName: body.displayName,
@@ -1282,6 +1279,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               : {}),
           });
           if (fieldProblem) return err(fieldProblem);
+          // Soft schema check per type. Catches the common mistake of saving
+          // an OAUTH2 connection with no `access_token` (the piece would
+          // later fail with a confusing "auth missing" at run time).
           const schemaError = validateConnectionValueShape(body.type, body.value);
           if (schemaError) return err(schemaError);
           // Adding never replaces. The same external id for the same piece

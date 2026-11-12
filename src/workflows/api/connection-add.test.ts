@@ -35,6 +35,7 @@ describe("adding a connection never replaces one", () => {
     const second = await add({ ...good, displayName: "Other name", value: { secret_text: "canary-key-two" } });
     expect(second.status).toBe(409);
     expect(second.body.error).toContain("Rotate");
+    expect(JSON.stringify(second.body)).not.toContain("canary-key");
     const rows = listConnections();
     expect(rows).toHaveLength(1);
     expect(rows[0]!.displayName).toBe("Slack");
@@ -52,8 +53,10 @@ describe("a new connection's fields are checked", () => {
   test.each([
     ["a very long name", { displayName: "x".repeat(201) }],
     ["a name with a line break", { displayName: "a\nb" }],
-    ["a name with a bidi override", { displayName: "cv‮gpj.exe" }],
+    ["a name with a bidi override", { displayName: "cv\u202Egpj.exe" }],
+    ["a name with a line separator", { displayName: "a\u2028b" }],
     ["a blank name", { displayName: "   " }],
+    ["a zero-width space in the id", { externalId: "slack\u200Bmain" }],
     ["a NUL in the id", { externalId: "a\u0000b" }],
     ["a long id", { externalId: "i".repeat(201) }],
     ["a reserved id", { externalId: "__proto__" }],

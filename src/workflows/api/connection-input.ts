@@ -18,14 +18,20 @@ export const CONNECTION_TYPES: readonly AppConnectionType[] = [
   "NO_AUTH",
 ];
 
-/** Control characters, and the characters that reorder how text reads (bidi marks, embeddings, isolates). */
-const CONTROL_OR_BIDI = /[\p{Cc}؜‎‏‪-‮⁦-⁩]/u;
+/**
+ * Control characters, line and paragraph separators, the characters that
+ * reorder how text reads (bidi marks, embeddings, overrides, isolates), and the
+ * invisible ones that make two ids look the same (zero-width space, word
+ * joiner, BOM). Zero-width joiner and non-joiner stay allowed: emoji and some
+ * scripts need them. Written as escapes so the source stays plain ASCII.
+ */
+const CONTROL_OR_BIDI = /[\p{Cc}\p{Zl}\p{Zp}\u061C\u200B\u200E\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/u;
 const RESERVED_IDS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
 
 function textProblem(value: string, label: string, max: number): string | null {
   if (value.trim().length === 0) return `${label} cannot be blank`;
   if (value.length > max) return `${label} must be at most ${max} characters`;
-  if (CONTROL_OR_BIDI.test(value)) return `${label} cannot contain control or text-direction characters`;
+  if (CONTROL_OR_BIDI.test(value)) return `${label} cannot contain control, line-separator, text-direction or invisible characters`;
   return null;
 }
 
