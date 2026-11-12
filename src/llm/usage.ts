@@ -81,8 +81,8 @@ export function recordUsage(rec: UsageRecord): void {
         rec.provider,
         rec.model,
         // A provider's numbers are not trusted: anything that is not a sane
-        // count is 0 (unknown), so the call is still recorded and the totals
-        // and threshold alerts built on them are never corrupted.
+        // count is 0 (unknown), so the call is still recorded and the Usage
+        // totals built on them are never corrupted.
         cleanTokenCount(rec.input_tokens, { provider: rec.provider, field: 'input_tokens' }),
         cleanTokenCount(rec.output_tokens, { provider: rec.provider, field: 'output_tokens' }),
         cleanTokenCount(rec.cache_read_input_tokens, { provider: rec.provider, field: 'cache_read_input_tokens' }),
