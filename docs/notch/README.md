@@ -126,6 +126,78 @@ itself, and `sidecar.yaml` has no setting for it.
     page checks first that the window is not on its way out. On Windows a
     script run while the web view is being taken apart is a crash.
 
+## Real things on the notch
+
+From pass 4 the notch is fed by the product itself. `src/notch/real.ts` is
+the one place that puts it together, and reading it is reading the list of
+what the notch touches.
+
+| On the notch | Where it comes from | How it is found | How it is answered |
+|---|---|---|---|
+| An approval | `approval_requests` | looking once a second | `applyApprovalDecision`, as decider `notch` |
+| A promise about to be kept | the commitment executor | its `subscribe` | `cancelExecution` |
+| A workflow's question | `workflow_human_request` | looking every 5 s | `resolveHumanInput` |
+| A failure | the open failures list | looking every 5 s | nothing: it is news |
+| A background task that ended | the task manager's lifecycle | its `subscribeLifecycle` | nothing: it is news |
+| A suggestion | the awareness delivery policy | given in place of its toast | nothing: it is news |
+| Everything stopped | the emergency controller | its `subscribe` | `pause`, `resume` |
+
+What holds for all of them:
+
+20. **The notch decides nothing.** A yes goes through the same function every
+    other surface uses, so "decided once" holds: a second answer, from the
+    notch or from anywhere else, is refused there, and the notch says so.
+21. **Not now is never no.** A line turned down, clicked away from, or left
+    until it folds goes back to the count. Nothing is denied, rejected or
+    cancelled by looking away. The only cancel on the notch is Esc inside a
+    promise's window, where cancelling is what the window is for.
+22. **A yes is not acted on at once.** A fuse burns first and Esc takes it
+    back. Nothing has been decided while it burns, so nothing has to be
+    undone. A fuse nobody saw burn out (the page went away) decides nothing.
+23. **What a key may approve.** The rules a spoken yes follows, and the rule
+    every surface smaller than the dashboard follows: a payment, a
+    destructive request, one that needs on-screen review, or a sentence too
+    long to show whole or that could be a look-alike is approved in the
+    dashboard. The line says so and yes on it only opens the dashboard.
+24. **A tap cannot land on the wrong thing.** A line that came by itself
+    takes no yes for 0.7 s, counted in the page from when it was drawn.
+25. **The page starts nothing.** A promise is run by the executor's own
+    clock. The page saying its fuse has burnt is not what runs it.
+26. **One item per subject, and each has one chance to speak up.** An item
+    speaks when it arrives and the notch is free, otherwise it joins the
+    count. Exceptions: one that arrived while no notch was up, or while
+    everything was stopped, speaks when that ends; and a window that is
+    already running (a promise's fuse) takes the notch.
+27. **Before anything is shown it is asked whether it is still true.** What
+    was decided, answered, cancelled or expired elsewhere leaves by itself.
+28. **While a notch is up, it is the one that asks.** The approval toast and
+    the task-complete toast are not raised for what the notch shows.
+
+### What this branch changes with the switch off
+
+Invariant 1 is about the notch. These are changes to the product itself, made
+because the notch needed them to be true, and they hold whether or not the
+switch is on:
+
+- **A payment is approved on the dashboard only** (`approvalDashboardOnly`).
+  A notification button or a chat reply could approve one before. Decided by
+  the owner on 12 November 2026.
+- **A commitment runs at its due time, at most once, and a cancel holds**
+  (`commitment-executor.ts`, `claimCommitmentRun`, new column
+  `commitments.started_at`). It no longer runs up to two minutes early; the
+  same words due in the same minute are one commitment; one cut off by a
+  restart is closed, not run again; nothing is announced or run while Jarvis
+  is paused; a turn that came back as error text is a failure.
+- **The audit trail has a channel `notch`**, unused while the switch is off.
+
+And these are behind the switch:
+
+- **Pause also holds the model loops** (`setPauseHoldsLoops`, `whenRunnable`).
+  Background model calls wait for Resume. One line in `daemon/index.ts`
+  makes it the rule everywhere.
+- **Suggestions join the count** and are not spoken or toasted.
+- **Approval and task-complete toasts are not raised** while a notch page is up.
+
 ## The keys
 
 | What | Keys | How it is told |
@@ -165,11 +237,27 @@ itself, and `sidecar.yaml` has no setting for it.
 
 ## What it does not protect, and what is missing
 
-- Nothing real feeds the notch yet. The only thing that puts a line on it is
-  the demo (`jarvis notch demo`), with sample data.
+- Approvals a restart left without a receipt ("run once or close") are not
+  on the notch. They are in the dashboard, and in the tray's count.
+- Esc twice is heard only while the notch has something on it, because that
+  is the only time Esc is taken from the app in front. To stop everything
+  from rest: yes (which opens Today or starts a round), then Esc twice. Or
+  the tray's Pause. The same pause either way.
+- Pause does not stop watching. The observers run on; "eyes closed" here
+  means nothing is done, not that nothing is seen.
+- Held model loops are in memory. A brain restarted while paused comes back
+  paused, with what was held gone.
+- A workflow's question that needs typing, or more than one field, is not
+  answered on the notch: the line points at the dashboard.
+- Workflow questions, failures and suggestions on the notch have tests but
+  no fixture that makes a real workflow run, so they have not been seen on a
+  real brain. Approvals, promises and the pause have.
+- There is no model for testing without a key. The fixtures need none.
+- Today lists approved actions and kept promises only. Work that needed no
+  approval is in the audit trail by tool name, with no sentence to show.
 - Talking is only seen, not heard: holding the talk keys makes the notch perk
   up. Speech comes in a later pass.
-- The keys have not been tried by hand yet on Windows, and the macOS tap has
+- The keys were tried by hand on one Windows 11 machine. The macOS tap has
   never run.
 - The existing Ctrl + Shift + Space hotkey is untouched and still does what
   it did.
@@ -224,6 +312,7 @@ itself, and `sidecar.yaml` has no setting for it.
 | brain to desktop app | `notch.spawn` | `{url: string}`, on the brain's origin | `{spawned: true, already: boolean}` |
 | brain to desktop app | `notch.close` | none | `{closed: boolean}` |
 | brain to desktop app | `notch.push` | `{message: any JSON}`, for the page | `{pushed: true}` |
+| brain to desktop app | `notch.open_dashboard` | none | `{opened: boolean}`. Opens the dashboard's window, as the tray's entry does. Decides nothing |
 | desktop app to brain | event `notch.message` | `{message: any JSON}`, from the page | none |
 
 The page talks to the desktop app through six functions on `window`:
@@ -254,10 +343,11 @@ time; a new `show` replaces it.
 | From | Message | Meaning |
 |---|---|---|
 | page | `hello {v}` | The page is up. Answered with `state` |
-| brain | `state {line, count, born}` | Everything the notch should show, at once |
+| brain | `state {line, count, born, face}` | Everything the notch should show, at once |
 | brain | `show {line}` | Put this on the notch |
 | brain | `rest` | Back to the eyes |
 | brain | `count {count}` | How many things wait |
+| brain | `face {mood}` | The face the notch has at rest until told otherwise: `closed` while everything is stopped. Kept by the brain, unlike a mood given with `act` |
 | brain | `update {id, ...}` | Change the line on the notch in place: steps done, a new sentence, words heard, a sheet's content |
 | brain | `act {...}` | A face, a movement, a birth, the watching eye, the mouth, sounds. Not remembered |
 | page | `answer {id, act, ...}` | What the person did with the line `id` |
@@ -268,6 +358,9 @@ A line is one of seven kinds: `say` (a result that leaves by itself), `offer`
 (yes or no, or a row of choices), `sheet`, `ask` (a text field), `work`
 (steps), `send` (a window to take it back) and `listen`. A sentence is made
 of plain words, `em` words, keycaps and lit words the person can change.
+
+A line marked `unasked` came by itself: the page takes no yes on it for
+0.7 s.
 
 After `no`, `fold`, and a `say` that finished, the page has gone to rest by
 itself. After any other answer it keeps the line until the brain says what
@@ -326,6 +419,28 @@ It is `jarvis notch demo` pointed at the test brain. `try.sh` makes the secret
 the first time and keeps it in the test data folder. Against any other brain:
 start it with `JARVIS_NOTCH=1` and `JARVIS_NOTCH_DEMO=<16 or more characters>`,
 and run `jarvis notch demo <moment>` with the same `JARVIS_NOTCH_DEMO` set.
+
+### Making real things to try it on
+
+The demo plays sample sentences. Fixtures make real records, found and
+answered through the product's own code (`src/notch/fixtures.ts` says what
+each does, and that it is harmless):
+
+```sh
+scripts/notch/fixture.sh               # a menu
+scripts/notch/fixture.sh approval      # an approval a key may answer
+scripts/notch/fixture.sh approval 3    # three, for the count and the round
+scripts/notch/fixture.sh payment       # an approval that is a payment; no money moves
+scripts/notch/fixture.sh promise 30    # a promise due in 30 s (two minutes when not said)
+scripts/notch/fixture.sh failure       # one failure in the list of open failures
+scripts/notch/fixture.sh log           # one line per promise that ran
+```
+
+It is `jarvis notch fixture` behind the same secret as the demo. A fixture
+promise is kept by adding one line to `notch-fixture.log` in the data
+directory, with no model: the file is the proof that it ran once. Before
+setup is complete the promise executor is not running; with the demo gate
+open it runs for fixture promises alone.
 
 The page can also be tried without the desktop app or a brain, in a browser.
 The preview runs the real page with the brain's own demo scripts, and can draw
