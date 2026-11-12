@@ -69,6 +69,8 @@ import { assertVersionReady, versionReadiness, WorkflowReadinessError } from '..
 import { assertCodeStepsAllowed, CodeStepsRefusedError } from "../db/repos/flow-code-steps";
 import { getFlowReadHosts, setFlowReadHosts } from "../db/repos/flow-read-hosts";
 import { normalizeReadHosts, readHostsOfRow } from "../db/read-hosts";
+import { LOCAL_ADDRESS_REFUSAL, localHostRefusal } from "../runtime/http-approval";
+import type { EgressPolicy } from "../runtime/http-egress";
 import { FlowVersionRequestError, withOwnedFlowVersion } from "../db/repos/flow-version-ownership";
 import {
   getFlowVersionUiMeta,
@@ -703,6 +705,8 @@ function sampleStepNameRefusal(stepName: string): Response | null {
 }
 
 export interface CreateWorkflowRoutesOptions {
+  /** Where a workflow HTTP step may connect; the read list refuses a host it can never reach. Absent: private ranges are allowed, the rest is not. */
+  egressPolicy?: EgressPolicy;
   recoveryAuthority?: AuthorityEngine;
   briefWorkflowContext?: WorkflowContext;
   briefCapabilities?: BriefCapabilities;
@@ -2086,6 +2090,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           let expected: string[] | null = null;
           try {
             hosts = normalizeReadHosts(body.hosts);
+            const local = hosts.find((host) => localHostRefusal(host, opts.egressPolicy ?? "private-allowed") !== null);
+            if (local) return err(`${local}: ${LOCAL_ADDRESS_REFUSAL} Jarvis could never read it, so it is not added to the list.`, 400);
             if (Array.isArray(body.expected)) expected = normalizeReadHosts(body.expected);
           } catch (e) {
             return err(e instanceof Error ? e.message : String(e), 400);
