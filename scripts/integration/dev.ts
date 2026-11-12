@@ -2,6 +2,7 @@
 import { mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
+import { devEnv } from './dev-env.ts';
 
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
@@ -23,16 +24,7 @@ if (!Number.isInteger(port) || port < 1024 || port > 65535) throw Error('Use a p
 const home = join(root, 'home'), data = join(root, 'data'), tmp = join(root, 'tmp');
 for (const path of [home, data, tmp]) mkdirSync(path, { recursive: true, mode: 0o700 });
 // Do not inherit credentials or an existing hosted instance's environment.
-const env: Record<string, string> = { PATH: process.env.PATH ?? '', HOME: home, TMPDIR: tmp,
-  LANG: process.env.LANG ?? 'C.UTF-8', JARVIS_HOME: data, JARVIS_SECRETS_DIR: data,
-  JARVIS_PORT: String(port), JARVIS_PUBLIC_URL: `http://localhost:${port}`, JARVIS_LOCAL_INTEGRATION: '1' };
-for (const key of ['TZ', 'SystemRoot', 'SYSTEMROOT', 'WSL_INTEROP', 'WSL_DISTRO_NAME']) if (process.env[key]) env[key] = process.env[key]!;
-for (const key of [
-  'NAVIGATION_COMPATIBILITY', 'RECONCILIATION', 'ONBOARDING', 'CONVERSATIONS', 'CHAT_TRANSPORT', 'CHAT_STATE',
-  'CHAT_ATTACHMENTS', 'CHAT_PROGRESS', 'WORKFLOW_COMPOSITION', 'COMPOSITION_INGREDIENTS', 'PREPARED_OPPORTUNITIES',
-  'OPPORTUNITY_ACTIVATION', 'QUIET_AWARENESS', 'DECISIONS', 'DECISION_EDITS', 'RECOMMENDATIONS', 'GOAL_MEASUREMENTS',
-  'OUTCOMES', 'MEMORY_STREAM', 'MEMORY_USAGE', 'MEMORY_FORGET', 'WORKFLOW_REMOVAL', 'WORKFLOW_CONTEXT', 'CONNECTIONS', 'PROFILE_SETTINGS',
-]) env[`JARVIS_BRIEF_${key}`] = '1';
+const env = devEnv(process.env, { home, data, tmp }, port);
 const enroll = args.includes('--enroll');
 const command = enroll ? [process.execPath, '--no-env-file', 'run', 'bin/jarvis.ts', 'enroll', option('--enroll', '')]
   : [process.execPath, '--no-env-file', 'run', 'bin/jarvis.ts', 'start', '--no-open'];
