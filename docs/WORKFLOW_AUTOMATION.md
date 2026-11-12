@@ -864,7 +864,9 @@ HTTP request specifics:
   Found.` plus `It said:` and the first 300 characters of the reply in quotes,
   redacted by the same credential rules as the card and the receipt, with frame
   delimiters defanged (the reply is the server's text, never Jarvis's own
-  words); `The request timed out after 2 seconds.` for the step's own timeout
+  words). A reply that is a web page is never quoted as markup: the sentence
+  says `It sent a web page titled "..."`, or quotes the text a reader would see
+  when it has no title; `The request timed out after 2 seconds.` for the step's own timeout
   (never shown as a server 500); `Could not reach api.example.com.` only when
   no connection was made (the name did not resolve, or the address refused or
   could not be routed to). Any other failure with no answer (a reset, a TLS or
