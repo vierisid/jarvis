@@ -48,6 +48,12 @@ export interface WorkerOptions {
   pollIntervalMs?: number;
   /** Lease for retryable jobs. Workflow execution claims are never reassigned. */
   leaseMs?: number;
+  /**
+   * Called after a job's final queue state is written (done, failed or
+   * requeued), so a caller can react to a run that just ended or parked
+   * without waiting for a poll. A throw is logged, never the job's.
+   */
+  onJobSettled?: (job: Job) => void;
   /** Optional logger; defaults to console. Pass a no-op to silence. */
   log?: (line: string) => void;
 }
@@ -62,6 +68,7 @@ export class Worker {
   private readonly pollIntervalMs: number;
   private readonly leaseMs: number | undefined;
   private readonly log: (line: string) => void;
+  private readonly onJobSettled?: (job: Job) => void;
   private running = false;
   private loops: Promise<void>[] = [];
 
@@ -69,6 +76,7 @@ export class Worker {
     this.handlers = opts.handlers;
     this.pollIntervalMs = opts.pollIntervalMs ?? 250;
     this.leaseMs = opts.leaseMs;
+    this.onJobSettled = opts.onJobSettled;
     this.log = opts.log ?? ((line) => console.log(`[workflow-worker] ${line}`));
   }
 
@@ -137,6 +145,15 @@ export class Worker {
   }
 
   private async handle(job: Job): Promise<void> {
+    try {
+      await this.handleJob(job);
+    } finally {
+      try { this.onJobSettled?.(job); }
+      catch (e) { this.log(`job ${job.id}: settle hook failed: ${(e as Error).message}`); }
+    }
+  }
+
+  private async handleJob(job: Job): Promise<void> {
     const handler = this.handlers[job.jobType];
     if (!handler) {
       const msg = `no handler registered for jobType=${job.jobType}`;
