@@ -29,7 +29,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { EngineRuntime } from "../runner/engine-runtime/engine-runtime";
+import type { EngineHandle, EngineRuntime } from "../runner/engine-runtime/engine-runtime";
 import { DEFAULT_IDS } from "../db/schema";
 import { SandboxRegistry } from "../sandbox-api/sandbox-registry";
 import type {
@@ -38,6 +38,7 @@ import type {
   PieceInputType,
 } from "./piece-input";
 import { WORKFLOW_EVENT_TYPES } from "./event-types";
+import { DYNAMIC_SCHEMA_PIECES, resolveDynamicSchemas, type DynamicSchemaTable } from "./dynamic-property-schemas";
 
 export type { PieceInputField, PieceInputSchema, PieceInputType } from "./piece-input";
 
@@ -58,6 +59,12 @@ export interface PieceCatalogAction {
   description: string;
   requireAuth?: boolean;
   inputSchema?: PieceInputSchema;
+  /**
+   * The property map the engine resolved for each dynamic property, for every
+   * value its refreshers can take (dynamic-property-schemas.ts). Present only
+   * for pieces in DYNAMIC_SCHEMA_PIECES.
+   */
+  dynamicSchemas?: Record<string, DynamicSchemaTable>;
   /**
    * Optional declared output sample: the same JSON shape the action returns
    * on a successful run. Surfaced by the piece author via
@@ -315,7 +322,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "32"; // v32: managed GitLab issue outputs; v31: managed Help Scout customer, conversation and note output contracts; v30: managed Zoom meeting output contracts; v29: managed Pipedrive person/deal outputs; v28: managed Wrike task/comment outputs; v27: managed Webflow CMS item output contracts; v26: Figma file/comment output contracts; v25: reusable child call flow_ref; v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts; v20: Typeform form and response output contracts; v21: Notion page output contracts; v22: Linear issue and comment output contracts; v23: Todoist task and completion output contracts; v24: managed monday.com item output contracts
+export const CATALOG_SCHEMA_VERSION = "33"; // v33: resolved dynamic property schemas; v32: managed GitLab issue outputs; v31: managed Help Scout customer, conversation and note output contracts; v30: managed Zoom meeting output contracts; v29: managed Pipedrive person/deal outputs; v28: managed Wrike task/comment outputs; v27: managed Webflow CMS item output contracts; v26: Figma file/comment output contracts; v25: reusable child call flow_ref; v10: managed GitHub issue output contracts; v11: Trello board/list/card output contracts; v12: managed Mailchimp output contracts; v13: Slack channel/message output contracts; v14: Dropbox action output contracts; v15: Asana task and comment output contracts; v16: retain action aiMetadata; v17: Intercom contact, conversation, note and tag output contracts; v18: Calendly meeting and booking-link output contracts; v19: Airtable record output contracts; v20: Typeform form and response output contracts; v21: Notion page output contracts; v22: Linear issue and comment output contracts; v23: Todoist task and completion output contracts; v24: managed monday.com item output contracts
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -648,8 +655,11 @@ export async function buildPieceCatalog(
             `extract ${piece.name}@${piece.version} timed out after ${pieceTimeoutMs}ms`,
           );
           const entry = { ...metadataToCatalogEntry(meta), version: piece.version };
+          const resolved = !DYNAMIC_SCHEMA_PIECES.has(piece.name)
+            || await attachDynamicSchemas(handle, piece, meta, entry, pieceTimeoutMs, reporter);
           out.push(entry);
-          userEntries[`${piece.name}@${piece.version}`] = { contentHash, entry };
+          // An entry missing a schema that failed to resolve is not cached, so the next build tries again.
+          if (resolved) userEntries[`${piece.name}@${piece.version}`] = { contentHash, entry };
           extracted++;
           consecutiveTimeouts = 0;
         } catch (e) {
@@ -761,6 +771,51 @@ export async function buildPieceCatalog(
 }
 
 /**
+ * Resolve the dynamic properties of a piece whose resolvers read only their
+ * sibling values. A property that fails to resolve is left out, so the step
+ * keeps the readiness message that says what to do; it never fails the piece.
+ * False when any failed, so the entry is not cached in that state.
+ */
+async function attachDynamicSchemas(
+  handle: EngineHandle,
+  piece: PieceDiscoveryEntry,
+  meta: RawPieceMetadata,
+  entry: PieceCatalogEntry,
+  timeoutMs: number,
+  reporter: (msg: string) => void,
+): Promise<boolean> {
+  let complete = true;
+  const groups: Array<[Record<string, RawActionOrTrigger> | undefined, Record<string, PieceCatalogAction> | undefined]> = [
+    [meta.actions, entry.actions],
+    [meta.triggers, entry.triggers],
+  ];
+  for (const [raws, entries] of groups) {
+    for (const [key, raw] of Object.entries(raws ?? {})) {
+      const target = entries?.[key];
+      if (!target) continue;
+      try {
+        const tables = await resolveDynamicSchemas(raw, (propertyName, input) => withTimeout(
+          handle.executeDynamicProperty({
+            pieceName: piece.name,
+            pieceVersion: piece.version,
+            actionOrTriggerName: key,
+            propertyName,
+            input,
+          }),
+          timeoutMs,
+          `resolve ${piece.name}.${key}.${propertyName} timed out after ${timeoutMs}ms`,
+        ));
+        if (tables) target.dynamicSchemas = tables;
+      } catch (e) {
+        complete = false;
+        reporter(`resolve dynamic properties of ${piece.name}.${key} failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  }
+  return complete;
+}
+
+/**
  * Thrown when an extraction outruns its per-piece budget.
  *
  * A distinct type because the two failure shapes need opposite handling and a
@@ -824,6 +879,7 @@ export interface RawProp {
   required?: boolean;
   properties?: Record<string, unknown>;
   defaultValue?: unknown;
+  refreshers?: string[];
   options?: { options?: Array<{ value: unknown; label?: string; description?: string }> };
 }
 
