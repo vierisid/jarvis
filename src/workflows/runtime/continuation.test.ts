@@ -71,6 +71,14 @@ describe("one continuation per pause", () => {
     expect(JSON.stringify(listFlowFires(flowId))).not.toContain(wp.id);
   });
 
+  test("a continuation is claimed ahead of runs that have not started", () => {
+    for (let i = 0; i < 5; i++) enqueue({ jobType: RUN_FLOW, payload: { runId: `fresh-${i}` }, flowRunId: `fresh-${i}` });
+    const { runId } = pausedRun();
+    const wp = timer(runId, "2026-10-07T09:00:00Z");
+    expect(new TimerWaitpointScheduler().tick(at("2026-10-07T09:03:00Z"))).toBe(1);
+    expect(claimNextJob<{ waitpointId?: string }>()?.payload).toMatchObject({ waitpointId: wp.id });
+  });
+
   test("while one continuation is queued, another is not queued behind it", async () => {
     const { runId } = pausedRun();
     const webhookWaitpoint = hook(runId);

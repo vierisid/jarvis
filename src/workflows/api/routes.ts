@@ -84,7 +84,7 @@ import {
   type FlowRunStatus,
   type RunEnvironment,
 } from "../db/repos/flow-run";
-import { countQueued, enqueue } from "../db/repos/job-queue";
+import { countQueued, countQueuedOwnerRuns, enqueue } from "../db/repos/job-queue";
 import { listChildRuns } from "../db/repos/child-run";
 import { cancelFlowRun } from "../db/repos/run-cancellation";
 import { startWorkItemRun } from "../../goals/workflow-bridge";
@@ -240,6 +240,15 @@ export const WAITPOINT_RESUME_MAX_BODY_BYTES = 1_000_000;
  * where it gets one.
  */
 export const RUN_TRIGGERED_BY_MAX_CHARS = 200;
+
+/**
+ * Most runs the owner may have waiting to start in a project before
+ * `POST /:id/run` refuses another (429, Retry-After). Counts only runs the
+ * owner started (`countQueuedOwnerRuns`), never trigger runs: webhook ingress
+ * is refused at its own cap, and a sender filling the queue must not lock the
+ * owner out of running a workflow by hand.
+ */
+export const MAX_QUEUED_MANUAL_RUNS = 500;
 
 function isRunEnvironment(value: unknown): value is RunEnvironment {
   return value === "PRODUCTION" || value === "TESTING";
@@ -2190,6 +2199,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             && (typeof body.triggeredBy !== "string" || body.triggeredBy.length > RUN_TRIGGERED_BY_MAX_CHARS)
           ) {
             return err(`triggeredBy must be a string of at most ${RUN_TRIGGERED_BY_MAX_CHARS} characters`, 400);
+          }
+          // Manual starts are capped: past this many of the owner's own runs
+          // waiting in this project, a request is refused rather than queued
+          // behind them for minutes. Trigger runs are not counted, so a
+          // webhook backlog never refuses a run started by hand. Before any
+          // run row exists, so nothing is left to clean up.
+          let waiting = 0;
+          try { waiting = countQueuedOwnerRuns(callerProject(req)); } catch { /* a probe failure must not stop the owner's run */ }
+          if (waiting >= MAX_QUEUED_MANUAL_RUNS) {
+            return new Response(JSON.stringify({
+              error: `${waiting} runs you started are still waiting to start. Try again once some of them have run.`,
+            }), {
+              status: 429,
+              headers: { "Content-Type": "application/json", "Retry-After": "30" },
+            });
           }
           // Version selection:
           //   - Test-from-here (stepNameToTest set): prefer DRAFT. The user

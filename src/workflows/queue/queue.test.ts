@@ -18,6 +18,7 @@ import {
   enqueue,
   failJob,
   getJob,
+  PRIORITY_HEAD_START_MS,
   queueStats,
   recoverOrphanedJobs,
 } from "../db/repos/job-queue";
@@ -385,6 +386,16 @@ describe("job-queue repo", () => {
 
     const fourth = claimNextJob({ now: now + 1000 });
     expect(fourth?.id).toBe(b.id);
+  });
+
+  test("priority is a bounded head start: a job waiting longer than it goes before any newer, higher one", () => {
+    const now = Date.now();
+    const old = enqueue({ jobType: "T", payload: {}, scheduledAt: now - PRIORITY_HEAD_START_MS - 1 });
+    const recent = enqueue({ jobType: "T", payload: {}, scheduledAt: now - PRIORITY_HEAD_START_MS + 1000 });
+    const urgent = enqueue({ jobType: "T", payload: {}, priority: 1, scheduledAt: now });
+    expect(claimNextJob({ now })?.id).toBe(old.id);
+    expect(claimNextJob({ now })?.id).toBe(urgent.id);
+    expect(claimNextJob({ now })?.id).toBe(recent.id);
   });
 
   test("claim respects locked_until lease", () => {
