@@ -4,9 +4,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { initDatabase, closeDb, getDb } from '../vault/schema';
-import { createEntity } from '../vault/entities';
+import { createEntity, updateEntity } from '../vault/entities';
 import { createFact, correctFact, deleteFact, verifyFact } from '../vault/facts';
-import { MemoryStream, MEMORY_STREAM_LIMITS, memoryStreamQuery } from './memory-stream';
+import { MemoryStream, MEMORY_STREAM_LIMITS, memoryStreamQuery, readableSubject } from './memory-stream';
 import type { MemoryStreamQuery, MemoryStreamPage, MemoryUsageReader } from './memory-stream-contracts';
 import type { BriefMemoryUse } from './contracts';
 
@@ -126,7 +126,9 @@ test('cursors are bound to query and page size and signed against offset tamperi
   fact('tea'); fact('coffee'); const first = await page({ limit: 1 });
   for (const query of [{ limit: 2 }, { limit: 1, q: 'tea' }, { limit: 1, source: 'meeting' }])
     await expect(provider.read({ ...query, cursor: first.nextCursor! })).rejects.toThrow('different query');
-  await expect(provider.read({ limit: 1, cursor: first.nextCursor!.replace('.1.', '.0.') })).rejects.toThrow('Invalid cursor');
+  const [snapshot, position, signature] = first.nextCursor!.split('.');
+  await expect(provider.read({ limit: 1, cursor: [snapshot, Buffer.from(JSON.stringify(null)).toString('base64url'), signature].join('.') })).rejects.toThrow('Invalid cursor');
+  expect(position!.length).toBeGreaterThan(0);
 });
 test('strict bounds reject unsupported fields and malformed query inputs', async () => {
   for (const query of [{ limit: 0 }, { limit: 101 }, { limit: 1.5 }, { q: '' }, { q: 'a'.repeat(257) }, { q: 'x\u0000' },
@@ -149,20 +151,22 @@ test('malformed and duplicate usage records fail closed', async () => {
   }
   uses = [supplied(a.id), supplied(a.id)]; expect((await provider.read()).state).toBe('unavailable');
 });
-test('hard collection cap is unavailable, never a silently truncated count', async () => {
+test('a store over the old 10,000 fact cap still pages, searches and counts from the database', async () => {
   const template = fact('tea'), entries = Object.entries(getDb().query<any, [string]>('SELECT * FROM facts WHERE id=?').get(template.id));
   const columns = entries.map(([k]) => k), stmt = getDb().prepare(`INSERT INTO facts (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`);
-  getDb().transaction(() => { for (let i = 0; i < MEMORY_STREAM_LIMITS.facts; i++) stmt.run(...entries.map(([k, v]) => k === 'id' ? `extra-${i}` : v) as SQLQueryBindings[]); })();
-  expect(await provider.read()).toEqual({ state: 'unavailable', reason: 'capacity_exceeded' });
+  const total = 20_000;
+  getDb().transaction(() => { for (let i = 0; i < total; i++) stmt.run(...entries.map(([k, v]) => k === 'id' ? `extra-${String(i).padStart(5, '0')}` : k === 'object' ? (i === 12_345 ? 'needle' : `item ${i}`) : v) as SQLQueryBindings[]); })();
+  const first = await page({ limit: 100 });
+  expect(first.count).toEqual({ total: total + 1, matched: total + 1, returned: 100 }); expect(first.nextCursor).not.toBeNull();
+  const found = await page({ q: 'NEEDLE' }); expect(found.items.map(i => i.sentence)).toEqual(['Ada likes needle']);
+  const seen = new Set(first.items.map(i => i.factId)); let next = first.nextCursor;
+  for (let n = 0; n < 20 && next; n++) { const current = await page({ limit: 100, cursor: next }); for (const i of current.items) seen.add(i.factId); next = current.nextCursor; }
+  expect(seen.size).toBe(2100); expect(next).not.toBeNull();
+  expect((provider.detail('extra-12345') as any).state).toBe('ready');
 });
 
-
-test('usage and provenance caps fail closed before returning misleading partial evidence', async () => {
+test('a usage ledger over its cap fails closed before returning misleading partial evidence', async () => {
   const a = fact('tea'); uses = Array.from({ length: MEMORY_STREAM_LIMITS.uses + 1 }, (_, i) => supplied(a.id, { useId: `use-${i}` }));
-  expect(await provider.read()).toEqual({ state: 'unavailable', reason: 'capacity_exceeded' });
-  uses = [];
-  const stmt = getDb().prepare(`INSERT INTO fact_evidence(id,fact_id,source,basis,confidence,recorded_at,evidence_key) VALUES(?,?,'fixture','reported',1,?,?)`);
-  getDb().transaction(() => { for (let i = 0; i < MEMORY_STREAM_LIMITS.evidence; i++) stmt.run(`e-${i}`, a.id, now, `key-${i}`); })();
   expect(await provider.read()).toEqual({ state: 'unavailable', reason: 'capacity_exceeded' });
 });
 test('history cycles terminate and oversized lineage is unavailable without truncation', async () => {
@@ -174,4 +178,120 @@ test('history cycles terminate and oversized lineage is unavailable without trun
   const columns = entries.map(([k]) => k), stmt = getDb().prepare(`INSERT INTO facts (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`);
   getDb().transaction(() => { for (let i = 0; i < 99; i++) stmt.run(...entries.map(([k, v]) => k === 'id' ? `history-${i}` : v) as SQLQueryBindings[]); })();
   expect(provider.detail(a.id, true)).toEqual({ state: 'unavailable' });
+});
+test('workflow bookkeeping entities are left out of the stream and counts, and id-only subjects read as a type and source', async () => {
+  const flow = createEntity('project', 'lbk0h4QNrT2dLz9oEdSQQ', { entity_kind: 'workflow' });
+  const draft = createEntity('concept', 'zkRaquk048rgAX6HlPz84', { entity_kind: 'draft_version' });
+  createFact(flow.id, 'reported_schedule', 'daily', { source: 'llm_extraction' });
+  createFact(draft.id, 'requested_state', 'disabled draft', { source: 'llm_extraction' });
+  const bare = createEntity('project', 'qwErTy0123456789AbCdEf');
+  const kept = createFact(bare.id, 'launch_plan', 'weekly', { source: 'llm_extraction' });
+  fact('tea');
+  const view = await page();
+  expect(view.count.total).toBe(2);
+  expect(view.items.map(i => i.sentence).join('\n')).not.toContain('lbk0h4QNrT2dLz9oEdSQQ');
+  const row = view.items.find(i => i.factId === kept.id)!;
+  expect(row.sentence).toBe('A project noted from a chat launch plan weekly');
+  expect(row.sentence).not.toContain('qwErTy0123456789AbCdEf');
+  expect(view.items.some(i => i.sentence === 'Ada likes tea')).toBe(true);
+  expect(getDb().query('SELECT COUNT(*) c FROM facts').get()).toEqual({ c: 3 + 1 });
+});
+test('operational facts stored earlier are hidden at read time and counted consistently; data is kept', async () => {
+  getDb().run("CREATE TABLE IF NOT EXISTS flow_version (id TEXT PRIMARY KEY, flow_id TEXT, display_name TEXT)");
+  getDb().run("INSERT INTO flow_version (id, flow_id, display_name) VALUES ('v1', 'f1', 'Weekly Reminder')");
+  const wf = createEntity('project', 'Weekly Reminder', undefined, 'llm_extraction');
+  const biz = createEntity('project', 'Morloven', undefined, 'llm_extraction');
+  const llm = { source: 'llm_extraction' };
+  createFact(wf.id, 'requested_schedule', 'Every weekday at 09:00', { ...llm, basis: 'reported', quote: 'q' });
+  createFact(biz.id, 'reported_workflow_id', 'lbk0h4QNrT2dLz9oEdSQQ', { ...llm, basis: 'reported', quote: 'q' });
+  createFact(biz.id, 'reported_saved_cron', '0 9 * * 1-5', { ...llm, basis: 'reported', quote: 'q' });
+  createFact(biz.id, 'assistant_reported_status', 'Saved as disabled draft', { ...llm, basis: 'inferred' });
+  const real = createFact(biz.id, 'sells', 'surf apparel', { ...llm, basis: 'reported', quote: 'q' });
+  const view = await page();
+  expect(view.items.map(i => i.factId)).toEqual([real.id]);
+  expect(view.count).toEqual({ total: 1, matched: 1, returned: 1 });
+  expect(await page({ q: 'cron' })).toMatchObject({ count: { total: 1, matched: 0 } });
+  expect(getDb().query('SELECT COUNT(*) c FROM facts').get()).toEqual({ c: 5 });
+});
+test('extracted repeats that differ only in case or spacing collapse to the latest; different values and user-entered facts do not', async () => {
+  const biz = createEntity('project', 'Morloven', undefined, 'llm_extraction');
+  const llm = { source: 'llm_extraction' };
+  createFact(biz.id, 'requires', 'One row per order.', llm); now += 1000;
+  const latest = createFact(biz.id, 'requires', 'one row  per order', llm);
+  const apparel = createFact(biz.id, 'sells', 'surf apparel', llm); now += 1000;
+  const wetsuits = createFact(biz.id, 'sells', 'wetsuits', llm);
+  const a = fact('tea'), b = fact('coffee');
+  const view = await page();
+  expect(view.items.map(i => i.factId).sort()).toEqual([latest.id, apparel.id, wetsuits.id, a.id, b.id].sort());
+  expect(view.count.total).toBe(5);
+});
+test('a contested extracted pair stays visible to be settled', async () => {
+  const llm = { source: 'llm_extraction' };
+  const one = createFact(subject, 'birthday', 'May 1', llm); now += 1000;
+  const two = createFact(subject, 'birthday', 'June 2', llm);
+  const view = await page();
+  expect(view.items.map(i => i.factId).sort()).toEqual([one.id, two.id].sort());
+  expect(view.items.every(i => i.status === 'contested')).toBe(true);
+});
+test('facts a person entered or confirmed always show, even when they look like bookkeeping', async () => {
+  const wf = createEntity('project', 'Hiring workflow', { entity_kind: 'workflow' });
+  getDb().run("CREATE TABLE IF NOT EXISTS flow_version (id TEXT PRIMARY KEY, flow_id TEXT, display_name TEXT)");
+  getDb().run("INSERT INTO flow_version (id, flow_id, display_name) VALUES ('v1', 'f1', 'Ada')");
+  const typed = createFact(subject, 'stripe_account', 'acct_1NqXyZ2eZvKYlo2C', { source: 'dashboard' });
+  const onFlow = createFact(wf.id, 'needs', 'two interviews', { source: 'dashboard' });
+  const confirmed = createFact(subject, 'reported_schedule_id', 'Q7hYt3kLmN0pQrStUv', { source: 'llm_extraction' });
+  verifyFact(confirmed.id, 'yes, that is mine');
+  const quoted = createFact(createEntity('project', 'Morloven').id, 'account_id', 'acct_1NqXyZ2eZvKYlo2C',
+    { source: 'llm_extraction', quote: 'our account is acct_1NqXyZ2eZvKYlo2C' });
+  const reportsTo = createFact(createEntity('person', 'Bea').id, 'reported_to', 'Ada', { source: 'llm_extraction' });
+  const ids = (await page()).items.map(i => i.factId);
+  for (const f of [typed, onFlow, quoted, reportsTo]) expect(ids).toContain(f.id);
+  expect(ids.length).toBe(5);
+});
+test('hidden bookkeeping still resolves by id for detail and history', async () => {
+  const flow = createEntity('project', 'lbk0h4QNrT2dLz9oEdSQQ', { entity_kind: 'workflow' });
+  const f = createFact(flow.id, 'reported_schedule', 'daily', { source: 'llm_extraction' });
+  expect((await page()).count.total).toBe(0);
+  expect(provider.detail(f.id)).toMatchObject({ state: 'ready', data: { factId: f.id } });
+  expect(provider.detail(f.id, true)).toMatchObject({ state: 'ready' });
+  expect(readableSubject('qwErTy0123456789AbCdEf', 'event', 'llm_extraction')).toBe('An event noted from a chat');
+});
+test('facts about a workflow itself are hidden, not facts about the business', async () => {
+  const wf = createEntity('project', 'Order ingestion workflow', undefined, 'llm_extraction');
+  createFact(wf.id, 'required_output', 'One row per order', { source: 'llm_extraction', basis: 'reported', quote: 'q' });
+  const view = await page();
+  expect(view.count.total).toBe(0);
+});
+test('hidden bookkeeping stays out of every page of a paged read, and counts match what pages return', async () => {
+  const flow = createEntity('project', 'lbk0h4QNrT2dLz9oEdSQQ', { entity_kind: 'workflow' }), llm = { source: 'llm_extraction' };
+  const shown: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    createFact(flow.id, 'reported_schedule', `daily ${i}`, llm);
+    shown.push(fact(`tea${i}`).id); now += 1000;
+  }
+  let view = await page({ limit: 2 }); const seen = view.items.map(i => i.factId);
+  expect(view.count).toEqual({ total: 6, matched: 6, returned: 2 });
+  while (view.nextCursor) { view = await page({ limit: 2, cursor: view.nextCursor }); seen.push(...view.items.map(i => i.factId)); }
+  expect(seen.sort()).toEqual(shown.sort());
+  expect((await page({ q: 'daily' })).count).toEqual({ total: 6, matched: 0, returned: 0 });
+});
+test('a fact that becomes hidden while a cursor is open ends that cursor as stale', async () => {
+  for (let i = 0; i < 3; i++) fact(`tea${i}`);
+  createFact(createEntity('project', 'Weekly Reminder').id, 'needs', 'a sheet', { source: 'llm_extraction' });
+  const first = await page({ limit: 2 }); expect(first.count.total).toBe(4);
+  getDb().run("CREATE TABLE IF NOT EXISTS flow_version (id TEXT PRIMARY KEY, flow_id TEXT, display_name TEXT)");
+  getDb().run("INSERT INTO flow_version (id, flow_id, display_name) VALUES ('v1', 'f1', 'Weekly Reminder')");
+  expect(await provider.read({ limit: 2, cursor: first.nextCursor! })).toEqual({ state: 'stale', reason: 'source_changed' });
+  expect((await page()).count.total).toBe(3);
+});
+test('search matches the words a sentence shows: spaced predicates and non-ASCII text typed as stored', async () => {
+  const f = createFact(createEntity('person', 'Émile').id, 'launch_plan', 'Città di Roma', { source: 'dashboard' });
+  for (const q of ['launch plan', 'Émile', 'Émile LAUNCH plan', 'città di roma', 'CITTà'])
+    expect((await page({ q })).items.map(i => i.factId)).toEqual([f.id]);
+});
+test('renaming a member subject ends an open cursor as stale, even to a name of the same shape', async () => {
+  for (let i = 0; i < 3; i++) fact(`tea${i}`);
+  const first = await page({ limit: 2 }); now += 1000;
+  updateEntity(subject, { name: 'Ana' });
+  expect(await provider.read({ limit: 2, cursor: first.nextCursor! })).toEqual({ state: 'stale', reason: 'source_changed' });
 });

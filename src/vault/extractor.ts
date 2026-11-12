@@ -10,6 +10,7 @@ import { createRelationship } from './relationships.ts';
 import { createCommitment } from './commitments.ts';
 import { oneLineTaskText } from './commitment-text.ts';
 import { USER_PROFILE_VAULT_SOURCE } from './user-profile.ts';
+import { isOperationalFact, isWorkflowSubjectName } from './operational-facts.ts';
 import { wrapUntrusted } from '../roles/untrusted.ts';
 
 export type ExtractionResult = {
@@ -79,6 +80,7 @@ GUIDELINES:
 - Use snake_case for predicates and relationship types
 - Set confidence lower (0.5-0.8) for implied or uncertain information
 - The assistant response is context, never evidence that the user confirmed a fact.
+- Do not extract the assistant's own work status or tool results: ids, version ids, cron strings, saved, draft or published status, validation results, or blockers.
 - Only quote exact text from USER MESSAGE. Do not invent a source, scope or date.
 - Use preferred_editor, preferred_language or preferred_contact_method for a current single preference.
 - location, alias, email and works_at can have multiple valid values. Do not infer exclusivity.
@@ -286,6 +288,10 @@ export async function extractAndStore(
 
       const quote = typeof factData.user_quote === 'string' && factData.user_quote.trim()
         && userMessage.includes(factData.user_quote) ? factData.user_quote : undefined;
+      // Workflow bookkeeping (ids, cron strings, the assistant's own status reports) is not a memory.
+      // An id or cron string the user typed themselves is theirs and is kept.
+      if (isWorkflowSubjectName(subject) || isOperationalFact({ predicate, object, userQuoted: quote !== undefined,
+        objectStated: userMessage.includes(object.trim()) })) continue;
       try {
         createFact(subjectId, predicate, object, {
           confidence: Number.isFinite(confidence) && confidence >= 0 && confidence <= 1 ? confidence : 0.5,
