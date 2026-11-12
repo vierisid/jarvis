@@ -25,6 +25,9 @@ import type { JobHandler } from "../queue/worker";
 import { ensureRunExecutionConfig, getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
 import { cancelFlowRun, getRunCancellation } from "../db/repos/run-cancellation";
 import { assertRunIngredientsReady, WorkflowReadinessError } from "../db/repos/flow-readiness";
+import { removedPieceStep } from "../db/repos/flow-dependents";
+import { workflowReadinessServices } from "../db/repos/readiness-services";
+import { plainPieceName } from "../pieces-library/plain-piece-name";
 import { watchRunCancellation, withRunCancellation } from "../runtime/cancellation";
 import { signalRunEnded } from "../runtime/cancellation-signals";
 import {
@@ -259,6 +262,35 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
         });
         throw new Error(workflowFailureMessage(`RUN_FLOW refused RESUME for run ${runId}: ${message}`));
       }
+    }
+
+    // A piece uninstalled after this run was queued or paused: it stops here,
+    // saying which piece, before any step needs it, not in the engine midway.
+    // A fresh fire is refused earlier, by readiness; this covers the rest.
+    const removed = removedPieceStep(version.trigger, workflowReadinessServices()?.pieces);
+    if (removed) {
+      const piece = plainPieceName(removed.pieceName);
+      if (resuming) {
+        const message = `The ${piece} piece this run uses was removed, so the run was not continued. Reinstall it from the Library, then start a new run.`;
+        updateRun(runId, {
+          status: "FAILED",
+          failedStep: { name: "<resume>", displayName: "Continue run", errorMessage: message },
+          finishTime: now(),
+        });
+        throw new Error(workflowFailureMessage(`RUN_FLOW refused RESUME for run ${runId}: ${message}`));
+      }
+      // Recorded as readiness refuses a fire, so the run reads "did not run:
+      // the <piece> piece it uses was removed" and nothing was claimed.
+      const message = `Unknown piece "${removed.pieceName}"`;
+      updateRun(runId, {
+        status: "FAILED",
+        failedStep: { name: "<readiness>", displayName: "Workflow readiness", errorMessage: message },
+        steps: { "<readiness>": { status: "FAILED", output: { code: "PIECE", phase: "dispatch",
+          readiness: { ready: false, runtimeChecks: [], issues: [{ node: removed.step, path: "settings.pieceName", code: "PIECE", message }] } } } },
+        stepsCount: 0,
+        finishTime: now(),
+      });
+      throw new Error(workflowFailureMessage(`RUN_FLOW refused BEGIN for run ${runId}: the ${piece} piece it uses was removed.`));
     }
 
     const startTime = run.startTime ?? now();

@@ -21,8 +21,6 @@
 import { getWorkflowDb } from '../db';
 import { ENDED_RUN_STATUSES_SQL } from '../db/schema';
 import { readBindingPins } from '../db/repos/binding-pins';
-import { removedPieceReason } from '../db/repos/piece-dependents';
-import { workflowReadinessServices } from '../db/repos/readiness-services';
 import { getFlowRun, type FlowRun } from '../db/repos/flow-run';
 import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { getFlowVersion } from '../db/repos/flow-version';
@@ -62,8 +60,7 @@ export interface BindingBlock {
   kind: 'readiness' | 'runtime';
   /** The Q-19 headline: what happened, one sentence. */
   message: string;
-  /** The run that shows it, or null when none does (a removed piece is known before any run fails). */
-  runId: string | null;
+  runId: string;
   at: number;
 }
 
@@ -97,10 +94,6 @@ export const LATEST_ENDED_RUN_SQL = `SELECT id, status, failed_step, finish_time
 export function flowBindingBlock(flow: { id: string; project_id: string; status: string }): BindingBlock | null {
   if (flow.status !== 'ENABLED') return null;
   const db = getWorkflowDb();
-  // A piece uninstalled since it was published stops every run, so the list
-  // says so now, not after the next fire fails. No run shows it yet.
-  const removed = removedPieceReason(flow, workflowReadinessServices()?.pieces);
-  if (removed) return { code: 'PIECE_REMOVED', kind: 'readiness', runId: null, message: removed, at: Date.now() };
   // Filtered and ordered as idx_flow_run_ended (db/schema.ts), so this reads
   // the index to its first entry, not past every run still waiting. Named:
   // without table statistics the planner takes idx_brief_run_history for

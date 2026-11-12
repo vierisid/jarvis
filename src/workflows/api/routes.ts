@@ -96,10 +96,10 @@ import {
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { deleteWorkflow } from "../db/repos/flow-deletion";
-import { connectionDependents, dependentsSentence, missingDependency, workflowsCalling } from "../db/repos/flow-dependents";
+import { connectionDependents, dependentsSentence, enabledWorkflowsUsingPiece, missingDependency, removedPieceReason, uninstallSentence, workflowsCalling } from "../db/repos/flow-dependents";
+import { workflowReadinessServices } from "../db/repos/readiness-services";
 import { claimContinuation } from "../runtime/continuation";
 import { flowBindingBlock } from "../runtime/binding-refusals";
-import { enabledWorkflowsUsingPiece, uninstallSentence } from "../db/repos/piece-dependents";
 import { plainPieceName } from "../pieces-library/plain-piece-name";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
 import {
@@ -1623,6 +1623,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               // deleted cannot run, whatever its last run said.
               const missing = missingDependency(flow);
               if (missing) return { code: "DEPENDENCY_MISSING", kind: "readiness" as const, message: missing, runId: null, at: flow.updated };
+              // A piece uninstalled since it was published stops every run, so
+              // the list says so now, not after the next fire fails. It reads
+              // the live catalog, so it clears once the piece is back.
+              const removed = removedPieceReason(flow, workflowReadinessServices()?.pieces);
+              if (removed) return { code: "PIECE_REMOVED", kind: "readiness" as const, message: removed, runId: null, at: flow.updated };
               return flowBindingBlock(flow);
             } catch (error) { console.error(`[workflows] blocked state of ${flow.id} unreadable:`, error); return null; }
           };
