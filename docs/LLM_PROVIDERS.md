@@ -250,7 +250,7 @@ active_role: "default"
 
 ### Applying a change
 
-Saving LLM settings in the dashboard (`POST /api/config/llm`, onboarding setup, or an external edit picked up by a reload) applies to the running daemon without a restart: the providers and tier map are swapped, and the chat layer follows. Adding the `conversation` tier switches chat to the router-first path; removing it returns chat to the single-orchestrator path. A turn already running finishes on the path it started on.
+Saving LLM settings in the dashboard (`POST /api/config/llm`, onboarding setup, or an external edit picked up by a reload) applies to the running daemon without a restart: the providers and tier map are swapped, and the chat layer follows. Adding the `conversation` tier switches chat to the router-first path; removing it returns chat to the single-orchestrator path. A turn already running stays on the path it started on, but its next model call uses the new providers and tier map: a router-first turn still running when the `conversation` tier is removed ends with "No provider configured for tier 'conversation'".
 
 ### Loading Configuration
 
