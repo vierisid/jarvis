@@ -284,3 +284,8 @@ test('a fact that becomes hidden while a cursor is open ends that cursor as stal
   expect(await provider.read({ limit: 2, cursor: first.nextCursor! })).toEqual({ state: 'stale', reason: 'source_changed' });
   expect((await page()).count.total).toBe(3);
 });
+test('search matches the words a sentence shows: spaced predicates and non-ASCII text typed as stored', async () => {
+  const f = createFact(createEntity('person', 'Émile').id, 'launch_plan', 'Città di Roma', { source: 'dashboard' });
+  for (const q of ['launch plan', 'Émile', 'Émile LAUNCH plan', 'città di roma', 'CITTà'])
+    expect((await page({ q })).items.map(i => i.factId)).toEqual([f.id]);
+});

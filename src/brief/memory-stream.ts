@@ -31,6 +31,9 @@ const compareText = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const idValid = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 200 && !/[\\/\u0000-\u001f\u007f]/.test(v) && v !== '.' && v !== '..';
 const timestamp = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && Math.abs(v) <= 8.64e15;
 const sameWords = (text: string) => text.toLowerCase().replace(/\s+/g, ' ').replace(/[\s.,;:!]+$/, '');
+// SQLite lower() folds ASCII letters only. Search folds the query the same way, so text typed exactly as stored
+// always matches, accented capitals included; only a non-ASCII letter typed in the other case does not.
+const asciiLower = (text: string) => text.replace(/[A-Z]/g, c => c.toLowerCase());
 const SOURCE_PHRASE: Record<string, string> = { llm_extraction: 'noted from a chat', user_profile: 'from your profile', dashboard: 'added by you' };
 /** The subject as a person reads it: its name, or a type and source phrase when the name is only an id. */
 export function readableSubject(name: string, type: string, source: string | null): string {
@@ -250,7 +253,8 @@ export class MemoryStream {
         }
         // Search, Source, Used in and the Updated range run in the database over the member facts.
         const where: string[] = [], params: (string | number)[] = [];
-        if (query.q) { where.push(`instr(lower(subject_name || ' ' || predicate || ' ' || object), ?) > 0`); params.push(query.q.toLowerCase()); }
+        // The text the sentence is made of; a subject shown as a type and source phrase is still found by its stored name.
+        if (query.q) { where.push(`instr(lower(subject_name || ' ' || replace(predicate, '_', ' ') || ' ' || object), ?) > 0`); params.push(asciiLower(query.q)); }
         if (query.source) { where.push(`(source = ? OR EXISTS (SELECT 1 FROM fact_evidence ev WHERE ev.fact_id = r.id AND ev.source = ?))`); params.push(query.source, query.source); }
         if (query.updatedFrom !== undefined) { where.push('updated_at >= ?'); params.push(query.updatedFrom); }
         if (query.updatedBefore !== undefined) { where.push('updated_at < ?'); params.push(query.updatedBefore); }
