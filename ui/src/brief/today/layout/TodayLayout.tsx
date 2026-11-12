@@ -29,12 +29,21 @@ export function TodayLayout({ shell, greeting, dateLabel, dateTime, decision, sl
       const height = Math.max(74, box.height);
       setGreetingBox(current => current.top === top && current.height === height ? current : { top, height });
     };
-    measure();
-    const observer = new ResizeObserver(measure); observer.observe(header);
+    // Only what sits before the greeting in the page can move it: watch those boxes, so
+    // a notice whose text changes in place (paused to stopped) or that wraps is followed too.
+    const ancestors: Element[] = [];
+    for (let node = header.parentElement; main && node && main.contains(node); node = node.parentElement) ancestors.push(node);
+    const sizes = new ResizeObserver(measure);
+    const watchAbove = () => {
+      sizes.disconnect(); sizes.observe(header);
+      for (let node: Element = header; node.parentElement && ancestors.includes(node.parentElement); node = node.parentElement)
+        for (let sibling = node.previousElementSibling; sibling; sibling = sibling.previousElementSibling) sizes.observe(sibling);
+    };
+    watchAbove(); measure();
     // A notice appearing or leaving moves the greeting without resizing it.
-    const mutations = new MutationObserver(measure);
-    if (main) mutations.observe(main, { childList: true, subtree: true });
-    return () => { observer.disconnect(); mutations.disconnect(); };
+    const mutations = new MutationObserver(() => { watchAbove(); measure(); });
+    for (const node of ancestors) mutations.observe(node, { childList: true });
+    return () => { sizes.disconnect(); mutations.disconnect(); };
   }, []);
   return <div className="brief-today-layout" data-compact={compact} data-single={workspace.layout === "single"}
     data-chat={workspace.open} data-goal={!!slots.goal} data-reduce-motion={reducedMotion}>
