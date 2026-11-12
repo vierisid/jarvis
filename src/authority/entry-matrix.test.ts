@@ -113,6 +113,43 @@ describe('a card that must be reviewed on screen', () => {
   });
 });
 
+describe('a payment', () => {
+  const askPayment = (p: ReturnType<typeof pipeline>) => {
+    const req = p.ask();
+    getDb().run("UPDATE approval_requests SET action_category = 'make_payment' WHERE id = ?", [req.id]);
+    return p.approvals.getRequest(req.id)!;
+  };
+
+  test('is approved on the dashboard only: a key on the notch, a chat reply and a toast are refused and it stays pending', async () => {
+    const p = pipeline();
+    const req = askPayment(p);
+    for (const surface of ['notch', 'telegram', 'telegram:42', 'discord', 'notification', 'voice']) {
+      expect(await applyApprovalDecision('approve', req.id, surface, p.deps)).toMatchObject({ status: 'needs_dashboard' });
+    }
+    expect(p.approvals.getRequest(req.id)!.status).toBe('pending');
+    const refused = await applyApprovalDecision('approve', req.id, 'telegram', p.deps);
+    expect(channelDecisionReply(refused, req)).toContain('is a payment');
+    expect(notificationDecisionNote(refused)).toContain('is a payment');
+    expect(p.runs).toEqual([]);
+    expect(await applyApprovalDecision('approve', req.id, 'dashboard', p.deps)).toMatchObject({ status: 'approved', executed: true });
+    expect(p.runs).toHaveLength(1);
+  });
+
+  test('can be denied from anywhere', async () => {
+    const p = pipeline();
+    const req = askPayment(p);
+    expect(await applyApprovalDecision('deny', req.id, 'telegram', p.deps)).toMatchObject({ status: 'denied' });
+  });
+
+  test('approved anywhere else, the executor refuses it', async () => {
+    const p = pipeline();
+    const req = askPayment(p);
+    p.approvals.approve(req.id, 'notification');
+    expect((await p.executor.executeApprovedWithReceipt(req.id)).result).toContain('is a payment, which is approved on the dashboard only');
+    expect(p.runs).toEqual([]);
+  });
+});
+
 describe('two surfaces deciding one request', () => {
   test('dispatch it once', async () => {
     const p = pipeline();
