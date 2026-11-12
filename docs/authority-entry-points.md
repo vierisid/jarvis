@@ -64,6 +64,25 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
   for a piece that includes a digest of its whole resolved input, not only the
   shortened copy the card shows (a body past 512 characters, a list past 25
   items).
+- **What the card shows.** The Needs you card of a governed piece action
+  (email, HTTP request, any verified piece) lists what will happen, read from
+  the effect's frozen arguments, and only while they are the arguments the
+  approval is bound to (the digest the effect boundary checks before it runs;
+  otherwise the section is left out). The primary target comes first
+  (recipients, method and URL, channel), then subject, a body excerpt,
+  attachment names and sizes and the other fields, at most 12, with the count
+  of fields not shown. Values are redacted as the frozen record redacts them,
+  and again with the same shared rules (`redactHttpInput` on any URL, the
+  piece's own redaction), so a rule added later covers an older record too.
+  Each value is untrusted text, reduced as any card value is (format, bidi and
+  control characters removed, whitespace collapsed to one line) and shown in
+  its own field under its label. Every recipient the record holds is listed,
+  and a value is cut only past 600 characters, above the record's own bound,
+  with "(shortened)" after its label. A body keeps up to 12 lines and 500
+  characters, framed as quoted text and marked "(beginning only)" when cut.
+  Headers and credentials are never listed. The one-line sentence on chat and
+  desktop cards names up to four target fields, primary target first, so a
+  recipient is never cut for a sender name.
 - **Permissions.** Each request records whom it was asked for (role, level,
   profile). When it runs, the same checks are made again as that agent: a deny
   override, a context rule or a revoked permission added since the card was

@@ -26,6 +26,11 @@
 @media (max-width: 640px) { .brief-root.brief-host-toast { bottom: 72px; } }
 
 .brief-root .brief-host-pending .brief-decision-document p { margin: 0 0 18px; max-width: 70ch; }
+/* A governed action's fields (what an email or HTTP step will send): labels bold, values plain, a body framed as quoted text. */
+.brief-root .brief-host-pending .brief-decision-action { margin: 0 0 18px; max-width: 70ch; }
+.brief-root .brief-host-pending .brief-decision-action dt { font-weight: 600; }
+.brief-root .brief-host-pending .brief-decision-action dd { margin: 0 0 12px; }
+.brief-root .brief-host-pending .brief-decision-action dd.brief-decision-quoted { padding: 8px 12px; border-left: 3px solid var(--brief-paper-edge); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; }
 .brief-root .brief-host-pending .brief-decision-subtitle { margin: 4px 0 0; color: var(--brief-secondary); font-size: 14px; }
 
 /* Global emergency hold: a state of Jarvis itself, not a request waiting on the person, so it reads apart from the Needs-you banner.

@@ -187,6 +187,25 @@ test('notification permission renders the reviewed message, destination and occu
   transport.stop();
 });
 
+test('a governed email card lists its recipients, subject, body and attachments (G-1)', async () => {
+  const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const row = { decisionId: 'approval:mail', revision: 'r', kind: 'permission', state: 'pending', title: 'send_email is above this agent\'s authority level',
+    review: { toolName: 'piece:smtp/send-email', reason: 'Permission required', workflowName: 'Invoices',
+      action: { fields: [{ label: 'To', value: 'alice@example.test' }, { label: 'Subject', value: 'Q4 invoice' }, { label: 'Bcc', value: 'secret@example.test' },
+        { label: 'Body', value: 'pay 1000 EUR\nthanks', text: true, cut: true }, { label: 'Attachments', value: 'invoice.pdf (21 bytes)' }], more: 2 } },
+    supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
+  const doc = host.querySelector('.brief-decision-document')!.textContent!;
+  for (const text of ['What will happen', 'To', 'alice@example.test', 'Subject', 'Q4 invoice', 'Bcc', 'secret@example.test', 'pay 1000 EUR', 'invoice.pdf (21 bytes)', '2 more fields are not shown.']) expect(doc).toContain(text);
+  // Each value in its own field under its label; the body framed as quoted text and marked as its beginning only.
+  const action = host.querySelector('.brief-decision-action')!;
+  expect([...action.querySelectorAll('dt')].map(dt => dt.textContent)).toEqual(['To', 'Subject', 'Bcc', 'Body (beginning only)', 'Attachments']);
+  const quoted = action.querySelectorAll('dd.brief-decision-quoted');
+  expect(quoted).toHaveLength(1);
+  expect(quoted[0]!.textContent).toBe('pay 1000 EUR\nthanks');
+  transport.stop();
+});
+
 test('permission list reports its real count to suppress the unrelated document empty state', async () => {
   const counts: (number | null)[] = [];
   const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);

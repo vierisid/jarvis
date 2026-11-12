@@ -930,6 +930,25 @@ function synthesizeApprovalIntent(request: ApprovalRequest): string {
   }
 }
 
+/** How many target fields the one-line sentence names. */
+const GOVERNED_SENTENCE_MAX_DETAILS = 4;
+
+/**
+ * The fields that say who or what an action reaches, first. The frozen target
+ * is stored with its keys sorted, so without this the sentence took the first
+ * few keys alphabetically and an email's `to` fell behind `bcc`, `cc` and
+ * `from`. Anything not listed keeps its place after these.
+ */
+export const TARGET_KEY_PRIORITY: readonly string[] = ['to', 'receiver', 'recipients', 'method', 'url', 'channel', 'channel_id',
+  'chat_id', 'user', 'user_id', 'subject', 'cc', 'bcc'];
+
+/** The target's entries with the primary target first, then the rest in their stored order. */
+export function orderedTargetEntries(target: Record<string, unknown>): Array<[string, unknown]> {
+  const rank = (key: string) => { const i = TARGET_KEY_PRIORITY.indexOf(key); return i < 0 ? TARGET_KEY_PRIORITY.length : i; };
+  return Object.entries(target).map((entry, index) => ({ entry, index }))
+    .sort((a, b) => rank(a.entry[0]) - rank(b.entry[0]) || a.index - b.index).map(item => item.entry);
+}
+
 /** A governed piece's target value in the dashboard sentence: the 80 it always had. */
 const GOVERNED_TARGET_VALUE_MAX_CHARS = 80;
 
@@ -954,7 +973,7 @@ function describeGovernedPieceIntent(pieceId: string, action: string, request: A
     // No context to read; the piece and action alone still describe the step.
   }
   const details: string[] = [];
-  for (const [key, value] of Object.entries(target)) {
+  for (const [key, value] of orderedTargetEntries(target)) {
     if (key === 'piece' || key === 'action' || key === 'unmappedAction') continue;
     const rendered = Array.isArray(value) ? value.map(item => String(item)).join(', ')
       : value === null || typeof value === 'object' ? undefined : String(value);
@@ -964,7 +983,7 @@ function describeGovernedPieceIntent(pieceId: string, action: string, request: A
     // the same reduction #651 gave the Telegram card's labels.
     const shown = boundedApprovalLabel(rendered, GOVERNED_TARGET_VALUE_MAX_CHARS) || '(invisible characters only)';
     details.push(`${key.replace(/_/g, ' ')}: ${shown}`);
-    if (details.length === 3) break;
+    if (details.length === GOVERNED_SENTENCE_MAX_DETAILS) break;
   }
   const head = `${label} - ${verb}`;
   return details.length > 0 ? `${head} (${details.join(', ')})` : head;

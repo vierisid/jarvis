@@ -462,3 +462,55 @@ test('malformed frozen notification arguments are not projected', () => {
   saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify', arguments: { message: 'Hi', channels: ['dashboard', 7, null] } });
   expect(queue.get(`approval:${a.id}`).review?.channels).toEqual(['dashboard']);
 });
+
+/** A governed piece approval bound to `args`, as the effect boundary raises one, and its frozen effect. */
+function governedApproval(tool: string, category: 'send_email' | 'send_message', args: Record<string, unknown>, cardArgs = args) {
+  const a = manager.createRequest({ agentId: 'workflow:fixture', agentName: 'Fixture', toolName: tool, toolArguments: cardArgs,
+    actionCategory: category, urgency: 'normal', reason: `${category} is above this agent's authority level`, context: '', executionMode: 'workflow' });
+  const e = effect('pending', a.id);
+  saveWorkflowEffect({ ...e.record, toolName: tool, actionCategory: category, route: 'piece', arguments: args });
+  return a;
+}
+
+test('a governed email card shows who it goes to, the subject, a body excerpt and the attachments from the frozen effect (G-1)', () => {
+  const a = governedApproval('piece:smtp/send-email', 'send_email', {
+    from: 'owner@example.test', to: ['alice@example.test'], cc: ['bob@example.test'], bcc: ['secret@example.test'], subject: 'Q4 invoice',
+    body: `pay 1000 EUR to IBAN 123\n${'x'.repeat(2000)}`, body_type: 'plain_text',
+    attachments: [{ file: { filename: 'invoice.pdf', data: '[binary, 21 bytes]' }, name: 'Invoice Q4.pdf' }],
+    customHeaders: { 'X-Api-Key': 'never serialize me' } });
+  const action = queue.get(`approval:${a.id}`).review?.action;
+  expect(action?.fields.map(f => f.label)).toEqual(['To', 'Subject', 'Cc', 'Bcc', 'From', 'Body', 'Attachments', 'Body type']);
+  const field = (label: string) => action!.fields.find(f => f.label === label)!;
+  expect(field('To').value).toBe('alice@example.test');
+  expect(field('Cc').value).toBe('bob@example.test');
+  expect(field('Bcc').value).toBe('secret@example.test');
+  expect(field('Subject').value).toBe('Q4 invoice');
+  expect(field('Body').value.startsWith('pay 1000 EUR to IBAN 123\n')).toBe(true);
+  expect(field('Body').value.length).toBeLessThanOrEqual(503);
+  expect(field('Body')).toMatchObject({ text: true, cut: true });
+  expect(field('Attachments').value).toBe('Invoice Q4.pdf (21 bytes)');
+  expect(JSON.stringify(queue.get(`approval:${a.id}`).review)).not.toContain('never serialize me');
+});
+
+test('a governed HTTP card shows the method, URL and body excerpt with credentials redacted by the shared HTTP rules (G-1)', () => {
+  // Frozen as an older record might hold it: the card applies redactHttpInput again, so a rule added since covers it too.
+  const a = governedApproval('piece:http/send_request', 'send_message', { method: 'POST', url: 'http://user:pw@203.0.113.10/hook?token=abc123',
+    headers: { Authorization: 'Bearer live-secret' }, body: { type: 'json', data: { note: 'hello', password: 'hunter2' } } });
+  const action = queue.get(`approval:${a.id}`).review?.action;
+  expect(action?.fields.map(f => [f.label, f.value])).toEqual([['Method', 'POST'], ['URL', 'http://[redacted]@203.0.113.10/hook?token=[redacted]'],
+    ['Body', '{"type":"json","data":{"note":"hello","password":"[redacted]"}}']]);
+  const card = JSON.stringify(queue.get(`approval:${a.id}`).review);
+  for (const secret of ['live-secret', 'hunter2', 'abc123', ':pw@']) expect(card).not.toContain(secret);
+});
+
+test('a governed card strips bidi and format characters from what it shows (G-1)', () => {
+  const a = governedApproval('piece:smtp/send-email', 'send_email', { to: ['a@example.test'], subject: 'Pay \u202eevil\u202c now\u200b' });
+  expect(queue.get(`approval:${a.id}`).review?.action?.fields.find(f => f.label === 'Subject')?.value).toBe('Pay evil now');
+});
+
+test('a governed card shows nothing when the effect no longer holds what the approval is bound to (G-1)', () => {
+  // The effect boundary refuses to run this pair; the card must not present the effect's arguments as approved.
+  const a = governedApproval('piece:smtp/send-email', 'send_email', { to: ['attacker@example.test'], subject: 'Changed' },
+    { to: ['alice@example.test'], subject: 'Approved' });
+  expect(queue.get(`approval:${a.id}`).review?.action).toBeUndefined();
+});
