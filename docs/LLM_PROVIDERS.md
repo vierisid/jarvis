@@ -352,6 +352,13 @@ manager.setFallbackChain(['openai', 'ollama']);
 const response = await manager.chat(messages);
 ```
 
+### Tool calls and unreadable replies
+
+- Tool arguments that are not valid JSON are the model's mistake, not a refused request. The call is delivered with `argumentsError` set (a fixed phrase, never the arguments or the parser's message), nothing runs, and the model gets a tool error saying so (as for a tool name that does not exist) and can send the call again. Other calls in the same reply still run. Every loop that dispatches tool calls (orchestrator, task tier, conversation router, sub-agents, onboarding interviewer, workflow composer) answers such a call before anything else reads it; a composer reply cut at the token limit still fails as truncated.
+- Tool call ids are unique within one assistant message. A repeated or empty id gets a new one, so each call runs once and the history stays valid for providers that key results on the id.
+- A turn may spend at most 200 provider calls on tool rounds. At the limit it stops, says so in plain words and ends as stopped (failed in Brief chat, with the steps already taken left in place), never as a completed turn.
+- A reply that is not a stream of events (a page served with a 200, `data:` lines that are not JSON) is a provider error, never an empty finished answer. A server that ignores `stream: true` and sends one JSON completion is read as that answer.
+
 ### Provider-Specific Options
 
 ```typescript

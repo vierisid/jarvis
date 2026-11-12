@@ -18,7 +18,7 @@ import type {
 } from "../../workflows/runtime/piece-input.ts";
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { LLMMessage, LLMResponse, LLMTool, LLMToolCall } from "../../llm/provider.ts";
-import { getLLMErrorCode, type LLMErrorCode } from "../../llm/provider.ts";
+import { getLLMErrorCode, malformedArgumentsResult, type LLMErrorCode } from "../../llm/provider.ts";
 import { CompositionTimeoutError, withCompositionBudget } from "./composition-budget.ts";
 
 /**
@@ -684,9 +684,7 @@ async function composeWithTools(
       // drops to no tool call). Nudging or falling back won't help -- fail with
       // an accurate message instead of misdiagnosing it as prose.
       if (reply.finish_reason === "length") {
-        const msg =
-          "the composer's reply was truncated at the model's output token limit before it could finish; " +
-          "the flow may be too large to emit in a single response";
+        const msg = COMPOSER_REPLY_TRUNCATED;
         logAttempt(turn, "tool-loop-truncated", msg);
         return { ok: false, errors: [msg], rawResponse: lastRaw };
       }
@@ -711,6 +709,18 @@ async function composeWithTools(
     messages.push({ role: "assistant", content: reply.content ?? "", tool_calls: calls });
     for (const call of calls) {
       req.signal?.throwIfAborted();
+      // Arguments that did not parse: never read as an empty flow or an empty
+      // block report. A reply cut at the token cap is the usual cause (a
+      // submit_flow whose JSON was cut short), and re-asking cannot fix that.
+      if (call.argumentsError !== undefined) {
+        if (reply.finish_reason === "length") {
+          const msg = COMPOSER_REPLY_TRUNCATED;
+          logAttempt(turn, "tool-loop-truncated", msg);
+          return { ok: false, errors: [msg], rawResponse: lastRaw };
+        }
+        messages.push(toolResult(call, malformedArgumentsResult(call)));
+        continue;
+      }
       if (call.name === "submit_flow") {
         submits++;
         const flowArg = unwrapSubmittedFlow(call.arguments);
@@ -762,6 +772,11 @@ async function composeWithTools(
     rawResponse: lastRaw,
   };
 }
+
+/** What a composition cut short at the model's output token limit fails with. */
+const COMPOSER_REPLY_TRUNCATED =
+  "the composer's reply was truncated at the model's output token limit before it could finish; " +
+  "the flow may be too large to emit in a single response";
 
 /** Wrap a tool's textual output as the tool-result message for `call`. */
 function toolResult(call: ComposerToolCall, content: string): ComposerChatMessage {

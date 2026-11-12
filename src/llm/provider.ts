@@ -21,7 +21,49 @@ export type LLMToolCall = {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * Set by a provider when the model's arguments were not valid JSON. The
+   * call is still delivered (with empty `arguments`) so the loop can answer it
+   * with a tool error the model can read and correct, the way it answers a tool
+   * name that does not exist, instead of ending the turn. Every loop that
+   * dispatches calls must answer such a call with `malformedArgumentsResult`
+   * BEFORE anything else reads it (discovery, off-list admission, special
+   * tools): its empty `arguments` are not what the model asked for and must
+   * never be run. A short fixed phrase, never the arguments themselves.
+   */
+  argumentsError?: string;
 };
+
+/** Reasons a provider may set as `argumentsError`; anything else is reported as unreadable. */
+const ARGUMENTS_ERROR_REASONS = new Set(['not valid JSON', 'expected a JSON object']);
+
+/**
+ * The tool result for a call whose arguments could not be read. Never ran
+ * anything. Only fixed text and the tool name (model output, bounded and
+ * quoted as a JSON string) go back: never the arguments or a parser message.
+ */
+export function malformedArgumentsResult(call: Pick<LLMToolCall, 'name' | 'argumentsError'>): string {
+  const reason = call.argumentsError !== undefined && ARGUMENTS_ERROR_REASONS.has(call.argumentsError)
+    ? call.argumentsError : 'unreadable';
+  return `Error: the arguments for ${JSON.stringify(String(call.name).slice(0, 100))} were not valid JSON (${reason}). `
+    + 'The tool did not run. Call it again with valid JSON arguments.';
+}
+
+/**
+ * Tool call ids must be unique within one assistant message: a provider keys
+ * each tool result on its id, and a strict one rejects the next request when
+ * two results share one. A model (or a compatible server) that repeats or omits
+ * an id gets the later calls renamed, so each call still runs exactly once.
+ */
+export function withUniqueToolCallIds(calls: LLMToolCall[]): LLMToolCall[] {
+  const seen = new Set<string>();
+  return calls.map((call, index) => {
+    let id = call.id || `call_${index + 1}`;
+    for (let n = 2; seen.has(id); n++) id = `${call.id || `call_${index + 1}`}_${n}`;
+    seen.add(id);
+    return id === call.id ? call : { ...call, id };
+  });
+}
 
 export type LLMResponse = {
   content: string;
@@ -73,7 +115,8 @@ export type LLMErrorCode =
   | 'bad_request'  // 400/422, invalid parameters
   | 'unsupported_tools' // explicit lack of tool-calling support, not an arbitrary 400
   | 'not_found'    // 404, model/resource missing
-  | 'server'       // generic 5xx
+  | 'server'       // generic 5xx, or a reply the provider sent that cannot be read
+  | 'tool_loop_limit' // Jarvis stopped a turn that kept calling tools; not a provider failure
   // Hosted (usejarvis_ai) outcomes that retrying cannot change. None of them
   // is retried on the same provider; see LLMManager.shouldFailOver for which
   // may still move to another one.

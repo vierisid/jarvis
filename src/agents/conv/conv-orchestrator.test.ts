@@ -88,6 +88,25 @@ describe('ConvOrchestrator', () => {
     registry = new TaskRegistry();
   });
 
+  it('tells the router when its tool arguments were not valid JSON, and runs nothing', async () => {
+    const bad = toolCallResponse('delegate', {});
+    bad.tool_calls[0]!.argumentsError = 'Unexpected token b';
+    const provider = new MockProvider([bad, textResponse('Sorry, let me try that again.')]);
+    const llm = makeManager(provider);
+    let ran = 0;
+    const dispatcher = new TaskDispatcher(llm, registry, (async () => { ran++; throw new Error('no task'); }) as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
+    const seen: LLMMessage[][] = [];
+    const original = provider.chat.bind(provider);
+    provider.chat = async (messages, opts) => { seen.push([...messages]); return original(messages, opts); };
+
+    const result = await conv.processTurn('Do it', {}, { scope: null });
+    expect(ran).toBe(0);
+    expect(result.tasksRun).toEqual([]);
+    const toolMessage = seen[1]!.find(m => m.role === 'tool');
+    expect(String(toolMessage?.content)).toContain('were not valid JSON');
+  });
+
   it('answers directly when conv LLM emits text without tool calls', async () => {
     const provider = new MockProvider([textResponse('Hello there!')]);
     const llm = makeManager(provider);

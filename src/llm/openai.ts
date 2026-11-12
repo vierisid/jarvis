@@ -9,7 +9,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
-import { classifyHttpStatus, LLMProviderError, parseRetryAfterMs } from './provider.ts';
+import { classifyHttpStatus, LLMProviderError, parseRetryAfterMs, withUniqueToolCallIds } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 /**
@@ -30,6 +30,43 @@ export function modelRejectsCustomTemperature(model: string): boolean {
   if (id.startsWith('gpt-6')) return true;
   if (id.startsWith('gpt-5') && !id.startsWith('gpt-5-chat')) return true;
   return false;
+}
+
+/** How much of a reply is kept in case it turns out to be one whole completion. */
+const MAX_RAW_BODY_CHARS = 1_000_000;
+
+/**
+ * A tool call from its wire pieces. Arguments that do not parse are kept on the
+ * call as `argumentsError` (see LLMToolCall) instead of failing the request. An
+ * empty argument string is a tool called with no arguments.
+ *
+ * The reason is a fixed phrase, never the parser's message: that quotes the
+ * offending token ("Unexpected identifier \"sk-...\""), which may be a secret
+ * the model copied, and the reason is fed back to the model and stored with
+ * the conversation.
+ */
+function parseToolCall(raw: { id: string; name: string; arguments: string }): LLMToolCall {
+  if (raw.arguments.trim() === '') return { id: raw.id, name: raw.name, arguments: {} };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.arguments);
+  } catch {
+    return { id: raw.id, name: raw.name, arguments: {}, argumentsError: 'not valid JSON' };
+  }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return { id: raw.id, name: raw.name, arguments: parsed as Record<string, unknown> };
+  }
+  return { id: raw.id, name: raw.name, arguments: {}, argumentsError: 'expected a JSON object' };
+}
+
+/** The body as one non-stream completion, or null when it is not one. */
+function wholeCompletion(raw: string): OpenAIResponse | null {
+  try {
+    const parsed = JSON.parse(raw) as OpenAIResponse;
+    return Array.isArray(parsed?.choices) && parsed.choices[0]?.message ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 export type OpenAIContentPart =
@@ -309,6 +346,14 @@ export class OpenAIProvider implements LLMProvider {
     let finishReason: string | null = null;
     let responseModel = model;
     let streamUsage: OpenAIResponse['usage'] | null = null;
+    // A reply that is not a stream of events at all (a captive-portal page, a
+    // server that ignored stream:true, `data:` lines that are not JSON) must not
+    // look like an empty answer: count what actually parsed, and keep the raw
+    // text (bounded) in case it is one whole completion.
+    let parsedChunks = 0;
+    let sawDone = false;
+    let unreadableChunks = 0;
+    let rawBody = '';
 
     try {
       const reader = response.body.getReader();
@@ -319,7 +364,12 @@ export class OpenAIProvider implements LLMProvider {
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
+        const decoded = decoder.decode(value, { stream: true });
+        // Only needed while nothing has parsed as an event: a real stream
+        // stops paying for the copy at its first chunk.
+        if (parsedChunks === 0 && rawBody.length < MAX_RAW_BODY_CHARS) rawBody += decoded;
+        else if (parsedChunks > 0) rawBody = '';
+        buffer += decoded;
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
@@ -327,10 +377,11 @@ export class OpenAIProvider implements LLMProvider {
           if (!line.trim() || !line.startsWith('data: ')) continue;
 
           const data = line.slice(6);
-          if (data === '[DONE]') continue;
+          if (data === '[DONE]') { sawDone = true; continue; }
 
           try {
             const chunk = JSON.parse(data) as OpenAIStreamChunk;
+            parsedChunks++;
             // Capture usage from WHICHEVER chunk carries it (last one wins),
             // before the choices guard: OpenAI attaches it to an empty-choices
             // terminal chunk, the hosted proxy to the last content chunk.
@@ -372,24 +423,38 @@ export class OpenAIProvider implements LLMProvider {
             }
           } catch (err) {
             // Skip invalid JSON lines
+            unreadableChunks++;
             console.error('Failed to parse SSE chunk:', err);
           }
         }
       }
 
-      // Convert accumulated tool calls
-      for (const builder of toolCallBuilders.values()) {
-        try {
-          const toolCall: LLMToolCall = {
-            id: builder.id,
-            name: builder.name,
-            arguments: JSON.parse(builder.arguments),
-          };
-          toolCalls.push(toolCall);
-          yield { type: 'tool_call', tool_call: toolCall };
-        } catch (err) {
-          yield { type: 'error', error: `Failed to parse tool call arguments: ${err}`, code: 'bad_request' };
+      if (parsedChunks === 0 && (!sawDone || unreadableChunks > 0)) {
+        // Some compatible servers ignore stream:true and answer with one JSON
+        // completion. That is a usable answer: read it as one.
+        const whole = wholeCompletion(rawBody);
+        if (whole) {
+          const converted = this.convertResponse(whole);
+          if (converted.content) yield { type: 'text', text: converted.content };
+          for (const toolCall of converted.tool_calls) yield { type: 'tool_call', tool_call: toolCall };
+          yield { type: 'done', response: converted };
+          return;
         }
+        // Said in plain words, without the body: it may be a page with anything in it.
+        yield {
+          type: 'error',
+          error: `${this.errorLabel} API error: the reply was not a readable stream of events (HTTP ${response.status})`,
+          code: 'server',
+        };
+        return;
+      }
+
+      // Convert accumulated tool calls. Arguments that are not valid JSON are
+      // the MODEL's mistake, not the provider refusing the request: the call is
+      // kept with the problem attached so the loop can tell the model.
+      for (const toolCall of withUniqueToolCallIds([...toolCallBuilders.values()].map(builder => parseToolCall(builder)))) {
+        toolCalls.push(toolCall);
+        yield { type: 'tool_call', tool_call: toolCall };
       }
 
       const mappedFinishReason = this.mapFinishReason(finishReason);
@@ -493,17 +558,9 @@ export class OpenAIProvider implements LLMProvider {
     const tool_calls: LLMToolCall[] = [];
 
     if (message.tool_calls) {
-      for (const toolCall of message.tool_calls) {
-        try {
-          tool_calls.push({
-            id: toolCall.id,
-            name: toolCall.function.name,
-            arguments: JSON.parse(toolCall.function.arguments),
-          });
-        } catch (err) {
-          console.error('Failed to parse tool call arguments:', err);
-        }
-      }
+      tool_calls.push(...withUniqueToolCallIds(message.tool_calls.map(toolCall => parseToolCall({
+        id: toolCall.id, name: toolCall.function.name, arguments: toolCall.function.arguments,
+      }))));
     }
 
     return {

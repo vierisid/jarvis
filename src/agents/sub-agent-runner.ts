@@ -20,7 +20,7 @@ import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import { truncateWithNote } from '../util/truncate.ts';
 import type { ContentBlock, LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
-import { capTextBlocks, guardImageSize } from '../llm/provider.ts';
+import { capTextBlocks, guardImageSize, malformedArgumentsResult } from '../llm/provider.ts';
 import { ToolRegistry, isToolResult, type ToolDefinition } from '../actions/tools/registry.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import { beginExecutionActivity } from '../actions/progress-context.ts';
@@ -449,6 +449,8 @@ async function executeTool(
   sequence: number,
   authorityCtx?: AuthorityContext,
 ): Promise<ToolDispatch> {
+  // Arguments the model wrote that were not valid JSON: nothing ran; it can try again.
+  if (toolCall.argumentsError !== undefined) return { text: malformedArgumentsResult(toolCall), failed: true };
   // The audit row says what happened, so it is written once the outcome is
   // known: a refusal or a pause with `executed: false`, an execution after
   // the tool returned. Nothing is recorded as executed before it ran.
@@ -846,6 +848,13 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     for (let index = 0; index < calls.length; index++) {
       const tc = calls[index]!;
       fence();
+      // Unreadable arguments: answered before discovery or off-list admission
+      // read the empty stand-in arguments, and not listed in `toolsUsed`.
+      if (tc.argumentsError !== undefined) {
+        sequence += 1;
+        record(tc, { text: malformedArgumentsResult(tc), failed: true });
+        continue;
+      }
       // Filter off: nothing to intercept, and nothing is built for it.
       const discoveryCtx: DiscoveryContext | null = !getToolFilterPolicy().enabled ? null : {
         // Without the desktop tools while desktop.enabled is off (#905), as

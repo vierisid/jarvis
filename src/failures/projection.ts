@@ -184,6 +184,9 @@ const PROVIDER: Record<LLMErrorCode, { category: FailureCategory; what: string }
   content_policy: { category: 'provider_limit', what: "the AI platform's content policy blocked the request" },
   restricted: { category: 'provider_limit', what: 'hosted AI is restricted on this account' },
   unknown: { category: 'internal', what: 'the AI provider failed' },
+  // Jarvis's own stop for a turn that kept calling tools: not the provider's
+  // doing, and not "nothing started" either -- its earlier steps ran.
+  tool_loop_limit: { category: 'uncertain_effect', what: 'it kept working without finishing, so Jarvis stopped it' },
 };
 
 const NEXT: Record<RecoveryStep, string> = {

@@ -2,7 +2,7 @@ import type { RoleDefinition } from '../roles/types.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { SystemPromptParts } from '../roles/prompt-builder.ts';
 import type { LLMMessage, LLMResponse, LLMStreamEvent, LLMToolCall, LLMTool, ContentBlock } from '../llm/provider.ts';
-import { capTextBlocks, guardImageSize } from '../llm/provider.ts';
+import { capTextBlocks, guardImageSize, malformedArgumentsResult } from '../llm/provider.ts';
 import { truncateWithNote } from '../util/truncate.ts';
 import { LLMManager } from '../llm/manager.ts';
 import type { Tier } from '../llm/tiers.ts';
@@ -102,7 +102,15 @@ function toSystemMessages(systemPrompt: string | SystemPromptParts): LLMMessage[
   return messages;
 }
 
+/**
+ * Provider calls one turn may spend on tool rounds. Raised from 25 to 200 on
+ * purpose (#13) so long tool work can finish in one turn. A turn that reaches
+ * it stops in plain words as stopped, never as a completed turn with a marker.
+ */
 const MAX_TOOL_ITERATIONS = 200;
+/** What a person is told when a turn stops at that limit. Plain words, no markers. */
+const TOOL_LOOP_STOPPED_TEXT =
+  `I stopped after ${MAX_TOOL_ITERATIONS} steps without finishing. Check what was done so far, then ask me to carry on.`;
 const MAX_TOOL_RESULT_CHARS = 6000; // Cap individual tool results to control context size
 
 /**
@@ -974,6 +982,7 @@ export class AgentOrchestrator {
     let decided = this.decideTurnTools(messages, tier, ledger, undefined, turnScope);
     let tools = decided.llm;
     let finalText = '';
+    let answered = false;
 
     const llm = hold?.llm ?? this.llmManager;
 
@@ -992,6 +1001,12 @@ export class AgentOrchestrator {
         // Execute each tool and add results
         let widened = false;
         for (const tc of llmResponse.tool_calls) {
+          // Unreadable arguments: answered first, so neither discovery nor an
+          // off-list admission nor the tool reads the empty stand-in arguments.
+          if (tc.argumentsError !== undefined) {
+            messages.push({ role: 'tool', content: malformedArgumentsResult(tc), tool_call_id: tc.id });
+            continue;
+          }
           const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, turnScope);
           if (discovery) {
             widened ||= discovery.grew;
@@ -1051,8 +1066,12 @@ export class AgentOrchestrator {
         finalText += '\n\n[Response was truncated due to output token limits. If you asked for long content, ask to continue or use shorter chunks.]';
       }
 
+      answered = true;
       break;
     }
+
+    // Still calling tools at the limit: say so instead of returning nothing.
+    if (!answered) finalText = TOOL_LOOP_STOPPED_TEXT;
 
     // Add final response to persistent history
     if (!ownThread) primary.addMessage('assistant', finalText);
@@ -1207,6 +1226,7 @@ export class AgentOrchestrator {
     // the workflow).
     let toolsExecuted = opts.history?.some((m) => m.role === 'tool') ? 1 : 0;
     let nudges = 0;
+    let taskAnswered = false;
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
       if (opts.signal?.aborted) {
@@ -1227,7 +1247,10 @@ export class AgentOrchestrator {
         // else in this batch. We DO record the assistant message + the
         // clarification call in the conversation so resume can replay the
         // LLM's "I need more info" turn.
-        const clarifyCall = llmResponse.tool_calls.find((tc) => tc.name === ASK_FOR_CLARIFICATION_TOOL.name);
+        // A clarification whose arguments did not parse is not a question: it
+        // is answered as malformed below, rather than pausing on a made-up one.
+        const clarifyCall = llmResponse.tool_calls.find((tc) => tc.name === ASK_FOR_CLARIFICATION_TOOL.name
+          && tc.argumentsError === undefined);
         if (clarifyCall) {
           const args = clarifyCall.arguments as { question?: string };
           const question = (args.question ?? '').trim() || 'I need more information to continue.';
@@ -1269,6 +1292,12 @@ export class AgentOrchestrator {
 
         let widened = false;
         for (const tc of llmResponse.tool_calls) {
+          // Unreadable arguments: answered first, before discovery, off-list
+          // admission or the tool, and not counted as work done.
+          if (tc.argumentsError !== undefined) {
+            messages.push({ role: 'tool', content: malformedArgumentsResult(tc), tool_call_id: tc.id });
+            continue;
+          }
           // Scope-filtered on both: the catalogue must not REVEAL a withheld
           // tool, and the off-list interceptor must not ADMIT one -- an
           // admission adds the name to the shared primary ledger, which
@@ -1345,9 +1374,14 @@ export class AgentOrchestrator {
         finalText += '\n\n[Response was truncated due to output token limits.]';
       }
       messages.push({ role: 'assistant', content: finalText });
+      taskAnswered = true;
       break;
     }
 
+    if (!taskAnswered) {
+      finalText = TOOL_LOOP_STOPPED_TEXT;
+      messages.push({ role: 'assistant', content: finalText });
+    }
     return { kind: 'completed', text: finalText, conversation: messages };
   }
 
@@ -1603,6 +1637,11 @@ export class AgentOrchestrator {
       let widened = false;
       for (const tc of toolCalls) {
         conversation?.signal.throwIfAborted();
+        // Unreadable arguments: answered first (see processMessage).
+        if (tc.argumentsError !== undefined) {
+          messages.push({ role: 'tool', content: malformedArgumentsResult(tc), tool_call_id: tc.id });
+          continue;
+        }
         const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, turnScope);
         if (discovery) {
           widened ||= discovery.grew;
@@ -1637,19 +1676,10 @@ export class AgentOrchestrator {
       // Continue loop — will stream next LLM response
     }
 
-    // Max iterations reached
-    yield { type: 'text', text: '\n[Max tool iterations reached]' };
-    yield {
-      type: 'done',
-      response: {
-        content: finalText + '\n[Max tool iterations reached]',
-        tool_calls: [],
-        usage: totalUsage,
-        model: responseModel,
-        finish_reason: 'stop',
-      },
-    };
-    if (!conversation) primary.addMessage('assistant', finalText);
+    // Limit reached: the turn did not finish, and it is reported as stopped
+    // rather than completed. What it already said is kept.
+    if (!conversation && finalText.trim()) primary.addMessage('assistant', finalText);
+    yield { type: 'error', error: TOOL_LOOP_STOPPED_TEXT, code: 'tool_loop_limit' };
   }
 
   /**
@@ -1930,6 +1960,10 @@ export class AgentOrchestrator {
     // (#571, actions/tools/turn-scope-store.ts). Ambient rather than passed
     // because `createCommitment` has six callers, four with no turn in hand.
     // Nothing reads it to grant anything.
+    // Arguments the model wrote that are not valid JSON: nothing ran, and the
+    // model is told so and can send the call again. Before the gate, like an
+    // unknown tool name: a call that cannot run is not a governance decision.
+    if (toolCall.argumentsError !== undefined) return malformedArgumentsResult(toolCall);
     return withTurnScopeId(scope?.id, () =>
       this.taintStore.run(taint ?? new Set<string>(), () => this.executeToolInner(toolCall, signal, scope)));
   }
