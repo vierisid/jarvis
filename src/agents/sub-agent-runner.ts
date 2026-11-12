@@ -848,6 +848,13 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     for (let index = 0; index < calls.length; index++) {
       const tc = calls[index]!;
       fence();
+      // Unreadable arguments: answered before discovery or off-list admission
+      // read the empty stand-in arguments, and not listed in `toolsUsed`.
+      if (tc.argumentsError !== undefined) {
+        sequence += 1;
+        record(tc, { text: malformedArgumentsResult(tc), failed: true });
+        continue;
+      }
       // Filter off: nothing to intercept, and nothing is built for it.
       const discoveryCtx: DiscoveryContext | null = !getToolFilterPolicy().enabled ? null : {
         // Without the desktop tools while desktop.enabled is off (#905), as

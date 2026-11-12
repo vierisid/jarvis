@@ -39,19 +39,24 @@ const MAX_RAW_BODY_CHARS = 1_000_000;
  * A tool call from its wire pieces. Arguments that do not parse are kept on the
  * call as `argumentsError` (see LLMToolCall) instead of failing the request. An
  * empty argument string is a tool called with no arguments.
+ *
+ * The reason is a fixed phrase, never the parser's message: that quotes the
+ * offending token ("Unexpected identifier \"sk-...\""), which may be a secret
+ * the model copied, and the reason is fed back to the model and stored with
+ * the conversation.
  */
 function parseToolCall(raw: { id: string; name: string; arguments: string }): LLMToolCall {
   if (raw.arguments.trim() === '') return { id: raw.id, name: raw.name, arguments: {} };
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw.arguments);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return { id: raw.id, name: raw.name, arguments: parsed as Record<string, unknown> };
-    }
-    return { id: raw.id, name: raw.name, arguments: {}, argumentsError: 'expected a JSON object' };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message.slice(0, 120) : 'not valid JSON';
-    return { id: raw.id, name: raw.name, arguments: {}, argumentsError: reason };
+    parsed = JSON.parse(raw.arguments);
+  } catch {
+    return { id: raw.id, name: raw.name, arguments: {}, argumentsError: 'not valid JSON' };
   }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return { id: raw.id, name: raw.name, arguments: parsed as Record<string, unknown> };
+  }
+  return { id: raw.id, name: raw.name, arguments: {}, argumentsError: 'expected a JSON object' };
 }
 
 /** The body as one non-stream completion, or null when it is not one. */
@@ -360,7 +365,10 @@ export class OpenAIProvider implements LLMProvider {
         if (done) break;
 
         const decoded = decoder.decode(value, { stream: true });
-        if (rawBody.length < MAX_RAW_BODY_CHARS) rawBody += decoded;
+        // Only needed while nothing has parsed as an event: a real stream
+        // stops paying for the copy at its first chunk.
+        if (parsedChunks === 0 && rawBody.length < MAX_RAW_BODY_CHARS) rawBody += decoded;
+        else if (parsedChunks > 0) rawBody = '';
         buffer += decoded;
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';

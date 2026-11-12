@@ -1001,6 +1001,12 @@ export class AgentOrchestrator {
         // Execute each tool and add results
         let widened = false;
         for (const tc of llmResponse.tool_calls) {
+          // Unreadable arguments: answered first, so neither discovery nor an
+          // off-list admission nor the tool reads the empty stand-in arguments.
+          if (tc.argumentsError !== undefined) {
+            messages.push({ role: 'tool', content: malformedArgumentsResult(tc), tool_call_id: tc.id });
+            continue;
+          }
           const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, turnScope);
           if (discovery) {
             widened ||= discovery.grew;
@@ -1241,7 +1247,10 @@ export class AgentOrchestrator {
         // else in this batch. We DO record the assistant message + the
         // clarification call in the conversation so resume can replay the
         // LLM's "I need more info" turn.
-        const clarifyCall = llmResponse.tool_calls.find((tc) => tc.name === ASK_FOR_CLARIFICATION_TOOL.name);
+        // A clarification whose arguments did not parse is not a question: it
+        // is answered as malformed below, rather than pausing on a made-up one.
+        const clarifyCall = llmResponse.tool_calls.find((tc) => tc.name === ASK_FOR_CLARIFICATION_TOOL.name
+          && tc.argumentsError === undefined);
         if (clarifyCall) {
           const args = clarifyCall.arguments as { question?: string };
           const question = (args.question ?? '').trim() || 'I need more information to continue.';
@@ -1283,6 +1292,12 @@ export class AgentOrchestrator {
 
         let widened = false;
         for (const tc of llmResponse.tool_calls) {
+          // Unreadable arguments: answered first, before discovery, off-list
+          // admission or the tool, and not counted as work done.
+          if (tc.argumentsError !== undefined) {
+            messages.push({ role: 'tool', content: malformedArgumentsResult(tc), tool_call_id: tc.id });
+            continue;
+          }
           // Scope-filtered on both: the catalogue must not REVEAL a withheld
           // tool, and the off-list interceptor must not ADMIT one -- an
           // admission adds the name to the shared primary ledger, which
@@ -1622,6 +1637,11 @@ export class AgentOrchestrator {
       let widened = false;
       for (const tc of toolCalls) {
         conversation?.signal.throwIfAborted();
+        // Unreadable arguments: answered first (see processMessage).
+        if (tc.argumentsError !== undefined) {
+          messages.push({ role: 'tool', content: malformedArgumentsResult(tc), tool_call_id: tc.id });
+          continue;
+        }
         const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, turnScope);
         if (discovery) {
           widened ||= discovery.grew;

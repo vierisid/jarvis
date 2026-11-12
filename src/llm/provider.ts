@@ -25,14 +25,27 @@ export type LLMToolCall = {
    * Set by a provider when the model's arguments were not valid JSON. The
    * call is still delivered (with empty `arguments`) so the loop can answer it
    * with a tool error the model can read and correct, the way it answers a tool
-   * name that does not exist, instead of ending the turn.
+   * name that does not exist, instead of ending the turn. Every loop that
+   * dispatches calls must answer such a call with `malformedArgumentsResult`
+   * BEFORE anything else reads it (discovery, off-list admission, special
+   * tools): its empty `arguments` are not what the model asked for and must
+   * never be run. A short fixed phrase, never the arguments themselves.
    */
   argumentsError?: string;
 };
 
-/** The tool result for a call whose arguments could not be read. Never ran anything. */
+/** Reasons a provider may set as `argumentsError`; anything else is reported as unreadable. */
+const ARGUMENTS_ERROR_REASONS = new Set(['not valid JSON', 'expected a JSON object']);
+
+/**
+ * The tool result for a call whose arguments could not be read. Never ran
+ * anything. Only fixed text and the tool name (model output, bounded and
+ * quoted as a JSON string) go back: never the arguments or a parser message.
+ */
 export function malformedArgumentsResult(call: Pick<LLMToolCall, 'name' | 'argumentsError'>): string {
-  return `Error: the arguments for "${call.name}" were not valid JSON (${call.argumentsError ?? 'unreadable'}). `
+  const reason = call.argumentsError !== undefined && ARGUMENTS_ERROR_REASONS.has(call.argumentsError)
+    ? call.argumentsError : 'unreadable';
+  return `Error: the arguments for ${JSON.stringify(String(call.name).slice(0, 100))} were not valid JSON (${reason}). `
     + 'The tool did not run. Call it again with valid JSON arguments.';
 }
 

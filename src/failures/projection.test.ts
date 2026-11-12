@@ -120,3 +120,9 @@ test('browser sign-in failure keeps the setup instruction without claiming no ea
   expect(failure.effect).toBe('unknown'); expect(failure.outcome).not.toContain('Nothing was done');
   expect(failure.headline).not.toContain('Private account');
 });
+
+test('a turn Jarvis stopped at its tool loop limit is not "nothing started": its earlier steps may have taken effect', () => {
+  const failure = projectFailure({ source: 'provider', code: 'tool_loop_limit', message: 'stopped' }, { label: 'Your request', sideEffects: true });
+  expect(failure.category).toBe('uncertain_effect');
+  expect(failure.effect).toBe('unknown');
+});

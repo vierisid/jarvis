@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { OpenAIProvider } from './openai';
-import type { LLMStreamEvent } from './provider';
+import { malformedArgumentsResult, type LLMStreamEvent } from './provider';
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -30,6 +30,17 @@ test('tool arguments that are not JSON reach the loop as a call carrying the pro
   expect(tool).toMatchObject({ tool_call: { id: 'a', name: 'write_file', arguments: {} } });
   expect((tool as { tool_call: { argumentsError?: string } }).tool_call.argumentsError).toBeTruthy();
   expect(events.at(-1)?.type).toBe('done');
+});
+
+test('the problem is a fixed phrase: neither the arguments nor the parser message reach the model', async () => {
+  reply(sse(call(0, 'a', '{"token": sk_live_SECRET123}'), call(1, 'b', '[1]'), delta({}, 'tool_calls')));
+  const calls = (await collect()).flatMap(e => e.type === 'tool_call' ? [e.tool_call] : []);
+  expect(calls.map(c => c.argumentsError)).toEqual(['not valid JSON', 'expected a JSON object']);
+  const told = malformedArgumentsResult(calls[0]!);
+  expect(told).not.toContain('SECRET');
+  expect(told).toContain('The tool did not run');
+  // A reason no provider sets is not repeated either.
+  expect(malformedArgumentsResult({ name: 'x', argumentsError: 'Unexpected identifier "sk_live_SECRET123"' })).not.toContain('SECRET');
 });
 
 test('a valid call next to a malformed one still arrives, and empty arguments mean no arguments', async () => {

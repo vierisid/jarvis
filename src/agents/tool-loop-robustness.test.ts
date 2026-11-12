@@ -98,6 +98,15 @@ describe('arguments the model wrote that are not valid JSON', () => {
   }
 });
 
+test('processTaskCall: a clarification whose arguments did not parse does not pause the task on a made-up question', async () => {
+  const { orch } = build((results, call) => call === 1
+    ? { content: '', calls: [{ id: 'q', name: 'ask_for_clarification', arguments: {}, argumentsError: 'not valid JSON' }] }
+    : { content: `got: ${results.at(-1)}`, calls: [] });
+  const result = await orch.processTaskCall({ systemPrompt: PROMPT, userMessage: 'go', tier: 'medium', subsystem: 'scripted', scope: null });
+  expect(result.kind).toBe('completed');
+  expect(result.kind === 'completed' ? result.text : '').toContain('did not run');
+});
+
 describe('a turn that never stops calling tools', () => {
   const forever: Script = (_r, call) => ({ content: '', calls: [{ id: `c${call}`, name: 'read_file', arguments: {} }] });
 
