@@ -35,6 +35,9 @@ export interface WorkflowCanvasBinding {
   permissionsChanged?: () => Promise<void>;
   publish?: () => Promise<void>;
   edit?: () => Promise<void>;
+  /** Set when this locked version is no longer the published one: the published version's
+   * ID. The host then offers neither Run nor Edit; the room offers the current version. */
+  supersededBy?: string;
 }
 export function canvasAvailable(
   shell: BriefShellPort,
@@ -191,7 +194,15 @@ function CanvasHeader({
           <h1 className="brief-type-room-title">Workflow</h1>
         )
       }
-      runAction={
+      runAction={binding.supersededBy ? (
+        <BriefButton
+          variant="primary"
+          disabled={editor.dirty}
+          onClick={() => shell.navigate({ room: "workflow", selection: { flowId: binding.flowId, versionId: binding.supersededBy } })}
+        >
+          Open current version
+        </BriefButton>
+      ) : (
         <BriefButton
           variant="primary"
           disabled={
@@ -212,7 +223,7 @@ function CanvasHeader({
         >
           {running ? "Queueing…" : "Run workflow"}
         </BriefButton>
-      }
+      )}
     >
       <div className="brief-canvas-tools" aria-label="Draft tools">
         {binding.publish && <BriefButton size="sm" disabled={codeBlocked || needsSetup || changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!)}>Publish version</BriefButton>}
@@ -270,7 +281,7 @@ function CanvasHeader({
                   (editor.dirty
                     ? editor.invalidJsonMessage ?? "Unsaved changes"
                     : editor.version?.state === "LOCKED"
-                      ? "Published version"
+                      ? binding.supersededBy ? "Earlier version (read only)" : "Published version"
                       : needsSetup ? "Saved draft · Setup required" : "Saved draft")}
         </span>
       </div>

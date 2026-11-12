@@ -25,6 +25,9 @@ export interface WorkflowRunsBinding {
   title: string;
   capabilities: unknown;
   controller: WorkflowRunsController;
+  /** Set when this locked version is no longer the published one: the published version's
+   * ID. The room is read only then and offers the current version instead of Run. */
+  supersededBy?: string;
 }
 export function runsAvailable(
   shell: BriefShellPort,
@@ -153,15 +156,35 @@ function BoundRuns({
         active="runs"
         title={<h1>{b.title}</h1>}
         runAction={
-          <BriefButton
-            variant="primary"
-            onClick={() => void start()}
-            disabled={!store.canRun}
-          >
-            {state.submission === "pending" ? "Requesting…" : "Run workflow"}
-          </BriefButton>
+          b.supersededBy ? (
+            <BriefButton
+              variant="primary"
+              onClick={() =>
+                shell.navigate({
+                  room: "workflow-runs",
+                  selection: { flowId: b.flowId, versionId: b.supersededBy },
+                })
+              }
+            >
+              Open current version
+            </BriefButton>
+          ) : (
+            <BriefButton
+              variant="primary"
+              onClick={() => void start()}
+              disabled={!store.canRun}
+            >
+              {state.submission === "pending" ? "Requesting…" : "Run workflow"}
+            </BriefButton>
+          )
         }
       />
+      {b.supersededBy && (
+        <p className="brief-runs-superseded" role="note">
+          This is an earlier version of this workflow, shown read only. Runs
+          start from the current version.
+        </p>
+      )}
       <div className="brief-runs-feedback" role="status">
         {state.message}
       </div>
