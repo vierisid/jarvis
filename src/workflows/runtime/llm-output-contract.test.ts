@@ -177,6 +177,23 @@ describe('LLM output evaluation', () => {
     expect((result.outcome as { message: string }).message).toContain('code fence');
   });
 
+  test('an empty reply with no contract is an error, not a success', () => {
+    // Whitespace (a no-break space included) and characters that render as nothing count as nothing.
+    for (const text of ['', '  \n\t ', '\u00a0', '\u200b\u200d\ufeff', ' \u2060 ']) {
+      const result = evaluateLlmOutput({ text });
+      expect('parsed' in result).toBe(false);
+      // The provider processed the request: never typed as "nothing started".
+      expect(result.outcome).toMatchObject({ status: 'error', code: 'EMPTY_AI_REPLY', effect: 'may_have_occurred' });
+      expect((result.outcome as { message: string }).message).toContain('empty reply');
+    }
+  });
+
+  test('a short visible answer is an answer, however short', () => {
+    for (const text of ['ok', '0', 'No', '.', ' - ', '\u200b0']) {
+      expect(evaluateLlmOutput({ text }).outcome).toEqual({ status: 'succeeded' });
+    }
+  });
+
   test('an empty reply is not JSON', () => {
     expect(evaluateLlmOutput({ text: '', parseJson: true }).outcome).toMatchObject({ code: 'INVALID_JSON_OUTPUT' });
   });
