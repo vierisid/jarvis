@@ -33,7 +33,7 @@ import { createRunFlowHandler, RUN_FLOW } from "../handler";
 import { TriggerManager } from "./manager";
 import { scheduleZoneWarning } from "./schedule-zone";
 import { TIMESTAMPED_REPEAT_WINDOW_MS, WEBHOOK_TIMESTAMP_TOLERANCE_S } from "./webhook-secret";
-import { webhookDelivery } from "./webhook";
+import { redactedHeaders, webhookDelivery, WEBHOOK_OFF_LOOKUPS_PER_MINUTE, WORKFLOW_OFF_MESSAGE } from "./webhook";
 import { getScheduleWatch, setScheduleWatch } from "../../db/repos/trigger-fire";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
 import { createWaitpoint } from "../../db/repos/waitpoint";
@@ -640,6 +640,47 @@ describe("webhooks", () => {
     await d.stop();
   });
 
+  test("sender credentials in headers are redacted in the stored run and in the trigger data, and a signed request still verifies", async () => {
+    const { flowId } = webhook({ secret: SECRET });
+    const d = await daemon(Date.now());
+    const body = '{"order":1}';
+    const response = await post(d, flowId, body, {
+      ...(await timestamped(SECRET, body)),
+      "Content-Type": "application/json", "X-GitHub-Event": "push",
+      Authorization: "Bearer sk-live-sender-secret", Cookie: "session=cookie-secret", "X-Hub-Signature-256": "sha256=provider-signature",
+      "X-Api-Key": "key-secret", "X-Custom-Token": "custom-secret",
+    });
+    expect(await response.json()).toMatchObject({ outcome: "started" });
+    // What the queue hands the run as trigger data, and what the run records.
+    const stored = JSON.stringify([claimNextJob(), runsOf(flowId)]);
+    expect(stored).toContain("push");
+    for (const leaked of ["sk-live-sender-secret", "cookie-secret", "provider-signature", "key-secret", "custom-secret"]) expect(stored).not.toContain(leaked);
+    expect(stored).toContain("[redacted]");
+    expect(stored).toContain('content-type');
+    expect(stored).toContain('application/json');
+    expect(stored).toContain('"x-github-event":"push"');
+    expect(JSON.stringify(listFlowFires(flowId))).not.toContain("sender-secret");
+    await d.stop();
+  });
+
+  test("credential headers are withheld by name in any case and by value shape, and delivery and event headers are kept", () => {
+    const out = redactedHeaders(new Headers({
+      AUTHORIZATION: "Basic dXNlcjpwYXNz", "Proxy-Authorization": "Basic cHJveHk6cHc=", Cookie: "a=b", "Set-Cookie": "c=d",
+      "X-Api-Key": "k1", "X-Goog-Api-Key": "k2", "X-Auth-Key": "k3", "X-Functions-Key": "k4", Apikey: "k5",
+      "X-Shopify-Hmac-Sha256": "h1", "Stripe-Signature": "t=1,v1=s", "X-Hub-Signature-256": "sha256=s", "X-Paypal-Transmission-Sig": "s",
+      "X-Gitlab-Token": "t1", "X-Jarvis-Signature": "s", "X-Jarvis-Timestamp": "1700000000", "X-Session-Id": "sess",
+      "X-Forwarded-Credential": "Bearer abcdefgh12345678", "X-Custom": "Bearer abcdefgh12345678",
+      "Content-Type": "application/json", "User-Agent": "GitHub-Hookshot/1", "X-GitHub-Event": "push", "X-GitHub-Delivery": "d-1",
+      "Idempotency-Key": "i-1", "X-Request-Id": "r-1", "X-Note": "Basic membership",
+    }));
+    const withheld = ["authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "x-goog-api-key", "x-auth-key",
+      "x-functions-key", "apikey", "x-shopify-hmac-sha256", "stripe-signature", "x-hub-signature-256", "x-paypal-transmission-sig",
+      "x-gitlab-token", "x-jarvis-signature", "x-jarvis-timestamp", "x-session-id", "x-forwarded-credential", "x-custom"];
+    for (const name of withheld) expect([name, out[name]]).toEqual([name, "[redacted]"]);
+    expect(out).toMatchObject({ "content-type": "application/json", "user-agent": "GitHub-Hookshot/1", "x-github-event": "push",
+      "x-github-delivery": "d-1", "idempotency-key": "i-1", "x-request-id": "r-1", "x-note": "Basic membership" });
+  });
+
   test("a workflow turned off answers 404 and starts nothing", async () => {
     const { flowId } = webhook();
     const d = await daemon(Date.now());
@@ -651,6 +692,149 @@ describe("webhooks", () => {
     updateFlowStatus(flowId, "ENABLED");
     expect(await (await post(d, flowId, "{}", { "Idempotency-Key": "k-1" })).json()).toMatchObject({ outcome: "started" });
     await d.stop();
+  });
+
+  test("a workflow turned off says so, and an unknown id stays not found", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    await d.manager.stop();
+    updateFlowStatus(flowId, "DISABLED");
+    const off = await post(d, flowId, "{}");
+    expect(off.status).toBe(404);
+    expect(await off.json()).toEqual({ error: expect.stringContaining("turned off") });
+    const unknown = await post(d, "no-such-flow", "{}");
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toEqual({ error: "Webhook not found" });
+    await d.stop();
+  });
+
+  test("a turned-off flow that is not a webhook stays not found", async () => {
+    const { flowId } = schedule("0 9 * * *");
+    const d = await daemon(Date.now());
+    await d.manager.stop();
+    updateFlowStatus(flowId, "DISABLED");
+    expect(await (await post(d, flowId, "{}")).json()).toEqual({ error: "Webhook not found" });
+    await d.stop();
+  });
+
+  test("lookups for unregistered ids are bounded; past the budget the reply is not found", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    await d.manager.stop();
+    updateFlowStatus(flowId, "DISABLED");
+    for (let i = 0; i < WEBHOOK_OFF_LOOKUPS_PER_MINUTE; i++) await post(d, `made-up-${i}`, "{}");
+    expect(await (await post(d, flowId, "{}")).json()).toEqual({ error: "Webhook not found" });
+    await d.stop();
+  });
+
+  test("only a turned-off refusal says turned off; removed, changed or not listening answers not found", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    const reply = async (result: Record<string, unknown>) => {
+      d.manager.webhookManager().setTriggerCallback(() => result);
+      const res = await post(d, flowId, "{}");
+      return { status: res.status, body: await res.json() };
+    };
+    expect(await reply({ outcome: "blocked", reason: "The workflow was removed.", disabled: true }))
+      .toEqual({ status: 404, body: { error: "Webhook not found" } });
+    expect(await reply({ outcome: "blocked", reason: "The workflow is turned off.", disabled: true, turnedOff: true }))
+      .toEqual({ status: 404, body: { error: WORKFLOW_OFF_MESSAGE } });
+    await d.stop();
+  });
+
+  test("a registered webhook turned off before the refresh says so", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    updateFlowStatus(flowId, "DISABLED"); // the route is still registered
+    const res = await post(d, flowId, "{}");
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe(WORKFLOW_OFF_MESSAGE);
+    await d.stop();
+  });
+
+  describe("body shapes", () => {
+    const FORM = { "Content-Type": "application/x-www-form-urlencoded" };
+    const capture = async (flowId: string, body: string, headers: Record<string, string>, query = "") => {
+      const d = await daemon(Date.now());
+      const seen: Record<string, any>[] = [];
+      d.manager.webhookManager().setTriggerCallback((_id, data) => { seen.push(data); return { outcome: "started", fireId: "f", runId: "r" }; });
+      const res = await d.manager.webhookManager().handleRequest(flowId, new Request(`http://localhost/api/webhooks/${flowId}${query}`, { method: "POST", body, headers }));
+      await d.stop();
+      return { res, data: seen[0] };
+    };
+
+    test("a form post's fields are top-level fields, repeated names are arrays", async () => {
+      const { flowId } = webhook();
+      const { data } = await capture(flowId, "name=Ada+Lovelace&email=a%40b.co&tag=x&tag=y&tag=z", FORM);
+      expect(data).toMatchObject({ name: "Ada Lovelace", email: "a@b.co", tag: ["x", "y", "z"] });
+      expect(data!.body).toBeUndefined();
+      expect(data!._webhook.method).toBe("POST");
+    });
+
+    test("a multipart form's text fields are top-level fields", async () => {
+      const { flowId } = webhook();
+      const part = (name: string, value: string, file = "") => `--B\r\nContent-Disposition: form-data; name="${name}"${file ? `; filename="${file}"` : ""}\r\n\r\n${value}\r\n`;
+      const body = part("name", "Ada") + part("tag", "x") + part("tag", "y") + part("upload", "bytes", "a.txt") + "--B--\r\n";
+      const { data } = await capture(flowId, body, { "Content-Type": "multipart/form-data; boundary=B" });
+      expect(data).toMatchObject({ name: "Ada", tag: ["x", "y"] });
+      expect(data!.upload).toBeUndefined();
+    });
+
+    test("query parameters are parsed under _webhook.query, repeats as arrays", async () => {
+      const { flowId } = webhook();
+      const { data } = await capture(flowId, '{"n":1}', { "Content-Type": "application/json" }, "?source=ad&id=1&id=2&empty=");
+      expect(data!.n).toBe(1);
+      expect(data!._webhook.query).toEqual({ source: "ad", id: ["1", "2"], empty: "" });
+      const none = await capture(flowId, "{}", {});
+      expect(none.data!._webhook.query).toEqual({});
+    });
+
+    test("JSON objects, arrays and plain text keep their shapes", async () => {
+      const { flowId } = webhook();
+      expect((await capture(flowId, "[1,2]", { "Content-Type": "application/json" })).data!.body).toEqual([1, 2]);
+      expect((await capture(flowId, "hello", { "Content-Type": "text/plain" })).data!.body).toBe("hello");
+      expect((await capture(flowId, "a=1", { "Content-Type": "text/plain" })).data!.body).toBe("a=1");
+    });
+
+    test("a captured signed event sent again as a form is still a repeat", async () => {
+      const { flowId } = webhook({ secret: SECRET, signature_scheme: "timestamped" });
+      const d = await daemon(Date.now());
+      const body = '{"object":"event","id":"evt_1","a":"x&b=y"}';
+      const headers = await timestamped(SECRET, body);
+      const send = (type: string) => post(d, flowId, body, { ...headers, "Content-Type": type });
+      expect(await (await send("application/json")).json()).toMatchObject({ outcome: "started" });
+      expect(await (await send("application/x-www-form-urlencoded")).json()).toMatchObject({ outcome: "duplicate" });
+      expect(runsOf(flowId)).toHaveLength(1);
+      await d.stop();
+    });
+
+    test("a 1 MB form of one repeated name parses in linear time", async () => {
+      const { flowId } = webhook();
+      const repeats = 330_000; // "a=&" is 3 bytes: just under the 1 MB cap
+      const { res, data } = await capture(flowId, "a=&".repeat(repeats), FORM);
+      expect(res.status).toBe(200);
+      expect(data!.a).toHaveLength(repeats);
+    });
+
+    test("a field named __proto__ is data, not a prototype", async () => {
+      const { flowId } = webhook();
+      const { data } = await capture(flowId, "__proto__=x&a=1", FORM);
+      expect(Object.getPrototypeOf(data)).toBe(Object.prototype);
+      expect(Object.keys(data!)).toContain("__proto__");
+    });
+
+    test("a signed form post verifies over the raw body, and a changed body does not", async () => {
+      const { flowId } = webhook({ secret: SECRET });
+      const body = "name=Ada+Lovelace&tag=x&tag=y";
+      const d = await daemon(Date.now());
+      const seen: Record<string, any>[] = [];
+      d.manager.webhookManager().setTriggerCallback((_id, data) => { seen.push(data); return { outcome: "started", fireId: "f", runId: "r" }; });
+      const send = async (text: string, signedText: string) => d.manager.webhookManager().handleRequest(flowId, new Request(`http://localhost/api/webhooks/${flowId}`, { method: "POST", body: text, headers: { ...FORM, ...(await timestamped(SECRET, signedText)) } }));
+      expect((await send(body, body)).status).toBe(200);
+      expect(seen[0]).toMatchObject({ name: "Ada Lovelace", tag: ["x", "y"] });
+      expect((await send("name=Eve", body)).status).toBe(401);
+      await d.stop();
+    });
   });
 
   test("a delivery refused by readiness is kept for a person, and its retries do not pile up failed runs", async () => {
@@ -777,6 +961,46 @@ describe("through the engine, as production runs triggers", () => {
     await d.poll(p.flowId, '2026-10-26T08:00:10Z');
     expect(runsOf(p.flowId)).toHaveLength(1);
     expect(d.manager.list()[0]?.warning).toBeUndefined();
+    await d.stop();
+  });
+
+  test("a leap-day schedule, more than a year from its next time, registers and fires on the day", async () => {
+    setCronTimezone("UTC");
+    const f = schedule("0 0 29 2 *");
+    const d = await daemon(at("2026-11-11T12:00:00Z")); // 2028-02-29 is 475 days away
+    expect(d.manager.registrationProblem(f.flowId)).toBeNull();
+    expect(d.manager.list()).toEqual([expect.objectContaining({ flowId: f.flowId, kind: "cron" })]);
+    expect(d.cron.getJobs()[0]?.nextRun).toBe(at("2028-02-29T00:00:00Z"));
+    await d.poll(f.flowId, "2028-02-29T00:00:10Z");
+    expect(runsOf(f.flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test("the schedule piece's leap-day schedule registers through the engine and fires on the day", async () => {
+    setCronTimezone("UTC");
+    const p = pieceSchedule("0 0 29 2 *", "UTC", true);
+    const { engine } = stubEngine({ enable: p.enable, poll: () => [{ date: "leap" }] });
+    const d = await daemon(at("2026-11-11T12:00:00Z"), engine);
+    expect(d.manager.registrationState(p.flowId, p.versionId)).toBe("registered");
+    await d.poll(p.flowId, "2028-02-29T00:00:10Z");
+    expect(runsOf(p.flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test("a schedule that cannot be registered says why instead of reading as on", async () => {
+    const p = pieceSchedule("0 0 29 2 *", "UTC", true);
+    // The engine answers with a schedule that has no time to run (February 31).
+    const { engine } = stubEngine({ enable: { listeners: [], scheduleOptions: { cronExpression: "0 0 31 2 *", timezone: "UTC" } } });
+    const d = await daemon(at("2026-11-11T12:00:00Z"), engine);
+    expect(d.manager.registrationProblem(p.flowId)).toContain("The schedule could not be started");
+    await d.stop();
+  });
+
+  test("a trigger whose schedule fails but whose webhook still delivers is not said to be not running", async () => {
+    const p = pieceSchedule("0 0 29 2 *", "UTC", true);
+    const { engine } = stubEngine({ enable: { listeners: [{ events: ["x"], identifierValue: "x" }], scheduleOptions: { cronExpression: "0 0 31 2 *", timezone: "UTC" } } });
+    const d = await daemon(at("2026-11-11T12:00:00Z"), engine);
+    expect(d.manager.registrationProblem(p.flowId)).toBeNull();
     await d.stop();
   });
 
