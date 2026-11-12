@@ -364,12 +364,15 @@ export class AgentService implements Service, IAgentService {
     // The existing classic path supports multimodal blocks and scoped history,
     // and seeds the turn's taint from `untrustedSources`, which the conv path
     // does not: a turn that starts on outside content runs there (#1155).
-    if (this.convOrchestrator && !conversation?.attachmentContent?.length && !conversation?.untrustedSources?.length) {
+    // Read once: a hot reload that removes the conversation tier mid-turn
+    // must not pull the orchestrator out from under this turn (#1435).
+    const conv = this.convOrchestrator;
+    if (conv && !conversation?.attachmentContent?.length && !conversation?.untrustedSources?.length) {
       // Both halves travel now (#571). This branch used to drop `siteContext`
       // AND `scope`, which made a project-scoped chat on every hosted install
       // the pre-#561 state exactly: the generic file and shell tools present,
       // and not even the prompt line that used to be their only restraint.
-      return this.streamMessageConv(text, channel, siteContext, scope, contextKey, conversation, carry);
+      return this.streamMessageConv(conv, text, channel, siteContext, scope, contextKey, conversation, carry);
     }
 
     const systemPrompt = this.buildFullSystemPromptParts(channel, text);
@@ -412,6 +415,8 @@ export class AgentService implements Service, IAgentService {
    * then the final verbalization text appears.
    */
   private streamMessageConv(
+    // The orchestrator the turn started with, held for the whole turn.
+    conv: ConvOrchestrator,
     text: string,
     channel: string,
     siteContext?: string,
@@ -425,10 +430,6 @@ export class AgentService implements Service, IAgentService {
   } {
     const self = this;
     const stream = (async function* (): AsyncGenerator<LLMStreamEvent> {
-      if (!self.convOrchestrator) {
-        yield { type: 'error', error: 'Conv orchestrator not initialized' };
-        return;
-      }
       let fullText = '';
       try {
         const identity = self.buildUserIdentityBlock();
@@ -447,7 +448,7 @@ export class AgentService implements Service, IAgentService {
         // generator below yields only text/done events.
         const taskListener = self.convTaskEventListener ?? undefined;
 
-        for await (const event of self.convOrchestrator.streamTurn(text, {
+        for await (const event of conv.streamTurn(text, {
           userIdentity: identity,
           userProfile,
           recentDialogue,
@@ -629,8 +630,9 @@ export class AgentService implements Service, IAgentService {
       return await withMemoryRecall(async () => {
         let response: string;
 
-        if (this.convOrchestrator) {
-          response = await this.handleMessageConv(text, channel, scope, siteContext, undefined, undefined, carry);
+        const conv = this.convOrchestrator;
+        if (conv) {
+          response = await this.handleMessageConv(conv, text, channel, scope, siteContext, undefined, undefined, carry);
         } else {
           const systemPrompt = this.buildFullSystemPromptParts(channel, text);
           if (siteContext) systemPrompt.dynamic += '\n\n' + siteContext;
@@ -724,8 +726,9 @@ export class AgentService implements Service, IAgentService {
           return await this.handleForwardedMessage(text, channel, history, thread.forwarded === true, link);
         }
         let response: string;
-        if (this.convOrchestrator) {
-          response = await this.handleMessageConv(text, channel, null, undefined, history, thread.contextKey, link);
+        const conv = this.convOrchestrator;
+        if (conv) {
+          response = await this.handleMessageConv(conv, text, channel, null, undefined, history, thread.contextKey, link);
         } else {
           const systemPrompt = this.buildFullSystemPromptParts(channel, text);
           response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, null, { history }, link);
@@ -851,6 +854,8 @@ export class AgentService implements Service, IAgentService {
    * delegate or answer directly.
    */
   private async handleMessageConv(
+    // The orchestrator the turn started with, held for the whole turn (#1435).
+    conv: ConvOrchestrator,
     text: string,
     channel: string = 'websocket',
     scope?: TurnToolScope | null,
@@ -862,17 +867,13 @@ export class AgentService implements Service, IAgentService {
     // The turn's taint carry-over, handed to every task it runs.
     carry?: TurnTaintLink | null,
   ): Promise<string> {
-    if (!this.convOrchestrator) {
-      // Should be unreachable - caller checks this.convOrchestrator first.
-      throw new Error('Conv orchestrator not initialized');
-    }
     const identity = this.buildUserIdentityBlock();
     // No caller of handleMessage stores its message first today; this keeps
     // the non-streaming path in step with streamMessageConv, so one that does
     // cannot send it twice (#912). `dialogue` comes already stripped
     // (handleThreadMessage).
     const recentDialogue = dialogue ?? withoutTrailingTurn(await this.loadRecentDialogue(channel), text);
-    const result = await this.convOrchestrator.processTurn(
+    const result = await conv.processTurn(
       text,
       {
         userIdentity: identity,
@@ -1038,7 +1039,9 @@ export class AgentService implements Service, IAgentService {
    * running in classic mode.
    */
   getTaskRegistry(): TaskRegistry | null {
-    return this.taskRegistry;
+    // Kept across a hot reload that removes the conversation tier, so paused
+    // tasks come back when it is re-added; classic mode cannot answer them.
+    return this.convOrchestrator ? this.taskRegistry : null;
   }
 
   // --- Private methods ---
@@ -1136,7 +1139,9 @@ export class AgentService implements Service, IAgentService {
    * built from the tier map, so a save that adds or removes the conversation
    * tier changes which chat path runs. Without this a "saved and applied"
    * multi-tier setting kept chatting through the old path until restart.
-   * Turns already running keep the orchestrator they started with.
+   * Turns already running keep the orchestrator they started with (each
+   * entry reads the field once), but the manager is shared: their next model
+   * call already sees the new providers and tier map.
    */
   syncConversationTier(): void {
     const wanted = this.llmManager.hasConversationTier();

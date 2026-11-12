@@ -127,6 +127,24 @@ describe('POST /api/onboarding/setup on a hosted install', () => {
     expect(body.dropped).toEqual([]);
   });
 
+  test('an LLM block re-syncs chat after the providers reload (#1435)', async () => {
+    const config = hostedConfig();
+    const order: string[] = [];
+    const ctx = makeCtx(config);
+    ctx.agentService = {
+      getLLMManager: () => new Proxy({}, {
+        get: (_t, prop) => { order.push('manager'); return prop === 'getProviderNames' ? () => [] : () => null; },
+      }),
+      syncConversationTier: () => { order.push('sync'); },
+    } as unknown as ApiContext['agentService'];
+    const handler = getHandler(createApiRoutes(ctx), '/api/onboarding/setup', 'POST');
+    const res = await post(handler, { llm: { mode: 'multi-tier' }, tts: { enabled: true } });
+    expect(res.status).toBe(200);
+    expect(order).toContain('manager');
+    expect(order.filter((o) => o === 'sync')).toHaveLength(1);
+    expect(order.at(-1)).toBe('sync');
+  });
+
   test('still completes setup, so onboarding does not replay next launch', async () => {
     const config = hostedConfig();
     const handler = getHandler(createApiRoutes(makeCtx(config)), '/api/onboarding/setup', 'POST');

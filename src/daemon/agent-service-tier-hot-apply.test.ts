@@ -73,6 +73,48 @@ describe('the conversation tier follows a hot reload', () => {
   });
 });
 
+describe('a turn keeps the orchestrator it started with', () => {
+  beforeEach(() => initDatabase(':memory:'));
+  afterEach(() => closeDb());
+
+  test('removing the tier before a started turn runs ends it on its own path, with the tier error', async () => {
+    const { agent, llm } = classicAgent();
+    llm.setTierMap({ medium: { provider: 'small' }, conversation: { provider: 'conv' } });
+    agent.syncConversationTier();
+
+    // The stream is lazy: the turn has picked the conversation path but not
+    // run yet when the save lands. It used to re-read the field and fail as
+    // "not initialized" (or dereference null after an await); now it keeps its
+    // orchestrator, and the manager -- shared, already on the new tier map --
+    // says what is missing. Finishing on the OLD providers would need a
+    // per-turn snapshot of the manager, which no hot reload has.
+    const { stream } = agent.streamMessage('hello', 'websocket-tier-test');
+    llm.setTierMap({ medium: { provider: 'small' } });
+    agent.syncConversationTier();
+    const errors: string[] = [];
+    for await (const event of stream) if (event.type === 'error') errors.push(event.error);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("No provider configured for tier 'conversation'");
+  });
+
+  test('the paused-task registry is hidden while the tier is off and back when it returns', () => {
+    const { agent, llm } = classicAgent();
+    llm.setTierMap({ medium: { provider: 'small' }, conversation: { provider: 'conv' } });
+    agent.syncConversationTier();
+    const registry = agent.getTaskRegistry();
+    expect(registry).not.toBeNull();
+
+    llm.setTierMap({ medium: { provider: 'small' } });
+    agent.syncConversationTier();
+    expect(agent.getTaskRegistry()).toBeNull();
+
+    llm.setTierMap({ medium: { provider: 'small' }, conversation: { provider: 'conv' } });
+    agent.syncConversationTier();
+    expect(agent.getTaskRegistry()).toBe(registry);
+  });
+});
+
 describe('saving LLM settings applies them to chat', () => {
   test('POST /api/config/llm re-syncs the conversation tier after the providers reload', async () => {
     const { createApiRoutes } = await import('./api-routes.ts');
