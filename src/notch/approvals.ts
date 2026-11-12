@@ -128,11 +128,13 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       const toast = approvalToast(request);
       const way = notchApprovalWay(request);
       if (way !== 'key') {
+        // The reason first, then the thing itself, with nothing after it: a
+        // line that wraps must not start with a stray full stop.
         const why: NotchPart[] = way === 'payment'
-          ? [em(bare(toast.body)), '. A payment. I never take that on a key.']
+          ? ['A payment. I never take that on a key: ', em(bare(toast.body))]
           : way === 'unreadable'
-            ? [em(bare(toast.body)), '. Too long to show whole here, so it is approved in the dashboard.']
-            : [em(bare(toast.body)), '. That one is approved with a click in the dashboard.'];
+            ? ['Too long to show whole here, so it is approved in the dashboard: ', em(bare(toast.body))]
+            : ['Approved with a click in the dashboard, not with a key: ', em(bare(toast.body))];
         const answer = await stage.offer(why, 'open', { mood: 'careful' });
         if (answer.act !== 'yes') return 'waits';
         deps.openDashboard?.(stage.from());
@@ -140,7 +142,7 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         return 'waits';
       }
 
-      const answer = await stage.offer([`${bare(toast.body)}?`], 'yes');
+      const answer = await stage.offer([`${bare(toast.body)}?`], 'approve');
       if (answer.act !== 'yes') return 'waits';
       answering.add(requestId);
       try {
