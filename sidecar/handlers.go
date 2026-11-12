@@ -125,6 +125,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 			registry["notch.spawn"] = makeNotchSpawnHandler(notch, panels, brainURL, panelToken)
 			registry["notch.close"] = makeNotchCloseHandler(notch)
 			registry["notch.push"] = makeNotchPushHandler(notch)
+			registry["notch.open_dashboard"] = makeNotchOpenDashboardHandler(notch)
 		} else {
 			notch.usePanels(nil)
 		}

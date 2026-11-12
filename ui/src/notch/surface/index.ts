@@ -22,6 +22,11 @@ import { createSentence } from './sentence.ts';
 import { OX, WK, createShape } from './shape.ts';
 import { createSounds } from './sounds.ts';
 
+/** How long after a line is drawn a yes from the keyboard is ignored. */
+const YES_DEAD_MS = 350;
+/** And how long when the line came by itself. */
+const YES_DEAD_UNASKED_MS = 700;
+
 export interface NotchSurfaceOptions {
   /** Ask the desktop app for the keyboard (true) or give it back (false). */
   focus?: (take: boolean) => void;
@@ -233,6 +238,14 @@ export function createNotchSurface(
       if (alive) sheetEl.classList.toggle('more', sheetEl.scrollTop + sheetEl.clientHeight < sheetEl.scrollHeight - 6);
     });
   }
+
+  /**
+   * Whether a yes would land too soon after the line was drawn. 0.35 s for
+   * any line: the key may already have been on its way down. 0.7 s for a line
+   * that came by itself: the person may be in the middle of a yes to something
+   * else, or of a shortcut that ends like one.
+   */
+  const tooSoon = (): boolean => performance.now() - shownAt < (line?.unasked ? YES_DEAD_UNASKED_MS : YES_DEAD_MS);
 
   function paintCount(body: Body): void {
     const n = body === 'rest' ? count : 0;
@@ -653,7 +666,7 @@ export function createNotchSurface(
       return;
     }
     // A line that only just appeared cannot be answered by a key already on its way down.
-    if (performance.now() - shownAt < 350) return;
+    if (tooSoon()) return;
     if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
       e.preventDefault();
       cur.onYes?.();
@@ -736,7 +749,7 @@ export function createNotchSurface(
   function yesKey(): void {
     if (!born || !edge.shown()) return;
     // A line that only just appeared cannot be answered by keys already on their way down.
-    if (performance.now() - shownAt < 350) return;
+    if (tooSoon()) return;
     if (!cur) { send({ type: 'open' }); return; }
     if (cur.done) return;
     if (cur.onYes) { cur.onYes(); return; }

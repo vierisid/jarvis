@@ -54,6 +54,7 @@ type NotchService struct {
 	panels  PanelService
 	toPage  func(script string) // runs a script in the page; nil while no page is up
 	toBrain func(text string)   // sends the brain one message; nil while not connected
+	dashboard func()            // opens the dashboard's window on this machine; nil when it cannot
 	// The keys (notch_keyboard.go). pairs is what the settings say; keys is
 	// the watch on the keyboard, which exists only while a page is up.
 	pairs notchKeyPairs
@@ -242,6 +243,26 @@ func notchPairsFromSettings(talk, yes, goos string) notchKeyPairs {
 	return pairs
 }
 
+// OnOpenDashboard sets how the dashboard is opened on this machine.
+func (n *NotchService) OnOpenDashboard(open func()) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.dashboard = open
+}
+
+// OpenDashboard opens the dashboard's window, as the tray's own entry does.
+// It reports whether there was a way to.
+func (n *NotchService) OpenDashboard() bool {
+	n.mu.Lock()
+	open := n.dashboard
+	n.mu.Unlock()
+	if open == nil {
+		return false
+	}
+	open()
+	return true
+}
+
 // OnMessage sets where the page's messages go. nil while no brain is connected.
 func (n *NotchService) OnMessage(send func(text string)) {
 	n.mu.Lock()
@@ -310,6 +331,21 @@ func makeNotchPushHandler(svc *NotchService) RPCHandler {
 			return nil, err
 		}
 		return &RPCResult{Result: map[string]any{"pushed": true}}, nil
+	}
+}
+
+// notch.open_dashboard - the brain asks for the dashboard to be opened here.
+// A line on the notch that cannot be answered with a key says where it can be
+// answered, and yes on it opens that place. Nothing is decided by opening it.
+//
+//	Params: none
+//	Result: { "opened": bool }
+func makeNotchOpenDashboardHandler(svc *NotchService) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		if !svc.Enabled() {
+			return nil, fmt.Errorf("the notch is off: notch.configure {enabled: true} comes first")
+		}
+		return &RPCResult{Result: map[string]any{"opened": svc.OpenDashboard()}}, nil
 	}
 }
 

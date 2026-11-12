@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { NOTCH_DEMO_ENV, NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, initNotchDemoGate, notchDemoGate } from './demo-gate.ts';
+import { NOTCH_DEMO_ENV, NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, initNotchDemoGate, notchDemoGate } from './demo-gate.ts';
 import { NOTCH_PAGE_PATH, notchRoutes } from './routes.ts';
 
 const SECRET = 'a-secret-of-sixteen-or-more';
@@ -26,6 +26,28 @@ const post = (routes: ReturnType<typeof notchRoutes>, body: unknown, token?: str
     body: JSON.stringify(body),
   }));
 
+const postFixture = (routes: ReturnType<typeof notchRoutes>, body: unknown, token?: string): Promise<Response> =>
+  routes[NOTCH_FIXTURE_PATH]!.POST(new Request(`http://localhost${NOTCH_FIXTURE_PATH}`, {
+    method: 'POST',
+    headers: token === undefined ? {} : { [NOTCH_DEMO_HEADER]: token },
+    body: JSON.stringify(body),
+  }));
+
+function fakeFixtures() {
+  const made: { kind: string; in?: number }[] = [];
+  return {
+    made,
+    fixtures: {
+      kinds: () => ['approval', 'promise'],
+      make: async (kind: string, options: { in?: number }) => {
+        if (kind === 'promise' && options.in === 13) throw new Error('No task could be made.');
+        made.push({ kind, ...options });
+        return `Made one ${kind}.`;
+      },
+    },
+  };
+}
+
 afterEach(() => { initNotchDemoGate({ hosted: false, notch: true }, {}); });
 
 describe('the notch routes', () => {
@@ -36,7 +58,7 @@ describe('the notch routes', () => {
 
   test('the page is a built file at the root, not a route', () => {
     expect(NOTCH_PAGE_PATH).toBe('/notch.html');
-    expect(Object.keys(notchRoutes(true))).toEqual([NOTCH_DEMO_PATH]);
+    expect(Object.keys(notchRoutes(true))).toEqual([NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH]);
   });
 });
 
@@ -115,5 +137,41 @@ describe('the functions the page and the desktop app share', () => {
     expect(keyboard).toContain('window.__notch_key&&window.__notch_key(');
     expect(bridge).toContain('host.__notch_pairs = ');
     expect(keyboard).toContain('window.__notch_pairs&&window.__notch_pairs(');
+  });
+});
+
+describe('the fixture route', () => {
+  test('is behind the same gate: shut, or without the secret, there is nothing there and nothing is made', async () => {
+    const f = fakeFixtures();
+    const routes = notchRoutes(true, { fixtures: f.fixtures });
+    expect((await postFixture(routes, { kind: 'approval' }, SECRET)).status).toBe(404);
+    initNotchDemoGate({ hosted: false, notch: true }, { [NOTCH_DEMO_ENV]: SECRET });
+    expect((await postFixture(routes, { kind: 'approval' })).status).toBe(404);
+    expect((await postFixture(routes, { kind: 'approval' }, 'not-the-secret-at-all')).status).toBe(404);
+    expect((await postFixture(notchRoutes(true), { kind: 'approval' }, SECRET)).status).toBe(404);
+    expect(f.made).toEqual([]);
+  });
+
+  test('with the secret it lists the kinds and makes one, passing on a due time in range only', async () => {
+    initNotchDemoGate({ hosted: false, notch: true }, { [NOTCH_DEMO_ENV]: SECRET });
+    const f = fakeFixtures();
+    const routes = notchRoutes(true, { fixtures: f.fixtures, pages: () => 1 });
+    expect(await (await postFixture(routes, { kind: 'list' }, SECRET)).json()).toEqual({ kinds: ['approval', 'promise'], pages: 1 });
+    expect(await (await postFixture(routes, { kind: 'approval' }, SECRET)).json()).toEqual({ made: 'Made one approval.', pages: 1 });
+    await postFixture(routes, { kind: 'promise', in: 120 }, SECRET);
+    await postFixture(routes, { kind: 'promise', in: 2 }, SECRET);
+    await postFixture(routes, { kind: 'promise', in: '120' }, SECRET);
+    expect(f.made).toEqual([{ kind: 'approval' }, { kind: 'promise', in: 120 }, { kind: 'promise' }, { kind: 'promise' }]);
+  });
+
+  test('an unknown kind is refused, and a fixture that cannot be made says why', async () => {
+    initNotchDemoGate({ hosted: false, notch: true }, { [NOTCH_DEMO_ENV]: SECRET });
+    const routes = notchRoutes(true, { fixtures: fakeFixtures().fixtures });
+    const unknown = await postFixture(routes, { kind: 'constructor' }, SECRET);
+    expect(unknown.status).toBe(400);
+    expect((await unknown.json() as { kinds: string[] }).kinds).toEqual(['approval', 'promise']);
+    const failed = await postFixture(routes, { kind: 'promise', in: 13 }, SECRET);
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toEqual({ error: 'No task could be made.' });
   });
 });
