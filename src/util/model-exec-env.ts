@@ -90,6 +90,7 @@ import { MODEL_EXEC_ENV_KEY_FLAG, MODEL_EXEC_MARKER_ENV, modelExecMarkers } from
  *   - JARVIS_DEBUG_RPC                daemon/debug-rpc-gate.ts, which deletes
  *     it from process.env at boot -- a delete that reaches only spawns
  *     passing an explicit env (see the header).
+ *   - JARVIS_NOTCH_DEMO               notch/demo-gate.ts, on the same terms.
  *
  * Read by earlier releases, until #228 moved LLM configuration into the
  * database and keychain. An install set up from those docs still carries them
@@ -114,6 +115,7 @@ export const DAEMON_SECRET_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_WORKFLOW_ENCRYPTION_KEY',
   'JARVIS_GITHUB_TOKEN',
   'JARVIS_DEBUG_RPC',
+  'JARVIS_NOTCH_DEMO',
   'JARVIS_API_KEY',
   'JARVIS_OPENAI_KEY',
   'JARVIS_GROQ_KEY',

@@ -24,6 +24,10 @@ export function devEnv(parent: Record<string, string | undefined>, paths: DevPat
   for (const key of BRIEF_FEATURES) env[`JARVIS_BRIEF_${key}`] = '1';
   // The notch is off unless the caller asks for it by exactly "1", the same
   // rule the daemon applies (src/notch/switch.ts).
-  if (parent.JARVIS_NOTCH === '1') env.JARVIS_NOTCH = '1';
+  if (parent.JARVIS_NOTCH === '1') {
+    env.JARVIS_NOTCH = '1';
+    // The demo secret only means anything with the notch on (src/notch/demo-gate.ts).
+    if (parent.JARVIS_NOTCH_DEMO) env.JARVIS_NOTCH_DEMO = parent.JARVIS_NOTCH_DEMO;
+  }
   return env;
 }
