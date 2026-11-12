@@ -18,7 +18,9 @@ function harness() {
     learner: { getSuggestions: () => [{ actionCategory: 'send_email' }], markSuggestionSent: () => {} } } as unknown as ApiContext) as Record<string, Record<string, (req: Request) => Promise<Response>>>;
   const post = (path: string, body: unknown) => routes[path]!.POST!(new Request(`http://localhost${path}`, {
     method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } }));
-  return { authority, emergency, post };
+  const raw = (path: string, body: ReadableStream<Uint8Array>) => routes[path]!.POST!(new Request(`http://localhost${path}`, {
+    method: 'POST', body, headers: { 'Content-Type': 'application/json' }, duplex: 'half' } as RequestInit));
+  return { authority, emergency, post: Object.assign(post, { raw }) };
 }
 
 test('while Kill is active, config writes, quick overrides and learning accepts are refused and change nothing', async () => {
@@ -42,4 +44,35 @@ test('Pause does not freeze settings', async () => {
   h.emergency.pause();
   expect((await h.post('/api/authority/config', { default_level: 4 })).status).toBe(200);
   expect((await h.post('/api/authority/config/quick-override', { action: 'send_email', allow: false })).status).toBe(200);
+});
+
+test('a Deny quick override is accepted during Kill, since it can only tighten; an Allow is not', async () => {
+  const h = harness();
+  h.emergency.kill();
+  expect((await h.post('/api/authority/config/quick-override', { action: 'send_email', allow: true })).status).toBe(409);
+  expect(h.authority.getConfig().overrides).toEqual([]);
+  expect((await h.post('/api/authority/config/quick-override', { action: 'send_email', allow: false })).status).toBe(200);
+  expect(h.authority.getConfig().overrides).toEqual([{ action: 'send_email', allowed: false, requires_approval: false }]);
+  // Turning that Deny back into an Allow is loosening, so it waits for Reset.
+  expect((await h.post('/api/authority/config/quick-override', { action: 'send_email', allow: true })).status).toBe(409);
+  expect(h.authority.getConfig().overrides).toEqual([{ action: 'send_email', allowed: false, requires_approval: false }]);
+});
+
+test('a write whose body is still arriving when Kill lands is refused and changes nothing', async () => {
+  const h = harness();
+  for (const [path, body] of [['/api/authority/config', { default_level: 10 }],
+    ['/api/authority/config/quick-override', { action: 'send_email', allow: true }],
+    ['/api/authority/learning/accept', { action: 'send_email', tool_name: 'x' }]] as const) {
+    if (h.emergency.getState() === 'killed') h.emergency.reset();
+    let send!: () => void;
+    const stream = new ReadableStream<Uint8Array>({ start(controller) {
+      send = () => { controller.enqueue(new TextEncoder().encode(JSON.stringify(body))); controller.close(); };
+    } });
+    const pending = h.post.raw(path, stream);
+    h.emergency.kill();
+    send();
+    const response = await pending;
+    expect(response.status).toBe(409);
+  }
+  expect(h.authority.getConfig()).toMatchObject({ default_level: 3, overrides: [] });
 });

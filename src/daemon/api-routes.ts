@@ -419,15 +419,16 @@ function buildAgentSnapshots(ctx: ApiContext) {
 const API_FACT_SOURCES: ReadonlySet<string> = new Set(['dashboard', 'user', 'api']);
 
 /**
- * Create all API route handlers.
- */
-/**
  * Kill stops Jarvis and Reset brings it back. A rule loosened while it is
  * stopped would silently go live on Reset, so Authority settings are read-only
- * until then. Pause keeps working as before.
+ * until then, except a Deny quick override, which can only tighten. Pause keeps
+ * working as before.
  */
 export const AUTHORITY_FROZEN_WHILE_KILLED = 'Jarvis is stopped. Reset it first, then change Authority settings.';
 
+/**
+ * Create all API route handlers.
+ */
 export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
   const googleOAuthFlows = new GoogleOAuthFlowStore();
   // Identifies this daemon boot; the workspace id identifies the data it serves.
@@ -4287,6 +4288,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
         try {
           const body = await req.json() as Record<string, unknown>;
+          // Again once the body is in: a Kill may have landed while it was read.
+          if (ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
           // Checked before anything is applied: a level that is not a number
           // used to pass every level check (Q-08).
           const invalid = authorityConfigPatchError(body);
@@ -4362,11 +4365,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/authority/config/quick-override': {
       POST: async (req: Request) => {
         if (!ctx.authorityEngine) return error('Authority engine not configured', 500);
-        if (ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
         try {
           const body = await req.json() as { action?: ActionCategory; allow?: boolean; role_id?: string };
           if (!body.action) return error('Missing "action" field', 400);
           if (typeof body.allow !== 'boolean') return error('Missing "allow" boolean', 400);
+          // During Kill only a Deny gets through: it is checked before every
+          // other rule, so it can only tighten what Reset brings back.
+          if (body.allow && ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
 
           const validActions: ReadonlyArray<ActionCategory> = [
             'read_data', 'write_data', 'delete_data',
@@ -4420,6 +4425,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
         try {
           const body = await req.json() as { action: ActionCategory; tool_name: string };
+          if (ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
           if (!body.action) return error('Missing "action" field');
           // Only a suggestion the learner actually made can be accepted: this
           // writes an "always allow" override (Q-08).
