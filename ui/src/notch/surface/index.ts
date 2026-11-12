@@ -15,7 +15,7 @@ import { renderBlocks } from './blocks.ts';
 import { SKELETON, btn, createFrames, createTimers, el, need } from './dom.ts';
 import { createEdge } from './edge.ts';
 import { createEyes } from './eyes.ts';
-import { mkHint, type Hint } from './hints.ts';
+import { duo, mkHint, setKeyPairs, type Hint } from './hints.ts';
 import { ICON } from './icons.ts';
 import { flattenPath, hanging, inside, type Point } from './outline.ts';
 import { createSentence } from './sentence.ts';
@@ -42,6 +42,15 @@ export interface NotchSurface {
   onOutline(listener: (settled: boolean) => void): void;
   /** The pointer, anywhere on the screen, in this page's px; `down` is the main button. */
   pointer(x: number, y: number, down: boolean): void;
+  /**
+   * What the keys said, from anywhere on the desktop: the talk pair held and
+   * let go, the yes pair tapped, Esc, Esc twice. Anything else is ignored.
+   */
+  key(name: string): void;
+  /** Which keys the hints show (they are set per machine). */
+  setPairs(pairs: unknown): void;
+  /** Told whenever the notch starts or stops having something Esc would close. */
+  onWantEsc(listener: (want: boolean) => void): void;
   destroy(): void;
 }
 
@@ -126,6 +135,16 @@ export function createNotchSurface(
   let restMood: NotchMood = 'idle';
   let born = false;
 
+  // Esc is taken from the app in front only while it would do something here.
+  const escListeners = new Set<(want: boolean) => void>();
+  let wantedEsc = false;
+  const syncEsc = (): void => {
+    const want = alive && born && ((cur !== null && !cur.done) || sentence.picking());
+    if (want === wantedEsc) return;
+    wantedEsc = want;
+    for (const listener of escListeners) listener(want);
+  };
+
   const later = (ms: number, fn: () => void): number => { const mine = tok; return timers.after(ms, () => { if (mine === tok) fn(); }); };
   const answer = (act: NotchAnswerAct, more: Partial<Extract<NotchFromPage, { type: 'answer' }>> = {}): void => {
     if (cur) send({ type: 'answer', id: cur.id, act, ...more });
@@ -135,11 +154,12 @@ export function createNotchSurface(
     if (cur) cur.done = true;
     stopFold();
     nin.classList.add('answered');
+    syncEsc();
   };
 
   const sentence = createSentence({
     nin, pick: pickEl, opts: optsEl, sheet: sheetEl,
-    refit: () => { shape.fit(false, true); more(); },
+    refit: () => { shape.fit(false, true); more(); syncEsc(); },
     changed: (word: NotchWord, value: string, button: HTMLElement) => {
       // The eyes go to the word that changed.
       const r = button.getBoundingClientRect();
@@ -283,6 +303,7 @@ export function createNotchSurface(
     nin.style.setProperty('--tx', lead.offsetLeft + lead.offsetWidth + 10 + 'px');
     shape.fit(instant);
     more();
+    syncEsc();
   }
 
   function rest(instant = false): void {
@@ -325,6 +346,8 @@ export function createNotchSurface(
 
     if (l.kind === 'say') {
       me.onYes = () => { answer('yes'); rest(); };
+      // Esc on a result is "seen": it goes, like yes.
+      me.onEsc = () => { answer('done'); rest(); };
       show({ body: 'line', say: l.say, ...common }, instant);
       later(Math.max(0, l.ms), () => { answer('done'); rest(); });
       return;
@@ -544,6 +567,7 @@ export function createNotchSurface(
             rest(true);
           }
           born = true;
+          syncEsc();
           return;
         }
         case 'show':
@@ -708,14 +732,69 @@ export function createNotchSurface(
     if (cur && !cur.done && (body === 'sheet' || body === 'ask')) cur.onEsc?.();
   }
 
+  /** Yes from the keyboard: to what is offered; with nothing offered, open up. */
+  function yesKey(): void {
+    if (!born || !edge.shown()) return;
+    // A line that only just appeared cannot be answered by keys already on their way down.
+    if (performance.now() - shownAt < 350) return;
+    if (!cur) { send({ type: 'open' }); return; }
+    if (cur.done) return;
+    if (cur.onYes) { cur.onYes(); return; }
+    // Choices have no yes: the row of them nods, to say "pick one".
+    if (optsEl.firstChild) {
+      optsEl.classList.remove('nudge');
+      void optsEl.offsetWidth;
+      optsEl.classList.add('nudge');
+      timers.after(420, () => optsEl.classList.remove('nudge'));
+    }
+  }
+
+  function key(name: string): void {
+    if (!alive || !born) return;
+    if (name === 'talk-start') {
+      // It perks up the moment its keys are held.
+      wrap.classList.add('att');
+      shape.kick(90);
+      shape.fit(false, true);
+    } else if (name === 'talk-end') {
+      wrap.classList.remove('att');
+      shape.fit(false, true);
+    } else if (name === 'yes') {
+      yesKey();
+    } else if (name === 'esc') {
+      if (sentence.picking()) sentence.closePick();
+      else if (cur && !cur.done) cur.onEsc?.();
+    } else if (name === 'esc-twice') {
+      eyes.gesture('shake');
+      sounds.sfx('no');
+      send({ type: 'stop' });
+    }
+  }
+
+  // The pair that is held shows beside the eyes while it is held.
+  const held = (): void => {
+    lead.querySelector('.cap.held')?.remove();
+    lead.append(duo('talk', 'span', 'cap held'));
+  };
+  held();
+
   // Nothing is on screen until the brain has said what the notch shows.
   edge.hide();
 
   return {
-    receive, outlines, pointer,
+    receive, outlines, pointer, key,
     onOutline(listener) { listeners.add(listener); },
+    onWantEsc(listener) { escListeners.add(listener); },
+    setPairs(pairs) {
+      if (!setKeyPairs(pairs)) return;
+      held();
+      // The hints on screen were drawn with the old keys: draw the line again.
+      if (line && cur && !cur.done) showLine(structuredClone(line), true);
+    },
     destroy() {
       alive = false;
+      syncEsc();
+      escListeners.clear();
       frames.stop();
       timers.clear();
       sounds.stop();

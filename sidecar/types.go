@@ -191,6 +191,11 @@ type PreferencesConfig struct {
 	// Style
 	EtherealPebble      bool `yaml:"ethereal_pebble"`       // fade the pebble out while idle, pop it back on activity
 	EtherealIdleSeconds int  `yaml:"ethereal_idle_seconds"` // idle time before the pebble fades out (default 5)
+	// The notch's keys: the pair of modifier keys held to talk and the pair
+	// tapped for yes, each written like "ctrl+meta". Empty means this
+	// system's own default. They matter only while the brain has the notch on.
+	NotchTalkKeys string `yaml:"notch_talk_keys,omitempty"`
+	NotchYesKeys  string `yaml:"notch_yes_keys,omitempty"`
 }
 
 type TerminalConfig struct {

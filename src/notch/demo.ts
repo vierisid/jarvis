@@ -602,6 +602,15 @@ const MOMENTS: Record<string, Moment> = {
     }
   },
 
+  /** Where Esc twice leads: everything is stopped until the person says to go on. */
+  async stopped(s) {
+    s.surface.act({ gesture: 'shake' });
+    const wake = await s.offer(['Everything is stopped. Nothing runs until you wake me.'], 'wake', { mood: 'closed', fold: 0 });
+    if (wake.act !== 'yes') return;
+    s.surface.act({ gesture: 'wake' });
+    await s.say(['Awake. Watching again.'], 1800);
+  },
+
   /** The widest sentence the notch holds: it wraps to two lines. */
   async wide(s) {
     const answer = await s.offer(
@@ -632,14 +641,19 @@ export function createNotchDemo(
   let stage: Stage | null = null;
   let playing: string | null = null;
   surface.onAnswer((answer: NotchAnswer) => { stage?.heard(answer); });
-  surface.onOpen(() => { stage?.wasOpened(); });
+  // Yes with nothing on the notch, or a click on it: a moment that is waiting
+  // for that gets it; with nothing playing, Jarvis opens.
+  surface.onOpen(() => { if (stage) stage.wasOpened(); else demo.play('home'); });
+  // Esc twice. Whatever is playing stops, and nothing starts until woken.
+  surface.onStop(() => { demo.play('stopped'); });
   const end = (): void => {
     stage?.stop();
     stage = null;
     playing = null;
   };
-  return {
-    names: () => Object.keys(MOMENTS),
+  const demo: NotchDemo = {
+    // "stopped" is where Esc twice leads, not a moment to pick.
+    names: () => Object.keys(MOMENTS).filter((name) => name !== 'stopped'),
     play(name) {
       const moment = Object.hasOwn(MOMENTS, name) ? MOMENTS[name] : undefined;
       if (!moment) return false;
@@ -673,4 +687,5 @@ export function createNotchDemo(
     },
     running: () => playing,
   };
+  return demo;
 }

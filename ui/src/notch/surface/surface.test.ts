@@ -288,6 +288,98 @@ describe('rest, the count and the eyes', () => {
   });
 });
 
+describe('the keys', () => {
+  // A line that only just appeared cannot be answered by keys already on their way down.
+  const settleKeys = (): Promise<void> => wait(380);
+
+  test('yes answers what is offered, and not before the line has been up a moment', async () => {
+    show({ id: 'o1', kind: 'offer', say: ['Reply?'], yes: 'show' });
+    surface.key('yes');
+    expect(sent).toEqual([]);
+    await settleKeys();
+    surface.key('yes');
+    surface.key('yes');
+    expect(sent).toEqual([{ type: 'answer', id: 'o1', act: 'yes' }]);
+  });
+
+  test('yes with nothing on the notch opens it', async () => {
+    await settleKeys();
+    surface.key('yes');
+    expect(sent).toEqual([{ type: 'open' }]);
+  });
+
+  test('yes on a row of choices picks nothing: the row nods', async () => {
+    show({ id: 'c1', kind: 'offer', say: ['Which?'], options: ['A', 'B'] });
+    await settleKeys();
+    surface.key('yes');
+    expect(sent).toEqual([]);
+    expect($('.opts')?.classList.contains('nudge')).toBe(true);
+  });
+
+  test('Esc closes what is on the notch, and an open strip first', async () => {
+    show({ id: 's1', kind: 'sheet', say: ['Overnight'], blocks: [] });
+    surface.key('esc');
+    expect(sent).toEqual([{ type: 'answer', id: 's1', act: 'no' }]);
+    expect(body()).toBe('rest');
+    sent.length = 0;
+    show({ id: 'w1', kind: 'offer', yes: 'draft', fold: 0, say: ['Chase ', { word: { name: 'tone', value: 'politely', options: ['politely', 'firmly'] } }, '?'] });
+    $('.say .live')!.click();
+    sent.length = 0;
+    surface.key('esc');
+    expect($('.pick')?.childElementCount).toBe(0);
+    expect(sent).toEqual([]);
+    surface.key('esc');
+    expect(sent).toEqual([{ type: 'answer', id: 'w1', act: 'no' }]);
+  });
+
+  test('Esc twice asks for everything to stop', () => {
+    surface.key('esc-twice');
+    expect(sent).toEqual([{ type: 'stop' }]);
+  });
+
+  test('holding the talk pair perks it up, and letting go rests it', () => {
+    surface.key('talk-start');
+    expect($('.wrap')?.classList.contains('att')).toBe(true);
+    expect($('.lead .cap.held')).not.toBeNull();
+    surface.key('talk-end');
+    expect($('.wrap')?.classList.contains('att')).toBe(false);
+  });
+
+  test('it says when Esc would do something here, and when it would not', () => {
+    const wants: boolean[] = [];
+    surface.onWantEsc((want) => wants.push(want));
+    show({ id: 'o1', kind: 'offer', say: ['Reply?'], yes: 'show' });
+    expect(wants).toEqual([true]);
+    all('.hint .key')[0]!.click();
+    // Answered: Esc would do nothing now, so it is the app's again.
+    expect(wants).toEqual([true, false]);
+    show({ id: 'o2', kind: 'offer', say: ['Again?'], yes: 'show' });
+    surface.receive({ type: 'rest' });
+    expect(wants).toEqual([true, false, true, false]);
+  });
+
+  test('the hints show the machine\'s own keys, and nonsense leaves them as they were', () => {
+    show({ id: 'o1', kind: 'offer', say: ['Reply?'], yes: 'show' });
+    const caps = (): string => all('.hint .key .cap b').map((b) => b.textContent).join('+');
+    const before = caps();
+    surface.setPairs({ talk: ['ctrl', 'alt'], yes: ['shift', 'meta'] });
+    expect(caps()).not.toBe(before);
+    const changed = caps();
+    for (const bad of [null, {}, { talk: ['ctrl', 'ctrl'], yes: ['alt', 'meta'] }, { talk: ['ctrl', 'alt'], yes: ['alt', 'ctrl'] }, { talk: ['ctrl', 'f1'], yes: ['alt', 'meta'] }]) {
+      surface.setPairs(bad);
+      expect(caps()).toBe(changed);
+    }
+    surface.setPairs({ talk: ['ctrl', 'meta'], yes: ['meta', 'alt'] });
+    expect(caps()).toBe(before);
+  });
+
+  test('a key it does not know is ignored', () => {
+    surface.key('f13');
+    surface.key('');
+    expect(sent).toEqual([]);
+  });
+});
+
 describe('what should never break it', () => {
   test('nonsense is ignored, and the line on the notch stays', () => {
     show({ id: 'o', kind: 'offer', say: ['Reply?'], yes: 'show' });

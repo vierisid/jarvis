@@ -214,6 +214,9 @@ export function createShape(deps: ShapeDeps): Shape {
   function kick(v: number): void { if (reduce) return; N.dnH = false; N.vh += v; wake(); }
 
   function fit(instant?: boolean, fast?: boolean): void {
+    // The copy is laid out as the notch is: with the held pair of keys in it
+    // while they are held.
+    measure.classList.toggle('att', wrap.classList.contains('att'));
     const c = nin.cloneNode(true) as HTMLElement;
     measure.append(c);
     const r = c.getBoundingClientRect();

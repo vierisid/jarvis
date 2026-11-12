@@ -171,7 +171,15 @@ describe('answers', () => {
     expect(opened).toEqual(['pc']);
   });
 
-  test('what is not one of the three messages is dropped, and said so a few times only', () => {
+  test('stop reaches its listeners', () => {
+    const h = harness();
+    const stopped: string[] = [];
+    h.surface.onStop((from) => stopped.push(from));
+    h.say('pc', { type: 'stop' });
+    expect(stopped).toEqual(['pc']);
+  });
+
+  test('what is not one of its messages is dropped, and said so a few times only', () => {
     const h = harness();
     const got: NotchAnswer[] = [];
     h.surface.onAnswer((answer) => got.push(answer));

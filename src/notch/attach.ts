@@ -38,6 +38,12 @@ export interface NotchConfigureResult {
   configured?: boolean;
   enabled?: boolean;
   surface?: string;
+  /**
+   * Whether that machine can watch the keyboard for the notch's keys: "watch",
+   * "blocked" (the system has not allowed it yet) or "none". Absent from a
+   * desktop app older than the keys.
+   */
+  keys?: string;
 }
 
 export function attachNotch(port: NotchSidecarPort, options: AttachNotchOptions): void {
@@ -54,7 +60,10 @@ export function attachNotch(port: NotchSidecarPort, options: AttachNotchOptions)
       (result) => {
         const answer = (result ?? {}) as NotchConfigureResult;
         const surface = answer.surface ?? 'unknown';
-        log(`[notch] "${sidecar.name}" ready, surface: ${surface}`);
+        log(`[notch] "${sidecar.name}" ready, surface: ${surface}${answer.keys ? `, keys: ${answer.keys}` : ''}`);
+        if (answer.keys === 'blocked') {
+          log(`[notch] "${sidecar.name}" cannot hear the notch's keys until it is given the Accessibility permission; the mouse still works`);
+        }
         // Only a desktop app that says it has a window is asked to open one.
         if (surface !== 'window' || !options.pageUrl) return;
         return port.dispatchRPC(sidecar.id, 'notch.spawn', { url: options.pageUrl }).then(
