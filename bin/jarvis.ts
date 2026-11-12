@@ -23,7 +23,7 @@ import { existsSync, openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { acquireLock, releaseLock, releaseLockIfUnheld, isLocked, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
-import { describeDashboard, describeLeftAlone, ensurePortReleased, resolveDashboardTarget, resolveStopPort } from '../src/cli/lifecycle.ts';
+import { describeDashboard, describeLeftAlone, ensurePortReleased, holdsJarvisLock, resolveDashboardTarget, resolveStopPort } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
 import { loadConfig } from '../src/config/loader.ts';
 import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
@@ -330,6 +330,22 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
     return true;
   }
 
+  // The flock proves that a daemon is running, not that it is `pid`: the pid
+  // is only what that daemon wrote. A daemon in a container writes its own pid
+  // namespace's number (1 in the shipped image), which out here is some other
+  // process, and a pid can be reused. So signal it only once it is shown to
+  // hold this data folder's lock, the same test port cleanup uses.
+  if (!(await holdsJarvisLock(pid))) {
+    // It may have exited between the two checks; then there is nothing to stop.
+    if (releaseLockIfUnheld()) {
+      console.log(c.yellow('JARVIS is not running.'));
+      return true;
+    }
+    console.error(c.red(`✗ JARVIS is running, but PID ${pid}, named in its lock file, does not hold the lock, so it was not signalled.`));
+    console.error(c.dim('  The daemon may be running in a container or another pid namespace. Stop it where it runs.'));
+    return false;
+  }
+
   console.log(c.cyan(`${verb} JARVIS daemon (PID ${pid})...`));
   try {
     process.kill(pid, 'SIGTERM');
@@ -350,10 +366,17 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
     }
 
     if (alive) {
-      console.log(c.dim('  Drain deadline exceeded, sending SIGKILL...'));
-      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
-      // SIGKILL returns before the kernel finishes the teardown.
-      await waitForProcessExit(pid, 2000);
+      // Ask again before SIGKILL: a pid that no longer holds the lock is not
+      // the daemon any more (it let go as it exited, or the pid was reused).
+      if (await holdsJarvisLock(pid)) {
+        console.log(c.dim('  Drain deadline exceeded, sending SIGKILL...'));
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+        // SIGKILL returns before the kernel finishes the teardown.
+        await waitForProcessExit(pid, 2000);
+      } else {
+        console.log(c.dim(`  PID ${pid} no longer holds the lock, so it was not force-killed.`));
+        await waitForProcessExit(pid, 1000);
+      }
     }
 
     // releaseLock() unlinks the lockfile whether or not we hold it, so it may

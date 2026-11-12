@@ -5,6 +5,7 @@
  */
 
 import { isLocked, releaseLockIfUnheld, isProcessAlive, waitForProcessExit } from '../daemon/pid.ts';
+import { holdsJarvisLock } from './lifecycle.ts';
 
 export interface StopOptions {
   /** How long to wait for graceful exit before SIGKILL. Default 5s. */
@@ -32,6 +33,12 @@ export interface StopResult {
    * here as "stopped".
    */
   stopped: boolean;
+  /**
+   * Set when a daemon holds the lock but the pid in the lock file is not shown
+   * to be the holder, so nothing was signalled: a daemon in a container (its
+   * pid is from another pid namespace) or a reused pid. `stopped` is false.
+   */
+  notHolder?: true;
 }
 
 /**
@@ -45,6 +52,16 @@ export async function stopDaemonGracefully(options: StopOptions = {}): Promise<S
   const pid = isLocked();
   if (!pid) {
     return { wasRunning: false, pid: null, graceful: true, stopped: true };
+  }
+
+  // The lock proves a daemon is running, not that it is `pid` (see notHolder).
+  // Signal the pid only once it is shown to hold this data folder's lock.
+  if (!(await holdsJarvisLock(pid))) {
+    // It may have exited between the two checks; then there is nothing to stop.
+    const stopped = releaseLockIfUnheld();
+    return stopped
+      ? { wasRunning: false, pid: null, graceful: true, stopped: true }
+      : { wasRunning: true, pid, graceful: false, stopped: false, notHolder: true };
   }
 
   const timeoutMs = options.timeoutMs ?? 5000;
@@ -69,18 +86,24 @@ export async function stopDaemonGracefully(options: StopOptions = {}): Promise<S
 
     if (alive) {
       graceful = false;
-      options.onForce?.(pid);
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        // Already gone between our last check and the kill attempt.
+      // Ask again before SIGKILL: a pid that no longer holds the lock is not
+      // the daemon any more (it let go as it exited, or the pid was reused).
+      if (await holdsJarvisLock(pid)) {
+        options.onForce?.(pid);
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // Already gone between our last check and the kill attempt.
+        }
+        // SIGKILL returns before the kernel has finished tearing the process
+        // down, and a killed-but-unreaped zombie still answers kill(pid, 0).
+        // Without this wait the liveness check below loses that race, reports
+        // the daemon as alive, and leaves a stale lockfile blocking the next
+        // start — the exact case the unconditional release used to cover.
+        await waitForProcessExit(pid, 2000);
+      } else {
+        await waitForProcessExit(pid, 1000);
       }
-      // SIGKILL returns before the kernel has finished tearing the process
-      // down, and a killed-but-unreaped zombie still answers kill(pid, 0).
-      // Without this wait the liveness check below loses that race, reports
-      // the daemon as alive, and leaves a stale lockfile blocking the next
-      // start — the exact case the unconditional release used to cover.
-      await waitForProcessExit(pid, 2000);
     }
   } catch {
     // SIGTERM failed. Usually the process was already dead (ESRCH), but it can
