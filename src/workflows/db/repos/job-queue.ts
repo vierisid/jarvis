@@ -265,8 +265,9 @@ export function getJob<P = Record<string, unknown>>(id: string): Job<P> | null {
  * Other job types may re-queue within their attempt budget. Returns how many
  * retryable jobs were re-queued. Must run BEFORE the worker starts polling.
  * Runs stranded by an older daemon's recovery code are closed the same way.
+ * `bootedAt` (this process's start) bounds which jobless runs are settled.
  */
-export function recoverOrphanedJobs(): number {
+export function recoverOrphanedJobs(bootedAt: number = performance.timeOrigin): number {
   // Before the transaction below, and before retireWorkflowRetries, on purpose.
   // (1) cancelFlowRun opens its own BEGIN IMMEDIATE and only announces the stop
   // decision once that commits; nesting it here would signal on a savepoint
@@ -313,28 +314,35 @@ export function recoverOrphanedJobs(): number {
       [JSON.stringify({ name: '<recovery>', displayName: 'Recovery',
         errorMessage: 'Execution was interrupted and exhausted its attempts. Its outcome is unknown; inspect partial results before proposing another run.' }), ts, ts],
     );
-    settleRunsWithoutJob(ts);
+    settleRunsWithoutJob(bootedAt, ts);
     return res.changes;
   })();
 }
 
 /**
- * A run row and its job are written together, so a QUEUED run with no job at
- * all can only come from a crash in code that wrote them separately (before
- * they shared one transaction). Nothing will ever start it, and the client that
- * asked for it never got an answer and may have asked again, so it is NOT
- * queued again: it closes as stopped, saying it never started. Runs a job
- * exists for, in any state, are left to the recovery above.
+ * Every path that queues a run writes the run row and its job together, so a
+ * QUEUED run with no job at all, created by an earlier process, can only come
+ * from a crash in code that wrote them separately (before they shared one
+ * transaction). Nothing will ever start it, and the client that asked for it
+ * never got an answer and may have asked again, so it is NOT queued again: it
+ * closes as stopped, saying it never started. Runs a job exists for, in any
+ * state, are left to the recovery above. Runs this process created are never
+ * touched: the prepared dry runner executes its run in process with no job,
+ * and may already be doing so while boot recovery runs.
  */
-export function settleRunsWithoutJob(ts: number = nowMs()): number {
+function settleRunsWithoutJob(createdBefore: number, ts: number): number {
+  // Two NOT EXISTS rather than one OR, so each can use idx_workflow_job_flow_run
+  // instead of scanning every job (jobs are never deleted) for each QUEUED run.
   return db().run(
     `UPDATE flow_run SET status = 'STOPPED', finish_time = ?, updated = ?, failed_step = ?
-     WHERE status = 'QUEUED'
+     WHERE status = 'QUEUED' AND created < ?
        AND NOT EXISTS (SELECT 1 FROM workflow_run_cancellation c WHERE c.run_id = flow_run.id)
-       AND NOT EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id = flow_run.id
-         OR (j.flow_run_id IS NULL AND CASE WHEN json_valid(j.payload) THEN json_extract(j.payload, '$.runId') END = flow_run.id))`,
+       AND NOT EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id = flow_run.id)
+       AND NOT EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id IS NULL
+         AND CASE WHEN json_valid(j.payload) THEN json_extract(j.payload, '$.runId') END = flow_run.id)`,
     [ts, ts, JSON.stringify({ name: '<lifecycle>', displayName: 'Did not start',
-      errorMessage: 'This run did not start and nothing ran. Jarvis stopped before it could begin. Start it again if you still want it.' })],
+      errorMessage: 'This run did not start and nothing ran. Jarvis stopped before it could begin. Start it again if you still want it.' }),
+      createdBefore],
   ).changes;
 }
 
