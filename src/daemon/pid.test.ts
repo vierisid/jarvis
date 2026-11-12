@@ -211,8 +211,24 @@ describe('Process Lock Manager', () => {
         try {
           expect(acquireLockAt(fifo, process.pid)).toBeNull();
           expect(flockHeldBy(process.pid, fifo)).toBeNull();
+          expect(isLocked(fifo)).toBeNull();
         } finally {
           rmSync(dir, { recursive: true, force: true });
+        }
+      }, 5_000);
+
+      // What `jarvis stop` and `jarvis status` read before anything else: none
+      // of it may hang on a FIFO at the daemon's own lock path.
+      test.if(process.platform === 'linux')('reads a FIFO at the default lock path without hanging', () => {
+        expect(Bun.spawnSync(['mkfifo', LOCK_PATH]).exitCode).toBe(0);
+        try {
+          expect(isLocked()).toBeNull();
+          expect(readPid()).toBeNull();
+          expect(readLockedPort()).toBeNull();
+          expect(releaseLockIfUnheld()).toBe(true);
+          expect(existsSync(LOCK_PATH)).toBe(false);
+        } finally {
+          rmSync(LOCK_PATH, { force: true });
         }
       }, 5_000);
 

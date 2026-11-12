@@ -160,12 +160,18 @@ export function isLocked(lockPath: string = defaultLockPath()): number | null {
 
   let fd: number;
   try {
-    fd = openSync(lockPath, constants.O_RDONLY);
+    // O_NONBLOCK: a FIFO planted at the path must not hang `jarvis status`.
+    fd = openSync(lockPath, constants.O_RDONLY | constants.O_NONBLOCK);
   } catch {
     return null;
   }
 
   try {
+    // Only a regular file can be a lock the daemon took (openLockFile).
+    if (!fstatSync(fd).isFile()) {
+      closeSync(fd);
+      return null;
+    }
     // Try non-blocking exclusive lock to probe
     const result = getFlock().do_flock(fd, LOCK_EX | LOCK_NB);
     if (result === 0) {
@@ -338,7 +344,7 @@ export function releaseLockIfUnheld(): boolean {
 
   let fd: number;
   try {
-    fd = openSync(lockPath, constants.O_RDONLY);
+    fd = openSync(lockPath, constants.O_RDONLY | constants.O_NONBLOCK);
   } catch {
     // Can't even open it (e.g. EACCES on another user's file) — treat as held,
     // never as free.
@@ -375,13 +381,27 @@ export function readPid(): number | null {
 function readPidAt(lockPath: string): number | null {
   if (!existsSync(lockPath)) return null;
   try {
-    const content = readFileSync(lockPath, 'utf-8');
+    const content = readLockText(lockPath);
     const firstLine = content.split(/\r?\n/, 1)[0]?.trim() ?? '';
     const pid = parseInt(firstLine, 10);
     if (isNaN(pid) || pid <= 0) return null;
     return pid;
   } catch {
     return null;
+  }
+}
+
+/**
+ * The lock file's text, read without blocking: a FIFO (or anything else that
+ * is not a regular file) at the path throws instead of hanging the reader.
+ */
+function readLockText(lockPath: string): string {
+  const fd = openSync(lockPath, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error(`${lockPath} is not a regular file`);
+    return readFileSync(fd, 'utf-8');
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -393,7 +413,7 @@ export function readLockedPort(): number | null {
   const lockPath = defaultLockPath();
   if (!existsSync(lockPath)) return null;
   try {
-    const content = readFileSync(lockPath, 'utf-8');
+    const content = readLockText(lockPath);
     const lines = content.split(/\r?\n/);
     const raw = lines[1]?.trim();
     if (!raw) return null;
