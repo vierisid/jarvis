@@ -3,7 +3,8 @@
  *
  * Manages OAuth2 tokens for Google APIs (Gmail, Calendar).
  * Uses raw fetch() — no googleapis package needed.
- * Tokens stored at ~/.jarvis/google-tokens.json
+ * Tokens stored at googleTokensPath(): ~/.jarvis/google-tokens.json, or
+ * <JARVIS_HOME>/google-tokens.json on an instance with its own data dir.
  */
 
 import path from 'node:path';
@@ -20,9 +21,12 @@ const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
  * changing (settings-reload's per-section diff) cannot drift from the path this
  * class actually reads.
  */
-export function googleTokensPath(): string {
-  const legacy = path.join(os.homedir(), '.jarvis', 'google-tokens.json');
-  const dataDir = process.env.JARVIS_HOME?.trim();
+export function googleTokensPath(
+  env: Record<string, string | undefined> = process.env,
+  home: string = os.homedir(),
+): string {
+  const legacy = path.join(home, '.jarvis', 'google-tokens.json');
+  const dataDir = env.JARVIS_HOME?.trim();
   if (!dataDir) return legacy;
   // An instance with its own data dir keeps its tokens there. One that already
   // has tokens in the old home location keeps using that file until it moves them.
