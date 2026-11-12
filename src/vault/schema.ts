@@ -202,7 +202,8 @@ function createTables(db: Database): void {
       completed_at INTEGER,
       result TEXT,
       sort_order INTEGER DEFAULT 0,
-      scope_id TEXT
+      scope_id TEXT,
+      started_at INTEGER
     )
   `);
 
@@ -216,6 +217,12 @@ function createTables(db: Database): void {
   // daemon/commitment-executor.ts for why the executor does not yet RUN under
   // it and what that would take.
   try { db.run('ALTER TABLE commitments ADD COLUMN scope_id TEXT'); } catch {}
+
+  // Migration: when the executor took this commitment to run it. Set once, in
+  // the same statement that decides who runs it (claimCommitmentRun), so a
+  // commitment is run at most once: not after it was closed or cancelled, and
+  // not a second time after a crash in the middle of its run.
+  try { db.run('ALTER TABLE commitments ADD COLUMN started_at INTEGER'); } catch {}
 
   db.run(`
     CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status)

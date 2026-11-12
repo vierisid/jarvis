@@ -8,12 +8,26 @@
  *   passive:    announce only, never auto-execute
  *   moderate:   30s cancel window (default)
  *   aggressive: 5s cancel window
+ *
+ * What a commitment can rely on:
+ *   - It runs at its due time, not before: the announcement comes one cancel
+ *     window ahead of it.
+ *   - It runs at most once. Taking it to run is one statement in the store
+ *     (claimCommitmentRun), so it is not run after it was closed, cancelled,
+ *     re-dated or removed, and not a second time after a crash in the middle
+ *     of its run: that one is closed as interrupted, and said so.
+ *   - A cancel is written down. The commitment is closed, not just dropped
+ *     from memory to be announced again by the next sweep.
+ *   - While Jarvis is paused or stopped nothing is announced or run. What was
+ *     announced is withdrawn, and announced again after Resume.
+ *   - Listeners (`subscribe`) hear each step, with the time it will run.
  */
 
-import { getDueCommitments, getUpcoming, updateCommitmentStatus, getCommitment, isWorkItemCommitment, parseParkedRequestIds, PARKED_RESULT_PREFIX } from '../vault/commitments.ts';
+import { getDueCommitments, getUpcoming, updateCommitmentStatus, getCommitment, isWorkItemCommitment, parseParkedRequestIds, PARKED_RESULT_PREFIX, claimCommitmentRun, releaseCommitmentRun, getInterruptedCommitments } from '../vault/commitments.ts';
 import { truncateText } from '../vault/commitment-text.ts';
 import type { Commitment } from '../vault/commitments.ts';
 import { runWithAdmission } from '../llm/background-budget.ts';
+import { activeEmergencyState } from '../authority/emergency.ts';
 import type { IAgentService } from './agent-service-interface.ts';
 import type { WSMessage } from '../comms/websocket.ts';
 import type { WorkflowEventBus } from '../workflows/runtime/event-bus.ts';
@@ -27,7 +41,33 @@ export type ExecutionState = {
   cancelDeadline: number;
   cancelled: boolean;
   executed: boolean;
+  /**
+   * The due time it was announced for. If the row's has changed since, it is
+   * not run on this announcement. Absent: the due time is not compared.
+   */
+  whenDue?: number | null;
 };
+
+/** What the executor tells its listeners. `fireAt` is when it will run, on the wall clock; null means never by itself. */
+export type CommitmentEvent =
+  | { type: 'announced'; commitmentId: string; what: string; whenDue: number | null; fireAt: number | null }
+  /** The person cancelled it inside its window. It is closed and will not run. */
+  | { type: 'cancelled'; commitmentId: string; what: string }
+  /** Announced, then not run on that announcement: Jarvis was paused, or the task was closed, re-dated or removed. */
+  | { type: 'withdrawn'; commitmentId: string; what: string; reason: 'paused' | 'changed' }
+  | { type: 'started'; commitmentId: string; what: string }
+  /** `parked`: the turn stopped on an approval, and the commitment closes from its outcome. */
+  | { type: 'finished'; commitmentId: string; what: string; status: 'completed' | 'failed' | 'parked'; result: string }
+  /** Found at start: a process took it to run and stopped in the middle. It is closed, not run again. */
+  | { type: 'interrupted'; commitmentId: string; what: string };
+
+/** Runs a commitment directly, in place of a model turn. Comes back with its result text. */
+export type CommitmentRunner = (commitment: Commitment) => Promise<string> | string;
+
+/** What a commitment a restart interrupted is closed with. */
+export const INTERRUPTED_RESULT = 'Interrupted by a restart. It may have partly run, so it was not run again.';
+/** What a commitment the person cancelled inside its window is closed with. */
+export const CANCELLED_RESULT = 'Cancelled by user';
 
 export type BroadcastFn = (msg: WSMessage) => void;
 
@@ -63,8 +103,19 @@ export class CommitmentExecutor {
    * waiting.
    */
   private executeTimers: Map<string, Timer> = new Map();
+  /**
+   * Announcements waiting for their moment: a commitment found ahead of its
+   * due time is announced one cancel window before it, so that it runs when
+   * it is due and not up to two minutes early.
+   */
+  private announceTimers: Map<string, { timer: Timer; whenDue: number | null }> = new Map();
   private aggressiveness: Aggressiveness;
   private running = false;
+  /** Jarvis is paused or stopped: nothing is announced or run. */
+  private held = false;
+  private readonly listeners = new Set<(event: CommitmentEvent) => void>();
+  /** Commitments run directly, by where they were created from. */
+  private readonly originRunners = new Map<string, CommitmentRunner>();
 
   constructor(aggressiveness: Aggressiveness = 'moderate') {
     this.aggressiveness = aggressiveness;
@@ -72,6 +123,70 @@ export class CommitmentExecutor {
 
   setAgentService(agent: IAgentService): void {
     this.agentService = agent;
+  }
+
+  /**
+   * Hears each step of each commitment. Returns the unsubscribe. A listener
+   * that throws is logged and does not stop the others, or the executor.
+   */
+  subscribe(listener: (event: CommitmentEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  private emit(event: CommitmentEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.error('[Executor] A listener failed:', err);
+      }
+    }
+  }
+
+  /**
+   * Commitments created from `origin` are run by `run` in place of a model
+   * turn. `created_from` cannot be set through the HTTP route or the model's
+   * tool, so only code inside the daemon can make such a commitment.
+   */
+  setOriginRunner(origin: string, run: CommitmentRunner): void {
+    this.originRunners.set(origin, run);
+  }
+
+  /** Whether there is anything that could run this commitment right now. */
+  private canRun(commitment: Pick<Commitment, 'created_from'>): boolean {
+    return this.agentService !== null
+      || (commitment.created_from !== null && this.originRunners.has(commitment.created_from));
+  }
+
+  private isHeld(): boolean {
+    return this.held || activeEmergencyState() !== 'normal';
+  }
+
+  /**
+   * Told when Jarvis is paused, stopped, or running again. Paused or stopped:
+   * every announced commitment is withdrawn, so nothing fires into a system
+   * that refuses its tools and then records the refusal as "done". Running
+   * again: the sweep runs at once, and each is announced with a fresh window.
+   */
+  onEmergency(state: 'normal' | 'paused' | 'killed'): void {
+    if (state === 'normal') {
+      const was = this.held;
+      this.held = false;
+      if (was && this.running) this.checkAndAnnounce();
+      return;
+    }
+    this.held = true;
+    for (const timer of this.executeTimers.values()) clearTimeout(timer);
+    this.executeTimers.clear();
+    for (const { timer } of this.announceTimers.values()) clearTimeout(timer);
+    this.announceTimers.clear();
+    for (const state of this.pending.values()) {
+      if (!state.cancelled && !state.executed) {
+        this.emit({ type: 'withdrawn', commitmentId: state.commitmentId, what: state.what, reason: 'paused' });
+      }
+    }
+    this.pending.clear();
   }
 
   /** Lets the executor read approval outcomes for parked commitments. */
@@ -152,6 +267,10 @@ export class CommitmentExecutor {
       this.checkAndAnnounce();
     }, 60_000);
 
+    // What a process took to run and never closed was interrupted in the
+    // middle. It is not run again: it may have sent what it was to send.
+    this.closeInterrupted();
+
     // Run an immediate check
     this.checkAndAnnounce();
 
@@ -166,7 +285,28 @@ export class CommitmentExecutor {
     }
     for (const t of this.executeTimers.values()) clearTimeout(t);
     this.executeTimers.clear();
+    for (const { timer } of this.announceTimers.values()) clearTimeout(timer);
+    this.announceTimers.clear();
     console.log('[Executor] Stopped');
+  }
+
+  /**
+   * Closes commitments a previous process left in the middle of their run,
+   * and tells the listeners. Called once, at start, before anything can be
+   * running in this process.
+   */
+  private closeInterrupted(): void {
+    try {
+      for (const commitment of getInterruptedCommitments()) {
+        if (isWorkItemCommitment(commitment.id)) continue;
+        updateCommitmentStatus(commitment.id, 'failed', INTERRUPTED_RESULT);
+        this.executedIds.add(commitment.id);
+        console.warn(`[Executor] "${commitment.what}" was interrupted by a restart; closed, not run again`);
+        this.emit({ type: 'interrupted', commitmentId: commitment.id, what: commitment.what });
+      }
+    } catch (err) {
+      console.error('[Executor] Could not close interrupted commitments:', err);
+    }
   }
 
   /**
@@ -177,6 +317,9 @@ export class CommitmentExecutor {
    */
   checkAndAnnounce(): void {
     this.settleAwaitingApprovals();
+    // Paused or stopped: nothing new is announced. The sweep after Resume
+    // finds everything that came due in the meantime.
+    if (this.isHeld()) return;
     try {
       const now = Date.now();
       const dueNow = getDueCommitments({ excludeWorkItems: true }); // when_due <= now
@@ -235,11 +378,55 @@ export class CommitmentExecutor {
           continue;
         }
 
-        this.announceExecution(commitment);
+        // Taken to run already: it is running now, or it is parked, or it was
+        // interrupted and closed at start. Never a second run.
+        if (commitment.started_at !== null) continue;
+        // Nothing here could run it (no agent yet, and no runner for where it
+        // came from): announcing it would promise a run that cannot happen.
+        // In passive mode nothing is ever run, and the announcement is all.
+        if (this.aggressiveness !== 'passive' && !this.canRun(commitment)) continue;
+
+        this.announceWhenItsTime(commitment, now);
       }
     } catch (err) {
       console.error('[Executor] Check error:', err);
     }
+  }
+
+  /**
+   * Announces a commitment one cancel window before it is due, so that it
+   * runs at its due time. One already due, or closer than a window, is
+   * announced now.
+   */
+  private announceWhenItsTime(commitment: Commitment, now: number): void {
+    const cancelWindow = CANCEL_WINDOW[this.aggressiveness];
+    const lead = cancelWindow === Infinity ? 0 : cancelWindow;
+    const announceAt = commitment.when_due === null ? now : commitment.when_due - lead;
+    if (announceAt <= now) {
+      this.announceExecution(commitment);
+      return;
+    }
+    const waiting = this.announceTimers.get(commitment.id);
+    if (waiting) {
+      if (waiting.whenDue === commitment.when_due) return;
+      // Re-dated while it waited: the old moment is no longer the one.
+      clearTimeout(waiting.timer);
+    }
+    const timer = setTimeout(() => {
+      this.announceTimers.delete(commitment.id);
+      if (!this.running || this.isHeld()) return;
+      try {
+        // As it is now: closed, re-dated or removed in the meantime, it is not announced.
+        const current = getCommitment(commitment.id);
+        if (!current || (current.status !== 'pending' && current.status !== 'active')) return;
+        if (current.when_due !== commitment.when_due || current.started_at !== null) return;
+        if (this.pending.has(current.id) || this.executedIds.has(current.id)) return;
+        this.announceExecution(current);
+      } catch (err) {
+        console.error('[Executor] Announce error:', err);
+      }
+    }, announceAt - now);
+    this.announceTimers.set(commitment.id, { timer, whenDue: commitment.when_due });
   }
 
   /**
@@ -251,6 +438,19 @@ export class CommitmentExecutor {
 
     state.cancelled = true;
     console.log(`[Executor] Cancelled execution: ${state.what}`);
+
+    // Written down, not only remembered: the row is still open and due, so
+    // without this the next sweep would announce it again and it would run.
+    // Left alone if someone closed it in the meantime; their word stands.
+    try {
+      const current = getCommitment(commitmentId);
+      if (current && (current.status === 'pending' || current.status === 'active') && current.started_at === null) {
+        updateCommitmentStatus(commitmentId, 'failed', CANCELLED_RESULT);
+      }
+    } catch (err) {
+      console.error('[Executor] Could not record the cancellation:', err);
+    }
+    this.executedIds.add(commitmentId);
 
     // Broadcast cancellation confirmation
     this.broadcast?.({
@@ -271,6 +471,7 @@ export class CommitmentExecutor {
       clearTimeout(timer);
       this.executeTimers.delete(commitmentId);
     }
+    this.emit({ type: 'cancelled', commitmentId, what: state.what });
     return true;
   }
 
@@ -291,19 +492,25 @@ export class CommitmentExecutor {
       commitmentId: commitment.id,
       what: commitment.what,
       announcedAt: now,
-      cancelDeadline: cancelWindow === Infinity ? Infinity : now + cancelWindow,
+      // A full window from now, and never before it is due.
+      cancelDeadline: cancelWindow === Infinity ? Infinity : Math.max(now + cancelWindow, commitment.when_due ?? 0),
       cancelled: false,
       executed: false,
+      whenDue: commitment.when_due,
     };
 
     this.pending.set(commitment.id, state);
+    const windowSec = state.cancelDeadline === Infinity ? 0 : Math.max(1, Math.round((state.cancelDeadline - now) / 1000));
 
     if (this.aggressiveness === 'passive') {
       console.log(`[Executor] Announced (passive, no auto-execute): ${commitment.what}`);
     } else {
-      const windowSec = Math.round(cancelWindow / 1000);
       console.log(`[Executor] Announced: "${commitment.what}" — executing in ${windowSec}s unless cancelled`);
     }
+    this.emit({
+      type: 'announced', commitmentId: commitment.id, what: commitment.what, whenDue: commitment.when_due,
+      fireAt: state.cancelDeadline === Infinity ? null : state.cancelDeadline,
+    });
 
     // Broadcast announcement to all WebSocket clients
     this.broadcast?.({
@@ -314,7 +521,7 @@ export class CommitmentExecutor {
         commitmentId: commitment.id,
         what: commitment.what,
         executeAt: state.cancelDeadline === Infinity ? null : state.cancelDeadline,
-        cancelWindowMs: cancelWindow === Infinity ? null : cancelWindow,
+        cancelWindowMs: state.cancelDeadline === Infinity ? null : state.cancelDeadline - now,
       },
       timestamp: now,
     });
@@ -325,7 +532,7 @@ export class CommitmentExecutor {
       payload: {
         text: this.aggressiveness === 'passive'
           ? `Task due: "${commitment.what}". Waiting for your instruction to proceed.`
-          : `Executing "${commitment.what}" in ${Math.round(cancelWindow / 1000)}s. Send cancel to abort.`,
+          : `Executing "${commitment.what}" in ${windowSec}s. Send cancel to abort.`,
         source: 'proactive',
       },
       priority: 'urgent',
@@ -357,9 +564,42 @@ export class CommitmentExecutor {
       this.pending.delete(commitmentId);
       return;
     }
-    if (!this.agentService) return;
+    // Paused or stopped since it was announced: it does not run into a
+    // system that refuses its tools. It stays open and is announced again
+    // after Resume.
+    if (this.isHeld()) {
+      this.pending.delete(commitmentId);
+      this.emit({ type: 'withdrawn', commitmentId, what: state.what, reason: 'paused' });
+      return;
+    }
+    let row: Commitment | null;
+    try {
+      row = getCommitment(commitmentId);
+    } catch {
+      row = null;
+    }
+    if (row && !this.canRun(row)) return;
+
+    // The one statement that decides whether this runs. It fails when the
+    // task was closed, cancelled, removed or re-dated since the announcement,
+    // or was already taken: then nothing runs.
+    let claimed: Commitment | null;
+    try {
+      claimed = claimCommitmentRun(commitmentId, state.whenDue === undefined ? {} : { whenDue: state.whenDue });
+    } catch (err) {
+      console.error(`[Executor] Could not take "${state.what}" to run it:`, err);
+      claimed = null;
+    }
+    if (!claimed) {
+      this.pending.delete(commitmentId);
+      console.log(`[Executor] Not run, it changed since it was announced: "${state.what}"`);
+      this.emit({ type: 'withdrawn', commitmentId, what: state.what, reason: 'changed' });
+      return;
+    }
 
     state.executed = true;
+    // What it says now, not what it said when it was announced.
+    state.what = claimed.what;
     this.pending.delete(commitmentId);
     this.executedIds.add(commitmentId);
 
@@ -369,24 +609,33 @@ export class CommitmentExecutor {
       this.executedIds = new Set(arr.slice(arr.length - 250));
     }
 
+    this.emit({ type: 'started', commitmentId, what: state.what });
     try {
-      await this.executeCommitment(state);
+      await this.executeCommitment(state, claimed);
     } catch (err) {
       console.error(`[Executor] Failed to execute "${state.what}":`, err);
+      const reason = err instanceof Error ? err.message : 'Execution failed';
       try {
-        const reason = err instanceof Error ? err.message : 'Execution failed';
         updateCommitmentStatus(state.commitmentId, 'failed', reason);
       } catch { /* ignore */ }
+      this.emit({ type: 'finished', commitmentId, what: state.what, status: 'failed', result: reason });
     }
   }
 
-  private async executeCommitment(state: ExecutionState): Promise<void> {
+  private async executeCommitment(state: ExecutionState, commitment: Commitment): Promise<void> {
     console.log(`[Executor] Executing: "${state.what}"`);
 
-    // Mark as active
-    try {
-      updateCommitmentStatus(state.commitmentId, 'active');
-    } catch { /* ignore */ }
+    // Already marked active: taking it to run did that (claimCommitmentRun).
+
+    // Run directly, when where it came from has a runner: no model turn.
+    const direct = commitment.created_from !== null ? this.originRunners.get(commitment.created_from) : undefined;
+    if (direct) {
+      const result = truncateText(String(await direct(commitment)), 500) || 'Executed successfully';
+      updateCommitmentStatus(state.commitmentId, 'completed', result);
+      console.log(`[Executor] Completed: "${state.what}"`);
+      this.emit({ type: 'finished', commitmentId: state.commitmentId, what: state.what, status: 'completed', result });
+      return;
+    }
 
     // Build a mandatory execution prompt
     const prompt = [
@@ -460,6 +709,22 @@ export class CommitmentExecutor {
     // a spent daily allowance cannot fail it. Origin stays `background`.
     const response = await runWithAdmission('exempt', () => this.agentService!.handleMessage(prompt, 'system'));
 
+    // The turn never began: the process is shutting down. Nothing was done,
+    // so it is given back, and the next start runs it. Recorded as done, it
+    // would be a promise silently not kept.
+    if (response === 'skipped: draining') {
+      releaseCommitmentRun(state.commitmentId);
+      this.executedIds.delete(state.commitmentId);
+      console.log(`[Executor] Not run, shutting down; it will run after the restart: "${state.what}"`);
+      this.emit({ type: 'withdrawn', commitmentId: state.commitmentId, what: state.what, reason: 'changed' });
+      return;
+    }
+    // The turn threw, and the background agent handed the error back as text.
+    // That is a failure, not a result.
+    if (typeof response === 'string' && response.startsWith('Error: ')) {
+      throw new Error(truncateText(response.slice('Error: '.length), 500) || 'Execution failed');
+    }
+
     // Broadcast the execution result
     this.broadcast?.({
       type: 'chat',
@@ -490,6 +755,7 @@ export class CommitmentExecutor {
         console.error('[Executor] Failed to update commitment status:', err);
       }
       console.log(`[Executor] Awaiting approval (${requestIds.length} request(s)): "${state.what}"`);
+      this.emit({ type: 'finished', commitmentId: state.commitmentId, what: state.what, status: 'parked', result: resultSummary });
       return;
     }
 
@@ -500,5 +766,6 @@ export class CommitmentExecutor {
     }
 
     console.log(`[Executor] Completed: "${state.what}"`);
+    this.emit({ type: 'finished', commitmentId: state.commitmentId, what: state.what, status: 'completed', result: resultSummary });
   }
 }
