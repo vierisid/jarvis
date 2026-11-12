@@ -937,9 +937,11 @@ actions only change local fixture state.
 ## Needs you at scale
 
 - The workflow request list asks the server for 50 pending requests (`GET /api/workflow-inputs?limit=`) and
-  adds 50 each time "Show more requests" is pressed; a thousand requests are never drawn at once.
+  adds 50 each time "Show more requests" is pressed, up to the server's largest page (500); past that it says
+  how many more are waiting. A thousand requests are never drawn at once.
   The Needs you count is the server's `pendingTotal` plus the settled requests that still need attention,
   never the number listed.
 - The queue reads every 5 seconds only while the page is visible, and once when it becomes visible again.
-- Needs you lists requests a person can answer before rows that can only be inspected, and the first card
-  selected is one of the former.
+- With nothing chosen, the first card selected is one a person can answer, not a row that can only be
+  inspected: in the other decisions list (`PendingDecisions`), and in the document room, which also lists
+  answerable rows first (live, that room only receives rows with document actions).

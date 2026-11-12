@@ -82,7 +82,8 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
     finally { setPending(false); }
   };
   if (!enabled) return null;
-  const row = rows?.find(r => r.decisionId === selected) ?? rows?.[0];
+  // With nothing chosen, the first request a person can answer (G-10), not a row that can only be inspected.
+  const row = rows?.find(r => r.decisionId === selected) ?? rows?.find(r => r.supportedActions.some(a => a !== 'inspect')) ?? rows?.[0];
   const title = (r: QueuedDecision) => browserCardTitle(r)?.heading ?? r.title;
   const actions = row?.supportedActions.filter(a => a !== 'inspect') ?? [];
   const primary = actions.find(a => ['approve_permission', 'accept_intent', 'execute_once'].includes(a));
