@@ -136,6 +136,39 @@ export const expressionPatches = {
     ["    this.status = status;\n    this.responseBody = responseBody;\n  }\n",
       "    this.status = status;\n    this.responseBody = responseBody;\n    // === JARVIS PATCH: see above ===\n    this.hasResponse = err?.response !== undefined && err?.response !== null;\n    this.code = typeof err?.code === 'string' ? err.code : undefined;\n    // Not enumerable: the client logs this error, and a header can carry a cookie.\n    Object.defineProperty(this, 'responseHeaders', { value: err?.response?.headers, enumerable: false });\n    // === END JARVIS PATCH ===\n  }\n"],
   ],
+  // Convert JSON to CSV keeps every column, not only the first row's. Registered so a
+  // vendor sync re-applies it; `core-csv-piece.test.ts` covers it.
+  "packages/pieces/core/csv/src/lib/actions/convert-json-to-csv.ts": [
+    [
+      "    return stringify(flattened, {\n      header: true,\n      delimiter: delimiter_type,\n    });",
+      '    // === JARVIS PATCH: the header is every key of every row ===\n' +
+      '    // Upstream took the header from the first row, so a column only a later row\n' +
+      '    // had was dropped, with its values, and the step still succeeded. Keys are\n' +
+      '    // listed in first-seen order; a row without a key gets an empty cell.\n' +
+      '    // Cells are read as own properties and handed over by position: given an\n' +
+      '    // object row, csv-stringify resolves a column like `tags.0` as a path, so a\n' +
+      '    // row whose `tags` is the string "foo" would get "f", and a row without\n' +
+      '    // `toString` would read the prototype\'s function and fail the step.\n' +
+      '    const isRow = (row: unknown): row is Record<string, unknown> =>\n' +
+      '      row !== null && typeof row === \'object\' && !Array.isArray(row);\n' +
+      '    const columns = [...new Set(flattened.flatMap((row) => (isRow(row) ? Object.keys(row) : [])))];\n' +
+      '    if (columns.length > 0) {\n' +
+      '      const cells = flattened.map((row) =>\n' +
+      '        isRow(row) ? columns.map((key) => (Object.prototype.hasOwnProperty.call(row, key) ? row[key] : undefined)) : row,\n' +
+      '      );\n' +
+      '      return stringify(cells, {\n' +
+      '        header: true,\n' +
+      '        delimiter: delimiter_type,\n' +
+      '        columns,\n' +
+      '      });\n' +
+      '    }\n' +
+      '    return stringify(flattened, {\n' +
+      '      header: true,\n' +
+      '      delimiter: delimiter_type,\n' +
+      '    });\n' +
+      '    // === END JARVIS PATCH ==='
+    ],
+  ],
   "packages/pieces/core/sftp/src/lib/common.ts": [
     ["        rejectUnauthorized: !(allow_unauthorized_certificates ?? false),\n      }",
       "        rejectUnauthorized: !(allow_unauthorized_certificates ?? false),\n        ...servername,\n      }"],
