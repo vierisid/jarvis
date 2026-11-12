@@ -8,6 +8,9 @@ centre of the screen, one line at a time. It ships dark. This page states what
 
 - `JARVIS_NOTCH=1` in the brain's environment turns the notch on. Any other
   value is off, including `true` (`src/notch/switch.ts`).
+- It is classified as a setting, not a secret (`JARVIS_SETTINGS_ENV_NAMES` in
+  `src/util/model-exec-env.ts`), so a brain restarted from the assistant's own
+  shell keeps the owner's choice.
 - A desktop app advertises the capability `notch` to say it understands
   `notch.*`. It hosts nothing until the brain tells it to.
 - When a desktop app connects, a brain with the switch on sends it
