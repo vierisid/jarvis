@@ -181,6 +181,7 @@ import { resolveSharedRuntimePaths } from "../workflows/runtime/shared-runtime-p
 import { DEFAULT_IDS } from "../workflows/db/schema.ts";
 import { buildSandboxServiceBackends } from "../workflows/runtime/service-backends.ts";
 import { humanInputRefusal } from "../workflows/runtime/human-input-contract.ts";
+import { workflowStepToolRefusal } from "../workflows/runtime/effect-capabilities.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 import { createLimiter } from "../util/concurrency.ts";
 import { runWithOrigin } from "../llm/origin.ts";
@@ -5296,7 +5297,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       tool: name => {
         const tool = agentService.getOrchestrator().getToolRegistry()?.list().find(t => t.name === name);
         return tool ? { params: Object.entries(tool.parameters).map(([name, param]) => ({ name, ...param })),
-          workflowRefusal: workflowToolDeclarationRefusal(tool), switchRefusal: workflowToolSwitchRefusal(tool) } : null;
+          workflowRefusal: workflowToolDeclarationRefusal(tool), switchRefusal: workflowToolSwitchRefusal(tool),
+          unsupported: params => workflowStepToolRefusal(tool, params) } : null;
       },
       roles: () => new Set(agentService.getSpecialists().keys()),
       roleTools: (id) => agentService.getSpecialists().get(id)?.tools ?? null,
