@@ -1771,6 +1771,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | POST | `/api/workflows/:id/code-steps` | Grant or revoke this flow's CODE-step permission (`{"enabled": bool}`, required) |
 | POST | `/api/workflows/:id/read-hosts` | Replace this flow's read list, the hosts an HTTP GET or HEAD reaches without asking (`{"hosts": string[]}`, required; bare host names, at most 64; `[]` clears it). A host matches exactly: listing `example.com` does not list `api.example.com`. Optional `expected`: the list the edit started from; 409 when the list has changed since |
 | POST | `/api/workflows/:id/run` | Enqueue a run, 202. `{ environment?, triggeredBy?, stepNameToTest?, payload? }`, or `{ workItemId }` alone |
+| GET | `/api/workflows/recent-runs` | "Recently run": the newest run of each workflow in the caller's project, most recent first, with the workflow's `displayName`. `?limit` (default 6, 1 to 20). Workflows removed in Brief are left out; no step output. Answers `{ items }` |
 | GET | `/api/workflows/:id/runs` | Run history, newest first. `?status`, `?limit` (default 50, max 100), `?offset`; answers `{ items, nextOffset }` |
 | GET | `/api/workflow-runs/:runId` | One run, including its machine binding and cancellation |
 | GET | `/api/workflow-runs/:runId/effects` | The run's governed effect records, `{ runId, effects }` |
