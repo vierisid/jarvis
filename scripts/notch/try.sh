@@ -2,13 +2,14 @@
 # Build the desktop app from this checkout and run the brain with the notch
 # switch on, against data that is kept apart from any installed Jarvis.
 #
-#   scripts/notch/try.sh              build, then run the brain (Ctrl-C stops it)
+#   scripts/notch/try.sh              build, start everything (Ctrl-C stops the brain)
 #   scripts/notch/try.sh --token      also print a fresh enrolment token
 #   scripts/notch/try.sh --no-build   skip the desktop app build
+#   scripts/notch/try.sh --no-start   do not start the desktop app
 #
-# On WSL it cross-builds the Windows desktop app and puts it in a folder under
-# your Windows profile. On a Mac it builds Jarvis.app next to the data. The
-# brain always runs here, on this machine. docs/notch/README.md has the rest.
+# On WSL it cross-builds the Windows desktop app into a folder under your
+# Windows profile, restarts it, and runs the brain here. On a Mac it builds
+# Jarvis.app next to the data. docs/notch/README.md has the rest.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
@@ -18,11 +19,13 @@ PORT="${NOTCH_PORT:-3143}"
 DEVICE="${NOTCH_DEVICE:-notch-dev}"
 BUILD=1
 FRESH_TOKEN=0
+START=1
 for arg in "$@"; do
   case "$arg" in
     --no-build) BUILD=0 ;;
     --token) FRESH_TOKEN=1 ;;
-    -h|--help) sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --no-start) START=0 ;;
+    -h|--help) sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -53,6 +56,34 @@ elif [ "$TARGET" = "mac" ]; then
   START_HINT="$APP_DIR/start-sidecar.command"
 fi
 
+# Which jarvis.exe is running, if any: "test" for the one in APP_DIR, "other"
+# for any other (an installed Jarvis), empty for none.
+running_jarvis() {
+  local dir paths
+  dir="$(wslpath -w "$APP_DIR" | tr '[:upper:]' '[:lower:]')"
+  paths="$(powershell.exe -NoProfile -Command "Get-Process jarvis -ErrorAction SilentlyContinue | ForEach-Object { \$_.Path }" 2>/dev/null | tr -d '\r' | tr '[:upper:]' '[:lower:]')"
+  [ -n "$paths" ] || return 0
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in "$dir"\\*) ;; *) echo other; return 0 ;; esac
+  done <<< "$paths"
+  echo test
+}
+
+if [ "$TARGET" = "windows" ]; then
+  case "$(running_jarvis)" in
+    other)
+      echo "Jarvis is running on Windows. Quit it from its tray icon, then run this again: the test build cannot run beside it." >&2
+      exit 1 ;;
+    test)
+      if [ "$BUILD" = 1 ] || [ "$START" = 1 ]; then
+        say "Stopping the test build that is still running"
+        powershell.exe -NoProfile -Command "Get-Process jarvis -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true
+        sleep 1
+      fi ;;
+  esac
+fi
+
 if [ "$BUILD" = 1 ] && [ "$TARGET" = "windows" ]; then
   need go "Install Go (the version in sidecar/go.mod is fetched automatically)."
   need x86_64-w64-mingw32-gcc "Install mingw-w64 (sudo apt-get install mingw-w64)."
@@ -72,6 +103,19 @@ if [ "$BUILD" = 1 ] && [ "$TARGET" = "windows" ]; then
   rm -rf "$OUT"
   cp scripts/integration/start-sidecar.cmd "$APP_DIR/start-sidecar.cmd"
   echo "Desktop app: $(wslpath -w "$APP_DIR")\\bin\\jarvis.exe"
+fi
+
+# A local build is unsigned. Windows Smart App Control lets some unsigned
+# programs run and refuses others, per file. Find out now, and say so, instead
+# of starting a brain that no desktop app will ever join.
+if [ "$TARGET" = "windows" ] && [ -f "$APP_DIR/bin/jarvis.exe" ]; then
+  if ! (cd "$APP_DIR" && timeout 30 ./bin/jarvis.exe --version >/dev/null 2>&1); then
+    echo >&2
+    echo "Windows refused to run this build of the desktop app." >&2
+    echo "The usual cause is Smart App Control, which blocks programs that are not signed." >&2
+    echo "Nothing was started. See \"When Windows refuses the build\" in docs/notch/README.md." >&2
+    exit 1
+  fi
 fi
 
 if [ "$BUILD" = 1 ] && [ "$TARGET" = "mac" ]; then
@@ -113,10 +157,25 @@ fi
 say "Starting the brain with the notch switch on"
 echo "Data:  $DATA_DIR   (separate from any installed Jarvis)"
 echo "Brain: http://localhost:$PORT"
-if [ -n "${START_HINT:-}" ]; then
+if [ "$START" = 1 ] && [ "$TARGET" = "windows" ] && [ -f "$APP_DIR/bin/jarvis.exe" ]; then
+  echo "The test build starts by itself once the brain is up. The first time, a"
+  echo "window asks for the token above."
+  # Start-Process launches the start file the way a double-click would and
+  # returns at once, so nothing here waits on the desktop app.
+  (
+    for _ in $(seq 1 90); do
+      if curl -fsS -o /dev/null "http://localhost:$PORT/health" 2>/dev/null; then
+        powershell.exe -NoProfile -Command "Start-Process -FilePath '$(wslpath -w "$APP_DIR/start-sidecar.cmd")'" >/dev/null 2>&1 || true
+        exit 0
+      fi
+      sleep 1
+    done
+    echo "The brain did not answer in 90 seconds, so the test build was not started. Run $START_HINT by hand." >&2
+  ) &
+elif [ -n "${START_HINT:-}" ]; then
   echo "Next:  quit Jarvis from its tray or menu-bar icon, then run"
   echo "       $START_HINT"
 fi
-echo "Ready when you see: JARVIS daemon running on port $PORT"
+echo "Ready when you see: [notch] \"$DEVICE\" is showing the notch"
 echo
 JARVIS_NOTCH=1 exec bun run dev:local --data-dir "$DATA_DIR" --port "$PORT"

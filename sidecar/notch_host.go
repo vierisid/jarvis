@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -90,23 +91,34 @@ func notchShouldHide(fullscreenAppInFront, displayKeptAwake bool) bool {
 	return fullscreenAppInFront && displayKeptAwake
 }
 
-// bindNotch gives the page its three calls. They run on the window's own
-// thread, like every other panel binding.
-func bindNotch(wv webview.WebView, handle unsafe.Pointer) {
+// bindNotch gives the page its three calls and starts feeding it the pointer's
+// position. The calls run on the window's own thread, like every other panel
+// binding. The function it returns stops the feed and releases what the
+// platform set up; the panel calls it on the window's thread once the window's
+// loop has ended and before the web view is destroyed.
+func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 	bind := func(name string, fn any) {
 		if err := wv.Bind(name, fn); err != nil {
 			log.Printf("[notch] Bind(%s) failed: %v", name, err)
 		}
 	}
-	// __notch_set_outline([[x, y], ...]) in device pixels of the window.
-	bind("__notch_set_outline", func(points [][]int) error {
+	// __notch_set_outline(shape, cut): two closed polygons in device pixels of
+	// the window. shape is the notch's true outline. cut is the same outline
+	// one pixel in: where a platform draws the edge with a second window, the
+	// web view ends there. A platform that masks the web view itself uses shape.
+	bind("__notch_set_outline", func(shape, cut [][]int) error {
 		w, h := platformNotchWindowSize(handle)
-		outline, err := notchOutline(points, w, h)
+		outer, err := notchOutline(shape, w, h)
 		if err != nil {
 			log.Printf("[notch] outline refused: %v", err)
 			return err
 		}
-		return platformNotchSetOutline(handle, outline)
+		inner, err := notchOutline(cut, w, h)
+		if err != nil {
+			log.Printf("[notch] inner outline refused: %v", err)
+			return err
+		}
+		return platformNotchSetOutline(handle, outer, inner)
 	})
 	// __notch_focus(true) takes the keyboard for a text field,
 	// __notch_focus(false) gives it back to whoever had it.
@@ -121,6 +133,46 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) {
 		}
 		log.Printf("[notch/page] %s", text)
 	})
+
+	// The page only hears the mouse inside its own outline, so the pointer's
+	// position everywhere else has to be told to it. That is what lets the
+	// eyes follow the cursor across the whole screen.
+	quit := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		ticker := time.NewTicker(33 * time.Millisecond)
+		defer ticker.Stop()
+		lastX, lastY, sent := 0, 0, false
+		for {
+			select {
+			case <-quit:
+				return
+			case <-ticker.C:
+			}
+			x, y, ok := platformNotchCursor(handle)
+			if !ok || (sent && x == lastX && y == lastY) {
+				continue
+			}
+			lastX, lastY, sent = x, y, true
+			js := notchCursorScript(x, y)
+			wv.Dispatch(func() { wv.Eval(js) })
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(quit)
+			<-finished
+			platformNotchTearDown(handle)
+		})
+	}
+}
+
+// notchCursorScript is what the page is told: the pointer's place in the
+// page's own pixels, from the window's top left corner.
+func notchCursorScript(x, y int) string {
+	return fmt.Sprintf("window.__notch_cursor&&window.__notch_cursor(%d,%d);", x, y)
 }
 
 // notch.spawn - open the notch on the page the brain names.
