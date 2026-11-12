@@ -310,6 +310,18 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
   // Esc closes the editor. If there are unsaved changes, confirm first so a
   // stray keystroke doesn't lose work.
   const editorDirty = editor.dirty;
+  /** Every way out of the editor (Esc, the X button) asks first when there is unsaved work. */
+  const requestClose = useCallback(async (): Promise<void> => {
+    if (editorDirty && !await confirmDialog("Discard unsaved changes?", { confirmLabel: "Discard", cancelLabel: "Keep editing" })) return;
+    onClose();
+  }, [editorDirty, onClose]);
+  // Closing the tab or reloading would lose them too; the browser asks.
+  useEffect(() => {
+    if (!editorDirty || workspace) return;
+    const warn = (e: BeforeUnloadEvent): void => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [editorDirty, workspace]);
   useEffect(() => {
     const onKey = async (e: KeyboardEvent): Promise<void> => {
       if (e.key !== "Escape" || workspace) return;
@@ -318,12 +330,11 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
-      if (editorDirty && !await confirmDialog("Discard unsaved changes?")) return;
-      onClose();
+      await requestClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editorDirty, onClose, workspace]);
+  }, [requestClose, workspace]);
 
   // Ctrl/Cmd+Z undoes the most recent destructive op (delete, disconnect,
   // piece replace). Scoped tight: ignore when the user is typing in a
@@ -834,7 +845,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
               <span className="wf-editor__runs-count">{runs.runs.length}</span>
             ) : null}
           </Button>
-          <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close editor">
+          <Button variant="ghost" size="sm" onClick={() => void requestClose()} aria-label="Close editor">
             <Icon icon={X} size={14} />
           </Button>
         </div>

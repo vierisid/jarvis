@@ -1,5 +1,7 @@
 import { jsonInputBase, jsonInputScope, type JsonInputDraft } from './json-input-drafts';
-import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
+import { useEditCopy, useWorkflowRequest } from "./WorkflowEditorEnvironment";
+import { keptEdits, serializeEdits, staleEditsTime } from "./edit-copy";
+import { describeSaveFailure, WORKFLOW_REMOVED_TEXT, workflowGone } from "./save-failure";
 /**
  * Hook for the workflow visual editor.
  *
@@ -239,12 +241,21 @@ interface ActionResult {
 
 export function useWorkflowEditor(flowId: string | null) {
   const fetch = useWorkflowRequest();
+  const editCopy = useEditCopy();
   const savedDisplayName = useRef<string | null>(null);
   const [catalog, setCatalog] = useState<PieceCatalogEntry[]>([]);
   const [version, setVersion] = useState<FlowVersion | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
+  // The workflow was deleted elsewhere: nothing here can be saved any more.
+  const [workflowRemoved, setWorkflowRemoved] = useState(false);
+  // What happened on opening to unsaved edits kept from an earlier visit (see `edit-copy.ts`):
+  // put back (`credentialsDropped` when a typed credential has to be entered again), or not put
+  // back because the draft changed since (`stale`).
+  const [restored, setRestored] = useState<{ at: number; credentialsDropped: boolean; stale: boolean } | null>(null);
+  // The orphans as saved, beside `version.trigger`: where a kept copy takes saved credentials from.
+  const savedOrphans = useRef<OrphanStep[]>([]);
   // Raw JSON is part of the edit buffer even while it cannot enter the typed graph.
   const [jsonInputDrafts, setJsonInputDrafts] = useState<Record<string, JsonInputDraft>>({});
   const setJsonInputDraft = useCallback((key: string, draft: JsonInputDraft) => {
@@ -392,19 +403,39 @@ export function useWorkflowEditor(flowId: string | null) {
         editable = { ...detail.published };
       }
       savedDisplayName.current = editable?.displayName ?? null;
+      setWorkflowRemoved(false);
       setVersion(editable);
       setDraftTrigger(editable ? cloneTrigger(editable.trigger) : null);
       // Hydrate orphans + positions from the editor sidecar. Both default to
       // empty so a flow that's never been visually edited renders with the
       // deterministic auto-layout.
       const meta = detail.uiMeta;
-      setDraftOrphans(
-        Array.isArray(meta?.orphans)
-          ? meta!.orphans.map((o) => orphanFromMeta(o)).filter((o): o is OrphanStep => !!o)
-          : [],
-      );
+      const loadedOrphans = Array.isArray(meta?.orphans)
+        ? meta!.orphans.map((o) => orphanFromMeta(o)).filter((o): o is OrphanStep => !!o)
+        : [];
+      savedOrphans.current = loadedOrphans;
+      setDraftOrphans(loadedOrphans);
       setStepPositions(meta?.positions && typeof meta.positions === "object" ? { ...meta.positions } : {});
       setDirty(false);
+      setRestored(null);
+      // Edits that were unsaved when this draft was last open (a reload, or a session that ended)
+      // come back, as long as the draft has not changed since they were made.
+      const stored = editable?.state === "DRAFT" ? editCopy?.read() ?? null : null;
+      const kept = editable ? keptEdits(stored, editable.editorRevision, { trigger: editable.trigger, orphans: loadedOrphans }) : null;
+      if (stored && !kept) {
+        // Made from an older revision (or damaged): it can never apply, so it goes, and the page says so.
+        try { editCopy?.clear(); } catch { /* blocked storage */ }
+        const at = staleEditsTime(stored);
+        if (at !== null) setRestored({ at, credentialsDropped: false, stale: true });
+      }
+      if (kept && editable) {
+        setDraftTrigger(kept.trigger);
+        setDraftOrphans(kept.orphans);
+        setStepPositions(kept.positions);
+        if (kept.displayName) setVersion({ ...editable, displayName: kept.displayName });
+        setDirty(true);
+        setRestored({ at: kept.savedAt, credentialsDropped: kept.credentialsDropped, stale: false });
+      }
       setJsonInputDrafts({});
       // Reload replaces the entire edit buffer with server state; any
       // in-flight undo history would be against a tree that no longer
@@ -417,7 +448,7 @@ export function useWorkflowEditor(flowId: string | null) {
     } finally {
       if (current()) setLoading(false);
     }
-  }, [flowId, fetch]);
+  }, [flowId, fetch, editCopy]);
 
   useEffect(() => {
     if (ignoreNextLoadRef.current) {
@@ -427,6 +458,22 @@ export function useWorkflowEditor(flowId: string | null) {
     }
     return () => { loadRequest.current?.abort(); loadRequest.current = null; };
   }, [reload]);
+
+  // Keep a copy of unsaved edits where a reload can find it. Written shortly after each change and
+  // when the page is hidden or closed; dropped by a save or a discard.
+  useEffect(() => {
+    if (!editCopy || !version || loading || !dirty || version.state !== "DRAFT" || !draftTrigger) return;
+    const persist = (): void => {
+      try {
+        const text = serializeEdits({ base: version.editorRevision ?? null, displayName: version.displayName, trigger: draftTrigger, orphans: draftOrphans, positions: stepPositions },
+          { trigger: version.trigger, orphans: savedOrphans.current });
+        if (text) editCopy.write(text);
+      } catch { /* storage full or blocked: the edits are still on screen */ }
+    };
+    const timer = window.setTimeout(persist, 200);
+    window.addEventListener("pagehide", persist);
+    return () => { window.clearTimeout(timer); window.removeEventListener("pagehide", persist); };
+  }, [editCopy, version, loading, dirty, draftTrigger, draftOrphans, stepPositions]);
 
   /**
    * Apply an in-place mutation to a step wherever it lives -- inside the
@@ -1259,6 +1306,7 @@ export function useWorkflowEditor(flowId: string | null) {
       }
       if (!res.ok) {
         const body = await safeJson(res);
+        if (workflowGone(body)) { setWorkflowRemoved(true); return { ok: false, message: WORKFLOW_REMOVED_TEXT }; }
         return { ok: false, message: body?.error ?? `save failed: ${res.status}` };
       }
       const updated = (await res.json()) as FlowVersion;
@@ -1277,13 +1325,18 @@ export function useWorkflowEditor(flowId: string | null) {
       // Drop the stack so undo can't accidentally restore a state the
       // user already deliberately overwrote.
       setUndoStack([]);
+      savedOrphans.current = draftOrphans;
+      setRestored(null);
+      try { editCopy?.clear(); } catch { /* nothing to clear */ }
       return { ok: true, message: "Saved" };
     } catch (e) {
-      return { ok: false, message: e instanceof Error ? e.message : String(e) };
+      return { ok: false, message: describeSaveFailure(e) };
     }
-  }, [flowId, version, draftTrigger, draftOrphans, stepPositions, fetch, invalidJson]);
+  }, [flowId, version, draftTrigger, draftOrphans, stepPositions, fetch, invalidJson, editCopy]);
 
   const reset = useCallback((): void => {
+    try { editCopy?.clear(); } catch { /* nothing to clear */ }
+    setRestored(null);
     if (version) {
       setDraftTrigger(cloneTrigger(version.trigger));
       // Reset clears in-memory edits including orphans + positions. The
@@ -1296,7 +1349,7 @@ export function useWorkflowEditor(flowId: string | null) {
       setJsonInputDrafts({});
       setUndoStack([]);
     }
-  }, [version]);
+  }, [version, editCopy]);
 
   /**
    * Per-step sample data update. Saves through to the server immediately
@@ -1480,6 +1533,8 @@ export function useWorkflowEditor(flowId: string | null) {
     isHandleAvailable,
     error,
     loading,
+    workflowRemoved,
+    restored,
     dirty: dirty || Object.keys(jsonInputDrafts).length > 0,
     jsonInputDrafts,
     setJsonInputDraft,

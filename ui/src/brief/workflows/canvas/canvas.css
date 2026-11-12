@@ -386,3 +386,6 @@
 .brief-root .brief-canvas-setup li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-block: 4px; }
 .brief-root .brief-canvas-setup li span { overflow-wrap: anywhere; color: var(--brief-secondary); }
 .brief-root .brief-canvas-setup summary:focus-visible { outline: 2px solid var(--brief-focus); outline-offset: 2px; }
+.brief-root .brief-canvas-removed { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-block: 8px; padding: 12px 16px; border: 1px solid var(--brief-error-text); border-left-width: 4px; border-radius: var(--brief-corner-control); background: var(--brief-error-surface); }
+.brief-root .brief-canvas-removed p { margin: 0; flex: 1 1 320px; line-height: 1.5; overflow-wrap: anywhere; }
+.brief-root .brief-canvas-removed strong { color: var(--brief-error-text); }
