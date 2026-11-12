@@ -723,6 +723,11 @@ of offering an unusable webhook resume URL.
 Canceling a run atomically stops its required descendants, retires waitpoints
 and closes undispatched approval cards. An already-dispatched effect retains
 its receipt or uncertainty; cancellation never claims remote rollback.
+A parent continues as soon as its child ends or the parent parks: after each
+finished run of a child, or of a run waiting on one, the worker runs the same
+child sweep, so the wait is not the 15 s timer poll. The poll stays the safety
+net for a crash or restart, and the sweep consumes each waitpoint once, so the
+two cannot resume a parent twice.
 Recovery polling also stops required children whose parent failed or was deleted.
 For required children that already ended, it retires remaining waitpoints and
 undispatched approvals before continuing the parent. The child's terminal status,
