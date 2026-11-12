@@ -259,6 +259,10 @@ export function engineEnv(opts: Omit<SpawnEngineOptions, "expectedDigest">): Rec
   const hostAddresses = process.env["JARVIS_HOST_ADDRESSES"]?.trim();
   // Whole entries only, at most 64, so a cut never leaves a different address.
   if (hostAddresses) env[HOST_ADDRESSES_ENV] = hostAddresses.split(",").map((a) => a.trim()).filter(Boolean).slice(0, 64).join(",");
+  // The memory ceiling a CODE step's child runs under, in MB (4096 when unset,
+  // 0 for none; see no-op-code-sandbox.ts). Digits only, so nothing else rides along.
+  const codeStepMemory = process.env["JARVIS_CODE_STEP_MEMORY_MB"]?.trim();
+  if (codeStepMemory && /^\d{1,6}$/.test(codeStepMemory)) env["AP_CODE_STEP_MEMORY_MB"] = codeStepMemory;
   if (opts.customPiecesPaths?.length) {
     env["AP_CUSTOM_PIECES_PATHS"] = opts.customPiecesPaths.join(":");
   }

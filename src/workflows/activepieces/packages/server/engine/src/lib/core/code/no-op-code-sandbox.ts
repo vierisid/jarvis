@@ -37,7 +37,16 @@ process.once('message', async function(msg) {
 
         if (settled) return
         settled = true
-        process.send({ success: true, result: JSON.parse(JSON.stringify(result ?? null)) }, () => process.exit(0))
+        // Jarvis: a result past the run's data cap is refused here, before it
+        // crosses to the engine (a 200 MB result cost the engine about 1 GB of
+        // memory on the way through, only to be refused there).
+        const json = JSON.stringify(result ?? null)
+        const bytes = typeof json === 'string' ? Buffer.byteLength(json) : 0
+        if (bytes > msg.maxResultBytes) {
+            process.send({ success: false, oversizedBytes: bytes }, () => process.exit(0))
+            return
+        }
+        process.send({ success: true, result: JSON.parse(json) }, () => process.exit(0))
     } catch(e) {
         if (settled) return
         settled = true
@@ -107,6 +116,106 @@ export function codeChildConfigArgs(execArgv: readonly string[] = process.execAr
     throw new Error('CODE step refused: the engine was not started with --config=<empty bunfig>, so the step would read a bunfig.toml from its working directory (#863).')
 }
 
+/**
+ * Jarvis: what a CODE step's child may take from this machine. A step is
+ * granted code, not unlimited resources, and three of them were unbounded.
+ *
+ * Memory: the child runs with an address-space ceiling (`ulimit -v`, 4 GiB by
+ * default; the daemon's `JARVIS_CODE_STEP_MEMORY_MB` reaches the engine as
+ * `AP_CODE_STEP_MEMORY_MB` to change it, `0` to remove it). An
+ * allocation past it fails inside the step as an out-of-memory error instead of
+ * taking the machine's RAM; the step then fails with a plain message. The
+ * ceiling is address space, so a step can fill less than it (on Bun 1.3.11 about
+ * 1.5 GB of 4 GiB). Enforced
+ * on Linux. macOS accepts the limit without enforcing it and Windows has no
+ * `sh`, so there the step runs without a ceiling, and a failure there is never
+ * called out of memory (the 10-minute flow timeout still applies). A process
+ * the step starts inherits the ceiling, each such process on its own.
+ *
+ * Output: the step's console output is copied into the daemon log only up to
+ * 64 KiB per stream, then a single note says how much was left out; the copy
+ * kept for a failure message is the last 64 KiB. Wall clock: the flow timeout,
+ * unchanged. A step that calls fetch without a timeout waits as long as the
+ * peer lets it.
+ */
+export const CODE_STEP_MEMORY_MB_DEFAULT = 4096
+/** One run keeps at most 10 MB of step data (the engine's own cap); a single step result past it can only fail the run. */
+export const CODE_STEP_OUTPUT_MAX_MB = 10
+export const CODE_STEP_LOG_MIRROR_BYTES = 64 * 1024
+export const CODE_STEP_CAPTURE_CHARS = 64 * 1024
+const OMITTED_EARLIER = '[earlier output omitted] '
+
+export function codeStepMemoryCeilingMb(env: Record<string, string | undefined> = process.env, platform: string = process.platform): number | null {
+    if (platform === 'win32' || platform === 'darwin') return null
+    const raw = env.AP_CODE_STEP_MEMORY_MB?.trim()
+    const mb = raw === undefined || raw === '' || !Number.isFinite(Number(raw)) ? CODE_STEP_MEMORY_MB_DEFAULT : Number(raw)
+    return mb >= 1 ? Math.floor(mb) : null
+}
+
+/** A step's result as the run would keep it, in bytes. */
+export function resultBytes(result: unknown): number {
+    return Buffer.byteLength(JSON.stringify(result ?? null))
+}
+
+/** What a person reads when a step returned more than a run can hold. */
+export function oversizedResultMessage(bytes: number): string {
+    const mb = Math.round(bytes / (1024 * 1024) * 10) / 10
+    return `This CODE step returned ${mb} MB of data, more than a run can keep (${CODE_STEP_OUTPUT_MAX_MB} MB). Return less from the step, for example a summary or a count instead of every record.`
+}
+
+/**
+ * `command args` run under `ulimit -v <mb>`; a shell that cannot set the limit runs it anyway. The shell
+ * exports its own PWD, OLDPWD and `_` (and bash, as /bin/sh on some distributions, SHLVL), which the step's
+ * sanitized environment must not carry, so they are unset on the way through.
+ */
+export function withMemoryCeiling(command: string, args: string[], mb: number): [string, string[]] {
+    return ['/bin/sh', ['-c', 'ulimit -v "$1" 2>/dev/null; shift; exec env -u PWD -u OLDPWD -u SHLVL -u _ "$@"', 'sh', String(mb * 1024), command, ...args]]
+}
+
+/** The last CODE_STEP_CAPTURE_CHARS of a stream, marked when something before them was dropped. */
+export function keepTail(previous: string, text: string): string {
+    const all = previous + text
+    return all.length <= CODE_STEP_CAPTURE_CHARS + OMITTED_EARLIER.length ? all : OMITTED_EARLIER + all.slice(-CODE_STEP_CAPTURE_CHARS)
+}
+
+/** Copies a stream to the log until its budget is spent, then says once what is being left out. */
+export function boundedMirror(write: (line: string) => void, budget: number = CODE_STEP_LOG_MIRROR_BYTES): { push(data: Buffer): void, finish(): void } {
+    let shown = 0
+    let dropped = 0
+    return {
+        push(data) {
+            const room = budget - shown
+            if (room > 0) {
+                const part = data.length <= room ? data : data.subarray(0, room)
+                shown += part.length
+                write(part.toString().trimEnd())
+                if (part.length < data.length) {
+                    dropped += data.length - part.length
+                    write(`[CODE step output is only copied to this log up to ${Math.floor(budget / 1024)} KiB per stream; the rest is not shown]`)
+                }
+            }
+            else dropped += data.length
+        },
+        finish() {
+            if (dropped > 0) write(`[${dropped} bytes of CODE step output were not copied to this log]`)
+        },
+    }
+}
+
+/**
+ * Whether a failed step hit the memory ceiling: the runtime's own out-of-memory error thrown inside the step
+ * (`RangeError: Out of memory`, or an ENOMEM from a call the step made), or the child ended by a crash signal
+ * or a kill: past the ceiling JSC aborts (`MemoryExhaustion`, SIGABRT) or Bun crashes (SIGILL, SIGSEGV),
+ * often before anything reaches stderr, and the kernel's out-of-memory killer sends SIGKILL (a cancel or
+ * timeout signals the whole engine, so it never gets here). What the step printed is read only after such
+ * a death, so a step that logs an API's "ENOMEM" and then throws keeps its own error.
+ */
+export function ranOutOfMemory(message: string, stderr: string, signal: string | null): boolean {
+    if (/\bRangeError: Out of memory\b|\bENOMEM\b/.test(message)) return true
+    if (signal === null) return false
+    return /^SIG(?:ABRT|ILL|TRAP|SEGV|BUS|KILL)$/.test(signal) || /out of memory|MemoryExhaustion|allocation failed/i.test(stderr)
+}
+
 async function runInChildProcess({ codeFilePath, inputs }: { codeFilePath: string, inputs: Record<string, unknown> }): Promise<unknown> {
     return new Promise((resolve, reject) => {
         // Jarvis (#837): `--no-install`, because a step file has no `node_modules`
@@ -122,7 +231,11 @@ async function runInChildProcess({ codeFilePath, inputs }: { codeFilePath: strin
         // `--no-env-file`, so a `.env` there cannot add variables to the
         // sanitized env below (a proxy for every request the step makes).
         const args = process.versions.bun ? [...codeChildConfigArgs(), '--no-env-file', '--no-install', '--eval', CODE_RUNNER_SCRIPT] : ['--eval', CODE_RUNNER_SCRIPT]
-        const child = spawn(process.execPath, args, {
+        // Jarvis: the memory ceiling, and failure messages that say so.
+        const memoryMb = codeStepMemoryCeilingMb()
+        const [command, spawnArgs] = memoryMb === null ? [process.execPath, args] : withMemoryCeiling(process.execPath, args, memoryMb)
+        const buildError = (parts: { message: string | undefined, stdout: string, stderr: string, signal?: string | null }): Error => buildCodeError({ ...parts, memoryMb })
+        const child = spawn(command, spawnArgs, {
             stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
             // Jarvis: this child runs a CODE step, i.e. workflow-authored code.
             // Inheriting would hand it the engine's own env: SANDBOX_ID (what
@@ -136,18 +249,20 @@ async function runInChildProcess({ codeFilePath, inputs }: { codeFilePath: strin
 
         let capturedStdout = ''
         let capturedStderr = ''
+        // Jarvis: a step that prints without end must not fill the daemon log or this process's memory.
+        const mirrorStdout = boundedMirror((line) => console.log(line))
+        const mirrorStderr = boundedMirror((line) => console.error(line))
 
         child.stdout?.on('data', (data: Buffer) => {
-            const text = data.toString()
-            capturedStdout += text
-            console.log(text.trimEnd())
+            capturedStdout = keepTail(capturedStdout, data.toString())
+            mirrorStdout.push(data)
         })
 
         child.stderr?.on('data', (data: Buffer) => {
-            const text = data.toString()
-            capturedStderr += text
-            console.error(text.trimEnd())
+            capturedStderr = keepTail(capturedStderr, data.toString())
+            mirrorStderr.push(data)
         })
+        child.on('close', () => { mirrorStdout.finish(); mirrorStderr.finish() })
 
         let settled = false
 
@@ -155,7 +270,14 @@ async function runInChildProcess({ codeFilePath, inputs }: { codeFilePath: strin
             if (settled) return
             settled = true
             if (msg.success) {
-                resolve(msg.result)
+                // Jarvis: a result past the run's data cap would end the whole run with an engine code; say it here, at the step.
+                const bytes = resultBytes(msg.result)
+                if (bytes > CODE_STEP_OUTPUT_MAX_MB * 1024 * 1024) reject(new Error(oversizedResultMessage(bytes)))
+                else resolve(msg.result)
+            }
+            // Jarvis: the child refused a result past the cap before sending it (see CODE_RUNNER_SCRIPT).
+            else if (typeof (msg as { oversizedBytes?: unknown }).oversizedBytes === 'number') {
+                reject(new Error(oversizedResultMessage(Number((msg as { oversizedBytes?: unknown }).oversizedBytes))))
             }
             else {
                 reject(buildError({ message: msg.error, stdout: capturedStdout, stderr: capturedStderr }))
@@ -165,7 +287,7 @@ async function runInChildProcess({ codeFilePath, inputs }: { codeFilePath: strin
         child.on('close', (code, signal) => {
             if (settled) return
             settled = true
-            reject(buildError({ message: `Code process exited with code ${code} and signal ${signal}`, stdout: capturedStdout, stderr: capturedStderr }))
+            reject(buildError({ message: `Code process exited with code ${code} and signal ${signal}`, stdout: capturedStdout, stderr: capturedStderr, signal }))
         })
 
         child.on('error', (error) => {
@@ -174,12 +296,16 @@ async function runInChildProcess({ codeFilePath, inputs }: { codeFilePath: strin
             reject(buildError({ message: error.message, stdout: capturedStdout, stderr: capturedStderr }))
         })
 
-        child.send({ codeFilePath, inputs })
+        child.send({ codeFilePath, inputs, maxResultBytes: CODE_STEP_OUTPUT_MAX_MB * 1024 * 1024 })
     })
 }
 
-function buildError({ message, stdout, stderr }: { message: string | undefined, stdout: string, stderr: string }): Error {
+function buildCodeError({ message, stdout, stderr, memoryMb, signal = null }: { message: string | undefined, stdout: string, stderr: string, memoryMb: number | null, signal?: string | null }): Error {
     const parts: string[] = [message ?? 'Code execution failed']
+    // Jarvis: an allocation past the ceiling reads as the machine's own words; say what happened.
+    if (memoryMb !== null && ranOutOfMemory(message ?? '', stderr, signal)) {
+        parts.unshift(`This CODE step ran out of memory: a step may use up to ${memoryMb} MB. Process less data at a time, or ask the person who runs Jarvis to raise JARVIS_CODE_STEP_MEMORY_MB. `)
+    }
     if (stdout.trim()) {
         parts.push(`\n--- stdout ---\n${stdout.trim()}`)
     }

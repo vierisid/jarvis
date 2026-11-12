@@ -1237,6 +1237,10 @@ latest version and ran it. Now:
   entries, four steps at the step caps (#1154): an install that would take the
   version past that is refused like one over the step cap, naming the step,
   and the version's other steps keep their trees.
+- What a running CODE step may take (each CODE step is its own child process):
+  - **Time:** the flow's 10-minute timeout, and cancelling the run ends the child. Nothing shorter is imposed, so a `fetch` with no timeout of its own waits as long as the other side lets it.
+  - **Memory:** an address-space ceiling of 4 GiB per step on Linux (usable memory is lower: about 1.5 GB on Bun 1.3.11, more on newer Bun) (`ulimit -v`; `JARVIS_CODE_STEP_MEMORY_MB` in the daemon's environment changes it, `0` removes it). An allocation past it fails inside the step, and the step fails with "This CODE step ran out of memory: a step may use up to N MB". A process the step starts inherits the same ceiling, each on its own, so the ceiling stops a runaway, not a step written to get around it. macOS ignores that limit and Windows has no shell to set it, so there a step runs without a ceiling.
+  - **Output:** what the step prints is copied into the daemon log up to 64 KiB per stream, then one line says how many bytes were left out (the step still runs to the end). A failure message carries the last 64 KiB of each stream. A step's result is part of the run's data, which a run keeps up to 10 MB; a result past that fails the step with "This CODE step returned N MB of data, more than a run can keep (10 MB)". The step's own process measures what the step returns, so an over-size result is not handed to the engine.
 - Every version that ran a CODE step has a tree under
   `~/.jarvis/workflow-codes/<versionId>/`. The daemon removes a tree at start
   and hourly unless its version is a flow's published version or current
