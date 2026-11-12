@@ -76,9 +76,15 @@
   // moved onto whole pixels they turn an arc into short straight runs. And an
   // arc gets a point about every pixel and a half of its length on the screen,
   // so no straight piece is long enough to be seen.
+  //
+  // The straight sides are the opposite case. Once the shape has settled they
+  // are put on whole pixels: a side that falls between two pixels is drawn as
+  // a grey line half as dark, down its whole length. While the shape moves
+  // they may fall anywhere, which is what makes the motion smooth.
   function outline(width, height, inset) {
     const scale = window.devicePixelRatio || 1;
-    const cx = window.innerWidth / 2, left = cx - width / 2 + inset, right = cx + width / 2 - inset, bottom = height - inset, pts = [];
+    const settle = (v) => moving ? v : Math.round(v * scale) / scale;
+    const cx = window.innerWidth / 2, left = settle(cx - width / 2 + inset), right = settle(cx + width / 2 - inset), bottom = settle(height - inset), pts = [];
     const arc = (ox, oy, r, from, to) => {
       const steps = Math.min(64, Math.max(8, Math.ceil(r * scale * Math.abs(to - from) / 1.5)));
       for (let i = 0; i <= steps; i++) { const a = from + (to - from) * i / steps; pts.push([ox + r * Math.cos(a), oy + r * Math.sin(a)]); }
@@ -118,7 +124,8 @@
     const style = getComputedStyle(row), eyesStyle = getComputedStyle(eyes);
     const need = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + parseFloat(style.columnGap) +
       eyes.offsetWidth + parseFloat(eyesStyle.marginLeft) + parseFloat(eyesStyle.marginRight) + btns.offsetWidth;
-    const width = Math.ceil(need);
+    // An even number, so the box sits on whole pixels both sides of the centre.
+    const width = 2 * Math.ceil(need / 2);
     if (width === SIZES.small[0]) return false;
     SIZES.small[0] = width;
     return true;
@@ -130,10 +137,12 @@
     vw += ((tw - w) * k - vw * c) * dt; vh += ((th - h) * k - vh * c) * dt;
     w += vw * dt; h += vh * dt;
     const done = Math.abs(tw - w) < .3 && Math.abs(th - h) < .3 && Math.abs(vw) < 3 && Math.abs(vh) < 3;
-    if (done) { w = tw; h = th; vw = vh = 0; }
+    // moving goes false before the last report, so that one is the settled
+    // outline, with its sides on whole pixels.
+    if (done) { w = tw; h = th; vw = vh = 0; moving = false; }
     n.style.width = w + 'px'; n.style.height = h + 'px';
     describe(report());
-    if (done) { moving = false; return; }
+    if (!moving) return;
     requestAnimationFrame(frame);
   }
   function go(next) {

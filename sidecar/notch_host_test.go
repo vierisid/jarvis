@@ -73,20 +73,25 @@ func TestNotchSitsAtTheTopCentre(t *testing.T) {
 	}
 }
 
-// The fullscreen rule, whole: it hides for a fullscreen app that keeps the
-// display awake (a playing video) and for nothing else. A browser in
-// fullscreen that is only being read keeps the notch.
+// The fullscreen rule, whole: it hides for a fullscreen video and for nothing
+// else. Every one of the three is needed. The third row from the end is the
+// machine this was found on: a browser in fullscreen, being read, while some
+// other program kept the display awake all day.
 func TestNotchHidesOnlyForAFullscreenVideo(t *testing.T) {
 	for _, c := range []struct {
-		fullscreen, awake, hide bool
+		fullscreen, awake, playing, hide bool
 	}{
-		{false, false, false},
-		{true, false, false}, // fullscreen browser, reading
-		{false, true, false}, // a video in a window
-		{true, true, true},   // a fullscreen video
+		{false, false, false, false},
+		{true, false, false, false}, // fullscreen browser, reading
+		{false, true, false, false}, // a video in a window
+		{false, true, true, false},  // the same, picture moving
+		{true, false, true, false},  // a moving picture nothing keeps awake: not a player
+		{true, true, false, false},  // fullscreen browser, reading, display held by another program
+		{false, false, true, false}, // something moving in a window
+		{true, true, true, true},    // a fullscreen video
 	} {
-		if got := notchShouldHide(c.fullscreen, c.awake); got != c.hide {
-			t.Errorf("fullscreen=%v awake=%v: hide=%v, want %v", c.fullscreen, c.awake, got, c.hide)
+		if got := notchShouldHide(c.fullscreen, c.awake, c.playing); got != c.hide {
+			t.Errorf("fullscreen=%v awake=%v playing=%v: hide=%v, want %v", c.fullscreen, c.awake, c.playing, got, c.hide)
 		}
 	}
 }
@@ -236,7 +241,8 @@ func TestNotchWindowHandlersNeedTheWindowsCapability(t *testing.T) {
 // A screen capture covers the screen and is in front, like a fullscreen app.
 // It must not count as one, or the notch vanishes from under the capture.
 func TestNotchLeavesItselfAloneUnderAScreenCapture(t *testing.T) {
-	for _, program := range []string{"SnippingTool.exe", "snippingtool.exe", "ScreenClippingHost.exe"} {
+	// "SnippingTool" is the name as the desktop app's log gave it on Windows 11.
+	for _, program := range []string{"SnippingTool", "SnippingTool.exe", "snippingtool.exe", "ScreenClippingHost"} {
 		if !notchIsCaptureOverlay(program) {
 			t.Errorf("%s is a screen capture tool", program)
 		}

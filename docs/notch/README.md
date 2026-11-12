@@ -47,11 +47,21 @@ itself, and `sidecar.yaml` has no setting for it.
 8. **Appearing never takes the keyboard.** The window is shown without
    activation. It takes the keyboard only when the page calls
    `__notch_focus(true)`, and gives it back to the window that had it.
-9. **It hides for a fullscreen video and only then:** a fullscreen app in front
-   AND something keeping the display awake. A browser in fullscreen that is
-   only being read keeps the notch. A screen capture choosing its area covers
-   the screen too: while Windows' own capture tools are in front the notch
-   stays exactly as it was.
+9. **It hides for a fullscreen video and only then.** A browser in fullscreen
+   that is only being read keeps the notch. When in doubt the notch stays.
+   - **Windows:** all three must hold. A fullscreen app is in front. Something
+     is keeping the display awake, which every player does while it plays. And
+     the picture is seen to be moving by itself (`sidecar/notch_video.go`): a
+     32 by 18 grid of points from the middle of the display changes by a tenth
+     or more, three samples in a row, with no mouse or keyboard input in the
+     last 1.2 seconds. It is over after twelve still samples in a row, about
+     five seconds, or at once when the app leaves fullscreen. The screen is
+     only read while the first two hold.
+   - **macOS:** a fullscreen app is in front, and that app (itself, a helper
+     inside its bundle, or the system's WebKit process) is the one asking for
+     the display to stay on.
+   - A screen capture choosing its area covers the screen too: while Windows'
+     own capture tools are in front the notch stays exactly as it was.
 
 ## What it does not protect, and what is missing
 
@@ -64,15 +74,24 @@ itself, and `sidecar.yaml` has no setting for it.
   2560 by 1440 display at 100%). Outline points with fractions of a pixel have
   not: they were added after that run, because corners sent on whole pixels
   read as polygons.
-- The fullscreen rule reads "the display is being kept awake" for the whole
-  machine. A video playing in another window while a different app is
-  fullscreen in front also hides the notch. Worse, any program that holds the
-  display awake all the time turns the rule into "hide for every fullscreen
-  app". On the first test machine something did hold it throughout. The log
-  says so at start (`at start, display kept awake: true`) and names the
-  program and window class in front each time the rule hides the notch. The
-  signal may have to be replaced.
-- **macOS (`sidecar/notch_host_darwin.go`) has never been compiled or run.**
+- The fullscreen rule first read "the display is being kept awake" for the
+  whole machine. On the first test machine some other program held the display
+  all day, so a browser put into fullscreen to read lost the notch. That is
+  why Windows now looks at the picture and macOS asks which app is holding.
+  What the picture cannot tell:
+  - A video that does not move, such as a lecture on one slide, gets the notch
+    back after about five seconds until it moves again.
+  - A film the system refuses to hand out to screen readers (some paid
+    streaming) may read as a still, black picture. Not tried yet.
+  - A page that animates a tenth of the screen by itself, with hands off, in a
+    fullscreen browser, while something holds the display, reads as a video.
+  - The notch sits over a film for about two and a half seconds after it goes
+    fullscreen, because the click that started it counts as input.
+- The log names the program and window class in front each time the rule
+  hides the notch, and says at start whether the display was already being
+  kept awake (`at start, display kept awake: true`).
+- **macOS (`sidecar/notch_host_darwin.go`) compiles in CI and has never been
+  run.**
 - On Linux the window opens as an ordinary always-on-top panel: no shape, no
   focus rule, no fullscreen rule.
 - There is no per-machine opt-out: every desktop app that advertises the
