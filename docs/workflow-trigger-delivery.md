@@ -59,7 +59,7 @@ in that schedule's zone (`2026-11-01T01:30`), which is the occurrence's identity
 
 | Case | What happens |
 | --- | --- |
-| On time, or up to two minutes late | Runs; lateness over a minute shows as delayed |
+| On time, or up to two minutes late | Runs; lateness over a minute shows as delayed. In normal conditions a time starts within about a second of its minute (the scheduler checks every second) |
 | Later than two minutes (host asleep, process stalled, Jarvis off) | Recorded as missed, not run |
 | A long sleep | The time still within two minutes runs; the newest 100 missed are listed, older ones counted in one row, back seven days |
 | Restart within two minutes after a time | Runs at startup, late, once. Several times still owed (a one-minute schedule down for a few minutes) all run at startup, one after another, none skipped as stacked; one left waiting more than two minutes behind the check before it is missed |
@@ -114,6 +114,22 @@ A delivery's identity, in order:
   delivery id header is ignored there: trusting it would let a captured request
   run again under a fresh id.
 
+Credential headers are not passed on. In `_webhook.headers` (the run history,
+the trigger output, `{{trigger._webhook.headers.*}}`) a header keeps its name
+but its value is `[redacted]` when the name is a credential's, in any case:
+`Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, any name with
+the word `auth`, `key`, `sig`, `signature`, `credential` or `session-id` in it
+(`X-Api-Key`, `X-Goog-Api-Key`, `X-Auth-Key`, `Stripe-Signature`,
+`X-Hub-Signature-256`, `X-Jarvis-Signature`), any name containing `token`,
+`secret`, `password` or `hmac` (`X-Gitlab-Token`, `X-Shopify-Hmac-Sha256`), and
+`X-Jarvis-Timestamp`. A value shaped like `Bearer <token>` or `Basic <token>`
+is redacted under any name. `Idempotency-Key` and other headers
+(`Content-Type`, `User-Agent`, `X-GitHub-Event`, `X-GitHub-Delivery`) are kept.
+Signatures and delivery identity are checked on the raw request before this.
+A workflow that read one of these headers now gets `[redacted]`: authenticate
+the sender with the webhook secret, and keep a credential a step needs in a
+connection, not in the request.
+
 A repeat answers 200 with `outcome: "duplicate"` and the original `runId`;
 nothing runs again. Identical unsigned bodies without an id are separate
 deliveries: pings and button presses repeat on purpose. A provider's manual
@@ -125,10 +141,31 @@ work again, rerun it in Jarvis.
 | Started | 200 `{ ok, outcome: "started", fireId, runId }` |
 | Repeat | 200 `{ ok, outcome: "duplicate", duplicate: true, fireId, runId }` |
 | Readiness refused | 200 `{ ok, outcome: "blocked", reason }`; the delivery is kept on a failed run for a person to decide, and its retries are repeats |
-| Workflow off, changed or gone | 404; a retry after it is turned back on runs |
+| Workflow turned off | 404 `{ error }` saying the workflow is turned off (a Webhook-trigger workflow only; past 60 such lookups a minute across all ids the reply is `Webhook not found`); a retry after it is turned back on runs |
+| Workflow changed or gone | 404 `Webhook not found`, as for an id that never existed |
 | Queue full | 503 with `Retry-After` |
 | 100 steps of the workflow already waiting behind its approval cards | 503 with `Retry-After: 60`, recorded as skipped |
 | Not recorded | 500 |
+
+### What the workflow receives
+
+The body is read once, signature checked on those exact bytes, and only then
+parsed, so parsing never changes what is signed. The Content-Type is not
+signed, so a delivery's identity (an event id in the body) is read from the
+bytes as JSON whatever it says: the same signed bytes sent again as a form
+are still a repeat.
+
+| Content type | In `{{trigger}}` |
+| --- | --- |
+| JSON object | its fields, at the top level |
+| JSON array or other JSON value | `trigger.body` |
+| `application/x-www-form-urlencoded` | the form fields at the top level, so `{{trigger.name}}` works; a repeated name is an array |
+| `multipart/form-data` | its text fields, as above; file parts are dropped |
+| Anything else, or invalid JSON | the raw text in `trigger.body` |
+
+Every delivery also carries `trigger._webhook`: `method`, `url`, `headers`,
+`timestamp`, and `query`, the URL's query string as fields (a repeated name is
+an array; none gives `{}`). A body field called `_webhook` is overwritten.
 
 ## Events
 
@@ -155,6 +192,18 @@ approvals, create a request that only the signed-in user answers in Needs you
 waitpoints refuse a resume URL (403). Each request belongs to one run, so
 stopping one run never closes another run's request. The answer continues the
 run once, and only while it is paused with no other continuation queued.
+
+Wait for Approval stops the run at its step when the request is rejected,
+cancelled or expired: the run fails with `APPROVAL_DENIED` (or
+`APPROVAL_EXPIRED`, which reads as "its approval was not given in time"), and
+no later step runs. An author who wants to branch on the answer ticks
+`Continue when rejected` (`continueOnReject`): the step then returns
+`{ approved: false }` and the run continues. Only the ticked box in the
+published version counts: an expression in that field (one trigger data or an
+earlier step could set) is ignored, and the step's Continue on failure does not
+continue past a refusal. The setting defaults to off, so a saved workflow
+without it stops on a refusal. Its request ID, when set, must
+come from a Create Approval Links step in the same run.
 
 A parent run waiting on a required child workflow is continued by the child-run
 scheduler (`runtime/child-run-scheduler.ts`) once the child has finished. The
