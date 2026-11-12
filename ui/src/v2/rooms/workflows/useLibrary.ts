@@ -92,7 +92,10 @@ export interface LibraryState {
   actionState: Record<string, LibraryActionState>;
   refresh: () => Promise<void>;
   install: (id: string) => Promise<{ ok: boolean; message: string; partial?: boolean }>;
-  uninstall: (id: string) => Promise<{ ok: boolean; message: string }>;
+  /** `warning` names the enabled workflows that used the piece, when any did. */
+  uninstall: (id: string) => Promise<{ ok: boolean; message: string; warning?: string }>;
+  /** The sentence naming the enabled workflows that use an installed piece, for the confirmation; null when none do or it cannot be read. */
+  dependents: (id: string) => Promise<string | null>;
 }
 
 export function useLibrary(): LibraryState {
@@ -180,8 +183,10 @@ export function useLibrary(): LibraryState {
           const body = (await r.json().catch(() => ({}))) as { error?: string };
           return { ok: false, message: body.error ?? `HTTP ${r.status}` };
         }
+        // The workflows that use it, read as it was removed.
+        const body = (await r.json().catch(() => ({}))) as { warning?: unknown };
         await refresh();
-        return { ok: true, message: "uninstalled" };
+        return { ok: true, message: "uninstalled", ...(typeof body.warning === "string" ? { warning: body.warning } : {}) };
       } catch (e) {
         return { ok: false, message: (e as Error).message };
       } finally {
@@ -191,5 +196,19 @@ export function useLibrary(): LibraryState {
     [refresh, setOne],
   );
 
-  return { loading, error, managed, entries, actionState, refresh, install, uninstall };
+  const dependents: LibraryState["dependents"] = useCallback(
+    async (id) => {
+      try {
+        const r = await fetch(`/api/workflows/pieces/library/${encodeURIComponent(id)}/dependents`);
+        if (!r.ok) return null;
+        const body = (await r.json()) as { warning?: unknown };
+        return typeof body.warning === "string" ? body.warning : null;
+      } catch {
+        return null;
+      }
+    },
+    [fetch],
+  );
+
+  return { loading, error, managed, entries, actionState, refresh, install, uninstall, dependents };
 }

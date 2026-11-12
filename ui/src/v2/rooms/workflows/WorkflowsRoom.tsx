@@ -385,7 +385,8 @@ export function FlowBlockedChip({ flowId, blocked }: { flowId: string; blocked: 
   const open = (): void => { if (runId) focusRun(flowId, runId); };
   const preview = blocked.message.length > 60 ? blocked.message.slice(0, 57) + "..." : blocked.message;
   // A runtime refusal is the last run's outcome, which can clear on its own.
-  const label = blocked.code === "DEPENDENCY_MISSING" ? "Needs setup" : blocked.kind === "runtime" ? "Last run refused" : "Blocked";
+  // Something it uses is gone (a deleted workflow or connection, a removed piece): the person sets it up again.
+  const label = blocked.code === "DEPENDENCY_MISSING" || blocked.code === "PIECE_REMOVED" ? "Needs setup" : blocked.kind === "runtime" ? "Last run refused" : "Blocked";
   return (
     <Chip
       tone="warn"

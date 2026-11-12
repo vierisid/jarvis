@@ -11,6 +11,8 @@ import { createFlow } from "../../../../../src/workflows/db/repos/flow";
 import { createDraftVersion } from "../../../../../src/workflows/db/repos/flow-version";
 import { createFlowRun, updateRun } from "../../../../../src/workflows/db/repos/flow-run";
 import { createWorkflowRoutes, type WorkflowRouteMap } from "../../../../../src/workflows/api/routes";
+import { configureWorkflowReadiness } from "../../../../../src/workflows/db/repos/flow-readiness";
+import { PieceCatalog } from "../../../../../src/workflows/runtime/piece-catalog";
 
 const NativeRequest = globalThis.Request;
 const NativeResponse = globalThis.Response;
@@ -130,4 +132,32 @@ test("a run refused for its computer reads as the last run's outcome, not as blo
   expect(badge.getAttribute("data-blocked-code")).toBe("WORKFLOW_MACHINE_OFFLINE");
   expect(badge.textContent).toStartWith("Last run refused: ");
   expect(badge.getAttribute("title")).toContain("offline");
+});
+
+test("a workflow whose piece was uninstalled reads Needs setup, with no run to open", async () => {
+  const flow = createFlow();
+  createDraftVersion({ flowId: flow.id, displayName: "Daily post", trigger: { name: "trigger", type: "EMPTY", nextAction: { name: "post_it", displayName: "Post it",
+    type: "PIECE", settings: { pieceName: "@activepieces/piece-discord", actionName: "send_message", input: {} } } } as never });
+  getWorkflowDb().run("UPDATE flow SET published_version_id = (SELECT id FROM flow_version WHERE flow_id = ?), status = 'ENABLED' WHERE id = ?", [flow.id, flow.id]);
+  // The live catalog no longer has the piece.
+  configureWorkflowReadiness({ pieces: new PieceCatalog([]) });
+  const focused: unknown[] = [];
+  const noop = () => undefined;
+  function Probe() {
+    const { flows } = useWorkflowsData();
+    useRunFocus((target) => { focused.push(target); });
+    return <div>{flows.map((f) => <FlowRow key={f.id} flow={f} selected={false} onSelect={noop} onEdit={noop} onRun={noop}
+      onToggle={noop} onPublish={noop} onDelete={noop} />)}</div>;
+  }
+  await act(async () => root!.render(<Probe />));
+  for (let i = 0; i < 50 && !host.querySelector("[data-blocked-code]"); i++) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+  }
+  const badge = host.querySelector<HTMLElement>("[data-blocked-code]")!;
+  expect(badge.getAttribute("data-blocked-code")).toBe("PIECE_REMOVED");
+  expect(badge.textContent).toBe('Needs setup: The step "Post it" uses the Discord piece, which was remo...');
+  expect(badge.getAttribute("title")).toBe('The step "Post it" uses the Discord piece, which was removed. Reinstall it from the Library.');
+  expect(badge.getAttribute("role")).toBeNull();
+  await act(async () => { badge.click(); });
+  expect(focused).toEqual([]);
 });

@@ -75,7 +75,7 @@ export interface FlowBlock {
   kind: "readiness" | "runtime";
   /** One sentence: what happened (the Q-19 headline). */
   message: string;
-  /** Null when no run shows it (a called workflow or connection was deleted). */
+  /** Null when no run shows it (a called workflow or connection was deleted, a piece was removed). */
   runId: string | null;
   at: number;
 }
