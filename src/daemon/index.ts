@@ -4457,6 +4457,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Channel conversation messages are kept forever unless the owner set a
     // retention (#1167); then a daily sweep deletes the older ones.
     startChannelMessageRetention(jarvisConfig);
+    // Finished workflow runs are kept forever unless the owner chose a limit in
+    // Brief Settings; a finished job's stored input is dropped after a week.
+    const { startRunHistoryRetention } = await import('../workflows/db/repos/run-retention.ts');
+    startRunHistoryRetention();
     // A workflow card past its explicit deadline leaves the dashboard the same way.
     onApprovalDeadlineExpired(request => wsService.broadcastApprovalUpdate(request));
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
