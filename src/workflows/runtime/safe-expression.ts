@@ -19,6 +19,16 @@ const GUIDANCE = 'Workflow expressions are data only: property paths, literals, 
   + 'and prototype access are no longer evaluated. Rewrite the expression as a data '
   + 'reference, or move the logic into a step whose effects Authority can govern.';
 
+/**
+ * The error for a reference that has no value in this run. It names the
+ * reference, so a person can find it in the step. Raised before the step
+ * runs; `missingReference` in expression-failure.ts reads it back from a
+ * failed step's message.
+ */
+export function absentReferenceError(expression: string): Error {
+  return new Error(`"{{${excerpt(expression)}}}" has no value in this run.`);
+}
+
 /** Keep a failure message readable when the expression is long. */
 const excerpt = (script: string): string => {
   const flat = script.replace(/\s+/gu, ' ').trim();

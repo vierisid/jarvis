@@ -9,7 +9,7 @@ import { assertRunNotCanceled } from './cancellation';
 import { claimContinuation } from './continuation';
 import { emergencyHold } from './emergency-hold';
 import { ActionOutcomeError } from '../../actions/action-outcome';
-import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_PENDING_LIMIT, HUMAN_INPUT_PIECE, HUMAN_INPUT_UNAVAILABLE_CODE, answerErrors, isHumanInputStep, formFields, humanRequestDismissable, type HumanRequest } from './human-input-contract';
+import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_REJECTED_CODE, HUMAN_INPUT_PENDING_LIMIT, HUMAN_INPUT_PIECE, HUMAN_INPUT_UNAVAILABLE_CODE, answerErrors, isHumanInputStep, formFields, humanRequestDismissable, type HumanRequest } from './human-input-contract';
 
 type Row = { id: string; project_id: string; flow_id: string; fingerprint: string; record: string; status: HumanRequest['status']; deadline: number; closed_at: number | null };
 const row = (id: string) => getWorkflowDb().query<Row, [string]>('SELECT * FROM workflow_human_request WHERE id=?').get(id);
@@ -155,6 +155,7 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
     }
     if (request.status !== 'pending') {
       // No denied/expired request can accidentally fall through into a write.
+      if (request.status === 'rejected') throw new ActionOutcomeError({ status: 'blocked', code: HUMAN_INPUT_REJECTED_CODE, effect: 'not_started', message: 'Human request rejected' });
       if (request.status !== 'submitted' && request.status !== 'approved') throw Error(`Human request ${request.status}`);
       return { requestId: id, status: request.status, approved: request.status === 'approved', answers: request.answers ?? {} };
     }

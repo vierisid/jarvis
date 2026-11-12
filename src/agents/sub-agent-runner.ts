@@ -185,6 +185,8 @@ export type SubAgentResult = {
   paused?: SubAgentPause;
   /** Set on `error` when the governed dispatch raised it, not the model or the loop. */
   dispatchError?: boolean;
+  /** Set on `error`: what was thrown, for a caller that reads its type (a provider's refusal). */
+  cause?: unknown;
   /** The enclosing execution was cancelled between turns; nothing more started. */
   canceled?: boolean;
 };
@@ -1042,7 +1044,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     const errorMsg = err instanceof Error ? err.message : String(err);
     console.error(`[SubAgent:${agentName}] Error:`, errorMsg);
 
-    return finish({ success: false, response: `Sub-agent error: ${errorMsg}`, terminationReason: 'error',
+    return finish({ success: false, response: `Sub-agent error: ${errorMsg}`, terminationReason: 'error', cause: err,
       ...(err instanceof GovernedDispatchError ? { dispatchError: true }
         // An aborted model call rejects with the provider's abort error, not
         // SubAgentCanceled; the signal says which it was. An unrelated error

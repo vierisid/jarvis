@@ -28,8 +28,10 @@ import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-e
 import { walkFlowNodes } from '../db/flow-graph';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import { nodeConnectionReferences, type RunConnectionBindingView } from '../db/repos/binding-pins';
-import { expressionFailureGuidance } from './expression-failure';
-import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, isHumanInputStep } from './human-input-contract';
+import { expressionFailureGuidance, failedOnMissingReference, loopInputFailure, missingReference } from './expression-failure';
+import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_REJECTED_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, isHumanInputStep } from './human-input-contract';
+import { IN_RUN_STEP_PIECES } from './step-admission';
+import { WORKFLOW_SKILL_NOT_FOUND_CODE, WORKFLOW_TOOL_UNSUPPORTED_CODE } from './effect-capabilities';
 
 const ENDED_BADLY = new Set(['FAILED', 'TIMEOUT', 'INTERNAL_ERROR', 'QUOTA_EXCEEDED', 'MEMORY_LIMIT_EXCEEDED', 'SCHEDULE_FAILURE', 'STOPPED']);
 
@@ -76,6 +78,12 @@ function couldHaveRunBefore(nodes: FlowTriggerNode[], step?: string): FlowTrigge
   return [...before].filter(node => node.name !== step);
 }
 
+/** Whether a step sits inside a loop's body, where an earlier round may already have run it. */
+function inLoopBody(nodes: FlowTriggerNode[], node: FlowTriggerNode): boolean {
+  return nodes.some(loop => loop.type === 'LOOP_ON_ITEMS' && !!loop.firstLoopAction
+    && walkFlowNodes(loop.firstLoopAction).some(inner => inner.name === node.name));
+}
+
 /**
  * What the run did apart from the step `except`: `yes` when an effect record
  * shows a dispatch or the trace shows an untracked step ran; `maybe` when the
@@ -97,7 +105,8 @@ function withOtherSteps(failure: UserFailure, other: 'yes' | 'maybe' | 'no', bef
   const said = other === 'yes' ? `${before} had already run.` : `${before} may already have run.`;
   const own = failure.next.map(n => n.step).filter(step => step !== 'run_again' && step !== 'open_details');
   return { ...failure, effect: failure.effect === 'none' ? (other === 'yes' ? 'partial' : 'unknown') : failure.effect,
-    outcome: `${failure.outcome === NOTHING_DONE ? itself : failure.outcome} ${said}`,
+    // "Nothing was done." is about this step only once earlier steps ran, so it says so; a cause after it stays.
+    outcome: `${failure.outcome.startsWith(NOTHING_DONE) ? `${itself}${failure.outcome.slice(NOTHING_DONE.length)}` : failure.outcome} ${said}`,
     next: recoverySteps(...own, 'check_earlier_steps', 'open_details') };
 }
 
@@ -126,22 +135,33 @@ function credentialFailureFor(run: FlowRun, node: FlowTriggerNode): RunConnectio
   return bindings.find(binding => binding.credentialFailure) ?? null;
 }
 
-/** The typed refusals of a human input step (#1266), and the denial of a Wait for Approval step that was not approved. */
-const HUMAN_INPUT_REFUSALS = [HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, 'APPROVAL_DENIED', 'APPROVAL_EXPIRED'];
-const HUMAN_INPUT_REFUSAL = new RegExp(`"outcome":\\s*\\{[^{}]*"code":\\s*"(${HUMAN_INPUT_REFUSALS.join('|')})"`);
+const JARVIS_TOOL_PIECE = '@jarvispieces/piece-jarvis-tool';
 
 /**
- * #1266: a human input step refused before it asked anyone: its workflow
- * already has as many requests waiting as it may, or nothing on this Jarvis
- * could answer one. The step leaves no effect record, so its typed refusal
+ * The typed refusals a step's own piece can raise before or instead of doing
+ * its work: a human input step refused (#1266) or rejected by the person, a
+ * Wait for Approval step that was not approved (#1322), and a tool step naming
+ * a tool no workflow can run or a skill that is not saved.
+ */
+function typedRefusalCodes(node: FlowTriggerNode): string[] {
+  if (isHumanInputStep(node.settings?.pieceName, node.settings?.actionName)) {
+    return [HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, HUMAN_INPUT_REJECTED_CODE, 'APPROVAL_DENIED', 'APPROVAL_EXPIRED'];
+  }
+  return node.settings?.pieceName === JARVIS_TOOL_PIECE ? [WORKFLOW_TOOL_UNSUPPORTED_CODE, WORKFLOW_SKILL_NOT_FOUND_CODE] : [];
+}
+
+/**
+ * #1266: a step refused before it did anything, or stopped by a person's
+ * rejection. These steps leave no effect record for it, so the typed refusal
  * reaches the run only in the engine's step error, as the sandbox API's
  * `{ error, outcome }` body; it is read from there for those steps and those
- * codes only. The input piece's one call is to Jarvis's own human-input
- * route, so the body carrying the code is Jarvis's.
+ * codes only. Each one's single call is to Jarvis's own route, so the body
+ * carrying the code is Jarvis's.
  */
-function humanInputRefusal(node: FlowTriggerNode | undefined, message: string | undefined): ActionFailure | null {
-  if (!node || !isHumanInputStep(node.settings?.pieceName, node.settings?.actionName) || message === undefined) return null;
-  const code = HUMAN_INPUT_REFUSAL.exec(message)?.[1];
+function typedStepRefusal(node: FlowTriggerNode | undefined, message: string | undefined): ActionFailure | null {
+  const codes = node ? typedRefusalCodes(node) : [];
+  if (!node || codes.length === 0 || message === undefined) return null;
+  const code = new RegExp(`"outcome":\\s*\\{[^{}]*"code":\\s*"(${codes.join('|')})"`).exec(message)?.[1];
   if (!code) return null;
   const said = /"error":\s*"((?:[^"\\]|\\.)*)"/.exec(message);
   let text = code;
@@ -159,6 +179,35 @@ function unsupportedToolRefusal(node: FlowTriggerNode | undefined, message: stri
     && !message.includes(`Unsupported direct workflow capability: ${tool} has opaque code/UI effects`)) return null;
   return { status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started',
     message: 'This tool was not supported by the workflow execution path used by this run.' };
+}
+
+/** Every string in a step's settings, whitespace removed. */
+function settingStrings(value: unknown, out: string[] = []): string[] {
+  if (typeof value === 'string') out.push(value.replace(/\s+/gu, ''));
+  else if (Array.isArray(value)) for (const item of value) settingStrings(item, out);
+  else if (value && typeof value === 'object') for (const item of Object.values(value)) settingStrings(item, out);
+  return out;
+}
+
+/**
+ * Whether the engine stopped this step while resolving its input, read from the
+ * run's structure rather than from the error text alone: the engine records a
+ * step's resolved input only after resolving it, so the step has no record or
+ * one with an empty input, and the reference the error names is in the step's
+ * own settings.
+ */
+function stoppedResolvingInput(run: FlowRun, node: FlowTriggerNode, message: string): boolean {
+  const entry = run.steps?.[node.name] as { output?: unknown; input?: unknown } | undefined;
+  const record = (entry?.output && typeof entry.output === 'object' && 'status' in entry.output ? entry.output : entry) as { input?: unknown } | undefined;
+  const input = record?.input;
+  if (record && !(input && typeof input === 'object' && Object.keys(input).length === 0)) return false;
+  const named = missingReference(message);
+  return named !== null && settingStrings(node.settings).some(text => text.includes(named));
+}
+
+/** A step that makes no call outside Jarvis: its piece only works on data inside the run. */
+function makesNoOutsideCall(node: FlowTriggerNode): boolean {
+  return node.type === 'PIECE' && IN_RUN_STEP_PIECES.has(node.settings?.pieceName ?? '');
 }
 
 /**
@@ -180,6 +229,19 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   if (run.status === 'STOPPED') {
     const sent = otherSteps(run, records, graph) !== 'no' || run.cancellation?.inFlightMayHaveCompleted === true;
     return projectFailure({ source: 'cancellation', dispatched: sent }, { label: 'The run', sideEffects: sent }, links);
+  }
+  if (step?.name === '<engine>') {
+    const input = loopInputFailure(step.errorMessage);
+    if (input) {
+      // The engine reads a loop's list before the loop has a record, so it ends the run with no step. The loop
+      // is found from the graph; reading its list did nothing, and the steps before it may have.
+      const flat = (text: unknown) => typeof text === 'string' ? text.replace(/\s+/gu, '') : '';
+      const loop = graph.find(n => n.type === 'LOOP_ON_ITEMS' && flat(n.settings?.items).includes(flat(input.expression)));
+      const named = loop ? { ...links, stepName: loop.name } : links;
+      const label = loop ? `The step "${loop.displayName}"` : 'The run';
+      return withOtherSteps(projectFailure({ source: 'local', message: input.text(loop ? 'This loop' : 'A loop in this workflow') },
+        { label, sideEffects: false }, named), otherSteps(run, records, graph, loop?.name), 'Steps before it');
+    }
   }
   if (!step || step.name === '<engine>') {
     return projectFailure({ source: 'unknown', message: step?.errorMessage ?? `The run ended ${run.status}` },
@@ -205,7 +267,7 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   const delegated = checkpoint?.result?.outcome && checkpoint.versionDigest === digest(loadVersion()?.trigger)
     ? checkpoint.result.outcome : undefined;
   const node = graph.find(n => n.name === step.name);
-  const outcome = recorded ?? (delegated && delegated.status !== 'succeeded' ? delegated : null) ?? humanInputRefusal(node, step.errorMessage)
+  const outcome = recorded ?? (delegated && delegated.status !== 'succeeded' ? delegated : null) ?? typedStepRefusal(node, step.errorMessage)
     ?? (own.length === 0 ? unsupportedToolRefusal(node, step.errorMessage) : null);
   let evidence: FailureEvidence;
   let sideEffects = true;
@@ -226,7 +288,9 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   }
   if (outcome) {
     if (record) Object.assign(links, { effectId: record.id, ...(record.approvalId ? { approvalId: record.approvalId } : {}) });
-    const provider = record?.route === 'llm' ? providerCode(outcome.code) : null;
+    // An AI step's record, or an agent step whose first model call was refused
+    // (its delegation outcome carries the provider's code and no tool ran).
+    const provider = record?.route === 'llm' || outcome === delegated ? providerCode(outcome.code) : null;
     if (provider) {
       // An AI call changes nothing outside Jarvis; what failed is the provider.
       evidence = { source: 'provider', code: provider, message: outcome.message };
@@ -235,9 +299,20 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
       evidence = { source: 'action', outcome };
     }
   } else {
-    evidence = { source: 'unknown', message: step.errorMessage ?? `${step.displayName} failed` };
+    const message = step.errorMessage ?? `${step.displayName} failed`;
+    // A step with no call outside Jarvis, or one that failed resolving its own
+    // input, did nothing: the reading says so and names the cause. Such a step
+    // inside a loop may have run in an earlier round, so only a step that makes
+    // no outside call at all is read this way there.
+    const noOutsideCall = !!node && makesNoOutsideCall(node);
+    // A step with no effect record has only its error text to say where it stopped, and an outside
+    // piece can put any text there: it counts only when the step record shows its input was never
+    // resolved and the reference it names is one the step's own settings read.
+    const beforeDispatch = !!node && failedOnMissingReference(message) && !own.some(dispatched)
+      && (!untracked(node) || (!inLoopBody(graph, node) && stoppedResolvingInput(run, node, message)));
+    evidence = noOutsideCall || beforeDispatch ? { source: 'local', message } : { source: 'unknown', message };
     // A record still pending (waiting on approval, or refused before its claim) never dispatched.
-    sideEffects = own.some(dispatched) || !node || untracked(node);
+    sideEffects = own.some(dispatched) || !node || (untracked(node) && !noOutsideCall && !beforeDispatch);
   }
   // The sentence is about the failed step; it also says what the steps before it had done.
   const reading = withOtherSteps(projectFailure(evidence, { label, sideEffects }, links), otherSteps(run, records, graph, step.name), 'Steps before it');
@@ -246,7 +321,7 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   // advice changes; what took effect is read from the evidence above.
   const guidance = outcome ? null : expressionFailureGuidance(step.errorMessage);
   return guidance ? { ...reading, next: [{ step: 'edit_and_run_again', label: guidance },
-    ...reading.next.filter(n => n.step !== 'run_again' && n.step !== 'edit_and_run_again')] } : reading;
+    ...reading.next.filter(n => n.step !== 'run_again' && n.step !== 'edit_and_run_again' && n.step !== 'fix_step')] } : reading;
 }
 
 /**

@@ -291,6 +291,9 @@ describe('#609: the call sites that persist a receipt', () => {
       'authority/approval-delivery.ts',
       // approval_requests.execution_result, every branch
       'authority/deferred-executor.ts',
+      // a failed step's cause: the outcome sentence of a run's failure and the
+      // failed step message the run API hands a screen (publicRun)
+      'failures/cause.ts',
       // a failure's detail: shown behind Details, kept with a chat failure and
       // a failed task's result (Q-19)
       'failures/projection.ts',

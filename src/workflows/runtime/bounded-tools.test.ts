@@ -261,8 +261,13 @@ describe('gated tool classification (run_skill)', () => {
     expect(cap.target({ name: 'notepad' })).toMatchObject({ surface: 'desktop', capability: 'desktop' });
   }));
 
-  test('an unknown skill is refused as an unsupported capability', () => withVault(() => {
+  test('an unknown skill is refused as a missing skill, not an unsupported tool', () => withVault(() => {
     expect(() => toolEffectCapability(runSkillTool, { name: 'nope' })).toThrow(/Unsupported direct workflow capability: run_skill/);
+    // Typed, so the failed run says nothing ran and that the skill is missing. run_skill itself stays
+    // reachable (#1314's admission table counts a WORKFLOW_TOOL_UNSUPPORTED refusal as unreachable).
+    let outcome: unknown;
+    try { toolEffectCapability(runSkillTool, { name: 'nope' }); } catch (error) { outcome = (error as { outcome?: unknown }).outcome; }
+    expect(outcome).toMatchObject({ code: 'SKILL_NOT_FOUND', effect: 'not_started' });
   }));
 
   test('a subject key cannot shadow the target fields the dispatch fence reads', () => withVault(() => {

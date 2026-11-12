@@ -236,6 +236,39 @@ describe('runFailure (Q-19)', () => {
     expect(failure.next.some(n => n.step === 'edit_and_run_again')).toBe(false);
   });
 
+  /** A run whose loop `loop` reads `{{trigger.items}}`, ended by the engine with no step of its own. */
+  function loopRun(errorMessage: string) {
+    const flow = createFlow({});
+    const loop = { name: 'loop', type: 'LOOP_ON_ITEMS', displayName: 'Each contact', settings: { items: '{{trigger.items}}' },
+      firstLoopAction: notifyStep('notify') };
+    const version = createDraftVersion({ flowId: flow.id, displayName: 'Loop', trigger: { name: 'trigger', type: 'EMPTY', nextAction: loop } as never });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING', startTime: Date.now() });
+    return updateRun(run.id, { status: 'INTERNAL_ERROR', failedStep: { name: '<engine>', displayName: 'engine', errorMessage } })!;
+  }
+  const RAW = 'WorkflowExpressionError: Unsupported workflow expression: value or nesting limit in {{ trigger.items }}. Workflow expressions are data only: property paths';
+
+  test('a loop list over the value limit names the loop, the limit and what to do', () => {
+    const failure = runFailure(loopRun(`executeFlow(run r) -> INTERNAL_ERROR: ${RAW}`))!;
+    expect(failure).toMatchObject({ headline: 'The step "Each contact" failed.' });
+    expect(failure.links.stepName).toBe('loop');
+    expect(failure.outcome).toContain('10,000 values, counting every field');
+    expect(failure.outcome).toContain('about 2,500 contacts');
+    expect(failure.outcome).toContain('Split the list');
+    expect(failure.next.map(n => n.step)).toEqual(['fix_step', 'open_details']);
+    expect(JSON.stringify({ ...failure, detail: '' })).not.toMatch(/INTERNAL_ERROR|WorkflowExpressionError|<engine>|executeFlow/);
+  });
+
+  test('a loop list with no value says which reference had none', () => {
+    const failure = runFailure(loopRun('executeFlow(run r) -> INTERNAL_ERROR: Error: "{{trigger.items}}" has no value in this run.\n    at x'))!;
+    expect(failure.headline).toBe('The step "Each contact" failed.');
+    expect(failure.outcome).toContain('"trigger.items", which had no value in this run');
+    expect(failure.outcome).not.toContain('INTERNAL_ERROR');
+  });
+
+  test('an engine failure that is not about a loop list reads as before', () => {
+    expect(runFailure(loopRun('executeFlow(run r) -> INTERNAL_ERROR: RPC timeout'))!.headline).toContain('The run failed');
+  });
+
   test('a loop step that failed may follow untracked steps later in the same loop body', () => {
     const flow = createFlow({});
     const loop = { name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.items}}' },

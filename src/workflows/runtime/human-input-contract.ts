@@ -12,6 +12,8 @@ export const HUMAN_INPUT_LIMIT_CODE = 'HUMAN_INPUT_LIMIT';
  * answered in Needs you, the Brief decisions feature, and it is off (#1266).
  */
 export const HUMAN_INPUT_UNAVAILABLE_CODE = 'HUMAN_INPUT_UNAVAILABLE';
+/** The person rejected the request: the step stops the run, and nothing after it runs. */
+export const HUMAN_INPUT_REJECTED_CODE = 'HUMAN_INPUT_REJECTED';
 /**
  * Why nothing could answer a request on this Jarvis, or null when Needs you
  * (the Brief decisions capability) can take it. Requests are answered only in

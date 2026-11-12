@@ -20,7 +20,8 @@ import type { ActionFailure } from '../actions/action-outcome';
 import type { LLMErrorCode } from '../llm/provider';
 import { redactSecrets } from '../util/redact';
 import { boundedReceiptText } from '../roles/untrusted';
-import { HUMAN_INPUT_PENDING_LIMIT } from '../workflows/runtime/human-input-contract';
+import { HUMAN_INPUT_PENDING_LIMIT, HUMAN_INPUT_REJECTED_CODE } from '../workflows/runtime/human-input-contract';
+import { causeSentence, failureCause } from './cause';
 
 export type FailureCategory =
   /** The input or definition is not valid; fixing it is the person's call. */
@@ -53,7 +54,7 @@ export type RecoveryStep =
   | 'edit_and_run_again' | 'connect' | 'wait_or_switch_model' | 'bring_online' | 'ask_again' | 'review_authority'
   | 'check_before_running_again' | 'check_earlier_steps' | 'run_again' | 'resend' | 'check_before_resending' | 'open_details'
   | 'wait_and_run_again' | 'run_again_when_resumed' | 'accept_binding_change' | 'update_recipient' | 'update_desktop_app'
-  | 'change_request' | 'appeal_restriction';
+  | 'change_request' | 'appeal_restriction' | 'fix_step' | 'check_ai_settings';
 
 export interface FailureLinks {
   runId?: string; flowId?: string; stepName?: string; effectId?: string;
@@ -95,6 +96,13 @@ export type FailureEvidence =
   | { source: 'provider'; code: LLMErrorCode; message?: string; retryAfterMs?: number }
   | { source: 'cancellation'; dispatched: boolean; message?: string }
   | { source: 'delivery'; channels: Array<{ channel: string; result: DeliveryResult; error?: string }> }
+  /**
+   * A step that makes no call outside Jarvis, or one that failed before it
+   * dispatched anything (a reference with no value, an input the step could
+   * not use). Nothing took effect, and running it again unchanged fails the
+   * same way. `message` is the step's own error report; only its cause is read.
+   */
+  | { source: 'local'; message: string }
   | { source: 'unknown'; message: string };
 
 const DETAIL_MAX = 1200;
@@ -207,6 +215,9 @@ const NEXT: Record<RecoveryStep, string> = {
   // Waiting does not lift a content policy block or an account restriction.
   change_request: 'Change what it asks, then try again. If you think it was blocked by mistake, contact support.',
   appeal_restriction: 'Contact support to appeal, or use your own AI provider.',
+  fix_step: 'Fix the step, then run it again.',
+  // A hosted provider reports an inactive plan as auth too (#1317), so the plan is named beside the key.
+  check_ai_settings: 'Check the AI provider key in AI settings, or your plan in Billing if you use Jarvis AI, then run it again.',
 };
 const next = (...steps: RecoveryStep[]) => steps.map(step => ({ step, label: NEXT[step] }));
 /** Recovery steps with their labels, for a reading that adjusts a projected failure. */
@@ -308,6 +319,9 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
       if (code === 'EMERGENCY_STOPPED') {
         return build('cancelled', 'none', `${s} did not run: Jarvis was stopped.`, NOTHING, ['run_again_when_resumed'], links, code, detail);
       }
+      if (code === HUMAN_INPUT_REJECTED_CODE) {
+        return build('approval_denied', 'none', `${s} did not continue: the request was rejected.`, 'Nothing after it ran.', [], links, code, detail);
+      }
       if (code && NAMED_REFUSALS[code]) {
         const named = NAMED_REFUSALS[code];
         return build(named.category, 'none', `${s} did not run: ${named.why}.`, NOTHING, [named.step], links, code, detail);
@@ -368,6 +382,7 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
       const steps: RecoveryStep[] = evidence.code === 'content_policy' ? ['change_request']
         : evidence.code === 'restricted' ? ['appeal_restriction']
         : mapped.category === 'provider_limit' ? ['wait_or_switch_model']
+        : evidence.code === 'auth' ? ['check_ai_settings']
         : mapped.category === 'missing_binding' ? ['connect']
         : mapped.category === 'target_offline' ? (effect === 'none' ? ['run_again'] : [])
         : mapped.category === 'invalid_input' ? ['edit_and_run_again'] : [];
@@ -400,12 +415,19 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
       return build('delivery_failed', 'none', `${s} was not sent.`, failed.length ? `Not sent on ${names(failed)}.` : 'No channel was available.',
         ['resend'], links, DELIVERY_FAILED, detail);
     }
-    case 'unknown':
+    case 'local': {
+      const cause = failureCause(evidence.message);
+      return build('invalid_input', 'none', `${s} failed.`, cause ? `${NOTHING} ${causeSentence(cause)}` : NOTHING, ['fix_step'], links, null, cause ?? '');
+    }
+    case 'unknown': {
       // No typed evidence: say what is known, and for work that can change
-      // things outside Jarvis, do not claim that nothing did.
+      // things outside Jarvis, do not claim that nothing did. The detail is
+      // the step's own message; the engine's stack and paths are not shown.
+      const cause = failureCause(evidence.message) ?? '';
       return subject.sideEffects
         ? build('internal', 'unknown', `${s} failed, and Jarvis cannot tell whether it took effect.`, MAYBE,
-          ['check_before_running_again'], links, null, evidence.message)
-        : build('internal', 'none', `${s} failed.`, NOTHING, ['run_again'], links, null, evidence.message);
+          ['check_before_running_again'], links, null, cause)
+        : build('internal', 'none', `${s} failed.`, NOTHING, ['run_again'], links, null, cause);
+    }
   }
 }

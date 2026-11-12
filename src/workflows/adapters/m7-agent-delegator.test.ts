@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { LLMMessage } from "../../llm/provider";
+import { LLMProviderError, type LLMMessage } from "../../llm/provider";
 import type { RoleDefinition } from "../../roles/types";
 import type { RunSubAgentOptions, SubAgentPause, SubAgentResult } from "../../agents/sub-agent-runner";
 import type { DelegationCheckpoint } from "../db/repos/delegation";
@@ -232,6 +232,19 @@ describe("M7AgentDelegator", () => {
     expect(out.status).toBe("error");
     expect(out.error).toMatch(/LLM provider down/);
     expect(calls.terminate).toContain("child-1");
+  });
+
+  test("a provider that rejected the key before any tool ran is a typed refusal that did nothing", async () => {
+    const { orchestrator } = makeOrchestratorStub({ primary: { id: "primary", canSpawn: true } });
+    const runner: RunSubAgentFn = async () => ({
+      success: false, response: "Sub-agent error: 401 invalid x-api-key", toolsUsed: [], tokensUsed: { input: 0, output: 0 },
+      terminationReason: "error", messages: [], cause: new LLMProviderError("401 invalid x-api-key", "auth"),
+    });
+    const delegator = new M7AgentDelegator({ orchestrator: orchestrator as never, llmManager: {} as never,
+      specialists: new Map([["workflow-default", makeRole("workflow-default")]]), runSubAgentFn: runner });
+    const out = await delegator.delegate({ goal: "x" });
+    expect(out.status).toBe("error");
+    expect(out.outcome).toMatchObject({ status: "error", code: "PROVIDER_AUTH", effect: "not_started" });
   });
 
   test("terminates the spawned sub-agent even when the runner throws", async () => {

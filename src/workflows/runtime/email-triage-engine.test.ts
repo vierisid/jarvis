@@ -212,12 +212,12 @@ for (const failure of ['label', 'notification']) test(`lost ${failure} response 
 test('a manual run naming no message runs unclaimed, and a step needing the message fails before Gmail is called', async () => {
   const f = await fixture(); reply = response('support', false, true); const before = stats();
   const empty = await f.manual({});
-  expect(empty.failedStep?.name).toBe('classify'); expect(empty.failedStep?.errorMessage).toContain('absent value');
+  expect(empty.failedStep?.name).toBe('classify'); expect(empty.failedStep?.errorMessage).toContain('has no value in this run');
   expect(stats()).toEqual(before);
   for (const payload of [{ id: 'buffer-only', payload: { subject: 'Fixture', snippet: 'Fixture' } }, { payload: { id: '', subject: 'Fixture', snippet: 'Fixture' } }]) {
     const run = await f.manual(payload);
     expect(run.status).toBe('FAILED'); expect(run.failedStep?.name).toBe('label_support');
-    expect(run.failedStep?.errorMessage).toContain('absent value');
+    expect(run.failedStep?.errorMessage).toContain('has no value in this run');
   }
   // Classified twice, but no label request and no alert: the label step needs a message.
   expect(stats().map((n,i) => n-before[i]!)).toEqual([2,0,0]);

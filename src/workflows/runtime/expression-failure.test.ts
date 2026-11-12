@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { inspect } from 'node:util';
-import { evaluateWorkflowExpression } from './safe-expression';
-import { expressionFailureGuidance } from './expression-failure';
+import { absentReferenceError, evaluateWorkflowExpression } from './safe-expression';
+import { expressionFailureGuidance, failedOnMissingReference } from './expression-failure';
 
 /** The step message the engine records: `inspect` of the real evaluator error, behind the executor's prefix. */
 function recorded(script: string, context: Record<string, unknown>): string {
@@ -76,5 +76,25 @@ describe('expressionFailureGuidance', () => {
     const text = expressionFailureGuidance(`WorkflowExpressionError: Unsupported workflow expression: forbidden-${SECRET} in {{ token }}`)!;
     expect(text).toBe(`An input expression could not be evaluated against the data this step read. ${CHECK}`);
     expect(expressionFailureGuidance('WorkflowExpressionError: Unsupported workflow expression: constructor')).toBe(text);
+  });
+});
+
+describe('a reference with no value', () => {
+  const recordedAbsent = (expression: string) => `engine executor: run r ended FAILED at step "s": ${inspect(absentReferenceError(expression))}\nAutomatic retry is disabled.`;
+
+  test('names the reference, and is read back from the step message with its stack', () => {
+    expect(absentReferenceError('trigger.body.name').message).toBe('"{{trigger.body.name}}" has no value in this run.');
+    expect(failedOnMissingReference(recordedAbsent('trigger.body.name'))).toBe(true);
+    expect(failedOnMissingReference(recordedAbsent("trigger.headers['x-qa']"))).toBe(true);
+  });
+
+  test('a long reference is cut, not copied whole', () => {
+    expect(absentReferenceError(`a.${'b'.repeat(500)}`).message.length).toBeLessThan(200);
+  });
+
+  test('other messages, including ones that only quote it, are not it', () => {
+    expect(failedOnMissingReference('Error: boom')).toBe(false);
+    expect(failedOnMissingReference('Error: sent, then failed: "{{a}}" has no value in this run.')).toBe(false);
+    expect(failedOnMissingReference(undefined)).toBe(false);
   });
 });

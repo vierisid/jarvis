@@ -54,6 +54,45 @@ can change things outside Jarvis it reads as "may have taken effect".
 `src/failures/fixtures.ts` holds one canonical failure per category and the
 timeouts that must never read as "nothing happened".
 
+## Workflow step failures
+
+A failed step's recorded message is the engine's whole error report: the
+piece's own message, a stack trace with server and engine paths, and the retry
+guidance. `failureCause` (`src/failures/cause.ts`) reduces it to the piece's own
+message: first line, no stack, path, error class or wrapper, credentials
+redacted, frame delimiters defanged, at most 240 characters. That cause is the `detail` of a failure from
+a step with no typed evidence, and the sentence after "Nothing was done." where
+the step did nothing. The run API (`publicRun`) applies the same reduction to
+the failed step and to every step output, so no stack or path reaches a screen.
+The stored run and the server log keep the full report.
+
+- A step whose piece makes no call outside Jarvis (`IN_RUN_STEP_PIECES` in
+  `step-admission.ts`: math, text, date, csv, xml, data, crypto and the other
+  in-run helpers) reads `The step "X" failed.` with "Nothing was done." and its
+  cause, and advises "Fix the step, then run it again." (`fix_step`). Running it
+  again unchanged fails the same way, so it is never offered as a plain rerun.
+- A reference with no value in this run fails while the step's input is
+  resolved, before the step runs: `"{{trigger.body.name}}" has no value in this
+  run.` It is read as nothing done for any step, except one that can call out and
+  sits in a loop, where an earlier round may have acted. For a step with no
+  effect record (a community piece, a CODE step) the error text alone is not
+  enough, since its piece can return any text: the run must also show the step
+  never resolved its input (no step record, or one with an empty input) and the
+  named reference must be in the step's own settings. A router with such an
+  operand fails as the router step, not as an engine error on `<engine>`; only
+  resolving and evaluating its conditions is caught, so an error in a branch's
+  own steps is never blamed on the router.
+- A rejected human request (`HUMAN_INPUT_REJECTED`) is an approval denial:
+  `did not continue: the request was rejected.` "Nothing after it ran." No
+  rerun advice.
+- A tool no workflow can run (`WORKFLOW_TOOL_UNSUPPORTED`) says so and advises
+  fixing the step.
+- An AI provider that rejects its key before any call (`auth`), for an Ask or an
+  Agent step that ran no tool, says nothing was done and points to AI settings
+  (`check_ai_settings`), or to the plan in Billing: a hosted provider reports an
+  inactive plan as `auth` too. An agent step that already ran a tool keeps the
+  uncertain reading.
+
 ## Delivery
 
 `src/comms/delivery.ts` classifies a failed send from its error's name, runtime
