@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runUpdate, type Spawner, type SpawnResult } from './update.ts';
+import { recordStartOptions } from './start-options.ts';
 import type { InstallMethod, InstallMethodInfo } from './install-method.ts';
 
 let workDir: string;
@@ -299,6 +300,54 @@ describe('runUpdate — script install', () => {
     // The checkout was the meaningful operation; bun install is recoverable.
     expect(result.outcome).toBe('updated');
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe('runUpdate - restart keeps the start options', () => {
+  const lsRemote = (tag: string): string => `${'0'.repeat(40)}\trefs/tags/${tag}\n`;
+  const runningPid = 4242;
+
+  async function updateAndRestart(): Promise<string[][]> {
+    const { spawn } = recordingSpawner([
+      { exitCode: 0, stdout: lsRemote('v1.0.0') }, // git ls-remote
+      { exitCode: 0, stdout: 'v1.0.0\n' }, // git describe: up to date
+    ]);
+    const launched: string[][] = [];
+    const result = await runUpdate({
+      packageRoot: workDir,
+      spawn,
+      detect: () => fakeInfo('script'),
+      checkRunning: () => runningPid,
+      stopDaemon: async () => ({ wasRunning: true, pid: runningPid, graceful: true, stopped: true }),
+      launchDaemon: (args) => { launched.push(args); },
+    });
+    expect(result.exitCode).toBe(0);
+    return launched;
+  }
+
+  test('restarts with the flags the stopped daemon recorded', async () => {
+    const dataDir = join(workDir, 'data');
+    recordStartOptions(runningPid, { port: 4100, dataDir, noLocalTools: true, systemConfigPath: '/etc/jarvis/system.yaml' });
+
+    expect(await updateAndRestart()).toEqual([[
+      'start', '--no-open',
+      '--port', '4100',
+      '--data-dir', dataDir,
+      '--no-local-tools',
+      '--system-config', '/etc/jarvis/system.yaml',
+    ]]);
+  });
+
+  test('ignores a record another daemon left behind', async () => {
+    recordStartOptions(runningPid + 1, { port: 4100 });
+
+    expect(await updateAndRestart()).toEqual([['start', '--no-open']]);
+  });
+
+  test('restarts with no extra flags when the daemon was started without any', async () => {
+    recordStartOptions(runningPid, {});
+
+    expect(await updateAndRestart()).toEqual([['start', '--no-open']]);
   });
 });
 

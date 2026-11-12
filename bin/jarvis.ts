@@ -27,6 +27,7 @@ import { describeDashboard, ensurePortReleased, resolveDashboardTarget, resolveS
 import { getInstalledVersion } from '../src/cli/version.ts';
 import { loadConfig } from '../src/config/loader.ts';
 import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
+import { daemonStartFlags, recordStartOptions } from '../src/cli/start-options.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
 
@@ -130,6 +131,13 @@ async function cmdStart(args: string[]): Promise<void> {
   const dataDirIdx = args.indexOf('--data-dir');
   if (dataDirIdx !== -1 && args[dataDirIdx + 1]) {
     dataDir = args[dataDirIdx + 1]!;
+    // Forwarded to the detached child and to `jarvis update`'s restart, where
+    // a dash-leading value would be read as a flag (`--data-dir -d` would make
+    // every child detach again).
+    if (dataDir.startsWith('-')) {
+      console.error(c.red(`Error: --data-dir value cannot start with '-' (for a directory named that, use ./${dataDir})`));
+      process.exit(1);
+    }
   }
 
   // Parse --system-config (hosted-mode flag, usejarvis #66).
@@ -200,6 +208,8 @@ async function cmdStart(args: string[]): Promise<void> {
     // DRAIN before exiting. A `process.exit(0)` from the CLI would preempt that
     // async teardown mid-flight. The OS auto-releases the flock on exit anyway.
     process.on('exit', () => releaseLock());
+    // For `jarvis update`, which restarts this daemon and cannot read its argv.
+    recordStartOptions(process.pid, { port, dataDir, noLocalTools, systemConfigPath });
 
     const { startDaemon } = await import('../src/daemon/index.ts');
     await startDaemon({ port, dataDir, noLocalTools, systemConfigPath });
@@ -221,13 +231,13 @@ async function cmdStart(args: string[]): Promise<void> {
 
     const logPath = getLogPath();
 
-    const daemonArgs = [join(PACKAGE_ROOT, 'bin/jarvis.ts'), 'start', '--no-open'];
-    if (port) daemonArgs.push('--port', String(port));
-    // Forward --system-config into the detached child: without this, a hosted
-    // `jarvis start -d` would re-enter cmdStart in the child with no flag,
-    // and the daemon would (silently) fall back to ~/.jarvis/config.yaml,
-    // defeating the whole point of the flag.
-    if (systemConfigPath) daemonArgs.push('--system-config', systemConfigPath);
+    // Every start option goes to the detached child, which re-enters cmdStart
+    // with only what it is handed. Without --system-config a hosted
+    // `jarvis start -d` would (silently) fall back to ~/.jarvis/config.yaml,
+    // defeating the whole point of the flag; --data-dir and --no-local-tools
+    // were once dropped here the same way.
+    const daemonArgs = [join(PACKAGE_ROOT, 'bin/jarvis.ts'), 'start', '--no-open',
+      ...daemonStartFlags({ port, dataDir, noLocalTools, systemConfigPath })];
 
     // We redirect the child's stdout AND stderr into logPath. If
     // daemon.log_file_path names this same file the child does NOT install its

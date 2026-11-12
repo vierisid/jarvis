@@ -41,6 +41,7 @@ import {
 } from './install-method.ts';
 import { stopDaemonGracefully, type StopResult } from './daemon-control.ts';
 import { modelExecRestartWarning } from '../util/model-exec-marker.ts';
+import { daemonStartFlags, readStartOptions } from './start-options.ts';
 
 export interface SpawnResult {
   exitCode: number;
@@ -71,6 +72,11 @@ export interface UpdateDeps {
    * unit is handed the update.
    */
   restartDaemon?: boolean;
+  /**
+   * Injectable for tests: receives the `jarvis` argv (from `start` on) of the
+   * restart instead of a detached daemon being spawned with it.
+   */
+  launchDaemon?: (jarvisArgs: string[]) => void;
   /**
    * Injectable for tests. Defaults to detectSystemdUnit(): the systemd user
    * unit the running daemon is the main process of, if any. Not detected at
@@ -125,10 +131,10 @@ export function defaultSpawn(cmd: string[], options: { cwd?: string; timeoutMs?:
  * sink's first compaction would rename a new file over the path and leave this
  * descriptor appending to an unlinked inode forever.
  */
-function restartDaemonDetached(packageRoot: string): void {
+function restartDaemonDetached(packageRoot: string, jarvisArgs: string[]): void {
   const logPath = getLogPath();
   const logFd = openSync(logPath, 'a');
-  const child = spawn('bun', [join(packageRoot, 'bin/jarvis.ts'), 'start', '--no-open'], {
+  const child = spawn('bun', [join(packageRoot, 'bin/jarvis.ts'), ...jarvisArgs], {
     detached: true,
     stdio: ['ignore', logFd, logFd],
     env: { ...process.env },
@@ -376,6 +382,9 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   const checkRunning = deps.checkRunning ?? isLocked;
   const stopDaemon = deps.stopDaemon ?? (() => stopDaemonGracefully());
   const runningPid = checkRunning();
+  // Read before the stop, while the record is plainly this daemon's: the
+  // restart below starts the new daemon the way this one was started.
+  const startOptions = runningPid ? readStartOptions(runningPid) : null;
   // A daemon that is a systemd user unit's main process is updated by a
   // transient unit that stops and starts the service through systemd (#525;
   // src/cli/systemd-unit.ts): stopping it from here can kill this command
@@ -468,7 +477,15 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
       // that can lack the workflow key (#514; util/model-exec-marker.ts).
       const warning = modelExecRestartWarning();
       if (warning) console.log(c.yellow(warning));
-      restartDaemonDetached(deps.packageRoot);
+      const jarvisArgs = ['start', '--no-open', ...daemonStartFlags(startOptions ?? {})];
+      if (!startOptions) {
+        // Started by an older version, or not through `jarvis start`: what it
+        // was started with is not known here, so say what this one gets.
+        console.log(c.yellow('  The running daemon did not record its start options; restarting with the defaults.'));
+        console.log(c.dim('  If it was started with --port, --data-dir, --no-local-tools or --system-config, run `jarvis stop` and start it again with them.'));
+      }
+      if (deps.launchDaemon) deps.launchDaemon(jarvisArgs);
+      else restartDaemonDetached(deps.packageRoot, jarvisArgs);
     } else {
       // The old daemon still holds the lock, so a spawned replacement would
       // fail acquireLock() and die into the log while the user reads
