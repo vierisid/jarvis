@@ -9,7 +9,7 @@ import { assertRunNotCanceled } from './cancellation';
 import { claimContinuation } from './continuation';
 import { emergencyHold } from './emergency-hold';
 import { ActionOutcomeError } from '../../actions/action-outcome';
-import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_PENDING_LIMIT, HUMAN_INPUT_PIECE, HUMAN_INPUT_UNAVAILABLE_CODE, answerErrors, isHumanInputStep, formFields, humanRequestDismissable, type HumanRequest } from './human-input-contract';
+import { humanRequestForDisplay, HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_PENDING_LIMIT, HUMAN_INPUT_PIECE, HUMAN_INPUT_UNAVAILABLE_CODE, answerErrors, isHumanInputStep, formFields, humanRequestDismissable, type HumanRequest } from './human-input-contract';
 
 type Row = { id: string; project_id: string; flow_id: string; fingerprint: string; record: string; status: HumanRequest['status']; deadline: number; closed_at: number | null };
 const row = (id: string) => getWorkflowDb().query<Row, [string]>('SELECT * FROM workflow_human_request WHERE id=?').get(id);
@@ -24,7 +24,7 @@ function matchesGeneration(request: HumanRequest, expected: unknown): boolean {
   return expected === generationOf(request) || (expected === undefined && generationOf(request) === 0);
 }
 const staleResponse = (request: HumanRequest) => ({ status: 409,
-  error: 'This request was reopened. Your response belongs to an earlier request and was not accepted. Review the current request.', request });
+  error: 'This request was reopened. Your response belongs to an earlier request and was not accepted. Review the current request.', request: humanRequestForDisplay(request) });
 /** SQL: the current instance of request row `h` (records from before generations are 0). */
 const CURRENT_GENERATION = `COALESCE(json_extract(h.record,'$.generation'),0)`;
 /**
@@ -153,9 +153,13 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
   }).immediate();
 }
 
-/** Runs of the current instance of request row `h`: the one that created it and any that waited on it. */
-const INSTANCE_RUN = `(r.id=json_extract(h.record,'$.runId') OR r.id IN (SELECT w.run_id FROM workflow_human_wait w
-  WHERE w.request_id=h.id AND w.generation=${CURRENT_GENERATION}))`;
+/**
+ * Runs of the current instance of request row `h`: the one that created it and any that waited on it.
+ * Written as one `IN` so the run is found through its primary key. With an `OR` of two tests SQLite read
+ * every run of the workspace for every pending request.
+ */
+const INSTANCE_RUN = `r.id IN (SELECT json_extract(h.record,'$.runId') UNION SELECT w.run_id FROM workflow_human_wait w
+  WHERE w.request_id=h.id AND w.generation=${CURRENT_GENERATION})`;
 /**
  * Closed requests whose outcome still needs the user until dismissed (see
  * humanRequestNeedsAttention): they stay listed however many requests close later.
@@ -164,18 +168,30 @@ const UNDISMISSED_OUTCOME = `h.status IN ('submitted','approved','cancelled') AN
   AND (json_extract(h.record,'$.closureReason')='workflow_changed' OR (h.status!='cancelled' AND (
     NOT EXISTS (SELECT 1 FROM flow_run r WHERE ${INSTANCE_RUN})
     OR EXISTS (SELECT 1 FROM flow_run r WHERE ${INSTANCE_RUN} AND r.status NOT IN ('QUEUED','RUNNING','PAUSED','SUCCEEDED','STOPPED')))))`;
-/** Persistent terminal results and pending requests are scoped to the signed-in workspace. */
+/**
+ * Persistent terminal results and pending requests are scoped to the signed-in workspace. The
+ * pending ones come oldest deadline first, at most `limit` of them; the recent and unacknowledged
+ * closed ones are bounded by their own rules. `pendingTotal` is every pending request, listed or not,
+ * so a count never depends on the page. Run outcomes are read for the whole page in one query.
+ */
+export function humanInputQueue(projectId: string, opts: { limit?: number; now?: number } = {}): { requests: HumanRequest[]; pendingTotal: number } {
+  expireHumanInputs(opts.now ?? Date.now());
+  const db = getWorkflowDb(), limit = opts.limit ?? -1;
+  const rows = db.query<Row, [string, number]>(`SELECT * FROM workflow_human_request h WHERE h.project_id=?1 AND (
+    (h.status='pending' AND h.id IN (SELECT id FROM workflow_human_request WHERE project_id=?1 AND status='pending' ORDER BY deadline,id LIMIT ?2))
+    OR h.id IN (SELECT id FROM workflow_human_request WHERE project_id=?1 AND ${CLOSED} ORDER BY closed_at DESC,id DESC LIMIT ${HISTORY_PAGE})
+    OR (${UNDISMISSED_OUTCOME})) ORDER BY h.deadline,h.id`).all(projectId, limit);
+  const pendingTotal = db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM workflow_human_request WHERE project_id=? AND status='pending'`).get(projectId)!.n;
+  return { requests: withRunOutcomes(rows.map(unpack)), pendingTotal };
+}
 export function listHumanInputs(projectId: string, now = Date.now()): HumanRequest[] {
-  expireHumanInputs(now);
-  return getWorkflowDb().query<Row, [string]>(`SELECT * FROM workflow_human_request h WHERE h.project_id=?1 AND (h.status='pending' OR h.id IN
-    (SELECT id FROM workflow_human_request WHERE project_id=?1 AND ${CLOSED} ORDER BY closed_at DESC,id DESC LIMIT ${HISTORY_PAGE})
-    OR (${UNDISMISSED_OUTCOME})) ORDER BY h.deadline,h.id`).all(projectId).map(record => withRunOutcomes(unpack(record)));
+  return humanInputQueue(projectId, { now }).requests;
 }
 /** Authenticated deep links and local draft recovery are not limited by the recent page. */
 export function getHumanInput(projectId: string, id: string, now = Date.now()): HumanRequest | null {
   expireHumanInputs(now);
   const record = row(id);
-  return record?.project_id === projectId ? withRunOutcomes(unpack(record)) : null;
+  return record?.project_id === projectId ? withRunOutcomes([unpack(record)])[0]! : null;
 }
 /**
  * Keyset page of closed requests, newest close first: new responses cannot
@@ -198,7 +214,7 @@ function historyPage(projectId: string, cursor: string | null | undefined): { ro
 }
 export function humanInputHistory(projectId: string, cursor?: string | null) {
   const { rows, nextCursor } = historyPage(projectId, cursor);
-  return { requests: rows.map(record => withRunOutcomes(unpack(record))), nextCursor };
+  return { requests: withRunOutcomes(rows.map(unpack)), nextCursor };
 }
 /** Cursor past the Recent list's closed requests: ids and close times only, through idx_human_closed. */
 export function humanInputHistoryCursor(projectId: string): string | null {
@@ -226,20 +242,24 @@ export function resolveHumanInput(projectId: string, id: string, input: Record<s
     const request = unpack(row(id)!);
     const answers = status === 'submitted' ? input.answers : null;
     if (request.status !== 'pending') {
-      if (request.status === status && digest(request.answers) === digest(answers)) return { status: 200, request };
+      if (request.status === status && digest(request.answers) === digest(answers)) return { status: 200, request: humanRequestForDisplay(request) };
       return { status: 409, error: request.closureReason === 'workflow_changed'
-        ? 'The workflow changed while this request was waiting. Your answer was not accepted.' : `This request is ${request.status}`, request };
+        ? 'The workflow changed while this request was waiting. Your answer was not accepted.' : `This request is ${request.status}`, request: humanRequestForDisplay(request) };
     }
     const errors = status === 'submitted' ? answerErrors(request.fields, answers) : {};
     if (Object.keys(errors).length) return { status: 422, error: 'Check the highlighted answers', errors };
     request.status = status; request.answers = answers as Record<string, unknown> | null; save(request, now);
-    return { status: 200, request: unpack(row(id)!) };
+    return { status: 200, request: humanRequestForDisplay(unpack(row(id)!)) };
   }).immediate();
   resumeHumanInputs(now);
   return result;
 }
-/** A run that can still be continued: not finished and not stopped by turning its workflow off. */
-const LIVE_RUN = `SELECT 1 FROM flow_run r JOIN flow f ON f.id=r.flow_id WHERE r.status IN ('RUNNING','PAUSED','QUEUED')
+/**
+ * A run that can still be continued: not finished and not stopped by turning its workflow off. Always
+ * paired with `INSTANCE_RUN`; the `+` keeps SQLite from walking every paused run for each pending
+ * request (it looks the run up by its id instead).
+ */
+const LIVE_RUN = `SELECT 1 FROM flow_run r JOIN flow f ON f.id=r.flow_id WHERE +r.status IN ('RUNNING','PAUSED','QUEUED')
   AND NOT (f.disabled_at IS NOT NULL AND r.created <= f.disabled_at)`;
 /**
  * Close what can no longer be answered. Reads only through the pending index and
@@ -280,13 +300,22 @@ export function resumeHumanInputs(now = Date.now()): number {
  * Only runs that asked this instance count: a shared form reopened after it
  * expired or was cancelled does not report the earlier runs' outcomes.
  */
-function withRunOutcomes(request: HumanRequest): HumanRequest {
-  const rows = getWorkflowDb().query<{ id: string; flow_version_id: string; status: string }, [string, string, number]>(`
-    SELECT DISTINCT r.id,r.flow_version_id,r.status FROM flow_run r
-    WHERE r.id=?1 OR r.id IN (SELECT run_id FROM workflow_human_wait WHERE request_id=?2 AND generation=?3)
-    ORDER BY r.created,r.id`).all(request.runId, request.id, generationOf(request));
-  return { ...request, runs: rows.length ? rows.map(r => ({ runId: r.id, versionId: r.flow_version_id, status: r.status }))
-    : [{ runId: request.runId, versionId: '', status: 'UNAVAILABLE' }] };
+function withRunOutcomes(requests: HumanRequest[]): HumanRequest[] {
+  if (!requests.length) return [];
+  const db = getWorkflowDb(), waits = new Map<string, Array<{ run_id: string; generation: number }>>();
+  for (const w of db.query<{ request_id: string; run_id: string; generation: number }, [string]>(
+    'SELECT request_id,run_id,generation FROM workflow_human_wait WHERE request_id IN (SELECT value FROM json_each(?))').all(JSON.stringify(requests.map(r => r.id)))) {
+    const list = waits.get(w.request_id) ?? []; list.push(w); waits.set(w.request_id, list);
+  }
+  const wanted = new Set<string>(requests.map(r => r.runId)); for (const list of waits.values()) for (const w of list) wanted.add(w.run_id);
+  const runs = new Map(db.query<{ id: string; flow_version_id: string; status: string; created: number }, [string]>(
+    'SELECT id,flow_version_id,status,created FROM flow_run WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify([...wanted])).map(r => [r.id, r]));
+  return requests.map(request => {
+    const ids = new Set([request.runId, ...(waits.get(request.id) ?? []).filter(w => w.generation === generationOf(request)).map(w => w.run_id)]);
+    const rows = [...ids].flatMap(id => runs.get(id) ?? []).sort((a, b) => a.created - b.created || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return { ...humanRequestForDisplay(request), runs: rows.length ? rows.map(r => ({ runId: r.id, versionId: r.flow_version_id, status: r.status }))
+      : [{ runId: request.runId, versionId: '', status: 'UNAVAILABLE' }] };
+  });
 }
 /**
  * Acknowledge a closed request whose outcome needed attention (a failed run, a
@@ -297,13 +326,13 @@ export function dismissHumanInput(projectId: string, id: string, now = Date.now(
   return db.transaction(() => {
     const record = row(id);
     if (!record || record.project_id !== projectId) return { status: 404, error: 'Request not found' };
-    const request = withRunOutcomes(unpack(record));
+    const stored = unpack(record), request = withRunOutcomes([stored])[0]!;
     if (!matchesGeneration(request, generation)) return staleResponse(request);
     if (request.dismissedAt) return { status: 200, request };
     if (!humanRequestDismissable(request)) return { status: 409, error: request.status === 'pending' ? 'This request is still waiting for a response' : 'This request has nothing to dismiss yet', request };
-    const { runs: _runs, ...stored } = request;
+    // Saved from the stored text, never from what a person was shown.
     const dismissed = { ...stored, dismissedAt: now }; save(dismissed, now);
-    return { status: 200, request: { ...dismissed, runs: request.runs } };
+    return { status: 200, request: { ...humanRequestForDisplay(dismissed), runs: request.runs } };
   }).immediate();
 }
 /** A stale draft cannot consume an answer the worker will refuse to resume. */

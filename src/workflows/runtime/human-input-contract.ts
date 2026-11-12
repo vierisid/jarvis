@@ -1,4 +1,5 @@
 /** Shared, credential-free form contract used by the runtime and dashboard. */
+import { withoutCardInvisibles } from '../../util/card-text';
 export const HUMAN_INPUT_PIECE = '@jarvispieces/piece-jarvis-input';
 /**
  * How many requests one workflow may have waiting for an answer at once
@@ -53,6 +54,25 @@ export type HumanRequest = {
   /** A shared form reopened after it closed is a new instance; earlier waits keep `reopenedFrom`. */
   generation?: number; reopenedFrom?: HumanRequest['status'];
 };
+/**
+ * Most pending requests one `GET /api/workflow-inputs` lists when the caller names no limit, and the
+ * most it lists at all. Shared so the dashboard never asks for a page the server refuses.
+ */
+export const HUMAN_INPUT_LIST_DEFAULT = 100;
+export const HUMAN_INPUT_LIST_MAX = 500;
+/**
+ * Text a workflow author wrote, as a person is shown it: without the invisible and control
+ * characters a card never shows (`withoutCardInvisibles`, the set `forCard` drops). Left in a title
+ * or question, a bidi override reorders the text around it, so "Pay <U+202E>0001 EUR" reads as
+ * another amount. Line breaks are kept. The stored request keeps what the workflow wrote.
+ */
+export const forHumanDisplay = (text: string): string => typeof text === 'string' ? withoutCardInvisibles(text) : text;
+/** The request as a person is shown it: no hidden characters in any text a workflow author chose. */
+export function humanRequestForDisplay(request: HumanRequest): HumanRequest {
+  return { ...request, title: forHumanDisplay(request.title), prompt: forHumanDisplay(request.prompt),
+    requestKey: forHumanDisplay(request.requestKey), workflowName: forHumanDisplay(request.workflowName),
+    fields: Array.isArray(request.fields) ? request.fields.map(field => ({ ...field, label: forHumanDisplay(field.label) })) : request.fields };
+}
 export function formFields(value: unknown): InputField[] {
   if (!Array.isArray(value) || !value.length || value.length > 20) throw Error('Provide 1–20 input fields');
   const keys = new Set<string>();

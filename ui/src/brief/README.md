@@ -933,3 +933,15 @@ actions only change local fixture state.
   localStorage before the runner starts (see Entry points).
 - `verification/*.test.ts` are unit tests of the matrix, assessment and DOM observations; they run
   in the normal suite without a browser.
+
+## Needs you at scale
+
+- The workflow request list asks the server for 50 pending requests (`GET /api/workflow-inputs?limit=`) and
+  adds 50 each time "Show more requests" is pressed, up to the server's largest page (500); past that it says
+  how many more are waiting. A thousand requests are never drawn at once.
+  The Needs you count is the server's `pendingTotal` plus the settled requests that still need attention,
+  never the number listed.
+- The queue reads every 5 seconds only while the page is visible, and once when it becomes visible again.
+- With nothing chosen, the first card selected is one a person can answer, not a row that can only be
+  inspected: in the other decisions list (`PendingDecisions`), and in the document room, which also lists
+  answerable rows first (live, that room only receives rows with document actions).

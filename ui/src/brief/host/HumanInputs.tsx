@@ -1,33 +1,46 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { answerErrors, humanRequestDismissable, humanRequestNeedsAttention, type HumanRequest } from '../../../../src/workflows/runtime/human-input-contract';
+import { answerErrors, humanRequestDismissable, humanRequestNeedsAttention, forHumanDisplay, HUMAN_INPUT_LIST_MAX, type HumanRequest } from '../../../../src/workflows/runtime/human-input-contract';
 import type { HostTransport } from './http';
 import { EmergencyStatusContext } from './EmergencyStatus';
 import { post } from './http';
 import { briefHash } from '../entry/route';
 import './human-inputs.css';
 import { draftKey, instanceKey, rememberDraft, forgetDraft, localDraftRequests, localDraftIds, filled, storedAnswers, answerOnlyDrafts, forgetStoredDraft } from './human-input-drafts';
-type HumanInputQueue = { requests: HumanRequest[]; error: string; refresh(): Promise<void>; historyCursor?: string | null; unavailable?: string[] };
-/** Polls only while the decisions capability is on, like the other Needs you lists. */
+type HumanInputQueue = { requests: HumanRequest[]; error: string; refresh(): Promise<void>; historyCursor?: string | null; unavailable?: string[];
+  /** Every pending request the server holds, listed or not. */
+  pendingTotal?: number;
+  /** Lists 50 more pending requests; absent once the list holds as many as the server will page (`HUMAN_INPUT_LIST_MAX`). */
+  showMore?(): void };
+/** Pending requests asked for at first, and added by each "Show more": a list of a thousand is read a page at a time. */
+export const HUMAN_INPUT_PAGE = 50;
+/**
+ * Polls only while the decisions capability is on, like the other Needs you lists, and only while
+ * the page is visible: a hidden tab reads nothing, and reads once when it is shown again.
+ */
 export function useHumanInputQueue(http: HostTransport, enabled = true): HumanInputQueue {
   const [requests, setRequests] = useState<HumanRequest[]>([]), [error, setError] = useState('');
   const [historyCursor, setHistoryCursor] = useState<string | null>(null), [unavailable, setUnavailable] = useState<string[]>([]);
-  const active = useRef(true), reading = useRef(false);
-  // Requests read for local drafts beyond the recent page, by id; null once the
-  // server said it has no such request. A request outside the page is closed (a
-  // pending one is always listed, and a reopen lists it again), so the copy read
-  // once stays right; it is read again only after it was listed in between.
+  const [pendingTotal, setPendingTotal] = useState<number | undefined>(), [limit, setLimit] = useState(HUMAN_INPUT_PAGE);
+  const active = useRef(true), reading = useRef(false), again = useRef(false), wanted = useRef(HUMAN_INPUT_PAGE);
+  wanted.current = limit;
+  // Requests read for local drafts beyond the listed page, by id; null once the
+  // server said it has no such request. A closed one stays closed (a reopen lists
+  // it again), so that copy read once stays right. A pending one may sit past the
+  // page of pending requests and still be answered or expire elsewhere, so it is
+  // read again on every refresh, keeping the last copy if that read fails.
   const beyondPage = useRef(new Map<string, HumanRequest | null>());
   const refresh = async () => {
-    if (reading.current || http.signal.aborted) return;
+    if (http.signal.aborted) return;
+    if (reading.current) { again.current = true; return; }
     reading.current = true;
     try {
-      const value = await http.json('/api/workflow-inputs');
+      const value = await http.json(`/api/workflow-inputs?limit=${wanted.current}`);
       if (!Array.isArray(value.requests)) throw Error();
       // A browser draft must remain reachable even after it leaves the recent page.
       const listed = new Set<string>(value.requests.map((r: HumanRequest) => r.id)), drafts = localDraftIds();
       const cache = beyondPage.current;
       for (const id of [...cache.keys()]) if (listed.has(id) || !drafts.includes(id)) cache.delete(id);
-      await Promise.all(drafts.filter(id => !listed.has(id) && !cache.has(id)).map(async id => {
+      await Promise.all(drafts.filter(id => !listed.has(id) && (!cache.has(id) || cache.get(id)?.status === 'pending')).map(async id => {
         try {
           const response = await http.request(`/api/workflow-inputs/${encodeURIComponent(id)}`);
           if (response.status === 404) { cache.set(id, null); return; }
@@ -40,19 +53,25 @@ export function useHumanInputQueue(http: HostTransport, enabled = true): HumanIn
       const gone = [...cache.entries()].filter(([, r]) => r === null).map(([id]) => id);
       if (active.current) {
         setRequests([...value.requests, ...recovered]); setHistoryCursor(value.historyCursor ?? null);
+        setPendingTotal(Number.isSafeInteger(value.pendingTotal) ? value.pendingTotal : undefined);
         setUnavailable(previous => previous.length === gone.length && previous.every((id, i) => id === gone[i]) ? previous : gone); setError('');
       }
     } catch { if (active.current && !http.signal.aborted) setError('Workflow requests could not be refreshed. Reconnect and check again.'); }
-    finally { reading.current = false; }
+    finally { reading.current = false; if (again.current) { again.current = false; void refresh(); } }
   };
   useEffect(() => {
-    if (!enabled) { setRequests([]); setError(''); return; }
+    if (!enabled) { setRequests([]); setPendingTotal(undefined); setError(''); return; }
     active.current = true; void refresh();
-    const timer = setInterval(() => void refresh(), 5000);
+    const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void refresh(); }, 5000);
     const focus = () => void refresh(); window.addEventListener('focus', focus);
-    return () => { active.current = false; clearInterval(timer); window.removeEventListener('focus', focus); };
+    const shown = () => { if (document.visibilityState === 'visible') void refresh(); }; document.addEventListener('visibilitychange', shown);
+    return () => { active.current = false; clearInterval(timer); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', shown); };
   }, [http, enabled]);
-  return { requests, error, refresh, historyCursor, unavailable };
+  // The server refuses a page larger than HUMAN_INPUT_LIST_MAX: past it, every poll would fail.
+  const showMore = limit < HUMAN_INPUT_LIST_MAX ? () => {
+    wanted.current = Math.min(wanted.current + HUMAN_INPUT_PAGE, HUMAN_INPUT_LIST_MAX); setLimit(wanted.current); void refresh();
+  } : undefined;
+  return { requests, error, refresh, historyCursor, unavailable, pendingTotal, showMore };
 }
 export const HumanInputsContext = createContext({ pending: 0 });
 export const useHumanInputCount = () => useContext(HumanInputsContext).pending;
@@ -135,7 +154,7 @@ export function HumanInputForm({ request, http, changed, focused = false, recove
           return <div className="brief-human-field" key={field.key}><label htmlFor={id}>{field.label}{field.required ? ' (required)' : ' (optional)'}</label>
             {field.type === 'long_text' ? <textarea {...props} readOnly={!pending} rows={4} maxLength={10000} value={String(answers[field.key] ?? '')} onChange={e => update(field.key, e.target.value)} />
               : field.type === 'boolean' || field.type === 'select' ? <select {...props} disabled={!pending} value={String(answers[field.key] ?? '')} onChange={e => update(field.key, field.type === 'boolean' && e.target.value ? e.target.value === 'true' : e.target.value)}>
-                <option value="">Choose an answer</option>{(field.type === 'boolean' ? ['true', 'false'] : field.options!).map(option => <option key={option} value={option}>{field.type === 'boolean' ? option === 'true' ? 'Yes' : 'No' : option}</option>)}</select>
+                <option value="">Choose an answer</option>{(field.type === 'boolean' ? ['true', 'false'] : field.options!).map(option => <option key={option} value={option}>{field.type === 'boolean' ? option === 'true' ? 'Yes' : 'No' : forHumanDisplay(option)}</option>)}</select>
               : <input {...props} readOnly={!pending} type={field.type === 'number' ? 'number' : 'text'} step={field.type === 'number' ? 'any' : undefined} maxLength={10000}
                 value={String(answers[field.key] ?? '')} onChange={e => update(field.key, field.type === 'number' && e.target.value !== '' ? e.target.valueAsNumber : e.target.value)} />}
             {errors[field.key] && <p id={`${id}-error`} className="brief-human-error">{errors[field.key]}</p>}
@@ -231,6 +250,7 @@ export function HumanInputInbox({ queue, http, focusId }: { queue: HumanInputQue
   const known = new Set([...all.values(), ...retained.current.values(), ...recovered].map(r => r.id));
   const orphaned = (queue.unavailable ?? []).filter(id => !known.has(id)).flatMap(answerOnlyDrafts);
   const recent = [...all.values()].filter(r => !retained.current.has(instanceKey(r))).sort((a,b) => (b.closedAt ?? b.created) - (a.closedAt ?? a.created));
+  const hiddenPending = Math.max(0, (queue.pendingTotal ?? 0) - queue.requests.filter(r => r.status === 'pending').length);
   const nextCursor = cursor === undefined ? queue.historyCursor : cursor;
   const loadOlder = async () => {
     if (loading || !nextCursor) return;
@@ -252,6 +272,8 @@ export function HumanInputInbox({ queue, http, focusId }: { queue: HumanInputQue
     {recovered.map(request => <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} recoveryOnly
       onAnswers={answers => { if (!filled(answers).length) setEmptied(n => n + 1); }} />)}
     {orphaned.map(draft => <UnavailableDraft key={draft.storageKey} draft={draft} discarded={() => setEmptied(n => n + 1)} />)}
+    {hiddenPending > 0 && (queue.showMore ? <div className="brief-human-actions"><button type="button" onClick={queue.showMore}>Show more requests ({hiddenPending} more waiting)</button></div>
+      : <p role="status">{hiddenPending} more requests are waiting. Answer some of these to see them.</p>)}
     {(!!recent.length || !!nextCursor) && <details className="brief-human-history"><summary>Response history ({recent.length})</summary>
       {recent.map(request => <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} />)}
       {historyError && <p role="status">{historyError}</p>}
@@ -279,7 +301,8 @@ function UnavailableDraft({ draft, discarded }: { draft: { storageKey: string; a
 }
 function SubmittedAnswers({ request }: { request: HumanRequest }) {
   const [message, setMessage] = useState('');
-  const value = (key: string) => Object.hasOwn(request.answers!, key) ? String(request.answers![key]) : 'Not provided';
+  // A chosen option is the workflow's own text: shown as its option was, without hidden characters.
+  const value = (key: string) => Object.hasOwn(request.answers!, key) ? forHumanDisplay(String(request.answers![key])) : 'Not provided';
   const text = request.fields.map(field => `${field.label}: ${value(field.key)}`).join('\n');
   return <section className="brief-human-receipt" aria-label="Submitted answers">
     <h3>Submitted answers</h3>
