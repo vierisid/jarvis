@@ -19,6 +19,22 @@ import { workflowReadinessServices } from "./readiness-services";
 import { assertCodeStepsAllowedForLiveDraft } from "./flow-code-steps";
 import { repinLiveDraft } from "./binding-pins";
 import { applyWebhookSecretRules, WebhookSecretError } from "../../runner/triggers/webhook-secret";
+import { withoutHiddenText } from "../../../vault/commitment-text";
+
+// eslint-disable-next-line no-control-regex
+const NAME_BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+
+/**
+ * A workflow name as every writer stores it: one line (each run of controls
+ * and line or paragraph separators a space), well formed, without the
+ * characters that reorder or hide text. The API refuses controls first
+ * (`validDisplayName`); this holds the composer, the assistant's tools and
+ * onboarding, which never throw over a name, to the same line. A no-op for an
+ * ordinary name.
+ */
+export function storedDisplayName(name: string): string {
+  return withoutHiddenText(String(name).toWellFormed().replace(NAME_BREAKS, " "));
+}
 
 export type FlowVersionState = "DRAFT" | "LOCKED";
 
@@ -314,7 +330,7 @@ export function createDraftVersion(input: CreateDraftVersionInput): FlowVersion 
     [
       id,
       input.flowId,
-      input.displayName,
+      storedDisplayName(input.displayName),
       JSON.stringify(trigger),
       input.schemaVersion ?? LATEST_SCHEMA_VERSION,
       input.updatedBy ?? null,
@@ -380,7 +396,7 @@ export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): 
 
   const next: FlowVersionRow = {
     ...existing,
-    display_name: patch.displayName ?? existing.display_name,
+    display_name: patch.displayName !== undefined ? storedDisplayName(patch.displayName) : existing.display_name,
     trigger: patch.trigger ? JSON.stringify(patch.trigger) : existing.trigger,
     // A client-supplied valid=true is not evidence. This is a cached authoring
     // result only; activation always recompiles against current bindings.
