@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, mkdtempSync, rmSync, truncateSync, chmodSync, statSync, symlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, mkdtempSync, rmSync, truncateSync, chmodSync, statSync, symlinkSync, linkSync, readdirSync, readlinkSync } from 'node:fs';
 import {
   acquireLock,
   acquireLockAt,
@@ -14,6 +14,9 @@ import {
   getLogPath,
   getLogDir,
   releaseLockIfUnheld,
+  lockTableShowsHolder,
+  flockHeldBy,
+  mountDeviceOf,
 } from './pid.ts';
 
 // The lock lives at `JARVIS_HOME`/jarvis.pid, resolved per call (see
@@ -187,20 +190,63 @@ describe('Process Lock Manager', () => {
         }
       });
 
-      test('does not chmod the target of a lock path that is a symlink', () => {
+      test('parents it creates are 0755 even under a umask of 0', () => {
+        process.umask(0);
+        const parent = join(DATA_DIR, 'umask0');
+        process.env.JARVIS_HOME = join(parent, 'home');
+        try {
+          expect(acquireLock(process.pid)).toBe(true);
+          expect(statSync(parent).mode & 0o777).toBe(0o755);
+        } finally {
+          releaseLock();
+          rmSync(parent, { recursive: true, force: true });
+        }
+      });
+
+      test('refuses a lock path that is a symlink, and leaves its target alone', () => {
         const dir = join(DATA_DIR, 'link');
         mkdirSync(dir, { recursive: true });
         const target = join(dir, 'someone-elses-file');
-        writeFileSync(target, 'x');
+        writeFileSync(target, 'IMPORTANT\n');
         chmodSync(target, 0o644);
         symlinkSync(target, join(dir, 'jarvis.pid'));
         const lock = acquireLockAt(join(dir, 'jarvis.pid'), process.pid);
         try {
+          expect(lock).toBeNull();
+          expect(readFileSync(target, 'utf-8')).toBe('IMPORTANT\n');
           expect(statSync(target).mode & 0o777).toBe(0o644);
         } finally {
           lock?.release();
           rmSync(dir, { recursive: true, force: true });
         }
+      });
+
+      test('refuses a lock path that is a hard link, and leaves the other name alone', () => {
+        const dir = join(DATA_DIR, 'hard');
+        mkdirSync(dir, { recursive: true });
+        const other = join(dir, 'other-file');
+        writeFileSync(other, 'IMPORTANT\n');
+        linkSync(other, join(dir, 'jarvis.pid'));
+        const lock = acquireLockAt(join(dir, 'jarvis.pid'), process.pid);
+        try {
+          expect(lock).toBeNull();
+          expect(readFileSync(other, 'utf-8')).toBe('IMPORTANT\n');
+        } finally {
+          lock?.release();
+          rmSync(dir, { recursive: true, force: true });
+        }
+      });
+
+      // A child that inherited the lock descriptor would keep the data folder
+      // locked after the daemon died, under the daemon's pid in /proc/locks.
+      test.if(process.platform === 'linux')('the lock descriptor is close-on-exec', () => {
+        expect(acquireLock(process.pid)).toBe(true);
+        const fd = readdirSync('/proc/self/fd').find((n) => {
+          try { return readlinkSync(`/proc/self/fd/${n}`) === LOCK_PATH; } catch { return false; }
+        });
+        expect(fd).toBeDefined();
+        const flags = /^flags:\s+([0-7]+)/m.exec(readFileSync(`/proc/self/fdinfo/${fd}`, 'utf-8'))![1]!;
+        expect(parseInt(flags, 8) & 0o2000000).toBe(0o2000000);
       });
 
       test('acquireLockAt creates its folder 0700 and its lock file 0600', () => {
@@ -433,6 +479,20 @@ describe('Process Lock Manager', () => {
       }
     });
 
+    test('getLogPath creates a missing data folder 0700, as the lock does', () => {
+      const prevUmask = process.umask(0o022);
+      const fresh = join(DATA_DIR, 'logfresh', 'home');
+      process.env.JARVIS_HOME = fresh;
+      try {
+        getLogPath();
+        expect(statSync(fresh).mode & 0o777).toBe(0o700);
+      } finally {
+        process.umask(prevUmask);
+        process.env.JARVIS_HOME = DATA_DIR;
+        rmSync(join(DATA_DIR, 'logfresh'), { recursive: true, force: true });
+      }
+    });
+
     test('getLogPath returns path and creates logs dir', () => {
       const logPath = getLogPath();
       expect(logPath).toBe(join(DATA_DIR, 'logs', 'jarvis.log'));
@@ -648,5 +708,71 @@ console.log('ACQUIRE=' + ok);
       expect(stderr).toContain('WSL2 or Docker');
       expect(stderr).not.toContain('sys/file.h');
     }, { timeout: 15000 });
+  });
+});
+
+describe('lockTableShowsHolder', () => {
+  // A real /proc/locks line, from a flock in a btrfs subvolume (measured in a
+  // privileged container): the table names the filesystem's device 00:ad, not
+  // the subvolume's own st_dev.
+  const table = [
+    '35: OFDLCK ADVISORY  READ -1 00:ad:257 0 EOF',
+    '36: FLOCK  ADVISORY  WRITE 18 00:ad:257 0 EOF',
+    '36: -> FLOCK  ADVISORY  WRITE 19 00:ad:257 0 EOF',
+    '37: POSIX  ADVISORY  WRITE 20 00:ad:257 0 EOF',
+    '38: FLOCK  ADVISORY  READ  21 00:ad:257 0 EOF',
+  ].join('\n');
+
+  test('matches the holder on a device and inode given', () => {
+    expect(lockTableShowsHolder(table, 18, 257n, [[0n, 0xdfn], [0n, 0xadn]])).toBe(true);
+  });
+
+  test('a device that is only the subvolume st_dev does not match', () => {
+    expect(lockTableShowsHolder(table, 18, 257n, [[0n, 0xdfn]])).toBe(false);
+  });
+
+  test('waiters, POSIX, OFD and read locks never count, nor another inode or pid', () => {
+    for (const pid of [19, 20, 21, -1]) expect(lockTableShowsHolder(table, pid, 257n, [[0n, 0xadn]])).toBe(false);
+    expect(lockTableShowsHolder(table, 18, 258n, [[0n, 0xadn]])).toBe(false);
+  });
+});
+
+describe.if(process.platform === 'linux')('flockHeldBy', () => {
+  test('names this process for a lock it holds, nobody else, and null for no file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-flock-held-'));
+    const lockPath = join(dir, 'jarvis.pid');
+    const { acquireLockAt } = require('./pid.ts') as typeof import('./pid.ts');
+    const lock = acquireLockAt(lockPath, process.pid);
+    try {
+      expect(lock).not.toBeNull();
+      expect(flockHeldBy(process.pid, lockPath)).toBe(true);
+      expect(flockHeldBy(process.pid + 1_000_000, lockPath)).toBe(false);
+    } finally {
+      lock?.release();
+    }
+    expect(flockHeldBy(process.pid, lockPath)).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe.if(process.platform === 'linux')('mountDeviceOf', () => {
+  // On a filesystem without subvolumes the mount's device is the file's st_dev,
+  // which proves the fdinfo and mountinfo lookups find the right mount. (The
+  // btrfs case, where they differ, needs root to set up and was measured in a
+  // privileged container.)
+  test('is the device stat reports, on a plain filesystem', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-mountdev-'));
+    const file = join(dir, 'f');
+    writeFileSync(file, '');
+    try {
+      const dev = statSync(file, { bigint: true }).dev;
+      expect(mountDeviceOf(file)).toEqual([((dev >> 8n) & 0xfffn) | ((dev >> 32n) & ~0xfffn), (dev & 0xffn) | ((dev >> 12n) & ~0xffn)]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('is null for a missing file', () => {
+    expect(mountDeviceOf(join(tmpdir(), 'jarvis-no-such-file-for-mountdev'))).toBeNull();
   });
 });

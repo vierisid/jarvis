@@ -21,7 +21,6 @@ import {
   ftruncateSync,
   fchmodSync,
   fstatSync,
-  lstatSync,
   statSync,
 } from 'node:fs';
 import { cc } from 'bun:ffi';
@@ -70,6 +69,7 @@ export function lockPathFor(dataDir?: string): string {
 
 type FlockSymbols = {
   do_flock: (fd: number, operation: number) => number;
+  do_cloexec: (fd: number) => number;
 };
 
 let flockSymbols: FlockSymbols | null = null;
@@ -85,6 +85,7 @@ function getFlock(): FlockSymbols {
       source: flockSource,
       symbols: {
         do_flock: { args: ['i32', 'i32'], returns: 'i32' },
+        do_cloexec: { args: ['i32'], returns: 'i32' },
       },
     });
     flockSymbols = symbols as FlockSymbols;
@@ -120,7 +121,7 @@ export function acquireLock(pid: number): boolean {
     makeOwnerFolder(daemonRootDir());
 
     // Open (or create) the lock file — don't truncate before locking
-    const fd = openSync(defaultLockPath(), constants.O_WRONLY | constants.O_CREAT, 0o600);
+    const fd = openLockFile(defaultLockPath(), flock);
 
     // Try non-blocking exclusive lock
     const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
@@ -130,7 +131,7 @@ export function acquireLock(pid: number): boolean {
     }
 
     // A lock file from an older version may still be 0644.
-    narrowToOwner(fd, defaultLockPath());
+    narrowToOwner(fd);
 
     // Lock acquired — truncate and write PID for display purposes
     ftruncateSync(fd, 0);
@@ -203,13 +204,13 @@ export function acquireLockAt(lockPath: string, pid: number): { release: () => v
   try {
     const flock = getFlock();
     makeOwnerFolder(dirname(lockPath));
-    const fd = openSync(lockPath, constants.O_WRONLY | constants.O_CREAT, 0o600);
+    const fd = openLockFile(lockPath, flock);
     const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
     if (result !== 0) {
       closeSync(fd);
       return null;
     }
-    narrowToOwner(fd, lockPath);
+    narrowToOwner(fd);
     ftruncateSync(fd, 0);
     writeSync(fd, String(pid));
     let released = false;
@@ -227,19 +228,41 @@ export function acquireLockAt(lockPath: string, pid: number): { release: () => v
 }
 
 /**
- * Make a lock file this process holds readable and writable by its owner only.
- * Best effort: a file owned by someone else cannot be changed, and that is no
- * reason to give up a lock already taken.
+ * Open (or create) the lock file for writing, refusing anything that is not
+ * this user's own plain file: the path is written to (truncated, then the pid),
+ * so a symlink or a hard link planted there would redirect that write to
+ * another file. O_NOFOLLOW refuses a symlink at the last component, and the
+ * fstat checks a hard link (two names) and another user's file. Root may take
+ * a lock file its daemon user owns (`docker exec -u 0`).
+ *
+ * The descriptor is made close-on-exec: a child that inherited it would keep
+ * the flock, and the data folder locked, after the daemon died.
  */
-function narrowToOwner(fd: number, lockPath: string): void {
+function openLockFile(lockPath: string, flock: FlockSymbols): number {
+  const fd = openSync(lockPath, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
   try {
-    // Only this user's own regular file, and only the one the path itself
-    // names: the open follows a symlink, and a symlink or a hard link can
-    // reach a file that is not the lock's to change.
     const st = fstatSync(fd);
-    const atPath = lstatSync(lockPath);
-    if (!st.isFile() || st.nlink !== 1 || st.uid !== process.geteuid?.()) return;
-    if (atPath.isSymbolicLink() || atPath.ino !== st.ino || atPath.dev !== st.dev) return;
+    const euid = process.geteuid?.();
+    if (!st.isFile() || st.nlink !== 1 || (euid !== undefined && euid !== 0 && st.uid !== euid)) {
+      throw new Error(`${lockPath} is not a plain file owned by this user; refusing to use it as the lock file`);
+    }
+    const err = flock.do_cloexec(fd);
+    if (err !== 0) throw new Error(`could not mark ${lockPath} close-on-exec (errno ${err})`);
+  } catch (err) {
+    closeSync(fd);
+    throw err;
+  }
+  return fd;
+}
+
+/**
+ * Make a lock file this process holds readable and writable by its owner only
+ * (one from an older version may still be 0644). Best effort, and only for this
+ * user's own file: root taking its daemon user's lock leaves the mode alone.
+ */
+function narrowToOwner(fd: number): void {
+  try {
+    if (fstatSync(fd).uid !== process.geteuid?.()) return;
     fchmodSync(fd, 0o600);
   } catch { /* not ours to change */ }
 }
@@ -250,7 +273,9 @@ function narrowToOwner(fd: number, lockPath: string): void {
  * shared with other users or services.
  */
 function makeOwnerFolder(dir: string): void {
-  mkdirSync(dirname(dir), { recursive: true });
+  // 0755 rather than the default 0777: under a umask of 0 the default would
+  // leave a parent anyone can rename the data folder out of.
+  mkdirSync(dirname(dir), { recursive: true, mode: 0o755 });
   try {
     mkdirSync(dir, { mode: 0o700 });
   } catch (err) {
@@ -416,7 +441,7 @@ export function writeLockedPort(port: number): void {
  * /proc/locks is the kernel's own table of who holds which lock. Unlike
  * /proc/<pid>/fd it is readable by every user and not ptrace-gated, so it still
  * answers for the daemon after it hardens itself (PR_SET_DUMPABLE 0, see
- * process-hardening.ts), which makes its fd folder unreadable to anyone else.
+ * hardenProcessInspection), which makes its fd folder unreadable to anyone else.
  * Pids are shown in the reader's own pid namespace, so a holder in another
  * container never matches. A line reads, for a flock on device 08:40 inode 641284:
  *
@@ -430,25 +455,66 @@ export function writeLockedPort(port: number): void {
 export function flockHeldBy(pid: number, lockPath: string = defaultLockPath()): boolean | null {
   if (process.platform !== 'linux') return null;
   let table: string;
-  let dev: bigint;
-  let ino: bigint;
+  let st: { dev: bigint; ino: bigint };
   try {
-    const st = statSync(lockPath, { bigint: true });
-    dev = st.dev;
-    ino = st.ino;
+    st = statSync(lockPath, { bigint: true });
     table = readFileSync('/proc/locks', 'utf-8');
   } catch {
     return null;
   }
-  const major = ((dev >> 8n) & 0xfffn) | ((dev >> 32n) & ~0xfffn);
-  const minor = (dev & 0xffn) | ((dev >> 12n) & ~0xffn);
+  const devices: Array<[bigint, bigint]> = [splitDev(st.dev)];
+  const mounted = mountDeviceOf(lockPath);
+  if (mounted) devices.push(mounted);
+  return lockTableShowsHolder(table, pid, st.ino, devices);
+}
+
+/**
+ * Is there a FLOCK WRITE line in `table` (/proc/locks) held by `pid` on inode
+ * `ino` of one of `devices` ([major, minor])? Waiters (`->`), read locks, and
+ * POSIX/OFD/lease lines never count.
+ */
+export function lockTableShowsHolder(table: string, pid: number, ino: bigint, devices: Array<[bigint, bigint]>): boolean {
   for (const line of table.split('\n')) {
-    const m = /^\d+:\s+(->\s+)?(\S+)\s+\S+\s+(\S+)\s+(-?\d+)\s+([0-9a-fA-F]+):([0-9a-fA-F]+):(\d+)\s/.exec(line);
-    if (!m || m[1] || m[2] !== 'FLOCK' || m[3] !== 'WRITE') continue;
-    if (Number(m[4]) !== pid) continue;
-    if (BigInt(`0x${m[5]}`) === major && BigInt(`0x${m[6]}`) === minor && BigInt(m[7]!) === ino) return true;
+    const m = /^\d+:\s+(->\s+)?(\S+)\s+(\S+)\s+(\S+)\s+(-?\d+)\s+([0-9a-fA-F]+):([0-9a-fA-F]+):(\d+)\s/.exec(line);
+    if (!m || m[1] || m[2] !== 'FLOCK' || m[3] !== 'ADVISORY' || m[4] !== 'WRITE') continue;
+    if (Number(m[5]) !== pid || BigInt(m[8]!) !== ino) continue;
+    const major = BigInt(`0x${m[6]}`);
+    const minor = BigInt(`0x${m[7]}`);
+    if (devices.some(([a, b]) => a === major && b === minor)) return true;
   }
   return false;
+}
+
+/** st_dev as [major, minor], decoded the way glibc's major()/minor() do. */
+function splitDev(dev: bigint): [bigint, bigint] {
+  return [((dev >> 8n) & 0xfffn) | ((dev >> 32n) & ~0xfffn), (dev & 0xffn) | ((dev >> 12n) & ~0xffn)];
+}
+
+/**
+ * The device of the mount `path` lives on, from /proc/self/mountinfo: the
+ * filesystem's own device, which is what /proc/locks prints. stat() can report
+ * another one: each btrfs subvolume gets its own st_dev (measured: a flock in a
+ * subvolume showed as 00:ad in /proc/locks, mountinfo 0:173, while stat said
+ * device 223). Null when it cannot be told.
+ */
+export function mountDeviceOf(path: string): [bigint, bigint] | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, constants.O_RDONLY);
+    const mntId = /^mnt_id:\s+(\d+)/m.exec(readFileSync(`/proc/self/fdinfo/${fd}`, 'utf-8'))?.[1];
+    if (!mntId) return null;
+    for (const line of readFileSync('/proc/self/mountinfo', 'utf-8').split('\n')) {
+      const fields = line.split(' ');
+      if (fields[0] !== mntId) continue;
+      const dev = /^(\d+):(\d+)$/.exec(fields[2] ?? '');
+      return dev ? [BigInt(dev[1]!), BigInt(dev[2]!)] : null;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) try { closeSync(fd); } catch { /* already closed */ }
+  }
 }
 
 /**
@@ -467,6 +533,9 @@ export function getPidPath(): string {
  * `jarvis logs` then tailed a file the daemon wasn't writing.
  */
 export function getLogPath(): string {
+  // The data folder first, so a `jarvis start -d` (which asks for the log path
+  // before the daemon takes its lock) creates it 0700 too, not 0755.
+  makeOwnerFolder(daemonRootDir());
   const dir = getLogDir();
   mkdirSync(dir, { recursive: true });
   return join(dir, 'jarvis.log');

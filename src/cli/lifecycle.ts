@@ -201,10 +201,19 @@ function sameMountNamespace(pid: number): boolean {
  *
  * The test is whether the process holds that lock file open. The daemon opens
  * it in acquireLock and keeps the descriptor for its whole life (that open
- * descriptor IS the flock), and nothing else does. The descriptor is not
- * close-on-exec, but Bun.spawn and node:child_process close every descriptor
- * beyond stdio in the child (measured on both), so the daemon's own children
- * do not inherit it.
+ * descriptor IS the flock), and nothing else does. The descriptor is
+ * close-on-exec, and Bun.spawn and node:child_process also close every
+ * descriptor beyond stdio in the child (measured on both), so the daemon's own
+ * children do not inherit it.
+ *
+ * On Linux this is asked two ways. First the kernel's lock table, /proc/locks
+ * (flockHeldBy in pid.ts): it is readable by every user and still answers for
+ * the real daemon, which makes itself non-dumpable at boot so that its
+ * /proc/<pid>/fd is unreadable to anyone else (hardenProcessInspection). Then
+ * that fd folder, which covers what the table cannot (a lock file deleted
+ * under the daemon, below) but only for a process that left it readable: a
+ * daemon with `daemon.allow_process_inspection` set, or a reader running as
+ * root.
  *
  * A pid number, a name or a command line proves much less -- pids are
  * reused, and any program can be called `bun`.
@@ -222,10 +231,11 @@ function sameMountNamespace(pid: number): boolean {
  * not name a deleted file at all; then the daemon is not identified, which is
  * the safe way to be wrong.
  *
- * Anything we cannot inspect is NOT ours: another user's process (its
- * /proc/<pid>/fd is unreadable, and we could not signal it anyway), a platform
- * without /proc or lsof, and native Windows, where the daemon does not run at
- * all (pid.ts refuses to take the lock there).
+ * Anything we cannot inspect is NOT ours: a process the lock table does not
+ * name and whose /proc/<pid>/fd is unreadable (a hardened daemon whose lock
+ * file was deleted, another user's process), a platform without /proc or
+ * lsof, and native Windows, where the daemon does not run at all (pid.ts
+ * refuses to take the lock there).
  */
 export async function holdsJarvisLock(pid: number, lockPath: string = getPidPath()): Promise<boolean> {
   const platform = os.platform();
@@ -243,7 +253,8 @@ export async function holdsJarvisLock(pid: number, lockPath: string = getPidPath
     // hardened itself (PR_SET_DUMPABLE 0, which it does at boot unless
     // daemon.allow_process_inspection is set), whose /proc/<pid>/fd below is
     // unreadable to anyone else. The fd walk stays for what the table cannot
-    // show: a lock file already deleted under the daemon.
+    // show, a lock file already deleted under the daemon, and only works where
+    // that folder is readable (see above).
     if (flockHeldBy(pid, lockPath) === true) return true;
     const fdDir = `/proc/${pid}/fd`;
     let fds: string[];

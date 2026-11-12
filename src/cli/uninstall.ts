@@ -23,7 +23,7 @@ import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { closeRL, ask, askYesNo, c } from './helpers.ts';
-import { stopDaemonGracefully } from './daemon-control.ts';
+import { stopDaemonGracefully, type StopResult } from './daemon-control.ts';
 import { isLocked } from '../daemon/pid.ts';
 import { getAutostartName, isAutostartInstalled, uninstallAutostart } from './autostart.ts';
 import {
@@ -226,6 +226,13 @@ try {
 
 // ── Side-effect cleanup (synchronous, parent process) ───────────────
 
+/** What to do about a daemon `jarvis uninstall` could not stop. */
+export function uninstallStopAdvice(stop: Pick<StopResult, 'notHolder'>): string {
+  return stop.notHolder
+    ? 'Its lock file names a process that could not be shown to hold the lock (a daemon in a container, or run as another user), so it was not signalled. Stop it where it runs, then re-run `jarvis uninstall`.'
+    : 'Stop it as its owner (or with root), then re-run `jarvis uninstall`.';
+}
+
 async function runSideEffectCleanup(plan: CleanupPlan): Promise<boolean> {
   // Autostart FIRST, then the daemon. Both service definitions relaunch a
   // daemon that exits unsuccessfully (systemd Restart=on-failure, the launchd
@@ -269,7 +276,7 @@ async function runSideEffectCleanup(plan: CleanupPlan): Promise<boolean> {
     const holder = isLocked();
     console.log(c.red(`\n✗ Daemon (PID ${holder ?? stop.pid}) could not be stopped.`));
     console.log(c.dim('  Uninstall aborted: removing the data dir while it is running would corrupt it.'));
-    console.log(c.dim('  Stop it as its owner (or with root), then re-run `jarvis uninstall`.'));
+    console.log(c.dim(`  ${uninstallStopAdvice(stop)}`));
     return false;
   }
 
