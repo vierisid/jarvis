@@ -8,13 +8,12 @@
  */
 
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { spawnSync } from 'bun';
 import { c, printOk, printWarn, printErr, printInfo, askYesNo, ask, askSecret, startSpinner, detectPlatform } from './helpers.ts';
 import { LINUX_BROWSER_PATHS, MACOS_BROWSER_PATHS, type BrowserExecutable } from '../actions/browser/chrome-launcher.ts';
 import { externalUrl, resolveExternalOrigin } from '../util/external-origin.ts';
 import { GoogleOAuthFlowStore } from '../integrations/google-oauth-flow.ts';
+import { googleTokensPath } from '../integrations/google-auth.ts';
 import { linuxSystemExe, SystemExeNotFoundError, type LinuxSystemTool } from '../util/system-exe.ts';
 
 export type DepKind = 'core' | 'browser' | 'linux' | 'google';
@@ -198,7 +197,8 @@ export function checkLinuxTools(): DepStatus[] {
  * Check if Google OAuth tokens exist.
  */
 export function checkGoogleAuth(): DepStatus {
-  const tokensPath = join(homedir(), '.jarvis', 'google-tokens.json');
+  // The file the daemon reads: inside JARVIS_HOME on an instance with its own data dir.
+  const tokensPath = googleTokensPath();
   const found = existsSync(tokensPath);
 
   return {

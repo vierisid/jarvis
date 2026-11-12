@@ -3078,7 +3078,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/auth/google/disconnect': {
       POST: async () => {
         try {
-          const tokensPath = path.join(os.homedir(), '.jarvis', 'google-tokens.json');
+          const { googleTokensPath } = await import('../integrations/google-auth.ts');
+          const tokensPath = ctx.googleTokensPath ?? googleTokensPath();
           if (existsSync(tokensPath)) {
             const { unlinkSync } = await import('node:fs');
             unlinkSync(tokensPath);

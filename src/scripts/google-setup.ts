@@ -8,7 +8,7 @@
  * Usage: bun run src/scripts/google-setup.ts
  */
 
-import { GoogleAuth } from '../integrations/google-auth.ts';
+import { GoogleAuth, googleTokensPath } from '../integrations/google-auth.ts';
 import { loadConfig } from '../config/loader.ts';
 import { externalUrl, resolveExternalOrigin } from '../util/external-origin.ts';
 import { GoogleOAuthFlowStore } from '../integrations/google-oauth-flow.ts';
@@ -88,7 +88,7 @@ async function main() {
 
   // Check if already authenticated
   if (auth.isAuthenticated()) {
-    console.log('Already authenticated! Tokens exist at ~/.jarvis/google-tokens.json');
+    console.log(`Already authenticated! Tokens exist at ${googleTokensPath()}`);
     console.log('To re-authenticate, delete that file and run this again.');
     process.exit(0);
   }
@@ -161,7 +161,7 @@ async function main() {
             console.log('Authorization successful!');
             console.log(`Access token: ${tokens.access_token.slice(0, 20)}...`);
             console.log(`Refresh token: ${tokens.refresh_token.slice(0, 20)}...`);
-            console.log(`Tokens saved to ~/.jarvis/google-tokens.json`);
+            console.log(`Tokens saved to ${googleTokensPath()}`);
 
             setTimeout(() => {
               server.stop();

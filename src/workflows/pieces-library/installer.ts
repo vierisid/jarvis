@@ -18,7 +18,7 @@
 import { promises as fs, existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { resolve, join } from "node:path";
-import { homedir } from "node:os";
+import { homeJarvisDir } from "../../util/jarvis-dirs";
 import { catalogById, excludedReason, PieceExcludedError, type CatalogEntry } from "./catalog";
 import { sanitizedEnv } from "../../util/subprocess-env";
 import { BUN_INSTALL_ARGS, SANITIZED_INSTALL_HINT } from "../../util/sanitized-install";
@@ -30,7 +30,7 @@ const ROOT_ENV = "JARVIS_PIECES_DIR";
 export function piecesBaseDir(): string {
   const override = process.env[ROOT_ENV];
   if (override) return resolve(override);
-  return resolve(homedir(), ".jarvis", "pieces");
+  return homeJarvisDir("pieces");
 }
 
 export interface InstalledPiece {

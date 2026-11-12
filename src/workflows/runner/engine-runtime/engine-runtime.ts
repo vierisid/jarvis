@@ -25,7 +25,7 @@ import { isAbsolute, resolve } from "node:path";
 import type { EngineContract, EngineResponse } from "../../sandbox-api/contracts";
 import type { SandboxApi } from "../../sandbox-api/server";
 import { SandboxRegistry } from "../../sandbox-api/sandbox-registry";
-import { workflowLogsBase } from "../../sandbox-api/config";
+import { workflowRoot } from "../../sandbox-api/config";
 import { spawnEngine, type SpawnedEngine, type SpawnEngineOptions } from "./spawn";
 import { ENGINE_BUILD_PATHS } from "./build";
 import { loadedCorePieceDirs } from "./build-pieces";
@@ -733,7 +733,7 @@ export class EngineRuntime {
     // headroom, while a long-idle daemon (overnight) reclaims memory.
     this.poolIdleTtlMs = opts.poolIdleTtlMs ?? 5 * 60_000;
     this.baseCodeDir =
-      opts.baseCodeDir ?? resolve(workflowLogsBase(), "..", "workflow-codes");
+      opts.baseCodeDir ?? resolve(workflowRoot(), "workflow-codes");
     this.customPiecesPaths =
       opts.customPiecesPaths ?? [
         resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces"),
