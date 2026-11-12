@@ -101,6 +101,20 @@ export function listEntityNames(): Array<{ id: string; name: string }> {
 }
 
 /**
+ * `properties.entity_kind` values that mark workflow bookkeeping (a flow, a
+ * draft version), not something a founder knows or told Jarvis. They stay in
+ * the vault; reads meant for people and workflows leave them out.
+ */
+export const INTERNAL_ENTITY_KINDS = ['workflow', 'draft_version'] as const;
+
+/** SQL condition that is true for an entity that is not workflow bookkeeping. */
+export function notInternalEntitySql(alias = 'entities'): string {
+  const list = INTERNAL_ENTITY_KINDS.map(k => `'${k}'`).join(', ');
+  return `(${alias}.properties IS NULL OR NOT json_valid(${alias}.properties)
+    OR COALESCE(json_extract(${alias}.properties, '$.entity_kind'), '') NOT IN (${list}))`;
+}
+
+/**
  * Find entities matching query criteria
  */
 export function findEntities(query: {
@@ -108,6 +122,8 @@ export function findEntities(query: {
   name?: string;
   nameContains?: string;
   source?: string;
+  /** Leave out workflow bookkeeping entities (see INTERNAL_ENTITY_KINDS). */
+  excludeInternal?: boolean;
 }): Entity[] {
   const db = getDb();
   const conditions: string[] = [];
@@ -132,6 +148,8 @@ export function findEntities(query: {
     conditions.push("name LIKE ? ESCAPE '\\'");
     params.push(`%${escapeLike(query.nameContains)}%`);
   }
+
+  if (query.excludeInternal) conditions.push(notInternalEntitySql());
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const stmt = db.prepare(`SELECT * FROM entities ${where} ORDER BY updated_at DESC`);

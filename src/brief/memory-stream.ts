@@ -3,6 +3,8 @@ import type { MemoryUsageCoverage } from '../vault/memory-usage';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Database } from 'bun:sqlite';
 import { getDb } from '../vault/schema';
+import { notInternalEntitySql } from '../vault/entities';
+import { isOperationalFact, isOperationalObject, isWorkflowSubjectName, looksLikeId } from '../vault/operational-facts';
 import type { FactRow } from '../vault/fact-policy';
 import type { FactEvidence } from '../vault/facts';
 import type { BriefMemoryUse } from './contracts';
@@ -13,7 +15,10 @@ export const MEMORY_STREAM_LIMITS = { uses: 50000, bytes: 16 * 1024 * 1024, line
   snapshots: 16, ttlMs: 5 * 60_000, page: 100 } as const;
 export class MemoryQueryError extends Error {}
 class CapacityError extends Error {}
-type Row = FactRow & { subject_name: string };
+type Row = FactRow & { subject_name: string; subject_type: string };
+/** The light columns the hide rules read, for extracted, unconfirmed facts only. */
+type HideRow = { id: string; subject_id: string; subject_name: string; subject_internal: number; predicate: string; predicate_key: string;
+  scope: string; object: string; status: string; reported: number; updated_at: number };
 type Usage = { byFact: Map<string, BriefMemoryUse[]> | null; usedIn: MemoryStreamPage['usedIn']; coverage?: MemoryUsageCoverage; fingerprint: string };
 /** A frozen view of one query: facts added after it began (higher rowid) never join it, and any change to a member ends it. */
 type Snapshot = { queryKey: string; asOf: number; expiresAt: number; maxRowid: number; fingerprint: string;
@@ -25,6 +30,13 @@ const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(va
 const compareText = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const idValid = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 200 && !/[\\/\u0000-\u001f\u007f]/.test(v) && v !== '.' && v !== '..';
 const timestamp = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && Math.abs(v) <= 8.64e15;
+const sameWords = (text: string) => text.toLowerCase().replace(/\s+/g, ' ').replace(/[\s.,;:!]+$/, '');
+const SOURCE_PHRASE: Record<string, string> = { llm_extraction: 'noted from a chat', user_profile: 'from your profile', dashboard: 'added by you' };
+/** The subject as a person reads it: its name, or a type and source phrase when the name is only an id. */
+export function readableSubject(name: string, type: string, source: string | null): string {
+  if (!looksLikeId(name)) return name;
+  return `${/^[aeiou]/i.test(type) ? 'An' : 'A'} ${type} ${SOURCE_PHRASE[source ?? ''] ?? 'in your memory'}`;
+}
 export function memoryFactId(value: unknown): string {
   if (!idValid(value)) throw new MemoryQueryError('Invalid fact ID'); return value;
 }
@@ -126,7 +138,7 @@ export class MemoryStream {
     if (!timestamp(updatedAt)) throw Error('Invalid provenance');
     const revision = digest([row, ev, factUses]);
     const href = `/api/brief/memory/${encodeURIComponent(row.id)}`;
-    return { factId: row.id, sourceId: null, sentence: `${row.subject_name} ${row.predicate} ${row.object}`,
+    return { factId: row.id, sourceId: null, sentence: `${readableSubject(row.subject_name, row.subject_type, row.source)} ${row.predicate.replace(/_/g, ' ')} ${row.object}`,
       revision, ...(coverage ? { usageCoverage: coverage } : {}), subjectId: row.subject_id, scope: row.scope, updatedAt, basis, status: row.status,
       validity: { from: row.valid_from, to: row.valid_to }, sourceSummary: { labels, evidenceCount: ev.length },
       provenance: ev.map(e => ({ kind: 'source', id: e.id, revision: digest(e) })), uses: factUses,
@@ -138,14 +150,58 @@ export class MemoryStream {
     if (!ids.length) return [];
     const rows = new Map<string, Row>();
     for (let i = 0; i < ids.length; i += 500) {
-      for (const r of this.db.query<Row, [string]>(`SELECT f.*, e.name AS subject_name FROM facts f JOIN entities e ON e.id = f.subject_id
+      for (const r of this.db.query<Row, [string]>(`SELECT f.*, e.name AS subject_name, e.type AS subject_type FROM facts f JOIN entities e ON e.id = f.subject_id
         WHERE f.id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids.slice(i, i + 500)))) rows.set(r.id, r);
     }
     const evidence = this.evidenceFor(ids);
     return ids.flatMap(id => { const row = rows.get(id); return row ? [this.toItem(row, evidence.get(id) ?? [], usage.byFact === null ? null : (usage.byFact.get(id) ?? []), usage.coverage)] : []; });
   }
-  /** Changes when any member fact, its evidence, its subject, or any usage record changes. Later inserts do not count. */
-  private fingerprint(maxRowid: number, usage: Usage): string {
+  /**
+   * Member facts hidden from the stream (#1339), never deleted: detail, history, correction and forget still
+   * resolve them by id. Only extraction bookkeeping is hidden: a fact a person entered, confirmed or backed with
+   * another source always shows, whatever its subject or predicate looks like. The rules read only the light
+   * columns of extracted, unconfirmed facts, so this stays one indexed scan however large the store is.
+   */
+  private hiddenIds(maxRowid: number): string[] {
+    const rows = this.db.query<HideRow, [number]>(`SELECT f.id, f.subject_id, e.name AS subject_name,
+      CASE WHEN ${notInternalEntitySql('e')} THEN 0 ELSE 1 END AS subject_internal, f.predicate, f.predicate_key, f.scope, f.object, f.status,
+      EXISTS (SELECT 1 FROM fact_evidence ev WHERE ev.fact_id = f.id AND ev.basis = 'reported') AS reported,
+      MAX(f.created_at, COALESCE((SELECT MAX(recorded_at) FROM fact_evidence ev WHERE ev.fact_id = f.id), f.created_at)) AS updated_at
+      FROM facts f JOIN entities e ON e.id = f.subject_id
+      WHERE f.rowid <= ? AND f.status IS NOT 'superseded' AND f.source = 'llm_extraction' AND f.verified_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM fact_evidence ev WHERE ev.fact_id = f.id AND ev.source IS NOT 'llm_extraction')
+      ORDER BY f.id`).all(maxRowid);
+    if (!rows.length) return [];
+    const workflowNames = this.workflowNames(), hidden = new Set<string>(), latest = new Map<string, HideRow>();
+    const quotes = this.db.query<{ quote: string }, [string]>('SELECT quote FROM fact_evidence WHERE fact_id = ? AND quote IS NOT NULL');
+    for (const row of rows) {
+      const object = row.object.trim();
+      const objectStated = isOperationalObject(object) && quotes.all(row.id).some(q => q.quote.includes(object));
+      // Unconfirmed extracted facts read as 'reported' with a reported source and 'inferred' otherwise (toItem).
+      if (row.subject_internal || workflowNames.has(row.subject_name.trim().toLowerCase()) || isWorkflowSubjectName(row.subject_name)
+        || isOperationalFact({ predicate: row.predicate, object, userQuoted: row.reported === 1, objectStated })) { hidden.add(row.id); continue; }
+      // The extractor re-learns the same thing in slightly different words: show the most recent of facts that
+      // differ only in case, spacing or end punctuation. Different values are different memories (predicates are
+      // multi-valued unless fact-policy says otherwise) and a contested pair stays visible for the person to settle.
+      if (row.status === 'contested') continue;
+      const key = JSON.stringify([row.subject_id, row.predicate_key, row.scope, sameWords(object)]), prior = latest.get(key);
+      if (!prior) { latest.set(key, row); continue; }
+      const newer = row.updated_at > prior.updated_at || (row.updated_at === prior.updated_at && compareText(row.id, prior.id) < 0);
+      hidden.add(newer ? prior.id : row.id); if (newer) latest.set(key, row);
+    }
+    return [...hidden].sort(compareText);
+  }
+  /** Display names of saved workflows, lowercased. Empty when the workflow tables do not exist. */
+  private workflowNames(): Set<string> {
+    const names = new Set<string>();
+    const has = (t: string) => !!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+    if (has('flow_version')) for (const r of this.db.query<{ n: string }, []>('SELECT DISTINCT display_name AS n FROM flow_version').all()) names.add(r.n.trim().toLowerCase());
+    if (has('workflows')) for (const r of this.db.query<{ n: string }, []>('SELECT DISTINCT name AS n FROM workflows').all()) names.add(r.n.trim().toLowerCase());
+    names.delete('');
+    return names;
+  }
+  /** Changes when any member fact, its evidence, its subject, the hidden set or any usage record changes. Later inserts do not count. */
+  private fingerprint(maxRowid: number, usage: Usage, hidden: readonly string[]): string {
     const f = this.db.query<Record<string, number>, [number]>(`SELECT count(*) AS n, total(created_at) AS c, total(COALESCE(verified_at, 0)) AS v,
       total(COALESCE(valid_from, 0) + COALESCE(valid_to, 0)) AS w, total(${mix('object')} + ${mix('predicate')} + ${mix('scope')} + ${mix('status')}
       + ${mix('superseded_by')} + ${mix('source')}) AS m FROM facts WHERE rowid <= ?`).get(maxRowid)!;
@@ -153,7 +209,7 @@ export class MemoryStream {
       total(COALESCE(e.confidence, 0) * 1000) AS c FROM fact_evidence e JOIN facts f ON f.id = e.fact_id WHERE f.rowid <= ?`).get(maxRowid)!;
     const s = this.db.query<Record<string, number>, [number]>(`SELECT count(*) AS n, total(${mix('name')}) AS m FROM entities
       WHERE id IN (SELECT subject_id FROM facts WHERE rowid <= ?)`).get(maxRowid)!;
-    return digest([f, e, s, usage.fingerprint]);
+    return digest([f, e, s, usage.fingerprint, hidden]);
   }
   private encode(id: string, after: After | null): string {
     const body = `${id}.${Buffer.from(JSON.stringify(after ?? null)).toString('base64url')}`;
@@ -187,7 +243,8 @@ export class MemoryStream {
         const usage = this.readUsage(allIds);
         if (query.usedIn && usage.usedIn.state !== 'ready') return { state: 'unavailable', reason: 'usage_unavailable' };
         const maxRowid = previous?.maxRowid ?? this.db.query<{ m: number }, []>('SELECT COALESCE(MAX(rowid), 0) AS m FROM facts').get()!.m;
-        const fingerprint = this.fingerprint(maxRowid, usage);
+        const hiddenIds = this.hiddenIds(maxRowid), hidden = JSON.stringify(hiddenIds);
+        const fingerprint = this.fingerprint(maxRowid, usage, hiddenIds);
         if (previous && (previous.fingerprint !== fingerprint || JSON.stringify(previous.usedIn) !== JSON.stringify(usage.usedIn))) {
           this.snapshots.delete(decoded!.id); return { state: 'stale', reason: 'source_changed' };
         }
@@ -202,14 +259,16 @@ export class MemoryStream {
             && ((u.turn !== null && target === `conversation:${u.turn.conversationId}`) || (u.runId !== null && target === `run:${u.runId}`)))).map(([id]) => id);
           where.push('id IN (SELECT value FROM json_each(?))'); params.push(JSON.stringify(usedFacts));
         }
-        const cte = `WITH r AS (SELECT f.*, e.name AS subject_name,
+        // Every query below starts with the hidden ids as its first parameter.
+        const cte = `WITH r AS (SELECT f.*, e.name AS subject_name, e.type AS subject_type,
           MAX(f.created_at, COALESCE(f.verified_at, f.created_at), COALESCE((SELECT MAX(recorded_at) FROM fact_evidence WHERE fact_id = f.id), f.created_at)) AS updated_at
-          FROM facts f JOIN entities e ON e.id = f.subject_id WHERE f.rowid <= ${maxRowid} AND f.status IS NOT 'superseded')`;
+          FROM facts f JOIN entities e ON e.id = f.subject_id WHERE f.rowid <= ${maxRowid} AND f.status IS NOT 'superseded'
+            AND f.id NOT IN (SELECT value FROM json_each(?)))`;
         const filter = where.length ? ` WHERE ${where.join(' AND ')}` : '';
         let snapshot = previous, id = decoded?.id;
         if (!snapshot) {
-          const total = this.db.query<{ n: number }, []>(`SELECT count(*) AS n FROM facts WHERE rowid <= ${maxRowid} AND status IS NOT 'superseded'`).get()!.n;
-          const matched = where.length ? this.db.query<{ n: number }, (string | number)[]>(`${cte} SELECT count(*) AS n FROM r${filter}`).get(...params)!.n : total;
+          const total = this.db.query<{ n: number }, [string]>(`${cte} SELECT count(*) AS n FROM r`).get(hidden)!.n;
+          const matched = where.length ? this.db.query<{ n: number }, (string | number)[]>(`${cte} SELECT count(*) AS n FROM r${filter}`).get(hidden, ...params)!.n : total;
           snapshot = { queryKey, asOf: now, expiresAt: now + MEMORY_STREAM_LIMITS.ttlMs, maxRowid, fingerprint, total, matched, usedIn: usage.usedIn };
           id = randomBytes(16).toString('hex');
           if (matched > query.limit) {
@@ -218,7 +277,7 @@ export class MemoryStream {
           }
         }
         const after = decoded?.after ?? null;
-        const pageWhere = [...where], pageParams = [...params];
+        const pageWhere = [...where], pageParams = [hidden, ...params];
         if (after) { pageWhere.push('(updated_at < ? OR (updated_at = ? AND id > ?))'); pageParams.push(after.updatedAt, after.updatedAt, after.id); }
         const rows = this.db.query<Row & { updated_at: number }, (string | number)[]>(`${cte} SELECT * FROM r${pageWhere.length ? ` WHERE ${pageWhere.join(' AND ')}` : ''}
           ORDER BY updated_at DESC, id LIMIT ${query.limit}`).all(...pageParams);
@@ -227,7 +286,7 @@ export class MemoryStream {
         const last = items[items.length - 1];
         const more = last !== undefined && rows.length === query.limit && this.snapshots.has(id!)
           && this.db.query<{ n: number }, (string | number)[]>(`${cte} SELECT count(*) AS n FROM (SELECT 1 FROM r WHERE ${[...where, '(updated_at < ? OR (updated_at = ? AND id > ?))'].join(' AND ')} LIMIT 1)`)
-            .get(...params, last.updatedAt, last.updatedAt, last.factId)!.n > 0;
+            .get(hidden, ...params, last.updatedAt, last.updatedAt, last.factId)!.n > 0;
         const nextCursor = more ? this.encode(id!, { updatedAt: last!.updatedAt, id: last!.factId }) : null;
         return { state: snapshot.matched ? 'ready' : 'empty', asOf: snapshot.asOf,
           data: { items, nextCursor, ...(usage.coverage ? { usageCoverage: usage.coverage } : {}), count: { total: snapshot.total, matched: snapshot.matched, returned: items.length }, usedIn: snapshot.usedIn } };
