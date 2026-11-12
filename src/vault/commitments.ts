@@ -85,6 +85,12 @@ export type Commitment = {
    * says exactly why and what closing it needs.
    */
   scope_id: string | null;
+  /**
+   * When the executor took this commitment to run it, or null if it never
+   * has. Written only by `claimCommitmentRun`, and it is what makes a run
+   * happen at most once. Cleared when someone opens the task again.
+   */
+  started_at: number | null;
 };
 
 type CommitmentRow = {
@@ -103,6 +109,8 @@ type CommitmentRow = {
   sort_order: number;
   /** Absent on a row read from a database predating the column (#571). */
   scope_id?: string | null;
+  /** Absent on a row read from a database predating the column. */
+  started_at?: number | null;
 };
 
 /**
@@ -113,6 +121,7 @@ function parseCommitment(row: CommitmentRow): Commitment {
     ...row,
     retry_policy: row.retry_policy ? JSON.parse(row.retry_policy) : null,
     scope_id: row.scope_id ?? null,
+    started_at: row.started_at ?? null,
   };
 }
 
@@ -140,6 +149,40 @@ function commitmentsHaveScopeColumn(db: Database): boolean {
       + 'commitment was created under will not be recorded (#571)');
   }
   return present;
+}
+
+/**
+ * Whether this database's `commitments` table carries `started_at`. Probed
+ * for the same reason as `scope_id`: the column arrives by an ALTER that
+ * swallows its error, and a statement naming a column that is not there would
+ * fail every write. Without it the claim below still decides by status, but
+ * it cannot tell a run that a crash interrupted from one never started.
+ */
+const startedColumn = new WeakMap<Database, boolean>();
+function commitmentsHaveStartedColumn(db: Database): boolean {
+  const cached = startedColumn.get(db);
+  if (cached !== undefined) return cached;
+  let present: boolean;
+  try {
+    present = db.query<{ name: string }, []>('PRAGMA table_info(commitments)')
+      .all().some((c) => c.name === 'started_at');
+  } catch {
+    present = false;
+  }
+  startedColumn.set(db, present);
+  if (!present) {
+    console.warn('[Commitments] commitments.started_at is missing; a commitment interrupted by a crash cannot be told from one that never started');
+  }
+  return present;
+}
+
+/**
+ * The same promise, said twice: the text with case, spacing and punctuation
+ * taken out. Two open commitments with the same key due in the same minute
+ * are one commitment (see createCommitment).
+ */
+export function commitmentSameKey(what: string): string {
+  return what.toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
 /**
@@ -173,6 +216,19 @@ export function createCommitment(
   if (text === null) throw new CommitmentTextError('A task needs some text to say what it is');
   what = text;
   const db = getDb();
+  // The same thing, due in the same minute, and still open: it is already
+  // there. A second row would be run a second time when it falls due, and a
+  // promise is kept once. Only for a commitment with a due time: two undated
+  // notes with the same words are not known to be the same thing.
+  if (opts?.when_due != null) {
+    const minute = Math.floor(opts.when_due / 60_000) * 60_000;
+    const key = commitmentSameKey(what);
+    const open = db.prepare(
+      "SELECT * FROM commitments WHERE status IN ('pending', 'active') AND when_due >= ? AND when_due < ? ORDER BY created_at ASC"
+    ).all(minute, minute + 60_000) as CommitmentRow[];
+    const same = open.find((row) => commitmentSameKey(row.what) === key);
+    if (same) return parseCommitment(same);
+  }
   const id = generateId();
   const now = Date.now();
   const priority = opts?.priority ?? 'normal';
@@ -223,6 +279,7 @@ export function createCommitment(
     created_from: opts?.created_from ?? null,
     assigned_to: opts?.assigned_to ?? null,
     scope_id: scopeId,
+    started_at: null,
     created_at: now,
     completed_at: null,
     result: null,
@@ -381,8 +438,58 @@ export function updateCommitmentStatus(
   db.prepare(
     'UPDATE commitments SET status = ?, completed_at = ?, result = ? WHERE id = ?'
   ).run(status, completedAt, result ?? null, id);
+  // Opened again by someone (the dashboard, the commitments tool): whatever
+  // run it had is behind it, and it may be run again when it is due. The
+  // executor's own parking keeps the mark: a parked commitment has run.
+  if (!isTerminal && !opts.parked && status !== 'escalated' && commitment.started_at !== null && commitmentsHaveStartedColumn(db)) {
+    db.prepare('UPDATE commitments SET started_at = NULL WHERE id = ?').run(id);
+  }
 
   return getCommitment(id);
+}
+
+/**
+ * Takes a commitment to run it. Exactly one caller can ever win this for a
+ * commitment that is open and has not been started: the row is marked active
+ * and started in one statement. Null means it is not to be run: it was closed,
+ * cancelled or removed, it was already taken (this process, or one that
+ * crashed in the middle of it), or its due time is no longer the one given.
+ * The row comes back as it is now, so what runs is what it says now.
+ */
+export function claimCommitmentRun(id: string, expected: { whenDue?: number | null } = {}, now: number = Date.now()): Commitment | null {
+  const db = getDb();
+  const dueIsChecked = 'whenDue' in expected;
+  const dueClause = dueIsChecked ? ' AND when_due IS ?' : '';
+  const dueArgs = dueIsChecked ? [expected.whenDue ?? null] : [];
+  const taken = commitmentsHaveStartedColumn(db)
+    ? db.prepare(
+      `UPDATE commitments SET status = 'active', started_at = ? WHERE id = ? AND status IN ('pending', 'active') AND started_at IS NULL${dueClause}`
+    ).run(now, id, ...dueArgs).changes
+    : db.prepare(
+      `UPDATE commitments SET status = 'active' WHERE id = ? AND status IN ('pending', 'active')${dueClause}`
+    ).run(id, ...dueArgs).changes;
+  return taken === 1 ? getCommitment(id) : null;
+}
+
+/**
+ * Gives back a commitment that was taken but not run at all (the process was
+ * shutting down before the turn began). It is open again and will be run.
+ */
+export function releaseCommitmentRun(id: string): void {
+  const db = getDb();
+  if (!commitmentsHaveStartedColumn(db)) return;
+  db.prepare("UPDATE commitments SET status = 'pending', started_at = NULL WHERE id = ? AND status = 'active'").run(id);
+}
+
+/**
+ * Commitments a process took to run and never closed: it stopped in the
+ * middle. Parked ones (waiting on an approval) are not among them.
+ */
+export function getInterruptedCommitments(): Commitment[] {
+  const db = getDb();
+  if (!commitmentsHaveStartedColumn(db)) return [];
+  const rows = db.prepare("SELECT * FROM commitments WHERE status = 'active' AND started_at IS NOT NULL").all() as CommitmentRow[];
+  return rows.map(parseCommitment).filter((row) => parseParkedRequestIds(row.result) === null);
 }
 
 /** The fields a dashboard edit may change (#1020); see daemon/commitment-patch.ts. */

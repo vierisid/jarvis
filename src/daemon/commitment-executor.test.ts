@@ -144,6 +144,8 @@ describe('only the executor parks a commitment (#1115)', () => {
     expect(parseParkedRequestIds(forged?.result)).toBeNull();
 
     const ex = new CommitmentExecutor();
+    // Something that could run it: a commitment nothing could run is not announced.
+    ex.setAgentService({ handleMessage: async () => 'done' } as any);
     let announced = 0;
     (ex as unknown as { announceExecution: () => void }).announceExecution = () => { announced += 1; };
     ex.setApprovalLookup(() => ({ status: 'executed', execution_result: 'transferred' }));
