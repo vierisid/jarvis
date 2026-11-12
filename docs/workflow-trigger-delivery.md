@@ -140,7 +140,7 @@ work again, rerun it in Jarvis.
 | --- | --- |
 | Started | 200 `{ ok, outcome: "started", fireId, runId }` |
 | Repeat | 200 `{ ok, outcome: "duplicate", duplicate: true, fireId, runId }` |
-| Readiness refused | 200 `{ ok, outcome: "blocked", reason }`; the delivery is kept on a failed run for a person to decide, and its retries are repeats |
+| Readiness refused (a connection changed, a piece removed) | 503 with `Retry-After: 300` and `{ error, outcome: "blocked", fireId }`, a plain reason that names nothing of the workflow; the delivery is kept on a failed run for a person to decide, and its retries are repeats |
 | Workflow off, changed or gone | 404; a retry after it is turned back on runs |
 | Queue full | 503 with `Retry-After` |
 | 100 steps of the workflow already waiting behind its approval cards | 503 with `Retry-After: 60`, recorded as skipped |

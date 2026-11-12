@@ -757,6 +757,40 @@ not part of the invocation fingerprint: it changes how the parent treats the
 receipt, never what is sent to the child. `require_success` still works after a
 `call`, but a default `call` already fails first.
 
+### Deleting what other workflows use
+
+Deleting a workflow or a connection is never blocked because published
+workflows use it. The delete answers with `usedBy` (the published workflows
+that call the workflow or bind the connection) and a plain `warning` sentence,
+and `GET /api/workflows/:id/dependents` and
+`GET /api/workflows/connections/:id/dependents` give the same list
+beforehand, so the Workflows room can name them in its confirmation. Afterwards an enabled
+workflow that calls a deleted workflow, or binds a deleted connection (a
+`{{connections...}}` binding or a Jarvis step's account field, the same rule a
+run's connection scope reads), lists `blocked` with code `DEPENDENCY_MISSING`
+and a sentence naming the step and what is missing; it has no run, so `runId`
+is null. Only published graphs count: a draft nobody runs is not a dependent,
+and only workflows of the caller's project are read or named. A connection is
+looked up without decrypting it, so one whose secret cannot be read any more
+still deletes; when another connection of the project keeps the same external
+id, nobody is named. A parent already waiting on a child that was deleted
+fails with a sentence saying the child was deleted, not the engine's status
+word.
+
+Uninstalling a Library piece works the same way. The Library confirmation
+names the enabled workflows of the caller's project that use it (from
+`GET /api/workflows/pieces/library/:id/dependents`), the uninstall answers with
+the same `usedBy` and `warning`, and nothing is blocked. Each of those
+workflows then lists `blocked` with code `PIECE_REMOVED` (no run, `runId` null)
+and a sentence naming the step and the piece; it is read from the live piece
+catalog, so it clears once the piece is reinstalled. The Workflows list shows
+`DEPENDENCY_MISSING` and `PIECE_REMOVED` as "Needs setup". A fire is refused by
+readiness before it starts. A run queued before the uninstall does not start
+either: it fails as a readiness refusal ("did not run: the <piece> piece it uses
+was removed"). A run paused before the uninstall is not continued into it: it
+fails at the continuation, saying which piece to reinstall, before any further
+step runs.
+
 ### Governed pieces
 
 The ten verified pieces -- gmail, slack, notion, openai, github, google-calendar,
@@ -1779,7 +1813,8 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | GET | `/api/workflows/pieces` | Engine-extracted catalog |
 | GET | `/api/workflows/pieces/library` | Catalog of installable community pieces |
 | POST | `/api/workflows/pieces/library/:id/install` | Install or update a community piece |
-| DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece |
+| GET | `/api/workflows/pieces/library/:id/dependents` | The enabled workflows (of the caller's project) that use the installed piece, for the confirmation before uninstalling: `{ usedBy, warning? }` |
+| DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece. Never blocked by workflows that use it; the answer names them (`usedBy`, `warning`). Afterwards each enabled workflow that used it lists `blocked` with code `PIECE_REMOVED` (no run, `runId` null) and a sentence naming the step and the piece, and its runs, including one already queued or paused, stop before any step needs the piece. See "Deleting what other workflows use" |
 | GET | `/api/workflows/connections` | Connections in the default project (no secrets) plus the registered Jarvis sources: `{ connections, jarvisSources }` |
 | POST | `/api/workflows/connections` | Create, or replace by `(pieceName, externalId)`, a connection (encrypted). `{ externalId, displayName, type, pieceName, pieceVersion?, value }` |
 | PATCH | `/api/workflows/connections/:id` | Update that connection in place: `displayName`, `value` (full replacement), `status`. Rotates a token without the delete-then-recreate gap. 404 for an id outside the default project, the same as for an id that does not exist |

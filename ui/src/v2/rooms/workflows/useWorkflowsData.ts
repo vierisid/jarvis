@@ -75,7 +75,8 @@ export interface FlowBlock {
   kind: "readiness" | "runtime";
   /** One sentence: what happened (the Q-19 headline). */
   message: string;
-  runId: string;
+  /** Null when no run shows it (a called workflow or connection was deleted, a piece was removed). */
+  runId: string | null;
   at: number;
 }
 
@@ -305,6 +306,7 @@ export function useWorkflowsData() {
         const body = await safeJson(res);
         return { ok: false, message: body?.error ?? `delete failed: ${res.status}` };
       }
+      const deleted = await safeJson(res);
       nameCacheRef.current.delete(flowId);
       setRuns((prev) => {
         const next = { ...prev };
@@ -313,7 +315,7 @@ export function useWorkflowsData() {
       });
       void refresh();
       if (selectedFlowId === flowId) setSelectedFlowId(null);
-      return { ok: true, message: "Deleted" };
+      return { ok: true, message: typeof deleted?.warning === "string" ? `Deleted. ${deleted.warning}` : "Deleted" };
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : String(e) };
     }
@@ -413,9 +415,9 @@ export function useWorkflowsData() {
   };
 }
 
-async function safeJson(res: Response): Promise<{ error?: string } | null> {
+async function safeJson(res: Response): Promise<{ error?: string; warning?: string } | null> {
   try {
-    return (await res.json()) as { error?: string };
+    return (await res.json()) as { error?: string; warning?: string };
   } catch {
     return null;
   }

@@ -15,6 +15,7 @@
  * Recovery is advice for the person: every step is something they start
  * themselves. Nothing here runs, retries or resends anything.
  */
+import { plainPieceName } from '../workflows/pieces-library/plain-piece-name';
 import { createHash } from 'node:crypto';
 import type { ActionFailure } from '../actions/action-outcome';
 import type { LLMErrorCode } from '../llm/provider';
@@ -53,7 +54,7 @@ export type RecoveryStep =
   | 'edit_and_run_again' | 'connect' | 'wait_or_switch_model' | 'bring_online' | 'ask_again' | 'review_authority'
   | 'check_before_running_again' | 'check_earlier_steps' | 'run_again' | 'resend' | 'check_before_resending' | 'open_details'
   | 'wait_and_run_again' | 'run_again_when_resumed' | 'accept_binding_change' | 'update_recipient' | 'update_desktop_app'
-  | 'change_request' | 'appeal_restriction';
+  | 'change_request' | 'appeal_restriction' | 'reinstall_piece';
 
 export interface FailureLinks {
   runId?: string; flowId?: string; stepName?: string; effectId?: string;
@@ -204,6 +205,7 @@ const NEXT: Record<RecoveryStep, string> = {
   accept_binding_change: 'Check the change, then enable or publish the workflow again to accept it.',
   update_recipient: 'Update the recipient in the workflow or in memory, then run it again.',
   update_desktop_app: 'Update Jarvis on that computer, then run it again.',
+  reinstall_piece: 'Reinstall the piece from the Library, then run it again.',
   // Waiting does not lift a content policy block or an account restriction.
   change_request: 'Change what it asks, then try again. If you think it was blocked by mistake, contact support.',
   appeal_restriction: 'Contact support to appeal, or use your own AI provider.',
@@ -347,6 +349,11 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
         return build('missing_binding', 'none', `${s} did not run: a connection or computer it uses changed since it was enabled.`, NOTHING,
           ['accept_binding_change'], links, STALE_BINDING_ISSUE, detail);
       }
+      // A piece uninstalled after the workflow was published: say which, and where to get it back.
+      const removed = evidence.issues.map(issue => issue.code === 'PIECE' ? /^Unknown piece "([^"]{1,200})"/u.exec(issue.message ?? '') : null).find(Boolean);
+      if (removed) return build('missing_binding', 'none',
+        `${s} did not run: the ${plainPieceName(removed[1]!)} piece it uses was removed. Reinstall it from the Library.`, NOTHING,
+        ['reinstall_piece'], links, 'PIECE', detail);
       return binding
         ? build('missing_binding', 'none', `${s} did not run: a connection or other binding it needs is missing.`, NOTHING,
           ['connect'], links, binding, detail)

@@ -261,7 +261,9 @@ export function WorkflowsRoomBody(): React.ReactElement {
                     const msg = hasDraftOnly
                       ? `Delete "${flow.displayName ?? flow.id}"?\n\nThis flow has no published version -- the draft (including any per-step sample data) will be permanently lost.`
                       : `Delete "${flow.displayName ?? flow.id}"?\n\nThe published version and any draft (including per-step sample data) will be permanently lost.`;
-                    if (await confirmDialog(msg)) {
+                    const usage = await fetch(`/api/workflows/${flow.id}/dependents`)
+                      .then((res) => (res.ok ? res.json() : null)).catch(() => null) as { warning?: string } | null;
+                    if (await confirmDialog(usage?.warning ? `${msg}\n\n${usage.warning}` : msg)) {
                       void handleAction("Delete", () => data.deleteFlow(flow.id));
                     }
                   }}
@@ -379,19 +381,21 @@ export function FlowRow({ flow, selected, triggerWarning, onSelect, onEdit, onRu
  * way Today's "Open" does (Q-19 run focus).
  */
 export function FlowBlockedChip({ flowId, blocked }: { flowId: string; blocked: FlowBlock }): React.ReactElement {
-  const open = (): void => focusRun(flowId, blocked.runId);
+  const runId = blocked.runId;
+  const open = (): void => { if (runId) focusRun(flowId, runId); };
   const preview = blocked.message.length > 60 ? blocked.message.slice(0, 57) + "..." : blocked.message;
   // A runtime refusal is the last run's outcome, which can clear on its own.
-  const label = blocked.kind === "runtime" ? "Last run refused" : "Blocked";
+  // Something it uses is gone (a deleted workflow or connection, a removed piece): the person sets it up again.
+  const label = blocked.code === "DEPENDENCY_MISSING" || blocked.code === "PIECE_REMOVED" ? "Needs setup" : blocked.kind === "runtime" ? "Last run refused" : "Blocked";
   return (
     <Chip
       tone="warn"
       dot={false}
       className="wf-list__blocked"
-      role="button"
-      tabIndex={0}
-      title={`${blocked.message} Click to open the run.`}
-      aria-label={`${label}: ${blocked.message} Open the run.`}
+      role={runId ? "button" : undefined}
+      tabIndex={runId ? 0 : undefined}
+      title={runId ? `${blocked.message} Click to open the run.` : blocked.message}
+      aria-label={runId ? `${label}: ${blocked.message} Open the run.` : `${label}: ${blocked.message}`}
       data-blocked-code={blocked.code}
       onClick={(e: React.MouseEvent) => { e.stopPropagation(); open(); }}
       onKeyDown={(e: React.KeyboardEvent) => {

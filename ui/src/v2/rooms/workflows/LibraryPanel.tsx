@@ -268,18 +268,21 @@ function LibraryRowWired({
         );
       }}
       onUninstall={async () => {
+        // Names the enabled workflows that use it, so the confirmation says who loses it.
+        const warning = await lib.dependents(entry.id);
+        const note = warning ? `\n\n${warning}` : "";
         if (
           !await confirmDialog(
             entry.withdrawn
-              ? `Uninstall ${entry.displayName}? It is no longer offered, so it cannot be installed again, and workflows that use it will stop working.`
-              : `Uninstall ${entry.displayName}? Existing workflows that use it will stop working until reinstalled.`,
+              ? `Uninstall ${entry.displayName}? It is no longer offered, so it cannot be installed again, and workflows that use it will stop working.${note}`
+              : `Uninstall ${entry.displayName}? Existing workflows that use it will stop working until reinstalled.${note}`,
           )
         )
           return;
         const r = await lib.uninstall(entry.id);
         flash(
           r.ok ? "ok" : "warn",
-          r.ok ? `${entry.displayName} uninstalled` : `Uninstall failed: ${r.message}`,
+          r.ok ? `${entry.displayName} uninstalled${r.warning ? `. ${r.warning}` : ""}` : `Uninstall failed: ${r.message}`,
         );
       }}
     />
