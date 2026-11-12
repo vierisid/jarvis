@@ -38,6 +38,7 @@ import { DEFAULT_IDS, getWorkflowDb } from '../db';
 import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
 import { OnboardingResolutionError, resolveOnboardingOutcome, runOnboardingOutcomes } from '../runtime/onboarding-service';
 import { runFailure } from '../runtime/run-failure';
+import { continuedFailures } from '../runtime/continued-failures';
 import { dismissFailures, listOpenFailures } from '../runtime/open-failures';
 import type { AuthorityEngine } from '../../authority/engine';
 import {
@@ -69,6 +70,8 @@ import { assertVersionReady, versionReadiness, WorkflowReadinessError } from '..
 import { assertCodeStepsAllowed, CodeStepsRefusedError } from "../db/repos/flow-code-steps";
 import { getFlowReadHosts, setFlowReadHosts } from "../db/repos/flow-read-hosts";
 import { normalizeReadHosts, readHostsOfRow } from "../db/read-hosts";
+import { LOCAL_ADDRESS_REFUSAL, localHostRefusal } from "../runtime/http-approval";
+import type { EgressPolicy } from "../runtime/http-egress";
 import { FlowVersionRequestError, withOwnedFlowVersion } from "../db/repos/flow-version-ownership";
 import {
   getFlowVersionUiMeta,
@@ -114,7 +117,7 @@ import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oaut
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
-import { isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
+import { canContinuePastStep, canRetryStep, isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import { withScheduleZoneDefault } from "../runner/triggers/schedule-zone";
@@ -703,6 +706,8 @@ function sampleStepNameRefusal(stepName: string): Response | null {
 }
 
 export interface CreateWorkflowRoutesOptions {
+  /** Where a workflow HTTP step may connect; the read list refuses a host it can never reach. Absent: private ranges are allowed, the rest is not. */
+  egressPolicy?: EgressPolicy;
   recoveryAuthority?: AuthorityEngine;
   briefWorkflowContext?: WorkflowContext;
   briefCapabilities?: BriefCapabilities;
@@ -924,6 +929,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             // editor badges its steps. The daemon decides, so the badge and
             // the gate in `pieceAuthorize` cannot disagree.
             ...(isCommunityPiece(p.name) ? { notApprovalGated: true } : {}),
+            // "Retry on failure" applies only to built-in steps that act inside the run.
+            ...(canRetryStep(p.name) ? { retrySafe: true } : {}),
             actions: Object.values(p.actions).map((a) => ({
               name: a.name,
               displayName: a.displayName,
@@ -931,6 +938,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               inputSchema: a.inputSchema ?? null,
               // A partly governed piece badges only its ungoverned actions.
               ...(!isCommunityPiece(p.name) && isCommunityAction(p.name, a.name) ? { notApprovalGated: true } : {}),
+              // A step that asks a person stops on a "no": "Continue on failure" does not apply.
+              ...(canContinuePastStep(p.name, a.name) ? {} : { continueUnavailable: true }),
               // Optional declared output sample (Jarvis extension to AP).
               // Surfaced to the dashboard so the variable picker can show
               // field-level rows for actions that have never been run yet.
@@ -2083,6 +2092,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           let expected: string[] | null = null;
           try {
             hosts = normalizeReadHosts(body.hosts);
+            const local = hosts.find((host) => localHostRefusal(host, opts.egressPolicy ?? "private-allowed") !== null);
+            if (local) return err(`${local}: ${LOCAL_ADDRESS_REFUSAL} Jarvis could never read it, so it is not added to the list.`, 400);
             if (Array.isArray(body.expected)) expected = normalizeReadHosts(body.expected);
           } catch (e) {
             return err(e instanceof Error ? e.message : String(e), 400);
@@ -2319,7 +2330,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             offset,
           };
           if (status) opts.status = status;
-          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run) }));
+          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run), continuedFailures: continuedFailures(run) }));
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
@@ -2416,7 +2427,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
-          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run) }) : err("run not found", 404);
+          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run), continuedFailures: continuedFailures(run) }) : err("run not found", 404);
         }),
     },
 

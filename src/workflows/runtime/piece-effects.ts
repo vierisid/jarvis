@@ -954,6 +954,10 @@ const SCHEMED_CREDENTIAL = {
       || /[._~+/=:-]/u.test(token.slice(0, -1)) || token.length >= 20;
   },
 };
+/** A value that is a scheme and a credential-shaped token (`Bearer x`), whatever it is stored under. */
+export function isSchemedCredential(value: string): boolean {
+  return SCHEMED_CREDENTIAL.test(value);
+}
 
 function redactNamed(value: unknown, depth = 0): unknown {
   // Past any depth `bound()` keeps; a stored input (#1153) can go deeper, and
