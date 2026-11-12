@@ -203,6 +203,19 @@ describe('Process Lock Manager', () => {
         }
       });
 
+      test.if(process.platform === 'linux')('refuses a FIFO at the lock path without hanging', () => {
+        const dir = join(DATA_DIR, 'fifo');
+        mkdirSync(dir, { recursive: true });
+        const fifo = join(dir, 'jarvis.pid');
+        expect(Bun.spawnSync(['mkfifo', fifo]).exitCode).toBe(0);
+        try {
+          expect(acquireLockAt(fifo, process.pid)).toBeNull();
+          expect(flockHeldBy(process.pid, fifo)).toBeNull();
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }, 5_000);
+
       test('refuses a lock path that is a symlink, and leaves its target alone', () => {
         const dir = join(DATA_DIR, 'link');
         mkdirSync(dir, { recursive: true });
@@ -714,26 +727,47 @@ console.log('ACQUIRE=' + ok);
 describe('lockTableShowsHolder', () => {
   // A real /proc/locks line, from a flock in a btrfs subvolume (measured in a
   // privileged container): the table names the filesystem's device 00:ad, not
-  // the subvolume's own st_dev.
+  // the subvolume's own st_dev 00:df.
   const table = [
     '35: OFDLCK ADVISORY  READ -1 00:ad:257 0 EOF',
     '36: FLOCK  ADVISORY  WRITE 18 00:ad:257 0 EOF',
     '36: -> FLOCK  ADVISORY  WRITE 19 00:ad:257 0 EOF',
     '37: POSIX  ADVISORY  WRITE 20 00:ad:257 0 EOF',
-    '38: FLOCK  ADVISORY  READ  21 00:ad:257 0 EOF',
   ].join('\n');
 
-  test('matches the holder on a device and inode given', () => {
-    expect(lockTableShowsHolder(table, 18, 257n, [[0n, 0xdfn], [0n, 0xadn]])).toBe(true);
+  test('matches the holder on the mount device when stat device names no lock', () => {
+    expect(lockTableShowsHolder(table, 18, 257n, [0n, 0xdfn], [0n, 0xadn])).toBe(true);
   });
 
   test('a device that is only the subvolume st_dev does not match', () => {
-    expect(lockTableShowsHolder(table, 18, 257n, [[0n, 0xdfn]])).toBe(false);
+    expect(lockTableShowsHolder(table, 18, 257n, [0n, 0xdfn], null)).toBe(false);
   });
 
-  test('waiters, POSIX, OFD and read locks never count, nor another inode or pid', () => {
-    for (const pid of [19, 20, 21, -1]) expect(lockTableShowsHolder(table, pid, 257n, [[0n, 0xadn]])).toBe(false);
-    expect(lockTableShowsHolder(table, 18, 258n, [[0n, 0xadn]])).toBe(false);
+  test('waiters, POSIX and OFD locks never count, nor another inode or pid', () => {
+    for (const pid of [19, 20, -1]) expect(lockTableShowsHolder(table, pid, 257n, [0n, 0xadn])).toBe(false);
+    expect(lockTableShowsHolder(table, 18, 258n, [0n, 0xadn])).toBe(false);
+  });
+
+  test('a lone read flock on the mount device is not the holder', () => {
+    expect(lockTableShowsHolder('40: FLOCK  ADVISORY  READ 30 00:ad:257 0 EOF', 30, 257n, [0n, 0xdfn], [0n, 0xadn])).toBe(false);
+  });
+
+  test('a read flock is not the holder', () => {
+    expect(lockTableShowsHolder('38: FLOCK  ADVISORY  READ  21 00:ad:257 0 EOF', 21, 257n, [0n, 0xadn])).toBe(false);
+  });
+
+  // Inode numbers repeat across btrfs subvolumes, so on the mount device alone
+  // two different files can share a key. Then it proves nothing.
+  test('on the mount device, two flocks on one inode number prove nothing', () => {
+    const two = table + '\n40: FLOCK  ADVISORY  WRITE 30 00:ad:257 0 EOF';
+    expect(lockTableShowsHolder(two, 18, 257n, [0n, 0xdfn], [0n, 0xadn])).toBe(false);
+    expect(lockTableShowsHolder(two, 30, 257n, [0n, 0xdfn], [0n, 0xadn])).toBe(false);
+  });
+
+  test('an exact device match is never second-guessed by the mount device', () => {
+    const t = '50: FLOCK  ADVISORY  WRITE 7 08:40:99 0 EOF\n51: FLOCK  ADVISORY  WRITE 8 00:ad:99 0 EOF';
+    expect(lockTableShowsHolder(t, 7, 99n, [8n, 0x40n], [0n, 0xadn])).toBe(true);
+    expect(lockTableShowsHolder(t, 8, 99n, [8n, 0x40n], [0n, 0xadn])).toBe(false);
   });
 });
 

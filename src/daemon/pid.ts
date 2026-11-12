@@ -95,6 +95,7 @@ function getFlock(): FlockSymbols {
 
 const LOCK_EX = 2;  // Exclusive lock
 const LOCK_NB = 4;  // Non-blocking
+const LOCK_SH = 1;  // Shared lock
 const LOCK_UN = 8;  // Unlock
 
 // ── Lock state ───────────────────────────────────────────────────────
@@ -239,12 +240,18 @@ export function acquireLockAt(lockPath: string, pid: number): { release: () => v
  * the flock, and the data folder locked, after the daemon died.
  */
 function openLockFile(lockPath: string, flock: FlockSymbols): number {
-  const fd = openSync(lockPath, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  // O_NONBLOCK: opening a FIFO planted at the path must not hang. It changes
+  // nothing for a regular file's reads, writes or flock.
+  const fd = openSync(lockPath, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
   try {
     const st = fstatSync(fd);
     const euid = process.geteuid?.();
-    if (!st.isFile() || st.nlink !== 1 || (euid !== undefined && euid !== 0 && st.uid !== euid)) {
-      throw new Error(`${lockPath} is not a plain file owned by this user; refusing to use it as the lock file`);
+    const problem = !st.isFile() ? 'is not a regular file'
+      : st.nlink !== 1 ? `has ${st.nlink} names (a hard link)`
+      : euid !== undefined && euid !== 0 && st.uid !== euid ? 'belongs to another user'
+      : null;
+    if (problem) {
+      throw new Error(`The lock file ${lockPath} ${problem}, so Jarvis will not write to it. Remove it if nothing uses it, then start again.`);
     }
     const err = flock.do_cloexec(fd);
     if (err !== 0) throw new Error(`could not mark ${lockPath} close-on-exec (errno ${err})`);
@@ -268,9 +275,9 @@ function narrowToOwner(fd: number): void {
 }
 
 /**
- * Create `dir` 0700 when missing. Parents it has to create get the default
- * mode: `mkdir -p` with a mode would make them 0700 too, and a parent may be
- * shared with other users or services.
+ * Create `dir` 0700 when missing. Parents it has to create get 0755 (less the
+ * umask), not 0700: `mkdir -p` with a mode would make them 0700 too, and a
+ * parent may be shared with other users or services.
  */
 function makeOwnerFolder(dir: string): void {
   // 0755 rather than the default 0777: under a umask of 0 the default would
@@ -454,35 +461,79 @@ export function writeLockedPort(port: number): void {
  */
 export function flockHeldBy(pid: number, lockPath: string = defaultLockPath()): boolean | null {
   if (process.platform !== 'linux') return null;
+  // One open, so the inode and the mount come from the same file. O_NONBLOCK
+  // so a FIFO planted at the path cannot hang the probe; O_NOFOLLOW so it
+  // names the lock file itself.
+  let fd: number | null = null;
   let table: string;
-  let st: { dev: bigint; ino: bigint };
+  let ino: bigint;
+  let exact: [bigint, bigint];
+  let mounted: [bigint, bigint] | null;
+  let fileIsLocked = true;
   try {
-    st = statSync(lockPath, { bigint: true });
+    fd = openSync(lockPath, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+    const st = fstatSync(fd, { bigint: true });
+    if (!st.isFile()) return null;
+    ino = st.ino;
+    exact = splitDev(st.dev);
+    mounted = mountDeviceOfFd(fd);
     table = readFileSync('/proc/locks', 'utf-8');
+    // The mount-device fallback needs proof that THIS file is locked at all: a
+    // lone line on that key could be another subvolume's file with the same
+    // inode number while ours is a stale, unheld lock. A shared probe that
+    // succeeds means nobody holds ours exclusively.
+    const flock = getFlock();
+    if (flock.do_flock(fd, LOCK_SH | LOCK_NB) === 0) {
+      flock.do_flock(fd, LOCK_UN);
+      fileIsLocked = false;
+    }
   } catch {
     return null;
+  } finally {
+    if (fd !== null) try { closeSync(fd); } catch { /* already closed */ }
   }
-  const devices: Array<[bigint, bigint]> = [splitDev(st.dev)];
-  const mounted = mountDeviceOf(lockPath);
-  if (mounted) devices.push(mounted);
-  return lockTableShowsHolder(table, pid, st.ino, devices);
+  return lockTableShowsHolder(table, pid, ino, exact, fileIsLocked ? mounted : null);
+}
+
+type LockLine = { pid: number; write: boolean; major: bigint; minor: bigint; ino: bigint };
+
+function flockLines(table: string): LockLine[] {
+  const lines: LockLine[] = [];
+  for (const line of table.split('\n')) {
+    const m = /^\d+:\s+(->\s+)?(\S+)\s+(\S+)\s+(\S+)\s+(-?\d+)\s+([0-9a-fA-F]+):([0-9a-fA-F]+):(\d+)\s/.exec(line);
+    if (!m || m[1] || m[2] !== 'FLOCK' || m[3] !== 'ADVISORY') continue;
+    lines.push({ pid: Number(m[5]), write: m[4] === 'WRITE', major: BigInt(`0x${m[6]}`), minor: BigInt(`0x${m[7]}`), ino: BigInt(m[8]!) });
+  }
+  return lines;
 }
 
 /**
- * Is there a FLOCK WRITE line in `table` (/proc/locks) held by `pid` on inode
- * `ino` of one of `devices` ([major, minor])? Waiters (`->`), read locks, and
- * POSIX/OFD/lease lines never count.
+ * Does `table` (/proc/locks) show `pid` holding the write flock on inode `ino`?
+ * Waiters (`->`), POSIX, OFD and lease lines never count.
+ *
+ * The device is matched exactly (stat's) when any flock line names it. Only
+ * when none does is the mount's device tried (`mounted`): on btrfs every
+ * subvolume has its own st_dev but /proc/locks prints the filesystem's. That
+ * key is weaker, since inode numbers repeat across subvolumes, so it counts
+ * only when exactly one flock in the whole table is on it, and that one is a
+ * write lock held by `pid`. Callers pass `mounted` only once they know the
+ * lock file itself is locked (flockHeldBy probes it).
  */
-export function lockTableShowsHolder(table: string, pid: number, ino: bigint, devices: Array<[bigint, bigint]>): boolean {
-  for (const line of table.split('\n')) {
-    const m = /^\d+:\s+(->\s+)?(\S+)\s+(\S+)\s+(\S+)\s+(-?\d+)\s+([0-9a-fA-F]+):([0-9a-fA-F]+):(\d+)\s/.exec(line);
-    if (!m || m[1] || m[2] !== 'FLOCK' || m[3] !== 'ADVISORY' || m[4] !== 'WRITE') continue;
-    if (Number(m[5]) !== pid || BigInt(m[8]!) !== ino) continue;
-    const major = BigInt(`0x${m[6]}`);
-    const minor = BigInt(`0x${m[7]}`);
-    if (devices.some(([a, b]) => a === major && b === minor)) return true;
-  }
-  return false;
+export function lockTableShowsHolder(
+  table: string,
+  pid: number,
+  ino: bigint,
+  exact: [bigint, bigint],
+  mounted: [bigint, bigint] | null = null,
+): boolean {
+  const lines = flockLines(table);
+  const on = ([major, minor]: [bigint, bigint]) =>
+    lines.filter((l) => l.ino === ino && l.major === major && l.minor === minor);
+  const exactLines = on(exact);
+  if (exactLines.length > 0) return exactLines.some((l) => l.pid === pid && l.write);
+  if (mounted === null) return false;
+  const mountLines = on(mounted);
+  return mountLines.length === 1 && mountLines[0]!.pid === pid && mountLines[0]!.write;
 }
 
 /** st_dev as [major, minor], decoded the way glibc's major()/minor() do. */
@@ -500,7 +551,17 @@ function splitDev(dev: bigint): [bigint, bigint] {
 export function mountDeviceOf(path: string): [bigint, bigint] | null {
   let fd: number | null = null;
   try {
-    fd = openSync(path, constants.O_RDONLY);
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    return mountDeviceOfFd(fd);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) try { closeSync(fd); } catch { /* already closed */ }
+  }
+}
+
+function mountDeviceOfFd(fd: number): [bigint, bigint] | null {
+  try {
     const mntId = /^mnt_id:\s+(\d+)/m.exec(readFileSync(`/proc/self/fdinfo/${fd}`, 'utf-8'))?.[1];
     if (!mntId) return null;
     for (const line of readFileSync('/proc/self/mountinfo', 'utf-8').split('\n')) {
@@ -512,8 +573,6 @@ export function mountDeviceOf(path: string): [bigint, bigint] | null {
     return null;
   } catch {
     return null;
-  } finally {
-    if (fd !== null) try { closeSync(fd); } catch { /* already closed */ }
   }
 }
 
