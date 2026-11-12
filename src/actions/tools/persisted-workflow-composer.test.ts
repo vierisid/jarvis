@@ -278,3 +278,18 @@ test('a plan that keeps the key fails, and neither the errors, the response nor 
   expect(JSON.stringify(row)).not.toContain(CANARY);
   expect(JSON.stringify(row)).toContain('[secret removed]');
 });
+
+test('a webhook trigger with its signing secret is accepted, and the secret is not kept in the history', async () => {
+  const secret = 'q8Zr2Lk9Vb4Nx7Wm1Pt6Yh3Jc5Df0Gs8';
+  const prompts: string[] = [];
+  const result = await composePersistedFlow({ pieceRegistry: sampleCatalog(), llm: { async chat({ prompt }) {
+    prompts.push(prompt);
+    return { text: JSON.stringify({ displayName: 'Signed hook', trigger: { name: 'trigger', type: 'PIECE_TRIGGER',
+      settings: { pieceName: 'webhook', triggerName: 'catch_webhook', input: { secret } },
+      nextAction: { name: 'notify', type: 'PIECE', settings: { pieceName: 'jarvis-notify', actionName: 'notify', input: { message: 'Hook received' } } } } }) };
+  } } }, request);
+  expect(result.ok).toBe(true);
+  expect(prompts).toHaveLength(1);
+  const row = getWorkflowDb().query("SELECT * FROM workflow_composition").get();
+  expect(JSON.stringify(row)).not.toContain(secret);
+});

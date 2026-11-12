@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { findSecretLiterals, redactSecretLiterals, redactSecretText, secretLiteralFeedback } from './secret-literals';
+import { findNewSecretLiterals, findSecretLiterals, redactSecretLiterals, redactSecretText, secretLiteralFeedback, secretLiteralWarnings } from './secret-literals';
 
 const step = (name: string, input: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
   ({ name, type: 'PIECE', settings: { pieceName: '@x/piece-y', actionName: 'send', input }, ...extra });
@@ -20,7 +20,7 @@ describe('secret-shaped literals are found', () => {
   for (const [name, value] of [
     ['an Anthropic key', 'sk-ant-api03-AbCdEf0123456789abcdefXYZ'],
     ['a GitHub token', 'ghp_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8'],
-    ['an AWS access key', 'AKIAIOSFODNN7EXAMPLE'],
+    ['an AWS access key', 'AKIAQ3EGTUV7WXYZ2ABC'],
     ['a Slack token', 'xoxb-1234567890-abcdefghij'],
     ['a Stripe key', 'sk_live_' + '4eC39HqLyjWDarjtT1zdp7dc'],
     ['a JWT', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U'],
@@ -58,6 +58,8 @@ describe('normal workflows are left alone', () => {
     ['a bearer word in prose', { message: 'Bearer of bad news: the meeting moved to Thursday afternoon' }],
     ['an email and a phone number', { to: 'ana.rossi@example.com', phone: '+39 333 123 4567' }],
     ['a sentence under a field called token', { token: 'this is a sentence that is quite long indeed' }],
+    ['documentation placeholders', { message: 'Set AKIAIOSFODNN7EXAMPLE and sk-your-key-here-123456', apiKey: 'YOUR_API_KEY_HERE_0123456789' }],
+    ['the markers a redacted value reads as', { token: '[redacted]', message: 'Bearer [secret removed]' }],
   ])('%s', (_name, input) => {
     expect(findSecretLiterals(graph(['t', {}], ['s', input as Record<string, unknown>]))).toEqual([]);
   });
@@ -72,10 +74,50 @@ describe('what is kept in composition history', () => {
     expect(JSON.stringify(cleaned)).not.toContain('Zk93Lq0TnV4bXc1Wd5Fk29sLr7');
     expect(JSON.stringify(cleaned)).toContain('ana@example.com');
   });
+  test('a raw reply loses a value in a field named like a credential, and keeps references and plain values', () => {
+    const raw = 'Here: {"apiKey": "Zk93Lq0TnV4bXc1Wd5Fk29sLr7", "token": "{{connections.x}}", "password": "changeme", "flowId": "ZlsMhRLU0AK5y7hPdyZkc3"}';
+    expect(redactSecretText(raw)).toBe('Here: {"apiKey": "[secret removed]", "token": "{{connections.x}}", "password": "changeme", "flowId": "ZlsMhRLU0AK5y7hPdyZkc3"}');
+  });
   test('feedback says where and what to do, never the value', () => {
     const lines = secretLiteralFeedback(findSecretLiterals(graph(['t', {}], ['notify', { message: canary }])));
     expect(lines[0]).toContain('step "notify" settings.input.message');
     expect(lines[0]).toContain('use a connection');
     expect(lines.join('')).not.toContain(canary);
+  });
+});
+
+describe('designed secrets, positions and cost', () => {
+  const webhook = (secret: string) => ({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input: { secret, signature_scheme: 'timestamped' } } });
+  test('the Webhook trigger signing secret is not refused or warned about, but stays out of history', () => {
+    const secret = 'q8Zr2Lk9Vb4Nx7Wm1Pt6Yh3Jc5Df0Gs8';
+    expect(findSecretLiterals(webhook(secret))).toEqual([]);
+    expect(findSecretLiterals({ displayName: 'Hook', trigger: webhook(secret) })).toEqual([]);
+    expect(secretLiteralWarnings(webhook(secret))).toEqual([]);
+    expect(JSON.stringify(redactSecretLiterals(webhook(secret)))).not.toContain(secret);
+    // Only the webhook piece's own field: a `secret` field on another step is still one.
+    expect(findSecretLiterals(graph(['t', {}], ['s', { secret }]))).toHaveLength(1);
+  });
+  test('a real key next to a placeholder is still found', () => {
+    expect(findSecretLiterals(graph(['t', {}], ['s', { message: 'AKIAIOSFODNN7EXAMPLE then AKIAQ3EGTUV7WXYZ2ABC' }]))).toHaveLength(1);
+  });
+  test('an input object with name and type keys is not taken for a step', () => {
+    const found = findSecretLiterals(graph(['t', {}], ['call', { field: { name: 'x', type: 'text', apiKey: 'Zk93Lq0TnV4bXc1Wd5Fk29sLr7' } }]));
+    expect(found).toEqual([{ path: 'step "call" settings.input.field.apiKey', kind: 'a secret typed into a credential field' }]);
+  });
+  test('a composed plan names its steps under the trigger', () => {
+    const plan = { displayName: 'p', trigger: graph(['t', {}], ['notify', { message: 'sk-qa4-canary-SECRET-9911' }]) };
+    expect(findSecretLiterals(plan)[0]!.path).toBe('step "notify" settings.input.message');
+  });
+  test('an edit is judged on what it adds', () => {
+    const key = 'sk-qa4-canary-SECRET-9911';
+    const saved = graph(['t', {}], ['s', { message: key }]);
+    expect(findNewSecretLiterals(saved, graph(['t', {}], ['renamed', { message: key }]))).toEqual([]);
+    expect(findNewSecretLiterals(saved, graph(['t', {}], ['s', { message: key, body: 'sk-ant-api03-AbCdEf0123456789abcdefXYZ' }]))).toHaveLength(1);
+  });
+  test('a long dotted or repeated string is scanned in linear time', () => {
+    const start = performance.now();
+    findSecretLiterals(graph(['t', {}], ['s', { a: 'a.'.repeat(200_000), b: 'sk-'.repeat(100_000) }]));
+    redactSecretText('a.'.repeat(200_000) + '"'.repeat(100_000));
+    expect(performance.now() - start).toBeLessThan(2000);
   });
 });
