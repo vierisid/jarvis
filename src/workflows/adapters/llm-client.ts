@@ -13,10 +13,21 @@ import type {
   PieceLlmResponse,
 } from "../jarvis-pieces/types";
 import type { LLMManager } from "../../llm/manager";
-import type { LLMMessage, LLMOptions, LLMResponse } from "../../llm/provider";
+import { LLMProviderError, type LLMMessage, type LLMOptions, type LLMResponse } from "../../llm/provider";
+
+/**
+ * One Ask step gets this long in total, across every retry and failover. The
+ * manager alone allows 90s per attempt and three attempts, so a provider that
+ * accepts the connection and never answers held a run for 4.5 minutes with
+ * nothing on screen.
+ */
+export const ASK_STEP_DEADLINE_MS = 120_000;
 
 export class JarvisLlmClient implements PieceLlmClient {
-  constructor(private readonly manager: LLMManager) {}
+  constructor(
+    private readonly manager: LLMManager,
+    private readonly deadlineMs: number = ASK_STEP_DEADLINE_MS,
+  ) {}
 
   async chat(input: PieceLlmInput): Promise<PieceLlmResponse> {
     const messages: LLMMessage[] = [];
@@ -35,9 +46,16 @@ export class JarvisLlmClient implements PieceLlmClient {
     if (input.model !== undefined) options.model = input.model;
     if (input.temperature !== undefined) options.temperature = input.temperature;
 
-    const reply: LLMResponse = await this.manager.chat(messages, options);
-
-    return projectResponse(reply);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new LLMProviderError(
+      `The AI provider did not answer within ${Math.round(this.deadlineMs / 1000)}s (timed out)`, 'network',
+    )), this.deadlineMs);
+    options.signal = controller.signal;
+    try {
+      return projectResponse(await this.manager.chat(messages, options));
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 

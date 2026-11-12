@@ -43,6 +43,12 @@ function withMemoryHandoff(provider: LLMProvider): LLMProvider {
   return wrapped;
 }
 
+/** Marks an error produced by the manager's stream stall timer. */
+const STREAM_STALL_PREFIX = 'LLM stream from';
+export function isStreamStall(message: string | undefined): boolean {
+  return Boolean(message?.startsWith(STREAM_STALL_PREFIX));
+}
+
 export class LLMManager {
   private providers: Map<string, LLMProvider> = new Map();
   private primaryProvider = '';
@@ -50,6 +56,8 @@ export class LLMManager {
   private tierMap: TierMap = {};
   private static readonly MAX_RETRIES_PER_PROVIDER = 3;
   private static readonly REQUEST_TIMEOUT_MS = 90000; // 90 second timeout for LLM calls
+  private static readonly STREAM_FIRST_DATA_MS = 90_000;
+  private static readonly STREAM_IDLE_MS = 60_000;
   /**
    * Never park an interactive request for a very long quota reset. Applies
    * cumulatively across one provider's attempts (see waitForRetry).
@@ -57,7 +65,18 @@ export class LLMManager {
   private static readonly MAX_RETRY_AFTER_MS = 60000;
   private static readonly isDebugging = process.env.JARVIS_LOG_LEVEL === 'debug' || process.env.DEBUG_LLM === 'true';
 
-  constructor() {}
+  /**
+   * A stream that sends nothing is not covered by REQUEST_TIMEOUT_MS (that wraps
+   * the non-stream call). First data gets as long as a whole non-stream request;
+   * once data flows, a longer silence than this means the provider hung.
+   */
+  private readonly streamFirstDataMs: number;
+  private readonly streamIdleMs: number;
+
+  constructor(options: { streamFirstDataMs?: number; streamIdleMs?: number } = {}) {
+    this.streamFirstDataMs = options.streamFirstDataMs ?? LLMManager.STREAM_FIRST_DATA_MS;
+    this.streamIdleMs = options.streamIdleMs ?? LLMManager.STREAM_IDLE_MS;
+  }
 
   registerProvider(provider: LLMProvider): void {
     this.providers.set(provider.name, provider);
@@ -598,6 +617,70 @@ export class LLMManager {
     );
   }
 
+  /**
+   * Provider stream under stall timers. The timer runs only while WE wait for
+   * the provider: it stops while the consumer handles an event (a tool run can
+   * take minutes) and restarts when the next one is requested. On a stall the
+   * provider request is aborted and a stall error is yielded.
+   */
+  private async *guardedStream(
+    provider: LLMProvider,
+    messages: LLMMessage[],
+    options?: LLMOptions,
+  ): AsyncIterable<LLMStreamEvent> {
+    const controller = new AbortController();
+    const signal = options?.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let waiting = false;
+    let gotEvent = false;
+    let stalled: string | null = null;
+    let finished = false;
+    // A provider on the user's own hardware may need longer to start (see LLMProvider.streamFirstDataMs).
+    const firstDataMs = Math.max(this.streamFirstDataMs, provider.streamFirstDataMs ?? 0);
+    const arm = () => {
+      clearTimeout(timer);
+      const ms = gotEvent ? this.streamIdleMs : firstDataMs;
+      timer = setTimeout(() => {
+        stalled = `${STREAM_STALL_PREFIX} ${provider.name} sent no data for ${ms >= 1000 ? `${Math.round(ms / 1000)}s` : `${ms}ms`} (timed out)`;
+        controller.abort(new LLMProviderError(stalled, 'network'));
+      }, ms);
+    };
+    const iterator = backgroundStream(withMemoryHandoff(provider), messages, {
+      ...options,
+      signal,
+      onStreamActivity: () => { if (waiting) arm(); },
+    })[Symbol.asyncIterator]();
+    try {
+      while (true) {
+        waiting = true;
+        arm();
+        let step: IteratorResult<LLMStreamEvent>;
+        try {
+          step = await raceWithSignal(signal, () => iterator.next());
+        } catch (err) {
+          if (stalled) { yield { type: 'error', error: stalled, code: 'network' }; return; }
+          throw err;
+        } finally {
+          waiting = false;
+          clearTimeout(timer);
+        }
+        if (step.done) { finished = true; return; }
+        // An error event from an aborted provider stream is the stall itself.
+        if (stalled && step.value.type === 'error') { yield { type: 'error', error: stalled, code: 'network' }; return; }
+        gotEvent = true;
+        yield step.value;
+      }
+    } finally {
+      clearTimeout(timer);
+      // A stream that ran to its end has nothing left to cancel. Aborting it
+      // anyway would mark a finished request's signal as aborted.
+      if (!finished) {
+        if (!controller.signal.aborted) controller.abort();
+        void Promise.resolve(iterator.return?.(undefined)).catch(() => {});
+      }
+    }
+  }
+
   private async *streamWithRetry(
     provider: LLMProvider,
     messages: LLMMessage[],
@@ -618,14 +701,14 @@ export class LLMManager {
       try {
         let hasError = false;
         options?.signal?.throwIfAborted();
-        for await (const event of backgroundStream(withMemoryHandoff(provider), messages, options)) {
+        for await (const event of this.guardedStream(provider, messages, options)) {
           if (event.type === 'error') {
             hasError = true;
             if (spent) addUsage(spent, event.usage);
             errors.push(`attempt ${attempt}: ${event.error}`);
             lastErrorCode = event.code ?? classifyErrorString(event.error);
             lastHostedDetail = hostedDetailOf(provider, event.hosted_detail);
-            retryableEvent = this.shouldRetryCode(lastErrorCode);
+            retryableEvent = this.shouldRetryCode(lastErrorCode) && !isStreamStall(event.error);
             eventRetryAfterMs = event.retry_after_ms;
             lastRetryAfterMs = event.retry_after_ms;
             console.error(
@@ -794,13 +877,13 @@ export class LLMManager {
         try {
           let hasError = false;
           options?.signal?.throwIfAborted();
-          for await (const event of backgroundStream(withMemoryHandoff(provider), messages, options)) {
+          for await (const event of this.guardedStream(provider, messages, options)) {
             if (event.type === 'error') {
               hasError = true;
               errors.push(`attempt ${attempt}: ${event.error}`);
               lastErrorCode = event.code ?? classifyErrorString(event.error);
               lastHostedDetail = hostedDetailOf(provider, event.hosted_detail);
-              retryableEvent = this.shouldRetryCode(lastErrorCode);
+              retryableEvent = this.shouldRetryCode(lastErrorCode) && !isStreamStall(event.error);
               eventRetryAfterMs = event.retry_after_ms;
               lastRetryAfterMs = event.retry_after_ms;
               console.error(

@@ -405,6 +405,8 @@ export class AnthropicProvider implements LLMProvider {
 
       while (true) {
         const { done, value } = await reader.read();
+        // Thinking, tool-argument deltas and pings yield nothing yet; the stream is alive.
+        if (!done) options.onStreamActivity?.();
         buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';

@@ -1,4 +1,5 @@
 import { OpenAIProvider } from './openai.ts';
+import { LOCAL_STREAM_FIRST_DATA_MS } from './provider.ts';
 
 /** Endpoint paths users commonly paste in place of the API root. */
 const ENDPOINT_SUFFIX = /\/(?:chat\/completions|models)$/i;
@@ -69,6 +70,8 @@ export class OpenAICompatibleProvider extends OpenAIProvider {
   override name = 'openai_compatible';
   /** No built-in model: the endpoint serves whatever its operator loaded. */
   readonly placeholderDefaultModel = true;
+  /** Often a model on the user's own machine (LM Studio, llama.cpp, vLLM): slow to start. */
+  readonly streamFirstDataMs = LOCAL_STREAM_FIRST_DATA_MS;
 
   /** Every root worth trying, in priority order. Never mutated. */
   private readonly routes: string[];

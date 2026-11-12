@@ -354,7 +354,11 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
           ['edit_and_run_again'], links, codes[0] ?? null, detail);
     }
     case 'provider': {
-      const mapped = PROVIDER[evidence.code] ?? PROVIDER.unknown;
+      const base = PROVIDER[evidence.code] ?? PROVIDER.unknown;
+      // A provider that took the request and never answered is not one that
+      // could not be reached: say which, so the fix (try again, change model) fits.
+      const mapped = evidence.code === 'network' && /timed out|stalled/i.test(evidence.message ?? '')
+        ? { ...base, what: 'the AI provider did not answer in time' } : base;
       // A model call changes nothing outside Jarvis. Work the same request had
       // already started (a tool it called) may have, so it is never "nothing".
       const effect: FailureEffect = subject.sideEffects ? 'unknown' : 'none';
