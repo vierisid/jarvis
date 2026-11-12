@@ -142,6 +142,8 @@ function BoundRuns({
       mounted.current = false;
     };
   }, []);
+  // Only a version this room can start says it would run once while the workflow is off.
+  const runOnce = store.workflowOff && !!store.port.start;
   return (
     <section className="brief-workflow-runs" aria-label="Workflow run history">
       <WorkflowViewHeader
@@ -155,13 +157,13 @@ function BoundRuns({
             variant="primary"
             onClick={() => void start()}
             disabled={!store.canRun}
-            aria-describedby={store.workflowOff ? "brief-run-off-note" : undefined}
+            aria-describedby={runOnce ? "brief-run-off-note" : undefined}
           >
-            {state.submission === "pending" ? "Requesting…" : store.workflowOff ? "Run once anyway" : "Run workflow"}
+            {state.submission === "pending" ? "Requesting…" : runOnce ? "Run once anyway" : "Run workflow"}
           </BriefButton>
         }
       />
-      {store.workflowOff && (
+      {runOnce && (
         <p id="brief-run-off-note" className="brief-runs-off-note">
           This workflow is off. You can still run it once yourself; it stays off afterwards.
         </p>

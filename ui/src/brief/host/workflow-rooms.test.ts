@@ -18,14 +18,18 @@ function storage(fail = false) {
   return { map, getItem: (k: string) => map.get(k) ?? null,
     setItem: (k: string, v: string) => { if (fail && k === journal && v !== 'null') throw Error('quota'); map.set(k, v); } };
 }
-function rooms(store: ReturnType<typeof storage>, answer: Answer) {
+// Run reads the workflow's on/off state before it sends: `status` answers that read,
+// null makes it fail.
+function rooms(store: ReturnType<typeof storage>, answer: Answer, status: string | null = 'ENABLED', confirm?: (message: string) => Promise<boolean>) {
   const posts: string[] = [];
   const transport = createHostTransport((async (path: string, init: RequestInit = {}) => {
     if (init.method === 'POST') posts.push(String(path));
     if (String(path).includes('/runs')) return Response.json({ status: 'ready', data: { items: [], nextCursor: null, total: null } });
+    if (String(path) === `/api/workflows/${flowId}` && !init.method)
+      return status === null ? new Response('', { status: 503 }) : Response.json({ flow: { id: flowId, status } });
     return answer(String(path), init);
   }) as unknown as typeof fetch);
-  const value = createWorkflowRooms({ scopeId, transport, capabilities, storage: store, dirty: () => {}, runInput: async () => ({}) });
+  const value = createWorkflowRooms({ scopeId, transport, capabilities, storage: store, dirty: () => {}, runInput: async () => ({}), confirm });
   live.push(value);
   return { posts, runs: value.controllers(flowId, versionId, false).runs, value };
 }
@@ -116,34 +120,41 @@ test('an editable draft never inherits a journaled request', () => {
   expect(draft.getSnapshot().submission).toBe('idle'); expect(draft.canCheck).toBe(false);
 });
 
+const accept: Answer = (_p, init) => { const requestId = JSON.parse(String(init.body)).brief.requestId;
+  return Response.json({ status: 'accepted', requestId, run: summary(requestId) }, { status: 202 }); };
+
 test('a run by hand of a turned-off workflow asks first, says it ran once, and sends nothing when declined', async () => {
   const asked: string[] = [];
-  const build = (answer: boolean, run: Answer) => {
-    const posts: string[] = [];
-    const transport = createHostTransport((async (path: string, init: RequestInit = {}) => {
-      if (init.method === 'POST') posts.push(String(path));
-      if (String(path).includes('/runs')) return Response.json({ status: 'ready', data: { items: [], nextCursor: null, total: null } });
-      return run(String(path), init);
-    }) as unknown as typeof fetch);
-    const value = createWorkflowRooms({ scopeId, transport, capabilities, storage: storage(), dirty: () => {}, runInput: async () => ({}),
-      confirm: async (message: string) => { asked.push(message); return answer; } });
-    live.push(value);
-    return { posts, runs: value.controllers(flowId, versionId, false, true, true).runs };
-  };
-  const declined = build(false, () => { throw Error('must not send'); });
-  expect(declined.runs.workflowOff).toBe(true);
+  const ask = (answer: boolean) => async (message: string) => { asked.push(message); return answer; };
+  const declined = rooms(storage(), () => { throw Error('must not send'); }, 'DISABLED', ask(false));
   await declined.runs.start();
   expect(declined.posts).toEqual([]); expect(declined.runs.getSnapshot().submission).toBe('idle');
+  expect(declined.runs.workflowOff).toBe(true);
   expect(asked[0]).toContain('turned off'); expect(asked[0]).toContain('once anyway');
-  const accepted = build(true, (_p, init) => { const requestId = JSON.parse(String(init.body)).brief.requestId;
-    return Response.json({ status: 'accepted', requestId, run: summary(requestId) }, { status: 202 }); });
+  const accepted = rooms(storage(), accept, 'DISABLED', ask(true));
   await accepted.runs.start();
   expect(accepted.posts.length).toBe(1);
   expect(accepted.runs.getSnapshot().message).toBe('Started one run. The workflow is still off.');
   // A workflow that is on never asks and keeps the plain message.
   const before = asked.length;
-  const on = rooms(storage(), (_p, init) => { const requestId = JSON.parse(String(init.body)).brief.requestId;
-    return Response.json({ status: 'accepted', requestId, run: summary(requestId) }, { status: 202 }); });
+  const on = rooms(storage(), accept, 'ENABLED', ask(true));
   await on.runs.start();
   expect(asked.length).toBe(before); expect(on.runs.getSnapshot().message).toBe('Run requested.');
+});
+
+test('Run asks about a workflow turned off after the room loaded, and sends nothing when its state cannot be read', async () => {
+  const asked: string[] = [];
+  // The room loaded while the workflow was on; another window turned it off since.
+  const stale = rooms(storage(), () => { throw Error('must not send'); }, 'DISABLED', async (m) => { asked.push(m); return false; });
+  stale.runs.setWorkflowOff(false);
+  await stale.runs.start();
+  expect(asked.length).toBe(1); expect(stale.posts).toEqual([]);
+  expect(stale.runs.workflowOff).toBe(true);
+  // On/off is not part of the controller key: the version keeps one controller either way.
+  const same = stale.value.controllers(flowId, versionId, false).runs;
+  expect(same).toBe(stale.runs);
+  const unreadable = rooms(storage(), () => { throw Error('must not send'); }, null, async (m) => { asked.push(m); return true; });
+  await unreadable.runs.start();
+  expect(unreadable.posts).toEqual([]); expect(asked.length).toBe(1);
+  expect(unreadable.runs.getSnapshot().message).toBe('No run started: could not check whether this workflow is on. Try again.');
 });

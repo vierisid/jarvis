@@ -53,18 +53,30 @@ export class WorkflowRunsController {
   private acknowledged = new Map<string, RunSummary>();
   private preferredId: string | null = null;
   private positions = new Map<string, number>();
+  private off: boolean;
   constructor(
     scope: RunScope,
     readonly port: WorkflowRunsPort,
     pending?: ManualRunRequest,
-    /** True when the workflow is turned off: a manual run is still allowed, once, and says so. */
-    readonly workflowOff = false,
+    workflowOff = false,
   ) {
     this.scope = { ...scope };
+    this.off = workflowOff;
     // A request journaled before a reload stays uncertain and locked until an
     // explicit check reads its outcome back. Nothing is read or re-sent here.
     if (pending && pending.scopeId === scope.scopeId && pending.flowId === scope.flowId && pending.versionId === scope.versionId && pending.requestId)
       this.state = { ...this.state, submission: 'uncertain', request: pending, message: 'A previous run request was not confirmed. Check its result before starting another run.' };
+  }
+  /** True when the workflow is turned off: a manual run is still allowed, once, and says so.
+   * It is the workflow's state, not this version's identity, so it changes in place. */
+  get workflowOff() {
+    return this.off;
+  }
+  /** Record the workflow's current on/off state and re-render the Run control. */
+  setWorkflowOff(off: boolean) {
+    if (off === this.off) return;
+    this.off = off;
+    this.emit({});
   }
   getSnapshot = () => this.state;
   subscribe = (fn: () => void) => {

@@ -51,8 +51,10 @@ export function createWorkflowRooms(host: WorkflowHost) {
     reconcile: command => transport.json(`/api/brief/workflows/requests/${encodeURIComponent(command.requestId)}`),
   });
   const selections = new Map<string, { runs: WorkflowRunsController; context: WorkflowContextController }>();
-  function controllers(flowId: string, versionId: string, editable: boolean, needsInput: boolean = true, workflowOff = false) {
-    const key = JSON.stringify([flowId, versionId, editable, workflowOff]); let value = selections.get(key);
+  // On/off is the workflow's state, not this version's identity: it is not part of
+  // the key, so one controller (and its request journal) serves the version either way.
+  function controllers(flowId: string, versionId: string, editable: boolean, needsInput: boolean = true) {
+    const key = JSON.stringify([flowId, versionId, editable]); let value = selections.get(key);
     if (value) return value;
     const base = `/api/brief/workflows/${encodeURIComponent(flowId)}`;
     const scope = { scopeId, flowId, versionId };
@@ -71,8 +73,16 @@ export function createWorkflowRooms(host: WorkflowHost) {
     const runs = new WorkflowRunsController(scope, {
       list: read.list, detail: read.detail,
       ...(!editable ? { start: async (request: ManualRunRequest): Promise<ManualRunResult> => {
-        // A turned-off workflow can still be run by hand, but only on purpose.
-        if (workflowOff && !(await host.confirm?.('This workflow is turned off.\nRun it once anyway? It will stay off afterwards.')))
+        // A turned-off workflow can still be run by hand, but only on purpose. Read
+        // its state now: it may have been turned off in another window since this
+        // room loaded. Without an answer nothing is sent.
+        const off = await transport.json(`/api/workflows/${encodeURIComponent(flowId)}`).then(
+          (detail: { flow?: { id?: unknown; status?: unknown } } | null) =>
+            detail?.flow?.id === flowId && typeof detail.flow.status === 'string' ? detail.flow.status !== 'ENABLED' : null,
+          () => null);
+        if (off === null) return { status: 'rejected', requestId: request.requestId, message: 'No run started: could not check whether this workflow is on. Try again.' };
+        runs.setWorkflowOff(off);
+        if (off && !(await host.confirm?.('This workflow is turned off.\nRun it once anyway? It will stay off afterwards.')))
           return { status: 'not_submitted', requestId: request.requestId };
         const payload = needsInput ? await host.runInput() : {};
         if (payload === null || transport.signal.aborted || !isBriefCapabilityEnabled(host.capabilities(), 'workflowContext')) return { status: 'not_submitted', requestId: request.requestId };
@@ -94,7 +104,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
         // Anything else is uncertain: the controller locks Run until an explicit check.
         return { status: 'uncertain', requestId: request.requestId };
       }, reconcile: read.reconcile } : {}),
-    }, editable ? undefined : pending, workflowOff);
+    }, editable ? undefined : pending);
     // The journal is cleared only when this controller settles its own request: a
     // validated acceptance, a definite refusal, or a check that found no record.
     // Ordinary emits never clear it, so another window's pending journal survives.
@@ -131,7 +141,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
   }
   function Selected({ shell }: { shell: BriefShellPort }) {
     const { flowId, versionId, runId } = shell.route.selection;
-    const [selection, setSelection] = useState<{ flowId: string; versionId: string; title: string; flow: Flow; editable: boolean; needsInput: boolean; workflowOff: boolean; inspection: InspectionSelection } | null>(null);
+    const [selection, setSelection] = useState<{ flowId: string; versionId: string; title: string; flow: Flow; editable: boolean; needsInput: boolean; inspection: InspectionSelection } | null>(null);
     const [error, setError] = useState(false), [revision, retry] = useState(0);
     useEffect(() => {
       const abort = new AbortController(); setSelection(null); setError(false);
@@ -146,13 +156,16 @@ export function createWorkflowRooms(host: WorkflowHost) {
         const params = new URLSearchParams({ versionId: version.id }); if (runId) params.set('runId', runId);
         const value = await transport.json(`/api/brief/workflows/${encodeURIComponent(flowId)}/inspection?${params}`, { signal: abort.signal });
         if (value.status !== 'ready' || value.data?.scopeId !== scopeId || value.data.flowId !== flowId || value.data.versionId !== version.id) throw new Error('Inspection unavailable');
-        if (!abort.signal.aborted) setSelection({ flowId, versionId: version.id, title: version.displayName, flow: detail.flow, editable: version.state === 'DRAFT', needsInput: needsManualRunInput(version.trigger), workflowOff: typeof detail.flow?.status === 'string' && detail.flow.status !== 'ENABLED', inspection: value.data });
+        if (abort.signal.aborted) return;
+        const editable = version.state === 'DRAFT', needsInput = needsManualRunInput(version.trigger);
+        controllers(flowId, version.id, editable, needsInput).runs.setWorkflowOff(typeof detail.flow?.status === 'string' && detail.flow.status !== 'ENABLED');
+        setSelection({ flowId, versionId: version.id, title: version.displayName, flow: detail.flow, editable, needsInput, inspection: value.data });
       })().catch(() => { if (!abort.signal.aborted) setError(true); });
       return () => abort.abort();
     }, [flowId, versionId, runId, shell.route.room, revision]);
     if (!selection) return <section><h1 className="brief-type-room-title">Workflow</h1><p role="status">{error ? 'This workflow version is unavailable. Your selected IDs are retained.' : 'Loading workflow…'}</p>
       {error && <BriefButton onClick={() => retry(v => v + 1)}>Check again</BriefButton>}<BriefButton onClick={() => shell.navigate({ room: 'all-workflows', selection: {} })}>All workflows</BriefButton></section>;
-    const { runs, context } = controllers(selection.flowId, selection.versionId, selection.editable, selection.needsInput, selection.workflowOff);
+    const { runs, context } = controllers(selection.flowId, selection.versionId, selection.editable, selection.needsInput);
     const binding = { source: 'live' as const, scopeId, flowId: selection.flowId, versionId: selection.versionId, title: selection.title, capabilities: host.capabilities() };
     if (shell.route.room === 'workflow-runs') return <WorkflowRunsRoom shell={shell} binding={{ ...binding, controller: runs }} />;
     if (shell.route.room === 'workflow-context') return <WorkflowContextRoom shell={shell} binding={{ ...binding, controller: context, runs,
