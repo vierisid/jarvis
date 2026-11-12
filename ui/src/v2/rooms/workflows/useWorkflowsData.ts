@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UserFailure } from "../../ui";
+import { askManualRunPayload } from "./manual-run-payload";
 
 const POLL_INTERVAL_MS = 8000;
 
@@ -247,10 +248,15 @@ export function useWorkflowsData() {
 
   const runFlow = useCallback(async (flowId: string): Promise<ActionResult> => {
     try {
+      // A manual trigger that declares input fields is started with values for
+      // them, read from the version the server will run.
+      const asked = await askManualRunPayload(flowId);
+      if (asked === null) return { ok: false, message: "Run cancelled. Nothing was started." };
+      const { payload } = asked;
       const res = await fetch(`/api/workflows/${flowId}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ triggeredBy: "dashboard" }),
+        body: JSON.stringify({ triggeredBy: "dashboard", ...(payload ? { payload } : {}) }),
       });
       if (!res.ok) {
         const body = await safeJson(res);

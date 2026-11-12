@@ -178,3 +178,14 @@ describe('manual run input', () => {
     expect(needsManualRunInput(withAction(empty('trigger'), { text: '{{"trigger.body"}}' }))).toBe(false);
   });
 });
+
+describe("manualTriggerFields", () => {
+  test("names the fields a manual trigger declares and asks for run input", async () => {
+    const { manualTriggerFields } = await import("./trigger-kinds");
+    const trigger = { ...empty("trigger"), settings: { input: { customer: "", amount: "" } } } as unknown as FlowStepNode;
+    expect(manualTriggerFields(trigger)).toEqual(["customer", "amount"]);
+    expect(needsManualRunInput(trigger)).toBe(true);
+    expect(manualTriggerFields(empty("trigger"))).toEqual([]);
+    expect(manualTriggerFields(pieceTrigger("t", "schedule", undefined, { a: 1 }))).toEqual([]);
+  });
+});

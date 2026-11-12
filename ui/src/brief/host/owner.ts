@@ -36,7 +36,7 @@ export function sameOwner(initial: HostDescriptor, next: HostDescriptor): boolea
 }
 export function createDashboardOwner(initial: HostDescriptor, ports: {
   storage: Storage; fetch?: typeof fetch; changed(): void; unauthorized(): void; explain(message: string): void;
-  confirm(message: string): Promise<boolean>; runInput(): Promise<Record<string, unknown> | null>;
+  confirm(message: string): Promise<boolean>; runInput(fields?: string[]): Promise<Record<string, unknown> | null>;
   revealConversationItem(id: string): void; replayTutorial(): Promise<{ state: 'replayed' | 'unknown' | 'unavailable' }>;
 }) {
   let descriptor = initial, retired = false, devices: SidecarInfo[] | null = null;
