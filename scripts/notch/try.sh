@@ -155,7 +155,8 @@ if [ "$FRESH_TOKEN" = 1 ] || [ ! -f "$DATA_DIR/.notch-enrolled" ]; then
 fi
 
 # The demo endpoint wants a secret (src/notch/demo-gate.ts). One is made once
-# and kept beside the test data, where scripts/notch/demo.sh finds it.
+# and kept beside the test data, where scripts/notch/demo.sh and fixture.sh
+# find it.
 DEMO_SECRET_FILE="$DATA_DIR/.notch-demo-secret"
 if [ ! -s "$DEMO_SECRET_FILE" ]; then
   (umask 077 && head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$DEMO_SECRET_FILE")
@@ -166,6 +167,7 @@ say "Starting the brain with the notch switch on"
 echo "Data:  $DATA_DIR   (separate from any installed Jarvis)"
 echo "Brain: http://localhost:$PORT"
 echo "Demo:  in a second terminal, run scripts/notch/demo.sh"
+echo "Real:  for real approvals and promises to test on, run scripts/notch/fixture.sh"
 if [ "$START" = 1 ] && [ "$TARGET" = "windows" ] && [ -f "$APP_DIR/bin/jarvis.exe" ]; then
   echo "The test build starts by itself once the brain is up. The first time, a"
   echo "window asks for the token above."
