@@ -59,6 +59,13 @@ Practical consequences:
   context rule on `read_data` with the condition `tool_name` set to
   `workflow_notify` and the effect `require_approval`. A repeated
   `idempotencyKey` is deduplicated before any approval is asked.
+  A card for such a notice that an earlier version created (when every notify
+  was a governed send) and parked is not retired and not approved for the owner:
+  it stays a waiting card until answered. Approved, the step delivers once and
+  the run continues; denied, it ends as denied. The recorded effect is moved to
+  the new category only when the request, the workflow version and the tool are
+  unchanged and its frozen channels are still only the owner's own, so any
+  other change after the card was made is still refused as a changed effect.
 - Each effect is recorded in `workflow_effect` with its frozen arguments, target,
   decision and outcome, readable at `GET /api/workflow-runs/:runId/effects`.
 - A tool that fails reports a typed outcome rather than a result that happens to

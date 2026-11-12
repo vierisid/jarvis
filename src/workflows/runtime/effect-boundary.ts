@@ -37,6 +37,7 @@ export const WORKFLOW_STEP_LABEL_MAX_CHARS = 120;
 /** Routes whose target the boundary takes a chat card sentence from: starting a workflow and calling a reusable child (#1152). */
 const CHANNEL_INTENT_ROUTES: ReadonlySet<string> = new Set(['workflow', 'subflow']);
 import { holdStep, PAUSED_REASON } from './emergency-hold';
+import { isOwnerOnlyNotify } from '../jarvis-pieces/types';
 import { beginEffectDispatch } from './effect-inflight';
 
 export interface WorkflowAuthorityDependencies {
@@ -297,6 +298,21 @@ export class WorkflowEffectBoundary {
         effect.requestDigest = digest(input.request);
         saveWorkflowEffect(effect);
       }
+    }
+    // A notification recorded as a governed send before #1331 judged it as one,
+    // and parked on a card. A notice that only reaches the owner is a read now.
+    // Same request, same version, same tool, and the new judgement is the looser
+    // one: the owner's answer on the old card still stands for the same step, so
+    // it is matched once and bound to the new category from then on. Any other
+    // change of category stays a changed effect. The frozen channels are what
+    // the step sends to, so they must be the owner's own surfaces too, not
+    // only the request's.
+    if (effect && input.route === 'notify' && effect.route === 'notify' && effect.toolName === input.toolName
+      && effect.actionCategory === 'send_message' && input.category === 'read_data'
+      && effect.requestDigest === digest(input.request) && effect.versionDigest === resolved.versionDigest
+      && isOwnerOnlyNotify(effect.arguments.channels)) {
+      effect.actionCategory = input.category;
+      saveWorkflowEffect(effect);
     }
     if (effect && (effect.requestDigest !== digest(input.request) || effect.versionDigest !== resolved.versionDigest
       || effect.toolName !== input.toolName || effect.actionCategory !== input.category)) {
