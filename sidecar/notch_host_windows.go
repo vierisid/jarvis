@@ -5,10 +5,13 @@ package main
 import (
 	"fmt"
 	"log"
+	"runtime"
 	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
+
+	ole "github.com/go-ole/go-ole"
 )
 
 var (
@@ -18,6 +21,7 @@ var (
 	procNotchCallNtPowerInfo  = syscall.NewLazyDLL("powrprof.dll").NewProc("CallNtPowerInformation")
 	procNotchGetLastInputInfo = user32.NewProc("GetLastInputInfo")
 	procNotchGetTickCount     = kernel32.NewProc("GetTickCount")
+	procNotchGetCursorInfo    = user32.NewProc("GetCursorInfo")
 )
 
 const (
@@ -163,8 +167,26 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 		video      notchVideoWatch
 		sampler    notchScreenSampler
 		sampleFail bool
+		soundFail  bool
+		looks      int // looks at the fullscreen app now in front
 	)
 	defer sampler.release()
+	// Asking which programs play sound goes through COM, which belongs to a
+	// thread. This goroutine keeps one for as long as the notch is open.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	canAskSound := true
+	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err == nil {
+		defer ole.CoUninitialize()
+	} else if oe, ok := err.(*ole.OleError); ok && oe.Code() == 1 {
+		// Already started on this thread: usable, and still to be balanced.
+		defer ole.CoUninitialize()
+	} else if ok && oe.Code() == 0x80010106 {
+		// Started in the other mode by someone else: usable as it is.
+	} else {
+		canAskSound = false
+		log.Printf("[notch] cannot ask which programs play sound (%v); a video that does not move will keep the notch", err)
+	}
 	for {
 		select {
 		case <-done:
@@ -196,15 +218,33 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 		// read at all.
 		playing := false
 		if fullscreen && awake {
+			signs := notchVideoSigns{handsOff: notchIdleMs() >= notchInputGraceMs}
+			signs.pointerHidden, signs.pointerElsewhere = notchPointerState(w.hwnd)
 			if sample, ok := sampler.take(w.hwnd); ok {
-				playing = video.observe(sample, notchIdleMs() < notchInputGraceMs)
+				signs.change = video.change(sample)
 			} else if !sampleFail {
 				sampleFail = true
-				// Without a picture nothing says "video", so the notch stays.
-				log.Printf("[notch] could not read the screen to look for a video; the notch stays in fullscreen apps")
+				log.Printf("[notch] could not read the screen; a muted video will keep the notch")
+			}
+			if canAskSound {
+				if programs, err := notchProgramsPlayingSound(); err == nil {
+					signs.appSound = notchAppPlaysSound(program, programs)
+				} else if !soundFail {
+					soundFail = true
+					log.Printf("[notch] could not ask which programs play sound: %v", err)
+				}
+			}
+			playing = video.observe(signs)
+			// What was seen, so a test run can be read afterwards: every two
+			// seconds for the first twenty, then once a minute.
+			looks++
+			if (looks <= 50 && looks%5 == 1) || looks%150 == 0 {
+				log.Printf("[notch] looking at %s: hands off %v, pointer hidden %v (elsewhere %v), app sound %v, picture change %.3f, video %v",
+					program, signs.handsOff, signs.pointerHidden, signs.pointerElsewhere, signs.appSound, signs.change, playing)
 			}
 		} else {
 			video.reset()
+			looks = 0
 		}
 		hide := notchShouldHide(fullscreen, awake, playing)
 		if hide != w.hidden.Load() {
@@ -216,7 +256,7 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 				if w.loaded.Load() {
 					w.show()
 				}
-				log.Printf("[notch] shown again (fullscreen app in front: %v, display kept awake: %v, picture moving: %v)", fullscreen, awake, playing)
+				log.Printf("[notch] shown again (fullscreen app in front: %v, display kept awake: %v, video: %v)", fullscreen, awake, playing)
 			}
 		}
 		fg, _, _ := procGetForegroundWindow.Call()
@@ -257,6 +297,40 @@ func notchIdleMs() uint32 {
 	}
 	now, _, _ := procNotchGetTickCount.Call()
 	return uint32(now) - li.dwTime
+}
+
+// notchCursorInfo mirrors Win32 CURSORINFO.
+type notchCursorInfo struct {
+	cbSize  uint32
+	flags   uint32
+	hCursor uintptr
+	pos     w32Point
+}
+
+// notchPointerState says what the mouse pointer tells about the app in front.
+// hidden: the pointer is on the notch's display and is not being drawn, which
+// is what a player does once the hand is off the mouse and a page never does.
+// elsewhere: the pointer is on another display and tells nothing. A failure
+// reads as a pointer in plain view, which keeps the notch.
+func notchPointerState(hwnd uintptr) (hidden, elsewhere bool) {
+	ci := notchCursorInfo{}
+	ci.cbSize = uint32(unsafe.Sizeof(ci))
+	if ok, _, _ := procNotchGetCursorInfo.Call(uintptr(unsafe.Pointer(&ci))); ok == 0 {
+		return false, false
+	}
+	monitor, _, _ := procPanelMonitorFromWindow.Call(hwnd, monitorDefaultToNearest)
+	mi := panelMonitorInfo{}
+	mi.cbSize = uint32(unsafe.Sizeof(mi))
+	if ok, _, _ := procGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&mi))); monitor == 0 || ok == 0 {
+		return false, false
+	}
+	m := mi.rcMonitor
+	if ci.pos.X < m.Left || ci.pos.X >= m.Right || ci.pos.Y < m.Top || ci.pos.Y >= m.Bottom {
+		return false, true
+	}
+	// An app hides the pointer either by turning it off or by setting none.
+	const cursorShowing = 0x1
+	return ci.flags&cursorShowing == 0 || ci.hCursor == 0, false
 }
 
 // notchScreenSampler reads a grid of colours from the middle of the notch's
