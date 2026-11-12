@@ -75,6 +75,11 @@ interface NotchLineBase {
   /** The app the line is about: its icon is shown with a ring. */
   src?: NotchApp;
   arrive?: NotchArrival;
+  /**
+   * The line came by itself: the person did not ask for it. No yes lands on it
+   * for the first 0.7 seconds, so a tap meant for something else cannot.
+   */
+  unasked?: boolean;
 }
 
 /** A result. Nothing is asked; it leaves by itself after `ms`. */

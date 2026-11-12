@@ -90,3 +90,42 @@ describe('jarvis notch demo', () => {
     }
   });
 });
+
+describe('jarvis notch fixture', () => {
+  test('makes one on the running brain and says what the brain said', async () => {
+    const h = deps({ answer: () => Response.json({ made: 'An approval is waiting: write a line into notch-fixture.txt.', pages: 1 }) });
+    expect(await cmdNotch(['fixture', 'approval'], h.d)).toBe(0);
+    expect(h.calls).toEqual([{
+      url: 'http://127.0.0.1:3142/api/notch/fixture',
+      headers: { 'Content-Type': 'application/json', 'x-notch-demo-token': SECRET },
+      body: { kind: 'approval' },
+    }]);
+    expect(h.out).toEqual(['An approval is waiting: write a line into notch-fixture.txt.']);
+  });
+
+  test('with no kind it lists them, and --in gives a due time in seconds', async () => {
+    const h = deps({ answer: () => Response.json({ kinds: ['approval', 'promise'], pages: 1 }) });
+    expect(await cmdNotch(['fixture'], h.d)).toBe(0);
+    expect(h.out).toEqual(['Fixtures: approval, promise']);
+    expect(await cmdNotch(['fixture', 'promise', '--in', '120', '--port', '3143'], h.d)).toBe(0);
+    expect(h.calls[1]!.url).toBe('http://127.0.0.1:3143/api/notch/fixture');
+    expect(h.calls[1]!.body).toEqual({ kind: 'promise', in: 120 });
+  });
+
+  test('--in is for fixtures only, and must be a sensible number', async () => {
+    const h = deps();
+    expect(await cmdNotch(['demo', 'mail', '--in', '120'], h.d)).toBe(2);
+    expect(await cmdNotch(['fixture', 'promise', '--in', 'soon'], h.d)).toBe(2);
+    expect(await cmdNotch(['fixture', 'promise', '--in', '1'], h.d)).toBe(2);
+    expect(h.calls).toEqual([]);
+  });
+
+  test('an unknown kind and a fixture that failed are told apart', async () => {
+    const unknown = deps({ answer: () => Response.json({ error: 'No fixture is called "x"', kinds: ['approval'] }, { status: 400 }) });
+    expect(await cmdNotch(['fixture', 'x'], unknown.d)).toBe(2);
+    expect(unknown.err).toEqual(['No fixture is called "x"', 'Fixtures: approval']);
+    const failed = deps({ answer: () => Response.json({ error: 'No task could be made.' }, { status: 500 }) });
+    expect(await cmdNotch(['fixture', 'promise'], failed.d)).toBe(1);
+    expect(failed.err).toEqual(['No task could be made.']);
+  });
+});

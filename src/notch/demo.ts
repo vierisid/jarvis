@@ -10,162 +10,18 @@
  * One moment plays at a time. Starting another replaces the one running.
  */
 import type { NotchAnswer, NotchSurface } from './surface.ts';
-import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchWord } from './protocol.ts';
+import type { NotchBlock, NotchLine, NotchPart, NotchWord } from './protocol.ts';
 import { NOTCH_BIRTHS, NOTCH_GESTURES, NOTCH_LIPS, NOTCH_MOODS } from './protocol.ts';
 
-/** Thrown inside a moment when another takes its place. */
-class Replaced extends Error {}
+import { NotchStage, NotchStageEnded, realNotchClock } from './stage.ts';
+import type { NotchClock, NotchLineExtras } from './stage.ts';
 
-export interface NotchDemoClock {
-  setTimeout(fn: () => void, ms: number): unknown;
-  clearTimeout(handle: unknown): void;
-}
-
-const realClock: NotchDemoClock = {
-  setTimeout: (fn, ms) => setTimeout(fn, ms),
-  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-};
-
-type LineExtras = Partial<Pick<NotchLine, 'mood' | 'mark' | 'who' | 'src' | 'arrive'>>;
-
-/** How long past its time a line is waited for before the script goes on without the page's word. */
-const LATE = 1500;
+/** The clock a demo runs on. Tests give it one they can wind forward. */
+export type NotchDemoClock = NotchClock;
 
 /** What a moment's script works with. */
-class Stage {
-  private n = 0;
-  private stopped = false;
-  private readonly timers = new Set<unknown>();
-  private readonly waiters = new Set<{ take(answer: NotchAnswer): boolean; fail(): void }>();
-  /**
-   * Answers nobody was waiting for when they came. Two can arrive back to
-   * back (a word changed, then yes), and the script is between two waits
-   * when the second lands: it must still be there when the script asks.
-   */
-  private readonly unheard: NotchAnswer[] = [];
-  private readonly openWaiters = new Set<{ done(): void; fail(): void }>();
-
-  constructor(readonly surface: NotchSurface, private readonly clock: NotchDemoClock, private readonly name: string) {}
-
-  /** A fresh id for the next line of this moment. */
-  id(): string {
-    return `demo-${this.name}-${++this.n}`;
-  }
-
-  stop(): void {
-    this.stopped = true;
-    for (const timer of this.timers) this.clock.clearTimeout(timer);
-    this.timers.clear();
-    for (const waiter of [...this.waiters]) waiter.fail();
-    for (const waiter of [...this.openWaiters]) waiter.fail();
-  }
-
-  heard(answer: NotchAnswer): void {
-    for (const waiter of [...this.waiters]) {
-      if (waiter.take(answer)) return;
-    }
-    this.unheard.push(answer);
-    if (this.unheard.length > 50) this.unheard.shift();
-  }
-
-  wasOpened(): void {
-    for (const waiter of [...this.openWaiters]) waiter.done();
-  }
-
-  wait(ms: number): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.stopped) { reject(new Replaced()); return; }
-      const timer = this.clock.setTimeout(() => {
-        this.timers.delete(timer);
-        if (this.stopped) reject(new Replaced()); else resolve();
-      }, ms);
-      this.timers.add(timer);
-    });
-  }
-
-  /** The next answer about the line `id`, of one of `acts` when given. */
-  answer(id: string, acts?: NotchAnswerAct[]): Promise<NotchAnswer> {
-    return new Promise((resolve, reject) => {
-      if (this.stopped) { reject(new Replaced()); return; }
-      const wanted = (answer: NotchAnswer): boolean => answer.id === id && (!acts || acts.includes(answer.act));
-      const kept = this.unheard.findIndex(wanted);
-      if (kept >= 0) { resolve(this.unheard.splice(kept, 1)[0]!); return; }
-      const waiter = {
-        take: (answer: NotchAnswer): boolean => {
-          if (!wanted(answer)) return false;
-          this.waiters.delete(waiter);
-          resolve(answer);
-          return true;
-        },
-        fail: (): void => { this.waiters.delete(waiter); reject(new Replaced()); },
-      };
-      this.waiters.add(waiter);
-    });
-  }
-
-  /** The next click on the resting notch. */
-  opened(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.stopped) { reject(new Replaced()); return; }
-      const waiter = {
-        done: (): void => { this.openWaiters.delete(waiter); resolve(); },
-        fail: (): void => { this.openWaiters.delete(waiter); reject(new Replaced()); },
-      };
-      this.openWaiters.add(waiter);
-    });
-  }
-
-  /**
-   * A result line. Comes back when it has left the notch: when the page says
-   * so, or a little after its time if no page is there to say it.
-   */
-  async say(parts: NotchPart[], ms: number, extras: LineExtras = {}): Promise<void> {
-    const id = this.id();
-    this.surface.show({ id, kind: 'say', say: parts, ms, ...extras });
-    await Promise.race([this.answer(id, ['done', 'yes']), this.wait(ms + LATE)]);
-  }
-
-  /** An offer. Comes back with what the person did with it. */
-  offer(parts: NotchPart[], yes: string, extras: LineExtras & { fold?: number } = {}): Promise<NotchAnswer> {
-    const id = this.id();
-    this.surface.show({ id, kind: 'offer', say: parts, yes, ...extras });
-    return this.answer(id, ['yes', 'no', 'fold']);
-  }
-
-  /** A row of choices. Comes back with the pick, or with no or fold. */
-  choose(parts: NotchPart[], options: string[], extras: LineExtras = {}): Promise<NotchAnswer> {
-    const id = this.id();
-    this.surface.show({ id, kind: 'offer', say: parts, options, ...extras });
-    return this.answer(id, ['pick', 'no', 'fold']);
-  }
-
-  /** A send with its window. True when it went out, false when it was taken back. */
-  async send(parts: NotchPart[], ms: number, extras: LineExtras = {}): Promise<boolean> {
-    const id = this.id();
-    this.surface.show({ id, kind: 'send', say: parts, ms, ...extras });
-    const answer = await Promise.race([this.answer(id, ['done', 'undo']), this.wait(ms + LATE)]);
-    return answer?.act !== 'undo';
-  }
-
-  /**
-   * Work in `steps` steps, one every `per` ms. Comes back with how many were
-   * done: all of them, or fewer if the person asked it to stop.
-   */
-  async work(parts: NotchPart[], steps: number, per: number, extras: LineExtras & { canTalk?: boolean; from?: number } = {}): Promise<number> {
-    const id = this.id();
-    const { from = 0, ...rest } = extras;
-    let stopAsked = false;
-    this.answer(id, ['stop']).then(() => { stopAsked = true; }, () => {});
-    this.surface.show({ id, kind: 'work', say: parts, steps, done: from, ...rest });
-    for (let done = from + 1; done <= steps; done++) {
-      await this.wait(per);
-      if (stopAsked) return done - 1;
-      this.surface.update(id, { done });
-    }
-    await this.wait(Math.min(per, 300));
-    return stopAsked ? steps - 1 : steps;
-  }
-}
+type Stage = NotchStage;
+type LineExtras = NotchLineExtras;
 
 const em = (text: string): NotchPart => ({ em: text });
 const word = (name: string, value: string, options: string[], more: Partial<NotchWord> = {}): NotchPart =>
@@ -632,20 +488,36 @@ export interface NotchDemo {
   running(): string | null;
 }
 
-export function createNotchDemo(
-  surface: NotchSurface,
-  options: { clock?: NotchDemoClock; log?: (line: string) => void } = {},
-): NotchDemo {
-  const clock = options.clock ?? realClock;
+export interface NotchDemoOptions {
+  clock?: NotchDemoClock;
+  log?: (line: string) => void;
+  /**
+   * Real things live on this notch too (./inbox.ts). Then yes at rest and Esc
+   * twice are theirs: with no moment playing the demo leaves both alone, and
+   * Esc twice only ends the moment that is playing.
+   */
+  real?: boolean;
+  /** Called when a moment is over, however it ended: the notch is free again. */
+  onEnd?: () => void;
+}
+
+export function createNotchDemo(surface: NotchSurface, options: NotchDemoOptions = {}): NotchDemo {
+  const clock = options.clock ?? realNotchClock;
   const log = options.log ?? ((line: string) => console.log(line));
   let stage: Stage | null = null;
   let playing: string | null = null;
   surface.onAnswer((answer: NotchAnswer) => { stage?.heard(answer); });
   // Yes with nothing on the notch, or a click on it: a moment that is waiting
   // for that gets it; with nothing playing, Jarvis opens.
-  surface.onOpen(() => { if (stage) stage.wasOpened(); else demo.play('home'); });
+  surface.onOpen(() => {
+    if (stage) stage.wasOpened();
+    else if (!options.real) demo.play('home');
+  });
   // Esc twice. Whatever is playing stops, and nothing starts until woken.
-  surface.onStop(() => { demo.play('stopped'); });
+  surface.onStop(() => {
+    if (!options.real) demo.play('stopped');
+    else if (stage) demo.stop();
+  });
   const end = (): void => {
     stage?.stop();
     stage = null;
@@ -658,7 +530,7 @@ export function createNotchDemo(
       const moment = Object.hasOwn(MOMENTS, name) ? MOMENTS[name] : undefined;
       if (!moment) return false;
       end();
-      const mine = new Stage(surface, clock, name);
+      const mine = new NotchStage(surface, clock, name);
       stage = mine;
       playing = name;
       // A clean start: nothing left over from the moment before.
@@ -671,10 +543,11 @@ export function createNotchDemo(
           stage = null;
           playing = null;
           if (surface.current().line) surface.rest();
+          options.onEnd?.();
         },
         (error: unknown) => {
-          if (error instanceof Replaced) return;
-          if (stage === mine) { stage = null; playing = null; }
+          if (error instanceof NotchStageEnded) return;
+          if (stage === mine) { stage = null; playing = null; options.onEnd?.(); }
           log(`[notch] the demo moment "${name}" failed: ${error instanceof Error ? error.message : String(error)}`);
         },
       );
@@ -684,6 +557,7 @@ export function createNotchDemo(
       end();
       surface.act({ park: 0, eye: false, mouth: 'shut' });
       surface.rest();
+      options.onEnd?.();
     },
     running: () => playing,
   };

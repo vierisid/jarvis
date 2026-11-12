@@ -168,6 +168,30 @@ func TestNotchPushHandlerNeedsTheSwitchOn(t *testing.T) {
 	}
 }
 
+func TestNotchOpenDashboardHandler(t *testing.T) {
+	svc := &NotchService{}
+	opened := 0
+	open := makeNotchOpenDashboardHandler(svc)
+	if _, err := open(nil); err == nil {
+		t.Fatal("notch.open_dashboard with the switch off should be refused")
+	}
+	svc.Configure(true)
+	// No way to open it yet (no brain connection): it says so and does nothing.
+	res, err := open(nil)
+	if err != nil || res.Result.(map[string]any)["opened"] != false {
+		t.Fatalf("with no way to open it: %v %v", res, err)
+	}
+	svc.OnOpenDashboard(func() { opened++ })
+	res, err = open(nil)
+	if err != nil || res.Result.(map[string]any)["opened"] != true || opened != 1 {
+		t.Fatalf("notch.open_dashboard: %v %v, opened %d times", res, err, opened)
+	}
+	svc.OnOpenDashboard(nil)
+	if svc.OpenDashboard() {
+		t.Fatal("after the way to open it was taken away it must not report opening")
+	}
+}
+
 func TestNotchPageMessagesGoToTheBrainAsTheyCame(t *testing.T) {
 	svc := &NotchService{}
 	if err := svc.fromPage(`{"type":"hello"}`); err == nil {

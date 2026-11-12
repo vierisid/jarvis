@@ -1,15 +1,15 @@
 /**
- * The notch's page and its one route.
+ * The notch's page and its two routes.
  *
  * The page is a built file, ui/notch.html, served like every other page of
  * the dashboard: from the static directory, behind the session check. It is
  * inert by itself: it draws nothing until the brain answers its hello, and a
  * brain with the switch off never does.
  *
- * The route is the demo endpoint, which exists only with the switch on and its
- * own gate open (./demo-gate.ts).
+ * The routes are the demo and fixture endpoints, which exist only with the
+ * switch on and their gate open (./demo-gate.ts).
  */
-import { NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, notchDemoGate, notchDemoTokenMatches } from './demo-gate.ts';
+import { NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, notchDemoGate, notchDemoTokenMatches } from './demo-gate.ts';
 
 /** Where the desktop app is told to point the notch's window. */
 export const NOTCH_PAGE_PATH = '/notch.html';
@@ -21,6 +21,12 @@ export interface NotchRouteDeps {
     play(name: string): boolean;
     stop(): void;
     running(): string | null;
+  } | null;
+  /** Makes real test items (./fixtures.ts). */
+  fixtures?: {
+    kinds(): string[];
+    /** Comes back with a sentence saying what was made, or throws one saying why not. */
+    make(kind: string, options: { in?: number }): Promise<string>;
   } | null;
   /** How many notch pages are up and listening. */
   pages?: () => number;
@@ -52,6 +58,26 @@ export function notchRoutes(enabled: boolean, deps: NotchRouteDeps = {}): NotchR
           return Response.json({ error: `No moment is called "${moment.slice(0, 60)}"`, moments: demo.names() }, { status: 400 });
         }
         return Response.json({ playing: moment, pages });
+      },
+    },
+    [NOTCH_FIXTURE_PATH]: {
+      POST: async (req) => {
+        const gate = notchDemoGate();
+        const fixtures = deps.fixtures;
+        if (!gate || !fixtures || !notchDemoTokenMatches(req.headers.get(NOTCH_DEMO_HEADER), gate)) return notFound();
+        const body = await req.json().catch(() => null) as { kind?: unknown; in?: unknown } | null;
+        const kind = typeof body?.kind === 'string' ? body.kind : '';
+        const pages = deps.pages?.() ?? 0;
+        if (kind === 'list') return Response.json({ kinds: fixtures.kinds(), pages });
+        if (!fixtures.kinds().includes(kind)) {
+          return Response.json({ error: `No fixture is called "${kind.slice(0, 60)}"`, kinds: fixtures.kinds() }, { status: 400 });
+        }
+        const dueIn = typeof body?.in === 'number' && Number.isInteger(body.in) && body.in >= 5 && body.in <= 86_400 ? body.in : undefined;
+        try {
+          return Response.json({ made: await fixtures.make(kind, { in: dueIn }), pages });
+        } catch (error) {
+          return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+        }
       },
     },
   };

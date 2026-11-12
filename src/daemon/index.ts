@@ -142,7 +142,7 @@ import { ApprovalDelivery, approvalToast, taskCompleteBody } from "../authority/
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
-import { channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
+import { NOTCH_DECIDER, applyApprovalDecision, channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
 import { sendDesktopNotification, sendDesktopNotificationReceipt } from "../comms/desktop-notify.ts";
 import { channelLabel, failureText, projectFailure } from "../failures/projection.ts";
 import { bindingRefusalNotifier, workflowRunNotice } from "../workflows/runtime/binding-refusals.ts";
@@ -161,6 +161,8 @@ import { createNotchDemo } from "../notch/demo.ts";
 import type { NotchDemo } from "../notch/demo.ts";
 import { NOTCH_DEMO_PATH, initNotchDemoGate } from "../notch/demo-gate.ts";
 import { NOTCH_PAGE_PATH, notchRoutes } from "../notch/routes.ts";
+import { attachNotchReal } from "../notch/real.ts";
+import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
@@ -722,6 +724,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   const notchDemoState = initNotchDemoGate({ hosted: isHostedInstall(jarvisConfig), notch: notchEnabled() });
   let notchSurface: NotchSurface | null = null;
   let notchDemo: NotchDemo | null = null;
+  // The real things on the notch: approvals and the rest (src/notch/real.ts).
+  let notchReal: NotchReal | null = null;
 
   // File sink, installed here - the first thing after the config is readable
   // and before anything else boots - so the log captures startup too. A hosted
@@ -1136,7 +1140,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // gets the same line again (src/notch/surface.ts).
       notchSurface = new NotchSurface(sidecarManager);
       if (notchDemoState === 'open') {
-        notchDemo = createNotchDemo(notchSurface);
+        // Real things live on the notch too: yes at rest and Esc twice are
+        // theirs, and when a moment ends the count is said again.
+        notchDemo = createNotchDemo(notchSurface, { real: true, onEnd: () => notchReal?.inbox.refresh() });
         console.warn(`[notch] JARVIS_NOTCH_DEMO is set: ${NOTCH_DEMO_PATH} is OPEN (secret-gated). Whoever holds the secret can make the notch show sample sentences. Nothing else.`);
       }
     }
@@ -4496,6 +4502,26 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Voice-channel audit tagging for forensic separation from click path.
     wsService.setAuditTrail(auditTrail);
 
+    // The notch: every pending approval becomes one line with one yes. The
+    // yes goes through applyApprovalDecision like every other surface's, as
+    // its own decider, so decided-once and every refusal hold there too.
+    if (notchSurface) {
+      notchReal = attachNotchReal(notchSurface, {
+        busy: () => notchDemo?.running() != null,
+        approvalManager,
+        approve: (requestId) => applyApprovalDecision('approve', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
+        deliverApproval: (request) => approvalDelivery.deliver(request),
+        openDashboard: (sidecarId) => {
+          const targets = sidecarId ? [sidecarId] : sidecarManager.getConnectedSidecars().map((sc) => sc.id);
+          for (const id of targets) {
+            void sidecarManager.dispatchRPC(id, 'notch.open_dashboard', {}).catch((err) => {
+              console.warn('[notch] the dashboard could not be opened:', err instanceof Error ? err.message : err);
+            });
+          }
+        },
+      });
+    }
+
     // Restore emergency state from config
     const savedEmergencyState = authorityConfig.emergency_state ?? 'normal';
     if (savedEmergencyState === 'paused') emergencyController.pause();
@@ -4726,6 +4752,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Approve/Deny to ordinary actions and gave irreversible ones "Review in
     // Jarvis" only; the founder opted to allow Approve/Deny on every approval
     // notification (the impact still shows in the body's meta as a risk cue).
+    // A payment is the exception since 12 November: it is approved on the
+    // dashboard only (approvalDashboardOnly), so its toast is review-only.
     // Since #791 a toast too long to read whole is review-only whatever its
     // impact (approvalToast, TOAST_APPROVABLE_MAX_COLUMNS).
     // All four reasons are wired: approval, done (an approved action finished),
@@ -4758,9 +4786,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const approvalNotifyTimer = setInterval(() => {
       try {
         if (sidecarManager.getConnectedSidecars().length === 0) return;
+        // While a notch is up it is the one that asks and the one that says
+        // "done": a toast for the same thing would ask twice. The ids are
+        // still marked as told, so a notch that goes away does not release
+        // a backlog of toasts.
+        const notchTells = notchReal?.showing() === true;
         for (const req of approvalManager.getPending()) {
           if (notifiedApprovalIds.has(req.id)) continue;
           notifiedApprovalIds.add(req.id);
+          if (notchTells) continue;
           if (Date.now() - req.created_at > 60_000) continue; // skip the backlog
           // Approve/Deny only when the toast can show the full request.
           // Requests requiring on-screen review remain dashboard-only.
@@ -4781,6 +4815,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         for (const req of executed) {
           if (notifiedDoneIds.has(req.id)) continue;
           notifiedDoneIds.add(req.id);
+          if (notchTells) continue;
           // Only a run whose receipt says it happened is "complete" (Q-08).
           if ((req.execution_outcome ?? 'committed') !== 'committed') continue;
           const doneAt = req.executed_at ?? req.decided_at ?? req.created_at;
@@ -5401,7 +5436,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const apiRoutes = {
       ...createApiRoutes(apiContext),
       // Absent unless the notch switch is on.
-      ...notchRoutes(notchEnabled(), { demo: notchDemo, pages: () => notchSurface?.listening() ?? 0 }),
+      ...notchRoutes(notchEnabled(), { demo: notchDemo, fixtures: notchReal?.fixtures ?? null, pages: () => notchSurface?.listening() ?? 0 }),
       ...createWorkflowRoutes({
         egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
         recoveryAuthority: authorityEngine,

@@ -26,7 +26,7 @@ function fakeClock() {
 /** Lets every promise that can settle, settle. */
 const settle = async (): Promise<void> => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
-function harness() {
+function harness(options: { real?: boolean; onEnd?: () => void } = {}) {
   const pushed: NotchToPage[] = [];
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const port: NotchSurfacePort = {
@@ -40,7 +40,7 @@ function harness() {
   const logs: string[] = [];
   const surface = new NotchSurface(port, (line) => logs.push(line));
   const { clock, advance } = fakeClock();
-  const demo = createNotchDemo(surface, { clock, log: (line) => logs.push(line) });
+  const demo = createNotchDemo(surface, { clock, log: (line) => logs.push(line), ...options });
   const say = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
   say({ type: 'hello', v: 1 });
   pushed.length = 0;
@@ -303,4 +303,37 @@ describe('every moment', () => {
       expect(h.surface.current().line).toBeNull();
     });
   }
+});
+
+describe('beside real things', () => {
+  test('yes at rest and Esc twice are not the demo\'s when real things live on the notch', async () => {
+    const h = harness({ real: true });
+    h.say({ type: 'open' });
+    h.say({ type: 'stop' });
+    await settle();
+    expect(h.demo.running()).toBeNull();
+    expect(h.shown()).toEqual([]);
+  });
+
+  test('Esc twice ends the moment that is playing, and says the notch is free again', async () => {
+    let ended = 0;
+    const h = harness({ real: true, onEnd: () => { ended++; } });
+    h.demo.play('mail');
+    await settle();
+    expect(h.demo.running()).toBe('mail');
+    h.say({ type: 'stop' });
+    await settle();
+    expect(h.demo.running()).toBeNull();
+    expect(ended).toBe(1);
+    expect(h.surface.current().line).toBeNull();
+  });
+
+  test('a moment that ends by itself says so too', async () => {
+    let ended = 0;
+    const h = harness({ onEnd: () => { ended++; } });
+    h.demo.play('faces');
+    for (let i = 0; i < 400 && h.demo.running(); i++) { h.advance(2000); await settle(); }
+    expect(h.demo.running()).toBeNull();
+    expect(ended).toBe(1);
+  });
 });
