@@ -105,6 +105,18 @@ test('a caller that gives up while held is let go, and nothing is left listening
   expect(listeners.size).toBe(0);
 });
 
+test('with nothing held the call goes out in the same turn of the loop, as it always did', () => {
+  // The cancellation tests rely on this: a call that yielded first would let
+  // an abort land before the provider had been reached.
+  setPauseHoldsLoops(true);
+  setActiveEmergencyController(new EmergencyController());
+  const { m, calls } = manager();
+  void runWithOrigin('background', () => m.chatTier('medium', 'test', messages));
+  expect(calls).toEqual(['chat']);
+  void runWithOrigin('background', () => m.chatWithOverride(messages, 'fixture'));
+  expect(calls).toEqual(['chat', 'chat']);
+});
+
 test('running, or with no controller at all, nothing waits', async () => {
   setPauseHoldsLoops(true);
   await whenRunnable();

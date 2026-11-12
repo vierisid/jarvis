@@ -135,6 +135,15 @@ export function setPauseHoldsLoops(on: boolean): void {
 }
 
 /**
+ * Whether a background model call would be held right now. For callers that
+ * must not wait at all when there is nothing to wait for: an `await`, even
+ * of a promise already resolved, lets other work run first.
+ */
+export function pauseIsHolding(): boolean {
+  return pauseHoldsLoops && active?.getState() === 'paused';
+}
+
+/**
  * Resolves when background work may make its next model call: at once when
  * Jarvis is running, and after Resume when it is paused. This is what makes
  * Pause stop the loops that it otherwise only starves: a paused loop is told
@@ -151,7 +160,7 @@ export function setPauseHoldsLoops(on: boolean): void {
  */
 export function whenRunnable(signal?: AbortSignal): Promise<void> {
   const controller = active;
-  if (!pauseHoldsLoops || !controller || controller.getState() !== 'paused') return Promise.resolve();
+  if (!controller || !pauseIsHolding()) return Promise.resolve();
   return new Promise<void>((resolve, reject) => {
     let off: () => void = () => {};
     const onAbort = (): void => { finish(() => reject(signal?.reason ?? new Error('aborted'))); };
