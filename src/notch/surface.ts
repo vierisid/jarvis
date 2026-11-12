@@ -39,6 +39,7 @@ export class NotchSurface {
   private readonly answerListeners = new Set<(answer: NotchAnswer, sidecarId: string) => void>();
   private readonly openListeners = new Set<(sidecarId: string) => void>();
   private readonly stopListeners = new Set<(sidecarId: string) => void>();
+  private readonly helloListeners = new Set<(sidecarId: string) => void>();
   private complaints = 0;
 
   constructor(
@@ -108,6 +109,12 @@ export class NotchSurface {
     return () => { this.openListeners.delete(listener); };
   }
 
+  /** A page has come up and been told everything: it can be shown things from now on. */
+  onHello(listener: (sidecarId: string) => void): () => void {
+    this.helloListeners.add(listener);
+    return () => { this.helloListeners.delete(listener); };
+  }
+
   /** Esc twice: the person wants everything stopped. */
   onStop(listener: (sidecarId: string) => void): () => void {
     this.stopListeners.add(listener);
@@ -134,6 +141,7 @@ export class NotchSurface {
       }
       this.met.add(sidecarId);
       this.push(state, sidecarId);
+      for (const listener of this.helloListeners) listener(sidecarId);
       return;
     }
     if (message.type === 'open') {

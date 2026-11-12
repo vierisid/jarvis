@@ -14,6 +14,10 @@
  *   payment   an approval that says it is a payment of a sample amount. It is
  *             a declared intent with nothing behind it: approving it in the
  *             dashboard moves no money and runs nothing.
+ *   promise   a promise due in two minutes (or `--in <seconds>`). Keeping it
+ *             adds one line to notch-fixture.log in the data directory, and
+ *             that is all: no model is asked. One line per time it ran, so
+ *             the file is the proof that it ran once.
  *
  * The route that reaches this is behind the demo gate (./demo-gate.ts): a
  * secret, never on a hosted install, and absent with the notch switch off.
@@ -22,13 +26,47 @@ import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts'
 
 /** What every fixture's records are marked with, so they can be told from real ones. */
 export const NOTCH_FIXTURE_AGENT = 'notch-fixture';
+/**
+ * Where a fixture promise says it was created from. The executor runs
+ * commitments from here with the fixture's own runner in place of a model
+ * turn. Neither the HTTP route nor the model's tool can write this value, so
+ * such a commitment can only be made by this file.
+ */
+export const NOTCH_FIXTURE_ORIGIN = 'notch_fixture';
+/** The file a fixture promise adds its line to, inside the data directory. */
+export const NOTCH_FIXTURE_LOG = 'notch-fixture.log';
 
 export interface NotchFixtureDeps {
   approvalManager: Pick<ApprovalManager, 'createRequest'>;
   /** Shows a new approval wherever approvals are shown: the dashboard card, and a chat card if a channel is set up. */
   deliverApproval?: (request: ApprovalRequest) => Promise<void> | void;
-  /** More fixtures, by kind. Each comes back with a sentence saying what was made. */
-  more?: Record<string, (options: { in?: number }) => Promise<string> | string>;
+  /** Promises. Absent when the executor that keeps them is not there. */
+  promises?: {
+    create(what: string, options: { when_due: number; assigned_to: string; created_from: string }): { id: string; when_due: number | null };
+    /** Has the executor look now, so the promise is announced on time and not at its next sweep. */
+    look(): void;
+  };
+  now?: () => number;
+}
+
+/** How long until a fixture promise is due, when not said. */
+export const NOTCH_FIXTURE_PROMISE_IN_S = 120;
+
+const two = (n: number): string => String(n).padStart(2, '0');
+const hms = (at: number): string => {
+  const d = new Date(at);
+  return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+};
+
+/**
+ * What keeping a fixture promise does: one line into the log, saying when and
+ * which. `append` is the file write, handed in so this file touches no disk.
+ */
+export function notchFixturePromiseRun(append: (line: string) => void, now: () => number = Date.now) {
+  return (commitment: { id: string; what: string }): string => {
+    append(`${new Date(now()).toISOString()} ${commitment.id} ${commitment.what}\n`);
+    return `Wrote one line into ${NOTCH_FIXTURE_LOG}.`;
+  };
 }
 
 export interface NotchFixtures {
@@ -79,8 +117,20 @@ export function createNotchFixtures(deps: NotchFixtureDeps): NotchFixtures {
       await deliver(request);
       return `A payment approval is waiting (${request.id.slice(0, 8)}). It is a test: approving it in the dashboard moves no money.`;
     },
-    ...deps.more,
   };
+  const promises = deps.promises;
+  if (promises) {
+    kinds.promise = (options) => {
+      const now = (deps.now ?? Date.now)();
+      const seconds = options.in ?? NOTCH_FIXTURE_PROMISE_IN_S;
+      const due = now + seconds * 1000;
+      // The time is in its words so that two made in the same minute are two
+      // promises, not one said twice.
+      const made = promises.create(`Notch test promise of ${hms(now)}`, { when_due: due, assigned_to: 'jarvis', created_from: NOTCH_FIXTURE_ORIGIN });
+      promises.look();
+      return `A promise is due at ${hms(due)}, in ${seconds} seconds (${made.id.slice(0, 8)}). Keeping it adds one line to ${NOTCH_FIXTURE_LOG} in the data directory.`;
+    };
+  }
 
   return {
     kinds: () => Object.keys(kinds),

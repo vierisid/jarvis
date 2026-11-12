@@ -77,7 +77,7 @@ import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness
 import { switchedOffCard, workflowToolDeclarationRefusal, workflowToolSwitchRefusal } from '../workflows/runtime/workflow-ui-tools';
 import { setDeletedWorkflowCardListener } from '../workflows/db/repos/flow-deletion';
 import { pinUnpinnedEnabledFlows } from '../workflows/db/repos/binding-pins';
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { initDatabase, closeDb } from "../vault/schema.ts";
@@ -161,6 +161,8 @@ import { createNotchDemo } from "../notch/demo.ts";
 import type { NotchDemo } from "../notch/demo.ts";
 import { NOTCH_DEMO_PATH, initNotchDemoGate } from "../notch/demo-gate.ts";
 import { NOTCH_PAGE_PATH, notchRoutes } from "../notch/routes.ts";
+import { NOTCH_FIXTURE_LOG } from "../notch/fixtures.ts";
+import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { attachNotchReal } from "../notch/real.ts";
 import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
@@ -4511,6 +4513,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         approvalManager,
         approve: (requestId) => applyApprovalDecision('approve', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
         deliverApproval: (request) => approvalDelivery.deliver(request),
+        // Promises: the fuse before one is kept, Esc to cancel, and what came
+        // of it. A fixture promise (demo gate only) is kept by one line in a
+        // file inside the data directory, not by a model turn.
+        promises: {
+          executor,
+          create: (what, options) => createCommitment(what, options),
+          kept: () => findCommitments({ status: 'completed' }),
+          appendFixtureLog: notchDemoState === 'open'
+            ? (line) => appendFileSync(path.join(dataDir, NOTCH_FIXTURE_LOG), line)
+            : undefined,
+        },
         openDashboard: (sidecarId) => {
           const targets = sidecarId ? [sidecarId] : sidecarManager.getConnectedSidecars().map((sc) => sc.id);
           for (const id of targets) {
@@ -4526,6 +4539,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const savedEmergencyState = authorityConfig.emergency_state ?? 'normal';
     if (savedEmergencyState === 'paused') emergencyController.pause();
     else if (savedEmergencyState === 'killed') emergencyController.kill();
+
+    // Pause holds promises too: nothing is announced or run while Jarvis is
+    // paused or stopped, and each is announced again after Resume. Told the
+    // state as it stands now as well: the restore above was before anyone
+    // was listening.
+    emergencyController.subscribe((state) => executor.onEmergency(state));
+    executor.onEmergency(emergencyController.getState());
 
     // Persist emergency state changes to the DB settings store
     emergencyController.setStateChangeCallback(async (state) => {
@@ -5888,6 +5908,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const inSetupMode = !jarvisConfig.onboarding?.setup_completed_at;
     if (inSetupMode) {
       console.log('[Daemon] Setup mode — bgAgent / executor / awareness will start when onboarding completes');
+      // The notch's fixture promise needs no model: it is kept by its own
+      // runner. With the demo gate open the executor runs for those alone.
+      // Nothing else is announced or run, because nothing here could run it.
+      if (notchReal && notchDemoState === 'open') {
+        executor.start();
+        console.warn('[notch] setup is not complete, so the promise executor is running for notch fixture promises only');
+      }
     }
 
     // Idempotent constructor for the LLM-dependent services. Safe to call
