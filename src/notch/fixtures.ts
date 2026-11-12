@@ -14,6 +14,10 @@
  *   payment   an approval that says it is a payment of a sample amount. It is
  *             a declared intent with nothing behind it: approving it in the
  *             dashboard moves no money and runs nothing.
+ *   failure   one failure in the product's own list of open failures, worded
+ *             by the product ("The notch test failed, and Jarvis cannot tell
+ *             whether it took effect."). Nothing failed. It stays in the
+ *             dashboard's list until it is dismissed there.
  *   promise   a promise due in two minutes (or `--in <seconds>`). Keeping it
  *             adds one line to notch-fixture.log in the data directory, and
  *             that is all: no model is asked. One line per time it ran, so
@@ -40,6 +44,8 @@ export interface NotchFixtureDeps {
   approvalManager: Pick<ApprovalManager, 'createRequest'>;
   /** Shows a new approval wherever approvals are shown: the dashboard card, and a chat card if a channel is set up. */
   deliverApproval?: (request: ApprovalRequest) => Promise<void> | void;
+  /** Records the test failure. Comes back with its sentence. Absent when it cannot be recorded. */
+  failure?: () => string;
   /** Promises. Absent when the executor that keeps them is not there. */
   promises?: {
     create(what: string, options: { when_due: number; assigned_to: string; created_from: string }): { id: string; when_due: number | null };
@@ -118,6 +124,8 @@ export function createNotchFixtures(deps: NotchFixtureDeps): NotchFixtures {
       return `A payment approval is waiting (${request.id.slice(0, 8)}). It is a test: approving it in the dashboard moves no money.`;
     },
   };
+  const failure = deps.failure;
+  if (failure) kinds.failure = () => `A test failure is in the list of open failures: "${failure()}" Dismiss it in the dashboard when you are done.`;
   const promises = deps.promises;
   if (promises) {
     kinds.promise = (options) => {

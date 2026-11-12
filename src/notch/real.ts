@@ -15,9 +15,13 @@ import type { CommitmentEvent, CommitmentRunner } from '../daemon/commitment-exe
 import { NOTCH_FIXTURE_ORIGIN, createNotchFixtures, notchFixturePromiseRun } from './fixtures.ts';
 import type { NotchFixtures } from './fixtures.ts';
 import { NotchInbox } from './inbox.ts';
+import { NOTCH_FAILURE_LOOK_MS, attachNotchNews } from './news.ts';
+import type { NotchNews, NotchOpenFailure } from './news.ts';
 import { attachNotchPause } from './pause.ts';
 import type { NotchPauseDeps } from './pause.ts';
 import { attachNotchPromises } from './promises.ts';
+import { NOTCH_QUESTION_LOOK_MS, attachNotchQuestions } from './questions.ts';
+import type { NotchQuestionDeps, NotchQuestions } from './questions.ts';
 import type { NotchClock } from './stage.ts';
 import type { NotchSurface } from './surface.ts';
 import { notchTodayScript } from './today.ts';
@@ -48,6 +52,17 @@ export interface NotchRealDeps {
   };
   /** How often to look for what is new. */
   lookMs?: number;
+  /** Workflow questions: what waits, and the product's own function for answering one. */
+  questions?: Pick<NotchQuestionDeps, 'pending' | 'get' | 'answer'>;
+  /** The failures that are open now, each with its one sentence. New ones are said once. */
+  openFailures?: () => NotchOpenFailure[];
+  /**
+   * Hears a background agent's task end. Called until it answers true: the
+   * task manager is made after the notch, so it may not be there yet.
+   */
+  onTaskEnded?: (listener: NotchNews['taskEnded']) => boolean;
+  /** Makes one test failure in the product's own failure list. Given only when fixtures may be made. */
+  recordFixtureFailure?: () => string;
   /** The product's pause: Esc twice pauses through it, and the notch shows its state whoever changed it. */
   emergency?: NotchPauseDeps['controller'];
   /** The clock the lines on the notch run on. Tests give one they can wind forward. */
@@ -58,6 +73,8 @@ export interface NotchRealDeps {
 export interface NotchReal {
   inbox: NotchInbox;
   approvals: NotchApprovals;
+  news: NotchNews;
+  questions: NotchQuestions | null;
   fixtures: NotchFixtures;
   /** Whether a notch page is up: then the notch tells the person, and the toasts need not. */
   showing(): boolean;
@@ -90,7 +107,25 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     promises.executor.setOriginRunner(NOTCH_FIXTURE_ORIGIN, notchFixturePromiseRun(appendFixtureLog));
   }
   const stopPause = deps.emergency ? attachNotchPause(surface, inbox, { controller: deps.emergency, log }) : () => {};
+  const questions: NotchQuestions | null = deps.questions
+    ? attachNotchQuestions(inbox, { ...deps.questions, openDashboard: deps.openDashboard, log })
+    : null;
+  questions?.sync();
+  const questionTimer = questions ? setInterval(() => questions.sync(), NOTCH_QUESTION_LOOK_MS) : null;
+  questionTimer?.unref?.();
+  const news = attachNotchNews(inbox, { openFailures: deps.openFailures, log });
+  news.sync();
+  const failureTimer = setInterval(() => news.sync(), NOTCH_FAILURE_LOOK_MS);
+  failureTimer.unref?.();
+  // The task manager is made later in the daemon's start: ask until it is there.
+  let taskTries = 0;
+  const taskTimer = deps.onTaskEnded ? setInterval(() => {
+    if (deps.onTaskEnded!(news.taskEnded) || ++taskTries > 120) clearInterval(taskTimer!);
+  }, 500) : null;
+  taskTimer?.unref?.();
+  const recordFixtureFailure = deps.recordFixtureFailure;
   const fixtures = createNotchFixtures({
+    failure: recordFixtureFailure ? () => { const said = recordFixtureFailure(); news.sync(); return said; } : undefined,
     approvalManager: deps.approvalManager,
     deliverApproval: deps.deliverApproval,
     promises: promises && appendFixtureLog
@@ -111,8 +146,13 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   timer.unref?.();
 
   return {
-    inbox, approvals, fixtures,
+    inbox, approvals, news, questions, fixtures,
     showing: () => surface.listening() > 0,
-    stop: () => { clearInterval(timer); stopPromises(); stopPause(); },
+    stop: () => {
+      clearInterval(timer); clearInterval(failureTimer);
+      if (taskTimer) clearInterval(taskTimer);
+      if (questionTimer) clearInterval(questionTimer);
+      stopPromises(); stopPause();
+    },
   };
 }
