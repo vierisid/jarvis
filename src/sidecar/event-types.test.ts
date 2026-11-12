@@ -18,6 +18,7 @@ const REQUIRED = [
   'pebble.realtime_start', 'pebble.realtime_stop', 'pebble.audio_frame', 'pebble.mic_blocked',
   'tray.set_pause', 'tray.set_mute', 'notify.action',
   'ui_interaction', 'ui_recording',
+  'notch.message',
 ];
 
 describe('sidecar event subscriptions', () => {

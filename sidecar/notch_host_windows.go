@@ -15,13 +15,13 @@ import (
 )
 
 var (
-	procNotchCreatePolygonRgn = gdi32.NewProc("CreatePolygonRgn")
-	procNotchGetDpiForWindow  = user32.NewProc("GetDpiForWindow")
-	procNotchGetClientRect    = user32.NewProc("GetClientRect")
-	procNotchCallNtPowerInfo  = syscall.NewLazyDLL("powrprof.dll").NewProc("CallNtPowerInformation")
-	procNotchGetLastInputInfo = user32.NewProc("GetLastInputInfo")
-	procNotchGetTickCount     = kernel32.NewProc("GetTickCount")
-	procNotchGetCursorInfo    = user32.NewProc("GetCursorInfo")
+	procNotchCreatePolyPolygonRgn = gdi32.NewProc("CreatePolyPolygonRgn")
+	procNotchGetDpiForWindow      = user32.NewProc("GetDpiForWindow")
+	procNotchGetClientRect        = user32.NewProc("GetClientRect")
+	procNotchCallNtPowerInfo      = syscall.NewLazyDLL("powrprof.dll").NewProc("CallNtPowerInformation")
+	procNotchGetLastInputInfo     = user32.NewProc("GetLastInputInfo")
+	procNotchGetTickCount         = kernel32.NewProc("GetTickCount")
+	procNotchGetCursorInfo        = user32.NewProc("GetCursorInfo")
 )
 
 const (
@@ -445,57 +445,89 @@ func platformNotchWindowSize(handle unsafe.Pointer) (int, int) {
 
 // platformNotchCursor is where the pointer is, in the page's own pixels,
 // measured from the window's top left corner. It can be far outside the window.
-func platformNotchCursor(handle unsafe.Pointer) (int, int, bool) {
+func platformNotchCursor(handle unsafe.Pointer) (int, int, bool, bool) {
 	w := notchWindowFor(handle)
 	if w == nil || w.dpi <= 0 {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
 	cx, cy, err := platformGetCursorPos()
 	if err != nil {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
 	var r w32Rect
 	if ok, _, _ := procGetWindowRect.Call(w.hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
-	return (cx - int(r.Left)) * 96 / w.dpi, (cy - int(r.Top)) * 96 / w.dpi, true
+	// The main button is the left one unless the person swapped them.
+	const vkLeft, vkRight, smSwapButton = 0x01, 0x02, 23
+	button := uintptr(vkLeft)
+	if swapped, _, _ := procGetSystemMetrics.Call(smSwapButton); swapped != 0 {
+		button = vkRight
+	}
+	state, _, _ := procGetAsyncKeyState.Call(button)
+	down := state&0x8000 != 0
+	return (cx - int(r.Left)) * 96 / w.dpi, (cy - int(r.Top)) * 96 / w.dpi, down, true
 }
 
-// platformNotchSetOutline draws the shape and cuts the web view. shape is the
-// notch's true outline, drawn smooth by the backdrop. cut is the same outline
-// one pixel in, which is where the web view ends. Windows owns the region
-// after SetWindowRgn, so nothing is freed here.
-func platformNotchSetOutline(handle unsafe.Pointer, shape []notchVertex, cut []notchPoint) error {
+// platformNotchSetOutline draws the silhouette and cuts the web view. shapes
+// is the notch's true silhouette, drawn smooth by the backdrop. cuts is the
+// same a little way in, which is where the web view ends. Windows owns the
+// region after SetWindowRgn, so nothing is freed here.
+func platformNotchSetOutline(handle unsafe.Pointer, shapes [][]notchVertex, cuts [][]notchPoint) error {
 	if handle == nil {
 		return fmt.Errorf("nil HWND")
 	}
-	if len(shape) < notchOutlineMinPoints || len(cut) < notchOutlineMinPoints {
-		return fmt.Errorf("outline too short")
-	}
 	w := notchWindowFor(handle)
 	if w != nil && w.backdrop != nil {
-		if err := w.backdrop.paint(shape); err != nil {
+		if err := w.backdrop.paint(shapes); err != nil {
 			log.Printf("[notch] smooth edge not drawn: %v", err)
 		}
 	} else {
 		// No backdrop: the web view carries the whole shape, hard edge and all.
-		cut = notchWhole(shape)
+		cuts = make([][]notchPoint, len(shapes))
+		for i, shape := range shapes {
+			cuts[i] = notchWhole(shape)
+		}
 	}
-	rgn, _, _ := procNotchCreatePolygonRgn.Call(
-		uintptr(unsafe.Pointer(&cut[0])), uintptr(len(cut)), notchWinding)
+	// One region for all the polygons, joined where they overlap.
+	points := make([]notchPoint, 0, 128)
+	counts := make([]int32, 0, len(cuts))
+	for _, cut := range cuts {
+		if len(cut) < notchOutlineMinPoints {
+			continue
+		}
+		points = append(points, cut...)
+		counts = append(counts, int32(len(cut)))
+	}
+	var rgn uintptr
+	if len(counts) == 0 {
+		// Nothing has an inside: the web view shows nothing, the backdrop all.
+		rgn, _, _ = procCreateRectRgn.Call(0, 0, 0, 0)
+	} else {
+		rgn, _, _ = procNotchCreatePolyPolygonRgn.Call(
+			uintptr(unsafe.Pointer(&points[0])), uintptr(unsafe.Pointer(&counts[0])),
+			uintptr(len(counts)), notchWinding)
+	}
 	if rgn == 0 {
-		return fmt.Errorf("CreatePolygonRgn failed for %d points", len(cut))
+		return fmt.Errorf("the window region could not be made for %d polygons", len(counts))
 	}
 	procSetWindowRgn.Call(uintptr(handle), rgn, 1)
 	if w != nil {
 		now := time.Now().UnixMilli()
 		if last := w.outlineLog.Load(); now-last > 2000 && w.outlineLog.CompareAndSwap(last, now) {
-			minX, minY, maxX, maxY := shape[0].X, shape[0].Y, shape[0].X, shape[0].Y
-			for _, p := range shape {
-				minX, maxX = min(minX, p.X), max(maxX, p.X)
-				minY, maxY = min(minY, p.Y), max(maxY, p.Y)
+			total := 0
+			var minX, minY, maxX, maxY float64
+			if len(shapes) > 0 {
+				minX, minY, maxX, maxY = shapes[0][0].X, shapes[0][0].Y, shapes[0][0].X, shapes[0][0].Y
 			}
-			log.Printf("[notch] outline: %d points, box %.1fx%.1f at (%.1f, %.1f)", len(shape), maxX-minX, maxY-minY, minX, minY)
+			for _, shape := range shapes {
+				total += len(shape)
+				for _, p := range shape {
+					minX, maxX = min(minX, p.X), max(maxX, p.X)
+					minY, maxY = min(minY, p.Y), max(maxY, p.Y)
+				}
+			}
+			log.Printf("[notch] outline: %d polygons, %d points, box %.1fx%.1f at (%.1f, %.1f)", len(shapes), total, maxX-minX, maxY-minY, minX, minY)
 		}
 	}
 	return nil
@@ -621,10 +653,10 @@ func newNotchBackdrop(x, y, width, height int) (*notchBackdrop, error) {
 	}, nil
 }
 
-// paint draws the outline as anti-aliased black and hands it to the window.
+// paint draws the silhouette as anti-aliased black and hands it to the window.
 // Black with premultiplied alpha is just the alpha, so coverage is the pixel.
-func (b *notchBackdrop) paint(shape []notchVertex) error {
-	notchCoverage(b.cover, int(b.w), int(b.h), shape)
+func (b *notchBackdrop) paint(shapes [][]notchVertex) error {
+	notchCoverage(b.cover, int(b.w), int(b.h), shapes)
 	for i, c := range b.cover {
 		b.pixels[i] = uint32(c) << 24
 	}

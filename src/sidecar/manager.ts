@@ -100,6 +100,8 @@ export const SIDECAR_EVENT_TYPES: readonly string[] = [
   'ui_interaction', 'ui_recording',
   // Self-update progress (recorded on the connection by the manager itself).
   'update_progress',
+  // What the notch's page says to the brain: an answer, "open", hello.
+  'notch.message',
 ];
 
 /** Update phases a sidecar may report; anything else is dropped. */
