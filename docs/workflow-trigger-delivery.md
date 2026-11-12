@@ -114,6 +114,22 @@ A delivery's identity, in order:
   delivery id header is ignored there: trusting it would let a captured request
   run again under a fresh id.
 
+Credential headers are not passed on. In `_webhook.headers` (the run history,
+the trigger output, `{{trigger._webhook.headers.*}}`) a header keeps its name
+but its value is `[redacted]` when the name is a credential's, in any case:
+`Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, any name with
+the word `auth`, `key`, `sig`, `signature`, `credential` or `session-id` in it
+(`X-Api-Key`, `X-Goog-Api-Key`, `X-Auth-Key`, `Stripe-Signature`,
+`X-Hub-Signature-256`, `X-Jarvis-Signature`), any name containing `token`,
+`secret`, `password` or `hmac` (`X-Gitlab-Token`, `X-Shopify-Hmac-Sha256`), and
+`X-Jarvis-Timestamp`. A value shaped like `Bearer <token>` or `Basic <token>`
+is redacted under any name. `Idempotency-Key` and other headers
+(`Content-Type`, `User-Agent`, `X-GitHub-Event`, `X-GitHub-Delivery`) are kept.
+Signatures and delivery identity are checked on the raw request before this.
+A workflow that read one of these headers now gets `[redacted]`: authenticate
+the sender with the webhook secret, and keep a credential a step needs in a
+connection, not in the request.
+
 A repeat answers 200 with `outcome: "duplicate"` and the original `runId`;
 nothing runs again. Identical unsigned bodies without an id are separate
 deliveries: pings and button presses repeat on purpose. A provider's manual
@@ -155,6 +171,18 @@ approvals, create a request that only the signed-in user answers in Needs you
 waitpoints refuse a resume URL (403). Each request belongs to one run, so
 stopping one run never closes another run's request. The answer continues the
 run once, and only while it is paused with no other continuation queued.
+
+Wait for Approval stops the run at its step when the request is rejected,
+cancelled or expired: the run fails with `APPROVAL_DENIED` (or
+`APPROVAL_EXPIRED`, which reads as "its approval was not given in time"), and
+no later step runs. An author who wants to branch on the answer ticks
+`Continue when rejected` (`continueOnReject`): the step then returns
+`{ approved: false }` and the run continues. Only the ticked box in the
+published version counts: an expression in that field (one trigger data or an
+earlier step could set) is ignored, and the step's Continue on failure does not
+continue past a refusal. The setting defaults to off, so a saved workflow
+without it stops on a refusal. Its request ID, when set, must
+come from a Create Approval Links step in the same run.
 
 A parent run waiting on a required child workflow is continued by the child-run
 scheduler (`runtime/child-run-scheduler.ts`) once the child has finished. The
