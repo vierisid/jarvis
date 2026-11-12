@@ -137,7 +137,7 @@ import { AuditTrail } from "../authority/audit.ts";
 import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
 import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
-import { EmergencyController, setActiveEmergencyController } from "../authority/emergency.ts";
+import { EmergencyController, setActiveEmergencyController, setPauseHoldsLoops } from "../authority/emergency.ts";
 import { ApprovalDelivery, approvalToast, taskCompleteBody } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
@@ -4504,6 +4504,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Voice-channel audit tagging for forensic separation from click path.
     wsService.setAuditTrail(auditTrail);
 
+    // With the notch on, Pause also holds the model loops: background work
+    // makes no model call until Resume, instead of going round being told no
+    // by every tool (authority/emergency.ts, whenRunnable). Decided by the
+    // owner on 12 November, with "Esc twice pauses, it does not kill". It is
+    // behind the notch switch so that with the switch off Pause is unchanged;
+    // to make it the rule everywhere, call this unconditionally.
+    setPauseHoldsLoops(notchEnabled());
+
     // The notch: every pending approval becomes one line with one yes. The
     // yes goes through applyApprovalDecision like every other surface's, as
     // its own decider, so decided-once and every refusal hold there too.
@@ -4513,6 +4521,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         approvalManager,
         approve: (requestId) => applyApprovalDecision('approve', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
         deliverApproval: (request) => approvalDelivery.deliver(request),
+        // Esc twice pauses through the same controller as the tray's Pause.
+        emergency: emergencyController,
         // Promises: the fuse before one is kept, Esc to cancel, and what came
         // of it. A fixture promise (demo gate only) is kept by one line in a
         // file inside the data directory, not by a model turn.

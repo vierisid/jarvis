@@ -374,3 +374,64 @@ describe('giving way', () => {
     expect(h.line()).toBeNull();
   });
 });
+
+describe('what cannot wait, and what arrived while nobody could be told', () => {
+  test('an urgent item takes the notch from the one on it, which goes back to the count', async () => {
+    const h = harness();
+    const a = item('a');
+    h.inbox.add(a);
+    await settle();
+    const fuse = item('fuse', 'clock', { urgent: true });
+    h.inbox.add(fuse);
+    await settle();
+    expect(h.said()).toBe('fuse?');
+    expect(h.line()?.unasked).toBe(true);
+    expect(h.count()).toBe(1);
+    expect(h.inbox.has('a')).toBe(true);
+  });
+
+  test('an urgent item does not take the notch from something else that has it', async () => {
+    const h = harness({ busy: () => true });
+    const fuse = item('fuse', 'clock', { urgent: true });
+    h.inbox.add(fuse);
+    await settle();
+    expect(fuse.shows).toEqual([]);
+  });
+
+  test('what arrived while no notch was up is said when one comes up: one of them, an urgent one first', async () => {
+    const h = harness({ page: false });
+    const a = item('a'), b = item('b', 'clock', { urgent: true }), c = item('c');
+    for (const each of [a, b, c]) h.inbox.add(each);
+    await settle();
+    h.fromPage({ type: 'hello', v: 1 });
+    await settle();
+    expect(h.said()).toBe('b?');
+    expect(h.count()).toBe(2);
+    await h.answer('yes');
+    // The others had the same chance: they wait in the count.
+    expect(h.line()).toBeNull();
+    expect(a.shows).toEqual([]);
+    // And a second hello does not bring them up either.
+    h.fromPage({ type: 'hello', v: 1 });
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(2);
+  });
+
+  test('what arrived during a hold is said when the hold ends', async () => {
+    const h = harness();
+    h.inbox.hold('stopped');
+    const a = item('a');
+    h.inbox.add(a);
+    await settle();
+    expect(a.shows).toEqual([]);
+    h.inbox.release('stopped');
+    await settle();
+    expect(h.said()).toBe('a?');
+    expect(h.line()?.unasked).toBe(true);
+    // Releasing what is not held does nothing.
+    h.inbox.release('stopped');
+    await settle();
+    expect(a.shows).toEqual([true]);
+  });
+});
