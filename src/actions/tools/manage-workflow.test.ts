@@ -1202,14 +1202,25 @@ describe("#598: summarizeFlow's metadata and name are framed where they reach th
    * output. `name` is truncated rather than withheld because `resolveFlow`
    * matches a flow BY it, and the exact `id` sits beside it either way.
    */
+  // `create` refuses a name over 512 now, so an oversized row is written
+  // straight to the store: the read-side cap is what covers rows written by
+  // the editor or before the write caps existed.
+  const plantNamed = (displayName: string): string => {
+    const flow = createFlow();
+    createDraftVersion({ flowId: flow.id, displayName, trigger: { name: "trigger", type: "EMPTY", displayName: "Manual", settings: {} } as any });
+    return flow.id;
+  };
+
   test("an oversized name is truncated with a sibling notice, and the id stays exact", async () => {
     const long = "N".repeat(5000);
-    const created = (await call("create", { name: long, empty: true })) as {
-      id: string; name: string; nameTruncated: { chars: number };
+    const id = plantNamed(long);
+    const { flows } = JSON.parse(unframe(await raw("list")).payload) as {
+      flows: Array<{ id: string; name: string; nameTruncated: { chars: number } }>;
     };
+    const created = flows.find((f) => f.id === id)!;
     expect(created.name).toBe("N".repeat(200));
     expect(created.nameTruncated.chars).toBe(5000);
-    expect(created.id).toMatch(/^.+$/);
+    expect(created.id).toBe(id);
     // A short name gets no notice at all.
     const short = (await call("create", { name: "tidy", empty: true })) as {
       name: string; nameTruncated?: unknown;
@@ -1233,7 +1244,7 @@ describe("#598: summarizeFlow's metadata and name are framed where they reach th
   test("an oversized name on the head row cannot sever the listing or its counters", async () => {
     for (let i = 0; i < 3; i++) await call("create", { name: `benign ${i}`, empty: true });
     // Created last, so `ORDER BY updated DESC` puts it first.
-    await call("create", { name: "X".repeat(20_000), empty: true });
+    plantNamed("X".repeat(20_000));
 
     const { payload } = unframe(await raw("list"));
     expect(payload).not.toContain("... (truncated, was ");

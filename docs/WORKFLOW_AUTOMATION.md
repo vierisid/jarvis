@@ -532,7 +532,15 @@ Three things about #598 are load bearing beyond the frame itself:
 - **Both caller-written fields are capped at both ends.** On the way in, the
   write routes reject a `metadata` that is not an object, carries a top-level
   `__proto__` / `constructor` / `prototype` key, or exceeds 16 KB, and reject a
-  `displayName` that is not a non-empty string or exceeds 512 characters. All of
+  `displayName` that is not a non-empty string or exceeds 512 characters
+  (`WORKFLOW_NAME_MAX_CHARS` in `workflows/api/display-name.ts`). The assistant's
+  `manage_workflow` holds `create`, `compose`, `continue_setup` and `update`
+  names, and the step `name` / `displayName` a compose saves or an update
+  writes, to the same 512. A composer-chosen workflow name over it falls back
+  to the caller's name; a composed step name over it refuses the compose. An
+  over-long step value the draft already carries stays where it is without
+  blocking other edits, but cannot be copied to another step or field. The
+  dashboard's version routes do not check step names. All of
   that is close to free, because no shipped caller writes `metadata` at all (the
   dashboard POSTs `{ displayName }`, PATCHes `{ status }`, and keeps its editor
   state in `flow_version_ui_meta`) and no real workflow name is that long. A

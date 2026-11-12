@@ -3,6 +3,7 @@ import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion } from './editor-version';
+import { WORKFLOW_NAME_MAX_CHARS } from './display-name';
 import type { BriefCapabilities } from '../../brief/capabilities';
 import { requireWorkflowContext } from '../../brief/workflow-context-routes';
 import { WorkflowInspectionError } from '../../brief/inspection-values';
@@ -581,7 +582,7 @@ async function readWriteBody(
  * dashboard may reasonably carry a longer name than the prompt wants to spend
  * tokens on, and the two caps answer different questions.
  */
-const FLOW_DISPLAY_NAME_MAX_CHARS = 512;
+const FLOW_DISPLAY_NAME_MAX_CHARS = WORKFLOW_NAME_MAX_CHARS;
 
 /**
  * The caller's `displayName`, or the refusal. Same shape as

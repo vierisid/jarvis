@@ -27,6 +27,7 @@ import { describeDashboard, ensurePortReleased, resolveDashboardTarget, resolveS
 import { getInstalledVersion } from '../src/cli/version.ts';
 import { loadConfig } from '../src/config/loader.ts';
 import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
+import { clearStartOptions, daemonStartFlags, readStartOptions, recordStartOptions, restartStartArgs } from '../src/cli/start-options.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
 
@@ -130,6 +131,13 @@ async function cmdStart(args: string[]): Promise<void> {
   const dataDirIdx = args.indexOf('--data-dir');
   if (dataDirIdx !== -1 && args[dataDirIdx + 1]) {
     dataDir = args[dataDirIdx + 1]!;
+    // Forwarded to the detached child and to `jarvis update`'s restart, where
+    // a dash-leading value would be read as a flag (`--data-dir -d` would make
+    // every child detach again).
+    if (dataDir.startsWith('-')) {
+      console.error(c.red(`Error: --data-dir value cannot start with '-' (for a directory named that, use ./${dataDir})`));
+      process.exit(1);
+    }
   }
 
   // Parse --system-config (hosted-mode flag, usejarvis #66).
@@ -199,7 +207,12 @@ async function cmdStart(args: string[]): Promise<void> {
     // daemon (src/daemon/index.ts) traps them and runs a bounded graceful
     // DRAIN before exiting. A `process.exit(0)` from the CLI would preempt that
     // async teardown mid-flight. The OS auto-releases the flock on exit anyway.
-    process.on('exit', () => releaseLock());
+    // The start-options record goes first: a process that later reuses this
+    // pid must not inherit it.
+    process.on('exit', () => { clearStartOptions(process.pid); releaseLock(); });
+    // For `jarvis update` and `jarvis restart`, which restart this daemon and
+    // cannot read its argv.
+    recordStartOptions(process.pid, { port, dataDir, noLocalTools, systemConfigPath });
 
     const { startDaemon } = await import('../src/daemon/index.ts');
     await startDaemon({ port, dataDir, noLocalTools, systemConfigPath });
@@ -221,13 +234,13 @@ async function cmdStart(args: string[]): Promise<void> {
 
     const logPath = getLogPath();
 
-    const daemonArgs = [join(PACKAGE_ROOT, 'bin/jarvis.ts'), 'start', '--no-open'];
-    if (port) daemonArgs.push('--port', String(port));
-    // Forward --system-config into the detached child: without this, a hosted
-    // `jarvis start -d` would re-enter cmdStart in the child with no flag,
-    // and the daemon would (silently) fall back to ~/.jarvis/config.yaml,
-    // defeating the whole point of the flag.
-    if (systemConfigPath) daemonArgs.push('--system-config', systemConfigPath);
+    // Every start option goes to the detached child, which re-enters cmdStart
+    // with only what it is handed. Without --system-config a hosted
+    // `jarvis start -d` would (silently) fall back to ~/.jarvis/config.yaml,
+    // defeating the whole point of the flag; --data-dir and --no-local-tools
+    // were once dropped here the same way.
+    const daemonArgs = [join(PACKAGE_ROOT, 'bin/jarvis.ts'), 'start', '--no-open',
+      ...daemonStartFlags({ port, dataDir, noLocalTools, systemConfigPath })];
 
     // We redirect the child's stdout AND stderr into logPath. If
     // daemon.log_file_path names this same file the child does NOT install its
@@ -508,6 +521,10 @@ async function cmdRestart(args: string[]): Promise<void> {
   if (warning) console.warn(c.yellow(warning));
 
   const pid = isLocked();
+  // Read before the stop, which removes the record with the daemon: "restart
+  // with same settings" means the flags the running daemon was started with.
+  const recorded = pid ? readStartOptions(pid) : null;
+  const start = restartStartArgs(args, recorded);
   if (pid) {
     if (!await cmdStop()) {
       // A service manager can bring the daemon back under a new pid before the
@@ -528,7 +545,13 @@ async function cmdRestart(args: string[]): Promise<void> {
   // Before the start, not after: with no -d, cmdStart does not return until the
   // daemon exits, and a note printed then would arrive hours late.
   await printLaunchdHandoffNote();
-  await cmdStart(args);
+  if (start.reused.length) {
+    console.log(c.dim(`  Starting with the options it was started with: ${start.reused.join(' ')}`));
+    console.log(c.dim('  (pass any of --port, --data-dir, --no-local-tools, --system-config to start with only those instead)'));
+  } else if (pid && !recorded) {
+    console.log(c.dim('  The stopped daemon did not record its start options; starting with the ones given here.'));
+  }
+  await cmdStart(start.args);
 }
 
 /**
