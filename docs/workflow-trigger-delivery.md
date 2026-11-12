@@ -172,6 +172,18 @@ waitpoints refuse a resume URL (403). Each request belongs to one run, so
 stopping one run never closes another run's request. The answer continues the
 run once, and only while it is paused with no other continuation queued.
 
+Wait for Approval stops the run at its step when the request is rejected,
+cancelled or expired: the run fails with `APPROVAL_DENIED` (or
+`APPROVAL_EXPIRED`, which reads as "its approval was not given in time"), and
+no later step runs. An author who wants to branch on the answer ticks
+`Continue when rejected` (`continueOnReject`): the step then returns
+`{ approved: false }` and the run continues. Only the ticked box in the
+published version counts: an expression in that field (one trigger data or an
+earlier step could set) is ignored, and the step's Continue on failure does not
+continue past a refusal. The setting defaults to off, so a saved workflow
+without it stops on a refusal. Its request ID, when set, must
+come from a Create Approval Links step in the same run.
+
 A parent run waiting on a required child workflow is continued by the child-run
 scheduler (`runtime/child-run-scheduler.ts`) once the child has finished. The
 child's waitpoint refuses a manual resume (403). A parent whose workflow was
