@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import { ApprovalManager } from './approval.ts';
-import { AuditTrail } from './audit.ts';
+import { AUDIT_PAGE_MAX, AuditTrail, auditPageLimit } from './audit.ts';
+import { AuthorityEngine, decisionAuthor } from './engine.ts';
 import { DeferredExecutor } from './deferred-executor.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import { applyApprovalDecision } from '../daemon/approval-decision.ts';
@@ -77,5 +78,48 @@ describe('the ledger reads one entry per side effect', () => {
     expect(trail.queryEntries({ tool: 'a' })).toHaveLength(1);
     expect(trail.queryEntries({ decision: 'denied' })).toHaveLength(0);
     expect(trail.getStats()).toMatchObject({ total: 2, allowed: 2 });
+  });
+
+  test('an entry with no settling row is counted as unrecorded, never as succeeded', () => {
+    const trail = audit();
+    // The chat gate writes `executed: true` before the tool runs: that is not a result.
+    trail.log({ agent_id: 'x', agent_name: 'X', tool_name: 'send_email', action_category: 'send_email', authority_decision: 'allowed', executed: true });
+    expect(trail.queryEntries()).toMatchObject([{ outcome: null }]);
+    expect(trail.getStats().byOutcome).toEqual({ unrecorded: 1 });
+  });
+
+  test('the page is bounded and ordered by when each entry began, not by its latest row', () => {
+    const trail = audit();
+    const at = (ms: number) => { const real = Date.now; Date.now = () => ms; return () => { Date.now = real; }; };
+    let restore = at(1_000);
+    trail.log({ agent_id: 'w', agent_name: 'W', tool_name: 'old', action_category: 'send_message', authority_decision: 'approval_required', approval_id: 'appr_old', executed: false });
+    restore(); restore = at(2_000);
+    trail.log({ agent_id: 'w', agent_name: 'W', tool_name: 'new', action_category: 'send_message', authority_decision: 'allowed', executed: false });
+    restore(); restore = at(3_000);
+    // The old entry settles last: it stays one entry, placed where it began.
+    trail.log({ agent_id: 'w', agent_name: 'W', tool_name: 'old', action_category: 'send_message', authority_decision: 'approval_required', approval_id: 'appr_old', executed: true, outcome: 'succeeded' });
+    restore();
+    expect(trail.queryEntries().map(e => [e.tool_name, e.events, e.updated_at])).toEqual([['new', 1, 2_000], ['old', 2, 3_000]]);
+    expect(trail.queryEntries({ limit: 1 }).map(e => e.tool_name)).toEqual(['new']);
+    expect(trail.queryEntries({ since: 1_500 }).map(e => e.tool_name)).toEqual(['new']);
+    expect(trail.queryEntries({ decision: 'approval_required' })).toMatchObject([{ tool_name: 'old', outcome: 'succeeded', executed: 1 }]);
+    expect([auditPageLimit(undefined), auditPageLimit(0), auditPageLimit(Number.NaN), auditPageLimit(7), auditPageLimit(1e9)]).toEqual([100, 100, 100, 7, AUDIT_PAGE_MAX]);
+  });
+
+  test('who decided names the rule, Authority level, delegated grant or policy when no person did', () => {
+    const config = { default_level: 3, governed_categories: ['write_data'], overrides: [{ action: 'delete_data', allowed: false }],
+      context_rules: [{ id: 'night', action: 'send_message', condition: 'always', params: {}, effect: 'allow', description: 'notify ok' }],
+      learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' } as never;
+    const engine = new AuthorityEngine(config);
+    const judge = (actionCategory: string, toolName = 't', grants = new Map<string, string[]>()) => decisionAuthor(engine.checkAuthority({
+      agentId: 'a', agentAuthorityLevel: 3, agentRoleId: 'r', toolName, toolCategory: 'x', actionCategory: actionCategory as never, temporaryGrants: grants as never }));
+    expect(judge('read_data')).toBe('level');
+    expect(judge('make_payment')).toBe('level');
+    expect(judge('write_data')).toBe('policy');
+    expect(judge('delete_data')).toBe('rule:override');
+    expect(judge('send_message', 'notify')).toBe('rule:night');
+    expect(judge('make_payment', 't', new Map([['a', ['make_payment']]]))).toBe('delegated');
+    expect(decisionAuthor(engine.checkAuthority({ agentId: 'a', agentAuthorityLevel: 10, agentRoleId: 'r', toolName: 't', toolCategory: 'x',
+      actionCategory: 'read_data', temporaryGrants: new Map(), profile: { label: 'background', denied_categories: ['read_data'] } }))).toBe('policy');
   });
 });

@@ -33,7 +33,7 @@ import type { ObservationType } from '../vault/observations.ts';
 import type { ContentStage, ContentType } from '../vault/content-pipeline.ts';
 import type { AuthorityEngine } from '../authority/engine.ts';
 import type { ApprovalManager } from '../authority/approval.ts';
-import type { AuditTrail, AuthorityDecisionType } from '../authority/audit.ts';
+import { auditPageLimit, type AuditTrail, type AuthorityDecisionType } from '../authority/audit.ts';
 import type { AuthorityLearner } from '../authority/learning.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
@@ -4225,7 +4225,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           tool: params.get('tool') || undefined,
           decision: (params.get('decision') as AuthorityDecisionType) || undefined,
           since: params.get('since') ? parseInt(params.get('since')!) : undefined,
-          limit: parseInt(params.get('limit') ?? '100') || 100,
+          // Bounded for both views: at most AUDIT_PAGE_MAX entries or rows.
+          limit: auditPageLimit(parseInt(params.get('limit') ?? '100')),
         };
         // One entry per side effect with its real outcome; `rows=all` is every row written.
         return json(params.get('rows') === 'all' ? ctx.auditTrail.query(filters) : ctx.auditTrail.queryEntries(filters));
@@ -4234,7 +4235,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/authority/audit/stats': {
       GET: (req: Request) => {
-        if (!ctx.auditTrail) return json({ total: 0, allowed: 0, denied: 0, approvalRequired: 0, byCategory: {} });
+        if (!ctx.auditTrail) return json({ total: 0, allowed: 0, denied: 0, approvalRequired: 0, byCategory: {}, byOutcome: {} });
         const params = getSearchParams(req);
         const since = params.get('since') ? parseInt(params.get('since')!) : undefined;
         return json(ctx.auditTrail.getStats(since));

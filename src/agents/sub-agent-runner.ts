@@ -43,7 +43,7 @@ import type { EmergencyController } from '../authority/emergency.ts';
 import { freezeToolArguments, getActionForTool, resolveToolGate, substituteAboveLevel } from '../authority/tool-action-map.ts';
 import { desktopRefusal, withoutDisabledDesktopTools } from '../actions/tools/desktop-guard.ts';
 import { workflowUiRead, workflowUiReview } from '../authority/ui-intent.ts';
-import { combineDecisions } from '../authority/engine.ts';
+import { combineDecisions, decisionAuthor } from '../authority/engine.ts';
 import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { mergeProfiles, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
@@ -556,6 +556,8 @@ async function executeTool(
       // answers with an empty approval id: no card, so none is recorded.
       approval_id: approvalId || null,
       executed,
+      // What decided, when no person did: an approved card's row is the person's.
+      decided_by: approvalId ? null : decisionAuthor(decision),
     });
 
     if (!decision.allowed) {

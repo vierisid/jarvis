@@ -448,13 +448,15 @@ describe('workflow effect boundary', () => {
     }
   }
 
-  for (const [label, failure, effectStatus, receipt] of [
-    ['a thrown error', () => new Error('remote timeout'), 'unknown', 'failed'],
-    ['a blocked outcome', () => new ActionOutcomeError({ status: 'blocked', code: 'refused', message: 'remote refused', effect: 'not_started' }), 'blocked', 'blocked'],
-    ['an unknown outcome', () => new ActionOutcomeError({ status: 'unknown', code: 'lost', message: 'reply lost', effect: 'may_have_occurred' }), 'unknown', 'failed'],
+  for (const [label, failure, effectStatus, receipt, ledger] of [
+    ['a thrown error', () => new Error('remote timeout'), 'unknown', 'failed', 'unknown'],
+    ['a blocked outcome', () => new ActionOutcomeError({ status: 'blocked', code: 'refused', message: 'remote refused', effect: 'not_started' }), 'blocked', 'blocked', 'not_started'],
+    ['an unknown outcome', () => new ActionOutcomeError({ status: 'unknown', code: 'lost', message: 'reply lost', effect: 'may_have_occurred' }), 'unknown', 'failed', 'unknown'],
+    ['an error outcome', () => new ActionOutcomeError({ status: 'error', code: 'remote', message: 'remote 500', effect: 'may_have_occurred' }), 'failed', 'failed', 'failed'],
     // Blocked partway: the effect may have happened, so the receipt must not
-    // say `blocked`, which reads as "nothing was done".
-    ['a blocked outcome that may have taken effect', () => new ActionOutcomeError({ status: 'blocked', code: 'partial', message: 'stopped partway', effect: 'may_have_occurred' }), 'blocked', 'failed'],
+    // say `blocked`, which reads as "nothing was done", and the ledger entry
+    // stays uncertain, not `not_started`.
+    ['a blocked outcome that may have taken effect', () => new ActionOutcomeError({ status: 'blocked', code: 'partial', message: 'stopped partway', effect: 'may_have_occurred' }), 'blocked', 'failed', 'unknown'],
   ] as const) {
     test(`an approved effect whose dispatch ends in ${label} closes its approval as ${receipt} (#845)`, async () => {
       const f = fixture(); f.authority.setGovernedCategories(['write_data']);
@@ -468,6 +470,9 @@ describe('workflow effect boundary', () => {
       const approval = f.approvals.getRequest(id)!;
       expect(approval).toMatchObject({ status: 'executed', execution_outcome: receipt });
       expect(JSON.parse(approval.execution_result!)).toEqual({ effectId: effect.id, status: effectStatus, error: effect.error });
+      // The ledger reads the settled outcome, never a more hopeful one.
+      expect((f.options.auditTrail as AuditTrail).queryEntries({ agentId: `workflow:${f.run.id}` }))
+        .toMatchObject([{ effect_id: effect.id, outcome: ledger, executed: 0 }]);
     });
   }
 

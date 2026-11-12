@@ -3,7 +3,7 @@ import { uiCardSentence, type UiCard } from './ui-card';
 import { collectActionVerification } from '../../actions/action-verification';
 import type { ActionOutcome } from '../../actions/action-outcome';
 import { projectDocument } from './decision-document';
-import { combineDecisions, governedActionReason, type AuthorityEngine, type AuthorityProfile } from '../../authority/engine';
+import { combineDecisions, decisionAuthor, governedActionReason, type AuthorityDecision, type AuthorityEngine, type AuthorityProfile } from '../../authority/engine';
 import type { AuditOutcome, AuditTrail } from '../../authority/audit';
 import type { EmergencyController } from '../../authority/emergency';
 import type { ApprovalManager, ApprovalRequest } from '../../authority/approval';
@@ -428,14 +428,23 @@ export class WorkflowEffectBoundary {
     const stepLabel = boundedApprovalLabel(record.stepName, WORKFLOW_STEP_LABEL_MAX_CHARS);
     // How the effect stands as this row is written, from the record: a row
     // written while the card still waits settles nothing.
+    // A typed outcome says whether anything started: a block or an error that
+    // `may_have_occurred` is uncertain, never `not_started` (the dispatch
+    // catch below records a partway block as `blocked`).
     const settled = (executed: boolean, handedOff: boolean): AuditOutcome | null => {
       if (handedOff) return 'dispatched';
       if (executed || record.status === 'succeeded') return 'succeeded';
-      if (record.status === 'blocked') return 'not_started';
-      if (record.status === 'failed') return 'failed';
-      if (record.status === 'unknown') return 'unknown';
-      return null;
+      if (record.status !== 'blocked' && record.status !== 'failed' && record.status !== 'unknown') return null;
+      const typed = record.outcome && record.outcome.status !== 'succeeded' ? record.outcome : null;
+      if (typed?.effect === 'not_started') return 'not_started';
+      if (record.status === 'unknown' || typed?.status === 'unknown') return 'unknown';
+      if (record.status === 'failed' || typed?.status === 'error') return 'failed';
+      return typed ? 'unknown' : 'not_started';
     };
+    // Who decided, on a row no person decided: the rule, Authority level,
+    // delegated grant or policy the engine named. A card's person writes the
+    // decision row (`approval-decision.ts`), so rows of a carded effect carry none.
+    let judgedBy: AuthorityDecision | null = null;
     // `handedOff`: a piece's send was authorized and passed to the engine, which
     // sends it and reports back. The row says it was handed out (a lost receipt
     // must not leave a send with no row), with outcome `dispatched`: the receipt
@@ -444,7 +453,8 @@ export class WorkflowEffectBoundary {
       agent_name: `Workflow ${flowLabel} / ${stepLabel} / ${record.id}${judged}`,
       tool_name: record.toolName, action_category: input.category,
       authority_decision: record.decision === 'denied' ? 'denied' : record.approvalId ? 'approval_required' : 'allowed',
-      approval_id: record.approvalId, executed, effect_id: record.id, outcome: settled(executed, handedOff) });
+      approval_id: record.approvalId, executed, effect_id: record.id, outcome: settled(executed, handedOff),
+      decided_by: !record.approvalId && judgedBy ? decisionAuthor(judgedBy) : null });
     // Pause holds (Q-08): a step reached while Jarvis is paused parks on a
     // HOLD waitpoint instead of being refused for good, and is judged afresh
     // when Resume releases it. Asked before the decision and again before the
@@ -464,6 +474,7 @@ export class WorkflowEffectBoundary {
       // other dispatch points can never disagree about whether a run is dead.
       assertRunNotCanceled(record.runId);
       const decision = judgeEffect(authority, input, record.runId);
+      judgedBy = decision;
       if (!decision.allowed) throw new PolicyRefusal('AUTHORITY_DENIED', `Authority denied ${input.toolName}: ${decision.reason}`);
       // A capability whose UI effect cannot be described is reviewed whatever
       // the category check concluded; the card carries the uncertainty.

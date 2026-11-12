@@ -119,7 +119,7 @@ export class DecisionDocuments {
     try {
       this.authority.auditTrail?.log({ agent_id: request.agent_id, agent_name: request.agent_name, tool_name: request.tool_name,
         action_category: request.action_category as ActionCategory, authority_decision: decision, approval_id: request.id,
-        executed: false, channel: 'click' });
+        executed: false, channel: 'click', decided_by: DASHBOARD_DECIDER });
     } catch (err) { console.warn('[Brief] could not audit a document decision:', err instanceof Error ? err.message : err); }
   }
   private broadcast(approvalIds: string[]): void {

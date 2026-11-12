@@ -114,20 +114,33 @@ The ledger (`audit_trail`) is append-only. A side effect writes a row when it
 is asked, a row when it is decided and a row when it settles, and no row is
 ever rewritten. Rows are linked, not merged: each carries `effect_id` (the
 workflow effect, found from the approval for a decision row), `outcome` on the
-row that settles it, and `decided_by` on a decision row (`dashboard:<device id>`
-for a dashboard session, otherwise the surface).
+row that settles it, and `decided_by`: on a person's decision row the surface
+(`dashboard:<device id>` for a dashboard session, else `dashboard`, `voice`,
+`notification`, `telegram:...`), and on a row no person decided what did:
+`rule:override` or `rule:<context rule id>`, `level` (the Authority level),
+`delegated` (a parent agent's temporary grant) or `policy` (a governed category
+or an agent profile). The entry shows the latest of them, so a carded effect
+reads the person who decided the card.
 
 The owner reads one entry per side effect. `GET /api/authority/audit` returns
 entries (first row's identity; `denied` when any row denied; `outcome` of the
 last settling row; `executed` is 1 only when the outcome is `succeeded`;
 `events` rows behind it; `decided_by` and the device's name). `?rows=all`
-returns every row. `GET /api/authority/audit/stats` counts entries, with a
-`byOutcome` breakdown. An entry's outcome is one of `succeeded`, `failed`,
+returns every row. Both are bounded: `limit` defaults to 100 and is capped at
+500, and an entry page is read newest first by index, never by grouping the
+whole table. `GET /api/authority/audit/stats` counts entries, with a
+`byOutcome` breakdown (`unrecorded` for an entry no row settled: a
+pre-execution `executed` flag is not counted as `succeeded`). An entry's outcome is one of `succeeded`, `failed`,
 `not_started` (refused or denied before anything ran), `unknown`, or
 `dispatched` (a piece's send was handed to the engine and no receipt has said
-how it ended). A send the engine's egress guard refused reads `not_started`,
+how it ended). A dispatch that was blocked or failed with an outcome that says
+it `may_have_occurred` reads `unknown` or `failed`, never `not_started`. A send the engine's egress guard refused reads `not_started`,
 not executed. Entries written before outcomes were recorded keep what their
-rows said. Entries are grouped by effect, else by approval, else by row.
+rows said. Entries are grouped by effect, else by approval, else by row. Known
+gap: the chat gate writes its `approval_required` row before the card exists,
+with no approval id, so a chat approval still reads as two entries (the ask,
+and the decision with its receipt), and a chat call allowed outright records
+no outcome (`executed` there is written before the tool runs).
 
 ## Limits
 

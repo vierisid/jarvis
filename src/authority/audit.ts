@@ -58,6 +58,15 @@ export type AuditLedgerEntry = AuditEntry & {
   decided_device?: string | null;
 };
 
+/** The most entries or rows one ledger read returns. */
+export const AUDIT_PAGE_MAX = 500;
+
+/** A requested page size, clamped to 1..AUDIT_PAGE_MAX (default 100). */
+export function auditPageLimit(limit: number | undefined): number {
+  const n = Math.floor(Number(limit ?? 100));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, AUDIT_PAGE_MAX) : 100;
+}
+
 export class AuditTrail {
   /**
    * Log a tool execution decision.
@@ -203,30 +212,36 @@ export class AuditTrail {
     if (filters?.action) { conditions.push('f.action_category = ?'); values.push(filters.action); }
     if (filters?.tool) { conditions.push('f.tool_name = ?'); values.push(filters.tool); }
     if (filters?.since) { conditions.push('f.created_at >= ?'); values.push(filters.since); }
-    if (filters?.decision) {
-      conditions.push(`(CASE WHEN g.any_denied = 1 THEN 'denied' ELSE f.authority_decision END) = ?`);
-      values.push(filters.decision);
-    }
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const limit = filters?.limit ?? 100;
+    const anyDenied = `EXISTS (SELECT 1 FROM audit_trail d WHERE d.entry_key = f.entry_key AND d.authority_decision = 'denied')`;
+    if (filters?.decision === 'denied') conditions.push(`(f.authority_decision = 'denied' OR ${anyDenied})`);
+    else if (filters?.decision) { conditions.push(`f.authority_decision = ? AND NOT ${anyDenied}`); values.push(filters.decision); }
+    const limit = auditPageLimit(filters?.limit);
+    // Bounded: the page is the newest entries' FIRST rows (no earlier row with
+    // the same key), read newest first by `idx_audit_created` and stopping at
+    // `limit`; each entry's own rows are then read through `idx_audit_entry`.
+    // Nothing groups the whole table. Every row has an `entry_key` (written on
+    // insert, back-filled by the schema migration).
+    const latest = (column: string) => `(SELECT l.${column} FROM audit_trail l WHERE l.entry_key = f.entry_key AND l.${column} IS NOT NULL
+            ORDER BY l.created_at DESC, l.rowid DESC LIMIT 1)`;
     const rows = db.query(
-      `SELECT f.*, g.events, g.last_at, g.any_denied, g.any_executed,
-         (SELECT o.outcome FROM audit_trail o WHERE o.entry_key = g.k AND o.outcome IS NOT NULL
-            ORDER BY o.created_at DESC, o.rowid DESC LIMIT 1) AS final_outcome,
-         (SELECT d.decided_by FROM audit_trail d WHERE d.entry_key = g.k AND d.decided_by IS NOT NULL
-            ORDER BY d.created_at DESC, d.rowid DESC LIMIT 1) AS final_decided_by,
-         (SELECT c.channel FROM audit_trail c WHERE c.entry_key = g.k AND c.channel IS NOT NULL
-            ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1) AS final_channel,
-         (SELECT x.execution_time_ms FROM audit_trail x WHERE x.entry_key = g.k AND x.execution_time_ms IS NOT NULL
-            ORDER BY x.created_at DESC, x.rowid DESC LIMIT 1) AS final_time
-       FROM (SELECT COALESCE(entry_key, id) AS k, MIN(rowid) AS first_rowid, COUNT(*) AS events, MAX(created_at) AS last_at,
-               MAX(authority_decision = 'denied') AS any_denied, MAX(executed) AS any_executed
-             FROM audit_trail GROUP BY COALESCE(entry_key, id)) g
-       JOIN audit_trail f ON f.rowid = g.first_rowid
-       ${where}
-       ORDER BY f.created_at DESC, f.rowid DESC LIMIT ?`,
+      `WITH page AS (
+         SELECT f.rowid AS first_rowid FROM audit_trail f
+         WHERE NOT EXISTS (SELECT 1 FROM audit_trail e WHERE e.entry_key = f.entry_key AND e.rowid < f.rowid)
+           ${conditions.map((c) => `AND ${c}`).join(' ')}
+         ORDER BY f.created_at DESC, f.rowid DESC LIMIT ?)
+       SELECT f.*,
+         (SELECT COUNT(*) FROM audit_trail n WHERE n.entry_key = f.entry_key) AS events,
+         (SELECT MAX(m.created_at) FROM audit_trail m WHERE m.entry_key = f.entry_key) AS last_at,
+         ${anyDenied} AS any_denied,
+         EXISTS (SELECT 1 FROM audit_trail x WHERE x.entry_key = f.entry_key AND x.executed = 1) AS any_executed,
+         ${latest('outcome')} AS final_outcome,
+         ${latest('decided_by')} AS final_decided_by,
+         ${latest('channel')} AS final_channel,
+         ${latest('execution_time_ms')} AS final_time
+       FROM page JOIN audit_trail f ON f.rowid = page.first_rowid
+       ORDER BY f.created_at DESC, f.rowid DESC`,
     ).all(...[...values, limit] as any[]) as Array<AuditEntry & {
-      events: number; last_at: number; any_denied: number; any_executed: number;
+      events: number; last_at: number | null; any_denied: number; any_executed: number;
       final_outcome: AuditOutcome | null; final_decided_by: string | null; final_channel: ResolutionChannel | null; final_time: number | null;
     }>;
     return rows.map(({ events, last_at, any_denied, any_executed, final_outcome, final_decided_by, final_channel, final_time, ...row }) => {
@@ -234,15 +249,16 @@ export class AuditTrail {
       const decidedBy = final_decided_by ?? row.decided_by ?? null;
       return {
         ...row,
-        authority_decision: any_denied ? 'denied' as const : row.authority_decision,
+        authority_decision: any_denied || row.authority_decision === 'denied' ? 'denied' as const : row.authority_decision,
         executed: outcome ? (outcome === 'succeeded' ? 1 : 0) : any_executed ? 1 : 0,
         outcome,
         decided_by: decidedBy,
         decided_device: this.deviceName(decidedBy),
         channel: final_channel ?? row.channel ?? null,
         execution_time_ms: final_time ?? row.execution_time_ms ?? null,
-        events,
-        updated_at: last_at,
+        // A row with no key (written outside `log`) is an entry of its own.
+        events: events || 1,
+        updated_at: last_at ?? row.created_at,
       };
     });
   }
@@ -295,7 +311,10 @@ export class AuditTrail {
       if (decision === 'denied') stats.denied += 1;
       if (decision === 'approval_required') stats.approvalRequired += 1;
       stats.byCategory[group.action_category] = (stats.byCategory[group.action_category] ?? 0) + 1;
-      const outcome = group.final_outcome ?? (group.any_denied ? 'not_started' : group.any_executed ? 'succeeded' : 'pending');
+      // No settling row: a denial ran nothing; anything else is not known from
+      // the ledger (a pre-execution `executed` flag is not a result), so it is
+      // counted as `unrecorded`, never as `succeeded`.
+      const outcome = group.final_outcome ?? (group.any_denied ? 'not_started' : 'unrecorded');
       stats.byOutcome[outcome] = (stats.byOutcome[outcome] ?? 0) + 1;
     }
     return stats;

@@ -139,7 +139,8 @@ test('G-3: an auto-allowed send the egress guard refused is one ledger entry tha
 
   const sent = fixture();
   expect(await sent.invoke()).toEqual(sent.result);
-  expect(trail.queryEntries({ agentId: `workflow:${sent.run.id}` })).toMatchObject([{ outcome: 'succeeded', executed: 1, events: 2 }]);
+  // Nobody was asked: the Authority level decided, and the entry says so.
+  expect(trail.queryEntries({ agentId: `workflow:${sent.run.id}` })).toMatchObject([{ outcome: 'succeeded', executed: 1, events: 2, decided_by: 'level' }]);
   expect(trail.getStats()).toMatchObject({ total: 2, byOutcome: { not_started: 1, succeeded: 1 } });
 });
 
