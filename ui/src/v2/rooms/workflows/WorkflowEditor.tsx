@@ -114,6 +114,7 @@ import { CANCELED_EFFECT_WARNING } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
 import { modKey } from "../../ui/platform";
 import { NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, stepNotApprovalGated } from "./approval-gate";
+import { accessibleText } from "./accessible-text";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
 // cursor rightward by NODE_X_STEP; nested branches (loop body / router
@@ -406,12 +407,14 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
     setNodes(baseNodes);
   }, [baseNodes, setNodes]);
 
+  // On a phone, keep nodes big enough to read and let the person pan, rather
+  // than shrink a long chain to fit. The first fit, Arrange and the fit-view
+  // zoom button all use these options, so none of them shrinks it again.
+  const narrowScreen = typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 640px)").matches;
+  const fitOptions = useMemo(() => ({ padding: 0.15, minZoom: narrowScreen ? 0.7 : 0.4, maxZoom: 1.25 }), [narrowScreen]);
   // Capture the ReactFlowInstance so right-click handlers can translate
   // the cursor's screen coordinates into the canvas's flow coordinates
   // for orphan placement.
-  // On a phone, keep nodes big enough to read and let the person pan, rather
-  // than shrink a long chain to fit.
-  const narrowScreen = typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 640px)").matches;
   const rfInstanceRef = useRef<ReactFlowInstance<Node<StepNodeData>, Edge> | null>(null);
 
   const selectedNameRef = useRef(selectedStepName);
@@ -745,7 +748,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
   return (
     <CurrentFlowIdContext.Provider value={flowId}>
     <div ref={rootRef} className={`wf-editor${workspace ? " wf-editor--workspace" : ""}`} role={workspace ? "region" : "dialog"} aria-modal={workspace ? undefined : true} aria-label={workspace ? "Workflow editor" : undefined} aria-labelledby={workspace ? undefined : "wf-editor-title"}>
-      {renderHeader ? renderHeader({ editor, selectSetupStep: name => { setSelectedStepName(name); setPopoverAnchor({ x: 0, y: 0 }); closeRunDetail(); }, saving:workspaceSaving, save: async () => { if(saveLock.current)return; saveLock.current=true;setWorkspaceSaving(true);try {await onSave();} finally {saveLock.current=false;setWorkspaceSaving(false);} }, discard: onDiscard, message: actionMessage, arrange: () => { editor.clearStepPositions(); window.requestAnimationFrame(() => rfInstanceRef.current?.fitView({padding: 0.15, duration: 0})); } }) : (
+      {renderHeader ? renderHeader({ editor, selectSetupStep: name => { setSelectedStepName(name); setPopoverAnchor({ x: 0, y: 0 }); closeRunDetail(); }, saving:workspaceSaving, save: async () => { if(saveLock.current)return; saveLock.current=true;setWorkspaceSaving(true);try {await onSave();} finally {saveLock.current=false;setWorkspaceSaving(false);} }, discard: onDiscard, message: actionMessage, arrange: () => { editor.clearStepPositions(); window.requestAnimationFrame(() => rfInstanceRef.current?.fitView({ ...fitOptions, duration: 0 })); } }) : (
       <header className="wf-editor__header">
         <div className="wf-editor__title">
           {editor.version ? (
@@ -781,7 +784,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
               // visible (similar to xyflow's "fitView" controls button
               // but triggered by the explicit user action).
               window.requestAnimationFrame(() => {
-                rfInstanceRef.current?.fitView({ padding: 0.15, duration: 250 });
+                rfInstanceRef.current?.fitView({ ...fitOptions, duration: 250 });
               });
             }}
             title="Reset all step positions to the auto-arranged grid (does not change connections)"
@@ -957,7 +960,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             isValidConnection={isValidConnection}
             onEdgeContextMenu={readOnly ? undefined : onEdgeContextMenu}
             fitView
-            fitViewOptions={{ padding: 0.15, minZoom: narrowScreen ? 0.7 : 0.4, maxZoom: 1.25 }}
+            fitViewOptions={fitOptions}
             // Distance (px) from the pointer at which a connection drag
             // snaps to the closest valid handle. The default of 20 forces
             // pixel-perfect drops on the handle dot; raising it to ~140
@@ -977,7 +980,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             zoomOnScroll
           >
             <Background gap={workspace ? 24 : 16} color={workspace ? "var(--brief-card-edge)" : undefined} />
-            <Controls showInteractive={false} />
+            <Controls showInteractive={false} fitViewOptions={fitOptions} />
           </ReactFlow>
         )}
       </section>
@@ -2969,9 +2972,13 @@ function computeAutoLayout(root: FlowStepNode | null): Record<string, { x: numbe
   return out;
 }
 
-/** What a screen reader says for a canvas node: "Draft the follow-up, step". */
-export function nodeAccessibleName(step: FlowStepNode): string {
-  const title = step.displayName || step.name;
+/**
+ * What a screen reader says for a canvas node: "Draft the follow-up, step".
+ * The title may come from a model (compose), so it is cleaned of bidi and
+ * invisible characters first; an empty title falls back to the step's name.
+ */
+export function nodeAccessibleName(step: FlowStepNode, orphan = false): string {
+  const title = accessibleText(step.displayName) || accessibleText(step.name);
   let kind: string;
   if (step.type === "EMPTY") kind = "manual trigger";
   else if (step.type === "PIECE_TRIGGER") kind = "trigger";
@@ -2979,7 +2986,8 @@ export function nodeAccessibleName(step: FlowStepNode): string {
   else if (step.type === "ROUTER") kind = step.settings?.routerKind === "if" ? "if" : "router";
   else if (step.type === "CODE") kind = "code step";
   else kind = !step.settings?.pieceName || !step.settings.actionName ? "step, not set up yet" : "step";
-  return `${title}, ${kind}`;
+  // The canvas shows a disconnected step only by its dashed border.
+  return `${title}, ${kind}${orphan ? ", not connected" : ""}`;
 }
 
 function buildGraph(
@@ -3159,7 +3167,7 @@ function buildGraph(
     }
   }
   // Every node reads as its title and kind, not as an unnamed group.
-  for (const n of nodes) n.ariaLabel = nodeAccessibleName(n.data.step);
+  for (const n of nodes) n.ariaLabel = nodeAccessibleName(n.data.step, n.data.isOrphan);
   return { nodes, edges };
 }
 
@@ -5551,7 +5559,7 @@ function RouterEditor({
                     when nothing else matched. */}
                 {!isFallback && b?.branchType === "CONDITION" ? (
                   <BranchConditionsEditor
-                    branchName={b.branchName}
+                    branchName={b.branchName || `branch ${idx}`}
                     conditions={(b.conditions ?? []) as BranchConditions}
                     onChange={(next) => onSetBranchConditions(idx, next)}
                   />
@@ -5725,7 +5733,10 @@ export function BranchConditionsEditor({
   conditions,
   onChange,
 }: {
-  /** Names each field for screen readers: every branch repeats the same labels. */
+  /**
+   * Names each field for screen readers: every branch repeats the same
+   * labels. Cleaned of bidi and invisible characters before use.
+   */
   branchName: string;
   conditions: BranchConditions;
   onChange: (next: BranchConditions) => void;
@@ -5786,7 +5797,7 @@ export function BranchConditionsEditor({
           {firstGroup.map((c, idx) => (
             <ConditionRow
               key={idx}
-              owner={`${branchName}, condition ${idx + 1}`}
+              owner={`${accessibleText(branchName) || "Branch"}, condition ${idx + 1}`}
               condition={c}
               showAnd={idx > 0}
               onUpdate={(patch) => updateAt(idx, patch)}
