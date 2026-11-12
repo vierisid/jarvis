@@ -107,6 +107,20 @@ Connections are re-resolved at runtime, including managed sources, whose token
 availability can change after activation. Nested runs and tools validate again
 at their existing dispatch boundaries.
 
+A tool step must be one a run can dispatch: a tool with a declared Authority
+action (`BOUNDED_TOOLS`), `run_skill` naming a skill that exists, or a tool with a typed
+`workflowEffect`. Any other name, such as `run_command`, is refused with a message listing
+what is supported (`TOOL_UNSUPPORTED`), the same rule `toolEffectCapability` applies at run
+time. A `run_skill` whose parameters come from run data is checked when it runs.
+A form step's fields get the run's own validation (`formFields`), reported in plain
+words: each field needs a `key` (`name` is accepted for it), a label, a type and `required`.
+A step that works on a computer (a bounded tool) while the computer a run would use is
+offline (the pinned one, or for an unpinned flow any computer, with local tools off) is
+still ready, because it may be online by the time it runs, but carries a `computer`
+runtime check telling the person to open the desktop app. A computer that is briefly
+asleep never makes a workflow not ready. A run that finds its computer
+offline fails with the device name and the same instruction, never its id.
+
 Readiness does not grant Authority approval, prove business intent, guarantee
 provider availability, or prove arbitrary CODE behavior. Existing Authority,
 CODE opt-in, required-effect outcomes, cancellation and machine/session binding
