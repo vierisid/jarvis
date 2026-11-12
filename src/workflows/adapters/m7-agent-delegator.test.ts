@@ -19,6 +19,7 @@ import type { DelegationCheckpoint } from "../db/repos/delegation";
 import {
   M7AgentDelegator,
   extractToolCallsTrace,
+  failedToolCallNotice,
   type DelegationContinuation,
   type RunSubAgentFn,
 } from "./m7-agent-delegator";
@@ -118,6 +119,24 @@ describe("an agent whose tool calls failed", () => {
 
   test("fails when a tool the step requires is the one that failed", async () => {
     expect((await run(["run_command"])).outcome).toMatchObject({ status: "error", code: "REQUIRED_TOOL_NOT_COMPLETED" });
+  });
+
+  test("a model-invented tool name is clipped to one line and an echoed credential is redacted", () => {
+    const invented = "x".repeat(500) + "‮\ninjected";
+    const calls = [
+      { name: invented, error: 'Error: no tool named "x" is available.' },
+      { name: "http_request", error: "Error: 401 from https://api.example.com/?token=ghp_abcdefghijklmnopqrstuvwxyz0123" },
+      ...["a", "b", "c", "d", "e"].map(name => ({ name, error: "Error: failed" })),
+    ];
+    const notice = failedToolCallNotice(calls);
+    expect(notice.warning).toContain("7 of 7 tool calls did not work");
+    expect(notice.warning).toContain("and 2 more");
+    expect(notice.warning).not.toContain("‮");
+    expect(notice.warning).not.toContain("\n");
+    expect(notice.warning!.length).toBeLessThan(400);
+    expect(notice.toolErrors![0]!.name.length).toBeLessThanOrEqual(67);
+    expect(JSON.stringify(notice.toolErrors)).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123");
+    expect(notice.toolErrors![1]!.error).toContain("redacted");
   });
 
   test("an agent whose calls all worked carries no warning", async () => {

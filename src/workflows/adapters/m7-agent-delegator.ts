@@ -56,6 +56,7 @@ import type { EmergencyController } from "../../authority/emergency";
 import type { ActionCategory } from "../../roles/authority";
 import type { RoleDefinition } from "../../roles/types";
 import { boundedReceiptText } from "../../roles/untrusted";
+import { redactSecrets } from "../../util/redact";
 import type { ToolRegistry } from "../../actions/tools/registry";
 import type { ActionOutcome } from "../../actions/action-outcome";
 import type { DelegationCheckpoint } from "../db/repos/delegation";
@@ -190,6 +191,11 @@ export function runScopedAuditTrail(base: AuditTrail, run: { runId: string; step
 
 /** Most failed calls listed in a step's output; the warning still counts all of them. */
 const MAX_LISTED_TOOL_ERRORS = 10;
+/** Distinct tool names a warning names before "and N more". */
+const MAX_NAMED_FAILED_TOOLS = 5;
+/** A real tool name is far shorter; a model-invented one is cut here. */
+const TOOL_NAME_NOTICE_MAX_CHARS = 64;
+const toolNameForNotice = (name: string) => boundedApprovalLabel(name, TOOL_NAME_NOTICE_MAX_CHARS) || "(unnamed)";
 
 /**
  * The part of a finished delegation that did not happen. A tool that was not
@@ -201,10 +207,18 @@ const MAX_LISTED_TOOL_ERRORS = 10;
 export function failedToolCallNotice(toolCalls: PieceAgentToolCall[]): Pick<PieceAgentDelegateResult, "warning" | "toolErrors"> {
   const failed = toolCalls.filter(call => call.error !== undefined);
   if (failed.length === 0) return {};
-  const names = [...new Set(failed.map(call => call.name))];
+  // The name is the model's, not a registry's: a call to a tool that does not
+  // exist carries whatever the model wrote, of any length and with any
+  // characters. It is clipped to one plain line before a sentence quotes it.
+  const names = [...new Set(failed.map(call => toolNameForNotice(call.name)))];
+  const shown = names.slice(0, MAX_NAMED_FAILED_TOOLS).join(", ")
+    + (names.length > MAX_NAMED_FAILED_TOOLS ? ` and ${names.length - MAX_NAMED_FAILED_TOOLS} more` : "");
   return {
-    warning: `${failed.length} of ${toolCalls.length} tool call${toolCalls.length === 1 ? "" : "s"} did not work (${names.join(", ")}), so the work behind them was not done. The agent's final message may not say so.`,
-    toolErrors: failed.slice(0, MAX_LISTED_TOOL_ERRORS).map(call => ({ name: call.name, error: call.error! })),
+    warning: `${failed.length} of ${toolCalls.length} tool call${toolCalls.length === 1 ? "" : "s"} did not work (${shown}), so the work behind them was not done. The agent's final message may not say so.`,
+    // The error is already bounded and defanged (`extractToolCallsTrace`);
+    // credentials a failing tool echoed (a URL with a token) are redacted here,
+    // where the run detail lists them for a person to read.
+    toolErrors: failed.slice(0, MAX_LISTED_TOOL_ERRORS).map(call => ({ name: toolNameForNotice(call.name), error: redactSecrets(call.error!) })),
   };
 }
 
