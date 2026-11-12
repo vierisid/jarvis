@@ -64,6 +64,15 @@ export type CronScheduleOptions = {
   dueAfter?: number;
 };
 
+/**
+ * How often cron jobs check whether a minute has come due. A tick costs one
+ * integer compare per job unless the minute changed, so a time fires within
+ * this long of its minute, not within a coarse poll's worth of it. One timer
+ * per scheduler serves all its cron jobs, so many schedules do not mean many
+ * wakeups a second.
+ */
+export const CRON_TICK_MS = 1_000;
+
 /** A tick this late after its minute still fires; later than this, the occurrence was missed. */
 export const CRON_GRACE_MS = 2 * 60_000;
 /** Missed occurrences are looked for this far back. */
@@ -77,8 +86,9 @@ export type CronJob = {
   callback: (occurrence: CronOccurrence) => void;
   lastRun: number | null;
   nextRun: number;
-  handle: ReturnType<typeof setInterval>;
-  /** Evaluate the job as of `nowMs`. The interval calls it; tests drive time with `runDue`. */
+  /** The job's own interval: `@every` jobs only. Cron jobs share the scheduler's one ticker. */
+  handle?: ReturnType<typeof setInterval>;
+  /** Evaluate the job as of `nowMs`. The ticker calls it; tests drive time with `runDue`. */
   tick?: (nowMs: number) => void;
 };
 
@@ -149,6 +159,17 @@ function parseField(field: string, min: number, max: number): number[] {
 export function validateCronExpression(expression: string): void {
   if (parseEveryExpression(expression) === null) parseExpression(expression);
 }
+
+/**
+ * How far ahead the next time of a schedule is looked for: one Gregorian
+ * cycle, 400 years, which is a whole number of weeks. Calendar dates and
+ * weekdays repeat exactly every cycle, so an expression with no time inside it
+ * never fires, and one that has a time has it inside it however rare it is
+ * (a leap day is up to 8 years apart, a leap day that must be a Monday up to
+ * 40). Both nextRun paths use this one bound.
+ */
+const CRON_LOOKAHEAD_DAYS = 146_097;
+const CRON_LOOKAHEAD_MS = CRON_LOOKAHEAD_DAYS * 24 * 60 * 60_000;
 
 /**
  * Parse a full 5-field cron expression into its component arrays.
@@ -357,6 +378,24 @@ function zoneFormatter(zone: string): Intl.DateTimeFormat {
   });
 }
 
+/**
+ * Whole days nextRun can jump past from a day `wc` that does not match,
+ * without stepping over one that might: to two days before the next day of
+ * the month the expression names, or before the next month when this month
+ * is not named. Two days of slack keep a jump of that many 24-hour spans on
+ * or before the target's eve even where a zone moved its date line (Samoa
+ * skipped a whole day); `startOfNextLocalDay` and the loop do the rest day by
+ * day. Without it a far search walks every day of the 400-year bound.
+ */
+function daysPassedOver(parsed: ParsedCron, wc: WallClock): number {
+  const monthDays = new Date(Date.UTC(wc.year, wc.month, 0)).getUTCDate();
+  // LW falls on one of the last three days of the month.
+  const target = !parsed.months.includes(wc.month) ? monthDays + 1
+    : parsed.lastWeekday ? monthDays - 2
+    : Math.min(parsed.daysOfMonth.find((d) => d > wc.dom) ?? monthDays + 1, monthDays + 1);
+  return Math.max(0, target - wc.dom - 2);
+}
+
 /** Local calendar date as a single comparable number (yyyymmdd). */
 function localDateKey(wc: WallClock): number {
   return wc.year * 10_000 + wc.month * 100 + wc.dom;
@@ -410,6 +449,27 @@ function startOfNextLocalDay(ts: number, zone: string | null): number {
 export class CronScheduler {
   constructor(private readonly now: () => number = () => Date.now()) {}
   private jobs: Map<string, CronJob> = new Map();
+  /** The one interval that ticks every cron job; running only while one is scheduled. */
+  private ticker: ReturnType<typeof setInterval> | null = null;
+
+  private tickAll(): void {
+    for (const job of Array.from(this.jobs.values())) {
+      // A job cancelled by an earlier job's callback in this pass is not ticked.
+      if (!job.tick || this.jobs.get(job.id) !== job) continue;
+      try {
+        job.tick(this.now());
+      } catch (err) {
+        console.error(`[CronScheduler] Job "${job.id}" tick threw:`, err);
+      }
+    }
+  }
+
+  private stopTickerIfIdle(): void {
+    if (this.ticker && !Array.from(this.jobs.values()).some((job) => job.tick)) {
+      clearInterval(this.ticker);
+      this.ticker = null;
+    }
+  }
 
   /**
    * Check if a cron expression matches a given date.
@@ -461,7 +521,7 @@ export class CronScheduler {
    * Calculate the next execution time for a cron expression.
    * @param expression - 5-field cron expression
    * @param from - start searching from this date (default: now)
-   * @returns Date of next execution, or null if none found within 1 year
+   * @returns Date of next execution, or null if it never fires (see CRON_LOOKAHEAD_DAYS)
    */
   static nextRun(expression: string, from: Date = new Date(), limitMs?: number, zone: string | null = cronTimezone, dstPolicy?: CronDstPolicy): Date | null {
     validateCronDstPolicy(dstPolicy);
@@ -475,10 +535,8 @@ export class CronScheduler {
       start.setSeconds(0, 0);
       start.setMinutes(start.getMinutes() + 1);
 
-      // Search up to 1 year ahead (minute-by-minute is too slow; step by minute smartly)
-      const limit = new Date(from);
-      limit.setFullYear(limit.getFullYear() + 1);
-      if (limitMs !== undefined && limitMs < limit.getTime()) limit.setTime(limitMs);
+      // Search one 400-year cycle ahead (minute-by-minute is too slow; step by minute smartly)
+      const limit = new Date(Math.min(from.getTime() + CRON_LOOKAHEAD_MS, limitMs ?? Number.MAX_SAFE_INTEGER));
 
       const candidate = new Date(start);
 
@@ -558,13 +616,13 @@ export class CronScheduler {
 
       // Start from the next whole minute.
       let ts = Math.floor(from.getTime() / 60_000) * 60_000 + 60_000;
-      const limit = Math.min(from.getTime() + 366 * 24 * 60 * 60_000, limitMs ?? Number.MAX_SAFE_INTEGER);
+      const limit = Math.min(from.getTime() + CRON_LOOKAHEAD_MS, limitMs ?? Number.MAX_SAFE_INTEGER);
       let guard = 0;
 
       while (ts < limit && ++guard < 600_000) {
         const wc = wallClock(new Date(ts), zone);
         if (!matchesDay(parsed, wc)) {
-          ts = startOfNextLocalDay(ts, zone);
+          ts = startOfNextLocalDay(ts + daysPassedOver(parsed, wc) * 86_400_000, zone);
           continue;
         }
         if (!hours.includes(wc.hour)) {
@@ -588,7 +646,7 @@ export class CronScheduler {
 
   /**
    * Schedule a recurring callback based on a cron expression.
-   * Uses setInterval to check every 30 seconds which occurrences have come due.
+   * The scheduler's one ticker checks every `CRON_TICK_MS` which occurrences have come due.
    *
    * Each occurrence fires once: a tick up to `CRON_GRACE_MS` late still fires
    * it (with its lateness); older ones are reported to `onMissed` and never
@@ -723,17 +781,15 @@ export class CronScheduler {
       if (job && (due.length || job.nextRun <= nowMs)) job.nextRun = CronScheduler.nextRun(expression, new Date(nowMs), undefined, zone, dstPolicy)?.getTime() ?? nowMs;
     };
 
-    const handle = setInterval(() => tick(this.now()), 30_000);
-
     this.jobs.set(id, {
       id,
       expression,
       callback,
       lastRun: null,
       nextRun: nextRun.getTime(),
-      handle,
       tick,
     });
+    this.ticker ??= setInterval(() => this.tickAll(), CRON_TICK_MS);
 
     console.log(`[CronScheduler] Scheduled job "${id}" (${expression}), next run: ${nextRun.toISOString()}`);
   }
@@ -749,8 +805,9 @@ export class CronScheduler {
   cancel(id: string): void {
     const job = this.jobs.get(id);
     if (job) {
-      clearInterval(job.handle);
+      if (job.handle) clearInterval(job.handle);
       this.jobs.delete(id);
+      this.stopTickerIfIdle();
       console.log(`[CronScheduler] Cancelled job "${id}"`);
     }
   }
@@ -760,9 +817,10 @@ export class CronScheduler {
    */
   cancelAll(): void {
     for (const job of this.jobs.values()) {
-      clearInterval(job.handle);
+      if (job.handle) clearInterval(job.handle);
     }
     this.jobs.clear();
+    this.stopTickerIfIdle();
     console.log('[CronScheduler] All jobs cancelled');
   }
 

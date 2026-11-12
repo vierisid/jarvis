@@ -813,3 +813,27 @@ test('a child call in a loop needs an invocation key that changes per item', () 
   const outside = graph(callStep('{{trigger.request_id}}'));
   expect(compileWorkflow(outside, { pieces: subflowCatalog }).issues.filter(i => i.path === 'settings.input.invocationKey')).toEqual([]);
 });
+
+test('readiness says "Retry on failure" cannot apply to a step that acts outside Jarvis, without refusing the flow', () => {
+  const retry = { errorHandlingOptions: { retryOnFailure: { value: true } } };
+  const outside = step(); outside.settings = { ...outside.settings, ...retry };
+  const report = compile(graph(outside));
+  expect(report.ready).toBe(true);
+  expect(report.warnings).toEqual([{ node: 'send', path: 'settings.errorHandlingOptions.retryOnFailure', code: 'RETRY_UNAVAILABLE',
+    message: 'Retry is not available for steps that act outside Jarvis, so a request is never sent twice.' }]);
+  const code: any = { name: 'run', type: 'CODE', settings: { sourceCode: { packageJson: '{}', code: '' }, input: {}, ...retry } };
+  expect(compile(graph(code)).warnings?.map(w => w.node)).toEqual(['run']);
+  // Built-in steps that work inside the run, and steps with the option off or "Continue on failure" only, say nothing.
+  const inside: any = { name: 'sum', type: 'PIECE', settings: { pieceName: '@activepieces/piece-math-helper', actionName: 'x', input: {}, ...retry } };
+  const off = step('send', 'x'); off.settings = { ...off.settings, errorHandlingOptions: { retryOnFailure: { value: false }, continueOnFailure: { value: true } } };
+  expect(compileWorkflow(graph(inside), { pieces }).warnings).toBeUndefined();
+  expect(compile(graph(off)).warnings).toBeUndefined();
+});
+
+test('readiness says "Continue on failure" cannot apply to a step that asks a person, without refusing the flow', () => {
+  const ask: any = { name: 'ok', type: 'PIECE', settings: { pieceName: '@activepieces/piece-approval', actionName: 'wait_for_approval', input: {},
+    errorHandlingOptions: { continueOnFailure: { value: true } } } };
+  const report = compileWorkflow(graph(ask), { phase: 'composition' });
+  expect(report.warnings).toEqual([{ node: 'ok', path: 'settings.errorHandlingOptions.continueOnFailure', code: 'CONTINUE_UNAVAILABLE',
+    message: 'Continue on failure is not available for a step that asks a person, so the steps after it run only after a yes.' }]);
+});

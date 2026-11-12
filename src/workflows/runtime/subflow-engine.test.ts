@@ -101,9 +101,29 @@ for(const scenario of ['success','invalid','failure','timeout'])test('real paren
  if(scenario==='timeout'){expect(f.children()[0]!.status).toBe('PAUSED');now+=60_000;new TimerWaitpointScheduler().tick(now);await worker.drain();}
  const final=await finish(first.id);expect(final.status).toBe(scenario==='success'?'SUCCEEDED':'FAILED');
  if(scenario==='success')expect(consume(final)).toEqual({valid:true,customer:{id:'customer-1',name:'Fixture Customer',email:'customer@example.invalid'},issues:[]});
- else expect(final.failedStep?.errorMessage).toContain(scenario==='invalid'?'invalid_output':scenario==='failure'?'failed':'timeout');
+ else expect(final.failedStep?.errorMessage).toContain(scenario==='invalid'?'different shape':scenario==='failure'?'failed':'did not finish');
  const replay=await f.run();expect(replay.status).toBe(final.status);expect(f.children()).toHaveLength(1);
 },60_000);
+// The daemon wires the worker's job-settled hook to the scheduler, so a parent continues when its child ends without waiting for the poll.
+async function runWithSettleHook(flowId:string,versionId:string){
+ const scheduler=new TimerWaitpointScheduler();
+ const hooked=new Worker({log:()=>{},handlers:{[RUN_FLOW]:createRunFlowHandler({executor:new EngineFlowExecutor(runtime),now:()=>now})},onJobSettled:job=>{scheduler.afterJobSettled(job);}});
+ const r=createFlowRun({flowId,flowVersionId:versionId});runIds.push(r.id);enqueue({jobType:RUN_FLOW,payload:{runId:r.id,payload},flowId,flowRunId:r.id});
+ await hooked.drain();
+ for(const child of listRuns({limit:500}).filter(x=>x.parentRunId))if(!runIds.includes(child.id))runIds.push(child.id);
+ return getFlowRun(r.id)!;
+}
+for(const scenario of ['success','invalid'])test('a parent continues as soon as its child ends, with no poll: '+scenario,async()=>{
+ const f=await fixture();mode=scenario;
+ const final=await runWithSettleHook(f.parent.id,f.pv.id);
+ expect(final.status).toBe(scenario==='success'?'SUCCEEDED':'FAILED');
+ if(scenario==='invalid')expect(final.failedStep?.errorMessage).toMatch(/invalid_output|different shape/);
+});
+test('without the settle hook the poll still continues a parent after a restart',async()=>{
+ const f=await fixture(),first=await f.run();expect(first.status).toBe('PAUSED');
+ new TimerWaitpointScheduler().tick(now);await worker.drain();
+ expect(getFlowRun(first.id)!.status).toBe('SUCCEEDED');
+});
 test('database reopen after child completion resumes parent and reuses child on new parent run',async()=>{
  const f=await fixture(),first=await f.run();expect(first.status).toBe('PAUSED');expect(f.children()[0]!.status).toBe('SUCCEEDED');
  closeWorkflowDb();initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,79));configureWorkflowReadiness({pieces:catalog});
@@ -143,10 +163,10 @@ test('invalid customer returns validation issues as structured data',async()=>{
 test('successful child with no explicit return is invalid output',async()=>{
  const child=childTestGraph();delete child.nextAction.nextAction;const c=createFlow(),cv=createDraftVersion({flowId:c.id,displayName:'No return',trigger:{name:'trigger',type:'EMPTY'}});lockVersion(cv.id);setPublishedVersion(c.id,cv.id);updateFlowStatus(c.id,'ENABLED');
  const parent=parentTestGraph(c.id);parent.nextAction.settings.input.invocationKey='{{trigger.request_id}}';const p=createFlow(),pv=createDraftVersion({flowId:p.id,displayName:'Missing result',trigger:parent});lockVersion(pv.id);setPublishedVersion(p.id,pv.id);updateFlowStatus(p.id,'ENABLED');
- mode='success';authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});const final=await finish((await run(p.id,pv.id)).id);expect(final.status).toBe('FAILED');expect(final.failedStep?.errorMessage).toContain('invalid_output');
+ mode='success';authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});const final=await finish((await run(p.id,pv.id)).id);expect(final.status).toBe('FAILED');expect(final.failedStep?.errorMessage).toContain('did not send back a result');
 });
 test('completion before deadline survives downtime beyond the deadline',async()=>{const f=await fixture(),first=await f.run();now+=120_000;expect((await finish(first.id)).status).toBe('SUCCEEDED');});
-test('child completed at the deadline is a timeout',async()=>{const f=await fixture(),first=await f.run();const c=f.children()[0]!;getWorkflowDb().run('UPDATE flow_run SET finish_time=? WHERE id=?',[now+60_000,c.id]);now+=60_000;const final=await finish(first.id);expect(final.status).toBe('FAILED');expect(final.failedStep?.errorMessage).toContain('timeout');});
+test('child completed at the deadline is a timeout',async()=>{const f=await fixture(),first=await f.run();const c=f.children()[0]!;getWorkflowDb().run('UPDATE flow_run SET finish_time=? WHERE id=?',[now+60_000,c.id]);now+=60_000;const final=await finish(first.id);expect(final.status).toBe('FAILED');expect(final.failedStep?.errorMessage).toContain('did not finish');});
 test('child completion cannot be forged by another step',async()=>{const f=await fixture(),r=createFlowRun({flowId:f.parent.id,flowVersionId:f.pv.id,status:'RUNNING'});runIds.push(r.id);await expect(services.subflowResult!({result:{}},{runId:r.id,projectId:DEFAULT_IDS.project,stepName:f.pv.trigger.nextAction!.name,executionPath:[]})).rejects.toThrow('pinned version');});
 test('Authority approval pins the child version before dispatch',async()=>{
  const f=await fixture();authority.setGovernedCategories(['spawn_agent']);const r=createFlowRun({flowId:f.parent.id,flowVersionId:f.pv.id,status:'RUNNING'});runIds.push(r.id);
@@ -289,4 +309,34 @@ test('explicit child cancellation still stops a child shared by live parents',as
  const f=await sharedApprovalFixture(),parents=[await f.run(),await f.run()],child=f.children()[0]!;
  expect(cancelFlowRun(child.id).accepted).toBe(true);expect(getFlowRun(child.id)?.status).toBe('STOPPED');
  for(const parent of parents)expect((await finish(parent.id)).status).toBe('FAILED');
+});
+
+// The call step itself fails by default; the later require_success step is not what makes the run fail.
+async function callOnly(options:{continueOnChildFailure?:boolean}={},noReturn=false){
+ const f=await fixture(),g=configuredSubflowGraphs(parentTestGraph('x'),childTestGraph());
+ const child=createFlow();let childGraph=g.child;if(noReturn)delete childGraph.nextAction.nextAction;
+ const cv=createDraftVersion({flowId:child.id,displayName:'Customer checker',trigger:childGraph});lockVersion(cv.id);setPublishedVersion(child.id,cv.id);updateFlowStatus(child.id,'ENABLED');
+ g.parent.nextAction.settings.input.flow=child.id;if(options.continueOnChildFailure!==undefined)g.parent.nextAction.settings.input.continueOnChildFailure=options.continueOnChildFailure;delete g.parent.nextAction.nextAction;
+ const parent=createFlow(),pv=createDraftVersion({flowId:parent.id,displayName:'Call only',trigger:g.parent});lockVersion(pv.id);setPublishedVersion(parent.id,pv.id);updateFlowStatus(parent.id,'ENABLED');
+ return {run:()=>run(parent.id,pv.id),f};
+}
+test('a failing child fails the calling step and the run by default, naming the child',async()=>{
+ const c=await callOnly();mode='failure';const final=await finish((await c.run()).id);
+ expect(final.status).toBe('FAILED');expect(final.failedStep?.errorMessage).toContain('The workflow "Customer checker" failed');expect(final.failedStep?.errorMessage).not.toContain('CHILD_FAILED');
+});
+test('a child that returns nothing fails the calling step by default',async()=>{
+ const c=await callOnly({},true);const final=await finish((await c.run()).id);
+ expect(final.status).toBe('FAILED');expect(final.failedStep?.errorMessage).toContain('The workflow "Customer checker" finished but did not send back a result');
+});
+test('a child result that does not match the schema fails the calling step by default',async()=>{
+ const c=await callOnly();mode='invalid';const final=await finish((await c.run()).id);
+ expect(final.status).toBe('FAILED');expect(final.failedStep?.errorMessage).toContain('different shape than this step expects');
+});
+test('continueOnChildFailure keeps the parent green and returns the status object',async()=>{
+ for(const [scenario,status,code] of [['failure','failed','CHILD_FAILED'],['invalid','invalid_output','CHILD_RESULT_INVALID']] as const){
+  const c=await callOnly({continueOnChildFailure:true});mode=scenario;const final=await finish((await c.run()).id);
+  expect(final.status).toBe('SUCCEEDED');expect((final.steps as any)?.child?.output?.output).toMatchObject({status,code});
+ }
+ const none=await callOnly({continueOnChildFailure:true},true),final=await finish((await none.run()).id);
+ expect(final.status).toBe('SUCCEEDED');expect((final.steps as any)?.child?.output?.output).toMatchObject({status:'invalid_output',code:'CHILD_RESULT_MISSING'});
 });
