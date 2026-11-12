@@ -322,6 +322,11 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 					log.Printf("[panels] spawn(%s): positioned at saved (%d,%d)", spec.ID, spec.Bounds.X, spec.Bounds.Y)
 				}
 			}
+			if spec.Notch {
+				// Top centre of the main display, cut to nothing until the page
+				// reports its outline, and watched for the fullscreen rule.
+				platformNotchSetUp(handle, impl.done)
+			}
 
 			// JS-callable bindings: page calls these directly via webview, no
 			// daemon round-trip. Must be bound before Run.
@@ -335,6 +340,9 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				return s.SetClickThrough(panelID, ct)
 			}); err != nil {
 				log.Printf("[panels] spawn(%s): Bind(__sidecar_set_clickthrough) failed: %v", spec.ID, err)
+			}
+			if spec.Notch {
+				bindNotch(wv, handle)
 			}
 
 			// Reveal the (hidden) panel once its page has loaded, with a timeout
@@ -371,6 +379,14 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 					default:
 					}
 					if panelShown.CompareAndSwap(false, true) {
+						if spec.Notch {
+							// The notch never takes the keyboard by appearing.
+							platformNotchReveal(earlyHandle)
+							if panelTracksReveal {
+								wv.Eval(panelRevealedScript)
+							}
+							return
+						}
 						_ = platformSetWindowVisible(earlyHandle, true)
 						_ = platformFocusWindow(earlyHandle)
 						if panelTracksReveal {

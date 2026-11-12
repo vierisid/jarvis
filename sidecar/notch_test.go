@@ -8,7 +8,7 @@ func TestNotchStartsOff(t *testing.T) {
 	}
 }
 
-func TestNotchConfigureSetsTheSwitchAndSaysThereIsNoSurfaceYet(t *testing.T) {
+func TestNotchConfigureSetsTheSwitch(t *testing.T) {
 	svc := &NotchService{}
 	handle := makeNotchConfigureHandler(svc)
 
