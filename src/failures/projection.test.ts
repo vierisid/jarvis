@@ -120,3 +120,21 @@ test('browser sign-in failure keeps the setup instruction without claiming no ea
   expect(failure.effect).toBe('unknown'); expect(failure.outcome).not.toContain('Nothing was done');
   expect(failure.headline).not.toContain('Private account');
 });
+
+test('an approved step whose connection changed after the card says so and that nothing was sent (G-6)', () => {
+  const failure = projectFailure({ source: 'action', outcome: { status: 'blocked', code: 'CONNECTION_CHANGED_AFTER_REQUEST',
+    message: 'The connection changed after you were asked, so this was not sent', effect: 'not_started' } }, { label: 'The step "Send invoice"', sideEffects: false });
+  expect(failure.headline).toBe('The step "Send invoice" did not run: the connection it uses was changed after you were asked, so nothing was sent.');
+  expect(failure).toMatchObject({ effect: 'none', category: 'missing_binding' });
+  // A new run is admitted only once the change is accepted, so the advice is to accept it, not a bare "run it again".
+  expect(failure.next.map(n => n.step)).toContain('accept_binding_change');
+  expect(failure.next.map(n => n.step)).not.toContain('run_again');
+});
+
+test('an approved step whose connection was removed after the card says to set it up again (G-6)', () => {
+  const failure = projectFailure({ source: 'action', outcome: { status: 'blocked', code: 'CONNECTION_REMOVED_AFTER_REQUEST',
+    message: 'The connection was removed after you were asked, so this was not sent', effect: 'not_started' } }, { label: 'The step "Send invoice"', sideEffects: false });
+  expect(failure.headline).toBe('The step "Send invoice" did not run: the connection it uses was removed after you were asked, so nothing was sent.');
+  expect(failure).toMatchObject({ effect: 'none', category: 'missing_binding' });
+  expect(failure.next.map(n => n.step)).toContain('connect');
+});

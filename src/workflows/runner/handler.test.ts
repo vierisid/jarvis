@@ -6,6 +6,9 @@ import { createFlowRun, getFlowRun, updateRun } from "../db/repos/flow-run";
 import { enqueue, getJob, queueStats } from "../db/repos/job-queue";
 import { workflowFailureMessage } from "../queue/retry-policy";
 import { Worker } from "../queue/worker";
+import { ApprovalManager } from "../../authority/approval";
+import { getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from "../db/repos/workflow-effect";
+import { getWorkflowDb } from "../db/index";
 import { createWaitpoint } from "../db/repos/waitpoint";
 import { createWorkflowRoutes } from "../api/routes";
 import { TimerWaitpointScheduler } from "../timer-scheduler";
@@ -394,5 +397,103 @@ describe("RUN_FLOW handler run-ended signal (#1018)", () => {
     await run(async () => { throw new FlowExecutionError("refused", { name: "send", displayName: "Send" }); });
     await run(async () => ({ status: "PAUSED", steps: {}, stepsCount: 0 }));
     expect(heard).toEqual(["SUCCEEDED", "FAILED"]);
+  });
+});
+
+describe("RUN_FLOW handler settles an approved effect the run never sent (G-6)", () => {
+  function approvedEffect(flowId: string, versionId: string, runId: string, opts: { stepName?: string; status?: WorkflowEffect["status"]; approve?: boolean } = {}) {
+    const approvals = new ApprovalManager();
+    const request = approvals.createRequest({ agentId: `workflow:${runId}`, agentName: "Workflow", toolName: "piece:smtp/send-email", toolArguments: {},
+      actionCategory: "send_email", urgency: "normal", reason: "r", context: "", executionMode: "workflow" });
+    if (opts.approve !== false) approvals.approve(request.id, "dashboard");
+    const stepName = opts.stepName ?? "send";
+    const effect: WorkflowEffect = { id: `wfe_${stepName.padEnd(64, "a").slice(0, 64)}`, runId, projectId: getFlowRun(runId)!.projectId, flowId, versionId,
+      versionDigest: "d", stepName, executionPath: [], route: "piece", toolName: "piece:smtp/send-email", actionCategory: "send_email",
+      requestDigest: "d", arguments: {}, target: {}, provenance: {}, decision: "approval_required", reason: "r", status: opts.status ?? "pending",
+      approvalId: request.id, waitpointId: null, createdAt: Date.now() - 1_000 };
+    saveWorkflowEffect(effect);
+    return { effect, approvals, approvalId: request.id };
+  }
+  // What `enforceRunConnectionBinding` records on the run when it refuses a fetch.
+  const refuse = (runId: string, message: string, at = Date.now()) => getWorkflowDb().run(
+    "INSERT INTO workflow_run_connection_binding (run_id, external_id, record) VALUES (?, ?, ?)",
+    [runId, "smtp-qa", JSON.stringify({ externalId: "smtp-qa", identity: null, boundAt: 1, refusal: { message, at } })]);
+  const REPLACED = "The credential stored in connection smtp-qa was replaced during this run, after the run first used it. Its credential was not handed out; start a new run once the connection is right.";
+  const fail = async (runId: string, onCardClosed: (id: string) => void) => {
+    const worker = new Worker({ log: silent, handlers: { [RUN_FLOW]: createRunFlowHandler({ onCardClosed,
+      executor: { execute: async () => { throw new FlowExecutionError("Failed to load connection (smtp-qa)", { name: "send", displayName: "Send" }); } } }) } });
+    await worker.drain();
+  };
+
+  test("the connection changed after the request: the effect is blocked as not started, with the reason, the moment the run ends", async () => {
+    const { flowId, versionId, runId } = setupRun();
+    const { effect, approvals, approvalId } = approvedEffect(flowId, versionId, runId);
+    refuse(runId, REPLACED);
+    const closed: string[] = [];
+    await fail(runId, id => closed.push(id));
+    expect(getFlowRun(runId)?.status).toBe("FAILED");
+    expect(getWorkflowEffect(effect.id)).toMatchObject({ status: "blocked", error: "The connection changed after you were asked, so this was not sent",
+      outcome: { status: "blocked", code: "CONNECTION_CHANGED_AFTER_REQUEST", effect: "not_started" } });
+    expect(approvals.getRequest(approvalId)).toMatchObject({ status: "executed", execution_outcome: "blocked" });
+    expect(closed).toEqual([approvalId]);
+  });
+
+  test("a connection removed after the request says so, so the next step is to set it up again, not to accept a change", async () => {
+    const { flowId, versionId, runId } = setupRun();
+    const { effect } = approvedEffect(flowId, versionId, runId);
+    refuse(runId, "Connection smtp-qa was removed while this run asked for it. Its credential was not handed out; start a new run once the connection is right.");
+    await fail(runId, () => {});
+    expect(getWorkflowEffect(effect.id)?.outcome).toMatchObject({ code: "CONNECTION_REMOVED_AFTER_REQUEST", effect: "not_started" });
+  });
+
+  test("only the failed step's card refused after it was raised reads as changed after the request; the run's others read as ended", async () => {
+    const { flowId, versionId, runId } = setupRun();
+    const other = approvedEffect(flowId, versionId, runId, { stepName: "notify", approve: false });
+    const own = approvedEffect(flowId, versionId, runId);
+    refuse(runId, REPLACED);
+    const closed: string[] = [];
+    await fail(runId, id => closed.push(id));
+    expect(getWorkflowEffect(own.effect.id)?.outcome).toMatchObject({ code: "CONNECTION_CHANGED_AFTER_REQUEST", effect: "not_started" });
+    expect(getWorkflowEffect(other.effect.id)).toMatchObject({ status: "blocked", outcome: { code: "WORKFLOW_FINISHED", effect: "not_started" } });
+    expect(other.approvals.getRequest(other.approvalId)?.status).toBe("denied");
+    expect(closed.sort()).toEqual([own.approvalId, other.approvalId].sort());
+  });
+
+  test("a refusal from before the card was raised is not a change after the request", async () => {
+    const { flowId, versionId, runId } = setupRun();
+    const { effect } = approvedEffect(flowId, versionId, runId);
+    refuse(runId, REPLACED, effect.createdAt - 1);
+    await fail(runId, () => {});
+    expect(getWorkflowEffect(effect.id)?.outcome).toMatchObject({ code: "WORKFLOW_FINISHED", effect: "not_started" });
+  });
+
+  test("an effect already dispatching is never settled: it may have gone out", async () => {
+    const { flowId, versionId, runId } = setupRun();
+    const { effect, approvals, approvalId } = approvedEffect(flowId, versionId, runId, { status: "dispatching" });
+    refuse(runId, REPLACED);
+    const closed: string[] = [];
+    await fail(runId, id => closed.push(id));
+    expect(getWorkflowEffect(effect.id)).toMatchObject({ status: "dispatching" });
+    expect(getWorkflowEffect(effect.id)?.outcome).toBeUndefined();
+    expect(approvals.getRequest(approvalId)?.status).toBe("approved");
+    expect(closed).toEqual([]);
+  });
+
+  test("a surface that throws on one closed card does not keep the others from hearing", async () => {
+    const { flowId, versionId, runId } = setupRun();
+    const first = approvedEffect(flowId, versionId, runId, { stepName: "notify" });
+    const second = approvedEffect(flowId, versionId, runId);
+    refuse(runId, REPLACED);
+    const heard: string[] = [];
+    await fail(runId, id => { heard.push(id); if (heard.length === 1) throw new Error("socket closed"); });
+    expect(heard.sort()).toEqual([first.approvalId, second.approvalId].sort());
+    expect(getFlowRun(runId)?.status).toBe("FAILED");
+  });
+
+  test("a run that failed for another reason leaves its undispatched effect to the sweep, as before", async () => {
+    const { flowId, versionId, runId } = setupRun();
+    const { effect } = approvedEffect(flowId, versionId, runId);
+    await fail(runId, () => {});
+    expect(getWorkflowEffect(effect.id)).toMatchObject({ status: "pending" });
   });
 });

@@ -5753,7 +5753,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: flowExecutor,
           // #1080: a run refused for what it is bound to (its computer, a
           // recipient) tells the owner once per workflow and reason.
-          onRunEnded: bindingRefusalNotifier((notice) => notifyAll(notice)) }) },
+          onRunEnded: bindingRefusalNotifier((notice) => notifyAll(notice)),
+          // A card closed because its run ended before the effect could send (G-6).
+          onCardClosed: (approvalId) => {
+            const request = approvalManager.getRequest(approvalId);
+            if (request) wsService.broadcastApprovalUpdate(request);
+          } }) },
       });
       workflowWorker.start();
 
