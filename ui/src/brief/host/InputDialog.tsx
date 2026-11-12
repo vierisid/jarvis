@@ -47,21 +47,26 @@ export function InputHost() {
   }, [prompt]);
   if (!prompt) return null;
   const fields = prompt.fields ?? [], form = fields.length > 0 && !advanced;
+  // Own keys only: a field named like an Object.prototype member ("toString",
+  // "constructor") must read as empty, not as the inherited function.
+  const own = (from: unknown, name: string): unknown => from !== null && typeof from === 'object' && Object.prototype.hasOwnProperty.call(from, name) ? (from as Record<string, unknown>)[name] : undefined;
+  const entry = (name: string): string => { const v = own(entries, name); return typeof v === 'string' ? v : ''; };
+  const answers = () => JSON.stringify(Object.fromEntries(fields.map(name => [name, entry(name)])));
   const toggleAdvanced = () => {
     // Carry what was typed across, in the shape the other view reads.
-    if (form) setValue(JSON.stringify(Object.fromEntries(fields.map(name => [name, entries[name] ?? '']))));
-    else { try { const parsed = JSON.parse(value); setEntries(Object.fromEntries(fields.map(name => [name, typeof parsed?.[name] === 'string' ? parsed[name] : parsed?.[name] === undefined ? '' : JSON.stringify(parsed[name])]))); } catch { /* Keep the entries as they were. */ } }
+    if (form) setValue(answers());
+    else { try { const parsed: unknown = JSON.parse(value); setEntries(Object.fromEntries(fields.map(name => { const v = own(parsed, name); return [name, typeof v === 'string' ? v : v === undefined ? '' : JSON.stringify(v)]; }))); } catch { /* Keep the entries as they were. */ } }
     setError(''); setAdvanced(!advanced);
   };
   return createPortal(<div className="jconfirm" role="presentation"><form ref={box} className="jconfirm__box" role="dialog" aria-modal="true" aria-label={prompt.label}
     onSubmit={event => { event.preventDefault();
-      if (form) { close(JSON.stringify(Object.fromEntries(fields.map(name => [name, entries[name] ?? ''])))); return; }
+      if (form) { close(answers()); return; }
       if (!value.trim()) return; const invalid = prompt.validate?.(value); if (invalid) { setError(invalid); box.current?.querySelector('textarea')?.focus(); } else close(value); }}>
     {form ? <>
       <h2 className="jconfirm__title">{prompt.label}</h2>
       <p className="jconfirm__body">This workflow starts with these values. Leave a field empty to send it blank.</p>
       {fields.map((name, index) => <label key={name} className="jconfirm__body" style={{ display: 'grid', gap: 4 }}>{name}
-        <input type="text" autoFocus={index === 0} value={entries[name] ?? ''} onChange={event => setEntries({ ...entries, [name]: event.target.value })} />
+        <input type="text" autoFocus={index === 0} value={entry(name)} onChange={event => setEntries({ ...entries, [name]: event.target.value })} />
       </label>)}
     </> : <>
       <label className="jconfirm__title" htmlFor="brief-command-input">{prompt.label}</label>

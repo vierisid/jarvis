@@ -276,6 +276,19 @@ test('a manual trigger that declares fields asks for them in a form, with JSON a
   expect(result).toEqual({ customer: 'acme', amount: '12' });
 });
 
+test('a declared field named like an Object.prototype member starts empty and is sent', async () => {
+  await React.act(async () => root.render(<Input.InputHost />));
+  let result: Record<string, unknown> | null | undefined;
+  await React.act(async () => { void Input.manualRunInput(undefined, ['toString', 'constructor']).then(value => { result = value; }); });
+  const boxes = [...document.querySelectorAll('input')] as HTMLInputElement[];
+  expect(boxes.map(box => box.value)).toEqual(['', '']);
+  await click('Advanced: JSON');
+  expect(document.querySelector('textarea')!.value).toBe('{"toString":"","constructor":""}');
+  await click('Use the form');
+  await click('Continue');
+  expect(result).toEqual({ toString: '', constructor: '' });
+});
+
 test('publishing from the existing canvas route reloads authoritative state and enables Run without navigation', async () => {
   const { createWorkflowRooms } = await import('./workflow-rooms');
   const { makeCanvasFixture } = await import('../workflows/canvas/fixtures');
