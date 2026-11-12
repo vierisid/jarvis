@@ -183,7 +183,17 @@ Practical consequences:
   until its draft workflow is attached: after that a failure fails as before,
   and a job dismissed meanwhile keeps its spent attempt), and
   prepared-opportunity discovery and the opportunity notification outbox
-  hold on the switch itself, so nothing queued is lost; and a flow's
+  hold on the switch itself, so nothing queued is lost; the automatic help
+  that sends screen text to the background agent (error and struggle
+  research, and the event reactor's turns on awareness events) does not
+  start while awareness is off, stops before its next model call, provider
+  retry or tool run once it turns off, runs on a thread of its own so the
+  screen text never enters the background agent's history, and a result
+  that finishes after the switch is not shown, toasted or spoken; a
+  suggestion's or a fix's spoken copy stops before its next sentence and
+  its channel copies (the urgent echo included) before their next retry; an
+  awareness event that arrives after the switch (a capture still in flight)
+  is dropped, so no `awareness.*` flow or dashboard gets it; and a flow's
   `awarenessRecent` context returns no activity. Vault entities and goal notes once written from awareness are
   ordinary data and stay visible (owner decision). Nothing is deleted; it shows
   again when awareness is turned back on. Not covered: shell commands
@@ -723,6 +733,11 @@ of offering an unusable webhook resume URL.
 Canceling a run atomically stops its required descendants, retires waitpoints
 and closes undispatched approval cards. An already-dispatched effect retains
 its receipt or uncertainty; cancellation never claims remote rollback.
+A parent continues as soon as its child ends or the parent parks: after each
+finished run of a child, or of a run waiting on one, the worker runs the same
+child sweep, so the wait is not the 15 s timer poll. The poll stays the safety
+net for a crash or restart, and the sweep consumes each waitpoint once, so the
+two cannot resume a parent twice.
 Recovery polling also stops required children whose parent failed or was deleted.
 For required children that already ended, it retires remaining waitpoints and
 undispatched approvals before continuing the parent. The child's terminal status,
