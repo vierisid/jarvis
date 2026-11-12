@@ -35,9 +35,11 @@ import { WorkflowInspectionError } from '../../brief/inspection-values';
  */
 
 import { DEFAULT_IDS, getWorkflowDb } from '../db';
+import { NOT_ONE_LINE } from '../../vault/commitment-text.ts';
 import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
 import { OnboardingResolutionError, resolveOnboardingOutcome, runOnboardingOutcomes } from '../runtime/onboarding-service';
 import { runFailure } from '../runtime/run-failure';
+import { continuedFailures } from '../runtime/continued-failures';
 import { dismissFailures, listOpenFailures } from '../runtime/open-failures';
 import type { AuthorityEngine } from '../../authority/engine';
 import {
@@ -69,6 +71,8 @@ import { assertVersionReady, versionReadiness, WorkflowReadinessError } from '..
 import { assertCodeStepsAllowed, CodeStepsRefusedError } from "../db/repos/flow-code-steps";
 import { getFlowReadHosts, setFlowReadHosts } from "../db/repos/flow-read-hosts";
 import { normalizeReadHosts, readHostsOfRow } from "../db/read-hosts";
+import { LOCAL_ADDRESS_REFUSAL, localHostRefusal } from "../runtime/http-approval";
+import type { EgressPolicy } from "../runtime/http-egress";
 import { FlowVersionRequestError, withOwnedFlowVersion } from "../db/repos/flow-version-ownership";
 import {
   getFlowVersionUiMeta,
@@ -114,7 +118,7 @@ import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oaut
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
-import { isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
+import { canContinuePastStep, canRetryStep, isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import { withScheduleZoneDefault } from "../runner/triggers/schedule-zone";
@@ -584,8 +588,13 @@ const FLOW_DISPLAY_NAME_MAX_CHARS = 512;
  * The caller's `displayName`, or the refusal. Same shape as
  * `readWriteBody`, and it returns the NARROWED string so a caller cannot
  * validate and then pass the unnarrowed value on.
+ *
+ * `flowId` names the flow a version route writes to. A name that flow already
+ * stores is let through the character rule, so a workflow named before the
+ * rule existed can still be saved: the editor sends the current name with
+ * every save, and refusing it would lock the workflow until it was renamed.
  */
-function validDisplayName(raw: unknown): { name: string } | { error: Response } {
+function validDisplayName(raw: unknown, flowId?: string): { name: string } | { error: Response } {
   if (typeof raw !== "string" || raw.length === 0) {
     return { error: err("displayName is required and must be a non-empty string") };
   }
@@ -597,7 +606,18 @@ function validDisplayName(raw: unknown): { name: string } | { error: Response } 
       ),
     };
   }
+  // A name is one line of plain text: a control character in it (NUL, a bell,
+  // an escape, a line break, C1, the line and paragraph separators) breaks
+  // lists and logs, and a lone surrogate is not text. The rule a task's text is
+  // stored under (vault/commitment-text.ts). Refused as a plain 400.
+  if ((!raw.isWellFormed() || NOT_ONE_LINE.test(raw)) && !(flowId && nameStoredOnFlow(flowId, raw))) {
+    return { error: err("displayName cannot contain control characters") };
+  }
   return { name: raw };
+}
+
+function nameStoredOnFlow(flowId: string, name: string): boolean {
+  return getWorkflowDb().query("SELECT 1 FROM flow_version WHERE flow_id = ? AND display_name = ? LIMIT 1").get(flowId, name) !== null;
 }
 
 /**
@@ -703,6 +723,8 @@ function sampleStepNameRefusal(stepName: string): Response | null {
 }
 
 export interface CreateWorkflowRoutesOptions {
+  /** Where a workflow HTTP step may connect; the read list refuses a host it can never reach. Absent: private ranges are allowed, the rest is not. */
+  egressPolicy?: EgressPolicy;
   recoveryAuthority?: AuthorityEngine;
   briefWorkflowContext?: WorkflowContext;
   briefCapabilities?: BriefCapabilities;
@@ -924,6 +946,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             // editor badges its steps. The daemon decides, so the badge and
             // the gate in `pieceAuthorize` cannot disagree.
             ...(isCommunityPiece(p.name) ? { notApprovalGated: true } : {}),
+            // "Retry on failure" applies only to built-in steps that act inside the run.
+            ...(canRetryStep(p.name) ? { retrySafe: true } : {}),
             actions: Object.values(p.actions).map((a) => ({
               name: a.name,
               displayName: a.displayName,
@@ -931,6 +955,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               inputSchema: a.inputSchema ?? null,
               // A partly governed piece badges only its ungoverned actions.
               ...(!isCommunityPiece(p.name) && isCommunityAction(p.name, a.name) ? { notApprovalGated: true } : {}),
+              // A step that asks a person stops on a "no": "Continue on failure" does not apply.
+              ...(canContinuePastStep(p.name, a.name) ? {} : { continueUnavailable: true }),
               // Optional declared output sample (Jarvis extension to AP).
               // Surfaced to the dashboard so the variable picker can show
               // field-level rows for actions that have never been run yet.
@@ -1735,7 +1761,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!scopedFlow(req, id)) return err("flow not found", 404);
           // Used to be a bare truthiness check, so a non-string of any length
           // reached the column that becomes a flow's model-facing `name` (#598).
-          const named = validDisplayName(body.displayName);
+          const named = validDisplayName(body.displayName, id);
           if ("error" in named) return named.error;
           // `uiMeta` is checked BEFORE the insert, not after (#632). There is
           // no transaction around the two writes below, so a malformed `uiMeta`
@@ -1856,7 +1882,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // transaction, so a bad name cannot half-apply a patch.
           const uiMeta = body.uiMeta;
           if (body.displayName !== undefined) {
-            const named = validDisplayName(body.displayName);
+            const named = validDisplayName(body.displayName, scopedFlow(req, id) ? id : undefined);
             if ("error" in named) return named.error;
             // The NARROWED value goes on, so this cannot validate one string
             // and forward another. Identical today because the validator
@@ -2083,6 +2109,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           let expected: string[] | null = null;
           try {
             hosts = normalizeReadHosts(body.hosts);
+            const local = hosts.find((host) => localHostRefusal(host, opts.egressPolicy ?? "private-allowed") !== null);
+            if (local) return err(`${local}: ${LOCAL_ADDRESS_REFUSAL} Jarvis could never read it, so it is not added to the list.`, 400);
             if (Array.isArray(body.expected)) expected = normalizeReadHosts(body.expected);
           } catch (e) {
             return err(e instanceof Error ? e.message : String(e), 400);
@@ -2319,7 +2347,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             offset,
           };
           if (status) opts.status = status;
-          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run) }));
+          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run), continuedFailures: continuedFailures(run) }));
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
@@ -2416,7 +2444,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
-          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run) }) : err("run not found", 404);
+          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run), continuedFailures: continuedFailures(run) }) : err("run not found", 404);
         }),
     },
 
