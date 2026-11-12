@@ -121,6 +121,25 @@ describe('the approval fixture, from the command to Today', () => {
     expect(h.runs).toEqual([]);
   });
 
+  test('the failure fixture records one failure and the notch says its sentence at once', async () => {
+    const approvals = new ApprovalManager();
+    const open: { key: string; headline: string }[] = [];
+    let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onEvent = listener; }, onSidecarDisconnected() {} }, () => {});
+    onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 1 } } });
+    const real = attachNotchReal(surface, {
+      approvalManager: approvals, approve: async () => ({ status: 'already_decided' }),
+      openFailures: () => open,
+      recordFixtureFailure: () => { open.push({ key: 'k', headline: 'The notch test failed, and Jarvis cannot tell whether it took effect.' }); return open[0]!.headline; },
+      lookMs: 3_600_000, log: () => {},
+    });
+    live = real;
+    expect(real.fixtures.kinds()).toEqual(['approval', 'payment', 'failure']);
+    expect(await real.fixtures.make('failure', {})).toContain('A test failure is in the list of open failures');
+    await settle();
+    expect(surface.current().line).toMatchObject({ kind: 'say', mark: 'fail', say: ['The notch test failed, and Jarvis cannot tell whether it took effect.'] });
+  });
+
   test('an unknown fixture is refused', async () => {
     const h = harness();
     await expect(h.real.fixtures.make('toString', {})).rejects.toThrow('No fixture is called "toString"');
