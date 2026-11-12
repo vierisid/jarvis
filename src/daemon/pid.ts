@@ -7,7 +7,7 @@
  * container-safe and race-free.
  */
 
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import {
   constants,
@@ -20,6 +20,8 @@ import {
   writeSync,
   ftruncateSync,
   fchmodSync,
+  fstatSync,
+  lstatSync,
 } from 'node:fs';
 import { cc } from 'bun:ffi';
 import flockSource from './flock.c' with { type: 'file' };
@@ -114,7 +116,7 @@ export function acquireLock(pid: number): boolean {
 
     // 0700/0600: the data folder and its lock are this user's alone. The modes
     // apply only to what this creates; an existing folder keeps its own.
-    mkdirSync(daemonRootDir(), { recursive: true, mode: 0o700 });
+    makeOwnerFolder(daemonRootDir());
 
     // Open (or create) the lock file — don't truncate before locking
     const fd = openSync(defaultLockPath(), constants.O_WRONLY | constants.O_CREAT, 0o600);
@@ -127,7 +129,7 @@ export function acquireLock(pid: number): boolean {
     }
 
     // A lock file from an older version may still be 0644.
-    narrowToOwner(fd);
+    narrowToOwner(fd, defaultLockPath());
 
     // Lock acquired — truncate and write PID for display purposes
     ftruncateSync(fd, 0);
@@ -199,14 +201,14 @@ export function isLocked(lockPath: string = defaultLockPath()): number | null {
 export function acquireLockAt(lockPath: string, pid: number): { release: () => void } | null {
   try {
     const flock = getFlock();
-    mkdirSync(join(lockPath, '..'), { recursive: true, mode: 0o700 });
+    makeOwnerFolder(dirname(lockPath));
     const fd = openSync(lockPath, constants.O_WRONLY | constants.O_CREAT, 0o600);
     const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
     if (result !== 0) {
       closeSync(fd);
       return null;
     }
-    narrowToOwner(fd);
+    narrowToOwner(fd, lockPath);
     ftruncateSync(fd, 0);
     writeSync(fd, String(pid));
     let released = false;
@@ -228,8 +230,31 @@ export function acquireLockAt(lockPath: string, pid: number): { release: () => v
  * Best effort: a file owned by someone else cannot be changed, and that is no
  * reason to give up a lock already taken.
  */
-function narrowToOwner(fd: number): void {
-  try { fchmodSync(fd, 0o600); } catch { /* not ours to change */ }
+function narrowToOwner(fd: number, lockPath: string): void {
+  try {
+    // Only this user's own regular file, and only the one the path itself
+    // names: the open follows a symlink, and a symlink or a hard link can
+    // reach a file that is not the lock's to change.
+    const st = fstatSync(fd);
+    const atPath = lstatSync(lockPath);
+    if (!st.isFile() || st.nlink !== 1 || st.uid !== process.geteuid?.()) return;
+    if (atPath.isSymbolicLink() || atPath.ino !== st.ino || atPath.dev !== st.dev) return;
+    fchmodSync(fd, 0o600);
+  } catch { /* not ours to change */ }
+}
+
+/**
+ * Create `dir` 0700 when missing. Parents it has to create get the default
+ * mode: `mkdir -p` with a mode would make them 0700 too, and a parent may be
+ * shared with other users or services.
+ */
+function makeOwnerFolder(dir: string): void {
+  mkdirSync(dirname(dir), { recursive: true });
+  try {
+    mkdirSync(dir, { mode: 0o700 });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
+  }
 }
 
 /**
