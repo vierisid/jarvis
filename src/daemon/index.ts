@@ -5371,6 +5371,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const apiRoutes = {
       ...createApiRoutes(apiContext),
       ...createWorkflowRoutes({
+        egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
         recoveryAuthority: authorityEngine,
         briefWorkflowContext, briefCapabilities,
         triggerManager,
@@ -5700,6 +5701,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // buildSandboxServiceBackends if any of these are missing.
       const agentSpecialists = agentService.getSpecialists();
       const backends = buildSandboxServiceBackends({
+        // The rule the engine's HTTP step connects under, so a request it would refuse is refused before a card.
+        egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
         decisionDocumentsEnabled: briefCapabilities.snapshot().capabilities.decisionEdits.enabled,
         // Input and approval requests are answered in Needs you (#1266): with
         // decisions off nothing could answer one, so a step that asks fails now.
