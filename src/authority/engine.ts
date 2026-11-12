@@ -13,13 +13,21 @@
  * 6. Numeric level check: level >= AUTHORITY_REQUIREMENTS[action]
  * 7. Governed category check: if allowed but governed -> requiresApproval
  *
- * So a deny always wins over an allow, whichever rule is listed first, and an
- * "always allow" override (global or for a role) skips the level check and the
- * governed switch for its action but never beats a matching deny rule.
+ * So a matching deny rule wins over any allow override or allow rule,
+ * whichever is listed first, and an "always allow" override (global or for a
+ * role) skips the level check and the governed switch for its action but never
+ * beats a matching deny rule. Two exceptions are deliberate and unchanged: a
+ * temporary grant (step 1) comes first, and a role's own override replaces the
+ * global one for that role, so a role allow override beats a global deny
+ * override (but not a deny rule).
+ *
+ * Time-range rules read the hour on the owner's configured timezone
+ * (`config.timezone`), or this machine's clock when none is set.
  */
 
 import type { ActionCategory } from '../roles/authority.ts';
 import { AUTHORITY_REQUIREMENTS } from '../roles/authority.ts';
+import { ownerWallClockHour } from '../lib/cron-scheduler.ts';
 
 export type PerActionOverride = {
   action: ActionCategory;
@@ -115,9 +123,12 @@ export type AuthorityCheckParams = {
 
 export class AuthorityEngine {
   private config: AuthorityConfig;
+  /** The current hour on the owner's clock; replaceable so tests can pin an instant. */
+  private readonly currentHour: () => number;
 
-  constructor(config: AuthorityConfig) {
+  constructor(config: AuthorityConfig, clock: { currentHour?: () => number } = {}) {
     this.config = config;
+    this.currentHour = clock.currentHour ?? (() => ownerWallClockHour(new Date()));
   }
 
   /**
@@ -352,12 +363,15 @@ export class AuthorityEngine {
   private evaluateContextRules(action: ActionCategory, toolName: string): ContextRule | null {
     const strictness: Record<ContextRule['effect'], number> = { deny: 2, require_approval: 1, allow: 0 };
     let winner: ContextRule | null = null;
+    let hour: number | undefined;
     for (const rule of this.config.context_rules) {
       if (rule.action !== action) continue;
       let matches = false;
       switch (rule.condition) {
         case 'time_range':
-          matches = timeRangeMatches(new Date().getHours(), rule.params);
+          // Read once per decision, so every rule sees the same hour.
+          hour ??= this.currentHour();
+          matches = timeRangeMatches(hour, rule.params);
           break;
         case 'tool_name': {
           const toolPattern = rule.params.tool_name as string;
@@ -379,15 +393,21 @@ export class AuthorityEngine {
  * `start_hour` up to, not including, `end_hour`, and wraps past midnight when
  * it ends before it starts: start 22, end 6 covers 22:00 to 05:59, and
  * start 15, end 14 covers every hour except 14. A start equal to the end
- * covers no hour. A missing start is 0 and a missing end is 24. Hours that
- * are not numbers fall back to those; a saved config is clamped, never refused.
+ * covers no hour; start 0, end 24 covers the whole day. A missing start is 0
+ * and a missing end is 24.
+ *
+ * A saved value the API would now refuse is read exactly as before this rule
+ * could wrap, so an upgrade never widens it: hours are compared as JavaScript
+ * compared them (`hour >= "22"` reads "22" as 22, a fraction rounds up, a value
+ * that is not a number matches no hour), and only a window whose ends are both
+ * real hours (start 1 to 23, end 0 to 22, after rounding up) wraps.
  */
 export function timeRangeMatches(hour: number, params: Record<string, unknown>): boolean {
-  const hourParam = (value: unknown, fallback: number): number =>
-    typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(24, Math.floor(value))) : fallback;
-  const start = hourParam(params.start_hour, 0);
-  const end = hourParam(params.end_hour, 24);
-  return start <= end ? hour >= start && hour < end : hour >= start || hour < end;
+  const start = Math.ceil(Number(params.start_hour ?? 0));
+  const end = Math.ceil(Number(params.end_hour ?? 24));
+  if (Number.isNaN(start) || Number.isNaN(end)) return false;
+  const wraps = start > end && start <= 23 && end >= 0;
+  return wraps ? hour >= start || hour < end : hour >= start && hour < end;
 }
 
 /**

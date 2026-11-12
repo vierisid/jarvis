@@ -30,8 +30,11 @@ export function contextRuleParamsError(rule: { condition?: unknown; params?: unk
   if (rule.condition === 'time_range') {
     if (params.start_hour !== undefined && !isHour(params.start_hour, 23)) return 'start_hour must be a whole hour from 0 to 23';
     if (params.end_hour !== undefined && !isHour(params.end_hour, 24)) return 'end_hour must be a whole hour from 0 to 23 (24 means the end of the day)';
+    // The owner's report: a rule that saves fine and never applies. Equal ends
+    // cover no hour, so say so instead of saving a rule that does nothing.
+    if ((params.start_hour ?? 0) === (params.end_hour ?? 24)) return 'start_hour and end_hour are the same, so the rule covers no hour (use 0 to 24 for the whole day)';
   }
-  if (rule.condition === 'tool_name' && params.tool_name !== undefined && (typeof params.tool_name !== 'string' || !params.tool_name.trim())) {
+  if (rule.condition === 'tool_name' && (typeof params.tool_name !== 'string' || !params.tool_name.trim())) {
     return 'tool_name must be the name of a tool';
   }
   return null;
@@ -68,9 +71,11 @@ export function quickOverrideError(body: { action?: unknown; allow?: unknown; ro
 
 /**
  * What is wrong in a config that is already saved. A saved config is never
- * refused: the engine reads each of these as its clamped or default value (an
- * hour outside 0 to 24 is clamped, an unknown background category is ignored).
- * This is how they are reported.
+ * refused: the engine reads a bad hour exactly as it did before windows could
+ * wrap (see `timeRangeMatches`), and the background profile clamps the cap and
+ * ignores unknown categories. This is how they are reported, together with
+ * allow rules whose window crosses midnight: those matched no hour before
+ * windows could wrap, and now apply.
  */
 export function authorityConfigWarnings(config: {
   context_rules?: unknown; overrides?: unknown; background?: unknown;
@@ -80,12 +85,17 @@ export function authorityConfigWarnings(config: {
     for (const rule of config.context_rules) {
       if (!isObject(rule)) { warnings.push('A saved context rule is not readable and is ignored.'); continue; }
       const problem = contextRuleParamsError(rule);
-      if (problem) warnings.push(`Context rule "${String(rule.id)}": ${problem}. It is read with the nearest valid value.`);
+      if (problem) warnings.push(`Context rule "${String(rule.id)}": ${problem}. It is read as it was before this check existed.`);
+      const params = isObject(rule.params) ? rule.params : {};
+      if (rule.condition === 'time_range' && rule.effect !== 'deny' && !problem
+        && typeof params.start_hour === 'number' && typeof params.end_hour === 'number' && params.start_hour > params.end_hour) {
+        warnings.push(`Context rule "${String(rule.id)}" (${String(rule.effect)}) crosses midnight: it now applies from ${params.start_hour}:00 to ${params.end_hour}:00; before, it applied at no hour.`);
+      }
     }
   }
   if (Array.isArray(config.overrides)) {
     for (const override of config.overrides) {
-      if (isObject(override) && override.role_id !== undefined && typeof override.role_id !== 'string') {
+      if (isObject(override) && override.role_id !== undefined && override.role_id !== null && typeof override.role_id !== 'string') {
         warnings.push(`An override for ${String(override.action)} names a role that is not text, so it matches no role.`);
       }
     }
@@ -98,9 +108,9 @@ export function authorityConfigWarnings(config: {
 }
 
 /** Why this config patch cannot be applied, or null. Only the fields present are checked.
- * A context rule already saved unchanged is not checked again, so a bad rule from an
- * earlier version does not block saving anything else (`current` is the saved rules). */
-export function authorityConfigPatchError(body: Record<string, unknown>, current?: { context_rules?: readonly unknown[] }): string | null {
+ * A context rule or override already saved unchanged is not checked again, so a bad one
+ * from an earlier version does not block saving anything else (`current` is the saved config). */
+export function authorityConfigPatchError(body: Record<string, unknown>, current?: { context_rules?: readonly unknown[]; overrides?: readonly unknown[] }): string | null {
   if (body.default_level !== undefined) {
     const level = body.default_level;
     if (typeof level !== 'number' || !Number.isInteger(level) || level < 0 || level > 10) {
@@ -115,6 +125,9 @@ export function authorityConfigPatchError(body: Record<string, unknown>, current
   if (body.overrides !== undefined) {
     if (!Array.isArray(body.overrides)) return 'overrides must be a list';
     for (const override of body.overrides) {
+      // Same exemption as context rules: an override a quick override saved
+      // before role ids were checked must not block every later full save.
+      if (current?.overrides?.some(saved => JSON.stringify(saved) === JSON.stringify(override))) continue;
       if (!isObject(override) || !isActionCategory(override.action) || typeof override.allowed !== 'boolean'
         || (override.requires_approval !== undefined && typeof override.requires_approval !== 'boolean')
         || (override.role_id !== undefined && typeof override.role_id !== 'string')) {
