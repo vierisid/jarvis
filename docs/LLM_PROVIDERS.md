@@ -352,6 +352,15 @@ manager.setFallbackChain(['openai', 'ollama']);
 const response = await manager.chat(messages);
 ```
 
+### Retries and failover
+
+- A 5xx, a timeout and a provider-side rate limit are retried up to three times on the same provider (a rate limit moves on at once when another provider is configured). A 5xx waits 0.5 s then 1.5 s between attempts unless the server sent `Retry-After`. A dropped connection (reset) or a malformed reply is retried once.
+- When every attempt failed because the provider is down (5xx, reset or refused connection, timeout, malformed reply), or is out of capacity (rate limit, quota, restricted account), the call moves to the next provider configured for that tier. Only providers the user mapped to a tier are used.
+- It never moves on for `bad_request`, a content-policy block, or a key or plan the provider refused (`auth`, `forbidden`; on Usejarvis AI an inactive plan): those are verdicts on the request or the account, not an outage. A stated 4xx stays a request error even when its body mentions a timeout or a 5xx number.
+- A provider that failed this way is skipped under its other tiers too, and a stopped turn does not move on.
+- A stream that already produced text does not move on; the partial reply is kept and the turn fails.
+- In what the user reads: a 5xx is "the AI provider returned an error", a refused or dropped connection is "the AI provider could not be reached".
+
 ### Provider-Specific Options
 
 ```typescript

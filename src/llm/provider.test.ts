@@ -1688,10 +1688,10 @@ describe('classifyHttpStatus', () => {
     expect(classifyHttpStatus(422)).toBe('bad_request');
   });
 
-  test('502/503/504 → network (transient)', () => {
-    expect(classifyHttpStatus(502)).toBe('network');
-    expect(classifyHttpStatus(503)).toBe('network');
-    expect(classifyHttpStatus(504)).toBe('network');
+  test('502/503/504 → server (the provider answered with an error)', () => {
+    expect(classifyHttpStatus(502)).toBe('server');
+    expect(classifyHttpStatus(503)).toBe('server');
+    expect(classifyHttpStatus(504)).toBe('server');
   });
 
   test('non-standard 498 (gateway upstream expiry) → network (transient)', () => {
@@ -1750,8 +1750,10 @@ describe('classifyErrorString', () => {
     expect(classifyErrorString('Too Many Requests')).toBe('rate_limit');
   });
 
-  test('network via 503 / timeout / econnrefused', () => {
-    expect(classifyErrorString('Service temporarily unavailable (503)')).toBe('network');
+  test('network via timeout / econnrefused / reset; 503 is a provider error', () => {
+    expect(classifyErrorString('Service temporarily unavailable (503)')).toBe('server');
+    expect(classifyErrorString('ECONNRESET: The socket connection was closed unexpectedly')).toBe('network');
+    expect(classifyErrorString('Malformed_HTTP_Response fetching "http://x"')).toBe('server');
     expect(classifyErrorString('fetch failed: ECONNREFUSED')).toBe('network');
     expect(classifyErrorString('Request timeout')).toBe('network');
   });
