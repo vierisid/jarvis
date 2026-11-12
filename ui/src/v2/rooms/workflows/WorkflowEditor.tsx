@@ -1,4 +1,5 @@
 import { CodeStepFields } from './CodeStepFields';
+import { forCard } from '../../../../../src/util/card-text';
 import { helpScoutInputSchema, isHelpScoutReference } from "../../../../../src/workflows/runtime/managed-help-scout-inputs";
 import { HelpScoutConnection, useHelpScoutStatus } from "../../integrations/HelpScoutConnection";
 import { zoomInputSchema, isZoomReference } from "../../../../../src/workflows/runtime/managed-zoom-inputs";
@@ -421,8 +422,11 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
       const instance = rfInstanceRef.current, canvas = canvasRef.current;
       if (!instance || !canvas || canvas.clientWidth === 0) return;
       const view = instance.getViewport();
+      // The drawn size when React Flow has measured it: a long title wraps
+      // and makes the card taller than the default.
+      const size = instance.getNode(target.id)?.measured;
       const left = target.position.x * view.zoom + view.x, top = target.position.y * view.zoom + view.y;
-      const right = left + 280 * view.zoom, bottom = top + 84 * view.zoom;
+      const right = left + (size?.width ?? 280) * view.zoom, bottom = top + (size?.height ?? 84) * view.zoom;
       const margin = 40;
       let { x, y } = view;
       if (left < margin) x += margin - left;
@@ -1067,7 +1071,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
               if (created) setSelectedStepName(created);
             }}
             onDelete={async () => {
-              if (await confirmDialog(`Delete step "${selectedStep.displayName ?? selectedStep.name}"?`)) {
+              if (await confirmDialog(`Delete step "${forCard(selectedStep.displayName ?? selectedStep.name, 160) || selectedStep.name}"?`)) {
                 editor.deleteStep(selectedStep.name);
                 closePopover();
               }
@@ -3623,9 +3627,9 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
 
       {isManual ? (
         <p className="wf-props__hint">
-          A manual workflow runs when you press Run. Add a field below for each value you want
-          to give it, then use it in a later step by choosing it from "Insert variable". Pick
-          Schedule, Webhook or Event above to run it automatically instead.
+          A manual workflow runs when you press Run. It starts with no values of its own, so
+          later steps work with what earlier steps produce. Pick Schedule, Webhook or Event
+          above to run it automatically instead.
         </p>
       ) : null}
 
@@ -3727,7 +3731,10 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
               input={(step.settings?.input ?? {}) as Record<string, unknown>}
               onSetInput={onSetInput}
             />
-          ) : (
+          ) : isManual && inputEntries.length === 0 ? null : (
+            // A Manual trigger takes no values (Run sends none and the engine
+            // never reads them), so it gets no "add a field" box. One already
+            // carrying fields still shows them, so they can be removed.
             <FreeformInputs
               inputEntries={inputEntries}
               newKey={newKey}
@@ -4130,7 +4137,7 @@ function ErrorHandlingSection({
 export function sampleInputPlaceholder(configured: Record<string, unknown> | undefined): string {
   const keys = Object.keys(configured ?? {}).filter((key) => key !== "auth").slice(0, 2);
   if (keys.length === 0) return '{"field": "value"}';
-  return `{${keys.map((key) => `"${key}": "..."`).join(", ")}}`;
+  return `{${keys.map((key) => `${JSON.stringify(key)}: "..."`).join(", ")}}`;
 }
 
 function SampleInputSection({

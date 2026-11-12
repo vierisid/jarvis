@@ -29,6 +29,10 @@ test('the sample-input hint names this step\'s own fields, not a tool from anoth
   expect(sampleInputPlaceholder({ text: 'x', method: 'sha256', auth: '{{connections.a}}' })).toBe('{"text": "...", "method": "..."}');
   expect(sampleInputPlaceholder(undefined)).toBe('{"field": "value"}');
   expect(sampleInputPlaceholder({})).not.toContain('get_clipboard');
+  // A field name is quoted as JSON, so the hint stays valid JSON for any name.
+  const odd = sampleInputPlaceholder({ 'say "hi"': 1 });
+  expect(odd).toBe('{"say \\"hi\\"": "..."}');
+  expect(() => JSON.parse(odd)).not.toThrow();
 });
 
 test('a long step name wraps inside the confirm dialog', () => {
@@ -44,4 +48,8 @@ test('the manual trigger help does not expose the API path or template syntax', 
   expect(editor).not.toContain('/api/workflows/:id/run');
   expect(editor).not.toContain('{`{{step_1.field}}`}');
   expect(editor).not.toContain('skip_missing_first_repeated skips');
+  // Run sends no values and the variable picker never lists a manual trigger's
+  // inputs, so the help must not promise that a field added there can be used.
+  expect(editor).not.toContain('Add a field below for each value');
+  expect(editor).toContain('isManual && inputEntries.length === 0 ? null');
 });
