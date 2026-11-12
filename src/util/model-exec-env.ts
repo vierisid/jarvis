@@ -256,6 +256,11 @@ export const JARVIS_INTERNAL_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_CAPTURE_PATH',
   // Test-only cache isolation. Never forward to model-launched processes.
   'JARVIS_TEST_ENGINE_CACHE_ROOT',
+  // The operator's one-off "start over with an empty database" override
+  // (vault/db-guard.ts). Not wiring, but stripped for the same reason: a
+  // `jarvis` command the model runs must never inherit permission to replace
+  // a missing database with an empty one.
+  'JARVIS_ALLOW_NEW_DATABASE',
 ]);
 
 const SECRET_EXACT: ReadonlySet<string> = new Set(DAEMON_SECRET_ENV_NAMES);
