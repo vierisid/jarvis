@@ -7,6 +7,7 @@ import { getFlowVersion } from '../db/repos/flow-version';
 import { walkFlowNodes } from '../db/flow-graph';
 import { apId } from '../db/ids';
 import { digest } from './effect-context';
+import { ownStep } from './engine-expression-data';
 import { lookupProviderReceipt, pieceCompletionReceipt, providerReceipt, type ProviderEvidence } from './provider-reconciliation';
 import { activeEmergencyState } from '../../authority/emergency';
 import type { AuthorityEngine } from '../../authority/engine';
@@ -70,7 +71,7 @@ function effectStatus(effect: WorkflowEffect): 'unknown' | 'not_started' | 'comp
  * outputs require their exact path and are deliberately not guessed. */
 function lookupCandidate(effect: WorkflowEffect, run: FlowRun): WorkflowEffect {
   if (effect.result !== undefined || effect.route !== 'piece-dispatch' || effect.executionPath.length) return effect;
-  const step = (run.steps && Object.hasOwn(run.steps, effect.stepName) ? run.steps[effect.stepName] : undefined) as { status?: unknown; output?: unknown } | undefined;
+  const step = ownStep(run.steps ?? undefined, effect.stepName) as { status?: unknown; output?: unknown } | undefined;
   return step?.status === 'SUCCEEDED' && step.output !== undefined ? { ...effect, result: step.output } : effect;
 }
 
