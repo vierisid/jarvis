@@ -65,6 +65,7 @@ const SRC_ROOT = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "../../..");
 export const PIECE_JARVIS_SOURCES: readonly string[] = [
   "actions/action-outcome.ts",
   "workflows/runtime/http-egress.ts",
+  "workflows/runtime/http-failure.ts",
   "workflows/runtime/piece-effects.ts",
   "workflows/runtime/lead-batch.ts",
   "workflows/runtime/subflow-contract.ts",
@@ -165,6 +166,10 @@ function pieceHash(pieceDir: string): string {
   // The batch contract imports these helpers transitively, outside the vendored tree.
   if (basename(pieceDir) === 'batch') {
     for (const rel of ['workflows/runtime/hubspot-contact.ts', 'workflows/batch-accounts.ts']) hasher.update(readFileSync(resolve(SRC_ROOT, rel))).update('\0');
+  }
+  // The HTTP failure sentence defangs the server's words (runtime/http-failure.ts).
+  if (basename(pieceDir) === 'http' || basename(pieceDir) === 'graphql') {
+    for (const rel of ['roles/untrusted.ts', 'util/truncate.ts']) hasher.update(readFileSync(resolve(SRC_ROOT, rel))).update('\0');
   }
   if (basename(pieceDir) === 'subflow') {
     hasher.update(readFileSync(resolve(SRC_ROOT, 'workflows/runtime/llm-output-contract.ts'))).update('\0');
