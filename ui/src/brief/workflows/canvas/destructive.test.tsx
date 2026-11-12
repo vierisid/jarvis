@@ -59,6 +59,12 @@ test("a refused publish says which step is wrong in plain words", async () => {
   await React.act(async () => button("Publish version").click());
   await settle();
   expect(feedback()).toContain("could not be confirmed");
+  // A server failure's own text is internal, not a reason a person can act on.
+  await room({ publish: async () => { throw Object.assign(new Error("Request unavailable (500)"), { status: 500, body: { error: "SQLITE_BUSY: database is locked" } }); } });
+  await React.act(async () => button("Publish version").click());
+  await settle();
+  expect(feedback()).toContain("could not be confirmed");
+  expect(feedback()).not.toContain("SQLITE");
 });
 
 test("a draft that cannot run says why next to the button, and the server's readiness issues are listed", async () => {
