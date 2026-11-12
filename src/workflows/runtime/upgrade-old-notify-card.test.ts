@@ -75,6 +75,7 @@ test('an old dashboard-notify card, approved after the upgrade, delivers once an
   await f.backends.notify!(f.request, f.context);
   expect(f.delivered).toHaveLength(1);
   expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded', actionCategory: 'read_data' });
+  expect(f.approvals.getRequest(approvalId)?.status).toBe('executed');
 });
 
 test('an old card still waiting for its answer stays a waiting card', async () => {
@@ -100,4 +101,16 @@ test('only the relaxation is bridged: other changed effects are still refused', 
   // Different message than the one approved.
   await expect(f.backends.notify!({ ...f.request, message: 'Something else' }, f.context)).rejects.toThrow(/changed since it was recorded/);
   expect(f.delivered).toHaveLength(0);
+});
+
+test('an old card whose frozen channels reach someone else is not bridged, even for an owner-only request', async () => {
+  const f = oldCardFixture();
+  const approvalId = await f.parkAsOldVersion();
+  const [effect] = listWorkflowEffects(f.run.id);
+  effect!.arguments = { ...effect!.arguments, channels: ['dashboard', 'telegram'] };
+  saveWorkflowEffect(effect!);
+  f.approvals.approve(approvalId, 'owner');
+  await expect(f.backends.notify!(f.request, f.context)).rejects.toThrow(/changed since it was recorded/);
+  expect(f.delivered).toHaveLength(0);
+  expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ actionCategory: 'send_message' });
 });

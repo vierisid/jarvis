@@ -64,8 +64,8 @@ Practical consequences:
   it stays a waiting card until answered. Approved, the step delivers once and
   the run continues; denied, it ends as denied. The recorded effect is moved to
   the new category only when the request, the workflow version and the tool are
-  unchanged, so any other change after the card was made is still refused as a
-  changed effect.
+  unchanged and its frozen channels are still only the owner's own, so any
+  other change after the card was made is still refused as a changed effect.
 - Each effect is recorded in `workflow_effect` with its frozen arguments, target,
   decision and outcome, readable at `GET /api/workflow-runs/:runId/effects`.
 - A tool that fails reports a typed outcome rather than a result that happens to
