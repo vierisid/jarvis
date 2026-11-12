@@ -41,6 +41,28 @@ export function notchFocus(host: NotchWindow): (take: boolean) => void {
   return (take) => quietly(() => host.__notch_focus?.(take));
 }
 
+/** How far past the window's edge a point may be sent, in CSS pixels. */
+const PAST_EDGE = 8;
+
+/**
+ * Keeps an outline to the window it is for. A bump that comes in along the
+ * top edge starts well outside the window; nothing of it out there can be
+ * drawn, and the desktop app refuses an outline with a point far outside (the
+ * whole outline, not just that polygon). So points are held to just past the
+ * edge, and a polygon that is wholly outside is left out.
+ */
+export function withinWindow(polygons: readonly (readonly [number, number])[][], width: number, height: number): [number, number][][] {
+  const out: [number, number][][] = [];
+  for (const polygon of polygons) {
+    if (polygon.every(([x]) => x <= 0) || polygon.every(([x]) => x >= width) || polygon.every(([, y]) => y >= height)) continue;
+    out.push(polygon.map(([x, y]): [number, number] => [
+      Math.max(-PAST_EDGE, Math.min(width + PAST_EDGE, x)),
+      Math.max(-PAST_EDGE, Math.min(height + PAST_EDGE, y)),
+    ]));
+  }
+  return out;
+}
+
 /** Polygons in the window's own pixels: CSS pixels times the display scale, two decimals. */
 export function devicePolygons(polygons: readonly (readonly [number, number])[][], scale: number): Polygons {
   return polygons.map((polygon) => polygon.map(([x, y]) => [Math.round(x * scale * 100) / 100, Math.round(y * scale * 100) / 100]));
@@ -51,8 +73,9 @@ export function connectNotch(surface: NotchSurface, host: NotchWindow = window a
   let sent = '';
   const report = (): void => {
     const scale = window.devicePixelRatio || 1;
-    const shapes = devicePolygons(surface.outlines(0), scale);
-    const cuts = devicePolygons(surface.outlines(NOTCH_CUT_INSET), scale);
+    const width = window.innerWidth, height = window.innerHeight;
+    const shapes = devicePolygons(withinWindow(surface.outlines(0), width, height), scale);
+    const cuts = devicePolygons(withinWindow(surface.outlines(NOTCH_CUT_INSET), width, height), scale);
     const key = JSON.stringify(shapes);
     // The same outline again is not worth a call across two processes.
     if (key === sent) return;
