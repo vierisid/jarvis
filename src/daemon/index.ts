@@ -183,6 +183,7 @@ import { buildSandboxServiceBackends } from "../workflows/runtime/service-backen
 import { humanInputRefusal } from "../workflows/runtime/human-input-contract.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 import { createLimiter } from "../util/concurrency.ts";
+import { forCard } from "../util/card-text.ts";
 import { runWithOrigin } from "../llm/origin.ts";
 import { getMachineScope } from "../actions/machine-scope.ts";
 import {
@@ -5377,6 +5378,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         sharedPiecesDir: sharedRuntime.piecesDir,
         ...(onPieceLibraryChanged ? { onPieceLibraryChanged } : {}),
         getEventBufferDropped: () => workflowEventBuffer.dropped(),
+        // A rotated key pauses the enabled workflows that run on it until they
+        // are published again: tell the owner now, not at the next failed fire.
+        onConnectionReplaced: ({ connectionId, displayName, message }) => {
+          notifyAll({
+            id: `workflow-connection-replaced:${connectionId}:${Date.now()}`, kind: 'workflow',
+            title: `Workflows paused: ${forCard(displayName, 40)} key changed`, body: message,
+            actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
+          });
+        },
         // Lets the editor's publish (version lock) report a step whose
         // command can't run on any machine it could land on -- the one OS
         // check a hand-drawn flow gets, since it never meets the composer.

@@ -89,6 +89,18 @@ own.
 | Pinned computer offline | Admitted | `WORKFLOW_MACHINE_OFFLINE` at dispatch; no other computer takes over |
 | A newer computer enrolled | Admitted | The run still uses the pinned computer |
 
+Rotating a key does not wait for the next fire to say so:
+
+- The Rotate form lists the enabled workflows that run on the connection
+  (`GET /api/workflows/connections/:id/rotation-impact`) and says they stop until
+  each is published again. Turned-off workflows are not named: turning one on
+  accepts the new key.
+- Saving a different key answers with `pausedWorkflows` and a plain `notice`, and
+  the daemon raises one "Workflows paused" notification for it.
+- Straight away the workflows list shows the workflow as `blocked` with code
+  `BINDING_STALE` and no run (`runId` is null, nothing has failed yet), until it
+  is published again.
+
 Admission covers every entry: manual and chat runs, schedules, webhooks,
 events, polling, child workflows, work items and evaluation. A refused trigger
 fire is recorded as a failed run with the reason, as other readiness refusals
@@ -107,10 +119,16 @@ Re-enabling the flow accepts a change for later runs, never for a run already
 under way.
 
 The engine reports any refused fetch as a bare loading error, so the reason is
-shown where people look: `GET /api/workflow-runs/:runId` (`connectionBindings`:
-the connection, its kind and any refusal, never a grant's fingerprint) and
-`manage_workflow get_run` (`bindingRefusals`). Run lists and status updates
-leave the bindings out.
+shown where people look. A step whose connection was refused fails with that
+reason as its headline (code `CONNECTION_BINDING_REFUSED`, next step: publish the
+workflow again to accept the change, or set the connection up again when it was
+removed or revoked), not "this step did nothing". The run list
+and the run page read the same evidence, so an expired OAuth2 token says
+Reconnect in both. The run page also shows the evidence itself
+(`GET /api/workflow-runs/:runId`, `connectionBindings`: the connection, its kind
+and any refusal, never a grant's fingerprint) and so does `manage_workflow
+get_run` (`bindingRefusals`). Run lists and status updates leave the bindings
+out of the run; the failure each shows is still read from them.
 
 ## Recipient facts
 

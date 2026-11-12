@@ -19,6 +19,7 @@ import { createHash } from 'node:crypto';
 import type { ActionFailure } from '../actions/action-outcome';
 import type { LLMErrorCode } from '../llm/provider';
 import { redactSecrets } from '../util/redact';
+import { forCard } from '../util/card-text';
 import { boundedReceiptText } from '../roles/untrusted';
 import { HUMAN_INPUT_PENDING_LIMIT } from '../workflows/runtime/human-input-contract';
 
@@ -307,6 +308,14 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
       }
       if (code === 'EMERGENCY_STOPPED') {
         return build('cancelled', 'none', `${s} did not run: Jarvis was stopped.`, NOTHING, ['run_again_when_resumed'], links, code, detail);
+      }
+      if (code === 'CONNECTION_BINDING_REFUSED') {
+        // The run was refused a connection it had pinned (Q-05): the first sentence of the refusal says which and why.
+        // The connection's id in it is free text, so it is read as card text. A connection removed or revoked mid-run
+        // has nothing to accept: it has to be set up again.
+        const why = forCard(o.message.split(/(?<=\.)\s/u)[0], 300);
+        const gone = /^Connection .* was (removed|revoked) while this run asked for it\./su.test(o.message);
+        return build('missing_binding', 'none', `${s} could not continue. ${why}`, NOTHING, [gone ? 'connect' : 'accept_binding_change'], links, code, detail);
       }
       if (code && NAMED_REFUSALS[code]) {
         const named = NAMED_REFUSALS[code];
