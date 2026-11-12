@@ -17,6 +17,7 @@
  */
 import { STATUS_CODES } from 'node:http';
 import { boundedReceiptText } from '../../roles/untrusted';
+import { withoutCardInvisibles } from '../../util/card-text';
 import { redactCredentials } from './piece-effects';
 
 /** How much of a response body a failure sentence quotes. */
@@ -69,34 +70,72 @@ function looksLikeHtml(text: string): boolean {
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 
+/**
+ * How much of a web page is read for its title or its visible text. Both are
+ * at the start of a page, and a body can be megabytes the server chose, so
+ * the scan is bounded rather than every pattern below having to be linear.
+ */
+const HTML_SCAN_CHARS = 64 * 1024;
+
 function decodeEntities(text: string): string {
-  return text.replace(/&(?:#(\d{1,6})|#x([0-9a-f]{1,5})|([a-z]{2,6}));/giu, (whole, dec: string | undefined, hex: string | undefined, name: string | undefined) => {
+  return text.replace(/&(?:#(\d{1,7})|#x([0-9a-f]{1,6})|([a-z]{2,6}));/giu, (whole, dec: string | undefined, hex: string | undefined, name: string | undefined) => {
     if (name) return ENTITIES[name.toLowerCase()] ?? whole;
     const code = dec !== undefined ? Number(dec) : parseInt(hex!, 16);
     return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : whole;
   });
 }
 
-/** Tags, scripts, styles and comments out; what is left is what a reader would see. */
+/**
+ * The words between `<title ...>` and `</title>`, or undefined. Found with
+ * one forward search for each end rather than one lazy pattern, which went
+ * quadratic on a page of unclosed `<title` tags.
+ */
+function pageTitle(html: string): string | undefined {
+  const open = /<title\b/iu.exec(html);
+  if (!open) return undefined;
+  const start = html.indexOf('>', open.index);
+  if (start < 0) return undefined;
+  const close = /<\/title\s*>/giu;
+  close.lastIndex = start + 1;
+  const end = close.exec(html);
+  return end ? html.slice(start + 1, end.index) : undefined;
+}
+
+/**
+ * Markup as the words a reader would see: tags out, entities decoded, and
+ * the invisible and control characters a card drops (bidi overrides, zero
+ * widths) dropped too, since an entity can spell one the raw page did not.
+ * Every pattern here consumes what it scans, so the cost is linear.
+ */
+function pageWords(markup: string): string {
+  // Collapsed and trimmed before `bodyExcerpt` redacts it: a reply that is
+  // one form pair once the tags are gone is redacted only as a whole line.
+  return withoutCardInvisibles(decodeEntities(markup.replace(/<[^>]*>?/gu, ' '))).replace(/\s+/gu, ' ').trim();
+}
+
+/** Tags, scripts, styles, comments and the head out; what is left is what a reader would see. */
 function visibleText(html: string): string {
-  const stripped = html
+  return pageWords(html
     .replace(/<!--[\s\S]*?(?:-->|$)/gu, ' ')
-    .replace(/<(script|style|noscript|template|head)\b[\s\S]*?(?:<\/\1\s*>|$)/giu, ' ')
-    .replace(/<[^>]*>?/gu, ' ');
-  return decodeEntities(stripped).replace(/\s+/gu, ' ').trim();
+    .replace(/<(script|style|noscript|template)\b[\s\S]*?(?:<\/\1\s*>|$)/giu, ' ')
+    // `</head>` may be left out, so the body's own tag also ends the head.
+    .replace(/<head\b[\s\S]*?(?:<\/head\s*>|(?=<body[\s>/])|$)/giu, ' '));
 }
 
 /**
  * What a web page body says in words: `titled "..."` when it has a title,
- * else the text a reader would see, else nothing. Redacted and cut like any
- * other excerpt. Null when the body is not a web page.
+ * else the text a reader would see, else nothing. Redacted (the whole body,
+ * so no credential is cut in two by the scan bound) before it is read, and
+ * redacted, defanged and cut again like any other excerpt after. Null when
+ * the body is not a web page.
  */
 function htmlSummary(body: unknown): { titled?: string; said?: string } | null {
   if (typeof body !== 'string' || !looksLikeHtml(body)) return null;
   let safe: string;
   try { const redacted = redactCredentials(body); safe = typeof redacted === 'string' ? redacted : body; } catch { return {}; }
-  const title = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/iu.exec(safe)?.[1];
-  const titled = title === undefined ? '' : bodyExcerpt(decodeEntities(title.replace(/<[^>]*>/gu, ' ')));
+  safe = safe.slice(0, HTML_SCAN_CHARS);
+  const title = pageTitle(safe);
+  const titled = title === undefined ? '' : bodyExcerpt(pageWords(title));
   if (titled) return { titled };
   const said = bodyExcerpt(visibleText(safe));
   return said ? { said } : {};

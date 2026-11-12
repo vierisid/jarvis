@@ -167,9 +167,10 @@ function pieceHash(pieceDir: string): string {
   if (basename(pieceDir) === 'batch') {
     for (const rel of ['workflows/runtime/hubspot-contact.ts', 'workflows/batch-accounts.ts']) hasher.update(readFileSync(resolve(SRC_ROOT, rel))).update('\0');
   }
-  // The HTTP failure sentence defangs the server's words (runtime/http-failure.ts).
+  // The HTTP failure sentence defangs the server's words and drops a web
+  // page's invisible characters (runtime/http-failure.ts).
   if (basename(pieceDir) === 'http' || basename(pieceDir) === 'graphql') {
-    for (const rel of ['roles/untrusted.ts', 'util/truncate.ts']) hasher.update(readFileSync(resolve(SRC_ROOT, rel))).update('\0');
+    for (const rel of ['roles/untrusted.ts', 'util/truncate.ts', 'util/card-text.ts']) hasher.update(readFileSync(resolve(SRC_ROOT, rel))).update('\0');
   }
   if (basename(pieceDir) === 'subflow') {
     hasher.update(readFileSync(resolve(SRC_ROOT, 'workflows/runtime/llm-output-contract.ts'))).update('\0');
