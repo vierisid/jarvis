@@ -352,6 +352,10 @@ manager.setFallbackChain(['openai', 'ollama']);
 const response = await manager.chat(messages);
 ```
 
+### Usage numbers
+
+A provider's token counts are checked before they are stored or added up (`cleanTokenCount` in `src/llm/provider.ts`). Only a finite, non-negative whole number up to 100 million per call is accepted; a missing, null, negative, fractional, text or larger value counts as 0 (unknown), never as a clamped number. The call is still recorded in `llm_usage`, so one buggy gateway cannot lose a call's record or corrupt the local Usage totals. A count that is present but rejected is logged once per provider, field and kind (for example `[LLM] openai reported completion_tokens that is null; counted as 0 (unknown)`), never with the value or the response body. A missing usage block is 0 for every adapter and the reply is still delivered. Hosted plan limits are metered by the proxy, not from these local counts.
+
 ### Provider-Specific Options
 
 ```typescript

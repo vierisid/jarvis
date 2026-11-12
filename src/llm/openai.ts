@@ -9,7 +9,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
-import { classifyHttpStatus, LLMProviderError, parseRetryAfterMs } from './provider.ts';
+import { classifyHttpStatus, cleanTokenCount, LLMProviderError, parseRetryAfterMs } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 /**
@@ -530,15 +530,16 @@ export class OpenAIProvider implements LLMProvider {
    * the signal that Anthropic silently declined to cache — the one field
    * that distinguishes "working" from "declined every time". */
   protected normalizeUsage(usage: OpenAIResponse['usage']): LLMResponse['usage'] {
+    // Every wire count is checked first (cleanTokenCount): a gateway that sends
+    // null, text, a negative or an absurd number must not turn into NaN here.
+    const from = (field: string) => ({ provider: this.name, field });
+    const cached = cleanTokenCount(usage?.prompt_tokens_details?.cached_tokens, from('cached_tokens'));
+    const created = cleanTokenCount(usage?.cache_creation_input_tokens, from('cache_creation_input_tokens'));
     return {
-      input_tokens: Math.max(0, usage.prompt_tokens
-        - (usage.prompt_tokens_details?.cached_tokens ?? 0)
-        - (usage.cache_creation_input_tokens ?? 0)),
-      output_tokens: usage.completion_tokens,
-      ...(usage.prompt_tokens_details?.cached_tokens !== undefined
-        ? { cache_read_input_tokens: usage.prompt_tokens_details.cached_tokens } : {}),
-      ...(usage.cache_creation_input_tokens !== undefined
-        ? { cache_creation_input_tokens: usage.cache_creation_input_tokens } : {}),
+      input_tokens: Math.max(0, cleanTokenCount(usage?.prompt_tokens, from('prompt_tokens')) - cached - created),
+      output_tokens: cleanTokenCount(usage?.completion_tokens, from('completion_tokens')),
+      ...(usage?.prompt_tokens_details?.cached_tokens !== undefined ? { cache_read_input_tokens: cached } : {}),
+      ...(usage?.cache_creation_input_tokens !== undefined ? { cache_creation_input_tokens: created } : {}),
     };
   }
 

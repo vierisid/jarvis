@@ -8,7 +8,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
-import { classifyErrorString } from './provider.ts';
+import { classifyErrorString, cleanTokenCount } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type GeminiPart =
@@ -186,12 +186,16 @@ export class GeminiProvider implements LLMProvider {
             const chunk = JSON.parse(data) as GeminiStreamChunk;
 
             if (chunk.usageMetadata) {
-              const cached = chunk.usageMetadata.cachedContentTokenCount;
+              const reportedCached = chunk.usageMetadata.cachedContentTokenCount;
+              // Each count is checked first (cleanTokenCount), so a bad cached
+              // figure cannot zero out the prompt count it is subtracted from.
+              const from = (field: string) => ({ provider: this.name, field });
+              const cached = cleanTokenCount(reportedCached, from('cachedContentTokenCount'));
               // Normalized: input_tokens counts only uncached prompt tokens
               // (Gemini's promptTokenCount includes cached content).
-              usage.input_tokens = Math.max(0, (chunk.usageMetadata.promptTokenCount ?? 0) - (cached ?? 0));
-              usage.output_tokens = chunk.usageMetadata.candidatesTokenCount ?? 0;
-              if (cached !== undefined) {
+              usage.input_tokens = Math.max(0, cleanTokenCount(chunk.usageMetadata.promptTokenCount, from('promptTokenCount')) - cached);
+              usage.output_tokens = cleanTokenCount(chunk.usageMetadata.candidatesTokenCount, from('candidatesTokenCount'));
+              if (reportedCached !== undefined) {
                 usage.cache_read_input_tokens = cached;
               } else {
                 // Each usageMetadata chunk is a full snapshot: a chunk

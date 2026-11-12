@@ -711,11 +711,13 @@ export class AnthropicProvider implements LLMProvider {
       content,
       tool_calls,
       usage: {
-        input_tokens: response.usage.input_tokens,
-        output_tokens: response.usage.output_tokens,
-        ...(response.usage.cache_read_input_tokens !== undefined
+        // A missing usage block is unknown (0), not a lost reply; the manager
+        // checks every count (cleanUsage).
+        input_tokens: response.usage?.input_tokens ?? 0,
+        output_tokens: response.usage?.output_tokens ?? 0,
+        ...(response.usage?.cache_read_input_tokens !== undefined
           ? { cache_read_input_tokens: response.usage.cache_read_input_tokens } : {}),
-        ...(response.usage.cache_creation_input_tokens !== undefined
+        ...(response.usage?.cache_creation_input_tokens !== undefined
           ? { cache_creation_input_tokens: response.usage.cache_creation_input_tokens } : {}),
       },
       model: response.model,

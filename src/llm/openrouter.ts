@@ -7,7 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
-import { classifyHttpStatus } from './provider.ts';
+import { classifyHttpStatus, cleanTokenCount } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type OpenRouterMessage = {
@@ -424,14 +424,18 @@ export class OpenRouterProvider implements LLMProvider {
    * max(0, ...) because OpenRouter aggregates many upstreams and a routed
    * backend could report cached_tokens with different inclusion semantics.
    */
-  private convertUsage(usage: OpenRouterResponse['usage']): LLMResponse['usage'] {
-    const cached = usage.prompt_tokens_details?.cached_tokens;
-    const cacheWrite = usage.prompt_tokens_details?.cache_write_tokens;
+  private convertUsage(usage: OpenRouterResponse['usage'] | undefined): LLMResponse['usage'] {
+    // Each count is checked first (cleanTokenCount), so a missing usage block
+    // or a bad cached figure cannot throw or zero out the prompt count.
+    const from = (field: string) => ({ provider: this.name, field });
+    const reportedCached = usage?.prompt_tokens_details?.cached_tokens;
+    const reportedWrite = usage?.prompt_tokens_details?.cache_write_tokens;
+    const cached = cleanTokenCount(reportedCached, from('cached_tokens'));
     return {
-      input_tokens: Math.max(0, usage.prompt_tokens - (cached ?? 0)),
-      output_tokens: usage.completion_tokens,
-      ...(cached !== undefined ? { cache_read_input_tokens: cached } : {}),
-      ...(cacheWrite !== undefined ? { cache_creation_input_tokens: cacheWrite } : {}),
+      input_tokens: Math.max(0, cleanTokenCount(usage?.prompt_tokens, from('prompt_tokens')) - cached),
+      output_tokens: cleanTokenCount(usage?.completion_tokens, from('completion_tokens')),
+      ...(reportedCached !== undefined ? { cache_read_input_tokens: cached } : {}),
+      ...(reportedWrite !== undefined ? { cache_creation_input_tokens: cleanTokenCount(reportedWrite, from('cache_write_tokens')) } : {}),
     };
   }
 
