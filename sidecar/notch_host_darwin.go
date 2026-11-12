@@ -31,6 +31,7 @@ package main
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 #import <IOKit/pwr_mgt/IOPMLib.h>
+#include <libproc.h>
 #import <objc/runtime.h>
 
 // One notch per process.
@@ -71,25 +72,61 @@ static void jarvis_notch_adopt(NSWindow* win) {
     }
 }
 
-static BOOL jarvis_notch_display_kept_awake(void) {
-    CFDictionaryRef status = NULL;
-    if (IOPMCopyAssertionsStatus(&status) != kIOReturnSuccess || status == NULL) return NO;
-    NSDictionary* levels = CFBridgingRelease(status);
-    return [levels[@"PreventUserIdleDisplaySleep"] intValue] > 0
-        || [levels[@"NoDisplaySleepAssertion"] intValue] > 0;
+// Is the app in front the one keeping the display awake? That is what a
+// playing video does, and it is the Mac's whole test for "a video".
+//
+// The machine-wide answer is not enough: on the Windows machine this was first
+// run on, some other program kept the display awake all day, and a browser put
+// into fullscreen to read lost the notch. macOS says who is asking, so here
+// the question is put to the app in front: itself, a helper process inside its
+// bundle (a browser's), or the system's WebKit process that plays video for
+// Safari and for any app built on it.
+static BOOL jarvis_notch_app_keeps_display_awake(pid_t front) {
+    CFDictionaryRef byPid = NULL;
+    if (IOPMCopyAssertionsByProcess(&byPid) != kIOReturnSuccess || byPid == NULL) return NO;
+    NSDictionary* all = CFBridgingRelease(byPid);
+    NSString* bundle = [NSRunningApplication runningApplicationWithProcessIdentifier:front].bundleURL.path;
+    NSString* inside = bundle.length > 0 ? [bundle stringByAppendingString:@"/"] : nil;
+    for (NSNumber* holder in all) {
+        NSArray* assertions = all[holder];
+        if (![assertions isKindOfClass:[NSArray class]]) continue;
+        BOOL holds = NO;
+        for (NSDictionary* a in assertions) {
+            if (![a isKindOfClass:[NSDictionary class]]) continue;
+            if ([a[(__bridge NSString*)kIOPMAssertionLevelKey] intValue] <= 0) continue;
+            NSString* type = a[(__bridge NSString*)kIOPMAssertionTypeKey];
+            if (![type isKindOfClass:[NSString class]]) continue;
+            if ([type isEqualToString:(__bridge NSString*)kIOPMAssertionTypePreventUserIdleDisplaySleep]
+                || [type isEqualToString:(__bridge NSString*)kIOPMAssertionTypeNoDisplaySleep]) {
+                holds = YES;
+                break;
+            }
+        }
+        if (!holds) continue;
+        pid_t pid = holder.intValue;
+        if (pid == front) return YES;
+        char buf[PROC_PIDPATHINFO_MAXSIZE];
+        if (proc_pidpath(pid, buf, sizeof(buf)) <= 0) continue;
+        NSString* path = [NSString stringWithUTF8String:buf];
+        if (path == nil) continue;
+        if (inside != nil && [path hasPrefix:inside]) return YES;
+        if ([path rangeOfString:@"/WebKit.framework/"].location != NSNotFound) return YES;
+    }
+    return NO;
 }
 
-static BOOL jarvis_notch_fullscreen_app_in_front(void) {
+// The app in front if it covers the whole main display, else 0.
+static pid_t jarvis_notch_fullscreen_app_in_front(void) {
     NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
-    if (front == nil) return NO;
+    if (front == nil) return 0;
     pid_t pid = front.processIdentifier;
-    if (pid == [[NSProcessInfo processInfo] processIdentifier]) return NO;
+    if (pid == [[NSProcessInfo processInfo] processIdentifier]) return 0;
     NSScreen* screen = [NSScreen screens].firstObject;
-    if (screen == nil) return NO;
+    if (screen == nil) return 0;
     CGSize size = screen.frame.size;
     CFArrayRef list = CGWindowListCopyWindowInfo(
         kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
-    if (list == NULL) return NO;
+    if (list == NULL) return 0;
     NSArray* windows = CFBridgingRelease(list);
     for (NSDictionary* info in windows) {
         if ([info[(__bridge NSString*)kCGWindowOwnerPID] intValue] != pid) continue;
@@ -100,10 +137,10 @@ static BOOL jarvis_notch_fullscreen_app_in_front(void) {
         // A fullscreen window covers the menu bar too; a zoomed one does not.
         if (bounds.origin.x <= 0.5 && bounds.origin.y <= 0.5
             && bounds.size.width >= size.width - 0.5 && bounds.size.height >= size.height - 0.5) {
-            return YES;
+            return pid;
         }
     }
-    return NO;
+    return 0;
 }
 
 static void jarvis_notch_tick(BOOL checkFullscreen) {
@@ -115,7 +152,8 @@ static void jarvis_notch_tick(BOOL checkFullscreen) {
     BOOL inside = jarvis_notch_path != nil && [jarvis_notch_path containsPoint:local];
     [win setIgnoresMouseEvents:!inside];
     if (!checkFullscreen) return;
-    BOOL hide = jarvis_notch_fullscreen_app_in_front() && jarvis_notch_display_kept_awake();
+    pid_t front = jarvis_notch_fullscreen_app_in_front();
+    BOOL hide = front > 0 && jarvis_notch_app_keeps_display_awake(front);
     if (hide == jarvis_notch_hidden) return;
     jarvis_notch_hidden = hide;
     if (hide) {

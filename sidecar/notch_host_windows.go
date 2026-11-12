@@ -16,6 +16,8 @@ var (
 	procNotchGetDpiForWindow  = user32.NewProc("GetDpiForWindow")
 	procNotchGetClientRect    = user32.NewProc("GetClientRect")
 	procNotchCallNtPowerInfo  = syscall.NewLazyDLL("powrprof.dll").NewProc("CallNtPowerInformation")
+	procNotchGetLastInputInfo = user32.NewProc("GetLastInputInfo")
+	procNotchGetTickCount     = kernel32.NewProc("GetTickCount")
 )
 
 const (
@@ -157,6 +159,12 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 	defer ticker.Stop()
 	stoleFocus := false
 	first := true
+	var (
+		video      notchVideoWatch
+		sampler    notchScreenSampler
+		sampleFail bool
+	)
+	defer sampler.release()
 	for {
 		select {
 		case <-done:
@@ -171,8 +179,8 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 		if first {
 			first = false
 			// Worth a line: if this is true with no video playing, some other
-			// program holds the display, and every fullscreen app will hide
-			// the notch on this machine.
+			// program holds the display, and on this machine the picture
+			// alone decides whether a fullscreen app is showing a video.
 			log.Printf("[notch] at start, display kept awake: %v", awake)
 		}
 		program, class := "", ""
@@ -183,17 +191,32 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 				continue
 			}
 		}
-		hide := notchShouldHide(fullscreen, awake)
+		// The picture is only looked at when the first two conditions hold:
+		// on a machine where nothing holds the display, the screen is never
+		// read at all.
+		playing := false
+		if fullscreen && awake {
+			if sample, ok := sampler.take(w.hwnd); ok {
+				playing = video.observe(sample, notchIdleMs() < notchInputGraceMs)
+			} else if !sampleFail {
+				sampleFail = true
+				// Without a picture nothing says "video", so the notch stays.
+				log.Printf("[notch] could not read the screen to look for a video; the notch stays in fullscreen apps")
+			}
+		} else {
+			video.reset()
+		}
+		hide := notchShouldHide(fullscreen, awake, playing)
 		if hide != w.hidden.Load() {
 			w.hidden.Store(hide)
 			if hide {
 				w.hide()
-				log.Printf("[notch] hidden: a fullscreen app is in front (%s, window class %s) and the display is being kept awake", program, class)
+				log.Printf("[notch] hidden: a video is playing in a fullscreen app (%s, window class %s)", program, class)
 			} else {
 				if w.loaded.Load() {
 					w.show()
 				}
-				log.Printf("[notch] shown again (fullscreen app in front: %v, display kept awake: %v)", fullscreen, awake)
+				log.Printf("[notch] shown again (fullscreen app in front: %v, display kept awake: %v, picture moving: %v)", fullscreen, awake, playing)
 			}
 		}
 		fg, _, _ := procGetForegroundWindow.Call()
@@ -216,6 +239,109 @@ func notchForeground() (program, class string) {
 	var buf [256]uint16
 	procGetClassNameW.Call(fg, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
 	return processBaseName(win32GetWindowPid(fg)), syscall.UTF16ToString(buf[:])
+}
+
+// notchLastInput mirrors Win32 LASTINPUTINFO.
+type notchLastInput struct {
+	cbSize uint32
+	dwTime uint32
+}
+
+// notchIdleMs is how long ago the person last touched the mouse or keyboard,
+// in milliseconds. A failure reads as "just now", which keeps the notch.
+func notchIdleMs() uint32 {
+	li := notchLastInput{}
+	li.cbSize = uint32(unsafe.Sizeof(li))
+	if ok, _, _ := procNotchGetLastInputInfo.Call(uintptr(unsafe.Pointer(&li))); ok == 0 {
+		return 0
+	}
+	now, _, _ := procNotchGetTickCount.Call()
+	return uint32(now) - li.dwTime
+}
+
+// notchScreenSampler reads a grid of colours from the middle of the notch's
+// display, for notchVideoWatch. It copies the middle quarter of the screen in
+// one call and picks the grid out of that: on the machine this was measured
+// on, every read of the screen cost about 7 ms whatever its size, so one read
+// of an area is far cheaper than a read per point. The pixels never leave this
+// function except as the grid, and the grid never leaves the process.
+type notchScreenSampler struct {
+	memDC, dib, oldBmp uintptr
+	bits               unsafe.Pointer
+	w, h               int32
+	out                []uint32
+}
+
+func (s *notchScreenSampler) release() {
+	if s.memDC != 0 {
+		procSelectObject.Call(s.memDC, s.oldBmp)
+		procDeleteObjectGdi.Call(s.dib)
+		procDeleteDC.Call(s.memDC)
+	}
+	s.memDC, s.dib, s.oldBmp, s.bits, s.w, s.h = 0, 0, 0, nil, 0, 0
+}
+
+// take returns the grid for the display hwnd is on. The slice is reused by the
+// next call.
+func (s *notchScreenSampler) take(hwnd uintptr) ([]uint32, bool) {
+	monitor, _, _ := procPanelMonitorFromWindow.Call(hwnd, monitorDefaultToNearest)
+	if monitor == 0 {
+		return nil, false
+	}
+	mi := panelMonitorInfo{}
+	mi.cbSize = uint32(unsafe.Sizeof(mi))
+	if ok, _, _ := procGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&mi))); ok == 0 {
+		return nil, false
+	}
+	m := mi.rcMonitor
+	width, height := (m.Right-m.Left)/2, (m.Bottom-m.Top)/2
+	if width < notchSampleCols || height < notchSampleRows {
+		return nil, false
+	}
+	screenDC, _, _ := procGetDC.Call(0)
+	if screenDC == 0 {
+		return nil, false
+	}
+	defer procReleaseDC.Call(0, screenDC)
+	if s.memDC == 0 || s.w != width || s.h != height {
+		s.release()
+		memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
+		bi := pblBitmapInfo{
+			Header: pblBitmapInfoHeader{
+				BiSize:     uint32(unsafe.Sizeof(pblBitmapInfoHeader{})),
+				BiWidth:    width,
+				BiHeight:   -height,
+				BiPlanes:   1,
+				BiBitCount: 32,
+			},
+		}
+		var bits unsafe.Pointer
+		dib, _, _ := procCreateDIBSection.Call(memDC, uintptr(unsafe.Pointer(&bi)), 0, uintptr(unsafe.Pointer(&bits)), 0, 0)
+		if memDC == 0 || dib == 0 || bits == nil {
+			if memDC != 0 {
+				procDeleteDC.Call(memDC)
+			}
+			return nil, false
+		}
+		s.oldBmp, _, _ = procSelectObject.Call(memDC, dib)
+		s.memDC, s.dib, s.bits, s.w, s.h = memDC, dib, bits, width, height
+	}
+	const srcCopy = 0x00CC0020
+	left, top := m.Left+width/2, m.Top+height/2
+	if ok, _, _ := procBitBlt.Call(s.memDC, 0, 0, uintptr(width), uintptr(height),
+		screenDC, uintptr(left), uintptr(top), srcCopy); ok == 0 {
+		return nil, false
+	}
+	pixels := unsafe.Slice((*uint32)(s.bits), int(width)*int(height))
+	s.out = s.out[:0]
+	for row := 0; row < notchSampleRows; row++ {
+		y := (2*row + 1) * int(height) / (2 * notchSampleRows)
+		for col := 0; col < notchSampleCols; col++ {
+			x := (2*col + 1) * int(width) / (2 * notchSampleCols)
+			s.out = append(s.out, pixels[y*int(width)+x]&0x00ffffff)
+		}
+	}
+	return s.out, true
 }
 
 // displayKeptAwake reports whether anything on the machine is asking for the
