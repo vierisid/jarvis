@@ -302,6 +302,17 @@ describe('the keys', () => {
     expect(sent).toEqual([{ type: 'answer', id: 'o1', act: 'yes' }]);
   });
 
+  // The test from the plan: tap yes within half a second of a line arriving.
+  test('a line that came by itself takes no yes for 0.7 seconds', async () => {
+    show({ id: 'a1', kind: 'offer', say: ['Send the pricing to Anna?'], yes: 'send', unasked: true });
+    await wait(500);
+    surface.key('yes');
+    expect(sent).toEqual([]);
+    await wait(260);
+    surface.key('yes');
+    expect(sent).toEqual([{ type: 'answer', id: 'a1', act: 'yes' }]);
+  });
+
   test('yes with nothing on the notch opens it', async () => {
     await settleKeys();
     surface.key('yes');

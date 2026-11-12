@@ -11,14 +11,19 @@
  * notch switch off, or on a hosted install, the route is absent (404).
  *
  * What the secret is worth: whoever holds it can make the notch show sample
- * sentences. It reaches no data and runs nothing. It is still a secret,
- * because an open gate is a way to put words in Jarvis's mouth.
+ * sentences, and can make the fixed test items of ./fixtures.ts (an approval,
+ * a promise, a question, a failure), each of which does one harmless thing
+ * that is written down there. It reaches no data and chooses nothing that
+ * runs. It is still a secret, because an open gate is a way to put words in
+ * Jarvis's mouth.
  */
 import { MIN_SECRET_LENGTH, debugRpcTokenMatches } from '../daemon/debug-rpc-gate.ts';
 
 export const NOTCH_DEMO_ENV = 'JARVIS_NOTCH_DEMO';
 export const NOTCH_DEMO_HEADER = 'x-notch-demo-token';
 export const NOTCH_DEMO_PATH = '/api/notch/demo';
+/** The second route behind the same gate: makes one real test item (./fixtures.ts). */
+export const NOTCH_FIXTURE_PATH = '/api/notch/fixture';
 
 export type NotchDemoGateState = 'off' | 'too-short' | 'refused-hosted' | 'notch-off' | 'open';
 

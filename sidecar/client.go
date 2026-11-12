@@ -665,6 +665,10 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		}
 	})
 	defer notch.OnMessage(nil)
+	// The dashboard, opened the way the tray opens it. On its own goroutine:
+	// minting the window's access token is a network round trip.
+	notch.OnOpenDashboard(func() { go c.OpenChat() })
+	defer notch.OnOpenDashboard(nil)
 
 	c.mu.Lock()
 	c.obsCtx = ctx // store parent context so reloadConfig can create fresh children

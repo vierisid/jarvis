@@ -217,14 +217,16 @@ func TestNotchWindowHandlersNeedTheWindowsCapability(t *testing.T) {
 	panels := newFakePanelService()
 	token := func(context.Context) (string, error) { return "tok", nil }
 	with := NewHandlerRegistry(&cfg, nil, []SidecarCapability{CapNotch, CapWindows}, panels, nil, nil, nil, nil, nil, "ws://localhost:3143/sidecar/connect", token)
-	for _, method := range []string{"notch.configure", "notch.spawn", "notch.close"} {
+	for _, method := range []string{"notch.configure", "notch.spawn", "notch.close", "notch.push", "notch.open_dashboard"} {
 		if _, ok := with[method]; !ok {
 			t.Errorf("%s is missing although the notch and windows capabilities are available", method)
 		}
 	}
 	without := NewHandlerRegistry(&cfg, nil, []SidecarCapability{CapNotch}, nil, nil, nil, nil, nil, nil, "", nil)
-	if _, ok := without["notch.spawn"]; ok {
-		t.Error("notch.spawn is registered without the windows capability")
+	for _, method := range []string{"notch.spawn", "notch.open_dashboard"} {
+		if _, ok := without[method]; ok {
+			t.Errorf("%s is registered without the windows capability", method)
+		}
 	}
 	if _, ok := without["notch.configure"]; !ok {
 		t.Error("notch.configure must still be understood without windows")
