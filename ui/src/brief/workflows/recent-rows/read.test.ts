@@ -13,3 +13,7 @@ test("inventory is paginated and capped; workers never run more than four reads"
 });
 test("empty inventory has no run requests and stays distinct",async()=>{let calls=0;const state=await readRecentWorkflows(async()=>{calls++;return Response.json([]);});expect(state.status).toBe("empty");expect(calls).toBe(1);});
 test("a bare run array (the pre-#652 shape) is not read as a page",async()=>{const state=await readRecentWorkflows(async url=>Response.json(url.includes('?limit=50')?[{id:"a"}]:url.includes('/runs')?[{id:"r",flowId:"a",flowVersionId:"v",status:"SUCCEEDED",environment:"PRODUCTION",startTime:1}]:{}));expect(state.status).toBe("unavailable");});
+test("Recently run names a workflow as every other list does: the published name wins over a draft's",async()=>{
+  const state=await readRecentWorkflows(async url=>Response.json(url.startsWith('/api/workflows?')?[{id:"a"}]:url.includes('/a/runs')?{items:[{id:"run-a",flowId:"a",flowVersionId:"v-a",status:"SUCCEEDED",environment:"PRODUCTION",startTime:1}],nextOffset:1}:{latestDraft:{displayName:"Half-edited draft"},published:{displayName:"Weekly digest"}}));
+  expect(state).toMatchObject({status:"ready",data:[{flowId:"a",name:"Weekly digest"}]});
+});

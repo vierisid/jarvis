@@ -26,6 +26,14 @@ export function publishFlowVersion(flowId: string, versionId?: string): { flow: 
       ? getLatestDraft(flowId) ?? (published ? getFlowVersion(published) : null)
       : getFlowVersion(versionId);
     if (!target) throw new FlowVersionRequestError("no draft version to publish", 400);
+    // Publishing an older version brings back its steps, not its old name:
+    // a workflow's name is its published version's label, so the older one
+    // takes the current name and the workflow keeps it.
+    const current = published && published !== target.id ? getFlowVersion(published) : null;
+    if (current && target.created < current.created && target.displayName !== current.displayName) {
+      getWorkflowDb().run("UPDATE flow_version SET display_name = ? WHERE id = ?", [current.displayName, target.id]);
+      target = { ...target, displayName: current.displayName };
+    }
     // The CODE gate. Publish is the moment a human asked for this flow to
     // start running for real and is waiting on the answer, so a flow carrying
     // a CODE step it was never opted in for is refused HERE -- before the
