@@ -17,6 +17,14 @@
   padding: 0 32px 8px;
   flex: none;
 }
+.brief-root .brief-runs-superseded {
+  margin: 0;
+  padding: 4px 32px 0;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--brief-secondary);
+  flex: none;
+}
 .brief-root .brief-runs-feedback {
   min-height: 28px;
   padding: 4px 32px;
@@ -338,6 +346,7 @@
     grid-template-columns: minmax(120px, 0.62fr) minmax(0, 1.4fr);
   }
   .brief-root .brief-runs-feedback,
+  .brief-root .brief-runs-superseded,
   .brief-root .brief-runs-check {
     padding-inline: 18px;
   }

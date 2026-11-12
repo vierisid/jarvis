@@ -285,3 +285,46 @@ test('publishing from the existing canvas route reloads authoritative state and 
     expect(button('Publish version')).toBeUndefined(); expect(button('Edit a new draft')).toBeTruthy();
   } finally { rooms.retire(); transport.stop(); }
 });
+
+test('an earlier version opened from run history is read only: no Run, no new draft from it, and a way to the current version', async () => {
+  const { createWorkflowRooms } = await import('./workflow-rooms');
+  const { makeRunsFixture, RUN_SCOPE, RUN_CAPABILITY } = await import('../workflows/runs/fixtures');
+  const { makeCanvasFixture } = await import('../workflows/canvas/fixtures');
+  const { scopeId, flowId } = RUN_SCOPE, older = 'meeting-v2', current = RUN_SCOPE.versionId;
+  const runs = makeRunsFixture(), canvas = makeCanvasFixture(), writes: string[] = [], opened: any[] = [];
+  const olderRun = [...runs.records.values()].find(r => r.versionId === older)!;
+  const version = (id: string) => ({ ...canvas.snapshot().version, id, flowId, state: 'LOCKED', displayName: 'Calendar digest' });
+  const transport = createHostTransport((async (input: any, init: any = {}) => {
+    const path = String(input), signal = new AbortController().signal;
+    if (init.method && init.method !== 'GET') { writes.push(path); throw Error('No write expected: ' + path); }
+    if (path === '/api/workflows/' + flowId) return Response.json({ flow: { id: flowId }, latestDraft: null, published: version(current), uiMeta: canvas.snapshot().uiMeta });
+    if (path.endsWith('/versions/' + older)) return Response.json(version(older));
+    if (path.includes('/inspection?')) return Response.json({ status: 'ready', data: { scopeId, flowId, versionId: new URL('http://x' + path).searchParams.get('versionId') } });
+    if (path.endsWith('/runs')) return Response.json(await runs.port.list(null, signal));
+    if (path.includes('/runs/')) return Response.json(await runs.port.detail(path.split('/').at(-1)!, signal));
+    return canvas.request(input, init);
+  }) as typeof fetch);
+  const rooms = createWorkflowRooms({ scopeId, transport, capabilities: () => RUN_CAPABILITY,
+    storage: localStorage, dirty() {}, runInput: async () => ({}) });
+  const shell = (room: string, selection: Record<string, string>) => ({ mode: 'live', route: { room, selection },
+    theme: 'dark', sidebar: 'expanded', chatOpen: false, navigate: (r: any) => opened.push(r), setTheme() {}, setSidebar() {}, setChatOpen() {} }) as any;
+  try {
+    const Runs = rooms.rooms['workflow-runs']!.Body!;
+    await React.act(async () => root.render(<Runs shell={shell('workflow-runs', { flowId, versionId: older, runId: olderRun.runId })} />));
+    await React.act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    expect(host.textContent).toContain('earlier version of this workflow, shown read only');
+    expect(button('Run workflow')).toBeUndefined();
+    await click('Open current version');
+    expect(opened.at(-1)).toEqual({ room: 'workflow-runs', selection: { flowId, versionId: current } });
+    await React.act(async () => root.render(null));
+    const Canvas = rooms.rooms.workflow!.Body!;
+    await React.act(async () => root.render(<Canvas shell={shell('workflow', { flowId, versionId: older })} />));
+    await React.act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    expect(host.textContent).toContain('Earlier version (read only)');
+    expect(button('Edit a new draft')).toBeUndefined(); expect(button('Run workflow')).toBeUndefined();
+    expect(button('Publish version')).toBeUndefined();
+    await click('Open current version');
+    expect(opened.at(-1)).toEqual({ room: 'workflow', selection: { flowId, versionId: current } });
+    expect(writes).toEqual([]);
+  } finally { await React.act(async () => root.render(null)); rooms.retire(); runs.controller.retire(); transport.stop(); }
+});
