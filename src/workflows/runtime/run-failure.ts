@@ -139,12 +139,13 @@ const JARVIS_TOOL_PIECE = '@jarvispieces/piece-jarvis-tool';
 
 /**
  * The typed refusals a step's own piece can raise before or instead of doing
- * its work: a human input step refused (#1266) or rejected by the person, and
- * a tool step naming a tool no workflow can run or a skill that is not saved.
+ * its work: a human input step refused (#1266) or rejected by the person, a
+ * Wait for Approval step that was not approved (#1322), and a tool step naming
+ * a tool no workflow can run or a skill that is not saved.
  */
 function typedRefusalCodes(node: FlowTriggerNode): string[] {
   if (isHumanInputStep(node.settings?.pieceName, node.settings?.actionName)) {
-    return [HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, HUMAN_INPUT_REJECTED_CODE];
+    return [HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, HUMAN_INPUT_REJECTED_CODE, 'APPROVAL_DENIED', 'APPROVAL_EXPIRED'];
   }
   return node.settings?.pieceName === JARVIS_TOOL_PIECE ? [WORKFLOW_TOOL_UNSUPPORTED_CODE, WORKFLOW_SKILL_NOT_FOUND_CODE] : [];
 }

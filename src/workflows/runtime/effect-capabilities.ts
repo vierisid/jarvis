@@ -14,7 +14,7 @@ import { rawUiGate, REVIEWED_UI_TOOLS } from '../../authority/ui-intent';
 // piece's target props can set them (`piece-effects.ts`, #793).
 import { RESERVED_TARGET_KEYS } from './piece-effects';
 import { BOUNDED_TOOLS, boundedToolCapability } from './tool-capability';
-import { workflowUiReview, workflowToolRefusal } from './workflow-ui-tools';
+import { workflowUiReview, workflowToolRefusal, WORKFLOW_REVIEWED_UI_TOOLS } from './workflow-ui-tools';
 import { forCard } from '../../util/card-text';
 
 /** The capability a bounded tool needs on the machine it runs on; dispatch checks it. */
@@ -278,4 +278,27 @@ export function uiCallComputer(toolName: string, requested: unknown): { sidecarI
   const sidecar = getSidecarManager()?.listSidecars().find(s => s.id === sidecarId);
   // The name is cut, never the id that tells two similar names apart (#1314 review).
   return { sidecarId, name: sidecar ? `${forCard(sidecar.name, 80) || 'unnamed'} (${sidecarId})` : sidecarId };
+}
+
+/**
+ * Why a workflow step cannot run this tool, in plain words, or null when it
+ * can. The same rule `toolEffectCapability` enforces when the step runs, asked
+ * early so a step that can never run is not called ready. `params` is null when
+ * run data decides them: what depends on them (which skill) is then left to the run.
+ * Tools the workflow UI rules refuse by name (`workflowToolRefusal`) are reported
+ * by readiness from that rule, so this covers what only the call itself decides.
+ */
+export function workflowStepToolRefusal(tool: ToolDefinition, params: Record<string, unknown> | null): string | null {
+  if (GATED_TOOLS.has(tool.name) && !tool.workflowEffect && params === null) return null;
+  try { toolEffectCapability(tool, params ?? {}); return null; } catch { /* described below */ }
+  if (GATED_TOOLS.has(tool.name) && !tool.workflowEffect) {
+    return `${tool.name} needs the name of a skill saved on this Jarvis, and that skill was not found. Check the skill name in the step's parameters.`;
+  }
+  const supported = [...BOUNDED_TOOLS, ...GATED_TOOLS, ...WORKFLOW_REVIEWED_UI_TOOLS];
+  // A supported tool refused for what this call asks (desktop_click reading a
+  // value, say): naming it in the list of supported tools would contradict the refusal.
+  if (supported.includes(tool.name)) {
+    return `A workflow step cannot run ${tool.name} with these parameters, because Jarvis cannot show you beforehand what it would do. Change the step's parameters, or let an agent step do it.`;
+  }
+  return `A workflow step cannot run ${tool.name}, because Jarvis cannot show you beforehand what it would do. Workflow steps can use these tools: ${supported.join(', ')}.`;
 }
