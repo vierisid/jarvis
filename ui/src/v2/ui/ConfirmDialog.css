@@ -65,3 +65,7 @@
 @media (prefers-reduced-motion: reduce) {
   .jconfirm, .jconfirm__box { animation: none; }
 }
+
+/* A long step name wraps inside the dialog instead of running past its edge. */
+.jconfirm__title,
+.jconfirm__body { overflow-wrap: anywhere; }
