@@ -110,7 +110,7 @@ import {
   type AppConnectionType,
 } from "../db/repos/app-connection";
 import type { CredentialResolver } from "../credentials/adapter";
-import { pastedOAuth2Status, stampOAuth2Claim, type RefreshProblem } from "../credentials/pasted-oauth2";
+import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oauth2";
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
@@ -2617,6 +2617,9 @@ function clampPage(params: URLSearchParams, defaultLimit: number): { limit: numb
     offset: Math.max(0, Math.trunc(numParam(params.get("offset")) ?? 0)),
   };
 }
+
+/** Why an OAuth2 row's refresh cannot work, as `CredentialResolver.refreshProblem` says it. */
+type RefreshProblem = NonNullable<ReturnType<CredentialResolver["refreshProblem"]>>;
 
 /**
  * An OAuth2 row's status plus why its refresh cannot work, when it carries

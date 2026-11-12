@@ -257,13 +257,15 @@ export class CredentialResolver {
    * never connects to. The Connections panel says so instead of "Refreshed by
    * Jarvis". A custom token transport (tests) decides the address itself.
    */
-  refreshProblem(row: { projectId: string; id: string; value: Record<string, unknown> }): RefreshProblem | null {
+  refreshProblem(row: { projectId: string; id: string; externalId: string; value: Record<string, unknown> }): RefreshProblem | null {
     const remembered = this.oauth2.refusalOf(row);
     if (remembered) return remembered;
     const host = tokenUrlIpLiteral(row.value);
     if (!host || !this.policy) return null;
-    try { assertHostAllowed(host, this.policy); } catch (error) {
-      return { kind: "blocked", message: error instanceof Error ? error.message : "Jarvis may not connect to that address." };
+    try { assertHostAllowed(host, this.policy); } catch {
+      // Worded here, as the refresher words its own refusals: the guard's sentence is about workflow steps.
+      return { kind: "blocked", message: `The token URL of connection ${row.externalId} is at ${host}, an address this Jarvis never connects to, `
+        + "so no refresh can work. Change the connection's token_url, or reconnect." };
     }
     return null;
   }

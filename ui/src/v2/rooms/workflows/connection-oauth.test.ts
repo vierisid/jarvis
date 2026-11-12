@@ -35,10 +35,12 @@ describe("#954 pasted OAuth2 labels", () => {
   test("a row whose refresh is known not to work never says Refreshed by Jarvis", () => {
     const blocked = oauth2RowLabel({ type: "OAUTH2", oauth2: { expiresAt: NOW + 1, refreshable: true,
       refreshProblem: { kind: "blocked", message: "Jarvis may not connect to 127.0.0.1." } } }, NOW)!;
-    expect(blocked).toMatchObject({ tone: "warn", label: "Refresh failed: reconnect" });
-    expect(blocked.title).toContain("Jarvis may not connect to 127.0.0.1.");
-    expect(oauth2RowLabel({ type: "OAUTH2", oauth2: { expiresAt: NOW + 1, refreshable: true,
-      refreshProblem: { kind: "refused", message: "The provider refused to refresh it." } } }, NOW)!.label).toBe("Refresh failed: reconnect");
+    expect(blocked).toMatchObject({ tone: "warn", label: "Refresh blocked: reconnect", title: "Jarvis may not connect to 127.0.0.1." });
+    const refused = oauth2RowLabel({ type: "OAUTH2", oauth2: { expiresAt: NOW + 1, refreshable: true,
+      refreshProblem: { kind: "refused", message: "The provider refused to refresh it. Reconnect it: paste a new token with its refresh details." } } }, NOW)!;
+    expect(refused.label).toBe("Refresh failed: reconnect");
+    // The server's sentence already says what to do; it is not said twice.
+    expect(refused.title.match(/paste a new token/giu)).toHaveLength(1);
     expect(oauth2RowLabel({ type: "OAUTH2", oauth2: { expiresAt: NOW + 1, refreshable: true,
       refreshProblem: { kind: "unreachable", message: "Jarvis could not reach the token endpoint." } } }, NOW)!.label).toBe("Refresh failing: provider not answering");
   });

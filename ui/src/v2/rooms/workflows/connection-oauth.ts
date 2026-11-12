@@ -53,9 +53,12 @@ export function oauth2RowLabel(connection: Pick<ConnectionMeta, "type" | "oauth2
   const when = expiresAt === null ? null : new Date(expiresAt).toLocaleString();
   if (refreshable && refreshProblem) {
     // It has refresh details, but Jarvis knows the refresh does not work: say so, not "Refreshed by Jarvis".
-    return refreshProblem.kind === "unreachable"
-      ? { tone: "warn", label: "Refresh failing: provider not answering", title: `${refreshProblem.message} Jarvis tries again on the next use.` }
-      : { tone: "warn", label: "Refresh failed: reconnect", title: `${refreshProblem.message} Paste a new token with its refresh details.` };
+    // A refusal or a blocked address already says what to do; an unanswered one does not.
+    if (refreshProblem.kind === "unreachable") {
+      return { tone: "warn", label: "Refresh failing: provider not answering", title: `${refreshProblem.message} Jarvis tries again on the next use.` };
+    }
+    // Blocked is known without trying, so nothing "failed" yet.
+    return { tone: "warn", label: refreshProblem.kind === "blocked" ? "Refresh blocked: reconnect" : "Refresh failed: reconnect", title: refreshProblem.message };
   }
   if (refreshable) {
     return { tone: "ok", label: "Refreshed by Jarvis", title: `Jarvis refreshes this token before it expires${when ? ` (now ${when})` : ""}.` };
