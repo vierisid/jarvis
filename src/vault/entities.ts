@@ -1,4 +1,5 @@
 import { getDb, generateId } from './schema.ts';
+import { cleanVaultText, ENTITY_NAME_MAX_CHARS } from './input-limits.ts';
 
 /** Escape SQL LIKE wildcard characters in user input */
 function escapeLike(s: string): string {
@@ -46,6 +47,7 @@ export function createEntity(
   properties?: Record<string, unknown>,
   source?: string
 ): Entity {
+  name = cleanVaultText(String(name), ENTITY_NAME_MAX_CHARS);
   const db = getDb();
   const id = generateId();
   const now = Date.now();
@@ -156,7 +158,7 @@ export function updateEntity(
 
   if (updates.name !== undefined) {
     fields.push('name = ?');
-    params.push(updates.name);
+    params.push(cleanVaultText(String(updates.name), ENTITY_NAME_MAX_CHARS));
   }
 
   if (updates.type !== undefined) {

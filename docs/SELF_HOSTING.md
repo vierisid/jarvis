@@ -440,7 +440,7 @@ path and a `/proc/self/root/...` spelling all land on the same verdict:
   `/etc/default/*`, `/etc/sysconfig/*`, `/etc/environment` and
   `~/.config/environment.d/*`. Closing `/proc` while leaving the unit readable
   would have been cosmetic.
-- a `jarvis export` archive, which holds all of the above verbatim.
+- a `jarvis export` archive, which holds the key material above verbatim.
 
 Your own files are untouched: documents, logs, `~/.gitconfig`, `~/.config`,
 project files and `~/.jarvis/logs` all read as before, and `~/.jarvis` is still
@@ -891,6 +891,33 @@ environment (the dashboard and keychain hold LLM keys) keeps it out of that file
 either way, and nothing short of a sandbox keeps the daemon's files from what it
 runs.
 
+### Backup and restore
+
+`jarvis export --out jarvis-backup.tar` is the backup. It is complete by
+default: the database, the keys that decrypt it (the workflow encryption key,
+the saved AI provider keys, device signing keys, Google tokens) and the list of
+apps you installed from the Library. `--full` is accepted and means the same.
+Because it holds plaintext keys, the archive file is written with mode 0600
+(and a folder created for it with 0700). Keep it as private as the data
+directory, and encrypt it before it leaves the machine.
+
+The installed apps themselves are not in the archive, only the list. On the
+first start after a restore Jarvis installs them again, which needs internet.
+
+`jarvis export --no-secrets` leaves every key out, for an archive you want to
+share. It cannot be restored into a working install when it holds saved
+workflow connections.
+
+`jarvis restore jarvis-backup.tar` needs the brain stopped. Before it touches
+anything it checks the archive. It refuses, and changes nothing, when the
+archive holds saved connections that neither its own key nor, for an archive
+without a key, the key already on this machine opens. `--allow-missing-keys`
+overrides that for a key you supply another way. It also refuses an
+installed-apps list that the Library could not have written. When it finishes it says what came back and what you still have
+to do, such as adding AI provider keys, connecting devices again, or reinstalling
+Library apps your workflows use that the backup did not list. Run logs and
+uploaded files are not part of the archive.
+
 ### Workflow credential encryption
 
 Workflow connection credentials (`app_connection.value`) are encrypted with
@@ -902,7 +929,7 @@ truth: `src/workflows/db/encryption.ts`.
 What this protects: a database file or archive that travels without the key.
 It does not protect against anyone who can read the data directory, since on a
 default install the key sits beside the database. Losing the key is
-unrecoverable. `jarvis export --full` includes the key file; a key supplied only
+unrecoverable. `jarvis export` includes the key file; a key supplied only
 through the environment is never captured, so escrow it separately.
 
 New writes use the row-bound `enc1a:` envelope: the ciphertext authenticates

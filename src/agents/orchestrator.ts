@@ -924,6 +924,12 @@ export class AgentOrchestrator {
     // taint set comes from it, so a bare "yes" after a tainted turn starts
     // tainted. The caller closes it when the turn ends.
     carry?: TurnTaintLink | null,
+    // A turn whose permission to send can lapse mid-turn (screen-derived
+    // background research once awareness is turned off, #1314 follow-up):
+    // `llm` replaces the manager for this turn's model calls (a held client
+    // refuses them itself), and `checkpoint` is asked before each tool run
+    // and throws to end the turn. Passed, never stored, like `scope`.
+    hold?: { llm?: Pick<LLMManager, 'chatTier'>; checkpoint?: () => void } | null,
   ): Promise<string> {
     const primary = this.getPrimary();
     if (!primary) {
@@ -969,9 +975,11 @@ export class AgentOrchestrator {
     let tools = decided.llm;
     let finalText = '';
 
+    const llm = hold?.llm ?? this.llmManager;
+
     // Tool execution loop
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-      const llmResponse: LLMResponse = await this.llmManager.chatTier(tier, subsystem, messages, { tools });
+      const llmResponse: LLMResponse = await llm.chatTier(tier, subsystem, messages, { tools });
 
       if (llmResponse.finish_reason === 'tool_use' && llmResponse.tool_calls.length > 0) {
         // Add assistant message with tool calls to local messages
@@ -1003,6 +1011,8 @@ export class AgentOrchestrator {
           // of the conversation, so a later turn cannot strip a tool an
           // in-flight task is using.
           this.noteToolUse(ledger, tc.name, turnScope);
+          // A tool call's arguments came from this turn's prompt: none runs once the turn may no longer send.
+          hold?.checkpoint?.();
           const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, undefined, turnTaint, turnScope));
           messages.push({
             role: 'tool',
