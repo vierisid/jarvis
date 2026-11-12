@@ -6,29 +6,44 @@ import (
 )
 
 // notchCoverage writes, for every pixel of a w by h image, how much of that
-// pixel the polygon covers: 0 for none, 255 for all. It is what gives the
-// notch a smooth edge on a system where a window can only be cut along whole
-// pixels.
+// pixel the polygons cover between them: 0 for none, 255 for all. It is what
+// gives the notch a smooth edge on a system where a window can only be cut
+// along whole pixels.
 //
 // The method is plain: sixteen sample lines through each pixel row, and along
 // each line the exact horizontal overlap of every filled span with every
-// pixel. Even-odd filling, which is right for a simple outline. Sixteen lines
-// give seventeen levels on an edge that runs nearly level, which is where the
-// notch's bottom corners end; four left visible steps there.
-func notchCoverage(dst []uint8, w, h int, pts []notchVertex) {
+// pixel. Sixteen lines give seventeen levels on an edge that runs nearly
+// level, which is where the notch's bottom corners end; four left visible
+// steps there.
+//
+// Where polygons overlap they are one shape, not a hole: a span is filled
+// while the line is inside any of them. That needs every polygon to turn the
+// same way, which notchOutlines sees to.
+func notchCoverage(dst []uint8, w, h int, polygons [][]notchVertex) {
 	for i := range dst {
 		dst[i] = 0
 	}
-	if w <= 0 || h <= 0 || len(dst) < w*h || len(pts) < 3 {
+	if w <= 0 || h <= 0 || len(dst) < w*h {
 		return
 	}
 	const samples = 16
 	// Only the rows the outline reaches need work. The notch is a few dozen
 	// rows of a window that is hundreds tall, and this runs on every frame of
 	// a size change.
-	top, bottom := pts[0].Y, pts[0].Y
-	for _, p := range pts {
-		top, bottom = math.Min(top, p.Y), math.Max(bottom, p.Y)
+	top, bottom, any := 0.0, 0.0, false
+	for _, pts := range polygons {
+		if len(pts) < 3 {
+			continue
+		}
+		for _, p := range pts {
+			if !any {
+				top, bottom, any = p.Y, p.Y, true
+			}
+			top, bottom = math.Min(top, p.Y), math.Max(bottom, p.Y)
+		}
+	}
+	if !any {
+		return
 	}
 	firstRow, lastRow := int(math.Floor(top)), int(math.Ceil(bottom))
 	if firstRow < 0 {
@@ -37,8 +52,12 @@ func notchCoverage(dst []uint8, w, h int, pts []notchVertex) {
 	if lastRow > h-1 {
 		lastRow = h - 1
 	}
+	type crossing struct {
+		x   float64
+		dir int
+	}
 	acc := make([]float32, w)
-	xs := make([]float64, 0, 16)
+	xs := make([]crossing, 0, 32)
 	for y := firstRow; y <= lastRow; y++ {
 		for i := range acc {
 			acc[i] = 0
@@ -47,21 +66,38 @@ func notchCoverage(dst []uint8, w, h int, pts []notchVertex) {
 		for s := 0; s < samples; s++ {
 			sy := float64(y) + (float64(s)+0.5)/samples
 			xs = xs[:0]
-			for i := range pts {
-				a, b := pts[i], pts[(i+1)%len(pts)]
-				ay, by := a.Y, b.Y
-				if (ay <= sy) == (by <= sy) {
+			for _, pts := range polygons {
+				if len(pts) < 3 {
 					continue
 				}
-				ax, bx := a.X, b.X
-				xs = append(xs, ax+(sy-ay)*(bx-ax)/(by-ay))
+				for i := range pts {
+					a, b := pts[i], pts[(i+1)%len(pts)]
+					if (a.Y <= sy) == (b.Y <= sy) {
+						continue
+					}
+					dir := 1
+					if a.Y > b.Y {
+						dir = -1
+					}
+					xs = append(xs, crossing{a.X + (sy-a.Y)*(b.X-a.X)/(b.Y-a.Y), dir})
+				}
 			}
 			if len(xs) < 2 {
 				continue
 			}
-			sort.Float64s(xs)
-			for i := 0; i+1 < len(xs); i += 2 {
-				x0, x1 := xs[i], xs[i+1]
+			sort.Slice(xs, func(i, j int) bool { return xs[i].x < xs[j].x })
+			inside, from := 0, 0.0
+			for _, c := range xs {
+				before := inside
+				inside += c.dir
+				if before == 0 && inside != 0 {
+					from = c.x
+					continue
+				}
+				if before == 0 || inside != 0 {
+					continue
+				}
+				x0, x1 := from, c.x
 				if x1 <= 0 || x0 >= float64(w) {
 					continue
 				}
