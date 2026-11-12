@@ -469,6 +469,27 @@ const MOMENTS: Record<string, Moment> = {
         await s.say(['You asked: ', em(answer.text), '. In this demo I only show that I heard it.'], 4200);
         return;
       }
+      if (answer.act === 'button' && answer.button === 'memory') {
+        // A long sheet: more than fits, so it scrolls.
+        const memory = s.id();
+        const things = [
+          'Marco prefers a short tone.', 'Anna is at Orbit Labs since March.', 'Invoices go out on the 1st.', 'Brightline is paid on Fridays.',
+          'The deck lives in the shared drive.', 'Calls with Anna are on Thursdays.', 'Leo covers support on Mondays.', 'Stripe payouts land on Tuesdays.',
+          'Lumen Studio writes in Italian.', 'Acme pays late, usually by 9 days.', 'Pricing is per seat, 5 seats minimum.', 'The contract template is version 4.',
+          'Nora answers new leads within the hour.', 'Otto files invoices every evening.', 'You do not take calls before 9:00.', 'Friday afternoons are kept free.',
+          'The kickoff call takes 30 minutes.', 'Receipts are forwarded to the accountant.', 'Orbit Labs asked for a demo twice.', 'The newsletter goes out every other week.',
+        ];
+        s.surface.show({
+          id: memory, kind: 'sheet', say: ['What I remember'],
+          blocks: [
+            ...things.map((text, i): NotchBlock => ({ kind: 'row', say: [text], small: `${i + 1}` })),
+            { kind: 'note', say: ['You can tell me to forget any of these.'] },
+          ],
+        });
+        await s.answer(memory, ['no']);
+        id = home();
+        continue;
+      }
       if (answer.act === 'go' && answer.row === 'agents') {
         const agents = s.id();
         s.surface.show({

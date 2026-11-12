@@ -150,6 +150,25 @@ describe('the demo plays through the real path', () => {
     expect(h.shown().at(-1)!.id).toBe(sheet.id);
   });
 
+  test('a sheet can open another, and closing that one goes back', async () => {
+    const h = harness();
+    h.demo.play('home');
+    await settle();
+    const home = h.shown().at(-1)!;
+    expect(home.kind).toBe('ask');
+    h.say({ type: 'answer', id: home.id, act: 'button', button: 'memory' });
+    await settle();
+    const memory = h.shown().at(-1)!;
+    // Long enough to need scrolling: that is what it is there to try.
+    expect(memory.kind === 'sheet' && memory.blocks.length).toBeGreaterThan(20);
+    h.say({ type: 'answer', id: memory.id, act: 'no' });
+    await settle();
+    const back = h.shown().at(-1)!;
+    expect(back.kind).toBe('ask');
+    expect(back.id).not.toBe(home.id);
+    expect(h.demo.running()).toBe('home');
+  });
+
   test('a moment that is replaced says nothing more', async () => {
     const h = harness();
     h.demo.play('mail');
