@@ -157,7 +157,7 @@ export function ForgetMemory({ detail, http, capabilities, storage, scopeId, cha
       const path = `/api/brief/memory/${encodeURIComponent(item.factId)}`;
       const source = await http.json(path + '/forget'), current = await http.json(path);
       if (source.state !== 'ready' || source.factId !== item.factId || current.state !== 'ready' || current.data.revision !== item.revision) throw Error();
-      if (!await confirmDialog(`Forget this memory: “${item.sentence}”?\n\nThis removes the selected fact and its evidence from future recall. Original messages, source documents, other facts and backups remain.`)) return;
+      if (!await confirmDialog(`Forget this memory: “${item.sentence}”?\n\nThis removes the selected fact, every earlier version it replaced, and their evidence from future recall. Original messages, source documents, other facts and backups remain.`)) return;
       const command = { requestId: crypto.randomUUID(), expectedRevision: source.revision, confirmed: true };
       storage.setItem(`brief:forget:v1:${scopeId}:${item.factId}`, JSON.stringify(command));
       const result = await http.json(path + '/forget', post(command));
