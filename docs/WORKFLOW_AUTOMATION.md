@@ -47,6 +47,18 @@ Practical consequences:
 - A category the user put under approval parks the run at a waitpoint and delivers
   an approval request. The run resumes on approval and fails on denial or expiry.
   This is why `jarvis-context` reads can now answer `202` instead of `200`.
+- A notify step whose every channel is the owner's own screen (`dashboard`,
+  `desktop`) asks for no approval, even while `send_message` is governed: it
+  shows the owner the same text an approval card would have shown, and no one
+  else. It is judged as `read_data`, so it still records its effect row and
+  audit row, is held by Pause, refused by Kill and stopped by cancellation, and
+  an override or context rule on `read_data` applies to it while one on
+  `send_message` no longer does. `auto`, `telegram`, `discord`, `voice` (spoken
+  aloud to the room) and any mix that includes one of them stay `send_message`.
+  To make self-notifications ask again without asking for every read, add a
+  context rule on `read_data` with the condition `tool_name` set to
+  `workflow_notify` and the effect `require_approval`. A repeated
+  `idempotencyKey` is deduplicated before any approval is asked.
 - Each effect is recorded in `workflow_effect` with its frozen arguments, target,
   decision and outcome, readable at `GET /api/workflow-runs/:runId/effects`.
 - A tool that fails reports a typed outcome rather than a result that happens to
@@ -222,6 +234,31 @@ Practical consequences:
   says so. Which pieces count is `src/workflows/runtime/step-admission.ts`,
   which both the admission and `/api/workflows/pieces` (`notApprovalGated`)
   read.
+
+### A dashboard notification is saved, not only shown
+
+A `jarvis-notify` step to `dashboard` (or `auto`, which includes it) saves the notification in the
+daemon's `dashboard_notifications` table, then sends the live toast to any open dashboard tab under
+the same id. Saved means delivered: the step succeeds whether or not a tab is open, so a 9:00
+reminder is not lost when nobody is looking at 9:00. The row keeps the message, priority, time, flow
+id and run id.
+
+- The dashboard loads the unread rows when it opens (`GET /api/dashboard-notifications`) and shows
+  them in the Needs you notifications list and as a toast. Marking one read
+  (`POST /api/dashboard-notifications/:id/read`) clears it for every tab and every later visit.
+- A deduplicated notification (same idempotency key) is claimed before anything is saved, so it is
+  stored once.
+- Retention: at most the newest 200 rows and nothing older than 30 days, read or not, trimmed on
+  every insert. A message longer than 32,000 characters is saved shortened, with a note saying so.
+- Deleting a workflow (the ordinary delete and the Brief purge) deletes its saved notifications.
+  Removing it with Undo available keeps them.
+- If the row cannot be saved, the dashboard channel is failed, and the step fails when no other
+  channel delivered. If the live toast throws, or a Pause, Kill or cancel stops it, after the row
+  was saved, the step reports the send as unconfirmed and its idempotency key stays used.
+- The saved text is the workflow's own output and may carry outside content it read. It is shown
+  as plain text and is never given to a model.
+- `auto` with no tab open also shows the desktop notification, as before. `voice` still needs an
+  open dashboard to play the audio and reports so when none is open.
 
 ### A step's tool result is NOT framed as untrusted content
 
@@ -686,6 +723,11 @@ of offering an unusable webhook resume URL.
 Canceling a run atomically stops its required descendants, retires waitpoints
 and closes undispatched approval cards. An already-dispatched effect retains
 its receipt or uncertainty; cancellation never claims remote rollback.
+A parent continues as soon as its child ends or the parent parks: after each
+finished run of a child, or of a run waiting on one, the worker runs the same
+child sweep, so the wait is not the 15 s timer poll. The poll stays the safety
+net for a crash or restart, and the sweep consumes each waitpoint once, so the
+two cannot resume a parent twice.
 Recovery polling also stops required children whose parent failed or was deleted.
 For required children that already ended, it retires remaining waitpoints and
 undispatched approvals before continuing the parent. The child's terminal status,
@@ -701,6 +743,24 @@ installing this version. Before downgrading, cancel or finish active required
 parent/child runs and remove their `waitForCompletion` settings. Older binaries
 ignore that input and would otherwise restore asynchronous behavior. Retain the
 additive table and historical receipts; never retry an uncertain run as rollback.
+
+### Reusable workflow calls fail by default
+
+The "Jarvis: Reusable workflows" `call` step fails when its child does not give
+a usable result: the child failed, timed out, stopped uncertain, returned
+nothing (no `return_result` step), or returned output that does not match the
+step's expected result shape. The failure names the child workflow and says why
+in plain words, and it fails the run. Only a succeeded child with a valid result
+continues the parent.
+
+Authors who want to branch on the child's outcome turn on **Continue when the
+child fails** (`continueOnChildFailure`). The step then returns the status object
+(`status` of `failed`, `invalid_output`, `timeout` or `uncertain`, a `code` and
+the child `runId`) and the parent stays green. An absent setting means the safe
+default, so saved flows that never set it fail on a bad child. The setting is
+not part of the invocation fingerprint: it changes how the parent treats the
+receipt, never what is sent to the child. `require_success` still works after a
+`call`, but a default `call` already fails first.
 
 ### Governed pieces
 
@@ -804,6 +864,39 @@ HTTP request specifics:
   redacted receipt carries `receiptRedacted: true`. The step
   itself still hands the flow the whole response; only a replay of a recorded
   step reads the receipt.
+- **Failures read as sentences.** A failed request fails the step with one
+  plain sentence, never the upstream JSON envelope: `The server answered 404 Not
+  Found.` plus `It said:` and the first 300 characters of the reply in quotes,
+  redacted by the same credential rules as the card and the receipt, with frame
+  delimiters defanged (the reply is the server's text, never Jarvis's own
+  words); `The request timed out after 2 seconds.` for the step's own timeout
+  (never shown as a server 500); `Could not reach api.example.com.` only when
+  no connection was made (the name did not resolve, or the address refused or
+  could not be routed to). Any other failure with no answer (a reset, a TLS or
+  redirect failure) reads `The connection to api.example.com failed before an
+  answer came back (ECONNRESET).`, since the request may have been sent. Only
+  the host name is named, never the path, query or login. The text is built in
+  `runtime/http-failure.ts`.
+- **Retries.** "Retry on errors" tries again on a 5xx, a timeout, a network
+  error, a 408 or a 429, and never on another 4xx: the same request would be
+  refused the same way. "Retry on internal errors (5xx)" tries again on a 5xx,
+  a timeout or a network error and continues the flow on any other answer
+  (408 and 429 included), as before. Only a read is tried again at all (up to
+  three times, see "No resend").
+- **Continuing past a failure** ("Continue flow on ..." modes, and an answer
+  below 500 under "Retry on internal errors") returns the same fields as a
+  success, `status`, `headers` and `body`, plus `ok: false` and `error` (the
+  sentence), so `{{step_1.body}}` and `{{step_1.status}}` keep working. A
+  success carries `ok: true`. With no response (a timeout, an unreachable host)
+  `status` is `null` and `body` is `null`. The old keys stay for saved flows:
+  `response: { status, body }` (the body redacted and cut to 300 characters
+  when long; `status` stays 500 with no response, as it was) and `request: {}`
+  (the request body is no longer echoed).
+- **GraphQL.** An HTTP 200 answer whose `errors` array is not empty fails the
+  step with `The GraphQL server reported an error:` and the first error's
+  message in quotes. With "No Error on Failure" on, the step returns the
+  response with `ok: false` and `error` instead. A non-2xx answer reads as
+  above.
 - **Size.** A response (and an engine file download) is read up to 7.3 MiB,
   `(10 MiB - 256 KiB) * 3/4`: the engine fails a run whose step data passes
   10 MiB less a 256 KiB offset, and a binary response is stored as base64. A
@@ -864,6 +957,39 @@ HTTP request specifics:
   for the run's list (`GET /v1/jarvis/read-hosts`, engine token) and a file
   URL whose host is not listed, or a redirect off the list, fails the step
   naming the host and the list.
+- **What the card says, and what is refused before it.** An HTTP or GraphQL
+  request's card (and its Needs you entry) says what will happen in words,
+  naming the method, the host and the path ("Jarvis wants to send a POST
+  request to api.stripe.com/v1/refunds", "Jarvis wants to read
+  api.example.com/status", "Jarvis wants to send a GraphQL request to ...").
+  The path is taken from the URL after #1318's redaction, so the query,
+  fragment and userinfo never appear and a webhook's secret segment reads
+  `[redacted]`. A path segment of 20 or more token characters with a digit or
+  mixed case (#1318's Bearer-token shape, narrowed for paths) is masked as
+  `[redacted]` too; a long id such as a UUID is masked with it, and the
+  arguments keep the redacted URL whole. A segment is percent-decoded only
+  when the result is plain (letters, digits and the characters a path may hold
+  unencoded); anything else stays encoded. A `{{...}}` the engine has not
+  resolved reads `[set when the step runs]`, and an unresolved or unparsable
+  host reads "a web address set when the step runs". A sentence over 600
+  characters, or a URL the input projection cut, is refused
+  (`CARD_CANNOT_SHOW`) rather than shown cut. The sentence rides in the effect
+  target's `intent`, like every other per-step card sentence.
+  Its reason line says why in words ("not on the workflow's list of sites it
+  may read without asking", "Sending a request to another server needs your
+  approval") in place of the engine's generic governed-category sentence only;
+  an override's, a context rule's or a profile's reason is shown as before,
+  and so is the engine's own reason for a listed read that asks because reads
+  are governed. A request whose URL names `localhost` or an address the rules above never
+  allow (and, on a hosted install, any private address) is refused before a
+  card is raised: "Jarvis does not send requests to addresses on this computer
+  or local network." A name that only resolves to such an address is still
+  refused by the guard when it connects. A step already recorded (a card
+  raised before the install's rule changed) is not refused early: the guard
+  refuses it when it runs, and a tracked send is recorded as not sent.
+  `parse_url` makes no request, so it
+  never asks and is never held to the read list. The read list refuses the
+  same hosts when a person adds them (400), since a read there could never run.
 - **Read list (#1153).** A body-less GET or HEAD still carries what its URL and
   headers hold to the host it names, so it runs without a card only when that
   host is on the flow's read list (`POST /api/workflows/:id/read-hosts`
