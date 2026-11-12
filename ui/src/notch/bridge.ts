@@ -2,9 +2,10 @@
  * The thin layer between the surface and the desktop app that hosts it.
  *
  * The desktop app puts a few functions on `window` (see docs/notch/README.md):
- * the page calls `__notch_set_outline`, `__notch_focus`, `__notch_send` and
- * `__notch_log`, and defines `__notch_receive` and `__notch_cursor` for the
- * desktop app to call. Opened in a plain browser none of them is there, so
+ * the page calls `__notch_set_outline`, `__notch_focus`, `__notch_send`,
+ * `__notch_esc`, `__notch_keys` and `__notch_log`, and defines `__notch_receive`,
+ * `__notch_cursor`, `__notch_key` and `__notch_pairs` for the desktop app to
+ * call. Opened in a plain browser none of them is there, so
  * every call is guarded and the page simply shows nothing.
  */
 import { NOTCH_PROTOCOL_VERSION } from '../../../src/notch/protocol.ts';
@@ -18,8 +19,12 @@ interface NotchWindow {
   __notch_focus?: (take: boolean) => unknown;
   __notch_send?: (text: string) => unknown;
   __notch_log?: (text: string) => unknown;
+  __notch_esc?: (want: boolean) => unknown;
+  __notch_keys?: () => unknown;
   __notch_receive?: (message: NotchToPage) => void;
   __notch_cursor?: (x: number, y: number, down?: number | boolean) => void;
+  __notch_key?: (name: string) => void;
+  __notch_pairs?: (pairs: unknown) => void;
 }
 
 /** How far inside the true outline the page's window is cut, in CSS pixels. */
@@ -85,6 +90,17 @@ export function connectNotch(surface: NotchSurface, host: NotchWindow = window a
   surface.onOutline(report);
   host.__notch_receive = (message) => surface.receive(message);
   host.__notch_cursor = (x, y, down) => surface.pointer(x, y, !!down);
+  // The keys: what they said, which they are on this machine, and whether Esc
+  // would do anything here right now (only then is it taken from the app).
+  host.__notch_key = (name) => surface.key(String(name));
+  host.__notch_pairs = (pairs) => surface.setPairs(pairs);
+  surface.onWantEsc((want) => quietly(() => host.__notch_esc?.(want)));
+  // Ask once which keys this machine uses, so the hints show them from the
+  // first line. A change made in the settings later arrives by __notch_pairs.
+  try {
+    const asked = host.__notch_keys?.();
+    if (asked instanceof Promise) asked.then((pairs) => surface.setPairs(pairs), () => {});
+  } catch { /* no desktop app here: the hints keep this system's usual keys */ }
   // A new display scale changes every number of the outline.
   window.addEventListener('resize', () => { sent = ''; report(); });
   quietly(() => host.__notch_log?.(`page ready: scale ${window.devicePixelRatio || 1}, window ${window.innerWidth}x${window.innerHeight} css px`));

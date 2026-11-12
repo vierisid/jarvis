@@ -38,6 +38,7 @@ export class NotchSurface {
   private births = 0;
   private readonly answerListeners = new Set<(answer: NotchAnswer, sidecarId: string) => void>();
   private readonly openListeners = new Set<(sidecarId: string) => void>();
+  private readonly stopListeners = new Set<(sidecarId: string) => void>();
   private complaints = 0;
 
   constructor(
@@ -107,6 +108,12 @@ export class NotchSurface {
     return () => { this.openListeners.delete(listener); };
   }
 
+  /** Esc twice: the person wants everything stopped. */
+  onStop(listener: (sidecarId: string) => void): () => void {
+    this.stopListeners.add(listener);
+    return () => { this.stopListeners.delete(listener); };
+  }
+
   private fromPage(sidecarId: string, raw: unknown): void {
     const message = parseNotchFromPage(raw);
     if (!message) {
@@ -131,6 +138,10 @@ export class NotchSurface {
     }
     if (message.type === 'open') {
       for (const listener of this.openListeners) listener(sidecarId);
+      return;
+    }
+    if (message.type === 'stop') {
+      for (const listener of this.stopListeners) listener(sidecarId);
       return;
     }
     const line = this.line;

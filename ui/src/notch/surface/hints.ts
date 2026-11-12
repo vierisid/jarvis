@@ -6,16 +6,46 @@ import { el } from './dom.ts';
 
 const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || '');
 
+/** A modifier key, as the desktop app names it. */
+export type KeyName = 'ctrl' | 'alt' | 'meta' | 'shift';
+export type KeyPairs = Record<'talk' | 'yes', [KeyName, KeyName]>;
+
+/** How each key is written on a keycap, and how it is read out. */
+const CAP: Record<KeyName, string> = MAC ? { ctrl: '⌃', alt: '⌥', meta: '⌘', shift: '⇧' } : { ctrl: 'ctrl', alt: 'alt', meta: 'win', shift: 'shift' };
+const SPOKEN: Record<KeyName, string> = MAC ? { ctrl: 'Ctrl', alt: 'Option', meta: 'Cmd', shift: 'Shift' } : { ctrl: 'Ctrl', alt: 'Alt', meta: 'Win', shift: 'Shift' };
+const NAMES: readonly string[] = ['ctrl', 'alt', 'meta', 'shift'];
+
+/** The pairs a machine has until it says otherwise. */
+export const DEFAULT_PAIRS: KeyPairs = MAC ? { talk: ['ctrl', 'alt'], yes: ['alt', 'meta'] } : { talk: ['ctrl', 'meta'], yes: ['meta', 'alt'] };
+
 /** The two pairs of keys, never more than two at once: one to talk, the next pair along for yes. */
-export const KEYS: Record<'talk' | 'yes', [string, string]> = {
-  talk: MAC ? ['⌃', '⌥'] : ['ctrl', 'win'],
-  yes: MAC ? ['⌥', '⌘'] : ['win', 'alt'],
-};
+export const KEYS: Record<'talk' | 'yes', [string, string]> = { talk: ['', ''], yes: ['', ''] };
 /** The same pairs, as they are read out. */
-export const KEYN: Record<'talk' | 'yes', string> = {
-  talk: MAC ? 'Ctrl + Option' : 'Ctrl + Win',
-  yes: MAC ? 'Option + Cmd' : 'Win + Alt',
-};
+export const KEYN: Record<'talk' | 'yes', string> = { talk: '', yes: '' };
+
+const isPair = (value: unknown): value is [KeyName, KeyName] =>
+  Array.isArray(value) && value.length === 2 && value.every((k) => typeof k === 'string' && NAMES.includes(k)) && value[0] !== value[1];
+
+/**
+ * Sets which keys the hints show. The pairs are per machine and the desktop
+ * app tells the page which they are. Anything that is not two pairs of two
+ * different modifiers is ignored, and the hints keep what they had.
+ */
+export function setKeyPairs(pairs: unknown): boolean {
+  const p = pairs as { talk?: unknown; yes?: unknown } | null;
+  if (!p) return false;
+  const { talk, yes } = p;
+  // The same two keys cannot both talk and say yes.
+  if (!isPair(talk) || !isPair(yes) || (talk.includes(yes[0]) && talk.includes(yes[1]))) return false;
+  const set = (kind: 'talk' | 'yes', [a, b]: [KeyName, KeyName]): void => {
+    KEYS[kind] = [CAP[a], CAP[b]];
+    KEYN[kind] = `${SPOKEN[a]} + ${SPOKEN[b]}`;
+  };
+  set('talk', talk);
+  set('yes', yes);
+  return true;
+}
+setKeyPairs(DEFAULT_PAIRS);
 
 /** A pair of keys drawn as one keycap. */
 export function duo(kind: 'talk' | 'yes', tag: 'span' | 'kbd' = 'span', cls = 'cap'): HTMLElement {

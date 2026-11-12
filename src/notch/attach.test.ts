@@ -85,4 +85,20 @@ describe('attachNotch', () => {
     await settle();
     expect(lines[1]).toBe('[notch] "desk" did not accept notch.configure: METHOD_NOT_FOUND');
   });
+  // The desktop app says whether it can hear the notch's keys. A machine that
+  // cannot yet must be visible in the log, not found out by pressing keys.
+  test('says whether the desktop app can hear the keys', async () => {
+    for (const [keys, expected] of [['watch', 'keys: watch'], ['blocked', 'Accessibility'], [undefined, 'surface: window']] as const) {
+      const lines: string[] = [];
+      const listeners: ((sidecar: { id: string; name: string; capabilities: string[] }) => void)[] = [];
+      attachNotch({
+        onSidecarConnected: (listener) => { listeners.push(listener); },
+        dispatchRPC: async (_id, method) => (method === 'notch.configure' ? { configured: true, enabled: true, surface: 'window', keys } : { spawned: true }),
+      }, { enabled: true, pageUrl: 'http://localhost:3143/notch.html', log: (line) => lines.push(line) });
+      listeners[0]!({ id: 's1', name: 'pc', capabilities: ['notch'] });
+      await new Promise((r) => setTimeout(r, 5));
+      expect(lines.join('\n')).toContain(expected);
+      if (keys === undefined) expect(lines.join('\n')).not.toContain('keys:');
+    }
+  });
 });

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime"
 	"sync"
 	"sync/atomic"
 )
@@ -26,6 +27,14 @@ const (
 	notchSurfaceWindow = "window" // can host the notch's window (notch_host.go)
 )
 
+// The same reply says whether this machine can watch the keyboard for the
+// notch's keys, so the brain knows a notch that only the mouse can answer.
+const (
+	notchKeysNone    = "none"    // not built for this system
+	notchKeysWatch   = "watch"   // can watch for them
+	notchKeysBlocked = "blocked" // the system has not allowed it yet (macOS Accessibility)
+)
+
 // A message between the brain and the notch's page may be this long, as JSON
 // text. A line of the notch is a few hundred bytes; this is room for a sheet.
 const notchMessageMax = 64 * 1024
@@ -45,6 +54,10 @@ type NotchService struct {
 	panels  PanelService
 	toPage  func(script string) // runs a script in the page; nil while no page is up
 	toBrain func(text string)   // sends the brain one message; nil while not connected
+	// The keys (notch_keyboard.go). pairs is what the settings say; keys is
+	// the watch on the keyboard, which exists only while a page is up.
+	pairs notchKeyPairs
+	keys  *notchKeyboard
 }
 
 // notch is the process-wide service. It is safe before any connection exists:
@@ -94,6 +107,9 @@ func (n *NotchService) closeSurface() bool {
 func (n *NotchService) Configure(enabled bool) bool {
 	changed := n.enabled.Swap(enabled) != enabled
 	if !enabled {
+		// The keys first, and at once: closing the window takes a moment, and
+		// for that moment Esc must not still be taken from the app in front.
+		n.stopKeys()
 		n.closeSurface()
 	}
 	return changed
@@ -120,12 +136,110 @@ func (n *NotchService) attachPage(run func(script string)) {
 	n.mu.Unlock()
 }
 
+// watchKeys starts the watch on the keyboard. The window calls it once its
+// page is attached, and detachPage ends it: the keys are watched for as long
+// as there is a page to tell, and no longer. With no notch on screen nothing
+// looks at the keyboard.
+func (n *NotchService) watchKeys() {
+	n.mu.Lock()
+	pairs, running, attached := n.pairs, n.keys != nil, n.toPage != nil
+	n.mu.Unlock()
+	if running || !attached {
+		return
+	}
+	if !pairs.valid() {
+		pairs = notchDefaultPairs(runtime.GOOS)
+	}
+	kb := newNotchKeyboard(pairs, func(action notchKeyAction) { n.runInPage(notchKeyScript(action)) }, nil)
+	if err := kb.watch(); err != nil {
+		log.Printf("[notch] keys: not watching: %v", err)
+		return
+	}
+	n.mu.Lock()
+	n.keys = kb
+	n.mu.Unlock()
+}
+
 // detachPage returns only when no message is on its way into the page, so the
-// web view can be destroyed after it.
+// web view can be destroyed after it. The watch on the keyboard ends with it.
 func (n *NotchService) detachPage() {
 	n.mu.Lock()
 	n.toPage = nil
 	n.mu.Unlock()
+	n.stopKeys()
+}
+
+// stopKeys ends the watch on the keyboard, if there is one.
+func (n *NotchService) stopKeys() {
+	n.mu.Lock()
+	kb := n.keys
+	n.keys = nil
+	n.mu.Unlock()
+	if kb != nil {
+		kb.close()
+	}
+}
+
+// runInPage runs a script in the notch's page, if there is one.
+func (n *NotchService) runInPage(script string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.toPage != nil {
+		n.toPage(script)
+	}
+}
+
+// SetKeyPairs takes the pairs the settings name. A watch that is running
+// changes to them at once, and the page is told so its hints show them.
+func (n *NotchService) SetKeyPairs(pairs notchKeyPairs) {
+	if !pairs.valid() {
+		pairs = notchDefaultPairs(runtime.GOOS)
+	}
+	n.mu.Lock()
+	n.pairs = pairs
+	kb := n.keys
+	n.mu.Unlock()
+	if kb != nil {
+		kb.setPairs(pairs)
+		n.runInPage(notchPairsScript(pairs))
+	}
+}
+
+// KeyPairs is the pairs in force.
+func (n *NotchService) KeyPairs() notchKeyPairs {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.pairs.valid() {
+		return notchDefaultPairs(runtime.GOOS)
+	}
+	return n.pairs
+}
+
+// wantEsc is the page saying whether Esc would do anything on the notch now.
+func (n *NotchService) wantEsc(want bool) {
+	n.mu.Lock()
+	kb := n.keys
+	n.mu.Unlock()
+	if kb != nil {
+		kb.wantEsc(want)
+	}
+}
+
+// notchPairsFromSettings reads the two pairs as the settings write them. An
+// empty or unreadable pair, or the same pair twice, falls back to this
+// system's defaults: a typo in a file must not leave the notch without keys.
+func notchPairsFromSettings(talk, yes, goos string) notchKeyPairs {
+	pairs := notchDefaultPairs(goos)
+	if p, err := notchParsePair(talk); err == nil {
+		pairs.Talk = p
+	}
+	if p, err := notchParsePair(yes); err == nil {
+		pairs.Yes = p
+	}
+	if !pairs.valid() {
+		return notchDefaultPairs(goos)
+	}
+	return pairs
 }
 
 // OnMessage sets where the page's messages go. nil while no brain is connected.
@@ -202,7 +316,8 @@ func makeNotchPushHandler(svc *NotchService) RPCHandler {
 // notch.configure - the brain tells this app whether to host the notch.
 //
 //	Params: { "enabled": bool }
-//	Result: { "configured": true, "enabled": bool, "surface": "none" | "window" }
+//	Result: { "configured": true, "enabled": bool, "surface": "none" | "window",
+//	          "keys": "none" | "watch" | "blocked" }
 func makeNotchConfigureHandler(svc *NotchService) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		raw, ok := params["enabled"]
@@ -225,6 +340,7 @@ func makeNotchConfigureHandler(svc *NotchService) RPCHandler {
 			"configured": true,
 			"enabled":    enabled,
 			"surface":    surface,
+			"keys":       platformNotchKeysAvailable(),
 		}}, nil
 	}
 }

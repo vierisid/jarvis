@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -37,6 +38,15 @@ type settingsState struct {
 		EtherealIdleSeconds    int  `json:"ethereal_idle_seconds"`
 		TelemetryEnabled       bool `json:"telemetry_enabled"`
 	} `json:"prefs"`
+	// The notch's keys. Shown only while the brain has the notch on: Notch
+	// says so, Talk and Yes are the pairs in force (like "ctrl+meta"), and Mac
+	// says how to name the keys.
+	Notch struct {
+		On   bool   `json:"on"`
+		Talk string `json:"talk"`
+		Yes  string `json:"yes"`
+		Mac  bool   `json:"mac"`
+	} `json:"notch"`
 }
 
 func connStateString(s int32) string {
@@ -76,6 +86,11 @@ func (c *SidecarClient) runSettingsWindow() {
 				st.Prefs.EtherealIdleSeconds = pebbleEtherealDefaultIdleSec
 			}
 			st.Prefs.TelemetryEnabled = c.TelemetryEnabled()
+			// The keys are shown only while the brain has the notch on.
+			pairs := notch.KeyPairs()
+			st.Notch.On = notch.Enabled()
+			st.Notch.Talk, st.Notch.Yes = pairs.Talk.String(), pairs.Yes.String()
+			st.Notch.Mac = runtime.GOOS == "darwin"
 			return st
 		})
 
@@ -165,6 +180,33 @@ func (c *SidecarClient) runSettingsWindow() {
 			default:
 				return fmt.Errorf("unknown preference %q", key)
 			}
+		})
+
+		// setNotchKeys sets the two pairs of keys the notch listens for. Both
+		// are checked together: each must be two different modifier keys, and
+		// they cannot be the same two.
+		_ = w.Bind("setNotchKeys", func(talk, yes string) error {
+			t, err := notchParsePair(talk)
+			if err != nil {
+				return fmt.Errorf("The talk keys: %v", err)
+			}
+			y, err := notchParsePair(yes)
+			if err != nil {
+				return fmt.Errorf("The yes keys: %v", err)
+			}
+			pairs := notchKeyPairs{Talk: t, Yes: y}
+			if !pairs.valid() {
+				return fmt.Errorf("Talk and yes cannot be the same two keys")
+			}
+			if err := c.editConfig(func(cfg *SidecarConfig) {
+				cfg.Preferences.NotchTalkKeys = t.String()
+				cfg.Preferences.NotchYesKeys = y.String()
+			}); err != nil {
+				return err
+			}
+			notch.SetKeyPairs(pairs)
+			log.Printf("[settings] notch keys: %s to talk, %s for yes", t, y)
+			return nil
 		})
 
 		// setEtherealIdle sets the idle timeout (seconds) before the pebble fades out.
@@ -265,8 +307,9 @@ const settingsWindowHTML = `<!doctype html>
   .num { width: 62px; padding: 6px 9px; border: 1px solid var(--rule); border-radius: var(--corner-sm); background: var(--panel2); color: var(--ink); font-family: var(--mono); font-size: 12px; outline: none; text-align: center; }
   .num:focus { border-color: var(--speak); background: var(--raise); box-shadow: 0 0 0 3px rgba(45,120,255,.14); }
   .unit { font-size: 12px; color: var(--ink3); }
-  #prefMsg { font-size: 11.5px; min-height: 16px; padding: 2px 16px 12px; color: var(--ink3); }
-  #prefMsg.err { color: var(--listen-tx); }
+  #prefMsg, #notchMsg { font-size: 11.5px; min-height: 16px; padding: 2px 16px 12px; color: var(--ink3); }
+  #prefMsg.err, #notchMsg.err { color: var(--listen-tx); }
+  .sv7 select { font: inherit; color: inherit; background: transparent; border: 1px solid var(--rule, #c9d2d9); border-radius: 6px; padding: 4px 8px; }
 ` + brandTitlebarCSS + `
 </style>
 </head>
@@ -318,6 +361,21 @@ const settingsWindowHTML = `<!doctype html>
     <div id="prefMsg"></div>
   </div>
 
+  <div id="notchKeys" style="display:none">
+  <div class="sec">Notch keys</div>
+  <div class="panel">
+    <div class="srow">
+      <div class="sl7"><div class="a">Hold to talk</div><div class="b">Hold these two keys while you speak.</div></div>
+      <div class="sv7"><select id="notch_talk" onchange="saveNotchKeys()"></select></div>
+    </div>
+    <div class="srow">
+      <div class="sl7"><div class="a">Tap for yes</div><div class="b">Tap these two keys together to say yes to what the notch offers.</div></div>
+      <div class="sv7"><select id="notch_yes" onchange="saveNotchKeys()"></select></div>
+    </div>
+    <div id="notchMsg"></div>
+  </div>
+  </div>
+
   <div class="sec">Privacy</div>
   <div class="panel">
     <div class="srow">
@@ -358,9 +416,51 @@ const settingsWindowHTML = `<!doctype html>
     catch (e) { msg.className = 'err'; msg.textContent = (e && e.message) ? e.message : String(e); }
   }
 
+  // The notch's keys: every pair of two modifier keys, named as this system names them.
+  var notchSaved = { talk: '', yes: '' };
+  function fillNotchKeys(st) {
+    var box = document.getElementById('notchKeys');
+    if (!st.notch || !st.notch.on) { box.style.display = 'none'; return; }
+    box.style.display = '';
+    var names = st.notch.mac ? { ctrl: 'Ctrl', alt: 'Option', meta: 'Cmd', shift: 'Shift' } : { ctrl: 'Ctrl', alt: 'Alt', meta: 'Win', shift: 'Shift' };
+    var keys = ['ctrl', 'alt', 'meta', 'shift'];
+    ['talk', 'yes'].forEach(function (kind) {
+      var sel = document.getElementById('notch_' + kind);
+      if (sel.options.length) return;
+      for (var i = 0; i < keys.length; i++) for (var j = i + 1; j < keys.length; j++) {
+        var o = document.createElement('option');
+        o.value = keys[i] + '+' + keys[j];
+        o.textContent = names[keys[i]] + ' + ' + names[keys[j]];
+        sel.appendChild(o);
+      }
+    });
+    // Stored either way round: show whichever option is the same two keys.
+    var same = function (a, b) { return a.split('+').sort().join('+') === b.split('+').sort().join('+'); };
+    ['talk', 'yes'].forEach(function (kind) {
+      var sel = document.getElementById('notch_' + kind);
+      for (var i = 0; i < sel.options.length; i++) if (same(sel.options[i].value, st.notch[kind])) sel.selectedIndex = i;
+      notchSaved[kind] = sel.value;
+    });
+  }
+
+  async function saveNotchKeys() {
+    var msg = document.getElementById('notchMsg');
+    msg.className = ''; msg.textContent = '';
+    var talk = document.getElementById('notch_talk'), yes = document.getElementById('notch_yes');
+    try {
+      await window.setNotchKeys(talk.value, yes.value);
+      notchSaved = { talk: talk.value, yes: yes.value };
+    } catch (e) {
+      // Not saved: put the choice back to what is in force.
+      talk.value = notchSaved.talk; yes.value = notchSaved.yes;
+      msg.className = 'err'; msg.textContent = (e && e.message) ? e.message : String(e);
+    }
+  }
+
   async function init() {
     var st = await window.getState();
     paintStatus(st.status);
+    fillNotchKeys(st);
     document.getElementById('start_at_startup').checked = !!st.prefs.start_at_startup;
     document.getElementById('open_dashboard_at_startup').checked = !!st.prefs.open_dashboard_at_startup;
     document.getElementById('ethereal_pebble').checked = !!st.prefs.ethereal_pebble;

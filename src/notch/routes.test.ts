@@ -94,14 +94,14 @@ describe('the demo gate', () => {
   });
 });
 
-// The page and the desktop app meet at six names. If one side renames one the
+// The page and the desktop app meet at ten names. If one side renames one the
 // window opens and stays empty, or hears nothing, and no type check sees it.
 describe('the functions the page and the desktop app share', () => {
   test('every name the page uses is one the desktop app provides, and the other way round', async () => {
     const bridge = await Bun.file(new URL('../../ui/src/notch/bridge.ts', import.meta.url)).text();
     const host = await Bun.file(new URL('../../sidecar/notch_host.go', import.meta.url)).text();
     const pipe = await Bun.file(new URL('../../sidecar/notch.go', import.meta.url)).text();
-    for (const name of ['__notch_set_outline', '__notch_focus', '__notch_send', '__notch_log']) {
+    for (const name of ['__notch_set_outline', '__notch_focus', '__notch_send', '__notch_log', '__notch_esc', '__notch_keys']) {
       expect(bridge).toContain(`host.${name}?.(`);
       expect(host).toContain(`bind("${name}"`);
     }
@@ -109,5 +109,11 @@ describe('the functions the page and the desktop app share', () => {
     expect(pipe).toContain('window.__notch_receive&&window.__notch_receive(');
     expect(bridge).toContain('host.__notch_cursor = ');
     expect(host).toContain('window.__notch_cursor&&window.__notch_cursor(');
+    // The keys: what they said, and which they are on this machine.
+    const keyboard = await Bun.file(new URL('../../sidecar/notch_keyboard.go', import.meta.url)).text();
+    expect(bridge).toContain('host.__notch_key = ');
+    expect(keyboard).toContain('window.__notch_key&&window.__notch_key(');
+    expect(bridge).toContain('host.__notch_pairs = ');
+    expect(keyboard).toContain('window.__notch_pairs&&window.__notch_pairs(');
   });
 });

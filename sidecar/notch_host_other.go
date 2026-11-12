@@ -44,3 +44,10 @@ func platformNotchFocus(handle unsafe.Pointer, take bool) bool {
 	}
 	return false
 }
+
+// The keys are not watched on this system yet.
+func platformNotchKeysStart(kb *notchKeyboard) (stop func(), err error) {
+	return nil, fmt.Errorf("the notch's keys are not built for this system yet")
+}
+
+func platformNotchKeysAvailable() string { return notchKeysNone }

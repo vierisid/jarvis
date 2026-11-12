@@ -162,6 +162,9 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 	client.panels = maybeNewPanelService(client.availableCaps)
 	client.pebble = maybeNewPebbleService(client.availableCaps)
 	client.subPebble = maybeNewSubPebbleService(client.availableCaps)
+	// The notch's keys, as the settings have them. Nothing watches the
+	// keyboard for them until the brain has the notch on and its page is up.
+	notch.SetKeyPairs(notchPairsFromSettings(config.Preferences.NotchTalkKeys, config.Preferences.NotchYesKeys, runtime.GOOS))
 	if client.pebble != nil {
 		// Apply the ethereal preference up front (stored on the core; takes
 		// effect whenever the brain spawns the pebble).
@@ -482,6 +485,9 @@ func (c *SidecarClient) reloadConfig() {
 
 	// Re-run preflight checks (capabilities or tools may have changed)
 	c.runPreflight()
+
+	// The notch's keys may have been edited in the file.
+	notch.SetKeyPairs(notchPairsFromSettings(c.config.Preferences.NotchTalkKeys, c.config.Preferences.NotchYesKeys, runtime.GOOS))
 
 	// (Re-)init panel service if CapWindows toggled on; tear it down if off.
 	hasWindows := false

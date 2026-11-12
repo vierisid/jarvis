@@ -14,6 +14,7 @@ Where things are:
 | Canned moments for trying it, and their gate | `src/notch/demo.ts`, `src/notch/demo-gate.ts`, `src/cli/notch.ts` |
 | The page | `ui/notch.html`, `ui/src/notch/` |
 | The window, its shape and its rules | `sidecar/notch*.go` |
+| The keys | `sidecar/notch_keys.go` (the deciding), `notch_keyboard.go`, `notch_keys_winlogic.go`, `notch_keys_windows.go`, `notch_keys_darwin.go` |
 
 ## The switch
 
@@ -93,7 +94,7 @@ itself, and `sidecar.yaml` has no setting for it.
 12. **The page decides nothing.** It reports what the person did (yes, no, a
     pick, a changed word, typed text) and the brain decides what that means.
     The brain reads those reports strictly: anything that is not exactly one
-    of the three messages is dropped, and an answer about a line that is no
+    of its four messages is dropped, and an answer about a line that is no
     longer on the notch is dropped as late.
 13. **The demo endpoint is shut unless opened on purpose.** `POST
     /api/notch/demo` exists only with the switch on, a `JARVIS_NOTCH_DEMO`
@@ -101,12 +102,77 @@ itself, and `sidecar.yaml` has no setting for it.
     request must echo the secret. Otherwise it answers 404. It can make the
     notch show sample sentences and nothing else.
 
+14. **The keyboard is watched only while the notch is on screen.** The watch
+    starts when the notch's page is attached and ends when it is detached, so
+    it cannot outlive the switch. With the switch off nothing looks at the
+    keyboard for the notch at all.
+15. **What the watch may know.** A key is Esc, one of the eight modifier keys,
+    or "another key". Which other key it was is not passed on, kept or logged,
+    by construction: the event the deciding code is fed has no field for it.
+    On macOS plain typing does not even reach Go. Nothing is logged from
+    inside the watch.
+16. **What the watch may change.** Esc is kept from the app in front while the
+    notch has something Esc would close, and only then (and the second Esc of
+    a quick two). No other key is ever kept. When a pair has been understood
+    one key that no keyboard has is sent, so that letting go of the Windows
+    key or Alt does not open the Start menu or the menu bar.
+17. **Only a person talks to the notch.** A key a program sent is not seen
+    by the watch at all, on either system. Jarvis itself types and presses
+    keys in other apps: an Esc it presses there reaches that app, and a pair
+    it presses is never a yes to its own offer.
+18. **The watch ends with the switch, at once.** Turning the switch off stops
+    the watch before the window is closed, not when it has finished closing.
+19. **A message into a closing window is dropped.** Everything sent into the
+    page checks first that the window is not on its way out. On Windows a
+    script run while the web view is being taken apart is a crash.
+
+## The keys
+
+| What | Keys | How it is told |
+|---|---|---|
+| Talk | hold Ctrl + Win (Mac: Ctrl + Option) | the pair down alone for 150 ms; ends when either comes up or any other key goes down |
+| Yes | tap Win + Alt (Mac: Option + Cmd) | the two down within 0.7 s of each other and up again within 1.5 s, with no other key |
+| Esc | Esc | only while the notch has something on it, and never with a modifier |
+| Stop everything | Esc twice | the second within 0.4 s of one that was taken |
+
+- A pair is two different modifier keys. Left and right are the same key.
+  AltGr is never Ctrl and never Alt.
+- A shortcut that begins with the same keys (Ctrl + Win + D, Win + Alt + R)
+  is not ours: any other key makes the press somebody else's.
+- One press of the modifiers says one thing. Letting go of one talk key and
+  pressing Alt does not become a yes.
+- The pairs are per machine: `notch_talk_keys` and `notch_yes_keys` under
+  `preferences` in `sidecar.yaml`, written like `ctrl+meta`, or the two lists
+  in the desktop app's settings window (shown only while the notch is on). An
+  unreadable pair, or the same pair twice, falls back to the system's default.
+- The page shows the machine's own keys in its hints. With nothing on the
+  notch, yes opens Jarvis.
+- Windows takes a low-level hook away, without saying so, if its callback is
+  ever too slow. The hook is put back once a minute while no key is down.
+- Twice a second the watch checks the keys it believes are down against what
+  Windows says. A key let go over a window that runs as administrator, or
+  while the screen was locked, never reaches the hook; this is what ends a
+  talk that such a release left hanging.
+- Keys sent by a remapping tool are keys a program sent, so the notch does
+  not see them. Someone who remaps Ctrl, Alt or the Windows key in software
+  needs to pick pairs from keys that are not remapped.
+- A window that runs as administrator in front (Task Manager) does not let
+  the hook see keys. Nothing can be done about that from here.
+- `notch.configure` answers `keys: "watch" | "blocked" | "none"`. On macOS
+  the tap needs the Accessibility permission, asked for in setup and never
+  from the watch itself; without it the answer is `blocked` and the notch
+  answers to the mouse only.
+
 ## What it does not protect, and what is missing
 
 - Nothing real feeds the notch yet. The only thing that puts a line on it is
   the demo (`jarvis notch demo`), with sample data.
-- This is the mouse pass. The page takes the keyboard only for a text field;
-  the keys that answer a line from anywhere come next.
+- Talking is only seen, not heard: holding the talk keys makes the notch perk
+  up. Speech comes in a later pass.
+- The keys have not been tried by hand yet on Windows, and the macOS tap has
+  never run.
+- The existing Ctrl + Shift + Space hotkey is untouched and still does what
+  it did.
 - What the prototype drew outside the black shape is not there: the soft
   shadow under the notch, and things arriving along the whole top edge of the
   screen. The window is 800 pixels wide, so an arrival starts at its edge.
@@ -154,26 +220,30 @@ itself, and `sidecar.yaml` has no setting for it.
 
 | Direction | Message | Params | Answer |
 |---|---|---|---|
-| brain to desktop app | `notch.configure` | `{enabled: boolean}` | `{configured: true, enabled, surface: "none" \| "window"}` |
+| brain to desktop app | `notch.configure` | `{enabled: boolean}` | `{configured: true, enabled, surface: "none" \| "window", keys: "none" \| "watch" \| "blocked"}` |
 | brain to desktop app | `notch.spawn` | `{url: string}`, on the brain's origin | `{spawned: true, already: boolean}` |
 | brain to desktop app | `notch.close` | none | `{closed: boolean}` |
 | brain to desktop app | `notch.push` | `{message: any JSON}`, for the page | `{pushed: true}` |
 | desktop app to brain | event `notch.message` | `{message: any JSON}`, from the page | none |
 
-The page talks to the desktop app through four functions on `window`:
+The page talks to the desktop app through six functions on `window`:
 
 | Function | Meaning |
 |---|---|
 | `__notch_set_outline(shapes, cuts)` | Two lists of closed polygons, each polygon `[[x, y], ...]` in the window's own pixels (CSS pixels times the display scale). Fractions of a pixel are kept and matter: send a curve as it is, with a point about every pixel and a half, not moved onto whole pixels. `shapes` is the notch's true silhouette: its body, and any small shapes on the screen's edge beside it. `cuts` is the same 1.5 CSS pixels in, and may hold fewer polygons or none. Shapes that overlap are joined. Both lists are checked; if either is refused, nothing changes |
 | `__notch_focus(true \| false)` | Take the keyboard for a text field, or give it back. Answers whether the notch has it |
 | `__notch_send(text)` | One message for the brain, as JSON text |
+| `__notch_esc(true \| false)` | Whether Esc would do anything on the notch right now. Only then is it taken from the app in front |
+| `__notch_keys()` | Answers the machine's two pairs, `{talk: [a, b], yes: [a, b]}`, each key one of `ctrl`, `alt`, `meta`, `shift` |
 | `__notch_log(text)` | One line in the desktop app's log, for test runs |
 
-and the desktop app calls two functions the page defines:
+and the desktop app calls four functions the page defines:
 
 | Function | Meaning |
 |---|---|
 | `window.__notch_receive(message)` | One message from the brain |
+| `window.__notch_key(name)` | What the keys said: `talk-start`, `talk-end`, `yes`, `esc`, `esc-twice` |
+| `window.__notch_pairs(pairs)` | The pairs changed in the settings: same shape as `__notch_keys()` answers |
 | `window.__notch_cursor(x, y, down)` | Where the pointer is, in the page's own pixels from the window's top left corner, and whether the main mouse button is down (1 or 0). Sent about 30 times a second, and only when something changed. The page hears the mouse only inside its outline, so this is how the eyes follow the pointer across the screen, and how a click in the app underneath closes a sheet |
 
 ## What the brain and the page say to each other
@@ -191,7 +261,8 @@ time; a new `show` replaces it.
 | brain | `update {id, ...}` | Change the line on the notch in place: steps done, a new sentence, words heard, a sheet's content |
 | brain | `act {...}` | A face, a movement, a birth, the watching eye, the mouth, sounds. Not remembered |
 | page | `answer {id, act, ...}` | What the person did with the line `id` |
-| page | `open` | A click on the resting notch |
+| page | `open` | A click on the resting notch, or yes with nothing on it |
+| page | `stop` | Esc twice: stop everything, and start nothing until told |
 
 A line is one of seven kinds: `say` (a result that leaves by itself), `offer`
 (yes or no, or a row of choices), `sheet`, `ask` (a text field), `work`

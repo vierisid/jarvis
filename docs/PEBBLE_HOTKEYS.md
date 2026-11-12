@@ -517,6 +517,14 @@ the machine, which is a real cost for a product that already has an
 awareness/OCR trust story to defend, and the system disables a tap whose callback
 is slow (`kCGEventTapDisabledByTimeout`).
 
+That verdict is for a hotkey a registered key can express, and it stands. The
+notch's keys are a different case and do use a tap on macOS (and a low-level
+hook on Windows): they are pairs of modifiers that are held and let go, which
+no registered hotkey can say, and Esc has to be kept from the app in front
+while the notch has something on. They exist only while the notch is on
+(`JARVIS_NOTCH=1`), and what they may look at is narrower than "every
+keystroke": see "The keys" in `docs/notch/README.md`.
+
 ### Layout-aware key names on macOS
 
 `TISCopyCurrentKeyboardLayoutInputSource` + `UCKeyTranslate` could map a

@@ -184,6 +184,43 @@ describe('the demo plays through the real path', () => {
     expect(h.demo.running()).toBe('slot');
   });
 
+  test('yes with nothing on the notch opens Jarvis; a moment waiting for it gets it instead', async () => {
+    const h = harness();
+    h.say({ type: 'open' });
+    await settle();
+    expect(h.demo.running()).toBe('home');
+    expect(h.shown().at(-1)!.kind).toBe('ask');
+  });
+
+  test('Esc twice stops whatever is playing, and nothing runs until woken', async () => {
+    const h = harness();
+    h.demo.play('sheets');
+    await settle();
+    h.say({ type: 'answer', id: h.shown().at(-1)!.id, act: 'yes' });
+    await settle();
+    expect(h.shown().at(-1)!.kind).toBe('work');
+    h.say({ type: 'stop' });
+    await settle();
+    const stopped = h.shown().at(-1)!;
+    expect(h.demo.running()).toBe('stopped');
+    expect(JSON.stringify(stopped.say)).toContain('Everything is stopped');
+    expect(stopped.kind === 'offer' && [stopped.yes, stopped.fold]).toEqual(['wake', 0]);
+    // The work that was going on says nothing more.
+    const before = h.pushed.length;
+    h.advance(30_000);
+    await settle();
+    expect(h.pushed.length).toBe(before);
+    h.say({ type: 'answer', id: stopped.id, act: 'yes' });
+    await settle();
+    expect(JSON.stringify(h.shown().at(-1)!.say)).toContain('Awake');
+  });
+
+  test('"stopped" is where Esc twice leads, not a moment to pick from the list', () => {
+    const h = harness();
+    expect(h.demo.names()).not.toContain('stopped');
+    expect(h.demo.names()).toContain('morning');
+  });
+
   test('stop rests the notch and nothing follows', async () => {
     const h = harness();
     h.demo.play('quiet');
@@ -244,6 +281,9 @@ describe('every moment', () => {
           else if (line.kind === 'ask') h.say({ type: 'answer', id: line.id, act: 'no' });
           continue;
         }
+        // The moment may have ended while things settled: then there is
+        // nothing to open, and an open now would start another.
+        if (!h.demo.running()) break;
         if (!line) h.say({ type: 'open' });
         h.advance(250);
       }
