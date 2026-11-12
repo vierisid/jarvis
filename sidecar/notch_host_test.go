@@ -43,14 +43,9 @@ func TestNotchOutlineKeepsFractionsAndTheCutRoundsThem(t *testing.T) {
 // The page is not trusted to cut the window to any shape it likes. Each of
 // these must be refused whole, so the previous shape stays.
 func TestNotchOutlineRefusesWhatAPageShouldNotSend(t *testing.T) {
-	tooMany := make([][]float64, notchOutlineMaxPoints+1)
-	for i := range tooMany {
-		tooMany[i] = []float64{float64(i % 700), 10}
-	}
 	for name, points := range map[string][][]float64{
 		"two points":       {{0, 0}, {10, 10}},
 		"no points":        {},
-		"too many points":  tooMany,
 		"a point of three": {{0, 0}, {10, 10, 10}, {20, 0}},
 		"far to the right": {{0, 0}, {5000, 10}, {20, 0}},
 		"far below":        {{0, 0}, {10, 5000}, {20, 0}},
@@ -107,7 +102,7 @@ func TestNotchSpawnOpensOneNotchPanelOnTheBrainsOrigin(t *testing.T) {
 	svc.usePanels(panels)
 	svc.Configure(true)
 
-	res, err := notchTestSpawn(svc, panels)(map[string]any{"url": "http://localhost:3143/api/notch/spike"})
+	res, err := notchTestSpawn(svc, panels)(map[string]any{"url": "http://localhost:3143/notch.html"})
 	if err != nil {
 		t.Fatalf("notch.spawn: %v", err)
 	}
@@ -121,7 +116,7 @@ func TestNotchSpawnOpensOneNotchPanelOnTheBrainsOrigin(t *testing.T) {
 	if !spec.Notch || !spec.Frameless || !spec.AlwaysOnTop {
 		t.Fatalf("the notch panel must be frameless, always on top and marked as the notch: %+v", spec)
 	}
-	if !strings.HasPrefix(spec.URL, "http://localhost:3143/api/notch/spike?") || !strings.Contains(spec.URL, "token=tok") {
+	if !strings.HasPrefix(spec.URL, "http://localhost:3143/notch.html?") || !strings.Contains(spec.URL, "token=tok") {
 		t.Fatalf("the page must be on the brain's origin and signed in, got %q", spec.URL)
 	}
 }
@@ -148,7 +143,7 @@ func TestNotchSpawnIsRefusedWhileTheSwitchIsOff(t *testing.T) {
 	svc := &NotchService{}
 	panels := newFakePanelService()
 	svc.usePanels(panels)
-	if _, err := notchTestSpawn(svc, panels)(map[string]any{"url": "http://localhost:3143/api/notch/spike"}); err == nil {
+	if _, err := notchTestSpawn(svc, panels)(map[string]any{"url": "http://localhost:3143/notch.html"}); err == nil {
 		t.Fatal("notch.spawn succeeded with the switch off")
 	}
 	if len(panels.spawned) != 0 {
@@ -162,11 +157,11 @@ func TestNotchSpawnTwiceIsStillOneWindow(t *testing.T) {
 	svc.usePanels(panels)
 	svc.Configure(true)
 	spawn := notchTestSpawn(svc, panels)
-	if _, err := spawn(map[string]any{"url": "http://localhost:3143/api/notch/spike"}); err != nil {
+	if _, err := spawn(map[string]any{"url": "http://localhost:3143/notch.html"}); err != nil {
 		t.Fatal(err)
 	}
 	panels.spawnErr = formatPanelError("spawn", notchPanelID, ErrPanelExists)
-	res, err := spawn(map[string]any{"url": "http://localhost:3143/api/notch/spike"})
+	res, err := spawn(map[string]any{"url": "http://localhost:3143/notch.html"})
 	if err != nil {
 		t.Fatalf("a second notch.spawn must not be an error: %v", err)
 	}
@@ -187,7 +182,7 @@ func TestTurningTheNotchOffClosesItsWindow(t *testing.T) {
 		panels := newFakePanelService()
 		svc.usePanels(panels)
 		svc.Configure(true)
-		if _, err := notchTestSpawn(svc, panels)(map[string]any{"url": "http://localhost:3143/api/notch/spike"}); err != nil {
+		if _, err := notchTestSpawn(svc, panels)(map[string]any{"url": "http://localhost:3143/notch.html"}); err != nil {
 			t.Fatalf("%s: spawn: %v", name, err)
 		}
 		off(svc)
@@ -251,5 +246,64 @@ func TestNotchLeavesItselfAloneUnderAScreenCapture(t *testing.T) {
 		if notchIsCaptureOverlay(program) {
 			t.Errorf("%q is not a screen capture tool", program)
 		}
+	}
+}
+
+// The silhouette may be several shapes: the notch's body and small ones on
+// the screen's edge beside it. The whole of it is checked, and refused whole.
+func TestNotchOutlinesAcceptSeveralShapesWithinTheLimits(t *testing.T) {
+	body := [][]float64{{300, 0}, {500, 0}, {500, 40}, {300, 40}}
+	bump := [][]float64{{100, 0}, {140, 0}, {120, 8}}
+	got, err := notchOutlines([][][]float64{body, bump}, 800, 680)
+	if err != nil || len(got) != 2 || len(got[1]) != 3 {
+		t.Fatalf("two shapes: %v %v", got, err)
+	}
+	// No shapes at all is valid: nothing is on screen, or nothing has an inside.
+	if got, err := notchOutlines(nil, 800, 680); err != nil || len(got) != 0 {
+		t.Fatalf("no shapes: %v %v", got, err)
+	}
+
+	tooManyShapes := make([][][]float64, notchOutlineMaxPolygons+1)
+	for i := range tooManyShapes {
+		tooManyShapes[i] = bump
+	}
+	manyPoints := make([][]float64, notchOutlineMaxPoints/2+1)
+	for i := range manyPoints {
+		manyPoints[i] = []float64{float64(i % 700), float64(i % 7)}
+	}
+	for name, polygons := range map[string][][][]float64{
+		"too many shapes":          tooManyShapes,
+		"too many points in all":   {manyPoints, manyPoints},
+		"one bad shape among good": {body, {{0, 0}, {5000, 10}, {20, 0}}},
+		"a shape of two points":    {body, {{0, 0}, {10, 10}}},
+	} {
+		if _, err := notchOutlines(polygons, 800, 680); err == nil {
+			t.Errorf("%s: expected the outline to be refused", name)
+		}
+	}
+}
+
+// Shapes are joined where they overlap, which only works if they all turn the
+// same way. The page is not asked to get that right.
+func TestNotchOutlinesAllTurnTheSameWay(t *testing.T) {
+	clockwise := [][]float64{{10, 10}, {30, 10}, {30, 30}, {10, 30}}
+	other := [][]float64{{10, 30}, {30, 30}, {30, 10}, {10, 10}}
+	got, err := notchOutlines([][][]float64{clockwise, other}, 800, 680)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, polygon := range got {
+		if notchSignedArea(polygon) <= 0 {
+			t.Errorf("polygon %d turns the other way: %v", i, polygon)
+		}
+	}
+}
+
+func TestNotchCursorScriptCarriesTheButton(t *testing.T) {
+	if got := notchCursorScript(12, -3, true); got != "window.__notch_cursor&&window.__notch_cursor(12,-3,1);" {
+		t.Fatalf("button down: %s", got)
+	}
+	if got := notchCursorScript(12, 40, false); got != "window.__notch_cursor&&window.__notch_cursor(12,40,0);" {
+		t.Fatalf("button up: %s", got)
 	}
 }

@@ -245,39 +245,55 @@ static void jarvis_notch_size(void* nswindow_ptr, int* w, int* h) {
     if ([NSThread isMainThread]) read(); else dispatch_sync(dispatch_get_main_queue(), read);
 }
 
-// xy holds n points as x0, y0, x1, y1, ... in outline pixels (top-left origin).
-static void jarvis_notch_set_outline(void* nswindow_ptr, const double* xy, int n) {
-    if (!nswindow_ptr || xy == NULL || n < 3) return;
+// xy holds every point of every polygon as x0, y0, x1, y1, ... in outline
+// pixels (top-left origin); counts holds how many points each of the n polygons
+// has. They become one silhouette, joined where they overlap: the polygons all
+// turn the same way and both the mask and the hit test fill by winding.
+static void jarvis_notch_set_outline(void* nswindow_ptr, const double* xy, const int* counts, int n) {
+    if (!nswindow_ptr || n < 0 || (n > 0 && (xy == NULL || counts == NULL))) return;
     NSWindow* win = (__bridge NSWindow*)nswindow_ptr;
-    // Copy the points now: the caller's memory is only good for this call.
-    NSMutableData* copy = [NSMutableData dataWithBytes:xy length:sizeof(double) * 2 * (NSUInteger)n];
+    // No polygons: an empty mask, so nothing of the window is seen or hit.
+    NSUInteger total = 0;
+    for (int i = 0; i < n; i++) {
+        if (counts[i] < 3) return;
+        total += (NSUInteger)counts[i];
+    }
+    // Copy now: the caller's memory is only good for this call.
+    NSData* points = n > 0 ? [NSData dataWithBytes:xy length:sizeof(double) * 2 * total] : [NSData data];
+    NSData* sizes = n > 0 ? [NSData dataWithBytes:counts length:sizeof(int) * (NSUInteger)n] : [NSData data];
     jarvis_notch_on_main(^{
-        const double* pts = (const double*)copy.bytes;
+        const double* pts = (const double*)points.bytes;
+        const int* each = (const int*)sizes.bytes;
         CGFloat scale = win.backingScaleFactor > 0 ? win.backingScaleFactor : 1.0;
         NSView* content = win.contentView;
         CGFloat height = content.bounds.size.height;
         BOOL flipped = content.isFlipped;
         NSBezierPath* path = [NSBezierPath bezierPath];
+        path.windingRule = NSWindingRuleNonZero;
         CGMutablePathRef cg = CGPathCreateMutable();
-        for (int i = 0; i < n; i++) {
-            CGFloat x = pts[2 * i] / scale;
-            CGFloat y = pts[2 * i + 1] / scale;
-            CGFloat ly = flipped ? y : height - y;
-            if (i == 0) {
-                [path moveToPoint:NSMakePoint(x, y)];
-                CGPathMoveToPoint(cg, NULL, x, ly);
-            } else {
-                [path lineToPoint:NSMakePoint(x, y)];
-                CGPathAddLineToPoint(cg, NULL, x, ly);
+        NSUInteger at = 0;
+        for (int p = 0; p < n; p++) {
+            for (int i = 0; i < each[p]; i++, at++) {
+                CGFloat x = pts[2 * at] / scale;
+                CGFloat y = pts[2 * at + 1] / scale;
+                CGFloat ly = flipped ? y : height - y;
+                if (i == 0) {
+                    [path moveToPoint:NSMakePoint(x, y)];
+                    CGPathMoveToPoint(cg, NULL, x, ly);
+                } else {
+                    [path lineToPoint:NSMakePoint(x, y)];
+                    CGPathAddLineToPoint(cg, NULL, x, ly);
+                }
             }
+            [path closePath];
+            CGPathCloseSubpath(cg);
         }
-        [path closePath];
-        CGPathCloseSubpath(cg);
         jarvis_notch_path = path;
         CALayer* mask = content.layer.mask;
         if ([mask isKindOfClass:[CAShapeLayer class]]) {
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
+            ((CAShapeLayer*)mask).fillRule = kCAFillRuleNonZero;
             ((CAShapeLayer*)mask).path = cg;
             [CATransaction commit];
         }
@@ -289,9 +305,10 @@ static void jarvis_notch_set_outline(void* nswindow_ptr, const double* xy, int n
 // Returns 0 when there is no window. Reads only, so it may be called from any
 // thread: NSEvent's mouseLocation is safe off the main thread, and the frame is
 // read through the main queue when the caller is elsewhere.
-static int jarvis_notch_cursor(void* nswindow_ptr, int* x, int* y) {
+static int jarvis_notch_cursor(void* nswindow_ptr, int* x, int* y, int* down) {
     *x = 0;
     *y = 0;
+    *down = 0;
     if (!nswindow_ptr) return 0;
     NSWindow* win = (__bridge NSWindow*)nswindow_ptr;
     __block NSRect f = NSZeroRect;
@@ -300,6 +317,8 @@ static int jarvis_notch_cursor(void* nswindow_ptr, int* x, int* y) {
     NSPoint p = [NSEvent mouseLocation];
     *x = (int)lround(p.x - f.origin.x);
     *y = (int)lround(NSMaxY(f) - p.y);
+    // Bit 0 is the main button, whichever side the person has it on.
+    *down = ([NSEvent pressedMouseButtons] & 1) ? 1 : 0;
     return 1;
 }
 
@@ -351,16 +370,17 @@ func platformNotchTearDown(handle unsafe.Pointer) {
 }
 
 // platformNotchCursor is where the pointer is, in the page's own pixels (points
-// on macOS), measured from the window's top left corner.
-func platformNotchCursor(handle unsafe.Pointer) (int, int, bool) {
+// on macOS), measured from the window's top left corner, and whether the main
+// mouse button is down.
+func platformNotchCursor(handle unsafe.Pointer) (int, int, bool, bool) {
 	if handle == nil {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
-	var x, y C.int
-	if C.jarvis_notch_cursor(handle, &x, &y) == 0 {
-		return 0, 0, false
+	var x, y, down C.int
+	if C.jarvis_notch_cursor(handle, &x, &y, &down) == 0 {
+		return 0, 0, false, false
 	}
-	return int(x), int(y), true
+	return int(x), int(y), down != 0, true
 }
 
 func platformNotchReveal(handle unsafe.Pointer) {
@@ -380,21 +400,30 @@ func platformNotchWindowSize(handle unsafe.Pointer) (int, int) {
 	return int(w), int(h)
 }
 
-// platformNotchSetOutline masks the web view to the notch's true outline. The
-// mask is a shape layer, which is anti-aliased, so macOS needs no second window
-// for the edge and the inner outline is not used.
-func platformNotchSetOutline(handle unsafe.Pointer, shape []notchVertex, cut []notchPoint) error {
+// platformNotchSetOutline masks the web view to the notch's true silhouette.
+// The mask is a shape layer, which is anti-aliased, so macOS needs no second
+// window for the edge and the inner outlines are not used.
+func platformNotchSetOutline(handle unsafe.Pointer, shapes [][]notchVertex, cuts [][]notchPoint) error {
 	if handle == nil {
 		return fmt.Errorf("nil NSWindow*")
 	}
-	if len(shape) < notchOutlineMinPoints {
-		return fmt.Errorf("outline too short")
+	xy := make([]C.double, 0, 256)
+	counts := make([]C.int, 0, len(shapes))
+	for _, shape := range shapes {
+		if len(shape) < notchOutlineMinPoints {
+			continue
+		}
+		for _, p := range shape {
+			xy = append(xy, C.double(p.X), C.double(p.Y))
+		}
+		counts = append(counts, C.int(len(shape)))
 	}
-	xy := make([]C.double, 0, len(shape)*2)
-	for _, p := range shape {
-		xy = append(xy, C.double(p.X), C.double(p.Y))
+	if len(counts) == 0 {
+		// Nothing is on screen.
+		C.jarvis_notch_set_outline(handle, nil, nil, 0)
+		return nil
 	}
-	C.jarvis_notch_set_outline(handle, &xy[0], C.int(len(shape)))
+	C.jarvis_notch_set_outline(handle, &xy[0], &counts[0], C.int(len(counts)))
 	return nil
 }
 

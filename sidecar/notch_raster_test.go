@@ -8,7 +8,7 @@ import (
 func TestNotchCoverageOfASquareIsSolidInsideAndEmptyOutside(t *testing.T) {
 	const w, h = 20, 20
 	dst := make([]uint8, w*h)
-	notchCoverage(dst, w, h, []notchVertex{{4, 4}, {12, 4}, {12, 12}, {4, 12}})
+	notchCoverage(dst, w, h, [][]notchVertex{{{4, 4}, {12, 4}, {12, 12}, {4, 12}}})
 	at := func(x, y int) uint8 { return dst[y*w+x] }
 	if at(8, 8) != 255 || at(4, 4) != 255 || at(11, 11) != 255 {
 		t.Fatalf("inside the square should be solid: centre=%d corner=%d far corner=%d", at(8, 8), at(4, 4), at(11, 11))
@@ -23,7 +23,7 @@ func TestNotchCoverageOfASquareIsSolidInsideAndEmptyOutside(t *testing.T) {
 func TestNotchCoverageSoftensASlantedEdge(t *testing.T) {
 	const w, h = 40, 40
 	dst := make([]uint8, w*h)
-	notchCoverage(dst, w, h, []notchVertex{{5, 5}, {35, 5}, {20, 35}})
+	notchCoverage(dst, w, h, [][]notchVertex{{{5, 5}, {35, 5}, {20, 35}}})
 	partial, solid := 0, 0
 	for _, c := range dst {
 		switch {
@@ -46,7 +46,7 @@ func TestNotchCoverageSoftensASlantedEdge(t *testing.T) {
 func TestNotchCoverageAddsUpToTheArea(t *testing.T) {
 	const w, h = 30, 30
 	dst := make([]uint8, w*h)
-	notchCoverage(dst, w, h, []notchVertex{{5, 5}, {25, 5}, {5, 25}})
+	notchCoverage(dst, w, h, [][]notchVertex{{{5, 5}, {25, 5}, {5, 25}}})
 	sum := 0
 	for _, c := range dst {
 		sum += int(c)
@@ -61,7 +61,7 @@ func TestNotchCoverageClipsWhatLiesOutsideTheImage(t *testing.T) {
 	const w, h = 10, 10
 	dst := make([]uint8, w*h)
 	// The notch's top edge sits above the window, like the real outline.
-	notchCoverage(dst, w, h, []notchVertex{{-5, -2}, {15, -2}, {15, 5}, {-5, 5}})
+	notchCoverage(dst, w, h, [][]notchVertex{{{-5, -2}, {15, -2}, {15, 5}, {-5, 5}}})
 	if dst[0] != 255 || dst[4*w+9] != 255 {
 		t.Fatalf("rows 0 to 4 should be solid edge to edge: %d %d", dst[0], dst[4*w+9])
 	}
@@ -69,7 +69,7 @@ func TestNotchCoverageClipsWhatLiesOutsideTheImage(t *testing.T) {
 		t.Fatalf("row 5 should be empty, got %d", dst[5*w])
 	}
 	// Degenerate input must not panic and must leave the image empty.
-	notchCoverage(dst, w, h, []notchVertex{{1, 1}, {2, 2}})
+	notchCoverage(dst, w, h, [][]notchVertex{{{1, 1}, {2, 2}}})
 	for _, c := range dst {
 		if c != 0 {
 			t.Fatal("two points are not a shape: the image should be empty")
@@ -82,7 +82,7 @@ func TestNotchCoverageClipsWhatLiesOutsideTheImage(t *testing.T) {
 func TestNotchCoverageHonoursFractionsOfAPixel(t *testing.T) {
 	const w, h = 20, 12
 	dst := make([]uint8, w*h)
-	notchCoverage(dst, w, h, []notchVertex{{4.5, 2}, {12.25, 2}, {12.25, 8.5}, {4.5, 8.5}})
+	notchCoverage(dst, w, h, [][]notchVertex{{{4.5, 2}, {12.25, 2}, {12.25, 8.5}, {4.5, 8.5}}})
 	at := func(x, y int) int { return int(dst[y*w+x]) }
 	near := func(got, want int) bool { return got >= want-2 && got <= want+2 }
 	if !near(at(4, 5), 128) || !near(at(12, 5), 64) {
@@ -109,7 +109,7 @@ func TestNotchCoverageOfARoundCornerFollowsTheCircle(t *testing.T) {
 		pts = append(pts, notchVertex{r + r*math.Cos(a), r * math.Sin(a)})
 	}
 	dst := make([]uint8, w*h)
-	notchCoverage(dst, w, h, pts)
+	notchCoverage(dst, w, h, [][]notchVertex{pts})
 	worst := 0.0
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
@@ -133,5 +133,43 @@ func TestNotchCoverageOfARoundCornerFollowsTheCircle(t *testing.T) {
 	// sample lines instead of sixteen it is 0.056. Both fail here.
 	if worst > 1.0/32 {
 		t.Fatalf("the corner strays from the circle by %.3f of a pixel's coverage at worst", worst)
+	}
+}
+
+// Two shapes that overlap are one silhouette. Filled by counting crossings
+// alone, the part they share would come out as a hole.
+func TestNotchCoverageJoinsOverlappingShapes(t *testing.T) {
+	const w, h = 40, 20
+	dst := make([]uint8, w*h)
+	left := []notchVertex{{2, 2}, {22, 2}, {22, 12}, {2, 12}}
+	right := []notchVertex{{16, 2}, {36, 2}, {36, 12}, {16, 12}}
+	notchCoverage(dst, w, h, [][]notchVertex{left, right})
+	at := func(x, y int) uint8 { return dst[y*w+x] }
+	if at(19, 6) != 255 {
+		t.Fatalf("where the two shapes overlap should be solid, got %d", at(19, 6))
+	}
+	if at(5, 6) != 255 || at(30, 6) != 255 || at(38, 6) != 0 || at(19, 14) != 0 {
+		t.Fatalf("left %d, right %d, beyond %d, below %d", at(5, 6), at(30, 6), at(38, 6), at(19, 14))
+	}
+	sum := 0
+	for _, c := range dst {
+		sum += int(c)
+	}
+	// 34 wide by 10 tall, not 20x10 twice.
+	if area := float64(sum) / 255; area < 338 || area > 342 {
+		t.Fatalf("the joined shape covers %.1f pixels, want 340", area)
+	}
+}
+
+// Shapes apart from each other are each drawn, with nothing between them.
+func TestNotchCoverageDrawsShapesThatAreApart(t *testing.T) {
+	const w, h = 60, 12
+	dst := make([]uint8, w*h)
+	body := []notchVertex{{20, -2}, {40, -2}, {40, 8}, {20, 8}}
+	bump := []notchVertex{{4, -2}, {12, -2}, {8, 4}}
+	notchCoverage(dst, w, h, [][]notchVertex{body, bump})
+	at := func(x, y int) uint8 { return dst[y*w+x] }
+	if at(30, 4) != 255 || at(8, 0) == 0 || at(16, 2) != 0 {
+		t.Fatalf("body %d, bump %d, between them %d", at(30, 4), at(8, 0), at(16, 2))
 	}
 }

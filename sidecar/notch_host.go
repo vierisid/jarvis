@@ -29,17 +29,21 @@ import (
 
 const notchPanelID PanelID = "notch"
 
-// The window is as large as the notch can ever grow, in logical pixels. The
-// page draws the notch inside it and reports the outline; the rest of the
-// window is cut away.
+// The window is as large as the notch can ever grow, in logical pixels: the
+// widest line is 700 across with a flared shoulder each side, and the tallest
+// sheet is 600 down with room for the lower edge to swing. The page draws the
+// notch inside it and reports the outline; the rest of the window is cut away.
 const (
-	notchWindowW = 760
-	notchWindowH = 600
+	notchWindowW = 800
+	notchWindowH = 680
 )
 
-// An outline is a closed polygon in window pixels.
+// An outline is a few closed polygons in window pixels: the notch's body, and
+// any small shapes on the screen's top edge beside it.
 const (
-	notchOutlineMinPoints = 3
+	notchOutlineMaxPolygons = 16
+	notchOutlineMinPoints   = 3
+	// Over all the polygons of one outline.
 	notchOutlineMaxPoints = 720
 	// The page may run a little past the window edge (the top corners sit
 	// above the screen), never far.
@@ -59,16 +63,10 @@ type notchPoint struct {
 	X, Y int32
 }
 
-// notchOutline checks an outline the page reported against the window it is
-// for. A page is not trusted to cut the window to any shape it likes: too few
-// points, too many, or a point far outside the window is refused whole, and the
-// previous shape stays.
+// notchOutline checks one polygon of an outline against the window it is for.
 func notchOutline(points [][]float64, winW, winH int) ([]notchVertex, error) {
 	if len(points) < notchOutlineMinPoints {
-		return nil, fmt.Errorf("an outline needs at least %d points, got %d", notchOutlineMinPoints, len(points))
-	}
-	if len(points) > notchOutlineMaxPoints {
-		return nil, fmt.Errorf("an outline may have at most %d points, got %d", notchOutlineMaxPoints, len(points))
+		return nil, fmt.Errorf("a polygon needs at least %d points, got %d", notchOutlineMinPoints, len(points))
 	}
 	out := make([]notchVertex, 0, len(points))
 	for i, p := range points {
@@ -86,6 +84,50 @@ func notchOutline(points [][]float64, winW, winH int) ([]notchVertex, error) {
 		out = append(out, notchVertex{X: x, Y: y})
 	}
 	return out, nil
+}
+
+// notchOutlines checks an outline the page reported against the window it is
+// for. A page is not trusted to cut the window to any shape it likes: too many
+// polygons, too few or too many points, or a point far outside the window, and
+// the outline is refused whole and the previous shape stays.
+//
+// Every polygon comes back turning the same way. The shapes are joined as one
+// silhouette wherever they overlap, and that only works when none of them
+// cancels another.
+func notchOutlines(polygons [][][]float64, winW, winH int) ([][]notchVertex, error) {
+	if len(polygons) > notchOutlineMaxPolygons {
+		return nil, fmt.Errorf("an outline may have at most %d polygons, got %d", notchOutlineMaxPolygons, len(polygons))
+	}
+	total := 0
+	out := make([][]notchVertex, 0, len(polygons))
+	for i, points := range polygons {
+		total += len(points)
+		if total > notchOutlineMaxPoints {
+			return nil, fmt.Errorf("an outline may have at most %d points", notchOutlineMaxPoints)
+		}
+		polygon, err := notchOutline(points, winW, winH)
+		if err != nil {
+			return nil, fmt.Errorf("polygon %d: %w", i, err)
+		}
+		if notchSignedArea(polygon) < 0 {
+			for a, b := 0, len(polygon)-1; a < b; a, b = a+1, b-1 {
+				polygon[a], polygon[b] = polygon[b], polygon[a]
+			}
+		}
+		out = append(out, polygon)
+	}
+	return out, nil
+}
+
+// notchSignedArea is positive for a polygon that turns clockwise on a screen,
+// where y grows downwards.
+func notchSignedArea(polygon []notchVertex) float64 {
+	sum := 0.0
+	for i, a := range polygon {
+		b := polygon[(i+1)%len(polygon)]
+		sum += a.X*b.Y - b.X*a.Y
+	}
+	return sum / 2
 }
 
 // notchWhole moves an outline onto whole pixels, for the one use that needs
@@ -117,8 +159,8 @@ func notchShouldHide(fullscreenAppInFront, displayKeptAwake, videoPlaying bool) 
 	return fullscreenAppInFront && displayKeptAwake && videoPlaying
 }
 
-// bindNotch gives the page its three calls and starts feeding it the pointer's
-// position. The calls run on the window's own thread, like every other panel
+// bindNotch gives the page its calls, opens the line between the page and the
+// brain, and starts feeding the page the pointer's position. The calls run on the window's own thread, like every other panel
 // binding. The function it returns stops the feed and releases what the
 // platform set up; the panel calls it on the window's thread once the window's
 // loop has ended and before the web view is destroyed.
@@ -128,24 +170,31 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 			log.Printf("[notch] Bind(%s) failed: %v", name, err)
 		}
 	}
-	// __notch_set_outline(shape, cut): two closed polygons in device pixels of
-	// the window, fractions allowed. shape is the notch's true outline. cut is
-	// the same outline a little way in: where a platform draws the edge with a
-	// second window, the web view ends there. A platform that masks the web
-	// view itself uses shape.
-	bind("__notch_set_outline", func(shape, cut [][]float64) error {
+	// __notch_set_outline(shapes, cuts): two lists of closed polygons in device
+	// pixels of the window, fractions allowed. shapes is the notch's true
+	// silhouette: its body, and any small shapes beside it. cuts is the same a
+	// little way in: where a platform draws the edge with a second window, the
+	// web view ends there. A platform that masks the web view itself uses
+	// shapes. cuts may hold fewer polygons, or none: a shape thinner than the
+	// way in has no inside. No shapes at all means nothing is on screen: the
+	// notch before it is born, or between two ways of appearing.
+	bind("__notch_set_outline", func(shapes, cuts [][][]float64) error {
 		w, h := platformNotchWindowSize(handle)
-		outer, err := notchOutline(shape, w, h)
+		outer, err := notchOutlines(shapes, w, h)
 		if err != nil {
 			log.Printf("[notch] outline refused: %v", err)
 			return err
 		}
-		inner, err := notchOutline(cut, w, h)
+		inner, err := notchOutlines(cuts, w, h)
 		if err != nil {
 			log.Printf("[notch] inner outline refused: %v", err)
 			return err
 		}
-		return platformNotchSetOutline(handle, outer, notchWhole(inner))
+		whole := make([][]notchPoint, len(inner))
+		for i, polygon := range inner {
+			whole[i] = notchWhole(polygon)
+		}
+		return platformNotchSetOutline(handle, outer, whole)
 	})
 	// __notch_focus(true) takes the keyboard for a text field,
 	// __notch_focus(false) gives it back to whoever had it.
@@ -161,34 +210,45 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 		log.Printf("[notch/page] %s", text)
 	})
 
+	// __notch_send(text) sends the brain one message, as JSON text. Messages
+	// the other way arrive as the argument of window.__notch_receive.
+	bind("__notch_send", func(text string) error {
+		return notch.fromPage(text)
+	})
+	notch.attachPage(func(script string) {
+		wv.Dispatch(func() { wv.Eval(script) })
+	})
+
 	// The page only hears the mouse inside its own outline, so the pointer's
-	// position everywhere else has to be told to it. That is what lets the
-	// eyes follow the cursor across the whole screen.
+	// position and its main button everywhere else have to be told to it.
+	// That is what lets the eyes follow the cursor across the whole screen,
+	// and a click in the app underneath close a sheet.
 	quit := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
 		ticker := time.NewTicker(33 * time.Millisecond)
 		defer ticker.Stop()
-		lastX, lastY, sent := 0, 0, false
+		lastX, lastY, lastDown, sent := 0, 0, false, false
 		for {
 			select {
 			case <-quit:
 				return
 			case <-ticker.C:
 			}
-			x, y, ok := platformNotchCursor(handle)
-			if !ok || (sent && x == lastX && y == lastY) {
+			x, y, down, ok := platformNotchCursor(handle)
+			if !ok || (sent && x == lastX && y == lastY && down == lastDown) {
 				continue
 			}
-			lastX, lastY, sent = x, y, true
-			js := notchCursorScript(x, y)
+			lastX, lastY, lastDown, sent = x, y, down, true
+			js := notchCursorScript(x, y, down)
 			wv.Dispatch(func() { wv.Eval(js) })
 		}
 	}()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
+			notch.detachPage()
 			close(quit)
 			<-finished
 			platformNotchTearDown(handle)
@@ -197,9 +257,15 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 }
 
 // notchCursorScript is what the page is told: the pointer's place in the
-// page's own pixels, from the window's top left corner.
-func notchCursorScript(x, y int) string {
-	return fmt.Sprintf("window.__notch_cursor&&window.__notch_cursor(%d,%d);", x, y)
+// page's own pixels, from the window's top left corner, and whether the main
+// mouse button is down. The button is how the page hears a click that landed
+// outside its outline, in the app underneath: a click away from a sheet.
+func notchCursorScript(x, y int, down bool) string {
+	pressed := 0
+	if down {
+		pressed = 1
+	}
+	return fmt.Sprintf("window.__notch_cursor&&window.__notch_cursor(%d,%d,%d);", x, y, pressed)
 }
 
 // notch.spawn - open the notch on the page the brain names.

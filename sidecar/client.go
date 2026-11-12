@@ -643,6 +643,23 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		return c.sendEvent(ctx, event, binaryData)
 	}
 
+	// What the notch's page says to the brain goes out on this connection, as
+	// it came. With no connection there is nowhere for it to go.
+	notch.OnMessage(func(text string) {
+		evt := SidecarEvent{
+			Type:      "sidecar_event",
+			EventType: "notch.message",
+			Timestamp: time.Now().UnixMilli(),
+			// An answer must not be the event dropped when the queue is full.
+			Priority: "high",
+			Payload:  map[string]any{"message": json.RawMessage(text)},
+		}
+		if err := sendFn(ctx, evt, nil); err != nil {
+			log.Printf("[notch] a message from the page did not reach the brain: %v", err)
+		}
+	})
+	defer notch.OnMessage(nil)
+
 	c.mu.Lock()
 	c.obsCtx = ctx // store parent context so reloadConfig can create fresh children
 	c.obsCancel = obsCancel
@@ -1557,6 +1574,22 @@ func (c *SidecarClient) readLoop(ctx context.Context) error {
 			result, rpcErr := runRPCHandler(req.Method, c.playPCMInline, req.Params)
 			c.sendResult(ctx, req.ID, result, rpcErr)
 			continue
+		}
+
+		// The notch's page must get the brain's messages in the order they were
+		// sent: an "update" that overtook its "show" would update nothing. So
+		// notch.push is handled inline too, for the same reason and at the same
+		// cost as pebble.play_pcm: its work is a JSON encode and a queue append.
+		// It is also kept out of the log below, which it would fill.
+		if req.Method == "notch.push" {
+			c.mu.Lock()
+			push, ok := c.handlers[req.Method]
+			c.mu.Unlock()
+			if ok {
+				result, rpcErr := runRPCHandler(req.Method, push, req.Params)
+				c.sendResult(ctx, req.ID, result, rpcErr)
+				continue
+			}
 		}
 
 		log.Printf("[sidecar] RPC %s: %s", req.ID, req.Method)
