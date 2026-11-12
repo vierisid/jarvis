@@ -843,6 +843,38 @@ describe("workflow API: runs", () => {
     expect((body as RunsPage).items.length).toBe(2);
   });
 
+  test("GET /recent-runs answers Recently run in one read: the newest run of each workflow, not a window of workflows", async () => {
+    const post = routes["/api/workflows"]?.POST;
+    const ids: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      const created = await callJson(post, plainReq("POST", "http://x", { displayName: `Flow ${i}` }));
+      ids.push(created.body.flow.id);
+    }
+    const runHandler = routes["/api/workflows/:id/run"]?.POST;
+    const run = (id: string) => callJson(runHandler, reqWithParams("POST", `http://x/api/workflows/${id}/run`, { id }, {}));
+    // The oldest workflows ran last: a read of the first few workflows would miss them.
+    for (const id of [ids[5]!, ids[3]!, ids[0]!, ids[0]!]) { await run(id); await new Promise(r => setTimeout(r, 3)); }
+    const recent = routes["/api/workflows/recent-runs"]?.GET;
+    const { status, body } = await callJson(recent, plainReq("GET", "http://x/api/workflows/recent-runs?limit=2"));
+    expect(status).toBe(200);
+    const items = (body as { items: { flowId: string; displayName: string; id: string }[] }).items;
+    expect(items.map(i => i.flowId)).toEqual([ids[0]!, ids[3]!]);
+    expect(items[0]!.displayName).toBe("Flow 0");
+    const all = await callJson(recent, plainReq("GET", "http://x/api/workflows/recent-runs"));
+    expect((all.body as { items: unknown[] }).items).toHaveLength(3);
+
+    // A workflow removed in Brief (pending Undo) leaves Recently run, as it leaves the list.
+    const { getWorkflowDb } = await import("../db/index");
+    getWorkflowDb().run("UPDATE brief_workflow_slots SET receipt_id = 'receipt-test' WHERE flow_id = ?", [ids[0]!]);
+    const afterRemoval = await callJson(recent, plainReq("GET", "http://x/api/workflows/recent-runs"));
+    expect((afterRemoval.body as { items: { flowId: string }[] }).items.map(i => i.flowId)).toEqual([ids[3]!, ids[5]!]);
+
+    // Another project's caller sees none of these runs.
+    const scoped = createWorkflowRoutes({ callerProjectId: () => "proj_other_recent" });
+    const foreign = await callJson(scoped["/api/workflows/recent-runs"]?.GET, plainReq("GET", "http://x/api/workflows/recent-runs"));
+    expect(foreign).toEqual({ status: 200, body: { items: [] } });
+  });
+
   test("POST /api/workflow-runs/:runId/cancel cancels the queued job", async () => {
     const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));

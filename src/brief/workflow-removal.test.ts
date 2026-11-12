@@ -65,11 +65,22 @@ test('only later explicit enable changes restored activation, using canonical re
   expect(service.change(c)).toMatchObject({ status: 'rejected', code: 'not_ready' }); expect(getFlow(empty.id)?.status).toBe('DISABLED');
   expect(service.request(c.requestId)).toEqual(service.change(c));
 });
-test('complete stable collection includes more than the legacy first page and refuses overflow', () => {
-  for (let i = 0; i < 101; i++) createFlow();
-  expect(service.read().data.items).toHaveLength(101);
-  getWorkflowDb().transaction(() => { for (let i = 101; i <= WORKFLOW_REMOVAL_LIMITS.flows; i++) createFlow(); })();
-  expect(() => service.read()).toThrow('capacity_exceeded');
+test('the list pages without a ceiling: every workflow once, newest first, even past 1,000', () => {
+  const ids: string[] = [];
+  getWorkflowDb().transaction(() => { for (let i = 0; i < 1205; i++) ids.push(createFlow().id); })();
+  const first = service.read();
+  expect(first.data.items).toHaveLength(WORKFLOW_REMOVAL_LIMITS.defaultPage); expect(first.data.total).toBe(1205);
+  expect(first.data.nextCursor).not.toBeNull();
+  const seen: string[] = []; let cursor: string | undefined, pages = 0;
+  do {
+    const page = service.read({ limit: WORKFLOW_REMOVAL_LIMITS.flows, cursor });
+    seen.push(...page.data.items.map(i => i.flowId)); cursor = page.data.nextCursor ?? undefined; pages++;
+    if (pages === 1) createFlow(); // A workflow added while paging joins no later page, so no page shifts or repeats.
+  } while (cursor);
+  expect(seen).toEqual([...ids].reverse()); expect(pages).toBe(7);
+  expect(service.read().data.total).toBe(1206);
+  for (const bad of [{ limit: 0 }, { limit: WORKFLOW_REMOVAL_LIMITS.flows + 1 }, { limit: 1.5 }, { cursor: 'x' }, { cursor: '-1' }])
+    expect(() => service.read(bad)).toThrow('invalid_query');
 });
 test('new workflows keep their new slot while Undo returns removed workflows to the same neighbors', () => {
   const a = fixture('A'), b = fixture('B'), c = fixture('C'), r = remove(b.flow.id), d = fixture('D');

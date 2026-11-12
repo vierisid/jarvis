@@ -468,9 +468,10 @@ replay, offline and unavailable). It sends nothing.
   retry never creates a second draft. A receipt must echo the request id, prompt, name and exact ordered
   ingredient pins, and keep its job id; a ready receipt navigates once to `workflow-draft` with its exact
   `flowId` and `versionId`. Unreadable saved state makes the record read-only rather than replacing it.
-- Recent rows (`readRecentWorkflows(authenticatedFetch, signal)`) read the existing workflow API with
-  four workers, at most 200 flows and each flow's latest run page (`{ items, nextOffset }`); no implicit
-  polling. A missed read or a larger inventory reports `stale`/`unavailable`, never complete recency.
+- Recent rows (`readRecentWorkflows(authenticatedFetch, signal)`) make one read of
+  `GET /api/workflows/recent-runs?limit=6`: the newest run of each workflow, most recent first, with the
+  workflow's name, whatever the number of workflows; no implicit polling. A missed read reports
+  `unavailable`, a malformed row `stale`, never complete recency.
   Rows show status-derived copy only (never step output) and open `workflow` with flow, version and
   run ids. The host owns invocation, caching and abort on scope change.
 - `workflows/create/figma-reference.json` records the UI-21 source values.

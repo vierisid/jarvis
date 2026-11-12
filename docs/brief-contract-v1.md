@@ -49,6 +49,13 @@ Source of truth: `src/brief/contracts.ts`, `capabilities.ts`, `providers.ts` and
   actual selected/supplied/outcome-verified uses. Supplied does not mean relied upon.
   Connections retain their store kind, source/account IDs and permissions. An
   installed library piece does not imply an authenticated account.
+- The workflow list `GET /api/brief/workflows` answers one page at a time, newest slot first:
+  `limit` (1 to 200, default 100) and `cursor`, with `nextCursor` (null on the last page) and the
+  `total` count in `data`. The cursor is the last slot position, which never changes for a workflow, so
+  workflows added or removed while paging shift or repeat nothing. There is no ceiling on the number of
+  workflows. A client that needs the whole list follows the cursors; a failed page fails the read.
+  "Recently run" is `GET /api/workflows/recent-runs?limit=` (1 to 20, default 6): the newest run of each
+  workflow with its name, in one read.
 - These types are compile-time contracts, not validators for untrusted input. Each
   provider owns bounded inputs, permission checks, runtime output validation and
   its domain-specific persistence/recovery acceptance checks.

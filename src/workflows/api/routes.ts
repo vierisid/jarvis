@@ -81,6 +81,7 @@ import {
   getFlowRun,
   getFlowRunInProject,
   listRuns,
+  listRecentRunSummaries,
   type FlowRunStatus,
   type RunEnvironment,
 } from "../db/repos/flow-run";
@@ -2264,6 +2265,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             maxAttempts: 1,
           });
           return ok(run, 202);
+        }),
+    },
+
+    // "Recently run" in one read: the newest run of each workflow, most recent first, with the
+    // workflow's name. Replaces a runs read and a detail read per workflow.
+    "/api/workflows/recent-runs": {
+      GET: (req) =>
+        trapErrors(() => {
+          const limit = Math.max(1, Math.min(20, Math.trunc(numParam(new URL(req.url).searchParams.get("limit")) ?? 6)));
+          const runs = listRecentRunSummaries(callerProject(req), limit);
+          return ok({ items: runs.map(run => {
+            const flow = getFlow(run.flowId);
+            const version = getLatestDraft(run.flowId) ?? (flow?.published_version_id ? getFlowVersion(flow.published_version_id) : null);
+            return { ...run, displayName: version?.displayName ?? run.flowId };
+          }) });
         }),
     },
 

@@ -4,12 +4,12 @@ import { panelSessionDevice } from '../comms/panel-session-marker';
 
 type Params = Request & { params?: { requestId?: string } };
 export function createWorkflowRemovalRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, provider?: WorkflowRemoval) {
-  const wrap = (fn: (req: Params) => unknown | Promise<unknown>) => async (req: Params) => {
+  const wrap = (fn: (req: Params) => unknown | Promise<unknown>, allowQuery = false) => async (req: Params) => {
     let response: Response;
     try {
       if (!provider || !capabilities.hasProvider('workflowRemoval', provider)) throw new WorkflowRemovalError('unsupported', 501);
       if (!capabilities.snapshot().capabilities.workflowRemoval.enabled) throw new WorkflowRemovalError('unavailable', 503);
-      if (new URL(req.url).search) throw new WorkflowRemovalError('unexpected_query');
+      if (!allowQuery && new URL(req.url).search) throw new WorkflowRemovalError('unexpected_query');
       response = json(await fn(req));
     } catch (error) {
       response = error instanceof WorkflowRemovalError ? json({ code: error.code }, error.status) : json({ code: 'unavailable' }, 503);
@@ -17,7 +17,14 @@ export function createWorkflowRemovalRoutes(capabilities: BriefCapabilities, jso
     response.headers.set('Cache-Control', 'no-store'); return response;
   };
   return {
-    '/api/brief/workflows': { GET: wrap(() => provider!.read()) },
+    '/api/brief/workflows': { GET: wrap(req => {
+      const params = new URL(req.url).searchParams, query: { limit?: number; cursor?: string } = {};
+      for (const [key, value] of params) {
+        if (!['limit', 'cursor'].includes(key) || params.getAll(key).length !== 1 || !/^[0-9]{1,15}$/.test(value)) throw new WorkflowRemovalError('invalid_query');
+        if (key === 'limit') query.limit = Number(value); else query.cursor = value;
+      }
+      return provider!.read(query);
+    }, true) },
     '/api/brief/workflows/requests/:requestId': { GET: wrap(req => {
       let requestId: string; try { requestId = decodeURIComponent(req.params?.requestId ?? ''); } catch { throw new WorkflowRemovalError('invalid_request_id'); }
       return provider!.request(requestId);
