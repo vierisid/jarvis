@@ -64,6 +64,7 @@ const SRC_ROOT = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "../../..");
 /** Jarvis modules a vendored piece imports by relative path, relative to `src/`. */
 export const PIECE_JARVIS_SOURCES: readonly string[] = [
   "actions/action-outcome.ts",
+  "workflows/runtime/date-parse.ts",
   "workflows/runtime/http-egress.ts",
   "workflows/runtime/http-failure.ts",
   "workflows/runtime/piece-effects.ts",

@@ -306,6 +306,22 @@ export const expressionPatches = {
   "packages/server/engine/src/lib/variables/processors/types.ts": [
     ["export type ProcessorFn<INPUT = any, OUTPUT = any> = (\n    property: PieceProperty,\n    value: INPUT,\n) => OUTPUT\n", "export type ProcessorFn<INPUT = any, OUTPUT = any> = (\n    property: PieceProperty,\n    value: INPUT,\n    fileContext?: { apiUrl: string; engineToken: string },\n) => OUTPUT\n"],
   ],
+  // Date Helper: every date-reading action parses through runtime/date-parse.ts,
+  // an instant in the zone setting (or UTC), not a wall clock in the daemon's zone.
+  "packages/pieces/core/date-helper/src/lib/common/index.ts": [
+    ["import duration from 'dayjs/plugin/duration';", "import duration from 'dayjs/plugin/duration';\nimport { parseDateInstant } from '../../../../../../../../runtime/date-parse';"],
+    ["export function parseDate(date: string, format: string): dayjs.Dayjs {\n  const correctedFormat = getCorrectedFormat(format);\n  \n  // Try strict parsing with the provided format\n  let djs = apDayjs(date, correctedFormat, true);\n  \n  // If strict parsing fails, try lenient parsing (useful for formats that native parser handles well)\n  if (!djs.isValid()) {\n    djs = apDayjs(date, correctedFormat, false);\n  }\n  \n  // If still invalid, try without format (native parser fallback)\n  if (!djs.isValid()) {\n    djs = apDayjs(date);\n  }\n  \n  if (!djs.isValid()) {\n    throw new Error(`Failed to parse the date: ${date} with format: ${correctedFormat}`);\n  }\n  return djs;\n}\n", "// === JARVIS PATCH: one instant-based parser for every Date Helper action ===\n// The upstream parser read the text in the process zone, accepted text that\n// did not match the format, and rolled impossible dates over. The parse lives\n// in runtime/date-parse.ts (see its header for the rules). `zone` is where a\n// wall time with no offset is read; actions without a zone setting read UTC.\nexport function parseDate(date: string, format: string, zone = 'UTC'): dayjs.Dayjs {\n  // Always a UTC-mode value: its parts are UTC, and `.tz()` on it converts the real instant.\n  return apDayjs.utc(parseDateInstant(date, getCorrectedFormat(format), zone));\n}\n\n/** Format an instant. `X` is formatted from the instant: the upstream plugin reads a shifted clock for a zoned value. */\nexport function formatDate(date: dayjs.Dayjs, format: string): string {\n  return format === 'X' ? String(date.unix()) : date.format(format);\n}\n// === END JARVIS PATCH ===\n"],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/format-date.ts": [
+    ["  getCorrectedFormat,\n} from '../common';", "  getCorrectedFormat,\n  formatDate,\n} from '../common';"],
+    ["  const parsedDate = parseDate(inputDate, inputFormat);\n  \n  return parsedDate.tz(inputTimeZone, true).tz(outputTimeZone).format(outputFormat);\n}", "  // Jarvis: the input is read as an instant (an offset in the text wins over the\n  // From Time Zone), then shown in the To Time Zone.\n  const parsedDate = parseDate(inputDate, inputFormat, inputTimeZone);\n\n  return formatDate(parsedDate.tz(outputTimeZone), outputFormat);\n}"],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/add-subtract-date.ts": [
+    ["  parseDate,\n", "  parseDate,\n  formatDate,\n"],
+    ["let dayjsDate = timeZone ? apDayjs(date).tz(timeZone) : apDayjs(date);", "// Jarvis: without a zone the date is worked in UTC, not the daemon's own zone.\n  let dayjsDate = timeZone ? apDayjs(date).tz(timeZone) : apDayjs.utc(date);"],
+    ["return { result: AfterDate.tz(timeZone).format(outputFormat) };", "return { result: formatDate(AfterDate.tz(timeZone), outputFormat) };"],
+    ["return { result: AfterDate.format(outputFormat) };", "return { result: formatDate(AfterDate, outputFormat) };"],
+  ],
 } as const;
 
 export function applyExpressionPatch(source: string, replacements: readonly (readonly [string, string])[]): string {
