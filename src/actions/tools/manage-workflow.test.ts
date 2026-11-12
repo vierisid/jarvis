@@ -152,6 +152,15 @@ describe("manage_workflow tool", () => {
     expect(byId.id).toBe(created.id);
   });
 
+  test("get finds by name a workflow older than the newest 1,000", async () => {
+    const created = (await call("create", { name: "Old Flow", empty: true })) as { id: string };
+    const { getWorkflowDb } = await import("../../workflows/db/index.ts");
+    getWorkflowDb().run("UPDATE flow SET updated = 0 WHERE id = ?", [created.id]);
+    getWorkflowDb().transaction(() => { for (let i = 0; i < 1000; i++) createFlow(); })();
+    const byName = (await call("get", { flow: "old flow" })) as { id: string };
+    expect(byName.id).toBe(created.id);
+  });
+
   test("get never shows the model the Webhook trigger's signing secret (#961)", async () => {
     const { updateDraftVersion } = await import("../../workflows/db/repos/flow-version.ts");
     const created = (await call("create", { name: "hooked", empty: true })) as { id: string };

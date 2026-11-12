@@ -9,9 +9,10 @@
  * alignment with upstream; this route just trusts whatever shape we have stored
  * for `flow_version.trigger` etc.
  *
- * Filter semantics: when no externalIds query param is present, return every
- * flow in the default project (pages of up to 50 -- single-tenant, in practice
- * far below the cap).
+ * Filter semantics: every flow of the caller's project with a published
+ * version, narrowed to `externalIds` when that query param is present. One
+ * page, no `next`: `listAllFlows`, because the default `listFlows` page (100)
+ * silently missed older flows.
  */
 
 import { listAllFlows, parseFlowMetadata } from "../../db/repos/flow";
