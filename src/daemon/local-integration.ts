@@ -24,7 +24,7 @@ export function localIntegrationEnabled(config: JarvisConfig, env: Record<string
 /** Separate output cannot confer local-integration authorization on production. */
 export function buildLocalIntegrationUi(repoRoot: string): string {
   const out = join(repoRoot, 'ui', 'dist-local-integration');
-  const result = Bun.spawnSync([process.execPath, '--no-env-file', 'build', 'ui/local-integration.html', 'ui/pebble.html', '--outdir', out], {
+  const result = Bun.spawnSync([process.execPath, '--no-env-file', 'build', 'ui/local-integration.html', 'ui/pebble.html', 'ui/notch.html', '--outdir', out], {
     cwd: repoRoot, env: sanitizedEnv(),
     stdout: 'pipe', stderr: 'pipe',
   });

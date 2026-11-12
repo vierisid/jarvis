@@ -36,7 +36,7 @@ export const UI_NOTICES_FILE = "THIRD_PARTY_NOTICES-ui.md";
 export const ENGINE_NOTICES_FILE = "THIRD_PARTY_NOTICES-engine.md";
 
 /** The entry points `bun run build:ui` builds (package.json). */
-export const UI_ENTRYPOINTS = ["ui/index.html", "ui/pebble.html"] as const;
+export const UI_ENTRYPOINTS = ["ui/index.html", "ui/pebble.html", "ui/notch.html"] as const;
 
 /**
  * The staging install's build tools: in the staging tree to run the build,

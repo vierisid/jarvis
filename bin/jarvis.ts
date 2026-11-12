@@ -701,6 +701,11 @@ switch (command) {
     const { cmdEnroll } = await import('../src/cli/devices.ts');
     process.exit(await cmdEnroll(commandArgs));
   }
+  // Not in the help: a tool for trying the notch by hand, and the notch ships dark.
+  case 'notch': {
+    const { cmdNotch } = await import('../src/cli/notch.ts');
+    process.exit(await cmdNotch(commandArgs));
+  }
   case 'sidecars': {
     const { cmdSidecars } = await import('../src/cli/devices.ts');
     process.exit(await cmdSidecars(commandArgs));

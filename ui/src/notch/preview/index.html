@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jarvis notch preview</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:ital,wght@0,400..700;1,400&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../notch.css" />
+  <link rel="stylesheet" href="./preview.css" />
+</head>
+<body>
+  <main class="desk">
+    <div class="window"><div id="notch-root"></div><svg id="overlay" aria-hidden="true"></svg></div>
+    <p class="caption">The notch as its page draws it, in the 800 by 680 window it has on the desktop. No brain and no desktop app: the demo moments run here in the page.</p>
+  </main>
+  <aside class="panel">
+    <h1>Notch preview</h1>
+    <div id="moments" class="buttons"></div>
+    <label><input type="checkbox" id="outline" /> Show the reported outline</label>
+    <label><input type="checkbox" id="sound" /> Sounds</label>
+    <h2>Messages</h2>
+    <ol id="log"></ol>
+  </aside>
+  <script type="module" src="./preview.ts"></script>
+</body>
+</html>

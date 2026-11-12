@@ -86,7 +86,7 @@ describe('the daemon-secret rule', () => {
     // Pinned: widening or narrowing it is a reviewed edit to this line.
     expect([...DAEMON_SECRET_ENV_NAMES].sort()).toEqual([
       'ANTHROPIC_API_KEY', 'JARVIS_API_KEY', 'JARVIS_DEBUG_RPC', 'JARVIS_GITHUB_TOKEN',
-      'JARVIS_GROQ_KEY', 'JARVIS_LITELLM_KEY', 'JARVIS_OPENAI_KEY', 'JARVIS_OPENROUTER_KEY',
+      'JARVIS_GROQ_KEY', 'JARVIS_LITELLM_KEY', 'JARVIS_NOTCH_DEMO', 'JARVIS_OPENAI_KEY', 'JARVIS_OPENROUTER_KEY',
       'JARVIS_WORKFLOW_ENCRYPTION_KEY', 'NVIDIA_API_KEY', 'OPENAI_API_KEY',
     ]);
   });

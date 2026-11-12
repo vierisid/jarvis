@@ -4,6 +4,17 @@ A desktop surface that is still being built: Jarvis in a shape at the top
 centre of the screen, one line at a time. It ships dark. This page states what
 "dark" guarantees, the messages that exist so far, and how to try a build.
 
+Where things are:
+
+| What | Where |
+|---|---|
+| The switch, and telling a desktop app to host the notch | `src/notch/switch.ts`, `src/notch/attach.ts` |
+| What the brain and the page say to each other | `src/notch/protocol.ts` |
+| What the notch is showing, held by the brain | `src/notch/surface.ts` |
+| Canned moments for trying it, and their gate | `src/notch/demo.ts`, `src/notch/demo-gate.ts`, `src/cli/notch.ts` |
+| The page | `ui/notch.html`, `ui/src/notch/` |
+| The window, its shape and its rules | `sidecar/notch*.go` |
+
 ## The switch
 
 - `JARVIS_NOTCH=1` in the brain's environment turns the notch on. Any other
@@ -22,8 +33,11 @@ itself, and `sidecar.yaml` has no setting for it.
 ## Invariants this protects
 
 1. **Off means silent.** With the switch off the brain registers no notch
-   listener, sends no `notch.*` message to any desktop app, and has no notch
-   page: the route is absent, not refused.
+   listener, sends no `notch.*` message to any desktop app, holds no notch
+   state, and has no notch route: absent, not refused. The page's built files
+   ship in `ui/dist` like any other asset and are inert: the page draws
+   nothing until a brain answers its hello, and a brain with the switch off
+   never does.
 2. **Old desktop apps are left alone.** A desktop app that does not advertise
    `notch` is never sent `notch.*`, whatever the switch says. One that
    advertises it but reports `surface: "none"` is never asked for a window.
@@ -40,10 +54,11 @@ itself, and `sidecar.yaml` has no setting for it.
 6. **Only the brain's own page renders.** `notch.spawn` pins its URL to the
    brain origin in the enrolment token and signs it in with a short-lived
    access token, exactly as `panel.spawn` does.
-7. **The page cannot cut the window to any shape it likes.** An outline with
-   fewer than 3 or more than 720 points, a malformed point, or a point far
-   outside the window is refused whole and the previous shape stays. The page
-   sends two outlines at a time, and one bad outline refuses both.
+7. **The page cannot cut the window to any shape it likes.** An outline is at
+   most 16 polygons and 720 points in all. A polygon of fewer than 3 points, a
+   malformed point, or a point far outside the window, and the outline is
+   refused whole and the previous shape stays. The page sends two outlines at
+   a time, and one bad outline refuses both.
 8. **Appearing never takes the keyboard.** The window is shown without
    activation. It takes the keyboard only when the page calls
    `__notch_focus(true)`, and gives it back to the window that had it.
@@ -64,10 +79,41 @@ itself, and `sidecar.yaml` has no setting for it.
    - A screen capture choosing its area covers the screen too: while Windows'
      own capture tools are in front the notch stays exactly as it was.
 
+10. **The desktop app carries the messages and reads none.** What the brain
+    and the page say to each other passes through it as JSON, at most 64 KB a
+    message, in the order it was sent (`notch.push` is handled on the
+    connection's own thread for that). It refuses what is not JSON, a push
+    with the switch off, and a push with no page up. It never acts on a
+    message's content.
+11. **What the notch shows lives in the brain.** A page that appears says
+    hello and is told everything at once, so a desktop app restarted in the
+    middle of a line shows the same line, with the words the person had
+    already changed. A page that has not said hello on its present connection
+    is sent nothing.
+12. **The page decides nothing.** It reports what the person did (yes, no, a
+    pick, a changed word, typed text) and the brain decides what that means.
+    The brain reads those reports strictly: anything that is not exactly one
+    of the three messages is dropped, and an answer about a line that is no
+    longer on the notch is dropped as late.
+13. **The demo endpoint is shut unless opened on purpose.** `POST
+    /api/notch/demo` exists only with the switch on, a `JARVIS_NOTCH_DEMO`
+    secret of 16 or more characters, and not on a hosted install, and every
+    request must echo the secret. Otherwise it answers 404. It can make the
+    notch show sample sentences and nothing else.
+
 ## What it does not protect, and what is missing
 
-- The page is a test page (four sizes, eyes that follow the pointer, and a text
-  box), not the notch.
+- Nothing real feeds the notch yet. The only thing that puts a line on it is
+  the demo (`jarvis notch demo`), with sample data.
+- This is the mouse pass. The page takes the keyboard only for a text field;
+  the keys that answer a line from anywhere come next.
+- What the prototype drew outside the black shape is not there: the soft
+  shadow under the notch, and things arriving along the whole top edge of the
+  screen. The window is 800 pixels wide, so an arrival starts at its edge.
+- A brain that restarts forgets the line. Only the desktop app restarting is
+  covered.
+- Two desktop apps on one brain show the same line, and the first answer is
+  the one that counts. Nothing yet tells the other notch that it was answered.
 - On Windows the last 1.5 CSS pixels inside the edge belong to the backdrop
   window, not the page (see "How the edge is drawn"). That band is always
   black, whatever the page paints there.
@@ -111,20 +157,50 @@ itself, and `sidecar.yaml` has no setting for it.
 | brain to desktop app | `notch.configure` | `{enabled: boolean}` | `{configured: true, enabled, surface: "none" \| "window"}` |
 | brain to desktop app | `notch.spawn` | `{url: string}`, on the brain's origin | `{spawned: true, already: boolean}` |
 | brain to desktop app | `notch.close` | none | `{closed: boolean}` |
+| brain to desktop app | `notch.push` | `{message: any JSON}`, for the page | `{pushed: true}` |
+| desktop app to brain | event `notch.message` | `{message: any JSON}`, from the page | none |
 
-The page talks to the desktop app through three functions on `window`:
+The page talks to the desktop app through four functions on `window`:
 
 | Function | Meaning |
 |---|---|
-| `__notch_set_outline(shape, cut)` | Two closed polygons, each `[[x, y], ...]` in the window's own pixels (CSS pixels times the display scale). Fractions of a pixel are kept and matter: send a curve as it is, with a point about every pixel and a half, not moved onto whole pixels. `shape` is the notch's true outline. `cut` is the same outline 1.5 CSS pixels in. Both are checked; if either is refused, nothing changes |
+| `__notch_set_outline(shapes, cuts)` | Two lists of closed polygons, each polygon `[[x, y], ...]` in the window's own pixels (CSS pixels times the display scale). Fractions of a pixel are kept and matter: send a curve as it is, with a point about every pixel and a half, not moved onto whole pixels. `shapes` is the notch's true silhouette: its body, and any small shapes on the screen's edge beside it. `cuts` is the same 1.5 CSS pixels in, and may hold fewer polygons or none. Shapes that overlap are joined. Both lists are checked; if either is refused, nothing changes |
 | `__notch_focus(true \| false)` | Take the keyboard for a text field, or give it back. Answers whether the notch has it |
+| `__notch_send(text)` | One message for the brain, as JSON text |
 | `__notch_log(text)` | One line in the desktop app's log, for test runs |
 
-and the desktop app calls one function the page defines:
+and the desktop app calls two functions the page defines:
 
 | Function | Meaning |
 |---|---|
-| `window.__notch_cursor(x, y)` | Where the pointer is, in the page's own pixels from the window's top left corner. Sent about 30 times a second, and only when the pointer has moved. The page hears the mouse only inside its outline, so this is how the eyes follow the pointer across the screen |
+| `window.__notch_receive(message)` | One message from the brain |
+| `window.__notch_cursor(x, y, down)` | Where the pointer is, in the page's own pixels from the window's top left corner, and whether the main mouse button is down (1 or 0). Sent about 30 times a second, and only when something changed. The page hears the mouse only inside its outline, so this is how the eyes follow the pointer across the screen, and how a click in the app underneath closes a sheet |
+
+## What the brain and the page say to each other
+
+Version 1, in full in `src/notch/protocol.ts`. One thing is on the notch at a
+time; a new `show` replaces it.
+
+| From | Message | Meaning |
+|---|---|---|
+| page | `hello {v}` | The page is up. Answered with `state` |
+| brain | `state {line, count, born}` | Everything the notch should show, at once |
+| brain | `show {line}` | Put this on the notch |
+| brain | `rest` | Back to the eyes |
+| brain | `count {count}` | How many things wait |
+| brain | `update {id, ...}` | Change the line on the notch in place: steps done, a new sentence, words heard, a sheet's content |
+| brain | `act {...}` | A face, a movement, a birth, the watching eye, the mouth, sounds. Not remembered |
+| page | `answer {id, act, ...}` | What the person did with the line `id` |
+| page | `open` | A click on the resting notch |
+
+A line is one of seven kinds: `say` (a result that leaves by itself), `offer`
+(yes or no, or a row of choices), `sheet`, `ask` (a text field), `work`
+(steps), `send` (a window to take it back) and `listen`. A sentence is made
+of plain words, `em` words, keycaps and lit words the person can change.
+
+After `no`, `fold`, and a `say` that finished, the page has gone to rest by
+itself. After any other answer it keeps the line until the brain says what
+comes next.
 
 ## How the edge is drawn
 
@@ -164,6 +240,29 @@ scripts/notch/try.sh
 - `--token` prints a fresh token, `--no-build` skips the desktop app build.
   `NOTCH_DATA_DIR`, `NOTCH_PORT`, `NOTCH_WIN_DIR` and `NOTCH_MAC_DIR` override
   the defaults.
+
+### Playing the demo
+
+With that brain running, in a second terminal:
+
+```sh
+scripts/notch/demo.sh            # a menu of moments
+scripts/notch/demo.sh mail       # one moment
+scripts/notch/demo.sh stop
+```
+
+It is `jarvis notch demo` pointed at the test brain. `try.sh` makes the secret
+the first time and keeps it in the test data folder. Against any other brain:
+start it with `JARVIS_NOTCH=1` and `JARVIS_NOTCH_DEMO=<16 or more characters>`,
+and run `jarvis notch demo <moment>` with the same `JARVIS_NOTCH_DEMO` set.
+
+The page can also be tried without the desktop app or a brain, in a browser.
+The preview runs the real page with the brain's own demo scripts, and can draw
+the outline the desktop app would be given over what the page paints:
+
+```sh
+bun ui/src/notch/preview/serve.ts
+```
 
 ### When Windows refuses the build
 

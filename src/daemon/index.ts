@@ -157,7 +157,11 @@ import {
 } from "../sidecar/first-run.ts";
 import type { ConnectedSidecar } from "../sidecar/types.ts";
 import { attachNotch } from "../notch/attach.ts";
+import { createNotchDemo } from "../notch/demo.ts";
+import type { NotchDemo } from "../notch/demo.ts";
+import { NOTCH_DEMO_PATH, initNotchDemoGate } from "../notch/demo-gate.ts";
 import { NOTCH_PAGE_PATH, notchRoutes } from "../notch/routes.ts";
+import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
@@ -714,6 +718,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   // `{ ...process.env }` spawns stop copying it (defense in depth only, see
   // debug-rpc-gate.ts). The outcome is logged next to the sidecar manager (6c).
   const debugRpcState = initDebugRpcGate({ hosted: isHostedInstall(jarvisConfig) });
+  // The notch's demo gate, resolved at the same moment and for the same reason.
+  const notchDemoState = initNotchDemoGate({ hosted: isHostedInstall(jarvisConfig), notch: notchEnabled() });
+  let notchSurface: NotchSurface | null = null;
+  let notchDemo: NotchDemo | null = null;
 
   // File sink, installed here - the first thing after the config is readable
   // and before anything else boots - so the log captures startup too. A hosted
@@ -1123,6 +1131,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // The notch ships dark: with JARVIS_NOTCH unset this registers nothing and
     // no notch.* message is ever sent (docs/notch/README.md).
     attachNotch(sidecarManager, { enabled: notchEnabled(), pageUrl: `${pebblePanelOrigin}${NOTCH_PAGE_PATH}` });
+    if (notchEnabled()) {
+      // What the notch shows lives here, so a desktop app that comes back
+      // gets the same line again (src/notch/surface.ts).
+      notchSurface = new NotchSurface(sidecarManager);
+      if (notchDemoState === 'open') {
+        notchDemo = createNotchDemo(notchSurface);
+        console.warn(`[notch] JARVIS_NOTCH_DEMO is set: ${NOTCH_DEMO_PATH} is OPEN (secret-gated). Whoever holds the secret can make the notch show sample sentences. Nothing else.`);
+      }
+    }
+    if (notchDemoState === 'too-short') {
+      console.warn(`[notch] JARVIS_NOTCH_DEMO is set but shorter than ${MIN_SECRET_LENGTH} characters; the demo endpoint stays disabled.`);
+    } else if (notchDemoState === 'refused-hosted') {
+      console.warn('[notch] JARVIS_NOTCH_DEMO is ignored because this install counts as hosted; the demo endpoint stays disabled.');
+    } else if (notchDemoState === 'notch-off') {
+      console.warn('[notch] JARVIS_NOTCH_DEMO is set but JARVIS_NOTCH is not 1; the demo endpoint stays disabled.');
+    }
 
     // 6d. Wire sidecar manager to WebSocket server for WS routing
     wsService.getServer().setSidecarManager(sidecarManager);
@@ -5377,7 +5401,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const apiRoutes = {
       ...createApiRoutes(apiContext),
       // Absent unless the notch switch is on.
-      ...notchRoutes(notchEnabled()),
+      ...notchRoutes(notchEnabled(), { demo: notchDemo, pages: () => notchSurface?.listening() ?? 0 }),
       ...createWorkflowRoutes({
         egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
         recoveryAuthority: authorityEngine,
