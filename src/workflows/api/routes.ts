@@ -1204,7 +1204,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/connections": {
       GET: (req) =>
         trapErrors(() => {
-          const list = listConnections(callerProject(req)).map((c) => ({ c, oauth2: pastedOAuth2Status(c.type, c.value) })).map(({ c, oauth2 }) => ({
+          const list = listConnections(callerProject(req)).map((c) => ({ c, oauth2: withRefreshProblem(pastedOAuth2Status(c.type, c.value), opts.credentialResolver?.refreshProblem(c)) })).map(({ c, oauth2 }) => ({
             id: c.id,
             externalId: c.externalId,
             displayName: c.displayName,
@@ -2616,6 +2616,21 @@ function clampPage(params: URLSearchParams, defaultLimit: number): { limit: numb
     limit: Math.max(1, Math.min(LISTING_MAX_LIMIT, Math.trunc(numParam(params.get("limit")) ?? defaultLimit))),
     offset: Math.max(0, Math.trunc(numParam(params.get("offset")) ?? 0)),
   };
+}
+
+/** Why an OAuth2 row's refresh cannot work, as `CredentialResolver.refreshProblem` says it. */
+type RefreshProblem = NonNullable<ReturnType<CredentialResolver["refreshProblem"]>>;
+
+/**
+ * An OAuth2 row's status plus why its refresh cannot work, when it carries
+ * refresh details and the resolver knows they do not (a refresh refused or
+ * unanswered, or a token URL this install never connects to).
+ */
+function withRefreshProblem(
+  status: ReturnType<typeof pastedOAuth2Status>,
+  problem: RefreshProblem | null | undefined,
+): (NonNullable<ReturnType<typeof pastedOAuth2Status>> & { refreshProblem?: RefreshProblem }) | null {
+  return status && status.refreshable && problem ? { ...status, refreshProblem: problem } : status;
 }
 
 /**
