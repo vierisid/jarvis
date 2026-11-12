@@ -37,3 +37,17 @@ export function homeJarvisDirFor(home: string, dataDir: string | undefined, ...s
   if (!own || canWriteOrCreate(inHome)) return resolve(inHome);
   return resolve(own, ...sub);
 }
+
+/** The site builder's projects folder as the default config spells it. */
+export const DEFAULT_SITE_PROJECTS_DIR = '~/.jarvis/projects';
+
+/**
+ * The site builder's projects folder. The default (`sites.projects_dir` unset,
+ * or left at `~/.jarvis/projects`, which the config defaults always fill in)
+ * goes through `homeJarvisDir`, so a read-only home with `JARVIS_HOME` set
+ * keeps projects in the data dir; any other configured folder is used as given.
+ */
+export function siteProjectsDir(configured: string | undefined): string {
+  if (!configured || configured.trim() === DEFAULT_SITE_PROJECTS_DIR) return homeJarvisDir('projects');
+  return configured.replace(/^~(?=$|[\\/])/, homedir());
+}

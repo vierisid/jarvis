@@ -80,7 +80,7 @@ import { pinUnpinnedEnabledFlows } from '../workflows/db/repos/binding-pins';
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { homeJarvisDir } from "../util/jarvis-dirs.ts";
+import { siteProjectsDir } from "../util/jarvis-dirs.ts";
 import { initDatabase, closeDb } from "../vault/schema.ts";
 import { flushWindowState } from "./window-state.ts";
 import { ServiceRegistry } from "./services.ts";
@@ -5457,7 +5457,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // daemon loads or runs, where a write is rated execute_command.
     {
       const { setSiteProjectsDir, setDaemonDataRoots } = await import('../actions/tools/file-path-policy.ts');
-      setSiteProjectsDir((jarvisConfig.sites?.projects_dir ?? homeJarvisDir('projects')).replace(/^~/, os.homedir()));
+      setSiteProjectsDir(siteProjectsDir(jarvisConfig.sites?.projects_dir));
       // Where the keychain and the workflow key really are, which
       // JARVIS_SECRETS_DIR can put outside every data dir. Resolved through the
       // owning modules rather than recomputed, and tolerated failing: a read of
@@ -6028,14 +6028,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (jarvisConfig.sites?.enabled !== false) {
       try {
         const { SiteBuilderService } = await import('../sites/service.ts');
-        const sitesConfig = jarvisConfig.sites ?? {
-          enabled: true,
-          // The folder projects have always lived in; inside the data dir only when the home one cannot be written.
-          projects_dir: homeJarvisDir('projects'),
-          port_range_start: 4000,
-          port_range_end: 4999,
-          auto_commit: true,
-          max_concurrent_servers: 3,
+        // The folder projects have always lived in; inside the data dir only
+        // when the home one cannot be written and JARVIS_HOME is set. The
+        // config defaults always fill in sites.projects_dir, so the default
+        // value is resolved here rather than taken literally.
+        const sitesConfig = {
+          ...(jarvisConfig.sites ?? {
+            enabled: true,
+            port_range_start: 4000,
+            port_range_end: 4999,
+            auto_commit: true,
+            max_concurrent_servers: 3,
+          }),
+          projects_dir: siteProjectsDir(jarvisConfig.sites?.projects_dir),
         };
         const siteBuilderService = new SiteBuilderService(sitesConfig);
         // Site projects stay uploadable even inside the data dir (#521).

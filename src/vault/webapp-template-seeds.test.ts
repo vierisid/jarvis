@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { closeDb, initDatabase } from './schema.ts';
 import { getWebappTemplateByName } from './webapp-templates.ts';
 import { seedWebappTemplates } from './webapp-template-seeds.ts';
-import { canWriteOrCreate, homeJarvisDirFor } from '../util/jarvis-dirs.ts';
+import { canWriteOrCreate, homeJarvisDirFor, siteProjectsDir } from '../util/jarvis-dirs.ts';
 import { spawnSync } from 'node:child_process';
+import { zstdCompressSync } from 'node:zlib';
 
 const yaml = (name: string, text: string) =>
   `app_name: ${name}\ndomains: [${name}.example]\ndescription: d\ninstructions: ${text}\n`;
@@ -94,13 +95,33 @@ describe('webapp templates are seeded from inside the data dir (C-5)', () => {
 describe('homeJarvisDir keeps the home location unless it cannot be used', () => {
   test('canWriteOrCreate looks at the nearest folder that exists', () => {
     expect(canWriteOrCreate(join(root, 'a', 'b', 'c'))).toBe(true);
-    expect(canWriteOrCreate('/nonexistent/qa4C/.jarvis/cache')).toBe(false);
+    // root can create anything under /, so only a normal user sees the refusal.
+    if (process.getuid?.() !== 0) expect(canWriteOrCreate('/nonexistent/qa4C/.jarvis/cache')).toBe(false);
   });
 
   test('a writable home keeps ~/.jarvis even when a data dir is set', () => {
     const home = join(root, 'home');
     mkdirSync(home);
     expect(homeJarvisDirFor(home, join(root, 'data'), 'cache')).toBe(join(home, '.jarvis', 'cache'));
+  });
+
+  test('the default site projects folder follows the same rule; a configured one is used as given', () => {
+    expect(siteProjectsDir('/srv/sites')).toBe('/srv/sites');
+    expect(siteProjectsDir('~/my-sites')).toBe(join(homedir(), 'my-sites'));
+    // The config defaults always fill in ~/.jarvis/projects, so it must not be taken literally.
+    // The config defaults always fill in ~/.jarvis/projects, so with a home
+    // that cannot be written it must still land in the data dir.
+    const script = join(root, 'projects.ts');
+    writeFileSync(script, [
+      `import { siteProjectsDir } from ${JSON.stringify(join(import.meta.dir, '..', 'util', 'jarvis-dirs.ts'))};`,
+      `console.log(JSON.stringify([siteProjectsDir('~/.jarvis/projects'), siteProjectsDir(undefined), siteProjectsDir('/srv/x')]));`,
+    ].join('\n'));
+    const r = spawnSync(process.execPath, ['--no-env-file', script], {
+      env: { PATH: process.env.PATH ?? '', HOME: '/nonexistent/qa4C', JARVIS_HOME: join(root, 'data') }, encoding: 'utf8',
+    });
+    expect(r.status).toBe(0);
+    const projects = join(root, 'data', 'projects');
+    if (process.getuid?.() !== 0) expect(JSON.parse(r.stdout)).toEqual([projects, projects, '/srv/x']);
   });
 
   test('an unusable home with a data dir uses the data dir; with none it keeps the home path', () => {
@@ -112,30 +133,51 @@ describe('homeJarvisDir keeps the home location unless it cannot be used', () =>
 });
 
 describe('run logs and Google tokens follow the data dir', () => {
-  test('logs go to JARVIS_HOME, and an earlier backup under the old home location is still found and removed with its run', async () => {
-    const { workflowLogsBase, legacyWorkflowLogsBase } = await import('../workflows/sandbox-api/config.ts');
-    const prev = { a: process.env.JARVIS_WORKFLOW_DATA_DIR, b: process.env.JARVIS_HOME };
-    delete process.env.JARVIS_WORKFLOW_DATA_DIR;
-    process.env.JARVIS_HOME = join(root, 'data');
-    try {
-      expect(workflowLogsBase()).toBe(join(root, 'data', 'workflow-logs'));
-      expect(legacyWorkflowLogsBase()).not.toBe(workflowLogsBase());
-    } finally {
-      if (prev.a === undefined) delete process.env.JARVIS_WORKFLOW_DATA_DIR; else process.env.JARVIS_WORKFLOW_DATA_DIR = prev.a;
-      if (prev.b === undefined) delete process.env.JARVIS_HOME; else process.env.JARVIS_HOME = prev.b;
-    }
-  });
+  test('logs go to JARVIS_HOME, and an earlier backup under the old home location is still found and removed with its run', () => {
+    // A child process, because os.homedir() is fixed at startup: HOME points
+    // at a temp folder, so neither side touches the real ~/.jarvis.
+    const home = join(root, 'home'), data = join(root, 'data');
+    mkdirSync(join(home, '.jarvis', 'workflow-logs'), { recursive: true });
+    mkdirSync(data, { recursive: true });
+    const legacyBin = join(home, '.jarvis', 'workflow-logs', 'runLegacy1.bin');
+    writeFileSync(legacyBin, zstdCompressSync(Buffer.from(JSON.stringify({ executionState: { steps: { a: { status: 'SUCCEEDED' } }, tags: ['t'] } }))));
+    const script = join(root, 'logs.ts');
+    const wf = join(import.meta.dir, '..', 'workflows');
+    writeFileSync(script, [
+      `import { workflowLogsBase, legacyWorkflowLogsBase } from ${JSON.stringify(join(wf, 'sandbox-api', 'config.ts'))};`,
+      `import { loadExecutionStateFromLog } from ${JSON.stringify(join(wf, 'runner', 'engine-runtime', 'execution-state-loader.ts'))};`,
+      `import { removeRunFiles } from ${JSON.stringify(join(wf, 'db', 'repos', 'flow-deletion.ts'))};`,
+      `const state = await loadExecutionStateFromLog('runLegacy1');`,
+      `const missing = await loadExecutionStateFromLog('runNone1');`,
+      `removeRunFiles(['runLegacy1']);`,
+      `console.log(JSON.stringify({ base: workflowLogsBase(), legacy: legacyWorkflowLogsBase(), state, missing }));`,
+    ].join('\n'));
+    const r = spawnSync(process.execPath, ['--no-env-file', script], {
+      env: { PATH: process.env.PATH ?? '', HOME: home, JARVIS_HOME: data, TMPDIR: tmpdir() }, encoding: 'utf8',
+    });
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout.trim().split('\n').pop()!);
+    expect(out.base).toBe(join(data, 'workflow-logs'));
+    expect(out.legacy).toBe(join(home, '.jarvis', 'workflow-logs'));
+    expect(out.state).toEqual({ steps: { a: { status: 'SUCCEEDED' } }, tags: ['t'] });
+    expect(out.missing).toBeNull();
+    expect(existsSync(legacyBin)).toBe(false);
+  }, 30_000);
 
   test('the Google tokens path is inside JARVIS_HOME, unless only the old home file exists', async () => {
     const { googleTokensPath } = await import('../integrations/google-auth.ts');
-    process.env.JARVIS_HOME = join(root, 'data');
-    // Only whether the old file exists matters here; it is never opened.
-    const legacy = join(homedir(), '.jarvis', 'google-tokens.json');
-    expect(googleTokensPath()).toBe(existsSync(legacy) ? legacy : join(root, 'data', 'google-tokens.json'));
-    mkdirSync(join(root, 'data'), { recursive: true });
-    writeFileSync(join(root, 'data', 'google-tokens.json'), '{}');
-    expect(googleTokensPath()).toBe(join(root, 'data', 'google-tokens.json'));
-    delete process.env.JARVIS_HOME;
-    expect(googleTokensPath()).toMatch(/\.jarvis[\\/]google-tokens\.json$/);
+    // A temp home, so the real ~/.jarvis is never looked at.
+    const home = join(root, 'home'), data = join(root, 'data');
+    const legacy = join(home, '.jarvis', 'google-tokens.json'), own = join(data, 'google-tokens.json');
+    const env = { JARVIS_HOME: data };
+    expect(googleTokensPath(env, home)).toBe(own);
+    mkdirSync(join(home, '.jarvis'), { recursive: true });
+    writeFileSync(legacy, '{}');
+    expect(googleTokensPath(env, home)).toBe(legacy);
+    mkdirSync(data, { recursive: true });
+    writeFileSync(own, '{}');
+    expect(googleTokensPath(env, home)).toBe(own);
+    expect(googleTokensPath({}, home)).toBe(legacy);
   });
 });
