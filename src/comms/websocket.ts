@@ -11,6 +11,7 @@ import { getCookie } from '../util/cookie.ts';
 import { rejectsCrossSiteWrite } from './cross-site-guard.ts';
 import { isServiceWorkerScriptRequest, serviceWorkerKillSwitch } from './service-worker-kill-switch.ts';
 import { limitUndeclaredBody, MAX_REQUEST_BODY_BYTES } from '../util/bounded-body.ts';
+import { isStorageWriteError, noteStorageFailure, plainStorageResponse, storageFailureBody } from '../vault/storage-health.ts';
 
 /** Constant-time string comparison to prevent timing attacks */
 export type WSMessage = {
@@ -701,8 +702,11 @@ export class WebSocketServer {
         } catch (err) {
           // A route that let the failed read throw still gets the 413.
           if (limited.exceeded()) return tooLarge();
+          // A write the disk refused answers in plain words, not SQLite text.
+          if (isStorageWriteError(err)) { noteStorageFailure(err); return Response.json(storageFailureBody(err), { status: 500 }); }
           throw err;
         }
+        if (res) res = await plainStorageResponse(res);
         if (limited.exceeded()) {
           // The route's answer is dropped; a proxied one may still be streaming.
           res?.body?.cancel().catch(() => {});

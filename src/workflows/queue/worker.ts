@@ -22,6 +22,7 @@ import {
   type Job,
 } from "../db/repos/job-queue";
 import { emergencyHold } from "../runtime/emergency-hold";
+import { noteStorageFailure, probeStorage, storageStatus } from "../../vault/storage-health";
 
 export type JobHandler<P = Record<string, unknown>> = (job: Job<P>) => Promise<void>;
 
@@ -44,6 +45,8 @@ export interface StartOptions {
 export class Worker {
   private readonly handlers: Record<string, JobHandler>;
   private readonly pollIntervalMs: number;
+  /** Per-loop wait while storage is not writable: 1 s, doubling to 10 s. */
+  private readonly storageBackoffMs = new Map<number, number>();
   private readonly leaseMs: number | undefined;
   private readonly log: (line: string) => void;
   private running = false;
@@ -106,10 +109,25 @@ export class Worker {
         await sleep(this.pollIntervalMs);
         continue;
       }
+      // Nothing can be saved (a full disk): claiming would fail four times a
+      // second. Probe with one small write and back off until it works again.
+      if (!storageStatus().writable && !probeStorage()) {
+        await sleep(this.storageBackoff(idx));
+        continue;
+      }
       let claimed: Job | null = null;
       try {
         claimed = claimNextJob({ leaseMs: this.leaseMs });
+        // Only a claim that worked ends the streak: a probe can pass on a
+        // nearly full disk while the claim still fails.
+        this.storageBackoffMs.delete(idx);
       } catch (e) {
+        if (noteStorageFailure(e)) {
+          // Once per streak, not on every probe-then-claim cycle.
+          if (idx === 0 && !this.storageBackoffMs.has(idx)) this.log(`loop ${idx}: cannot save, so no job can be claimed: ${storageStatus().message}`);
+          await sleep(this.storageBackoff(idx));
+          continue;
+        }
         this.log(`loop ${idx}: claim error: ${(e as Error).message}`);
       }
       if (!claimed) {
@@ -118,6 +136,12 @@ export class Worker {
       }
       await this.handle(claimed);
     }
+  }
+
+  private storageBackoff(idx: number): number {
+    const next = Math.min((this.storageBackoffMs.get(idx) ?? 500) * 2, 10_000);
+    this.storageBackoffMs.set(idx, next);
+    return next;
   }
 
   private async handle(job: Job): Promise<void> {
@@ -137,6 +161,11 @@ export class Worker {
       // Cancellation is terminal queue bookkeeping, not a handler failure.
       if (getJob(job.id)?.status === "RUNNING") completeJob(job.id);
     } catch (e) {
+      // A run that could not record its work (a full disk) stops further
+      // claims: the loop probes before claiming again, so no new work starts
+      // that could not be recorded either. A claim alone can still fit on a
+      // disk where the run's own writes do not.
+      noteStorageFailure(e);
       if (getJob(job.id)?.status === "CANCELED") return;
       const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
       this.log(`job ${job.id} (${job.jobType}) failed: ${msg}`);
@@ -144,6 +173,7 @@ export class Worker {
         const willRetry = failJob(job.id, msg);
         if (willRetry) this.log(`job ${job.id} requeued for retry (attempt ${job.attempt + 1}/${job.maxAttempts})`);
       } catch (failErr) {
+        noteStorageFailure(failErr);
         this.log(`job ${job.id}: failJob errored: ${(failErr as Error).message}`);
       }
     }

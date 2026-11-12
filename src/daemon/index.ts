@@ -4470,21 +4470,29 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (savedEmergencyState === 'paused') emergencyController.pause();
     else if (savedEmergencyState === 'killed') emergencyController.kill();
 
-    // Persist emergency state changes to the DB settings store
-    emergencyController.setStateChangeCallback(async (state) => {
+    // Persist emergency state changes to the DB settings store. The stop takes
+    // effect in memory first; a failed save (a full disk) is retried and the
+    // routes tell the owner it will not survive a restart until it works.
+    const { saveUserSection: saveEmergencySection } = await import('./user-settings.ts');
+    const { createEmergencyPersister } = await import('../authority/emergency-persistence.ts');
+    const { noteStorageFailure, isStorageFullError } = await import('../vault/storage-health.ts');
+    const persistEmergencyState = createEmergencyPersister({
+      controller: emergencyController,
+      save: (state) => {
+        if (!jarvisConfig.authority) jarvisConfig.authority = { default_level: 3 } as any;
+        jarvisConfig.authority.emergency_state = state;
+        saveEmergencySection('authority', jarvisConfig.authority);
+      },
+      describe: (err) => isStorageFullError(err) ? 'the disk is full' : 'the database could not be written',
+      onFailure: (err) => { noteStorageFailure(err); },
+    });
+    emergencyController.setStateChangeCallback((state) => {
       wsService.broadcastEmergencyState(state);
       // Pause holds, Kill stops (Q-08): stop runs and deny approvals on Kill,
       // release held steps on Resume, keep the engine's copy of the state.
       applyEmergencyState(state, { authorityEngine, approvalManager, auditTrail,
         onApprovalDenied: (request) => wsService.broadcastApprovalUpdate(request) });
-      try {
-        const { saveUserSection } = await import('./user-settings.ts');
-        if (!jarvisConfig.authority) jarvisConfig.authority = { default_level: 3 } as any;
-        jarvisConfig.authority.emergency_state = state;
-        saveUserSection('authority', jarvisConfig.authority);
-      } catch (err) {
-        console.error('[Daemon] Failed to persist emergency state:', err);
-      }
+      persistEmergencyState();
     });
 
     // 8f. Settings hot reload: per-section appliers. Everything they need

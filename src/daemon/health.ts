@@ -8,12 +8,15 @@
 import { existsSync, statSync } from "node:fs";
 import { ServiceRegistry, type ServiceStatus } from "./services.ts";
 import { getDb } from "../vault/schema.ts";
+import { probeStorage, storageStatus, type StorageStatus } from "../vault/storage-health.ts";
 
 export type HealthStatus = {
   uptime: number;           // seconds
   services: Record<string, ServiceStatus>;
   memory: { heapUsed: number; heapTotal: number; rss: number };
   database: { connected: boolean; size: number };  // DB file size in bytes
+  /** Whether Jarvis can save. `writable: false` means every write is failing (a full disk). */
+  storage: StorageStatus;
   startedAt: number;        // epoch ms
 };
 
@@ -68,12 +71,15 @@ export class HealthMonitor {
     const services = this.registry.getStatus();
     const memory = this.getMemoryStats();
     const database = this.getDatabaseStats();
+    // Only while writes are failing: a tiny write tells whether they work again.
+    if (!storageStatus().writable) probeStorage();
 
     return {
       uptime,
       services,
       memory,
       database,
+      storage: storageStatus(),
       startedAt: this.startTime,
     };
   }
@@ -182,6 +188,7 @@ export class HealthMonitor {
     lines.push('Database:');
     lines.push(`  Connected: ${health.database.connected ? 'Yes' : 'No'}`);
     lines.push(`  Size: ${this.formatBytes(health.database.size)}`);
+    lines.push(`  Can save: ${health.storage.writable ? 'Yes' : `No (${health.storage.message})`}`);
 
     return lines.join('\n');
   }

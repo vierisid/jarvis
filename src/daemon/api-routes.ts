@@ -294,6 +294,24 @@ function error(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
+/**
+ * The answer to Pause, Resume, Kill or Reset. The state is in effect either
+ * way; `saved: false` says it could not be written to disk, so a restart would
+ * not keep it, and why (a full disk). The dashboard shows `warning` as is.
+ */
+function emergencyAnswer(controller: { getState(): string; persistence(): { saved: boolean; reason: string | null } }): Response {
+  const state = controller.getState();
+  const { saved, reason } = controller.persistence();
+  if (saved) return json({ ok: true, state, saved: true });
+  const now = state === 'paused' ? 'Jarvis is paused' : state === 'killed' ? 'Jarvis is stopped' : 'Jarvis is back to normal';
+  return json({
+    ok: true,
+    state,
+    saved: false,
+    warning: `${now}, but Jarvis could not save that because ${reason ?? 'the database could not be written'}. If Jarvis restarts before that is fixed, it will not remember this. Jarvis keeps trying to save it.`,
+  });
+}
+
 function awarenessHistoryHidden(): Response | null {
   return awarenessHistoryHiddenAs(json);
 }
@@ -3660,6 +3678,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json({
           enabled: true,
           emergency_state: emergency.getState(),
+          emergency_saved: emergency.persistence?.().saved ?? true,
           pending_approvals: approvals?.getPending().length ?? 0,
           // Approved before a restart and never receipted; they need a decision too.
           unresolved_approvals: approvals?.getUnresolved().length ?? 0,
@@ -4240,7 +4259,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: () => {
         if (!ctx.emergencyController) return error('Emergency controller not configured', 500);
         ctx.emergencyController.pause();
-        return json({ ok: true, state: ctx.emergencyController.getState() });
+        return emergencyAnswer(ctx.emergencyController);
       },
     },
 
@@ -4248,7 +4267,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: () => {
         if (!ctx.emergencyController) return error('Emergency controller not configured', 500);
         ctx.emergencyController.resume();
-        return json({ ok: true, state: ctx.emergencyController.getState() });
+        return emergencyAnswer(ctx.emergencyController);
       },
     },
 
@@ -4256,7 +4275,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: () => {
         if (!ctx.emergencyController) return error('Emergency controller not configured', 500);
         ctx.emergencyController.kill();
-        return json({ ok: true, state: ctx.emergencyController.getState() });
+        return emergencyAnswer(ctx.emergencyController);
       },
     },
 
@@ -4264,7 +4283,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: () => {
         if (!ctx.emergencyController) return error('Emergency controller not configured', 500);
         ctx.emergencyController.reset();
-        return json({ ok: true, state: ctx.emergencyController.getState() });
+        return emergencyAnswer(ctx.emergencyController);
       },
     },
 
