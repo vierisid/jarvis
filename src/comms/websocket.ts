@@ -8,6 +8,7 @@ import { isWithin } from '../util/path.ts';
 import type { SidecarManager } from '../sidecar/manager.ts';
 import { PANEL_SESSION_COOKIE } from '../sidecar/panel-sessions.ts';
 import { getCookie } from '../util/cookie.ts';
+import { withSecurityHeaders } from './security-headers.ts';
 import { rejectsCrossSiteWrite } from './cross-site-guard.ts';
 import { isServiceWorkerScriptRequest, serviceWorkerKillSwitch } from './service-worker-kill-switch.ts';
 import { limitUndeclaredBody, MAX_REQUEST_BODY_BYTES } from '../util/bounded-body.ts';
@@ -694,7 +695,7 @@ export class WebSocketServer {
 
       async fetch(rawReq, server) {
         const limited = limitUndeclaredBody(rawReq, self.maxRequestBodyBytes);
-        const tooLarge = () => Response.json({ error: 'Request body too large' }, { status: 413, headers: { Connection: 'close' } });
+        const tooLarge = () => withSecurityHeaders(Response.json({ error: 'Request body too large' }, { status: 413, headers: { Connection: 'close' } }));
         let res: Response | undefined;
         try {
           res = await routing.fetch(limited.req, server, rawReq);
@@ -708,7 +709,15 @@ export class WebSocketServer {
           res?.body?.cancel().catch(() => {});
           return tooLarge();
         }
-        return res;
+        return res ? withSecurityHeaders(res) : res;
+      },
+
+      // A route that throws would otherwise get Bun's default 500, which
+      // carries none of the headers above and, without NODE_ENV=production,
+      // is an HTML page quoting the throwing source.
+      error(err) {
+        console.error('[WebSocketServer] Unhandled request error:', err);
+        return withSecurityHeaders(new Response('Internal Server Error', { status: 500, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }));
       },
 
       websocket: {

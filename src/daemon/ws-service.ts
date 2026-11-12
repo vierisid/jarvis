@@ -11,7 +11,7 @@ import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { Service, ServiceStatus } from './services.ts';
 import type { AgentService } from './agent-service.ts';
 import type { CommitmentExecutor } from './commitment-executor.ts';
-import type { ChannelService } from './channel-service.ts';
+import type { BroadcastDelivery, ChannelService } from './channel-service.ts';
 import type { Commitment } from '../vault/commitments.ts';
 import type { ContentItem } from '../vault/content-pipeline.ts';
 import { splitIntoSentences, type STTProvider, type TTSProvider } from '../comms/voice.ts';
@@ -902,12 +902,14 @@ export class WebSocketService implements Service {
    * Used by EventReactor for immediate event reactions.
    * Urgent notifications are also pushed to all external channels.
    */
-  broadcastNotification(text: string, priority: 'urgent' | 'normal' | 'low'): void {
+  broadcastNotification(text: string, priority: 'urgent' | 'normal' | 'low', delivery?: Pick<BroadcastDelivery, 'shouldContinue'>): void {
     this.broadcastNotificationToDashboard(text, priority);
 
     // Legacy proactive notifications intentionally fan out to external channels.
+    // `delivery.shouldContinue` stops that copy's sends and retries once its
+    // sender may no longer send (screen-derived help, #1314 follow-up).
     if (priority === 'urgent' && this.channelService) {
-      this.channelService.broadcastToAll(`[URGENT] ${text}`).catch(err =>
+      this.channelService.broadcastToAll(`[URGENT] ${text}`, undefined, delivery?.shouldContinue ? { shouldContinue: delivery.shouldContinue } : undefined).catch(err =>
         console.error('[WSService] Channel broadcast error:', err)
       );
     }
@@ -916,14 +918,17 @@ export class WebSocketService implements Service {
   /**
    * Dashboard delivery only. Governed callers authorize external recipients
    * separately. Returns how many dashboard sockets accepted it (0: none open).
+   * `storedId` is the id of the saved copy, so a tab shows it once.
    */
-  broadcastNotificationToDashboard(text: string, priority: 'urgent' | 'normal' | 'low'): number {
+  broadcastNotificationToDashboard(text: string, priority: 'urgent' | 'normal' | 'low', storedId?: string): number {
     const message: WSMessage = {
-      id: crypto.randomUUID(),
+      id: storedId ?? crypto.randomUUID(),
       type: 'chat',
       payload: {
         text,
         source: 'proactive',
+        // Also in the unread list: the dashboard marks it read there too.
+        ...(storedId ? { stored: true } : {}),
       },
       priority,
       timestamp: Date.now(),
@@ -1101,8 +1106,15 @@ export class WebSocketService implements Service {
    * Used for awareness suggestions and other unsolicited voice notifications.
    * Resolves how many clients were sent audio: 0 when it was skipped or no
    * audio was synthesized, so a caller never reports silence as spoken.
+   *
+   * `shouldContinue` is asked before speaking starts, before each sentence
+   * and before each audio chunk is sent (#1314 follow-up): a caller whose
+   * permission to speak can lapse mid-message (screen-derived help once
+   * awareness is turned off) stops there, and the clients get tts_end.
    */
-  async broadcastProactiveVoice(text: string): Promise<number> {
+  async broadcastProactiveVoice(text: string, options: { shouldContinue?: () => boolean } = {}): Promise<number> {
+    const proceed = () => !options.shouldContinue || options.shouldContinue();
+    if (!proceed()) return 0;
     if (!this.ttsProvider || !text) {
       console.log(`[WSService] Proactive TTS skipped: ${!this.ttsProvider ? 'no TTS provider' : 'empty text'}`);
       return 0;
@@ -1155,9 +1167,11 @@ export class WebSocketService implements Service {
       const { splitIntoSentences } = await import('../comms/voice.ts');
       for (const sentence of splitIntoSentences(text)) {
         checkpointExecution();
+        if (!proceed()) break;
         try {
           for await (const chunk of this.ttsProvider.synthesizeStream(sentence)) {
             checkpointExecution();
+            if (!proceed()) break;
             // Send binary audio to the target clients
             for (const ws of owned()) {
               try {
