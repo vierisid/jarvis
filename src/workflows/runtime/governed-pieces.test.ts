@@ -10,11 +10,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../db';
+import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS, getWorkflowDb } from '../db';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun, updateRun } from '../db/repos/flow-run';
 import { AuthorityEngine } from '../../authority/engine';
+import { approvalIntentParts } from '../../authority/approval-delivery';
 import { AuditTrail } from '../../authority/audit';
 import { EmergencyController } from '../../authority/emergency';
 import { ApprovalManager } from '../../authority/approval';
@@ -1564,6 +1565,140 @@ describe('#961: the core HTTP piece is governed by method', () => {
     expect(listWorkflowEffects(get.run.id)[0]).toMatchObject({ actionCategory: 'read_data', status: 'succeeded' });
   });
 
+  test('the card says in words what the request will do, naming the method and the host, and why it asks', async () => {
+    const cases: Array<[string, Record<string, unknown>, string, RegExp]> = [
+      ['post', request('POST', { url: 'https://api.example.test/v1/orders?token=secret-q' }), 'Jarvis wants to send a POST request to api.example.test/v1/orders', /Sending a request/],
+      ['delete', request('PUT', { method: 'put' }), 'Jarvis wants to send a PUT request to ops.example.test/api/logs', /Sending a request/],
+      ['unlisted read', request('GET', { url: 'https://other.example.test/x?d=1' }), 'Jarvis wants to read other.example.test/x', /not on the workflow's list/],
+      ['unknown host', request('POST', { url: '{{trigger.url}}' }), 'Jarvis wants to send a POST request to a web address set when the step runs', /Sending a request/],
+    ];
+    for (const [name, input, sentence, why] of cases) {
+      const f = shipped();
+      const card = f.approvals.getRequest(approvalOf(await f.authorize(input)))!;
+      const parts = approvalIntentParts(card);
+      expect(`${name}: ${parts.action}`).toBe(`${name}: ${sentence}`);
+      expect(parts.action).not.toContain('secret-q');
+      expect(parts.reason).toMatch(why);
+      expect(parts.reason).not.toContain('governed action');
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
+    const gql = fixture('@activepieces/piece-graphql', 'send_request', DEFAULT_CONFIG.authority.default_level);
+    gql.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories] as ActionCategory[]);
+    const card = gql.approvals.getRequest(approvalOf(await gql.authorize({ method: 'POST', url: 'https://graph.example.test/graphql', query: '{ me { id } }' })))!;
+    expect(approvalIntentParts(card).action).toBe('Jarvis wants to send a GraphQL request to graph.example.test/graphql');
+  });
+
+  test('the card names the path from the redacted URL: never query, fragment or userinfo; secrets masked; unknown parts named; too long refused', async () => {
+    const cases: Array<[string, string]> = [
+      // Query, fragment and userinfo never reach the sentence.
+      ['https://user:pw@api.stripe.test/v1/refunds?api_key=q-secret#frag', 'api.stripe.test/v1/refunds'],
+      // #1318's path secrets stay redacted, and a long token-shaped segment is masked the same way.
+      ['https://hooks.slack.com/services/T0/B0/abcdefghijklmnop1234', 'hooks.slack.com/services/T0/B0/[redacted]'],
+      ['https://api.example.test/keys/sk_live_51HabcdEFGhijkLMNop/rotate', 'api.example.test/keys/[redacted]/rotate'],
+      // A long plain word is not a token.
+      ['https://api.example.test/customer-subscriptions-list', 'api.example.test/customer-subscriptions-list'],
+      // Decoded only where the result is plain; markup, slashes and non-ASCII stay encoded.
+      ['https://api.example.test/a%2Db/%3Cb%3E/a%2Fb/caf%C3%A9', 'api.example.test/a-b/%3Cb%3E/a%2Fb/caf%C3%A9'],
+      // A part the engine has not resolved is named as such; an unresolved host is unknown whole.
+      ['https://api.example.test/v1/{{trigger.id}}/refunds', 'api.example.test/v1/[set when the step runs]/refunds'],
+      ['https://{{trigger.host}}/v1/x', 'a web address set when the step runs'],
+    ];
+    for (const [url, where] of cases) {
+      const f = shipped([]);
+      const card = f.approvals.getRequest(approvalOf(await f.authorize(request('POST', { url }))))!;
+      expect(approvalIntentParts(card).action).toBe(`Jarvis wants to send a POST request to ${where}`);
+      expect(JSON.parse(card.context).intent).toBe(`Jarvis wants to send a POST request to ${where}`);
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
+    // A URL the engine's bound cut, and a sentence past the card's limit, are refused, not cut.
+    for (const url of [`https://api.example.test/${'a/'.repeat(300)}`, `https://api.example.test/${'{{x}}/'.repeat(23)}`]) {
+      const f = shipped([]);
+      await expect(f.authorize(request('POST', { url }))).rejects.toThrow(/approval card/);
+      expect(f.approvals.getPending()).toHaveLength(0);
+      expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'blocked', outcome: { code: 'CARD_CANNOT_SHOW' } });
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
+  });
+
+  test('parse_url makes no request: it runs without a card, whether or not any host is listed', async () => {
+    for (const hosts of [[], ['ops.example.test']]) {
+      const f = fixture(HTTP, 'parse_url', DEFAULT_CONFIG.authority.default_level);
+      f.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories] as ActionCategory[]);
+      setFlowReadHosts(f.run.flowId, hosts);
+      expect(await f.authorize({ url: 'https://ops.example.test/a?b=1' })).toEqual({ governed: true, dispatch: 'authorized' });
+      expect(f.approvals.getPending()).toHaveLength(0);
+      closeWorkflowDb(); initWorkflowDb(':memory:');
+    }
+  });
+
+  test('a request to this computer or the local network is refused before any card or waitpoint exists', async () => {
+    const urls = ['http://127.0.0.1:8080/admin', 'http://localhost/x', 'http://[::1]/x', 'http://169.254.169.254/latest/meta-data', 'http://0x7f.1/x', 'http://192.168.1.10/x'];
+    for (const url of urls) {
+      for (const method of ['POST', 'GET']) {
+        const f = shipped([]);
+        const waitpoints = () => getWorkflowDb().query('SELECT COUNT(*) AS n FROM waitpoint').get() as { n: number };
+        const before = waitpoints().n;
+        await expect(f.authorize(request(method, { url }))).rejects.toThrow('Jarvis does not send requests to addresses on this computer or local network.');
+        expect(`${url} ${method}: ${f.approvals.getPending().length} ${listWorkflowEffects(f.run.id).length} ${waitpoints().n - before}`).toBe(`${url} ${method}: 0 0 0`);
+        expect(f.deliveredApprovals).toEqual([]);
+        closeWorkflowDb(); initWorkflowDb(':memory:');
+      }
+    }
+    // A public address still asks, and a private one is allowed where the engine allows it.
+    const f = shipped();
+    expect(await f.authorize(request('POST', { url: 'https://93.184.216.35/x' }))).toMatchObject({ dispatch: 'approval_required' });
+    const self = fixture(HTTP, 'send_request', DEFAULT_CONFIG.authority.default_level);
+    const own = buildSandboxServiceBackends({ ...self.options, egressPolicy: 'private-allowed' });
+    self.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories] as ActionCategory[]);
+    const lan = request('POST', { url: 'http://192.168.1.10/x' });
+    expect(await own.pieceAuthorize!({ piece: HTTP, action: 'send_request', input: lan, inputDigest: await pieceInputDigest(lan) }, self.context))
+      .toMatchObject({ dispatch: 'approval_required' });
+  });
+
+  test('the early refusal uses the egress guard\'s own-address rule: JARVIS_HOST_ADDRESSES and a mapped loopback are refused before a card', async () => {
+    const saved = process.env.JARVIS_HOST_ADDRESSES;
+    process.env.JARVIS_HOST_ADDRESSES = '93.184.216.36';
+    try {
+      for (const url of ['https://93.184.216.36/x', 'http://[::ffff:127.0.0.1]/x', 'http://localhost./x']) {
+        const f = shipped([]);
+        await expect(f.authorize(request('POST', { url }))).rejects.toThrow('Jarvis does not send requests to addresses on this computer or local network.');
+        expect(`${url}: ${f.approvals.getPending().length} ${listWorkflowEffects(f.run.id).length}`).toBe(`${url}: 0 0`);
+        closeWorkflowDb(); initWorkflowDb(':memory:');
+      }
+    } finally {
+      if (saved === undefined) delete process.env.JARVIS_HOST_ADDRESSES; else process.env.JARVIS_HOST_ADDRESSES = saved;
+    }
+    // A public address the operator did not name still asks.
+    expect(await shipped().authorize(request('POST', { url: 'https://93.184.216.36/x' }))).toMatchObject({ dispatch: 'approval_required' });
+  });
+
+  test('a step already recorded is not refused early: its card stays the one it has, and the engine guard decides when it runs', async () => {
+    // A card raised on a self-hosted install, then read by a daemon that now applies the hosted rule.
+    const f = fixture(HTTP, 'send_request', DEFAULT_CONFIG.authority.default_level);
+    f.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories] as ActionCategory[]);
+    const lan = request('POST', { url: 'http://192.168.1.10/x' });
+    const before = buildSandboxServiceBackends({ ...f.options, egressPolicy: 'private-allowed' });
+    const first = await before.pieceAuthorize!({ piece: HTTP, action: 'send_request', input: lan, inputDigest: await pieceInputDigest(lan) }, f.context);
+    expect(first).toMatchObject({ dispatch: 'approval_required' });
+    const after = buildSandboxServiceBackends({ ...f.options, egressPolicy: 'public-only' });
+    const again = await after.pieceAuthorize!({ piece: HTTP, action: 'send_request', input: lan, inputDigest: await pieceInputDigest(lan) }, f.context);
+    expect(approvalOf(again)).toBe(approvalOf(first));
+    expect(f.approvals.getPending()).toHaveLength(1);
+  });
+
+  test('the card\'s own reason replaces only the engine\'s generic sentence, never an override\'s, nor a listed read\'s', async () => {
+    // A listed read asks only because reads are governed here: the engine's reason is the true one.
+    const read = shipped();
+    read.authority.setGovernedCategories([...DEFAULT_CONFIG.authority.governed_categories, 'read_data'] as ActionCategory[]);
+    const readCard = read.approvals.getRequest(approvalOf(await read.authorize(request('GET'))))!;
+    expect(approvalIntentParts(readCard)).toEqual({ action: 'Jarvis wants to read ops.example.test/api/logs', reason: 'read_data is a governed action requiring user approval' });
+    closeWorkflowDb(); initWorkflowDb(':memory:');
+    const send = shipped();
+    send.authority.addOverride({ action: 'send_message', allowed: true, requires_approval: true });
+    const sendCard = send.approvals.getRequest(approvalOf(await send.authorize(request('POST'))))!;
+    expect(approvalIntentParts(sendCard).reason).toBe('Override requires approval for send_message');
+  });
+
   test('PUT and PATCH ask as a POST does; DELETE and any other method are denied at the default level', async () => {
     for (const [method, outcome] of [['PUT', 'card'], ['PATCH', 'card'], ['post', 'card'], ['HEAD', 'run'], ['get', 'run'],
       ['DELETE', 'denied'], ['PURGE', 'denied'], [' GET', 'denied'], ['', 'denied']] as const) {
@@ -1619,8 +1754,8 @@ describe('#961: the core HTTP piece is governed by method', () => {
       // Userinfo and a parent domain do not make another host a listed one.
       [['ops.example.test'], 'https://ops.example.test@exfil.example.test/'],
       [['example.test'], 'https://ops.example.test/api/logs'],
-      // A URL the projection cut, or one that does not parse, is never listed.
-      [['ops.example.test'], `https://ops.example.test/${'a'.repeat(600)}`],
+      // A URL that does not parse is never listed. (One the projection cut is
+      // never listed either, and its card is refused, not cut: below.)
       [['ops.example.test'], '{{trigger.url}}'],
     ] as const) {
       for (const method of ['GET', 'HEAD']) {
@@ -1632,6 +1767,14 @@ describe('#961: the core HTTP piece is governed by method', () => {
         expect(JSON.parse(card.context).target).toMatchObject({ method });
         closeWorkflowDb(); initWorkflowDb(':memory:');
       }
+    }
+    // Cut by the projection: not listed, so it would ask, and a card cannot show it whole, so it is refused.
+    for (const method of ['GET', 'HEAD']) {
+      const cut = shipped(['ops.example.test']);
+      await expect(cut.authorize(sanitizePieceInput(request(method, { url: `https://ops.example.test/${'a'.repeat(600)}` }), HTTP)))
+        .rejects.toThrow(/too long for the approval card/);
+      expect(listWorkflowEffects(cut.run.id)[0]).toMatchObject({ actionCategory: 'send_message', outcome: { code: 'CARD_CANNOT_SHOW' } });
+      closeWorkflowDb(); initWorkflowDb(':memory:');
     }
     // Listed, in any letter case, it runs, and the list goes back to the engine.
     const f = shipped(['OPS.Example.test', 'other.example.test']);
