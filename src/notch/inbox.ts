@@ -275,25 +275,33 @@ export class NotchInbox {
     script(playing.stage).then(
       (end) => { this.finished(playing, end); },
       (error: unknown) => {
-        if (!(error instanceof NotchStageEnded)) {
-          const what = playing.entry ? `"${playing.entry.item.id}"` : 'a notch script';
-          this.log(`[notch] ${what} failed on the notch: ${error instanceof Error ? error.message : String(error)}`);
-        }
+        // Cut short by something else taking the notch: it has not had its say.
+        if (error instanceof NotchStageEnded) { this.finished(playing, 'cut'); return; }
+        const what = playing.entry ? `"${playing.entry.item.id}"` : 'a notch script';
+        this.log(`[notch] ${what} failed on the notch: ${error instanceof Error ? error.message : String(error)}`);
         this.finished(playing, 'waits');
       },
     );
   }
 
-  private finished(playing: Playing, end: NotchItemEnd | 'gone'): void {
-    // Halted, or replaced: whoever did that has already said what comes next.
-    if (this.playing !== playing) return;
-    this.playing = null;
-    playing.stage.stop();
+  /** `cut`: its stage was ended under it. Any other end is the script's own conclusion. */
+  private finished(playing: Playing, end: NotchItemEnd | 'gone' | 'cut'): void {
     const entry = playing.entry;
-    if (entry && (end !== 'waits' || entry.item.once)) {
+    // What the script concluded holds, whoever has the notch by now: an item
+    // that settled is out of the count, and news that was said is not said
+    // again. Only one that was cut short keeps its place.
+    const over = end === 'settled' || end === 'gone' || (end === 'waits' && entry?.item.once === true);
+    if (entry && over) {
       const at = this.entries.indexOf(entry);
       if (at >= 0) this.entries.splice(at, 1);
     }
+    // Halted, or replaced: whoever did that has already said what comes next.
+    if (this.playing !== playing) {
+      if (entry && over) this.pushCount();
+      return;
+    }
+    this.playing = null;
+    playing.stage.stop();
     // What comes next takes the line's place directly. Going back to the eyes
     // in between would make the notch shrink and grow again for nothing.
     if (playing.round && this.next(playing.round)) return;

@@ -435,3 +435,41 @@ describe('what cannot wait, and what arrived while nobody could be told', () => 
     expect(a.shows).toEqual([true]);
   });
 });
+
+describe('taken off the notch in the instant its script ends', () => {
+  test('news that was said is not said again because something took the notch right behind it', async () => {
+    const h = harness();
+    h.inbox.add(item('news', 'rest', { once: true, play: async (stage) => { await stage.say(['Kept: the pricing.'], 1000); return 'settled'; } }));
+    await settle();
+    // The page says the line is over, and in the same instant everything is held.
+    h.fromPage({ type: 'answer', id: h.line()!.id, act: 'done' });
+    h.inbox.hold('stopped');
+    await settle();
+    expect(h.inbox.has('news')).toBe(false);
+    expect(h.count()).toBe(0);
+  });
+
+  test('an item that settled is out of the count even if another took its place before its script returned', async () => {
+    const h = harness();
+    const a = item('a');
+    h.inbox.add(a);
+    await settle();
+    h.fromPage({ type: 'answer', id: h.line()!.id, act: 'yes' });
+    h.inbox.add(item('fuse', 'clock', { urgent: true }));
+    await settle();
+    expect(a.yeses).toBe(1);
+    expect(h.inbox.has('a')).toBe(false);
+    expect(h.said()).toBe('fuse?');
+    expect(h.count()).toBe(0);
+  });
+
+  test('news that was cut short before it was said keeps its place', async () => {
+    const h = harness();
+    h.inbox.add(item('news', 'rest', { once: true, play: async (stage) => { await stage.say(['Kept: the pricing.'], 1000); return 'settled'; } }));
+    await settle();
+    h.inbox.hold('stopped');
+    await settle();
+    expect(h.inbox.has('news')).toBe(true);
+    expect(h.count()).toBe(1);
+  });
+});

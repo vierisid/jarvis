@@ -59,8 +59,10 @@ export function attachNotchPromises(inbox: NotchInbox, deps: NotchPromiseDeps): 
 
   const outcome = (event: Extract<CommitmentEvent, { type: 'finished' }>): { say: NotchPart[]; ms: number; ok: boolean } | null => {
     const words = promiseWords(event.what);
-    if (event.status === 'completed') return { say: ['Kept: ', em(words), '.'], ms: 3200, ok: true };
-    if (event.status === 'failed') return { say: ['Not kept: ', em(words), '. The dashboard says why.'], ms: 4600, ok: false };
+    // The thing itself comes last, with nothing after it: a line that wraps
+    // must not start with a stray full stop.
+    if (event.status === 'completed') return { say: ['Kept: ', em(words)], ms: 3200, ok: true };
+    if (event.status === 'failed') return { say: ['Not kept, and the dashboard says why: ', em(words)], ms: 4600, ok: false };
     // Parked: it stopped on an approval, and that approval is its own line.
     return null;
   };
@@ -83,8 +85,8 @@ export function attachNotchPromises(inbox: NotchInbox, deps: NotchPromiseDeps): 
     const { commitmentId, what } = event;
     const words = promiseWords(what);
     const said: NotchPart[] = event.whenDue === null
-      ? ['I promised: ', em(words), '. Doing it…']
-      : [`${clockTime(event.whenDue)}. I promised: `, em(words), '. Doing it…'];
+      ? ['Doing what I promised: ', em(words)]
+      : [`${clockTime(event.whenDue)}. Doing what I promised: `, em(words)];
     return {
       id: notchPromiseItemId(commitmentId),
       subject: notchPromiseItemId(commitmentId),
@@ -128,7 +130,7 @@ export function attachNotchPromises(inbox: NotchInbox, deps: NotchPromiseDeps): 
       case 'announced':
         if (event.fireAt === null) {
           // Announce-only mode: nothing will run by itself. Said once.
-          inbox.add(news(event.commitmentId, ['Due now: ', em(promiseWords(event.what)), '. It waits for your word.'], 4200, true));
+          inbox.add(news(event.commitmentId, ['Due now, and waiting for your word: ', em(promiseWords(event.what))], 4200, true));
           return;
         }
         inbox.add(fuse({ ...event, fireAt: event.fireAt }));

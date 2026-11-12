@@ -108,7 +108,7 @@ describe('one line, one yes', () => {
     const req = h.ask();
     await h.sync();
     expect(h.said()).toBe(`${approvalToast(req).body}?`);
-    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'yes', unasked: true });
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'approve', unasked: true });
     expect(h.inbox.showing()).toBe(h.notch.itemId(req.id));
   });
 
@@ -230,7 +230,7 @@ describe('what a key may not approve', () => {
     const req = h.ask({ category: 'make_payment' });
     expect(notchApprovalWay(req)).toBe('payment');
     await h.sync();
-    expect(h.said()).toBe(`${approvalToast(req).body}. A payment. I never take that on a key.`);
+    expect(h.said()).toBe(`A payment. I never take that on a key: ${approvalToast(req).body}`);
     expect(h.line()).toMatchObject({ kind: 'offer', yes: 'open' });
     await h.answer('yes');
     expect(h.opened).toEqual(['pc']);
@@ -247,7 +247,7 @@ describe('what a key may not approve', () => {
     const review = h.ask({ context: JSON.stringify({ confirm: 'always', intent: 'Click Send in Mail (sends an email)' }) });
     expect(notchApprovalWay(review)).toBe('click');
     await h.sync();
-    expect(h.said()).toContain('approved with a click in the dashboard');
+    expect(h.said()).toContain('Approved with a click in the dashboard, not with a key: ');
     expect(h.line()).toMatchObject({ yes: 'open' });
   });
 
