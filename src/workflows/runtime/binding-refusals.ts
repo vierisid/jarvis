@@ -27,6 +27,7 @@ import { getFlowVersion } from '../db/repos/flow-version';
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
 import { TOAST_TITLE_MAX } from '../../comms/toast-limits';
 import { failureText } from '../../failures/projection';
+import { forCard } from '../../util/card-text';
 import { WORKFLOW_STEP_LABEL_MAX_CHARS } from './effect-boundary';
 import { runFailure } from './run-failure';
 
@@ -140,7 +141,7 @@ function replacedConnectionBlock(flow: { id: string; project_id: string }): Bind
     const updated = db.query<{ updated: number }, [string, string]>(
       'SELECT updated FROM app_connection WHERE project_id = ? AND external_id = ? LIMIT 1').get(flow.project_id, externalId)?.updated;
     return { code: 'BINDING_STALE', kind: 'readiness', runId: null,
-      message: `${change}, so this workflow is paused. Publish it again to accept the change.`,
+      message: forCard(`${change}, so this workflow is paused. Publish it again to accept the change.`, 300),
       at: updated ?? pins.pinnedAt };
   }
   return null;

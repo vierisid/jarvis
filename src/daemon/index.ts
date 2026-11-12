@@ -183,6 +183,7 @@ import { buildSandboxServiceBackends } from "../workflows/runtime/service-backen
 import { humanInputRefusal } from "../workflows/runtime/human-input-contract.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 import { createLimiter } from "../util/concurrency.ts";
+import { forCard } from "../util/card-text.ts";
 import { runWithOrigin } from "../llm/origin.ts";
 import { getMachineScope } from "../actions/machine-scope.ts";
 import {
@@ -5382,7 +5383,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         onConnectionReplaced: ({ connectionId, displayName, message }) => {
           notifyAll({
             id: `workflow-connection-replaced:${connectionId}:${Date.now()}`, kind: 'workflow',
-            title: `Workflows paused: ${displayName.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim().slice(0, 40)} key changed`, body: message,
+            title: `Workflows paused: ${forCard(displayName, 40)} key changed`, body: message,
             actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
           });
         },

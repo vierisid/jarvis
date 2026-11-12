@@ -121,7 +121,8 @@ under way.
 The engine reports any refused fetch as a bare loading error, so the reason is
 shown where people look. A step whose connection was refused fails with that
 reason as its headline (code `CONNECTION_BINDING_REFUSED`, next step: publish the
-workflow again to accept the change), not "this step did nothing". The run list
+workflow again to accept the change, or set the connection up again when it was
+removed or revoked), not "this step did nothing". The run list
 and the run page read the same evidence, so an expired OAuth2 token says
 Reconnect in both. The run page also shows the evidence itself
 (`GET /api/workflow-runs/:runId`, `connectionBindings`: the connection, its kind

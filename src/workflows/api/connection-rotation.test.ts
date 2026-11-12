@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { closeWorkflowDb, DEFAULT_IDS, initWorkflowDb } from "../db";
+import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from "../db";
 import { setEncryptionKey } from "../db/encryption";
 import { upsertConnection } from "../db/repos/app-connection";
 import { pinFlowBindings, recordRunCredentialOutcome, enforceRunConnectionBinding } from "../db/repos/binding-pins";
@@ -41,8 +41,8 @@ const connect = (secret: string) => upsertConnection({ externalId: "account", pi
 const step = { name: "trigger", type: "EMPTY", nextAction: { name: "send_it", displayName: "Send it", type: "PIECE",
   settings: { pieceName: PIECE, actionName: "send", input: { auth: "{{connections['account']}}" } } } } as never;
 
-function enabledFlow(name: string) {
-  const flow = createFlow({});
+function enabledFlow(name: string, projectId?: string) {
+  const flow = createFlow(projectId ? { projectId } : {});
   const version = createDraftVersion({ flowId: flow.id, displayName: name, trigger: step });
   publishFlowVersion(flow.id);
   updateFlowStatus(flow.id, "ENABLED");
@@ -111,9 +111,34 @@ describe("rotating a key says what it stops", () => {
   });
 });
 
+describe("the rotation list is held to the caller's project and shows names as card text", () => {
+  const OTHER = "proj_other_1406";
+
+  test("another project's workflow on the same external id is not named, and its connection is a 404", async () => {
+    const conn = connect("one");
+    const theirs = upsertConnection({ projectId: OTHER, externalId: "account", pieceName: PIECE, displayName: "Theirs", pieceVersion: "1",
+      type: "SECRET_TEXT", value: { secret_text: "x" } });
+    enabledFlow("Ours");
+    enabledFlow("Theirs", OTHER);
+    const impact = await call("/api/workflows/connections/:id/rotation-impact", "GET", { id: conn.id });
+    expect(impact.body.workflows.map((w: { name: string }) => w.name)).toEqual(["Ours"]);
+    const patched = await call("/api/workflows/connections/:id", "PATCH", { id: conn.id }, { value: { secret_text: "two" } });
+    expect(patched.body.pausedWorkflows.map((w: { name: string }) => w.name)).toEqual(["Ours"]);
+
+    expect((await call("/api/workflows/connections/:id/rotation-impact", "GET", { id: theirs.id })).status).toBe(404);
+  });
+
+  test("a workflow name cannot add a line, reorder the sentence or close its quotes", async () => {
+    const conn = connect("one");
+    enabledFlow("Pay\u202Egpj.exe\nrun \"now\"\u0007");
+    const impact = await call("/api/workflows/connections/:id/rotation-impact", "GET", { id: conn.id });
+    expect(impact.body.message).toStartWith(`"Paygpj.exe run 'now'" uses this connection.`);
+  });
+});
+
 describe("a run cut off by its connection says why", () => {
   function failedRun(afterBind: (runId: string) => void) {
-    connect("one");
+    connect("canary-old-key");
     const { flowId, versionId } = enabledFlow("Weekly digest");
     const run = createFlowRun({ flowId, flowVersionId: versionId, status: "RUNNING" });
     expect(enforceRunConnectionBinding(run.id, DEFAULT_IDS.project, "account")).toBeNull();
@@ -124,7 +149,7 @@ describe("a run cut off by its connection says why", () => {
 
   test("a key replaced during the run is the failure, not 'this step did nothing'", () => {
     const { runId } = failedRun((id) => {
-      connect("two");
+      connect("canary-new-key");
       // The engine's next fetch is refused and records why.
       expect(enforceRunConnectionBinding(id, DEFAULT_IDS.project, "account")).toContain("was replaced during this run");
     });
@@ -132,6 +157,20 @@ describe("a run cut off by its connection says why", () => {
     expect(failure.headline).toContain("The credential stored in connection account was replaced during this run");
     expect(failure.code).toBe("CONNECTION_BINDING_REFUSED");
     expect(failure.next.map((n) => n.step)).toContain("accept_binding_change");
+    // The reason names the connection, never the key it held or the new one.
+    for (const text of [failure.headline, failure.outcome, JSON.stringify(failure.next)]) {
+      expect(text).not.toContain("canary");
+    }
+  });
+
+  test("a connection removed during the run asks for it to be set up again, not for a publish", () => {
+    const { runId } = failedRun((id) => {
+      getWorkflowDb().run("DELETE FROM app_connection WHERE external_id = 'account'");
+      expect(enforceRunConnectionBinding(id, DEFAULT_IDS.project, "account")).toContain("was removed while this run asked for it");
+    });
+    const failure = runFailure(getFlowRun(runId)!)!;
+    expect(failure.code).toBe("CONNECTION_BINDING_REFUSED");
+    expect(failure.next.map((n) => n.step)).toEqual(["connect", "open_details"]);
   });
 
   test("the run list gives the same advice as the run page for an expired token", async () => {

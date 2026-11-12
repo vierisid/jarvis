@@ -1307,11 +1307,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
-    // Both resolve `:id` inside the caller's project (#692), the same project
-    // the GET lists and the POST writes. They found the row by bare id, so an
-    // id from another project was reachable here while invisible to the list.
-    // A mismatch is a 404, not a 403: to this caller the row does not exist,
-    // and a distinct answer would confirm the id to someone guessing them.
+    // Resolved inside the caller's project, as the routes below (#692).
     // What saving a new key would do: the enabled workflows that run on this
     // connection stop until each is published again. The Rotate form reads it.
     "/api/workflows/connections/:id/rotation-impact": {
@@ -1325,6 +1321,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // Both resolve `:id` inside the caller's project (#692), the same project
+    // the GET lists and the POST writes. They found the row by bare id, so an
+    // id from another project was reachable here while invisible to the list.
+    // A mismatch is a 404, not a 403: to this caller the row does not exist,
+    // and a distinct answer would confirm the id to someone guessing them.
     "/api/workflows/connections/:id": {
       DELETE: (req) =>
         trapErrors(() => {
