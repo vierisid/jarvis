@@ -236,4 +236,29 @@ describe("the engine is spawned so nothing is resolved from outside the bundle (
     expect(seen.execArgv).toContain("--no-install");
     expect({ bu: seen.bu, u8: seen.u8 }).toEqual({ bu: "1", u8: "1" });
   }, 20_000);
+
+  test("the engine's url.parse() deprecation warning is silenced and no other warning is", async () => {
+    // socket.io-client's long-polling calls url.parse() in a dependency on
+    // every engine start. A stand-in bundle does the same call, then raises a
+    // different deprecation: only the first may disappear. Only Bun 1.4.x
+    // raises DEP0169, so on 1.3.x the first two assertions hold without the
+    // flag; CI's Bun is what makes this test bite.
+    const dir = scratch("warnings");
+    const bundlePath = join(dir, "main.js");
+    writeFileSync(bundlePath, [
+      `require("url").parse("http://127.0.0.1:1/worker/ws");`,
+      `process.emitWarning("another deprecation", { type: "DeprecationWarning", code: "DEP0999" });`,
+      `process.emitWarning("a plain warning");`,
+      `setTimeout(() => {}, 50);`,
+    ].join("\n"));
+    const engine = spawnEngine({ bundlePath, expectedDigest: null, sandboxId: "warn-probe", sandboxWsPort: 1, baseCodeDir: dir });
+    let err = "";
+    engine.stdout?.resume();
+    engine.stderr?.on("data", (d: Buffer) => { err += d.toString(); });
+    expect((await engine.exited).code).toBe(0);
+    expect(err).not.toContain("DEP0169");
+    expect(err).not.toContain("url.parse()");
+    expect(err).toContain("DEP0999");
+    expect(err).toContain("a plain warning");
+  }, 20_000);
 });
