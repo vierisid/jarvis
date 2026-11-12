@@ -345,7 +345,7 @@ func platformNotchWindowSize(handle unsafe.Pointer) (int, int) {
 // platformNotchSetOutline masks the web view to the notch's true outline. The
 // mask is a shape layer, which is anti-aliased, so macOS needs no second window
 // for the edge and the inner outline is not used.
-func platformNotchSetOutline(handle unsafe.Pointer, shape, cut []notchPoint) error {
+func platformNotchSetOutline(handle unsafe.Pointer, shape []notchVertex, cut []notchPoint) error {
 	if handle == nil {
 		return fmt.Errorf("nil NSWindow*")
 	}
