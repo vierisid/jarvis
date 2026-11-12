@@ -50,14 +50,27 @@ export type WebhookRefusalCallback = (workflowId: string, code: string, reason: 
 /** How deeply a webhook body's JSON may nest. Real payloads stay under about 20. */
 export const WEBHOOK_MAX_JSON_DEPTH = 100;
 
-/** Whether a parsed JSON value nests deeper than `limit`. Iterative: a deep body must not overflow the stack it is measured on. */
-export function jsonNestsDeeperThan(value: unknown, limit: number): boolean {
-  const stack: Array<[unknown, number]> = [[value, 1]];
-  while (stack.length > 0) {
-    const [node, depth] = stack.pop()!;
-    if (node === null || typeof node !== 'object') continue;
-    if (depth > limit) return true;
-    for (const child of Array.isArray(node) ? node : Object.values(node)) stack.push([child, depth + 1]);
+/**
+ * Whether a body that starts like a JSON array or object opens more than
+ * `limit` brackets deep, measured on the text before it is parsed. Parsing a
+ * 1 MB body of brackets builds half a million nested arrays (tens of MB and
+ * tens of ms) only to refuse them; this scan stops at the first bracket past
+ * the limit. Brackets inside strings, escaped quotes included, do not count.
+ * For valid JSON the count is exactly its nesting depth.
+ */
+export function jsonTextNestsDeeperThan(text: string, limit: number): boolean {
+  if (!/^[ \t\r\n]*[[{]/u.test(text)) return false;
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (inString) {
+      if (c === 0x5c) i++; // a backslash escapes the next character
+      else if (c === 0x22) inString = false;
+    } else if (c === 0x22) inString = true;
+    else if (c === 0x5b || c === 0x7b) {
+      if (++depth > limit) return true;
+    } else if (c === 0x5d || c === 0x7d) depth--;
   }
   return false;
 }
@@ -379,14 +392,15 @@ export class WebhookManager {
 
     // Parse body
     let data: Record<string, unknown> = {};
+    // Measured on the text, before any parse cost is paid.
+    if (jsonTextNestsDeeperThan(rawBody, WEBHOOK_MAX_JSON_DEPTH)) {
+      const reason = `The request body is nested more than ${WEBHOOK_MAX_JSON_DEPTH} levels deep, so nothing ran for it.`;
+      this.refused(workflowId, route, 'BODY_TOO_DEEP', reason);
+      return json(400, { error: 'The request body is too deeply nested. Send a flatter body.' });
+    }
     if (rawBody.trim()) {
       try {
         const parsed = JSON.parse(rawBody);
-        if (jsonNestsDeeperThan(parsed, WEBHOOK_MAX_JSON_DEPTH)) {
-          const reason = `The request body is nested more than ${WEBHOOK_MAX_JSON_DEPTH} levels deep, so nothing ran for it.`;
-          this.refused(workflowId, route, 'BODY_TOO_DEEP', reason);
-          return json(400, { error: 'The request body is too deeply nested. Send a flatter body.' });
-        }
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           data = parsed as Record<string, unknown>;
         } else {

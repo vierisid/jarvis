@@ -33,7 +33,7 @@ import { createRunFlowHandler, RUN_FLOW } from "../handler";
 import { TriggerManager } from "./manager";
 import { scheduleZoneWarning } from "./schedule-zone";
 import { TIMESTAMPED_REPEAT_WINDOW_MS, WEBHOOK_TIMESTAMP_TOLERANCE_S } from "./webhook-secret";
-import { redactedHeaders, webhookDelivery } from "./webhook";
+import { jsonTextNestsDeeperThan, redactedHeaders, WEBHOOK_MAX_JSON_DEPTH, webhookDelivery } from "./webhook";
 import { getScheduleWatch, setScheduleWatch } from "../../db/repos/trigger-fire";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
 import { createWaitpoint } from "../../db/repos/waitpoint";
@@ -630,9 +630,42 @@ describe("webhooks", () => {
     expect(listFlowFires(flowId)[0]).toMatchObject({ label: "blocked", detail: { code: "BODY_TOO_DEEP" } });
     const objects = '{"a":'.repeat(50_000) + "1" + "}".repeat(50_000);
     expect((await post(d, flowId, objects)).status).toBe(400);
-    // An ordinary nested body still runs.
+    // An ordinary nested body still runs, and so do brackets inside a string.
     expect((await post(d, flowId, JSON.stringify({ a: { b: [{ c: 1 }] } }))).status).toBe(200);
+    expect((await post(d, flowId, JSON.stringify({ text: "[{".repeat(200) }))).status).toBe(200);
     await d.stop();
+  });
+
+  test("the nesting limit is measured on the text before the body is parsed", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    const deep = "[".repeat(WEBHOOK_MAX_JSON_DEPTH + 1) + "]".repeat(WEBHOOK_MAX_JSON_DEPTH + 1);
+    const parse = JSON.parse;
+    const parsed: string[] = [];
+    JSON.parse = ((text: string, reviver?: (this: unknown, key: string, value: unknown) => unknown) => {
+      if (text === deep) parsed.push(text);
+      return parse(text, reviver);
+    }) as typeof JSON.parse;
+    try {
+      expect((await post(d, flowId, deep)).status).toBe(400);
+    } finally {
+      JSON.parse = parse;
+    }
+    expect(parsed).toHaveLength(0);
+    await d.stop();
+  });
+
+  test("the nesting scan counts JSON depth exactly and ignores brackets in strings", () => {
+    const nest = (n: number) => "[".repeat(n) + "]".repeat(n);
+    expect(jsonTextNestsDeeperThan(nest(100), 100)).toBe(false);
+    expect(jsonTextNestsDeeperThan(nest(101), 100)).toBe(true);
+    expect(jsonTextNestsDeeperThan(" \n\t" + '{"a":'.repeat(101) + "1" + "}".repeat(101), 100)).toBe(true);
+    // Brackets in strings, after an escaped quote or an escaped backslash, are text.
+    expect(jsonTextNestsDeeperThan(JSON.stringify(["[".repeat(500)]), 100)).toBe(false);
+    expect(jsonTextNestsDeeperThan(JSON.stringify(['"' + "{".repeat(500)]), 100)).toBe(false);
+    expect(jsonTextNestsDeeperThan(JSON.stringify(["\\", "{".repeat(500)]), 100)).toBe(false);
+    // A body that does not start like JSON is never measured: it is passed on as text.
+    expect(jsonTextNestsDeeperThan("x" + nest(500), 100)).toBe(false);
   });
 
   test("#1153 review: timestamps are refused outside the tolerance either way and in any other form; a stamped body cannot pass as body-only", async () => {
