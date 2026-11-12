@@ -11,6 +11,7 @@ import { getCookie } from '../util/cookie.ts';
 import { rejectsCrossSiteWrite } from './cross-site-guard.ts';
 import { isServiceWorkerScriptRequest, serviceWorkerKillSwitch } from './service-worker-kill-switch.ts';
 import { limitUndeclaredBody, MAX_REQUEST_BODY_BYTES } from '../util/bounded-body.ts';
+import { checkDatabaseFile, databaseLostMessage } from '../vault/db-guard.ts';
 
 /** Constant-time string comparison to prevent timing attacks */
 export type WSMessage = {
@@ -176,6 +177,13 @@ class ProxyRateLimiter {
   }
 }
 
+/** 503 with the plain reason when the database file Jarvis opened is gone; null otherwise. */
+function databaseLostResponse(): Response | null {
+  checkDatabaseFile();
+  const message = databaseLostMessage();
+  return message ? Response.json({ error: message, code: 'database_lost' }, { status: 503 }) : null;
+}
+
 export class WebSocketServer {
   private server: Server<any> | null = null;
   private clients: Set<ServerWebSocket<unknown>> = new Set();
@@ -331,7 +339,7 @@ export class WebSocketServer {
 
           const claims = await self.sidecarManager.validateToken(token);
           if (!claims) {
-            return new Response('Invalid or revoked token', { status: 403 });
+            return databaseLostResponse() ?? new Response('Invalid or revoked token', { status: 403 });
           }
 
           // A `?channel=audio` connection is the pebble's dedicated realtime
@@ -352,11 +360,14 @@ export class WebSocketServer {
         //     (/api, /ws) then authenticates with that SESSION, never with
         //     this token and never with the enrollment JWT.
         if (pathname === '/sidecar/token' && req.method === 'POST' && self.sidecarManager) {
+          // Minting records a session: not into a database file that is gone.
+          const lostDb = databaseLostResponse();
+          if (lostDb) return lostDb;
           const authHeader = req.headers.get('Authorization');
           const enrollTok = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
           const claims = enrollTok ? await self.sidecarManager.validateToken(enrollTok) : null;
           if (!claims?.sid) {
-            return new Response('Invalid or revoked token', { status: 403 });
+            return databaseLostResponse() ?? new Response('Invalid or revoked token', { status: 403 });
           }
           const minted = await self.sidecarManager.issueAccessToken(claims.sid);
           if (!minted) {
@@ -555,6 +566,14 @@ export class WebSocketServer {
                 'Access-Control-Allow-Headers': 'Content-Type',
               },
             });
+          }
+
+          // The database file was deleted, emptied or swapped while running:
+          // a write now would be accepted and lost. Say so instead. Pause and
+          // Kill still work (safety), and reads and health answer as usual.
+          if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && !pathname.startsWith('/api/authority/emergency/')) {
+            const lost = databaseLostResponse();
+            if (lost) return lost;
           }
 
           // Cross-site write guard; see cross-site-guard.ts for the reasoning.

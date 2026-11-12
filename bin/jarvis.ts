@@ -65,6 +65,8 @@ ${c.bold('Start options:')}
   -d, --detach      Run as background daemon
   --no-open         Don't auto-open dashboard in browser
   --data-dir <path> Override data directory (default: ~/.jarvis)
+  --new-database    Create an empty database even though saved state exists
+                    (a missing or empty jarvis.db otherwise stops the start)
   --no-local-tools  Run the general tools only on a sidecar (your machine), never
                     on this host (Docker/headless). The site builder still runs here.
   --system-config <path>
@@ -113,6 +115,7 @@ async function cmdStart(args: string[]): Promise<void> {
   const detach = args.includes('--detach') || args.includes('-d');
   const noOpen = args.includes('--no-open');
   const noLocalTools = args.includes('--no-local-tools');
+  const allowNewDatabase = args.includes('--new-database');
 
   // Parse --port
   let port: number | undefined;
@@ -202,7 +205,7 @@ async function cmdStart(args: string[]): Promise<void> {
     process.on('exit', () => releaseLock());
 
     const { startDaemon } = await import('../src/daemon/index.ts');
-    await startDaemon({ port, dataDir, noLocalTools, systemConfigPath });
+    await startDaemon({ port, dataDir, noLocalTools, systemConfigPath, allowNewDatabase });
 
     if (!noOpen && dashboard.openUrl) {
       openDashboard(dashboard.openUrl);
@@ -228,6 +231,7 @@ async function cmdStart(args: string[]): Promise<void> {
     // and the daemon would (silently) fall back to ~/.jarvis/config.yaml,
     // defeating the whole point of the flag.
     if (systemConfigPath) daemonArgs.push('--system-config', systemConfigPath);
+    if (allowNewDatabase) daemonArgs.push('--new-database');
 
     // We redirect the child's stdout AND stderr into logPath. If
     // daemon.log_file_path names this same file the child does NOT install its

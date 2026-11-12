@@ -948,3 +948,29 @@ remains; unsetting it undoes that and changes no data.
 `GET /health` is unauthenticated and safe to point uptime monitors at. It
 works over the unix socket too, e.g.
 `curl --unix-socket /run/jarvis/jarvis.sock http://localhost/health`.
+
+## A missing, empty or damaged database
+
+Jarvis never quietly replaces its database.
+
+- **At start.** If `jarvis.db` is missing or empty but the data folder, or the
+  folder `daemon.db_path` points into, still has saved state (a non-empty
+  `workspace-id`, `.secrets.enc`, `.secrets.key` or `workflow-encryption.key`, the
+  keys in `sidecar-keys/`, or a leftover `jarvis.db-wal`), `jarvis start` stops and
+  says so, instead of starting empty and locking out every enrolled device. Bring
+  the data back with `jarvis restore <your-backup-file>`. To start over on purpose,
+  run `jarvis start --new-database` (or set `JARVIS_ALLOW_NEW_DATABASE=1` for a
+  service, and remove it again after that start).
+  `jarvis enroll`, `sidecars` and `revoke` apply the same check. A folder with no
+  saved state is a new install and starts normally.
+- **A damaged file.** A file SQLite cannot read is reported as damaged, with the
+  restore command. Jarvis never rewrites it.
+- **While running.** Jarvis watches the file it opened. If it is deleted,
+  emptied or replaced, `/api/health` reports `database.connected: false` with a
+  `problem`, every HTTP API write (anything but GET) is refused with 503 and
+  `code: "database_lost"`, the workflow worker claims no jobs, and Pause and Kill
+  keep working. Chat over the WebSocket and background work that is already
+  running are not stopped. Only a restart clears it; the running process cannot
+  tell which copy is right.
+- **`jarvis doctor`** checks the database file itself (read-only integrity
+  check) and never creates it.

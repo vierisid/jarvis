@@ -1,3 +1,4 @@
+import { describeOpenFailure } from "./db-guard.ts";
 import { ensureMemoryForgetSchema } from './memory-forget-schema';
 import { ensureMemoryUseSchema } from './memory-use-schema';
 import { ensureOutcomeSchema } from './outcome-schema';
@@ -80,6 +81,9 @@ export function initDatabase(dbPath: string = ":memory:", opts?: { quiet?: boole
     return dbInstance;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    // A damaged or read-only file gets plain words and the restore command.
+    const plain = describeOpenFailure(message, dbPath);
+    if (plain) throw plain;
     throw new Error(`Failed to initialize database: ${message}`);
   }
 }
