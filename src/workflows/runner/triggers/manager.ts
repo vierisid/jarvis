@@ -265,8 +265,14 @@ export class TriggerManager {
     const flows = listAllFlows(undefined, { status: "ENABLED" });
     for (const flow of flows) {
       // Through the per-flow lock, re-reading the flow: one turned off while
-      // startup worked through the others is not registered again.
-      await this.refresh(flow.id);
+      // startup worked through the others is not registered again. One flow
+      // that cannot be read (a corrupt row) costs only its own trigger: the
+      // rest still register and the daemon still boots.
+      try {
+        await this.refresh(flow.id);
+      } catch (e) {
+        this.log(`flow ${flow.id}: trigger not registered at startup: ${(e as Error).message}`);
+      }
     }
     this.log(`started; ${this.subs.size} active subscription(s)`);
   }
