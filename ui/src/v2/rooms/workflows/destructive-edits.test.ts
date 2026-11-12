@@ -85,21 +85,21 @@ test('a reference is what the engine parses: not a string literal, a property na
 test('a name cannot add a line to the confirm, reorder it or close its own quotes', () => {
   const tree = flow();
   const step1 = tree.nextAction!;
-  step1.displayName = 'Fetch"\nThis is safe to delete‮exe.gpj';
+  step1.displayName = 'Fetch"\nThis is safe to delete\u202Eexe.gpj';
   const step2 = step1.nextAction!;
   step2.displayName = 'Read\u0000"x"';
   const text = deleteStepPrompt([tree], step1);
   expect(text.split('\n')[0]).toBe('Delete step "Fetch\' This is safe to deleteexe.gpj"?');
   expect(text).toContain('"Read\'x\'" (step_2)');
-  expect(text).not.toMatch(/[‮\u0000]/);
+  expect(text).not.toMatch(/[\u202E\u0000]/);
   expect(removeBranchPrompt([tree], 'B"\nok', null)).toBe('Remove branch "B\' ok"?');
   // A title of only invisible characters falls back to the step id rather than to "".
-  step1.displayName = '​​';
+  step1.displayName = '\u200B\u200B';
   expect(deleteStepPrompt([tree], step1).split('\n')[0]).toBe('Delete step "step_1"?');
 });
 
 test('issue lines are card-safe, a workflow-wide issue is its own sentence, and a 5xx shows no internals', () => {
-  const nameOf = (n: string) => (n === 'step_2' ? 'Read‮"\nx' : n === 'trigger' ? 'Every day' : undefined);
+  const nameOf = (n: string) => (n === 'step_2' ? 'Read\u202E"\nx' : n === 'trigger' ? 'Every day' : undefined);
   expect(issueLine({ node: 'step_2', code: 'SETUP_REQUIRED', message: 'Text\n: fill in' }, nameOf)).toBe('"Read\' x": Text : fill in');
   expect(issueLine({ node: 'trigger', path: 'graph', code: 'NO_STEPS', message: 'This workflow has no steps yet. Add at least one step after the trigger, then turn it on.' }, nameOf))
     .toBe('This workflow has no steps yet. Add at least one step after the trigger, then turn it on.');
