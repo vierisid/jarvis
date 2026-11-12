@@ -156,6 +156,8 @@ import {
   type DashboardSpawnSettled,
 } from "../sidecar/first-run.ts";
 import type { ConnectedSidecar } from "../sidecar/types.ts";
+import { attachNotch } from "../notch/attach.ts";
+import { notchEnabled } from "../notch/switch.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
 import { Worker as WorkflowWorker } from "../workflows/queue/worker.ts";
@@ -1081,6 +1083,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 6c. Create sidecar manager
     const sidecarManager = new SidecarManager(jarvisConfig.daemon.data_dir.replace('~', os.homedir()));
     const pebbleBlindDeps = { connected: () => sidecarManager.listConnected(), dispatchRPC: sidecarManager.dispatchRPC.bind(sidecarManager) };
+    // The notch ships dark: with JARVIS_NOTCH unset this registers nothing and
+    // no notch.* message is ever sent (docs/notch/README.md).
+    attachNotch(sidecarManager, { enabled: notchEnabled() });
     // A sidecar keeps its observer pause only in memory and starts unpaused:
     // tell every machine that connects (#1159).
     sidecarManager.onSidecarConnected((sc) => {

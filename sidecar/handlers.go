@@ -116,6 +116,10 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		_ = regions // wired via direct closure in client.go (needs sendFn)
 	}
 
+	if caps[CapNotch] {
+		registry["notch.configure"] = makeNotchConfigureHandler(notch)
+	}
+
 	if caps[CapSubPebble] && subPebble != nil {
 		registry["sub_pebble.spawn"] = makeSubPebbleSpawnHandler(subPebble)
 		registry["sub_pebble.set_state"] = makeSubPebbleSetStateHandler(subPebble)

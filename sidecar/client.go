@@ -635,6 +635,9 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	// A recording cannot outlive the connection that started it: the brain
 	// owns the session, and without it nothing would ever send recorder_stop.
 	defer stopRecording("disconnect")
+	// Nor can the notch switch: only the brain turns it on, and a brain that
+	// comes back with it off says nothing, so it must fall back to off here.
+	defer notch.Reset("disconnect")
 
 	sendFn := func(ctx context.Context, event SidecarEvent, binaryData []byte) error {
 		return c.sendEvent(ctx, event, binaryData)

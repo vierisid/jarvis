@@ -18,7 +18,9 @@ export type SidecarCapability =
   | 'awareness'
   | 'windows'
   | 'pebble'
-  | 'sub_pebble';
+  | 'sub_pebble'
+  /** Understands `notch.*`. Hosts nothing until the brain says so (src/notch/attach.ts). */
+  | 'notch';
 
 /** A capability that is enabled in config but unavailable on the system */
 export interface UnavailableCapability {

@@ -9,6 +9,7 @@ local machine:
   model replies.
 
 Neither one is a release check, and neither enables anything in production builds.
+The notch has its own launcher on top of `dev:local`: see [docs/notch/README.md](notch/README.md).
 `bun run dev` is still the hot-reload daemon for the ordinary UI.
 
 ## Real daemon with a sidecar

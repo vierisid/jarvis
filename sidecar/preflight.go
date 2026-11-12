@@ -47,6 +47,9 @@ func CheckCapabilities(cfg *SidecarConfig) (available []SidecarCapability, unava
 			// returns an error — the daemon handles that gracefully via the
 			// dispatch.  Accept the capability either way so the brain knows
 			// it was advertised.
+		case CapNotch:
+			// Understanding notch.* needs nothing from the machine. Whether a
+			// surface can be shown is answered per request (notch.go).
 		}
 		if reason != "" {
 			unavailable = append(unavailable, UnavailableCapability{Name: cap, Reason: reason})
