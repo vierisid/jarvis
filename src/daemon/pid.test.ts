@@ -1,9 +1,10 @@
 import { test, expect, describe, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, mkdtempSync, rmSync, truncateSync, chmodSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, mkdtempSync, rmSync, truncateSync, chmodSync, statSync } from 'node:fs';
 import {
   acquireLock,
+  acquireLockAt,
   isLocked,
   releaseLock,
   readPid,
@@ -140,6 +141,50 @@ describe('Process Lock Manager', () => {
       // First fd holds an exclusive flock; second open+flock is denied
       expect(acquireLock(process.pid)).toBe(true);
       expect(acquireLock(process.pid)).toBe(false);
+    });
+
+    // The data folder and its lock are this user's alone. Modes are checked
+    // under a permissive umask so the result cannot come from the umask.
+    describe('permissions', () => {
+      let prevUmask: number;
+      beforeEach(() => { prevUmask = process.umask(0o022); });
+      afterEach(() => {
+        process.umask(prevUmask);
+        process.env.JARVIS_HOME = DATA_DIR;
+      });
+
+      test('creates a missing data folder 0700 and the lock file 0600', () => {
+        const fresh = join(DATA_DIR, 'fresh', 'home');
+        process.env.JARVIS_HOME = fresh;
+        try {
+          expect(acquireLock(process.pid)).toBe(true);
+          expect(statSync(fresh).mode & 0o777).toBe(0o700);
+          expect(statSync(join(fresh, 'jarvis.pid')).mode & 0o777).toBe(0o600);
+        } finally {
+          releaseLock();
+          rmSync(join(DATA_DIR, 'fresh'), { recursive: true, force: true });
+        }
+      });
+
+      test('narrows an existing lock file to 0600 once it holds it', () => {
+        writeFileSync(LOCK_PATH, '99999');
+        chmodSync(LOCK_PATH, 0o644);
+        expect(acquireLock(process.pid)).toBe(true);
+        expect(statSync(LOCK_PATH).mode & 0o777).toBe(0o600);
+      });
+
+      test('acquireLockAt creates its folder 0700 and its lock file 0600', () => {
+        const dir = join(DATA_DIR, 'at', 'dir');
+        const lock = acquireLockAt(join(dir, 'jarvis.pid'), process.pid);
+        try {
+          expect(lock).not.toBeNull();
+          expect(statSync(dir).mode & 0o777).toBe(0o700);
+          expect(statSync(join(dir, 'jarvis.pid')).mode & 0o777).toBe(0o600);
+        } finally {
+          lock?.release();
+          rmSync(join(DATA_DIR, 'at'), { recursive: true, force: true });
+        }
+      });
     });
   });
 

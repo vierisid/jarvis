@@ -19,6 +19,7 @@ import {
   closeSync,
   writeSync,
   ftruncateSync,
+  fchmodSync,
 } from 'node:fs';
 import { cc } from 'bun:ffi';
 import flockSource from './flock.c' with { type: 'file' };
@@ -111,10 +112,12 @@ export function acquireLock(pid: number): boolean {
     // we create the data dir or open an fd (nothing to leak / clean up).
     const flock = getFlock();
 
-    mkdirSync(daemonRootDir(), { recursive: true });
+    // 0700/0600: the data folder and its lock are this user's alone. The modes
+    // apply only to what this creates; an existing folder keeps its own.
+    mkdirSync(daemonRootDir(), { recursive: true, mode: 0o700 });
 
     // Open (or create) the lock file — don't truncate before locking
-    const fd = openSync(defaultLockPath(), constants.O_WRONLY | constants.O_CREAT, 0o644);
+    const fd = openSync(defaultLockPath(), constants.O_WRONLY | constants.O_CREAT, 0o600);
 
     // Try non-blocking exclusive lock
     const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
@@ -122,6 +125,9 @@ export function acquireLock(pid: number): boolean {
       closeSync(fd);
       return false;
     }
+
+    // A lock file from an older version may still be 0644.
+    narrowToOwner(fd);
 
     // Lock acquired — truncate and write PID for display purposes
     ftruncateSync(fd, 0);
@@ -193,13 +199,14 @@ export function isLocked(lockPath: string = defaultLockPath()): number | null {
 export function acquireLockAt(lockPath: string, pid: number): { release: () => void } | null {
   try {
     const flock = getFlock();
-    mkdirSync(join(lockPath, '..'), { recursive: true });
-    const fd = openSync(lockPath, constants.O_WRONLY | constants.O_CREAT, 0o644);
+    mkdirSync(join(lockPath, '..'), { recursive: true, mode: 0o700 });
+    const fd = openSync(lockPath, constants.O_WRONLY | constants.O_CREAT, 0o600);
     const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
     if (result !== 0) {
       closeSync(fd);
       return null;
     }
+    narrowToOwner(fd);
     ftruncateSync(fd, 0);
     writeSync(fd, String(pid));
     let released = false;
@@ -214,6 +221,15 @@ export function acquireLockAt(lockPath: string, pid: number): { release: () => v
   } catch {
     return null;
   }
+}
+
+/**
+ * Make a lock file this process holds readable and writable by its owner only.
+ * Best effort: a file owned by someone else cannot be changed, and that is no
+ * reason to give up a lock already taken.
+ */
+function narrowToOwner(fd: number): void {
+  try { fchmodSync(fd, 0o600); } catch { /* not ours to change */ }
 }
 
 /**
