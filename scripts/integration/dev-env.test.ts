@@ -26,4 +26,12 @@ describe('the dev:local environment', () => {
   test('carries the notch switch across when it is exactly "1"', () => {
     expect(devEnv({ PATH: '/bin', JARVIS_NOTCH: '1' }, paths, 3143).JARVIS_NOTCH).toBe('1');
   });
+
+  // The demo secret travels with the switch and never without it.
+  test('carries the notch demo secret only together with the switch', () => {
+    const secret = 'a-secret-of-sixteen-or-more';
+    expect(devEnv({ PATH: '/bin', JARVIS_NOTCH: '1', JARVIS_NOTCH_DEMO: secret }, paths, 3143).JARVIS_NOTCH_DEMO).toBe(secret);
+    expect('JARVIS_NOTCH_DEMO' in devEnv({ PATH: '/bin', JARVIS_NOTCH_DEMO: secret }, paths, 3143)).toBe(false);
+    expect('JARVIS_NOTCH_DEMO' in devEnv({ PATH: '/bin', JARVIS_NOTCH: '1' }, paths, 3143)).toBe(false);
+  });
 });

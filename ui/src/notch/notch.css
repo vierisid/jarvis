@@ -1,0 +1,395 @@
+/* The Jarvis notch. Ported from the prototype (notch-poc v15), one rule for one
+   rule, so the two can be read side by side. This file is self-contained: the
+   page loads nothing else, so it carries its own tokens.
+
+   Where it runs: a frameless window at the top centre of the screen, cut to the
+   outline the page reports. A native layer paints the black shape. So nothing
+   here draws outside the silhouette: no drop shadow, no tags, no cursors. */
+
+/* The product page only (ui/notch.html). The whole window is the notch's own
+   black: whatever the cut lets through is already the right colour. */
+html.notch-window, html.notch-window body { margin: 0; height: 100%; overflow: hidden; background: #0B0D10; }
+
+.jarvis-notch {
+  /* The notch: black, gray, citron. The same on every desktop, like hardware.
+     Red only when something broke. */
+  --notch: #0B0D10; --notch-raise: #1C2028; --notch-hover: #2A303A; --notch-rule: #343B47; --notch-line: #252A33;
+  /* The prototype drew a thin edge in dark mode. Here the native layer draws
+     the edge, and this line would fall outside the cut anyway. */
+  --notch-edge: transparent;
+  --n-ink: #EEF1F4; --n-ink2: #B4BAC3; --n-dim: #7C838D;
+  --citron: #D6FF5C; --citron-hi: #C8F23F; --citron-ink: #1B2400; --citron-soft: rgba(214,255,92,.13); --citron-mid: rgba(214,255,92,.24);
+  --fail: #FF6A5C;
+  --paper: #F6F8FA; --paper-ink: #13161A; --paper-ink2: #535B63; --paper-rule: #E2E7EC; --paper-chip: #E9EDF1;
+
+  --sans: 'Familjen Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'Spline Sans Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+  --corner: 14px 3px 14px 14px; --corner-sm: 8px 2px 8px 8px; --corner-xs: 6px 2px 6px 6px;
+  --ease: cubic-bezier(.2,.7,.2,1);
+  --spring: linear(0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%, 0.849 31.5%, 0.937 38.1%, 0.968 41.8%, 0.991 45.7%, 1.006 50.1%, 1.015 55%, 1.017 63.9%, 1.001 85.9%, 1);
+  /* Fixed, not tied to the viewport: the window is a slice of the desktop, and
+     the notch keeps its desktop sizes inside it. */
+  --maxw: 700px;
+  --sheetw: 468px;
+
+  position: relative; font: 400 14px/1.45 var(--sans); -webkit-font-smoothing: antialiased;
+  /* A drag on the notch scrubs a lit word. It never selects text. */
+  -webkit-user-select: none; user-select: none; cursor: default;
+}
+.jarvis-notch input { -webkit-user-select: text; user-select: text; cursor: text; }
+.jarvis-notch ::selection { background: var(--citron); color: var(--citron-ink); }
+/* :where keeps these two resets as weak as the prototype's bare selectors. */
+:where(.jarvis-notch) button { font: inherit; color: inherit; }
+:where(.jarvis-notch) svg { display: block; }
+
+/* The notch */
+.wrap { position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 2; }
+/* One liquid silhouette: shoulders and body are a single path moved by springs. Its edges lag and bow as it changes size. */
+.blob { position: absolute; left: -30px; top: 0; overflow: visible; pointer-events: none; }
+.blob .body { fill: var(--notch); stroke: var(--notch-edge); stroke-width: 1; }
+.blob .lip { fill: none; stroke: rgba(255,255,255,.14); stroke-width: 1; }
+.blob .meas { fill: none; stroke: none; }
+.blob .burn { fill: none; stroke: var(--citron); stroke-width: 2.4; stroke-linecap: round; opacity: 0; } /* the undo window burns along the notch's own edge, toward the eyes */
+.wrap.fusing .burn { opacity: 1; animation: burn var(--fuse, 4000ms) linear forwards; }
+@keyframes burn { from { stroke-dashoffset: 0; } to { stroke-dashoffset: var(--len, 900); } }
+.notch {
+  position: relative; overflow: hidden; color: var(--n-ink); width: 88px; height: 30px; border-radius: 0 0 16px 16px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .045 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.wrap[data-body="sheet"] .notch, .wrap[data-body="ask"] .notch { border-radius: 0 0 22px 22px; }
+.wrap[data-body="rest"] .notch { cursor: pointer; }
+
+.nin { position: absolute; top: 0; left: 0; width: max-content; max-width: var(--maxw); transition: opacity .3s var(--ease); }
+.nin[data-body="sheet"], .nin[data-body="ask"] { width: var(--sheetw); max-width: none; }
+/* Where the content is measured before the shape moves to fit it. */
+.measure { position: absolute; top: 0; left: 0; visibility: hidden; pointer-events: none; }
+
+.bar { position: relative; display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 5px 10px 5px 12px; box-sizing: border-box; }
+.nin[data-body="rest"] .bar { min-height: 30px; min-width: 88px; padding: 0 12px; justify-content: center; }
+.lead { display: flex; align-items: center; gap: 6px; flex: none; }
+.nin[data-body="rest"] .eyes { width: 20px; }
+
+/* Eyes: the Pebble's character. Two bars with a small library of looks and gestures. */
+.eyes {
+  appearance: none; border: 0; background: none; padding: 0; margin: 0; cursor: pointer; flex: none;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; width: 30px; height: 26px; border-radius: 8px;
+  --px: 0px; --py: 0px; --gx: 0px; --gy: 0px; --open: 1; --ew: 5px; --eh: 10px; --er: 3px; --ec: var(--n-ink);
+}
+.eye {
+  position: relative; display: grid; justify-items: center; align-items: end; width: 6px; height: 12px; --t: 0deg; --s: 1; --ox: 0px; --oy: 0px; --lh: 1;
+  translate: calc(var(--px) + var(--gx) + var(--ox)) calc(var(--py) + var(--gy) + var(--oy)); rotate: var(--t); scale: var(--s);
+  transition: translate .07s linear, rotate .24s var(--ease), scale .3s var(--spring);
+}
+.eye b {
+  display: block; width: var(--ew); height: calc(var(--eh) * var(--lh)); border-radius: var(--er); background: var(--ec); transform: scaleY(var(--open)); margin-bottom: 1px;
+  transition: transform .14s var(--ease), background-color .24s var(--ease), opacity .12s var(--ease), width .24s var(--spring), height .24s var(--spring), border-radius .24s var(--ease);
+}
+.arc { position: absolute; left: 50%; top: 50%; width: 10px; height: 7px; margin: -3.5px 0 0 -5px; overflow: visible; fill: none; stroke: var(--ec); stroke-width: 2.4; stroke-linecap: round; }
+.arc path { opacity: 0; transform: scale(.4); transform-box: fill-box; transform-origin: center; transition: opacity .12s var(--ease), transform .28s var(--spring); }
+.nin[data-mood="look"] .eyes { --gx: 1.5px; }
+.nin[data-mood="listen"] .eyes { --gy: .5px; --eh: 12px; gap: 7px; }
+.nin[data-mood="read"] .eyes { --gy: 1.5px; animation: scan 2.8s ease-in-out infinite; }
+.nin[data-mood="read"] .eye, .nin[data-mood="write"] .eye { --lh: .68; }
+.nin[data-mood="write"] .eyes { --gy: 1.5px; animation: write 1.3s cubic-bezier(.3,0,.7,1) infinite; }
+.nin[data-mood="write"] .eyes { gap: 3px; }
+.nin[data-mood="recall"] .eye.r { --oy: -1.6px; }
+.nin[data-mood="proud"] .eyes { --gy: -1.5px; } .nin[data-mood="proud"] .arc { scale: 1.08; } .nin[data-mood="proud"] .eye.l { --ox: -1.5px; } .nin[data-mood="proud"] .eye.r { --ox: 1.5px; }
+.nin[data-mood="sleepy"] .eyes { animation: breathe 3.4s ease-in-out infinite; } .nin[data-mood="sleepy"] .eye.l { --lh: .3; }
+.nin[data-mood="focus"] .eyes { gap: 4px; }
+.nin[data-mood="think"] .eyes { --gy: -1px; }
+.nin[data-mood="think"] .eye b { animation: eq .6s ease-in-out infinite alternate; }
+.nin[data-mood="think"] .eye.r b { animation-delay: .3s; }
+.nin[data-mood="recall"] .eyes { --gx: -2.2px; --gy: -2.4px; --ew: 6px; --eh: 6px; --er: 50%; }
+.nin[data-mood="search"] .eyes { --ew: 6px; --eh: 6px; --er: 50%; animation: search 1.7s ease-in-out infinite; }
+.nin[data-mood="work"] .eye { animation: step .44s ease-in-out infinite alternate; }
+.nin[data-mood="work"] .eye.r { animation-delay: .22s; }
+.nin[data-mood="happy"] .eye b, .nin[data-mood="proud"] .eye b, .nin[data-mood="closed"] .eye b { opacity: 0; transform: scaleY(.2); }
+.nin[data-mood="happy"] .arc .up, .nin[data-mood="proud"] .arc .up, .nin[data-mood="closed"] .arc .dn { opacity: 1; transform: none; }
+.nin[data-mood="proud"] .eyes { animation: hop .46s var(--ease) 2; }
+.nin[data-mood="urgent"] .eyes { --ec: var(--citron); --eh: 12px; animation: hop .46s var(--ease) 1; }
+.nin[data-mood="worried"] .eyes { --gy: .5px; }
+.nin[data-mood="worried"] .eye.l { --t: 16deg; } .nin[data-mood="worried"] .eye.r { --t: -16deg; }
+.nin[data-mood="sorry"] .eyes { --gy: 2.5px; --eh: 8px; }
+.nin[data-mood="sorry"] .eye.l { --t: 10deg; } .nin[data-mood="sorry"] .eye.r { --t: -10deg; }
+.nin[data-mood="confused"] .eye.l { --s: 1.22; --oy: -1px; --t: -8deg; } .nin[data-mood="confused"] .eye.r { --s: .74; --oy: 1px; --t: -8deg; }
+.nin[data-mood="curious"] .eyes { --gx: 1px; }
+.nin[data-mood="curious"] .eye.l { --t: 14deg; --oy: 1px; } .nin[data-mood="curious"] .eye.r { --t: 14deg; --oy: -1px; }
+.nin[data-mood="careful"] .eyes { --gx: 1px; }
+.nin[data-mood="careful"] .eye.l { --lh: .5; } .nin[data-mood="careful"] .eye.r { --s: 1.08; }
+.nin[data-mood="surprised"] .eyes { --ew: 8px; --eh: 8px; --er: 50%; }
+.nin[data-mood="surprised"] .eye { --s: 1.2; }
+.nin[data-mood="sleepy"] .eyes { --gy: 1px; }
+.nin[data-mood="sleepy"] .eye { --lh: .45; }
+.nin[data-mood="closed"] .eyes { --ec: var(--n-dim); animation: breathe 4.2s ease-in-out infinite; }
+.nin[data-mood="away"] .eyes { --gx: -5.5px; --ew: 2px; --eh: 10px; --er: 1px; --ec: var(--n-ink2); gap: 1px; animation: turnaway .5s var(--ease) both; }   /* looking away: both eyes turned up and to the side, half shut. Awake, but not reading */
+@keyframes turnaway { 0% { translate: 5.5px 0; } 55% { translate: -1.2px 0; } }   /* seen from the side: two thin lines, turned away from the screen */
+.nin[data-mood="focus"] .eyes { --gy: 3px; --eh: 6px; } /* on a call: awake, eyes lowered, saying nothing */
+/* gestures: one-shot, on top of any look */
+.nin .eyes.blink .eye b { transform: scaleY(.1); transition-duration: .06s; }
+.nin .eyes.sq .eye b { transform: scale(1.18, .72); transition-duration: .05s; } /* a tiny squash before every change of look */
+.nin .eyes.wink .eye.r b { transform: scaleY(.12); transition-duration: .07s; }
+.nin .eyes.peek-l { --gx: -2.4px; } .nin .eyes.peek-r { --gx: 2.4px; }
+.nin .eyes.pop { --ew: 7px; --eh: 9px; --er: 50%; }
+.nin .eyes.pop .eye { --s: 1.3; }
+.nin .eyes.nodg { animation: nodg .5s var(--ease); }
+.nin .eyes.shake { animation: shake .5s var(--ease); }
+.nin .eyes.hop { animation: hop .46s var(--ease); }
+@keyframes scan { 0%, 100% { transform: translateX(-1.6px); } 50% { transform: translateX(1.6px); } }
+@keyframes write { 0% { transform: translateX(-2px); } 82% { transform: translateX(2px); } 100% { transform: translateX(-2px); } }
+@keyframes search { 0%, 100% { transform: translate(-2.4px, 0); } 30% { transform: translate(2.4px, -1px); } 55% { transform: translate(0, -2.2px); } 80% { transform: translate(2px, 1.6px); } }
+@keyframes eq { from { transform: scaleY(.38); } to { transform: scaleY(1.18); } }
+@keyframes step { from { transform: translateY(-1.6px); } to { transform: translateY(1.6px); } }
+@keyframes breathe { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(1px); } }
+@keyframes nodg { 0%, 100% { transform: none; } 25% { transform: translateY(3px); } 55% { transform: translateY(-.5px); } 76% { transform: translateY(2px); } }
+@keyframes shake { 0%, 100% { transform: none; } 20% { transform: translateX(-3px); } 45% { transform: translateX(3px); } 70% { transform: translateX(-2px); } }
+@keyframes hop { 0%, 100% { transform: none; } 35% { transform: translateY(-3.5px); } 70% { transform: translateY(.8px); } }
+.notch:focus { outline: none; }
+.eyes:focus-visible, .live:focus-visible, .key:focus-visible, .btn:focus-visible, .row.go:focus-visible, .quietlinks button:focus-visible { outline: 2px solid var(--citron); outline-offset: 2px; }
+
+.appicon { display: none; width: 16px; height: 16px; flex: none; }
+.nin[data-icon="1"] .appicon { display: block; animation: pop .34s var(--ease) both; }
+.appicon svg { width: 16px; height: 16px; filter: saturate(.75) brightness(.92); }
+.nin[data-icon="1"] .appicon.from { animation: flip .44s var(--ease) both; }
+.appicon.from svg { box-shadow: 0 0 0 2px var(--notch), 0 0 0 3.5px var(--n-ink); border-radius: 4.5px; filter: none; }
+@keyframes flip { from { transform: rotateY(90deg) scale(.8); opacity: 0; } to { transform: none; opacity: 1; } }
+.appicon .who { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--n-ink); color: var(--notch); font: 700 10.5px/1 var(--sans); }
+.mark { display: none; width: 16px; height: 16px; flex: none; }
+.nin[data-mark="check"] .mark, .nin[data-mark="fail"] .mark { display: block; }
+.mark svg { width: 16px; height: 16px; fill: none; stroke: var(--citron); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 16; stroke-dashoffset: 16; animation: draw .4s var(--ease) .12s forwards; }
+.nin[data-mark="fail"] .mark svg { display: none; }
+.nin[data-mark="fail"] .mark::before { content: ""; display: block; width: 8px; height: 8px; margin: 4px; border-radius: 50%; background: var(--fail); animation: pop .3s var(--ease) both; }
+/* something waits: a count inside the notch, never outside it */
+.badge { display: none; flex: none; font: 600 12px/1 var(--mono); color: var(--citron-ink); background: var(--citron); padding: 3px 5px; min-width: 7px; text-align: center; border-radius: var(--corner-xs); font-variant-numeric: tabular-nums; }
+.nin[data-wait="count"] .badge { display: block; animation: pop .34s var(--ease) both; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes pop { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
+
+/* The sentence. Words arrive one by one; only live words are citron. */
+.say { flex: 1 1 auto; min-width: 0; font: 500 15px/21px var(--sans); color: var(--n-ink2); letter-spacing: .003em; text-wrap: balance; }
+.nin[data-body="sheet"] .say { color: var(--n-ink); font-weight: 600; }
+.say:empty, .hint:empty, .sheet:empty, .opts:empty, .pick:empty { display: none; }
+/* a citron word's options: click one, or type your own */
+.pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 12px 12px var(--tx, 48px); animation: rowin .24s var(--ease) both; }
+.pick .lab { font: 500 12px/16px var(--sans); color: var(--n-dim); margin-right: 2px; }
+.pick .o { appearance: none; border: 0; cursor: pointer; height: 24px; padding: 0 9px; border-radius: var(--corner-xs); background: var(--notch-raise); box-shadow: inset 0 0 0 1px var(--notch-rule); color: var(--n-ink2); font: 600 13px/1 var(--sans); }
+.pick .o:hover { background: var(--notch-hover); color: var(--n-ink); }
+.pick .o[aria-pressed="true"] { color: var(--citron); box-shadow: inset 0 0 0 1px var(--citron); }
+.pick.inrow { padding: 2px 4px 12px; }
+.pick input.no { border-bottom-color: var(--fail); } .pick input.no::placeholder { color: var(--n-ink2); }
+.pick input { width: 150px; height: 24px; box-sizing: border-box; background: none; border: 0; border-bottom: 1px solid var(--notch-rule); outline: 0; color: var(--n-ink); font: 500 13.5px/1 var(--sans); caret-color: var(--citron); padding: 0 2px; }
+.pick input::placeholder { color: var(--n-dim); }
+.pick input:focus { border-bottom-color: var(--citron); }
+.pick .o:focus-visible { outline: 2px solid var(--citron); outline-offset: 2px; }
+.say.ghost { position: absolute; flex: none; pointer-events: none; animation: ghost .2s var(--ease) forwards; }
+.ghost .w { animation: none; }
+@keyframes ghost { to { opacity: 0; filter: blur(5px); transform: translateY(-4px); } }
+.w { display: inline-block; white-space: pre; animation: word .36s var(--ease) both; animation-delay: calc(var(--i, 0) * 24ms); }
+@keyframes word { from { opacity: 0; transform: translateY(5px); filter: blur(4px); } to { opacity: 1; transform: none; filter: blur(0); } }
+.em { font-weight: 600; color: var(--n-ink); }
+.tight { margin-left: -2px; }
+.kbd, .cap {
+  font: 500 10.5px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--n-ink2);
+  padding: 3.5px 6px 4px; border-radius: var(--corner-xs); background: var(--notch-raise);
+  box-shadow: inset 0 0 0 1px var(--notch-rule), inset 0 -2px 0 var(--notch-rule);
+}
+.kbd { margin: 0 3px; }
+.live {
+  appearance: none; border: 0; margin: 0 1px; cursor: pointer; font: inherit; font-weight: 600;
+  color: var(--citron); background: var(--citron-soft); padding: 0 3px; line-height: inherit; border-radius: 4px;
+  transition: background-color .15s var(--ease);
+}
+.live:hover { background: var(--citron-mid); }
+.live { touch-action: none; }
+.say .live { animation-name: resolve; animation-duration: .52s; } /* a generated word resolves out of a block */
+@keyframes resolve { 0% { opacity: 0; color: transparent; background: var(--citron-mid); transform: translateY(5px); } 40% { opacity: 1; color: transparent; background: var(--citron-mid); transform: none; } 100% { opacity: 1; } }
+.live.roll { animation: roll .3s var(--ease); }
+.live.roll.up { animation-name: rollup; }
+@keyframes roll { from { opacity: 0; transform: translateY(7px); background: var(--citron-mid); } to { opacity: 1; transform: none; } }
+@keyframes rollup { from { opacity: 0; transform: translateY(-7px); background: var(--citron-mid); } to { opacity: 1; transform: none; } }
+
+/* One hint grammar: a key and what it does. Citron means yes. */
+.hint { flex: none; display: flex; align-items: center; gap: 8px; }
+.key {
+  appearance: none; border: 0; background: none; padding: 3px 4px 3px 2px; margin: 0; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 7px; border-radius: 8px; animation: word .4s var(--ease) both; animation-delay: .22s;
+}
+.key:active .cap { transform: translateY(1px); box-shadow: inset 0 0 0 1px var(--notch-rule); }
+.key .act { position: relative; font: 600 13.5px/1 var(--sans); color: var(--citron); }
+.key:hover .act { text-decoration: underline; text-underline-offset: 3px; }
+.key.quiet .act { color: var(--n-ink2); font-weight: 500; }
+.key.nudge { animation: nudge .4s var(--ease); }
+.key.nudge .cap { background: var(--citron); color: var(--citron-ink); }
+@keyframes nudge { 0%, 100% { transform: none; } 30% { transform: translateX(-3px); } 60% { transform: translateX(3px); } }
+/* A hint that only tells you something: there is nothing to press. */
+.key.mute { cursor: default; } .key.mute:hover .act { text-decoration: none; }
+.beads { display: inline-flex; gap: 4px; align-items: center; }
+.beads i { width: 6px; height: 6px; border-radius: 50%; background: var(--notch-rule); transition: background-color .2s, transform .2s var(--ease); }
+.beads i.on { background: var(--n-ink); }
+.beads i.now { background: var(--citron); transform: scale(1.35); }
+.count { font: 500 12px/1 var(--mono); color: var(--n-dim); font-variant-numeric: tabular-nums; margin-left: 4px; }
+/* Answered, and waiting for what comes next: the line stays, its hints step back. */
+.nin.spent .hint, .nin.spent .opts { opacity: .4; pointer-events: none; transition: opacity .2s var(--ease); }
+
+/* One button family: go (citron), plain, quiet. */
+.btn {
+  appearance: none; border: 0; cursor: pointer; flex: none; display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; box-sizing: border-box;
+  font: 600 13.5px/1 var(--sans); color: var(--n-ink); background: var(--notch-raise); box-shadow: inset 0 0 0 1px var(--notch-rule); border-radius: var(--corner-sm);
+  transition: background-color .15s var(--ease), color .15s var(--ease);
+}
+.btn:hover { background: var(--notch-hover); }
+.btn.go { background: var(--citron); color: var(--citron-ink); box-shadow: none; }
+.btn.go:hover { background: var(--citron-hi); }
+.btn.quiet { background: none; box-shadow: none; padding: 0 4px; color: var(--n-dim); font-weight: 500; }
+.btn.quiet:hover { color: var(--n-ink); background: none; }
+.btn.icon { background: none; box-shadow: none; padding: 0; width: 26px; justify-content: center; color: var(--n-dim); }
+.btn.icon:hover { background: var(--notch-raise); color: var(--n-ink); }
+.btn.icon svg { width: 14px; height: 14px; }
+.btn .cap { margin-left: -6px; }
+.btn.go .cap, .btn:hover .cap { box-shadow: inset 0 0 0 1px var(--notch-rule); }
+
+/* Choices and voice share the strip under the line. */
+.opts.nudge .btn { animation: optnudge .42s var(--ease); } @keyframes optnudge { 40% { background: var(--notch-hover); box-shadow: inset 0 0 0 1px var(--citron); } }
+.opts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 2px 12px 12px var(--tx, 48px); animation: sheet .4s var(--ease) both; animation-delay: .1s; }
+.voice { display: inline-flex; align-items: center; gap: 10px; min-height: 22px; font: 500 15px/1.4 var(--sans); color: var(--n-ink); }
+.wave { display: inline-flex; align-items: center; gap: 2.5px; height: 18px; flex: none; }
+.wave i { width: 2.5px; height: 16px; border-radius: 2px; background: var(--citron); transform: scaleY(.25); animation: wv .5s ease-in-out infinite alternate; }
+.wave i:nth-child(2n) { animation-duration: .36s; } .wave i:nth-child(3n) { animation-duration: .62s; } .wave i:nth-child(5n) { animation-duration: .28s; }
+@keyframes wv { to { transform: scaleY(1); } }
+.heard:empty::before { content: "Listening"; color: var(--n-dim); }
+
+/* Ask: you speak first. */
+.ask {
+  width: 100%; box-sizing: border-box; background: none; border: 0; outline: 0; padding: 4px 0;
+  font: 500 15px/1.4 var(--sans); color: var(--n-ink); caret-color: var(--citron);
+}
+.ask::placeholder { color: var(--n-dim); }
+.ask:focus-visible { outline: none; }
+
+/* Sheet: opens only when you ask for more than a line. One column, one row anatomy.
+   The prototype capped it at min(66vh, 560px). The window is only 680 tall, so
+   the cap is the fixed 560 it had on a real screen. */
+.sheet { padding: 2px 12px 12px; max-height: 560px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--notch-rule) transparent; animation: sheet .4s var(--ease) both; animation-delay: .08s; }
+@keyframes sheet { from { transform: translateY(-8px); } to { transform: none; } }
+.sheet.more { -webkit-mask-image: linear-gradient(#000 calc(100% - 30px), transparent); mask-image: linear-gradient(#000 calc(100% - 30px), transparent); }
+.sheet.stag .paper { animation: feed .36s var(--ease) both; animation-delay: .06s; }
+@keyframes feed { from { clip-path: inset(0 0 100% 0 round 14px 3px 14px 14px); transform: translateY(-12px); } to { clip-path: inset(0 0 0 0 round 14px 3px 14px 14px); transform: none; } }
+.paper.fold { animation: fold .22s cubic-bezier(.5,0,.8,.4) forwards; }
+@keyframes fold { to { clip-path: inset(0 0 100% 0 round 14px 3px 14px 14px); transform: translateY(-16px); } }
+.ghostly { position: absolute; left: 0; pointer-events: none; animation: fadeup .14s var(--ease) forwards; }
+@keyframes fadeup { to { opacity: 0; transform: translateY(-4px); } }
+/* a sheet you just opened lays its rows down one by one; a redraw does not */
+.sheet.stag .row, .sheet.stag .acts, .sheet.stag .note, .sheet.stag .quietlinks { animation: rowin .36s var(--ease) both; animation-delay: .1s; }
+.sheet.stag .row:nth-child(2) { animation-delay: .135s; } .sheet.stag .row:nth-child(3) { animation-delay: .17s; } .sheet.stag .row:nth-child(4) { animation-delay: .205s; }
+.sheet.stag .row:nth-child(5) { animation-delay: .24s; } .sheet.stag .row:nth-child(6) { animation-delay: .275s; } .sheet.stag .row:nth-child(n+7) { animation-delay: .31s; }
+.sheet.stag .acts, .sheet.stag .note, .sheet.stag .quietlinks { animation-delay: .3s; }
+@keyframes rowin { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: none; } }
+.rows { margin: 0; padding: 0; list-style: none; }
+.row {
+  display: flex; align-items: baseline; gap: 12px; padding: 11px 4px; border-top: 1px solid var(--notch-line);
+  font: 500 13.5px/19px var(--sans); color: var(--n-ink2);
+}
+.row:first-child { border-top: 0; }
+.row .mn { flex: 1 1 auto; min-width: 0; }
+.row .mn b { font-weight: 600; color: var(--n-ink); }
+.row .mn small { display: block; font: 400 12px/16px var(--sans); color: var(--n-dim); margin-top: 2px; }
+.row .at { font: 500 12px/16px var(--sans); color: var(--n-dim); flex: none; font-variant-numeric: tabular-nums; }
+.row .btn { align-self: center; margin-block: -6px; }
+.row.stack { flex-wrap: wrap; row-gap: 10px; }
+.row.stack .mn { flex-basis: 100%; color: var(--n-ink); }
+.row.stack .acts { flex-basis: 100%; }
+.row.stack .btn { margin-block: 0; }
+.row.go { appearance: none; width: 100%; box-sizing: border-box; background: none; border: 0; border-top: 1px solid var(--notch-line); text-align: left; cursor: pointer; }
+.row.go:first-child { border-top: 0; }
+.row.go:hover { color: var(--n-ink); }
+.row.go > svg { width: 14px; height: 14px; flex: none; opacity: .45; align-self: center; margin-right: 6px; }
+.row.go:hover > svg { opacity: 1; }
+.acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.sheet > div > .acts { padding: 10px 4px 2px; }
+.note { margin: 4px 0 0; padding: 10px 4px 0; border-top: 1px solid var(--notch-line); font: 400 12px/16px var(--sans); color: var(--n-dim); text-wrap: pretty; }
+.quietlinks { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0; padding: 12px 4px 0; border-top: 1px solid var(--notch-line); }
+.quietlinks button { appearance: none; border: 0; background: none; cursor: pointer; padding: 2px 0; font: 500 13.5px/19px var(--sans); color: var(--n-dim); border-radius: 3px; }
+.quietlinks button:hover { color: var(--n-ink); }
+.paper {
+  background: var(--paper); color: var(--paper-ink); border-radius: var(--corner); padding: 14px 16px 15px; margin-top: 2px;
+  font: 400 13.5px/20px var(--sans);
+}
+.paper p { margin: 0 0 8px; }
+.paper p:last-child { margin-bottom: 0; }
+.paper .to { color: var(--paper-ink2); font-size: 12px; line-height: 16px; padding-bottom: 9px; margin-bottom: 11px; border-bottom: 1px solid var(--paper-rule); }
+.paper .to b { color: var(--paper-ink); font-weight: 600; }
+.paper b { font-weight: 600; }
+.paper .live { color: var(--citron-ink); background: var(--citron); }
+.paper .live:hover { background: var(--citron-hi); }
+.paper .live:focus-visible { outline-color: var(--paper-ink); }
+.paper ul { margin: 0; padding: 0; list-style: none; }
+.paper li { padding: 7px 0; border-top: 1px solid var(--paper-rule); display: flex; gap: 10px; align-items: baseline; }
+.paper li:first-child { border-top: 0; padding-top: 0; }
+.paper li:last-child { padding-bottom: 0; }
+.paper li span { color: var(--paper-ink2); font: 600 12px/16px var(--sans); flex: none; width: 60px; }
+/* The attached file. In the prototype two rules shared the name .file: the
+   chip meant for the paper, and a later one for the file tiles of its fake
+   desktop. The later one won where they met, so what was shown, and what the
+   draft sheet's height comes from, is a small white tile: icon above, name and
+   size below. This is that tile, written out as one rule. */
+.file {
+  display: grid; justify-items: center; align-items: center; gap: 9px; width: 124px; box-sizing: border-box; margin-top: 3px; padding: 14px 10px 11px;
+  background: #FFFFFF; border: 1px solid var(--paper-rule); border-radius: var(--corner-sm); box-shadow: 0 1px 2px rgba(20,30,45,.06), 0 1px 1px rgba(20,30,45,.04);
+  font: 500 12px/1.3 var(--sans); color: var(--paper-ink);
+}
+.file svg { width: 26px; height: 26px; fill: none; stroke: var(--paper-ink2); stroke-width: 1.5; stroke-linejoin: round; }
+.file i { font: 400 12px/1 var(--sans); color: var(--paper-ink2); font-style: normal; }
+
+/* the keys: never more than two at once, shown by name */
+.cap.duo, .kbd.duo { display: inline-flex; padding: 0; overflow: hidden; min-width: 0; transition: background-color .12s var(--ease), color .12s var(--ease); }
+.duo b { font: inherit; font-weight: 500; font-size: 9.5px; padding: 4px 4px 4.5px; }
+.duo b + b { box-shadow: inset 1px 0 0 var(--notch-rule); }
+.kbd.duo { vertical-align: 1px; }
+@media (hover: none) { .key .cap.duo { display: none; } }   /* no keyboard: you tap the hint itself */
+.key.nn { display: none; } @media (hover: none) { .key.nn { display: inline-flex; } .key.nn .cap { display: none; } .key { min-height: 32px; } .live { padding: 3px 6px; } }   /* not now has no key: you ignore it. On a phone there is a button */
+/* a file dropped on the notch */
+.wrap.over .lip { stroke: var(--citron); stroke-width: 1.6; }
+.filecard { display: grid; grid-template-columns: 44px minmax(0, 1fr); column-gap: 12px; align-items: center; margin: 2px 4px 12px; padding: 10px 12px; border-radius: var(--corner-sm); background: var(--notch-raise); box-shadow: inset 0 0 0 1px var(--notch-rule); }
+.filecard .ic { grid-row: span 2; width: 44px; height: 44px; border-radius: 6px; background: var(--notch); display: grid; place-items: center; color: var(--citron); overflow: hidden; }
+.filecard .ic svg { width: 22px; height: 22px; }
+.filecard b { font: 600 14px/1.3 var(--sans); color: var(--n-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; align-self: end; }
+.filecard span { font: 500 12px/1.3 var(--sans); color: var(--n-ink2); align-self: start; }
+.asks { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 4px 6px; }
+/* an eye kept on something: one of Jarvis's own eyes turns citron. Nothing is added to the edge of the screen */
+.nin[data-eye="eye"] .eye.l { --ew: 7px; --eh: 7px; --er: 50%; } .nin[data-eye="eye"] .eye.l b { background: var(--citron); } .nin[data-eye="eye"] .eye.l .arc path { stroke: var(--citron); }   /* citron and round: one eye kept open. A shape as well as a colour */
+.nin[data-eye="eye"][data-mood="urgent"] .eye.r b { background: var(--n-ink); }
+.nin.eyefire .eye.l::after { content: ""; position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; border: 1.5px solid var(--citron); opacity: 0; animation: eyering .42s ease-out 2; }
+@keyframes eyering { from { scale: .6; opacity: .95; } to { scale: 2.6; opacity: 0; } }
+.nin.eyefire .eye.l { animation: eyefire .6s var(--ease); }   /* the thing it watched has changed: that eye opens wide before it speaks */
+@keyframes eyefire { 30% { scale: 1.9; } 60% { scale: .92; } }
+
+/* The line. Jarvis is drawn from the top edge of the screen: things arrive and leave along it as bumps of the notch's own ink, and the notch's lower edge is a lip that moves */
+.line { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; overflow: visible; }
+.line path { fill: var(--notch); stroke: var(--notch-edge); stroke-width: 1; }
+.wrap.lineon .wave { display: none; }  /* with the line on, the lip itself is the waveform */
+.blob .body { transition: fill-opacity .3s var(--ease); }
+/* A birth: the outline is drawn first, then what is inside appears. The
+   prototype drew it on an empty desktop and filled it after. Here the black
+   shape is the native layer's and is there at once, so the line is drawn in
+   light ink just inside its edge, where the page can be seen. */
+.blob .trace { fill: none; stroke: var(--n-ink); stroke-width: 1.6; stroke-linecap: round; opacity: 0; }
+.blob.tracing .trace { opacity: 1; stroke-dasharray: var(--blen, 400); animation: trace .7s cubic-bezier(.45,0,.55,1) forwards; }
+@keyframes trace { from { stroke-dashoffset: var(--blen, 400); } to { stroke-dashoffset: 0; } }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Reduced motion. A class, not a media query, so it can also be forced on or
+   off from outside (the surface sets it from the system setting by default). */
+.notch-still *, .notch-still *::before, .notch-still *::after { animation-duration: .01ms !important; animation-delay: 0ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+.notch-still .wrap.fusing .burn { animation-duration: var(--fuse, 4000ms) !important; }
+.notch-still .mark svg { stroke-dashoffset: 0; }
+
+/* Additions for the product page, not in the prototype. */
+
+/* The surface fills the window it is given; the notch hangs from the middle of its top edge. */
+html.notch-window #notch-root { position: absolute; inset: 0; overflow: hidden; }
+/* Answered: the line stays as it is until the brain says what comes next, and
+   takes no second answer. */
+.nin.answered .hint, .nin.answered .opts, .nin.answered .pick { pointer-events: none; opacity: .45; transition: opacity .2s var(--ease); }
+.nin.answered .sheet .btn, .nin.answered .sheet .row.go, .nin.answered .live { pointer-events: none; }
+/* A numbered list on paper: the number is a narrow column, not the 60px label column. */
+.paper li span.num { width: 14px; }
+.paper li > div { flex: 1 1 auto; min-width: 0; }
