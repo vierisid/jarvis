@@ -280,6 +280,34 @@ describe('runUpdate — script install', () => {
     expect(stopCalls).toBe(1);
   });
 
+  test('says the daemon was not signalled when its lock names a process that is not the holder', async () => {
+    const { spawn } = recordingSpawner([
+      { exitCode: 0, stdout: lsRemote('v2.0.0') }, // ls-remote
+      { exitCode: 0, stdout: 'v1.0.0\n' }, // describe
+      { exitCode: 0 }, // checkout -- .
+      { exitCode: 0 }, // fetch
+      { exitCode: 0 }, // checkout tag
+      { exitCode: 0 }, // bun install
+    ]);
+    const lines: string[] = [];
+    const realLog = console.log;
+    console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+    try {
+      await runUpdate({
+        packageRoot: workDir,
+        spawn,
+        detect: () => fakeInfo('script'),
+        checkRunning: () => 1,
+        stopDaemon: async () => ({ wasRunning: true, pid: 1, graceful: false, stopped: false, notHolder: true }),
+        restartDaemon: false,
+        systemdUnit: () => null,
+      });
+    } finally {
+      console.log = realLog;
+    }
+    expect(lines.join('\n')).toContain('It was not signalled');
+  });
+
   test('bun install failure is a warning, not a hard failure', async () => {
     const { spawn } = recordingSpawner([
       { exitCode: 0, stdout: lsRemote('v2.0.0') }, // ls-remote

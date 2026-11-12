@@ -1,19 +1,25 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import os from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import YAML from 'yaml';
-import { readLockedPort, isProcessAlive } from '../daemon/pid.ts';
+import { flockHeldBy, getPidPath, readLockedPort, isProcessAlive } from '../daemon/pid.ts';
 import { readPortSetting, type PortSetting } from '../config/port.ts';
 import { win32SystemExe } from '../util/system-exe.ts';
 
 export const DEFAULT_DAEMON_PORT = 3142;
 
-function parsePidList(output: string, currentPid: number): number[] {
+/**
+ * One pid per line, and ONLY lines that are a pid. Taking every run of digits
+ * anywhere in the output (as this once did) read a login profile's greeting
+ * ("Agent pid 4321", "1 new message") as listeners on the port.
+ */
+export function parsePidList(output: string, currentPid: number): number[] {
   return [...new Set(
     output
       .split(/\r?\n/)
-      .flatMap((line) => line.match(/\d+/g) ?? [])
+      .map((line) => line.trim())
+      .filter((line) => /^\d+$/.test(line))
       .map((value) => Number.parseInt(value, 10))
       .filter((value) => Number.isInteger(value) && value > 0 && value !== currentPid)
   )];
@@ -44,30 +50,56 @@ async function captureOutput(command: string[], quiet = true): Promise<string> {
   return output;
 }
 
+/** captureOutput, but '' when the program is not there at all (Bun.spawn throws ENOENT). */
+async function captureIfPresent(command: string[]): Promise<string> {
+  try {
+    return await captureOutput(command);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * A system tool by absolute path where it is installed in the usual places
+ * (lsof is in /usr/sbin on macOS and some Linux distributions, /usr/bin on
+ * others; ss likewise; ps in /bin), else by name.
+ */
+function systemTool(name: 'lsof' | 'ss' | 'ps'): string {
+  for (const dir of ['/usr/sbin', '/usr/bin', '/sbin', '/bin']) {
+    if (existsSync(`${dir}/${name}`)) return `${dir}/${name}`;
+  }
+  return name;
+}
+
+/**
+ * The PowerShell that lists the pids listening on `port`, one per line.
+ * PowerShell's own output already puts each on its own line. This used to
+ * `-join "\n"`, but PowerShell escapes with a backtick, so that joined with a
+ * literal backslash-n: a process on both 0.0.0.0 and :: came back as
+ * `1234\n1234` on one line, which is no pid at all.
+ */
+export function windowsListenerScript(port: number): string {
+  return `Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess`;
+}
+
 async function findListeningPids(port: number, currentPid: number): Promise<number[]> {
   if (os.platform() === 'win32') {
     const output = await captureOutput([
       win32SystemExe('powershell.exe'),
       '-NoProfile',
       '-Command',
-      `(Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess) -join "\\n"`,
+      windowsListenerScript(port),
     ]);
     return parsePidList(output, currentPid);
   }
 
-  const lsofOutput = await captureOutput([
-    'bash',
-    '-lc',
-    `lsof -ti tcp:${port} -sTCP:LISTEN 2>/dev/null || true`,
-  ]);
+  // Run directly, not through `bash -lc`: a login shell sources the user's
+  // profile, and whatever that prints lands in the output parsed below.
+  const lsofOutput = await captureIfPresent([systemTool('lsof'), '-t', '-n', '-P', `-iTCP:${port}`, '-sTCP:LISTEN']);
   const lsofPids = parsePidList(lsofOutput, currentPid);
   if (lsofPids.length > 0) return lsofPids;
 
-  const ssOutput = await captureOutput([
-    'bash',
-    '-lc',
-    `ss -ltnp '( sport = :${port} )' 2>/dev/null || true`,
-  ]);
+  const ssOutput = await captureIfPresent([systemTool('ss'), '-ltnp', `sport = :${port}`]);
   return [...new Set(
     Array.from(ssOutput.matchAll(/pid=(\d+)/g))
       .map((match) => Number.parseInt(match[1]!, 10))
@@ -75,30 +107,316 @@ async function findListeningPids(port: number, currentPid: number): Promise<numb
   )];
 }
 
+/**
+ * A process still listening on the port that `jarvis stop` did not kill, what
+ * it is called, and why it was left:
+ *  - `not-jarvis`: not identified as the Jarvis daemon for this data folder,
+ *    so never signalled;
+ *  - `no-permission`: identified, but the signal was refused (EPERM);
+ *  - `let-go-of-lock`: SIGTERMed as ours, then still running without the lock
+ *    when SIGKILL was due, so not killed.
+ */
+export type PortListener = { pid: number; command: string | null; reason: 'not-jarvis' | 'no-permission' | 'let-go-of-lock' };
+
+export type PortCleanup = {
+  /** Nothing listens on the port any more. */
+  released: boolean;
+  /** Jarvis daemons that exited after SIGTERM. */
+  terminated: number[];
+  /** Jarvis daemons that needed SIGKILL. */
+  forced: number[];
+  /**
+   * Listeners still on the port that were not stopped, each with the reason
+   * (see PortListener). Whoever prints the result names them.
+   */
+  leftAlone: PortListener[];
+};
+
+/**
+ * The spellings under which an open handle on `lockPath` can appear in
+ * /proc/<pid>/fd or in lsof once the file is gone: as given, and with its
+ * folder's symlinks resolved (a ~/.jarvis that is a symlink, macOS's
+ * /var -> /private/var). The kernel reports the resolved one.
+ */
+function lockPathSpellings(lockPath: string): Set<string> {
+  const spellings = new Set([lockPath]);
+  const anchor = nearestExistingFolder(dirname(lockPath));
+  if (anchor !== null) {
+    try {
+      spellings.add(join(realpathSync(anchor.path), anchor.rest, basename(lockPath)));
+    } catch { /* gone while we looked; the path as given is all there is */ }
+  }
+  return spellings;
+}
+
+/**
+ * The closest folder at or above `dir` that still exists, and the part of
+ * `dir` below it ('' when `dir` itself exists). The whole data folder can be
+ * deleted under a running daemon (`rm -rf ~/.jarvis` to start over), and the
+ * kernel still names the lock inside it; the folder above it is then what the
+ * deleted file is compared with.
+ */
+function nearestExistingFolder(dir: string): { path: string; rest: string; dev: number } | null {
+  let path = dir;
+  const below: string[] = [];
+  for (;;) {
+    try {
+      return { path, rest: below.length > 0 ? join(...below) : '', dev: statSync(path).dev };
+    } catch { /* missing: try the folder above */ }
+    const parent = dirname(path);
+    if (parent === path) return null;
+    below.unshift(basename(path));
+    path = parent;
+  }
+}
+
+/** Linux appends this to the link of an open file that has since been unlinked. */
+const DELETED_SUFFIX = ' (deleted)';
+
+type FileId = { dev: number; ino: number; nlink: number };
+
+function fileId(path: string): FileId | null {
+  try {
+    const st = statSync(path);
+    return { dev: st.dev, ino: st.ino, nlink: st.nlink };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A deleted file's link names a path inside the process's own mount
+ * namespace, so the same path means the same folder only when that is ours.
+ */
+function sameMountNamespace(pid: number): boolean {
+  try {
+    return readlinkSync(`/proc/${pid}/ns/mnt`) === readlinkSync('/proc/self/ns/mnt');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Is `pid` the Jarvis daemon for the data folder whose lock file is `lockPath`?
+ *
+ * The test is whether the process holds that lock file open. The daemon opens
+ * it in acquireLock and keeps the descriptor for its whole life (that open
+ * descriptor IS the flock), and nothing else does. The descriptor is
+ * close-on-exec, and Bun.spawn and node:child_process also close every
+ * descriptor beyond stdio in the child (measured on both), so the daemon's own
+ * children do not inherit it.
+ *
+ * On Linux this is asked two ways. First the kernel's lock table, /proc/locks
+ * (flockHeldBy in pid.ts): it is readable by every user and still answers for
+ * the real daemon, which makes itself non-dumpable at boot so that its
+ * /proc/<pid>/fd is unreadable to anyone else (hardenProcessInspection). Then
+ * that fd folder, which covers what the table cannot (a lock file deleted
+ * under the daemon, below) but only for a process that left it readable: a
+ * daemon with `daemon.allow_process_inspection` set, or a reader running as
+ * root.
+ *
+ * A pid number, a name or a command line proves much less -- pids are
+ * reused, and any program can be called `bun`.
+ *
+ * "That lock file" means the same file, not the same path: an open file is
+ * compared by device and inode with the one at `lockPath`, so a daemon in a
+ * container whose lock happens to sit at the same path (a different file, in
+ * another mount namespace) is not ours. The one case compared by path is a lock
+ * file unlinked under a running daemon, which is the main way a live daemon
+ * ends up holding no lock that `jarvis stop` can see. There is no file left to
+ * compare with, so on Linux the open file must have no links left, its
+ * "<path> (deleted)" link must name our path, it must live on the same device
+ * as our data folder (or, when that folder was deleted too, the closest folder
+ * above it), and the process must see the same mount namespace. macOS's lsof may
+ * not name a deleted file at all; then the daemon is not identified, which is
+ * the safe way to be wrong.
+ *
+ * Anything we cannot inspect is NOT ours: a process the lock table does not
+ * name and whose /proc/<pid>/fd is unreadable (a hardened daemon whose lock
+ * file was deleted, another user's process), a platform without /proc or
+ * lsof, and native Windows, where the daemon does not run at all (pid.ts
+ * refuses to take the lock there).
+ */
+export async function holdsJarvisLock(pid: number, lockPath: string = getPidPath()): Promise<boolean> {
+  const platform = os.platform();
+  if (platform === 'win32') return false;
+  const lock = fileId(lockPath);
+  // The data folder, or the closest folder above it when the whole folder was
+  // deleted under the daemon.
+  const folder = nearestExistingFolder(dirname(lockPath));
+  const spellings = lockPathSpellings(lockPath);
+  const isDeletedLock = (name: string) =>
+    name.endsWith(DELETED_SUFFIX) && spellings.has(name.slice(0, -DELETED_SUFFIX.length));
+
+  if (platform === 'linux') {
+    // The kernel's lock table first: it still answers for a daemon that has
+    // hardened itself (PR_SET_DUMPABLE 0, which it does at boot unless
+    // daemon.allow_process_inspection is set), whose /proc/<pid>/fd below is
+    // unreadable to anyone else. The fd walk stays for what the table cannot
+    // show, a lock file already deleted under the daemon, and only works where
+    // that folder is readable (see above).
+    if (flockHeldBy(pid, lockPath) === true) return true;
+    const fdDir = `/proc/${pid}/fd`;
+    let fds: string[];
+    try {
+      fds = readdirSync(fdDir);
+    } catch {
+      return false;
+    }
+    for (const fd of fds) {
+      try {
+        const link = readlinkSync(join(fdDir, fd));
+        // stat() through the magic link reaches the open file itself, wherever
+        // (and in whichever mount namespace) it lives.
+        const open = fileId(join(fdDir, fd));
+        if (open === null) continue;
+        if (lock !== null && open.dev === lock.dev && open.ino === lock.ino) return true;
+        // nlink 0 is what makes it deleted. A file literally NAMED
+        // "jarvis.pid (deleted)" has a link and does not pass. (The device
+        // check has no test: it needs a second filesystem at the same path.)
+        if (folder !== null && open.dev === folder.dev && open.nlink === 0 && isDeletedLock(link) && sameMountNamespace(pid)) return true;
+      } catch { /* closed while we looked */ }
+    }
+    return false;
+  }
+
+  // macOS and the BSDs: no /proc, so ask lsof for the process's open files.
+  // `-F Din` prints, per file, its device (hex), inode and name on lines
+  // starting D, i and n; -w silences warnings about filesystems it cannot
+  // stat, which would otherwise go to stderr.
+  try {
+    const output = await captureOutput([systemTool('lsof'), '-n', '-P', '-w', '-p', String(pid), '-F', 'Din']);
+    let dev: number | null = null;
+    let ino: number | null = null;
+    for (const line of output.split(/\r?\n/)) {
+      const field = line[0];
+      const value = line.slice(1);
+      if (field === 'f') { dev = null; ino = null; }
+      else if (field === 'D') dev = Number.parseInt(value, 16);
+      else if (field === 'i') ino = Number(value);
+      else if (field === 'n') {
+        if (lock !== null && ino === lock.ino && dev === lock.dev) return true;
+        // No inode to compare once the file is gone: the name alone, as above.
+        if (lock === null && spellings.has(value)) return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The process's short name, for telling the user who holds the port; null when
+ * unknown. Control characters become `?`: a process sets its own name, and one
+ * carrying escape sequences must not get to drive the user's terminal.
+ */
+async function processName(pid: number): Promise<string | null> {
+  const name = await rawProcessName(pid);
+  return name === null ? null : printableName(name);
+}
+
+/** `name` with every control character (C0, DEL, C1) replaced by `?`. */
+export function printableName(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  return name.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
+}
+
+async function rawProcessName(pid: number): Promise<string | null> {
+  try {
+    if (os.platform() === 'linux') {
+      return readFileSync(`/proc/${pid}/comm`, 'utf-8').trim() || null;
+    }
+    if (os.platform() === 'win32') {
+      const output = await captureOutput([
+        win32SystemExe('powershell.exe'),
+        '-NoProfile',
+        '-Command',
+        `(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).ProcessName`,
+      ]);
+      return output.trim() || null;
+    }
+    const output = await captureOutput([systemTool('ps'), '-o', 'comm=', '-p', String(pid)]);
+    return output.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The command that shows who listens on `port`, for the user to run. */
+export function portInspectCommand(port: number, platform: NodeJS.Platform = os.platform()): string {
+  if (platform === 'win32') return `netstat -ano | findstr :${port}`;
+  if (platform === 'linux') return `lsof -nP -iTCP:${port} -sTCP:LISTEN  (or: ss -ltnp 'sport = :${port}'; add sudo to see other users' programs)`;
+  return `lsof -nP -iTCP:${port} -sTCP:LISTEN`;
+}
+
+/**
+ * What to tell the user about listeners `jarvis stop` left alone: who they are,
+ * and how to look for themselves. Empty when there are none.
+ */
+export function describeLeftAlone(port: number, leftAlone: PortListener[], platform: NodeJS.Platform = os.platform()): string[] {
+  if (leftAlone.length === 0) return [];
+  const who = (reason: PortListener['reason']) => leftAlone
+    .filter((l) => l.reason === reason)
+    .map(({ pid, command }) => (command ? `PID ${pid} (${command})` : `PID ${pid}`))
+    .join(', ');
+  const lines: string[] = [];
+  const notJarvis = who('not-jarvis');
+  if (notJarvis) lines.push(`Port ${port} is held by ${notJarvis}, which is not the Jarvis daemon for this data folder, so it was left running.`);
+  const noPermission = who('no-permission');
+  if (noPermission) lines.push(`Port ${port} is held by ${noPermission}, a Jarvis daemon for this data folder that this user may not signal. Stop it as its owner, or with root.`);
+  const letGo = who('let-go-of-lock');
+  if (letGo) lines.push(`Port ${port} is still held by ${letGo}, which was asked to stop but no longer holds this data folder's lock, so it was not force-killed.`);
+  lines.push(`See what it is: ${portInspectCommand(port, platform)}`);
+  return lines;
+}
+
+/**
+ * Clear `port` of a lingering Jarvis daemon: SIGTERM, then SIGKILL if it has
+ * not gone within two seconds.
+ *
+ * Only a listener that holds this data folder's lock file open is signalled
+ * (see holdsJarvisLock). Everything else is reported in `leftAlone` and never
+ * touched. This used to signal every listener on the port, and with no daemon
+ * running `jarvis stop` resolves the port from config or the 3142 default, so
+ * a plain `jarvis stop` killed whatever unrelated program was on 3142.
+ */
 export async function ensurePortReleased(
   port: number,
-  currentPid: number = process.pid,
-): Promise<{ released: boolean; terminated: number[]; forced: number[] }> {
+  options: { currentPid?: number; lockPath?: string } = {},
+): Promise<PortCleanup> {
+  const currentPid = options.currentPid ?? process.pid;
+  const lockPath = options.lockPath ?? getPidPath();
   const initialPids = await findListeningPids(port, currentPid);
   if (initialPids.length === 0) {
-    return { released: true, terminated: [], forced: [] };
+    return { released: true, terminated: [], forced: [], leftAlone: [] };
   }
 
   const terminated: number[] = [];
   const forced: number[] = [];
+  const leftAlone: PortListener[] = [];
+  const leaveAlone = async (pid: number, reason: PortListener['reason']) => {
+    leftAlone.push({ pid, command: await processName(pid), reason });
+  };
 
   for (const pid of initialPids) {
     if (!isPidAlive(pid)) continue;
+    if (!(await holdsJarvisLock(pid, lockPath))) {
+      await leaveAlone(pid, 'not-jarvis');
+      continue;
+    }
 
     try {
       process.kill(pid, 'SIGTERM');
     } catch (err) {
-      // EPERM: someone else's listener on our port — we can neither signal it
-      // nor wait it out, so skip instead of burning the 2s + 1s waits below.
-      // (The old local isPidAlive reported EPERM as dead and skipped at the top
-      // of the loop; now that it reports alive, the skip has to be explicit.)
-      if ((err as NodeJS.ErrnoException)?.code === 'EPERM') continue;
-      // ESRCH and friends: fall through — the wait below returns at once.
+      // EPERM: we can neither signal it nor wait it out, so skip instead of
+      // burning the 2s + 1s waits below. (Rare once the lock check passed: it
+      // takes a process we could inspect but not signal.)
+      if ((err as NodeJS.ErrnoException)?.code === 'EPERM') {
+        await leaveAlone(pid, 'no-permission');
+        continue;
+      }
+      // ESRCH and friends: fall through -- the wait below returns at once.
     }
 
     if (await waitForExit(pid, 2000)) {
@@ -106,8 +424,13 @@ export async function ensurePortReleased(
       continue;
     }
 
-    if (!isPidAlive(pid)) {
-      terminated.push(pid);
+    // Ask again before SIGKILL. A process that no longer holds the lock is not
+    // something we may kill: normally it is our daemon in its last instant
+    // (it closes the lock as it exits) or a zombie waiting to be reaped, and in
+    // theory a reused pid. Give it a moment instead of a SIGKILL.
+    if (!(await holdsJarvisLock(pid, lockPath))) {
+      if (await waitForExit(pid, 1000)) terminated.push(pid);
+      else await leaveAlone(pid, 'let-go-of-lock');
       continue;
     }
 
@@ -121,10 +444,15 @@ export async function ensurePortReleased(
     }
   }
 
+  // Name only the ones still on the port. One that was asked to stop and has
+  // since let go of it (or exited and is a zombie nobody has reaped yet) holds
+  // nothing, and "Port N is still held by" would be wrong.
+  const remaining = await findListeningPids(port, currentPid);
   return {
-    released: (await findListeningPids(port, currentPid)).length === 0,
+    released: remaining.length === 0,
     terminated,
     forced,
+    leftAlone: leftAlone.filter((listener) => remaining.includes(listener.pid)),
   };
 }
 

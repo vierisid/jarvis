@@ -424,6 +424,7 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
       // gone and a NEW daemon holds the lock — naming the dead one misleads.
       const holder = isLocked() ?? stop.pid;
       console.log(c.yellow(`  Warning: daemon (PID ${holder}) is still running — update may not take effect until it restarts.`));
+      if (stop.notHolder) console.log(c.dim('  It was not signalled: that process could not be shown to hold the lock (a daemon in a container, or run as another user).'));
     }
   }
 
