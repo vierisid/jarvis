@@ -1254,8 +1254,8 @@ function isShellStartupFile(s: string): boolean {
  */
 export const SECRET_ENV_NAMES: readonly string[] = Object.freeze([
   // Exactly model-exec-env.ts's DAEMON_SECRET_ENV_NAMES (#536).
-  'JARVIS_WORKFLOW_ENCRYPTION_KEY', 'JARVIS_GITHUB_TOKEN', 'JARVIS_DEBUG_RPC', 'JARVIS_API_KEY',
-  'JARVIS_OPENAI_KEY', 'JARVIS_GROQ_KEY', 'JARVIS_OPENROUTER_KEY', 'JARVIS_LITELLM_KEY',
+  'JARVIS_WORKFLOW_ENCRYPTION_KEY', 'JARVIS_GITHUB_TOKEN', 'JARVIS_DEBUG_RPC', 'JARVIS_NOTCH_DEMO',
+  'JARVIS_API_KEY', 'JARVIS_OPENAI_KEY', 'JARVIS_GROQ_KEY', 'JARVIS_OPENROUTER_KEY', 'JARVIS_LITELLM_KEY',
   'NVIDIA_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY',
   // Plus names the scrub list does not need but the scan does. The two failure
   // modes are asymmetric: a scrub false positive breaks a child process, a scan
