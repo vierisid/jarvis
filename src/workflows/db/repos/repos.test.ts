@@ -529,6 +529,15 @@ describe("mergeRunOutputsIntoSampleData (auto-capture)", () => {
     expect(v.sampleData?.step_2).toBeUndefined();
   });
 
+  test("keeps a step's own { type, status, output } result when the type is not an engine step type", () => {
+    const versionId = newDraft();
+    mergeRunOutputsIntoSampleData(versionId, {
+      // An already-unwrapped step record: one unwrap reaches what the step returned.
+      step_1: { type: "PIECE", status: "SUCCEEDED", input: {}, output: { type: "invoice", status: "paid", output: { total: 3 } } },
+    });
+    expect(getFlowVersion(versionId)!.sampleData?.step_1).toEqual({ type: "invoice", status: "paid", output: { total: 3 } });
+  });
+
   test("does not clobber user-pinned cells", () => {
     const versionId = newDraft();
     setSampleDataEntry(versionId, "step_1", { user: "pinned" });
