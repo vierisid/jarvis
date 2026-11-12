@@ -40,6 +40,7 @@ import { NOT_ONE_LINE } from '../../vault/commitment-text.ts';
 import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
 import { OnboardingResolutionError, resolveOnboardingOutcome, runOnboardingOutcomes } from '../runtime/onboarding-service';
 import { runFailure } from '../runtime/run-failure';
+import { continuedFailures } from '../runtime/continued-failures';
 import { dismissFailures, listOpenFailures } from '../runtime/open-failures';
 import type { AuthorityEngine } from '../../authority/engine';
 import {
@@ -118,7 +119,7 @@ import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oaut
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
-import { isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
+import { canContinuePastStep, canRetryStep, isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import { withScheduleZoneDefault } from "../runner/triggers/schedule-zone";
@@ -955,6 +956,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             // editor badges its steps. The daemon decides, so the badge and
             // the gate in `pieceAuthorize` cannot disagree.
             ...(isCommunityPiece(p.name) ? { notApprovalGated: true } : {}),
+            // "Retry on failure" applies only to built-in steps that act inside the run.
+            ...(canRetryStep(p.name) ? { retrySafe: true } : {}),
             actions: Object.values(p.actions).map((a) => ({
               name: a.name,
               displayName: a.displayName,
@@ -962,6 +965,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               inputSchema: a.inputSchema ?? null,
               // A partly governed piece badges only its ungoverned actions.
               ...(!isCommunityPiece(p.name) && isCommunityAction(p.name, a.name) ? { notApprovalGated: true } : {}),
+              // A step that asks a person stops on a "no": "Continue on failure" does not apply.
+              ...(canContinuePastStep(p.name, a.name) ? {} : { continueUnavailable: true }),
               // Optional declared output sample (Jarvis extension to AP).
               // Surfaced to the dashboard so the variable picker can show
               // field-level rows for actions that have never been run yet.
@@ -2351,7 +2356,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             offset,
           };
           if (status) opts.status = status;
-          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run) }));
+          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run), continuedFailures: continuedFailures(run) }));
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
@@ -2448,7 +2453,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
-          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run) }) : err("run not found", 404);
+          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run), continuedFailures: continuedFailures(run) }) : err("run not found", 404);
         }),
     },
 

@@ -3,6 +3,8 @@ import { workflowTriggerLabel } from './workflow-trigger-label';
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_IDS, getWorkflowDb } from '../workflows/db';
 import { getFlow, updateFlowStatus, parseFlowMetadata, type FlowRow } from '../workflows/db/repos/flow';
+import { getFlowRun } from '../workflows/db/repos/flow-run';
+import { continuedFailureHeadline, continuedFailures } from '../workflows/runtime/continued-failures';
 import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-version';
 import { versionReadiness, WorkflowReadinessError } from '../workflows/db/repos/flow-readiness';
 import { displayWorkflowName } from '../workflows/display-name';
@@ -120,7 +122,7 @@ export class WorkflowRemoval {
       trigger: workflowTriggerLabel(version?.trigger),
       activation: f.status, publication: f.published_version_id ? 'published' : 'unpublished',
       readiness: { state: ready ? 'ready' : 'blocked', reason: ready ? null : 'Workflow setup or permission needs review before enabling' },
-      latestRun: last ? { runId: last.id, label: last.status } : null };
+      latestRun: last ? { runId: last.id, label: last.status === 'SUCCEEDED' && continuedFailures(getFlowRun(last.id)!).length ? continuedFailureHeadline(1) : last.status } : null };
   }
   read() {
     this.ready();
