@@ -249,10 +249,11 @@ export class OpenAIProvider implements LLMProvider {
     try {
       data = await response.json() as OpenAIResponse;
     } catch (error) {
-      // A connection that dropped mid-body keeps its own wording (a network
-      // failure); anything else is a body that is not JSON (a captive portal,
-      // a gateway error page served with a 200).
-      if (error instanceof Error && /econnreset|socket connection was closed/i.test(error.message)) throw error;
+      // Only a body that is not JSON (a captive portal, a gateway error page
+      // served with a 200) is the provider's bad reply. Anything else raised
+      // while reading it (a dropped connection, an abort or the manager's
+      // timeout) keeps its own error and code.
+      if (!(error instanceof SyntaxError)) throw error;
       throw new LLMProviderError(`${this.errorLabel} API error: the reply was not valid JSON (HTTP ${response.status})`, 'server');
     }
     if (!Array.isArray(data?.choices) || data.choices.length === 0) {

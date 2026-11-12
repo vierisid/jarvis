@@ -232,16 +232,10 @@ export class LLMManager {
       return this.shouldRetryCode(error.code);
     }
 
-    const msg = error.message.toLowerCase();
-    // Retry on network/timeout errors, not on auth/validation errors
-    if (this.shouldRetryCode(classifyErrorString(msg))) return true;
-    return msg.includes('timeout') || /\btimed\s+out\b/.test(msg) ||
-      msg.includes('econnrefused') ||
-      msg.includes('enotfound') ||
-      msg.includes('network') ||
-      msg.includes('temporarily unavailable') ||
-      msg.includes('429') ||  // rate limit
-      msg.includes('503');    // service unavailable
+    // Retry on network/timeout errors, not on auth/validation errors. The
+    // classifier covers every word the old substring list did, and unlike it
+    // keeps a stated 4xx a request error whatever its body says.
+    return this.shouldRetryCode(classifyErrorString(error.message));
   }
 
   private shouldRetryCode(code: LLMErrorCode | undefined): boolean {
@@ -543,7 +537,9 @@ export class LLMManager {
       }
 
       if (!terminalError) return;
-      if (emittedContent) {
+      // As chatTier's throwIfAborted: a stopped turn whose last attempt ended
+      // in a network-coded error must not start on the next provider.
+      if (emittedContent || options?.signal?.aborted) {
         yield terminalError;
         return;
       }

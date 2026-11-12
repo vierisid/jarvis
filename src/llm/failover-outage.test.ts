@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { LLMManager } from './manager';
 import { OpenAIProvider } from './openai';
-import { LLMProviderError, type LLMErrorCode, type LLMProvider, type LLMStreamEvent } from './provider';
+import { classifyErrorString, getLLMErrorCode, LLMProviderError, type LLMErrorCode, type LLMProvider, type LLMStreamEvent } from './provider';
 import { failureEvidence } from '../failures/evidence';
 import { failureText, projectFailure } from '../failures/projection';
 
@@ -99,4 +99,109 @@ test('an OpenAI-compatible server that answers 200 with a page that is not JSON 
   expect(error.message).not.toContain('captive portal');
   globalThis.fetch = (async () => new Response('{"id":"x"}', { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
   expect((await new OpenAIProvider('k').chat(messages).catch(e => e)).code).toBe('server');
+});
+
+for (const code of ['auth', 'forbidden'] as LLMErrorCode[]) {
+  test(`${code} never moves to another provider`, async () => {
+    const { manager, calls } = pair(() => new LLMProviderError('refused the key', code));
+    await expect(manager.chatTier('high', 't', messages)).rejects.toThrow();
+    expect(calls.fallback).toBe(0);
+  });
+}
+
+test('a stated 4xx whose body mentions a timeout or a 5xx number is a request error and stays put', async () => {
+  for (const message of [
+    'Anthropic API error (400): max_tokens: 512 is below the thinking budget',
+    'Gemini API error (400): invalid value for field "timeout"',
+    'OpenRouter API error (422): upstream said 503 for this payload',
+  ]) {
+    expect(classifyErrorString(message)).not.toBe('server');
+    expect(classifyErrorString(message)).not.toBe('network');
+    const { manager, calls } = pair(() => new Error(message));
+    await expect(manager.chatTier('high', 't', messages)).rejects.toThrow();
+    expect(calls.primary).toBe(1);
+    expect(calls.fallback).toBe(0);
+  }
+  // A stated 5xx and a 408 still read as outages.
+  expect(classifyErrorString('Anthropic API error (529): overloaded')).toBe('server');
+  expect(classifyErrorString('Gemini API error (408): request timeout')).toBe('network');
+});
+
+test('an outage never reaches a provider that is registered but not mapped to a tier', async () => {
+  const calls = { primary: 0, stray: 0 };
+  const manager = new LLMManager();
+  manager.registerProvider({ name: 'primary', async chat() { calls.primary++; throw new LLMProviderError('API error: 503', 'server'); },
+    async *stream() { calls.primary++; yield { type: 'error', error: 'API error: 503', code: 'server' }; }, async listModels() { return []; } });
+  manager.registerProvider({ name: 'stray', async chat() { calls.stray++; return reply; },
+    async *stream() { calls.stray++; yield { type: 'done', response: reply }; }, async listModels() { return []; } });
+  manager.setTierMap({ high: { provider: 'primary' } });
+  await expect(manager.chatTier('high', 't', messages)).rejects.toThrow();
+  const events: LLMStreamEvent[] = [];
+  for await (const event of manager.streamTier('high', 't', messages)) events.push(event);
+  expect(events.map(e => e.type)).toEqual(['error']);
+  expect(calls.stray).toBe(0);
+  // Bounded: three attempts per call, no loop back to the failed provider.
+  expect(calls.primary).toBe(6);
+});
+
+test('every configured provider down ends in one error after a bounded number of attempts', async () => {
+  const calls: Record<string, number> = {};
+  const manager = new LLMManager();
+  for (const name of ['a', 'b', 'c']) {
+    manager.registerProvider({ name, async chat() { calls[name] = (calls[name] ?? 0) + 1; throw new LLMProviderError('API error: 502', 'server'); },
+      async *stream() {}, async listModels() { return []; } });
+  }
+  // `a` is mapped twice: it must not be tried again under the second tier.
+  manager.setTierMap({ high: { provider: 'a' }, medium: { provider: 'b' }, low: { provider: 'a', model: 'other' } });
+  const error = await manager.chatTier('high', 't', messages).catch(e => e);
+  expect(error).toBeInstanceOf(LLMProviderError);
+  expect(error.code).toBe('server');
+  expect(calls).toEqual({ a: 3, b: 3 });
+});
+
+test('a stream that produced text before the provider failed is not resent to the next provider', async () => {
+  const calls = { primary: 0, fallback: 0 };
+  const manager = new LLMManager();
+  manager.registerProvider({ name: 'primary', async chat() { return reply; },
+    async *stream() { calls.primary++; yield { type: 'text', text: 'half an ans' }; yield { type: 'error', error: 'API error: 503', code: 'server' }; },
+    async listModels() { return []; } });
+  manager.registerProvider({ name: 'fallback', async chat() { return reply; },
+    async *stream() { calls.fallback++; yield { type: 'text', text: 'from fallback' }; yield { type: 'done', response: reply }; }, async listModels() { return []; } });
+  manager.setTierMap({ high: { provider: 'primary' }, medium: { provider: 'fallback' } });
+  const events: LLMStreamEvent[] = [];
+  for await (const event of manager.streamTier('high', 't', messages)) events.push(event);
+  expect(events.map(e => e.type)).toEqual(['text', 'error']);
+  expect(events.filter(e => e.type === 'text').map(e => (e as { text: string }).text)).toEqual(['half an ans']);
+  expect(calls).toEqual({ primary: 1, fallback: 0 });
+});
+
+test('a stream stopped by the caller does not move on to the next provider', async () => {
+  const controller = new AbortController();
+  const calls = { primary: 0, fallback: 0 };
+  const manager = new LLMManager();
+  manager.registerProvider({ name: 'primary', async chat() { return reply; },
+    // A provider whose stream reports the abort as a dropped connection, on
+    // its last attempt (a reset gets two).
+    async *stream() { calls.primary++; if (calls.primary === 2) controller.abort(); yield { type: 'error', error: 'Stream error: ECONNRESET', code: 'network' }; },
+    async listModels() { return []; } });
+  manager.registerProvider({ name: 'fallback', async chat() { return reply; },
+    async *stream() { calls.fallback++; yield { type: 'done', response: reply }; }, async listModels() { return []; } });
+  manager.setTierMap({ high: { provider: 'primary' }, medium: { provider: 'fallback' } });
+  const events: LLMStreamEvent[] = [];
+  for await (const event of manager.streamTier('high', 't', messages, { signal: controller.signal })) events.push(event);
+  expect(events.map(e => e.type)).toEqual(['error']);
+  // The turn ends on the provider it was stopped on: no second provider's
+  // failure is added to what it reports.
+  expect((events[0] as { code?: string }).code).toBe('network');
+  expect((events[0] as { error: string }).error).not.toContain('fallback');
+  expect(calls).toEqual({ primary: 2, fallback: 0 });
+});
+
+test('an error raised while reading a 200 body keeps its own code instead of becoming a bad reply', async () => {
+  globalThis.fetch = (async () => new Response(new ReadableStream({
+    start(controller) { controller.error(new LLMProviderError('LLM request to openai timed out after 90000ms', 'network')); },
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
+  const error = await new OpenAIProvider('k').chat(messages).catch(e => e);
+  expect(error.message).not.toContain('not valid JSON');
+  expect(getLLMErrorCode(error)).toBe('network');
 });
