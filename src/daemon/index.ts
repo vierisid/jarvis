@@ -1145,7 +1145,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // Real things live on the notch too: yes at rest and Esc twice are
         // theirs, and when a moment ends the count is said again.
         notchDemo = createNotchDemo(notchSurface, { real: true, onEnd: () => notchReal?.inbox.refresh() });
-        console.warn(`[notch] JARVIS_NOTCH_DEMO is set: ${NOTCH_DEMO_PATH} is OPEN (secret-gated). Whoever holds the secret can make the notch show sample sentences. Nothing else.`);
+        console.warn(`[notch] JARVIS_NOTCH_DEMO is set: ${NOTCH_DEMO_PATH} is OPEN (secret-gated). Whoever holds the secret can make the notch show sample sentences, and can make the fixed test items of src/notch/fixtures.ts. Nothing else.`);
       }
     }
     if (notchDemoState === 'too-short') {

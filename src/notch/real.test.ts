@@ -113,7 +113,7 @@ describe('the approval fixture, from the command to Today', () => {
     expect(notchApprovalWay(request!)).toBe('payment');
     expect(approvalToast(request!).approvable).toBe(false);
     await h.look();
-    expect(h.said()).toBe('Pay $40.00 to Northwind (a test, no money moves). A payment. I never take that on a key.');
+    expect(h.said()).toBe('A payment. I never take that on a key: Pay $40.00 to Northwind (a test, no money moves)');
     await h.answer('yes');
     expect(h.opened).toEqual(['pc']);
     expect(await applyApprovalDecision('approve', request!.id, NOTCH_DECIDER, h.deps)).toMatchObject({ status: 'needs_dashboard' });

@@ -97,7 +97,7 @@ describe('the line with its fuse', () => {
     const c = await announced(h);
     const line = h.line();
     expect(line?.kind).toBe('send');
-    expect(h.said()).toContain('I promised: Send Anna the pricing. Doing it…');
+    expect(h.said()).toContain('Doing what I promised: Send Anna the pricing');
     expect(line?.kind === 'send' && line.ms).toBeGreaterThan(4000);
     expect(line?.kind === 'send' && line.ms).toBeLessThanOrEqual(5000);
     expect(h.real.inbox.showing()).toBe(notchPromiseItemId(c.id));
@@ -130,7 +130,7 @@ describe('the line with its fuse', () => {
     await h.fire(c.id);
     expect(h.log).toHaveLength(1);
     expect(h.log[0]).toContain(c.id);
-    expect(h.said()).toBe('Kept: Send Anna the pricing.');
+    expect(h.said()).toBe('Kept: Send Anna the pricing');
     expect(h.line()).toMatchObject({ kind: 'say', mark: 'check' });
     await h.fire(c.id);
     expect(h.log).toHaveLength(1);
@@ -152,7 +152,7 @@ describe('the line with its fuse', () => {
     await h.advance(1500);
     expect(h.line()).toBeNull();
     await h.fire(c.id);
-    expect(h.said()).toBe('Kept: Send Anna the pricing.');
+    expect(h.said()).toBe('Kept: Send Anna the pricing');
   });
 
   test('a fuse takes the notch from whatever is on it, which goes back to the count', async () => {
@@ -195,7 +195,7 @@ describe('when the brain or the notch was away', () => {
     await second.fire(c.id);
     expect(second.log).toEqual([c.id]);
     expect(first.log).toEqual([]);
-    expect(second.said()).toBe('Kept: Send Anna the pricing.');
+    expect(second.said()).toBe('Kept: Send Anna the pricing');
   });
 
   test('kept while no notch was up: it is said when one comes up', async () => {
@@ -205,7 +205,7 @@ describe('when the brain or the notch was away', () => {
     expect(h.log).toHaveLength(1);
     expect(h.line()).toBeNull();
     await h.hello();
-    expect(h.said()).toBe('Kept: Send Anna the pricing.');
+    expect(h.said()).toBe('Kept: Send Anna the pricing');
   });
 
   test('cut off in the middle by a restart: not run again, and the notch says exactly that', async () => {

@@ -162,7 +162,7 @@ describe('the pause, whoever made it', () => {
     expect(h.log).toEqual([]);
     await h.open();
     expect(h.line()?.kind).toBe('send');
-    expect(h.said()).toContain('I promised: Send Anna the pricing');
+    expect(h.said()).toContain('Doing what I promised: Send Anna the pricing');
   });
 
   test('stopped with Kill is not a pause: the notch says where it is reset, and a yes wakes nothing', async () => {
