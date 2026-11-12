@@ -152,6 +152,15 @@ describe('governed piece adapters: the catalogue stays open', () => {
       executionPath: [], fetchImpl, piece: COMMUNITY_PIECE, action: 'create_contact', input: {} }))
       .rejects.toThrow(`Piece step ${COMMUNITY_PIECE}/create_contact was not admitted`);
   });
+
+  test('a typed Authority refusal reads as its reason, not as a status code and a raw body (G-9)', async () => {
+    const reason = 'Authority denied piece:gmail/send_email: Authority level 3 is below required 7 for send_email';
+    const typed = (async () => Response.json({ error: reason, outcome: { status: 'blocked', code: 'AUTHORITY_DENIED', effect: 'not_started', message: reason } }, { status: 409 })) as unknown as typeof fetch;
+    const failure = await authorizePieceDispatch({ apiUrl: 'http://127.0.0.1:1', engineToken: 't', stepName: 'action',
+      executionPath: [], fetchImpl: typed, piece: GMAIL, action: 'send_email', input: SEND_INPUT }).catch(e => e as Error);
+    expect((failure as Error).message).toBe(`Governed piece ${GMAIL}/send_email was not authorized: ${reason}`);
+    expect((failure as Error).message).not.toContain('daemon responded');
+  });
 });
 
 describe('governed piece adapters: gmail', () => {

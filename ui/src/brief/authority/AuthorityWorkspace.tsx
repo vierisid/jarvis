@@ -11,6 +11,7 @@ import { BriefButton, BriefSwitch } from "../components/controls";
 import { AuthorityController } from "./controller";
 import { ACTION_CATEGORIES, CATEGORY_LABELS } from "./model";
 import { AuthoritySlider } from "./AuthoritySlider";
+import { AUTHORITY_REQUIREMENTS } from "../../../../src/roles/authority";
 import "./authority.css";
 
 export interface AuthorityBinding {
@@ -18,6 +19,30 @@ export interface AuthorityBinding {
   scopeId: string;
   source: "live" | "fixture";
   capabilities?: unknown;
+}
+/**
+ * Workflow steps in these categories ask first only while the category is On;
+ * with it Off, a level below what the category needs blocks them outright.
+ */
+const BLOCKED_WHEN_OFF = {
+  send_email: "send email",
+  send_message: "send messages",
+  make_payment: "make payments",
+} as const;
+/** Asking first instead needs the level to clear writing data (#953). */
+const ASK_FLOOR = AUTHORITY_REQUIREMENTS.write_data;
+export function blockedWhenOff(level: number, governed: readonly string[]) {
+  return (Object.keys(BLOCKED_WHEN_OFF) as Array<keyof typeof BLOCKED_WHEN_OFF>)
+    .filter(
+      (category) =>
+        !governed.includes(category) &&
+        level < AUTHORITY_REQUIREMENTS[category],
+    )
+    .map((category) => ({
+      category,
+      what: BLOCKED_WHEN_OFF[category],
+      needs: AUTHORITY_REQUIREMENTS[category],
+    }));
 }
 export function authorityAvailable(
   shell: BriefShellPort,
@@ -106,7 +131,7 @@ function AuthorityBody({ controller }: { controller: AuthorityController }) {
             <p className="brief-authority-notice" role="status">
               {state.saved.emergency_state === "paused"
                 ? "Paused: tool actions are held until you resume."
-                : "Emergency stop is active: tools are refused and agent runs are stopped until you reset."}{" "}
+                : "Emergency stop is active: tools are refused and agent runs are stopped until you reset. Settings cannot be changed until you reset."}{" "}
               Use Emergency controls to review the current state.
             </p>
           )}
@@ -134,6 +159,24 @@ function AuthorityBody({ controller }: { controller: AuthorityController }) {
               overrides, context rules and the approval asked after Jarvis reads
               outside content still apply.
             </p>
+            {blockedWhenOff(
+              state.draft.default_level,
+              state.draft.governed_categories,
+            ).map(({ category, what, needs }) => (
+              <p
+                key={category}
+                className="brief-authority-notice"
+                role="status"
+              >
+                {CATEGORY_LABELS[category]} is Off and your level (
+                {state.draft!.default_level}) is below the {needs} it needs, so
+                workflow steps that {what} will be blocked, not sent without
+                asking, unless an override or rule allows them.{" "}
+                {state.draft!.default_level >= ASK_FLOOR
+                  ? `Turn ${CATEGORY_LABELS[category]} On to be asked first, or raise the level.`
+                  : `Raise the level to at least ${ASK_FLOOR} for Jarvis to ask first.`}
+              </p>
+            ))}
             <div className="brief-authority-categories">
               {[ACTION_CATEGORIES.slice(0, 7), ACTION_CATEGORIES.slice(7)].map(
                 (categories, index) => (

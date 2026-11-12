@@ -99,6 +99,8 @@ export class AuthorityController {
       this.canWrite &&
       this.state.availability === "ready" &&
       !this.state.reading &&
+      // Kill freezes these settings: the server refuses a change until Reset.
+      this.state.saved?.emergency_state !== "killed" &&
       ["clean", "dirty", "saved"].includes(this.state.phase)
     );
   }

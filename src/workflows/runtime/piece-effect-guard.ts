@@ -204,6 +204,10 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   }
   if (!response.ok) {
     const text = await response.text().catch(() => '');
+    // A refusal the daemon typed (Authority, Pause, Kill, approval) carries its
+    // reason in plain words; say that, not the status and the raw body.
+    const reason = typedRefusalReason(text);
+    if (reason) throw new Error(`${refused}: ${reason}`);
     throw new Error(`${refused}: daemon responded ${response.status}: ${text.slice(0, 500)}`);
   }
   const reply = await response.json().catch(() => null) as PieceAuthorizeResponse | null;
@@ -452,4 +456,13 @@ export function receiptBody(piece: unknown, effectId: string, result: unknown): 
 function withoutCookies(headers: unknown): unknown {
   if (headers === null || typeof headers !== 'object' || Array.isArray(headers)) return headers ?? null;
   return Object.fromEntries(Object.entries(headers as Record<string, unknown>).filter(([name]) => name.toLowerCase() !== 'set-cookie'));
+}
+
+/** The reason of a typed refusal body (`{ error, outcome: { status: 'blocked' } }`), or null. */
+function typedRefusalReason(text: string): string | null {
+  try {
+    const body = JSON.parse(text) as { error?: unknown; outcome?: { status?: unknown; code?: unknown } };
+    return typeof body.error === 'string' && body.error && body.outcome?.status === 'blocked' && typeof body.outcome.code === 'string'
+      ? body.error.slice(0, 500) : null;
+  } catch { return null; }
 }
