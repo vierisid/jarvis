@@ -1,4 +1,5 @@
 import { useHumanInputCount } from './HumanInputs';
+import { NeedsYouContext, documentDecisionCount, isHeldNote } from './needs-you';
 import React, { useContext, useState } from 'react';
 import { StoredNoticesContext } from '../navigation/StoredNoticesContext';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
@@ -101,6 +102,8 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     const initialGoal = useBriefProjection(initialGoalRead);
     const g = useBriefProjection(goalRead), d = useBriefProjection(decisionRead), o = useBriefProjection(opportunityRead), outcome = useBriefProjection(outcomes), rec = useBriefProjection(recommendations);
     const decisionSnapshot = todayDecisionSnapshot(d);
+    // Same count as the sidebar badge; alone (no workspace around it) only the document decisions are known.
+    const waiting = useContext(NeedsYouContext)?.count ?? documentDecisionCount(d.data);
     const [operation, setOperation] = useState<DecisionOperation>();
     const caps = host.capabilities(), goal = g.data?.find(row => row.goal.status === 'active')
       ?? g.data?.find(row => row.goal.status === 'draft');
@@ -138,7 +141,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
         gettingStarted: isBriefCapabilityEnabled(caps, 'profileSettings') ? <GettingStarted journey={setup} navigate={shell.navigate} goalId={goal?.goal.goalId} compact={decisionSnapshot.state !== 'empty'} /> : undefined,
         goal: <GoalCard handoff={handoff} onReviewDraft={goal?.goal.status === 'draft' ? () => shell.navigate({ room: 'goals', selection: { goalId: goal.goal.goalId } }) : undefined}
           onPlanUnplanned={initialGoal.data === true ? () => shell.navigate({ room: 'goals', selection: {} }) : undefined} />,
-        queueNotice: d.data?.length ? <button onClick={() => shell.navigate({ room: 'needs-you', selection: {} })}>Review {d.data.length} {d.data.length === 1 ? 'request' : 'requests'}</button> : null,
+        queueNotice: waiting ? <button onClick={() => shell.navigate({ room: 'needs-you', selection: {} })}>Review {waiting} {waiting === 1 ? 'request' : 'requests'}</button> : null,
         outcomes: <Outcomes mode="live" binding={{ source: 'live', capabilities: caps, state: view(outcome, data => ({ window: data.window,
           today: data.today, week: data.week, days: data.days.map(day => ({ ...day, label: day.id })),
           chartMaxMinutes: Math.max(60, ...data.days.map(day => day.time?.value ?? 0)), goal: null,
@@ -162,11 +165,16 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   }
   function NeedsYou({ shell }: { shell: BriefShellPort }) {
     const all = useBriefProjection(decisionRead);
-    const humanPending = useHumanInputCount();
+    const humanPending = useHumanInputCount(), shared = useContext(NeedsYouContext);
     const stored = useContext(StoredNoticesContext);
-    const [otherCount, setOtherCount] = useState<number | null>(null);
+    const [ownCount, setOtherCount] = useState<number | null>(null);
+    // With the workspace around, its read decides; the list reports its own count only when rendered alone.
+    const otherCount = shared ? shared.others?.filter(row => !isHeldNote(row)).length ?? null : ownCount;
     const onlyOther = onlyOtherDecisions(all, otherCount === null ? null : otherCount + humanPending);
+    const count = shared?.count ?? 0;
     return <>{onlyOther ? <><header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header>{stored.list}</> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
+      {shared && count > 0 && <p className="brief-needs-count" role="status">{count} waiting for you.</p>}
+      {shared?.inbox}
       <PendingDecisions onCount={setOtherCount} selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
   }
   const rooms: BriefRoomRegistry = {
@@ -175,7 +183,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     opportunities: { ...BRIEF_ROOMS.opportunities, Body: ({ shell }) => <OpportunitiesRoom shell={shell} binding={{ ...base(), controller: opportunities }} /> },
     memory: { ...BRIEF_ROOMS.memory, Body: Memory }, 'memory-detail': { ...BRIEF_ROOMS['memory-detail'], Body: Memory },
   };
-  return { rooms, setup, goals, decisions, opportunities, memory, detail, ports,
+  return { rooms, setup, goals, decisions, opportunities, memory, detail, ports, decisionRead,
     refresh() { goalRead.refresh(); initialGoalRead.refresh(); decisionRead.refresh(); opportunityRead.refresh(); outcomes.refresh(); recommendations.refresh(); void goals.refresh(); void decisions.refresh(); void opportunities.refresh(); void memory.refresh(); },
     retire() { setup.retire(); goals.retire(); decisions.retire(); opportunities.retire(); memory.retire(); detail.retire(); } };
 }

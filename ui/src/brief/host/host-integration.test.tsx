@@ -222,6 +222,27 @@ test('the permission list takes exactly the rows without document actions, so it
   http.stop();
 });
 
+test('approved items waiting to run leave the asking list for a separate In progress group, and raw tool ids never show', async () => {
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const base = { revision: 'r', kind: 'permission', supportedActions: ['inspect'], createdAt: Date.now() - 5 * 60_000 };
+  const rows = [
+    { ...base, decisionId: 'approval:a', state: 'awaiting_execution', title: 'Send notification: Hello', review: { toolName: 'send_message', reason: '', workflowName: 'Morning reminder' } },
+    { ...base, decisionId: 'effect:b', kind: 'recovery', state: 'failed', title: 'workflow_ask' },
+    { ...base, decisionId: 'effect:c', kind: 'recovery', state: 'blocked', title: 'read_file' },
+  ];
+  await React.act(async () => root.render(<Commands.PendingDecisions http={http} read={async () => rows as any} enabled changed={() => {}} />));
+  await React.act(async () => { await new Promise(r => setTimeout(r, 0)); });
+  const asking = host.querySelector('nav[aria-label="Requests to review"]')!, running = host.querySelector('nav[aria-label="In progress"]')!;
+  expect(asking.textContent).not.toContain('Send notification');
+  expect(asking.textContent).toContain('A workflow step that asks the AI failed');
+  expect(asking.textContent).toContain('Reading a file was blocked');
+  expect(running.textContent).toContain('Send notification: Hello');
+  expect(running.textContent).toContain('Morning reminder');
+  expect(running.textContent).toContain('5 min ago');
+  expect(host.textContent).not.toContain('workflow_ask'); expect(host.textContent).not.toContain('read_file');
+  http.stop();
+});
+
 test('an allowed permission card whose outcome is unknown shows its state, not a request for permission', async () => {
   const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
   const row = { decisionId: 'approval:done', revision: 'r', kind: 'permission', state: 'unknown', title: 'Send report', supportedActions: ['inspect'] };

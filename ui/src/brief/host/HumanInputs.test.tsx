@@ -338,3 +338,18 @@ test('a queued continuation held by global pause says so, and reads as continuin
   expect(host.textContent).toContain('Workflow is continuing.');
   expect(host.textContent).not.toContain('Global emergency pause');
 });
+test('several pending requests from one workflow are told apart and the open one sits in the list, not below it', async () => {
+  const approvals = [1, 2, 3].map(n => ({ ...request, id: `approval-${n}`, kind: 'approval' as const, title: 'Send notification', fields: [], created: Date.now() - n * 60_000 }));
+  const queue = { requests: approvals, error: '', refresh: async () => {} };
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Forms.HumanInputInbox queue={queue} http={http} focusId="approval-2" />));
+  const summaries = [...host.querySelectorAll<HTMLButtonElement>('.brief-human-summary')];
+  expect(summaries).toHaveLength(3);
+  for (const [i, n] of [1, 2, 3].entries()) expect(summaries[i]!.textContent).toContain(`${n} min ago`);
+  expect(summaries[0]!.textContent).toContain('Daily operations'); expect(summaries[0]!.textContent).toContain('3 waiting from this workflow');
+  // Only the named request is open; the others are one line each until expanded.
+  expect(summaries.map(b => b.getAttribute('aria-expanded'))).toEqual(['false', 'true', 'false']);
+  await React.act(async () => summaries[0]!.click());
+  expect(summaries[0]!.getAttribute('aria-expanded')).toBe('true');
+  expect(document.getElementById(summaries[0]!.getAttribute('aria-controls')!)!.hasAttribute('hidden')).toBe(false);
+});

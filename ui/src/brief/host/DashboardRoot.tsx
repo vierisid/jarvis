@@ -1,6 +1,7 @@
 import { EmergencyStatusBanner, EmergencyStatusContext, useEmergencyStatus } from './EmergencyStatus';
 import { humanRequestNeedsAttention } from '../../../../src/workflows/runtime/human-input-contract';
 import { HumanInputsContext, HumanInputInbox, useHumanInputQueue, hasLocalDraft } from './HumanInputs';
+import { NeedsYouContext, documentDecisionCount, listedNoticeCount, needsYouCount, useOtherDecisions } from './needs-you';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { DashboardEntry, BriefHost } from '../entry/DashboardEntry';
@@ -179,6 +180,15 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   const emergency = useEmergencyStatus(host.transport, owner.emergencyRevision);
   const humanInputs = useHumanInputQueue(host.transport, isBriefCapabilityEnabled(host.capabilities(), 'decisions'));
   const humanPending = humanInputs.requests.filter(r => humanRequestNeedsAttention(r) || hasLocalDraft(r)).length;
+  // The one derivation of "needs you": Today, the sidebar badge and the room all read it.
+  const decisionsOn = isBriefCapabilityEnabled(host.capabilities(), 'decisions');
+  const documents = useBriefProjection(host.data.decisionRead);
+  // Each read fetches one document per row: poll at full rate only while the room is open.
+  const others = useOtherDecisions(host.data.ports.otherDecisions, decisionsOn, false, route.room === 'needs-you' ? 10_000 : 60_000);
+  // Counted from the same snapshot the room lists, plus the voice confirmation cards it shows,
+  // so nothing is counted that the room hides (disconnected, filtered) and nothing listed goes uncounted.
+  const noticeCount = listedNoticeCount(dashboardAttentionSnapshot(owner.isConnected, notices.items, host.capabilities())) + owner.clarifiers.length + owner.repeatBacks.length;
+  const needsCount = needsYouCount({ documents: documentDecisionCount(documents.data), others: others.rows, humanInputs: humanPending, notices: noticeCount });
   const [attentionMessage, setAttentionMessage] = useState('');
   const resolveAttention = async (kind: 'clarifier' | 'repeat-back', id: string, decision: 'confirm' | 'cancel') => {
     try {
@@ -195,13 +205,15 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     if (owner.roomNavRequest && !owner.roomActionRequests.some(request => request.ts === owner.roomNavRequest?.ts))
       void host.navigation.intent(owner.roomNavRequest.key, false);
   }, [owner.roomNavRequest?.ts]);
+  const inbox = <HumanInputInbox queue={humanInputs} http={host.transport} focusId={route.room === 'needs-you' ? route.selection.inputId : undefined} />;
   // A reminder a workflow sent is for the founder: unread ones lead the Needs you room, the rest stay below.
-  const isNewStored = (item: { stored?: boolean; unread: boolean }) => item.stored === true && item.unread;
+  // The lead list sits in the decisions room, which is not shown with decisions off: then they stay in one list.
+  const isNewStored = (item: { stored?: boolean; unread: boolean }) => decisionsOn && item.stored === true && item.unread;
   const storedNew = notices.items.filter(isNewStored);
   const attentionFor = (items: typeof notices.items, heading?: string) => <AttentionRoutes snapshot={dashboardAttentionSnapshot(owner.isConnected, items, host.capabilities())}
     navigation={host.navigation} roomAvailable={host.available} markRead={identity => notices.markRead(identity.id)} heading={heading} />;
   const storedNotices = { count: storedNew.length, list: storedNew.length ? attentionFor(storedNew, 'New messages from your workflows') : null };
-  const attention = <><HumanInputInbox queue={humanInputs} http={host.transport} focusId={route.room === 'needs-you' ? route.selection.inputId : undefined} />{attentionFor(notices.items.filter(item => !isNewStored(item)), storedNew.length ? 'Earlier notifications' : undefined)}
+  const attention = <>{attentionFor(notices.items.filter(item => !isNewStored(item)), storedNew.length ? 'Earlier notifications' : undefined)}
     <section aria-label="Voice confirmations">{owner.clarifiers.map(item => <ClarifierCard key={item.id} {...item}
       onConfirm={() => void resolveAttention('clarifier', item.id, 'confirm')} onCancel={() => void resolveAttention('clarifier', item.id, 'cancel')} />)}
       {owner.repeatBacks.map(item => <RepeatBackCard key={item.id} {...item}
@@ -214,7 +226,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     return { ...host.rooms, 'needs-you': { ...host.rooms['needs-you']!, Body: ({ shell }: { shell: BriefShellPort }) => <><Body shell={shell} />{latest.current}</> } };
   }, [host]);
   const RetainedBody = retained ? getRoomBody(retained) : null;
-  return <StoredNoticesContext.Provider value={storedNotices}><EmergencyStatusContext.Provider value={emergency}><HumanInputsContext.Provider value={{ pending: humanPending }}><RoomActionBridge requests={owner.roomActionRequests} ack={owner.ackRoomActionRequests}
+  return <StoredNoticesContext.Provider value={storedNotices}><EmergencyStatusContext.Provider value={emergency}><HumanInputsContext.Provider value={{ pending: humanPending }}><NeedsYouContext.Provider value={{ count: needsCount, others: others.rows, failed: others.failed, reload: others.reload, clear: others.clear, inbox }}><RoomActionBridge requests={owner.roomActionRequests} ack={owner.ackRoomActionRequests}
     forceIdle={() => {}} wsRef={owner.wsRef} beforeDispatch={async request => {
       if (!host.active()) return false;
       const result = await host.navigation.intent(request.room, true);
@@ -229,7 +241,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
         ...UNKNOWN_NAVIGATION, workspaceName: null, hosting: host.descriptor().installMode,
         connection: owner.isConnected ? 'connected' : owner.status.mode === 'loading' ? 'reconnecting' : 'offline',
         account: { name: profile.base?.answers.preferred_name ?? null, plan: planFromBilling(billing) },
-        badges: { 'needs-you': notices.items.length + humanPending || undefined },
+        badges: { 'needs-you': needsCount || undefined },
       } } } }} conversation={{ source: 'live', content: <HostConversation host={host} /> }}>
       {children ?? (RetainedBody && <LiveDataProvider value={{ approvals: owner.approvals, clarifiers: owner.clarifiers, repeatBacks: owner.repeatBacks,
         notices: owner.notices, taskEvents: owner.taskEvents, contentEvents: owner.contentEvents, agentActivity: owner.agentActivity,
@@ -241,5 +253,5 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     </BriefHost>
     {route.room !== 'needs-you' && toast.notice && <ReminderToast notice={toast.notice} onDismiss={() => { notices.markRead(toast.notice!.id); toast.hide(); }}
       onView={() => { toast.hide(); void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null })); }} />}
-  </HumanInputsContext.Provider></EmergencyStatusContext.Provider></StoredNoticesContext.Provider>;
+  </NeedsYouContext.Provider></HumanInputsContext.Provider></EmergencyStatusContext.Provider></StoredNoticesContext.Provider>;
 }

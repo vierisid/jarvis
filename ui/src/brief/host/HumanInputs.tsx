@@ -4,6 +4,7 @@ import type { HostTransport } from './http';
 import { EmergencyStatusContext } from './EmergencyStatus';
 import { post } from './http';
 import { briefHash } from '../entry/route';
+import { relativeTime, siblingNote } from './needs-you';
 import './human-inputs.css';
 import { draftKey, instanceKey, rememberDraft, forgetDraft, localDraftRequests, localDraftIds, filled, storedAnswers, answerOnlyDrafts, forgetStoredDraft } from './human-input-drafts';
 type HumanInputQueue = { requests: HumanRequest[]; error: string; refresh(): Promise<void>; historyCursor?: string | null; unavailable?: string[] };
@@ -56,8 +57,9 @@ export function useHumanInputQueue(http: HostTransport, enabled = true): HumanIn
 }
 export const HumanInputsContext = createContext({ pending: 0 });
 export const useHumanInputCount = () => useContext(HumanInputsContext).pending;
-export function HumanInputForm({ request, http, changed, focused = false, recoveryOnly = false, onAnswers }: {
-  request: HumanRequest; http: HostTransport; changed(): Promise<void>; focused?: boolean; recoveryOnly?: boolean;
+export function HumanInputForm({ request, http, changed, focused = false, recoveryOnly = false, onAnswers, note }: {
+  /** Says when several requests wait from the same workflow. */
+  note?: string | null; request: HumanRequest; http: HostTransport; changed(): Promise<void>; focused?: boolean; recoveryOnly?: boolean;
   /** Told what this card holds in memory, so the inbox can tell an unsent answer from an empty card. */
   onAnswers?(answers: Record<string, unknown>): void;
 }) {
@@ -118,7 +120,7 @@ export function HumanInputForm({ request, http, changed, focused = false, recove
   return <article ref={card} tabIndex={-1} className="brief-human-card" aria-current={focused || undefined} aria-labelledby={`human-title-${domId}`}>
     <header><span className="brief-human-kind">{recoveryOnly ? 'Unsent answer' : pending ? request.kind === 'approval' ? 'Approval requested' : 'Your update is needed' : `Request ${request.status}`}</span>
       <h2 id={`human-title-${domId}`}>{request.title}</h2>
-      <p>{request.workflowName} · {request.requestKey}</p></header>
+      <p>{request.workflowName} · {request.requestKey} · <time dateTime={new Date(request.created).toISOString()}>{relativeTime(request.created)}</time>{note ? ` · ${note}` : ''}</p></header>
     <p className="brief-human-prompt">{request.prompt}</p>
     <p className="brief-human-deadline">Requested <time dateTime={new Date(request.created).toISOString()}>{new Date(request.created).toLocaleString()}</time>. Respond by <time dateTime={new Date(request.deadline).toISOString()}>{new Date(request.deadline).toLocaleString()}</time>.</p>
     {!pending && <p role="status">{recoveryOnly ? 'This saved answer belongs to an earlier or unavailable request. It has not been submitted. You can copy or discard it below.' : request.closureReason === 'workflow_changed'
@@ -187,7 +189,7 @@ export function HumanInputInbox({ queue, http, focusId }: { queue: HumanInputQue
   const [focused, setFocused] = useState<HumanRequest | null>(null), [focusError, setFocusError] = useState('');
   const [older, setOlder] = useState<HumanRequest[]>([]), [cursor, setCursor] = useState<string | null | undefined>();
   const [loading, setLoading] = useState(false), [historyError, setHistoryError] = useState('');
-  const [focusAttempt, setFocusAttempt] = useState(0);
+  const [focusAttempt, setFocusAttempt] = useState(0), [toggled, setToggled] = useState<Map<string, boolean>>(new Map());
   // Closed requests seen on the recent page once older pages are loaded: one that
   // a new close pushes off page one is then on neither, and would drop out of history.
   const leftPage = useRef(new Map<string, HumanRequest>());
@@ -245,9 +247,16 @@ export function HumanInputInbox({ queue, http, focusId }: { queue: HumanInputQue
   return <section className="brief-human-inbox" aria-label="Workflow requests">
     {queue.error && <p role="status">{queue.error} <button onClick={() => void queue.refresh()}>Check again</button></p>}
     {focusError && <p role="status">{focusError} <button onClick={() => setFocusAttempt(n => n + 1)}>Check again</button></p>}
-    {visible.map(request => {
-      const recovery = recoveryOnly(request);
-      return <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} focused={request.id === focusId && !recovery} recoveryOnly={recovery} onAnswers={remember(instanceKey(request))} />;
+    {visible.map((request, index) => {
+      const recovery = recoveryOnly(request), key = instanceKey(request), many = visible.length > 1;
+      // With several cards the list shows one line each and the focused (else first) one open, so the form sits in view, not below the others.
+      const open = !many || (toggled.get(key) ?? (request.id === focusId ? true : focusId ? false : index === 0)), panel = 'human-item-' + key.replace(/\W/g, '-');
+      const siblings = request.status === 'pending' ? visible.filter(r => r.status === 'pending' && r.workflowName === request.workflowName).length : 0;
+      return <div className="brief-human-item" key={key}>
+        {many && <button type="button" className="brief-human-summary" aria-expanded={open} aria-controls={panel} onClick={() => setToggled(previous => new Map(previous).set(key, !open))}>
+          <strong>{request.title}</strong><span>{request.workflowName} · {relativeTime(request.created)}{siblingNote(siblings) ? ` · ${siblingNote(siblings)}` : ''}</span></button>}
+        <div id={panel} hidden={!open}><HumanInputForm request={request} http={http} changed={queue.refresh} focused={request.id === focusId && !recovery} recoveryOnly={recovery} onAnswers={remember(key)} note={siblingNote(siblings)} /></div>
+      </div>;
     })}
     {recovered.map(request => <HumanInputForm key={instanceKey(request)} request={request} http={http} changed={queue.refresh} recoveryOnly
       onAnswers={answers => { if (!filled(answers).length) setEmptied(n => n + 1); }} />)}
