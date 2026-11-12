@@ -59,6 +59,8 @@ async function runFixture(name: string, body: string): Promise<void> {
     env: { ...process.env, JARVIS_HOME: home, HOME: home },
     stdout: 'pipe',
     stderr: 'pipe',
+    // Below the 30s test budget, so a hung child is killed, not orphaned.
+    timeout: 25_000,
   });
   const [code, out, err] = await Promise.all([
     proc.exited,

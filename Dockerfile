@@ -468,18 +468,18 @@ RUN bun -e 'const {buildAllJarvisPieces} = await import("/app/src/workflows/runn
 # Hardcoding 3142 would re-create this very bug for anyone who moves the port:
 # a healthy daemon, probed on the wrong port, unhealthy forever.
 #
-# The JARVIS_PORT rung is not redundant with the lock file. The file is not
-# durable: `docker exec <c> jarvis status` unlinks it while the daemon is
-# still running (pid.ts releaseLock, via the pid-1-in-a-container branch) and
-# nothing rewrites it until the next boot. Without the env rung one such
-# command would send the probe back to 3142 for good.
+# The JARVIS_PORT rung is not redundant with the lock file: the daemon records
+# its port only after it binds, so the first probes of a boot find a file with
+# the pid alone. (A lock file once vanished under a running daemon too: `docker
+# exec <c> jarvis status` took the container's pid-1 daemon for a stale lock
+# and unlinked it. A held lock is never treated as stale any more.)
 #
 # Every malformed input degrades to the next rung rather than failing: no
 # file, no second line, a non-port value, a read error (the whole lookup is
 # wrapped). Only digit runs are matched, so this needs no backslash escape in
-# a Dockerfile. Still unreachable: a port set only in config.yaml once the
-# lock file has been unlinked, and `daemon.listen: unix:`, which binds no TCP
-# port at all.
+# a Dockerfile. Still unreachable: a port set only in config.yaml while the
+# lock file has no port line yet, and `daemon.listen: unix:`, which binds no
+# TCP port at all.
 #
 # This proves the HTTP listener is up and answering, not that every service
 # came up: `/health` reports a literal `status: ok` and consults no service
