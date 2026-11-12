@@ -20,6 +20,7 @@ import { PANEL_SESSION_COOKIE } from '../sidecar/panel-sessions.ts';
 import { SIDECAR_LATEST_VERSION } from '../sidecar/compat.ts';
 import { SidecarRPCError } from '../sidecar/rpc.ts';
 import { getCookie } from '../util/cookie.ts';
+import { panelSessionDevice } from '../comms/panel-session-marker.ts';
 import { SecretStorageError } from './section-secrets.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
@@ -32,7 +33,7 @@ import type { ObservationType } from '../vault/observations.ts';
 import type { ContentStage, ContentType } from '../vault/content-pipeline.ts';
 import type { AuthorityEngine } from '../authority/engine.ts';
 import type { ApprovalManager } from '../authority/approval.ts';
-import type { AuditTrail, AuthorityDecisionType } from '../authority/audit.ts';
+import { auditPageLimit, type AuditTrail, type AuthorityDecisionType } from '../authority/audit.ts';
 import type { AuthorityLearner } from '../authority/learning.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
@@ -3714,6 +3715,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           deferredExecutor: ctx.deferredExecutor,
           wsService: ctx.wsService,
           auditTrail: ctx.auditTrail,
+          decidedDevice: panelSessionDevice(req),
         });
         if (outcome.status === 'already_decided') return error('Request not found or already decided', 404);
         if (outcome.status === 'held') return error(heldApprovalMessage(outcome.state), 409);
@@ -3733,6 +3735,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           deferredExecutor: ctx.deferredExecutor,
           wsService: ctx.wsService,
           auditTrail: ctx.auditTrail,
+          decidedDevice: panelSessionDevice(req),
         });
         if (outcome.status === 'already_decided') return error('Request not found or already decided', 404);
         return json({ ok: true });
@@ -4216,20 +4219,23 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request) => {
         if (!ctx.auditTrail) return json([]);
         const params = getSearchParams(req);
-        return json(ctx.auditTrail.query({
+        const filters = {
           agentId: params.get('agent_id') || undefined,
           action: (params.get('action') as ActionCategory) || undefined,
           tool: params.get('tool') || undefined,
           decision: (params.get('decision') as AuthorityDecisionType) || undefined,
           since: params.get('since') ? parseInt(params.get('since')!) : undefined,
-          limit: parseInt(params.get('limit') ?? '100') || 100,
-        }));
+          // Bounded for both views: at most AUDIT_PAGE_MAX entries or rows.
+          limit: auditPageLimit(parseInt(params.get('limit') ?? '100')),
+        };
+        // One entry per side effect with its real outcome; `rows=all` is every row written.
+        return json(params.get('rows') === 'all' ? ctx.auditTrail.query(filters) : ctx.auditTrail.queryEntries(filters));
       },
     },
 
     '/api/authority/audit/stats': {
       GET: (req: Request) => {
-        if (!ctx.auditTrail) return json({ total: 0, allowed: 0, denied: 0, approvalRequired: 0, byCategory: {} });
+        if (!ctx.auditTrail) return json({ total: 0, allowed: 0, denied: 0, approvalRequired: 0, byCategory: {}, byOutcome: {} });
         const params = getSearchParams(req);
         const since = params.get('since') ? parseInt(params.get('since')!) : undefined;
         return json(ctx.auditTrail.getStats(since));

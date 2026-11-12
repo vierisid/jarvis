@@ -128,6 +128,22 @@ test('#1153: a send the egress guard refused before it went out is recorded as n
   await expect(f.invoke()).rejects.toThrow('refused'); expect(f.sends()).toBe(0);
   f.fail(); expect(getRunRecovery(f.run.id)).toMatchObject({ state: 'blocked', effects: [{ status: 'not_started' }] });
 });
+test('G-3: an auto-allowed send the egress guard refused is one ledger entry that did not run, and a send that went out is one that did', async () => {
+  const refused = fixture('@activepieces/piece-http', 'send_request'); refused.params.input = { method: 'POST', url: 'https://ops.test/x', body: { data: { a: 1 } } } as never;
+  const authorized = await authorizePieceDispatch(refused.params);
+  await expect(executeAuthorizedPiece(refused.params, authorized, async () => { throw new EgressRefusedError('HTTP request to ops.test refused: it resolves to 127.0.0.1'); })).rejects.toThrow('refused');
+  const trail = new AuditTrail(), agent = `workflow:${refused.run.id}`;
+  // Append-only: the hand-off and the receipt are both rows; only the receipt says how it ended.
+  expect(trail.query({ agentId: agent }).map(row => row.outcome).sort()).toEqual(['dispatched', 'not_started']);
+  expect(trail.queryEntries({ agentId: agent })).toMatchObject([{ effect_id: listWorkflowEffects(refused.run.id)[0]!.id, outcome: 'not_started', executed: 0, authority_decision: 'allowed', events: 2 }]);
+
+  const sent = fixture();
+  expect(await sent.invoke()).toEqual(sent.result);
+  // Nobody was asked: the Authority level decided, and the entry says so.
+  expect(trail.queryEntries({ agentId: `workflow:${sent.run.id}` })).toMatchObject([{ outcome: 'succeeded', executed: 1, events: 2, decided_by: 'level' }]);
+  expect(trail.getStats()).toMatchObject({ total: 2, byOutcome: { not_started: 1, succeeded: 1 } });
+});
+
 test('#1153: the receipt route takes a not-sent note only on its own, with a bounded message', async () => {
   const f = fixture(); const permit = await authorizePieceDispatch(f.params) as { effectId: string };
   const post = (body: unknown) => createJarvisPieceReceiptRoute(f.backends)({ req: new Request('http://fixture.test/v1/jarvis/pieces/receipt',

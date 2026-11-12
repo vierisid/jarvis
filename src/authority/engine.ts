@@ -65,7 +65,28 @@ export type AuthorityDecision = {
    * agent clears the tool's own floor; every other denial stands.
    */
   deniedByLevel?: true;
+  /**
+   * What decided, for the audit ledger's "who decided": a parent agent's
+   * temporary grant (`delegated`), a per-action override or a context rule
+   * (`rule`), the numeric Authority level (`level`), or a governed category or
+   * an agent profile (`policy`). A person deciding a card is recorded by the
+   * surface that decided it, not here.
+   */
+  source?: DecisionSource;
 };
+
+export type DecisionSource = 'delegated' | 'rule' | 'level' | 'policy';
+
+/**
+ * The ledger's `decided_by` for a decision no person made: `rule:override`,
+ * `rule:<context rule id>`, `level`, `delegated` or `policy`. Null when the
+ * decision does not say.
+ */
+export function decisionAuthor(decision: Pick<AuthorityDecision, 'source' | 'contextRule'>): string | null {
+  if (!decision.source) return null;
+  if (decision.source !== 'rule') return decision.source;
+  return decision.contextRule ? `rule:${decision.contextRule.slice(0, 64)}` : 'rule:override';
+}
 
 /**
  * Restrictions layered on top of the shared config for one orchestrator.
@@ -133,6 +154,7 @@ export class AuthorityEngine {
         requiresApproval: false,
         reason: 'Temporarily granted by parent agent',
         actionCategory,
+        source: 'delegated',
       };
     }
 
@@ -145,6 +167,7 @@ export class AuthorityEngine {
           requiresApproval: false,
           reason: `Explicitly denied by override for ${agentRoleId || 'global'}`,
           actionCategory,
+          source: 'rule',
         };
       }
       if (override.requires_approval) {
@@ -153,6 +176,7 @@ export class AuthorityEngine {
           requiresApproval: true,
           reason: `Override requires approval for ${actionCategory}`,
           actionCategory,
+          source: 'rule',
         };
       }
       return {
@@ -160,6 +184,7 @@ export class AuthorityEngine {
         requiresApproval: false,
         reason: `Explicitly allowed by override for ${agentRoleId || 'global'}`,
         actionCategory,
+        source: 'rule',
       };
     }
 
@@ -173,6 +198,7 @@ export class AuthorityEngine {
           reason: contextResult.description,
           actionCategory,
           contextRule: contextResult.id,
+          source: 'rule',
         };
       }
       if (contextResult.effect === 'require_approval') {
@@ -182,6 +208,7 @@ export class AuthorityEngine {
           reason: contextResult.description,
           actionCategory,
           contextRule: contextResult.id,
+          source: 'rule',
         };
       }
       if (contextResult.effect === 'allow') {
@@ -191,6 +218,7 @@ export class AuthorityEngine {
           reason: contextResult.description,
           actionCategory,
           contextRule: contextResult.id,
+          source: 'rule',
         };
       }
     }
@@ -210,6 +238,7 @@ export class AuthorityEngine {
         reason: `Authority level ${effectiveLevel} is below required ${requiredLevel} for ${actionCategory}`,
         actionCategory,
         deniedByLevel: true,
+        source: 'level',
       };
     }
 
@@ -220,6 +249,7 @@ export class AuthorityEngine {
         requiresApproval: true,
         reason: governedActionReason(actionCategory),
         actionCategory,
+        source: 'policy',
       };
     }
 
@@ -229,6 +259,7 @@ export class AuthorityEngine {
       requiresApproval: false,
       reason: `Authority level ${effectiveLevel} meets requirement ${requiredLevel}`,
       actionCategory,
+      source: 'level',
     };
   }
 
@@ -408,6 +439,7 @@ export function applyProfile(base: AuthorityDecision, profile: AuthorityProfile)
       reason: `${label}: ${actionCategory} is denied`,
       actionCategory,
       profileLabel: label,
+      source: 'policy',
     };
   }
 
@@ -425,6 +457,7 @@ export function applyProfile(base: AuthorityDecision, profile: AuthorityProfile)
         reason: `${label}: level cap ${profile.level_cap} is below required ${requiredLevel} for ${actionCategory}`,
         actionCategory,
         profileLabel: label,
+        source: 'policy',
       };
     }
   }
@@ -439,6 +472,7 @@ export function applyProfile(base: AuthorityDecision, profile: AuthorityProfile)
       actionCategory,
       contextRule: base.contextRule,
       profileLabel: label,
+      source: 'policy',
     };
   }
 

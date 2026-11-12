@@ -58,7 +58,7 @@ import { desktopRefusal } from '../actions/tools/desktop-guard.ts';
 import { withTurnScopeId } from '../actions/tools/turn-scope-store.ts';
 import { newSnapshotReadLog, withSnapshotReadLog } from '../actions/tools/snapshot-read-log.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
-import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts';
+import { combineDecisions, decisionAuthor, type AuthorityDecision } from '../authority/engine.ts';
 import { progressAcknowledgement } from './progress.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { runAsApproved } from '../authority/approved-action-scope.ts';
@@ -2114,6 +2114,8 @@ export class AgentOrchestrator {
         approval_id: null,
         executed: decision.allowed && !decision.requiresApproval,
         execution_time_ms: null,
+        // What decided (rule, Authority level, delegated grant or policy).
+        decided_by: decisionAuthor(decision),
       });
 
       // 4. Denied

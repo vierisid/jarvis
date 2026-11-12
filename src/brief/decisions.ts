@@ -318,7 +318,8 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
   private match(item: QueuedDecision, revision: string) {
     if (!text(revision) || item.revision !== revision) throw new DecisionError('Decision changed; read it by ID before acting', 409, 'revision_conflict');
   }
-  async resolve(id: string, body: DecisionResolution): Promise<QueuedDecision> {
+  /** `device` is the enrolled device whose session decided, recorded in the audit ledger. */
+  async resolve(id: string, body: DecisionResolution, device: string | null = null): Promise<QueuedDecision> {
     this.available();
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(k => !['revision','action','reason','note'].includes(k))) throw new DecisionError('Invalid resolution');
     const item = this.get(id);
@@ -334,7 +335,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
     // The existing writers commit approval/claims before dispatch. The optional
     // guard checks this projection in that same write transaction, including
     // changes by legacy surfaces or another process. Never wrap tool execution.
-    const authority = { ...this.authority, assertCurrent: validate };
+    const authority = { ...this.authority, assertCurrent: validate, decidedDevice: device };
     if (intent) this.db.transaction(() => {
       validate();
       decideWorkItem(item.workItemId!, { outcome: body.action === 'accept_intent' ? 'accepted' : 'rejected', reason: body.reason });

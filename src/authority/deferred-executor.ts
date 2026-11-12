@@ -11,7 +11,7 @@ import type { ToolDefinition } from '../actions/tools/registry.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import type { ContentBlock } from '../llm/provider.ts';
 import { rawUiGate } from './ui-intent';
-import type { AuditTrail } from './audit.ts';
+import type { AuditOutcome, AuditTrail } from './audit.ts';
 import type { AuthorityLearner } from './learning.ts';
 import type { EmergencyController } from './emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
@@ -165,12 +165,12 @@ export class DeferredExecutor {
   }
 
   /** The audit row for what became of an approved call: run, refused, failed or uncertain. */
-  private logReceipt(request: ApprovalRequest, executed: boolean, executionTimeMs: number | null = null): void {
+  private logReceipt(request: ApprovalRequest, executed: boolean, executionTimeMs: number | null = null, outcome: AuditOutcome = executed ? 'succeeded' : 'not_started'): void {
     try {
       this.auditTrail.log({
         agent_id: request.agent_id, agent_name: request.agent_name, tool_name: request.tool_name,
         action_category: request.action_category as ActionCategory, authority_decision: 'approval_required',
-        approval_id: request.id, executed, execution_time_ms: executionTimeMs,
+        approval_id: request.id, executed, execution_time_ms: executionTimeMs, outcome,
       });
     } catch (err) {
       console.warn('[DeferredExecutor] could not audit a receipt:', err instanceof Error ? err.message : err);
@@ -457,10 +457,10 @@ export class DeferredExecutor {
         this.logReceipt(request, false);
       } else if (outcome?.status === 'unknown') {
         this.approvalManager.markUncertain(requestId, receipt);
-        this.logReceipt(request, true);
+        this.logReceipt(request, true, null, 'unknown');
       } else {
         this.approvalManager.markExecuted(requestId, receipt, 'failed');
-        this.logReceipt(request, true);
+        this.logReceipt(request, true, null, 'failed');
       }
       this.onResult?.(requestId, request, errorStr);
       return { claimed: true, result: errorStr, failed: true };

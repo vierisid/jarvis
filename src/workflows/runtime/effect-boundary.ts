@@ -3,8 +3,8 @@ import { uiCardSentence, type UiCard } from './ui-card';
 import { collectActionVerification } from '../../actions/action-verification';
 import type { ActionOutcome } from '../../actions/action-outcome';
 import { projectDocument } from './decision-document';
-import { combineDecisions, governedActionReason, type AuthorityEngine, type AuthorityProfile } from '../../authority/engine';
-import type { AuditTrail } from '../../authority/audit';
+import { combineDecisions, decisionAuthor, governedActionReason, type AuthorityDecision, type AuthorityEngine, type AuthorityProfile } from '../../authority/engine';
+import type { AuditOutcome, AuditTrail } from '../../authority/audit';
 import type { EmergencyController } from '../../authority/emergency';
 import type { ApprovalManager, ApprovalRequest } from '../../authority/approval';
 import { approvalNeedsClick } from '../../authority/approval';
@@ -363,7 +363,7 @@ export class WorkflowEffectBoundary {
             audit.log({ agent_id: `workflow:${effect.runId}`,
               agent_name: `Workflow ${boundedApprovalLabel(resolved.version.displayName, WORKFLOW_NAME_LABEL_MAX_CHARS)} / ${boundedApprovalLabel(effect.stepName, WORKFLOW_STEP_LABEL_MAX_CHARS)} / ${effect.id}`,
               tool_name: effect.toolName, action_category: input.category, authority_decision: 'denied',
-              approval_id: effect.approvalId, executed: false });
+              approval_id: effect.approvalId, executed: false, effect_id: effect.id, outcome: 'not_started' });
           }
           throw failure;
         }
@@ -396,7 +396,8 @@ export class WorkflowEffectBoundary {
         // The trail shows it as every other refusal before dispatch.
         audit.log({ agent_id: `workflow:${resolved.run.id}`,
           agent_name: `Workflow ${boundedApprovalLabel(resolved.version.displayName, WORKFLOW_NAME_LABEL_MAX_CHARS)} / ${boundedApprovalLabel(resolved.stepName, WORKFLOW_STEP_LABEL_MAX_CHARS)} / ${id}`,
-          tool_name: input.toolName, action_category: input.category, authority_decision: 'denied', approval_id: null, executed: false });
+          tool_name: input.toolName, action_category: input.category, authority_decision: 'denied', approval_id: null, executed: false,
+          effect_id: id, outcome: 'not_started' });
         throw error;
       }
       effect = { id, runId: resolved.run.id, projectId: resolved.run.projectId, flowId: resolved.run.flowId,
@@ -425,11 +426,35 @@ export class WorkflowEffectBoundary {
     // is digested over it -- so it stays exactly what the graph holds.
     const flowLabel = boundedApprovalLabel(resolved.version.displayName, WORKFLOW_NAME_LABEL_MAX_CHARS);
     const stepLabel = boundedApprovalLabel(record.stepName, WORKFLOW_STEP_LABEL_MAX_CHARS);
-    const log = (executed: boolean) => audit.log({ agent_id: `workflow:${record.runId}`,
+    // How the effect stands as this row is written, from the record: a row
+    // written while the card still waits settles nothing.
+    // A typed outcome says whether anything started: a block or an error that
+    // `may_have_occurred` is uncertain, never `not_started` (the dispatch
+    // catch below records a partway block as `blocked`).
+    const settled = (executed: boolean, handedOff: boolean): AuditOutcome | null => {
+      if (handedOff) return 'dispatched';
+      if (executed || record.status === 'succeeded') return 'succeeded';
+      if (record.status !== 'blocked' && record.status !== 'failed' && record.status !== 'unknown') return null;
+      const typed = record.outcome && record.outcome.status !== 'succeeded' ? record.outcome : null;
+      if (typed?.effect === 'not_started') return 'not_started';
+      if (record.status === 'unknown' || typed?.status === 'unknown') return 'unknown';
+      if (record.status === 'failed' || typed?.status === 'error') return 'failed';
+      return typed ? 'unknown' : 'not_started';
+    };
+    // Who decided, on a row no person decided: the rule, Authority level,
+    // delegated grant or policy the engine named. A card's person writes the
+    // decision row (`approval-decision.ts`), so rows of a carded effect carry none.
+    let judgedBy: AuthorityDecision | null = null;
+    // `handedOff`: a piece's send was authorized and passed to the engine, which
+    // sends it and reports back. The row says it was handed out (a lost receipt
+    // must not leave a send with no row), with outcome `dispatched`: the receipt
+    // row, not this one, says whether it went out.
+    const log = (executed: boolean, handedOff = false) => audit.log({ agent_id: `workflow:${record.runId}`,
       agent_name: `Workflow ${flowLabel} / ${stepLabel} / ${record.id}${judged}`,
       tool_name: record.toolName, action_category: input.category,
       authority_decision: record.decision === 'denied' ? 'denied' : record.approvalId ? 'approval_required' : 'allowed',
-      approval_id: record.approvalId, executed });
+      approval_id: record.approvalId, executed, effect_id: record.id, outcome: settled(executed, handedOff),
+      decided_by: !record.approvalId && judgedBy ? decisionAuthor(judgedBy) : null });
     // Pause holds (Q-08): a step reached while Jarvis is paused parks on a
     // HOLD waitpoint instead of being refused for good, and is judged afresh
     // when Resume releases it. Asked before the decision and again before the
@@ -449,6 +474,7 @@ export class WorkflowEffectBoundary {
       // other dispatch points can never disagree about whether a run is dead.
       assertRunNotCanceled(record.runId);
       const decision = judgeEffect(authority, input, record.runId);
+      judgedBy = decision;
       if (!decision.allowed) throw new PolicyRefusal('AUTHORITY_DENIED', `Authority denied ${input.toolName}: ${decision.reason}`);
       // A capability whose UI effect cannot be described is reviewed whatever
       // the category check concluded; the card carries the uncertainty.
@@ -567,7 +593,7 @@ export class WorkflowEffectBoundary {
               audit.log({ agent_id: `workflow:${record.runId}`,
                 agent_name: `Workflow ${flowLabel} / ${stepLabel} / ${record.id}${judged}`,
                 tool_name: record.toolName, action_category: decision.actionCategory,
-                authority_decision: 'approval_required', approval_id: null, executed: false });
+                authority_decision: 'approval_required', approval_id: null, executed: false, effect_id: record.id });
             }
             const queued = !ahead ? '' : ahead >= deferredAheadLimit(budget)
               ? `, and ${ahead} or more earlier steps are waiting for a place`
@@ -721,7 +747,7 @@ export class WorkflowEffectBoundary {
       // even if this reply is lost or the engine retries the step. The trail
       // records the hand-off now, as it does for every piece authorization:
       // a lost completion receipt must not leave a send with no audit row.
-      if (input.externalDispatch) { log(true); return { result }; }
+      if (input.externalDispatch) { log(true, true); return { result }; }
       if (input.deferCompletion?.(result)) {
         // One audit row when the work first runs, and one when it completes;
         // the slices between are recorded on the effect, not the trail. Its own
@@ -730,7 +756,7 @@ export class WorkflowEffectBoundary {
         const first=!record.startLogged;
         record.status='pending'; record.result=null; record.startLogged=true;
         record.partial={slices:(record.partial?.slices??0)+1,at:Date.now()};
-        saveWorkflowEffect(record); if(first) log(true); return {result};
+        saveWorkflowEffect(record); if(first) log(true, true); return {result};
       }
       if (verification) record.outcome = { status: 'succeeded', verification };
       // NOT bounded and NOT defanged, deliberately: this is replay and

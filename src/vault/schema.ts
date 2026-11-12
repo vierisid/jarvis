@@ -538,6 +538,18 @@ function createTables(db: Database): void {
   // Useful forensics if a voice misfire ever resolves something it shouldn't.
   // Column is nullable so existing rows remain valid; new rows specify it.
   try { db.run(`ALTER TABLE audit_trail ADD COLUMN channel TEXT`); } catch {}
+  // The ledger stays append-only: a side effect writes several rows over its life
+  // (asked, decided, settled). These columns link the rows to one entry and say
+  // how it ended, so the owner reads one entry per effect, not one per row.
+  //   effect_id   the workflow effect a row belongs to, when it belongs to one
+  //   outcome     how the effect ended, on the row that settles it
+  //   decided_by  the device or session that made the decision, on a decision row
+  //   entry_key   effect_id, else approval_id, else the row's own id
+  for (const column of ['effect_id', 'outcome', 'decided_by', 'entry_key']) {
+    try { db.run(`ALTER TABLE audit_trail ADD COLUMN ${column} TEXT`); } catch {}
+  }
+  db.run(`UPDATE audit_trail SET entry_key = COALESCE(effect_id, approval_id, id) WHERE entry_key IS NULL`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_audit_entry ON audit_trail(entry_key)`);
 
   // Authority: Approval patterns (for learning)
   db.run(`
