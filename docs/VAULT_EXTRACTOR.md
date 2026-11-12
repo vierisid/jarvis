@@ -57,6 +57,10 @@ const result = await extractAndStore(
 );
 ```
 
+#### Private facts
+
+The owner can mark any fact **private** in the Memory room (`POST /api/vault/facts/:id/private` with `{"private": true|false}`). A private fact stays visible to the owner in Memory and in the fact APIs, and is left out of everything that feeds an AI prompt or a notification: recall (`retrieveForMessage` and `isCurrentRecallFact`) and the awareness knowledge suggestion (`findFacts({ excludePrivate: true })`). Any new code that puts facts into a prompt must exclude private facts the same way. A correction or revision of a private fact stays private, and a private fact is never copied into a profile answer by a confirmation or correction. Facts the profile answers or the onboarding interview stand behind, and facts a confirmation or correction would copy into a profile answer, cannot be made private (`isProfileBackedFact`), because profile answers reach prompts from Profile settings; the route answers 409 with the next step. When the owner types a value into Profile settings that matches a private fact, that fact stops being private. A fact made private after a turn or a workflow step packed it is refused before the next provider call (`assertCurrentMemoryFacts`), like a forgotten one. What already went to a model before the switch (earlier turns of a conversation, finished runs) is not recalled. The column is `facts.is_private INTEGER NOT NULL DEFAULT 0`, additive: a rollback to a build without it still reads the table, but that build sends private facts again.
+
 ## Data Structures
 
 ### ExtractionResult

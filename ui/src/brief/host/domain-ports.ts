@@ -113,6 +113,13 @@ export function createDomainPorts(scopeId: string, http: HostTransport, storage:
       if (!response.ok) return { state: 'unknown', reason: 'Could not confirm the change. Reload this fact.' };
       return response.json();
     },
+    setPrivate: async (factId, value, signal) => {
+      const response = await http.request(`/api/vault/facts/${encodeURIComponent(factId)}/private`, { ...post({ private: value }), signal });
+      if (response.status === 404) return { state: 'missing', reason: 'This fact is no longer available.' };
+      if (response.status === 409) return { state: 'error', reason: 'This one cannot be made private here. It is part of your profile answers: change or clear it in Profile settings.' };
+      if (!response.ok) return { state: 'error', reason: 'Could not save that change. Try again.' };
+      return { state: 'saved' };
+    },
   };
   return { goals, opportunities, decisions, memory, detail, collection,
     async otherDecisions() {

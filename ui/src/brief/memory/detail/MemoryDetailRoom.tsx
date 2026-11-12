@@ -201,6 +201,18 @@ export function MemoryDetailRoom({
               Confirm fact
             </BriefButton>
           )}
+        {data && data.item.status !== "superseded" && (
+          <BriefButton
+            variant="text"
+            disabled={locked || !!panel}
+            aria-describedby="brief-memory-private-note"
+            onClick={() => void controller.togglePrivate()}
+          >
+            {data.fact.is_private === 1
+              ? "Allow in AI context"
+              : "Keep private"}
+          </BriefButton>
+        )}
         {data?.item.supersededBy && (
           <BriefButton
             variant="text"
@@ -212,6 +224,13 @@ export function MemoryDetailRoom({
           </BriefButton>
         )}
       </div>
+      {data && data.item.status !== "superseded" && (
+        <p className="brief-memory-detail-note" id="brief-memory-private-note">
+          {data.fact.is_private === 1
+            ? "Private: this stays in your Memory but is never sent to the AI model."
+            : "Keep private leaves this fact out of everything sent to the AI model. It stays visible here."}
+        </p>
+      )}
       {data && !editable && (
         <p className="brief-memory-detail-note">
           {data.item.status === "superseded"

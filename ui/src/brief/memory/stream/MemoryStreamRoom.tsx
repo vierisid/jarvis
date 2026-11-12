@@ -254,6 +254,7 @@ function ConnectedMemory({ binding }: { binding: MemoryBinding }) {
                       <span className="brief-memory-qualification">
                         {row.scope && <span>Scope: {row.scope}</span>}
                         <span>{row.basis}</span>
+                        {row.private && <span>Private</span>}
                         {row.status === "contested" && <span>Contested</span>}
                         {(row.validity.from !== null ||
                           row.validity.to !== null) && (

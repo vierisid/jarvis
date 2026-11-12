@@ -31,7 +31,8 @@ export function retrieveForMessage(message: string): EntityProfile[] {
   const terms = new Set(recallTerms(message));
   if (!terms.size && !isRecallSelfOverview(message)) return [];
   const entities = findEntities({});
-  const facts = getDb().query<RecallFact, []>('SELECT * FROM facts').all();
+  // A fact the owner kept private never reaches a prompt: left out here, so recall does not even hint at it.
+  const facts = getDb().query<RecallFact, []>('SELECT * FROM facts WHERE is_private = 0').all();
   const ranked = rankRecall(message, entities, facts);
   return ranked.slice(0, RECALL_LIMITS.entities).map(({ entity, facts, matchedAliasIds, factDependencies, omitted }, index) => {
     const byId = new Map(facts.map(fact => [fact.id, fact]));
