@@ -55,6 +55,25 @@ export const PIECE_RECEIPT_MAX_BYTES = 262_144;
 /** The name a CODE step is admitted under: it has no piece of its own. */
 export const CODE_STEP_PIECE = '@jarvis/code-step';
 
+/**
+ * Whether "Continue on failure" may go on past a step that failed after the
+ * dispatch check let it run. A step that asks Jarvis from inside its own run
+ * (Jarvis's pieces, and the legacy approval piece through Needs you) hears a
+ * refusal by Authority, an approval or Kill, or a person's rejection, there,
+ * as a thrown error, not from `authorizePieceDispatch`. Such a step is gone
+ * past only when it reports a typed outcome that ran and failed (`error`, or
+ * `unknown`: it may have taken effect). A `blocked` outcome (refused, not
+ * approved, not started) or an untyped error is never continued past, so a
+ * refusal cannot be skipped. Any other step's failure after dispatch is its
+ * own (a provider error, a CODE step that threw).
+ */
+export function continuableFailure(piece: unknown, error: unknown): boolean {
+  const asksJarvis = typeof piece === 'string' && (piece.startsWith('@jarvispieces/') || piece === '@activepieces/piece-approval');
+  if (!asksJarvis) return true;
+  const outcome = error !== null && typeof error === 'object' ? (error as { outcome?: { status?: unknown } }).outcome : undefined;
+  return outcome?.status === 'error' || outcome?.status === 'unknown';
+}
+
 export interface PieceAuthorizeRequest {
   piece: string;
   action: string;
