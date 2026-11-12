@@ -277,6 +277,24 @@ describe("manage_workflow tool", () => {
     expect(inspected.steps).toEqual({ send: { output: { receipt: "fake-delivery-1" } } });
   });
 
+  test("a chat run of a published workflow that is turned off always asks, and says it stays off (#1422)", async () => {
+    await call("create", { name: "offflow", empty: true });
+    // A draft that was never published is not a turned-off workflow: the plain card.
+    expect(tool.authorityGate?.({ action: "run", flow: "offflow" })).toMatchObject({ confirm: "above_level", intent: "Run workflow: offflow" });
+    await call("publish", { flow: "offflow" });
+    expect(tool.authorityGate?.({ action: "run", flow: "offflow" })).toMatchObject({ confirm: "above_level" });
+    await call("disable", { flow: "offflow" });
+    expect(tool.authorityGate?.({ action: "run", flow: "offflow" })).toMatchObject({
+      actionCategory: "execute_command", confirm: "always", intent: expect.stringContaining("turned off and stays off"),
+    });
+    const out = await call("run", { flow: "offflow" }) as { status: string; workflow_off?: boolean; note?: string };
+    expect(out).toMatchObject({ status: "QUEUED", workflow_off: true });
+    expect(out.note).toContain("stays off");
+    expect(getFlow((out as unknown as { flow_id: string }).flow_id)?.status).toBe("DISABLED");
+    // An unknown flow keeps the plain card; execute reports it.
+    expect(tool.authorityGate?.({ action: "run", flow: "no-such-flow" })).toMatchObject({ confirm: "above_level" });
+  });
+
   test("a run asked for in chat while Jarvis is paused is refused, saying why (Q-08)", async () => {
     const { EmergencyController, setActiveEmergencyController } = await import("../../authority/emergency.ts");
     const controller = new EmergencyController();

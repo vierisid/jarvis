@@ -426,9 +426,21 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           return changes.length ? { actionCategory: "write_data", confirm: "always",
             intent: `${action === "enable" ? "Enable" : "Publish"} workflow ${forCard(params.flow)} and accept: ${changes.join(" ")}` } : null;
         }
-        case "run":
-          return { actionCategory: "execute_command", confirm: "above_level",
-            intent: `Run workflow: ${forCard(params.flow)}` };
+        case "run": {
+          // A published workflow that is turned off can still be run by hand,
+          // but only on purpose (#1422): a person is asked every time, as the
+          // dashboard asks, and the card says it stays off.
+          let off = false;
+          try {
+            const flow = requireFlowIn(deps.callerProjectId?.() ?? DEFAULT_IDS.project, params);
+            off = isOffAndPublished(flow);
+          } catch { /* An unknown flow fails in execute; the card stays the plain one. */ }
+          return off
+            ? { actionCategory: "execute_command", confirm: "always",
+              intent: `Run workflow ${forCard(params.flow)} once. It is turned off and stays off.` }
+            : { actionCategory: "execute_command", confirm: "above_level",
+              intent: `Run workflow: ${forCard(params.flow)}` };
+        }
         case "delete":
           return { actionCategory: "delete_data", confirm: "above_level",
             intent: `Permanently delete workflow: ${forCard(params.flow)}` };
@@ -537,8 +549,13 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
             actGet(requireFlowParam(params), params),
             "a workflow definition and its captured sample data",
           );
-        case "run":
-          return JSON.stringify(actRun(requireFlowParam(params), params.payload as Record<string, unknown> | undefined));
+        case "run": {
+          const flow = requireFlowParam(params);
+          const started = actRun(flow, params.payload as Record<string, unknown> | undefined);
+          return JSON.stringify(isOffAndPublished(flow)
+            ? { ...started, workflow_off: true, note: "This workflow is turned off. One run was started by hand; the workflow stays off." }
+            : started);
+        }
         case "create": {
           // Two-step gate to keep small / local LLMs honest:
           //   - If `description` is passed, reroute to `compose` so the
@@ -1234,6 +1251,11 @@ function validationSummary(flowId: string, versionId: string) {
     structureIssueCount: structure.issues.length, setupIssueCount: structure.setupIssues?.length ?? 0,
     readinessIssueCount: readiness.issues.length, runtimeCheckCount: readiness.runtimeChecks.length,
     functionalTesting: "not_performed" } };
+}
+
+/** A published workflow that is turned off: a run by hand is asked for, and says it stays off. */
+function isOffAndPublished(flow: FlowRow): boolean {
+  return flow.status === "DISABLED" && !!flow.published_version_id;
 }
 
 function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string, unknown> {
