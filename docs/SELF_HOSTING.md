@@ -948,3 +948,10 @@ remains; unsetting it undoes that and changes no data.
 `GET /health` is unauthenticated and safe to point uptime monitors at. It
 works over the unix socket too, e.g.
 `curl --unix-socket /run/jarvis/jarvis.sock http://localhost/health`.
+
+## Start-up refusals
+
+`jarvis start` checks two things before it boots anything, and says plainly which one failed.
+
+- **The port is busy.** The check takes a moment, before the database or any service starts. The message names the port, says another program (possibly a Jarvis with a different data folder) is listening on it, gives the command that shows which one (`lsof -nP -iTCP:<port> -sTCP:LISTEN`, or `netstat -ano | findstr :<port>` on Windows), and suggests a free port: `jarvis start --port <N>`, `JARVIS_PORT`, or `daemon.port`. Do not reach for `jarvis stop` here: with no Jarvis running for this data folder it clears the port by stopping whatever program listens on it. A port taken after that check gets the same message rather than a raw bind error.
+- **The data folder cannot be written.** A read-only folder, a full disk or the wrong owner stops the start with "Jarvis cannot write to its data folder" and the cause. "JARVIS is already running" means only that another daemon holds the lock for this data folder; stop it with `jarvis stop`. `jarvis start -d` and `jarvis logs` use the same wording.
