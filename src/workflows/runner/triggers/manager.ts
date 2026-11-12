@@ -89,6 +89,9 @@ interface TriggerNode {
  */
 export const MAX_QUEUED_WEBHOOK_RUNS = 500;
 
+/** The admission refusal for a flow that is off; a webhook sender is told so. */
+const TURNED_OFF = "The workflow is turned off.";
+
 type SubscriptionKind = "cron" | "webhook" | "event" | "engine";
 type ActiveSub = {
   generation: number;
@@ -224,6 +227,16 @@ export class TriggerManager {
       } catch {
         return true; // a probe failure must not close the ingress
       }
+    });
+    // A webhook flow that exists but is off answers "turned off", not "not
+    // found". Only a flow whose trigger is the Webhook trigger: any other
+    // flow's id stays as unknown to a caller as an id that never existed.
+    this.webhooks.setTurnedOffCheck((flowId) => {
+      const flow = getFlow(flowId);
+      if (!flow || flow.status === 'ENABLED' || workflowRemovalState(flowId).receipt_id) return false;
+      const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
+      const trigger = versionId ? getFlowVersion(versionId)?.trigger as unknown as TriggerNode | null | undefined : null;
+      return trigger?.type === 'PIECE_TRIGGER' && trigger.settings?.pieceName === 'webhook';
     });
     this.engineRuntime = deps.engineRuntime;
     this.log = deps.log ?? ((line) => console.log(`[trigger-manager] ${line}`));
@@ -838,7 +851,7 @@ export class TriggerManager {
   private notAdmitted(flowId: string, versionId: string, generation?: number): string | null {
     const flow = getFlow(flowId);
     if (!flow) return "The workflow no longer exists.";
-    if (flow.status !== "ENABLED") return "The workflow is turned off.";
+    if (flow.status !== "ENABLED") return TURNED_OFF;
     // F-20: a removed workflow starts nothing, and a subscription registered
     // before a Remove (even one later undone and re-enabled) is not current.
     const removal = workflowRemovalState(flowId);
@@ -911,7 +924,7 @@ export class TriggerManager {
       const fire = recordFire({ flowId, flowVersionId: versionId, source: opts.source, scheduledFor: opts.scheduledFor,
         outcome: "blocked", detail: { reason: off, ...(opts.dedupeKey ? { deliveryKey: opts.dedupeKey } : {}) } });
       this.log(`flow ${flowId} (${opts.source}) not started: ${off}`);
-      return { outcome: "blocked", fireId: fire?.id, reason: off, disabled: true };
+      return { outcome: "blocked", fireId: fire?.id, reason: off, disabled: true, ...(off === TURNED_OFF ? { turnedOff: true } : {}) };
     }
     // Pause holds and Kill stops (Q-08): nothing starts. A scheduled time is
     // skipped and shown, keyed so it is never run late after Resume; a webhook

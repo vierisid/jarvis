@@ -348,3 +348,11 @@ test('a blocked enable on a code step names the step and points at the workflow'
   expect(service.read().data.items[0]!.readiness).toMatchObject({ reason: '"Crunch numbers" runs code and needs your permission first.', fix: { kind: 'workflow' } });
   expect(service.change(command(flow.id, 'activation', { activation: 'ENABLED' }))).toMatchObject({ status: 'rejected', fix: { kind: 'workflow' } });
 });
+test('the latest run of a workflow that went on past a failed step reads as such, not as a plain success', () => {
+  const flow = createFlow();
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Lookup', trigger: { name: 'trigger', type: 'EMPTY', settings: {},
+    nextAction: { name: 'bad', type: 'PIECE', displayName: 'Look up', settings: { pieceName: 'p', actionName: 'a', input: {} } } } });
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'SUCCEEDED' });
+  updateRun(run.id, { steps: { bad: { output: { type: 'PIECE', status: 'FAILED' } } } });
+  expect(service.read().data.items.find(i => i.flowId === flow.id)?.latestRun).toEqual({ runId: run.id, label: 'Finished with a failed step' });
+});
