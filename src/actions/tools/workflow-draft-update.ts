@@ -7,6 +7,7 @@ import { compileWorkflow, type ReadinessContext } from '../../workflows/runtime/
 import { CODE_STEP_TYPE, walkFlowNodes } from '../../workflows/db/flow-graph';
 import { credentialEditRefusal, restoreRedactedCredentials, versionAsModelSees } from '../../workflows/runtime/step-credentials';
 import { assistantWebhookSecretRefusal } from '../../workflows/runner/triggers/webhook-secret';
+import { nameLengthRefusal, WORKFLOW_NAME_MAX_CHARS } from '../../workflows/api/display-name';
 
 /** Covers the persisted authoring snapshot, not a recomputed readiness report. */
 export function draftRevision(version: FlowVersion): string {
@@ -77,6 +78,27 @@ function assertNoAssistantCode(saved: FlowTriggerNode, graph: FlowTriggerNode): 
   if (codeSteps(graph).some(step => !existing.has(step))) fail('CODE steps cannot be added or changed by the assistant; the user edits code in the workflow editor');
 }
 
+/** A step name or display name `graph` writes over the cap, or null.
+ *
+ * With a `saved` draft, an over-long value is let through only where the same
+ * step (by name) already had it in the same field: one the editor wrote, or
+ * one from before the cap, does not block an unrelated repair, and cannot be
+ * copied onto other steps or fields either. With no saved draft (a composed
+ * flow) every name is held to the cap. */
+export function stepNameRefusal(saved: FlowTriggerNode | null, graph: FlowTriggerNode): string | null {
+  const savedSteps = new Map(walkFlowNodes(saved).map(node => [node.name, node] as const));
+  for (const node of walkFlowNodes(graph)) {
+    const before = savedSteps.get(node.name);
+    for (const field of ['name', 'displayName'] as const) {
+      const value = node[field];
+      if (typeof value !== 'string' || (before && before[field] === value)) continue;
+      const refusal = nameLengthRefusal(value, `step ${field}`);
+      if (refusal) return refusal;
+    }
+  }
+  return null;
+}
+
 /** Synchronous check + validation + write in one SQLite transaction. No LLM,
  * network, installation, activation, run, or workflow/version creation. */
 export function updateSavedDraft(input: {
@@ -94,7 +116,9 @@ export function updateSavedDraft(input: {
     if (flow.status === 'ENABLED' && !flow.published_version_id) fail('this unpublished draft is live; disable the workflow before editing');
     if (!/^[a-f0-9]{64}$/.test(input.expectedRevision) || draftRevision(version) !== input.expectedRevision) fail('draft changed since readback; get the definition again before editing');
     if (!input.context.pieces) fail('installed action schemas are unavailable');
-    if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200)) fail('name must be a nonempty string of at most 200 characters');
+    if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim())) fail(`name must be a nonempty string of at most ${WORKFLOW_NAME_MAX_CHARS} characters`);
+    const nameRefusal = typeof input.name === 'string' ? nameLengthRefusal(input.name, 'name') : null;
+    if (nameRefusal) fail(nameRefusal);
     // The model reads credential-taking steps redacted (`versionForModel`):
     // a value it wrote back unchanged keeps the stored credential, and an edit
     // that would store the marker in its place is refused (#1153).
@@ -103,6 +127,9 @@ export function updateSavedDraft(input: {
     // where it left their markers, and what that put back is judged (#1153).
     const written = patchDraftGraph(versionAsModelSees(version).trigger, input.patches);
     const graph = restoreRedactedCredentials(version.trigger, written);
+    // First: the refusals below and readiness's issues quote step names back.
+    const stepRefusal = stepNameRefusal(version.trigger, graph);
+    if (stepRefusal) fail(stepRefusal);
     const refusal = credentialEditRefusal(version.trigger, written, graph) ?? assistantWebhookSecretRefusal(version.trigger, graph);
     if (refusal) fail(refusal);
     assertNoAssistantCode(version.trigger, graph);

@@ -1,4 +1,4 @@
-import { draftRevision, updateSavedDraft } from './workflow-draft-update';
+import { draftRevision, stepNameRefusal, updateSavedDraft } from './workflow-draft-update';
 import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards';
 import { decideRunRecovery, getRunRecovery } from '../../workflows/runtime/recovery';
 import { getWorkflowDb } from '../../workflows/db';
@@ -102,6 +102,7 @@ import type {
 } from "./workflow-composer.ts";
 import { forCard } from "../../util/card-text.ts";
 import { wrapUntrusted } from "../../roles/untrusted.ts";
+import { nameLengthRefusal } from "../../workflows/api/display-name.ts";
 
 export interface ManageWorkflowDeps {
   /** When provided, a refresh is fired after status / publish / delete so cron+webhook+event subs reconcile. */
@@ -1267,6 +1268,8 @@ function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string
 }
 
 function actCreate(displayName: string, project: string): Record<string, unknown> {
+  const refusal = nameLengthRefusal(displayName, "create: the workflow name");
+  if (refusal) throw new Error(refusal);
   const flow = createFlow({ projectId: project });
   createDraftVersion({
     flowId: flow.id,
@@ -1396,6 +1399,14 @@ async function actCompose(
   /** Library IDs this call's Authority gate named; see approvedInstalls. */
   preinstall: string[] = [],
 ): Promise<Record<string, unknown>> {
+  // Before the LLM is spent on it. Covers create-with-description and
+  // continue_setup, which arrive here with the name they were given.
+  const nameRefusal = nameLengthRefusal(name, "the workflow name");
+  if (nameRefusal) {
+    throw new Error(context?.workflowSetup
+      ? `continue_setup: ${nameRefusal}; this setup cannot be continued, so compose it again under a shorter name`
+      : `compose: ${nameRefusal}`);
+  }
   if (!deps.llm) {
     throw new Error("compose: an LLM client is not configured for this build");
   }
@@ -1514,10 +1525,16 @@ async function actCompose(
   // the user must publish + enable explicitly.
   // One transaction: a draft the save rules refuse (a webhook secret under
   // the floor, #1153) leaves no empty flow behind.
-  const flowName = result.flow.displayName.trim() || name;
+  // The composer's own name for the flow, unless it is empty or over the cap
+  // the caller's name was held to.
+  const composedName = result.flow.displayName.trim();
+  const flowName = composedName && !nameLengthRefusal(composedName, "name") ? composedName : name;
   // A secret the composer wrote meets the floor however the store would treat it (#1153).
   const secretRefusal = assistantWebhookSecretRefusal(null, result.flow.trigger);
   if (secretRefusal) throw new Error(secretRefusal);
+  // Step names are held to the same cap as an update's; nothing is saved.
+  const stepRefusal = stepNameRefusal(null, result.flow.trigger);
+  if (stepRefusal) throw new Error(`compose: the composed workflow's ${stepRefusal}; nothing was saved, compose it again`);
   const { flow, version } = getWorkflowDb().transaction(() => {
     const flow = createFlow({ projectId: project, metadata: { compositionRecordId: result.compositionRecordId } });
     return { flow, version: createDraftVersion({ flowId: flow.id, displayName: flowName, trigger: result.flow.trigger }) };
