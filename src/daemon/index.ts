@@ -5065,8 +5065,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     briefWorkflowComposition = new BriefCompositionProvider(getDb());
     briefPreparedOpportunities = new PreparedOpportunities(getDb());
     briefOpportunityActivation = new OpportunityActivation(getDb());
+    // With the notch on, a suggestion does not pop up and is not spoken: it
+    // joins the count and is said when the person asks what waits. Only the
+    // two toast senders and the proactive voice are swapped. The dashboard
+    // card, the chat line and every other toast are as they were.
+    const notchSuggestions = notchReal?.suggestions;
     const awarenessDelivery = new AwarenessDeliveryPolicy({
-      sockets: wsService, channels: channelService, reactor, coalescer, agent: () => bgAgent,
+      sockets: notchSuggestions ? {
+        broadcastAwarenessEvent: (event) => wsService.broadcastAwarenessEvent(event),
+        broadcastNotification: (text, priority) => wsService.broadcastNotification(text, priority),
+        getServer: () => wsService.getServer(),
+        // Nothing is spoken back (decision C).
+        broadcastProactiveVoice: async () => 0,
+      } : wsService,
+      ...(notchSuggestions ? { desktop: notchSuggestions.toast, desktopWithReceipt: notchSuggestions.toastWithReceipt } : {}),
+      channels: channelService, reactor, coalescer, agent: () => bgAgent,
       // The workflow bus is initialized before awareness starts, after API setup.
       eventBus: { publish: (type, payload) => sharedEventBus.publish(type, payload) },
     }, process.env.JARVIS_BRIEF_QUIET_AWARENESS);
