@@ -244,13 +244,21 @@ function check(value: unknown, schema: OutputSchema, path: string, report: (mess
  * message names the contract that failed, never a reply value; the text
  * travels beside the outcome so a handled branch can still inspect it.
  */
+/** Characters that render as nothing (zero-width spaces, joiners, BOM, tag characters), as `util/card-text.ts` drops them. Inlined: this module is bundled into pieces. */
+const INVISIBLE_IN_REPLY = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
+
 export function evaluateLlmOutput(input: { text: string; parseJson?: boolean; outputSchema?: OutputSchema }): LlmOutputEvaluation {
   // A provider that answered with nothing gave this step nothing to pass on.
-  // Counting that as success ran every later step on an empty string. An Ask
-  // step has no side effects, so nothing was done either way. A step that asks
-  // for JSON keeps its own verdict below (INVALID_JSON_OUTPUT): graphs route on it.
-  if (input.text.trim() === '' && !input.parseJson && !input.outputSchema) {
-    return { outcome: { status: 'error', code: 'EMPTY_AI_REPLY', effect: 'not_started',
+  // Counting that as success ran every later step on an empty string. Nothing
+  // means no visible character: whitespace and invisible format characters
+  // only. Any visible reply, however short ("0", "No", "."), is an answer. The
+  // provider did process (and may have billed) the request, so the effect is
+  // `may_have_occurred`, as for INVALID_JSON_OUTPUT and a provider failure
+  // after the call (failures/evidence.ts); `not_started` would claim nothing
+  // was processed. A step that asks for JSON keeps its own verdict below
+  // (INVALID_JSON_OUTPUT): graphs route on it.
+  if (input.text.replace(INVISIBLE_IN_REPLY, '').trim() === '' && !input.parseJson && !input.outputSchema) {
+    return { outcome: { status: 'error', code: 'EMPTY_AI_REPLY', effect: 'may_have_occurred',
       message: 'The AI answered with an empty reply, so this step stopped before the next step could use it. Run it again, or check the model in Settings.' } };
   }
   if (!input.parseJson && !input.outputSchema) return { outcome: { status: 'succeeded' } };

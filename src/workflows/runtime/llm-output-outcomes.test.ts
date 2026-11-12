@@ -19,6 +19,8 @@ import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends } from './service-backends';
 import { createJarvisLlmChatRoute, type LlmChatFn, type PdfRetryPause } from '../sandbox-api/routes/jarvis-llm';
 import { cancelFlowRun } from '../db/repos/run-cancellation';
+import { runFailure } from './run-failure';
+import { NOTHING_DONE } from '../../failures/projection';
 import { WorkflowCancellationError } from './cancellation';
 import { createWorkflowFile } from '../db/repos/workflow-file';
 import { ConversationRequestError } from '../../vault/conversation-lifecycle';
@@ -109,7 +111,7 @@ describe('LLM output contract through the route and the durable receipt', () => 
     const f = fixture('');
     const failed = await f.call({});
     expect(failed.status).toBe(422);
-    expect(await failed.json()).toMatchObject({ text: '', outcome: { status: 'error', code: 'EMPTY_AI_REPLY', effect: 'not_started' } });
+    expect(await failed.json()).toMatchObject({ text: '', outcome: { status: 'error', code: 'EMPTY_AI_REPLY', effect: 'may_have_occurred' } });
     const handled = await f.call({ requireSuccess: false });
     expect(handled.status).toBe(200);
     expect(await handled.json()).toMatchObject({ outcome: { code: 'EMPTY_AI_REPLY' } });
@@ -346,6 +348,11 @@ describe('LLM output contract through the real engine', () => {
     expect(run.status).toBe('FAILED');
     expect(run.failedStep?.errorMessage).toContain('empty reply');
     expect(f.downstream).toHaveLength(0);
+    // Q-19: the model was called, so the run never reads as "nothing was done".
+    const reading = runFailure(run)!;
+    expect(reading.effect).not.toBe('none');
+    expect(reading.outcome).not.toContain(NOTHING_DONE);
+    expect(reading.detail).toContain('EMPTY_AI_REPLY');
   }, 60_000);
 
   test('required malformed JSON fails the step and nothing downstream runs', async () => {
