@@ -2,15 +2,32 @@
  * Authority Engine — Central decision maker for tool execution authorization.
  *
  * Decision order:
- * 1. Temporary grants (parent escalation) → allow
- * 2. Per-action overrides for this role → explicit allow/deny
- * 3. Context rules (time-based, tool-name-based) → allow/deny/require_approval
- * 4. Numeric level check: level >= AUTHORITY_REQUIREMENTS[action]
- * 5. Governed category check: if allowed but governed → requiresApproval
+ * 1. Temporary grants (parent escalation) -> allow
+ * 2. A per-action override that denies -> deny
+ * 3. A matching context rule that denies -> deny, whatever allow overrides or
+ *    allow rules also match and whatever order the rules are in
+ * 4. A per-action override that allows (or allows with approval) -> that
+ * 5. Context rules (time-based, tool-name-based) that match -> require_approval,
+ *    else allow. Among matching rules the stricter effect wins, never the
+ *    first listed: deny, then require_approval, then allow.
+ * 6. Numeric level check: level >= AUTHORITY_REQUIREMENTS[action]
+ * 7. Governed category check: if allowed but governed -> requiresApproval
+ *
+ * So a matching deny rule wins over any allow override or allow rule,
+ * whichever is listed first, and an "always allow" override (global or for a
+ * role) skips the level check and the governed switch for its action but never
+ * beats a matching deny rule. Two exceptions are deliberate and unchanged: a
+ * temporary grant (step 1) comes first, and a role's own override replaces the
+ * global one for that role, so a role allow override beats a global deny
+ * override (but not a deny rule).
+ *
+ * Time-range rules read the hour on the owner's configured timezone
+ * (`config.timezone`), or this machine's clock when none is set.
  */
 
 import type { ActionCategory } from '../roles/authority.ts';
 import { AUTHORITY_REQUIREMENTS } from '../roles/authority.ts';
+import { ownerWallClockHour } from '../lib/cron-scheduler.ts';
 
 export type PerActionOverride = {
   action: ActionCategory;
@@ -106,9 +123,12 @@ export type AuthorityCheckParams = {
 
 export class AuthorityEngine {
   private config: AuthorityConfig;
+  /** The current hour on the owner's clock; replaceable so tests can pin an instant. */
+  private readonly currentHour: () => number;
 
-  constructor(config: AuthorityConfig) {
+  constructor(config: AuthorityConfig, clock: { currentHour?: () => number } = {}) {
     this.config = config;
+    this.currentHour = clock.currentHour ?? (() => ownerWallClockHour(new Date()));
   }
 
   /**
@@ -136,17 +156,32 @@ export class AuthorityEngine {
       };
     }
 
-    // 2. Check per-action overrides for this role
+    // 2. Check per-action overrides for this role. A denying override is final.
     const override = this.findOverride(actionCategory, agentRoleId);
+    if (override && !override.allowed) {
+      return {
+        allowed: false,
+        requiresApproval: false,
+        reason: `Explicitly denied by override for ${agentRoleId || 'global'}`,
+        actionCategory,
+      };
+    }
+
+    // 3. Context rules. Every matching rule is read, and the strictest effect
+    // wins (deny, then require_approval, then allow), so the order the rules
+    // were saved in never decides. A matching deny rule also beats an allowing
+    // override: an "always allow" never reaches past an explicit deny.
+    const contextResult = this.evaluateContextRules(actionCategory, toolName);
+    if (contextResult?.effect === 'deny') {
+      return {
+        allowed: false,
+        requiresApproval: false,
+        reason: contextResult.description,
+        actionCategory,
+        contextRule: contextResult.id,
+      };
+    }
     if (override) {
-      if (!override.allowed) {
-        return {
-          allowed: false,
-          requiresApproval: false,
-          reason: `Explicitly denied by override for ${agentRoleId || 'global'}`,
-          actionCategory,
-        };
-      }
       if (override.requires_approval) {
         return {
           allowed: true,
@@ -162,19 +197,7 @@ export class AuthorityEngine {
         actionCategory,
       };
     }
-
-    // 3. Check context rules
-    const contextResult = this.evaluateContextRules(actionCategory, toolName);
     if (contextResult) {
-      if (contextResult.effect === 'deny') {
-        return {
-          allowed: false,
-          requiresApproval: false,
-          reason: contextResult.description,
-          actionCategory,
-          contextRule: contextResult.id,
-        };
-      }
       if (contextResult.effect === 'require_approval') {
         return {
           allowed: true,
@@ -195,7 +218,7 @@ export class AuthorityEngine {
       }
     }
 
-    // 4. Numeric level check
+    // 6. Numeric level check
     // Use the higher of the agent's role level and the config's default_level,
     // so the dashboard authority slider acts as the effective authority floor.
     // A level that is not a number counts for nothing: `NaN < required` is
@@ -213,7 +236,7 @@ export class AuthorityEngine {
       };
     }
 
-    // 5. Governed category check — if level is sufficient but action is governed, require approval
+    // 7. Governed category check: if level is sufficient but action is governed, require approval
     if (this.config.governed_categories.includes(actionCategory)) {
       return {
         allowed: true,
@@ -332,35 +355,59 @@ export class AuthorityEngine {
     return global ?? null;
   }
 
+  /**
+   * The matching context rule that decides, or null. All matching rules for
+   * the action are read; the strictest effect wins and, among equals, the first
+   * listed (deny, then require_approval, then allow).
+   */
   private evaluateContextRules(action: ActionCategory, toolName: string): ContextRule | null {
+    const strictness: Record<ContextRule['effect'], number> = { deny: 2, require_approval: 1, allow: 0 };
+    let winner: ContextRule | null = null;
+    let hour: number | undefined;
     for (const rule of this.config.context_rules) {
       if (rule.action !== action) continue;
-
+      let matches = false;
       switch (rule.condition) {
-        case 'time_range': {
-          const now = new Date();
-          const hour = now.getHours();
-          const startHour = (rule.params.start_hour as number) ?? 0;
-          const endHour = (rule.params.end_hour as number) ?? 24;
-          if (hour >= startHour && hour < endHour) {
-            return rule;
-          }
+        case 'time_range':
+          // Read once per decision, so every rule sees the same hour.
+          hour ??= this.currentHour();
+          matches = timeRangeMatches(hour, rule.params);
           break;
-        }
         case 'tool_name': {
           const toolPattern = rule.params.tool_name as string;
-          if (toolPattern && (toolName === toolPattern || toolName.startsWith(toolPattern))) {
-            return rule;
-          }
+          matches = !!toolPattern && (toolName === toolPattern || toolName.startsWith(toolPattern));
           break;
         }
-        case 'always': {
-          return rule;
-        }
+        case 'always':
+          matches = true;
+          break;
       }
+      if (matches && (!winner || (strictness[rule.effect] ?? 0) > (strictness[winner.effect] ?? 0))) winner = rule;
     }
-    return null;
+    return winner;
   }
+}
+
+/**
+ * Whether `hour` (0 to 23) falls in a rule's window. The window runs from
+ * `start_hour` up to, not including, `end_hour`, and wraps past midnight when
+ * it ends before it starts: start 22, end 6 covers 22:00 to 05:59, and
+ * start 15, end 14 covers every hour except 14. A start equal to the end
+ * covers no hour; start 0, end 24 covers the whole day. A missing start is 0
+ * and a missing end is 24.
+ *
+ * A saved value the API would now refuse is read exactly as before this rule
+ * could wrap, so an upgrade never widens it: hours are compared as JavaScript
+ * compared them (`hour >= "22"` reads "22" as 22, a fraction rounds up, a value
+ * that is not a number matches no hour), and only a window whose ends are both
+ * real hours (start 1 to 23, end 0 to 22, after rounding up) wraps.
+ */
+export function timeRangeMatches(hour: number, params: Record<string, unknown>): boolean {
+  const start = Math.ceil(Number(params.start_hour ?? 0));
+  const end = Math.ceil(Number(params.end_hour ?? 24));
+  if (Number.isNaN(start) || Number.isNaN(end)) return false;
+  const wraps = start > end && start <= 23 && end >= 0;
+  return wraps ? hour >= start || hour < end : hour >= start && hour < end;
 }
 
 /**

@@ -315,6 +315,15 @@ function matchesWall(parsed: ParsedCron, wc: WallClock): boolean {
   return parsed.minutes.includes(wc.minute) && parsed.hours.includes(wc.hour) && matchesDay(parsed, wc);
 }
 
+/**
+ * The wall-clock hour (0 to 23) of `date` in the owner's configured timezone,
+ * or this machine's when none is set. Authority time-range rules read this, so
+ * a hosted brain on a UTC machine still applies them on the owner's clock.
+ */
+export function ownerWallClockHour(date: Date, zone: string | null = cronTimezone): number {
+  return wallClockIn(date, zone).hour;
+}
+
 /** Scheduled local minute, independent of when its worker eventually executes. */
 export function cronWallTimeKey(date: Date, zone: string | null = cronTimezone): string {
   return wallKey(wallClockIn(date, zone));
