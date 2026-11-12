@@ -219,7 +219,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
       if (!host.active()) return false;
       const result = await host.navigation.intent(request.room, true);
       return result.state === 'opened' && host.active();
-    }} />{message && <p className="brief-host-notice" role="status">{message}</p>}
+    }} />{/* Always mounted: a message put into a live region that already exists is announced; one that arrives with its element often is not. */}<p className="brief-host-notice" role="alert">{message}</p>
     {!!humanPending && route.room !== 'needs-you' && <aside className="brief-human-banner" role="status">{humanPending} workflow {humanPending === 1 ? 'request needs' : 'requests need'} your attention. <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>Open Needs you</button></aside>}
     <BriefHost route={route} rooms={rooms} notice={<EmergencyStatusBanner state={emergency} open={() => host.navigation.navigate('emergency-controls')} />} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
       const guarded = host.guardShell(base);

@@ -114,6 +114,7 @@ import { CANCELED_EFFECT_WARNING } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
 import { modKey } from "../../ui/platform";
 import { NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, stepNotApprovalGated } from "./approval-gate";
+import { accessibleText } from "./accessible-text";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
 // cursor rightward by NODE_X_STEP; nested branches (loop body / router
@@ -406,6 +407,11 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
     setNodes(baseNodes);
   }, [baseNodes, setNodes]);
 
+  // On a phone, keep nodes big enough to read and let the person pan, rather
+  // than shrink a long chain to fit. The first fit, Arrange and the fit-view
+  // zoom button all use these options, so none of them shrinks it again.
+  const narrowScreen = typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 640px)").matches;
+  const fitOptions = useMemo(() => ({ padding: 0.15, minZoom: narrowScreen ? 0.7 : 0.4, maxZoom: 1.25 }), [narrowScreen]);
   // Capture the ReactFlowInstance so right-click handlers can translate
   // the cursor's screen coordinates into the canvas's flow coordinates
   // for orphan placement.
@@ -742,7 +748,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
   return (
     <CurrentFlowIdContext.Provider value={flowId}>
     <div ref={rootRef} className={`wf-editor${workspace ? " wf-editor--workspace" : ""}`} role={workspace ? "region" : "dialog"} aria-modal={workspace ? undefined : true} aria-label={workspace ? "Workflow editor" : undefined} aria-labelledby={workspace ? undefined : "wf-editor-title"}>
-      {renderHeader ? renderHeader({ editor, selectSetupStep: name => { setSelectedStepName(name); setPopoverAnchor({ x: 0, y: 0 }); closeRunDetail(); }, saving:workspaceSaving, save: async () => { if(saveLock.current)return; saveLock.current=true;setWorkspaceSaving(true);try {await onSave();} finally {saveLock.current=false;setWorkspaceSaving(false);} }, discard: onDiscard, message: actionMessage, arrange: () => { editor.clearStepPositions(); window.requestAnimationFrame(() => rfInstanceRef.current?.fitView({padding: 0.15, duration: 0})); } }) : (
+      {renderHeader ? renderHeader({ editor, selectSetupStep: name => { setSelectedStepName(name); setPopoverAnchor({ x: 0, y: 0 }); closeRunDetail(); }, saving:workspaceSaving, save: async () => { if(saveLock.current)return; saveLock.current=true;setWorkspaceSaving(true);try {await onSave();} finally {saveLock.current=false;setWorkspaceSaving(false);} }, discard: onDiscard, message: actionMessage, arrange: () => { editor.clearStepPositions(); window.requestAnimationFrame(() => rfInstanceRef.current?.fitView({ ...fitOptions, duration: 0 })); } }) : (
       <header className="wf-editor__header">
         <div className="wf-editor__title">
           {editor.version ? (
@@ -778,7 +784,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
               // visible (similar to xyflow's "fitView" controls button
               // but triggered by the explicit user action).
               window.requestAnimationFrame(() => {
-                rfInstanceRef.current?.fitView({ padding: 0.15, duration: 250 });
+                rfInstanceRef.current?.fitView({ ...fitOptions, duration: 250 });
               });
             }}
             title="Reset all step positions to the auto-arranged grid (does not change connections)"
@@ -954,7 +960,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             isValidConnection={isValidConnection}
             onEdgeContextMenu={readOnly ? undefined : onEdgeContextMenu}
             fitView
-            fitViewOptions={{ padding: 0.15, minZoom: 0.4, maxZoom: 1.25 }}
+            fitViewOptions={fitOptions}
             // Distance (px) from the pointer at which a connection drag
             // snaps to the closest valid handle. The default of 20 forces
             // pixel-perfect drops on the handle dot; raising it to ~140
@@ -974,7 +980,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
             zoomOnScroll
           >
             <Background gap={workspace ? 24 : 16} color={workspace ? "var(--brief-card-edge)" : undefined} />
-            <Controls showInteractive={false} />
+            <Controls showInteractive={false} fitViewOptions={fitOptions} />
           </ReactFlow>
         )}
       </section>
@@ -2191,7 +2197,9 @@ export function VariableChipField({
       contentEditable={!readOnly}
       suppressContentEditableWarning
       role="textbox"
-      aria-label={label}
+      // The name says "required" too: not every screen reader reads
+      // aria-required on an editable region, and the native fields say it.
+      aria-label={required && label ? `${label} (required)` : label}
       aria-describedby={descriptionId}
       aria-required={required || undefined}
       aria-invalid={invalid || undefined}
@@ -2964,6 +2972,24 @@ function computeAutoLayout(root: FlowStepNode | null): Record<string, { x: numbe
   return out;
 }
 
+/**
+ * What a screen reader says for a canvas node: "Draft the follow-up, step".
+ * The title may come from a model (compose), so it is cleaned of bidi and
+ * invisible characters first; an empty title falls back to the step's name.
+ */
+export function nodeAccessibleName(step: FlowStepNode, orphan = false): string {
+  const title = accessibleText(step.displayName) || accessibleText(step.name);
+  let kind: string;
+  if (step.type === "EMPTY") kind = "manual trigger";
+  else if (step.type === "PIECE_TRIGGER") kind = "trigger";
+  else if (step.type === "LOOP_ON_ITEMS") kind = "loop";
+  else if (step.type === "ROUTER") kind = step.settings?.routerKind === "if" ? "if" : "router";
+  else if (step.type === "CODE") kind = "code step";
+  else kind = !step.settings?.pieceName || !step.settings.actionName ? "step, not set up yet" : "step";
+  // The canvas shows a disconnected step only by its dashed border.
+  return `${title}, ${kind}${orphan ? ", not connected" : ""}`;
+}
+
 function buildGraph(
   trigger: FlowStepNode | null,
   steps: FlatStep[],
@@ -3140,6 +3166,8 @@ function buildGraph(
       }
     }
   }
+  // Every node reads as its title and kind, not as an unnamed group.
+  for (const n of nodes) n.ariaLabel = nodeAccessibleName(n.data.step, n.data.isOrphan);
   return { nodes, edges };
 }
 
@@ -3554,8 +3582,8 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
           looking. */}
 
       {isTriggerStep ? (
-        <Field label="Trigger">
-          <div className="wf-props__segmented" role="radiogroup">
+        <RadioGroupField label="Trigger">
+          <div className="wf-props__segmented">
             {TRIGGER_KINDS.map((tk) => {
               // When the step is a non-canonical PIECE_TRIGGER (community
               // piece, imported flow, ...) detection returns "other" and
@@ -3578,7 +3606,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
               );
             })}
           </div>
-        </Field>
+        </RadioGroupField>
       ) : null}
 
       {isManual ? (
@@ -4479,6 +4507,20 @@ export function WebhookTriggerFields({ secret, onSetSecret, scheme, onRequireTim
         </>
       ) : null}
     </>
+  );
+}
+
+/**
+ * A labelled set of radio buttons. Not a `<label>`: a label would make the
+ * first radio's name the whole group's text and the checked state would read
+ * oddly. The group carries its own name instead.
+ */
+export function RadioGroupField({ label, children }: { label: string; children: React.ReactNode }): React.ReactElement {
+  return (
+    <div className="wf-props__field" role="radiogroup" aria-label={label}>
+      <span className="wf-props__field-label" aria-hidden="true">{label}</span>
+      {children}
+    </div>
   );
 }
 
@@ -5444,8 +5486,8 @@ function RouterEditor({
 
   return (
     <>
-      <Field label="Execution mode">
-        <div className="wf-props__segmented" role="radiogroup">
+      <RadioGroupField label="Execution mode">
+        <div className="wf-props__segmented">
           <button
             type="button"
             role="radio"
@@ -5465,7 +5507,7 @@ function RouterEditor({
             All matches
           </button>
         </div>
-      </Field>
+      </RadioGroupField>
 
       <div className="wf-props__inputs">
         <div className="wf-props__inputs-head">
@@ -5517,6 +5559,7 @@ function RouterEditor({
                     when nothing else matched. */}
                 {!isFallback && b?.branchType === "CONDITION" ? (
                   <BranchConditionsEditor
+                    branchName={b.branchName || `branch ${idx}`}
                     conditions={(b.conditions ?? []) as BranchConditions}
                     onChange={(next) => onSetBranchConditions(idx, next)}
                   />
@@ -5685,10 +5728,16 @@ const OPERATOR_GROUPS: Array<{ label: string; options: Array<{ value: string; la
  * template), an operator, and (for two-value operators) a `secondValue`.
  * Text operators also expose a "case sensitive" toggle.
  */
-function BranchConditionsEditor({
+export function BranchConditionsEditor({
+  branchName,
   conditions,
   onChange,
 }: {
+  /**
+   * Names each field for screen readers: every branch repeats the same
+   * labels. Cleaned of bidi and invisible characters before use.
+   */
+  branchName: string;
   conditions: BranchConditions;
   onChange: (next: BranchConditions) => void;
 }): React.ReactElement {
@@ -5748,6 +5797,7 @@ function BranchConditionsEditor({
           {firstGroup.map((c, idx) => (
             <ConditionRow
               key={idx}
+              owner={`${accessibleText(branchName) || "Branch"}, condition ${idx + 1}`}
               condition={c}
               showAnd={idx > 0}
               onUpdate={(patch) => updateAt(idx, patch)}
@@ -5776,11 +5826,14 @@ function BranchConditionsEditor({
  * condition like `{{step_3.status}} = "ok"` is two clicks away.
  */
 function ConditionRow({
+  owner,
   condition,
   showAnd,
   onUpdate,
   onRemove,
 }: {
+  /** "Branch 1, condition 2": prefixed to every control's name. */
+  owner: string;
   condition: BranchCondition;
   showAnd: boolean;
   onUpdate: (patch: Partial<BranchCondition>) => void;
@@ -5794,12 +5847,13 @@ function ConditionRow({
       <VariableChipField
         className="wf-props__condition-field"
         value={condition.firstValue}
-        label="Condition value"
+        label={`${owner}: value`}
         onChange={(next) => onUpdate({ firstValue: next })}
         placeholder="{{step.field}}"
       />
       <select
         className="wf-props__condition-op"
+        aria-label={`${owner}: operator`}
         value={condition.operator}
         onChange={(e) => onUpdate({ operator: e.target.value })}
       >
@@ -5817,7 +5871,7 @@ function ConditionRow({
         <VariableChipField
           className="wf-props__condition-field"
           value={condition.secondValue ?? ""}
-          label="Compare with"
+          label={`${owner}: compare with`}
           onChange={(next) => onUpdate({ secondValue: next })}
           placeholder="value"
         />
@@ -5827,7 +5881,7 @@ function ConditionRow({
         className="wf-props__input-remove"
         onClick={onRemove}
         title="Remove condition"
-        aria-label="Remove condition"
+        aria-label={`Remove ${owner}`}
       >
         <Icon icon={Trash2} size={12} />
       </button>

@@ -198,6 +198,7 @@
 }
 .brief-root .brief-workflow-canvas .react-flow__controls {
   display: flex;
+  flex-direction: row;
   bottom: 16px;
   left: 20px;
   box-shadow: none;
@@ -251,23 +252,61 @@
   .brief-root .brief-canvas-heading h1 {
     font-size: 22px;
   }
+  /* The header and the canvas scroll as one page, so a tall Flow
+     permissions or Setup panel never pushes the canvas, or its own last
+     row, out of reach. */
+  .brief-root .brief-workflow-canvas .wf-editor--workspace {
+    overflow-y: auto;
+  }
   .brief-root .brief-workflow-canvas .wf-editor__body {
+    flex: none;
     flex-direction: column;
-    overflow: auto;
+    overflow: visible;
   }
-  .brief-root .brief-workflow-canvas .wf-editor__canvas {
-    flex: 1 0 280px;
-  }
+  /* Phone width: the settings open as a sheet fixed to the bottom of the
+     window. In the page flow it sat below the canvas, partly off screen, and
+     the chat button covered its tabs; above the chat button it is whole. */
   .brief-root .brief-workflow-canvas .wf-popover--inline {
-    flex: 0 0 auto;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 4;
+    flex: none;
     width: auto;
-    max-height: 360px;
-    margin: 8px 16px 0;
+    max-height: min(62vh, 520px);
+    margin: 0;
+    border-radius: var(--brief-corner-card) var(--brief-corner-card) 0 0;
+    box-shadow: 0 -8px 24px -12px rgba(0, 0, 0, 0.35);
   }
   .brief-root .brief-workflow-canvas .wf-popover--inline[data-open="false"] {
-    height: 0;
-    max-height: 0;
+    display: none;
+  }
+  /* The chat button sits over the sheet's lower right corner: the last
+     field scrolls clear of it. */
+  .brief-root .brief-workflow-canvas .wf-popover--inline .wf-popover__body {
+    padding-bottom: 88px;
+  }
+  /* Room to scroll the canvas clear of the open sheet. */
+  .brief-root .brief-workflow-canvas .wf-editor__body:has(.wf-popover--inline[data-open="true"]) {
+    padding-bottom: min(62vh, 520px);
+  }
+  /* A taller canvas, so nodes can be drawn at a readable size. */
+  .brief-root .brief-workflow-canvas .wf-editor__canvas {
+    flex: 1 0 min(70vh, 520px);
+  }
+  /* Zoom buttons stacked at the edge, where a zoomed-in chain leaves a margin. */
+  .brief-root .brief-workflow-canvas .react-flow__controls {
+    flex-direction: column;
+    left: 6px;
+    bottom: 6px;
     margin: 0;
+  }
+  .brief-root .brief-workflow-canvas .react-flow__controls-button {
+    width: 36px;
+    height: 36px;
+    border-right: 0;
+    border-bottom: 1px solid var(--brief-card-edge);
   }
   .brief-root .brief-canvas-feedback {
     flex-basis: 100%;
@@ -325,9 +364,6 @@
 }
 .brief-root .brief-workflow-canvas .wf-editor__canvas .react-flow__renderer {
   background: var(--brief-canvas);
-}
-.brief-root .brief-workflow-canvas .react-flow__controls {
-  flex-direction: row;
 }
 .brief-root .brief-workflow-canvas .wf-popover--inline {
   background: var(--brief-card);

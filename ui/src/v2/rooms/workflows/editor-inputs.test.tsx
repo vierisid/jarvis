@@ -20,7 +20,7 @@ test('selected replacement preserves multiple template segments, multiline text 
   Object.defineProperty(paste, 'clipboardData', { value: { getData: () => text } });
   await act(async () => field.dispatchEvent(paste));
   expect(value).toBe(text);
-  expect(field.getAttribute('aria-label')).toBe('Message');
+  expect(field.getAttribute('aria-label')).toBe('Message (required)');
   expect(field.getAttribute('aria-required')).toBe('true');
   expect(window.getSelection()!.getRangeAt(0).collapsed).toBe(true);
 });
