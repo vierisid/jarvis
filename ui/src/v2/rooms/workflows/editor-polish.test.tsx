@@ -48,8 +48,9 @@ test('the manual trigger help does not expose the API path or template syntax', 
   expect(editor).not.toContain('/api/workflows/:id/run');
   expect(editor).not.toContain('{`{{step_1.field}}`}');
   expect(editor).not.toContain('skip_missing_first_repeated skips');
-  // Run sends no values and the variable picker never lists a manual trigger's
-  // inputs, so the help must not promise that a field added there can be used.
-  expect(editor).not.toContain('Add a field below for each value');
-  expect(editor).toContain('isManual && inputEntries.length === 0 ? null');
+  // #1417: a manual trigger's fields are asked for on Run and offered in
+  // "Insert variable", so the field box stays and the help says so.
+  expect(editor).toContain('Run asks for them once the workflow is saved');
+  expect(editor).toContain('manualTrigger={isManual}');
+  expect(editor).not.toContain('isManual && inputEntries.length === 0 ? null');
 });

@@ -3632,9 +3632,10 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
 
       {isManual ? (
         <p className="wf-props__hint">
-          A manual workflow runs when you press Run. It starts with no values of its own, so
-          later steps work with what earlier steps produce. Pick Schedule, Webhook or Event
-          above to run it automatically instead.
+          A manual workflow runs when you press Run. Add a field below for each value it needs:
+          Run asks for them once the workflow is saved, and later steps use them by choosing
+          them from "Insert variable". Pick Schedule, Webhook or Event above to run it
+          automatically instead.
         </p>
       ) : null}
 
@@ -3736,11 +3737,9 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
               input={(step.settings?.input ?? {}) as Record<string, unknown>}
               onSetInput={onSetInput}
             />
-          ) : isManual && inputEntries.length === 0 ? null : (
-            // A Manual trigger takes no values (Run sends none and the engine
-            // never reads them), so it gets no "add a field" box. One already
-            // carrying fields still shows them, so they can be removed.
+          ) : (
             <FreeformInputs
+              manualTrigger={isManual}
               inputEntries={inputEntries}
               newKey={newKey}
               setNewKey={setNewKey}
@@ -5335,7 +5334,10 @@ function FreeformInputs({
   onSetInput,
   onAddInputKey,
   onRemoveInputKey,
+  manualTrigger = false,
 }: {
+  /** A Manual trigger's fields are asked for on Run (manual-run-payload.ts), not read from here. */
+  manualTrigger?: boolean;
   inputEntries: Array<[string, unknown]>;
   newKey: string;
   setNewKey: (s: string) => void;
@@ -5346,8 +5348,9 @@ function FreeformInputs({
   return (
     <>
       <p className="wf-props__hint">
-        This step has no fixed fields. Type a name below to add one. To use a value from an
-        earlier step, choose it from "Insert variable" when you click the value.
+        {manualTrigger
+          ? "Type a name below to add a field. Its value is asked for when you press Run; the value shown here is not used."
+          : "This step has no fixed fields. Type a name below to add one. To use a value from an earlier step, choose it from \"Insert variable\" when you click the value."}
       </p>
       {inputEntries.length === 0 ? (
         <p className="wf-props__hint">No inputs yet. Add one below.</p>
