@@ -14,6 +14,7 @@ import type { BriefReadProviders } from './providers';
 import type { BriefWorkflowRef } from './contracts';
 import type { DecisionAction, DecisionQuery, DecisionResolution, QueuedDecision } from './decision-contracts';
 import { ensureDecisionSchema } from './decision-schema';
+import { HELD_RUN_EFFECT } from '../workflows/runtime/deferred-cards';
 import { WORKFLOW_REVIEWED_UI_TOOLS } from '../authority/ui-intent';
 
 export class DecisionError extends Error {
@@ -36,6 +37,18 @@ const text = (value: unknown, max = 256): value is string => typeof value === 's
 const DENIED_EFFECT = `(e.status = 'blocked' AND json_extract(e.record, '$.decision') = 'denied'
   AND EXISTS (SELECT 1 FROM approval_requests da WHERE da.id = e.approval_id AND da.status = 'denied'))`;
 /**
+ * A step that waited for a place behind its flow's card budget and was stopped
+ * with its run (Kill, turn-off, cancel) before it ever raised a card: the run
+ * stop records it `not_started`. Nothing happened and there is nothing to
+ * decide, as #1364 rules for a run stopped before any step ran, so it is not
+ * queued and does not keep an accepted commitment's work card hidden. Without
+ * this a Kill would turn one held group back into one raw row per run.
+ */
+const NEVER_ASKED_EFFECT = `(e.status = 'blocked' AND e.approval_id IS NULL
+  AND json_extract(e.record, '$.deferral.budget') IS NOT NULL
+  AND json_extract(e.record, '$.outcome.effect') = 'not_started'
+  AND json_extract(e.record, '$.outcome.code') IN ('WORKFLOW_CANCELED','WORKFLOW_FINISHED'))`;
+/**
  * Every unresolved queue source, in sort-key order. Binds `?1` (run filter or
  * null) and `?6` (the queue's project); effects outside that project never appear.
  */
@@ -53,13 +66,23 @@ const DECISION_CANDIDATES = `
           LEFT JOIN flow_run r ON r.id = w.run_id
           WHERE (w.decision IS NULL OR (json_extract(w.decision, '$.outcome') = 'accepted' AND w.result_check IS NULL
             AND (r.status IS NULL OR r.status NOT IN ('RUNNING','QUEUED'))))
-            AND NOT EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = w.run_id AND e.status != 'succeeded' AND NOT ${DENIED_EFFECT})
+            AND NOT EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = w.run_id AND e.status != 'succeeded' AND NOT ${DENIED_EFFECT}
+              AND NOT ${NEVER_ASKED_EFFECT})
             AND (?1 IS NULL OR w.run_id = ?1)
           UNION ALL
           SELECT 'effect:' || e.id, json_extract(e.record, '$.createdAt') FROM workflow_effect e
           JOIN flow_run sr ON sr.id = e.run_id JOIN flow sf ON sf.id = sr.flow_id AND sf.project_id = ?6
           WHERE e.status != 'succeeded' AND NOT EXISTS (SELECT 1 FROM approval_requests a WHERE a.id = e.approval_id)
+            AND NOT (${HELD_RUN_EFFECT}) AND NOT ${NEVER_ASKED_EFFECT}
             AND (?1 IS NULL OR e.run_id = ?1)
+          UNION ALL
+          -- Sorted first (created 0), not by its oldest run: that age moves as
+          -- runs are released, and a sort key that moves without a generation
+          -- bump would repeat the entry across pages. The UI shows it apart.
+          SELECT 'held:' || sr.flow_id, 0 FROM workflow_effect e
+          JOIN flow_run sr ON sr.id = e.run_id JOIN flow sf ON sf.id = sr.flow_id AND sf.project_id = ?6
+          WHERE ${HELD_RUN_EFFECT} AND (?1 IS NULL OR e.run_id = ?1)
+          GROUP BY sr.flow_id
         ), ordered AS (
           SELECT c.*, coalesce(p.position, 0) AS position FROM candidates c
           LEFT JOIN brief_decision_placement p ON p.decision_id = c.id
@@ -81,7 +104,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
   }
   private parseId(id: string): [string, string] {
     if (!text(id, 300)) throw new DecisionError('Invalid decision ID');
-    const match = /^(approval|work|effect):(.+)$/.exec(id);
+    const match = /^(approval|work|effect|held):(.+)$/.exec(id);
     if (!match || !text(match[2])) throw new DecisionError('Invalid decision ID');
     return [match[1]!, match[2]!];
   }
@@ -104,6 +127,31 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
     const unresolved = ['unknown', 'blocked', 'failed', 'dispatching', 'pending'].find(s => states.has(s as EffectStatus)) as EffectStatus | undefined;
     return { rows: rows.slice(0, 50), truncated: rows.length > 50, unresolved, counts };
   }
+  /**
+   * The runs of one workflow held behind its approval-card limit (#1039): one
+   * entry per workflow, never one per run. Nothing to decide, so inspect only.
+   */
+  private projectHeld(id: string, flowId: string): QueuedDecision {
+    const rows = this.db.query<{ n: number; created: number; run_id: string }, [string, string]>(
+      `SELECT count(DISTINCT e.run_id) AS n, min(json_extract(e.record, '$.createdAt')) AS created, min(e.run_id) AS run_id
+        FROM workflow_effect e JOIN flow_run sr ON sr.id = e.run_id JOIN flow sf ON sf.id = sr.flow_id AND sf.project_id = ?1
+        WHERE sr.flow_id = ?2 AND ${HELD_RUN_EFFECT}`).get(this.projectId, flowId);
+    if (!rows || !rows.n) throw new DecisionError('Decision not found', 404, 'not_found');
+    const run = getFlowRunInProject(this.projectId, rows.run_id);
+    const workflow = run ? this.workflow(run.flowId, run.flowVersionId) : null;
+    const workflowName = (run && getFlowVersion(run.flowVersionId)?.displayName) || 'this workflow';
+    const placement = this.db.query<{ position: number }, [string]>(
+      'SELECT position FROM brief_decision_placement WHERE decision_id = ?').get(id)?.position ?? 0;
+    const item: QueuedDecision = {
+      decisionId: id, revision: '', kind: 'held', state: 'pending',
+      title: `${rows.n} more ${rows.n === 1 ? 'run' : 'runs'} of ${workflowName} ${rows.n === 1 ? 'is' : 'are'} waiting. Answer a request above to let the next one ask.`,
+      refs: [], relatedTruncated: false, approval: null, workItemId: null, workStatus: null, workflow, run: null,
+      actions: ['inspect'], supportedActions: ['inspect'], placement, createdAt: rows.created ?? 0,
+      held: { workflowName, count: rows.n },
+    };
+    item.revision = hash({ item });
+    return item;
+  }
   private project(id: string): QueuedDecision {
     let [kind, sourceId] = this.parseId(id);
     let document: DocumentReviewRow | null = null;
@@ -120,6 +168,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       if (!row) throw new DecisionError('Decision not found', 404, 'not_found');
       if (row.approval_id && this.authority.approvalManager.getRequest(row.approval_id)) return this.project(`approval:${row.approval_id}`);
     }
+    if (kind === 'held') return this.projectHeld(id, sourceId);
     const placement = this.db.query<{ position: number }, [string]>(
       'SELECT position FROM brief_decision_placement WHERE decision_id = ?',
     ).get(id)?.position ?? 0;
@@ -285,9 +334,11 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
     return this.db.transaction(() => {
       const key = this.db.query<Key, [null, string, null, null, null, string]>(`${DECISION_CANDIDATES}
         SELECT * FROM ordered WHERE id = 'work:' || ?2 OR EXISTS (
-          SELECT 1 FROM commitment_work w JOIN workflow_effect e ON e.run_id = w.run_id
+          SELECT 1 FROM commitment_work w JOIN workflow_effect e ON e.run_id = w.run_id JOIN flow_run sr ON sr.id = e.run_id
           WHERE w.work_id = ?2 AND (ordered.id = 'effect:' || e.id OR ordered.id = 'approval:' || e.approval_id
-            OR ordered.id = (SELECT decision_id FROM brief_decision_document WHERE approval_id=e.approval_id))
+            OR ordered.id = (SELECT decision_id FROM brief_decision_document WHERE approval_id=e.approval_id)
+            -- A run held behind its flow's card limit is represented by its flow's held group.
+            OR (ordered.id = 'held:' || sr.flow_id AND ${HELD_RUN_EFFECT}))
         ) ORDER BY position, created, id LIMIT 1`).get(null, workId, null, null, null, this.projectId);
       if (!key) throw new DecisionError('Work no longer has an unresolved queue item', 409, 'work_not_queued');
       if (created) {

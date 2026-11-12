@@ -7,6 +7,7 @@ import { assertVersionReady } from '../workflows/db/repos/flow-readiness';
 import { getFlowRun } from '../workflows/db/repos/flow-run';
 import { runFailure } from '../workflows/runtime/run-failure';
 import { forCard } from '../util/card-text';
+import { continuedFailureHeadline, continuedFailures } from '../workflows/runtime/continued-failures';
 import { getRunRecovery } from '../workflows/runtime/recovery';
 import { bindingDrift, runConnectionBindingViews, type BindingDrift } from '../workflows/db/repos/binding-pins';
 import { boundedJson, canonicalManualPayload, inspectionId, inspectionValue, INSPECTION_LIMITS as LIMIT,
@@ -51,6 +52,13 @@ function stepDisplayNames(nodes: Record<string, unknown>[] | null): Map<string, 
     if (title && typeof n.name === 'string') names.set(n.name, title);
   }
   return names;
+}
+/** "Finished with a failed step: <name>" for a SUCCEEDED run that continued past failed steps, else null. */
+function continuedNote(runId: string): string | null {
+  const run = getFlowRun(runId), failed = run ? continuedFailures(run) : [];
+  if (!failed.length) return null;
+  const names = failed.slice(0, 3).map(f => f.displayName.slice(0, 80)).join(', ') + (failed.length > 3 ? ', and more' : '');
+  return `${continuedFailureHeadline(failed.length)}: ${names}`;
 }
 const runColumns = 'id, flow_id, flow_version_id, project_id, status, environment, created, start_time, finish_time, updated';
 /** One short label for Runs, Context and the start receipt (#1100). The full ID
@@ -104,8 +112,11 @@ export class WorkflowContext {
     // effect: the same rule D-19's history reader applies to the paged runs API.
     const uncertain = this.db.query("SELECT 1 FROM workflow_effect WHERE run_id=? AND status IN ('unknown','dispatching') LIMIT 1").get(r.id)
       || (r.status === 'STOPPED' && this.db.query('SELECT 1 FROM workflow_run_cancellation WHERE run_id=? AND in_flight_may_have_completed=1').get(r.id));
+    // A run that went on past a failed step ("Continue on failure") is SUCCEEDED but says so.
+    const note = !uncertain && r.status === 'SUCCEEDED' ? continuedNote(r.id) : null;
     return { scopeId: this.projectId, flowId: r.flow_id, versionId: r.flow_version_id, runId: r.id,
-      label: runLabel(r), status: uncertain ? 'uncertain' : status(r.status), createdAt: r.created, startedAt: r.start_time };
+      label: runLabel(r), status: uncertain ? 'uncertain' : status(r.status), createdAt: r.created, startedAt: r.start_time,
+      ...(note ? { note } : {}) };
   }
   private version(flowId: string, versionId: string): Version | null {
     if (!inspectionId(versionId)) throw new WorkflowInspectionError('invalid_identity');
@@ -363,7 +374,7 @@ export class WorkflowContext {
     const run = getFlowRun(r.id)!, failure = runFailure(run), recovery = getRunRecovery(r.id);
     const stoppedBy = run.failedStep?.name === '<lifecycle>' ? `${run.failedStep.displayName}.` : null;
     const summary = failure ? [stoppedBy, failure.headline, failure.outcome].filter(Boolean).join(' ')
-      : 'Recorded execution evidence; success alone does not verify goal progress.';
+      : this.summary(r).note ?? 'Recorded execution evidence; success alone does not verify goal progress.';
     return { ...this.summary(r), summary,
       failure: failure ? { category: failure.category, effect: failure.effect, headline: stoppedBy ?? failure.headline,
         outcome: failure.outcome, next: failure.next, code: failure.code } : null,
