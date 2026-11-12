@@ -30,3 +30,16 @@ test('when nothing can be saved the worker says so once, backs off, and carries 
   expect(getJob(job.id)?.status).toBe('SUCCEEDED');
   expect(storageStatus().writable).toBe(true);
 });
+
+test('a probe that passes while the claim still fails keeps backing off and logs once', async () => {
+  const lines: string[] = [];
+  const worker = new Worker({ log: (line: string) => lines.push(line), pollIntervalMs: 10, handlers: { TEST: async () => {} } });
+  enqueue({ jobType: 'TEST', payload: {}, maxAttempts: 1 });
+  // A nearly full disk: the probe's one-row rewrite fits, the claim does not.
+  getWorkflowDb().exec("CREATE TRIGGER rv_full BEFORE UPDATE ON workflow_job BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END");
+  worker.start();
+  await wait(2_500);
+  await worker.stop();
+  // Back-off 1 s then 2 s: one complaint, not one per probe-then-claim cycle.
+  expect(lines.filter((line) => line.includes('no job can be claimed'))).toHaveLength(1);
+});

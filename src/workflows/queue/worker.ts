@@ -115,13 +115,16 @@ export class Worker {
         await sleep(this.storageBackoff(idx));
         continue;
       }
-      this.storageBackoffMs.delete(idx);
       let claimed: Job | null = null;
       try {
         claimed = claimNextJob({ leaseMs: this.leaseMs });
+        // Only a claim that worked ends the streak: a probe can pass on a
+        // nearly full disk while the claim still fails.
+        this.storageBackoffMs.delete(idx);
       } catch (e) {
         if (noteStorageFailure(e)) {
-          if (idx === 0) this.log(`loop ${idx}: cannot save, so no job can be claimed: ${storageStatus().message}`);
+          // Once per streak, not on every probe-then-claim cycle.
+          if (idx === 0 && !this.storageBackoffMs.has(idx)) this.log(`loop ${idx}: cannot save, so no job can be claimed: ${storageStatus().message}`);
           await sleep(this.storageBackoff(idx));
           continue;
         }
@@ -158,6 +161,11 @@ export class Worker {
       // Cancellation is terminal queue bookkeeping, not a handler failure.
       if (getJob(job.id)?.status === "RUNNING") completeJob(job.id);
     } catch (e) {
+      // A run that could not record its work (a full disk) stops further
+      // claims: the loop probes before claiming again, so no new work starts
+      // that could not be recorded either. A claim alone can still fit on a
+      // disk where the run's own writes do not.
+      noteStorageFailure(e);
       if (getJob(job.id)?.status === "CANCELED") return;
       const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
       this.log(`job ${job.id} (${job.jobType}) failed: ${msg}`);
@@ -165,6 +173,7 @@ export class Worker {
         const willRetry = failJob(job.id, msg);
         if (willRetry) this.log(`job ${job.id} requeued for retry (attempt ${job.attempt + 1}/${job.maxAttempts})`);
       } catch (failErr) {
+        noteStorageFailure(failErr);
         this.log(`job ${job.id}: failJob errored: ${(failErr as Error).message}`);
       }
     }

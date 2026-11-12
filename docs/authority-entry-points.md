@@ -111,7 +111,9 @@ records the first failed write and `/api/health` reports
 banner ("Jarvis cannot save: the disk is full"). While storage is not writable
 the run worker stops claiming jobs and probes with one small write every 1 to
 10 seconds instead of retrying four times a second; queued runs wait and drain
-exactly once saving works again. API errors caused by a refused write answer
+exactly once saving works again. A run that fails because it could not save
+marks storage the same way, so the worker starts no new run it could not
+record either (a claim alone can still fit on a nearly full disk). API errors caused by a refused write answer
 with the plain message and `code: "storage_full"` or `"storage_unwritable"`,
 never SQLite text.
 
