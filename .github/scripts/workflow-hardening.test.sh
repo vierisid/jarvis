@@ -135,6 +135,36 @@
 #      under RUNNER_TEMP at /work, -w /work and --network none, runs that
 #      image and one phase of the contained build script and nothing after
 #      it, and every phase but fetch has no network.
+#  15. (owner decision 2026-11-11, after run 42868738162) Every job of
+#      release.yml, release-exec.yml, sidecar-release.yml and
+#      installer-release.yml, and of every local reusable workflow they
+#      call, runs on a hosted runner label that names its OS version
+#      (ubuntu-NN.NN, optionally -arm; macos-N, optionally -intel, -large
+#      or -xlarge; windows-N, optionally -arm; a fixed label of any other
+#      shape is refused too, until it is added here): no -latest alias, no
+#      other floating name, a matrix runner resolved from the written-out
+#      matrix, and no runs-on this test cannot resolve. ubuntu-latest moved to
+#      ubuntu-26.04 between two releases and broke smoke-image; a move is
+#      now a diff someone reviews. The label pins the OS release only: the
+#      image under it still updates weekly. test.yml and docker-build.yml
+#      keep a -latest leg on purpose (rule 16), so the next image move shows
+#      up on an ordinary PR before anyone moves a release pin.
+#  16. (owner decision 2026-11-11, option c) A PR job that compiles what the
+#      release ships (test.yml sidecar-build: the linux sidecar and the mingw
+#      Windows sidecar and installer; docker-build.yml docker-build: the
+#      image) runs as two legs of one written-out matrix with fail-fast off:
+#      one on exactly the label its release twins run on, which gates, and
+#      one on that OS -latest alias with continue-on-error, named "early
+#      warning", which only warns. Both run the same steps: the legs set no
+#      other field, the job condition is the listed one, matrix and strategy
+#      are read only where listed, no step condition or timeout reads them
+#      or an env set from them, and no step has continue-on-error. A
+#      green PR then proves the release toolchain (a linux-x64 sidecar built
+#      on ubuntu-26.04 needs CXXABI_1.3.15, one built on ubuntu-24.04 does
+#      not). macOS is held only to the release macOS version, not its label
+#      (option a): the PR darwin jobs run macos-26-intel beside the release
+#      macos-26, and macos-latest is macos-26 today. Revisit when
+#      macos-latest moves: add a darwin early-warning leg then.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -168,7 +198,7 @@ trap 'rm -rf "$WORK"' EXIT
 #   rule = scoped | publish-perms | pinned | authority | reach | untrusted
 #          | mutable | narrow | pushcache | opens-pr | catalog-pr | npmpin
 #          | runs | persist | images | license-scan | pr-license-scan | contained
-#          | signenv
+#          | signenv | runners | prlegs
 check() {
 	# Written to a file once and run from there, not handed to bun -e: the
 	# source outgrew the 128 KiB Linux allows a single argument
@@ -2696,6 +2726,278 @@ if (rule === "contained") {
   }
   if (runs === 0) out.push("no docker run in this workflow, so nothing here is contained");
 }
+if (rule === "runners") {
+  // (owner decision 2026-11-11, after run 42868738162) Every job on the
+  // release path runs on a hosted runner label that names its OS version, so
+  // a runner image move reaches a release as a reviewed diff, not as a broken
+  // release: ubuntu-latest moved to ubuntu-26.04 between two releases and
+  // changed the docker image store smoke-image loads into. An allow-list of
+  // label shapes, not a deny-list of -latest: ubuntu-slim and other floating
+  // names are refused too. Every local reusable workflow a job calls is
+  // followed, recursively; a matrix runner is resolved from the matrix, and
+  // anything that cannot be resolved here (an expression, a group, a remote
+  // workflow) is refused rather than guessed. Not reported: an include
+  // entry with no runner that GitHub adds as a leg of its own beside a
+  // runner axis; that leg has no label at all, so it fails to start rather
+  // than floating.
+  const fs = require("node:fs");
+  const SHAPE = /^(ubuntu-[0-9]{2}\.[0-9]{2}(-arm)?|macos-[0-9]+(-intel|-large|-xlarge)?|windows-[0-9]+(-arm)?)$/;
+  const label = (where, v) => {
+    for (const l of [].concat(v)) {
+      if (typeof l !== "string") out.push(where + ": runner label " + JSON.stringify(l) + " is not a plain string");
+      else if (!SHAPE.test(l)) out.push(where + ": runs on " + l + ", a label that does not name its OS version (pin it, as ubuntu-24.04 or macos-26)");
+    }
+  };
+  const followed = new Set();
+  const walk = (wf, file, depth) => {
+    for (const [name, job] of Object.entries((wf && wf.jobs) ?? {})) {
+      const where = file + " " + name;
+      if (typeof job?.uses === "string") {
+        const u = job.uses;
+        if (!u.startsWith("./")) { out.push(where + ": calls " + u + ", a remote workflow whose runners cannot be read here"); continue; }
+        if (depth > 4) { out.push(where + ": reusable workflows nested too deep to check"); continue; }
+        const p = u.slice(2);
+        if (followed.has(p)) continue;
+        followed.add(p);
+        let called = null;
+        try { called = Bun.YAML.parse(fs.readFileSync(process.env.REPO + "/" + p, "utf8")); } catch {}
+        if (!called || typeof called !== "object") { out.push(where + ": calls " + u + ", which cannot be read, so its runners cannot be checked"); continue; }
+        walk(called, p, depth + 1);
+        continue;
+      }
+      const ro = job?.["runs-on"];
+      if (ro === undefined) { out.push(where + ": has no runs-on"); continue; }
+      if (typeof ro !== "string" && !Array.isArray(ro)) { out.push(where + ": runs-on " + JSON.stringify(ro) + " is a group or object, whose image cannot be read here"); continue; }
+      if (Array.isArray(ro) && ro.length === 0) { out.push(where + ": runs-on is an empty list"); continue; }
+      for (const l of [].concat(ro)) {
+        if (typeof l !== "string" || !l.includes("${{")) { label(where, l); continue; }
+        const m = /^\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}$/.exec(l);
+        if (!m) { out.push(where + ": runs-on " + l + " is an expression other than one matrix field, so its label cannot be read here"); continue; }
+        const key = m[1];
+        const mx = job.strategy?.matrix;
+        if (!mx || typeof mx !== "object" || Array.isArray(mx)) { out.push(where + ": runs-on reads matrix." + key + " from a matrix that is not written out (" + JSON.stringify(mx ?? null) + ")"); continue; }
+        let n = 0;
+        if (mx[key] !== undefined) {
+          if (!Array.isArray(mx[key])) out.push(where + ": matrix." + key + " is not a written-out list (" + JSON.stringify(mx[key]) + ")");
+          else for (const v of mx[key]) { n++; label(where + " (matrix." + key + ")", v); }
+        }
+        if (mx.include !== undefined) {
+          if (!Array.isArray(mx.include)) { out.push(where + ": matrix.include is not a written-out list (" + JSON.stringify(mx.include) + ")"); continue; }
+          for (const leg of mx.include) {
+            if (!leg || typeof leg !== "object" || Array.isArray(leg)) { out.push(where + ": a matrix.include entry is not written out (" + JSON.stringify(leg) + ")"); continue; }
+            if (leg[key] !== undefined) { n++; label(where + " (matrix.include " + key + ")", leg[key]); }
+            else if (mx[key] === undefined) out.push(where + ": a matrix.include entry sets no " + key + ", so that leg has no runner label");
+          }
+        }
+        if (n === 0) out.push(where + ": runs-on reads matrix." + key + ", which the matrix never sets");
+      }
+    }
+  };
+  // The root by its repository path when it is one, so a cycle back to it
+  // stops there; a mutated copy outside the repository by its file name.
+  const path = require("node:path");
+  const rel = path.relative(path.resolve(process.env.REPO), path.resolve(process.env.FILE));
+  const root = rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel : path.basename(process.env.FILE);
+  followed.add(root);
+  walk(doc, root, 0);
+}
+if (rule === "prlegs") {
+  // (owner decision 2026-11-11, option c) A PR job that compiles what the
+  // release ships builds on the release image AND on -latest: one leg on
+  // exactly the label of the release jobs that build the same thing, which
+  // gates, and one on that OS -latest alias, which only warns. So a green PR
+  // proves the release toolchain (measured: a linux-x64 sidecar built on
+  // ubuntu-26.04 needs CXXABI_1.3.15, one built on ubuntu-24.04 does not),
+  // and the next image move still shows up on a PR first. Read from the
+  // written-out matrix: runs-on is one matrix field, continue-on-error is one
+  // matrix field set to a literal boolean on each of exactly two include
+  // legs that set no other field than those and the ones the job name
+  // shows, fail-fast is off, the warning leg is named "early warning" and
+  // the gating one is not, and the job condition is the one listed. So both
+  // legs run the same steps: matrix and strategy are read nowhere else but
+  // the places listed in LEGREADS, no step condition, continue-on-error or
+  // timeout reads them or an env set from them, and no step has a
+  // continue-on-error of its own (it would make the gating leg pass a failed
+  // step). Not read: what a run script does, which can always tell the
+  // images apart through the runner (ImageOS), so this guards drift, not a
+  // script written to evade it. A failing early-warning leg shows as a red
+  // check without failing the workflow; neither leg is a required check
+  // (only test is), so "gates" means a red check nobody merges over. Pairs
+  // are listed by workflow name, so a mutated copy is still matched; the
+  // release side is read from the repository.
+  //
+  // macOS is held to less, on purpose (owner decision 2026-11-11, option a):
+  // the release darwin legs run macos-26 (arm64) and the PR darwin jobs run
+  // macos-26-intel, the same OS release and toolset on the x64 pool, which
+  // has the capacity; macos-latest is macos-26 today, so a -latest leg would
+  // repeat the gating one. Every macOS job of the release (sidecar and
+  // installer) must run one macOS version, and each macOS job of the Tests
+  // workflow on that version. REVISIT when macos-latest is announced to
+  // move: add the darwin early-warning leg then.
+  const fs = require("node:fs");
+  const PAIRS = {
+    "Tests": { "sidecar-build": [["sidecar-release.yml", "build-sidecar-linux-x64"], ["sidecar-release.yml", "build-sidecar-windows"], ["installer-release.yml", "build-windows"]] },
+    "Docker Build": { "docker-build": [["release-exec.yml", "build-image"], ["release-exec.yml", "smoke-image"]] },
+  };
+  // The job condition each paired job may have (undefined: none).
+  const JOBIF = { "sidecar-build": "needs.changes.outputs.sidecar == \x27true\x27", "docker-build": undefined };
+  // The only places a paired job may read matrix or strategy, by path, with
+  // the exact text: the check name, runs-on, continue-on-error, the notice
+  // naming the image, and the run-scoped image tag and smoke prefix.
+  const LEGREADS = {
+    "name": /^[a-z-]+ \(\$\{\{ matrix\.leg \}\}\)$/,
+    "runs-on": /^\$\{\{ matrix\.runner \}\}$/,
+    "continue-on-error": /^\$\{\{ matrix\.early_warning \}\}$/,
+    "steps[Name the runner image].env.LEG": /^\$\{\{ matrix\.leg \}\}$/,
+    "env.IMAGE_TAG": /^[^$]*\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}-\$\{\{ strategy\.job-index \}\}$/,
+    "steps[Smoke-test the image (run it like a user does)].env.SMOKE_PREFIX": /^[^$]*\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}-\$\{\{ strategy\.job-index \}\}$/,
+  };
+  // In an expression; an if is one whether or not it is wrapped in ${{ }}.
+  const READS = /\b(matrix|strategy)\b/;
+  const EXPR = /\$\{\{(?:(?!\}\}).)*?\b(matrix|strategy)\b/s;
+  // The only step inputs that may read an env set from the leg, exactly.
+  const DERIVEDREADS = { "steps[Build Docker image (validate)].with.tags": "${{ env.IMAGE_TAG }}" };
+  // Every string in v with its path; steps by name.
+  const strings = (v, path, acc) => {
+    if (typeof v === "string") acc.push([path, v]);
+    else if (Array.isArray(v)) v.forEach((x, i) => strings(x, path + "[" + (x && typeof x === "object" && typeof x.name === "string" ? x.name : i) + "]", acc));
+    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) strings(x, path ? path + "." + k : k, acc);
+    return acc;
+  };
+  const field = (v) => (typeof v === "string" ? /^\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}$/.exec(v)?.[1] : undefined);
+  const files = {};
+  const readWf = (f) => {
+    if (!(f in files)) { try { files[f] = Bun.YAML.parse(fs.readFileSync(process.env.REPO + "/.github/workflows/" + f, "utf8")); } catch { files[f] = null; } }
+    return files[f];
+  };
+  // The concrete labels a release job runs on, or a reason it has none.
+  const releaseLabels = (f, j) => {
+    const job = readWf(f)?.jobs?.[j];
+    if (!job) return f + " " + j + " cannot be read";
+    const ro = job["runs-on"];
+    if (typeof ro !== "string") return f + " " + j + " runs-on is not one label";
+    const k = field(ro);
+    if (!k) return ro.includes("${{") ? f + " " + j + " runs-on " + ro + " cannot be read" : [ro];
+    const mx = job.strategy?.matrix;
+    const ls = [];
+    if (Array.isArray(mx?.[k])) ls.push(...mx[k]);
+    if (Array.isArray(mx?.include)) for (const leg of mx.include) if (leg?.[k] !== undefined) ls.push(leg[k]);
+    return ls.length ? ls : f + " " + j + " runs-on reads matrix." + k + ", which cannot be resolved";
+  };
+  const pairs = PAIRS[doc.name];
+  if (!pairs) out.push("workflow " + JSON.stringify(doc.name) + " has no release pairs listed for rule 16");
+  for (const [name, rel] of Object.entries(pairs ?? {})) {
+    const job = jobs[name];
+    if (!job) { out.push(name + ": no such job, so nothing builds what the release ships on a PR"); continue; }
+    const want = new Set();
+    for (const [f, j] of rel) {
+      const r = releaseLabels(f, j);
+      if (typeof r === "string") out.push(name + ": its release twin " + r);
+      else for (const l of r) want.add(l);
+    }
+    if (want.size !== 1) { out.push(name + ": its release twins run on " + JSON.stringify([...want]) + ", not one label"); continue; }
+    const rel1 = [...want][0];
+    const os = /^(ubuntu)-[0-9]{2}\.[0-9]{2}$/.exec(rel1)?.[1];
+    if (!os) { out.push(name + ": the release runs on " + rel1 + ", which has no -latest alias known here"); continue; }
+    const latest = os + "-latest";
+    const rk = field(job["runs-on"]);
+    if (!rk) { out.push(name + ": runs-on " + JSON.stringify(job["runs-on"]) + " is not one matrix field, so it has no gating and early-warning legs"); continue; }
+    if (job.strategy?.["fail-fast"] !== false) out.push(name + ": strategy.fail-fast is not false, so a failing leg can cancel the other");
+    const mx = job.strategy?.matrix;
+    if (!mx || typeof mx !== "object" || Array.isArray(mx) || Object.keys(mx).join() !== "include" || !Array.isArray(mx.include)) {
+      out.push(name + ": the matrix is not exactly a written-out include list (" + JSON.stringify(mx ?? null) + ")"); continue;
+    }
+    const ck = field(job["continue-on-error"]);
+    if (!ck) { out.push(name + ": continue-on-error " + JSON.stringify(job["continue-on-error"] ?? null) + " is not one matrix field"); continue; }
+    if (mx.include.length !== 2) out.push(name + ": has " + mx.include.length + " legs, not a gating one and an early-warning one");
+    const named = new Set([...(typeof job.name === "string" ? job.name.matchAll(/\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}/g) : [])].map((m) => m[1]));
+    const allowed = new Set([rk, ck, ...named]);
+    const render = (leg) => (typeof job.name === "string" ? job.name.replace(/\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}/g, (_, k) => String(leg[k])) : "");
+    let gating = 0, warning = 0;
+    for (const leg of mx.include) {
+      const tag = name + " (" + rk + " " + JSON.stringify(leg?.[rk]) + ")";
+      if (!leg || typeof leg !== "object" || typeof leg[ck] !== "boolean") { out.push(tag + ": matrix." + ck + " is not a literal true or false"); continue; }
+      for (const k of Object.keys(leg)) if (!allowed.has(k)) out.push(tag + ": sets matrix." + k + ", which only that leg could read, so the legs could differ in what they run");
+      if (leg[ck] === false) {
+        gating++;
+        if (leg[rk] !== rel1) out.push(tag + ": the gating leg runs on " + leg[rk] + ", not " + rel1 + " as the release does");
+        if (/early warning/i.test(render(leg))) out.push(tag + ": the gating leg is named as an early warning");
+      } else {
+        warning++;
+        if (leg[rk] !== latest) out.push(tag + ": the non-blocking leg runs on " + leg[rk] + ", not " + latest);
+        if (!/early warning/i.test(render(leg))) out.push(tag + ": the non-blocking leg is not named as an early warning (name " + JSON.stringify(render(leg)) + ")");
+      }
+    }
+    if (gating !== 1) out.push(name + ": has " + gating + " gating legs (continue-on-error false), not one");
+    if (warning !== 1) out.push(name + ": has " + warning + " non-blocking legs (continue-on-error true), not one");
+    if (job.if !== JOBIF[name]) out.push(name + ": job condition " + JSON.stringify(job.if ?? null) + " is not " + JSON.stringify(JOBIF[name] ?? null) + ", so the legs could be skipped");
+    const { strategy, ...rest } = job;
+    const derived = new Set();
+    for (const [path, v] of strings(rest, "", [])) {
+      const re = /(^|\.)if$/.test(path) ? READS : EXPR;
+      if (!re.test(v)) continue;
+      if (LEGREADS[path]?.test(v)) { const m = /\.env\.([A-Za-z_][A-Za-z0-9_]*)$|^env\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(path); if (m) derived.add(m[1] ?? m[2]); continue; }
+      out.push(name + ": " + path + " reads " + re.exec(v)[1] + " (" + JSON.stringify(v) + "), outside the places the legs may differ");
+    }
+    // A listed step name must name one step, or a second step of that name
+    // would pass as the listed one.
+    const stepNames = flatSteps(job.steps).map(({ st }) => st?.name);
+    for (const k of Object.keys(LEGREADS)) {
+      const sn = /^steps\[(.*)\]\./.exec(k)?.[1];
+      if (sn !== undefined && stepNames.filter((x) => x === sn).length > 1) out.push(name + ": more than one step is named " + JSON.stringify(sn) + ", which is where the leg may be read");
+    }
+    const names = [...derived];
+    const leaks = (v) => READS.test(String(v)) || names.some((n) => new RegExp("\\b" + n + "\\b").test(String(v)));
+    if (job["timeout-minutes"] !== undefined && leaks(job["timeout-minutes"])) out.push(name + ": timeout-minutes reads the leg");
+    for (const { st, via } of flatSteps(job.steps)) {
+      const sn = JSON.stringify(st?.name ?? st?.uses ?? st?.run) + (via ? " (via " + via.slice(0, -3) + ")" : "");
+      if (st?.["continue-on-error"] !== undefined) out.push(name + ": step " + sn + " has continue-on-error, so the gating leg can pass a failed step");
+      // Not in a local composite action: it is shared, its inputs come from
+      // the caller (checked here), and its own step outputs carry no leg.
+      if (!via && st?.if !== undefined && /\bsteps\b/.test(String(st.if))) out.push(name + ": step " + sn + " if reads another step, which can carry the leg, so the legs may not run the same steps");
+      for (const key of ["with", "env", "working-directory", "shell"]) {
+        for (const [path, v] of strings(st?.[key], key, [])) {
+          const full = "steps[" + st?.name + "]." + path;
+          if (DERIVEDREADS[full] === v || LEGREADS[full]) continue;
+          if (leaks(v)) out.push(name + ": step " + sn + " " + path + " reads the leg (" + JSON.stringify(v) + "), so the legs may not run the same step");
+        }
+      }
+      for (const key of ["if", "timeout-minutes"]) {
+        if (st?.[key] !== undefined && leaks(st[key])) out.push(name + ": step " + sn + " " + key + " reads the leg, so the legs do not run the same steps");
+      }
+    }
+  }
+  if (doc.name === "Tests") {
+    const MAC = /^macos-([0-9]+)(-intel|-large|-xlarge)?$/;
+    const v = new Set();
+    for (const f of ["sidecar-release.yml", "installer-release.yml"]) {
+      const wf = readWf(f);
+      if (!wf?.jobs) { out.push("the release workflow " + f + " cannot be read"); continue; }
+      for (const j of Object.keys(wf.jobs)) {
+        if (typeof wf.jobs[j]?.uses === "string") continue;
+        const r = releaseLabels(f, j);
+        if (typeof r === "string") { out.push("the release job " + r); continue; }
+        for (const l of r) if (/^macos/.test(String(l))) v.add(MAC.exec(String(l))?.[1] + " (" + f + " " + j + " " + l + ")");
+      }
+    }
+    const majors = new Set([...v].map((x) => x.split(" ")[0]));
+    if (majors.size !== 1 || majors.has("undefined")) out.push("the release macOS jobs do not run one pinned macOS version: " + JSON.stringify([...v]));
+    else {
+      const mac = [...majors][0];
+      for (const [jn, job] of Object.entries(jobs)) {
+        if (pairs?.[jn]) continue;
+        const ro = job?.["runs-on"];
+        if (ro !== undefined && typeof ro !== "string" && !(Array.isArray(ro) && ro.every((x) => typeof x === "string"))) { out.push(jn + ": runs-on " + JSON.stringify(ro) + " cannot be read, so its macOS version cannot be checked"); continue; }
+        for (const l of [].concat(ro ?? [])) {
+          if (l.includes("${{")) { out.push(jn + ": runs-on " + l + " is an expression, so its macOS version cannot be checked"); continue; }
+          if (!/^macos/.test(l)) continue;
+          const m = /^macos-([0-9]+)(-intel|-large|-xlarge)?$/.exec(l);
+          if (!m || m[1] !== mac) out.push(jn + ": runs on " + l + ", not the macOS " + mac + " the release darwin legs build on");
+        }
+      }
+    }
+  }
+}
 if (rule === "pinned") {
   const uses = [];
   for (const [name, job] of Object.entries(jobs)) {
@@ -2725,6 +3027,23 @@ expect_clean() {
 # expect_caught <label> <rule> <file> <exact text> <replacement> [reason]
 # With a reason, the report must contain it: a mutant that some OTHER rule
 # happens to report proves nothing about the rule it was written for.
+# expect_caught_file <label> <rule> <file> <reason>: like expect_caught, for
+# a file already changed in place (a fixture repository).
+expect_caught_file() {
+	local found
+	found="$(check "$2" "$3")" || {
+		no "reports: $1" "the check could not read the fixture: ${found}"
+		return
+	}
+	if [ -z "$found" ]; then
+		no "reports: $1" "the check passed a fixture with this hole"
+	elif ! grep -qF -- "$4" <<<"$found"; then
+		no "reports: $1, for the reason it exists" "wanted '${4}', got:
+${found}"
+	else
+		ok "reports: $1"
+	fi
+}
 expect_caught() {
 	local copy="${WORK}/mutant.yml"
 	if ! FROM="$3" TO="$copy" OLD="$4" NEW="$5" bun -e '
@@ -3155,13 +3474,13 @@ done
 		'          npm install -g --offline --ignore-scripts "$npm_tgz"' '          npm_config_registry=https://registry.evil.example/ npm install -g --offline --ignore-scripts "$npm_tgz"' \
 		'publish-sidecar: publishes with id-token and runs: npm_config_registry='
 	expect_caught 'npm_config_registry in the npm publish job env (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env:\n      npm_config_registry: https://registry.evil.example/\n' \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n    env:\n      npm_config_registry: https://registry.evil.example/\n' \
 		'publish-brain: job env sets npm_config_registry in a job that publishes with id-token'
 	expect_caught 'setup-node pointing the npm publish job at another registry (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
 		'          registry-url: "https://registry.npmjs.org"' '          registry-url: "https://registry.evil.example"' \
 		'publish-brain: setup-node registry-url is'
 	expect_caught 'a default shell that sets NPM_VERSION first (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    defaults:\n      run:\n        shell: env NPM_VERSION=npm:evil-pkg@12.1.0 bash -e {0}\n' \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n    defaults:\n      run:\n        shell: env NPM_VERSION=npm:evil-pkg@12.1.0 bash -e {0}\n' \
 		'publish-brain: step with shell: env NPM_VERSION=npm:evil-pkg@12.1.0 bash -e {0}'
 	expect_caught 'a step shell that runs code before the script (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
 		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        shell: bash -c \x27export NPM_VERSION=npm:evil-pkg@12.1.0; . {0}\x27\n        run: |' \
@@ -3760,8 +4079,8 @@ echo "each rule reports the hole it exists for (mutated copies)"
 expect_caught 'a workflow and job with no permissions anywhere' scoped "$WORKFLOWS/test.yml" \
 	$'permissions:\n  contents: read\n' ''
 expect_caught 'a publish job with no permissions of its own' publish-perms "$WORKFLOWS/release-exec.yml" \
-	$'    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n    steps:\n      - name: Get release notes\n' \
-	$'    runs-on: ubuntu-latest\n    steps:\n      - name: Get release notes\n'
+	$'    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - name: Get release notes\n' \
+	$'    runs-on: ubuntu-24.04\n    steps:\n      - name: Get release notes\n'
 expect_caught 'write scopes back at the top of the publish path' publish-perms "$WORKFLOWS/release-exec.yml" \
 	$'permissions: {}\n' $'permissions:\n  contents: write\n'
 expect_caught 'a major tag on the publish path' pinned "$WORKFLOWS/release-exec.yml" \
@@ -4800,7 +5119,7 @@ echo "no env in a job holding id-token names code to run first, and no step writ
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
 	expect_caught 'BASH_ENV in the brain publish job env (#999)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env:\n      BASH_ENV: /tmp/x\n' \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n    env:\n      BASH_ENV: /tmp/x\n' \
 		'publish-brain: job env sets BASH_ENV in a job holding id-token'
 	expect_caught 'ENV in the sidecar workflow env (#999)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'  NPM_VERSION: "12.1.0"\n' $'  NPM_VERSION: "12.1.0"\n  ENV: /tmp/x\n' \
@@ -4836,7 +5155,7 @@ echo "no env in a job holding id-token names code to run first, and no step writ
 		$'  publish-sidecar:\n    # Same requirement' $'  publish-sidecar:\n    container:\n      image: x\n      env:\n        NODE_OPTIONS: --require /tmp/x.js\n    # Same requirement' \
 		'publish-sidecar: container env sets NODE_OPTIONS in a job holding id-token'
 	expect_caught 'a job env given as an expression, which the rule cannot read (#999)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env: ${{ fromJSON(vars.PUBLISH_ENV) }}\n' \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n    env: ${{ fromJSON(vars.PUBLISH_ENV) }}\n' \
 		'publish-brain: job env is "${{ fromJSON(vars.PUBLISH_ENV) }}", not a mapping this rule can read'
 	expect_caught 'a step env given as an expression (#999)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env: ${{ fromJSON(vars.PUBLISH_ENV) }}\n        run: |' \
@@ -4860,7 +5179,7 @@ echo "no env in a job holding id-token names code to run first, and no step writ
 		$'  NPM_VERSION: "12.1.0"\n' $'  NPM_VERSION: "12.1.0"\n  NODE_EXTRA_CA_CERTS: /tmp/evil-ca.pem\n' \
 		'publish-sidecar: workflow env sets NODE_EXTRA_CA_CERTS in a job holding id-token'
 	expect_caught 'HOME moved, so npm reads another .npmrc (#999 security review)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env:\n      HOME: /tmp/evil-home\n' \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n    env:\n      HOME: /tmp/evil-home\n' \
 		'publish-brain: job env sets HOME in a job holding id-token'
 	expect_caught 'GITHUB_ENV set as an env name (#999 security review)' narrow "$WORKFLOWS/release-exec.yml" \
 		$'      - name: Publish to npm\n        env:\n' $'      - name: Publish to npm\n        env:\n          GITHUB_ENV: /tmp/evil-env\n' \
@@ -4872,7 +5191,7 @@ echo "no env in a job holding id-token names code to run first, and no step writ
 		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          SOMETHING_NEW: x\n        run: |' \
 		'publish-sidecar: step Ensure npm supports Trusted Publishing env sets SOMETHING_NEW, a name no job holding id-token uses yet'
 	expect_caught 'a container whose options set env (#999 security review)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    container:\n      image: node:22\n      options: --env NODE_OPTIONS=--require=/tmp/x.js\n' \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-24.04\n    container:\n      image: node:22\n      options: --env NODE_OPTIONS=--require=/tmp/x.js\n' \
 		'publish-brain: runs in a container: in a job holding id-token'
 	expect_caught 'a service container beside the signer (#999 security review)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'  sign-sidecar-windows:\n    needs: [resolve, build-sidecar-windows]\n' $'  sign-sidecar-windows:\n    needs: [resolve, build-sidecar-windows]\n    services:\n      x:\n        image: evil\n' \
@@ -4896,7 +5215,7 @@ echo "no env in the job that installs npm and packs the brain tarball names code
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
 	expect_caught 'BASH_ENV in the pack-brain job env (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'    needs: [validate-tag, test, smoke-image]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, test, smoke-image]\n    runs-on: ubuntu-latest\n    env:\n      BASH_ENV: /tmp/x\n' \
+		$'    needs: [validate-tag, test, smoke-image]\n    runs-on: ubuntu-24.04\n' $'    needs: [validate-tag, test, smoke-image]\n    runs-on: ubuntu-24.04\n    env:\n      BASH_ENV: /tmp/x\n' \
 		'pack-brain: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
 	expect_caught 'an earlier pack-brain step writing NODE_OPTIONS to GITHUB_ENV (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
 		'      - name: Install the pinned npm' $'      - run: echo "NODE_OPTIONS=--require /tmp/x.js" >> "$GITHUB_ENV"\n      - name: Install the pinned npm' \
@@ -6113,6 +6432,318 @@ await Bun.write(process.env.TO, s.replace(old, () => "      - name: Something el
 else
 	no "reports: the npm content check gone from publish-sidecar (#1046)"
 fi
+
+echo
+echo "the release path runs on runner labels that name their OS version (rule 15, run 42868738162)"
+RELEASE_PATH="release.yml release-exec.yml sidecar-release.yml installer-release.yml"
+for f in $RELEASE_PATH; do
+	expect_clean "${f}: every runner label names its OS version, reusable workflows followed" runners "$WORKFLOWS/$f"
+done
+# The list above is written out, so a release workflow added later must be
+# added to it: every workflow a tag push, a release event, a ref creation or
+# another workflow run starts is on it. A new workflow started only by
+# workflow_dispatch, as release.yml is, cannot be told apart from any other
+# here; adding it to the list is left to its review.
+# release_roots <dir>: each such workflow in dir not on RELEASE_PATH.
+release_roots() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	DIR="$1" LISTED="$RELEASE_PATH" bun -e '
+const fs = require("node:fs");
+const listed = process.env.LISTED.split(" ");
+for (const f of fs.readdirSync(process.env.DIR).filter((x) => /\.ya?ml$/.test(x)).sort()) {
+  const d = Bun.YAML.parse(fs.readFileSync(process.env.DIR + "/" + f, "utf8")) ?? {};
+  const on = d.on ?? d[true] ?? {};
+  const ev = typeof on === "string" ? [on] : Array.isArray(on) ? on : Object.keys(on);
+  // A push with no branch filter runs on tag pushes too.
+  const p = on && typeof on === "object" && !Array.isArray(on) ? on.push : undefined;
+  const branchOnly = p && typeof p === "object" && (p.branches !== undefined || p["branches-ignore"] !== undefined) && p.tags === undefined && p["tags-ignore"] === undefined;
+  const tags = ev.includes("push") && !branchOnly;
+  if ((tags || ["release", "workflow_run", "create"].some((e) => ev.includes(e))) && !listed.includes(f))
+    console.log(f + ": started by a tag push, a release, a ref creation or another workflow run, but not on the release path list rule 15 checks");
+}
+'
+}
+found="$(release_roots "$WORKFLOWS")" || found="the bun helper failed"
+if [ -z "$found" ]; then ok "every tag, release and workflow_run triggered workflow is on the rule 15 list"; else no "every tag, release and workflow_run triggered workflow is on the rule 15 list" "$found"; fi
+mkdir -p "${WORK}/roots" && cp "$WORKFLOWS"/*.yml "${WORK}/roots/"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+if FROM="$WORKFLOWS/docker-build.yml" TO="${WORK}/roots/docker-build.yml" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const old = "  push:\n    branches: [main]\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(old, () => "  push:\n    branches: [main]\n    tags: [\"v*\"]\n"));
+' && grep -qF 'docker-build.yml: started by a tag push' <<<"$(release_roots "${WORK}/roots")"; then
+	ok "reports: a tag-triggered workflow left off the rule 15 list"
+else
+	no "reports: a tag-triggered workflow left off the rule 15 list"
+fi
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+if FROM="$WORKFLOWS/docker-build.yml" TO="${WORK}/roots/docker-build.yml" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const old = "  push:\n    branches: [main]\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(old, () => "  push:\n    paths: [Dockerfile]\n"));
+' && grep -qF 'docker-build.yml: started by a tag push' <<<"$(release_roots "${WORK}/roots")"; then
+	ok "reports: a workflow whose push has no branch filter, so tags start it, left off the rule 15 list"
+else
+	no "reports: a workflow whose push has no branch filter, so tags start it, left off the rule 15 list"
+fi
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'smoke-image back on ubuntu-latest, as it was for run 42868738162' runners "$WORKFLOWS/release-exec.yml" \
+		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-24.04\n' \
+		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-latest\n' \
+		'smoke-image: runs on ubuntu-latest'
+	expect_caught 'the release cut back on ubuntu-latest' runners "$WORKFLOWS/release.yml" \
+		$'  cut:\n    runs-on: ubuntu-24.04\n' $'  cut:\n    runs-on: ubuntu-latest\n' \
+		'cut: runs on ubuntu-latest'
+	expect_caught 'the macOS installer build back on macos-latest' runners "$WORKFLOWS/installer-release.yml" \
+		$'  build-macos:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \x27true\x27\n    runs-on: macos-26\n' \
+		$'  build-macos:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \x27true\x27\n    runs-on: macos-latest\n' \
+		'build-macos: runs on macos-latest'
+	expect_caught 'the linux sidecar leg back on ubuntu-latest through its matrix' runners "$WORKFLOWS/sidecar-release.yml" \
+		$'            runner: ubuntu-24.04\n' $'            runner: ubuntu-latest\n' \
+		'build-sidecar-linux-x64 (matrix.include runner): runs on ubuntu-latest'
+	expect_caught 'the darwin arm64 sidecar leg back on macos-latest through its matrix' runners "$WORKFLOWS/sidecar-release.yml" \
+		$'            npm_pkg: darwin-arm64\n            runner: macos-26\n' $'            npm_pkg: darwin-arm64\n            runner: macos-latest\n' \
+		'build-sidecar-darwin-arm64 (matrix.include runner): runs on macos-latest'
+	expect_caught 'a -latest alias with a size suffix' runners "$WORKFLOWS/installer-release.yml" \
+		$'  build-macos:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \x27true\x27\n    runs-on: macos-26\n' \
+		$'  build-macos:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \x27true\x27\n    runs-on: macos-latest-xlarge\n' \
+		'build-macos: runs on macos-latest-xlarge'
+	expect_caught 'a floating label that does not say latest' runners "$WORKFLOWS/release.yml" \
+		$'  cut:\n    runs-on: ubuntu-24.04\n' $'  cut:\n    runs-on: ubuntu-slim\n' \
+		'cut: runs on ubuntu-slim'
+	expect_caught 'ubuntu-latest as one label of a list' runners "$WORKFLOWS/release.yml" \
+		$'  cut:\n    runs-on: ubuntu-24.04\n' $'  cut:\n    runs-on: [ubuntu-latest]\n' \
+		'cut: runs on ubuntu-latest'
+	expect_caught 'a runner chosen by a variable' runners "$WORKFLOWS/release.yml" \
+		$'  cut:\n    runs-on: ubuntu-24.04\n' $'  cut:\n    runs-on: ${{ vars.RELEASE_RUNNER }}\n' \
+		'cut: runs-on ${{ vars.RELEASE_RUNNER }} is an expression other than one matrix field'
+	expect_caught 'a runner group, whose image cannot be read' runners "$WORKFLOWS/release.yml" \
+		$'  cut:\n    runs-on: ubuntu-24.04\n' $'  cut:\n    runs-on:\n      group: release-runners\n' \
+		'cut: runs-on {"group":"release-runners"} is a group or object'
+	expect_caught 'a matrix runner read from a matrix built at run time' runners "$WORKFLOWS/sidecar-release.yml" \
+		$'    strategy:\n      matrix:\n        include:\n          - goos: darwin\n            goarch: arm64\n            npm_pkg: darwin-arm64\n            runner: macos-26\n            setup: darwin\n' \
+		$'    strategy:\n      matrix: ${{ fromJSON(needs.resolve.outputs.legs) }}\n' \
+		'build-sidecar-darwin-arm64: runs-on reads matrix.runner from a matrix that is not written out'
+	expect_caught 'a matrix leg with no runner at all' runners "$WORKFLOWS/sidecar-release.yml" \
+		$'            npm_pkg: darwin-arm64\n            runner: macos-26\n' $'            npm_pkg: darwin-arm64\n' \
+		'build-sidecar-darwin-arm64: a matrix.include entry sets no runner'
+	PUBLISH_CALL=$'    uses: ./.github/workflows/sidecar-release.yml\n    with:\n      dry_run: ${{ inputs.dry_run == true }}\n      publish_only: true\n'
+	expect_caught 'the release executor calling a remote reusable workflow' runners "$WORKFLOWS/release-exec.yml" \
+		"$PUBLISH_CALL" "${PUBLISH_CALL/.\/.github\/workflows\/sidecar-release.yml/some-org\/some-repo\/.github\/workflows\/x.yml@0123456789012345678901234567890123456789}" \
+		'a remote workflow whose runners cannot be read here'
+	LINUX_LEG=$'      matrix:\n        include:\n          - goos: linux\n            goarch: amd64\n            npm_pkg: linux-x64\n            runner: ubuntu-24.04\n            setup: linux\n'
+	expect_caught 'a runner axis list holding ubuntu-latest' runners "$WORKFLOWS/sidecar-release.yml" \
+		"$LINUX_LEG" $'      matrix:\n        runner: [ubuntu-latest]\n        include:\n          - goos: linux\n            goarch: amd64\n            npm_pkg: linux-x64\n            setup: linux\n' \
+		'build-sidecar-linux-x64 (matrix.runner): runs on ubuntu-latest'
+	expect_caught 'a runner axis that is not a written-out list' runners "$WORKFLOWS/sidecar-release.yml" \
+		"$LINUX_LEG" $'      matrix:\n        runner: ${{ fromJSON(vars.RUNNERS) }}\n        include:\n          - goos: linux\n            goarch: amd64\n            npm_pkg: linux-x64\n            setup: linux\n' \
+		'build-sidecar-linux-x64: matrix.runner is not a written-out list'
+	expect_caught 'matrix.include built at run time' runners "$WORKFLOWS/sidecar-release.yml" \
+		"$LINUX_LEG" $'      matrix:\n        include: ${{ fromJSON(vars.LEGS) }}\n' \
+		'build-sidecar-linux-x64: matrix.include is not a written-out list'
+	expect_caught 'an empty runs-on list' runners "$WORKFLOWS/release.yml" \
+		$'  cut:\n    runs-on: ubuntu-24.04\n' $'  cut:\n    runs-on: []\n' \
+		'cut: runs-on is an empty list'
+	expect_caught 'the release executor calling a local workflow that does not exist' runners "$WORKFLOWS/release-exec.yml" \
+		"$PUBLISH_CALL" "${PUBLISH_CALL/sidecar-release.yml/no-such-release.yml}" \
+		'which cannot be read, so its runners cannot be checked'
+	# Called workflows are read from the repository, so these read a fixture
+	# repository instead: one called workflow on ubuntu-latest; a chain five
+	# calls deep from ok-root.yml, the most the rule follows, which passes;
+	# and release-exec.yml calling chain1 to chain5, where the sixth call,
+	# chain5 to chain6, is refused (chain6 is never read).
+	RUNNERS_REPO="${WORK}/runners-repo"
+	mkdir -p "${RUNNERS_REPO}/.github/workflows"
+	printf 'on: workflow_call\njobs:\n  floater:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"\n' >"${RUNNERS_REPO}/.github/workflows/floating.yml"
+	for i in 1 2 3 4 5; do
+		printf 'on: workflow_call\njobs:\n  next:\n    uses: ./.github/workflows/chain%s.yml\n' "$((i + 1))" >"${RUNNERS_REPO}/.github/workflows/chain${i}.yml"
+	done
+	printf 'on: workflow_call\njobs:\n  last:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: "true"\n' >"${RUNNERS_REPO}/.github/workflows/chain6.yml"
+	printf 'on: workflow_dispatch\njobs:\n  next:\n    uses: ./.github/workflows/ok1.yml\n' >"${RUNNERS_REPO}/.github/workflows/ok-root.yml"
+	for i in 1 2 3 4; do
+		printf 'on: workflow_call\njobs:\n  next:\n    uses: ./.github/workflows/ok%s.yml\n' "$((i + 1))" >"${RUNNERS_REPO}/.github/workflows/ok${i}.yml"
+	done
+	printf 'on: workflow_call\njobs:\n  last:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: "true"\n' >"${RUNNERS_REPO}/.github/workflows/ok5.yml"
+	REPO_DIR="$RUNNERS_REPO" expect_clean "a chain of reusable workflows five calls deep, the most rule 15 follows, is read to its end" runners "${RUNNERS_REPO}/.github/workflows/ok-root.yml"
+	REPO_DIR="$RUNNERS_REPO" expect_caught 'the release executor calling a local workflow that runs on ubuntu-latest' runners "$WORKFLOWS/release-exec.yml" \
+		"$PUBLISH_CALL" "${PUBLISH_CALL/sidecar-release.yml/floating.yml}" \
+		'.github/workflows/floating.yml floater: runs on ubuntu-latest'
+	REPO_DIR="$RUNNERS_REPO" expect_caught 'reusable workflows nested deeper than the rule follows' runners "$WORKFLOWS/release-exec.yml" \
+		"$PUBLISH_CALL" "${PUBLISH_CALL/sidecar-release.yml/chain1.yml}" \
+		'reusable workflows nested too deep to check'
+}
+
+echo
+echo "PR jobs that build what the release ships gate on its runner and warn on -latest (rule 16, owner decision 2026-11-11)"
+for f in test.yml docker-build.yml; do
+	expect_clean "${f}: the gating leg runs on the release label, the -latest leg only warns" prlegs "$WORKFLOWS/$f"
+done
+GATING_LEG=$'          - runner: ubuntu-24.04\n            leg: ubuntu-24.04, release image\n            early_warning: false\n'
+WARNING_LEG=$'          - runner: ubuntu-latest\n            leg: ubuntu-latest, early warning\n            early_warning: true\n'
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'the sidecar gating leg back on ubuntu-latest' prlegs "$WORKFLOWS/test.yml" \
+		"$GATING_LEG" "${GATING_LEG//ubuntu-24.04/ubuntu-latest}" \
+		'the gating leg runs on ubuntu-latest, not ubuntu-24.04 as the release does'
+	expect_caught 'the image gating leg on the next image rather than the release one' prlegs "$WORKFLOWS/docker-build.yml" \
+		"$GATING_LEG" "${GATING_LEG//ubuntu-24.04/ubuntu-26.04}" \
+		'the gating leg runs on ubuntu-26.04, not ubuntu-24.04'
+	expect_caught 'the early-warning leg made blocking' prlegs "$WORKFLOWS/test.yml" \
+		"$WARNING_LEG" "${WARNING_LEG/early_warning: true/early_warning: false}" \
+		'sidecar-build: has 0 non-blocking legs'
+	expect_caught 'the early-warning flag as a string, which is not false' prlegs "$WORKFLOWS/docker-build.yml" \
+		"$GATING_LEG" "${GATING_LEG/early_warning: false/early_warning: \"false\"}" \
+		'is not a literal true or false'
+	expect_caught 'continue-on-error dropped from the job, so the -latest leg blocks' prlegs "$WORKFLOWS/test.yml" \
+		$'    continue-on-error: ${{ matrix.early_warning }}\n' '' \
+		'sidecar-build: continue-on-error null is not one matrix field'
+	expect_caught 'continue-on-error on both legs, so nothing gates' prlegs "$WORKFLOWS/docker-build.yml" \
+		$'    continue-on-error: ${{ matrix.early_warning }}\n' $'    continue-on-error: true\n' \
+		'docker-build: continue-on-error true is not one matrix field'
+	expect_caught 'the sidecar build back to one ubuntu-latest job' prlegs "$WORKFLOWS/test.yml" \
+		$'    runs-on: ${{ matrix.runner }}\n    continue-on-error: ${{ matrix.early_warning }}\n' $'    runs-on: ubuntu-latest\n' \
+		'sidecar-build: runs-on "ubuntu-latest" is not one matrix field'
+	expect_caught 'the early-warning leg dropped' prlegs "$WORKFLOWS/docker-build.yml" \
+		"$WARNING_LEG" '' \
+		'docker-build: has 0 non-blocking legs'
+	expect_caught 'the early-warning leg on a pinned label, so it never sees the next image' prlegs "$WORKFLOWS/test.yml" \
+		"$WARNING_LEG" "${WARNING_LEG/runner: ubuntu-latest/runner: ubuntu-26.04}" \
+		'the non-blocking leg runs on ubuntu-26.04, not ubuntu-latest'
+	expect_caught 'fail-fast left on' prlegs "$WORKFLOWS/test.yml" \
+		$'      fail-fast: false\n      matrix:\n        include:\n          - runner: ubuntu-24.04\n' $'      matrix:\n        include:\n          - runner: ubuntu-24.04\n' \
+		'sidecar-build: strategy.fail-fast is not false'
+	expect_caught 'the early-warning leg not named as one' prlegs "$WORKFLOWS/docker-build.yml" \
+		"$WARNING_LEG" "${WARNING_LEG/leg: ubuntu-latest, early warning/leg: ubuntu-latest}" \
+		'the non-blocking leg is not named as an early warning'
+	expect_caught 'the gating leg named as an early warning' prlegs "$WORKFLOWS/test.yml" \
+		"$GATING_LEG" "${GATING_LEG/leg: ubuntu-24.04, release image/leg: ubuntu-24.04, early warning}" \
+		'the gating leg is named as an early warning'
+	expect_caught 'a matrix axis beside the include list, which adds legs' prlegs "$WORKFLOWS/docker-build.yml" \
+		$'      matrix:\n        include:\n' $'      matrix:\n        runner: [ubuntu-22.04]\n        include:\n' \
+		'docker-build: the matrix is not exactly a written-out include list'
+	expect_caught 'a step only the early-warning leg runs' prlegs "$WORKFLOWS/test.yml" \
+		$'      - name: Build + vet + test (linux/amd64, cgo)\n' $'      - name: Build + vet + test (linux/amd64, cgo)\n        if: ${{ matrix.early_warning }}\n' \
+		'if reads the leg, so the legs do not run the same steps'
+	BUILD_STEP=$'      - name: Build + vet + test (linux/amd64, cgo)\n'
+	expect_caught 'a step only one leg runs, told apart by strategy.job-index' prlegs "$WORKFLOWS/test.yml" \
+		"$BUILD_STEP" "${BUILD_STEP}"$'        if: strategy.job-index == 1\n' \
+		'if reads the leg, so the legs do not run the same steps'
+	expect_caught 'a step only one leg runs, the matrix read with brackets' prlegs "$WORKFLOWS/test.yml" \
+		"$BUILD_STEP" "${BUILD_STEP}"$'        if: ${{ matrix[\x27early_warning\x27] }}\n' \
+		'if reads the leg, so the legs do not run the same steps'
+	expect_caught 'a step only one leg runs, through a job env set from the matrix' prlegs "$WORKFLOWS/test.yml" \
+		$'      X_HOTKEY_TEST_COUNT: \x279\x27\n' $'      X_HOTKEY_TEST_COUNT: \x279\x27\n      SKIPIT: ${{ matrix.early_warning }}\n' \
+		'sidecar-build: env.SKIPIT reads matrix'
+	expect_caught 'a step only one leg runs, through the image tag that names the leg' prlegs "$WORKFLOWS/docker-build.yml" \
+		$'      - name: Check a release re-runs only its version-dependent steps\n' $'      - name: Check a release re-runs only its version-dependent steps\n        if: endsWith(env.IMAGE_TAG, \x27-0\x27)\n' \
+		'if reads the leg, so the legs do not run the same steps'
+	expect_caught 'a step that cannot fail, so the gating leg passes a broken build' prlegs "$WORKFLOWS/test.yml" \
+		"$BUILD_STEP" "${BUILD_STEP}"$'        continue-on-error: true\n' \
+		'has continue-on-error, so the gating leg can pass a failed step'
+	expect_caught 'a matrix field only the gating leg sets' prlegs "$WORKFLOWS/docker-build.yml" \
+		"$GATING_LEG" "${GATING_LEG}"$'            smoke: false\n' \
+		'sets matrix.smoke, which only that leg could read'
+	expect_caught 'the image job switched off' prlegs "$WORKFLOWS/docker-build.yml" \
+		$'    name: docker-build (${{ matrix.leg }})\n' $'    name: docker-build (${{ matrix.leg }})\n    if: false\n' \
+		'docker-build: job condition false is not null'
+	expect_caught 'the sidecar job condition widened to never run' prlegs "$WORKFLOWS/test.yml" \
+		$'    if: needs.changes.outputs.sidecar == \x27true\x27\n    name: sidecar-build' $'    if: needs.changes.outputs.sidecar == \x27never\x27\n    name: sidecar-build' \
+		'sidecar-build: job condition'
+	expect_caught 'a second step under the name where the leg may be read' prlegs "$WORKFLOWS/test.yml" \
+		"$BUILD_STEP" $'      - name: Name the runner image\n        env:\n          LEG: ${{ matrix.leg }}\n        run: echo "$LEG"\n'"$BUILD_STEP" \
+		'more than one step is named "Name the runner image"'
+	expect_caught 'a step condition read from another step output' prlegs "$WORKFLOWS/test.yml" \
+		"$BUILD_STEP" "${BUILD_STEP}"$'        if: steps.legx.outputs.g != \x27\x27\n' \
+		'if reads another step'
+	expect_caught 'a build input switched by the image tag that names the leg' prlegs "$WORKFLOWS/docker-build.yml" \
+		$'          push: false\n' $'          push: false\n          no-cache-filters: ${{ endsWith(env.IMAGE_TAG, \x27-1\x27) && \x27all\x27 || \x27\x27 }}\n' \
+		'with.no-cache-filters reads the leg'
+	expect_caught 'a run script reading the leg in an expression with a brace before it' prlegs "$WORKFLOWS/test.yml" \
+		$'          go vet ./...\n' $'          ${{ format(\x27{0}\x27, matrix.early_warning) }} || exit 0\n          go vet ./...\n' \
+		'.run reads matrix'
+	# A script comment that says matrix reads nothing: only expressions do.
+	copy="${WORK}/prlegs-comment.yml"
+	if FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const old = "          go vet ./...\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(old, () => "          # the build matrix and its retry strategy\n          go vet ./...\n"));
+' && [ -z "$(REPO_DIR="${HERE}/../.." check prlegs "$copy")" ]; then
+		ok "a script comment naming matrix or strategy is not a read of the leg"
+	else
+		no "a script comment naming matrix or strategy is not a read of the leg"
+	fi
+	expect_caught 'a PR macOS job whose runner is an expression' prlegs "$WORKFLOWS/test.yml" \
+		$'    runs-on: macos-26-intel\n' $'    runs-on: ${{ vars.MAC }}\n' \
+		'is an expression, so its macOS version cannot be checked'
+	expect_caught 'the build job renamed away' prlegs "$WORKFLOWS/docker-build.yml" \
+		$'\n  docker-build:\n' $'\n  docker-image:\n' \
+		'docker-build: no such job'
+	expect_caught 'a PR macOS job on macos-latest' prlegs "$WORKFLOWS/test.yml" \
+		$'    runs-on: macos-26-intel\n' $'    runs-on: macos-latest\n' \
+		'runs on macos-latest, not the macOS 26 the release darwin legs build on'
+	expect_caught 'a PR macOS job on an older macOS than the release' prlegs "$WORKFLOWS/test.yml" \
+		$'    runs-on: macos-26-intel\n' $'    runs-on: macos-15-intel\n' \
+		'runs on macos-15-intel, not the macOS 26'
+	expect_caught 'a workflow with no pairs listed' prlegs "$WORKFLOWS/docker-build.yml" \
+		$'name: Docker Build\n' $'name: Docker Image\n' \
+		'has no release pairs listed for rule 16'
+	# The release side is read from the repository, so these move it in a
+	# copy: a pin moved under one twin only, a pin moved under all of them
+	# (the PR gating leg must follow), and the darwin legs moved to macOS 27.
+	PRLEGS_REPO="${WORK}/prlegs-repo"
+	prlegs_repo() {
+		rm -rf "$PRLEGS_REPO" && mkdir -p "${PRLEGS_REPO}/.github" && cp -R "$WORKFLOWS" "${PRLEGS_REPO}/.github/workflows" &&
+			cp -R "${WORKFLOWS}/../actions" "${PRLEGS_REPO}/.github/actions"
+	}
+	prlegs_repo
+	for f in test.yml docker-build.yml; do
+		REPO_DIR="$PRLEGS_REPO" expect_clean "the unchanged fixture copy of ${f} passes, so the fixtures below fail for their change alone" prlegs "${PRLEGS_REPO}/.github/workflows/${f}"
+	done
+	FILE="${PRLEGS_REPO}/.github/workflows/sidecar-release.yml" bun -e '
+const f = process.env.FILE; const s = await Bun.file(f).text();
+const old = "            npm_pkg: linux-x64\n            runner: ubuntu-24.04\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(f, s.replace(old, () => "            npm_pkg: linux-x64\n            runner: ubuntu-26.04\n"));
+' || no "the prlegs fixture could move the linux-x64 release leg"
+	REPO_DIR="$PRLEGS_REPO" expect_caught_file 'a release twin moved alone, so the twins disagree' prlegs "${PRLEGS_REPO}/.github/workflows/test.yml" \
+		'sidecar-build: its release twins run on ["ubuntu-26.04","ubuntu-24.04"], not one label'
+	FILE="${PRLEGS_REPO}/.github/workflows" bun -e '
+const d = process.env.FILE;
+for (const f of ["sidecar-release.yml", "installer-release.yml"]) {
+  const s = await Bun.file(d + "/" + f).text();
+  await Bun.write(d + "/" + f, s.replaceAll("ubuntu-24.04\n", "ubuntu-26.04\n"));
+}
+' || no "the prlegs fixture could move every sidecar release leg"
+	REPO_DIR="$PRLEGS_REPO" expect_caught_file 'the release moved to ubuntu-26.04 and the PR gating leg left behind' prlegs "${PRLEGS_REPO}/.github/workflows/test.yml" \
+		'the gating leg runs on ubuntu-24.04, not ubuntu-26.04 as the release does'
+	prlegs_repo
+	FILE="${PRLEGS_REPO}/.github/workflows/sidecar-release.yml" bun -e '
+const f = process.env.FILE; const s = await Bun.file(f).text();
+const old = "            npm_pkg: darwin-arm64\n            runner: macos-26\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(f, s.replace(old, () => "            npm_pkg: darwin-arm64\n            runner: macos-27\n"));
+' || no "the prlegs fixture could move the darwin release leg"
+	REPO_DIR="$PRLEGS_REPO" expect_caught_file 'one release macOS job moved to macOS 27 alone' prlegs "${PRLEGS_REPO}/.github/workflows/test.yml" \
+		'the release macOS jobs do not run one pinned macOS version'
+	FILE="${PRLEGS_REPO}/.github/workflows" bun -e '
+const d = process.env.FILE;
+for (const f of ["sidecar-release.yml", "installer-release.yml"]) {
+  const s = await Bun.file(d + "/" + f).text();
+  await Bun.write(d + "/" + f, s.replaceAll("macos-26\n", "macos-27\n"));
+}
+' || no "the prlegs fixture could move every release macOS job"
+	REPO_DIR="$PRLEGS_REPO" expect_caught_file 'the release macOS jobs moved to macOS 27 and the PR macOS jobs left behind' prlegs "${PRLEGS_REPO}/.github/workflows/test.yml" \
+		'runs on macos-26-intel, not the macOS 27 the release darwin legs build on'
+	prlegs_repo
+	rm "${PRLEGS_REPO}/.github/workflows/release-exec.yml"
+	REPO_DIR="$PRLEGS_REPO" expect_caught_file 'a release twin that cannot be read' prlegs "${PRLEGS_REPO}/.github/workflows/docker-build.yml" \
+		'docker-build: its release twin release-exec.yml build-image cannot be read'
+	rm -rf "$PRLEGS_REPO"
+}
 
 echo
 echo "${pass} passed, ${fail} failed"

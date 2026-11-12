@@ -4650,16 +4650,62 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    /**
+     * Turn screen awareness on or off. The same switch as the pebble
+     * long-press: it sets awareness.enabled live and persists it as the
+     * user's choice, then runs the awareness applier, which starts or stops
+     * the service, closes switched-off workflow cards and pushes the pebble
+     * glyph and the observer pause to every sidecar. Toggling only the service
+     * left the setting (and every guard that reads it: screen reads, history,
+     * held research) and the sidecar observers saying the opposite.
+     */
     '/api/awareness/toggle': {
       POST: async (req: Request) => {
-        if (!ctx.awarenessService) return error('Awareness service not available', 503);
+        const service = ctx.awarenessService;
+        if (!service) return error('Awareness service not available', 503);
+        let body: unknown;
         try {
-          const body = await req.json() as { enabled: boolean };
-          ctx.awarenessService.toggle(body.enabled);
-          return json({ ok: true, enabled: body.enabled });
+          body = await req.json();
         } catch {
           return error('Invalid request body');
         }
+        // Only a real true or false. Screen watching must never start from a
+        // string like "false" that happens to be truthy.
+        const enabled = (body as { enabled?: unknown } | null)?.enabled;
+        if (typeof enabled !== 'boolean') return error('enabled must be true or false', 400);
+        const { persistAwarenessChoice } = await import('./user-settings.ts');
+        const setLive = () => {
+          const current = ctx.config.awareness;
+          if (typeof current === 'object' && current !== null) current.enabled = enabled;
+          else (ctx.config as { awareness?: unknown }).awareness = { enabled };
+        };
+        const apply = async () => {
+          if (ctx.settingsReload) return ctx.settingsReload.applyNow('awareness');
+          service.toggle(enabled);
+          return null;
+        };
+        // Off fails closed, like desktop control: it takes effect now even if
+        // it cannot be saved. On is saved first and applied only once it is.
+        let saveFailure: unknown = null;
+        if (!enabled) {
+          setLive();
+          try { persistAwarenessChoice(enabled); } catch (err) { saveFailure = err; }
+        } else {
+          try { persistAwarenessChoice(enabled); } catch (err) { saveFailure = err; }
+          if (saveFailure !== null) {
+            console.error('[Awareness] Could not save awareness.enabled:', saveFailure);
+            return error('Screen awareness could not be saved, so it was not turned on.', 500);
+          }
+          setLive();
+        }
+        const applyErr = await apply();
+        if (saveFailure !== null) {
+          console.error('[Awareness] Could not save awareness.enabled:', saveFailure);
+          return error('Screen awareness is off for now, but the choice could not be saved: it may come back on at the next restart or settings reload.', 500);
+        }
+        return json(applyErr
+          ? { ok: false, enabled, message: `Saved, but applying it failed: ${applyErr.error}` }
+          : { ok: true, enabled });
       },
     },
 

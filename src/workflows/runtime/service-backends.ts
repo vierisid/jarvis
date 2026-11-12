@@ -78,6 +78,8 @@ import { ActionOutcomeError, type ActionOutcome } from '../../actions/action-out
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput, tracksPieceCompletion, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR,
   HTTP_PIECE, httpReadHostListed } from './piece-effects';
+import { httpApprovalIntent, httpApprovalReason, httpCardRefusal, localAddressRefusal, makesNetworkRequest } from './http-approval';
+import type { EgressPolicy } from './http-egress';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
 import { captureProviderBinding, providerBindingHolds } from './provider-reconciliation';
 import { recordPieceCompletion, recordPieceNotSent } from './piece-completion';
@@ -100,6 +102,7 @@ import { toolReturnText } from '../../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../../actions/tools/template-delivery-scope.ts';
 import { outsideApprovalScope, runAsApproved } from '../../authority/approved-action-scope.ts';
 import type { ActionCategory } from '../../roles/authority';
+import { isOwnerOnlyNotify } from '../jarvis-pieces/types';
 import { sendMayHaveArrived } from '../../comms/delivery.ts';
 import { providerOutcome } from '../../failures/evidence.ts';
 import { escapedLiteralForCard, forCard, withoutCardInvisibles } from '../../util/card-text.ts';
@@ -235,6 +238,8 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
    * is allowed, as before.
    */
   humanInputUnavailable?: () => string | null;
+  /** Where a workflow HTTP step may connect, as the engine is told; a request it would refuse is refused before any card. Absent: public addresses only. */
+  egressPolicy?: EgressPolicy;
 }
 
 /**
@@ -772,8 +777,15 @@ export function buildSandboxServiceBackends(
       if (req.channels.length !== 1 || req.channels[0] !== 'dashboard') throw Error('Meeting briefs only notify the dashboard');
       req = {...req, meetingGuard:guard, idempotencyKey:meetingNotificationKey(guard)};
     }
+    // A notification that reaches only the owner's own surfaces is not a
+    // message to anyone else, so it is judged as `read_data` and raises no
+    // card. It is still an effect row, an audit row, and stopped by Pause,
+    // Kill and cancellation. Anything that can reach another person (`auto`
+    // included, which may fan out to Telegram or Discord, and `voice`, spoken
+    // aloud in the room) stays `send_message`.
+    const ownerOnly = isOwnerOnlyNotify(req.channels);
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-notify', action: 'notify',
-      route: 'notify', toolName: 'workflow_notify', category: 'send_message', ...(guard ? {categories:['read_data','send_message'] as ActionCategory[]} : {}), toolCategory: 'notification', request: { ...req },
+      route: 'notify', toolName: 'workflow_notify', category: ownerOnly ? 'read_data' : 'send_message', toolCategory: 'notification', request: { ...req },
       reuseCompleted: record => {
         const key = record.arguments.idempotencyKey;
         const identity = typeof key === 'string' && key ? digest(['workflow-notify-v1', record.projectId, record.flowId, key]) : null;
@@ -1437,13 +1449,27 @@ export function buildSandboxServiceBackends(
     // method) is judged on the projection the card and the record carry; the
     // engine's digest of the whole input binds that projection to what runs.
     const judged = resolveGovernedPieceAction(req.piece, req.action, projected)!;
+    const network = makesNetworkRequest(req.piece, req.action);
+    // A request the egress guard refuses as soon as it runs (this computer,
+    // the local network) is refused here, before anyone is asked to approve it.
+    // A step already recorded (a card raised under another policy or build)
+    // takes the path below instead, as before: the engine's guard refuses it
+    // when it runs and a tracked send is receipted not sent (#1153), so its
+    // record and card are not left open behind a refusal that skips them.
+    const recorded = () => !!ctx.stepName && (['piece', 'piece-dispatch'] as const).some(route =>
+      getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], route)) !== null);
+    const localRefusal = network ? localAddressRefusal(projected, opts.egressPolicy ?? 'public-only') : null;
+    if (localRefusal && !recorded()) {
+      effects.auditRefusal({ context: ctx, toolName: governedPieceToolName(judged.adapter.catalogId, judged.action), category: judged.category });
+      throw new ActionOutcomeError({ status: 'blocked', code: 'EGRESS_REFUSED', message: localRefusal, effect: 'not_started' });
+    }
     // #1153 (owner decision): an HTTP read runs without asking only to a host
     // on the flow's read list. A body-less GET still carries what its URL and
     // headers hold to the host it names, so to any other host it is a send
     // and asks while sends are governed. The list goes back with the
     // authorization, and the engine holds the request and every redirect to
     // it (`withReadHosts`), so a listed host's redirect cannot carry it on.
-    const readHosts = req.piece === HTTP_PIECE && judged.category === 'read_data' ? (() => {
+    const readHosts = req.piece === HTTP_PIECE && req.action === 'send_request' && judged.category === 'read_data' ? (() => {
       const flowRun = getFlowRun(ctx.runId);
       return flowRun && flowRun.projectId === ctx.projectId ? getFlowReadHosts(flowRun.flowId)?.hosts ?? [] : [];
     })() : null;
@@ -1526,11 +1552,18 @@ export function buildSandboxServiceBackends(
       prepare: () => {
         // Matched once, when the effect is recorded; resumes and retries recheck the record's facts.
         const facts = addressing ? recipientFactPins(recipientAddresses(input)) : [];
-        return { arguments: input, target: capability.target(input), ...(facts.length ? { bindings: { facts } } : {}) };
+        const named = network ? { ...capability.target(input), intent: httpApprovalIntent(req.piece, input) } : capability.target(input);
+        return { arguments: input, target: named, ...(facts.length ? { bindings: { facts } } : {}) };
       },
+      // The card says what the request will do (method, host and path), not the engine's
+      // category sentence, and a request it could not show whole is refused, not cut.
+      ...(network ? { intentFor: (args: Record<string, unknown>) => httpApprovalIntent(req.piece, args),
+        cardRefusal: (args: Record<string, unknown>) => httpCardRefusal(req.piece, args), approvalReason: httpApprovalReason(req.piece, input, readHosts !== null && !listedRead) } : {}),
       // A revised document carries its own reviewed target; anything else is frozen to this input.
+      // The card sentence rides in the target but is words about it, not part of it.
       validateTarget: (args, target) => {
-        if (digest(capability.target(document ? args : input)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
+        const { intent: _sentence, ...reviewed } = target;
+        if (digest(capability.target(document ? args : input)) !== digest(network ? reviewed : target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
       },
       revalidate: record => assertRecipientFactsCurrent((record.bindings as { facts?: FactPin[] } | undefined)?.facts),
       revalidateOnReplay: true,
