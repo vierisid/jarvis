@@ -364,6 +364,21 @@ describe("manage_workflow tool", () => {
     expect(getLatestDraft(created.id)).toBeNull();
   });
 
+  test("publish warns about a key typed into a step without repeating it, and still publishes", async () => {
+    const { getLatestDraft, updateDraftVersion } = await import("../../workflows/db/repos/flow-version.ts");
+    const key = "sk-qa4-canary-SECRET-9911";
+    const created = (await call("create", { name: "keyed", empty: true })) as { id: string };
+    updateDraftVersion(getLatestDraft(created.id)!.id, {
+      trigger: { name: "trigger", type: "EMPTY", nextAction: { name: "notify", type: "PIECE",
+        settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: `token ${key}` } } } },
+    });
+    const published = (await call("publish", { flow: "keyed" })) as { status: string; warnings?: string[] };
+    expect(published.status).toBe("ENABLED");
+    expect(published.warnings).toHaveLength(1);
+    expect(published.warnings![0]).toContain('Step "notify"');
+    expect(JSON.stringify(published)).not.toContain(key);
+  });
+
   test("publish stays silent when the flow fits the machines it will run on", async () => {
     await call("create", { name: "fine", empty: true });
     const withTargets = createManageWorkflowTool({

@@ -199,3 +199,19 @@ test('draft update keeps captured data out of its receipt and frames definition 
   expect(stored).not.toContain(updateNonce);
   expect(stored).not.toContain(readNonce);
 });
+
+test('an assistant edit that types a key into a step is refused without the key; a key the person already saved stays editable',async()=>{
+  const key='sk-qa4-canary-SECRET-9911';
+  const notify=(message:string)=>({name:'notify',type:'PIECE',settings:{pieceName:'jarvis-notify',actionName:'notify',input:{message,channels:['dashboard']}}});
+  const {flow,version}=fixture();let v=await read(flow.id);
+  const before=getFlowVersion(version.id);
+  const refused=call(args(flow.id,v,[{op:'add',path:'/nextAction/nextAction',value:notify(`token ${key}`)}]));
+  await expect(refused).rejects.toThrow('use a connection');
+  await refused.catch((error:Error)=>expect(error.message).not.toContain(key));
+  expect(getFlowVersion(version.id)).toEqual(before);
+  // The person typed one in the editor: the assistant can still rename the step and edit around it.
+  const saved=getFlowVersion(version.id)!;updateDraftVersion(version.id,{trigger:{...saved.trigger,nextAction:{...saved.trigger.nextAction!,nextAction:notify(`token ${key}`)}} as any});
+  v=await read(flow.id);
+  const output=await call(args(flow.id,v,[{op:'replace',path:'/nextAction/nextAction/name',value:'alert'},{op:'replace',path:'/nextAction/settings/input/prompt',value:'Anything to add?'}]));
+  expect(output.changed).toBe(true);
+});

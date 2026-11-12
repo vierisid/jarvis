@@ -6,6 +6,7 @@ import { workflowRemovalState } from '../../workflows/db/repos/workflow-removal-
 import { compileWorkflow, type ReadinessContext } from '../../workflows/runtime/workflow-readiness';
 import { CODE_STEP_TYPE, walkFlowNodes } from '../../workflows/db/flow-graph';
 import { credentialEditRefusal, restoreRedactedCredentials, versionAsModelSees } from '../../workflows/runtime/step-credentials';
+import { findNewSecretLiterals, secretLiteralFeedback } from './secret-literals';
 import { assistantWebhookSecretRefusal } from '../../workflows/runner/triggers/webhook-secret';
 
 /** Covers the persisted authoring snapshot, not a recomputed readiness report. */
@@ -105,6 +106,11 @@ export function updateSavedDraft(input: {
     const graph = restoreRedactedCredentials(version.trigger, written);
     const refusal = credentialEditRefusal(version.trigger, written, graph) ?? assistantWebhookSecretRefusal(version.trigger, graph);
     if (refusal) fail(refusal);
+    // The assistant never types a secret into a step, as the composer may not
+    // (secret-literals.ts). Only what this edit adds is judged: a value the
+    // person already put in the draft is theirs, and is warned about at publish.
+    const secrets = secretLiteralFeedback(findNewSecretLiterals(version.trigger, graph));
+    if (secrets.length) fail(secrets.join(' '));
     assertNoAssistantCode(version.trigger, graph);
     const validation = compileWorkflow(graph, { ...input.context, phase: 'composition' });
     if (!validation.ready) fail('edited graph is invalid: ' + validation.issues.slice(0, 5).map(i => `${i.node} (${i.path}): ${i.message}`).join('; '));

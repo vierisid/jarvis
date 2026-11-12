@@ -728,6 +728,25 @@ describe("workflow API: versions", () => {
     expect(body.flow.status).toBe("ENABLED");
     expect(body.flow.publishedVersionId).toBe(versionId);
     expect(body.version.state).toBe("LOCKED");
+    // A workflow with nothing secret in it carries no warnings key at all.
+    expect(body.warnings).toBeUndefined();
+  });
+
+  test("POST .../publish still publishes a workflow with a key typed into a step, and says so without repeating the key", async () => {
+    const canary = "sk-qa4-canary-SECRET-9911";
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const flowId = createFlow().id;
+    createDraftVersion({ flowId, displayName: "v1", trigger: { name: "trigger", type: "EMPTY",
+      nextAction: { name: "notify", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: `token ${canary}` } } } } as unknown as Record<string, unknown> });
+    const publish = routes["/api/workflows/:id/publish"]?.POST;
+    const { status, body } = await callJson(publish, reqWithParams("POST", `http://x/api/workflows/${flowId}/publish`, { id: flowId }));
+    expect(status).toBe(200);
+    expect(body.flow.status).toBe("ENABLED");
+    expect(body.warnings).toHaveLength(1);
+    expect(body.warnings[0]).toContain('Step "notify"');
+    expect(body.warnings[0]).toContain("connection");
+    expect(JSON.stringify(body.warnings)).not.toContain(canary);
   });
 });
 
