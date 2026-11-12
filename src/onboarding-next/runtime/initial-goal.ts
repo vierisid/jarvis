@@ -28,7 +28,10 @@ function checked(input: unknown, title: string): GoalProposal {
     || proposal.key_results.some((_, i) => !proposal.milestones?.some(m => m.key_result_index === i)))
     throw new IncompletePlan('A complete initial OKR requires key results and milestones');
   // Preserve the user's objective rather than replacing it with a model's new ambition.
-  proposal.objective.title = title;
+  // A goal title is one line (goals/validation.ts `text`), and the interview summary
+  // it comes from may hold a line break, so breaks and controls become one space.
+  // eslint-disable-next-line no-control-regex
+  proposal.objective.title = title.toWellFormed().replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim() || title;
   proposal.objective.tags = [...new Set([...(proposal.objective.tags ?? []), 'onboarding'])];
   planProposal(proposal, null, Date.now());
   return proposal;
