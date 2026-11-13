@@ -7,9 +7,15 @@ import { assertionKey, automaticSourceKey } from '../vault/memory-suppression';
 import { reconcileFacts } from '../vault/fact-schema';
 
 export const MEMORY_FORGET_LIMITS = { receipts: 10_000, sources: 100_000, perFact: 1000 } as const;
+/**
+ * Forget deletes rows rather than tombstoning them: the chosen fact, its evidence and every earlier
+ * version it replaced (the chain of `superseded_by` links) leave the facts table, so no read path
+ * (facts list, Memory detail and history, vault search, recall, workflow context) can return them.
+ * Only content-free receipts and suppression keys remain, one per removed version's source.
+ */
 export const MEMORY_FORGET_SCOPE = {
-  removed: ['chosen_canonical_fact', 'its_evidence', 'future_canonical_recall'],
-  retained: ['content_free_receipt_and_usage', 'other_facts_and_history', 'entity_identity_and_relationships',
+  removed: ['chosen_canonical_fact', 'earlier_versions_it_replaced', 'its_evidence', 'future_canonical_recall'],
+  retained: ['content_free_receipt_and_usage', 'other_facts_and_their_history', 'entity_identity_and_relationships',
     'original_messages_and_source_documents', 'profile_settings_and_interview_sources', 'backups_and_database_free_pages', 'already_sent_model_context'],
   suppression: 'same_normalized_assertion_and_automatic_source_revision',
   legacySuppression: 'unknown_revision_blocks_same_automatic_assertion_until_explicit_manual_input',
@@ -72,31 +78,46 @@ export class MemoryForget {
       }
       if (source.revision !== input.expectedRevision) throw new MemoryForgetError('revision_conflict', 409);
       const { fact } = source;
-      if (fact.evidence.length > MEMORY_FORGET_LIMITS.perFact) throw new MemoryForgetError('capacity_exceeded', 503);
-      const keys = new Set(fact.evidence.flatMap(e => [automaticSourceKey(this.db, e),
-        e.replay_source_ref ? automaticSourceKey(this.db, { ...e, source_ref: e.replay_source_ref }) : null,
-      ]).filter((k): k is string => k !== null));
-      // Old rows without provenance still cannot silently reappear from a legacy automatic writer.
-      if (!fact.evidence.length) {
-        const fallback = automaticSourceKey(this.db, { source: fact.source }); if (fallback) keys.add(fallback);
+      // Forgetting a fact forgets its whole history: every earlier version it replaced is removed too.
+      const chain = [fact]; const seen = new Set([fact.id]);
+      for (let i = 0; i < chain.length; i++) {
+        for (const prior of this.db.query<{ id: string }, [string]>('SELECT id FROM facts WHERE superseded_by = ?').all(chain[i]!.id)) {
+          if (seen.has(prior.id)) continue; seen.add(prior.id);
+          const earlier = getFact(prior.id); if (earlier) chain.push(earlier);
+        }
+        if (chain.length > MEMORY_FORGET_LIMITS.perFact) throw new MemoryForgetError('capacity_exceeded', 503);
       }
-      if (fact.source === 'user_profile' || fact.evidence.some(e => e.source === 'user_profile')) {
-        for (const source of profileSourceRevisionsForFact(fact)) keys.add(automaticSourceKey(this.db, source)!);
-      }
+      if (chain.reduce((n, f) => n + f.evidence.length, 0) > MEMORY_FORGET_LIMITS.perFact) throw new MemoryForgetError('capacity_exceeded', 503);
+      const sourceKeys = (f: typeof fact) => {
+        const keys = new Set(f.evidence.flatMap(e => [automaticSourceKey(this.db, e),
+          e.replay_source_ref ? automaticSourceKey(this.db, { ...e, source_ref: e.replay_source_ref }) : null,
+        ]).filter((k): k is string => k !== null));
+        // Old rows without provenance still cannot silently reappear from a legacy automatic writer.
+        if (!f.evidence.length) {
+          const fallback = automaticSourceKey(this.db, { source: f.source }); if (fallback) keys.add(fallback);
+        }
+        if (f.source === 'user_profile' || f.evidence.some(e => e.source === 'user_profile')) {
+          for (const source of profileSourceRevisionsForFact(f)) keys.add(automaticSourceKey(this.db, source)!);
+        }
+        return keys;
+      };
+      const pairs = chain.flatMap(f => { const assertion = assertionKey(this.db, f); return [...sourceKeys(f)].map(key => ({ assertion, key })); });
+      const keys = new Set(pairs.map(p => p.key));
       const count = (table: string) => (this.db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
       if (count('memory_forget_receipts') >= MEMORY_FORGET_LIMITS.receipts
-        || count('memory_forget_suppressions') + keys.size > MEMORY_FORGET_LIMITS.sources) throw new MemoryForgetError('capacity_exceeded', 503);
+        || count('memory_forget_suppressions') + pairs.length > MEMORY_FORGET_LIMITS.sources) throw new MemoryForgetError('capacity_exceeded', 503);
       const stored: Stored = { fact_id: id, request_id: input.requestId, expected_revision: input.expectedRevision,
         forgotten_at: Date.now(), suppressed_sources: keys.size };
       this.db.run('INSERT INTO memory_forget_receipts VALUES (?, ?, ?, ?, ?)',
         [id, input.requestId, input.expectedRevision, stored.forgotten_at, keys.size]);
-      const assertion = assertionKey(this.db, fact);
       // A shared replay alias must point to the latest Forget, so a turn accepted
       // between two deletions cannot bypass the newer suppression boundary.
-      for (const key of keys) this.db.run(`INSERT INTO memory_forget_suppressions VALUES (?, ?, ?)
+      for (const { assertion, key } of pairs) this.db.run(`INSERT INTO memory_forget_suppressions VALUES (?, ?, ?)
         ON CONFLICT(assertion_key, source_key) DO UPDATE SET fact_id = excluded.fact_id`, [assertion, key, id]);
-      this.db.run('DELETE FROM fact_evidence WHERE fact_id = ?', [id]);
-      this.db.run('DELETE FROM facts WHERE id = ?', [id]);
+      for (const f of chain) {
+        this.db.run('DELETE FROM fact_evidence WHERE fact_id = ?', [f.id]);
+        this.db.run('DELETE FROM facts WHERE id = ?', [f.id]);
+      }
       reconcileFacts(this.db, fact.subject_id, fact.predicate_key, fact.scope);
       return { state: 'forgotten' as const, replayed: false, receipt: receipt(stored) };
     }).immediate();

@@ -1,4 +1,5 @@
 import type { GoalLevel } from './types.ts';
+import { NOT_ONE_LINE, NOT_TEXT } from '../vault/commitment-text.ts';
 
 export const GOAL_LEVELS = ['objective', 'key_result', 'milestone', 'task', 'daily_action'] as const;
 export const TIME_HORIZONS = ['life', 'yearly', 'quarterly', 'monthly', 'weekly', 'daily'] as const;
@@ -20,6 +21,11 @@ export function keys(value: Record<string, unknown>, allowed: readonly string[],
 }
 export function text(value: unknown, path: string, required = true, max = 20000): string {
   if (typeof value !== 'string' || (required && !value.trim()) || value.length > max) invalid(path, 'must be a valid string');
+  // The rule a task's text is stored under (vault/commitment-text.ts): C0 and C1 controls and DEL
+  // are refused, and a lone surrogate is not text. Tab and line breaks stay for descriptions;
+  // a title is one line, so it refuses them and the Unicode line and paragraph separators too.
+  if (!value.isWellFormed()) invalid(path, 'must be a valid string');
+  if ((/(^|\.)title$/.test(path) ? NOT_ONE_LINE : NOT_TEXT).test(value)) invalid(path, 'must not contain control characters');
   return value;
 }
 export function enumeration<T extends string>(value: unknown, values: readonly T[], path: string): T {
