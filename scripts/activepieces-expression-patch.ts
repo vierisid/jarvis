@@ -169,6 +169,17 @@ export const expressionPatches = {
       '    // === END JARVIS PATCH ==='
     ],
   ],
+  // Image Helper: Compress accepts its own dropdown values, and a crop outside the
+  // image fails in plain words. Registered so a vendor sync re-applies them;
+  // `core-image-piece.test.ts` covers them.
+  "packages/pieces/core/image-helper/src/lib/actions/compress-image.actions.ts": [
+    ["    image.quality(context.propsValue.quality);",
+      "    // === JARVIS PATCH: the Quality dropdown's own values work ===\n    // A saved flow or the editor hands the dropdown value over as text (\"60\"),\n    // and the image library rejects anything that is not a number type.\n    const quality = Number(context.propsValue.quality);\n    if (\n      String(context.propsValue.quality).trim() === '' ||\n      !Number.isFinite(quality) ||\n      quality < 0 ||\n      quality > 100\n    ) {\n      throw new Error(\n        'Quality must be a number from 0 to 100. Pick High Quality or Lossy Quality.'\n      );\n    }\n    image.quality(quality);\n    // === END JARVIS PATCH ==="],
+  ],
+  "packages/pieces/core/image-helper/src/lib/actions/crop-image.action.ts": [
+    ["    await image.crop(\n      context.propsValue.left,\n      context.propsValue.top,\n      context.propsValue.width,\n      context.propsValue.height\n    );\n",
+      "    // === JARVIS PATCH: a crop outside the image says so in plain words ===\n    // Upstream let the image library fail with a raw \"offset is out of range\".\n    // The library rounds each value before it crops, so check the rounded ones.\n    const { left, top, width, height } = context.propsValue;\n    const x = Math.round(left);\n    const y = Math.round(top);\n    const w = Math.round(width);\n    const h = Math.round(height);\n    if (\n      ![left, top, width, height].every(Number.isFinite) ||\n      x < 0 ||\n      y < 0 ||\n      w < 1 ||\n      h < 1 ||\n      x + w > image.getWidth() ||\n      y + h > image.getHeight()\n    ) {\n      throw new Error(\n        `The crop area does not fit inside the image. The image is ${image.getWidth()} by ${image.getHeight()} pixels, so Left and Top must be 0 or more, Width and Height must be at least 1, and Left plus Width and Top plus Height must stay within the image.`\n      );\n    }\n    // === END JARVIS PATCH ===\n    await image.crop(\n      context.propsValue.left,\n      context.propsValue.top,\n      context.propsValue.width,\n      context.propsValue.height\n    );\n"],
+  ],
   "packages/pieces/core/sftp/src/lib/common.ts": [
     ["        rejectUnauthorized: !(allow_unauthorized_certificates ?? false),\n      }",
       "        rejectUnauthorized: !(allow_unauthorized_certificates ?? false),\n        ...servername,\n      }"],
