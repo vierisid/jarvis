@@ -156,10 +156,15 @@ export class NotchInbox {
     }
     if (item.speaks && this.free()) { this.start(entry, { unasked: true }, null); return; }
     if (item.speaks && item.urgent && this.playing && this.canShow()) {
+      // A yes that is burning its fuse is not interrupted: the urgent thing
+      // speaks the moment that is over.
+      if (this.playing.stage.burning()) { entry.missed = true; this.pushCount(); return; }
       const was = this.halt();
       this.start(entry, { unasked: true }, null);
-      const back = was?.entry;
-      if (back?.item.returns && back !== entry && this.playing?.entry === entry) this.playing.then = back;
+      // The notch goes back to what was waited on: the thing just replaced if
+      // it is such a thing, otherwise whatever that one was going to hand back to.
+      const back = was?.entry?.item.returns ? was.entry : was?.then;
+      if (back && back !== entry && this.entries.includes(back) && this.playing?.entry === entry) this.playing.then = back;
       return;
     }
     // No notch was up, or everything was held: it gets its say when that ends.
@@ -328,6 +333,9 @@ export class NotchInbox {
       return;
     }
     this.clear(playing.stage);
+    // Something that could not speak while this was up (it arrived during a
+    // fuse) speaks now.
+    if (this.entries.some((waiting) => waiting.missed)) { this.cameUp(); return; }
     this.pushCount();
   }
 
