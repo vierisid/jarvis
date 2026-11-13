@@ -13,7 +13,7 @@ import { DeferredExecutor } from '../authority/deferred-executor.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
 import { NOTCH_DECIDER, applyApprovalDecision, type ApprovalDecisionDeps } from '../daemon/approval-decision.ts';
 import { closeDb, initDatabase } from '../vault/schema.ts';
-import { notchApprovalWay } from './approvals.ts';
+import { NOTCH_PLAIN_LINE_COLUMNS, notchApprovalSentence, notchApprovalWay } from './approvals.ts';
 import { NOTCH_FIXTURE_AGENT } from './fixtures.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
 import { attachNotchReal, type NotchReal } from './real.ts';
@@ -154,16 +154,27 @@ describe('the approval fixture, from the command to Today', () => {
     const [request] = h.approvals.getPending();
     expect(request).toMatchObject({ agent_id: NOTCH_FIXTURE_AGENT, tool_name: 'run_command', action_category: 'execute_command' });
     expect(JSON.parse(request!.tool_arguments)).toEqual({ command: 'echo notch test' });
-    // Asked in plain words (here, with nobody to word it, by what kind of
-    // thing it is), with the tool's own gate's sentence under them: the
-    // machine, the directory, the command.
-    expect(notchApprovalWay(request!)).toBe('sheet');
+    // The sentence is the tool's own gate's: the machine, the directory, the
+    // command. How long it is depends on where the brain runs (the directory
+    // is in it), and that decides how it is shown: short, as one line; longer,
+    // in plain words with the sentence under them. Both are checked, whichever
+    // this machine makes.
+    const sentence = notchApprovalSentence(request!);
+    expect(sentence).toMatch(/run: echo notch test$/);
+    const way = notchApprovalWay(request!);
+    expect(way).toBe([...sentence].length > NOTCH_PLAIN_LINE_COLUMNS ? 'sheet' : 'key');
     await h.look();
-    expect(h.said()).toBe('Run a command on this computer?');
-    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'approve', stay: true, mood: 'careful' });
-    const sheet = h.line();
-    const paper = sheet?.kind === 'sheet' ? sheet.blocks.find((block) => block.kind === 'paper') : null;
-    expect(paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')).join(' ') : '').toMatch(/run: echo notch test$/);
+    if (way === 'sheet') {
+      // With nobody to word it here, it is asked by what kind of thing it is.
+      expect(h.said()).toBe('Run a command on this computer?');
+      expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'approve', stay: true, mood: 'careful' });
+      const sheet = h.line();
+      const paper = sheet?.kind === 'sheet' ? sheet.blocks.find((block) => block.kind === 'paper') : null;
+      expect(paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')).join(' ') : '').toBe(sentence);
+    } else {
+      expect(h.said()).toMatch(/run: echo notch test\?$/);
+      expect(h.line()).toMatchObject({ kind: 'offer', yes: 'approve', mood: 'careful' });
+    }
     await h.answer('yes');
     await h.answer('done');
     for (let i = 0; i < 60 && h.said() !== 'Done.'; i++) await new Promise((r) => setTimeout(r, 25));
