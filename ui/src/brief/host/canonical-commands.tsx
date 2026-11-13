@@ -48,7 +48,8 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
   const [rows, setRows] = useState<QueuedDecision[] | null>(null), [message, setMessage] = useState(''), [pending, setPending] = useState(false), [epoch, refresh] = useState(0);
   const [selected, select] = useState<string | null>(null);
   // null while loading or failed: an unknown permission list is not an empty one.
-  useEffect(() => { onCount?.(enabled ? rows?.length ?? null : 0); }, [rows, enabled, onCount]);
+  // Held runs (a workflow's runs waiting behind its card limit) are a note, not decisions: never counted.
+  useEffect(() => { onCount?.(enabled ? rows ? rows.filter(r => r.kind !== 'held').length : null : 0); }, [rows, enabled, onCount]);
   const list = React.useRef<HTMLElement>(null), restoreFocus = React.useRef(false);
   useEffect(() => {
     if (restoreFocus.current && rows) {
@@ -82,17 +83,18 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
     finally { setPending(false); }
   };
   if (!enabled) return null;
-  const row = rows?.find(r => r.decisionId === selected) ?? rows?.[0];
+  const held = rows?.filter(r => r.kind === 'held') ?? [], asks = rows?.filter(r => r.kind !== 'held');
+  const row = asks?.find(r => r.decisionId === selected) ?? asks?.[0];
   const title = (r: QueuedDecision) => browserCardTitle(r)?.heading ?? r.title;
   const actions = row?.supportedActions.filter(a => a !== 'inspect') ?? [];
   const primary = actions.find(a => ['approve_permission', 'accept_intent', 'execute_once'].includes(a));
   return <section className="brief-host-pending" aria-label="Other decisions">
     {row && <div className="brief-decisions-grid">
       <nav ref={list} className="brief-decision-list" aria-label="Requests to review">
-        {rows?.map(item => <button key={item.decisionId} className="brief-decision-choice" type="button"
+        {asks?.map(item => <button key={item.decisionId} className="brief-decision-choice" type="button"
           aria-pressed={item.decisionId === row.decisionId} disabled={pending} onClick={() => select(item.decisionId)}>
           <span><strong>{title(item)}</strong></span><span className="brief-decision-recipient">{item.review?.workflowName ?? (item.workflow ? 'Workflow request' : 'Jarvis request')}</span>
-          <span className="brief-decision-hint">{item.held ? 'Held while screen awareness is off.' : browserCardTitle(item)?.kind ?? (asksPermission(item) ? 'Your permission is needed to continue.' : item.state.replaceAll('_', ' '))}</span>
+          <span className="brief-decision-hint">{item.awarenessHeld ? 'Held while screen awareness is off.' : browserCardTitle(item)?.kind ?? (asksPermission(item) ? 'Your permission is needed to continue.' : item.state.replaceAll('_', ' '))}</span>
           <small>{item.decisionId === row.decisionId ? 'Selected' : 'Review request'}</small>
         </button>)}
       </nav>
@@ -116,7 +118,7 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
             <dl className="brief-decision-values">{row.review.values.map(v => <React.Fragment key={v.name}>
               <dt>{v.name}{v.source === 'run_data' ? ' (from run data)' : v.source === 'agent' ? ' (chosen by the agent)' : ''}</dt>
               <dd style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{v.value}</dd></React.Fragment>)}</dl></>}
-          {row.held && <p role="note"><strong>{row.held}</strong></p>}
+          {row.awarenessHeld && <p role="note"><strong>{row.awarenessHeld}</strong></p>}
           <p>{asksPermission(row) ? 'Jarvis needs your permission for this action before it can continue.' : row.title}</p>
           {browserCardTitle(row) && <p>{row.title}</p>}
           {row.review?.toolName.startsWith('browser_') && <p>The browser uses a separate Jarvis profile. If the site asks you to sign in, complete sign-in in that browser before starting a new run.</p>}
@@ -130,6 +132,7 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
         </div></footer>
       </article>
     </div>}
+    {held.map(item => <p key={item.decisionId} className="brief-decision-hint">{item.title}</p>)}
     {message && <p role="status">{message}</p>}{rows === null && <BriefButton disabled={pending} onClick={() => refresh(n => n + 1)}>Recheck decisions</BriefButton>}
   </section>;
 }
@@ -146,7 +149,7 @@ export function ForgetMemory({ detail, http, capabilities, storage, scopeId, cha
       const path = `/api/brief/memory/${encodeURIComponent(item.factId)}`;
       const source = await http.json(path + '/forget'), current = await http.json(path);
       if (source.state !== 'ready' || source.factId !== item.factId || current.state !== 'ready' || current.data.revision !== item.revision) throw Error();
-      if (!await confirmDialog(`Forget this memory: “${item.sentence}”?\n\nThis removes the selected fact and its evidence from future recall. Original messages, source documents, other facts and backups remain.`)) return;
+      if (!await confirmDialog(`Forget this memory: “${item.sentence}”?\n\nThis removes the selected fact, every earlier version it replaced, and their evidence from future recall. Original messages, source documents, other facts and backups remain.`)) return;
       const command = { requestId: crypto.randomUUID(), expectedRevision: source.revision, confirmed: true };
       storage.setItem(`brief:forget:v1:${scopeId}:${item.factId}`, JSON.stringify(command));
       const result = await http.json(path + '/forget', post(command));

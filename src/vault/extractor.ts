@@ -5,6 +5,7 @@ import type { LLMManager } from '../llm/manager.ts';
 import { getDb } from './schema.ts';
 import { createHash } from 'node:crypto';
 import { createEntity, findEntities } from './entities.ts';
+import { cleanVaultText, ENTITY_NAME_MAX_CHARS } from './input-limits.ts';
 import { createFact, FACT_TEXT_LIMIT } from './facts.ts';
 import { createRelationship } from './relationships.ts';
 import { createCommitment } from './commitments.ts';
@@ -248,7 +249,12 @@ export async function extractAndStore(
       }
 
       // Check if entity already exists. Goal completion records are not conversation subjects.
-      const existing = findEntities({ name, type }).filter(entity => entity.source !== 'goal_completion');
+      // createEntity stores a cleaned, capped name (input-limits.ts), so look it up
+      // under that too, or a long or control-laden name would add a new entity on
+      // every turn that mentions it. The raw name still finds a row stored before.
+      const storedName = cleanVaultText(String(name), ENTITY_NAME_MAX_CHARS);
+      const existing = [...findEntities({ name, type }), ...(storedName && storedName !== name ? findEntities({ name: storedName, type }) : [])]
+        .filter(entity => entity.source !== 'goal_completion');
 
       if (existing.length > 0) {
         // Use existing entity ID
