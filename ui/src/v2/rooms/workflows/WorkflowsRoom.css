@@ -357,6 +357,12 @@
   padding: var(--s-1) 0;
 }
 
+.wf-runs__steps-note {
+  margin: var(--s-1) 0 0;
+  font-size: 0.78rem;
+  color: var(--ink-2);
+}
+
 .wf-runs__steps pre {
   margin: var(--s-1) 0 0;
   padding: var(--s-2);

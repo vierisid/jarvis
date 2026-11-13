@@ -19,7 +19,7 @@
  */
 import type { ActionFailure } from '../../actions/action-outcome';
 import { providerCode } from '../../failures/evidence';
-import { failureText, NOTHING_DONE, projectFailure, recoverySteps, type FailureEvidence, type FailureLinks, type UserFailure } from '../../failures/projection';
+import { failureText, NOTHING_DONE, projectFailure, RUN_LOG_SIZE_EXCEEDED, recoverySteps, type FailureEvidence, type FailureLinks, type UserFailure } from '../../failures/projection';
 import { getFlowRun, type FlowRun } from '../db/repos/flow-run';
 import { getFlowVersion } from '../db/repos/flow-version';
 import { latestDelegation } from '../db/repos/delegation';
@@ -180,6 +180,13 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
   if (run.status === 'STOPPED') {
     const sent = otherSteps(run, records, graph) !== 'no' || run.cancellation?.inFlightMayHaveCompleted === true;
     return projectFailure({ source: 'cancellation', dispatched: sent }, { label: 'The run', sideEffects: sent }, links);
+  }
+  // The engine refused to keep more data for one run. Its reply is the only place that says so:
+  // engine-runtime's `executeFlow(run <id>) -> <status>`, read at the start so detail text cannot match.
+  if (step?.name === '<engine>' && /^executeFlow\(run [^)\n]*\) -> LOG_SIZE_EXCEEDED\b/.test(step.errorMessage ?? '')) {
+    return withOtherSteps(projectFailure({ source: 'action', outcome: { status: 'error', code: RUN_LOG_SIZE_EXCEEDED, effect: 'not_started',
+      message: step.errorMessage ?? 'LOG_SIZE_EXCEEDED' } }, { label: 'The run', sideEffects: false }, links),
+    otherSteps(run, records, graph), 'Steps up to that point');
   }
   if (!step || step.name === '<engine>') {
     return projectFailure({ source: 'unknown', message: step?.errorMessage ?? `The run ended ${run.status}` },

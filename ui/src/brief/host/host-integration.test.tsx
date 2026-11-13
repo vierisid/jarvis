@@ -286,6 +286,34 @@ test('publishing from the existing canvas route reloads authoritative state and 
   } finally { rooms.retire(); transport.stop(); }
 });
 
+test('a run id that no run has says the run was not found, not that the version is unavailable', async () => {
+  const { createWorkflowRooms } = await import('./workflow-rooms');
+  const { makeCanvasFixture } = await import('../workflows/canvas/fixtures');
+  const { RUN_CAPABILITY } = await import('../workflows/runs/fixtures');
+  const fixture = makeCanvasFixture(), flowId = 'meeting', versionId = fixture.versionId;
+  let inspection = 404;
+  const transport = createHostTransport((async (input: any, init: any = {}) => {
+    const path = String(input), version = { ...fixture.snapshot().version, state: 'LOCKED' };
+    if (path === '/api/workflows/meeting') return Response.json({ flow: { id: flowId }, latestDraft: null, published: version, uiMeta: fixture.snapshot().uiMeta });
+    if (path.endsWith('/versions/' + versionId)) return Response.json(version);
+    if (path.includes('/inspection?')) return inspection === 404 ? Response.json({ code: 'not_found' }, { status: 404 }) : Response.json({ code: 'unavailable' }, { status: 503 });
+    return fixture.request(input, init);
+  }) as typeof fetch);
+  const rooms = createWorkflowRooms({ scopeId: 'scope', transport, capabilities: () => RUN_CAPABILITY,
+    storage: localStorage, dirty() {}, runInput: async () => null });
+  const shell = (runId: string) => ({ mode: 'live', route: { room: 'workflow-runs', selection: { flowId, versionId, runId } },
+    theme: 'dark', sidebar: 'expanded', chatOpen: false, navigate() {}, setTheme() {}, setSidebar() {}, setChatOpen() {} }) as any;
+  const Room = rooms.rooms['workflow-runs']!.Body!;
+  try {
+    await React.act(async () => root.render(<Room shell={shell('no-such-run')} />));
+    expect(document.body.textContent).toContain('This run was not found.');
+    expect(document.body.textContent).not.toContain('version is unavailable');
+    inspection = 503;
+    await React.act(async () => root.render(<Room shell={shell('another-run')} />));
+    expect(document.body.textContent).toContain('This workflow version is unavailable.');
+  } finally { rooms.retire(); transport.stop(); }
+});
+
 test('held runs show as one plain sentence and never count as something that needs the owner', async () => {
   const counts: (number | null)[] = [];
   const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);

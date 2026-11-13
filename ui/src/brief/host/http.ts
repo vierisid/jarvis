@@ -17,10 +17,14 @@ export function createHostTransport(send: typeof fetch = fetch, onUnauthorized: 
       if (body?.code === 'AWARENESS_OFF') throw new AwarenessOffError();
       throw new Error(`Request unavailable (${response.status})`);
     }
-    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error(`Request unavailable (${response.status})`);
+    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new RequestError(response.status);
     const value = await response.json(); lifetime.signal.throwIfAborted(); return value;
   };
   return { request, json, stop: () => lifetime.abort(), signal: lifetime.signal };
+}
+/** A read the host answered with an error status, so a caller can tell a missing record from a broken read. */
+export class RequestError extends Error {
+  constructor(readonly status: number) { super(`Request unavailable (${status})`); this.name = 'RequestError'; }
 }
 export type HostTransport = ReturnType<typeof createHostTransport>;
 export const post = (value: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });

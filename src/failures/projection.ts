@@ -53,7 +53,7 @@ export type RecoveryStep =
   | 'edit_and_run_again' | 'connect' | 'wait_or_switch_model' | 'bring_online' | 'ask_again' | 'review_authority'
   | 'check_before_running_again' | 'check_earlier_steps' | 'run_again' | 'resend' | 'check_before_resending' | 'open_details'
   | 'wait_and_run_again' | 'run_again_when_resumed' | 'accept_binding_change' | 'update_recipient' | 'update_desktop_app'
-  | 'change_request' | 'appeal_restriction';
+  | 'change_request' | 'appeal_restriction' | 'handle_less_data';
 
 export interface FailureLinks {
   runId?: string; flowId?: string; stepName?: string; effectId?: string;
@@ -162,6 +162,8 @@ const APPROVAL_WHY: Record<string, string> = {
   APPROVAL_WITHDRAWN: 'its approval was withdrawn', APPROVAL_REQUIRED: 'it now needs approval',
   EFFECT_CHANGED_AFTER_REVIEW: 'what it would do changed after it was approved',
 };
+/** The engine stopped a run whose recorded data passed the size Jarvis keeps for one run. */
+export const RUN_LOG_SIZE_EXCEEDED = 'RUN_LOG_SIZE_EXCEEDED';
 /** A notification that was sent on no channel at all (the notify step's own outcome). */
 const DELIVERY_FAILED = 'DELIVERY_FAILED';
 /** Readiness issues that name a binding rather than invalid input. */
@@ -207,6 +209,7 @@ const NEXT: Record<RecoveryStep, string> = {
   // Waiting does not lift a content policy block or an account restriction.
   change_request: 'Change what it asks, then try again. If you think it was blocked by mistake, contact support.',
   appeal_restriction: 'Contact support to appeal, or use your own AI provider.',
+  handle_less_data: 'Change the workflow to handle less data per run, for example fewer items or smaller results, then run it again.',
 };
 const next = (...steps: RecoveryStep[]) => steps.map(step => ({ step, label: NEXT[step] }));
 /** Recovery steps with their labels, for a reading that adjusts a projected failure. */
@@ -269,6 +272,11 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
         return build(uncertain ? 'uncertain_effect' : 'not_started', uncertain ? 'unknown' : 'none',
           `${s} could not complete the tools required for its task.`, uncertain ? MAYBE : NOTHING,
           ['review_authority', 'open_details'], links, code, detail);
+      }
+      // The size is checked after a step finishes, so nothing after that step started.
+      if (code === RUN_LOG_SIZE_EXCEEDED) {
+        return build('invalid_input', 'none', `${s} stopped: it produced more data than Jarvis keeps for one run (10 MB).`,
+          'Nothing after that point ran.', ['handle_less_data'], links, code, detail);
       }
       const browserTask = code ? BROWSER_TASK_FAILURES[code] : undefined;
       if (browserTask) return build(browserTask.category, o.effect === 'not_started' ? 'none' : 'unknown',

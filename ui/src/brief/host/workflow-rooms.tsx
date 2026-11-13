@@ -23,8 +23,11 @@ import { WorkflowViewHeader } from '../workflows/runs/WorkflowViewHeader';
 import type { InspectionSelection } from '../../../../src/brief/workflow-context-contracts';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import type { HostTransport } from './http';
-import { post } from './http';
+import { post, RequestError } from './http';
 import { needsManualRunInput } from '../../v2/rooms/workflows/trigger-kinds';
+
+/** The workflow and its version were read, but no run has the selected id. */
+class RunNotFound extends Error {}
 
 export interface WorkflowHost {
   scopeId: string; transport: HostTransport; capabilities(): unknown;
@@ -127,7 +130,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
   function Selected({ shell }: { shell: BriefShellPort }) {
     const { flowId, versionId, runId } = shell.route.selection;
     const [selection, setSelection] = useState<{ flowId: string; versionId: string; title: string; flow: Flow; editable: boolean; needsInput: boolean; inspection: InspectionSelection } | null>(null);
-    const [error, setError] = useState(false), [revision, retry] = useState(0);
+    const [error, setError] = useState<false | 'unavailable' | 'run-missing'>(false), [revision, retry] = useState(0);
     useEffect(() => {
       const abort = new AbortController(); setSelection(null); setError(false);
       void (async () => {
@@ -139,13 +142,15 @@ export function createWorkflowRooms(host: WorkflowHost) {
         if (!version || version.flowId !== flowId || !['DRAFT', 'LOCKED'].includes(version.state)) throw new Error('Version unavailable');
         if (shell.route.room === 'workflow-draft' && version.state !== 'DRAFT') throw new Error('Draft changed');
         const params = new URLSearchParams({ versionId: version.id }); if (runId) params.set('runId', runId);
-        const value = await transport.json(`/api/brief/workflows/${encodeURIComponent(flowId)}/inspection?${params}`, { signal: abort.signal });
+        // The workflow and version were just read, so a 404 here is the run that is missing.
+        const value = await transport.json(`/api/brief/workflows/${encodeURIComponent(flowId)}/inspection?${params}`, { signal: abort.signal })
+          .catch((e: unknown) => { throw runId && e instanceof RequestError && e.status === 404 ? new RunNotFound() : e; });
         if (value.status !== 'ready' || value.data?.scopeId !== scopeId || value.data.flowId !== flowId || value.data.versionId !== version.id) throw new Error('Inspection unavailable');
         if (!abort.signal.aborted) setSelection({ flowId, versionId: version.id, title: version.displayName, flow: detail.flow, editable: version.state === 'DRAFT', needsInput: needsManualRunInput(version.trigger), inspection: value.data });
-      })().catch(() => { if (!abort.signal.aborted) setError(true); });
+      })().catch((e: unknown) => { if (!abort.signal.aborted) setError(e instanceof RunNotFound ? 'run-missing' : 'unavailable'); });
       return () => abort.abort();
     }, [flowId, versionId, runId, shell.route.room, revision]);
-    if (!selection) return <section><h1 className="brief-type-room-title">Workflow</h1><p role="status">{error ? 'This workflow version is unavailable. Your selected IDs are retained.' : 'Loading workflow…'}</p>
+    if (!selection) return <section><h1 className="brief-type-room-title">Workflow</h1><p role="status">{error === 'run-missing' ? 'This run was not found.' : error ? 'This workflow version is unavailable. Your selected IDs are retained.' : 'Loading workflow…'}</p>
       {error && <BriefButton onClick={() => retry(v => v + 1)}>Check again</BriefButton>}<BriefButton onClick={() => shell.navigate({ room: 'all-workflows', selection: {} })}>All workflows</BriefButton></section>;
     const { runs, context } = controllers(selection.flowId, selection.versionId, selection.editable, selection.needsInput);
     const binding = { source: 'live' as const, scopeId, flowId: selection.flowId, versionId: selection.versionId, title: selection.title, capabilities: host.capabilities() };

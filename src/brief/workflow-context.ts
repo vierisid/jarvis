@@ -11,7 +11,7 @@ import { getRunRecovery } from '../workflows/runtime/recovery';
 import { bindingDrift, runConnectionBindingViews, type BindingDrift } from '../workflows/db/repos/binding-pins';
 import { boundedJson, canonicalManualPayload, inspectionId, inspectionValue, INSPECTION_LIMITS as LIMIT,
   object, opaque, WorkflowInspectionError } from './inspection-values';
-import type { ContextGroup, InspectionContext, InspectionContextEntry, InspectionRunDetail,
+import type { ContextGroup, InspectionContext, InspectionContextEntry, InspectionField, InspectionRunDetail,
   InspectionRunStatus, InspectionRunSummary, InspectionSelection, InspectionState, ManualInspectionRunResult } from './workflow-context-contracts';
 
 interface RunRow {
@@ -35,6 +35,19 @@ const runColumns = 'id, flow_id, flow_version_id, project_id, status, environmen
 /** One short label for Runs, Context and the start receipt (#1100). The full ID
  * stays in `runId`, which the views show as the label's title and in inspection. */
 const runLabel = (r: Pick<RunRow, 'id' | 'environment'>) => `${r.environment === 'TESTING' ? 'Test run' : 'Run'} ${r.id.slice(-6)}`;
+/** A loop's iterations a run page lists: this many from each end, and up to this many failed ones between. */
+const LOOP_ITERATIONS_EACH_END = 20, LOOP_FAILED_SHOWN = 10;
+function shownIterations(iterations: unknown[]): number[] {
+  if (iterations.length <= LOOP_ITERATIONS_EACH_END * 2) return iterations.map((_, i) => i);
+  const keep = new Set<number>();
+  for (let i = 0; i < LOOP_ITERATIONS_EACH_END; i++) { keep.add(i); keep.add(iterations.length - 1 - i); }
+  let failed = 0;
+  for (let i = LOOP_ITERATIONS_EACH_END; i < iterations.length - LOOP_ITERATIONS_EACH_END && failed < LOOP_FAILED_SHOWN; i++) {
+    const it = iterations[i];
+    if (object(it) && Object.values(it).some(child => object(child) && child.status === 'FAILED')) { keep.add(i); failed++; }
+  }
+  return [...keep].sort((a, b) => a - b);
+}
 /** The digest of a request ID a "not found" receipt read withdrew (#1162). Not a sha256 hex.
  * Fences have their own budget and expire after a day: a POST still in transit
  * is long settled by then, and a read must never use up the capacity for runs. */
@@ -49,7 +62,15 @@ function receipt(stored: string): ManualInspectionRunResult {
 const groups: ContextGroup[] = ['goal', 'memory', 'bindings', 'target', 'rules'];
 const kinds = { goal: 'Goal', memory: 'Memory', bindings: 'Connection', target: 'Device', rules: 'Rule' } as const;
 const referenceId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_:.-]{1,200}$/.test(v);
+/** A refusal for size or count, which a run's reading answers by leaving detail out. */
+const tooBig = (e: unknown) => e instanceof WorkflowInspectionError && e.status === 413;
 const safeName = (v: unknown, fallback: string) => inspectionId(v) ? v : fallback;
+/** A run's reading with every step and receipt kept but their values left out, said in the note. */
+function withoutValues(detail: InspectionRunDetail): InspectionRunDetail {
+  const left = (fields: InspectionField[]) => fields.map(f => ({ label: f.label, value: '[Omitted: this run is too large to show values here]' }));
+  return { ...detail, steps: detail.steps.map(s => ({ ...s, fields: left(s.fields) })), effects: detail.effects.map(e => ({ ...e, fields: left(e.fields) })),
+    inspection: { status: 'partial', note: `${detail.inspection.note ?? ''} This run is too large to show here, so its step and receipt values are left out.`.trim() } };
+}
 
 /** Read-only projections, plus the manual-start command called exclusively by the
  * existing /api/workflows/:id/run route. No recovery/effect state is written here. */
@@ -145,7 +166,12 @@ export class WorkflowContext {
       if (!v && !r) throw new WorkflowInspectionError('not_found', 404);
       const recordedVersion = r ? this.db.query<{ was_locked: number }, [string]>('SELECT was_locked FROM workflow_run_inspection_versions WHERE run_id=?').get(r.id) : null;
       const historical = !r || (recordedVersion ? recordedVersion.was_locked === 1 : !!v && v.updated < r.created);
-      const nodes = this.nodes(historical ? v : null, !r), context = this.context(flowId, versionId, r, v, nodes);
+      const nodes = this.nodes(historical ? v : null, !r);
+      // A run too big to read (receipts, rows, or an answer past the cap) is shown by its status, failure
+      // and timings alone. It never refuses the selection: the canvas and version must stay usable.
+      let context: InspectionContext;
+      try { context = this.context(flowId, versionId, r, v, nodes); }
+      catch (e) { if (!r || !tooBig(e)) throw e; context = this.tooLargeContext(flowId, versionId, r); }
       const canvas = nodes ? ready({ nodes: nodes.map(n => {
         const settings = object(n.settings) ? n.settings : {};
         return { id: String(n.name), type: safeName(n.type, 'UNKNOWN'), title: `Step ${n.name}`,
@@ -153,8 +179,16 @@ export class WorkflowContext {
           edges: [n.nextAction, n.firstLoopAction, ...(Array.isArray(n.children) ? n.children : [])]
             .filter(object).map(x => safeName(x.name, 'unknown')) };
       }) }) : missing('Immutable version unavailable: this run may have used an editable draft. Current configuration was not substituted.');
-      return this.result({ scopeId: this.projectId, flowId, versionId, runId, canvas, context,
-        run: r ? this.detailRow(r, nodes, context) : null });
+      const answer = (run: InspectionRunDetail | null) => ({ scopeId: this.projectId, flowId, versionId, runId, canvas, context, run });
+      if (!r) return this.result(answer(null));
+      // Past the answer cap, a run first keeps its steps and receipts with their statuses but
+      // without their values; only if that is still too large are they left out as well.
+      let detail: InspectionRunDetail;
+      try { detail = this.detailRow(r, nodes, context); }
+      catch (e) { if (!tooBig(e)) throw e; return this.result(answer(this.detailRow(r, nodes, context, true))); }
+      try { return this.result(answer(detail)); } catch (e) { if (!tooBig(e)) throw e; }
+      try { return this.result(answer(withoutValues(detail))); } catch (e) { if (!tooBig(e)) throw e; }
+      return this.result(answer(this.detailRow(r, nodes, context, true)));
     })();
   }
   detail(flowId: string, runId: string): InspectionRunDetail {
@@ -304,10 +338,21 @@ export class WorkflowContext {
       return e;
     });
   }
-  private detailRow(r: RunRow, nodes: Record<string, unknown>[] | null, context: InspectionContext): InspectionRunDetail {
-    const row = this.db.query<{ steps: string | null }, [string]>('SELECT substr(steps,1,4000001) AS steps FROM flow_run WHERE id=?').get(r.id)!;
-    const steps = boundedJson(row.steps), entries: Array<[string, unknown, string]> = [];
+  private tooLargeContext(flowId: string, versionId: string, r: RunRow): InspectionContext {
+    const none = missing('This run is too large to show here.');
+    return { scopeId: this.projectId, flowId, versionId, basis: 'recorded', runId: r.id, runLabel: runLabel(r), asOf: r.updated,
+      groups: { goal: none, memory: none, bindings: none, target: none, rules: none } };
+  }
+  /** `omit` leaves out the step data, receipts and waits: what a run too large to show here is read with. */
+  private detailRow(r: RunRow, nodes: Record<string, unknown>[] | null, context: InspectionContext, omit = false): InspectionRunDetail {
+    const row = this.db.query<{ steps: string | null; size: number }, [string]>(
+      'SELECT substr(steps,1,4000001) AS steps, length(CAST(steps AS BLOB)) AS size FROM flow_run WHERE id=?').get(r.id)!;
+    // A run that recorded more than can be read here (it hit the size Jarvis keeps for one run)
+    // still shows its status and failure; only its step data is left out.
+    const tooLarge = omit || row.size > LIMIT.sourceBytes;
+    const steps = tooLarge ? undefined : boundedJson(row.steps), entries: Array<[string, unknown, string]> = [];
     if (steps !== undefined && !object(steps)) throw new WorkflowInspectionError('record_unavailable', 503);
+    let stepsOmitted = false; const loopsOmitted: string[] = [];
     const pending: Array<{ path: string; label: string; value: unknown }> = [{ path: '', label: '', value: steps }];
     while (pending.length) {
       const part = pending.pop()!;
@@ -320,18 +365,23 @@ export class WorkflowContext {
           && typeof raw.output.type === 'string' && typeof raw.output.status === 'string' ? raw.output : raw;
         const path = opaque(JSON.stringify([part.path, name]));
         const label = (part.label + safeName(name, 'unknown')).slice(0, 450);
-        entries.push([label, step, path]); this.boundedRows(entries);
+        // A run with more steps than a page can show is shown in part, never refused: the
+        // step list, statuses and failure stay readable, and the note says what is left out.
+        if (entries.length >= LIMIT.rows) { stepsOmitted = true; continue; }
+        entries.push([label, step, path]);
         if (object(step) && step.type === 'LOOP_ON_ITEMS' && object(step.output) && Array.isArray(step.output.iterations)) {
-          if (step.output.iterations.length + pending.length > LIMIT.rows) throw new WorkflowInspectionError('inspection_capacity', 413);
-          step.output.iterations.forEach((value, i) => pending.push({ path: opaque(JSON.stringify([path, i])), label: label + `-iteration-${i + 1}-`, value }));
+          const iterations = step.output.iterations, shown = shownIterations(iterations);
+          if (shown.length < iterations.length) loopsOmitted.push(`Showing ${shown.length} of ${iterations.length} iterations of ${label}.`);
+          // Pushed last first so the stack reads them back in order.
+          for (const i of shown.reverse()) pending.push({ path: opaque(JSON.stringify([path, i])), label: label + `-iteration-${i + 1}-`, value: iterations[i] });
         }
       }
     }
-    const effects = this.effects(r).map((e, i) => ({ id: safeName(e.id, `receipt-${i}`), label: e.route === 'agent' ? 'Agent dispatch authorization' : `Effect receipt ${i + 1}`,
+    const effects = (omit ? [] : this.effects(r)).map((e, i) => ({ id: safeName(e.id, `receipt-${i}`), label: e.route === 'agent' ? 'Agent dispatch authorization' : `Effect receipt ${i + 1}`,
       status: ['pending','dispatching','succeeded','failed','blocked','unknown'].includes(String(e.status)) ? e.status as InspectionRunDetail['effects'][number]['status'] : 'unknown' as const,
       description: e.route === 'agent' ? 'This records permission to start the agent, not whether its task succeeded.' : 'Recorded effect status. Arguments, results and free text use conservative redaction.',
       fields: [inspectionValue('Arguments', e.arguments), inspectionValue('Result', e.result), inspectionValue('Outcome', e.outcome)] }));
-    const waits = this.boundedRows(this.db.query<{ rowid: number; step_name: string; type: string; resumed_at: number | null }, [string, string]>(
+    const waits = this.boundedRows(omit ? [] : this.db.query<{ rowid: number; step_name: string; type: string; resumed_at: number | null }, [string, string]>(
       'SELECT rowid,step_name,type,resumed_at FROM waitpoint WHERE flow_run_id=? AND project_id=? ORDER BY rowid LIMIT 201').all(r.id, this.projectId))
       // Never expose the bearer waitpoint ID, even for authenticated inspection.
       .map((w) => ({ id: `wait-${w.rowid}`, stepName: safeName(w.step_name, 'unknown-step'), label: 'Recorded wait', status: w.resumed_at === null ? 'waiting' as const : 'resolved' as const }));
@@ -358,7 +408,7 @@ export class WorkflowContext {
           status: typeof s.status === 'string' ? status(s.status) : 'uncertain',
           fields: [inspectionValue('Input', s.input), inspectionValue('Output', s.output)] }; }),
       effects, waits, context: used,
-      inspection: { status: 'partial', note: `Text values and field names are redacted. Context covers retained records only.${nodes ? '' : ' Immutable historical graph unavailable.'}${steps == null ? ' Step data was not recorded.' : ''}` } };
+      inspection: { status: 'partial', note: `Text values and field names are redacted. Context covers retained records only.${nodes ? '' : ' Immutable historical graph unavailable.'}${omit ? ' This run is too large to show here, so its steps and receipts are not listed.' : tooLarge ? ' This run recorded more step data than can be shown here, so its steps are not listed.' : steps == null ? ' Step data was not recorded.' : ''}${loopsOmitted.slice(0, 5).map(n => ` ${n}`).join('')}${loopsOmitted.length > 5 ? ` ${loopsOmitted.length - 5} more loops are shown in part.` : ''}${stepsOmitted ? ` Showing the first ${LIMIT.rows} steps.` : ''}` } };
   }
   request(flowId: string, requestId: string): ManualInspectionRunResult {
     this.assertReady();

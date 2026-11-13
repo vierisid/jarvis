@@ -373,7 +373,7 @@ function RunDocument({ run }: { run: RunDetail }) {
         ))}
       </ol>
       {run.steps.length === 0 && (
-        <p className="brief-runs-muted">No step results recorded yet.</p>
+        <p className="brief-runs-muted">No step results to show.</p>
       )}
       {run.effects.length > 0 && (
         <section className="brief-run-evidence">

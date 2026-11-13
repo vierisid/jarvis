@@ -882,6 +882,31 @@ describe("workflow API: runs", () => {
     );
     expect(status).toBe(200);
     expect(body.id).toBe(runId);
+    expect(body.stepsTruncated).toBeUndefined();
+  });
+
+  test("a run that recorded more step data than one answer carries is answered with its steps outlined", async () => {
+    const created = await callJson(routes["/api/workflows"]?.POST, plainReq("POST", "http://x", { displayName: "x" }));
+    const flowId = created.body.flow.id;
+    const run = await callJson(
+      routes["/api/workflows/:id/run"]?.POST,
+      reqWithParams("POST", `http://x/api/workflows/${flowId}/run`, { id: flowId }, {}),
+    );
+    const runId: string = run.body.id;
+    const { updateRun } = await import("../db/repos/flow-run");
+    const big = "x".repeat(300_000);
+    updateRun(runId, { steps: {
+      small: { output: { type: "CODE", status: "SUCCEEDED", output: "ok" } },
+      loop: { output: { type: "LOOP_ON_ITEMS", status: "SUCCEEDED", output: { iterations: Array.from({ length: 10 }, () => ({ a: { output: big } })) } } },
+    } });
+    const get = await callJson(routes["/api/workflow-runs/:runId"]?.GET, reqWithParams("GET", `http://x/api/workflow-runs/${runId}`, { runId }));
+    expect(get.status).toBe(200);
+    expect(get.body.stepsTruncated).toBe(true);
+    expect(get.body.steps).toEqual({ small: { type: "CODE", status: "SUCCEEDED" }, loop: { type: "LOOP_ON_ITEMS", status: "SUCCEEDED" } });
+    expect(JSON.stringify(get.body).length).toBeLessThan(50_000);
+    const list = await callJson(routes["/api/workflows/:id/runs"]?.GET, reqWithParams("GET", `http://x/api/workflows/${flowId}/runs`, { id: flowId }));
+    expect(list.body.items[0].stepsTruncated).toBe(true);
+    expect(JSON.stringify(list.body).length).toBeLessThan(50_000);
   });
 });
 
