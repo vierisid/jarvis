@@ -28,6 +28,9 @@ import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-e
 import { walkFlowNodes } from '../db/flow-graph';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import { nodeConnectionReferences, type RunConnectionBindingView } from '../db/repos/binding-pins';
+import { calledWorkflowFailure, plainStepMessage, serverRefusalStatus } from '../../failures/step-error';
+import { GRAPHQL_PIECE, HTTP_PIECE } from './piece-effects';
+import { SUBFLOW_PIECE } from './subflow-contract';
 import { expressionFailureGuidance } from './expression-failure';
 import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, isHumanInputStep } from './human-input-contract';
 
@@ -54,7 +57,7 @@ function failure(effect: WorkflowEffect): ActionFailure | null {
 }
 
 /** A step that can reach the outside world without an effect record: CODE, or a piece that is not Jarvis's own. */
-function untracked(node: FlowTriggerNode): boolean {
+export function untracked(node: FlowTriggerNode): boolean {
   return node.type === 'CODE' || (node.type === 'PIECE' && !node.settings?.pieceName?.startsWith(JARVIS_PIECE_PREFIX));
 }
 
@@ -126,8 +129,8 @@ function credentialFailureFor(run: FlowRun, node: FlowTriggerNode): RunConnectio
   return bindings.find(binding => binding.credentialFailure) ?? null;
 }
 
-/** The typed refusals of a human input step (#1266). */
-const HUMAN_INPUT_REFUSALS = [HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE];
+/** The typed refusals of a human input step (#1266), and the denial of a Wait for Approval step that was not approved. */
+const HUMAN_INPUT_REFUSALS = [HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, 'APPROVAL_DENIED', 'APPROVAL_EXPIRED'];
 const HUMAN_INPUT_REFUSAL = new RegExp(`"outcome":\\s*\\{[^{}]*"code":\\s*"(${HUMAN_INPUT_REFUSALS.join('|')})"`);
 
 /**
@@ -159,6 +162,26 @@ function unsupportedToolRefusal(node: FlowTriggerNode | undefined, message: stri
     && !message.includes(`Unsupported direct workflow capability: ${tool} has opaque code/UI effects`)) return null;
   return { status: 'blocked', code: 'WORKFLOW_TOOL_UNSUPPORTED', effect: 'not_started',
     message: 'This tool was not supported by the workflow execution path used by this run.' };
+}
+
+/**
+ * What the failed step's own error text settles: an HTTP or GraphQL step whose
+ * server answered 4xx was turned away, and a call step whose child run ended
+ * Failed is known to have failed. Anything else (a timeout, a dropped
+ * connection, a server error, a child that never reported back) is not read
+ * here and stays uncertain.
+ */
+function settledByStepError(node: FlowTriggerNode | undefined, message: string | undefined): FailureEvidence | null {
+  const piece = node?.settings?.pieceName;
+  if (piece === HTTP_PIECE || piece === GRAPHQL_PIECE) {
+    const status = serverRefusalStatus(message);
+    return status === null ? null : { source: 'step_result', result: { kind: 'server_refused', status } };
+  }
+  if (piece === SUBFLOW_PIECE) {
+    const failed = calledWorkflowFailure(message);
+    return failed ? { source: 'step_result', result: { kind: 'child_failed', ...(failed.child ? { child: failed.child } : {}) } } : null;
+  }
+  return null;
 }
 
 /**
@@ -235,7 +258,8 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
       evidence = { source: 'action', outcome };
     }
   } else {
-    evidence = { source: 'unknown', message: step.errorMessage ?? `${step.displayName} failed` };
+    const settled = settledByStepError(node, step.errorMessage);
+    evidence = settled ?? { source: 'unknown', message: plainStepMessage(step.errorMessage ?? `${step.displayName} failed`) };
     // A record still pending (waiting on approval, or refused before its claim) never dispatched.
     sideEffects = own.some(dispatched) || !node || untracked(node);
   }
