@@ -5,6 +5,7 @@ import type { BriefMeasurement, BriefOutcome, BriefReadResult, BriefEvidenceRef 
 import { outcomeWindow, outcomeCalendar, type OutcomeWindow } from './outcome-windows';
 import { estimateMinutesFromJson, MAX_ESTIMATED_MINUTES_PER_WORKFLOW_PER_DAY } from '../workflows/time-saved-estimate';
 import { DEFAULT_IDS } from '../workflows/db/index';
+import { hasFailedStep } from '../workflows/runtime/continued-failures';
 import { OutcomeConflict, outcomeId, readOutcomeTime, timeBack, timeCommand, type OutcomeTimeRecord } from './outcome-time';
 
 type WorkRow = { work_id: string; goal_id: string | null; mode: string; workflow_id: string | null; workflow_version_id: string | null;
@@ -35,18 +36,6 @@ type Read<T> = BriefReadResult<T> & { coverage?: OutcomeCoverage };
 const parse = <T>(s: string | null): T | null => { try { return s ? JSON.parse(s) : null; } catch { return null; } };
 const within = (at: number, w: OutcomeWindow, now: number) => Number.isSafeInteger(at) && at >= w.start && at < w.end && at <= now;
 const source = (id: string, revision: string): BriefEvidenceRef => ({ kind: 'source', id, revision });
-/** A step that FAILED and was continued past, here or in a loop iteration, as the engine records `flow_run.steps`. */
-function continuedPastFailure(steps: unknown, depth = 0): boolean {
-  if (!steps || typeof steps !== 'object' || Array.isArray(steps) || depth > 16) return false;
-  for (const raw of Object.values(steps)) {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
-    const step = raw as { status?: unknown; output?: { iterations?: unknown } | null };
-    if (step.status === 'FAILED') return true;
-    const iterations = step.output && typeof step.output === 'object' ? step.output.iterations : undefined;
-    if (Array.isArray(iterations) && iterations.some(iteration => continuedPastFailure(iteration, depth + 1))) return true;
-  }
-  return false;
-}
 /** Default estimates stop at the per-workflow daily cap, earliest runs first; owner-set minutes are never capped. */
 function capEstimates(groups: RunGroup[]): RunGroup[] {
   const used = new Map<string, number>();
@@ -218,7 +207,7 @@ export class Outcomes {
     for (const row of rows) byKey.set(`${row.flow_id}|${row.flow_version_id}|${row.day}`, row);
     for (const row of suspects.slice(0, MAX_SUSPECT_RUNS)) {
       const steps = row.child_failed ? null : parse<unknown>(row.steps);
-      if (row.child_failed || steps === null || continuedPastFailure(steps)) { partial[row.day]!++; continue; }
+      if (row.child_failed || steps === null || hasFailedStep(steps)) { partial[row.day]!++; continue; }
       clean[row.day]!++;
       const key = `${row.flow_id}|${row.flow_version_id}|${row.day}`, group = byKey.get(key);
       if (group) { group.runs++; group.last = Math.max(group.last, row.finish_time); }

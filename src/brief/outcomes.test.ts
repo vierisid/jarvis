@@ -462,19 +462,25 @@ test('runs of a workflow in another project never count here', async () => {
   expect((await summary()).week?.value).toBe(4);
   expect(ready<OutcomeSummary>(await new Outcomes(getDb(), 'jrv_proj_other').summary({ timezone: 'UTC' })).week?.value).toBe(9);
 });
+// The engine keeps each step as `{ output: envelope }` and a loop's rounds under the envelope's `output.iterations`.
+const recorded = (status: string, extra: object = {}) => ({ output: { type: 'PIECE', status, ...extra } });
+const loopRounds = (...statuses: string[]) => ({ output: { type: 'LOOP_ON_ITEMS', status: 'SUCCEEDED', output: { index: statuses.length,
+  iterations: statuses.map(status => ({ step_2: { type: 'PIECE', status } })) } } });
 test('a run that succeeded only by continuing past a failed step is not counted, and the basis says so', async () => {
-  const f = runFlow({ minutes: 5, runs: 3 });
-  updateRun(f.runs[0]!.id, { steps: { step_1: { status: 'FAILED', output: null }, step_2: { status: 'SUCCEEDED', output: {} } } });
-  updateRun(f.runs[1]!.id, { steps: { loop: { status: 'SUCCEEDED', output: { iterations: [{ step_1: { status: 'SUCCEEDED' } }, { step_1: { status: 'FAILED' } }] } } } });
+  const f = runFlow({ minutes: 5, runs: 4 });
+  updateRun(f.runs[0]!.id, { steps: { step_1: recorded('FAILED', { errorMessage: 'boom' }), step_2: recorded('SUCCEEDED') } });
+  updateRun(f.runs[1]!.id, { steps: { loop: loopRounds('SUCCEEDED', 'FAILED') } });
   // Output that only quotes a failure is not one: the run did its work.
-  updateRun(f.runs[2]!.id, { steps: { step_1: { status: 'SUCCEEDED', output: { build: { status: 'FAILED' } } } } });
+  updateRun(f.runs[2]!.id, { steps: { step_1: recorded('SUCCEEDED', { output: { build: { status: 'FAILED' } } }) } });
+  updateRun(f.runs[3]!.id, { steps: { loop: loopRounds('SUCCEEDED', 'SUCCEEDED'), step_3: recorded('SUCCEEDED', { output: { note: '"status":"FAILED"' } }) } });
   const view = await summary();
-  expect(view.week?.value).toBe(5);
-  expect(view.weekBasis).toBe('1 run x 5 min. You set the minutes per run. 2 runs that continued past a failure are not counted.');
+  expect(view.week?.value).toBe(10);
+  expect(view.weekBasis).toBe('2 runs x 5 min. You set the minutes per run. 2 runs that continued past a failure are not counted.');
   expect(view.todayBasis).toBe(view.weekBasis);
-  updateRun(f.runs[2]!.id, { steps: { step_1: { status: 'FAILED' } } });
+  updateRun(f.runs[2]!.id, { steps: { step_1: recorded('FAILED') } });
+  updateRun(f.runs[3]!.id, { steps: { loop: loopRounds('FAILED') } });
   const none = await summary();
-  expect(none.week?.value).toBe(0); expect(none.weekBasis).toBe('No time saved. 3 runs that continued past a failure are not counted.');
+  expect(none.week?.value).toBe(0); expect(none.weekBasis).toBe('No time saved. 4 runs that continued past a failure are not counted.');
 });
 test('a root run whose child run did not succeed is not counted until it does', async () => {
   const f = runFlow({ minutes: 6 });
