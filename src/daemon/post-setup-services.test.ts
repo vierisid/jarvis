@@ -97,3 +97,38 @@ test('nonfatal Awareness failure remains unavailable until disabled or running',
   running = true;
   expect(services.readiness()).toBe('running');
 });
+
+// Owner decision 2026-11-11: awareness off at boot never started the service,
+// so turning it on later only saved the choice until a restart.
+test('awareness turned on after a boot with it off is started, once setup has completed', async () => {
+  let enabled: boolean | undefined = false, starts = 0;
+  const services = createPostSetupServices({
+    startCore: async () => {},
+    coreRunning: () => true,
+    awareness: { enabled: () => enabled, start: async () => { starts++; }, running: () => starts > 0 },
+  });
+  enabled = true;
+  // Before setup completes the onboarding start brings it up, not the switch.
+  await services.startAwarenessIfNeeded();
+  expect(starts).toBe(0);
+  enabled = false;
+  await services.start();
+  expect(starts).toBe(0);
+  await services.startAwarenessIfNeeded();
+  expect(starts).toBe(0);
+  enabled = true;
+  await services.startAwarenessIfNeeded();
+  expect(starts).toBe(1);
+  expect(services.readiness()).toBe('running');
+});
+
+test('a deployment without local tools never starts awareness from the switch', async () => {
+  let starts = 0;
+  const services = createPostSetupServices({
+    startCore: async () => {}, coreRunning: () => true, noLocalTools: true,
+    awareness: { enabled: () => true, start: async () => { starts++; }, running: () => false },
+  });
+  await services.start();
+  await services.startAwarenessIfNeeded();
+  expect(starts).toBe(0);
+});
