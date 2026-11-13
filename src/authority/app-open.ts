@@ -34,11 +34,15 @@ import { notchEnabled } from '../notch/switch.ts';
 /** How the request id of a turn started on the notch begins (src/notch/asks.ts). */
 export const NOTCH_REQUEST_ID = /^notch-(typed|spoken)-/;
 
-/** Whether the code running now is inside a turn the owner started on the notch. */
+/**
+ * Whether the code running now is inside a turn the owner started on the
+ * notch, and that turn is still going. Once it has ended or been stopped
+ * (Esc), whatever it left running has no standing from it.
+ */
 export function ownerAskedOnNotch(): boolean {
   if (!notchEnabled()) return false;
   const turn = currentBriefTurn();
-  return !!turn && NOTCH_REQUEST_ID.test(turn.requestId);
+  return !!turn && NOTCH_REQUEST_ID.test(turn.requestId) && turn.over !== true && !turn.signal.aborted;
 }
 
 /**

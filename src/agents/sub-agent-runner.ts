@@ -49,6 +49,7 @@ import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { mergeProfiles, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
 import { runAsActingAgent } from './acting-agent.ts';
 import { appOpenNeedsNoApproval } from '../authority/app-open.ts';
+import { OWNER_WORD_REASON, ownerWord } from '../authority/owner-word.ts';
 
 const MAX_TOOL_ITERATIONS = 100; // Lower than primary's 200 — sub-agents should be focused
 const MAX_TOOL_RESULT_CHARS = 6000;
@@ -511,9 +512,15 @@ async function executeTool(
     const toolCategory = tool?.category ?? 'unknown';
     const gate = resolveToolGate(tool, toolCall.name, toolCall.arguments);
     const actionCategory = gate.actionCategory;
+    // Saying it is the approval (authority/owner-word.ts): a helper working
+    // on something the owner asked for on the notch is not stopped for a yes
+    // either, unless the call reads as a delete or a payment. Never inside a
+    // workflow's governed run, which has its own review.
+    const word = governedTools ? null : await ownerWord(toolCall.name, toolCall.arguments, gate);
+    const onOwnersWord = word === 'go';
 
     // Mandatory confirmation is refused unless a workflow can park this guarded browser call for review.
-    if (gate.confirm === 'always' && !(governedTools && workflowUiReview(tool, toolCall.name, toolCall.arguments))) {
+    if (gate.confirm === 'always' && !onOwnersWord && !(governedTools && workflowUiReview(tool, toolCall.name, toolCall.arguments))) {
       auditTrail?.log({
         agent_id: agent.id,
         agent_name: agent.agent.role.name,
@@ -535,7 +542,7 @@ async function executeTool(
       temporaryGrants: temporaryGrants ?? new Map(),
       // Opening an app the owner asked for on the notch is not held back by
       // outside content, here as in the turn itself (authority/app-open.ts).
-      profile: appOpenNeedsNoApproval(toolCall.name, toolCall.arguments) ? (authorityCtx.profile ?? null) : (profile ?? null),
+      profile: onOwnersWord || appOpenNeedsNoApproval(toolCall.name, toolCall.arguments) ? (authorityCtx.profile ?? null) : (profile ?? null),
     });
     // The same substitution the orchestrator makes: a gated call whose worst
     // case is above this agent's level, when the agent clears the tool's
@@ -566,7 +573,13 @@ async function executeTool(
       return { text: `[AUTHORITY DENIED] ${toolCall.name}: ${decision.reason}`, failed: true };
     }
 
-    if (decision.requiresApproval || gate.confirm === 'always') {
+    if (onOwnersWord) {
+      // Allowed, and asked for by the owner: it runs like any allowed call.
+      console.log(`[Authority] ${toolCall.name} (${actionCategory}) goes ahead in a helper: ${OWNER_WORD_REASON}`);
+    } else if (decision.requiresApproval || gate.confirm === 'always' || word === 'ask') {
+      // (`ask`: a delete or a payment in something the owner asked for on the
+      // notch. A helper cannot hold the question, so it is refused here and
+      // the agent that can ask does it.)
       if (!governedTools) {
         // Nobody can hold the approval, so the call is refused. The row says
         // approval was required and nothing ran.

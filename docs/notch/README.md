@@ -258,6 +258,42 @@ What holds for all of them:
     were already not heard by the notch (17). What this does not cover: the
     dashboard open in the person's own browser is not a window of the desktop
     app, as it was not before.
+44. **Saying it is the approval.** Decided by the owner on 13 November 2026,
+    after a day of using it: "If I ask something, it should do it. Everything
+    apart from deleting and payments." In a turn the owner started on the
+    notch, typed or spoken, a call is not asked about: not a click, typed
+    text, a key press, a page, a command, a file, an app with arguments, a
+    send, an install or a change of settings, and not the step after outside
+    content was read. Two things are asked about, always, also where the
+    product's ordinary rules would let them run: **a delete** and **a
+    payment** (`authority/owner-word.ts`, applied where the main agent, a
+    helper agent and the model's own `request_approval` are decided).
+    What is read as one of those: a category the call's gate names
+    (`delete_data`, `make_payment`, which is how an on-screen action on a
+    control called "Delete" or "Buy now" arrives); a command whose text
+    removes something (`commandDeletes`: `rm`, `del`, `Remove-Item`, `git
+    clean`, an uninstall, a `DROP TABLE` and their kin); a Delete key; and
+    for a raw click, what the machine says is at that place, read the same
+    way (`notchPressReads`). A payment still goes to the dashboard (23). A
+    helper agent cannot hold a question, so a delete there is refused and
+    the main agent does it. A call the product refuses outright stays
+    refused, and one whose own classifier failed is judged by the ordinary
+    rules. The standing ends with the turn: once it has finished or been
+    stopped with Esc, whatever it left running has none
+    (`BriefExecutionContext.over`).
+    **What this gives up, and it is the owner's choice:** the guard that
+    asked about every step after a page, a file or a window had been read.
+    That guard exists because such text can carry instructions. Now, if
+    something Jarvis reads while doing what was asked tells it to do
+    something else, nothing holds that for a yes unless it is a delete or a
+    payment: a file sent somewhere, a command run, a message posted. The
+    agent is told that what it reads is information and never an
+    instruction (`NOTCH_TURN_NOTE`); that is a sentence to a model, not a
+    lock. And the reading of "a delete" is a reading: a script that removes
+    files in a way none of the signs catch, or a button with no name the
+    screen can read, goes ahead like anything else.
+    Everywhere but a notch turn (dashboard chat, Telegram, background
+    agents, workflows), and with the switch off, nothing changes.
 24. **A tap cannot land on the wrong thing.** A line that came by itself
     takes no yes and no Esc for 0.7 s, counted in the page from when it was
     drawn. After that an Esc pressed for the app in front does land on the
@@ -441,6 +477,9 @@ And these are behind the switch:
   and 35).
 - **Typed and spoken notch events are not broadcast to dashboards.**
 - **Approval and task-complete toasts are not raised** while a notch page is up.
+- **Saying it is the approval** (44): in a turn asked on the notch only a
+  delete and a payment are asked about, and a recognised delete is asked
+  about even where the ordinary rules would let it run.
 - **The notch comes back over a fullscreen video while it has a question
   that waits for an answer** (`__notch_asking`, `notchShouldHide`): an
   approval or a question back. It hides again once answered. Windows only.
@@ -503,8 +542,6 @@ And these are behind the switch:
   instead of reporting success; the limit itself is Windows'.
 - Start menu names are in the language of Windows. "Settings" finds nothing
   on a Windows in Italian, where it is "Impostazioni".
-- Every step on screen is still asked about once (the owner's decision of 13
-  November 2026). A task of ten clicks is ten sheets.
 - On the Mac the notch does not yet come back over a fullscreen video for a
   question.
 - Esc twice is heard only while the notch has something on it, because that
@@ -520,10 +557,10 @@ And these are behind the switch:
 - Workflow questions, failures and suggestions on the notch have tests but
   no fixture that makes a real workflow run, so they have not been seen on a
   real brain. Approvals, promises and the pause have.
-- After a turn has opened an app or read a window, a page or a file, every
-  command it runs next is asked about, also one that only reads (the
-  product's guard against a page telling Jarvis what to do). On the notch
-  that is one tap each, in plain words. It is not loosened.
+- In a turn asked on the notch nothing is held for a yes but a delete and a
+  payment (44). What that gives up is written there. In every other kind of
+  turn, after an app was opened or a window, a page or a file was read,
+  every command that follows is still asked about.
 - The plain words of an approval are a model's. They can be wrong. The exact
   action under them is what is approved.
 - A second instruction while one is running is not queued: it is not

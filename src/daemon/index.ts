@@ -169,7 +169,7 @@ import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { attachNotchReal } from "../notch/real.ts";
 import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
-import { notchAskDeps, notchScriptDeps, notchTurnNote } from "./notch-asks.ts";
+import { notchAskDeps, notchScriptDeps, notchTurnNote, wireOwnerWord } from "./notch-asks.ts";
 import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
@@ -4535,6 +4535,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // yes goes through applyApprovalDecision like every other surface's, as
     // its own decider, so decided-once and every refusal hold there too.
     if (notchSurface) {
+      // Saying it is the approval: a raw click goes ahead unasked unless what
+      // it lands on reads as a delete or a payment, so that has to be known
+      // before the click (authority/owner-word.ts).
+      wireOwnerWord();
       notchReal = attachNotchReal(notchSurface, {
         busy: () => notchDemo?.running() != null,
         approvalManager,

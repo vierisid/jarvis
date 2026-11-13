@@ -11,6 +11,7 @@
  * It is never given to a model: a window can be called anything.
  */
 import type { ApprovalRequest } from '../authority/approval.ts';
+import type { ActionCategory } from '../roles/authority.ts';
 import { uiEffectHints } from '../authority/ui-intent.ts';
 import { pointerRequest } from '../actions/tools/desktop.ts';
 import type { NotchApprovalWhere } from '../notch/approvals.ts';
@@ -82,6 +83,39 @@ export function notchPlacePays(reply: unknown): boolean {
 
 /** The actions that press what is there, as against looking at it, scrolling it or moving it. */
 const PRESSES = new Set(['click', 'double_click', 'invoke', 'select', 'toggle']);
+
+/**
+ * What a raw press would land on, read as the product reads a control's label:
+ * the categories a click on that name means (`delete_data`, `make_payment`,
+ * a send, a settings change), or none. For the owner's word
+ * (authority/owner-word.ts), which lets a click go ahead unasked unless it is
+ * a delete or a payment and so has to know before the click, not on a sheet.
+ * Nothing is read when the screen may not be read, and a machine that cannot
+ * say reads as nothing.
+ */
+export async function notchPressReads(toolName: string, args: Record<string, unknown>, deps: NotchWhereDeps): Promise<ActionCategory[]> {
+  if ((toolName !== 'desktop_click' && toolName !== 'desktop_pointer') || !deps.allowed()) return [];
+  const action = typeof args.action === 'string' && args.action ? args.action : 'click';
+  if (!PRESSES.has(action)) return [];
+  const target = deps.target(args.target, toolName);
+  if (!target) return [];
+  let params: Record<string, unknown>;
+  if (toolName === 'desktop_pointer') {
+    const place = pointerRequest(args, deps.seen(target));
+    if (typeof place === 'string') return [];
+    params = { fx: place.fx, fy: place.fy };
+  } else if (typeof args.element_id === 'number') {
+    params = { element_id: args.element_id };
+  } else {
+    return [];
+  }
+  const reply = await deps.ask(target, params);
+  if (!reply || typeof reply !== 'object' || Array.isArray(reply)) return [];
+  const said = reply as Record<string, unknown>;
+  const name = typeof said.element_name === 'string' ? said.element_name : '';
+  const title = typeof said.window_title === 'string' ? said.window_title : '';
+  return name ? uiEffectHints('click', name, title) : [];
+}
 
 /** The place an approval would land on, or null when it acts on nothing on a screen or the machine cannot say. */
 export async function notchApprovalWhere(request: Pick<ApprovalRequest, 'tool_name' | 'tool_arguments'>, deps: NotchWhereDeps): Promise<NotchApprovalWhere | null> {

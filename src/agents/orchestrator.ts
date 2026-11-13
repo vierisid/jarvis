@@ -16,6 +16,7 @@ import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFail
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } from '../authority/taint-gating.ts';
 import { appOpenNeedsNoApproval } from '../authority/app-open.ts';
+import { OWNER_WORD_ASKS_REASON, OWNER_WORD_REASON, ownerWord } from '../authority/owner-word.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { RealtimeTaint } from './realtime-taint.ts';
 import type { TurnTaintLink } from './turn-taint-carry.ts';
@@ -2057,6 +2058,11 @@ export class AgentOrchestrator {
       // own per-call gate when it has one (run_skill classifies the stored
       // steps it is about to replay).
       const gate = resolveToolGate(tool, toolCall.name, toolCall.arguments);
+      // Saying it is the approval (authority/owner-word.ts): in a turn the
+      // owner started on the notch a call is not asked about, unless it reads
+      // as a delete or a payment.
+      const word = await ownerWord(toolCall.name, toolCall.arguments, gate);
+      const onOwnersWord = word === 'go';
       const check = (category: ActionCategory): AuthorityDecision => this.authorityEngine!.checkAuthority({
         agentId: primary.id,
         agentAuthorityLevel: primary.agent.authority.max_authority_level,
@@ -2068,7 +2074,8 @@ export class AgentOrchestrator {
         // Opening an app the owner asked for on the notch is not held back
         // by outside content read earlier in the turn: the configured
         // profile alone applies to it (authority/app-open.ts).
-        profile: appOpenNeedsNoApproval(toolCall.name, toolCall.arguments) ? this.authorityProfile : this.getEffectiveProfile(),
+        // The same holds for everything else the owner's word covers.
+        profile: onOwnersWord || appOpenNeedsNoApproval(toolCall.name, toolCall.arguments) ? this.authorityProfile : this.getEffectiveProfile(),
       });
 
       // The call must clear every category it reaches (a skill that clicks
@@ -2086,6 +2093,18 @@ export class AgentOrchestrator {
       // whatever the level, the overrides or the learned approvals say.
       if (gate.confirm === 'always' && decision.allowed && !decision.requiresApproval) {
         decision = { ...decision, requiresApproval: true, reason: `${toolCall.name} requires user approval` };
+      }
+
+      // ...except by the person themselves, who has: they asked for it on the
+      // notch. A call the product refuses outright stays refused.
+      if (onOwnersWord && decision.allowed && decision.requiresApproval) {
+        decision = { ...decision, requiresApproval: false, reason: OWNER_WORD_REASON };
+        console.log(`[Authority] ${toolCall.name} (${decision.actionCategory}) goes ahead: ${OWNER_WORD_REASON}`);
+      }
+      // The other half of the same decision: what deletes or pays is asked
+      // about, also where the ordinary rules would have let it run unasked.
+      if (word === 'ask' && decision.allowed && !decision.requiresApproval) {
+        decision = { ...decision, requiresApproval: true, reason: `${toolCall.name}: ${OWNER_WORD_ASKS_REASON}` };
       }
 
       // The category the decision was made on: the worst case when allowed,
