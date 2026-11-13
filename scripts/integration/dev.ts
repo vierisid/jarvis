@@ -1,4 +1,9 @@
-/** Real daemon and sidecar acceptance. No fixtures or model substitutions. */
+/**
+ * Real daemon and sidecar acceptance. No fixtures, and no model is substituted
+ * by this script. One exception exists and is opt-in: with the notch's dev gate
+ * open and no model set up, a script can be loaded into a stand-in model
+ * (src/llm/scripted.ts). The brain says so in its log when that happens.
+ */
 import { mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';

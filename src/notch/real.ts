@@ -10,7 +10,13 @@
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
 import type { ApprovalDecisionOutcome } from '../daemon/approval-decision.ts';
+import type { Database } from 'bun:sqlite';
 import { NOTCH_APPROVAL_LOOK_MS, attachNotchApprovals } from './approvals.ts';
+import { attachNotchAsks } from './asks.ts';
+import type { NotchAsks, NotchAsksDeps } from './asks.ts';
+import { NotchLedger } from './ledger.ts';
+import { attachNotchTalk } from './talk.ts';
+import type { NotchTalk, NotchTalkDeps, NotchTalkPort } from './talk.ts';
 import type { NotchApprovals } from './approvals.ts';
 import type { CommitmentEvent, CommitmentRunner } from '../daemon/commitment-executor.ts';
 import { NOTCH_FIXTURE_ORIGIN, createNotchFixtures, notchFixturePromiseRun } from './fixtures.ts';
@@ -27,7 +33,7 @@ import type { NotchClock } from './stage.ts';
 import type { NotchSurface } from './surface.ts';
 import { attachNotchSuggestions } from './suggestions.ts';
 import type { NotchSuggestions } from './suggestions.ts';
-import { notchTodayScript } from './today.ts';
+import { notchToday, notchTodayBlocks, notchTodayScript } from './today.ts';
 
 export interface NotchRealDeps {
   /** Something else has the notch for now (a demo moment is playing). */
@@ -74,6 +80,21 @@ export interface NotchRealDeps {
   recordFixtureFailure?: () => string;
   /** The product's pause: Esc twice pauses through it, and the notch shows its state whoever changed it. */
   emergency?: NotchPauseDeps['controller'];
+  /**
+   * Asking: typed in Home, or spoken while the talk keys are held. With this
+   * given, yes at rest opens the text field with today under it.
+   */
+  asks?: {
+    /** Where the ledger of instructions is kept. */
+    db: Database;
+    turns: NotchAsksDeps['turns'];
+    modelReady: NotchAsksDeps['modelReady'];
+    remember?: NotchAsksDeps['remember'];
+    understand?: NotchAsksDeps['understand'];
+    /** The desktop app's recordings arrive as its events. */
+    talkPort: NotchTalkPort;
+    stt: NotchTalkDeps['stt'];
+  };
   /** The clock the lines on the notch run on. Tests give one they can wind forward. */
   clock?: NotchClock;
   log?: (line: string) => void;
@@ -87,6 +108,9 @@ export interface NotchReal {
   /** Where suggestion toasts go while the notch is on: the count. */
   suggestions: NotchSuggestions;
   fixtures: NotchFixtures;
+  /** Instructions given on the notch, when the brain takes them. */
+  asks: NotchAsks | null;
+  talk: NotchTalk | null;
   /** Whether a notch page is up: then the notch tells the person, and the toasts need not. */
   showing(): boolean;
   /** Stops looking. */
@@ -95,14 +119,18 @@ export interface NotchReal {
 
 export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): NotchReal {
   const log = deps.log ?? ((line: string) => console.log(line));
+  const todayDeps = {
+    executedApprovals: (limit: number) => deps.approvalManager.getHistory({ status: 'executed', limit }),
+    keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
+  };
+  // Made after the inbox, which opens it: yes at rest with nothing waiting.
+  let asks: NotchAsks | null = null;
+  const today = notchTodayScript(todayDeps);
   const inbox = new NotchInbox(surface, {
     busy: deps.busy,
     clock: deps.clock,
     log,
-    home: notchTodayScript({
-      executedApprovals: (limit) => deps.approvalManager.getHistory({ status: 'executed', limit }),
-      keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
-    }),
+    home: (stage) => (asks ? asks.home(stage) : today(stage)),
   });
   const approvals = attachNotchApprovals(inbox, {
     approvalManager: deps.approvalManager,
@@ -111,6 +139,23 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     openDashboard: deps.openDashboard,
     log,
   });
+  let talk: NotchTalk | null = null;
+  if (deps.asks) {
+    const emergency = deps.emergency;
+    asks = attachNotchAsks(inbox, {
+      ledger: new NotchLedger(deps.asks.db),
+      turns: deps.asks.turns,
+      modelReady: deps.asks.modelReady,
+      remember: deps.asks.remember,
+      understand: deps.asks.understand,
+      paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
+      raiseApproval: (approvalId) => approvals.raise(approvalId),
+      openDashboard: deps.openDashboard,
+      today: () => notchTodayBlocks(notchToday(todayDeps)),
+      log,
+    });
+    talk = attachNotchTalk(deps.asks.talkPort, { asks, stt: deps.asks.stt, log });
+  }
   const promises = deps.promises;
   const stopPromises = promises ? attachNotchPromises(inbox, { executor: promises.executor }) : () => {};
   // A fixture promise is kept by writing one line, not by a model turn.
@@ -165,13 +210,14 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   timer.unref?.();
 
   return {
-    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures,
+    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, talk,
     showing: () => surface.listening() > 0,
     stop: () => {
       clearInterval(timer); clearInterval(failureTimer);
       if (taskTimer) clearInterval(taskTimer);
       if (questionTimer) clearInterval(questionTimer);
       stopPromises(); stopPause();
+      asks?.stop();
     },
   };
 }

@@ -320,6 +320,7 @@ export function createNotchSurface(
   }
 
   function rest(instant = false): void {
+    dropKeyboard();
     stopFold();
     cur = null;
     line = null;
@@ -341,6 +342,19 @@ export function createNotchSurface(
     if (counter) counter.textContent = `${Math.min(done, steps)}/${steps}`;
   };
 
+  /**
+   * A text field that is going away gives the keyboard back first. One that
+   * is taken out of the page while it has the keyboard would keep it, and
+   * whatever was typed next would go nowhere.
+   */
+  const dropKeyboard = (): void => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== nin && nin.contains(active)) active.blur();
+  };
+
+  /** What a line that has stopped listening offers: Esc, so that what was heard is not acted on. */
+  const HEARD_HINT: Hint = { cap: 'esc', act: 'not this' };
+
   /** No: the eyes shake, and it goes. */
   const refuse = (): void => {
     answer('no');
@@ -350,6 +364,7 @@ export function createNotchSurface(
   };
 
   function showLine(l: NotchLine, instant = false): void {
+    dropKeyboard();
     line = l;
     cur = { id: l.id };
     stopFold();
@@ -416,15 +431,23 @@ export function createNotchSurface(
       me.onYes = submit;
       me.onEsc = () => { answer('no'); rest(); };
       show({ body: 'ask', say: input, hint: { act: l.yes }, sheet: blocksOf(l.blocks), stag: true, ...common }, instant);
+      // Opened to type in: the keyboard comes with it. Not for a line that is
+      // only being drawn again (a page that came back): that would take the
+      // keyboard from whatever the person is doing now.
+      if (l.focus && !instant) {
+        askFocus(true);
+        input.focus({ preventScroll: true });
+      }
       return;
     }
     if (l.kind === 'work') {
       me.onEsc = () => { eyes.gesture('shake'); sounds.sfx('no'); answer('stop'); settle(); };
       show({
         body: 'work', say: l.say, ...common,
-        hint: [{ beads: l.steps }, ...(l.canTalk ? [{ cap: 'space', act: 'talk', mute: true } satisfies Hint] : []), { cap: 'esc', act: 'stop' }],
+        // How many steps there will be is not always known: then there are no beads to light.
+        hint: [...(l.steps > 0 ? [{ beads: l.steps } satisfies Hint] : []), ...(l.canTalk ? [{ cap: 'space', act: 'talk', mute: true } satisfies Hint] : []), { cap: 'esc', act: 'stop' }],
       }, instant);
-      beads(l.done, l.steps);
+      if (l.steps > 0) beads(l.done, l.steps);
       return;
     }
     if (l.kind === 'send') {
@@ -460,9 +483,21 @@ export function createNotchSurface(
     const voice = el('span', 'voice'), wave = el('span', 'wave');
     for (let i = 0; i < 9; i++) wave.append(el('i'));
     voice.append(wave, el('span', 'heard', l.heard));
-    show({ body: 'line', say: voice, hint: { cap: 'jk', act: 'let go when done', mute: true }, ...common, mood: l.mood ?? 'listen' }, instant);
+    // Esc turns away what is being said, or what was just heard: it will not be acted on.
+    me.onEsc = refuse;
+    show({ body: 'line', say: voice, hint: l.over ? HEARD_HINT : { cap: 'jk', act: 'let go when done', mute: true }, ...common, mood: l.mood ?? 'listen' }, instant);
+    if (l.over) return;
     wrap.classList.add('talk');
     shape.morphPlay('talk');
+  }
+
+  /** The keys came up on a line that was listening: the lip is still, and Esc is what is left to press. */
+  function heardOver(): void {
+    wrap.classList.remove('talk');
+    if (shape.N.mode === 'talk') { shape.N.tgt = null; shape.morphStop(); }
+    const ctx = { body: 'line', onYes: () => {}, onEsc: () => { if (cur && !cur.done) cur.onEsc?.(); } };
+    hintEl.replaceChildren(mkHint(HEARD_HINT, ctx));
+    shape.fit(false, true);
   }
 
   function update(m: Extract<NotchToPage, { type: 'update' }>): void {
@@ -480,12 +515,16 @@ export function createNotchSurface(
       beads(l.done, l.steps);
       sounds.sfx('tick');
     }
+    if (m.over !== undefined && l.kind === 'listen' && m.over && !l.over) {
+      l.over = true;
+      heardOver();
+    }
     if (m.heard !== undefined && l.kind === 'listen') {
       l.heard = m.heard;
       const heard = sayEl.querySelector('.heard');
       if (heard) heard.textContent = m.heard;
-      // The lip jumps with each word.
-      if (!reduce) shape.N.tgt = Array.from({ length: WK }, () => Math.random() * 6);
+      // The lip jumps with each word, while there is a voice to follow.
+      if (!reduce && !l.over) shape.N.tgt = Array.from({ length: WK }, () => Math.random() * 6);
       shape.fit(false, true);
       shape.wake();
     }
@@ -777,7 +816,8 @@ export function createNotchSurface(
       wrap.classList.add('att');
       shape.kick(90);
       shape.fit(false, true);
-    } else if (name === 'talk-end') {
+    } else if (name === 'talk-end' || name === 'talk-cancel') {
+      // Let go, or ended by a slip: either way the keys are no longer held.
       wrap.classList.remove('att');
       shape.fit(false, true);
     } else if (name === 'yes') {

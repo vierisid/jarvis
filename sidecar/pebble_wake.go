@@ -119,6 +119,29 @@ func NewWakeListenerService(audioSvc *AudioCaptureService, sender EventSender, o
 	return w
 }
 
+// wakeHold says whether the wake listener may open the microphone at all on
+// this connection. It is the brain's to say: a brain with the notch on does
+// not listen for its name (the talk keys are the only way to speak to it), and
+// says so in its register_ack. Until that word has come the listener waits
+// with the device closed, so that the microphone is not opened and shut again
+// on every connection to such a brain.
+//
+// The zero value is "allowed": only a connection that is waiting for the
+// brain's word sets it otherwise (connectAndServe).
+var wakeHold atomic.Int32
+
+const (
+	wakeAllowed int32 = iota
+	// The connection is up and the brain has not said yet.
+	wakeUndecided
+	// The brain has the notch on: no listening for the name.
+	wakeForbidden
+)
+
+// wakeHeld is the second gate every path that opens the microphone for the
+// wake word consults, beside micMuted.
+func wakeHeld() bool { return wakeHold.Load() != wakeAllowed }
+
 // Start kicks off the continuous capture + segmentation loop. Idempotent.
 // Returns an error if the audio device can't be opened.
 func (w *WakeListenerService) Start(ctx context.Context) error {
@@ -136,6 +159,14 @@ func (w *WakeListenerService) Start(ctx context.Context) error {
 	if micMuted() {
 		w.paused.Store(true)
 		log.Printf("[wake] listener started paused — microphone muted")
+		go w.coordinate(ctx)
+		return nil
+	}
+	// The same shape for the brain's word: armed, device closed. Resume opens
+	// it once the brain has said it may listen, and never if it said no.
+	if wakeHeld() {
+		w.paused.Store(true)
+		log.Printf("[wake] listener waiting with the microphone closed until the brain says whether it listens for its name")
 		go w.coordinate(ctx)
 		return nil
 	}
@@ -187,6 +218,10 @@ func (w *WakeListenerService) Resume(ctx context.Context) {
 	}
 	if micMuted() {
 		log.Printf("[wake] resume refused — microphone muted")
+		return
+	}
+	// Like mute, before the paused CAS: a refused resume leaves it paused.
+	if wakeHeld() {
 		return
 	}
 	if !w.paused.CompareAndSwap(true, false) {

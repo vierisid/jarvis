@@ -67,14 +67,15 @@ func TestNotchKeyboardKeepsOnlyEscAndOnlyWhenWanted(t *testing.T) {
 }
 
 // When the watch stops in the middle of talking, the page must not be left
-// thinking the keys are still held.
+// thinking the keys are still held. It ends as a slip, not as a sentence:
+// what was being said is thrown away.
 func TestNotchKeyboardResetEndsTalking(t *testing.T) {
 	var h notchHeard
 	kb := newNotchKeyboard(notchTestPairs, h.say, h.mask)
 	kb.key(notchKeyModifiers, notchModCtrl|notchModMeta)
 	time.Sleep(time.Duration(notchTalkHoldMs+120) * time.Millisecond)
 	kb.reset()
-	if said, _ := h.got(); !reflect.DeepEqual(said, []notchKeyAction{notchKeyTalkStart, notchKeyTalkEnd}) {
+	if said, _ := h.got(); !reflect.DeepEqual(said, []notchKeyAction{notchKeyTalkStart, notchKeyTalkCancel}) {
 		t.Fatalf("said %v", said)
 	}
 	// And a hold that was reset before it became talking never does.

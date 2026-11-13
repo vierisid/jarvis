@@ -188,16 +188,27 @@ func TestNotchKeysOrdinaryShortcutsSayNothingAndAreNotTouched(t *testing.T) {
 	}
 }
 
-// A shortcut that grows out of the talk pair after talking began ends the talk.
+// A shortcut that grows out of the talk pair after talking began ends the
+// talk, and as a slip: what was said so far is not an instruction.
 func TestNotchKeysAnotherKeyWhileTalkingEndsIt(t *testing.T) {
 	s := newNotchKeyPlay(t)
-	s.down(tCtrl).down(tWin).wait(400).other().expect(notchKeyTalkStart, notchKeyTalkEnd)
-	s.wait(300).up(tWin).up(tCtrl).expect(notchKeyTalkStart, notchKeyTalkEnd)
+	s.down(tCtrl).down(tWin).wait(400).other().expect(notchKeyTalkStart, notchKeyTalkCancel)
+	s.wait(300).up(tWin).up(tCtrl).expect(notchKeyTalkStart, notchKeyTalkCancel)
 }
 
 func TestNotchKeysAThirdModifierWhileTalkingEndsIt(t *testing.T) {
 	s := newNotchKeyPlay(t)
-	s.down(tCtrl).down(tWin).wait(400).down(tShift).expect(notchKeyTalkStart, notchKeyTalkEnd)
+	s.down(tCtrl).down(tWin).wait(400).down(tShift).expect(notchKeyTalkStart, notchKeyTalkCancel)
+}
+
+// Letting go is the only way a recording ends as a sentence, whichever key
+// of the pair comes up first.
+func TestNotchKeysOnlyLettingGoEndsTalkingAsASentence(t *testing.T) {
+	s := newNotchKeyPlay(t)
+	s.down(tCtrl).down(tWin).wait(400).up(tWin).expect(notchKeyTalkStart, notchKeyTalkEnd)
+	s.up(tCtrl).expect(notchKeyTalkStart, notchKeyTalkEnd)
+	s = newNotchKeyPlay(t)
+	s.down(tCtrl).down(tWin).wait(400).up(tCtrl).expect(notchKeyTalkStart, notchKeyTalkEnd)
 }
 
 // Letting go of one talk key and pressing Alt must not turn into a yes: this
@@ -286,7 +297,7 @@ func TestNotchKeysEscWithAModifierIsNeverTaken(t *testing.T) {
 func TestNotchKeysResetEndsTalkingAndForgetsEveryKey(t *testing.T) {
 	s := newNotchKeyPlay(t)
 	s.down(tCtrl).down(tWin).wait(400).expect(notchKeyTalkStart)
-	if got := s.k.Reset(); !reflect.DeepEqual(got, []notchKeyAction{notchKeyTalkEnd}) {
+	if got := s.k.Reset(); !reflect.DeepEqual(got, []notchKeyAction{notchKeyTalkCancel}) {
 		t.Fatalf("reset while talking returned %v", got)
 	}
 	s.mods, s.said = 0, nil
@@ -365,7 +376,7 @@ func TestNotchKeysNeverKeepAnythingButEscWhateverIsTyped(t *testing.T) {
 				switch a {
 				case notchKeyTalkStart:
 					t.Fatalf("round %d: talking started on a key event, not on a hold", round)
-				case notchKeyTalkEnd:
+				case notchKeyTalkEnd, notchKeyTalkCancel:
 					if !talking {
 						t.Fatalf("round %d: talking ended that never started", round)
 					}
@@ -379,7 +390,7 @@ func TestNotchKeysNeverKeepAnythingButEscWhateverIsTyped(t *testing.T) {
 		}
 		// Let go of everything: nothing may be left talking.
 		for _, a := range k.Feed(notchKeyEvent{Kind: notchKeyModifiers, Mods: 0, At: now + 10}).Actions {
-			if a == notchKeyTalkEnd {
+			if a == notchKeyTalkEnd || a == notchKeyTalkCancel {
 				talking = false
 			}
 		}
@@ -392,6 +403,7 @@ func TestNotchKeysNeverKeepAnythingButEscWhateverIsTyped(t *testing.T) {
 func TestNotchKeyActionsHaveTheNamesThePageKnows(t *testing.T) {
 	names := map[notchKeyAction]string{
 		notchKeyTalkStart: "talk-start", notchKeyTalkEnd: "talk-end", notchKeyYes: "yes", notchKeyEsc: "esc", notchKeyEscTwice: "esc-twice",
+		notchKeyTalkCancel: "talk-cancel",
 	}
 	for action, want := range names {
 		if action.String() != want {
