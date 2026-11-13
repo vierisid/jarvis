@@ -62,12 +62,18 @@ export class BriefChatTransport implements BriefProvider {
   private jobs = new Set<Promise<void>>();
   private stopped = false;
   private limit: ReturnType<typeof createLimiter>;
+  private listeners = new Set<(event: BriefChatEvent) => void>();
 
   constructor(private readonly deps: {
     db: Database;
     runner: ScopedChatRunner;
     send: (client: Client, message: WSMessage) => void;
     tts?: () => TTSProvider | null;
+    /**
+     * Whether a turn sent with `speak` may be spoken now. When it says no the
+     * turn is still accepted and answered in text: nothing is refused for it.
+     */
+    speakAllowed?: () => boolean;
     workspaceId?: string;
     /** Test harnesses can interleave isolated fake runners; production stays at one. */
     concurrency?: number;
@@ -94,6 +100,33 @@ export class BriefChatTransport implements BriefProvider {
     this.stopped = true;
     for (const turn of this.repository.pending()) this.cancel(turn);
     this.clients.clear();
+  }
+
+  /**
+   * A turn from inside the brain: no socket, never spoken. It is the same
+   * turn a dashboard send makes (stored, keyed by its request id, cancellable,
+   * failed as interrupted by a restart) and every subscribed dashboard sees it.
+   * The caller hears how it goes through onEvent. Throws a
+   * ConversationRequestError for what a socket send is refused for: a
+   * conversation that already has a turn, a full queue, a reused identity.
+   */
+  submit(input: BriefTurnRef & { text: string }): { turn: ChatTurn; created: boolean } {
+    if (this.stopped) throw new ConversationRequestError('Conversation chat is unavailable.', 409);
+    const identity = { conversationId: id(input.conversationId), turnId: id(input.turnId), requestId: id(input.requestId) };
+    if (typeof input.text !== 'string' || !input.text.trim() || Buffer.byteLength(input.text) > 65_536) throw new ConversationRequestError('Invalid chat text or speech setting');
+    const accepted = this.repository.accept({ ...identity, text: input.text, speak: false, attachmentIds: [] });
+    for (const event of accepted.events) this.emit(event);
+    if (accepted.created) this.schedule(accepted.turn, null, true);
+    return { turn: accepted.turn, created: accepted.created };
+  }
+  /** Every event of every turn, for a listener inside the brain. Comes back with what removes it. */
+  onEvent(listener: (event: BriefChatEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+  /** Cancels a turn, as the dashboard's stop does. */
+  cancelTurn(turnRef: BriefTurnRef): void {
+    this.cancel(this.repository.get(turnRef));
   }
 
   async handle(message: WSMessage, client: Client, capabilities: BriefCapabilities): Promise<void> {
@@ -195,19 +228,23 @@ export class BriefChatTransport implements BriefProvider {
   private emit(event: BriefChatEvent | null): void {
     if (!event) return;
     for (const [client, subscriptions] of this.clients) if (subscriptions.has(event.conversationId)) this.send(client, 'brief_chat_event', event, event.requestId);
+    for (const listener of this.listeners) {
+      // A listener is a reader. Its fault is never the turn's.
+      try { listener(event); } catch (error) { console.error('[BriefChat] An event listener failed:', error instanceof Error ? error.name : 'unknown'); }
+    }
   }
   private cancel(turn: ChatTurn): void {
     this.endAudio(turn.turnId, true);
     for (const event of this.repository.finishEvents(turn, 'cancelled')) this.emit(event);
     this.controllers.get(turn.turnId)?.abort(new DOMException('Turn cancelled', 'AbortError'));
   }
-  private schedule(turn: ChatTurn, client: Client, progressEnabled: boolean): void {
+  private schedule(turn: ChatTurn, client: Client | null, progressEnabled: boolean): void {
     const controller = new AbortController();
     this.controllers.set(turn.turnId, controller);
     // Admission owns speech even before synthesis starts. Leaving the chat
     // removes this entry permanently, so returning cannot join encoded audio
     // midway or unexpectedly start speech for a turn the user left.
-    if (turn.speak) this.audioOwners.set(turn.turnId, { turn, client, started: false });
+    if (turn.speak && client) this.audioOwners.set(turn.turnId, { turn, client, started: false });
     const job = this.limit(() => this.execute(turn, client, controller, progressEnabled), controller.signal).catch(error => {
       if (!controller.signal.aborted) console.error('[BriefChat] Turn storage became unavailable:', error instanceof Error ? error.name : 'unknown');
     }).finally(() => {
@@ -231,7 +268,7 @@ export class BriefChatTransport implements BriefProvider {
     this.send(client, 'brief_chat_audio', { conversationId: turn.conversationId, turnId, requestId: turn.requestId,
       sequence: this.repository.nextSequence(turn.conversationId), phase: 'end', cancelled }, turn.requestId);
   }
-  private async execute(turn: ChatTurn, client: Client, controller: AbortController, progressEnabled: boolean): Promise<void> {
+  private async execute(turn: ChatTurn, client: Client | null, controller: AbortController, progressEnabled: boolean): Promise<void> {
     const signal = controller.signal;
     // Any tool, agent or delegated task that started in this turn may have
     // changed something, so a later failure must not say nothing was done.
@@ -259,7 +296,7 @@ export class BriefChatTransport implements BriefProvider {
       } }));
     };
     const audio = (payload: object) => {
-      if (!this.audioOwners.has(turn.turnId) || !this.clients.get(client)?.has(turn.conversationId)) return;
+      if (!client || !this.audioOwners.has(turn.turnId) || !this.clients.get(client)?.has(turn.conversationId)) return;
       this.send(client, 'brief_chat_audio', { ...identity, sequence: this.repository.nextSequence(turn.conversationId), ...payload }, turn.requestId);
     };
     try {
@@ -301,7 +338,7 @@ export class BriefChatTransport implements BriefProvider {
         }
         signal.throwIfAborted();
         if (!done) throw new Error('Model stream ended without completion');
-        const tts = turn.speak ? this.deps.tts?.() : null;
+        const tts = turn.speak && (this.deps.speakAllowed?.() ?? true) ? this.deps.tts?.() : null;
         const audioOwner = this.audioOwners.get(turn.turnId);
         if (tts && fullText && audioOwner) {
           audioOwner.started = true;
