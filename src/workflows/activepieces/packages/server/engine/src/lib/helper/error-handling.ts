@@ -25,6 +25,16 @@ export async function runWithExponentialBackoff<T extends CodeAction | PieceActi
     return resultExecutionState
 }
 
+// === JARVIS PATCH: a refused dispatch is never continued past ===
+// A step the daemon would not admit or authorize (denied, held for Kill, not
+// approved) did not run. "Continue on failure" is for a step that ran and
+// failed; it must not turn a refusal of Authority into a step to move past.
+// The executors add the failed context they return when the refusal came from
+// the dispatch check or, for a step that asks Jarvis from inside its run (a
+// Jarvis piece, an approval), from there (piece-effect-guard continuableFailure).
+export const refusedDispatches = new WeakSet<FlowExecutorContext>()
+// === END JARVIS PATCH ===
+
 export async function continueIfFailureHandler(
     executionState: FlowExecutorContext,
     action: CodeAction | PieceAction,
@@ -35,6 +45,7 @@ export async function continueIfFailureHandler(
     if (
         executionState.verdict.status === FlowRunStatus.FAILED &&
         continueOnFailure &&
+        !refusedDispatches.has(executionState) &&
         isNil(constants.stepNameToTest)
     ) {
         return executionState
