@@ -54,7 +54,6 @@
     "setup": "bun run scripts/setup-config.ts",
     "eval:workflows": "bun run scripts/evaluate-workflow-quality.ts",
     "test:llm": "bun run src/llm/test.ts",
-    "examples": "bun run examples/llm-integration.ts",
     "setup:google": "bun run src/scripts/google-setup.ts",
     "postinstall": "node scripts/ensure-bun.cjs && (bun run copy:models 2>/dev/null || true)",
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
