@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -147,6 +148,11 @@ $p = Start-Process -FilePath %s %s -PassThru
 
 	out, err := runPS(script, 10*time.Second)
 	if err != nil {
+		// Not startable by that name. An app a person installed usually is
+		// not: it is in the Start menu (desktop_startmenu.go).
+		if started, ok := launchFromStartMenu(executable, args, preexisting); ok {
+			return started, nil
+		}
 		return nil, fmt.Errorf("launch_app failed: %w", err)
 	}
 
@@ -180,6 +186,53 @@ $p = Start-Process -FilePath %s %s -PassThru
 		result["note"] = fmt.Sprintf("window belongs to pid %d (matched by process name; the launcher pid %d handed off) - use pid %d with desktop_snapshot/desktop_focus_window", win.Pid, pid, win.Pid)
 	}
 	return &RPCResult{Result: result}, nil
+}
+
+// launchFromStartMenu starts the one app the Start menu lists under the name
+// that could not be started directly. False when this was not a plain app by
+// its name, when no app or more than one answers to it, or when starting it
+// failed: the caller then reports the first failure as it was.
+func launchFromStartMenu(executable, args string, preexisting map[uintptr]bool) (*RPCResult, bool) {
+	want, ok := startMenuWanted(executable, args)
+	if !ok {
+		return nil, false
+	}
+	out, err := runPS(startMenuFindScript(want), 15*time.Second)
+	if err != nil {
+		log.Printf("[desktop] launch_app: the Start menu could not be read: %v", err)
+		return nil, false
+	}
+	var found struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Count int    `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(out), &found); err != nil || found.ID == "" {
+		log.Printf("[desktop] launch_app: %q is not one app in the Start menu (%d found)", want, found.Count)
+		return nil, false
+	}
+	if _, err := runPS(startMenuLaunchScript(found.ID), 10*time.Second); err != nil {
+		log.Printf("[desktop] launch_app: %q could not be started from the Start menu: %v", found.Name, err)
+		return nil, false
+	}
+	log.Printf("[desktop] launch_app: %q was not startable by name; started %q from the Start menu", executable, found.Name)
+	result := map[string]any{"pid": 0, "name": found.Name, "via": "start_menu"}
+	// An app started this way can take a while to draw its first window.
+	win, _ := waitForWindow(0, startMenuWindowHint(found.ID, executable), 12*time.Second, preexisting)
+	if win == nil {
+		result["success"] = false
+		result["window_visible"] = false
+		result["note"] = fmt.Sprintf(
+			"%q was started from the Start menu, but no window appeared within 12s - it may still be starting. Run desktop_list_windows to check before interacting; do NOT launch it again.",
+			found.Name)
+		return &RPCResult{Result: result}, true
+	}
+	result["success"] = true
+	result["window_visible"] = true
+	result["window_title"] = win.Title
+	result["window_pid"] = win.Pid
+	result["note"] = fmt.Sprintf("started %q from the Start menu - use pid %d with desktop_snapshot/desktop_focus_window", found.Name, win.Pid)
+	return &RPCResult{Result: result}, true
 }
 
 // ── focus_window ─────────────────────────────────────────────────────
