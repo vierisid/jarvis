@@ -389,6 +389,8 @@ export const PATCHED_VENDOR_SOURCES = [
   // Jarvis: engine console output withholds failed-request bodies and headers.
   'server/engine/src/lib/worker-socket.ts',
   '../../runtime/engine-console-redaction.ts',
+  // Jarvis: "Continue on failure" never goes past a refused step (#1338).
+  'server/engine/src/lib/helper/error-handling.ts',
   "server/engine/src/lib/helper/piece-loader.ts",
   // Jarvis-only `outputSample` extension on actions + the matching
   // ActionBase change. Hand-edits to these files (or a sync that
