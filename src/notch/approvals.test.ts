@@ -13,7 +13,8 @@ import { EmergencyController, setActiveEmergencyController } from '../authority/
 import { AuthorityEngine, type AuthorityConfig } from '../authority/engine.ts';
 import { NOTCH_DECIDER, applyApprovalDecision, type ApprovalDecisionDeps } from '../daemon/approval-decision.ts';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
-import { attachNotchApprovals, notchApprovalWay } from './approvals.ts';
+import { gateVoiceApprovalResolution } from '../roles/authority.ts';
+import { NOTCH_APPROVABLE_COLUMNS, attachNotchApprovals, notchApprovalWay } from './approvals.ts';
 import { NotchInbox } from './inbox.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -223,6 +224,42 @@ describe('two surfaces, one decision', () => {
   });
 });
 
+// The owner's decision of 13 November 2026: the rule a spoken yes follows
+// (nothing destructive by voice) is not applied on the notch.
+describe('what the voice rules refuse and a key approves', () => {
+  test('a shell command is approved with the key: a careful face, a fuse, and it runs once', async () => {
+    const h = harness();
+    const command = h.ask({ category: 'execute_command', context: JSON.stringify({ intent: 'On this Jarvis host, in "/srv/shop", run: make deploy' }) });
+    expect(gateVoiceApprovalResolution('execute_command', 1, 'approve').kind).toBe('clarify');
+    expect(notchApprovalWay(command)).toBe('key');
+    await h.sync();
+    expect(h.said()).toBe('On this Jarvis host, in "/srv/shop", run: make deploy?');
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'approve', mood: 'careful' });
+    await h.answer('yes');
+    expect(h.line()).toMatchObject({ kind: 'send' });
+    expect(h.runs).toEqual([]);
+    await h.answer('done');
+    expect(h.runs).toHaveLength(1);
+    expect(h.approvals.getRequest(command.id)).toMatchObject({ status: 'executed', decided_by: 'notch', execution_outcome: 'committed' });
+    expect(h.said()).toBe('Done.');
+  });
+
+  test('so is every other request the voice gate calls destructive, except a payment', () => {
+    const h = harness();
+    for (const category of ['execute_command', 'install_software', 'modify_settings', 'delete_data', 'terminate_agent']) {
+      expect(notchApprovalWay(h.ask({ category }))).toBe('key');
+    }
+    expect(notchApprovalWay(h.ask({ category: 'make_payment' }))).toBe('payment');
+  });
+
+  test('a request that is not destructive keeps its ordinary face', async () => {
+    const h = harness();
+    h.ask();
+    await h.sync();
+    expect(h.line()?.mood).toBeUndefined();
+  });
+});
+
 describe('what a key may not approve', () => {
   // Step 8 of the hand test.
   test('a payment: the line says it never takes that on a key, and yes only opens the dashboard', async () => {
@@ -240,23 +277,35 @@ describe('what a key may not approve', () => {
     expect(h.count()).toBe(1);
   });
 
-  test('a destructive request, and one that needs on-screen review, are approved in the dashboard', async () => {
+  test('a request that needs on-screen review is approved in the dashboard: the product refuses it from anywhere else', async () => {
     const h = harness();
-    const command = h.ask({ category: 'execute_command' });
-    expect(notchApprovalWay(command)).toBe('destructive');
     const review = h.ask({ context: JSON.stringify({ confirm: 'always', intent: 'Click Send in Mail (sends an email)' }) });
     expect(notchApprovalWay(review)).toBe('click');
     await h.sync();
-    expect(h.said()).toContain('Approved with a click in the dashboard, not with a key: ');
+    expect(h.said()).toBe('It has to be reviewed on screen, so it is approved in the dashboard: Click Send in Mail (sends an email)');
+    expect(h.line()).toMatchObject({ yes: 'open' });
+    expect(await applyApprovalDecision('approve', review.id, NOTCH_DECIDER, h.deps)).toMatchObject({ status: 'needs_dashboard' });
+  });
+
+  test('a sentence longer than three lines of the notch is not offered for a yes, and is shown cut with a mark', async () => {
+    const h = harness();
+    const fits = h.ask({ context: JSON.stringify({ intent: `Write ${'x'.repeat(NOTCH_APPROVABLE_COLUMNS - 6)}` }) });
+    expect(notchApprovalWay(fits)).toBe('key');
+    const long = h.ask({ context: JSON.stringify({ intent: `Write ${'a very long note '.repeat(20)}to disk` }) });
+    expect(notchApprovalWay(long)).toBe('too_long');
+    getDb().run('DELETE FROM approval_requests WHERE id = ?', [fits.id]);
+    await h.sync();
+    expect(h.said()).toStartWith('Too long to show whole here, so it is approved in the dashboard: Write a very long note');
+    expect(h.said()).toEndWith('…');
     expect(h.line()).toMatchObject({ yes: 'open' });
   });
 
-  test('a sentence too long to show whole is not offered for a yes', async () => {
+  test('a sentence whose letters could be look-alikes is not offered for a yes', async () => {
     const h = harness();
-    const long = h.ask({ context: JSON.stringify({ intent: `Write ${'a very long note '.repeat(20)}to disk` }) });
-    expect(notchApprovalWay(long)).toBe('unreadable');
+    const forged = h.ask({ context: JSON.stringify({ intent: 'Send the contract to Саша' }) });
+    expect(notchApprovalWay(forged)).toBe('look_alike');
     await h.sync();
-    expect(h.said()).toContain('Too long to show whole here');
+    expect(h.said()).toStartWith('Some of its letters could be look-alikes, so it is approved in the dashboard: ');
     expect(h.line()).toMatchObject({ yes: 'open' });
   });
 

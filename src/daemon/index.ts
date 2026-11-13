@@ -4584,6 +4584,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         approvalManager,
         approve: (requestId) => applyApprovalDecision('approve', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
         deliverApproval: (request) => approvalDelivery.deliver(request),
+        // For the hand test, demo gate only: the shell command fixture is
+        // filed against the brain's real run_command tool.
+        toolRegistry: notchDemoState === 'open' ? () => agentService.getOrchestrator().getToolRegistry() : undefined,
         // For the hand test, demo gate only: decides one of the fixture's own
         // approvals as a dashboard click would (src/notch/fixtures.ts).
         approveAsDashboard: notchDemoState === 'open'

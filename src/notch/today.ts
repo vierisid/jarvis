@@ -10,7 +10,7 @@
  * audit trail by tool name only, with no sentence a person could read, so it
  * is not listed. A list of what was done must not guess at what was done.
  */
-import { taskCompleteBody } from '../authority/approval-delivery.ts';
+import { approvalIntentParts, boundedApprovalLabel } from '../authority/approval-delivery.ts';
 import type { ApprovalRequest } from '../authority/approval.ts';
 import type { NotchBlock } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -41,6 +41,22 @@ export function startOfDay(now: number): number {
   return day.getTime();
 }
 
+/** The most of one thing's sentence a row of the list carries. A row wraps, so this is several lines. */
+const ROW_CHARS = 220;
+
+/**
+ * What an approved action did, as the sentence its approval showed: one
+ * line, with a mark if it had to be cut. The toast's own wording of this is
+ * cut to a toast's width, which loses the end of a shell command; a row of
+ * this list has room for all of it.
+ */
+function doneSentence(request: ApprovalRequest): string {
+  const { action } = approvalIntentParts(request);
+  const whole = boundedApprovalLabel(action, action.length).trim();
+  const points = [...whole];
+  return points.length <= ROW_CHARS ? whole : `${points.slice(0, ROW_CHARS - 1).join('').trimEnd()}…`;
+}
+
 /** What was done today, newest first. */
 export function notchToday(deps: NotchTodayDeps): NotchTodayRow[] {
   const now = (deps.now ?? Date.now)();
@@ -52,7 +68,7 @@ export function notchToday(deps: NotchTodayDeps): NotchTodayRow[] {
     if (request.status !== 'executed' || (request.execution_outcome ?? 'committed') !== 'committed') continue;
     const at = request.executed_at ?? request.decided_at ?? request.created_at;
     if (at < since || at > now) continue;
-    const text = taskCompleteBody(request);
+    const text = doneSentence(request);
     if (text) rows.push({ at, text, kind: 'approved' });
   }
   for (const promise of deps.keptPromises?.() ?? []) {

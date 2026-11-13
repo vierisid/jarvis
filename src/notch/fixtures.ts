@@ -11,6 +11,11 @@
  *
  *   approval  an approval to read this computer's name and system (the
  *             get_system_info tool). Approving it reads them. Nothing changes.
+ *   command   an approval to run one fixed shell command, `echo notch test`,
+ *             filed the way the product files any shell command: the same
+ *             gate, the same sentence naming the machine and the directory.
+ *             Approving it runs that echo, and nothing else can be put in
+ *             its place: the command is written here, not taken from anyone.
  *   payment   an approval that says it is a payment of a sample amount. It is
  *             a declared intent with nothing behind it: approving it in the
  *             dashboard moves no money and runs nothing.
@@ -33,7 +38,9 @@
  * The route that reaches this is behind the demo gate (./demo-gate.ts): a
  * secret, never on a hosted install, and absent with the notch switch off.
  */
+import type { ToolRegistry } from '../actions/tools/registry.ts';
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
+import { freezeToolArguments, gateContext, resolveToolGate } from '../authority/tool-action-map.ts';
 
 /** What every fixture's records are marked with, so they can be told from real ones. */
 export const NOTCH_FIXTURE_AGENT = 'notch-fixture';
@@ -44,6 +51,8 @@ export const NOTCH_FIXTURE_AGENT = 'notch-fixture';
  * such a commitment can only be made by this file.
  */
 export const NOTCH_FIXTURE_ORIGIN = 'notch_fixture';
+/** The one shell command a fixture ever asks to run. */
+export const NOTCH_FIXTURE_COMMAND = 'echo notch test';
 /** The file a fixture promise adds its line to, inside the data directory. */
 export const NOTCH_FIXTURE_LOG = 'notch-fixture.log';
 
@@ -53,6 +62,8 @@ export interface NotchFixtureDeps {
   approveAsDashboard?: (requestId: string) => Promise<{ status: string }>;
   /** The approval request the notch is showing now, if it is showing one. */
   approvalOnNotch?: () => string | null;
+  /** The brain's own tools, once they are loaded. The shell command fixture is filed against the real one. */
+  toolRegistry?: () => ToolRegistry | null | undefined;
   /** Shows a new approval wherever approvals are shown: the dashboard card, and a chat card if a channel is set up. */
   deliverApproval?: (request: ApprovalRequest) => Promise<void> | void;
   /** Records the test failure. Comes back with its sentence. Absent when it cannot be recorded. */
@@ -135,6 +146,31 @@ export function createNotchFixtures(deps: NotchFixtureDeps): NotchFixtures {
       return `A payment approval is waiting (${request.id.slice(0, 8)}). It is a test: approving it in the dashboard moves no money.`;
     },
   };
+  const toolRegistry = deps.toolRegistry;
+  if (toolRegistry) {
+    kinds.command = async () => {
+      const registry = toolRegistry();
+      const tool = registry?.get('run_command');
+      if (!registry || !tool) throw new Error('The brain has not loaded its tools yet. Try again in a moment.');
+      // As the agent's own gate files it (agents/orchestrator.ts): pin the
+      // arguments, ask the tool's gate for its sentence, and keep the
+      // registry, so the executor finds the same call when it is approved.
+      const args = freezeToolArguments(tool, { command: NOTCH_FIXTURE_COMMAND });
+      const gate = resolveToolGate(tool, 'run_command', args);
+      const request = deps.approvalManager.createRequest({
+        agentId: NOTCH_FIXTURE_AGENT, agentName: 'Notch fixture',
+        toolName: 'run_command', toolArguments: args,
+        actionCategory: 'execute_command', urgency: 'normal',
+        reason: 'execute_command requires user approval',
+        context: gateContext(gate, 'run_command', args),
+        executionMode: 'deferred',
+        toolRegistry: registry,
+        principal: PRINCIPAL,
+      });
+      await deliver(request);
+      return `A shell command is waiting for approval (${request.id.slice(0, 8)}): ${NOTCH_FIXTURE_COMMAND}. Approving it runs that echo and nothing else.`;
+    };
+  }
   const approveAsDashboard = deps.approveAsDashboard;
   const getPending = deps.approvalManager.getPending?.bind(deps.approvalManager);
   if (approveAsDashboard && getPending) {
@@ -142,7 +178,8 @@ export function createNotchFixtures(deps: NotchFixtureDeps): NotchFixtures {
       // Its own approvals only, and never the payment: this is a way to see
       // the notch react, not a way to approve things.
       const waiting = getPending()
-        .filter((request) => request.agent_id === NOTCH_FIXTURE_AGENT && request.tool_name === 'get_system_info')
+        .filter((request) => request.agent_id === NOTCH_FIXTURE_AGENT
+          && (request.tool_name === 'get_system_info' || request.tool_name === 'run_command'))
         .sort((a, b) => b.created_at - a.created_at);
       // The one on the notch is the one whose line is being watched; with
       // none there, the newest.
