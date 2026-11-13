@@ -43,7 +43,7 @@ export function ClosedChats({ client, openIds, busy }: {
     finally { lock.current = false; if (mounted.current) setPending(null); }
   }
   return <div className="brief-closed-chats">
-    <button type="button" ref={trigger} aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(value => !value)}>Closed chats</button>
+    <button type="button" ref={trigger} aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(value => !value)}>Reopen a closed chat</button>
     {expanded && <section id={id} aria-label="Closed chats" aria-busy={loading}>
       <p>Reopen a chat to continue where you left off.</p>
       <ul>{rows.map(row => <li key={row.conversationId}><button type="button" disabled={busy || pending !== null}

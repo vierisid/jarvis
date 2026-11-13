@@ -5,7 +5,7 @@ import { BriefBrand } from "../../styles/BriefBrand";
 import { useBriefMotion } from "../../motion";
 import type { BriefRoomRegistry, BriefShellPort } from "../../contracts";
 import { AccountMenu } from "../account-menu/AccountMenu";
-import { badgeLabel, breadcrumbs, canMountNavigation, connectionLabel, DIRECTION_NAV, navigationData,
+import { badgeLabel, breadcrumbs, canMountNavigation, connectionLabel, connectionWord, DIRECTION_NAV, navigationData,
   navigationRoute, NAV_LABELS, parentRoom, PRIMARY_NAV, UNKNOWN_NAVIGATION, UTILITY_NAV,
   type BriefNavigationBinding, type BriefNavigationData, type NavRoom } from "./model";
 import "./navigation.css";
@@ -67,6 +67,7 @@ export function NavigationShell({ shell, rooms, binding, conversation, reducedMo
           <button type="button" className="brief-connection" aria-label={`${statusLabel}. Open connected workspace`}
             onClick={() => { if (shell.route.room !== "connected-workspace") shell.navigate({ room: "connected-workspace", selection: {} }); }}>
             <span className="brief-connection-dot" data-state={data.connection} aria-hidden="true" />
+            {data.connection !== "connected" && <span className="brief-connection-text" data-state={data.connection}>{connectionWord(data.connection)}</span>}
           </button>
         </BriefTooltip>
       </header>}
