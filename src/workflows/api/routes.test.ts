@@ -3476,6 +3476,106 @@ describe("#652: the runs listing says where the next page starts", () => {
     expect((await page(flowId, "?limit=-3")).nextOffset).toBe(1);
   });
 
+  test("the recent-runs read gives each flow's latest real run, newest first, scoped and clamped", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const make = (name: string, projectId?: string) => {
+      const flow = createFlow(projectId ? { projectId } : undefined);
+      const version = createDraftVersion({ flowId: flow.id, displayName: name,
+        trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+      return { flow, version };
+    };
+    const OTHER_PROJECT = "proj_other_recent";
+    const a = make("Alpha"), b = make("Beta"), c = make("Gamma"), other = make("Foreign", OTHER_PROJECT);
+    const old = createFlowRun({ flowId: a.flow.id, flowVersionId: a.version.id, status: "FAILED" });
+    await Bun.sleep(3);
+    const latestA = createFlowRun({ flowId: a.flow.id, flowVersionId: a.version.id, status: "SUCCEEDED", steps: { secret: "CANARY" } } as never);
+    await Bun.sleep(3);
+    // A newer test run and a newer child run must not replace the real latest run.
+    createFlowRun({ flowId: a.flow.id, flowVersionId: a.version.id, environment: "TESTING", status: "FAILED" });
+    createFlowRun({ flowId: a.flow.id, flowVersionId: a.version.id, parentRunId: old.id, status: "FAILED" });
+    await Bun.sleep(3);
+    const latestB = createFlowRun({ flowId: b.flow.id, flowVersionId: b.version.id, status: "PAUSED" });
+    await Bun.sleep(3);
+    // A flow with only a test run is not listed at all.
+    createFlowRun({ flowId: c.flow.id, flowVersionId: c.version.id, environment: "TESTING", status: "SUCCEEDED" });
+    createFlowRun({ flowId: other.flow.id, flowVersionId: other.version.id, status: "SUCCEEDED" });
+    const read = async (query: string, r = routes) => {
+      const res = await callJson(r["/api/workflow-runs/recent"]?.GET, reqWithParams("GET", `http://x/api/workflow-runs/recent${query}`, {}));
+      expect(res.status).toBe(200);
+      return res.body as { items: Array<{ runId: string; name: string; status: string }> };
+    };
+    const all = await read("");
+    expect(all.items.map((row) => [row.runId, row.name, row.status])).toEqual([
+      [latestB.id, "Beta", "PAUSED"], [latestA.id, "Alpha", "SUCCEEDED"],
+    ]);
+    expect(JSON.stringify(all)).not.toContain("CANARY");
+    expect((await read("?limit=1")).items.map((row) => row.runId)).toEqual([latestB.id]);
+    expect((await read("?limit=-4")).items).toHaveLength(1);
+    const scoped = createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT });
+    expect((await read("", scoped)).items.map((row) => row.name)).toEqual(["Foreign"]);
+    // A rename shows the flow's current name, as the Workflows room does, not the
+    // name of the version the run used.
+    await Bun.sleep(3);
+    createDraftVersion({ flowId: a.flow.id, displayName: "Alpha renamed",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+    expect((await read("")).items.find((row) => row.runId === latestA.id)?.name).toBe("Alpha renamed");
+  });
+
+  test("the recent-runs read leaves out removed workflows and single-step tests, and cleans the name", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const { getWorkflowDb } = await import("../db/index");
+    const make = (name: string) => {
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: name,
+        trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+      return { flow, version };
+    };
+    const kept = make("Invoice\u202Etxt.exe  sender\u200B"), removed = make("Removed"), stepped = make("Stepped");
+    const keptRun = createFlowRun({ flowId: kept.flow.id, flowVersionId: kept.version.id, status: "SUCCEEDED" });
+    createFlowRun({ flowId: removed.flow.id, flowVersionId: removed.version.id, status: "SUCCEEDED" });
+    await Bun.sleep(3);
+    const realStepped = createFlowRun({ flowId: stepped.flow.id, flowVersionId: stepped.version.id, status: "FAILED" });
+    await Bun.sleep(3);
+    // "Test this step" sent as a production run is still a test of one step.
+    createFlowRun({ flowId: stepped.flow.id, flowVersionId: stepped.version.id, stepNameToTest: "step_1", status: "SUCCEEDED" });
+    // A removed workflow (Undo receipt held) is gone from the Workflows room, so from Today too.
+    getWorkflowDb().run("UPDATE brief_workflow_slots SET receipt_id = 'receipt' WHERE flow_id = ?", [removed.flow.id]);
+    const res = await callJson(routes["/api/workflow-runs/recent"]?.GET, reqWithParams("GET", "http://x/api/workflow-runs/recent", {}));
+    const items = (res.body as { items: Array<{ runId: string; name: string; status: string }> }).items;
+    expect(items.map(row => [row.runId, row.status])).toEqual([[realStepped.id, "FAILED"], [keptRun.id, "SUCCEEDED"]]);
+    expect(items[1]!.name).toBe("Invoicetxt.exe sender");
+  });
+
+  test("a paused run in the recent-runs read says whether it waits on a person or a timer", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const { createWaitpoint } = await import("../db/repos/waitpoint");
+    const make = (name: string) => {
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: name,
+        trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+      const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "PAUSED" });
+      return { flow, run };
+    };
+    const timer = make("Timer flow"), person = make("Person flow"), hook = make("Hook flow");
+    const resume = new Date(Date.now() + 3600_000).toISOString();
+    createWaitpoint({ flowRunId: timer.run.id, projectId: "proj", stepName: "delay", type: "TIMER", resumeDateTime: resume });
+    createWaitpoint({ flowRunId: person.run.id, projectId: "proj", stepName: "ask", type: "MANUAL" });
+    createWaitpoint({ flowRunId: hook.run.id, projectId: "proj", stepName: "hook", type: "WEBHOOK" });
+    const res = await callJson(routes["/api/workflow-runs/recent"]?.GET, reqWithParams("GET", "http://x/api/workflow-runs/recent?limit=50", {}));
+    const items = (res.body as { items: Array<{ runId: string; waitingOn?: string; resumeAt?: number }> }).items;
+    const of = (id: string) => items.find(row => row.runId === id);
+    expect(of(timer.run.id)).toMatchObject({ waitingOn: "timer", resumeAt: Date.parse(resume) });
+    expect(of(person.run.id)).toMatchObject({ waitingOn: "person" });
+    expect(of(person.run.id)?.resumeAt).toBeUndefined();
+    expect(of(hook.run.id)).toMatchObject({ waitingOn: "other" });
+  });
+
   test("following nextOffset from the start visits every run once, newest first", async () => {
     const { flowId, ids } = await flowWithRuns(105);
     const seen: string[] = [];

@@ -3,6 +3,8 @@ import { workflowTriggerLabel } from './workflow-trigger-label';
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_IDS, getWorkflowDb } from '../workflows/db';
 import { getFlow, updateFlowStatus, parseFlowMetadata, type FlowRow } from '../workflows/db/repos/flow';
+import { getFlowRun } from '../workflows/db/repos/flow-run';
+import { continuedFailureHeadline, continuedFailures } from '../workflows/runtime/continued-failures';
 import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-version';
 import { graphHasSteps, versionReadiness, WorkflowReadinessError } from '../workflows/db/repos/flow-readiness';
 import { CodeStepsRefusedError, ungrantedCodeSteps } from '../workflows/db/repos/flow-code-steps';
@@ -38,7 +40,7 @@ const receipt = (r: StoredReceipt): RemovalReceipt => ({ scopeId: r.project_id, 
   versionId: r.version_id, receiptId: r.receipt_id, expiresAt: r.expires_at });
 
 export class WorkflowRemoval {
-  private triggers?: Pick<TriggerManager, 'refresh'>;
+  private triggers?: Pick<TriggerManager, 'refresh'> & Partial<Pick<TriggerManager, 'registrationProblem'>>;
   private onCardClosed?: (approvalId: string) => void;
   private timer?: ReturnType<typeof setInterval>;
   private readonly pending = new Map<string, Promise<void>>();
@@ -53,7 +55,7 @@ export class WorkflowRemoval {
   constructor(readonly db: Database, readonly projectId: string = DEFAULT_IDS.project,
     private readonly now = Date.now, private readonly enabled = () => process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL === '1') {}
   /** `onCardClosed` hears each workflow card a purge closed, so the dashboard stops offering it (#1039). */
-  start(triggers: Pick<TriggerManager, 'refresh'>, opts: { onCardClosed?: (approvalId: string) => void } = {}): void {
+  start(triggers: Pick<TriggerManager, 'refresh'> & Partial<Pick<TriggerManager, 'registrationProblem'>>, opts: { onCardClosed?: (approvalId: string) => void } = {}): void {
     this.stop(); this.triggers = triggers; this.onCardClosed = opts.onCardClosed;
     this.recover();
     this.timer = setInterval(() => this.recover(), 5000); this.timer.unref();
@@ -99,7 +101,16 @@ export class WorkflowRemoval {
     if (!f || f.project_id !== this.projectId) throw new WorkflowRemovalError('not_found', 404);
     return f;
   }
+  /**
+   * The workflow as listed. One that is on but whose trigger could not be
+   * registered reads blocked with the reason, not ready (nothing would run).
+   */
   private item(f: FlowRow): ManagedWorkflow {
+    const item = this.baseItem(f);
+    const problem = f.status === 'ENABLED' && item.readiness.state === 'ready' ? this.triggers?.registrationProblem?.(f.id) : null;
+    return problem ? { ...item, readiness: { ...item.readiness, state: 'blocked', reason: problem } } : item;
+  }
+  private baseItem(f: FlowRow): ManagedWorkflow {
     const version = f.published_version_id ? getFlowVersion(f.published_version_id) : getLatestDraft(f.id);
     if (version && version.flowId !== f.id) throw new WorkflowRemovalError('unavailable', 503);
     const state = this.db.query<{ generation: number }, [string]>('SELECT generation FROM brief_workflow_slots WHERE flow_id = ?').get(f.id);
@@ -120,7 +131,7 @@ export class WorkflowRemoval {
       trigger: workflowTriggerLabel(version?.trigger),
       activation: f.status, publication: f.published_version_id ? 'published' : 'unpublished',
       readiness: { state: ready ? 'ready' : 'blocked', reason: ready ? null : 'Workflow setup or permission needs review before enabling' },
-      latestRun: last ? { runId: last.id, label: last.status } : null };
+      latestRun: last ? { runId: last.id, label: last.status === 'SUCCEEDED' && continuedFailures(getFlowRun(last.id)!).length ? continuedFailureHeadline(1) : last.status } : null };
   }
   read() {
     this.ready();
