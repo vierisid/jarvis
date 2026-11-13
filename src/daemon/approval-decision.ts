@@ -9,7 +9,7 @@
  * allowed only when nothing happened; closing it is always allowed.
  */
 
-import { APPROVAL_SHORT_ID_LENGTH, guardedApprovalWrite, approvalDashboardOnly, approvalIsPayment, DASHBOARD_DECIDER, executionState, type ApprovalManager, type ApprovalRequest } from '../authority/approval.ts';
+import { APPROVAL_SHORT_ID_LENGTH, guardedApprovalWrite, approvalDashboardOnly, approvalDecidableBy, approvalIsPayment, DASHBOARD_DECIDER, NOTCH_DECIDER, executionState, type ApprovalManager, type ApprovalRequest } from '../authority/approval.ts';
 import { isAgentStopCard, type DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { AuditTrail, ResolutionChannel } from '../authority/audit.ts';
 import { activeEmergencyState } from '../authority/emergency.ts';
@@ -17,7 +17,7 @@ import type { ActionCategory } from '../roles/authority.ts';
 import { approvalChannelCard, approvalToast, LITERAL_TEXT_CHANNELS, LOOK_ALIKE_REASON } from '../authority/approval-delivery.ts';
 
 /** Who decided, when the yes was given on the desktop notch. */
-export const NOTCH_DECIDER = 'notch';
+export { NOTCH_DECIDER };
 
 export interface ApprovalDecisionDeps {
   approvalManager: ApprovalManager;
@@ -76,7 +76,7 @@ export async function applyApprovalDecision(
     // show it: money moves on a click in the dashboard and nowhere else.
     // The executor refuses both too.
     const pending = approvalManager.getRequest(requestId);
-    if (pending?.status === 'pending' && decidedBy !== DASHBOARD_DECIDER && approvalDashboardOnly(pending) !== null) {
+    if (pending?.status === 'pending' && !approvalDecidableBy(pending, decidedBy)) {
       return { status: 'needs_dashboard', request: pending };
     }
     // Pause holds: nothing new starts, an approval included. The card waits

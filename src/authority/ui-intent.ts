@@ -2,6 +2,7 @@ import type { ToolGate } from '../actions/tools/registry';
 import type { ActionCategory } from '../roles/authority';
 import { forCard } from '../util/card-text';
 import { CONFUSABLE_PROTOTYPES } from './confusables-data';
+import { appOpenNeedsNoApproval } from './app-open.ts';
 
 // UI text is untrusted evidence, not a capability declaration. These hints
 // may add a policy check; neither a matching label nor an absent match proves
@@ -276,6 +277,9 @@ export const REVIEWED_UI_TOOLS: ReadonlySet<string> = new Set([
 
 export function rawUiGate(toolName: string, params: Record<string, unknown>): ToolGate | null {
   if (!REVIEWED_UI_TOOLS.has(toolName)) return null;
+  // Opening an app the owner asked for on the notch is not reviewed
+  // (authority/app-open.ts says what that is, and how narrow).
+  if (appOpenNeedsNoApproval(toolName, params)) return null;
   // Reading an element's value is a read, not an action: ui_act's get_value
   // and desktop_click's (#1314 m11) alike. Their floor category stays.
   if ((toolName === 'ui_act' || toolName === 'desktop_click') && params.action === 'get_value') return null;

@@ -175,6 +175,27 @@ export function approvalDashboardOnly(request: Pick<ApprovalRequest, 'context' |
   return null;
 }
 
+/** The decider the notch signs its answers with (daemon/approval-decision.ts). */
+export const NOTCH_DECIDER = 'notch';
+
+/**
+ * Whether `decidedBy` may approve this request. The dashboard may approve
+ * anything. Every other surface is refused what the dashboard alone may
+ * approve, with one exception: the notch may approve what has to be reviewed
+ * on screen, because it is on that screen and shows the request whole, with
+ * the exact action under a sentence that says what it does
+ * (src/notch/approvals.ts). Never a payment. The decision function and the
+ * executor both ask here.
+ */
+export function approvalDecidableBy(
+  request: Pick<ApprovalRequest, 'context' | 'action_category'>,
+  decidedBy: string | null | undefined,
+): boolean {
+  if (decidedBy === DASHBOARD_DECIDER) return true;
+  const only = approvalDashboardOnly(request);
+  return only === null || (only === 'click_only' && decidedBy === NOTCH_DECIDER);
+}
+
 /**
  * The card sentence a gated tool wrote into the request context, if any.
  *

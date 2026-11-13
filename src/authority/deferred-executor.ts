@@ -4,7 +4,7 @@
 
 import { collectActionVerification, verificationSummary, type ActionVerification } from '../actions/action-verification';
 import { isToolResult, type ToolRegistry } from '../actions/tools/registry.ts';
-import { guardedApprovalWrite, executionState, approvalIntentFromContext, approvalIsPayment, approvalNeedsClick, approvalPrincipal, DASHBOARD_DECIDER, type ApprovalManager, type ApprovalRequest } from './approval.ts';
+import { guardedApprovalWrite, executionState, approvalDecidableBy, approvalIntentFromContext, approvalIsPayment, approvalNeedsClick, approvalPrincipal, DASHBOARD_DECIDER, type ApprovalManager, type ApprovalRequest } from './approval.ts';
 import { ABOVE_LEVEL_SUBSTITUTION, resolveToolGate, severityRank, substituteAboveLevel } from './tool-action-map.ts';
 import { combineDecisions, type AuthorityEngine } from './engine.ts';
 import type { ToolDefinition } from '../actions/tools/registry.ts';
@@ -273,7 +273,9 @@ export class DeferredExecutor {
       // A card that must be reviewed on screen was approved somewhere that
       // could not show it: a chat reply, a toast, a voice "yes" (Q-08). Every
       // decision surface refuses such an approve; this holds below them all.
-      if (approvalNeedsClick(request) && request.decided_by !== DASHBOARD_DECIDER) {
+      // The one other surface that can show it is the notch, which is on the
+      // screen the action happens on (approvalDecidableBy).
+      if (approvalNeedsClick(request) && !approvalDecidableBy(request, request.decided_by)) {
         return this.refuse(request, `Approved action ${request.tool_name} was NOT executed: it must be reviewed and approved on the dashboard, and it was approved from ${request.decided_by ?? 'an unknown surface'}. Ask for it again and approve it on the dashboard.`);
       }
       // The same for a payment: it is approved on the dashboard and nowhere

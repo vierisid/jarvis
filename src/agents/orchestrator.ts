@@ -15,6 +15,7 @@ import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
 import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn, toolReturnText } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } from '../authority/taint-gating.ts';
+import { appOpenNeedsNoApproval } from '../authority/app-open.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { RealtimeTaint } from './realtime-taint.ts';
 import type { TurnTaintLink } from './turn-taint-carry.ts';
@@ -2064,7 +2065,10 @@ export class AgentOrchestrator {
         toolCategory: tool?.category ?? 'unknown',
         actionCategory: category,
         temporaryGrants: this.temporaryGrants,
-        profile: this.getEffectiveProfile(),
+        // Opening an app the owner asked for on the notch is not held back
+        // by outside content read earlier in the turn: the configured
+        // profile alone applies to it (authority/app-open.ts).
+        profile: appOpenNeedsNoApproval(toolCall.name, toolCall.arguments) ? this.authorityProfile : this.getEffectiveProfile(),
       });
 
       // The call must clear every category it reaches (a skill that clicks
