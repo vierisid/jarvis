@@ -8,6 +8,7 @@
  * inline on the event.
  */
 
+import { captureMayBeKept } from './capture-guard.ts';
 import { AWARENESS_OFF_MESSAGE, awarenessHistoryVisible } from './history-guard.ts';
 import type { Service, ServiceStatus } from '../daemon/services.ts';
 import type { JarvisConfig, AwarenessConfig } from '../config/types.ts';
@@ -275,6 +276,9 @@ export class AwarenessService implements Service {
     // desktop.enabled: false covers the desktop observers too (#905): what
     // the sidecar captures is dropped unread, as with awareness off.
     if (!isDesktopEnabled()) return;
+    // Not kept while that machine looks away, never watches this app, or
+    // Jarvis is asleep (awareness/capture-guard.ts).
+    if (!captureMayBeKept(sidecarId, event)) return;
 
     try {
       switch (event.event_type) {

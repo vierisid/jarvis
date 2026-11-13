@@ -7,9 +7,9 @@
  * away: `show` below is the prototype's `show`, and each kind of line maps to
  * one of its `tell`, `propose`, `sheet`, `work` and `sending`.
  */
-import { NOTCH_APPS, NOTCH_MOODS } from '../../../../src/notch/protocol.ts';
+import { NOTCH_APPS, NOTCH_MOODS, notchWhereApp } from '../../../../src/notch/protocol.ts';
 import type {
-  NotchAnswerAct, NotchApp, NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage, NotchWord,
+  NotchAnswerAct, NotchApp, NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage, NotchWhereApp, NotchWord,
 } from '../../../../src/notch/protocol.ts';
 import { renderBlocks } from './blocks.ts';
 import { SKELETON, btn, createFrames, createTimers, el, need } from './dom.ts';
@@ -146,6 +146,8 @@ export function createNotchSurface(
   let tok = 0, shownAt = 0;
   let foldTimer = 0, folding = false;
   let restMood: NotchMood = 'idle';
+  /** The app in front on this machine, as the brain last said. */
+  let front: NotchWhereApp | null = null;
   let born = false;
 
   // Esc is taken from the app in front only while it would do something here.
@@ -337,6 +339,8 @@ export function createNotchSurface(
       iconEl.innerHTML = ICON[v.src];
       nin.dataset.icon = '1';
       iconEl.classList.add('from');
+    } else if (v.body === 'rest' && restIcon()) {
+      nin.dataset.icon = '1';
     } else {
       iconEl.replaceChildren();
       nin.dataset.icon = '0';
@@ -348,6 +352,38 @@ export function createNotchSurface(
     shape.fit(instant);
     more();
     syncEsc();
+  }
+
+  /**
+   * At rest, the icon of the app in front sits beside the eyes: this is where
+   * you are, and I am watching it. Not while the eyes are closed or turned
+   * aside: then I am not watching, and say so by showing no app. The icon is
+   * the app's own picture, drawn as a picture and never as markup. True when
+   * one was drawn.
+   */
+  function restIcon(): boolean {
+    const icon = front?.icon;
+    if (!icon || restMood === 'closed' || restMood === 'away') return false;
+    const img = document.createElement('img');
+    img.alt = '';
+    img.decoding = 'sync';
+    img.draggable = false;
+    img.src = icon;
+    iconEl.replaceChildren(img);
+    return true;
+  }
+
+  /** The app in front changed, or the face did, while the notch rests: the icon follows. */
+  function repaintRestIcon(): void {
+    if (!born || cur) return;
+    const had = nin.dataset.icon === '1';
+    iconEl.classList.remove('from');
+    if (restIcon()) nin.dataset.icon = '1';
+    else { iconEl.replaceChildren(); nin.dataset.icon = '0'; }
+    if (had !== (nin.dataset.icon === '1')) {
+      nin.style.setProperty('--tx', lead.offsetLeft + lead.offsetWidth + 10 + 'px');
+      shape.fit();
+    }
   }
 
   function rest(instant = false): void {
@@ -644,6 +680,7 @@ export function createNotchSurface(
           count = Math.max(0, Math.floor(Number(message.count) || 0));
           shownCount = count;
           restMood = message.face && (NOTCH_MOODS as readonly string[]).includes(message.face) ? message.face : 'idle';
+          front = notchWhereApp(message.where);
           if (message.line) {
             edge.appear();
             showLine(structuredClone(message.line), true);
@@ -673,6 +710,11 @@ export function createNotchSurface(
           restMood = message.mood;
           // At rest it shows at once; under a line it waits for the rest.
           if (born && !cur) eyes.setMood(restMood);
+          repaintRestIcon();
+          return;
+        case 'where':
+          front = notchWhereApp(message.app);
+          repaintRestIcon();
           return;
         case 'count':
           count = Math.max(0, Math.floor(Number(message.count) || 0));

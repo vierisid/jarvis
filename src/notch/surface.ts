@@ -11,8 +11,8 @@
  * `notch.message` event the other), which carries them without reading them.
  * See docs/notch/README.md and ./protocol.ts.
  */
-import { NOTCH_BIRTHS, NOTCH_PROTOCOL_VERSION, parseNotchFromPage } from './protocol.ts';
-import type { NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage } from './protocol.ts';
+import { NOTCH_BIRTHS, NOTCH_PROTOCOL_VERSION, notchWhereApp, parseNotchFromPage } from './protocol.ts';
+import type { NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage, NotchWhereApp } from './protocol.ts';
 
 /** The desktop app event that carries one message from the page. */
 export const NOTCH_MESSAGE_EVENT = 'notch.message';
@@ -32,6 +32,7 @@ export class NotchSurface {
   private line: NotchLine | null = null;
   private count = 0;
   private face: NotchMood = 'idle';
+  private where: NotchWhereApp | null = null;
   /** Desktop apps whose page has said hello on its present connection. */
   private readonly pages = new Set<string>();
   /** Desktop apps whose page has been seen at all since the brain started. */
@@ -79,6 +80,14 @@ export class NotchSurface {
     if (mood === this.face) return;
     this.face = mood;
     this.push({ type: 'face', mood });
+  }
+
+  /** The app in front, for the icon at rest. It is kept, like the face. Null takes the icon away. */
+  setWhere(app: NotchWhereApp | null): void {
+    const next = app ? notchWhereApp(app) : null;
+    if (JSON.stringify(next) === JSON.stringify(this.where)) return;
+    this.where = next;
+    this.push({ type: 'where', app: next });
   }
 
   /** Changes the line on the notch. Ignored unless `id` is that line. */
@@ -144,6 +153,7 @@ export class NotchSurface {
       this.pages.add(sidecarId);
       const state: NotchToPage = { type: 'state', line: this.line, count: this.count };
       if (this.face !== 'idle') state.face = this.face;
+      if (this.where) state.where = this.where;
       // The first time a page appears with nothing to say, the notch is born.
       // A page that comes back, or comes up in the middle of a line, just is.
       if (!this.met.has(sidecarId) && !this.line) {

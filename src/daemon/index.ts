@@ -221,7 +221,8 @@ import { runRoomPanelIntent, type RoomPanelDeps } from "./pebble-room-panel.ts";
 import { makeFastPathTurns, PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
 import { startChannelMessageRetention } from "./channel-message-retention.ts";
 import { isGonePanelError, makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
-import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded } from "./pebble-blind.ts";
+import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded, type ObserverPause } from "./pebble-blind.ts";
+import { captureMayBeKept, setCaptureGuard } from "../awareness/capture-guard.ts";
 import { createSidecarOfflineNotifier } from "./sidecar-offline-notice.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
 import { skipGenericSidecarEvent } from "./sidecar-event-routing.ts";
@@ -1109,11 +1110,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 6c. Create sidecar manager
     const sidecarManager = new SidecarManager(jarvisConfig.daemon.data_dir.replace('~', os.homedir()));
     const pebbleBlindDeps = { connected: () => sidecarManager.listConnected(), dispatchRPC: sidecarManager.dispatchRPC.bind(sidecarManager) };
+    // Sleep means it sees nothing (notch pass 6). With the notch on, while
+    // everything is stopped (Esc twice, the tray's Pause) the desktop apps'
+    // observers are paused too: the pause used to freeze what Jarvis does and
+    // leave it watching. Set once the pause controller exists, below.
+    let asleepNow: () => boolean = () => false;
+    const asleepPause = (pause: ObserverPause): ObserverPause => (asleepNow() ? { screen: true, clipboard: true } : pause);
     // A sidecar keeps its observer pause only in memory and starts unpaused:
     // tell every machine that connects (#1159).
     sidecarManager.onSidecarConnected((sc) => {
       const awarenessOn = (jarvisConfig.awareness as { enabled?: boolean } | undefined)?.enabled !== false;
-      void pushObserverPause(pebbleBlindDeps, observerPause(awarenessOn, isDesktopEnabled()), sc.id);
+      void pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(awarenessOn, isDesktopEnabled())), sc.id);
     });
 
     // The bench harness backdoor must never be on quietly. Say so at startup,
@@ -2207,7 +2214,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           await pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(nextEnabled, isDesktopEnabled()), sidecarId);
           // And the observers themselves, at the source (#1159). Not awaited:
           // the spoken answer must not wait on other machines.
-          void pushObserverPause(pebbleBlindDeps, observerPause(nextEnabled, isDesktopEnabled()));
+          void pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(nextEnabled, isDesktopEnabled())));
+          // The notch's eyes follow the switch: closed while it is off.
+          notchReal?.where?.refresh();
           const ack = seeing
             ? "Awareness back on. I can see your screen again."
             : nextEnabled
@@ -4476,6 +4485,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const auditTrail = new AuditTrail();
     const learner = new AuthorityLearner(authorityConfig.learning?.suggest_threshold ?? 5);
     const emergencyController = new EmergencyController();
+    if (notchEnabled()) {
+      asleepNow = () => emergencyController.getState() !== 'normal';
+      emergencyController.subscribe(() => {
+        const awarenessOn = (jarvisConfig.awareness as { enabled?: boolean } | undefined)?.enabled !== false;
+        void pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(awarenessOn, isDesktopEnabled())));
+      });
+    }
     const approvalDelivery = new ApprovalDelivery();
     const deferredExecutor = new DeferredExecutor(approvalManager, auditTrail);
     deferredExecutor.setLearner(learner);
@@ -4539,6 +4555,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // it lands on reads as a delete or a payment, so that has to be known
       // before the click (authority/owner-word.ts).
       wireOwnerWord();
+      // A capture that was on its way when the desktop app started looking
+      // away is not kept (awareness/capture-guard.ts).
+      setCaptureGuard((id, app) => notchReal?.where?.mayKeep(id, app) ?? true);
       notchReal = attachNotchReal(notchSurface, {
         busy: () => notchDemo?.running() != null,
         approvalManager,
@@ -4556,6 +4575,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           : undefined,
         // Esc twice pauses through the same controller as the tray's Pause.
         emergency: emergencyController,
+        // Where the person is, and whether the desktop app is looking (pass 6).
+        where: {
+          port: sidecarManager,
+          watching: () => (jarvisConfig.awareness as { enabled?: boolean } | undefined)?.enabled !== false && isDesktopEnabled(),
+        },
         // A workflow step that stopped to ask a person: a few short options
         // become a row of choices, approve-or-reject becomes one yes, and
         // anything longer points at the dashboard. Answered through the
@@ -4757,7 +4781,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // The glyph follows the stored choice too, on every pebble (#1157).
       // Not awaited: appliers run in one serialized queue, and a sidecar RPC can take 30s to give up.
       void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
-      void pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()));
+      void pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled())));
+      notchReal?.where?.refresh();
     });
     // desktop (#905): Settings writes it at run time (POST /api/config/desktop,
     // #1159). Tools, captures and the prompt read the switch live; what is
@@ -4771,7 +4796,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // Not awaited, like the awareness applier's push. The sidecar observers
       // follow desktop.enabled too (#1159).
       void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
-      void pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()));
+      void pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled())));
+      notchReal?.where?.refresh();
     });
     // voice: resolveRealtimeVoice reads live config per call, so the dashboard
     // needs no applier, but a connected pebble keeps the realtime verdict it
@@ -6370,7 +6396,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // What is typed into the notch, and its recordings, are for the notch
     // alone (src/notch/surface.ts, src/notch/talk.ts): an instruction is not
     // an observation to pass round the dashboards.
-    const notchSidecarEventTypes = ['notch.message', 'notch.talk'];
+    const notchSidecarEventTypes = ['notch.message', 'notch.talk', 'notch.where'];
 
     sidecarManager.onEvent((sidecarId, event) => {
       // Skip events already routed to awareness service to avoid double
@@ -6380,6 +6406,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       if (recorderEventTypes.includes(event.event_type)) return;
       if (internalSidecarEventTypes.includes(event.event_type)) return;
       if (notchSidecarEventTypes.includes(event.event_type)) return;
+      // Not kept while that machine looks away, never watches this app, or
+      // Jarvis is asleep (awareness/capture-guard.ts).
+      if (!captureMayBeKept(sidecarId, event)) return;
 
       const payloadObj: Record<string, unknown> =
         typeof event.payload === 'object' && event.payload !== null

@@ -149,6 +149,8 @@ html.notch-window, html.notch-window body { margin: 0; height: 100%; overflow: h
 .appicon { display: none; width: 16px; height: 16px; flex: none; }
 .nin[data-icon="1"] .appicon { display: block; animation: pop .34s var(--ease) both; }
 .appicon svg { width: 16px; height: 16px; filter: saturate(.75) brightness(.92); }
+/* The front app's own icon, at rest. A picture from the machine, a little quieter than it was drawn. */
+.appicon img { display: block; width: 16px; height: 16px; border-radius: 3.5px; filter: saturate(.8) brightness(.94); -webkit-user-drag: none; }
 .nin[data-icon="1"] .appicon.from { animation: flip .44s var(--ease) both; }
 .appicon.from svg { box-shadow: 0 0 0 2px var(--notch), 0 0 0 3.5px var(--n-ink); border-radius: 4.5px; filter: none; }
 @keyframes flip { from { transform: rotateY(90deg) scale(.8); opacity: 0; } to { transform: none; opacity: 1; } }

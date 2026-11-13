@@ -11,6 +11,7 @@ import type { ToolRegistry } from '../actions/tools/registry.ts';
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
 import type { ApprovalDecisionOutcome } from '../daemon/approval-decision.ts';
 import type { Database } from 'bun:sqlite';
+import { attachNotchWhere, type NotchWhere, type NotchWherePort } from './where.ts';
 import { NOTCH_APPROVAL_LOOK_MS, attachNotchApprovals } from './approvals.ts';
 import { attachNotchAsks } from './asks.ts';
 import type { NotchAsks, NotchAsksDeps } from './asks.ts';
@@ -99,6 +100,11 @@ export interface NotchRealDeps {
     talkPort: NotchTalkPort;
     stt: NotchTalkDeps['stt'];
   };
+  /**
+   * Where the person is (pass 6): the desktop apps that say which app is in
+   * front, and whether watching is switched on at all.
+   */
+  where?: { port: NotchWherePort; watching?: () => boolean };
   /** The clock the lines on the notch run on. Tests give one they can wind forward. */
   clock?: NotchClock;
   log?: (line: string) => void;
@@ -114,6 +120,8 @@ export interface NotchReal {
   fixtures: NotchFixtures;
   /** Instructions given on the notch, when the brain takes them. */
   asks: NotchAsks | null;
+  /** Where the person is and whether Jarvis is looking, when a desktop app tells it. */
+  where: NotchWhere | null;
   talk: NotchTalk | null;
   /** Whether a notch page is up: then the notch tells the person, and the toasts need not. */
   showing(): boolean;
@@ -147,6 +155,16 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     clock: deps.clock,
     log,
   });
+  // Where the person is, and whether Jarvis is looking (pass 6). Before the
+  // asks and the pause, which both show what it knows.
+  const where: NotchWhere | null = deps.where
+    ? attachNotchWhere(surface, inbox, deps.where.port, {
+      asleep: () => (deps.emergency ? deps.emergency.getState() !== 'normal' : false),
+      sleep: () => deps.emergency?.pause(),
+      watching: deps.where.watching,
+      log,
+    })
+    : null;
   let talk: NotchTalk | null = null;
   if (deps.asks) {
     const emergency = deps.emergency;
@@ -163,6 +181,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       attention: () => surface.act({ gesture: 'shake' }),
       openDashboard: deps.openDashboard,
       today: () => notchTodayBlocks(notchToday(todayDeps)),
+      see: where ? { row: () => where.row(), open: (stage) => where.see(stage) } : undefined,
       log,
     });
     talk = attachNotchTalk(deps.asks.talkPort, { asks, stt: deps.asks.stt, log });
@@ -174,7 +193,14 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   if (promises && appendFixtureLog) {
     promises.executor.setOriginRunner(NOTCH_FIXTURE_ORIGIN, notchFixturePromiseRun(appendFixtureLog));
   }
-  const stopPause = deps.emergency ? attachNotchPause(surface, inbox, { controller: deps.emergency, log }) : () => {};
+  const stopPause = deps.emergency
+    ? attachNotchPause(surface, inbox, {
+      controller: deps.emergency,
+      restFace: where ? () => where.face() : undefined,
+      changed: where ? () => where.refresh() : undefined,
+      log,
+    })
+    : () => {};
   const questions: NotchQuestions | null = deps.questions
     ? attachNotchQuestions(inbox, { ...deps.questions, openDashboard: deps.openDashboard, log })
     : null;
@@ -221,7 +247,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   timer.unref?.();
 
   return {
-    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, talk,
+    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk,
     showing: () => surface.listening() > 0,
     stop: () => {
       clearInterval(timer); clearInterval(failureTimer);
@@ -229,6 +255,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       if (questionTimer) clearInterval(questionTimer);
       stopPromises(); stopPause();
       asks?.stop();
+      where?.stop();
     },
   };
 }
