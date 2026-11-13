@@ -333,3 +333,118 @@ func TestNotchWakeListenerWaitsForTheBrainsWord(t *testing.T) {
 		t.Fatal("the fallback released a listener the brain had forbidden")
 	}
 }
+
+// ── How much voice is in a recording ────────────────────────────────────────
+
+// talkPieces builds a recording from levels, one 20 ms piece each.
+func talkPieces(levels ...float32) []notchTalkPiece {
+	out := make([]notchTalkPiece, len(levels))
+	for i, level := range levels {
+		out[i] = notchTalkPiece{rms: level, bytes: 640}
+	}
+	return out
+}
+
+func repeatLevels(n int, levels ...float32) []float32 {
+	out := make([]float32, 0, n*len(levels))
+	for i := 0; i < n; i++ {
+		out = append(out, levels...)
+	}
+	return out
+}
+
+// A webcam microphone across a desk: speech that hardly reaches the fixed
+// level the first build used. This is the recording that was thrown away on
+// the first real microphone, every time.
+func quietMicSpeech() []notchTalkPiece {
+	levels := repeatLevels(5, 35)
+	levels = append(levels, repeatLevels(9, 300, 380, 520, 350, 80, 60)...)
+	levels = append(levels, repeatLevels(3, 35)...)
+	return talkPieces(levels...)
+}
+
+func TestNotchTalkMeasureHearsAQuietMicrophone(t *testing.T) {
+	pieces := quietMicSpeech()
+	// What the fixed level of 500 made of it: 9 pieces, 180 ms, "too little".
+	var old int64
+	for _, piece := range pieces {
+		if piece.rms >= 500 {
+			old += 20
+		}
+	}
+	if old >= notchTalkMinVoicedMs {
+		t.Fatalf("the example is not the failure it stands for: the fixed level heard %d ms", old)
+	}
+	heard := notchTalkMeasure(pieces, 16000)
+	if heard.VoicedMs < 600 {
+		t.Fatalf("heard %d ms of voice at level %.0f, want the speech (720 ms): %+v", heard.VoicedMs, heard.Level, heard)
+	}
+	if heard.Level != notchTalkVoiceFloorRMS {
+		t.Fatalf("level = %.0f, want the floor %.0f for a quiet room", heard.Level, notchTalkVoiceFloorRMS)
+	}
+}
+
+// Hold the keys and say nothing: a steady room, quiet or not, is not voice.
+func TestNotchTalkMeasureSteadyRoomIsNotVoice(t *testing.T) {
+	for name, levels := range map[string][]float32{
+		"a quiet room": repeatLevels(25, 30, 38, 45, 33),
+		"a fan":        repeatLevels(25, 180, 220, 260, 200),
+		"no sound":     repeatLevels(100, 0),
+	} {
+		heard := notchTalkMeasure(talkPieces(levels...), 16000)
+		if heard.VoicedMs >= notchTalkMinVoicedMs {
+			t.Errorf("%s: heard %d ms of voice at level %.0f: %+v", name, heard.VoicedMs, heard.Level, heard)
+		}
+	}
+}
+
+// A click, a cough, a key: loud, and far too short to be an instruction.
+func TestNotchTalkMeasureAClickIsTooLittle(t *testing.T) {
+	levels := repeatLevels(40, 30)
+	levels = append(levels, 2400, 1900)
+	levels = append(levels, repeatLevels(40, 30)...)
+	heard := notchTalkMeasure(talkPieces(levels...), 16000)
+	if heard.VoicedMs != 40 {
+		t.Fatalf("heard %d ms, want the click's 40", heard.VoicedMs)
+	}
+}
+
+// A loud microphone and a loud room are heard as before: the level never
+// goes above what the fixed one was.
+func TestNotchTalkMeasureNeverAsksForMoreThanTheOldLevel(t *testing.T) {
+	headset := append(repeatLevels(5, 20), repeatLevels(10, 3000, 5200, 4100, 900, 200)...)
+	if heard := notchTalkMeasure(talkPieces(headset...), 16000); heard.VoicedMs < 600 {
+		t.Fatalf("a headset: heard %d ms at level %.0f", heard.VoicedMs, heard.Level)
+	}
+	// Speech with no pause in it at all, loud: every piece is voice.
+	flat := notchTalkMeasure(talkPieces(repeatLevels(50, 4000)...), 16000)
+	if flat.Level != notchTalkVoiceCapRMS || flat.VoicedMs != 1000 {
+		t.Fatalf("flat loud speech: %d ms at level %.0f, want 1000 ms at the cap", flat.VoicedMs, flat.Level)
+	}
+}
+
+func TestNotchTalkMeasureOfNothing(t *testing.T) {
+	if heard := notchTalkMeasure(nil, 16000); heard.VoicedMs != 0 || heard.Pieces != 0 {
+		t.Fatalf("an empty recording: %+v", heard)
+	}
+}
+
+// The whole path with the quiet microphone: it is sent, with its sound.
+func TestNotchTalkSendsAQuietMicrophonesSpeech(t *testing.T) {
+	h := newTalkHarness(t)
+	h.key(notchKeyTalkStart)
+	h.mic.mu.Lock()
+	onChunk := h.mic.onChunk
+	h.mic.mu.Unlock()
+	for _, piece := range quietMicSpeech() {
+		onChunk(pcmChunk(320, int16(piece.rms)))
+	}
+	h.key(notchKeyTalkEnd)
+	got := h.last()
+	if got.phase != "end" || !got.hasPCM {
+		t.Fatalf("a quiet microphone's speech was not sent: %+v", got)
+	}
+	if got.payload["voiced_ms"].(int64) < 600 {
+		t.Fatalf("voiced_ms = %v", got.payload["voiced_ms"])
+	}
+}
