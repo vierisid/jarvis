@@ -279,10 +279,10 @@ test('publishing from the existing canvas route reloads authoritative state and 
   try {
     await React.act(async () => root.render(<Room shell={shell} />));
     expect(button('Run workflow').disabled).toBe(true); const before = reads;
-    await click('Publish version');
+    await click('Save and turn on');
     expect(publications).toBe(1); expect(reads).toBeGreaterThan(before);
     expect(button('Run workflow').disabled).toBe(false);
-    expect(button('Publish version')).toBeUndefined(); expect(button('Edit a new draft')).toBeTruthy();
+    expect(button('Save and turn on')).toBeUndefined(); expect(button('Edit workflow')).toBeTruthy();
   } finally { rooms.retire(); transport.stop(); }
 });
 

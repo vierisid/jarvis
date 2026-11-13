@@ -369,6 +369,11 @@ test('WebSocketServer - JWT-only by DEFAULT: unauthenticated requests are blocke
     const html = await dash.text();
     expect(html).toContain("location.replace");
     expect(html).toContain(".get('token')");
+    // ...and a person reading it learns what happened and what to do.
+    expect(html).toContain('Your Jarvis session has ended');
+    expect(html).toContain('desktop app');
+    expect(html).toContain('jarvis enroll');
+    expect(html).not.toContain('Access requires a valid token');
 
     // WebSocket endpoint blocked too
     const ws = await fetch('http://localhost:3150/ws');
