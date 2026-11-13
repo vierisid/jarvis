@@ -93,6 +93,8 @@ export interface NotchRealDeps {
     understand?: NotchAsksDeps['understand'];
     /** Puts an approval in plain words, from its tool and arguments alone. */
     describeApproval?: (request: ApprovalRequest) => Promise<string | null>;
+    /** What on the screen an approval would land on, as that machine reads it now. Shown to the person only. */
+    whereApproval?: (request: ApprovalRequest) => Promise<string | null>;
     /** The desktop app's recordings arrive as its events. */
     talkPort: NotchTalkPort;
     stt: NotchTalkDeps['stt'];
@@ -140,6 +142,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     deny: deps.deny,
     openDashboard: deps.openDashboard,
     describe: deps.asks?.describeApproval,
+    where: deps.asks?.whereApproval,
     mine: (requestId) => asks?.mine(requestId) === true,
     clock: deps.clock,
     log,

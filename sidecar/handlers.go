@@ -60,6 +60,10 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		registry["launch_app"] = handleLaunchApp
 		registry["focus_window"] = handleFocusWindow
 		registry["find_element"] = handleFindElement
+		// Acting at a place on the screen, and saying what is there
+		// (desktop_pointer.go). Windows only for now; elsewhere they refuse.
+		registry["pointer_action"] = handlePointerAction
+		registry["describe_target"] = handleDescribeTarget
 	}
 	if caps[CapBrowser] {
 		// The browser launches lazily on the first browser_* call (headed by

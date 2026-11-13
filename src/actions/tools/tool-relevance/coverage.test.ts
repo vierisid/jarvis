@@ -77,6 +77,10 @@ const EXPECTED: Record<string, OutsideReach> = {
   // `failureIsOutsideContent` declaration, which does not move the reach.
   desktop_type: 'inert',
   desktop_press_keys: 'inert',
+  // The same for acting at a place on the screen: its reply is our own words
+  // and numbers (`{success, action, screen_x, screen_y, window_pid}`), and what
+  // is at the place is never read back into it.
+  desktop_pointer: 'inert',
 };
 
 describe('reach classification coverage', () => {

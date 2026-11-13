@@ -31,6 +31,7 @@ export { boundedToolCapability };
 const OPAQUE_TOOLS = new Set(['run_command', 'browser_evaluate', 'browser_navigate', 'browser_click',
   'browser_type', 'browser_upload_file', 'browser_press_key', 'browser_hover', 'browser_scroll',
   'desktop_click', 'desktop_type', 'desktop_press_keys', 'desktop_launch_app', 'desktop_focus_window',
+  'desktop_pointer',
   // Recording installs input hooks behind a click the person makes; listing
   // and deleting skills is chat-side housekeeping. Neither belongs in a flow.
   'record_skill', 'manage_skills']);

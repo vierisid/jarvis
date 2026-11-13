@@ -74,6 +74,12 @@ let sidecarManager: SidecarManager | null = null;
  * was clicked first the same refusal carries no code, since something was done,
  * and `desktop_reach_test.go` pins both halves).
  *
+ * `DESKTOP_POINTER_REFUSED` is a click, scroll or drag at a place on the screen
+ * refused before the pointer moved: a request the sidecar could not read, a
+ * place on one of Jarvis's own windows, or a system the action is not built for
+ * (`handlePointerAction` in sidecar/desktop_pointer_windows.go checks all of it
+ * before its first mouse call).
+ *
  * `BROWSER_SNAPSHOT_SUPERSEDED` (#676) is a reviewed browser click, type or
  * hover refused because the element map is no longer on the generation the
  * call was reviewed against, or because the generation it carried was
@@ -83,8 +89,43 @@ let sidecarManager: SidecarManager | null = null;
  */
 const NOT_STARTED_RPC_CODES = new Set([
   'DESKTOP_INVALID_KEYS', 'DESKTOP_STALE_ELEMENT', 'DESKTOP_TARGET_OBSCURED', 'DESKTOP_TARGET_UNREACHABLE',
-  'BROWSER_SNAPSHOT_SUPERSEDED', 'BROWSER_ACTION_REFUSED',
+  'DESKTOP_POINTER_REFUSED', 'BROWSER_SNAPSHOT_SUPERSEDED', 'BROWSER_ACTION_REFUSED',
 ]);
+
+/**
+ * How long a picture of a screen stays good for reading a place off it. The
+ * screen moves on; a place read off an old picture is a place in the past.
+ */
+export const SCREEN_PICTURE_MAX_AGE_MS = 3 * 60_000;
+
+/**
+ * The size of the picture of each machine's screen that a model was last
+ * shown, by canonical sidecar id. `desktop_pointer` needs it: the model reads a
+ * place off that picture in the picture's own pixels, and the picture is often
+ * smaller than the screen, so the place is sent on as a fraction of it.
+ */
+const screenPictures = new Map<string, { width: number; height: number; at: number }>();
+
+function screenPictureKey(target: string): string {
+  const sidecar = sidecarManager ? findSidecar(target, sidecarManager.listSidecars()) : null;
+  return sidecar?.id ?? target;
+}
+
+export function rememberScreenPicture(target: string, width: number, height: number, now: number = Date.now()): void {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+  screenPictures.set(screenPictureKey(target), { width, height, at: now });
+}
+
+/** The picture last shown of that machine's screen, or null when there is none recent enough. */
+export function lastScreenPicture(target: string, now: number = Date.now()): { width: number; height: number } | null {
+  const picture = screenPictures.get(screenPictureKey(target));
+  if (!picture || now - picture.at > SCREEN_PICTURE_MAX_AGE_MS) return null;
+  return { width: picture.width, height: picture.height };
+}
+
+export function forgetScreenPictures(): void {
+  screenPictures.clear();
+}
 
 /**
  * Inject the sidecar manager at startup. Called once from the daemon.
@@ -688,6 +729,24 @@ export function routeToSidecarAction(target: string, method: string,
 }
 
 /**
+ * A desktop action whose arguments can only be worked out once the machine is
+ * known: `prepare` is given the machine's canonical id, after every check that
+ * it can be reached and before anything is sent, and answers with what to send
+ * or with why nothing can be. A refusal is `not_started`.
+ */
+export async function routeToSidecarPrepared(target: string, method: string, capability: SidecarCapability,
+  prepare: (sidecarId: string) => Record<string, unknown> | { refuse: string; code: string }): Promise<string> {
+  const out = await dispatchToSidecar(target, method, {}, capability, true, (sidecar) => {
+    const made = prepare(sidecar.id);
+    return typeof made.refuse === 'string' && typeof made.code === 'string'
+      ? { kind: 'refuse', code: made.code, message: `Error: ${made.refuse}` }
+      : { kind: 'send', extra: made as Record<string, unknown> };
+  });
+  if (out.kind === 'message') return out.text;
+  return typeof out.result === 'string' ? out.result : JSON.stringify(out.result, null, 2);
+}
+
+/**
  * `routeToSidecarAction`, also handing back the reply it rendered, for a
  * caller that decides something from the reply's STRUCTURE (#708) rather than
  * by parsing the display text. `text` is byte for byte what
@@ -823,6 +882,8 @@ export async function routeScreenshotToSidecar(
     && (image.origWidth !== image.width || image.origHeight !== image.height)
     ? `, downscaled from ${image.origWidth}x${image.origHeight} to fit` : '';
   const size = image.width && image.height ? ` (${image.width}x${image.height}${shrunk})` : '';
+  // What the model is about to see, so that a place it reads off it can be found on the screen.
+  if (image.width && image.height) rememberScreenPicture(target, image.width, image.height);
   return { content: [{ type: 'text', text: `Screenshot captured${size}.` }, imageBlock(image)] };
 }
 

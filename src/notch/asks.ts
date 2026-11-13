@@ -112,8 +112,11 @@ export interface NotchAsks {
    * keys were still held): then the recording need not be transcribed at all.
    */
   released(talkId: string): boolean;
-  /** The words. */
-  words(talkId: string, text: string): void;
+  /**
+   * The words. `cut` when listening stopped by itself at the limit: what was
+   * heard may end in the middle of a sentence, so it is asked about first.
+   */
+  words(talkId: string, text: string, more?: { cut?: boolean }): void;
   /** Nothing was caught. */
   nothing(talkId: string, why: NotchMissReason): void;
   /** The recording was thrown away where it was made. */
@@ -145,6 +148,8 @@ interface Live {
   answer: string | null;
   note: string | null;
   missed: NotchMissReason | null;
+  /** Listening stopped by itself at the limit: the words are asked about before they are acted on. */
+  cut?: boolean;
   approvals: Set<string>;
   waiters: Set<() => void>;
 }
@@ -592,7 +597,28 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
             turnAway(ask, 'You turned it away.');
             return 'settled';
           }
-          if (what === 'go' && ask.phase === 'heard') await run(ask, stage);
+          if (what === 'go' && ask.phase === 'heard') {
+            // Listening stopped by itself after a minute. What was heard may
+            // end in the middle of a sentence ("delete the old ones, but
+            // not..."), so it is shown whole and takes a yes. It used to be
+            // thrown away, the whole minute of it.
+            if (ask.cut) {
+              ask.cut = false;
+              const id = stage.id();
+              listenId = null;
+              stage.put({
+                id, kind: 'sheet', say: ['I stopped listening after a minute. Go on with what I heard?'], yes: 'go on', stay: true,
+                blocks: [{ kind: 'paper', lines: plainLines(ask.heard).map((line): NotchPart[] => [line]) }],
+              });
+              const answer = await stage.answer(id, ['yes', 'no']);
+              if (answer.act !== 'yes') {
+                turnAway(ask, 'It ran past a minute, and you turned it away.');
+                return 'settled';
+              }
+              if (ask.phase !== 'heard') continue;
+            }
+            await run(ask, stage);
+          }
           continue;
         }
         case 'running': {
@@ -831,13 +857,14 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       bump(ask);
       return true;
     },
-    words(talkId, text) {
+    words(talkId, text, more) {
       const ask = ofTalk(talkId);
       // Turned away while the words were being made: they are dropped here, unread.
       if (!ask) return;
       if (!ledger.heard(ask.id, text)) { sync(ask); bump(ask); return; }
       ask.phase = 'heard';
       ask.heard = text;
+      if (more?.cut) ask.cut = true;
       bump(ask);
     },
     nothing(talkId, why) {

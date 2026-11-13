@@ -219,6 +219,24 @@ What holds for all of them:
     (`NOTCH_TURN_NOTE`): it does not ask on its own account before opening
     an app or doing what it was just told to, only before a delete, a send,
     a payment, an install or a change of settings.
+42. **An action on the screen is approved by what it lands on.** A click, a
+    typed text or a key press says "element 12", or "x 640, y 300", or
+    nothing, and the product cannot tell a click that pays from one that
+    scrolls. So when its sheet is made, the machine is asked what is there
+    now (`describe_target`, a read), and the answer is the first line of the
+    paper: `On screen: Button "Send" in "Inbox - Outlook" (olk)`; for typed
+    text and keys with no element, the window in front. It is text from the
+    screen: it is shown to the person as one short line with nothing unseen
+    in it (`notchApprovalPlace`) and is never given to a model
+    (`daemon/notch-where.ts`). The sheet waits at most 1.5 s for it; a desktop
+    app too old to answer leaves the sheet as it was.
+43. **Jarvis does not act in its own windows.** A click, scroll or drag at a
+    place (`desktop_pointer`) is refused when the place is on a window of the
+    desktop app itself, the notch first of all: the notch asks the person
+    things, and the agent must never be who answers. A click on an element
+    under the notch is refused the same way after the notch has been given
+    two seconds to fold back (`pointerPlaceFree`, `pointerReachesElement`).
+    The keys the agent sends were already not heard by the notch (17).
 24. **A tap cannot land on the wrong thing.** A line that came by itself
     takes no yes and no Esc for 0.7 s, counted in the page from when it was
     drawn. After that an Esc pressed for the app in front does land on the
@@ -279,11 +297,15 @@ one paragraph, opens as a sheet that stays until it is closed.
     microphone opens. The brain keeps one open recording per desktop app and
     drops an `end` for any other id unread. Nothing looks up "the latest".
 32. **What stays on the machine.** A recording ended by a slip (another key
-    with the pair held), one made while the microphone was muted, one with
-    less than 250 ms of voice in it, and one that ran into the 60 second
-    limit are not sent. The brain is told how it ended and gets no sound.
+    with the pair held), one made while the microphone was muted, and one
+    with less than 150 ms of voice in it are not sent. The brain is told how
+    it ended and gets no sound. One that ran into the 60 second limit is
+    sent as far as it got, marked as that (`reason: "cap"`): the brain makes
+    it into words, shows them whole on a sheet, and acts on them only on a
+    yes, since they may stop in the middle of a sentence. (It used to be
+    thrown away, the whole minute of it.)
     What counts as voice is judged against the recording's own quiet: a
-    piece of sound is voice when it is 2.5 times louder than the quiet tenth
+    piece of sound is voice when it is 1.8 times louder than the quiet tenth
     of the pieces, never asking for less than a level of 90 or more than 500
     (`notchTalkMeasure`). The desktop app's log has one line per recording
     with what it measured and what became of it.
@@ -347,6 +369,39 @@ switch is on:
   with the switch off.
 - **A sheet row that opens something shows its small word** (the page's
   `blocks.ts`). No sheet used both before.
+- **An app is found by the way a person says its name**
+  (`startMenuPick`, `sidecar/desktop_startmenu.go`). The Start menu's list
+  is read once and matched in the desktop app: the app with exactly that
+  name; else the ones whose name contains it, the closest name winning
+  ("powershell" is Windows PowerShell, not its ISE); else a short way of
+  saying it ("vs code", "ms teams"). Two that are equally close are not
+  guessed between: they are named in the refusal.
+- **Typed text can break its lines with Shift+Enter** (`desktop_type`,
+  `line_break: "shift_enter"`, Windows). A line break is typed as Enter,
+  which sends the message in a chat app: the first line of a two-line
+  message went out alone. The tool's own text now says so.
+- **One path with spaces stays one argument** when an app is started
+  (`launchArgLine`). "Open that file in Notepad" used to reach Notepad as
+  two halves of a path.
+- **Typed text and keys say which window received them** (`foreground_pid`,
+  a number) **and are refused before the first key when that window runs as
+  administrator** and the desktop app does not (`DESKTOP_TARGET_UNREACHABLE`).
+  Windows drops those keys without an error, and the reply used to say
+  success. `delivery: "unconfirmed"` when the window could not be asked.
+- **A window read says why it is empty or short**: `window_minimized`,
+  `window_elevated`, `truncated` (3,000 elements or 15 seconds, whichever
+  comes first). All three used to read as "custom-drawn, use a screenshot".
+- **"The window of a program" is the one in front** (`pickWindowOfPid`), not
+  the first one found. File Explorer owns every folder window and the
+  desktop. `desktop_focus_window` takes an `hwnd` to name one of several.
+- **The notch's own two windows are not in the list of open windows.**
+- **A new tool, `desktop_pointer`**: click, double-click, right-click, scroll
+  or drag at a place read off a screenshot, for windows that list no element
+  (a game, Steam's own pages, a canvas). Windows only. It is reviewed on
+  screen like every raw click (`REVIEWED_UI_TOOLS`), is not allowed in a
+  workflow, and takes the place as a pixel of the last screenshot of that
+  machine (good for three minutes), which the brain sends on as a fraction
+  of the main display.
 
 And these are behind the switch:
 
@@ -358,6 +413,9 @@ And these are behind the switch:
   and 35).
 - **Typed and spoken notch events are not broadcast to dashboards.**
 - **Approval and task-complete toasts are not raised** while a notch page is up.
+- **The notch comes back over a fullscreen video while it has a question
+  that waits for an answer** (`__notch_asking`, `notchShouldHide`): an
+  approval or a question back. It hides again once answered. Windows only.
 
 ## The keys
 
@@ -400,6 +458,22 @@ And these are behind the switch:
 
 - Approvals a restart left without a receipt ("run once or close") are not
   on the notch. They are in the dashboard, and in the tray's count.
+- `desktop_pointer` has been compiled and its arithmetic tested, and has not
+  been run on a real screen. How well a model reads a place off a picture is
+  not known. A screenshot is of the main display only, taken by a helper
+  that does not know the display's scale: on a display scaled above 100% the
+  picture may not be the whole screen, and a place read off it would then be
+  wrong. On the Mac and on Linux the tool refuses.
+- A window that runs as administrator cannot be read or driven at all, and
+  with one in front the notch's own keys do not reach the notch either
+  (Windows keeps them from every ordinary program). The agent now says so
+  instead of reporting success; the limit itself is Windows'.
+- Start menu names are in the language of Windows. "Settings" finds nothing
+  on a Windows in Italian, where it is "Impostazioni".
+- Every step on screen is still asked about once (the owner's decision of 13
+  November 2026). A task of ten clicks is ten sheets.
+- On the Mac the notch does not yet come back over a fullscreen video for a
+  question.
 - Esc twice is heard only while the notch has something on it, because that
   is the only time Esc is taken from the app in front. To stop everything
   from rest: yes (which opens Home or starts a round), then Esc twice. Or

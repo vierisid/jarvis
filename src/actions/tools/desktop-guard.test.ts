@@ -15,7 +15,7 @@ import { DESKTOP_TOOLS, __setLocalDesktopControllerFactoryForTests } from './des
 import { endRecordingForDesktopOff, runSkillTool } from './skills.ts';
 import { getRecorder } from '../../skills/recorder.ts';
 import { resetUiSnapshots, uiActTool } from './ui.ts';
-import { getSidecarManager, setSidecarManagerRef } from './sidecar-route.ts';
+import { getSidecarManager, rememberScreenPicture, setSidecarManagerRef } from './sidecar-route.ts';
 import { toolsInScope, PROJECT_SITE_CHAT_SCOPE } from './tool-scope.ts';
 import { realtimeToolDecision } from './tool-relevance/filter.ts';
 import {
@@ -76,6 +76,7 @@ const ARGS: Record<string, Record<string, unknown>> = {
   desktop_launch_app: { executable: 'notepad' },
   desktop_focus_window: { pid: 1 },
   desktop_find_element: { name: 'OK' },
+  desktop_pointer: { x: 10, y: 10 },
 };
 
 describe('the setting', () => {
@@ -158,6 +159,8 @@ describe('desktop.enabled: false refuses at ToolRegistry.execute', () => {
   });
 
   test('with the switch on (the default) the same calls are not refused and do reach the sidecar', async () => {
+    // desktop_pointer reads its place off the last picture of that screen.
+    rememberScreenPicture('pc-1', 1280, 720);
     for (const tool of DESKTOP_TOOLS) {
       expect(await refusal(() => registry().execute(tool.name, ARGS[tool.name] ?? {}))).toBeNull();
     }

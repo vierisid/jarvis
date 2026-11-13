@@ -266,8 +266,10 @@ func TestNotchTalkClosesItselfAtTheCap(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	got := h.last()
-	if got.phase != "end" || got.payload["reason"] != "cap" || got.hasPCM {
-		t.Fatalf("at the cap: %+v, want an end with reason cap and no audio", got)
+	// What was said is sent as far as it got, marked as cut short: the brain
+	// asks before acting on it. It is not thrown away.
+	if got.phase != "end" || got.payload["reason"] != "cap" || !got.hasPCM {
+		t.Fatalf("at the cap: %+v, want an end with reason cap and the audio so far", got)
 	}
 	if h.mic.closed != 1 {
 		t.Fatalf("the microphone was closed %d times, want 1", h.mic.closed)
