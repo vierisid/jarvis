@@ -17,6 +17,7 @@
  */
 import type { EmergencyState } from '../authority/emergency.ts';
 import type { NotchInbox } from './inbox.ts';
+import type { NotchMood } from './protocol.ts';
 import type { NotchSurface } from './surface.ts';
 
 export interface NotchPauseDeps {
@@ -26,6 +27,14 @@ export interface NotchPauseDeps {
     resume(): void;
     subscribe(listener: (state: EmergencyState) => void): () => void;
   };
+  /**
+   * The face the notch has at rest when it is awake. It is not always open
+   * eyes: it may be looking away, or not watching the app in front
+   * (where.ts). Open eyes when not given.
+   */
+  restFace?: () => NotchMood;
+  /** Told after the notch has gone to sleep or woken, so that what depends on it can follow. */
+  changed?: () => void;
   log?: (line: string) => void;
 }
 
@@ -41,16 +50,18 @@ export function attachNotchPause(surface: NotchSurface, inbox: NotchInbox, deps:
     if (state === 'normal') {
       inbox.release(HOLD);
       inbox.setOpener(null);
-      surface.setFace('idle');
+      surface.setFace(deps.restFace?.() ?? 'idle');
       if (tell && was !== 'normal') {
         surface.act({ gesture: 'wake' });
         inbox.present('awake', (stage) => stage.say(['Awake. Going on from where things were.'], 2200, { mood: 'idle' }));
       }
+      deps.changed?.();
       return;
     }
     // Whatever is on the notch goes back to the count, and nothing speaks up.
     inbox.hold(HOLD);
     surface.setFace('closed');
+    deps.changed?.();
     if (state === 'paused') {
       inbox.setOpener(() => {
         log('[notch] woken from the notch: resuming');

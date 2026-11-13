@@ -195,10 +195,42 @@ export type NotchBlock =
 export const NOTCH_APPS = ['desk', 'mail', 'sheets', 'pay', 'cal', 'slack', 'call', 'form', 'term', 'dash', 'bank'] as const;
 export type NotchApp = (typeof NOTCH_APPS)[number];
 
+/**
+ * The app in front on that machine, as the resting notch shows it: its name,
+ * and its own icon as a small PNG in a data URL. The icon is a picture and is
+ * only ever drawn as one (an `<img>`), never set as markup.
+ */
+export interface NotchWhereApp { name: string; icon?: string }
+
+/** The longest icon the page will draw, as characters of its data URL (a 48 px PNG is a few thousand). */
+export const NOTCH_ICON_MAX = 60_000;
+
+/** An icon as the page may draw it: a PNG data URL of sane length, or nothing. */
+export function notchIconUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > NOTCH_ICON_MAX) return undefined;
+  return /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(value) ? value : undefined;
+}
+
+/** The app in front, checked: a name of one line, and an icon only if it is one. Null when it is not an app. */
+export function notchWhereApp(value: unknown): NotchWhereApp | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const name = typeof raw.name === 'string' ? [...raw.name.replace(/\s+/g, ' ').trim()].slice(0, 60).join('') : '';
+  if (!name) return null;
+  const icon = notchIconUrl(raw.icon);
+  return icon ? { name, icon } : { name };
+}
+
 /** Brain to page. */
 export type NotchToPage =
   /** The answer to hello: everything the notch should be showing, at once. */
-  | { type: 'state'; line: NotchLine | null; count: number; born?: NotchBirth; face?: NotchMood }
+  | { type: 'state'; line: NotchLine | null; count: number; born?: NotchBirth; face?: NotchMood; where?: NotchWhereApp | null }
+  /**
+   * The app in front, for the icon beside the resting eyes. Null: none is
+   * shown (nothing is in front, or the notch is not watching it). The brain
+   * keeps it, like the face.
+   */
+  | { type: 'where'; app: NotchWhereApp | null }
   | { type: 'show'; line: NotchLine }
   /** Back to the eyes. */
   | { type: 'rest' }
