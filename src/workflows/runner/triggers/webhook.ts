@@ -1,4 +1,5 @@
 import { prepareSubmission, type SubmissionConfig } from '../../runtime/form-submission';
+import { isSchemedCredential, isSecretName, REDACTED } from '../../runtime/piece-effects';
 /**
  * WebhookManager — manages inbound webhook endpoints for workflow triggers
  *
@@ -45,7 +46,7 @@ export type WebhookDelivery = {
 export type WebhookFireResult =
   | { outcome: 'started'; fireId: string; runId: string }
   | { outcome: 'duplicate'; fireId: string; runId?: string }
-  | { outcome: 'blocked'; fireId?: string; reason: string; disabled?: boolean }
+  | { outcome: 'blocked'; fireId?: string; reason: string; disabled?: boolean; turnedOff?: boolean }
   | { outcome: 'skipped'; fireId?: string; reason: string; retryAfterSeconds?: number }
   | { outcome: 'error'; reason: string };
 
@@ -115,6 +116,37 @@ async function computeHmac(secret: string, body: string): Promise<string> {
     .join('');
 }
 
+/**
+ * Header names whose value is withheld, besides every name `isSecretName`
+ * judges a credential's (`Authorization`, `Cookie`, `X-Api-Key`,
+ * `X-Goog-Api-Key`, `X-Auth-Key`, `Stripe-Signature`, ...). Run-together
+ * names it would miss (`X-Shopify-Hmac-Sha256`, `X-Hubsignature`), and the
+ * Jarvis timestamp, which only means something next to its signature.
+ */
+const SECRET_HEADER_NAME = /token|secret|signature|password|hmac/iu;
+const CREDENTIAL_HEADERS = new Set(['x-jarvis-timestamp']);
+/** Names `isSecretName` takes for a credential (`key`) that only name a delivery. */
+const DELIVERY_KEY_HEADERS = new Set(['idempotency-key', 'x-idempotency-key']);
+
+/**
+ * The request headers a workflow and its run history may see. A credential
+ * header keeps its name but not its value: a run is read by the dashboard
+ * and the assistant and copied into sample data, and a step could pass the
+ * value on. Judged by name (case-insensitive, Headers lower-cases it) and by
+ * shape: a `Bearer x` or `Basic x` value is withheld under any name.
+ * Signature checks and delivery identity read the raw request before this.
+ */
+export function redactedHeaders(headers: Headers): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of headers.entries()) {
+    const key = name.toLowerCase();
+    const secret = !DELIVERY_KEY_HEADERS.has(key)
+      && (CREDENTIAL_HEADERS.has(key) || SECRET_HEADER_NAME.test(key) || isSecretName(key) || isSchemedCredential(value));
+    out[name] = secret ? REDACTED : value;
+  }
+  return out;
+}
+
 // ── WebhookManager ──
 
 /** Per-flow and global ingress budgets. Generous for real integrations, fatal for a flood. */
@@ -123,6 +155,12 @@ export const WEBHOOK_GLOBAL_PER_MINUTE = 600;
 /** Budget for requests to a secret-protected flow that fail the signature. */
 export const WEBHOOK_BAD_SIGNATURE_PER_MINUTE = 30;
 /**
+ * Database lookups a minute, across all ids, to tell an unregistered id that
+ * is a turned-off flow from an unknown one. Past it the reply is the plain
+ * "not found", so a flood of made-up ids costs no more than it did before.
+ */
+export const WEBHOOK_OFF_LOOKUPS_PER_MINUTE = 60;
+/**
  * Body cap for the public ingress. The body is the real per-request cost
  * (the HMAC over it is microseconds), and the server's own default cap is
  * far larger than any webhook payload.
@@ -130,6 +168,47 @@ export const WEBHOOK_BAD_SIGNATURE_PER_MINUTE = 30;
 export const WEBHOOK_MAX_BODY_BYTES = 1_000_000;
 
 const HEX_SHA256 = /^[0-9a-f]{64}$/i;
+
+/** What a sender is told when the flow exists but is turned off. */
+export const WORKFLOW_OFF_MESSAGE = 'This workflow is turned off. Turn it on in Jarvis to receive webhooks.';
+
+/** Fields of a form or query string: repeated names become arrays. Own properties only, so a field named `__proto__` is data. */
+export function fieldsOf(pairs: Iterable<[string, unknown]>): Record<string, unknown> {
+  const fields = new Map<string, unknown>();
+  // The arrays are built here, so appending in place is safe. Copying them
+  // instead made a 1 MB body of one repeated name quadratic: minutes of
+  // blocked event loop from a single request.
+  const repeated = new Set<string>();
+  for (const [name, value] of pairs) {
+    if (!fields.has(name)) fields.set(name, value);
+    else if (repeated.has(name)) (fields.get(name) as unknown[]).push(value);
+    else {
+      fields.set(name, [fields.get(name), value]);
+      repeated.add(name);
+    }
+  }
+  return Object.fromEntries(fields);
+}
+
+/**
+ * A form body's fields, or null when the body is not a form. A urlencoded
+ * body is parsed as the browser sent it; a multipart one keeps its text
+ * fields (a file part is dropped: files are not carried in the trigger).
+ * Runs on the text that was verified, after the signature check.
+ */
+async function formFields(contentType: string | null, rawBody: string): Promise<Record<string, unknown> | null> {
+  const type = (contentType ?? '').split(';')[0]!.trim().toLowerCase();
+  if (type === 'application/x-www-form-urlencoded') return fieldsOf(new URLSearchParams(rawBody));
+  if (type === 'multipart/form-data') {
+    try {
+      const form = await new Response(rawBody, { headers: { 'content-type': contentType! } }).formData();
+      return fieldsOf([...form.entries()].filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+    } catch {
+      return null; // malformed: kept as the raw body text, like any other unparsed body
+    }
+  }
+  return null;
+}
 
 const json = (status: number, body: Record<string, unknown>, extra: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...extra } });
@@ -141,6 +220,13 @@ export class WebhookManager {
   private global = new KeyedRateLimiter(60_000, WEBHOOK_GLOBAL_PER_MINUTE);
   private badSignature = new KeyedRateLimiter(60_000, WEBHOOK_BAD_SIGNATURE_PER_MINUTE);
   private canAccept: (() => boolean) | null = null;
+  private isTurnedOff: ((workflowId: string) => boolean) | null = null;
+  private offLookups = new KeyedRateLimiter(60_000, WEBHOOK_OFF_LOOKUPS_PER_MINUTE);
+
+  /** Tells a flow that exists but is turned off from an id that is unknown. */
+  setTurnedOffCheck(fn: ((workflowId: string) => boolean) | null): void {
+    this.isTurnedOff = fn;
+  }
 
   /** Test hook: swap the limiters (e.g. with a fake clock). */
   setRateLimiters(perFlow: KeyedRateLimiter, global: KeyedRateLimiter, badSignature?: KeyedRateLimiter): void {
@@ -215,6 +301,11 @@ export class WebhookManager {
     const route = this.routes.get(workflowId);
 
     if (!route) {
+      let off = false;
+      if (this.isTurnedOff && this.offLookups.allow('*')) {
+        try { off = this.isTurnedOff(workflowId); } catch { /* answered as an unknown id */ }
+      }
+      if (off) return json(404, { error: WORKFLOW_OFF_MESSAGE });
       return new Response(JSON.stringify({ error: 'Webhook not found' }), {
         status: 404,
         headers: { 'Content-Type': 'application/json' },
@@ -307,29 +398,37 @@ export class WebhookManager {
       if (limited) return limited;
     }
 
-    // Body/HMAC awaits can outlive Remove/Undo/re-enable (or secret rotation).
-    // Never deliver a request authorized for a replaced registration.
-    if (this.routes.get(workflowId) !== route) {
-      return json(409, { error: 'Webhook registration changed' });
-    }
-
-    // Parse body
-    let data: Record<string, unknown> = {};
+    // Parse body. `body` is the JSON reading of the bytes, as before forms
+    // were parsed; the delivery's identity comes from it whatever the
+    // Content-Type says. The header is not signed: were the identity read
+    // from the form fields, a captured signed request named by its body's
+    // event id could be sent again as a form, under a fresh identity, and run
+    // twice.
+    let body: Record<string, unknown> = {};
     if (rawBody.trim()) {
       try {
         const parsed = JSON.parse(rawBody);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          data = parsed as Record<string, unknown>;
+          body = parsed as Record<string, unknown>;
         } else {
-          data = { body: parsed };
+          body = { body: parsed };
         }
       } catch {
-        // Not JSON — pass as raw string
-        data = { body: rawBody };
+        // Not JSON: pass as raw string
+        body = { body: rawBody };
       }
     }
+    const form = rawBody.trim() ? await formFields(req.headers.get('content-type'), rawBody) : null;
+    let data: Record<string, unknown> = form ?? body;
 
-    let delivery = webhookDelivery(req.headers, data, verifiedSignature, timestampedSignature);
+    // Body/HMAC/form awaits can outlive Remove/Undo/re-enable (or secret
+    // rotation). Never deliver a request authorized for a replaced
+    // registration. Nothing below awaits.
+    if (this.routes.get(workflowId) !== route) {
+      return json(409, { error: 'Webhook registration changed' });
+    }
+
+    let delivery = webhookDelivery(req.headers, body, verifiedSignature, timestampedSignature);
     if (route.submission) {
       try {
         const prepared = prepareSubmission(data, route.submission);
@@ -345,8 +444,9 @@ export class WebhookManager {
     data._webhook = {
       method: req.method,
       url: req.url,
+      query: fieldsOf(new URL(req.url).searchParams),
       timestamp: Date.now(),
-      headers: Object.fromEntries(req.headers.entries()),
+      headers: redactedHeaders(req.headers),
     };
 
     // Fire callback. It records the delivery and says what became of it.
@@ -397,8 +497,10 @@ function webhookReply(workflowId: string, result: unknown): Response {
       return json(200, { ok: true, workflowId, outcome: 'duplicate', duplicate: true, fireId: result.fireId,
         ...(result.runId ? { runId: result.runId } : {}) });
     case 'blocked':
+      // Only a workflow that is turned off says so; one removed, changed or
+      // not listening answers as an unknown id does, as the docs promise.
       return result.disabled
-        ? json(404, { error: 'Workflow is not active', ...(result.fireId ? { fireId: result.fireId } : {}) })
+        ? json(404, { error: result.turnedOff ? WORKFLOW_OFF_MESSAGE : 'Webhook not found', ...(result.fireId ? { fireId: result.fireId } : {}) })
         // The refusal's reason names the workflow's steps and connections:
         // it stays in the owner's delivery record, not in a reply to a sender
         // who may hold nothing but the URL.

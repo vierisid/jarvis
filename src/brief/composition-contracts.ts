@@ -14,7 +14,7 @@ export interface BriefCompositionJob {
   compositionId: string | null;
   /** Creation receipt only; use the canonical workflow API for its current activation/version state. */
   workflow: { flowId: string; versionId: string } | null;
-  blocker: { code: 'ingredient_unavailable' | 'insufficient_information' | 'composition_blocked' | 'composition_failed' | 'timeout' | 'interrupted' | 'cancelled'; message: string; details: string[] } | null;
+  blocker: { code: 'ingredient_unavailable' | 'insufficient_information' | 'composition_blocked' | 'composition_failed' | 'timeout' | 'interrupted' | 'cancelled' | `provider_${string}`; message: string; details: string[] } | null;
   createdAt: number;
   updatedAt: number;
 }

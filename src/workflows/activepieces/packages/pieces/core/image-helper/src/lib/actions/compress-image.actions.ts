@@ -43,7 +43,22 @@ export const compressImage = createAction({
   async run(context) {
     const image = await jimp.read(context.propsValue.image.data);
 
-    image.quality(context.propsValue.quality);
+    // === JARVIS PATCH: the Quality dropdown's own values work ===
+    // A saved flow or the editor hands the dropdown value over as text ("60"),
+    // and the image library rejects anything that is not a number type.
+    const quality = Number(context.propsValue.quality);
+    if (
+      String(context.propsValue.quality).trim() === '' ||
+      !Number.isFinite(quality) ||
+      quality < 0 ||
+      quality > 100
+    ) {
+      throw new Error(
+        'Quality must be a number from 0 to 100. Pick High Quality or Lossy Quality.'
+      );
+    }
+    image.quality(quality);
+    // === END JARVIS PATCH ===
 
     const imageBuffer = await image.getBufferAsync(image.getMIME());
 

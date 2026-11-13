@@ -2,7 +2,7 @@ import path from 'path'
 import { LATEST_CONTEXT_VERSION } from '@activepieces/pieces-framework'
 import { CodeAction, EngineGenericError, FlowActionType, FlowRunStatus, GenericStepOutput, isNil, StepOutputStatus } from '@activepieces/shared'
 import { initCodeSandbox } from '../core/code/code-sandbox'
-import { continueIfFailureHandler, runWithExponentialBackoff } from '../helper/error-handling'
+import { continueIfFailureHandler, refusedDispatches, runWithExponentialBackoff } from '../helper/error-handling'
 import { utils } from '../utils'
 import { ActionHandler, BaseExecutor } from './base-executor'
 import { runProgressService } from './run-progress'
@@ -24,6 +24,8 @@ export const codeExecutor: BaseExecutor<CodeAction> = {
 
 const executeAction: ActionHandler<CodeAction> = async ({ action, executionState, constants }) => {
     const stepStartTime = performance.now()
+    // Jarvis: set when the dispatch check refused this step (see refusedDispatches).
+    let dispatchRefused = false
     const { censoredInput, resolvedInput } = await constants.getPropsResolver(LATEST_CONTEXT_VERSION).resolve<Record<string, unknown>>({
         unresolvedInput: action.settings.input,
         executionState,
@@ -57,6 +59,11 @@ const executeAction: ActionHandler<CodeAction> = async ({ action, executionState
             stepName: action.name,
             executionPath: executionState.currentPath.path,
             input: {},
+        }).catch((error: unknown) => {
+            // === JARVIS PATCH: a refused dispatch is never continued past ===
+            dispatchRefused = true
+            // === END JARVIS PATCH ===
+            throw error
         })
         if ('dispatch' in admission && admission.dispatch === 'held') {
             return executionState
@@ -82,13 +89,17 @@ const executeAction: ActionHandler<CodeAction> = async ({ action, executionState
             .setErrorMessage(utils.formatError(executionStateError))
             .setDuration(performance.now() - stepStartTime)
 
-        return executionState
+        const failedContext = executionState
             .upsertStep(action.name, failedStepOutput)
             .setVerdict({ status: FlowRunStatus.FAILED, failedStep: {
                 name: action.name,
                 displayName: action.displayName,
                 message: utils.formatError(executionStateError),
             } })
+        // === JARVIS PATCH: a refused dispatch is never continued past ===
+        if (dispatchRefused) refusedDispatches.add(failedContext)
+        return failedContext
+        // === END JARVIS PATCH ===
     }
 
     return executionStateResult
