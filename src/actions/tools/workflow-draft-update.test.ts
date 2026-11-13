@@ -77,6 +77,14 @@ test('structural edits can add and remove steps; no-op retries do not manufactur
   current=await read(flow.id);const before=getFlowVersion(version.id);expect((await call(args(flow.id,current,[]))).changed).toBe(false);expect(getFlowVersion(version.id)).toEqual(before);
 });
 
+test('a rename is trimmed and a whitespace-only name is refused',async()=>{
+  const {flow,version}=fixture(),v=await read(flow.id);
+  await expect(call({...args(flow.id,v,[]),name:'   '})).rejects.toThrow(/name must be a nonempty string/);
+  await expect(call({...args(flow.id,v,[]),name:'\u200b\u2060'})).rejects.toThrow(/name must be a nonempty string/);
+  const output=await call({...args(flow.id,v,[]),name:'  Tidy name  '});
+  expect(output.changed).toBe(true);expect(getFlowVersion(version.id)!.displayName).toBe('Tidy name');
+});
+
 test('a stale revision rejects editor changes and concurrent repairs atomically',async()=>{
   const {flow,version}=fixture(),v=await read(flow.id);
   updateDraftVersion(version.id,{displayName:'Newer editor change'});

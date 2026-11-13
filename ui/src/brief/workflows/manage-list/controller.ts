@@ -23,6 +23,10 @@ export interface ManagementState {
   rows: ManagementSlot[];
   access: boolean;
   refreshing: boolean;
+  /** Rows the last list read returned but could not be shown. */
+  skipped: number;
+  /** IDs of those rows, when usable, so the room can open one to repair it. */
+  broken: string[];
   selectedId: string | null;
   scrollTop: number;
 }
@@ -46,6 +50,8 @@ export class WorkflowManagementController {
     rows: [],
     access: false,
     refreshing: false,
+    skipped: 0,
+    broken: [],
     selectedId: null,
     scrollTop: 0,
   };
@@ -160,6 +166,8 @@ export class WorkflowManagementController {
         rows.push(...[...incoming.values()].map(slot));
         this.publish({
           rows,
+          skipped: data.skipped,
+          broken: data.broken,
           read:
             result.status === "ready"
               ? { status: "ready", data: null }
@@ -172,6 +180,8 @@ export class WorkflowManagementController {
       } else if (result.status === "empty")
         this.publish({
           read: { status: "empty" },
+          skipped: 0,
+          broken: [],
           rows: this.state.rows.filter((r) => r.removed),
         });
       else if (result.status === "loading")

@@ -7,6 +7,7 @@ import { getFlowRun } from '../workflows/db/repos/flow-run';
 import { continuedFailureHeadline, continuedFailures } from '../workflows/runtime/continued-failures';
 import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-version';
 import { versionReadiness, WorkflowReadinessError } from '../workflows/db/repos/flow-readiness';
+import { displayWorkflowName } from '../workflows/display-name';
 import { CodeStepsRefusedError, ungrantedCodeSteps } from '../workflows/db/repos/flow-code-steps';
 import type { TriggerManager } from '../workflows/runner/triggers/manager';
 import { stopRunsOfTurnedOffFlow } from '../workflows/db/repos/flow-turn-off';
@@ -125,7 +126,7 @@ export class WorkflowRemoval {
       revision: hash([f, version && { id: version.id, name: version.displayName, trigger: version.trigger,
         state: version.state, valid: version.valid, schemaVersion: version.schemaVersion,
         agentIds: version.agentIds, connectionIds: version.connectionIds, notes: version.notes }, state.generation]),
-      name: (version?.displayName || 'Untitled workflow').slice(0, 4000),
+      name: displayWorkflowName(version?.displayName).slice(0, 4000),
       description: typeof metadata?.description === 'string' ? metadata.description.slice(0, 4000) : '',
       trigger: workflowTriggerLabel(version?.trigger),
       activation: f.status, publication: f.published_version_id ? 'published' : 'unpublished',

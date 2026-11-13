@@ -143,6 +143,14 @@ describe("manage_workflow tool", () => {
     expect(list.truncated).toBe(false);
   });
 
+  test("create refuses a whitespace-only name and trims a padded one", async () => {
+    await expect(call("create", { name: "   ", empty: true })).rejects.toThrow(/non-empty string/);
+    const created = (await call("create", { name: "  Padded  ", empty: true })) as { name: string };
+    expect(created.name).toBe("Padded");
+    await expect(call("create", { name: "\u200b\u202e", empty: true })).rejects.toThrow(/non-empty string/);
+    await expect(call("compose", { name: "  ", description: "x" })).rejects.toThrow(/non-empty string/);
+  });
+
   test("get accepts display name (case-insensitive) and id", async () => {
     const created = (await call("create", { name: "Test Flow", empty: true })) as { id: string };
     const byName = (await call("get", { flow: "test flow" })) as { id: string; latestDraft: { displayName: string } };
