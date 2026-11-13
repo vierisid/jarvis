@@ -9,7 +9,13 @@ export type DecisionReference =
 export type DecisionAction = 'accept_intent' | 'reject_intent' | 'approve_permission' | 'reject_permission'
   | 'execute_once' | 'close_without_running' | 'inspect';
 export interface QueuedDecision extends BriefDecision {
-  kind: 'intent' | 'permission' | 'recovery';
+  kind: 'intent' | 'permission' | 'recovery' | 'held';
+  /**
+   * Only on `held`: runs of one workflow waiting behind its approval-card
+   * limit. There is nothing to decide for them, so they never count as things
+   * that need the owner; the title is the plain sentence to show.
+   */
+  held?: { workflowName: string; count: number };
   title: string;
   state: 'deferred' | ApprovalExecutionState | NonNullable<BriefDecision['workStatus']> | EffectStatus;
   /** These are separate facts. A permission grant or committed effect is not a verified result. */

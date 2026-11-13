@@ -101,7 +101,7 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
         const value = unpack(linked);
         if (linked.project_id !== ctx.projectId || linked.flow_id !== run!.flowId || value.runId !== ctx.runId || value.kind !== 'approval') throw Error('Approval request does not belong to this run');
         id = linked.id; existing = linked; linkedApproval = true;
-      } else if (input.requestId) throw Error('Approval request not found');
+      } else if (input.requestId) throw Error('Approval request not found. The request ID must come from a "Create approval links" step in this run.');
     }
     const fingerprint = digest({ config, graph: resolved.versionDigest });
     if (existing && JSON.parse(existing.record).graphDigest !== resolved.versionDigest) throw Error('Workflow graph changed since this request was created');
@@ -137,9 +137,22 @@ export async function requestHumanInput(input: Record<string, unknown>, ctx: Wor
       throw Error(`Human request ${request.reopenedFrom ?? 'expired'}`);
     if (request.status === 'pending' && now >= request.deadline) { request.status = 'expired'; save(request, now); }
     if (linksOnly) return { requestId: id, approvalLink: `/?brief=1#/brief/needs-you?inputId=${id}`, disapprovalLink: `/?brief=1#/brief/needs-you?inputId=${id}` };
-    // The legacy Wait for Approval kept its old contract: it never failed the
-    // run, it returned `{ approved }` and let the flow branch on it.
-    if (request.status !== 'pending' && legacy) return { approved: request.status === 'approved' };
+    // Wait for Approval stops the run when the approval is not given (rejected,
+    // cancelled or expired), like the input piece's approval: nothing after a
+    // refusal may run unless the author opted in. `continueOnReject` keeps the
+    // old contract: the step returns `{ approved: false }` and the flow branches on it.
+    // The opt-in is read from the pinned version as the author saved it (a ticked
+    // box is literally `true`), never from the resolved input: an expression that
+    // trigger data or an earlier step sets, or the request body, cannot turn a
+    // refusal into a continue.
+    if (request.status !== 'pending' && legacy) {
+      const continueOnReject = node?.settings?.input?.continueOnReject === true;
+      if (request.status === 'approved' || continueOnReject) return { approved: request.status === 'approved' };
+      const expired = request.status === 'expired';
+      throw new ActionOutcomeError({ status: 'blocked', code: expired ? 'APPROVAL_EXPIRED' : 'APPROVAL_DENIED', effect: 'not_started',
+        message: expired ? 'The approval was not answered in time, so the workflow stopped at this step.'
+          : `The approval was ${request.status === 'cancelled' ? 'cancelled' : 'rejected'} in Needs you, so the workflow stopped at this step.` });
+    }
     if (request.status !== 'pending') {
       // No denied/expired request can accidentally fall through into a write.
       if (request.status !== 'submitted' && request.status !== 'approved') throw Error(`Human request ${request.status}`);

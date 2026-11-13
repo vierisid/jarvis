@@ -53,20 +53,32 @@ export type HumanRequest = {
   /** A shared form reopened after it closed is a new instance; earlier waits keep `reopenedFrom`. */
   generation?: number; reopenedFrom?: HumanRequest['status'];
 };
+/**
+ * The form a step asks for, or an error that says in plain words what to fix.
+ * Run at readiness and again when the step runs, so a form that would fail
+ * is refused before anything starts. `name` is accepted for `key`, because
+ * it is the natural word for a field's short name; the saved field is
+ * always `key`.
+ */
 export function formFields(value: unknown): InputField[] {
-  if (!Array.isArray(value) || !value.length || value.length > 20) throw Error('Provide 1–20 input fields');
+  if (!Array.isArray(value) || !value.length || value.length > 20) throw Error('A form needs between 1 and 20 fields');
   const keys = new Set<string>();
-  return value.map(field => {
-    if (!field || typeof field !== 'object' || typeof field.key !== 'string'
-      || !/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(field.key) || ['constructor', 'prototype', '__proto__'].includes(field.key)
-      || keys.has(field.key)) throw Error('Input field keys must be unique simple identifiers');
-    keys.add(field.key);
-    if (typeof field.label !== 'string' || !field.label.trim() || field.label.length > 200) throw Error('Each input field needs a label');
-    if (!['text', 'long_text', 'number', 'boolean', 'select'].includes(field.type) || typeof field.required !== 'boolean') throw Error('Invalid input field type or required flag');
+  return value.map((field, i) => {
+    const at = `Form field ${i + 1}`;
+    if (!field || typeof field !== 'object') throw Error(`${at} must be an object with a key, label, type and required`);
+    const key = typeof field.key === 'string' ? field.key : typeof field.name === 'string' ? field.name : undefined;
+    if (key === undefined) throw Error(`${at} needs a key, a short name like company_size`);
+    if (!/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(key) || ['constructor', 'prototype', '__proto__'].includes(key))
+      throw Error(`${at} has a key "${key.slice(0, 40)}" that is not allowed. Use letters, numbers and underscores, starting with a letter, like company_size`);
+    if (keys.has(key)) throw Error(`${at} repeats the key "${key}". Each form field needs its own key`);
+    keys.add(key);
+    if (typeof field.label !== 'string' || !field.label.trim() || field.label.length > 200) throw Error(`${at} needs a label`);
+    if (!['text', 'long_text', 'number', 'boolean', 'select'].includes(field.type)) throw Error(`${at} needs a type: text, long_text, number, boolean or select`);
+    if (typeof field.required !== 'boolean') throw Error(`${at} needs required set to true or false`);
     if (field.type === 'select' && (!Array.isArray(field.options) || !field.options.length || field.options.length > 30
       || field.options.some((v: unknown) => typeof v !== 'string' || !v || v.length > 200)
-      || new Set(field.options).size !== field.options.length)) throw Error('Select fields need distinct options');
-    return { key: field.key, label: field.label, type: field.type, required: field.required,
+      || new Set(field.options).size !== field.options.length)) throw Error(`${at} is a select and needs 1 to 30 different options`);
+    return { key, label: field.label, type: field.type, required: field.required,
       ...(field.type === 'select' ? { options: field.options } : {}) };
   });
 }
