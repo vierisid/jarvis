@@ -166,7 +166,18 @@ function ConnectedDecisions({
     if (match && controller.select(decisionId(match)))
       appliedRoute.current = key;
   }, [shell.route.selection, state.rows, controller]);
-  const item = state.rows.find((x) => decisionId(x) === state.selectedId);
+  const found = state.rows.find((x) => decisionId(x) === state.selectedId);
+  // A link that names a request this list does not hold selects nothing, never the first row.
+  const named = shell.route.selection.approvalId || shell.route.selection.workItemId;
+  const gone =
+    !!named &&
+    ["ready", "empty", "stale"].includes(state.read.status) &&
+    !state.rows.some((x) =>
+      shell.route.selection.approvalId
+        ? x.paper.decision.approval?.approvalId === shell.route.selection.approvalId
+        : x.paper.decision.workItemId === shell.route.selection.workItemId,
+    );
+  const item = gone ? undefined : found;
   const id = item ? decisionId(item) : "";
   const attempt = state.attempts.get(id),
     editing = state.draft?.id === id;
@@ -227,7 +238,7 @@ function ConnectedDecisions({
         </p>
       )}
       {stored.list}
-      {!item ? (
+      {!found ? (
         <div className="brief-decisions-empty" role="status">
           <FileText size={26} />
           <h2 className="brief-type-section-heading">
@@ -299,7 +310,7 @@ function ConnectedDecisions({
               </button>
             ))}
           </nav>
-          <article
+          {item && <article
             ref={paper}
             tabIndex={-1}
             className="brief-decision-paper"
@@ -483,7 +494,7 @@ function ConnectedDecisions({
                   )}
               </div>
             </div>
-          </article>
+          </article>}
         </div>
       )}
     </section>

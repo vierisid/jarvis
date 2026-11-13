@@ -124,6 +124,21 @@ test("direct Today review alias opens the matching document", async () => {
   await render();
   expect(host.querySelector("h2")?.textContent).toBe("Pilot invitation");
 });
+test("a link to a request that is not in the list selects nothing and shows no actions", async () => {
+  shell.route.selection = { approvalId: "approval-already-granted" };
+  await render();
+  expect(host.querySelector("article")).toBeNull();
+  expect(button("Pilot invitation").getAttribute("aria-pressed")).toBe("false");
+  expect(button("Approve & send")).toBeUndefined();
+  await click("Pilot invitation");
+  expect(shell.route.selection.approvalId).toBe("fixture-approval-maya");
+  await render();
+  expect(host.querySelector("article")?.dataset.decision).toBe("fixture-decision-invitation");
+});
+test("a link that names no request keeps the first one selected", async () => {
+  await render();
+  expect(host.querySelector("article")).not.toBeNull();
+});
 test("editing keeps the document/actions mounted and blocks selection/approval", async () => {
   await render();
   const paper = host.querySelector("article"),
