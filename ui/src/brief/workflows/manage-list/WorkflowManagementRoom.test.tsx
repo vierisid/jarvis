@@ -273,6 +273,122 @@ test("the list says before any switch that pausing stops queued and waiting runs
     "Turning a workflow off stops its queued and waiting runs.",
   );
 });
+const field = (label: string) =>
+  Array.from(
+    host.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input,select"),
+  ).find(
+    (e) => host.querySelector(`label[for="${e.id}"]`)?.textContent === label,
+  )!;
+async function type(label: string, value: string) {
+  const el = field(label) as HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )!.set!;
+  await React.act(async () => {
+    setter.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+async function pick(label: string, value: string) {
+  const el = field(label) as HTMLSelectElement;
+  await React.act(async () => {
+    el.value = value;
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+const rowNames = () =>
+  Array.from(host.querySelectorAll(".brief-management-open")).map(
+    (e) => e.textContent,
+  );
+test("search narrows by name, filter by state, and an empty match says so", async () => {
+  await render();
+  expect(rowNames().length).toBe(4);
+  await type("Search workflows", "  INBOX ");
+  expect(rowNames()).toEqual(["Morning inbox brief"]);
+  expect(host.textContent).toContain("1 of 4 workflows");
+  await type("Search workflows", "zzz");
+  expect(rowNames()).toEqual([]);
+  expect(host.textContent).toContain("No workflows match.");
+  await click("Clear search and filter");
+  expect(rowNames().length).toBe(4);
+  await pick("Show", "off");
+  const off = rowNames().length;
+  await pick("Show", "on");
+  expect(off + rowNames().length).toBe(4);
+});
+test("a long list draws one page and Show more adds the next", async () => {
+  f.controller.retire();
+  f = makeManagementFixture("long list");
+  await render();
+  expect(rowNames().length).toBe(50);
+  expect(host.querySelectorAll("[data-flow]").length).toBe(50);
+  expect(host.textContent).toContain("124 workflows");
+  await type("Search workflows", "research 11");
+  expect(rowNames().length).toBeLessThan(50);
+  await type("Search workflows", "");
+  await click("Show 50 more (74 left)");
+  expect(rowNames().length).toBe(100);
+  await click("Show 24 more (24 left)");
+  expect(rowNames().length).toBe(124);
+  expect(button("Show 24 more (24 left)")).toBeUndefined();
+});
+test("a row acted on under a filter stays drawn with its outcome until the filter changes", async () => {
+  await render();
+  await pick("Show", "on");
+  await click("Enable Meeting follow-ups");
+  expect(row("meeting")).toBeTruthy();
+  expect(row("meeting").textContent).toContain(
+    "queued and waiting runs were stopped",
+  );
+  expect(host.textContent).toContain("2 of 4 workflows");
+  await pick("Show", "off");
+  await pick("Show", "on");
+  expect(row("meeting")).toBeNull();
+});
+test("search, filter and the page survive leaving the room, so the opened row is focused on return", async () => {
+  f.controller.retire();
+  f = makeManagementFixture("long list");
+  await render();
+  await type("Search workflows", "research");
+  await click("Show 50 more (70 left)");
+  const name = row("long-80").querySelector<HTMLElement>(
+    ".brief-management-open",
+  )!;
+  await React.act(async () => name.click());
+  expect(shell.route.room).toBe("workflow");
+  await React.act(async () => root.render(<div />));
+  await render();
+  await React.act(async () => {
+    await new Promise((r) => setTimeout(r, 40));
+  });
+  expect((field("Search workflows") as HTMLInputElement).value).toBe(
+    "research",
+  );
+  expect(row("long-80")).toBeTruthy();
+  expect(document.activeElement).toBe(
+    row("long-80").querySelector(".brief-management-open"),
+  );
+});
+test("search and filter stay reachable while they hide every row", async () => {
+  await render();
+  await click("Delete Meeting follow-ups");
+  await click("Delete");
+  await click("Delete Competitor watch");
+  await click("Delete");
+  await type("Search workflows", "investor");
+  await click("Delete Weekly investor update");
+  await click("Delete");
+  expect(host.textContent).toContain("0 of 1 workflow");
+  expect(host.textContent).toContain("No workflows match.");
+  expect(field("Search workflows")).toBeTruthy();
+  await click("Clear search and filter");
+  expect(
+    Array.from(
+      host.querySelectorAll('[data-removed="false"] .brief-management-open'),
+    ).map((e) => e.textContent),
+  ).toEqual(["Morning inbox brief"]);
+});
 test("U2: an unpublished workflow says Off, then On after the switch, with no stale subtitle", async () => {
   await render();
   expect(

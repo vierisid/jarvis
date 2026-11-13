@@ -132,6 +132,12 @@ A workflow that read one of these headers now gets `[redacted]`: authenticate
 the sender with the webhook secret, and keep a credential a step needs in a
 connection, not in the request.
 
+Runs recorded before this kept those headers in clear. They are not rewritten:
+the run history, the run list, `manage_workflow get_run` and a version's sample
+data (to the dashboard and to the assistant) show them by the same rule as
+`[redacted]` when read, and also hide the same values where a later step of
+that run repeated them (`runAsShown` in `runtime/step-credentials.ts`).
+
 A repeat answers 200 with `outcome: "duplicate"` and the original `runId`;
 nothing runs again. Identical unsigned bodies without an id are separate
 deliveries: pings and button presses repeat on purpose. A provider's manual

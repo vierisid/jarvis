@@ -11,7 +11,7 @@ import { ApprovalCard } from "./ApprovalCard";
 import { ApprovalWhy } from "./ApprovalWhy";
 import { RailConfirmationStack } from "../voice/RailConfirmationStack";
 import { LiveDataProvider, type LiveData } from "../shell/LiveDataContext";
-import { ApprovalSentenceBlock } from "../rooms/authority/AuthorityRoom";
+import { ApprovalSentenceBlock, PendingApprovalCard } from "../rooms/authority/AuthorityRoom";
 import { approvalSentence, type PendingApproval } from "../../hooks/useWebSocket";
 import { WaitingWidget } from "../shell/NowRoom";
 
@@ -78,5 +78,19 @@ describe("#792: the reason is never part of the sentence", () => {
   test("the live stream keeps the parts apart, and falls back to the joined sentence", () => {
     expect(approvalSentence(COMMAND, REASON, "joined")).toEqual({ intent: COMMAND, intentReason: REASON });
     expect(approvalSentence(undefined, undefined, `${COMMAND} (${REASON})`)).toEqual({ intent: `${COMMAND} (${REASON})`, intentReason: "" });
+  });
+});
+
+// #1314 follow-up: a screen-derived approval held while screen awareness is off says so on the Authority room card.
+describe("held while screen awareness is off", () => {
+  const base = { id: "a1", agent_id: "bg", agent_name: "Background", tool_name: "send_email", tool_arguments: "{}", action_category: "send_email",
+    reason: REASON, context: "", status: "pending", urgency: "normal", decided_at: null, decided_by: null, executed_at: null,
+    execution_result: null, created_at: 0, intent: COMMAND };
+  const HELD = "Held while screen awareness is off: this request came from what was on your screen.";
+  test("the held note is shown when the server says the card is held, and not otherwise", () => {
+    const held = renderToStaticMarkup(<PendingApprovalCard approval={{ ...base, held: HELD } as never} onApprove={() => {}} onDeny={() => {}} />);
+    expect(textOf(held, 'role="note"')).toBe(HELD);
+    const plain = renderToStaticMarkup(<PendingApprovalCard approval={{ ...base, held: null } as never} onApprove={() => {}} onDeny={() => {}} />);
+    expect(plain).not.toContain('role="note"');
   });
 });

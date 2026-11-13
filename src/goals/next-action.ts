@@ -18,7 +18,7 @@ import type { CommitmentStatus } from '../vault/commitments.ts';
 import { getDb } from '../vault/schema.ts';
 import { getGoal } from '../vault/goals.ts';
 import { findCommitments } from '../vault/commitments.ts';
-import { getWorkItem } from './work-items.ts';
+import { getWorkItem, NEEDS_YOU_NOT_DOING_REF } from './work-items.ts';
 import { getWaitpoint } from '../workflows/db/repos/waitpoint.ts';
 import { getFlowVersion } from '../workflows/db/repos/flow-version.ts';
 import { walkFlowNodes } from '../workflows/db/flow-graph.ts';
@@ -49,6 +49,8 @@ export interface PlanResult {
   workId: string; title: string; verdict: 'passed' | 'failed';
   /** The check that settled it; null when it was closed in Tasks. */
   checkId: string | null; summary: string | null; at: number;
+  /** The founder chose not to do it (Needs you, Not doing this): a decision, not a failed attempt. */
+  dropped?: boolean;
 }
 export interface PlanWork {
   id: string; title: string; goalId: string | null; status: WorkItem['status']; mode: WorkMode;
@@ -446,9 +448,15 @@ export function planNextAction(snapshot: PlanSnapshot): NextActionPlan {
     if (!CONCRETE.has(goal.level)) {
       const which = last ? 'next' : 'first';
       add('start_step', `Choose the ${which} concrete step toward ${quote(goal.title)}`, goal, null,
-        [last ? `Its last step, ${quote(last.title)}, ${last.verdict === 'passed' ? 'was done' : 'failed'} on ${day(last.at)}, and nothing is planned after it; inventing the next one would be a guess.`
+        [last ? `Its last step, ${quote(last.title)}, ${last.verdict === 'passed' ? 'was done' : last.dropped ? 'was dropped' : 'failed'} on ${day(last.at)}, and nothing is planned after it; inventing the next one would be a guess.`
           : 'It has no concrete task yet, and inventing one would be a guess.'],
         last ? resultEvidence(last) : [], 'adds', `What is the ${which} concrete step toward ${quote(goal.title)}?`);
+      continue;
+    }
+    if (last?.verdict === 'failed' && last.dropped) {
+      const why = `You chose not to do ${quote(last.title)} (${clip(last.summary ?? '', REASON_MAX)})`;
+      add('start_step', `Choose another step toward ${quote(goal.title)}`, goal, null, [`${why}.`],
+        resultEvidence(last), 'adds', `${why}. What should the next step toward ${quote(goal.title)} be, if any?`);
       continue;
     }
     if (last?.verdict === 'failed') {
@@ -547,7 +555,7 @@ function waitsFor(work: WorkItem): 'you' | 'timer' | 'outside' {
   return step?.settings?.pieceName === WEBHOOK_PIECE ? 'outside' : 'you';
 }
 
-type ResultRow = { goal_id: string; work_id: string; what: string; check_id: string | null; verdict: 'passed' | 'failed'; summary: string | null; at: number };
+type ResultRow = { goal_id: string; work_id: string; what: string; check_id: string | null; verdict: 'passed' | 'failed'; summary: string | null; dropped: number; at: number };
 
 /**
  * Read the live state the planner judges. Reads only. Goals are read whole.
@@ -571,18 +579,19 @@ export function observeNextAction(options: PlanOptions = {}): PlanSnapshot {
      WHERE json_extract(event, '$.type') = 'goal_status_changed' AND json_extract(event, '$.data.status') = 'active'
      GROUP BY goal_id`).all().map(r => [r.goal_id, r.at]));
   // The latest settled result per goal: a check, or the item closed in Tasks. Closing a proposal as failed only dismisses it.
-  const results = new Map(db.query<ResultRow, []>(
-    `SELECT goal_id, work_id, what, check_id, verdict, summary, at FROM (
+  const results = new Map(db.query<ResultRow, [string]>(
+    `SELECT goal_id, work_id, what, check_id, verdict, summary, dropped, at FROM (
        SELECT w.goal_id, w.work_id, c.what, json_extract(w.result_check, '$.id') AS check_id,
          COALESCE(json_extract(w.result_check, '$.verdict'), CASE c.status WHEN 'completed' THEN 'passed' ELSE 'failed' END) AS verdict,
          json_extract(w.result_check, '$.summary') AS summary,
+         json_extract(w.result_check, '$.evidence[0].ref') IS ?1 AS dropped,
          COALESCE(json_extract(w.result_check, '$.checkedAt'), c.completed_at, c.created_at) AS at,
          ROW_NUMBER() OVER (PARTITION BY w.goal_id
            ORDER BY COALESCE(json_extract(w.result_check, '$.checkedAt'), c.completed_at, c.created_at) DESC, w.work_id) AS position
        FROM commitment_work w JOIN commitments c ON c.id = w.work_id
        WHERE w.goal_id IS NOT NULL AND (w.result_check IS NOT NULL OR c.status = 'completed'
          OR (c.status = 'failed' AND json_extract(w.decision, '$.outcome') = 'accepted'))
-     ) WHERE position = 1`).all().map(r => [r.goal_id, r]));
+     ) WHERE position = 1`).all(NEEDS_YOU_NOT_DOING_REF).map(r => [r.goal_id, r]));
   const goals: PlanGoal[] = db.query<{ id: string }, []>('SELECT id FROM goals ORDER BY sort_order, created_at, id').all().flatMap(({ id }) => {
     const g = getGoal(id);
     if (!g) return [];
@@ -593,7 +602,8 @@ export function observeNextAction(options: PlanOptions = {}): PlanSnapshot {
       createdAt: g.created_at, updatedAt: g.updated_at,
       activatedAt: Math.max(g.started_at ?? 0, resumed.get(id) ?? 0) || null,
       lastProgressAt: progress.get(id) ?? null,
-      lastResult: result ? { workId: result.work_id, title: result.what, verdict: result.verdict, checkId: result.check_id, summary: result.summary, at: result.at } : null,
+      lastResult: result ? { workId: result.work_id, title: result.what, verdict: result.verdict, checkId: result.check_id, summary: result.summary, at: result.at,
+        ...(result.verdict === 'failed' && result.dropped ? { dropped: true } : {}) } : null,
     }];
   });
 

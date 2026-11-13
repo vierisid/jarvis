@@ -7,17 +7,18 @@ import type { BriefRoute } from '../../contracts';
 let React:typeof import('react'), createRoot:typeof import('react-dom/client').createRoot;
 let UI:typeof import('./GettingStarted');
 let root:ReturnType<typeof createRoot>, host:HTMLDivElement, stored:GettingStartedState, destinations:BriefRoute[], writes:number, fail:boolean, http:HostTransport;
+let workflowRows:unknown=[];
 let journey:InstanceType<typeof UI.GettingStartedJourney>, route:BriefRoute, allowLeave:boolean;
 beforeAll(async()=>{ GlobalRegistrator.register(); (globalThis as any).IS_REACT_ACT_ENVIRONMENT=true; React=await import('react'); ({createRoot}=await import('react-dom/client')); UI=await import('./GettingStarted'); });
-beforeEach(()=>{ host=document.createElement('div'); document.body.append(host); root=createRoot(host); stored={revision:0,completed:[],hidden:false};destinations=[];writes=0;fail=false;allowLeave=true;route={room:'today',selection:{}};
+beforeEach(()=>{ host=document.createElement('div'); document.body.append(host); root=createRoot(host); stored={revision:0,completed:[],hidden:false};destinations=[];writes=0;fail=false;allowLeave=true;workflowRows=[];route={room:'today',selection:{}};
   window.localStorage.clear();
-  http={ json:async(_path:string,init?:RequestInit)=>{if(init?.method==='PATCH'){writes++;if(fail)throw Error('network');const {revision,change}=JSON.parse(init.body as string);if(revision!==stored.revision)throw Error('conflict');stored={revision:revision+1,hidden:change.hidden??stored.hidden,completed:change.item ? GETTING_STARTED_IDS.filter(id=>id===change.item?change.done:stored.completed.includes(id)):stored.completed};} return structuredClone(stored);} } as HostTransport;
+  http={ json:async(_path:string,init?:RequestInit)=>{if(_path==='/api/workflows?limit=1')return workflowRows;if(init?.method==='PATCH'){writes++;if(fail)throw Error('network');const {revision,change}=JSON.parse(init.body as string);if(revision!==stored.revision)throw Error('conflict');stored={revision:revision+1,hidden:change.hidden??stored.hidden,completed:change.item ? GETTING_STARTED_IDS.filter(id=>id===change.item?change.done:stored.completed.includes(id)):stored.completed};} return structuredClone(stored);} } as HostTransport;
   journey=new UI.GettingStartedJourney(http,window.localStorage,'scope');
 });
 afterEach(async()=>{await React.act(async()=>root.unmount());journey.retire();host.remove();});afterAll(()=>GlobalRegistrator.unregister());
 const button=(text:string)=>[...host.querySelectorAll<HTMLButtonElement>('button')].find(b=>(b.getAttribute('aria-label')??b.textContent).includes(text))!;
 function navigate(r:BriefRoute){destinations.push(r);route=r;}
-async function render(compact=false){await React.act(async()=>root.render(<div className="brief-root"><UI.GettingStarted journey={journey} navigate={navigate} goalId="existing-goal" compact={compact}/></div>));}
+async function render(compact=false,waiting:number|null=0,held=false){await React.act(async()=>root.render(<div className="brief-root"><UI.GettingStarted journey={journey} navigate={navigate} goalId="existing-goal" compact={compact} waiting={waiting} held={held}/></div>));}
 async function destination(){await React.act(async()=>root.render(<div className="brief-root"><UI.GettingStartedDestination journey={journey} shell={{route,navigate} as any} canLeave={async()=>allowLeave}><h1>Real page</h1></UI.GettingStartedDestination></div>));}
 async function click(text:string){await React.act(async()=>button(text).click());}
 async function open(){await click('Review setup action');const b=host.querySelector<HTMLButtonElement>('.brief-today-paper-actions button')!;await React.act(async()=>b.click());}
@@ -31,8 +32,30 @@ test('one paper at a time; ten destinations advance only after the review is com
     expect(writes).toBe(i);await destination();expect(host.textContent).toContain('Real page');await click('Done, back');
     expect(route.room).toBe('today');expect(stored.completed).toEqual(GETTING_STARTED_IDS.slice(0,i+1));
   }
-  await render();expect(host.textContent).toContain('All 10 setup actions complete');expect(host.querySelector('.brief-setup-hero')).toBeNull();
-  await click('Undo last');expect(stored.completed).toHaveLength(9);expect(host.textContent).toContain('Set your dashboard preferences');
+  await render();expect(host.textContent).toContain('Nothing needs you right now.');expect(host.querySelector('.brief-setup-hero')).toBeNull();
+  expect(host.textContent).not.toContain('Your next decision will appear here');expect(host.textContent).not.toContain('10 of 10');
+  expect(button('Undo last')).toBeUndefined();
+});
+test('completed setup collapses to one compact row with the next action that fits the account',async()=>{
+  stored={revision:10,completed:[...GETTING_STARTED_IDS],hidden:false};workflowRows=[];
+  await render();const row=host.querySelector('.brief-setup-done')!;expect(row).not.toBeNull();expect(host.querySelector('.brief-setup-controls')).toBeNull();
+  expect(row.textContent).toContain('Nothing needs you right now.');await click('Describe a recurring job');expect(route.room).toBe('workflows');
+  workflowRows=[{id:'f1'}];journey.retire();journey=new UI.GettingStartedJourney(http,window.localStorage,'scope');await render();
+  expect(button('Describe a recurring job')).toBeUndefined();await click('See your workflows');expect(route.room).toBe('all-workflows');
+  workflowRows=null;journey.retire();journey=new UI.GettingStartedJourney(http,window.localStorage,'scope');await render();expect(button('See your workflows')).toBeDefined();
+});
+test('the all-clear shows only when nothing waits, and otherwise points at Needs you',async()=>{
+  stored={revision:10,completed:[...GETTING_STARTED_IDS],hidden:false};
+  await render(false,20);expect(host.textContent).not.toContain('Nothing needs you');expect(host.textContent).toContain('20 items need you.');
+  await click('Open Needs you');expect(route.room).toBe('needs-you');
+  await render(false,1);expect(host.textContent).toContain('1 item needs you.');
+  await render(false,null);expect(host.textContent).not.toContain('Nothing needs you');
+  await render(false,0);expect(host.textContent).toContain('Nothing needs you right now.');
+});
+test('a paused or stopped workspace never reads as an all-clear, and waiting items still lead',async()=>{
+  stored={revision:10,completed:[...GETTING_STARTED_IDS],hidden:false};
+  await render(false,0,true);expect(host.textContent).not.toContain('Nothing needs you');expect(host.textContent).toContain('Work is on hold until you resume it.');
+  await render(false,2,true);expect(host.textContent).toContain('2 items need you.');expect(button('Open Needs you')).toBeDefined();
 });
 test('hover/focus details have a keyboard/touch review control and Escape closes them',async()=>{
   await render();expect(host.querySelector('.brief-today-paper-clip')?.getAttribute('data-raised')).toBe('false');
@@ -76,4 +99,9 @@ test('background checks preserve the empty hero; errors and actual decisions are
   expect(todayDecisionSnapshot({...empty,reason:'read_failed',refreshing:false}).state).toBe('stale');
   expect(todayDecisionSnapshot({...empty,asOf:null}).state).toBe('stale');
   expect(todayDecisionSnapshot({...empty,data:[{id:'real-decision'}]}).state).toBe('stale');
+});
+
+test('the finished-setup row lets the last grid row absorb the opportunities column height',async()=>{
+  const css=await Bun.file(new URL('../layout/today-layout.css',import.meta.url)).text();
+  expect(css).toMatch(/:has\(\.brief-setup-done\)[^{]*\{\s*grid-template-rows:\s*auto auto auto 1fr/);
 });

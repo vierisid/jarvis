@@ -226,6 +226,62 @@ describe("Engine end-to-end (F gate)", () => {
     }
   }
 
+  // F-32: a number condition compares numbers. An operand that is not one used to
+  // make the condition false, so the run took the fallback branch without a word.
+  for (const fixture of [
+    { label: 'numeric strings and numbers compare as numbers', operator: 'NUMBER_IS_GREATER_THAN', first: '10', second: 5, expected: 'matched' },
+    { label: 'less than on numeric text', operator: 'NUMBER_IS_LESS_THAN', first: '3', second: '4', expected: 'matched' },
+    { label: 'equal on numeric text', operator: 'NUMBER_IS_EQUAL_TO', first: '7.0', second: 7, expected: 'matched' },
+    { label: 'a false numeric comparison still takes the fallback', operator: 'NUMBER_IS_GREATER_THAN', first: 1, second: '5', expected: 'fallback' },
+    // What published workflows already compare keeps its meaning: padded,
+    // exponent and negative numeric text, and blank, null and boolean values
+    // (read as 0, 0 and 1/0, as upstream does).
+    { label: 'padded numeric text', operator: 'NUMBER_IS_GREATER_THAN', first: ' 42 ', second: 41, expected: 'matched' },
+    { label: 'exponent numeric text', operator: 'NUMBER_IS_EQUAL_TO', first: '1e3', second: 1000, expected: 'matched' },
+    { label: 'negative decimal text', operator: 'NUMBER_IS_LESS_THAN', first: '-0.5', second: '0', expected: 'matched' },
+    { label: 'blank text still reads as 0', operator: 'NUMBER_IS_LESS_THAN', first: '', second: 1, expected: 'matched' },
+    { label: 'null still reads as 0', operator: 'NUMBER_IS_EQUAL_TO', first: null, second: 0, expected: 'matched' },
+    { label: 'a boolean still reads as 1 or 0', operator: 'NUMBER_IS_GREATER_THAN', first: true, second: false, expected: 'matched' },
+    { label: 'text as the first value fails the step', operator: 'NUMBER_IS_GREATER_THAN', first: 'abc', second: '5', expected: null, named: 'The first value "abc" is not a number. A number condition needs a number on both sides.' },
+    { label: 'text as the second value fails the step', operator: 'NUMBER_IS_LESS_THAN', first: 3, second: 'many', expected: null, named: 'The second value "many" is not a number. A number condition needs a number on both sides.' },
+    { label: 'text equal to text is not a number comparison', operator: 'NUMBER_IS_EQUAL_TO', first: 'abc', second: 'abc', expected: null, named: 'The first value "abc" is not a number. A number condition needs a number on both sides.' },
+    // Text that used to compare as text (an ISO date) now fails rather than ordering by characters.
+    { label: 'date text is not a number', operator: 'NUMBER_IS_GREATER_THAN', first: '2026-01-02', second: '2026-01-01', expected: null, named: 'The first value "2026-01-02" is not a number. A number condition needs a number on both sides.' },
+    // The echoed operand is one escaped line, clipped to 60 characters.
+    { label: 'the echoed value is clipped, escaped and on one line', operator: 'NUMBER_IS_GREATER_THAN', first: `line one\nline two "quoted" \u202e${'x'.repeat(80)}`, second: 1, expected: null,
+      named: `The first value "line one\\nline two \\"quoted\\" \\u202e${'x'.repeat(32)}"... is not a number. A number condition needs a number on both sides.` },
+  ]) {
+    test.skipIf(skipE2eTests)(`F-32: ${fixture.label}`, async () => {
+      const before = llmCalls.length;
+      const ask = (name: string): FlowTriggerNode => ({ name, type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, actionName: 'ask', input: { prompt: name } } });
+      const flow = createFlow();
+      const trigger: FlowTriggerNode = { name: 'trigger', type: 'EMPTY', nextAction: { name: 'router', type: 'ROUTER', settings: {
+        executionType: 'EXECUTE_FIRST_MATCH', branches: [
+          { branchType: 'CONDITION', branchName: 'Match', conditions: [[{ firstValue: fixture.first, operator: fixture.operator, secondValue: fixture.second } as never]] },
+          { branchType: 'FALLBACK', branchName: 'Otherwise' },
+        ],
+      }, children: [ask('matched'), ask('fallback')] } };
+      const version = createDraftVersion({ flowId: flow.id, displayName: fixture.label, trigger });
+      const req = Object.assign(new Request('http://local/run', { method: 'POST', body: JSON.stringify({ environment: 'TESTING', payload: {} }) }), { params: { id: flow.id } });
+      const response = await createWorkflowRoutes()['/api/workflows/:id/run']!.POST!(req);
+      expect(response.status).toBe(202);
+      const { id: runId } = await response.json() as { id: string };
+      const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime!) }) } });
+      await worker.drain();
+      const run = getFlowRun(runId)!;
+      expect(run.status).toBe(fixture.expected ? 'SUCCEEDED' : 'FAILED');
+      expect(llmCalls.slice(before).map(call => call.prompt)).toEqual(fixture.expected ? [fixture.expected] : []);
+      if (fixture.named) {
+        // The router step itself fails, with the message as it is; the run is not an engine error.
+        const failed = (run as unknown as { failedStep?: { name?: string; errorMessage?: string } }).failedStep;
+        expect(failed?.name).toBe('router');
+        // The runner frames it ("... ended FAILED at step ...: <message>\n<retry note>");
+        // the message itself, echoed operand included, is the end of one line.
+        expect(failed?.errorMessage?.split('\n')[0]).toEndWith(`: ${fixture.named}`);
+      }
+    }, 45_000);
+  }
+
   for (const executionType of ['EXECUTE_FIRST_MATCH', 'EXECUTE_ALL_MATCH'] as const) {
     for (const payload of [{}, { optional: 'approved' }]) {
       test.skipIf(skipE2eTests)(`review: router evaluates only reachable branches (${executionType}, ${JSON.stringify(payload)})`, async () => {
