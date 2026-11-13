@@ -193,7 +193,12 @@ Practical consequences:
   suggestion's or a fix's spoken copy stops before its next sentence and
   its channel copies (the urgent echo included) before their next retry; an
   awareness event that arrives after the switch (a capture still in flight)
-  is dropped, so no `awareness.*` flow or dashboard gets it; and a flow's
+  is dropped, so no `awareness.*` flow or dashboard gets it, and the
+  capture itself is not sent for screen analysis (a provider retry
+  included), evaluated into a suggestion, summarised into a session topic or
+  matched against goals, and a daily or weekly report being written when it
+  turns off is not sent on (a provider retry included) or handed out; and a
+  flow's
   `awarenessRecent` context returns no activity. Vault entities and goal notes once written from awareness are
   ordinary data and stay visible (owner decision). Nothing is deleted; it shows
   again when awareness is turned back on. Not covered: shell commands
@@ -847,7 +852,7 @@ third-party dependencies are part of the engine's committed staging install
 | `smtp` | Governed: `send-email` is `send_email`, so it asks at the shipped defaults. Tracked (sent once): upstream's resend after a connection reset is removed, since a reset after the server took the message is a sent email. The mail server passes the egress guard; the connection's host name stays the TLS name. |
 | `sftp` | Governed by action: `read_file_content` and `listFolderContents` are `read_data`; `createFolder` is `write_data`; `upload_file` and `create_file` put content on the server and replace a file at that path, so they are `send_message`, as an HTTP PUT is (not tracked: a repeat writes the same bytes to the same path); `renameFileOrFolder` (which can replace the target), `deleteFile` and `deleteFolder` are `delete_data`. The server passes the egress guard for SFTP, FTP and FTPS, and an FTP data connection always goes to the checked control address, never to a host a PASV reply names. Its polling trigger (`new_file`) is not loaded: a trigger runs outside the effect boundary. |
 | `pdf` | Acts only inside the run, without upstream's "Convert to Image", which is not loaded: it writes the PDF to the OS temp dir and runs poppler's `pdftoppm` through `/bin/sh` with the engine's environment. |
-| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. The zip steps' password is redacted where the assistant reads the workflow and in run history and sample data (`redactZipPassword` in `runtime/step-credentials.ts`). |
+| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. The password `crypto` generates (Generate Password) reaches the next step as generated, but run history, the run list, `manage_workflow get_run`, the run's effect records, its failure message, open failures, work items and sample data show it, and the same text (or its URL-encoded form) elsewhere in that run's steps, as `[redacted]` (`runAsShown` in `runtime/step-credentials.ts`); the stored run keeps it, since a resumed run rebuilds its steps from it. Not hidden: the approval card of a later step that sends it (the approver sees what is sent), a child workflow's run that returns it, the per-run engine log, and a password shorter than 6 characters anywhere but its own step. The zip steps' password is redacted where the assistant reads the workflow and in run history and sample data (`redactZipPassword` in `runtime/step-credentials.ts`). |
 | `webhook` | Vendored, not loaded. The editor's Webhook trigger is Jarvis's own ingress (below); the core piece's trigger would never fire through the engine, and its "return response" actions answer a synchronous webhook Jarvis does not hold open. |
 | `tables`, `forms`, `subflows`, `connections`, `tags`, `manual-trigger` | Not vendored: each needs the Activepieces server (its API, its form and chat pages, its MANUAL trigger strategy). Child workflows use the "Jarvis: Reusable workflows" piece, and a workflow started by hand uses the editor's own manual trigger. `CORE_PIECES_LEFT_OUT` gives each reason. |
 
@@ -868,7 +873,25 @@ HTTP request specifics:
   written or percent-decoded, at any depth of a JSON or form body, in a raw
   JSON string body or a wholly form-encoded one, and in a URL fragment
   (`#access_token=`). The secret path segment of a Slack, Discord, Telegram or
-  Teams webhook URL is redacted too. The engine's digest of the whole input still
+  Teams webhook URL and of a Zapier catch hook is redacted too. So is every
+  token-shaped path segment after a `hooks`, `webhook` or `webhook-test`
+  segment or on a `hook.`/`hooks.` host (`/hooks/<token>`,
+  `hook.eu1.make.com/<token>`): 8+ characters with at least two letters and two
+  digits, or 20+ characters. After a `key`, `apikey`, `api-key`, `token`,
+  `access_token`, `secret` or `password` segment (singular) only the next
+  segment is judged, at 12+ characters (`/with/key/<key>`). A fragment that is one token (`#<token>`: 16+ characters
+  with letters and digits, or 32+, base64 padding allowed) is redacted, a
+  heading anchor such as `#step-1-install` is not. Words and word slugs
+  (`slack-notification-hook`), numbers (with an extension), env-style names
+  (`MY_SECRET_2024`) and versioned names (`endpoint1`) are kept, and an `auth`
+  or `sig` segment hides nothing after it. What moves: this redaction is part
+  of the projection an approval and a tracked send are bound to, so a step
+  whose URL it now changes (a hook URL, `/key/<k>`, `#<token>`, a Zapier hook,
+  a Slack `actions` or `commands` URL) and that was waiting on approval or
+  replay across the upgrade fails as "changed since it was recorded" (no
+  second send) and needs a new run; its card shows the URL with
+  `[redacted]` in place of the token.
+  The engine's digest of the whole input still
   binds the approval to what runs.
 - **Receipts keep no tokens.** The durable receipt of a sent request drops
   `Set-Cookie`, redacts token-named fields and headers at any depth
@@ -878,6 +901,24 @@ HTTP request specifics:
   redacted receipt carries `receiptRedacted: true`. The step
   itself still hands the flow the whole response; only a replay of a recorded
   step reads the receipt.
+- **Engine logs withhold failed requests.** The engine's console methods that
+  print values (`log`, `warn`, `error`, `info`, `debug`, `trace`, `dir`,
+  `table`, `assert`, `group`, `timeLog`, `count`, Bun's `write`) and
+  `process.stdout`/`stderr.write` (what the daemon copies into its own log as
+  `[engine ...]` lines and into the per-run log buffer) print a failed
+  request's error as its type, status and error code only, whichever copy of
+  the HTTP client a piece brings: an `HttpError` or `AxiosError` inside an
+  object, array, Map, Set or an error's `cause`, and a line from a serialized
+  request or response onward (an `HttpError` message, its JSON, an axios
+  error's JSON, headers holding `Authorization`), with the lines that continue
+  it. The daemon cuts such JSON text again as it copies engine output
+  (`runtime/engine-console-redaction.ts`). Not covered: an error type other
+  than these logged with its request config (another HTTP library), text a
+  piece builds from a body itself, writes straight to a file descriptor (the
+  daemon log copy still cuts JSON ones, the per-run buffer does not see them), and a
+  CODE step printing a value it holds, which it may do on purpose. An engine
+  log line holding such JSON for another reason is cut too, and a value too
+  large to check (over 20,000 nested values) prints in part.
 - **Failures read as sentences.** A failed request fails the step with one
   plain sentence, never the upstream JSON envelope: `The server answered 404 Not
   Found.` plus `It said:` and the first 300 characters of the reply in quotes,

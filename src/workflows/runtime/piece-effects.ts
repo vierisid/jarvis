@@ -1075,12 +1075,95 @@ const FORM_ENCODED = /^[^\s"'{}<>=&]+=[^\s"'{}<>&]*(?:&[^\s"'{}<>=&]+=[^\s"'{}<>
  */
 const PATH_SECRETS: readonly RegExp[] = [
   // Scheme, optional userinfo (already redacted by then), host with an optional trailing dot and port, any slashes.
-  /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?hooks\.slack\.com\.?(?::\d+)?[\\/]+(?:services|triggers|workflows)(?:[\\/]+[^/\\?#]+)*[\\/]+)([^/\\?#]+)/iu,
+  /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?hooks\.slack\.com\.?(?::\d+)?[\\/]+(?:services|triggers|workflows|actions|commands)(?:[\\/]+[^/\\?#]+)*[\\/]+)([^/\\?#]+)/iu,
   /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?(?:[a-z0-9-]+\.)*discord(?:app)?\.com\.?(?::\d+)?[\\/]+api[\\/]+(?:v\d+[\\/]+)?webhooks[\\/]+[^/\\?#]+[\\/]+)([^/\\?#]+)/iu,
   /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?api\.telegram\.org\.?(?::\d+)?[\\/]+(?:file[\\/]+)?bot)([^/\\?#]+)/iu,
   // Teams incoming webhook: .../webhookb2/<group>@<tenant>/IncomingWebhook/<secret>/<owner>.
+  // Zapier catch hook: /hooks/catch/<account>/<hook id>, a short id that may hold no digit.
+  /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?hooks\.zapier\.com\.?(?::\d+)?[\\/]+hooks[\\/]+catch[\\/]+[^/\\?#]+[\\/]+)([^/\\?#]+)/iu,
   /^(\s*https?:[\\/]+(?:[^/\\?#@]*@)?(?:[a-z0-9-]+\.)*webhook\.office\.com\.?(?::\d+)?[\\/]+webhookb2[\\/]+[^/\\?#]+[\\/]+IncomingWebhook[\\/]+)([^/\\?#]+)/iu,
 ];
+
+/** A segment after which every token-shaped segment is a hook secret: `/hooks/<id>/<token>`, `/webhook-test/<uuid>`. */
+const HOOK_MARKER = /^(?:web)?hooks?(?:-test)?$/iu;
+/** A segment naming the one segment after it as a credential: `/with/key/<key>`, `/token/<t>`. */
+const KEY_MARKER = /^(?:(?:api[-_]?)?key|apikey|token|access[-_]?token|secret|passw(?:or)?d)$/iu;
+/** A host whose own name says its paths are hook secrets (`hook.eu1.make.com/<token>`, `hooks.zapier.com/hooks/...`). */
+const HOOK_HOST = /^(?:web)?hooks?\./iu;
+const TOKEN_CHARS = /^[A-Za-z0-9._~+=:%-]+$/u;
+const hasLetterAndDigit = (text: string): boolean => /[A-Za-z]/u.test(text) && /\d/u.test(text);
+/** At least two letters and two digits: a random id, not a name with a version (`endpoint1`, `oauth2`). */
+const isMixed = (text: string): boolean => (text.match(/[A-Za-z]/gu)?.length ?? 0) >= 2 && (text.match(/\d/gu)?.length ?? 0) >= 2;
+/**
+ * Lowercase words joined by `-`, `_` or `.`, one a word no hex string spells
+ * (`slack-notification-hook`, `signature-verification`): a name, not a token.
+ */
+const isWordSlug = (text: string): boolean => /^[a-z0-9]+(?:[-_.][a-z0-9]+)+$/u.test(text)
+  && text.split(/[-_.]/u).some((part) => part.length >= 3 && /^[a-z]*[g-z][a-z]*$/u.test(part));
+/** A number with an optional extension (`123456789.json`) or an env-style name (`MY_SECRET_2024`): content. */
+const NAMED_ID = /^\d+(?:\.[a-z]{2,5})?$|^[A-Z][A-Z0-9_]*$/u;
+/**
+ * A segment that reads as a token once a marker said one follows: letters and
+ * digits mixed (8+ characters under a hook, 12+ after a key segment, a UUID),
+ * or 20+ characters. Words (`catch`, `messages`), numbers (a GitHub hook id),
+ * env-style names and versioned names (`endpoint1`, `/key/oauth2`) are content.
+ */
+const pathToken = (segment: string, mixedMin: number, cut: boolean): boolean => TOKEN_CHARS.test(segment)
+  && (cut || (!NAMED_ID.test(segment) && !isWordSlug(segment) && ((segment.length >= mixedMin && isMixed(segment)) || segment.length >= 20)));
+/**
+ * A heading anchor: lowercase parts joined by `-`, `_` or `.`, one of them a
+ * word no hex string spells (`step-1-install-dependencies`, `section-12-overview`).
+ */
+const isAnchor = (fragment: string): boolean => isWordSlug(fragment.toLowerCase());
+/**
+ * A fragment that is itself a token (`#<token>`), told from an anchor
+ * (`#section-2`, `#step-1-install-dependencies`) or a route (`#/settings`) by
+ * shape and length. A fragment the engine cut is judged on what is left of it.
+ */
+const fragmentToken = (raw: string, cut: boolean): boolean => {
+  // Base64 padding is part of a token, not a `name=value` pair.
+  const fragment = raw.replace(/=+$/u, '');
+  return TOKEN_CHARS.test(fragment) && !fragment.includes('=') && !isAnchor(fragment)
+    && ((cut && fragment.length >= 8) || (fragment.length >= 16 && hasLetterAndDigit(fragment)) || fragment.length >= 32);
+};
+
+/**
+ * Token-shaped secrets in a URL's path and fragment that no name announces:
+ * every token-shaped segment after a hook segment (`/hooks/<token>`,
+ * `/rocket/hooks/<id>/<token>`) or on a hook host, the one segment after a key
+ * or token segment (`/with/key/<key>`), and a bare fragment that is one token.
+ * Ordinary paths keep their words and short plain numbers. A URL a
+ * `PATH_SECRETS` pattern already matched (Slack, Discord, Telegram, Teams) is
+ * left to it, so its team and channel ids stay readable. Text edits only; a URL
+ * the engine cut is judged without its cut note, and the part the cut fell in
+ * is hidden on less evidence, since the cut may have shortened it.
+ */
+function redactUrlTokens(url: string): string {
+  const known = PATH_SECRETS.some((pattern) => pattern.test(url));
+  const note = CUT_NOTE.exec(url)?.[0] ?? '';
+  const text = url.slice(0, url.length - note.length);
+  const parts = /^(\s*[a-z][a-z0-9+.-]*:[\\/]+)([^/\\?#]*)([^?#]*)(\?[^#]*)?(#[\s\S]*)?$/iu.exec(text);
+  if (!parts) return url;
+  const [, scheme, authority, path, query = '', fragment = ''] = parts as unknown as [string, string, string, string, string?, string?];
+  let hooked = !known && HOOK_HOST.test(authority.replace(/^.*@/u, ''));
+  let keyNext = false;
+  const cutInPath = note !== '' && query === '' && fragment === '';
+  const segments = path.split(/([\\/]+)/u);
+  const lastSegment = segments.length - 1;
+  const redactedPath = segments.map((segment, i) => {
+    if (known || i % 2 === 1 || segment === '') return segment;
+    const underMarker = hooked || keyNext;
+    const mixedMin = hooked ? 8 : 12;
+    keyNext = false;
+    if (underMarker && pathToken(segment, mixedMin, cutInPath && i === lastSegment)) return REDACTED;
+    if (HOOK_MARKER.test(segment)) hooked = true;
+    else if (KEY_MARKER.test(segment)) keyNext = true;
+    return segment;
+  }).join('');
+  const body = fragment.slice(1);
+  const redactedFragment = fragmentToken(body, note !== '' && fragment !== '') ? `#${REDACTED}` : fragment;
+  return `${scheme}${authority}${redactedPath}${query}${redactedFragment}${note}`;
+}
 
 /**
  * The HTTP piece takes credentials as plain props: Basic or Bearer fields, a
@@ -1110,6 +1193,7 @@ export function redactHttpInput(input: Record<string, unknown>): Record<string, 
     for (const pattern of PATH_SECRETS) {
       out.url = (out.url as string).replace(pattern, (whole, head: string, secret: string) => secret !== '' ? `${head}${redactValue(secret)}` : whole);
     }
+    out.url = redactUrlTokens(out.url as string);
   }
   return out;
 }

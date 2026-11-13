@@ -11,6 +11,7 @@ import { getGoalApplication } from './application-service.ts';
 import { normalizeAwarenessActivityEvent } from '../awareness/activity-events.ts';
 import type { AwarenessActivityEvent } from '../awareness/activity-events.ts';
 import * as vault from '../vault/goals.ts';
+import { awarenessHistoryVisible } from '../awareness/history-guard.ts';
 
 export type AwarenessGoalMatch = {
   goalId: string;
@@ -87,6 +88,11 @@ export function logAutoDetectedProgress(
 
 /** Entry point shared by the daemon and serialized-producer integration tests. */
 export function recordGoalAwarenessActivity(event: unknown): AwarenessGoalMatch[] {
+  // An app or window name is what was on screen: none is matched or noted
+  // against a goal while screen awareness is off, including one from a
+  // capture still in flight when it was turned off, or the session the
+  // switch itself ended.
+  if (!awarenessHistoryVisible()) return [];
   const matches = matchAwarenessToGoals(event);
   logAutoDetectedProgress(matches);
   return matches;

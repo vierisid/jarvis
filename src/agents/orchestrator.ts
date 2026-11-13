@@ -2185,6 +2185,12 @@ export class AgentOrchestrator {
          */
         const runApproved = async (): Promise<string | ContentBlock[]> => {
           const receipt = await this.deferredExecutor!.executeApprovedWithReceipt(request.id, 'inline-gate');
+          // Held by screen awareness (#1314 follow-up): nothing ran, and the
+          // card is pending again for the person, not a result for the model.
+          if (receipt.held) {
+            return `[AWAITING_APPROVAL] Request #${request.id.slice(0, 8)} is held while screen awareness is off. ` +
+              `Action: ${toolCall.name} (${actionCategory}). It did not run; the user can approve it once screen awareness is back on.`;
+          }
           if (receipt.failed && tool?.failureIsOutsideContent === true) {
             this.noteTaint(toolCall.name, tool?.category);
             return markUntrustedToolFailure(toolCall.name, tool?.category, receipt.result, MAX_TOOL_RESULT_CHARS, true);
