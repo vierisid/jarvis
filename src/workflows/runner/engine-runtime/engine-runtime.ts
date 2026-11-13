@@ -36,6 +36,7 @@ import {
   ackTimeoutMsForOperation,
   buildExecuteFlowOperation,
   buildExecuteTriggerHookOperation,
+  buildExecutePropertyOperation,
   buildExtractPieceMetadataOperation,
   type EngineOperationEnvelope,
   type ExecuteFlowOptions,
@@ -506,6 +507,42 @@ export class EngineHandle {
       );
     }
     return reply.response as import("../../runtime/piece-catalog").RawPieceMetadata;
+  }
+
+  /**
+   * Resolve a dynamic property for the given sibling values (the engine's
+   * EXECUTE_PROPERTY). Returns the property map the piece declares for them.
+   * Throws when the engine reports anything but OK or the piece's own
+   * resolver failed (the engine then answers a disabled placeholder).
+   */
+  async executeDynamicProperty(opts: {
+    pieceName: string;
+    pieceVersion: string;
+    actionOrTriggerName: string;
+    propertyName: string;
+    input: Record<string, unknown>;
+    timeoutInSeconds?: number;
+  }): Promise<Record<string, unknown>> {
+    const reply = await this.send(buildExecutePropertyOperation({
+      ...opts,
+      projectId: this.projectId,
+      platformId: this.projectId,
+      engineToken: this.engineToken,
+      internalApiUrl: this.api.baseUrl,
+    }));
+    const label = `executeDynamicProperty(${opts.pieceName}.${opts.actionOrTriggerName}.${opts.propertyName})`;
+    if (reply.status !== "OK") {
+      const detail = typeof reply.error === "string" && reply.error.length > 0 ? `: ${reply.error}` : "";
+      throw new Error(`${label} -> ${reply.status}${detail}`);
+    }
+    const result = reply.response as { type?: string; options?: unknown } | undefined;
+    const options = result?.options;
+    // A resolver that threw comes back as a disabled placeholder, not a property map.
+    const placeholder = typeof options === "object" && options !== null && (options as { disabled?: unknown }).disabled === true;
+    if (result?.type !== "DYNAMIC" || typeof options !== "object" || options === null || Array.isArray(options) || placeholder) {
+      throw new Error(`${label} did not resolve`);
+    }
+    return options as Record<string, unknown>;
   }
 
   /** Set by the first `release()`; see there. */
