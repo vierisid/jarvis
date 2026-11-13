@@ -1287,7 +1287,7 @@ function actSetStatus(
   deps: ManageWorkflowDeps,
 ): Record<string, unknown> {
   // Turning a workflow off stops its queued and waiting runs (Q-06).
-  const stoppedRuns = updateFlowStatus(flow.id, status).turnedOff ? stopRunsOfTurnedOffFlow(flow.id) : 0;
+  const stoppedRuns = updateFlowStatus(flow.id, status, { requireSteps: true }).turnedOff ? stopRunsOfTurnedOffFlow(flow.id) : 0;
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
   const updated = getFlow(flow.id);
   if (!updated) return { error: "flow vanished after update" };

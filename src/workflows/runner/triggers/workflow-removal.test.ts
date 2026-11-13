@@ -21,8 +21,10 @@ beforeEach(() => {
 });
 afterEach(async () => { service.stop(); await tm?.stop(); closeWorkflowDb();
   if (saved === undefined) delete process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL; else process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL = saved; });
+// A step that needs no piece catalog: an explicit Enable refuses a workflow with only its trigger (NO_STEPS).
+const STEP = { name: 'step_1', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [{ branchType: 'FALLBACK', branchName: 'Otherwise' }] }, children: [null] };
 function flow(trigger: Record<string, unknown>) {
-  const f = createFlow(), v = createDraftVersion({ flowId: f.id, displayName: 'Fixture', trigger });
+  const f = createFlow(), v = createDraftVersion({ flowId: f.id, displayName: 'Fixture', trigger: { nextAction: STEP, ...trigger } });
   lockVersion(v.id); setPublishedVersion(f.id, v.id); updateFlowStatus(f.id, 'ENABLED'); return f.id;
 }
 function command(flowId: string, action: WorkflowManageCommand['action'] = 'remove', extra: Partial<WorkflowManageCommand> = {}): WorkflowManageCommand {
@@ -119,7 +121,7 @@ for (const secret of [undefined, 'fixture-webhook-secret-at-least-32-chars']) te
 test('R4: trigger dispatch uses the restored draft even after older run bookkeeping', async () => {
   const f = createFlow(), old = createDraftVersion({ flowId: f.id, displayName: 'Old', trigger: { name: 'trigger', type: 'EMPTY', settings: {} } });
   const selected = createDraftVersion({ flowId: f.id, displayName: 'Selected schedule', trigger: {
-    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cronExpression: '* * * * *' } },
+    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cronExpression: '* * * * *' } }, nextAction: STEP,
   } });
   getWorkflowDb().run('UPDATE flow_version SET updated = 1 WHERE id = ?', [old.id]);
   getWorkflowDb().run('UPDATE flow_version SET updated = 2 WHERE id = ?', [selected.id]);

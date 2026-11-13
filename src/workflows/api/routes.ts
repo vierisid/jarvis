@@ -1701,7 +1701,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const rejected = metadataRejection(body.metadata);
           if (rejected) return err(rejected.message, rejected.status);
           // Turning a workflow off stops its queued and waiting runs (Q-06).
-          if (body.status !== undefined && updateFlowStatus(id, body.status).turnedOff) stopRunsOfTurnedOffFlow(id);
+          if (body.status !== undefined && updateFlowStatus(id, body.status, { requireSteps: true }).turnedOff) stopRunsOfTurnedOffFlow(id);
           if (body.metadata !== undefined) updateFlowMetadata(id, body.metadata);
           if (body.status !== undefined) refreshTrigger(id);
           const flow = scopedFlow(req, id);

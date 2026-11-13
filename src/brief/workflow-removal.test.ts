@@ -25,8 +25,11 @@ beforeEach(() => {
 });
 afterEach(() => { service.stop(); closeWorkflowDb(); rmSync(dir, { recursive: true, force: true });
   if (saved === undefined) delete process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL; else process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL = saved; });
-function fixture(name = 'Workflow') {
-  const flow = createFlow(), version = createDraftVersion({ flowId: flow.id, displayName: name, trigger: { name: 'trigger', type: 'EMPTY', settings: {} } });
+// A step that needs no piece catalog; enabling refuses a workflow with only its trigger (NO_STEPS).
+const STEP = { name: 'step_1', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [{ branchType: 'FALLBACK', branchName: 'Otherwise' }] }, children: [null] };
+function fixture(name = 'Workflow', withStep = false) {
+  const flow = createFlow(), version = createDraftVersion({ flowId: flow.id, displayName: name,
+    trigger: { name: 'trigger', type: 'EMPTY', settings: {}, ...(withStep ? { nextAction: STEP } : {}) } });
   return { flow, version };
 }
 function command(flowId: string, action: WorkflowManageCommand['action'] = 'remove', extra: Partial<WorkflowManageCommand> = {}): WorkflowManageCommand {
@@ -43,7 +46,7 @@ function restart() { service.stop(); closeWorkflowDb(); initWorkflowDb(file);
   service = new WorkflowRemoval(getWorkflowDb(), DEFAULT_IDS.project, () => clock); service.start(runtime); }
 
 test('an enabled workflow whose trigger could not be registered reads blocked with the reason, not ready', () => {
-  const { flow } = fixture('Leap day');
+  const { flow } = fixture('Leap day', true);
   updateFlowStatus(flow.id, 'ENABLED');
   const reason = 'The schedule could not be started, so the workflow is not running. Turn it off and on again, or change the schedule.';
   let problem: string | null = null;
@@ -72,7 +75,7 @@ test('remove, reload and reverse-order Undo retain exact identities, history and
   expect(queueStats().queued).toBe(0);
 });
 test('only later explicit enable changes restored activation, using canonical readiness', () => {
-  const { flow } = fixture(); const r = remove(flow.id); service.change(r.restore);
+  const { flow } = fixture('Workflow', true); const r = remove(flow.id); service.change(r.restore);
   expect(service.change(command(flow.id, 'activation', { activation: 'ENABLED' }))).toMatchObject({ status: 'accepted', item: { activation: 'ENABLED' } });
   const empty = createFlow(); const c = command(empty.id, 'activation', { activation: 'ENABLED' });
   expect(service.change(c)).toMatchObject({ status: 'rejected', code: 'not_ready' }); expect(getFlow(empty.id)?.status).toBe('DISABLED');
@@ -231,6 +234,22 @@ test('management readiness reports missing CODE permission before explicit Enabl
   expect(service.change(command(flow.id, 'activation', { activation: 'ENABLED' }))).toMatchObject({ status: 'accepted' });
 });
 
+test('a workflow with only its trigger is shown blocked and Enable is refused, leaving it off', () => {
+  const { flow, version } = fixture();
+  expect(service.read().data.items[0]!.readiness.state).toBe('blocked');
+  expect(service.change(command(flow.id, 'activation', { activation: 'ENABLED' }))).toMatchObject({ status: 'rejected', code: 'not_ready' });
+  expect(getFlow(flow.id)?.status).toBe('DISABLED');
+  updateDraftVersion(version.id, { trigger: { name: 'trigger', type: 'EMPTY', settings: {}, nextAction: STEP } });
+  expect(service.read().data.items[0]!.readiness.state).toBe('ready');
+  expect(service.change(command(flow.id, 'activation', { activation: 'ENABLED' }))).toMatchObject({ status: 'accepted', item: { activation: 'ENABLED' } });
+});
+test('a workflow already on with only its trigger stays on, shows blocked, and can be turned off', () => {
+  const { flow } = fixture();
+  getWorkflowDb().run("UPDATE flow SET status = 'ENABLED' WHERE id = ?", [flow.id]);
+  expect(service.read().data.items[0]).toMatchObject({ activation: 'ENABLED', readiness: { state: 'blocked' } });
+  expect(service.change(command(flow.id, 'activation', { activation: 'DISABLED' }))).toMatchObject({ status: 'accepted', item: { activation: 'DISABLED' } });
+});
+
 function fillCommands(count: number, flowId: string) {
   getWorkflowDb().transaction(() => { for (let i = 0; i < count; i++) getWorkflowDb().run(
     'INSERT INTO brief_workflow_commands VALUES (?, ?, ?, ?, ?, ?)', [DEFAULT_IDS.project, `filler-${i}`, flowId, 'digest', '{}', clock]); })();
@@ -257,7 +276,7 @@ test('R2: invalid Undo cannot use receipt-reserved capacity or mutate the remova
 function twoDrafts() {
   const { flow, version: old } = fixture('Older');
   getWorkflowDb().run('UPDATE flow_version SET updated = 1 WHERE id = ?', [old.id]);
-  const selected = createDraftVersion({ flowId: flow.id, displayName: 'Selected', trigger: { name: 'trigger', type: 'EMPTY', settings: {} } });
+  const selected = createDraftVersion({ flowId: flow.id, displayName: 'Selected', trigger: { name: 'trigger', type: 'EMPTY', settings: {}, nextAction: STEP } });
   getWorkflowDb().run('UPDATE flow_version SET updated = 2 WHERE id = ?', [selected.id]);
   return { flow, old, selected };
 }

@@ -6,6 +6,9 @@ import { createDraftVersion, getFlowVersion, lockVersion, setSampleDataEntry, se
 import { upsertFlowVersionUiMeta } from "../db/repos/flow-version-ui-meta";
 import { createWorkflowRoutes, type WorkflowRouteMap } from "./routes";
 
+// A trigger plus the smallest step that needs no piece catalog: publishing refuses a trigger-only graph.
+const RUNNABLE = { name: "trigger", type: "EMPTY", nextAction: { name: "step_1", type: "ROUTER", settings: { executionType: "EXECUTE_FIRST_MATCH", branches: [{ branchType: "FALLBACK", branchName: "Otherwise" }] }, children: [null] } };
+
 let routes: WorkflowRouteMap;
 let refreshed: string[];
 beforeEach(() => {
@@ -20,7 +23,7 @@ afterEach(() => closeWorkflowDb());
 function fixture(name = "Private workflow B") {
   const flow = createFlow();
   const version = createDraftVersion({ flowId: flow.id, displayName: name,
-    trigger: { name: "trigger", type: "EMPTY" } });
+    trigger: RUNNABLE });
   setSampleDataEntry(version.id, "step", { result: "private output" });
   setSampleInputEntry(version.id, "step", { prompt: "private input" });
   upsertFlowVersionUiMeta(version.id, { schema: 1, positions: { step: { x: 1, y: 2 } }, orphans: [] });
@@ -139,7 +142,7 @@ describe("atomic workflow publication", () => {
     test(`rejects another flow's ${state} version without mutating either flow`, async () => {
       const a = fixture("A");
       const b = fixture();
-      const published = lockVersion(createDraftVersion({ flowId: a.flow.id, displayName: "Previous publication", trigger: { name: "trigger", type: "EMPTY" } }).id);
+      const published = lockVersion(createDraftVersion({ flowId: a.flow.id, displayName: "Previous publication", trigger: RUNNABLE }).id);
       setPublishedVersion(a.flow.id, published.id);
       if (state === "LOCKED") lockVersion(b.version.id);
       const before = snapshot();
@@ -186,7 +189,7 @@ describe("atomic workflow publication", () => {
 
   test("empty object selects the newest owned draft even when another flow was edited later", async () => {
     const a = fixture("A");
-    const newer = createDraftVersion({ flowId: a.flow.id, displayName: "Newer A", trigger: { name: "trigger", type: "EMPTY" } });
+    const newer = createDraftVersion({ flowId: a.flow.id, displayName: "Newer A", trigger: RUNNABLE });
     const b = fixture();
     getWorkflowDb().run("UPDATE flow_version SET updated = 1 WHERE id = ?", [a.version.id]);
     getWorkflowDb().run("UPDATE flow_version SET updated = 2 WHERE id = ?", [newer.id]);

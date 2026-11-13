@@ -9,7 +9,7 @@ import { getWorkflowDb, DEFAULT_IDS } from "../index";
 import { apId } from "../ids";
 import { withOwnedFlowVersion } from "./flow-version-ownership";
 import { assertFlowCodeStepsAllowed } from "./flow-code-steps";
-import { assertFlowReady, assertVersionReady } from './flow-readiness';
+import { assertFlowHasSteps, assertFlowReady, assertVersionReady } from './flow-readiness';
 import { pinFlowBindings } from './binding-pins';
 
 export type FlowStatus = "ENABLED" | "DISABLED";
@@ -151,8 +151,14 @@ export function listFlows(
  * Set the flow's status. Turning an ENABLED flow off stamps `disabled_at`, and
  * the caller then stops the runs it had started (repos/flow-turn-off.ts,
  * Q-06); `turnedOff` says whether this call did that.
+ *
+ * `requireSteps`: refuse turning on a workflow with nothing after its trigger
+ * (`NO_STEPS`). Every person or agent facing enable path passes it (HTTP
+ * status switch, chat tool, Brief workflow list; publish checks the version it
+ * publishes itself). Internal writers and fixtures that only need an enabled
+ * row do not.
  */
-export function updateFlowStatus(id: string, status: FlowStatus): { turnedOff: boolean } {
+export function updateFlowStatus(id: string, status: FlowStatus, opts: { requireSteps?: boolean } = {}): { turnedOff: boolean } {
   // Enabling is the OTHER way a flow becomes runnable: the trigger manager
   // registers an ENABLED flow's cron / webhook against `published ?? latest
   // draft`, so a flow can start firing on a schedule without ever being
@@ -164,17 +170,22 @@ export function updateFlowStatus(id: string, status: FlowStatus): { turnedOff: b
   // Enabling is a person accepting the flow's current bindings (Q-05), so it
   // pins them instead of comparing against pins taken earlier.
   if (status === 'ENABLED') assertFlowReady(id, { acceptBindings: true });
-  const before = db().query<{ status: FlowStatus }, [string]>(`SELECT status FROM flow WHERE id = ?`).get(id);
-  const ts = now();
-  const res = db().run(
-    `UPDATE flow SET status = ?, updated = ?,
-       disabled_at = CASE WHEN ? = 'DISABLED' AND status = 'ENABLED' THEN ? ELSE disabled_at END
-     WHERE id = ?`,
-    [status, ts, status, ts, id],
-  );
-  if (res.changes === 0) throw new Error(`updateFlowStatus: flow not found (id=${id})`);
-  if (status === 'ENABLED') pinFlowBindings(id);
-  return { turnedOff: before?.status === "ENABLED" && status === "DISABLED" };
+  return db().transaction(() => {
+    const before = db().query<{ status: FlowStatus }, [string]>(`SELECT status FROM flow WHERE id = ?`).get(id);
+    const ts = now();
+    const res = db().run(
+      `UPDATE flow SET status = ?, updated = ?,
+         disabled_at = CASE WHEN ? = 'DISABLED' AND status = 'ENABLED' THEN ? ELSE disabled_at END
+       WHERE id = ?`,
+      [status, ts, status, ts, id],
+    );
+    if (res.changes === 0) throw new Error(`updateFlowStatus: flow not found (id=${id})`);
+    // Checked after the write so a removed workflow keeps its own 409 from the
+    // removal fence; the throw rolls the write back.
+    if (status === 'ENABLED' && opts.requireSteps) assertFlowHasSteps(id);
+    if (status === 'ENABLED') pinFlowBindings(id);
+    return { turnedOff: before?.status === "ENABLED" && status === "DISABLED" };
+  })();
 }
 
 /**

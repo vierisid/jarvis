@@ -6,7 +6,7 @@ import { getFlow, updateFlowStatus, parseFlowMetadata, type FlowRow } from '../w
 import { getFlowRun } from '../workflows/db/repos/flow-run';
 import { continuedFailureHeadline, continuedFailures } from '../workflows/runtime/continued-failures';
 import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-version';
-import { versionReadiness, WorkflowReadinessError } from '../workflows/db/repos/flow-readiness';
+import { graphHasSteps, versionReadiness, WorkflowReadinessError } from '../workflows/db/repos/flow-readiness';
 import { CodeStepsRefusedError, ungrantedCodeSteps } from '../workflows/db/repos/flow-code-steps';
 import type { TriggerManager } from '../workflows/runner/triggers/manager';
 import { stopRunsOfTurnedOffFlow } from '../workflows/db/repos/flow-turn-off';
@@ -117,7 +117,8 @@ export class WorkflowRemoval {
     if (!state) throw new WorkflowRemovalError('unavailable', 503);
     const metadata = parseFlowMetadata(f);
     const readiness = version ? versionReadiness(f.id, version.id) : null;
-    const ready = readiness?.ready === true && !ungrantedCodeSteps(f, version!.trigger);
+    // A trigger-only workflow would be refused on enable (NO_STEPS), so it is not offered as ready.
+    const ready = readiness?.ready === true && graphHasSteps(version!.trigger) && !ungrantedCodeSteps(f, version!.trigger);
     const last = this.db.query<{ id: string; status: string }, [string]>(
       'SELECT id, status FROM flow_run WHERE flow_id = ? ORDER BY created DESC, id DESC LIMIT 1').get(f.id);
     return { flowId: f.id, versionId: version?.id ?? null,
@@ -464,7 +465,7 @@ export class WorkflowRemoval {
         this.markRegistration(f.id);
         return { ...base, receipt: receipt(r) };
       }
-      updateFlowStatus(f.id, c.activation!); // Existing CODE, readiness and publication semantics.
+      updateFlowStatus(f.id, c.activation!, { requireSteps: true }); // Existing CODE, readiness, steps and publication semantics.
     }
     this.markRegistration(f.id);
     return { ...base, item: this.item(this.flow(f.id)) };
