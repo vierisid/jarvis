@@ -34,7 +34,7 @@ import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } f
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { canContinuePastStep, canRetryStep, CONTINUE_UNAVAILABLE_MESSAGE, RETRY_UNAVAILABLE_MESSAGE } from './step-admission';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
-import { emptyInput, inputIssue } from './input-validation';
+import { emptyFieldInput, emptyInput, inputIssue } from './input-validation';
 import { formFields } from './human-input-contract';
 import { BOUNDED_TOOLS } from './tool-capability';
 import { declaredDependencies } from './code-step-manifest';
@@ -635,7 +635,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
             for (const field of schema?.fields ?? []) {
               const value = input[field.name];
               const path = `settings.input.${field.name}`;
-              if (field.required && emptyInput(value)) {
+              if (field.required && emptyFieldInput(field, value)) {
                 needsSetup(node, path, `${field.label || field.name}: fill in this required input`);
                 continue;
               }
