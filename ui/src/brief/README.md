@@ -612,8 +612,14 @@ run response). It sends no request.
 ## Workflow management
 
 - `workflows/manage-list/` is the D-21 All workflows list: the name opens the exact flow/version, the
-  Enabled/Paused switch and the bin are separate targets, and Delete confirms inside its own row.
-  Publication and readiness are secondary facts beside the switch; Draft is never a switch state.
+  On/Off switch and the bin are separate targets, and Delete confirms inside its own row.
+  `workflows/status-words.ts` is the one place server facts (ENABLED/DISABLED, published or draft,
+  readiness) become founder words, shared by the list and the workflow page: On or Off, plus at most
+  one note (Needs setup, Setup status unknown, Draft changes not live yet; while On, a draft that is
+  not live wins, since its setup gaps do not stop the running version). Published, Unpublished, Ready
+  and Paused are not shown. The one draft action is "Save and turn on" (publishing also turns the
+  workflow on).
+  Draft is never a switch state.
 - `WorkflowManagementController` holds one owner scope and survives room, chat and sidebar changes;
   the host calls `retire()` on logout or owner change. Each command carries scope, flow, version,
   expected revision and a request ID. A lost or `pending` answer locks that row as uncertain until
