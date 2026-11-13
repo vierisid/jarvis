@@ -127,6 +127,7 @@ function turnDoor(transport: BriefChatTransport, db: Database): NotchTurnDoor {
     // carrying the turn with it after the turn is over: it would keep the
     // turn's standing, such as opening an app without asking.
     onEvent: (listener) => transport.onEvent((event) => outsideBriefTurn(() => listener(event))),
+    mark(turn, text) { addMessage(turn.conversationId, { role: 'assistant', content: text }); },
     look(turn) {
       let stored;
       try { stored = transport.repository.get(turn); } catch { return null; }

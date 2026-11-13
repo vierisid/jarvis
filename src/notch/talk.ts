@@ -35,13 +35,24 @@ export const NOTCH_STT_TIMEOUT_MS = 20_000;
 
 export interface NotchTalkPort {
   onEvent(listener: (sidecarId: string, event: { event_type: string; payload: unknown; binary?: unknown }) => void): void;
+  /** A desktop app's connection ended. */
+  onSidecarDisconnected?(listener: (sidecarId: string) => void): void;
 }
+
+/**
+ * The longest a recording can stay open in the brain's eyes. The desktop app
+ * closes one itself at 60 seconds; if its word never arrives (the connection
+ * went), the line must not stay listening for ever.
+ */
+export const NOTCH_TALK_OPEN_MS = 70_000;
 
 export interface NotchTalkDeps {
   asks: Pick<NotchAsks, 'listen' | 'released' | 'words' | 'nothing' | 'dropped' | 'tell'>;
   /** Speech-to-text as it is set up now, or null when it is not. */
   stt(): { transcribe(audio: Buffer): Promise<string> } | null;
   sttTimeoutMs?: number;
+  /** How long a recording may stay open with no end. For tests. */
+  openMs?: number;
   log?: (line: string) => void;
 }
 
@@ -84,6 +95,22 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
   const timeoutMs = deps.sttTimeoutMs ?? NOTCH_STT_TIMEOUT_MS;
   /** The recordings whose microphone is open now, by desktop app. */
   const open = new Map<string, string>();
+  const limits = new Map<string, ReturnType<typeof setTimeout>>();
+  const closed = (sidecarId: string): void => {
+    const limit = limits.get(sidecarId);
+    if (limit) clearTimeout(limit);
+    limits.delete(sidecarId);
+    open.delete(sidecarId);
+  };
+  /** The microphone behind an open recording is gone: the recording is thrown away, and the line leaves. */
+  const lost = (sidecarId: string, why: string): void => {
+    const talkKey = open.get(sidecarId);
+    if (!talkKey) return;
+    closed(sidecarId);
+    log(`[notch] a recording was dropped: ${why}`);
+    deps.asks.dropped(talkKey);
+  };
+  port.onSidecarDisconnected?.((sidecarId) => { lost(sidecarId, 'its desktop app disconnected'); });
   const key = (sidecarId: string, talkId: string): string => `${sidecarId}:${talkId}`;
 
   async function transcribe(talkKey: string, pcm: Buffer, sampleRate: number): Promise<void> {
@@ -124,13 +151,17 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
       // One microphone per desktop app: a start means whatever was open there is over.
       const before = open.get(sidecarId);
       if (before && before !== talkKey) deps.asks.dropped(before);
+      closed(sidecarId);
       open.set(sidecarId, talkKey);
+      const limit = setTimeout(() => { if (open.get(sidecarId) === talkKey) lost(sidecarId, 'no end arrived for it'); }, deps.openMs ?? NOTCH_TALK_OPEN_MS);
+      (limit as { unref?: () => void }).unref?.();
+      limits.set(sidecarId, limit);
       deps.asks.listen(talkKey);
       return;
     }
     // Only the recording that is open on that desktop app can end or be cancelled.
     if (open.get(sidecarId) !== talkKey) return;
-    open.delete(sidecarId);
+    closed(sidecarId);
     if (phase === 'cancelled') { deps.asks.dropped(talkKey); return; }
     if (phase !== 'end') return;
     // Turned away while the keys were still held: its sound is dropped here,

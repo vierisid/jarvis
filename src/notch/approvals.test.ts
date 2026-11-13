@@ -31,7 +31,7 @@ function config(): AuthorityConfig {
     learning: { enabled: false, suggest_threshold: 5 }, emergency_state: 'normal' };
 }
 
-function harness(options: { page?: boolean; denyFails?: boolean; describe?: (request: ApprovalRequest) => Promise<string | null> } = {}) {
+function harness(options: { page?: boolean; denyFails?: boolean; describe?: (request: ApprovalRequest) => Promise<string | null>; mine?: (id: string) => boolean } = {}) {
   // The product side.
   const approvals = new ApprovalManager();
   const audit = new AuditTrail();
@@ -80,6 +80,7 @@ function harness(options: { page?: boolean; denyFails?: boolean; describe?: (req
     openDashboard: (from) => { opened.push(from); },
     log: (line) => logs.push(line),
     describe: options.describe,
+    mine: options.mine,
     clock,
   });
   const line = (): NotchLine | null => surface.current().line;
@@ -659,5 +660,34 @@ describe('what the sheet says will be done', () => {
     expect(h.line()).toMatchObject({ kind: 'offer', yes: 'open' });
     expect(h.said()).toStartWith('A payment. I never take that on a key');
     expect(await applyApprovalDecision('approve', pay.id, NOTCH_DECIDER, h.deps)).toMatchObject({ status: 'needs_dashboard' });
+  });
+});
+
+describe('an approval the person\'s own instruction is stopped at', () => {
+  test('does not fold: it stays until it is answered', async () => {
+    const h = harness({ mine: () => true });
+    const req = h.ask();
+    await h.sync();
+    expect(h.line()).toMatchObject({ kind: 'offer', fold: 0 });
+    await h.advance(120_000);
+    expect(h.said()).toBe('Write file?');
+    expect(h.approvals.getRequest(req.id)!.status).toBe('pending');
+  });
+
+  test('its sheet does not time out either', async () => {
+    const h = harness({ mine: () => true, describe: async () => 'Look up where Steam is installed?' });
+    h.ask({ context: JSON.stringify({ intent: `On this computer, run: ${'reg query HKCU '.repeat(8)}` }) });
+    await h.sync();
+    await h.advance(120_000);
+    expect(h.line()).toMatchObject({ kind: 'sheet', stay: true });
+    expect(h.said()).toBe('Look up where Steam is installed?');
+  });
+
+  test('any other approval still folds and waits in the count', async () => {
+    const h = harness({ mine: () => false });
+    h.ask();
+    await h.sync();
+    const line = h.line();
+    expect(line?.kind === 'offer' ? line.fold : 'not an offer').toBeUndefined();
   });
 });

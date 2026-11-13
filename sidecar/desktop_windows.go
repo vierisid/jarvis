@@ -177,13 +177,36 @@ $p = Start-Process -FilePath %s %s -PassThru
 	// process name (packaged apps hand the window to a broker process, e.g.
 	// calc.exe -> Calculator.exe).
 	pid := toInt(result["pid"])
-	win, matchedBy := waitForWindow(pid, executable, 5*time.Second, preexisting)
+	if pid == 0 {
+		// Started, with no process handed back: Windows gave it to a program
+		// that was already running. That is how a web address, a folder, a
+		// document, and an app that keeps a single window all open. It was
+		// reported as "process started (pid 0) but no window appeared", a
+		// failure, for something that had just opened.
+		return launchHandedOff(executable, result, preexisting), nil
+	}
+	win, matchedBy := waitForWindow(pid, executable, 8*time.Second, preexisting)
 	if win == nil {
-		result["success"] = false
-		result["window_visible"] = false
+		if !processAlive(pid) {
+			// It started and is gone again without a window: a command-line
+			// tool that shares an app's name (docker is the command; Docker
+			// Desktop is the app). The Start menu knows the app.
+			if started, ok, _ := launchFromStartMenu(executable, args, preexisting); ok {
+				return started, nil
+			}
+			result["success"] = false
+			result["window_visible"] = false
+			result["note"] = fmt.Sprintf(
+				"%q started (pid %d) and ended at once without a window - it is probably a command-line program, not an app. Run desktop_list_windows to check; do NOT assume anything opened.",
+				executable, pid)
+			return &RPCResult{Result: result}, nil
+		}
+		// Still running, no window yet: a slow start, not a failure.
+		result["success"] = true
+		result["window_visible"] = nil
 		result["note"] = fmt.Sprintf(
-			"process started (pid %d) but no window appeared within 5s - the app may still be starting, be windowless, or have exited. Run desktop_list_windows to check before interacting; do NOT assume it is open.",
-			pid)
+			"%q is running (pid %d) but has shown no window in 8s - it is probably still starting. Run desktop_list_windows in a moment; do NOT launch it again.",
+			executable, pid)
 		return &RPCResult{Result: result}, nil
 	}
 
@@ -195,6 +218,55 @@ $p = Start-Process -FilePath %s %s -PassThru
 		result["note"] = fmt.Sprintf("window belongs to pid %d (matched by process name; the launcher pid %d handed off) - use pid %d with desktop_snapshot/desktop_focus_window", win.Pid, pid, win.Pid)
 	}
 	return &RPCResult{Result: result}, nil
+}
+
+// processAlive says whether a process is still running.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	out, err := runPS(fmt.Sprintf("if (Get-Process -Id %d -ErrorAction SilentlyContinue) { 'yes' } else { 'no' }", pid), 5*time.Second)
+	// Not knowing is "alive": the kinder reply, and nothing is started twice.
+	return err != nil || strings.TrimSpace(out) != "no"
+}
+
+// launchHandedOff answers for a launch that Windows handed to a program that
+// was already running. If a window of that name is on screen it is named;
+// otherwise the reply is "opened, window not followed", which is not a failure.
+func launchHandedOff(executable string, result map[string]any, preexisting map[uintptr]bool) *RPCResult {
+	name := startMenuFold(executable)
+	if i := strings.LastIndexAny(name, `\/`); i >= 0 {
+		name = name[i+1:]
+	}
+	result["pid"] = 0
+	result["success"] = true
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		wins := enumTopWindows()
+		seen := make([]startMenuWin, len(wins))
+		for i, w := range wins {
+			seen[i] = startMenuWin{Hwnd: w.Hwnd, Title: w.Title, ProcessName: w.ProcessName}
+		}
+		opened, _, already := pickStartMenuWindow(seen, name, name, preexisting)
+		if opened < 0 && time.Now().After(deadline) {
+			opened = already
+		}
+		if opened >= 0 {
+			w := wins[opened]
+			result["window_visible"] = true
+			result["window_title"] = w.Title
+			result["window_pid"] = w.Pid
+			result["note"] = fmt.Sprintf("opened in a program that was already running: its window is %q - use pid %d with desktop_snapshot/desktop_focus_window", w.Title, w.Pid)
+			return &RPCResult{Result: result}
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	result["window_visible"] = nil
+	result["note"] = "opened, and handed to a program that was already running (a browser for a web address, File Explorer for a folder, or the app itself if it was open). Its window was not followed: run desktop_list_windows to see it; do NOT open it again."
+	return &RPCResult{Result: result}
 }
 
 // launchFromStartMenu starts the one app the Start menu lists under the name
