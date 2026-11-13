@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { NOTCH_TALK_EVENT, attachNotchTalk, pcmToWav } from './talk.ts';
+import { NOTCH_TALK_EVENT, attachNotchTalk, pcmToWav, notchTalkSignOff } from './talk.ts';
 import type { NotchTalkDeps } from './talk.ts';
 
 const settle = async (): Promise<void> => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
@@ -123,6 +123,25 @@ describe('a recording from the desktop app', () => {
     h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 50_000, reason: 'cap' });
     await settle();
     expect(h.calls.at(-1)).toBe('nothing pc:a1 too_long');
+  });
+
+  test('a video sign-off or a subtitle credit is never an instruction, in any language or at any length', async () => {
+    for (const line of [
+      'Kiitos kun katsoit videon ja olkaa hyvää iltapäivää!', 'Thanks for watching!', 'Thank you so much for watching, see you next time.',
+      'Sottotitoli creati dalla comunità Amara.org', 'Subtitles by the Amara.org community', "Merci d'avoir regardé cette vidéo !",
+      'Gracias por ver el video.', 'Vielen Dank fürs Zuschauen!', 'Спасибо за просмотр!', 'ご視聴ありがとうございました', '시청해주셔서 감사합니다.', 'Please subscribe to my channel.',
+    ]) {
+      const h = harness(() => ({ transcribe: async () => line }));
+      h.event({ phase: 'start', talk_id: 'a1' });
+      // Plenty of voice: the short-recording rule does not apply here.
+      h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 2400, duration_ms: 3000 }, true);
+      await settle();
+      expect([line, h.calls.at(-1)]).toEqual([line, 'nothing pc:a1 silence']);
+    }
+    // What a person asks is not one of them, also when it holds the same words.
+    for (const line of ['Open Steam.', 'Thanks, now close Notepad.', 'Write a subtitle for this video.', 'Kiitos, avaa Notepad.', 'Parli italiano?']) {
+      expect([line, notchTalkSignOff(line)]).toEqual([line, false]);
+    }
   });
 
   test('a refused microphone says why', () => {
