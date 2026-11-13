@@ -272,7 +272,7 @@ export const REVIEWED_UI_TOOLS: ReadonlySet<string> = new Set([
   'browser_navigate', 'browser_click', 'browser_type', 'browser_press_key',
   'browser_upload_file', 'browser_hover', 'browser_scroll', 'browser_evaluate',
   'desktop_click', 'desktop_type', 'desktop_press_keys', 'desktop_launch_app',
-  'desktop_focus_window', 'ui_act',
+  'desktop_focus_window', 'desktop_pointer', 'ui_act',
 ]);
 
 export function rawUiGate(toolName: string, params: Record<string, unknown>): ToolGate | null {

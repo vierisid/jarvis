@@ -46,6 +46,7 @@ export const TOOL_ACTION_MAP: Readonly<Record<string, ActionCategory>> = Object.
   desktop_click: 'control_app',
   desktop_type: 'control_app',
   desktop_press_keys: 'control_app',
+  desktop_pointer: 'control_app',
   desktop_launch_app: 'control_app',
   desktop_screenshot: 'read_data',
 

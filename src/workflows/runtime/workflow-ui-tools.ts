@@ -8,7 +8,7 @@ export { WORKFLOW_REVIEWED_UI_TOOLS, workflowUiReview };
 
 export const UNSUPPORTED_WORKFLOW_TOOLS: ReadonlySet<string> = new Set([
   'run_command', 'browser_evaluate', 'browser_upload_file', 'desktop_type', 'desktop_press_keys',
-  'record_skill', 'manage_skills', 'ui_act',
+  'desktop_pointer', 'record_skill', 'manage_skills', 'ui_act',
 ]);
 
 export function workflowToolRefusal(name: string): string | null {
@@ -16,6 +16,9 @@ export function workflowToolRefusal(name: string): string | null {
   if (name === 'browser_upload_file') return 'browser_upload_file has no computer-bound workflow adapter or sidecar route. Use a supported file-upload connector instead.';
   if (name === 'desktop_type' || name === 'desktop_press_keys') {
     return `${name} cannot run in a workflow because it can send input to whichever window has focus. Use a desktop agent to open the app, inspect its current editor, set that element's value with desktop_click (action set_value), and read it back with action get_value. If the editor does not support setting its value, report the limitation.`;
+  }
+  if (name === 'desktop_pointer') {
+    return 'desktop_pointer cannot run in a workflow because it acts on whatever is at a place on the screen at that moment, which a saved flow cannot know. Use a desktop agent that looks at the screen first.';
   }
   return `${name} is not supported as a direct workflow action. Use a supported connector, a recorded run_skill step, or a reviewed browser/desktop agent for supported UI actions.`;
 }

@@ -20,7 +20,7 @@ import { readFileSync } from 'node:fs';
 import { ToolRegistry, type ToolDefinition } from './registry.ts';
 import { toolDefToLLMTool } from './builtin.ts';
 import { uiActTool, uiSnapshotTool, parsePostcondition } from './ui.ts';
-import { desktopClickTool } from './desktop.ts';
+import { desktopClickTool, desktopPointerTool, DESKTOP_POINTER_ACTIONS } from './desktop.ts';
 import type { SemanticNode } from '../../structural/types.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 
@@ -226,6 +226,27 @@ describe('advertised values match what the implementation accepts', () => {
     expect([...desktopClickTool.parameters.action!.enum!].sort()).toEqual([...accepted].sort());
     expect(desktopClickTool.parameters.action!.enum).not.toContain('get_text');
     expect(desktopClickTool.parameters.action!.description).not.toContain('get_text');
+  });
+
+  test('every desktop_pointer action is one the sidecar reads, acts on and names, and no other', () => {
+    // The same gate, for acting at a place on the screen: what the sidecar
+    // accepts (parsePointerRequest), what it then does on Windows
+    // (handlePointerAction), and the list it prints for a wrong one.
+    const read = readFileSync(new URL('../../../sidecar/desktop_pointer.go', import.meta.url), 'utf-8');
+    const accepted = /switch req\.Action \{\n\s*case ((?:"[a-z_]+",?\s*)+):/.exec(read);
+    expect(accepted).not.toBeNull();
+    const names = [...accepted![1]!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]!).sort();
+    const supported = /supported: ([a-z_, ]+)\)/.exec(read);
+    expect(supported![1]!.split(', ').sort()).toEqual(names);
+
+    const acts = readFileSync(new URL('../../../sidecar/desktop_pointer_windows.go', import.meta.url), 'utf-8');
+    const body = acts.slice(acts.indexOf('func handlePointerAction('));
+    const done = [...body.slice(body.indexOf('switch req.Action {')).matchAll(/^\s*case ((?:"[a-z_]+",?\s*)+):\s*$/gm)]
+      .flatMap((m) => [...m[1]!.matchAll(/"([a-z_]+)"/g)].map((c) => c[1]!)).sort();
+    expect(done).toEqual(names);
+
+    expect([...desktopPointerTool.parameters.action!.enum!].sort()).toEqual(names);
+    expect(([...DESKTOP_POINTER_ACTIONS] as string[]).sort()).toEqual(names);
   });
 
   test('ui_snapshot kind matches the capture kinds the surface layer takes', () => {

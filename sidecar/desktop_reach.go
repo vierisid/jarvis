@@ -66,6 +66,23 @@ func keysBlockedError(what, after string) error {
 	return &codedError{code: desktopTargetUnreachableCode, err: fmt.Errorf("%s", text)}
 }
 
+// typeLineBreakIsSoft reads how a line break in typed text is to be typed:
+// "enter" (the default) is the Enter key, "shift_enter" is Shift+Enter, which
+// is a new line in a chat app where Enter alone sends the message.
+func typeLineBreakIsSoft(params map[string]any) (bool, error) {
+	raw, given := params["line_break"]
+	if !given || raw == nil {
+		return false, nil
+	}
+	switch raw {
+	case "", "enter":
+		return false, nil
+	case "shift_enter":
+		return true, nil
+	}
+	return false, fmt.Errorf("line_break must be \"enter\" or \"shift_enter\", got %v", raw)
+}
+
 // pidWindow is a window of one program, as the picker needs it.
 type pidWindow struct {
 	Hwnd      uintptr

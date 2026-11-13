@@ -166,6 +166,19 @@ func TestKeyEventsForRuneKeepsACharacterWhole(t *testing.T) {
 		}
 	})
 
+	t.Run("a line break that must not send is Shift+Enter, with Shift let go last", func(t *testing.T) {
+		got := softBreakEvents(nil)
+		if len(got) != 4 {
+			t.Fatalf("got %d events, want Shift down, Enter down, Enter up, Shift up", len(got))
+		}
+		if got[0].vk != vkShift || got[0].flags&keyeventfKeyUp != 0 || got[3].vk != vkShift || got[3].flags&keyeventfKeyUp == 0 {
+			t.Errorf("Shift must be held around the Enter: %+v", got)
+		}
+		if got[1].vk != vkReturn || got[1].flags&keyeventfKeyUp != 0 || got[2].vk != vkReturn || got[2].flags&keyeventfKeyUp == 0 {
+			t.Errorf("Enter must go down and up inside it: %+v", got)
+		}
+	})
+
 	t.Run("a carriage return is dropped", func(t *testing.T) {
 		if got := keyEventsForRune(nil, '\r'); len(got) != 0 {
 			t.Fatalf("got %d events, want none", len(got))

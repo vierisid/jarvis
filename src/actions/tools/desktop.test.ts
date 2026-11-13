@@ -88,8 +88,8 @@ describe('DESKTOP_TOOLS', () => {
     __setLocalDesktopControllerFactoryForTests(null);
   });
 
-  test('contains 9 desktop tools', () => {
-    expect(DESKTOP_TOOLS).toHaveLength(9);
+  test('contains 10 desktop tools', () => {
+    expect(DESKTOP_TOOLS).toHaveLength(10);
   });
 
   test('all have desktop category', () => {
@@ -106,6 +106,7 @@ describe('DESKTOP_TOOLS', () => {
       'desktop_focus_window',
       'desktop_launch_app',
       'desktop_list_windows',
+      'desktop_pointer',
       'desktop_press_keys',
       'desktop_screenshot',
       'desktop_snapshot',
@@ -133,7 +134,7 @@ describe('DESKTOP_TOOLS', () => {
   });
 
   test('#629: every desktop tool is framed, by exactly one of the two mechanisms', () => {
-    // With a `target` all nine dispatch through `routeToSidecarAction`, whose
+    // With a `target` all ten dispatch through `routeToSidecarAction`, whose
     // throws carry the reply a remote machine sent. So each one needs either a
     // place in `UNTRUSTED_TOOL_NAMES` (whole result framed, for the ones whose
     // SUCCESS reply carries a field the target machine wrote) or a
@@ -151,6 +152,9 @@ describe('DESKTOP_TOOLS', () => {
       desktop_type: 'declaration',
       desktop_press_keys: 'declaration',
       desktop_screenshot: 'declaration',
+      // `{success, action, screen_x, screen_y, window_pid}`: our own words and
+      // numbers. What is at the place is never read back into the reply.
+      desktop_pointer: 'declaration',
     };
     expect(Object.keys(expected).sort()).toEqual(DESKTOP_TOOLS.map((t) => t.name).sort());
     for (const [name, how] of Object.entries(expected)) {

@@ -18,6 +18,8 @@ import { approvalIntentFromContext } from '../authority/approval.ts';
 import { outsideBriefTurn } from '../brief/chat-context.ts';
 import { NOTCH_REQUEST_ID } from '../authority/app-open.ts';
 import { notchEnabled } from '../notch/switch.ts';
+import { findSidecar, getSidecarManager, lastScreenPicture, resolveToolTarget } from '../actions/tools/sidecar-route.ts';
+import { notchApprovalWhere } from './notch-where.ts';
 import {
   bindScriptedModel, scriptedCalls, scriptedModelBound, scriptedTurns, setScriptedTurns,
 } from '../llm/scripted.ts';
@@ -224,6 +226,26 @@ export function notchAskDeps(options: NotchAskOptions): NonNullable<NotchRealDep
         ].join('\n') },
       ], 60);
       return approvalWords(said);
+    },
+    whereApproval(request) {
+      return notchApprovalWhere(request, {
+        target: (explicit, tool) => {
+          try {
+            return resolveToolTarget(explicit, 'desktop', tool, { quiet: true });
+          } catch {
+            return null;
+          }
+        },
+        picture: (target) => lastScreenPicture(target),
+        async ask(target, params) {
+          const manager = getSidecarManager();
+          if (!manager) return null;
+          const sidecar = findSidecar(target, manager.listSidecars());
+          // A short read on the machine itself. An older desktop app does not
+          // know it and refuses: then nothing is said, and the sheet is as before.
+          return manager.dispatchRPC(sidecar?.id ?? target, 'describe_target', params, { initial: 3000, max: 3000 });
+        },
+      });
     },
     async understand(text) {
       try {

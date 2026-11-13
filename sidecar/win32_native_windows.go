@@ -350,6 +350,19 @@ func keyEventsForRune(dst []kbdInput, r rune) []kbdInput {
 	return dst
 }
 
+// softBreakEvents is a line break that does not send: Shift+Enter. In a chat
+// app (WhatsApp, Slack, Teams) a plain Enter sends the message, so the first
+// line of a two-line message went out alone the moment its line break was
+// typed. Shift+Enter is a new line in all of them.
+func softBreakEvents(dst []kbdInput) []kbdInput {
+	return append(dst,
+		kbdInput{inputType: inputKeyboard, vk: vkShift},
+		kbdInput{inputType: inputKeyboard, vk: vkReturn},
+		kbdInput{inputType: inputKeyboard, vk: vkReturn, flags: keyeventfKeyUp},
+		kbdInput{inputType: inputKeyboard, vk: vkShift, flags: keyeventfKeyUp},
+	)
+}
+
 // typeTextNative types arbitrary text into the focused window as Unicode
 // key events. No SendKeys metacharacters, no escaping, full Unicode
 // (surrogate pairs included).
@@ -360,7 +373,9 @@ func keyEventsForRune(dst []kbdInput, r rune) []kbdInput {
 // is a UTF-16 surrogate pair, and Windows expects both halves to arrive in
 // the same SendInput call. Splitting one across two calls is how an emoji
 // turns into a pair of replacement characters.
-func typeTextNative(text string) error {
+//
+// softBreak types each line break as Shift+Enter instead of Enter.
+func typeTextNative(text string, softBreak bool) error {
 	const chunkTarget = 256
 
 	inputs := make([]kbdInput, 0, chunkTarget+4)
@@ -377,7 +392,11 @@ func typeTextNative(text string) error {
 
 	var events []kbdInput
 	for _, r := range text {
-		events = keyEventsForRune(events[:0], r)
+		if softBreak && r == '\n' {
+			events = softBreakEvents(events[:0])
+		} else {
+			events = keyEventsForRune(events[:0], r)
+		}
 		if len(events) == 0 {
 			continue
 		}
