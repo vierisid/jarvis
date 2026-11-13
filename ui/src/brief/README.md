@@ -890,11 +890,15 @@ actions only change local fixture state.
 
 ## Settings and Appearance
 
-- `account/settings/` is the D-30 Settings room: Appearance, Conversation (voice), Check-ins and
+- `account/settings/` is the D-30 Settings room: Appearance, AI provider, Conversation (voice), Check-ins and
   Workspace controls. Appearance is the existing `useTheme()` owner (`ui/src/v2/shell/useTheme.ts`,
   `jarvis-theme` in localStorage, `data-theme` on `<html>`); every mounted selector and the v2
   top-bar toggle follow the root attribute, and a change in another tab is picked up from its
   `storage` event by re-reading the stored value.
+- The AI provider row names the current provider and model from `GET /api/config/llm` (the response the
+  AI settings page uses; keys are never read or shown) and its action opens that page through the
+  `credentials` destination, so there is one place that edits it. A missing provider or key says so in
+  plain words. Hosted installs on Usejarvis AI show that, with no key prompt or action.
 - Voice saves only one of the listed canonical choices, revision-bound, and reports the saved value
   separately from live application (applied, restart required, failed, unconfirmed). A lost or
   failed save keeps the selection; Retry re-reads first and reports a conflict instead of

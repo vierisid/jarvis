@@ -11,6 +11,7 @@ import type { Root } from "react-dom/client";
 import type { BriefShellPort } from "../../contracts";
 import type { SettingsBinding } from "./SettingsWorkspace";
 import { makeSettingsFixture, SETTINGS_SCOPE } from "./fixtures";
+import { DESTINATIONS } from "../../navigation/destinations";
 import { SettingsController } from "./controller";
 let React: typeof import("react"),
   createRoot: typeof import("react-dom/client").createRoot,
@@ -96,8 +97,8 @@ async function select(value: string) {
 test("approved groups expose only canonical voice choices and honest unavailable preferences", async () => {
   await render();
   expect(
-    [...host.querySelectorAll("h2")].slice(0, 3).map((n) => n.textContent),
-  ).toEqual(["Conversation", "Check-ins", "Workspace controls"]);
+    [...host.querySelectorAll("h2")].slice(0, 4).map((n) => n.textContent),
+  ).toEqual(["AI provider", "Conversation", "Check-ins", "Workspace controls"]);
   expect([...host.querySelectorAll("option")].map((n) => n.value)).toEqual(
     f.current().voice.choices.map((c) => c.id),
   );
@@ -113,6 +114,37 @@ test("approved groups expose only canonical voice choices and honest unavailable
   );
   expect(host.textContent).not.toContain("Marin");
   expect(f.writes).toHaveLength(0);
+});
+test("AI provider row shows the current provider and model and opens the LLM settings route", async () => {
+  await render();
+  const row = host.querySelector("section[aria-labelledby$='-ai']")!;
+  expect(row.textContent).toContain("Anthropic");
+  expect(row.textContent).toContain("claude-sonnet-4-5");
+  expect(row.textContent).not.toContain("can't reach");
+  expect(DESTINATIONS.credentials.legacy.settingsTab).toBe("llm");
+  await click("Change AI provider");
+  expect(f.destinations).toEqual(["credentials"]);
+});
+test("a missing AI provider says so in plain words and still offers the fix", async () => {
+  f.controller.retire();
+  f = makeSettingsFixture("no-provider");
+  await render();
+  const row = host.querySelector("section[aria-labelledby$='-ai']")!;
+  expect(row.textContent).toContain(
+    "Jarvis can't reach your AI provider. Update your key.",
+  );
+  expect(row.querySelector("[role=alert]")).not.toBeNull();
+  await click("Change AI provider");
+  expect(f.destinations).toEqual(["credentials"]);
+});
+test("hosted installs show Usejarvis AI instead of a key prompt", async () => {
+  f.controller.retire();
+  f = makeSettingsFixture("hosted");
+  await render();
+  const row = host.querySelector("section[aria-labelledby$='-ai']")!;
+  expect(row.textContent).toContain("Usejarvis AI");
+  expect(row.textContent).not.toContain("key");
+  expect(row.querySelector("button")).toBeNull();
 });
 test("voice autosave keeps the select mounted and pending recovery is explicit", async () => {
   f = makeSettingsFixture("lost-response");
