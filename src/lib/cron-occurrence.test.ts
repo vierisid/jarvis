@@ -20,6 +20,55 @@ function job(expression: string, startIso: string) {
 }
 
 describe("CronScheduler occurrences", () => {
+  test("a schedule resumed from a watch runs the times owed at once, not at the next interval, and a stale registration does not", async () => {
+    setCronTimezone("UTC");
+    setSystemTime(new Date(at("2026-10-07T09:36:25Z")));
+    scheduler = new CronScheduler();
+    const fired: CronOccurrence[] = [];
+    scheduler.schedule("j", "* * * * *", (o) => fired.push(o), { dueAfter: at("2026-10-07T09:34:25Z") });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // 09:35 is 85 s old and 09:36 is 25 s old: both run now, the later one marked as following.
+    expect(fired).toEqual([
+      { at: at("2026-10-07T09:35:00Z"), key: "2026-10-07T09:35", lateMs: 85_000 },
+      { at: at("2026-10-07T09:36:00Z"), key: "2026-10-07T09:36", lateMs: 25_000, afterEarlier: true },
+    ]);
+    scheduler.cancelAll();
+    const cancelled: CronOccurrence[] = [];
+    scheduler.schedule("j", "* * * * *", (o) => cancelled.push(o), { dueAfter: at("2026-10-07T09:34:25Z") });
+    scheduler.cancel("j");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(cancelled).toEqual([]);
+  });
+
+  test("the first evaluation of a resumed schedule is its catch-up, whoever runs it, and the deferred one then repeats nothing", async () => {
+    setCronTimezone("UTC");
+    setSystemTime(new Date(at("2026-10-07T09:36:25Z")));
+    scheduler = new CronScheduler();
+    const fired: CronOccurrence[] = [];
+    scheduler.schedule("j", "* * * * *", (o) => fired.push(o), { dueAfter: at("2026-10-07T09:34:25Z") });
+    // Another timer (a shared ticker, a test) evaluates the job before the deferred catch-up does.
+    scheduler.runDue("j", at("2026-10-07T09:36:25Z"));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(fired.map((o) => [o.key, o.afterEarlier ?? false])).toEqual([["2026-10-07T09:35", false], ["2026-10-07T09:36", true]]);
+    // Ordinary ticks after it mark nothing.
+    scheduler.runDue("j", at("2026-10-07T09:37:01Z"));
+    expect(fired[2]).toEqual({ at: at("2026-10-07T09:37:00Z"), key: "2026-10-07T09:37", lateMs: 1_000 });
+  });
+
+  test("a catch-up across the spring-forward jump marks the shifted minute as following the time before it", async () => {
+    setCronTimezone("America/New_York");
+    // 2026-03-08 02:00 EST jumps to 03:00 EDT (07:00Z). 02:00 does not exist and fires once right after the jump.
+    setSystemTime(new Date(at("2026-03-08T07:01:30Z")));
+    scheduler = new CronScheduler();
+    const fired: CronOccurrence[] = [];
+    scheduler.schedule("j", "0 2,3 * * *", (o) => fired.push(o), { dueAfter: at("2026-03-08T06:59:30Z") });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(fired.map((o) => [o.key, o.shifted ?? false, o.afterEarlier ?? false])).toEqual([
+      ["2026-03-08T03:00", false, false],
+      ["2026-03-08T02:00", true, true],
+    ]);
+  });
+
   test("each fires once, named by its wall-clock minute in the configured zone", () => {
     setCronTimezone("Asia/Kolkata");
     const { fired, tick } = job("0 9 * * *", "2026-10-07T03:29:00Z");
