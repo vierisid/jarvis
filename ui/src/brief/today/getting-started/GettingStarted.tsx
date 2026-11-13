@@ -21,10 +21,10 @@ const steps: Record<GettingStartedId, { title: string; detail: string; room: Bri
   preferences: { title: 'Set your dashboard preferences', detail: 'Choose your appearance and review the available voice settings.', room: 'settings' },
 };
 
-interface JourneyView { state: GettingStartedState | null; active: GettingStartedId | null; busy: boolean; error: string }
+interface JourneyView { state: GettingStartedState | null; active: GettingStartedId | null; busy: boolean; error: string; workflows: 'unknown' | 'none' | 'some' }
 /** One owner spans Today and destination rooms. Progress is a server acknowledgement. */
 export class GettingStartedJourney {
-  private view: JourneyView = { state: null, active: null, busy: false, error: '' };
+  private view: JourneyView = { state: null, active: null, busy: false, error: '', workflows: 'unknown' };
   private listeners = new Set<() => void>();
   private life = new AbortController();
   private reading: Promise<void> | null = null;
@@ -48,6 +48,13 @@ export class GettingStartedJourney {
       finally { this.reading = null; }
     })();
     return this.reading;
+  };
+  /** Which next action fits a finished account. A failed read stays 'unknown' and is treated as "has workflows". */
+  readWorkflows = async () => {
+    try {
+      const rows = await this.transport.json('/api/workflows?limit=1', { signal: this.life.signal });
+      this.update({ workflows: Array.isArray(rows) ? rows.length ? 'some' : 'none' : 'unknown' });
+    } catch { this.update({ workflows: 'unknown' }); }
   };
   start(id: GettingStartedId) {
     if (!this.view.state || this.view.busy || this.view.error || this.view.state.completed.includes(id)) return false;
@@ -84,10 +91,16 @@ function useJourney(journey: GettingStartedJourney) {
 function Recovery({ journey, error }: { journey: GettingStartedJourney; error: string }) {
   return error ? <div role="alert" className="brief-setup-error"><p>{error}</p><BriefButton variant="secondary" onClick={() => void journey.read()}>Refresh setup actions</BriefButton></div> : null;
 }
-export function GettingStarted({ journey, navigate, goalId, compact = false }: {
+export function GettingStarted({ journey, navigate, goalId, compact = false, waiting, held = false }: {
   journey: GettingStartedJourney; navigate(route: BriefRoute): void; goalId?: string; compact?: boolean;
+  /** Items waiting on the owner (decisions, approvals, input requests); null while unknown. Required so the all-clear cannot be shown by default. */
+  waiting: number | null;
+  /** Paused or stopped from emergency controls: the banner says so, and the row never reads as an all-clear. */
+  held?: boolean;
 }) {
-  const { state, busy, error } = useJourney(journey);
+  const { state, busy, error, workflows } = useJourney(journey);
+  const finished = !!state && state.completed.length === GETTING_STARTED_IDS.length && !state.hidden;
+  useEffect(() => { if (finished) void journey.readWorkflows(); }, [journey, finished]);
   const [expanded, setExpanded] = useState(false);
   const count = state?.completed.length ?? 0;
   const id = GETTING_STARTED_IDS.find(id => !state?.completed.includes(id));
@@ -96,11 +109,15 @@ export function GettingStarted({ journey, navigate, goalId, compact = false }: {
   return <div className="brief-setup-sequence">
     {!state ? <section className="brief-today-decision brief-today-decision--fallback" aria-busy={!error || undefined}><h2 className="brief-type-hero-heading">{error ? 'Setup actions unavailable.' : 'Loading your next setup action…'}</h2></section>
       : id ? <SetupPaper key={id} id={id} count={count} disabled={busy || !!error} open={open} />
-      : <section className="brief-today-decision brief-today-decision--fallback"><h2 className="brief-type-hero-heading">You’re ready to make room for your work.</h2><p className="brief-type-body brief-secondary">All 10 setup actions complete. Your next decision will appear here.</p></section>}
+      : <section className="brief-setup-done" aria-label={waiting === 0 && !held ? 'Nothing waiting' : 'Waiting on you'}>
+        <p className="brief-type-body-emphasis">{waiting ? `${waiting} ${waiting === 1 ? 'item needs' : 'items need'} you.` : held ? 'Work is on hold until you resume it.'
+          : waiting === 0 ? 'Nothing needs you right now.' : 'Checking what needs you…'}</p>
+        {waiting ? <BriefButton variant="text" icon={<ArrowRight size={16} />} onClick={() => navigate({ room: 'needs-you', selection: {} })}>Open Needs you</BriefButton>
+          : <BriefButton variant="text" icon={<ArrowRight size={16} />} onClick={() => navigate({ room: workflows === 'none' ? 'workflows' : 'all-workflows', selection: {} })}>{workflows === 'none' ? 'Describe a recurring job' : 'See your workflows'}</BriefButton>}</section>}
     <Recovery journey={journey} error={error} />
-    {state && <div className="brief-setup-controls"><span role="status" className="brief-type-utility brief-secondary">{count} of 10 setup actions complete{busy ? ' · Saving…' : ''}</span>
+    {state && id && <div className="brief-setup-controls"><span role="status" className="brief-type-utility brief-secondary">{count} of 10 setup actions complete{busy ? ' · Saving…' : ''}</span>
       {count > 0 && <BriefButton variant="text" size="sm" disabled={busy || !!error} onClick={() => void journey.save({ item: state.completed.at(-1)!, done: false })}>Undo last action</BriefButton>}
-      {id && <BriefButton variant="text" size="sm" disabled={busy || !!error} onClick={() => void journey.save({ hidden: true })}>Hide setup actions</BriefButton>}
+      <BriefButton variant="text" size="sm" disabled={busy || !!error} onClick={() => void journey.save({ hidden: true })}>Hide setup actions</BriefButton>
     </div>}
   </div>;
 }
