@@ -1,5 +1,5 @@
 import type { Goal, GoalLevel, TimeHorizon } from './types.ts';
-import { enumeration, epoch, GOAL_LEVELS, instant, invalid, keys, nextGoalLevel, number, record, strings, text, TIME_HORIZONS, timezone } from './validation.ts';
+import { enumeration, epoch, goalTitle, GOAL_LEVELS, instant, invalid, keys, nextGoalLevel, number, record, strings, text, TIME_HORIZONS, timezone } from './validation.ts';
 
 type Deadline = { deadline_days?: number; deadline_at?: string };
 type ProposedGoal = Deadline & { title: string; description: string; success_criteria?: string };
@@ -19,7 +19,7 @@ const NODE_FIELDS = ['title', 'description', 'success_criteria', 'deadline_days'
 function validateNode(input: unknown, path: string, extras: string[] = [], criteriaRequired = true): void {
   const value = record(input, path);
   keys(value, [...NODE_FIELDS, ...extras], path);
-  text(value.title, `${path}.title`);
+  goalTitle(value.title, `${path}.title`);
   text(value.description, `${path}.description`, false);
   if (criteriaRequired || value.success_criteria !== undefined) text(value.success_criteria, `${path}.success_criteria`);
   if (value.deadline_days !== undefined) number(value.deadline_days, `${path}.deadline_days`, 0, Number.MAX_SAFE_INTEGER, true);

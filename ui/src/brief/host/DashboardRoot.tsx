@@ -13,6 +13,7 @@ import { RoomActionBusProvider } from '../../v2/rooms/useRoomActionBus';
 import { RoomActionBridge } from '../../v2/shell/RoomActionBridge';
 import { BriefConversationProvider, useBriefConversation } from '../chat/provider';
 import { HostConversation } from './conversation';
+import { ConnectionLostBanner, useConnectionLost } from './ConnectionLost';
 import { createDashboardOwner, readHost, type DashboardOwner, type HostDescriptor } from './owner';
 import { createHostTransport } from './http';
 import { useBriefProjection } from '../reconciliation/react';
@@ -176,9 +177,18 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   const profile = useSyncExternalStore(host.account.profile.subscribe, host.account.profile.snapshot, host.account.profile.snapshot);
   const notices = useNotificationCenter(owner);
   const toast = useReminderToast(notices.items);
-  const emergency = useEmergencyStatus(host.transport, owner.emergencyRevision);
+  // Retry and every socket open or close read the status again at once: a socket that
+  // comes back before the next poll must not show a stale "status unavailable" notice.
+  const [retries, setRetries] = useState(0);
+  const emergency = useEmergencyStatus(host.transport, `${owner.emergencyRevision}:${owner.isConnected}:${retries}`);
   const humanInputs = useHumanInputQueue(host.transport, isBriefCapabilityEnabled(host.capabilities(), 'decisions'));
   const humanPending = humanInputs.requests.filter(r => humanRequestNeedsAttention(r) || hasLocalDraft(r)).length;
+  // Socket closed and the status read failing: Jarvis cannot be reached. Counts read
+  // from before the outage are then stale, so they are hidden rather than shown as current.
+  const lost = useConnectionLost(!owner.isConnected && emergency === 'unavailable');
+  // Reconnect the socket now instead of after its backoff, and read again what the outage left stale.
+  const retryConnection = () => { window.dispatchEvent(new Event('jarvis:ws-reconnect')); setRetries(n => n + 1);
+    void host.reconciliation.refresh(); void humanInputs.refresh(); };
   const [attentionMessage, setAttentionMessage] = useState('');
   const resolveAttention = async (kind: 'clarifier' | 'repeat-back', id: string, decision: 'confirm' | 'cancel') => {
     try {
@@ -223,16 +233,16 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
       const result = await host.navigation.intent(request.room, true);
       return result.state === 'opened' && host.active();
     }} />{message && <p className="brief-host-notice" role="status">{message}</p>}
-    {!!humanPending && route.room !== 'needs-you' && <aside className="brief-human-banner" role="status">{humanPending} workflow {humanPending === 1 ? 'request needs' : 'requests need'} your attention. <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>Open Needs you</button></aside>}
-    <BriefHost route={route} rooms={rooms} notice={<EmergencyStatusBanner state={emergency} open={() => host.navigation.navigate('emergency-controls')} />} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
+    {!lost && !!humanPending && route.room !== 'needs-you' && <aside className="brief-human-banner" role="status">{humanPending} workflow {humanPending === 1 ? 'request needs' : 'requests need'} your attention. <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>Open Needs you</button></aside>}
+    <BriefHost route={route} rooms={rooms} notice={lost ? <ConnectionLostBanner retry={retryConnection} /> : <EmergencyStatusBanner state={!owner.isConnected && emergency === 'unavailable' ? 'loading' : emergency} open={() => host.navigation.navigate('emergency-controls')} />} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
       const guarded = host.guardShell(base);
       return beforeNavigate ? { ...guarded, navigate: next => { void beforeNavigate().then(ok => { if (ok) guarded.navigate(next); }); } } : guarded;
     }}
       navigation={{ capabilities: host.capabilities(), view: { source: 'live', state: { status: 'ready', data: {
         ...UNKNOWN_NAVIGATION, workspaceName: null, hosting: host.descriptor().installMode,
-        connection: owner.isConnected ? 'connected' : owner.status.mode === 'loading' ? 'reconnecting' : 'offline',
+        connection: lost ? 'offline' : owner.isConnected ? 'connected' : owner.status.mode === 'loading' ? 'reconnecting' : 'offline',
         account: { name: profile.base?.answers.preferred_name ?? null, plan: planFromBilling(billing) },
-        badges: { 'needs-you': notices.items.length + humanPending || undefined },
+        badges: { 'needs-you': lost ? undefined : notices.items.length + humanPending || undefined },
       } } } }} conversation={{ source: 'live', content: <HostConversation host={host} /> }}>
       {children ?? (RetainedBody && <LiveDataProvider value={{ approvals: owner.approvals, clarifiers: owner.clarifiers, repeatBacks: owner.repeatBacks,
         notices: owner.notices, taskEvents: owner.taskEvents, contentEvents: owner.contentEvents, agentActivity: owner.agentActivity,

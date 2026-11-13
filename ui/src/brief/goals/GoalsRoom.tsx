@@ -1,5 +1,6 @@
 import React, {
   useEffect,
+  useState,
   useLayoutEffect,
   useRef,
   useSyncExternalStore,
@@ -17,8 +18,10 @@ import { BRIEF_EASE_OUT, BRIEF_MOTION, useBriefReducedMotion } from "../motion";
 import { GoalSegments, OutcomeNumber } from "../today/outcomes/Values";
 import { formatNumber, qualified } from "../today/outcomes/model";
 import { GoalsController } from "./controller";
+import { LogProgress, type LogMode } from "./LogProgress";
 import {
   goalValue,
+  measureKind,
   nextGoalRoute,
   type GoalDatum,
   type GoalFilter,
@@ -89,6 +92,10 @@ function ConnectedGoals({
   const routeKey = useRef("");
   const selectors = useRef<HTMLDivElement>(null);
   const pathElement = useRef<HTMLElement>(null);
+  const [logging, setLogging] = useState<{ goalId: string; mode: LogMode } | null>(null);
+  const [saved, setSaved] = useState("");
+  const [activateError, setActivateError] = useState("");
+  const [activating, setActivating] = useState(false);
   const all = controller.rows(),
     rows = controller.visible();
   const path = rows.find((row) => row.goal.goalId === state.selectedId);
@@ -123,6 +130,11 @@ function ConnectedGoals({
     observer?.observe(node);
     return () => observer?.disconnect();
   }, [state.selectedId, controller]);
+  useEffect(() => {
+    setLogging(null);
+    setSaved("");
+    setActivateError("");
+  }, [state.selectedId]);
   // One local crossfade for changing goals. Progress changes use only shared glyph/segment motion.
   const previous = useRef(state.selectedId);
   useLayoutEffect(() => {
@@ -144,6 +156,56 @@ function ConnectedGoals({
         selection: { goalId: id },
       });
   };
+  const canWrite = controller.canWrite;
+  const drafts = all.filter((p) => p.goal.status === "draft");
+  const draftsHidden = state.tab === "active" && state.filter === "active" && drafts.length > 0;
+  const activate = async (goal: GoalDatum) => {
+    setActivating(true);
+    setActivateError("");
+    const result = await controller.activate(goal);
+    setActivating(false);
+    if (result.ok) setSaved(`"${goal.title}" is active.`);
+    else setActivateError(result.message);
+  };
+  const stageActions = (goal: GoalDatum) => {
+    if (!canWrite || goal.status === "completed") return null;
+    const kind = measureKind(goal);
+    return (
+      <div className="brief-goal-stage-actions">
+        {goal.status === "draft" && (
+          <BriefButton variant="secondary" size="sm" disabled={activating} onClick={() => void activate(goal)}>
+            Activate
+          </BriefButton>
+        )}
+        <BriefButton
+          variant="secondary"
+          size="sm"
+          onClick={() => {
+            setSaved("");
+            setLogging({ goalId: goal.goalId, mode: kind === "none" ? "define" : "log" });
+          }}
+        >
+          {kind === "none" ? "Set how to measure this" : "Log progress"}
+        </BriefButton>
+        {/* A typed measure with logged values cannot be redefined without a new value; counted ones keep their entries. */}
+        {(kind === "count" || (kind === "number" && !goal.measurement)) && (
+          <BriefButton
+            variant="text"
+            size="sm"
+            onClick={() => {
+              setSaved("");
+              setLogging({ goalId: goal.goalId, mode: "define" });
+            }}
+          >
+            Change how it is measured
+          </BriefButton>
+        )}
+      </div>
+    );
+  };
+  const loggingGoal = logging
+    ? path && [path.goal, ...path.stages].find((g) => g.goalId === logging.goalId)
+    : undefined;
   const fresh = state.read.status === "ready";
   const canReview =
     shell.mode === "preview" ||
@@ -182,6 +244,17 @@ function ConnectedGoals({
             ? state.read.reason
             : null}
       </div>
+      {draftsHidden && (
+        <p className="brief-goals-drafts brief-surface brief-type-body" role="status">
+          <span>
+            {drafts.length === 1 ? "1 draft goal is not shown here." : `${drafts.length} draft goals are not shown here.`}{" "}
+            Draft: review and activate.
+          </span>
+          <BriefButton variant="secondary" size="sm" onClick={() => controller.setFilter("draft")}>
+            Review drafts
+          </BriefButton>
+        </p>
+      )}
       {rows.length > 0 && state.tab === "completed" ? (
         <div className="brief-goals-completed" aria-label="Completed goals">
           {rows.map((row) => (
@@ -254,6 +327,26 @@ function ConnectedGoals({
                   </span>
                 )}
               </div>
+              {path.goal.status === "draft" && (
+                <div className="brief-goal-draft brief-surface" role="status">
+                  <div>
+                    <p className="brief-type-body-emphasis">Draft: review and activate</p>
+                    <p className="brief-type-utility brief-secondary">
+                      A draft is not an active goal yet, so it does not count on Today until you activate it.
+                    </p>
+                    {activateError && (
+                      <p role="alert" className="brief-goal-log-error brief-type-utility">
+                        {activateError}
+                      </p>
+                    )}
+                  </div>
+                  {canWrite && (
+                    <BriefButton variant="primary" disabled={activating} onClick={() => void activate(path.goal)}>
+                      {activating ? "Activating..." : "Activate goal"}
+                    </BriefButton>
+                  )}
+                </div>
+              )}
               <ol
                 className="brief-goal-stages"
                 aria-label="Path to the goal"
@@ -266,6 +359,7 @@ function ConnectedGoals({
                         goal={stage}
                         current={stage.goalId === path.goal.goalId}
                         reduced={reduced}
+                        actions={stageActions(stage)}
                       />
                       {index < stages.length - 1 && (
                         <ArrowRight
@@ -278,6 +372,24 @@ function ConnectedGoals({
                   ),
                 )}
               </ol>
+              {saved && (
+                <p role="status" className="brief-goal-saved brief-type-body">
+                  {saved}
+                </p>
+              )}
+              {logging && loggingGoal && (
+                <LogProgress
+                  key={`${logging.goalId}:${logging.mode}`}
+                  goal={loggingGoal}
+                  mode={logging.mode}
+                  controller={controller}
+                  onCancel={() => setLogging(null)}
+                  onDone={(message) => {
+                    setLogging(null);
+                    setSaved(message);
+                  }}
+                />
+              )}
               {path.goal.status === "active" && (
                 <NextStep
                   path={path}
@@ -475,10 +587,12 @@ function PathCard({
   goal,
   current,
   reduced,
+  actions,
 }: {
   goal: GoalDatum;
   current: boolean;
   reduced: boolean;
+  actions?: React.ReactNode;
 }) {
   const value = goalValue(goal);
   return (
@@ -546,6 +660,7 @@ function PathCard({
           {goal.caption}
         </p>
       )}
+      {actions}
       {value.kind === "measurement" && (
         <details className="brief-goal-basis brief-type-utility brief-secondary">
           <summary>Data basis</summary>
