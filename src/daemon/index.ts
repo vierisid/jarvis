@@ -169,7 +169,7 @@ import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { attachNotchReal } from "../notch/real.ts";
 import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
-import { notchAskDeps, notchScriptDeps } from "./notch-asks.ts";
+import { notchAskDeps, notchScriptDeps, notchTurnNote } from "./notch-asks.ts";
 import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
@@ -5085,7 +5085,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       db: getDb(),
       runner: {
         ready: () => agentService.status() === 'running' && !activeTurns.isDraining,
-        stream: input => agentService.streamMessage(input.text, 'websocket', undefined, null, input.contextKey, input),
+        // A turn started on the notch is told so, in the per-turn part of
+        // the prompt (notchTurnNote). Every other turn gets nothing, as before.
+        stream: input => agentService.streamMessage(input.text, 'websocket', notchTurnNote(input.requestId), null, input.contextKey, input),
       },
       send: (client, message) => wsService.getServer().sendToClient(client, message),
       tts: () => wsService.getTTSProvider(),
