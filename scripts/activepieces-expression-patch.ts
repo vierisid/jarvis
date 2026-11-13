@@ -136,6 +136,50 @@ export const expressionPatches = {
     ["    this.status = status;\n    this.responseBody = responseBody;\n  }\n",
       "    this.status = status;\n    this.responseBody = responseBody;\n    // === JARVIS PATCH: see above ===\n    this.hasResponse = err?.response !== undefined && err?.response !== null;\n    this.code = typeof err?.code === 'string' ? err.code : undefined;\n    // Not enumerable: the client logs this error, and a header can carry a cookie.\n    Object.defineProperty(this, 'responseHeaders', { value: err?.response?.headers, enumerable: false });\n    // === END JARVIS PATCH ===\n  }\n"],
   ],
+  // Convert JSON to CSV keeps every column, not only the first row's. Registered so a
+  // vendor sync re-applies it; `core-csv-piece.test.ts` covers it.
+  "packages/pieces/core/csv/src/lib/actions/convert-json-to-csv.ts": [
+    [
+      "    return stringify(flattened, {\n      header: true,\n      delimiter: delimiter_type,\n    });",
+      '    // === JARVIS PATCH: the header is every key of every row ===\n' +
+      '    // Upstream took the header from the first row, so a column only a later row\n' +
+      '    // had was dropped, with its values, and the step still succeeded. Keys are\n' +
+      '    // listed in first-seen order; a row without a key gets an empty cell.\n' +
+      '    // Cells are read as own properties and handed over by position: given an\n' +
+      '    // object row, csv-stringify resolves a column like `tags.0` as a path, so a\n' +
+      '    // row whose `tags` is the string "foo" would get "f", and a row without\n' +
+      '    // `toString` would read the prototype\'s function and fail the step.\n' +
+      '    const isRow = (row: unknown): row is Record<string, unknown> =>\n' +
+      '      row !== null && typeof row === \'object\' && !Array.isArray(row);\n' +
+      '    const columns = [...new Set(flattened.flatMap((row) => (isRow(row) ? Object.keys(row) : [])))];\n' +
+      '    if (columns.length > 0) {\n' +
+      '      const cells = flattened.map((row) =>\n' +
+      '        isRow(row) ? columns.map((key) => (Object.prototype.hasOwnProperty.call(row, key) ? row[key] : undefined)) : row,\n' +
+      '      );\n' +
+      '      return stringify(cells, {\n' +
+      '        header: true,\n' +
+      '        delimiter: delimiter_type,\n' +
+      '        columns,\n' +
+      '      });\n' +
+      '    }\n' +
+      '    return stringify(flattened, {\n' +
+      '      header: true,\n' +
+      '      delimiter: delimiter_type,\n' +
+      '    });\n' +
+      '    // === END JARVIS PATCH ==='
+    ],
+  ],
+  // Image Helper: Compress accepts its own dropdown values, and a crop outside the
+  // image fails in plain words. Registered so a vendor sync re-applies them;
+  // `core-image-piece.test.ts` covers them.
+  "packages/pieces/core/image-helper/src/lib/actions/compress-image.actions.ts": [
+    ["    image.quality(context.propsValue.quality);",
+      "    // === JARVIS PATCH: the Quality dropdown's own values work ===\n    // A saved flow or the editor hands the dropdown value over as text (\"60\"),\n    // and the image library rejects anything that is not a number type.\n    const quality = Number(context.propsValue.quality);\n    if (\n      String(context.propsValue.quality).trim() === '' ||\n      !Number.isFinite(quality) ||\n      quality < 0 ||\n      quality > 100\n    ) {\n      throw new Error(\n        'Quality must be a number from 0 to 100. Pick High Quality or Lossy Quality.'\n      );\n    }\n    image.quality(quality);\n    // === END JARVIS PATCH ==="],
+  ],
+  "packages/pieces/core/image-helper/src/lib/actions/crop-image.action.ts": [
+    ["    await image.crop(\n      context.propsValue.left,\n      context.propsValue.top,\n      context.propsValue.width,\n      context.propsValue.height\n    );\n",
+      "    // === JARVIS PATCH: a crop outside the image says so in plain words ===\n    // Upstream let the image library fail with a raw \"offset is out of range\".\n    // The library rounds each value before it crops, so check the rounded ones.\n    const { left, top, width, height } = context.propsValue;\n    const x = Math.round(left);\n    const y = Math.round(top);\n    const w = Math.round(width);\n    const h = Math.round(height);\n    if (\n      ![left, top, width, height].every(Number.isFinite) ||\n      x < 0 ||\n      y < 0 ||\n      w < 1 ||\n      h < 1 ||\n      x + w > image.getWidth() ||\n      y + h > image.getHeight()\n    ) {\n      throw new Error(\n        `The crop area does not fit inside the image. The image is ${image.getWidth()} by ${image.getHeight()} pixels, so Left and Top must be 0 or more, Width and Height must be at least 1, and Left plus Width and Top plus Height must stay within the image.`\n      );\n    }\n    // === END JARVIS PATCH ===\n    await image.crop(\n      context.propsValue.left,\n      context.propsValue.top,\n      context.propsValue.width,\n      context.propsValue.height\n    );\n"],
+  ],
   "packages/pieces/core/sftp/src/lib/common.ts": [
     ["        rejectUnauthorized: !(allow_unauthorized_certificates ?? false),\n      }",
       "        rejectUnauthorized: !(allow_unauthorized_certificates ?? false),\n        ...servername,\n      }"],
@@ -305,6 +349,22 @@ export const expressionPatches = {
   ],
   "packages/server/engine/src/lib/variables/processors/types.ts": [
     ["export type ProcessorFn<INPUT = any, OUTPUT = any> = (\n    property: PieceProperty,\n    value: INPUT,\n) => OUTPUT\n", "export type ProcessorFn<INPUT = any, OUTPUT = any> = (\n    property: PieceProperty,\n    value: INPUT,\n    fileContext?: { apiUrl: string; engineToken: string },\n) => OUTPUT\n"],
+  ],
+  // Date Helper: every date-reading action parses through runtime/date-parse.ts,
+  // an instant in the zone setting (or UTC), not a wall clock in the daemon's zone.
+  "packages/pieces/core/date-helper/src/lib/common/index.ts": [
+    ["import duration from 'dayjs/plugin/duration';", "import duration from 'dayjs/plugin/duration';\nimport { parseDateInstant } from '../../../../../../../../runtime/date-parse';"],
+    ["export function parseDate(date: string, format: string): dayjs.Dayjs {\n  const correctedFormat = getCorrectedFormat(format);\n  \n  // Try strict parsing with the provided format\n  let djs = apDayjs(date, correctedFormat, true);\n  \n  // If strict parsing fails, try lenient parsing (useful for formats that native parser handles well)\n  if (!djs.isValid()) {\n    djs = apDayjs(date, correctedFormat, false);\n  }\n  \n  // If still invalid, try without format (native parser fallback)\n  if (!djs.isValid()) {\n    djs = apDayjs(date);\n  }\n  \n  if (!djs.isValid()) {\n    throw new Error(`Failed to parse the date: ${date} with format: ${correctedFormat}`);\n  }\n  return djs;\n}\n", "// === JARVIS PATCH: one instant-based parser for every Date Helper action ===\n// The upstream parser read the text in the process zone, accepted text that\n// did not match the format, and rolled impossible dates over. The parse lives\n// in runtime/date-parse.ts (see its header for the rules). `zone` is where a\n// wall time with no offset is read; actions without a zone setting read UTC.\nexport function parseDate(date: string, format: string, zone = 'UTC'): dayjs.Dayjs {\n  // Always a UTC-mode value: its parts are UTC, and `.tz()` on it converts the real instant.\n  return apDayjs.utc(parseDateInstant(date, getCorrectedFormat(format), zone));\n}\n\n/** Format an instant. `X` is formatted from the instant: the upstream plugin reads a shifted clock for a zoned value. */\nexport function formatDate(date: dayjs.Dayjs, format: string): string {\n  return format === 'X' ? String(date.unix()) : date.format(format);\n}\n// === END JARVIS PATCH ===\n"],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/format-date.ts": [
+    ["  getCorrectedFormat,\n} from '../common';", "  getCorrectedFormat,\n  formatDate,\n} from '../common';"],
+    ["  const parsedDate = parseDate(inputDate, inputFormat);\n  \n  return parsedDate.tz(inputTimeZone, true).tz(outputTimeZone).format(outputFormat);\n}", "  // Jarvis: the input is read as an instant (an offset in the text wins over the\n  // From Time Zone), then shown in the To Time Zone.\n  const parsedDate = parseDate(inputDate, inputFormat, inputTimeZone);\n\n  return formatDate(parsedDate.tz(outputTimeZone), outputFormat);\n}"],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/add-subtract-date.ts": [
+    ["  parseDate,\n", "  parseDate,\n  formatDate,\n"],
+    ["let dayjsDate = timeZone ? apDayjs(date).tz(timeZone) : apDayjs(date);", "// Jarvis: without a zone the date is worked in UTC, not the daemon's own zone.\n  let dayjsDate = timeZone ? apDayjs(date).tz(timeZone) : apDayjs.utc(date);"],
+    ["return { result: AfterDate.tz(timeZone).format(outputFormat) };", "return { result: formatDate(AfterDate.tz(timeZone), outputFormat) };"],
+    ["return { result: AfterDate.format(outputFormat) };", "return { result: formatDate(AfterDate, outputFormat) };"],
   ],
 } as const;
 

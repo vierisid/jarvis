@@ -1,6 +1,7 @@
 import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, listHumanInputs, resolveHumanInput } from '../runtime/human-input';
 import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
+import { forCard } from '../../util/card-text';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion } from './editor-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
@@ -84,6 +85,7 @@ import {
   createFlowRun,
   getFlowRun,
   getFlowRunInProject,
+  listRecentRuns,
   listRuns,
   type FlowRunStatus,
   type RunEnvironment,
@@ -2352,6 +2354,22 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // Today's "Recent activity": the latest production, top-level run of each
+    // flow in the caller's project, newest first. One bounded read, so Today
+    // does not list every flow and fetch each flow's runs. Identity, status and
+    // time only; never step output.
+    "/api/workflow-runs/recent": {
+      GET: req =>
+        trapErrors(() => {
+          const { limit } = clampPage(new URL(req.url).searchParams, 5);
+          // The name is model- or person-authored text shown on Today: invisible
+          // and bidi control characters are dropped and it is capped, as on a card.
+          const items = listRecentRuns(callerProject(req), limit)
+            .map(row => ({ ...row, name: forCard(row.name, RECENT_RUN_NAME_MAX) }));
+          return ok({ items });
+        }),
+    },
+
     // Q-19: what Today's "Waiting on you" shows, and dismissing it.
     "/api/failures/open": {
       GET: req => trapErrors(() => ok(listOpenFailures(Date.now(), callerProject(req)))),
@@ -2631,6 +2649,8 @@ function numParam(raw: string | null): number | null {
  * moves, move `LIST_RUNS_MAX_LIMIT` with it.
  */
 const LISTING_MAX_LIMIT = 100;
+/** Longest workflow name Today's Recent activity shows. */
+const RECENT_RUN_NAME_MAX = 120;
 
 /**
  * A listing's `limit` and `offset`, clamped. Three listings were doing this
