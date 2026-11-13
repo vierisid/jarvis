@@ -142,25 +142,24 @@ const response = await manager.chat(messages, {
 
 ## Configuration
 
-Load from `~/.jarvis/config.yaml`:
+Providers, credentials, the default model and the tier map are set in the dashboard (onboarding or
+Settings > LLM) and stored in the database and encrypted keychain. `config.yaml` has no LLM settings:
+`loadConfig` discards any `llm:` block. The daemon merges the saved settings into the loaded config
+and binds them to the manager:
 
 ```typescript
-import { loadConfig } from './config/index.ts';
+import { loadConfig } from '../config/index.ts';
+import { mergeLLMSettingsIntoConfig } from '../daemon/llm-settings.ts';
+import { registerLLMProviders } from './config-binding.ts';
+import { initDatabase } from '../vault/schema.ts';
 
 const config = await loadConfig();
-
-// Auto-configure providers from config
-if (config.llm.anthropic?.api_key) {
-  const anthropic = new AnthropicProvider(
-    config.llm.anthropic.api_key,
-    config.llm.anthropic.model
-  );
-  manager.registerProvider(anthropic);
-}
-
-manager.setPrimary(config.llm.primary);
-manager.setFallbackChain(config.llm.fallback);
+initDatabase(config.daemon.db_path);
+mergeLLMSettingsIntoConfig(config, { persistMigrations: false }); // providers, default, tiers from the DB
+registerLLMProviders(manager, config.llm.providers ?? {});
 ```
+
+`src/llm/test.ts` shows the full sequence, including the database and tier setup.
 
 ## Provider-Specific Usage
 
@@ -237,7 +236,7 @@ Run the test file:
 bun run src/llm/test.ts
 ```
 
-Make sure you have a valid config at `~/.jarvis/config.yaml` with API keys set.
+(or `bun run test:llm`). It uses the providers and tiers saved in the dashboard, so add one in Settings > LLM first.
 
 ## Implementation Details
 

@@ -22,6 +22,9 @@ import {
   GOAL_HEALTHS,
   GOAL_LEVELS,
   GOAL_STATUSES,
+  MAX_GOAL_TITLE,
+  PAST_DEADLINE_TEXT,
+  TITLE_TOO_LONG_TEXT,
   useGoalsData,
   type Goal,
   type GoalHealth,
@@ -1072,6 +1075,9 @@ function DetailPanel({
     // A partly cleared date reads as "" but is not a request to remove the deadline.
     const parsed = deadlineIncomplete ? undefined : deadline ? parseDeadlineInput(deadline) : null;
     if (parsed === undefined) { setSaveError("Enter a valid deadline, or use Clear deadline."); return; }
+    // A title saved before the limit stays editable through other fields; only a changed title is checked.
+    if (title.trim() !== opened.title && title.trim().length > MAX_GOAL_TITLE) { setSaveError(TITLE_TOO_LONG_TEXT); return; }
+    if (typeof parsed === "number" && deadline !== opened.deadline && parsed < Date.now()) { setSaveError(PAST_DEADLINE_TEXT); return; }
     // Send only what changed. The server re-runs health whenever a deadline is
     // present, and a date input can only express 23:59 on a day, so resending
     // an untouched deadline would move one set at another time and reset health.
@@ -1221,6 +1227,7 @@ function CreateDialog({
   const [level, setLevel] = useState<GoalLevel>("task");
   const [deadlineStr, setDeadlineStr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState("");
   const dialogRef = useRef<HTMLDivElement>(null);
   const [opener] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null);
   const closeRef = useRef(onClose), busyRef = useRef(busy), fallbackRef = useRef(fallbackFocus);
@@ -1248,10 +1255,13 @@ function CreateDialog({
 
   const submit = async () => {
     if (!title.trim()) return;
+    if (title.trim().length > MAX_GOAL_TITLE) { setProblem(TITLE_TOO_LONG_TEXT); return; }
+    const deadlineMs = deadlineStr ? parseDeadlineInput(deadlineStr) : undefined;
+    if (deadlineMs !== undefined && deadlineMs < Date.now()) { setProblem(PAST_DEADLINE_TEXT); return; }
+    setProblem("");
     // Disabling the focused control would drop focus to the page; hold it on the dialog.
     dialogRef.current?.focus();
     setBusy(true);
-    const deadlineMs = deadlineStr ? parseDeadlineInput(deadlineStr) : undefined;
     const ok = await onCreate({
       title: title.trim(),
       level,
@@ -1279,7 +1289,7 @@ function CreateDialog({
               New goal
             </div>
             <div className="v2-goals__dialog-subtitle">
-              You can edit the title and deadline after creating the goal.
+              You can edit the title and deadline after creating the goal. A new goal starts as a draft: set it to active when you are ready.
             </div>
           </div>
           <button
@@ -1300,7 +1310,8 @@ function CreateDialog({
               type="text"
               className="v2-goals__input"
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e) => { setTitle(e.target.value); setProblem(""); }}
+              maxLength={MAX_GOAL_TITLE + 50}
               placeholder="What do you want to achieve?"
               disabled={busy}
             />
@@ -1332,9 +1343,10 @@ function CreateDialog({
               className="v2-goals__input"
               value={deadlineStr}
               disabled={busy}
-              onChange={(e) => setDeadlineStr(e.target.value)}
+              onChange={(e) => { setDeadlineStr(e.target.value); setProblem(""); }}
             />
           </label>
+          {problem && <p role="alert" className="v2-goals__side-text">{problem}</p>}
         </div>
 
         <div className="v2-goals__dialog-foot">

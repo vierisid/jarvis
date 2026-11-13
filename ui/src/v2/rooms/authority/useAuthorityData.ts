@@ -55,6 +55,8 @@ export interface ApprovalRequest {
   resolution_note?: string | null;
   // enrichment from server
   execution_state?: string;
+  /** #1314 follow-up: set while approving waits on screen awareness (a screen-derived request). */
+  held?: string | null;
   intent?: string;
   /** #792: the sentence and the reason apart; `intent` joins them. */
   intent_action?: string;

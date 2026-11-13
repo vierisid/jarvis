@@ -1,5 +1,6 @@
-import { useHumanInputCount } from './HumanInputs';
-import React, { useContext, useState } from 'react';
+import { useHumanInputCount, useOwnerAttention } from './HumanInputs';
+import { EmergencyStatusContext } from './EmergencyStatus';
+import React, { useContext, useEffect, useState } from 'react';
 import { StoredNoticesContext } from '../navigation/StoredNoticesContext';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import { PendingDecisions, ForgetMemory } from './canonical-commands';
@@ -73,12 +74,39 @@ export function onlyOtherDecisions(all: Pick<Snapshot<readonly DecisionView[]>, 
   if (!settled || all.data?.some(row => row.actions.length > 0)) return false;
   return otherCount === null || otherCount > 0 || !!all.data?.length;
 }
+/**
+ * Everything that currently asks something of the owner, counted from the sources Needs you shows: document
+ * decisions with an action, the other queued decisions (workflow approvals, permissions, recoveries) and the
+ * rest of the attention list (workflow input requests, voice confirmations, live approvals). Each argument is
+ * null while its source is unread or failing, and then so is the total: an unknown queue is not an empty one.
+ */
+export function waitingOnOwner(documents: ReadonlyArray<{ actions: readonly unknown[] }> | null, others: number | null, attention: number | null): number | null {
+  return documents === null || others === null || attention === null ? null
+    : documents.filter(row => row.actions.length > 0).length + others + attention;
+}
+/** The document rows Today may count: a settled read (an empty queue is []) or cached rows; otherwise unknown. */
+export function settledDocuments<T>(state: Snapshot<readonly T[]>): readonly T[] | null {
+  if (state.data) return state.state === 'ready' || state.state === 'stale' ? state.data : null;
+  return todayDecisionSnapshot(state).state === 'empty' ? [] : null;
+}
+function useOtherDecisionCount(read: () => Promise<readonly unknown[]>, enabled: boolean): number | null {
+  const [count, setCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (!enabled) { setCount(0); return; }
+    let alive = true, reading = false;
+    const load = async () => { if (reading) return; reading = true;
+      try { const rows = await read(); if (alive) setCount(rows.length); } catch { if (alive) setCount(null); } finally { reading = false; } };
+    void load(); const timer = setInterval(() => void load(), 10000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [read, enabled]);
+  return count;
+}
 export function createDataRooms(host: { scopeId: string; transport: HostTransport; capabilities(): unknown;
   storage: Storage; reconciliation: BriefReconciliationClient; createGoal(): void }) {
   const { scopeId, transport, reconciliation } = host;
   const setup = new GettingStartedJourney(transport, host.storage, scopeId);
   const ports = createDomainPorts(scopeId, transport, host.storage);
-  const goals = new GoalsController(ports.goals), decisions = new DecisionsController('live', scopeId, { ...ports.decisions, read: async () => { const result = await ports.decisions.read(); if (result.status !== 'ready') return result; const data = result.data.filter(row => row.actions.length > 0); return data.length ? { status: 'ready', data } : { status: 'empty' }; } }),
+  const goals = new GoalsController(ports.goals, () => goalRead.refresh()), decisions = new DecisionsController('live', scopeId, { ...ports.decisions, read: async () => { const result = await ports.decisions.read(); if (result.status !== 'ready') return result; const data = result.data.filter(row => row.actions.length > 0); return data.length ? { status: 'ready', data } : { status: 'empty' }; } }),
     opportunities = new OpportunitiesController('live', scopeId, ports.opportunities), memory = new MemoryController(ports.memory);
   const detail = new MemoryDetailController(ports.detail, () => { void memory.refresh(); });
   const goalRead = reconciliation.projection(source<readonly GoalPath[]>(['goals'], 'goalMeasurements', ports.goals.read));
@@ -104,6 +132,8 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     const initialGoal = useBriefProjection(initialGoalRead);
     const g = useBriefProjection(goalRead), d = useBriefProjection(decisionRead), o = useBriefProjection(opportunityRead), outcome = useBriefProjection(outcomes), rec = useBriefProjection(recommendations);
     const decisionSnapshot = todayDecisionSnapshot(d);
+    const waiting = waitingOnOwner(settledDocuments(d), useOtherDecisionCount(ports.otherDecisions, isBriefCapabilityEnabled(host.capabilities(), 'decisions')), useOwnerAttention());
+    const emergency = useContext(EmergencyStatusContext);
     const [operation, setOperation] = useState<DecisionOperation>();
     const runs = useBriefProjection(recentRuns);
     const caps = host.capabilities(), goal = g.data?.find(row => row.goal.status === 'active')
@@ -139,7 +169,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
             decisionRead.refresh(); void decisions.refresh();
           } catch { setOperation({ ...request, state: 'unknown', message: 'The decision is not confirmed. Open Needs you to check it.' }); }
         } }} slots={{
-        gettingStarted: isBriefCapabilityEnabled(caps, 'profileSettings') ? <GettingStarted journey={setup} navigate={shell.navigate} goalId={goal?.goal.goalId} compact={decisionSnapshot.state !== 'empty'} /> : undefined,
+        gettingStarted: isBriefCapabilityEnabled(caps, 'profileSettings') ? <GettingStarted journey={setup} navigate={shell.navigate} goalId={goal?.goal.goalId} compact={decisionSnapshot.state !== 'empty'} waiting={waiting} held={emergency === 'paused' || emergency === 'killed'} /> : undefined,
         goal: <GoalCard handoff={handoff} onReviewDraft={goal?.goal.status === 'draft' ? () => shell.navigate({ room: 'goals', selection: { goalId: goal.goal.goalId } }) : undefined}
           onPlanUnplanned={initialGoal.data === true ? () => shell.navigate({ room: 'goals', selection: {} }) : undefined} />,
         queueNotice: d.data?.length ? <button onClick={() => shell.navigate({ room: 'needs-you', selection: {} })}>Review {d.data.length} {d.data.length === 1 ? 'request' : 'requests'}</button> : null,

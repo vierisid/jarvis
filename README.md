@@ -32,7 +32,7 @@ The **brain** keeps your memory, conversations, and workflows running. The **des
 
 For example, you can build workflows to prepare a client brief from connected sources, draft follow-ups for review, or turn recurring reports into a scheduled job. Start with one routine, connect its sources, and test the result before enabling it.
 
-> **In development:** the new Brief dashboard and revised onboarding are being integrated behind opt-in gates. Some views are development previews; they are not the default installed experience. See the [Brief development notes](ui/src/brief/README.md) and [releases](https://github.com/vierisid/jarvis/releases) for implementation and release status.
+> **Dashboard:** the Brief dashboard is the default on current main, for hosted and self-hosted installs. Set `JARVIS_DASHBOARD=legacy` and restart to use the previous dashboard. Self-hosted installs of v0.17.6 and earlier still open the previous dashboard by default. See the [Brief development notes](ui/src/brief/README.md) and [releases](https://github.com/vierisid/jarvis/releases) for implementation and release status.
 
 ## Get started
 
@@ -60,7 +60,7 @@ Instead of Bun's global install you can use the install script, which installs B
 curl -fsSL https://raw.githubusercontent.com/vierisid/jarvis/main/install.sh | bash
 ```
 
-`jarvis enroll` prints a device enrollment token. Keep it private: it grants access to your brain.
+`jarvis enroll` prints a device enrollment token. Keep it private: it grants access to your brain. If you used the install script, run `jarvis start -d` and then `jarvis enroll "my-desktop"` yourself: the script does not enroll a device, and opening `http://localhost:3142` before enrolling shows a 401 page.
 
 **2. Connect the desktop app.**
 
@@ -121,7 +121,7 @@ jarvis uninstall           # Remove the brain AND delete all its data in ~/.jarv
 
 ## Configuration
 
-System configuration lives in `~/.jarvis/config.yaml` by default; in the Docker image, where the home directory is `/data`, it is `/data/.jarvis/config.yaml`. The [configuration reference](config.example.yaml) describes ports, public URLs, timezone, logging, and other deployment settings.
+System configuration lives in `$HOME/.jarvis/config.yaml`; in the Docker image, where the home directory is `/data`, it is `/data/.jarvis/config.yaml`. `JARVIS_HOME` moves the data directory but not this file. The [configuration reference](config.example.yaml) describes ports, public URLs, timezone, logging, and other deployment settings.
 
 **Configure LLM providers, credentials, and model routing through onboarding or Settings > LLM.** They are stored in the database and encrypted keychain. An `llm:` block in YAML and the old provider-key environment variables are no longer used. Local and compatible providers have [setup guides inside the dashboard](docs/provider-guides/README.md).
 
