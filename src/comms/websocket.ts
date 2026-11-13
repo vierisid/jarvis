@@ -712,12 +712,13 @@ export class WebSocketServer {
         return res ? withSecurityHeaders(res) : res;
       },
 
-      // A route that throws would otherwise get Bun's default 500, which
-      // carries none of the headers above and, without NODE_ENV=production,
-      // is an HTML page quoting the throwing source.
+      // Anything a route throws that it did not catch itself. Without this Bun
+      // answers with its default 500, which carries none of the headers above
+      // and, without NODE_ENV=production, is an HTML page quoting absolute
+      // paths and the throwing source. The cause goes to the log only.
       error(err) {
         console.error('[WebSocketServer] Unhandled request error:', err);
-        return withSecurityHeaders(new Response('Internal Server Error', { status: 500, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }));
+        return withSecurityHeaders(Response.json({ error: 'Something went wrong on our side. Try again.' }, { status: 500 }));
       },
 
       websocket: {
