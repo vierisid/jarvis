@@ -37,9 +37,12 @@ var (
 )
 
 // screenObservationHeld reports whether the screen observer must skip work
-// now: a voice turn is under way (ambient suppression) or the brain paused it.
+// now: a voice turn is under way (ambient suppression), the brain paused it,
+// or the notch is looking away (an app the person said never to watch, a
+// password being typed, a bank: notch_where.go). Asked before the screenshot
+// is taken, so what must not be seen is not captured at all.
 func screenObservationHeld() bool {
-	return screenObserversPaused.Load() || ambientSuppressedNow()
+	return screenObserversPaused.Load() || ambientSuppressedNow() || notchWhere.Look() != notchLooking
 }
 
 // makeObserversSetPausedHandler handles observers.set_paused. Params:

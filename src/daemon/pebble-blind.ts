@@ -50,6 +50,17 @@ export function observerPause(awarenessEnabled: boolean, desktopEnabled: boolean
 }
 
 /**
+ * Sleep means it sees nothing (the notch, pass 6). While everything is
+ * stopped (Esc twice, the tray's Pause) the observers are paused whatever the
+ * switches say: the pause used to freeze what Jarvis does and leave it
+ * watching. Awake, the switches decide as before. The daemon applies this
+ * only with the notch on.
+ */
+export function whileAsleep(pause: ObserverPause, asleep: boolean): ObserverPause {
+  return asleep ? { screen: true, clipboard: true } : pause;
+}
+
+/**
  * Push the pause to every connected sidecar, or only to `onlyId` (a machine
  * that just connected). Not persisted on the sidecar: a fresh process starts
  * unpaused, so it must be told on every connect. A sidecar that predates the

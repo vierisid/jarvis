@@ -221,7 +221,7 @@ import { runRoomPanelIntent, type RoomPanelDeps } from "./pebble-room-panel.ts";
 import { makeFastPathTurns, PEBBLE_CHANNEL } from "./pebble-dialogue.ts";
 import { startChannelMessageRetention } from "./channel-message-retention.ts";
 import { isGonePanelError, makePalettePick, makePebbleNavTool } from "./pebble-nav-tool.ts";
-import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded, type ObserverPause } from "./pebble-blind.ts";
+import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded, whileAsleep, type ObserverPause } from "./pebble-blind.ts";
 import { captureMayBeKept, setCaptureGuard } from "../awareness/capture-guard.ts";
 import { createSidecarOfflineNotifier } from "./sidecar-offline-notice.ts";
 import { fetchPebbleForegroundApp, fetchPebbleScreenshot, pebbleActionDirectives, type PebbleDesktopDispatch } from "./pebble-desktop-context.ts";
@@ -1115,7 +1115,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // observers are paused too: the pause used to freeze what Jarvis does and
     // leave it watching. Set once the pause controller exists, below.
     let asleepNow: () => boolean = () => false;
-    const asleepPause = (pause: ObserverPause): ObserverPause => (asleepNow() ? { screen: true, clipboard: true } : pause);
+    const asleepPause = (pause: ObserverPause): ObserverPause => whileAsleep(pause, asleepNow());
     // A sidecar keeps its observer pause only in memory and starts unpaused:
     // tell every machine that connects (#1159).
     sidecarManager.onSidecarConnected((sc) => {

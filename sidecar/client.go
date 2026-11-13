@@ -101,6 +101,9 @@ type SidecarClient struct {
 	// rebuilt by reloadConfig), so the two can't be captured in one closure.
 	wakeSuppress atomic.Pointer[func(playing bool)]
 	// wakeDecide is the current connection's way to act on the brain's word
+	// What the present connection does when the brain says whether it has
+	// the notch on: tell it where the person is, or not (notch_where.go).
+	whereDecide atomic.Pointer[func(notchOn bool)]
 	// about listening for its name (pebble_wake.go, wakeHold). Nil when this
 	// connection has no wake listener.
 	wakeDecide atomic.Pointer[func(notchOn bool)]
@@ -169,6 +172,11 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 	// The notch's keys, as the settings have them. Nothing watches the
 	// keyboard for them until the brain has the notch on and its page is up.
 	notch.SetKeyPairs(notchPairsFromSettings(config.Preferences.NotchTalkKeys, config.Preferences.NotchYesKeys, runtime.GOOS))
+	// The apps this machine was told never to watch, and how the list is
+	// saved when the person changes it on the notch.
+	notchWhere.SetNever(config.Preferences.NotchNeverWatch, func(list []string) error {
+		return client.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.NotchNeverWatch = list })
+	})
 	if client.pebble != nil {
 		// Apply the ethereal preference up front (stored on the core; takes
 		// effect whenever the brain spawns the pebble).
@@ -492,6 +500,8 @@ func (c *SidecarClient) reloadConfig() {
 
 	// The notch's keys may have been edited in the file.
 	notch.SetKeyPairs(notchPairsFromSettings(c.config.Preferences.NotchTalkKeys, c.config.Preferences.NotchYesKeys, runtime.GOOS))
+	// And so may the list of apps never to watch.
+	notchWhere.SetNever(c.config.Preferences.NotchNeverWatch, nil)
 
 	// (Re-)init panel service if CapWindows toggled on; tear it down if off.
 	hasWindows := false
@@ -680,6 +690,38 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	notchTalk.use(nil, talkSend)
 	defer notchTalk.forget()
 
+	// Where the person is, and whether this program is looking, goes out on
+	// this connection once the brain has said it has the notch on. Until
+	// then, and with the notch off, nothing is heard, said or held back.
+	whereDecide := func(notchOn bool) {
+		if !notchOn {
+			notchWhere.Forget()
+			return
+		}
+		notchWhereStart.Do(func() { platformNotchWhereStart(notchWhere) })
+		notchWhere.Use(func(payload map[string]any, icon []byte) {
+			evt := SidecarEvent{
+				Type:      "sidecar_event",
+				EventType: notchWhereEvent,
+				Timestamp: time.Now().UnixMilli(),
+				// "Looking away" must not be the event a full queue drops.
+				Priority: "high",
+				Payload:  payload,
+			}
+			if icon != nil {
+				evt.Binary = BinaryDataInline{Type: "inline", MimeType: "image/png"}
+			}
+			if err := sendFn(ctx, evt, icon); err != nil {
+				log.Printf("[notch] where the person is did not reach the brain: %v", err)
+			}
+		})
+	}
+	c.whereDecide.Store(&whereDecide)
+	defer func() {
+		c.whereDecide.Store(nil)
+		notchWhere.Forget()
+	}()
+
 	// What the notch's page says to the brain goes out on this connection, as
 	// it came. With no connection there is nowhere for it to go.
 	notch.OnMessage(func(text string) {
@@ -750,6 +792,20 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	// The brain's awareness / desktop off switches, applied to the
 	// observers at the source (#1159). Not persisted; see observers_pause.go.
 	c.setConnHandler("observers.set_paused", makeObserversSetPausedHandler())
+	// "Never watch this app", from the notch: the list is this machine's, so
+	// the brain asks and is answered with the list as it now is.
+	c.setConnHandler("notch.never_watch", func(params map[string]any) (*RPCResult, error) {
+		app, _ := params["app"].(string)
+		watch, _ := params["watch"].(bool)
+		if notchAppKey(app) == "" {
+			return nil, fmt.Errorf("notch.never_watch: missing app")
+		}
+		list, err := notchWhere.NeverWatch(app, watch)
+		if err != nil {
+			return nil, fmt.Errorf("notch.never_watch: the list could not be saved: %w", err)
+		}
+		return &RPCResult{Result: map[string]any{"never": list}}, nil
+	})
 	// Bounded by sendUIEvent (#1160) and nothing else: not obsCtx, which the
 	// first update_config cancels (reloadConfig calls c.obsCancel, this
 	// connection's obsCancel), and which would then fail every tap, and
@@ -1536,6 +1592,9 @@ func (c *SidecarClient) handleRegisterAck(data []byte) {
 		Notch bool `json:"notch"`
 	}
 	_ = json.Unmarshal(data, &msg)
+	if where := c.whereDecide.Load(); where != nil {
+		(*where)(msg.Notch)
+	}
 	if decide := c.wakeDecide.Load(); decide != nil {
 		(*decide)(msg.Notch)
 	} else if msg.Notch {

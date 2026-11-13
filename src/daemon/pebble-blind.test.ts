@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded } from './pebble-blind.ts';
+import { observerPause, pebbleBlinded, pushObserverPause, pushPebbleBlinded, whileAsleep } from './pebble-blind.ts';
 
 // #1157: the blind glyph reached only the pressed pebble, and never followed a
 // settings change, so another machine's pebble showed the old state.
@@ -74,12 +74,28 @@ test('the observer pause reaches every connected sidecar, or just the one that c
 test('the daemon pushes the observer pause on connect, on the long-press, and from both settings appliers', () => {
   const index = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
   const connect = index.slice(index.indexOf('const pebbleBlindDeps = '), index.indexOf('// The bench harness backdoor'));
-  expect(connect).toMatch(/onSidecarConnected\(\(sc\) => \{[\s\S]*pushObserverPause\(pebbleBlindDeps, observerPause\(awarenessOn, isDesktopEnabled\(\)\), sc\.id\)/);
+  // Every push goes through `asleepPause`: asleep, the observers are paused whatever the switches say.
+  expect(connect).toMatch(/onSidecarConnected\(\(sc\) => \{[\s\S]*pushObserverPause\(pebbleBlindDeps, asleepPause\(observerPause\(awarenessOn, isDesktopEnabled\(\)\)\), sc\.id\)/);
   const toggle = index.slice(index.indexOf("event.event_type !== 'pebble.blind_toggle'"), index.indexOf("console.log(`[ambient-ui] blind toggle"));
-  expect(toggle).toContain('pushObserverPause(pebbleBlindDeps, observerPause(nextEnabled, isDesktopEnabled()))');
+  expect(toggle).toContain('pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(nextEnabled, isDesktopEnabled())))');
   const awareness = index.slice(index.indexOf("settingsReload.registerApplier('awareness'"), index.indexOf("settingsReload.registerApplier('desktop'"));
-  expect(awareness).toContain("pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()))");
+  expect(awareness).toContain("pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled())))");
   const desktopAt = index.indexOf("settingsReload.registerApplier('desktop'");
   const desktop = index.slice(desktopAt, index.indexOf('});', desktopAt));
-  expect(desktop).toContain("pushObserverPause(pebbleBlindDeps, observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled()))");
+  expect(desktop).toContain("pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled())))");
+  // No push is left that goes round it.
+  expect(index.match(/pushObserverPause\(pebbleBlindDeps, observerPause\(/g)).toBeNull();
+});
+
+test('sleep means it sees nothing: with the notch on, going to sleep and waking push the pause', () => {
+  // Asleep, both observers are paused whatever the switches say; awake, the switches decide.
+  expect(whileAsleep({ screen: false, clipboard: false }, true)).toEqual({ screen: true, clipboard: true });
+  expect(whileAsleep({ screen: false, clipboard: false }, false)).toEqual({ screen: false, clipboard: false });
+  expect(whileAsleep({ screen: true, clipboard: false }, false)).toEqual({ screen: true, clipboard: false });
+  const index = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+  const sleep = index.slice(index.indexOf('const emergencyController = new EmergencyController();'), index.indexOf('const approvalDelivery = new ApprovalDelivery();'));
+  // Only with the notch on, and on every change of the pause.
+  expect(sleep).toMatch(/if \(notchEnabled\(\)\) \{[\s\S]*asleepNow = \(\) => emergencyController\.getState\(\) !== 'normal';[\s\S]*emergencyController\.subscribe\(\(\) => \{[\s\S]*pushObserverPause\(pebbleBlindDeps, asleepPause\(/);
+  // With the notch off nothing is asleep, so nothing changes.
+  expect(index).toContain('let asleepNow: () => boolean = () => false;');
 });
