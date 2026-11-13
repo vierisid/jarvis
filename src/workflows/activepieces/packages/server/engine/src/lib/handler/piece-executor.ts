@@ -1,3 +1,4 @@
+import { invalidDateMessage } from "../../../../../../../runtime/resolved-input-guard"
 import { helpScoutEngineProps } from "../../../../../../../runtime/managed-help-scout-inputs"
 import { zoomEngineProps } from "../../../../../../../runtime/managed-zoom-inputs"
 import { gitlabEngineProps } from "../../../../../../../runtime/managed-gitlab-inputs"
@@ -90,6 +91,10 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
 
         const { processedInput, errors } = await propsProcessor.applyProcessorsAndValidators(resolvedInput, helpScoutEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? zoomEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? gitlabEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? pipedriveEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? wrikeEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? webflowEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? mondayEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? pieceAction.props, piece.auth, pieceAction.requireAuth, action.settings.propertySettings, { apiUrl: constants.internalApiUrl, engineToken: constants.engineToken })
         if (Object.keys(errors).length > 0) {
+            // === JARVIS PATCH: a date input that is not a date fails in plain words ===
+            const dateMessage = invalidDateMessage(errors, pieceAction.props, resolvedInput, action.settings.actionName)
+            if (dateMessage !== null) throw new Error(dateMessage)
+            // === END JARVIS PATCH ===
             throw new Error(JSON.stringify(errors, null, 2))
         }
 
@@ -383,7 +388,15 @@ function assertDelayWithinTimeout(resumeDateTime?: string): void {
     if (isNil(resumeDateTime)) {
         return
     }
-    const diffInDays = dayjs(resumeDateTime).diff(dayjs(), 'days')
+    const resumeAt = dayjs(resumeDateTime)
+    // === JARVIS PATCH: a resume time that is not a real date lies beyond any cap ===
+    // A delay too large for a Date turns into an invalid date, the comparison
+    // below is false for NaN, and the run would park with no resume time.
+    if (!resumeAt.isValid()) {
+        throw new PausedFlowTimeoutError(undefined, AP_PAUSED_FLOW_TIMEOUT_DAYS)
+    }
+    // === END JARVIS PATCH ===
+    const diffInDays = resumeAt.diff(dayjs(), 'days')
     if (diffInDays > AP_PAUSED_FLOW_TIMEOUT_DAYS) {
         throw new PausedFlowTimeoutError(undefined, AP_PAUSED_FLOW_TIMEOUT_DAYS)
     }

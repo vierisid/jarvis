@@ -52,12 +52,30 @@ export const delayForAction = createAction({
     }),
   },
   async run(ctx) {
+    // === JARVIS PATCH: an amount that is not a finite number is refused in plain words ===
+    // Infinity passes `z.number().min(0)`, and an amount too large to hold in
+    // milliseconds is Infinity after the unit conversion. Either one used to
+    // reach the wait with no usable resume time. A negative amount used to fail
+    // as zod JSON. The value itself is never echoed: it can come from run data.
+    const amount = ctx.propsValue.delayFor;
+    if (typeof amount !== 'number' || !Number.isFinite(amount)) {
+      throw new Error('The delay amount is not a usable number.');
+    }
+    if (amount < 0) {
+      throw new Error('The delay amount cannot be negative.');
+    }
+    // === END JARVIS PATCH ===
     await propsValidation.validateZod(ctx.propsValue, {
       delayFor: z.number().min(0),
     });
 
     const unit = ctx.propsValue.unit ?? TimeUnit.SECONDS;
     const delayInMs = calculateDelayInMs(ctx.propsValue.delayFor, unit);
+    // === JARVIS PATCH: see above; a finite amount can still overflow the conversion ===
+    if (!Number.isFinite(delayInMs)) {
+      throw new Error('The delay amount is too large. A run can wait at most 30 days.');
+    }
+    // === END JARVIS PATCH ===
     if (ctx.executionType == ExecutionType.RESUME) {
       return {
         delayForInMs: delayInMs,

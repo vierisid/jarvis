@@ -875,6 +875,21 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
     expect(getWorkflowDb().query("SELECT COUNT(*) AS n FROM waitpoint WHERE project_id = ?").get("proj_elsewhere")).toEqual({ n: 0 });
   });
 
+  test("POST /v1/waitpoints refuses a timer with no usable resume time and stores nothing", async () => {
+    const before = getWorkflowDb().query("SELECT COUNT(*) AS n FROM waitpoint WHERE flow_run_id = ?").get(testRunId);
+    for (const resumeDateTime of [undefined, "", "Invalid Date", "not a date"]) {
+      for (const type of ["DELAY", "TIMER"]) {
+        const r = await authedFetchForRun("/v1/waitpoints", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ flowRunId: testRunId, stepName: "x", type, version: "V1", resumeDateTime }),
+        });
+        expect(r.status).toBe(400);
+      }
+    }
+    expect(getWorkflowDb().query("SELECT COUNT(*) AS n FROM waitpoint WHERE flow_run_id = ?").get(testRunId)).toEqual(before);
+  });
+
   test("POST /v1/waitpoints accepts DELAY (stored as TIMER) and normalizes RFC-1123 -> ISO", async () => {
     // delay-for pieces send type 'DELAY' with an RFC-1123 (toUTCString) time.
     const rfc1123 = new Date("2026-07-07T03:00:00Z").toUTCString();
