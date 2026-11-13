@@ -51,6 +51,39 @@ export interface Sentence {
   reset(): void;
 }
 
+/** A word up to this long is one block and never breaks. */
+const WORD_WHOLE = 28;
+/** A longer one is cut into pieces of at most this many characters. */
+const WORD_PIECE = 24;
+
+/**
+ * A sentence as the blocks it is drawn in: one per word, each with the space
+ * that follows it. A block does not break inside, so a word longer than a
+ * line (a path, a URL, a command with no spaces in it) is cut into pieces a
+ * line can break between: after a separator where there is one, and at
+ * WORD_PIECE characters where there is none. Without that its end ran on
+ * under the hint, out of sight, and a line that asks for a yes must show all
+ * of what it asks.
+ */
+export function wordBlocks(text: string): string[] {
+  const blocks: string[] = [];
+  for (const token of text.match(/\S+\s*|\s+/g) ?? []) {
+    const chars = [...token];
+    if (chars.length <= WORD_WHOLE) { blocks.push(token); continue; }
+    let piece = '';
+    let n = 0;
+    for (const ch of chars) {
+      piece += ch;
+      n++;
+      // After a separator, once the piece is long enough to be worth a line
+      // break; or at the limit, whatever the character.
+      if (n >= WORD_PIECE || (n >= 8 && /[/\\._\-=&?:,;|@+]/.test(ch))) { blocks.push(piece); piece = ''; n = 0; }
+    }
+    if (piece) blocks.push(piece);
+  }
+  return blocks;
+}
+
 export function createSentence(deps: SentenceDeps): Sentence {
   const { nin, pick, opts, sheet } = deps;
   const words = new WeakMap<Element, NotchWord>();
@@ -73,12 +106,14 @@ export function createSentence(deps: SentenceDeps): Sentence {
     for (const p of parts) {
       if (typeof p === 'string') {
         // Punctuation right after a lit word sits tight against it.
-        (p.match(/\S+\s*|\s+/g) ?? []).forEach((t, k) => put(el('span', k === 0 && afterLive && /^[.,?!;:]/.test(t) ? 'w tight' : 'w', t)));
+        wordBlocks(p).forEach((t, k) => put(el('span', k === 0 && afterLive && /^[.,?!;:]/.test(t) ? 'w tight' : 'w', t)));
         afterLive = false;
         continue;
       }
       afterLive = 'word' in p;
-      if ('em' in p) put(el('b', 'w em', p.em));
+      // One block per word here too: an emphasised phrase can be a whole
+      // sentence (what an approval will do), and must wrap like one.
+      if ('em' in p) wordBlocks(p.em).forEach((t) => put(el('b', 'w em', t)));
       else if ('key' in p) put(p.key === 'talk' ? duo('talk', 'kbd', 'w kbd') : p.key === 'yes' ? duo('yes', 'kbd', 'w kbd') : el('kbd', 'w kbd', p.key));
       else put(liveBtn(p.word, false));
     }

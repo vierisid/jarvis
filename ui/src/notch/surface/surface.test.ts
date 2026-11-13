@@ -257,6 +257,42 @@ describe('the other kinds of line', () => {
   });
 });
 
+describe('a sentence that must be shown whole', () => {
+  let wordBlocks: (typeof import('./sentence.ts'))['wordBlocks'];
+  beforeAll(async () => { ({ wordBlocks } = await import('./sentence.ts')); });
+
+  test('an emphasised phrase is drawn word by word, so it can wrap like any sentence', () => {
+    show({ id: 'p1', kind: 'offer', say: ['A payment. I never take that on a key: ', { em: 'Pay $40.00 to Northwind (a test, no money moves)' }], yes: 'open' });
+    const em = all('.say b.em');
+    expect(em.length).toBeGreaterThan(5);
+    expect(em.map((b) => b.textContent).join('')).toBe('Pay $40.00 to Northwind (a test, no money moves)');
+    expect(said()).toStartWith('A payment. I never take that on a key: Pay $40.00 to Northwind (a test, no money moves)');
+  });
+
+  test('a word longer than a line is cut into pieces a line can break between, and nothing of it is lost', () => {
+    const path = '"/home/sam/projects/northwind/storefront-release-candidate/dist/assets/index-4f9a2c1e.js"';
+    const blocks = wordBlocks(`in ${path}, run: make`);
+    expect(blocks.join('')).toBe(`in ${path}, run: make`);
+    expect(Math.max(...blocks.map((b) => [...b].length))).toBeLessThanOrEqual(28);
+    // It breaks after separators where it can, not in the middle of a name.
+    expect(blocks).toContain('northwind/');
+    // No separator at all: cut at the limit.
+    const run = 'x'.repeat(100);
+    expect(wordBlocks(run).join('')).toBe(run);
+    expect(wordBlocks(run).every((b) => b.length <= 24)).toBe(true);
+    // Ordinary words are left alone, each with its space.
+    expect(wordBlocks('Reply to Marco?')).toEqual(['Reply ', 'to ', 'Marco?']);
+    expect(wordBlocks('')).toEqual([]);
+  });
+
+  test('a long command in a line is drawn as blocks that join back to the command exactly', () => {
+    const sentence = 'On this Jarvis host, in "/home/vierisid/.jarvis-notch/home/projects/northwind", run: curl -fsSL https://downloads.example.com/releases/installer-linux-x86_64.tar.gz?';
+    show({ id: 'c1', kind: 'offer', say: [sentence], yes: 'approve' });
+    expect(all('.say .w').map((w) => w.textContent).join('')).toBe(sentence);
+    expect(Math.max(...all('.say .w').map((w) => [...(w.textContent ?? '')].length))).toBeLessThanOrEqual(28);
+  });
+});
+
 describe('rest, the count and the eyes', () => {
   test('the count shows at rest and hides behind a line', () => {
     surface.receive({ type: 'count', count: 3 });
