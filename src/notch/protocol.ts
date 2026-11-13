@@ -106,6 +106,11 @@ export interface NotchSheetLine extends NotchLineBase {
   kind: 'sheet';
   blocks: NotchBlock[];
   yes?: string;
+  /**
+   * It asks something that must be answered on purpose: a click somewhere
+   * else does not close it. Only yes and Esc answer it.
+   */
+  stay?: boolean;
 }
 
 /** A text field in place of the sentence, with a panel under it. */

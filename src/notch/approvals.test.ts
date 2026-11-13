@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { ToolRegistry } from '../actions/tools/registry.ts';
-import { ApprovalManager, type ApprovalPrincipal } from '../authority/approval.ts';
+import { ApprovalManager, type ApprovalPrincipal, type ApprovalRequest } from '../authority/approval.ts';
 import { approvalToast } from '../authority/approval-delivery.ts';
 import { AuditTrail } from '../authority/audit.ts';
 import { DeferredExecutor } from '../authority/deferred-executor.ts';
@@ -14,7 +14,7 @@ import { AuthorityEngine, type AuthorityConfig } from '../authority/engine.ts';
 import { NOTCH_DECIDER, applyApprovalDecision, type ApprovalDecisionDeps } from '../daemon/approval-decision.ts';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import { gateVoiceApprovalResolution } from '../roles/authority.ts';
-import { NOTCH_APPROVABLE_COLUMNS, attachNotchApprovals, notchApprovalWay } from './approvals.ts';
+import { NOTCH_PLAIN_LINE_COLUMNS, attachNotchApprovals, notchApprovalWay } from './approvals.ts';
 import { NotchInbox } from './inbox.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -31,7 +31,7 @@ function config(): AuthorityConfig {
     learning: { enabled: false, suggest_threshold: 5 }, emergency_state: 'normal' };
 }
 
-function harness(options: { page?: boolean; denyFails?: boolean } = {}) {
+function harness(options: { page?: boolean; denyFails?: boolean; describe?: (request: ApprovalRequest) => Promise<string | null> } = {}) {
   // The product side.
   const approvals = new ApprovalManager();
   const audit = new AuditTrail();
@@ -78,6 +78,8 @@ function harness(options: { page?: boolean; denyFails?: boolean } = {}) {
     deny: (id) => (options.denyFails ? Promise.reject(new Error('database is locked')) : applyApprovalDecision('deny', id, NOTCH_DECIDER, deps)),
     openDashboard: (from) => { opened.push(from); },
     log: (line) => logs.push(line),
+    describe: options.describe,
+    clock,
   });
   const line = (): NotchLine | null => surface.current().line;
   const text = (l: NotchLine | null): string => (l?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
@@ -329,22 +331,32 @@ describe('what a key may not approve', () => {
     expect(h.count()).toBe(0);
   });
 
-  test('a request that needs on-screen review is approved in the dashboard: the product refuses it from anywhere else', async () => {
+  test('a request that has to be reviewed on screen is reviewed on the notch, which is on that screen: plain words, the exact action under them', async () => {
     const h = harness();
-    const review = h.ask({ context: JSON.stringify({ confirm: 'always', intent: 'Click Send in Mail (sends an email)' }) });
-    expect(notchApprovalWay(review)).toBe('click');
+    const review = h.ask({ context: JSON.stringify({ confirm: 'always', intent: 'Review desktop_click. Business effect unknown.' }) });
+    expect(notchApprovalWay(review)).toBe('sheet');
     await h.sync();
-    expect(h.said()).toBe('It has to be reviewed on screen, so it is approved in the dashboard: Click Send in Mail (sends an email)');
-    expect(h.line()).toMatchObject({ yes: 'open' });
-    expect(await applyApprovalDecision('approve', review.id, NOTCH_DECIDER, h.deps)).toMatchObject({ status: 'needs_dashboard' });
+    // Nobody to put it in plain words here: it is asked by what kind of thing it is.
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'approve', stay: true });
+    expect(h.said()).toBe('Write or change a file?');
+    const sheet = h.line();
+    const paper = sheet?.kind === 'sheet' ? sheet.blocks.find((block) => block.kind === 'paper') : null;
+    expect(paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')) : []).toEqual(['write_file', 'path: /tmp/a']);
+    // Any other surface is still refused it. The notch is not.
+    expect(await applyApprovalDecision('approve', review.id, 'telegram', h.deps)).toMatchObject({ status: 'needs_dashboard' });
+    await h.answer('yes');
+    expect(h.line()).toMatchObject({ kind: 'send' });
+    await h.answer('done');
+    expect(h.approvals.getRequest(review.id)).toMatchObject({ decided_by: 'notch' });
+    expect(['approved', 'executed']).toContain(h.approvals.getRequest(review.id)!.status);
   });
 
-  test('a sentence longer than three lines of the notch is not offered for a yes, and is shown cut with a mark', async () => {
+  test('a sentence too long for any sheet is not offered for a yes, and is shown cut with a mark', async () => {
     const h = harness();
-    const fits = h.ask({ context: JSON.stringify({ intent: `Write ${'x'.repeat(NOTCH_APPROVABLE_COLUMNS - 6)}` }) });
+    const fits = h.ask({ context: JSON.stringify({ intent: `Write ${'x'.repeat(NOTCH_PLAIN_LINE_COLUMNS - 6)}` }) });
     expect(notchApprovalWay(fits)).toBe('key');
-    const long = h.ask({ context: JSON.stringify({ intent: `Write ${'a very long note '.repeat(20)}to disk` }) });
-    expect(notchApprovalWay(long)).toBe('too_long');
+    const endless = h.ask({ context: JSON.stringify({ intent: `Write ${'a very long note '.repeat(200)}to disk` }) });
+    expect(notchApprovalWay(endless)).toBe('too_long');
     getDb().run('DELETE FROM approval_requests WHERE id = ?', [fits.id]);
     await h.sync();
     expect(h.said()).toStartWith('Too long to show whole here, so it is approved in the dashboard: Write a very long note');
@@ -463,5 +475,102 @@ describe('the count and the round', () => {
     expect(h.line()?.kind).not.toBe('offer');
     await h.sync();
     expect(h.count()).toBe(0);
+  });
+});
+
+describe('an approval asked in plain words', () => {
+  const COMMAND = 'On this computer, run: reg query HKCU\\Software\\Valve\\Steam /v SteamExe & if exist "C:\\Program Files (x86)\\Steam\\steam.exe" (echo STEAM_INSTALLED)';
+
+  test('a long command is asked as a question a person understands, with every character of it underneath', async () => {
+    const seen: string[] = [];
+    const h = harness({ describe: async (request) => { seen.push(request.tool_name); return 'Look up where Steam is installed?'; } });
+    const req = h.ask({ context: JSON.stringify({ intent: COMMAND }) });
+    expect(notchApprovalWay(req)).toBe('sheet');
+    await h.sync();
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'approve', stay: true });
+    expect(h.said()).toBe('Look up where Steam is installed?');
+    const sheet = h.line();
+    const paper = sheet?.kind === 'sheet' ? sheet.blocks.find((block) => block.kind === 'paper') : null;
+    expect(paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')) : []).toEqual([COMMAND]);
+    expect(seen).toEqual(['write_file']);
+    // Yes: the fuse says it in the same words, then it is decided as the notch.
+    await h.answer('yes');
+    expect(h.said()).toBe('Look up where Steam is installed…');
+    await h.answer('done');
+    expect(h.approvals.getRequest(req.id)).toMatchObject({ status: 'executed', decided_by: 'notch' });
+  });
+
+  test('Esc on it is a no', async () => {
+    const h = harness({ describe: async () => 'Look up where Steam is installed?' });
+    const req = h.ask({ context: JSON.stringify({ intent: COMMAND }) });
+    await h.sync();
+    await h.answer('no');
+    expect(h.approvals.getRequest(req.id)).toMatchObject({ status: 'denied', decided_by: 'notch' });
+  });
+
+  test('left alone it goes back to the count, still pending', async () => {
+    const h = harness({ describe: async () => 'Look up where Steam is installed?' });
+    const req = h.ask({ context: JSON.stringify({ intent: COMMAND }) });
+    await h.sync();
+    await h.advance(30_000);
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+    expect(h.approvals.getRequest(req.id)!.status).toBe('pending');
+  });
+
+  test('when nobody can say it in plain words in time, it is asked by what kind of thing it is', async () => {
+    for (const describe of [async () => null, async () => { throw new Error('no model'); }, () => new Promise<string | null>(() => {})]) {
+      const h = harness({ describe });
+      h.ask({ context: JSON.stringify({ intent: COMMAND }) });
+      await h.sync();
+      await h.advance(4000);
+      expect(h.said()).toBe('Write or change a file?');
+      expect(h.line()).toMatchObject({ kind: 'sheet' });
+    }
+  });
+
+  test('a short action, and the model\'s own one-line intent, stay a line as they were', async () => {
+    let asked = 0;
+    const h = harness({ describe: async () => { asked++; return 'Something else?'; } });
+    const short = h.ask({ context: JSON.stringify({ intent: 'Run: echo hello' }) });
+    expect(notchApprovalWay(short)).toBe('key');
+    await h.sync();
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'approve' });
+    expect(h.said()).toBe('Run: echo hello?');
+    expect(asked).toBe(0);
+  });
+
+  test('a payment is never on the notch, in any words', async () => {
+    const h = harness({ describe: async () => 'Pay Northwind forty dollars?' });
+    const req = h.ask({ category: 'make_payment', context: JSON.stringify({ intent: COMMAND }) });
+    expect(notchApprovalWay(req)).toBe('payment');
+    await h.sync();
+    expect(h.line()).toMatchObject({ yes: 'open' });
+    expect(await applyApprovalDecision('approve', req.id, NOTCH_DECIDER, h.deps)).toMatchObject({ status: 'needs_dashboard' });
+  });
+});
+
+describe('an approval that was already waiting when the notch came up', () => {
+  const COMMAND = 'On this computer, run: reg query HKCU\\Software\\Valve\\Steam /v SteamExe & echo a long command that does not fit one line';
+
+  test('is not worded until it is opened, and then gets its plain words on the sheet', async () => {
+    let asked = 0;
+    let say: (words: string) => void = () => {};
+    const h = harness({ describe: () => { asked++; return new Promise<string | null>((resolve) => { say = resolve; }); } });
+    h.ask({ context: JSON.stringify({ intent: COMMAND }), created: Date.now() - 10 * 60_000 });
+    await h.sync();
+    // It joined the count without a word, and nobody was asked to word it.
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+    expect(asked).toBe(0);
+    await h.open();
+    expect(h.line()).toMatchObject({ kind: 'sheet', stay: true });
+    expect(h.said()).toBe('Write or change a file?');
+    expect(asked).toBe(1);
+    say('Look up where Steam is installed?');
+    await settle();
+    expect(h.said()).toBe('Look up where Steam is installed?');
+    await h.answer('yes');
+    expect(h.said()).toBe('Look up where Steam is installed…');
   });
 });

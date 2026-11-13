@@ -78,7 +78,62 @@ const SHOWN_COLUMNS = 100;
  * How the notch may answer a request: `key` when yes approves it, otherwise
  * why it must be approved in the dashboard.
  */
-export type NotchApprovalWay = 'key' | 'payment' | 'click' | 'too_long' | 'look_alike';
+export type NotchApprovalWay = 'key' | 'sheet' | 'payment' | 'too_long' | 'look_alike';
+
+/**
+ * The longest exact sentence that is shown as it is, on one line. Anything
+ * longer, and anything that has to be reviewed on screen, is shown as a
+ * sentence in plain words with the exact action under it (way `sheet`).
+ * Decided by the owner on 13 November 2026: a person should be asked "Look up
+ * where Steam is installed?", not shown a registry query.
+ */
+export const NOTCH_PLAIN_LINE_COLUMNS = 60;
+/** The most of an exact action a sheet shows whole. Past this the dashboard is the place. */
+export const NOTCH_SHEET_COLUMNS = 3000;
+/** How long an approval's sheet stays up unanswered before it goes back to the count. */
+export const NOTCH_APPROVAL_SHEET_MS = 30_000;
+/** How long the plain words are waited for before the line is shown without them. */
+export const NOTCH_APPROVAL_WORDS_MS = 4000;
+
+/** What is asked when nobody could say it in plain words: by what kind of thing it is. */
+export function notchApprovalFallback(request: Pick<ApprovalRequest, 'action_category'>): string {
+  switch (request.action_category) {
+    case 'execute_command': return 'Run a command on this computer?';
+    case 'control_app': return 'Do this in an app on your screen?';
+    case 'access_browser': return 'Do this in the browser?';
+    case 'write_data': return 'Write or change a file?';
+    case 'delete_data': return 'Delete something?';
+    case 'install_software': return 'Install or remove software?';
+    case 'modify_settings': return 'Change a setting?';
+    case 'send_email': return 'Send an email?';
+    case 'send_message': return 'Send a message?';
+    case 'spawn_agent': return 'Hand this to another agent?';
+    case 'terminate_agent': return 'Stop an agent?';
+    default: return 'Allow this?';
+  }
+}
+
+/**
+ * The exact action, for the paper under the plain words. For a command it is
+ * the gate's own sentence, which holds every character of it. For an action
+ * on screen that sentence is only "review this", so the tool and each of its
+ * arguments are written out as they will be used.
+ */
+export function notchApprovalExact(request: ApprovalRequest): string[] {
+  if (approvalDashboardOnly(request) !== 'click_only') return [notchApprovalSentence(request)];
+  const lines = [request.tool_name];
+  try {
+    const args: unknown = JSON.parse(request.tool_arguments);
+    if (args && typeof args === 'object' && !Array.isArray(args)) {
+      for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
+        lines.push(`${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
+      }
+    }
+  } catch { /* arguments that are not an object are shown as they are */
+    lines.push(request.tool_arguments);
+  }
+  return lines;
+}
 
 /** What the request will do, as one line, whole: the sentence the dashboard card leads with. */
 export function notchApprovalSentence(request: ApprovalRequest): string {
@@ -89,11 +144,18 @@ export function notchApprovalSentence(request: ApprovalRequest): string {
 export function notchApprovalWay(request: ApprovalRequest): NotchApprovalWay {
   const only = approvalDashboardOnly(request);
   if (only === 'payment') return 'payment';
-  if (only === 'click_only') return 'click';
-  const sentence = notchApprovalSentence(request);
-  const columns = toastColumns(sentence);
-  if (columns === null || columns > NOTCH_APPROVABLE_COLUMNS) return 'too_long';
-  if (toastLookAlike(sentence)) return 'look_alike';
+  const exact = notchApprovalExact(request).join('\n');
+  // Letters that pass for other letters are not shown here at all: the
+  // dashboard marks them, a line and a sheet cannot.
+  if (toastLookAlike(exact)) return 'look_alike';
+  const columns = toastColumns(exact.replace(/\n/g, ' '));
+  if (columns === null || columns > NOTCH_SHEET_COLUMNS) return 'too_long';
+  // What has to be reviewed on screen is reviewed on the notch, which is on
+  // that screen: plain words, and the exact action under them.
+  if (only === 'click_only') return 'sheet';
+  // The model's own one-line intent is already plain words.
+  if (request.tool_name !== 'request_approval' && columns > NOTCH_PLAIN_LINE_COLUMNS) return 'sheet';
+  if (columns > NOTCH_APPROVABLE_COLUMNS) return 'sheet';
   return 'key';
 }
 
@@ -114,8 +176,17 @@ export interface NotchApprovalDeps {
   deny(requestId: string): Promise<ApprovalDecisionOutcome>;
   /** Opens the dashboard on the machine whose notch was answered. */
   openDashboard?: (sidecarId: string | null) => void;
+  /**
+   * What the request would do, as one question in plain words ("Look up where
+   * Steam is installed?"). Asked of something that sees only the tool and its
+   * arguments, never the conversation. Null when it cannot say.
+   */
+  describe?: (request: ApprovalRequest) => Promise<string | null>;
   now?: () => number;
   fuseMs?: number;
+  wordsMs?: number;
+  sheetMs?: number;
+  clock?: { setTimeout(fn: () => void, ms: number): unknown };
   log?: (line: string) => void;
 }
 
@@ -151,6 +222,44 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
    */
   const answering = new Set<string>();
 
+  /** The plain words for a request, once somebody has said them. Null: nobody could. */
+  const words = new Map<string, string | null>();
+  const preparing = new Map<string, Promise<void>>();
+  const wordsMs = deps.wordsMs ?? NOTCH_APPROVAL_WORDS_MS;
+  const sheetMs = deps.sheetMs ?? NOTCH_APPROVAL_SHEET_MS;
+  const after = deps.clock ? (fn: () => void, ms: number) => deps.clock!.setTimeout(fn, ms) : (fn: () => void, ms: number) => setTimeout(fn, ms);
+
+  /** Has the plain words fetched for a request that will be shown with them. Never waits longer than `wordsMs`. */
+  function prepare(request: ApprovalRequest): Promise<void> {
+    const describe = deps.describe;
+    if (!describe || words.has(request.id) || notchApprovalWay(request) !== 'sheet') return Promise.resolve();
+    const running = preparing.get(request.id);
+    if (running) return running;
+    const made = new Promise<void>((resolve) => {
+      let settled = false;
+      const done = (said: string | null): void => {
+        if (settled) return;
+        settled = true;
+        words.set(request.id, said);
+        preparing.delete(request.id);
+        resolve();
+      };
+      after(() => done(null), wordsMs);
+      describe(request).then(
+        (said) => done(said && said.trim() ? said.trim() : null),
+        (error: unknown) => {
+          log(`[notch] an approval could not be put in plain words: ${error instanceof Error ? error.message : String(error)}`);
+          done(null);
+        },
+      );
+    });
+    preparing.set(request.id, made);
+    return made;
+  }
+
+  /** The question a request is asked with: its plain words, or what kind of thing it is. */
+  const question = (request: ApprovalRequest): string => words.get(request.id) ?? notchApprovalFallback(request);
+
   const pendingRequest = (requestId: string): ApprovalRequest | null => {
     const request = deps.approvalManager.getRequest(requestId);
     return request && request.status === 'pending' ? request : null;
@@ -177,13 +286,12 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         // The reason first, then the thing itself, with nothing after it: a
         // line that wraps must not start with a stray full stop.
         const shown = em(bare(shortened(sentence)));
+        if (way === 'sheet') return await playSheet(request, stage);
         const why: NotchPart[] = way === 'payment'
           ? ['A payment. I never take that on a key: ', shown]
           : way === 'too_long'
             ? ['Too long to show whole here, so it is approved in the dashboard: ', shown]
-            : way === 'look_alike'
-              ? ['Some of its letters could be look-alikes, so it is approved in the dashboard: ', shown]
-              : ['It has to be reviewed on screen, so it is approved in the dashboard: ', shown];
+            : ['Some of its letters could be look-alikes, so it is approved in the dashboard: ', shown];
         const answer = await stage.offer(why, 'open', { mood: 'careful' });
         if (answer.act === 'no') return refuse(requestId, stage);
         if (answer.act !== 'yes') return 'waits';
@@ -204,6 +312,55 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         const fuse = await stage.fuse([`${bare(sentence)}…`], fuseMs, { mood: 'work' });
         if (fuse === 'undo') continue;
         // Nobody saw the fuse burn out: the yes is not acted on.
+        if (fuse === 'lost') return 'waits';
+        return await decide(requestId, stage);
+      } finally {
+        answering.delete(requestId);
+      }
+    }
+  }
+
+  /**
+   * A request asked in plain words, with the exact action on a sheet of paper
+   * under them, so that what is approved is on screen at the moment of the
+   * yes. Yes burns the fuse and decides. Esc is no. A click somewhere else is
+   * neither: the sheet stays, and goes back to the count if left alone.
+   */
+  async function playSheet(first: ApprovalRequest, stage: NotchStage): Promise<NotchItemEnd> {
+    const requestId = first.id;
+    for (;;) {
+      const request = pendingRequest(requestId);
+      if (!request) return 'settled';
+      const asked = question(request);
+      const destructive = impactFromCategory(request.action_category) === 'destructive';
+      const id = stage.id();
+      stage.put({
+        id, kind: 'sheet', say: [asked], yes: 'approve', stay: true, ...(destructive ? { mood: 'careful' as const } : {}),
+        blocks: [
+          { kind: 'paper', lines: notchApprovalExact(request).map((line): NotchPart[] => [line]) },
+          { kind: 'note', say: ['Under the question is exactly what will be done.'] },
+        ],
+      });
+      // Opened before anybody had worded it: the question is the kind of
+      // thing it is, and becomes the plain words when they are in. The exact
+      // action under it does not change.
+      if (deps.describe && !words.has(requestId)) {
+        void prepare(request).then(() => {
+          if (!stage.ended() && words.get(requestId)) stage.surface.update(id, { say: [words.get(requestId)!] });
+        });
+      }
+      const left = stage.wait(sheetMs).then(() => null);
+      left.catch(() => {});
+      const answer = await Promise.race([stage.answer(id, ['yes', 'no']), left]);
+      // Left alone: it waits, and comes round again.
+      if (!answer) return 'waits';
+      if (answer.act === 'no') return refuse(requestId, stage);
+      answering.add(requestId);
+      try {
+        // In the words that were on the sheet when yes was given.
+        const said = words.get(requestId) ?? asked;
+        const fuse = await stage.fuse([`${bare(said.replace(/\?+$/, ''))}…`], fuseMs, { mood: 'work' });
+        if (fuse === 'undo') continue;
         if (fuse === 'lost') return 'waits';
         return await decide(requestId, stage);
       } finally {
@@ -296,7 +453,10 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       // What was already waiting when the notch came up joins the count
       // quietly, as the toast leaves a backlog alone.
       speaks: raised || now() - request.created_at < FRESH_MS,
-      title: () => [shortened(notchApprovalSentence(deps.approvalManager.getRequest(requestId) ?? request))],
+      title: () => {
+        const current = deps.approvalManager.getRequest(requestId) ?? request;
+        return [words.get(requestId) ?? shortened(notchApprovalSentence(current))];
+      },
       check: () => pendingRequest(requestId) !== null,
       play: (stage) => play(requestId, stage),
     };
@@ -315,11 +475,12 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
     for (const request of [...pending].sort((a, b) => a.created_at - b.created_at)) {
       if (known.has(request.id)) continue;
       known.add(request.id);
-      inbox.add(item(request));
+      arrive(request, false);
     }
     for (const requestId of [...known]) {
       if (ids.has(requestId) || answering.has(requestId)) continue;
       known.delete(requestId);
+      words.delete(requestId);
       // Decided, expired or withdrawn somewhere else: the line leaves by itself.
       inbox.remove(itemId(requestId));
     }
@@ -329,7 +490,25 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
     const request = pendingRequest(requestId);
     if (!request || inbox.showing() === itemId(requestId)) return;
     known.add(requestId);
-    inbox.add(item(request, true));
+    arrive(request, true);
+  }
+
+  /**
+   * Puts a request in the inbox, once its plain words are there (or were not
+   * to be had in time). Until then whatever is on the notch stays on it.
+   */
+  function arrive(request: ApprovalRequest, raised: boolean): void {
+    const add = (): void => {
+      // Decided while its words were being found, or already on the notch.
+      if (!pendingRequest(request.id) || !known.has(request.id) || inbox.showing() === itemId(request.id)) return;
+      inbox.add(item(request, raised));
+    };
+    // One that will not speak up (it was already waiting when the notch came
+    // up) is not worded now: that would be a model call for every old
+    // request at every start. It is worded when it is opened.
+    const speaks = raised || now() - request.created_at < FRESH_MS;
+    if (!speaks || !deps.describe || words.has(request.id) || notchApprovalWay(request) !== 'sheet') { add(); return; }
+    void prepare(request).then(add);
   }
 
   return { sync, itemId, raise };

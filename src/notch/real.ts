@@ -91,6 +91,8 @@ export interface NotchRealDeps {
     modelReady: NotchAsksDeps['modelReady'];
     remember?: NotchAsksDeps['remember'];
     understand?: NotchAsksDeps['understand'];
+    /** Puts an approval in plain words, from its tool and arguments alone. */
+    describeApproval?: (request: ApprovalRequest) => Promise<string | null>;
     /** The desktop app's recordings arrive as its events. */
     talkPort: NotchTalkPort;
     stt: NotchTalkDeps['stt'];
@@ -137,6 +139,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     approve: deps.approve,
     deny: deps.deny,
     openDashboard: deps.openDashboard,
+    describe: deps.asks?.describeApproval,
+    clock: deps.clock,
     log,
   });
   let talk: NotchTalk | null = null;

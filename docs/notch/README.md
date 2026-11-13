@@ -166,14 +166,45 @@ What holds for all of them:
     command, a file write, a delete, an install, a message, stopping an
     agent. The rule a spoken yes follows (nothing destructive by voice) is
     not applied on the notch, by the owner's decision of 13 November 2026;
-    a destructive request is shown with a careful face. Three things a key
-    does not approve: a payment, a request that needs on-screen review (the
-    product refuses both from every surface but the dashboard), and a
-    sentence longer than three lines of the notch (200 columns) or one that
-    could be a look-alike. The line says why and yes on it only opens the
-    dashboard. A sentence is drawn one block per word, and a word longer
-    than a line (a path, a URL) is cut into pieces a line can break between,
-    so no part of what is being approved is ever out of sight.
+    a destructive request is shown with a careful face. Two things a key
+    never approves: a payment (the product refuses it from every surface but
+    the dashboard), and an action whose letters could be look-alikes or
+    whose exact text is over 3,000 columns. The line says why and yes on it
+    only opens the dashboard. A sentence is drawn one block per word, and a
+    word longer than a line (a path, a URL) is cut into pieces a line can
+    break between, so no part of what is being approved is ever out of sight.
+38. **An approval is asked in plain words, with the exact action under
+    them.** Decided by the owner on 13 November 2026: a person is asked "Look
+    up where Steam is installed?", not shown a registry query. An action
+    whose exact sentence is short (60 columns), and the model's own one-line
+    intent, are a line as before. Anything longer, and anything that has to
+    be reviewed on screen, is a sheet: the question on top, and on paper
+    under it every character of what will be done (`notchApprovalExact`). So
+    what is approved is on screen at the moment of the yes. The question is
+    written by a small model that is shown the tool and its arguments and
+    nothing else, not the conversation and not what the agent read, so a page
+    that steered the agent cannot also word the question. When it has no
+    answer in four seconds the question is the kind of thing it is ("Run a
+    command on this computer?"). On such a sheet yes approves, Esc is a no,
+    and a click somewhere else is neither.
+39. **The notch may approve what has to be reviewed on screen.** The product
+    lets only the dashboard approve a browser or desktop action, because a
+    chat reply or a toast cannot show what it would do. The notch is on the
+    screen the action happens on and shows it as in 38, so its yes counts
+    (`approvalDecidableBy`, asked by the decision function and by the
+    executor). Every other surface is refused as before.
+40. **Opening an app is not asked about.** Decided by the owner on 13
+    November 2026, with the operating system as the measure: it does not ask
+    before it opens an app; it asks before a delete, a payment, or a program
+    it does not know. In a turn the owner started on the notch, a plain app
+    open needs no approval and is not held back by outside content read
+    earlier in the turn. A plain app open is `desktop_launch_app` with no
+    arguments, of an app named as a person names one or installed in the
+    system's own folders for apps, and never a shell, a script host, an
+    installer or a tool that acts by being started (`authority/app-open.ts`).
+    Opening it still counts as outside content: what the turn does after it
+    is asked about as before. Everywhere but a notch turn, and with the
+    switch off, opening an app is reviewed on screen as it always was.
 24. **A tap cannot land on the wrong thing.** A line that came by itself
     takes no yes and no Esc for 0.7 s, counted in the page from when it was
     drawn. After that an Esc pressed for the app in front does land on the
@@ -363,6 +394,12 @@ And these are behind the switch:
 - Workflow questions, failures and suggestions on the notch have tests but
   no fixture that makes a real workflow run, so they have not been seen on a
   real brain. Approvals, promises and the pause have.
+- After a turn has opened an app or read a window, a page or a file, every
+  command it runs next is asked about, also one that only reads (the
+  product's guard against a page telling Jarvis what to do). On the notch
+  that is one tap each, in plain words. It is not loosened.
+- The plain words of an approval are a model's. They can be wrong. The exact
+  action under them is what is approved.
 - A second instruction while one is running is not queued: it is not
   started, and the notch says what is still running.
 - "What was understood" in the ledger is a second, small model's one
