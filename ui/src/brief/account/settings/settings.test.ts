@@ -6,6 +6,7 @@ import {
 } from "./fixtures";
 import { createSettingsPort } from "./adapter";
 import {
+  readAiProvider,
   readSettings,
   readVoice,
   type SettingsRead,
@@ -399,4 +400,45 @@ test("a settings read maps the flag-off answer to unavailable, and an internal e
     destinations: {}, request: async () => Response.json({ code }, { status }) } as never).read(new AbortController().signal);
   expect(await answer(503, "unavailable")).toEqual({ state: "unavailable" });
   expect(await answer(500, "internal")).toEqual({ state: "error" });
+});
+test("the AI provider row survives the voice settings being switched off", async () => {
+  const f = makeSettingsFixture();
+  const voiceGate = deferred<void>();
+  const original = f.host.request;
+  f.host.request = async (path, init) =>
+    path === "/api/config/llm"
+      ? original(path, init)
+      : voiceGate.promise.then(() => Response.json({ code: "unavailable" }, { status: 503 }));
+  f.controller.setAccess(true);
+  for (let i = 0; i < 100 && f.controller.snapshot().ai === null; i++) await Bun.sleep(1);
+  voiceGate.resolve();
+  for (let i = 0; i < 100 && f.controller.snapshot().availability !== "unavailable"; i++) await Bun.sleep(1);
+  expect(f.controller.snapshot().availability).toBe("unavailable");
+  expect(f.controller.snapshot().ai).toEqual({ state: "ready", provider: "Anthropic", model: "claude-sonnet-4-5" });
+  f.controller.retire();
+});
+test("the AI provider read never exposes a key and names what is really configured", () => {
+  const view = (body: Record<string, unknown>) => readAiProvider({ providers: {}, default: null, ...body });
+  // A self-hosted provider the user happened to name usejarvis_ai is theirs, not the hosted plan.
+  expect(view({ providers: { usejarvis_ai: { kind: "openai", has_api_key: false } }, default: "usejarvis_ai:gpt-4o" }))
+    .toEqual({ state: "missing", provider: "OpenAI (usejarvis_ai)" });
+  expect(view({ default: "usejarvis_ai:uj-chat", hosted_llm: true })).toEqual({ state: "managed", model: "uj-chat" });
+  expect(view({ hosted_llm: true })).toEqual({ state: "managed", model: null });
+  // A custom-named provider is labelled by its kind; keyless and optional-key kinds are ready.
+  expect(view({ providers: { work: { kind: "anthropic", has_api_key: true } }, default: "work:claude-x" }))
+    .toEqual({ state: "ready", provider: "Anthropic (work)", model: "claude-x" });
+  expect(view({ providers: { ollama: { kind: "ollama", has_api_key: false } }, default: "ollama:llama3" }))
+    .toEqual({ state: "ready", provider: "Ollama", model: "llama3" });
+  expect(view({ providers: { gw: { kind: "litellm", has_api_key: false } }, default: "gw:m" }))
+    .toEqual({ state: "ready", provider: "LiteLLM (gw)", model: "m" });
+  expect(view({ providers: { local: { kind: "openai_compatible", has_api_key: false } }, default: "local:m" }))
+    .toEqual({ state: "ready", provider: "OpenAI-compatible (local)", model: "m" });
+  // The routing the daemon reports wins over the stored default; a deleted provider is missing.
+  expect(view({ providers: { openai: { kind: "openai", has_api_key: true } }, default: "openai:gpt-4o",
+    effective: { tiers: { conversation: { ref: "gone:model", source: "choice" } } } }))
+    .toEqual({ state: "missing", provider: "gone" });
+  expect(view({ default: "malformed" })).toEqual({ state: "missing", provider: null });
+  expect(readAiProvider({ default: "openai:gpt-4o" })).toBeNull();
+  expect(JSON.stringify(view({ providers: { openai: { kind: "openai", has_api_key: true, api_key: "sk-secret" } },
+    default: "openai:gpt-4o" }))).not.toContain("sk-secret");
 });

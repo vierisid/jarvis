@@ -162,3 +162,37 @@ test('#1153 review: the model reads neither a webhook secret nor its scheme, whi
   const seen = versionAsModelSees({ trigger: { name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input: { secret: 'whsec-x', signature_scheme: 'timestamped', other: 1 } } } });
   expect((seen.trigger as FlowTriggerNode).settings!.input).toEqual({ secret: '[redacted]', other: 1 });
 });
+
+describe('a zip step password (file-helper zipFiles and unzipFile)', () => {
+  const FILES = '@activepieces/piece-file-helper';
+  const zipInput = () => ({ files: [{ file: 'https://example.com/a.txt', filePath: 'a.txt' }], outputFileName: 'out', usePassword: true,
+    passwordOptions: { password: 'z1p-pa55word', encryptionMethod: 'aes-256' } });
+  const zip = (name: string, action = 'zipFiles'): FlowTriggerNode => ({ name, type: 'PIECE',
+    settings: { pieceName: FILES, actionName: action, input: zipInput() } } as FlowTriggerNode);
+  const leaks = (value: unknown) => JSON.stringify(value).includes('z1p-pa55word');
+
+  test('is redacted for the model, in sample data and sample inputs, and in run history, also for a step the graph no longer names', () => {
+    for (const action of ['zipFiles', 'unzipFile']) {
+      const trigger = graph(zip('pack', action));
+      const recorded = { type: 'PIECE', status: 'SUCCEEDED', input: zipInput(), output: {} };
+      const seen = versionAsModelSees({ trigger, sampleData: { pack: recorded }, sampleInput: { pack: zipInput() } });
+      expect(leaks(seen)).toBe(false);
+      expect((seen.trigger as FlowTriggerNode).nextAction!.settings!.input!.passwordOptions).toEqual({ password: '[redacted]', encryptionMethod: 'aes-256' });
+      expect(leaks(redactRunSteps({ pack: { output: recorded } }, trigger))).toBe(false);
+      expect(leaks(redactRunSteps({ pack_old: { output: recorded } }, trigger))).toBe(false);
+    }
+  });
+
+  test('an edit that writes the redacted view back keeps the stored password, and moving it into a visible field is refused', () => {
+    const saved = graph(zip('pack'));
+    const g = versionAsModelSees({ trigger: saved }).trigger as FlowTriggerNode;
+    g.nextAction!.settings!.input!.outputFileName = 'renamed';
+    const restored = restoreRedactedCredentials(saved, g);
+    expect(credentialEditRefusal(saved, g, restored)).toBeNull();
+    expect((restored.nextAction!.settings!.input!.passwordOptions as Record<string, unknown>).password).toBe('z1p-pa55word');
+    expect(edit(saved, (x) => { x.nextAction!.settings!.input!.usePassword = false; })).toBeNull();
+    // A password moved to another step (the restore only puts it back where it was) stays the marker: refused.
+    expect(edit(saved, (x) => { x.nextAction!.settings!.input!.outputFileName = (x.nextAction!.settings!.input!.passwordOptions as Record<string, string>).password; }))
+      .toMatch(/would store \[redacted\]/);
+  });
+});

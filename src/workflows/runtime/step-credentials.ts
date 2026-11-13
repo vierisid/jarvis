@@ -1,7 +1,7 @@
 /**
  * Inline credentials of HTTP and GraphQL steps outside the approval path
- * (#1153). Those steps take a token, a password or an API key as plain props
- * (`redactHttpInput`), and the engine records each step's resolved input on
+ * (#1153), and the zip steps' password. Those steps take a token, a password
+ * or an API key as plain props (`redactHttpInput`, `redactZipPassword`), and the engine records each step's resolved input on
  * its step output, which the daemon keeps in run history (`flow_run.steps`)
  * and copies into a version's sample data. The approval card and the effect
  * record were already redacted; run history, sample data and the version the
@@ -23,10 +23,25 @@ import { GRAPHQL_PIECE, HTTP_PIECE, REDACTED, redactCredentials, redactGraphqlIn
 
 type Redactor = (input: Record<string, unknown>) => Record<string, unknown>;
 
+const FILE_HELPER_PIECE = '@activepieces/piece-file-helper';
+
+/**
+ * The zip steps' password (file-helper `zipFiles` and `unzipFile`), which they
+ * take under `passwordOptions` once "Use password" is on.
+ */
+export function redactZipPassword(input: Record<string, unknown>): Record<string, unknown> {
+  const options = input.passwordOptions;
+  if (!object(options) || !('password' in options)) return input;
+  const password = options.password;
+  if (password === null || password === undefined || password === '') return input;
+  return { ...input, passwordOptions: { ...options, password: REDACTED } };
+}
+
 /** Pieces whose props carry a credential inline, and what hides it. */
 const CREDENTIAL_REDACTORS: ReadonlyMap<string, Redactor> = new Map<string, Redactor>([
   [HTTP_PIECE, redactHttpInput],
   [GRAPHQL_PIECE, redactGraphqlInput],
+  [FILE_HELPER_PIECE, redactZipPassword],
 ]);
 
 /**
@@ -35,6 +50,10 @@ const CREDENTIAL_REDACTORS: ReadonlyMap<string, Redactor> = new Map<string, Reda
  * the URL of such a step is shown by its output whatever its input reads.
  */
 const SENDING_ACTION = 'send_request';
+
+/** Whether a step's output leaves its credentials out, so its input is judged as the model reads it. */
+const outputHidesCredentials = (settings: FlowTriggerNode['settings'] | undefined): boolean =>
+  settings?.actionName === SENDING_ACTION || settings?.pieceName === FILE_HELPER_PIECE;
 
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -68,11 +87,16 @@ function redactorsByStep(trigger: FlowTriggerNode | null | undefined): { byName:
 
 type Redactors = ReturnType<typeof redactorsByStep>;
 
+/** A zip step's input: a password under `passwordOptions`. */
+const looksLikeZip = (input: unknown): boolean => object(input) && object(input.passwordOptions) && 'password' in input.passwordOptions;
+
 /** The redactor for a recorded step: by its graph node, else by its shape when the graph has no such step. */
 function redactorFor(name: string, input: unknown, redactors: Redactors): Redactor | undefined {
   const named = redactors.byName.get(name);
   if (named) return named;
-  return !redactors.names.has(name) && looksLikeRequest(input) ? redactGraphqlInput : undefined;
+  if (redactors.names.has(name)) return undefined;
+  if (looksLikeRequest(input)) return redactGraphqlInput;
+  return looksLikeZip(input) ? redactZipPassword : undefined;
 }
 
 /**
@@ -290,8 +314,8 @@ function storedCredentials(saved: FlowTriggerNode): Map<string, Set<string>> {
 function visibleNode(node: FlowTriggerNode): string {
   const { nextAction: _n, children: _c, firstLoopAction: _l, ...rest } = node as FlowTriggerNode & { firstLoopAction?: unknown; children?: unknown };
   const redact = credentialRedactor(node.settings?.pieceName);
-  // Redacted only where it is still a request: a parse_url step's output shows its URL.
-  const hidden = redact && node.settings?.actionName === SENDING_ACTION && object(node.settings.input);
+  // Redacted only where the output does not repeat it: a parse_url step's output shows its URL.
+  const hidden = redact && outputHidesCredentials(node.settings) && object(node.settings?.input);
   return JSON.stringify(hidden ? { ...rest, settings: { ...rest.settings, input: redact!(node.settings!.input!) } } : rest);
 }
 

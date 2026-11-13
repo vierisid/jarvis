@@ -20,6 +20,7 @@ import axios from 'axios';
 // Jarvis (#961): the egress guard and the one method rule the daemon judges by.
 import { EgressRefusedError, egressGuardedAxios, egressPolicyFromEnv, egressRefusalIn } from '../../../../../../../../runtime/http-egress';
 import { httpRequestIsRead } from '../../../../../../../../runtime/piece-effects';
+import { continuedFailure, describeHttpFailure, httpFailureOf, isRetryableFailure } from '../../../../../../../../runtime/http-failure';
 
 enum AuthType {
   NONE = 'NONE',
@@ -252,7 +253,7 @@ export const httpSendRequestAction = createAction({
       options: {
         disabled: false,
         options: [
-          { label: 'Retry on all errors (4xx, 5xx)', value: 'retry_all' },
+          { label: 'Retry on errors (5xx, timeouts, 408, 429)', value: 'retry_all' },
           { label: 'Retry on internal errors (5xx)', value: 'retry_5xx' },
           { label: 'Do not retry', value: 'retry_none' },
           { label: 'Continue flow on all errors', value: 'continue_all' },
@@ -385,38 +386,41 @@ export const httpSendRequestAction = createAction({
         if (refused) throw attempts > 0 && !refused.afterSend ? new EgressRefusedError(refused.message, { afterSend: true }) : refused;
         attempts++;
 
+        // === JARVIS PATCH: a failure reads as a sentence (runtime/http-failure.ts) ===
+        // Anything that is not an HTTP failure keeps its own message. A 4xx
+        // other than 408 and 429 is not sent again whatever "Retry on" says: the
+        // same request would be refused the same way.
+        const failure = httpFailureOf(error);
+        if (!failure) throw error;
+        const message = describeHttpFailure(failure, { url, timeoutSeconds: timeout });
+        const fail = () => { throw new Error(message); };
+        const retry = isRetryableFailure(failure) && attempts < maxAttempts;
         switch (failureMode) {
           case 'retry_all': {
-            if (attempts < maxAttempts) continue;
-            throw error;
+            if (retry) continue;
+            return fail();
           }
           case 'retry_5xx': {
-            if (
-              (error as HttpError).response.status >= 500 &&
-              (error as HttpError).response.status < 600
-            ) {
-              if (attempts < maxAttempts) continue;
-              throw error; // after 3 tries, throw
+            if (failure.hasResponse && failure.status !== undefined && failure.status < 500) {
+              return continuedFailure(failure, message); // below 500, 408 and 429 included: the flow continues, as before
             }
-            return (error as HttpError).errorMessage(); //throw error; // non 5xxx error
+            if (retry) continue;
+            return fail();
           }
 
           case 'continue_all':
-            return (error as HttpError).errorMessage();
+            return continuedFailure(failure, message);
           case 'continue_4xx':
-            if (
-              (error as HttpError).response?.status >= 400 &&
-              (error as HttpError).response?.status < 500
-            ) {
-              return (error as HttpError).errorMessage();
+            if (failure.hasResponse && failure.status !== undefined && failure.status >= 400 && failure.status < 500) {
+              return continuedFailure(failure, message);
             }
-            if (attempts < maxAttempts) continue;
-            throw error;
+            if (retry) continue;
+            return fail();
           case 'continue_none':
-            throw error;
           default:
-            throw error;
+            return fail();
         }
+        // === END JARVIS PATCH ===
       }
     }
 
@@ -438,7 +442,8 @@ const handleBinaryResponse = (
     body = bodyContent;
   }
 
-  return { status, headers, body };
+  // Jarvis: `ok` is the flag a continued failure also carries (`ok: false`).
+  return { status, headers, body, ok: true };
 };
 
 const isBinaryBody = (body: string | ArrayBuffer | Buffer) => {
