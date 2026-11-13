@@ -65,9 +65,31 @@ export const jsonToCsvAction = createAction({
     }
     const flattened = json_array.map((item) => flatten(item) as Record<string, string>);
 
+    // === JARVIS PATCH: the header is every key of every row ===
+    // Upstream took the header from the first row, so a column only a later row
+    // had was dropped, with its values, and the step still succeeded. Keys are
+    // listed in first-seen order; a row without a key gets an empty cell.
+    // Cells are read as own properties and handed over by position: given an
+    // object row, csv-stringify resolves a column like `tags.0` as a path, so a
+    // row whose `tags` is the string "foo" would get "f", and a row without
+    // `toString` would read the prototype's function and fail the step.
+    const isRow = (row: unknown): row is Record<string, unknown> =>
+      row !== null && typeof row === 'object' && !Array.isArray(row);
+    const columns = [...new Set(flattened.flatMap((row) => (isRow(row) ? Object.keys(row) : [])))];
+    if (columns.length > 0) {
+      const cells = flattened.map((row) =>
+        isRow(row) ? columns.map((key) => (Object.prototype.hasOwnProperty.call(row, key) ? row[key] : undefined)) : row,
+      );
+      return stringify(cells, {
+        header: true,
+        delimiter: delimiter_type,
+        columns,
+      });
+    }
     return stringify(flattened, {
       header: true,
       delimiter: delimiter_type,
     });
+    // === END JARVIS PATCH ===
   },
 });

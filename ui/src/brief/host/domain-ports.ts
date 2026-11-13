@@ -68,7 +68,8 @@ export function createDomainPorts(scopeId: string, http: HostTransport, storage:
   };
   const decisions: DecisionsPort = {
     read: async () => {
-      const rows = await collection('/api/brief/decisions', 'decisionId');
+      // Held runs are a note under Needs you, not a decision (see otherDecisions).
+      const rows = (await collection('/api/brief/decisions', 'decisionId')).filter((row: { kind?: string }) => row.kind !== 'held');
       const data: DecisionView[] = [];
       // F14 supplies the typed document and server-approved action set together.
       for (const row of rows) {
@@ -122,6 +123,7 @@ export function createDomainPorts(scopeId: string, http: HostTransport, storage:
       const rows = await collection('/api/brief/decisions', 'decisionId');
       const result = [];
       for (const row of rows) {
+        if (row.kind === 'held') { result.push(row); continue; }
         const doc = await get(`/api/brief/decisions/${encodeURIComponent(row.decisionId)}/document`);
         if (doc.decision?.revision !== row.revision || !Array.isArray(doc.actions)) throw Error('Decision changed');
         // Exactly the rows DecisionsRoom leaves out (it keeps only rows with document actions), so nothing is
