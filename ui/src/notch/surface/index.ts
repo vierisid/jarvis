@@ -167,13 +167,14 @@ export function createNotchSurface(
   };
 
   // A question that waits for a yes or a no: an approval (a line with a yes, or
-  // a sheet that stays), choices, or a question back. The window is told, so
-  // that it does not stay hidden behind a fullscreen video with a task standing
-  // still on it.
+  // a sheet that stays and has a yes), choices, or a question back. The window
+  // is told, so that it does not stay hidden behind a fullscreen video with a
+  // task standing still on it. A sheet that stays only to be read (a long
+  // answer) is not a question: it must not come over a film.
   const askingListeners = new Set<(asking: boolean) => void>();
   let wasAsking = false;
   function syncAsking(): void {
-    const waits = line !== null && (line.kind === 'offer' || line.kind === 'ask' || (line.kind === 'sheet' && line.stay === true));
+    const waits = line !== null && (line.kind === 'offer' || line.kind === 'ask' || (line.kind === 'sheet' && line.stay === true && !!line.yes));
     const asking = alive && born && cur !== null && !cur.done && waits;
     if (asking === wasAsking) return;
     wasAsking = asking;

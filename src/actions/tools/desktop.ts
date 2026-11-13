@@ -525,7 +525,7 @@ export const desktopTypeTool: ToolDefinition = {
     },
     line_break: {
       type: 'string',
-      description: 'How a line break in the text is typed (Windows): "enter" (default) presses Enter, "shift_enter" presses Shift+Enter. In a chat app (WhatsApp, Slack, Teams, Discord) Enter SENDS the message, so text of several lines must use "shift_enter" there, or its first line is sent alone.',
+      description: 'How a line break in the text is typed: "enter" (default) presses Enter, "shift_enter" presses Shift+Enter. In a chat app (WhatsApp, Slack, Teams, Discord) Enter SENDS the message, so text of several lines must use "shift_enter" there, or its first line is sent alone. "shift_enter" is built for Windows; elsewhere text with a line break is refused with it, and is typed one line at a time with desktop_press_keys "shift,enter" between.',
       required: false,
       enum: ['enter', 'shift_enter'],
     },
@@ -537,6 +537,14 @@ export const desktopTypeTool: ToolDefinition = {
     }
     return executeLocal((controller) => serializedLocal(async () => {
       const elementId = params.element_id as number | undefined;
+      // Shift+Enter is typed by the Windows desktop app only. Typed here it
+      // would be a plain Enter, which sends the message in a chat app: the
+      // thing it was asked for to avoid. Refused before the click.
+      if (params.line_break === 'shift_enter' && /[\r\n]/.test(String(params.text ?? ''))) {
+        throw new ActionOutcomeError({ status: 'blocked', code: 'DESKTOP_SOFT_BREAK_UNSUPPORTED', effect: 'not_started',
+          message: 'Error: line_break "shift_enter" needs the Jarvis desktop app on Windows, and this text has a line break in it, so nothing was typed. '
+            + 'Type it one line at a time, pressing shift,enter with desktop_press_keys between the lines.' });
+      }
       if (elementId !== undefined) {
         await controller.clickElement(await confirmedLocalElement(controller, elementId));
         await Bun.sleep(100);
@@ -800,41 +808,42 @@ export const desktopFindElementTool: ToolDefinition = {
 export const DESKTOP_POINTER_ACTIONS = ['click', 'double_click', 'right_click', 'scroll_up', 'scroll_down', 'drag'] as const;
 
 /**
- * Where a pixel of a picture is, as a fraction of the picture: the middle of
- * that pixel. Null when it is not a pixel of the picture at all.
+ * A place on the picture as the model gives it: thousandths of the picture's
+ * width or height, 0 at the left or top edge and 1000 at the right or bottom.
+ * Not pixels: a provider often shrinks a picture before the model sees it, and
+ * a pixel read off the smaller one is a different place on the real one. A
+ * share of the picture is the same share of the screen whatever was shrunk.
+ * Null when it is not a place on the picture at all.
  */
-export function pictureFraction(pixel: unknown, size: number): number | null {
-  if (typeof pixel !== 'number' || !Number.isFinite(pixel) || pixel < 0 || pixel >= size) return null;
-  return (Math.floor(pixel) + 0.5) / size;
+export function pictureFraction(thousandths: unknown): number | null {
+  if (typeof thousandths !== 'number' || !Number.isFinite(thousandths) || thousandths < 0 || thousandths > 1000) return null;
+  return thousandths / 1000;
 }
 
 /**
  * A `desktop_pointer` call as the sidecar takes it: the place as fractions of
- * the main display, worked out from the picture the model last saw of that
- * machine's screen. A string is why it cannot be worked out; nothing has been
- * done then.
+ * the main display. `seen` is whether a model was shown that machine's screen
+ * recently enough to have read a place off it. A string is why the call cannot
+ * be made; nothing has been done then.
  */
-export function pointerRequest(
-  params: Record<string, unknown>,
-  picture: { width: number; height: number } | null,
-): Record<string, unknown> | string {
-  if (!picture) {
+export function pointerRequest(params: Record<string, unknown>, seen: boolean): Record<string, unknown> | string {
+  if (!seen) {
     return 'there is no recent desktop_screenshot of that screen to read a place off, so nothing was done. '
-      + 'Take a desktop_screenshot, then give x and y as pixels in that picture.';
+      + 'Take a desktop_screenshot, then give x and y as thousandths of that picture.';
   }
-  const size = `${picture.width}x${picture.height}`;
-  const fx = pictureFraction(params.x, picture.width);
-  const fy = pictureFraction(params.y, picture.height);
+  const fx = pictureFraction(params.x);
+  const fy = pictureFraction(params.y);
   if (fx === null || fy === null) {
-    return `x and y must be a pixel of the last desktop_screenshot, which is ${size} (x from 0 to ${picture.width - 1}, y from 0 to ${picture.height - 1}), so nothing was done.`;
+    return 'x and y must each be a number from 0 to 1000: thousandths of the last desktop_screenshot, '
+      + '0 at its left or top edge and 1000 at its right or bottom edge (the middle of the picture is 500, 500). Nothing was done.';
   }
   const action = typeof params.action === 'string' && params.action ? params.action : 'click';
   const request: Record<string, unknown> = { action, fx, fy };
   if (action === 'drag') {
-    const toFx = pictureFraction(params.to_x, picture.width);
-    const toFy = pictureFraction(params.to_y, picture.height);
+    const toFx = pictureFraction(params.to_x);
+    const toFy = pictureFraction(params.to_y);
     if (toFx === null || toFy === null) {
-      return `a drag needs to_x and to_y, a pixel of the last desktop_screenshot (${size}) where it ends, so nothing was done.`;
+      return 'a drag needs to_x and to_y, each from 0 to 1000, for where it ends, so nothing was done.';
     }
     request.to_fx = toFx;
     request.to_fy = toFy;
@@ -861,7 +870,7 @@ export function pointerRequest(
  */
 export const desktopPointerTool: ToolDefinition = {
   name: 'desktop_pointer',
-  description: 'Click, double-click, right-click, scroll or drag at a place on the screen. For windows whose snapshot lists nothing to act on: a game, a store or launcher page, a canvas, a video. Take a desktop_screenshot first: x and y are pixels in that picture, counted from its top left corner (its size is in its caption). Whenever desktop_snapshot does list the element, use desktop_click with its [id] instead: an [id] is exact, a place read off a picture is not. After acting, take a new desktop_screenshot to see what happened; never assume it worked. Windows only.',
+  description: 'Click, double-click, right-click, scroll or drag at a place on the screen. For windows whose snapshot lists nothing to act on: a game, a store or launcher page, a canvas, a video. Take a desktop_screenshot first, then say where on that picture: x and y are THOUSANDTHS of the picture, not pixels. x 0 is its left edge and 1000 its right edge; y 0 is its top edge and 1000 its bottom edge; the middle is x 500, y 500; something three quarters of the way across and a tenth of the way down is x 750, y 100. Whenever desktop_snapshot does list the element, use desktop_click with its [id] instead: an [id] is exact, a place read off a picture is not. After acting, take a new desktop_screenshot to see what happened; never assume it worked. Windows only.',
   category: 'desktop',
   failureIsOutsideContent: true,
   parameters: {
@@ -872,12 +881,12 @@ export const desktopPointerTool: ToolDefinition = {
     },
     x: {
       type: 'number',
-      description: 'Pixels from the left edge of the last desktop_screenshot',
+      description: 'How far across the last desktop_screenshot, in thousandths of its width: 0 is the left edge, 500 the middle, 1000 the right edge',
       required: true,
     },
     y: {
       type: 'number',
-      description: 'Pixels from the top edge of the last desktop_screenshot',
+      description: 'How far down the last desktop_screenshot, in thousandths of its height: 0 is the top edge, 500 the middle, 1000 the bottom edge',
       required: true,
     },
     action: {
@@ -888,12 +897,12 @@ export const desktopPointerTool: ToolDefinition = {
     },
     to_x: {
       type: 'number',
-      description: 'For drag: pixels from the left edge of the picture where the drag ends',
+      description: 'For drag: where it ends, in thousandths of the picture\'s width (0 to 1000)',
       required: false,
     },
     to_y: {
       type: 'number',
-      description: 'For drag: pixels from the top edge of the picture where the drag ends',
+      description: 'For drag: where it ends, in thousandths of the picture\'s height (0 to 1000)',
       required: false,
     },
     amount: {
@@ -913,7 +922,7 @@ export const desktopPointerTool: ToolDefinition = {
     // The place is worked out once the machine is known to be there to act
     // on: a machine that is offline is said to be offline, not to lack a picture.
     return routeToSidecarPrepared(target, 'pointer_action', 'desktop', (sidecarId) => {
-      const request = pointerRequest(params, lastScreenPicture(sidecarId));
+      const request = pointerRequest(params, lastScreenPicture(sidecarId) !== null);
       return typeof request === 'string' ? { refuse: request, code: 'DESKTOP_POINTER_PLACE' } : request;
     });
   },
