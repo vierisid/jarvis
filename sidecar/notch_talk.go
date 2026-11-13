@@ -28,8 +28,9 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"log"
+	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -40,10 +41,75 @@ const (
 	notchTalkCap = 60 * time.Second
 	// Less voiced sound than this is not an instruction. The audio is not sent.
 	notchTalkMinVoicedMs = 250
-	// How loud a piece of sound must be to count as voice. The same level the
-	// one-shot capture and the wake listener use (DefaultVADOpts).
-	notchTalkVoiceRMS = 500.0
+
+	// How loud a piece of sound must be to count as voice is not one number:
+	// a webcam microphone across a desk is ten times quieter than a headset.
+	// So it is judged against the recording's own quiet: a piece is voice
+	// when it is this many times louder than the quiet tenth of the pieces.
+	// (The first build used the fixed 500 of the one-shot capture. On the
+	// first real microphone it met, a Logitech C270, speech hardly reached
+	// it, and every recording was thrown away as "too little".)
+	notchTalkVoiceOverQuiet = 2.5
+	// Never lower than this: below it is the hiss of the microphone itself.
+	notchTalkVoiceFloorRMS = 90.0
+	// Never higher than this, however loud the room: what the fixed level
+	// passed, this passes too.
+	notchTalkVoiceCapRMS = 500.0
 )
+
+// notchTalkPiece is one piece of sound as the device handed it over: how loud
+// it was, and how many bytes long.
+type notchTalkPiece struct {
+	rms   float32
+	bytes int32
+}
+
+// notchTalkHeard is what was measured in one recording. It is written to the
+// log for every recording, so that a level that is wrong for some microphone
+// can be seen and not guessed at.
+type notchTalkHeard struct {
+	VoicedMs int64
+	// How loud a piece had to be to count as voice in this recording.
+	Level float64
+	// The quiet tenth, the middle, the loud tenth and the loudest piece.
+	Quiet, Middle, Loud, Loudest float64
+	Pieces                        int
+}
+
+// notchTalkMeasure says how much voice there is in a recording.
+func notchTalkMeasure(pieces []notchTalkPiece, sampleRate int) notchTalkHeard {
+	heard := notchTalkHeard{Pieces: len(pieces), Level: notchTalkVoiceFloorRMS}
+	if len(pieces) == 0 {
+		return heard
+	}
+	if sampleRate <= 0 {
+		sampleRate = pebbleAudioSampleRate
+	}
+	levels := make([]float64, len(pieces))
+	for i, piece := range pieces {
+		levels[i] = float64(piece.rms)
+	}
+	sort.Float64s(levels)
+	at := func(part float64) float64 { return levels[int(part*float64(len(levels)-1))] }
+	heard.Quiet, heard.Middle, heard.Loud, heard.Loudest = at(0.1), at(0.5), at(0.9), levels[len(levels)-1]
+	level := heard.Quiet * notchTalkVoiceOverQuiet
+	if level < notchTalkVoiceFloorRMS {
+		level = notchTalkVoiceFloorRMS
+	}
+	if level > notchTalkVoiceCapRMS {
+		level = notchTalkVoiceCapRMS
+	}
+	heard.Level = level
+	var voiced int64
+	for _, piece := range pieces {
+		if float64(piece.rms) >= level {
+			voiced += int64(piece.bytes)
+		}
+	}
+	// 16-bit mono: two bytes a sample.
+	heard.VoicedMs = voiced * 1000 / (int64(sampleRate) * 2)
+	return heard
+}
 
 // notchTalkMic is the microphone as talking needs it.
 type notchTalkMic struct {
@@ -79,9 +145,12 @@ type notchTalker struct {
 
 	// Owned by the run loop.
 	cur        string
-	voiced     atomic.Int64 // bytes of sound loud enough to be voice
 	capTimer   *time.Timer
 	sampleRate int
+
+	// The pieces of the open recording. Written on the audio thread.
+	piecesMu sync.Mutex
+	pieces   []notchTalkPiece
 }
 
 func newNotchTalker() *notchTalker {
@@ -185,12 +254,21 @@ func (t *notchTalker) begin() {
 		return
 	}
 	id := newNotchTalkID()
-	t.voiced.Store(0)
+	t.piecesMu.Lock()
+	// Room for the whole cap at the device's 20 ms pieces, so nothing grows on the audio thread.
+	if cap(t.pieces) < 4096 {
+		t.pieces = make([]notchTalkPiece, 0, 4096)
+	}
+	t.pieces = t.pieces[:0]
+	t.piecesMu.Unlock()
 	refused := mic.Open(id, func(chunk []byte) {
-		// On the audio thread: count, and nothing else.
-		if pcmRMSint16(chunk) >= notchTalkVoiceRMS {
-			t.voiced.Add(int64(len(chunk)))
+		// On the audio thread: measure, note, and nothing else.
+		piece := notchTalkPiece{rms: float32(pcmRMSint16(chunk)), bytes: int32(len(chunk))}
+		t.piecesMu.Lock()
+		if len(t.pieces) < cap(t.pieces) {
+			t.pieces = append(t.pieces, piece)
 		}
+		t.piecesMu.Unlock()
 	})
 	if refused != "" {
 		send("refused", map[string]any{"reason": refused}, nil)
@@ -222,13 +300,15 @@ func (t *notchTalker) close() (id string, pcm []byte, dur time.Duration, mic *no
 	return id, pcm, dur, mic, send
 }
 
-func (t *notchTalker) voicedMs() int64 {
-	rate := int64(t.sampleRate)
-	if rate <= 0 {
-		rate = pebbleAudioSampleRate
-	}
-	// 16-bit mono: two bytes a sample.
-	return t.voiced.Load() * 1000 / (rate * 2)
+// measure says how much voice the recording that was just closed had in it,
+// and writes what it found to the log with what became of the recording.
+func (t *notchTalker) measure(id string, dur time.Duration, outcome func(notchTalkHeard) string) notchTalkHeard {
+	t.piecesMu.Lock()
+	heard := notchTalkMeasure(t.pieces, t.sampleRate)
+	t.piecesMu.Unlock()
+	log.Printf("[notch] talk %s: %.2fs, %d ms of voice at level %.0f (quiet %.0f, middle %.0f, loud %.0f, loudest %.0f, %d pieces): %s",
+		id, dur.Seconds(), heard.VoicedMs, heard.Level, heard.Quiet, heard.Middle, heard.Loud, heard.Loudest, heard.Pieces, outcome(heard))
+	return heard
 }
 
 func (t *notchTalker) end(reason string) {
@@ -241,10 +321,19 @@ func (t *notchTalker) end(reason string) {
 	}
 	// Muted while the keys were held: what was recorded before stays here.
 	if mic == nil || mic.Muted() {
+		t.measure(id, dur, func(notchTalkHeard) string { return "muted, not sent" })
 		send("cancelled", map[string]any{"talk_id": id}, nil)
 		return
 	}
-	voiced := t.voicedMs()
+	voiced := t.measure(id, dur, func(heard notchTalkHeard) string {
+		switch {
+		case reason == "cap":
+			return "ran into the limit, not sent"
+		case heard.VoicedMs < notchTalkMinVoicedMs:
+			return "too little voice, not sent"
+		}
+		return "sent"
+	}).VoicedMs
 	payload := map[string]any{
 		"talk_id":     id,
 		"voiced_ms":   voiced,
@@ -268,7 +357,8 @@ func (t *notchTalker) drop(tell bool) {
 	if t.cur == "" {
 		return
 	}
-	id, _, _, _, send := t.close()
+	id, _, dur, _, send := t.close()
+	t.measure(id, dur, func(notchTalkHeard) string { return "thrown away, not sent" })
 	if tell && send != nil {
 		send("cancelled", map[string]any{"talk_id": id}, nil)
 	}
