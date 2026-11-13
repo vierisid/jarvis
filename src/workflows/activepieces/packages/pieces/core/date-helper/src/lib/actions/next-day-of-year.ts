@@ -57,7 +57,7 @@ export const nextDayofYear = createAction({
     time: Property.ShortText({
       displayName: '24h Time',
       description:
-        'The time that you would like to get the date and time of. This must be in 24h format.',
+        'The time that you would like to get the date and time of, as HH:mm in 24h format, for example 09:30. Not used when "Use Current Time" is checked.',
       required: false,
       defaultValue: '00:00',
     }),
@@ -87,10 +87,12 @@ export const nextDayofYear = createAction({
     }),
   },
   async run(context) {
+    // === JARVIS PATCH: "Use Current Time" does not need a time to be given ===
     await propsValidation.validateZod(context.propsValue, {
       day: z.number().min(1).max(31),
-      time: z.string().regex(/^\d\d:\d\d$/),
+      ...(context.propsValue.currentTime === true ? {} : { time: z.string().regex(/^\d\d:\d\d$/) }),
     });
+    // === END JARVIS PATCH ===
 
     const timeFormat = getCorrectedFormat(context.propsValue.timeFormat);
     const timeZone = context.propsValue.timeZone as string;
