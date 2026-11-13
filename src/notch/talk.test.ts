@@ -177,3 +177,25 @@ describe('a recording whose microphone goes away', () => {
     expect(h.calls.filter((call) => call.startsWith('dropped'))).toEqual([]);
   });
 });
+
+describe('what speech-to-text writes when there were no words', () => {
+  test('a stock line from a one-word recording is not an instruction; from a longer one it is what was said', async () => {
+    const h = harness(() => ({ transcribe: async () => 'Thank you.' }));
+    h.event({ phase: 'start', talk_id: 'a1' });
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 300 }, true);
+    await settle();
+    expect(h.calls.at(-1)).toBe('nothing pc:a1 silence');
+    h.event({ phase: 'start', talk_id: 'a2' });
+    h.event({ phase: 'end', talk_id: 'a2', voiced_ms: 1500 }, true);
+    await settle();
+    expect(h.calls.at(-1)).toBe('words pc:a2 "Thank you."');
+  });
+
+  test('a real short word is kept', async () => {
+    const h = harness(() => ({ transcribe: async () => 'Stop.' }));
+    h.event({ phase: 'start', talk_id: 'a1' });
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 200 }, true);
+    await settle();
+    expect(h.calls.at(-1)).toBe('words pc:a1 "Stop."');
+  });
+});

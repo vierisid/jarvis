@@ -496,7 +496,7 @@ describe('with nobody looking, and after a restart', () => {
     const before = harness({ db });
     await before.type('explain it');
     const turn = before.door.running();
-    before.door.say(turn, 'First paragraph.\n\nSecond paragraph.');
+    before.door.say(turn, 'First paragraph.\n\nSecond paragraph.\n\nThird paragraph.');
     before.door.end(turn);
     await settle();
     expect(before.line()?.kind).toBe('sheet');
@@ -568,11 +568,10 @@ describe('the ledger on the notch', () => {
     await h.open();
     await h.answer('button', { button: 'asked' });
     const list = h.line();
-    expect(h.said()).toBe('What you asked: the last 2');
+    // A hold of the keys in which nothing was caught is not something asked.
+    expect(h.said()).toBe('What you asked: 1 thing');
     const rows = list?.kind === 'sheet' ? list.blocks.filter((block) => block.kind === 'row') : [];
-    expect(rows.map((block) => (block.kind === 'row' ? [block.say.join(''), block.small] : []))).toEqual([
-      ['Nothing was caught.', 'not caught'], ['first question', 'done'],
-    ]);
+    expect(rows.map((block) => (block.kind === 'row' ? [block.say.join(''), block.small] : []))).toEqual([['first question', 'done']]);
     await h.answer('go', { row: h.ledger.recent(2)[1]!.id });
     expect(h.said()).toBe('You typed');
     const detail = h.line();
@@ -580,7 +579,7 @@ describe('the ledger on the notch', () => {
     expect(leads).toEqual(['Typed', 'Did', 'paper']);
     // Closing the one goes back to the list, closing the list goes back to Home.
     await h.answer('no');
-    expect(h.said()).toBe('What you asked: the last 2');
+    expect(h.said()).toBe('What you asked: 1 thing');
     await h.answer('no');
     expect(h.line()?.kind).toBe('ask');
   });
@@ -601,7 +600,10 @@ describe('the shape of an answer', () => {
     expect(answerShape('It is four.')).toEqual({ kind: 'line', text: 'It is four.' });
     expect(answerShape('')).toEqual({ kind: 'line', text: 'Done.' });
     expect(answerShape('x'.repeat(141)).kind).toBe('sheet');
-    expect(answerShape('One.\n\nTwo.').kind).toBe('sheet');
+    expect(answerShape('One.\n\nTwo.\n\nThree.').kind).toBe('sheet');
+    // Two short sentences on two lines are still read at a glance.
+    expect(answerShape('Done.\nSaved to the folder.')).toEqual({ kind: 'line', text: 'Done. Saved to the folder.' });
+    expect(answerShape('- one\n- two').kind).toBe('sheet');
   });
 
   test('a very long answer is cut, and says so', () => {
@@ -611,8 +613,12 @@ describe('the shape of an answer', () => {
   });
 
   test('marks written for a web page are taken out, code is left as it is', () => {
-    expect(plainLines('# Title\n\n**Bold** and _soft_ and `code` and [a link](https://x.y).\n\n```sh\necho **hi**\n```')).toEqual(
-      ['Title', 'Bold and soft and code and a link.', 'echo **hi**']);
+    expect(plainLines('# Title\n\n**Bold** and *soft* and `code` and [a link](https://x.y).\n\n```sh\necho **hi**\n```')).toEqual(
+      ['Title', 'Bold and soft and code and a link (https://x.y).', 'echo **hi**']);
+    // What only looks like a mark is left alone: maths, and names with underscores.
+    expect(plainLines('2 * 3 * 4 = 24')).toEqual(['2 * 3 * 4 = 24']);
+    expect(plainLines('Call `__init__` or __init__ once.')).toEqual(['Call __init__ or __init__ once.']);
+    expect(plainLines('| Name | Size |\n|---|---|\n| a.txt | 2 KB |')).toEqual(['Name · Size', 'a.txt · 2 KB']);
   });
 });
 
@@ -621,7 +627,7 @@ describe('first batch of the edge-case audit', () => {
     const h = harness();
     await h.type('explain it');
     const turn = h.door.running();
-    h.door.say(turn, 'One.\n\nTwo.');
+    h.door.say(turn, 'One.\n\nTwo.\n\nThree.');
     h.door.end(turn);
     await settle();
     expect(h.line()).toMatchObject({ kind: 'sheet', stay: true });
@@ -736,5 +742,90 @@ describe('first batch of the edge-case audit', () => {
     await settle();
     expect(after.said()).toBe('Jarvis restarted before it started on: send Leo the numbers. Say it again.');
     expect(after.door.texts()).toEqual([]);
+  });
+});
+
+describe('second batch of the edge-case audit', () => {
+  test('a spoken memory is shown as it would be saved and takes one yes; a no saves nothing and says nothing', async () => {
+    const saved: string[] = [];
+    const remember: NotchAsksDeps['remember'] = async (what, _sentence, _askId, confirm) => {
+      if (confirm && !(await confirm('Anna prefers colds'))) return { ok: false, why: 'Not saved.' };
+      saved.push(what);
+      return { ok: true, said: 'Remembered: Anna prefers colds.', understood: 'Anna · prefers · colds' };
+    };
+    const no = harness({ deps: { remember } });
+    await no.speak('t1', 'remember that Anna prefers colds');
+    await no.advance(900);
+    expect(no.line()).toMatchObject({ kind: 'offer', yes: 'remember', fold: 0 });
+    expect(no.said()).toBe('Remember: Anna prefers colds?');
+    await no.answer('no');
+    expect(saved).toEqual([]);
+    expect(no.line()).toBeNull();
+    expect(row(no)).toMatchObject({ state: 'stopped', note: 'Not saved.' });
+    const yes = harness({ deps: { remember } });
+    await yes.speak('t1', 'remember that Anna prefers colds');
+    await yes.advance(900);
+    await yes.answer('yes');
+    expect(saved).toEqual(['Anna prefers colds']);
+    expect(yes.said()).toBe('Remembered: Anna prefers colds.');
+  });
+
+  test('a typed memory is the person\'s own letters, and is saved as written', async () => {
+    let asked = false;
+    const h = harness({ deps: { remember: async (_what, _sentence, _askId, confirm) => { asked = confirm !== undefined; return { ok: true, said: 'Remembered: Anna prefers calls.', understood: 'x' }; } } });
+    await h.type('Remember that Anna prefers calls.');
+    await settle();
+    expect(asked).toBe(false);
+    expect(h.said()).toBe('Remembered: Anna prefers calls.');
+  });
+
+  test('what is tied to a time is not a memory, and Italian is understood', () => {
+    expect(rememberSentence('Remember that I have a meeting tomorrow at 3')).toBeNull();
+    expect(rememberSentence('Remember that the call is on Friday')).toBeNull();
+    expect(rememberSentence('Ricorda che Anna preferisce le chiamate')).toBe('Anna preferisce le chiamate');
+    expect(rememberSentence('Ricordati che domani ho il dentista')).toBeNull();
+    expect(rememberSentence('Remember this: Leo covers support')).toBe('Leo covers support');
+  });
+
+  test('a question back stays as a question, and what is typed there is the next instruction', async () => {
+    const h = harness();
+    await h.type('send the notes to Anna');
+    const turn = h.door.running();
+    h.door.say(turn, 'Which Anna do you mean?');
+    h.door.end(turn);
+    await settle();
+    expect(h.line()).toMatchObject({ kind: 'ask', yes: 'answer' });
+    await h.advance(60_000);
+    expect(h.line()?.kind).toBe('ask');
+    await h.answer('ask', { text: 'Anna Rossi' });
+    expect(h.door.texts()).toEqual(['send the notes to Anna', 'Anna Rossi']);
+    expect(h.line()).toMatchObject({ kind: 'work' });
+  });
+
+  test('a spoken reply answers the question too, and the question is not shown again', async () => {
+    const h = harness();
+    await h.type('send the notes to Anna');
+    h.door.say(h.door.running(), 'Which Anna do you mean?');
+    h.door.end(h.door.running());
+    await settle();
+    await h.speak('t1', 'Anna Rossi');
+    await h.advance(900);
+    expect(h.door.texts()).toEqual(['send the notes to Anna', 'Anna Rossi']);
+    expect(h.ledger.unseen()).toHaveLength(0);
+  });
+
+  test('the last answer is one step away in Home for a while', async () => {
+    const h = harness();
+    await h.type('what is two plus two?');
+    h.door.say(h.door.running(), 'It is four.');
+    h.door.end(h.door.running());
+    await settle();
+    await h.answer('done');
+    await h.open();
+    const home = h.line();
+    const first = home?.kind === 'ask' ? home.blocks[0] : null;
+    expect(first).toMatchObject({ kind: 'row', id: 'last', lead: 'Last answer', say: ['It is four.'] });
+    await h.answer('go', { row: 'last' });
+    expect(h.line()).toMatchObject({ kind: 'sheet', stay: true });
   });
 });

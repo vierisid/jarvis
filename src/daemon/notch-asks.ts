@@ -107,12 +107,27 @@ export interface NotchAskOptions {
   transport(): BriefChatTransport | null;
 }
 
+/** Notch conversations this process has opened as a chat. */
+const opened = new Set<string>();
+
 /** The notch's conversation: the newest one that is still warm, or a new one, shown as an open chat. */
 function notchConversation(transport: BriefChatTransport): string {
-  const id = getOrCreateConversation(NOTCH_CHANNEL, { label: NOTCH_CONVERSATION_LABEL }).id;
-  // Open, so a dashboard that is up sees the turn as it runs. Too many open
-  // chats already is no reason to refuse the instruction.
-  try { transport.repository.conversations.setOpen(id, true); } catch { /* it stays in Closed chats */ }
+  const conversation = getOrCreateConversation(NOTCH_CHANNEL, { label: NOTCH_CONVERSATION_LABEL });
+  const id = conversation.id;
+  // A new one (after four quiet hours) is opened as a chat, once, so a
+  // dashboard that is up sees its turns as they run, and the one before it is
+  // closed: there is one Notch chat open, not one more every few hours. If the
+  // owner closes it, it stays closed.
+  if (conversation.message_count === 0 && !opened.has(id)) {
+    opened.add(id);
+    try {
+      for (const old of transport.repository.db.query<{ id: string }, [string, string]>(
+        'SELECT id FROM conversations WHERE channel = ? AND id != ?').all(NOTCH_CHANNEL, id)) {
+        try { transport.repository.conversations.setOpen(old.id, false); } catch { /* already closed, or gone */ }
+      }
+      transport.repository.conversations.setOpen(id, true);
+    } catch { /* too many open chats: it stays in Closed chats */ }
+  }
   return id;
 }
 
