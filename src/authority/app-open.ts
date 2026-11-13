@@ -55,6 +55,7 @@ const NOT_AN_APP: ReadonlySet<string> = new Set([
   'reg', 'regedit', 'regedt32', 'schtasks', 'at', 'sc', 'net', 'net1', 'netsh', 'format', 'diskpart', 'bcdedit', 'cipher', 'wevtutil',
   'vssadmin', 'wbadmin', 'shutdown', 'logoff', 'tsdiscon', 'taskkill', 'tskill', 'takeown', 'icacls', 'attrib', 'sdelete', 'fsutil', 'mountvol',
   'curl', 'wget', 'ssh', 'scp', 'sftp', 'ftp', 'telnet', 'nc', 'ncat', 'certutil', 'bitsadmin', 'sudo', 'su', 'runas', 'doas', 'pkexec',
+  'reboot', 'poweroff', 'halt', 'init', 'telinit', 'pm-suspend', 'loginctl', 'pmset', 'caffeinate', 'rundll', 'slui', 'rstrui',
   'open', 'start', 'xdg-open', 'launchctl', 'systemctl', 'service', 'kill', 'killall', 'pkill', 'rm', 'del', 'rd', 'rmdir', 'erase', 'mv', 'move', 'cp', 'copy', 'dd',
 ]);
 
@@ -99,7 +100,10 @@ export function plainAppOpen(toolName: string, params: Record<string, unknown>):
   if (args !== undefined && args !== null && !(typeof args === 'string' && args.trim() === '')) return false;
   const raw = params.executable;
   if (typeof raw !== 'string') return false;
-  const executable = raw.trim();
+  // Windows drops dots and spaces from the end of a name, so "logoff.exe."
+  // is logoff: a name that ends in one is not taken as written.
+  if (/[.\s]$/.test(raw) || /^\s/.test(raw)) return false;
+  const executable = raw;
   if (!executable || executable.length > 260 || /[\r\n\t"<>|*?%$`;]/.test(executable)) return false;
   if (NOT_AN_APP_ENDING.test(executable)) return false;
   if (/[\\/]/.test(executable)) {

@@ -66,7 +66,7 @@ function harness(options: { start?: 'paused' | 'killed' } = {}) {
     async answer(act: NotchAnswerAct): Promise<void> { fromPage({ type: 'answer', id: line()!.id, act }); await settle(); },
     async ask(): Promise<void> {
       approvals.createRequest({ agentId: 'a', agentName: 'PA', toolName: 'write_file', toolArguments: {}, actionCategory: 'write_data',
-        urgency: 'normal', reason: 'Write the note', context: '' });
+        urgency: 'normal', reason: 'Write the note', context: JSON.stringify({ intent: 'Write file' }) });
       real.approvals.sync();
       await settle();
     },

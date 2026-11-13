@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { appOpenNeedsNoApproval, ownerAskedOnNotch, plainAppOpen } from './app-open.ts';
-import { approvalDecidableBy, DASHBOARD_DECIDER, NOTCH_DECIDER } from './approval.ts';
+import { approvalDashboardOnly, approvalDecidableBy, DASHBOARD_DECIDER, NOTCH_DECIDER } from './approval.ts';
 import { rawUiGate } from './ui-intent.ts';
 import { resolveToolGate } from './tool-action-map.ts';
 import { withBriefTurn } from '../brief/chat-context.ts';
@@ -61,6 +61,12 @@ describe('what a plain app open is', () => {
     for (const executable of ['C:\\Users\\sam\\Downloads\\steam.exe', 'C:\\Temp\\a.exe', 'C:\\Program Files\\..\\Users\\sam\\a.exe',
       '\\\\server\\share\\steam.exe', '/tmp/steam', '/Users/sam/Downloads/Safari.app', 'C:\\Windows\\System32\\notepad.exe',
       'C:\\Program Files\\App\\app.dll']) {
+      expect([executable, plainAppOpen('desktop_launch_app', open(executable))]).toEqual([executable, false]);
+    }
+  });
+
+  test('never a name that ends in a dot or a space, which Windows would drop, and never something that ends the session', () => {
+    for (const executable of ['logoff.exe.', 'shutdown.exe.', 'cmd.exe.', 'cmd.', 'steam ', ' steam', 'reboot', 'poweroff', 'halt']) {
       expect([executable, plainAppOpen('desktop_launch_app', open(executable))]).toEqual([executable, false]);
     }
   });
@@ -127,6 +133,11 @@ describe('who may approve what has to be reviewed on screen', () => {
     expect(approvalDecidableBy(payment, 'telegram')).toBe(false);
     expect(approvalDecidableBy(onScreen, DASHBOARD_DECIDER)).toBe(true);
     expect(approvalDecidableBy(onScreen, NOTCH_DECIDER)).toBe(true);
+    // A click that pays is a payment before it is an action on screen: never the notch.
+    const payByClick = { action_category: 'make_payment', context: JSON.stringify({ intent: 'Review click on "Pay now".', confirm: 'always' }) } as const;
+    expect(approvalDashboardOnly(payByClick)).toBe('payment');
+    expect(approvalDecidableBy(payByClick, NOTCH_DECIDER)).toBe(false);
+    expect(approvalDecidableBy(payByClick, DASHBOARD_DECIDER)).toBe(true);
     for (const other of ['telegram', 'discord', 'toast', 'voice', '', null, undefined]) {
       expect(approvalDecidableBy(onScreen, other)).toBe(false);
     }

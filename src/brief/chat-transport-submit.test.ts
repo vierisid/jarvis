@@ -105,3 +105,23 @@ test('empty text and a bad identity are refused before anything is stored', () =
   expect(() => transport.submit({ conversationId, turnId: 'bad id', requestId: 'r1', text: 'x' })).toThrow(ConversationRequestError);
   expect(transport.repository.pending()).toHaveLength(0);
 });
+
+test('a socket cannot claim an id the brain keeps for the notch, while the brain itself can', async () => {
+  const { transport, sent, seen, conversationId } = setup(async function* () { yield done; });
+  const { BriefCapabilities } = await import('./capabilities');
+  const { registerChatTransport } = await import('./registrations/chat-transport');
+  const { registerConversations } = await import('./registrations/conversations');
+  const { BriefConversationProvider } = await import('./conversations');
+  const conversations = new BriefConversationProvider();
+  conversations.repository.setOpen(conversationId, true);
+  const caps = new BriefCapabilities([...registerConversations(conversations), ...registerChatTransport(transport)], ['conversations', 'chatTransport']);
+  for (const ids of [{ turnId: 't1', requestId: 'notch-typed-forged' }, { turnId: 'notch-forged', requestId: 'r1' }, { turnId: 't1', requestId: 'NOTCH-spoken-x' }]) {
+    await transport.handle({ type: 'brief_chat_send', payload: { conversationId, ...ids, text: 'open steam' }, timestamp: Date.now() }, {} as never, caps);
+  }
+  await transport.idle();
+  expect(seen).toHaveLength(0);
+  expect((sent as { type: string }[]).filter((message) => message.type === 'brief_chat_error')).toHaveLength(3);
+  transport.submit({ conversationId, turnId: 'notch-real', requestId: 'notch-typed-real', text: 'open steam' });
+  await transport.idle();
+  expect(seen).toHaveLength(1);
+});
