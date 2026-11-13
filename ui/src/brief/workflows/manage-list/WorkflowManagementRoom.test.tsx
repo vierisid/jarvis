@@ -158,6 +158,17 @@ test("failed enable exposes blocker and leaves Paused, not Draft", async () => {
   expect(row("investor").textContent).toContain("Paused");
   expect(row("investor").textContent).not.toContain("Draft");
 });
+test("a blocked enable shows its reason once and links to where it is fixed", async () => {
+  f.controller.retire();
+  f = makeManagementFixture("blocked enable");
+  await render();
+  await click("Enable Weekly investor update");
+  const text = row("investor").textContent ?? "";
+  expect(text.split("Connect Notion before enabling.")).toHaveLength(2);
+  await click("Open Connected workspace");
+  expect(shell.route.room).toBe("connected-workspace");
+});
+
 test("uncertain mutation exposes Check result instead of another Delete; matching result resolves once", async () => {
   f.setMode("lost response");
   await render();

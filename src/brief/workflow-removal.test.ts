@@ -14,6 +14,8 @@ import { Worker } from '../workflows/queue/worker';
 import { createWorkflowRoutes } from '../workflows/api/routes';
 import { WorkflowRemoval, WORKFLOW_REMOVAL_LIMITS } from './workflow-removal';
 import type { WorkflowManageCommand } from './workflow-removal-contracts';
+import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
+import { PieceCatalog } from '../workflows/runtime/piece-catalog';
 import { readBindingPins } from '../workflows/db/repos/binding-pins';
 
 let dir: string, file: string, service: WorkflowRemoval, clock: number, saved: string | undefined;
@@ -336,6 +338,29 @@ test('R4: an invalid pinned draft cannot borrow readiness from an older runnable
   expect(getFlow(flow.id)?.status).toBe('DISABLED');
 });
 
+test('a blocked enable names the first thing to fix, once, and where to fix it', () => {
+  configureWorkflowReadiness({ pieces: new PieceCatalog([{ name: '@activepieces/piece-hubspot', displayName: 'HubSpot', description: '',
+    auth: { type: 'SECRET_TEXT' }, actions: { update_contact: { name: 'update_contact', displayName: 'Update contact', description: '' } } }] as any) });
+  const { flow, version } = fixture('Sync');
+  const step = (name: string, displayName: string, nextAction?: unknown) => ({ name, displayName, type: 'PIECE', settings: {
+    pieceName: '@activepieces/piece-hubspot', actionName: 'update_contact', input: {} }, ...(nextAction ? { nextAction } : {}) });
+  updateDraftVersion(version.id, { trigger: { name: 'trigger', type: 'EMPTY', settings: {},
+    nextAction: step('step_1', 'Update contact', step('step_2', 'Update deal')) } });
+  const item = service.read().data.items[0]!;
+  expect(item.readiness).toEqual({ state: 'blocked', fix: { kind: 'connections', label: 'Open Connected workspace' },
+    reason: 'Connect a HubSpot account for "Update contact" first, and 1 more thing to fix.' });
+  const result = service.change(command(flow.id, 'activation', { activation: 'ENABLED' }));
+  expect(result).toMatchObject({ status: 'rejected', code: 'not_ready', fix: { kind: 'connections' },
+    message: item.readiness.reason });
+  expect(getFlow(flow.id)?.status).toBe('DISABLED');
+});
+test('a blocked enable on a code step names the step and points at the workflow', () => {
+  const { flow, version } = fixture();
+  updateDraftVersion(version.id, { trigger: { name: 'trigger', type: 'EMPTY', settings: {}, nextAction: {
+    name: 'compute', displayName: 'Crunch numbers', type: 'CODE', settings: { sourceCode: { packageJson: '{}', code: 'export const code = async () => ({});' } } } } });
+  expect(service.read().data.items[0]!.readiness).toMatchObject({ reason: '"Crunch numbers" runs code and needs your permission first.', fix: { kind: 'workflow' } });
+  expect(service.change(command(flow.id, 'activation', { activation: 'ENABLED' }))).toMatchObject({ status: 'rejected', fix: { kind: 'workflow' } });
+});
 test('the latest run of a workflow that went on past a failed step reads as such, not as a plain success', () => {
   const flow = createFlow();
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Lookup', trigger: { name: 'trigger', type: 'EMPTY', settings: {},

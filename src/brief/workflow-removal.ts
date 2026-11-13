@@ -13,6 +13,9 @@ import { stopRunsOfTurnedOffFlow } from '../workflows/db/repos/flow-turn-off';
 import { addCounts, deleteFlowHistoryBatch, deleteFlowRows, flowHasLiveRun, flowHistoryOverBatch, NO_COUNTS,
   removeFlowFiles, removeRunFiles, stopEverythingOfFlow, type FlowDeleteCounts } from '../workflows/db/repos/flow-deletion';
 import { effectDispatchInFlight } from '../workflows/runtime/effect-inflight';
+import { explainBlocker, explainCodeSteps, type WorkflowBlocker } from './workflow-blockers';
+import { walkFlowNodes } from '../workflows/db/flow-graph';
+import type { FlowTriggerNode } from '../workflows/db/repos/flow-version';
 import type { ManagedWorkflow, RemovalReceipt, WorkflowManageCommand, WorkflowManageResult,
   WorkflowPurgeCommand, WorkflowPurgeResult } from './workflow-removal-contracts';
 
@@ -22,6 +25,14 @@ export const WORKFLOW_REMOVAL_SCOPE = {
   undo: 'same_identity_and_position_paused_no_run_replay', history: 'versions_runs_and_effects_retained_until_a_person_purges',
   registration: 'local_delivery_fenced_immediately_external_unsubscribe_best_effort',
 } as const;
+/** A step's name as the person sees it: its display name, else its id. */
+function stepNamer(trigger: unknown): (node: string) => string {
+  const shown = new Map<string, string>();
+  for (const n of walkFlowNodes(trigger && typeof trigger === 'object' ? trigger as FlowTriggerNode : null)) {
+    if (typeof n.displayName === 'string' && n.displayName.trim()) shown.set(n.name, n.displayName.trim());
+  }
+  return node => shown.get(node) ?? node;
+}
 export class WorkflowRemovalError extends Error {
   constructor(public code: string, public status = 400) { super(code); }
 }
@@ -117,7 +128,11 @@ export class WorkflowRemoval {
     if (!state) throw new WorkflowRemovalError('unavailable', 503);
     const metadata = parseFlowMetadata(f);
     const readiness = version ? versionReadiness(f.id, version.id) : null;
-    const ready = readiness?.ready === true && !ungrantedCodeSteps(f, version!.trigger);
+    const code = version ? ungrantedCodeSteps(f, version.trigger) : null;
+    const ready = readiness?.ready === true && !code;
+    const blocker = ready ? null : !version ? { reason: 'This workflow has nothing to run yet.', fix: null }
+      : code && readiness?.ready ? explainCodeSteps(code, stepNamer(version.trigger))
+      : explainBlocker(readiness?.issues ?? [], stepNamer(version.trigger), code?.length ?? 0);
     const last = this.db.query<{ id: string; status: string }, [string]>(
       'SELECT id, status FROM flow_run WHERE flow_id = ? ORDER BY created DESC, id DESC LIMIT 1').get(f.id);
     return { flowId: f.id, versionId: version?.id ?? null,
@@ -129,8 +144,14 @@ export class WorkflowRemoval {
       description: typeof metadata?.description === 'string' ? metadata.description.slice(0, 4000) : '',
       trigger: workflowTriggerLabel(version?.trigger),
       activation: f.status, publication: f.published_version_id ? 'published' : 'unpublished',
-      readiness: { state: ready ? 'ready' : 'blocked', reason: ready ? null : 'Workflow setup or permission needs review before enabling' },
+      readiness: { state: ready ? 'ready' : 'blocked', reason: blocker?.reason ?? null, fix: blocker?.fix ?? null },
       latestRun: last ? { runId: last.id, label: last.status === 'SUCCEEDED' && continuedFailures(getFlowRun(last.id)!).length ? continuedFailureHeadline(1) : last.status } : null };
+  }
+  /** Why a refused enable was refused, from the same issues the refusal carried. */
+  private blockerOf(flowId: string, error: WorkflowReadinessError | CodeStepsRefusedError): WorkflowBlocker {
+    const f = getFlow(flowId), version = f && (f.published_version_id ? getFlowVersion(f.published_version_id) : getLatestDraft(f.id));
+    const names = stepNamer(version?.trigger);
+    return error instanceof WorkflowReadinessError ? explainBlocker(error.readiness.issues, names) : explainCodeSteps(error.stepNames, names);
   }
   read() {
     this.ready();
@@ -182,7 +203,8 @@ export class WorkflowRemoval {
         if (error instanceof WorkflowRemovalError && error.status === 409) {
           result = { ...identity, status: 'rejected', code: error.code, message: error.code };
         } else if (error instanceof WorkflowReadinessError || error instanceof CodeStepsRefusedError) {
-          result = { ...identity, status: 'rejected', code: 'not_ready', message: 'Workflow setup or permission needs review before enabling' };
+          const b = this.blockerOf(c.flowId, error);
+          result = { ...identity, status: 'rejected', code: 'not_ready', message: b.reason, ...(b.fix ? { fix: b.fix } : {}) };
         } else throw error;
       }
       // Every removal receipt reserves exactly one successful Undo outcome, even

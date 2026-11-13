@@ -627,7 +627,10 @@ run response). It sends no request.
 - Activation adds no gate of its own and bypasses none (see the `WorkflowManagementPort` doc): enabling
   goes through the person path, which pins connections and the computer (Q-05; a changed binding shows
   as the readiness blocker, and enabling again accepts it), and the readiness and contract checks still
-  refuse. Turning a workflow off stops its queued and waiting runs (Q-06); the list says so above the
+  refuse. A blocked workflow says once, in plain words, the first step and what is missing (with a count
+  of the rest) and offers `readiness.fix`: Connected workspace for a missing account, the workflow for
+  anything else. The reason is built from the readiness issues, never from a second check. Turning a
+  workflow off stops its queued and waiting runs (Q-06); the list says so above the
   rows and in the result.
 - Opt-in `workflowManagementRegistration(useBinding)`, not in the production registry.
   `managementAvailable` requires a non-empty scope, a controller bound to it, a `source` matching the

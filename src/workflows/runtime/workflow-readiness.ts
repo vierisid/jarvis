@@ -34,7 +34,7 @@ import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } f
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { canContinuePastStep, canRetryStep, CONTINUE_UNAVAILABLE_MESSAGE, RETRY_UNAVAILABLE_MESSAGE } from './step-admission';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
-import { emptyInput, inputIssue } from './input-validation';
+import { emptyInput, inputIssue, plainInputReason } from './input-validation';
 import { formFields } from './human-input-contract';
 import { BOUNDED_TOOLS } from './tool-capability';
 import { declaredDependencies } from './code-step-manifest';
@@ -45,6 +45,8 @@ export interface ReadinessIssue {
   path: string;
   code: string;
   message: string;
+  /** Set when the fix is to connect an account: the app to connect (Connected workspace). */
+  connect?: { app: string };
   /** For a managed connection named by the wrong step: the pieces (by full name) that may use it. */
   allowedPieces?: string[];
 }
@@ -147,15 +149,15 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     if (n.type === 'LOOP_ON_ITEMS' && n.firstLoopAction) for (const inner of walkFlowNodes(n.firstLoopAction)) refundLoopBodies.add(inner);
   }
   let count = 0, inputVisits = 0, schemaVisits = 0, runtimeCount = 0, previewFound = false;
-  const issue = (node: string, path: string, code: string, message: string, allowedPieces?: readonly string[]) => {
-    if (issues.length < 100) issues.push({ node, path, code, message, ...(allowedPieces ? { allowedPieces: [...allowedPieces] } : {}) });
+  const issue = (node: string, path: string, code: string, message: string, allowedPieces?: readonly string[], connect?: { app: string }) => {
+    if (issues.length < 100) issues.push({ node, path, code, message, ...(connect ? { connect } : {}), ...(allowedPieces ? { allowedPieces: [...allowedPieces] } : {}) });
   };
   // The settings of the piece step whose input is being read, for connection checks.
   let stepSettings: Record<string, unknown> = {};
-  const needsSetup = (node: string, path: string, message: string) => {
+  const needsSetup = (node: string, path: string, message: string, connect?: { app: string }) => {
     if (context.phase === 'composition') {
-      if (setupIssues.length < 100) setupIssues.push({ node, path, code: 'SETUP_REQUIRED', message });
-    } else issue(node, path, 'SETUP_REQUIRED', message);
+      if (setupIssues.length < 100) setupIssues.push({ node, path, code: 'SETUP_REQUIRED', message, ...(connect ? { connect } : {}) });
+    } else issue(node, path, 'SETUP_REQUIRED', message, undefined, connect);
   };
   const runtime = (node: string, path: string, guard: RuntimeCheck['guard'], message: string) => {
     if (++runtimeCount === 501) issue(node, path, 'LIMIT', 'Graph exceeds 500 runtime checks');
@@ -241,7 +243,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       const input = resolved.known && object(resolved.value) ? staticInput(resolved.value[name]) : { known: false, value: UNKNOWN_INPUT };
       if (input.known) {
         const reason = inputIssue(field, input.value);
-        if (reason) issue(node, childPath, 'INPUT_TYPE', reason);
+        if (reason) issue(node, childPath, 'INPUT_TYPE', plainInputReason(reason, field.label || name));
       }
       if (prop.type === 'ARRAY' && prop.properties !== undefined) {
         arrayProperties(prop.properties, input.known ? input.value : UNKNOWN_INPUT, node, childPath, depth + 1);
@@ -636,7 +638,11 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
               const value = input[field.name];
               const path = `settings.input.${field.name}`;
               if (field.required && emptyInput(value)) {
-                needsSetup(node, path, `${field.label || field.name}: fill in this required input`);
+                // Jarvis pieces name an account reference `<app>Connection` and label it
+                // "<App> account"; both must hold, so a third-party "Ad account" ID stays a fill-in.
+                const account = /Connection$/.test(field.name) ? /^(.+?)\s+account$/i.exec(field.label ?? '') : null;
+                if (account) needsSetup(node, path, `${field.label}: connect your ${account[1]} account in Connected workspace, then choose it here`, { app: account[1]! });
+                else needsSetup(node, path, `${field.label || field.name}: fill in this required input`);
                 continue;
               }
               if (field.sourceType === 'DYNAMIC' && (field.required || !emptyInput(value))) {
@@ -657,7 +663,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
                 if (field.type === 'flow_ref') issue(node, path, 'WORKFLOW_BINDING', 'Select a stable workflow ID before activation');
               } else {
                 const reason = inputIssue(field, resolved.value);
-                if (reason) issue(node, path, 'INPUT_TYPE', reason);
+                if (reason) issue(node, path, 'INPUT_TYPE', plainInputReason(reason, field.label || field.name));
                 if (field.type === 'flow_ref' && !emptyInput(resolved.value) && context.phase !== 'composition') {
                   const reason = context.workflow?.(String(resolved.value)) ?? (context.workflow ? null : 'Workflow inventory is unavailable');
                   if (reason) issue(node, path, 'WORKFLOW_BINDING', reason);
@@ -667,8 +673,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
             }
             if (piece.auth && sub.requireAuth !== false) {
               if (typeof input.auth !== 'string' || !/^\{\{connections(?:\.[\w:-]+|\['[^']+'\])\}\}$/.test(input.auth)) {
-                if (context.phase === 'composition') needsSetup(node, 'settings.input.auth', 'Select a saved connection for this authenticated action');
-                else issue(node, 'settings.input.auth', 'CONNECTION_BINDING', 'Select a saved connection for this authenticated action');
+                const app = piece.displayName || pieceName;
+                const text = `Connect your ${app} account in Connected workspace, then choose it here`;
+                if (context.phase === 'composition') needsSetup(node, 'settings.input.auth', text, { app });
+                else issue(node, 'settings.input.auth', 'CONNECTION_BINDING', text, undefined, { app });
               }
             }
           }

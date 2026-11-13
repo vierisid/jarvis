@@ -2,6 +2,10 @@ import type { BriefReadState } from "../../contracts";
 
 /** Presentation seam. The host supplies authorized, complete list snapshots and
  * F-20 durable commands. There is deliberately no adapter to legacy DELETE. */
+export interface WorkflowFix {
+  kind: "connections" | "workflow";
+  label: string;
+}
 export interface ManagedWorkflow {
   flowId: string;
   versionId: string | null;
@@ -11,7 +15,12 @@ export interface ManagedWorkflow {
   trigger: string;
   activation: "ENABLED" | "DISABLED";
   publication: "published" | "unpublished";
-  readiness: { state: "ready" | "blocked" | "unknown"; reason: string | null };
+  readiness: {
+    state: "ready" | "blocked" | "unknown";
+    reason: string | null;
+    /** Where to go to clear the blocker. */
+    fix?: WorkflowFix | null;
+  };
   latestRun: { runId: string; label: string } | null;
 }
 export interface WorkflowList {
@@ -87,6 +96,11 @@ export function validateWorkflow(w: ManagedWorkflow): ManagedWorkflow {
     !["ready", "blocked", "unknown"].includes(w.readiness.state) ||
     !(w.readiness.reason === null || text(w.readiness.reason)) ||
     !(
+      w.readiness.fix == null ||
+      (["connections", "workflow"].includes(w.readiness.fix.kind) &&
+        text(w.readiness.fix.label, 200))
+    ) ||
+    !(
       w.latestRun === null ||
       (w.latestRun && id(w.latestRun.runId) && text(w.latestRun.label))
     )
@@ -101,7 +115,11 @@ export function validateWorkflow(w: ManagedWorkflow): ManagedWorkflow {
     trigger: w.trigger,
     activation: w.activation,
     publication: w.publication,
-    readiness: { state: w.readiness.state, reason: w.readiness.reason },
+    readiness: {
+      state: w.readiness.state,
+      reason: w.readiness.reason,
+      fix: w.readiness.fix ?? null,
+    },
     latestRun: w.latestRun
       ? { runId: w.latestRun.runId, label: w.latestRun.label }
       : null,
