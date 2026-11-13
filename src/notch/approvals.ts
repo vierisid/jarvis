@@ -222,6 +222,19 @@ function shortened(sentence: string): string {
   return points.length <= SHOWN_COLUMNS ? sentence : `${points.slice(0, SHOWN_COLUMNS - 1).join('').trimEnd()}…`;
 }
 
+/**
+ * What a machine said an action on the screen would land on. `pays` when what
+ * is there reads as a payment (a button called "Buy now"): the request itself
+ * only says "a click", and a payment is never taken on the notch.
+ */
+export interface NotchApprovalWhere {
+  place: string | null;
+  pays?: boolean;
+}
+
+/** How old a read of the place may be when a sheet is opened with it. The screen moves on. */
+const WHERE_FRESH_MS = 5000;
+
 export interface NotchApprovalDeps {
   approvalManager: {
     getPending(): ApprovalRequest[];
@@ -247,7 +260,7 @@ export interface NotchApprovalDeps {
    * paper for the person to read, as it is, and to nobody else. Null when the
    * request acts on nothing on screen, or it cannot be said.
    */
-  where?: (request: ApprovalRequest) => Promise<string | null>;
+  where?: (request: ApprovalRequest) => Promise<NotchApprovalWhere | null>;
   whereMs?: number;
   /**
    * Whether an instruction the person gave on the notch is stopped at this
@@ -331,30 +344,43 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
     return made;
   }
 
-  /** What on the screen a request would land on, once the machine has said. Null: it could not, or nothing. */
-  const places = new Map<string, string | null>();
+  /** What on the screen a request would land on, as the machine last said, and when. Null text: it could not say, or nothing. */
+  const places = new Map<string, { text: string | null; at: number }>();
+  /** Requests whose place reads as a payment. They are not taken on the notch. */
+  const paying = new Set<string>();
   const locating = new Map<string, Promise<void>>();
+  /** The sheet that is open for a request hears when its place has been read again. */
+  const placeListeners = new Map<string, () => void>();
   const whereMs = deps.whereMs ?? NOTCH_APPROVAL_WHERE_MS;
 
-  /** Has the place on the screen read for a request that will be shown on a sheet. Never waits longer than `whereMs`. */
-  function locate(request: ApprovalRequest): Promise<void> {
+  /**
+   * Has the place on the screen read for a request that is shown on a sheet.
+   * The promise never waits longer than `whereMs`; the read itself is taken
+   * whenever it answers, also later, and an open sheet is told. `again` reads
+   * it anew when what is known is old: a sheet can come back minutes later,
+   * and what was in front then is not what is in front now.
+   */
+  function locate(request: ApprovalRequest, again = false): Promise<void> {
     const where = deps.where;
-    if (!where || places.has(request.id) || notchApprovalWay(request) !== 'sheet') return Promise.resolve();
+    if (!where || notchApprovalWay(request) !== 'sheet') return Promise.resolve();
+    const known = places.get(request.id);
+    if (known && !(again && now() - known.at > WHERE_FRESH_MS)) return Promise.resolve();
     const running = locating.get(request.id);
     if (running) return running;
     const made = new Promise<void>((resolve) => {
-      let settled = false;
-      const done = (place: string | null): void => {
-        if (settled) return;
-        settled = true;
-        places.set(request.id, notchApprovalPlace(place));
+      const take = (read: NotchApprovalWhere | null): void => {
         locating.delete(request.id);
+        places.set(request.id, { text: notchApprovalPlace(read?.place), at: now() });
+        // Once it has read as a payment it stays one: a second read of a page
+        // that has moved on does not make the first click any less of one.
+        if (read?.pays === true) paying.add(request.id);
         resolve();
+        placeListeners.get(request.id)?.();
       };
-      after(() => done(null), whereMs);
-      where(request).then(done, (error: unknown) => {
+      after(() => resolve(), whereMs);
+      where(request).then(take, (error: unknown) => {
         log(`[notch] where an approval would land could not be read: ${error instanceof Error ? error.message : String(error)}`);
-        done(null);
+        take(null);
       });
     });
     locating.set(request.id, made);
@@ -363,7 +389,7 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
 
   /** The paper under the question: where on the screen it lands, when that is known, then the exact action. */
   const paper = (request: ApprovalRequest): NotchPart[][] => {
-    const place = places.get(request.id);
+    const place = places.get(request.id)?.text;
     return [...(place ? [`On screen: ${place}`] : []), ...notchApprovalExact(request)].map((line): NotchPart[] => [line]);
   };
 
@@ -391,13 +417,22 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       const request = pendingRequest(requestId);
       if (!request) return 'settled';
       const sentence = notchApprovalSentence(request);
-      const way = notchApprovalWay(request);
+      // What it lands on reads as a payment: it is one, whatever the request calls itself.
+      const landsOnPayment = paying.has(requestId);
+      const way = landsOnPayment ? 'payment' : notchApprovalWay(request);
       if (way !== 'key') {
         // The reason first, then the thing itself, with nothing after it: a
         // line that wraps must not start with a stray full stop.
-        const shown = em(bare(shortened(sentence)));
-        if (way === 'sheet') return await playSheet(request, stage);
-        const why: NotchPart[] = way === 'payment'
+        const shown = em(bare(shortened(landsOnPayment ? (places.get(requestId)?.text ?? sentence) : sentence)));
+        if (way === 'sheet') {
+          const end = await playSheet(request, stage);
+          // Its place turned out to be a payment while the sheet was up.
+          if (end === 'again') continue;
+          return end;
+        }
+        const why: NotchPart[] = landsOnPayment
+          ? ['That looks like a payment. I never take one on a key: ', shown]
+          : way === 'payment'
           ? ['A payment. I never take that on a key: ', shown]
           : way === 'too_long'
             ? ['Too long to show whole here, so it is approved in the dashboard: ', shown]
@@ -437,11 +472,12 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
    * yes. Yes burns the fuse and decides. Esc is no. A click somewhere else is
    * neither: the sheet stays, and goes back to the count if left alone.
    */
-  async function playSheet(first: ApprovalRequest, stage: NotchStage): Promise<NotchItemEnd> {
+  async function playSheet(first: ApprovalRequest, stage: NotchStage): Promise<NotchItemEnd | 'again'> {
     const requestId = first.id;
     for (;;) {
       const request = pendingRequest(requestId);
       if (!request) return 'settled';
+      if (paying.has(requestId)) return 'again';
       const asked = question(request);
       const destructive = impactFromCategory(request.action_category) === 'destructive';
       const id = stage.id();
@@ -453,13 +489,17 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         id, kind: 'sheet', say: [asked], yes: 'approve', stay: true, ...(destructive ? { mood: 'careful' as const } : {}),
         blocks: blocks(),
       });
-      // Opened before the machine had said where it lands: the place is added
-      // to the paper when it is in.
-      if (deps.where && !places.has(requestId)) {
-        void locate(request).then(() => {
-          if (!stage.ended() && places.get(requestId)) stage.surface.update(id, { blocks: blocks() });
-        });
-      }
+      // The place is read again when what is known is old, or was never
+      // read in time. When it is in, the paper says it; and if it reads as a
+      // payment the sheet is taken away, whatever has been pressed meanwhile.
+      let turned: () => void = () => {};
+      const pays = new Promise<'pays'>((resolve) => { turned = () => resolve('pays'); });
+      placeListeners.set(requestId, () => {
+        if (stage.ended()) return;
+        if (paying.has(requestId)) { turned(); return; }
+        stage.surface.update(id, { blocks: blocks() });
+      });
+      void locate(request, true);
       // Opened before anybody had worded it: the question is the kind of
       // thing it is, and becomes the plain words when they are in. The exact
       // action under it does not change.
@@ -472,7 +512,13 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       const waitedOn = deps.mine?.(requestId) === true;
       const left = waitedOn ? new Promise<null>(() => {}) : stage.wait(sheetMs).then(() => null);
       left.catch(() => {});
-      const answer = await Promise.race([stage.answer(id, ['yes', 'no']), left]);
+      let answer: Awaited<ReturnType<NotchStage['answer']>> | 'pays' | null;
+      try {
+        answer = await Promise.race([stage.answer(id, ['yes', 'no']), left, pays]);
+      } finally {
+        placeListeners.delete(requestId);
+      }
+      if (answer === 'pays') return 'again';
       // Left alone: it waits, and comes round again.
       if (!answer) return 'waits';
       if (answer.act === 'no') return refuse(requestId, stage);
@@ -483,6 +529,8 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         const fuse = await stage.fuse([`${bare(said.replace(/\?+$/, ''))}…`], fuseMs, { mood: 'work' });
         if (fuse === 'undo') continue;
         if (fuse === 'lost') return 'waits';
+        // The read came in while the fuse burned, and it is a payment.
+        if (paying.has(requestId)) return 'again';
         return await decide(requestId, stage);
       } finally {
         answering.delete(requestId);
@@ -514,6 +562,11 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
   /** The fuse has burnt: decide, and say what came of it. */
   async function decide(requestId: string, stage: NotchStage): Promise<NotchItemEnd> {
     let outcome: ApprovalDecisionOutcome;
+    // Whatever road led here: what lands on a payment is not approved on the notch.
+    if (paying.has(requestId)) {
+      await stage.say(['That looks like a payment. It is approved in the dashboard.'], 2600, { mood: 'careful' });
+      return 'waits';
+    }
     try {
       outcome = await deps.approve(requestId);
     } catch (error) {
@@ -604,6 +657,7 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       known.delete(requestId);
       words.delete(requestId);
       places.delete(requestId);
+      paying.delete(requestId);
       // Decided, expired or withdrawn somewhere else: the line leaves by itself.
       inbox.remove(itemId(requestId));
     }

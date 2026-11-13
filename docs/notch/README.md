@@ -228,15 +228,36 @@ What holds for all of them:
     text and keys with no element, the window in front. It is text from the
     screen: it is shown to the person as one short line with nothing unseen
     in it (`notchApprovalPlace`) and is never given to a model
-    (`daemon/notch-where.ts`). The sheet waits at most 1.5 s for it; a desktop
-    app too old to answer leaves the sheet as it was.
+    (`daemon/notch-where.ts`). Names from the screen lose their double quotes,
+    so a button cannot be called `OK" in "Windows Security` and read as a
+    window. The sheet waits at most 1.5 s for it; an answer that comes later is
+    put on the open sheet; a sheet that comes back after more than five seconds
+    is read again, since what was in front then is not what is in front now. A
+    desktop app too old to answer leaves the sheet as it was. With screen
+    awareness off nothing is read, for this either.
+    **A click that lands on a payment is a payment.** The name the screen gave
+    is read by the product's own reading of a control's label
+    (`uiEffectHints`, no model). If it reads as a payment ("Buy now", "Pay"),
+    the request is not taken on the notch whatever it calls itself: the line
+    points at the dashboard, a sheet that was already up is taken away, a yes
+    that was already burning its fuse is not acted on (`paying`, checked again
+    in `decide`). This closes for a raw click what 23 closes for a declared
+    payment. It rests on the label: a pay button with no name the screen can
+    read is still only "a click", and that is why the exact place is on paper.
 43. **Jarvis does not act in its own windows.** A click, scroll or drag at a
     place (`desktop_pointer`) is refused when the place is on a window of the
     desktop app itself, the notch first of all: the notch asks the person
     things, and the agent must never be who answers. A click on an element
     under the notch is refused the same way after the notch has been given
     two seconds to fold back (`pointerPlaceFree`, `pointerReachesElement`).
-    The keys the agent sends were already not heard by the notch (17).
+    Every press looks once more with the pointer already at its place and
+    the button goes down in the same breath or not at all (`pointerPress`):
+    the pointer takes 50 ms to settle, and a sheet could come up under it in
+    that time. Typed text and keys are refused when the window in front is
+    one of Jarvis's own (`keysIntoOwnWindowError`). The keys the agent sends
+    were already not heard by the notch (17). What this does not cover: the
+    dashboard open in the person's own browser is not a window of the desktop
+    app, as it was not before.
 24. **A tap cannot land on the wrong thing.** A line that came by itself
     takes no yes and no Esc for 0.7 s, counted in the page from when it was
     drawn. After that an Esc pressed for the app in front does land on the
@@ -379,7 +400,10 @@ switch is on:
 - **Typed text can break its lines with Shift+Enter** (`desktop_type`,
   `line_break: "shift_enter"`, Windows). A line break is typed as Enter,
   which sends the message in a chat app: the first line of a two-line
-  message went out alone. The tool's own text now says so.
+  message went out alone. The tool's own text now says so. On the Mac, on
+  Linux and without a desktop app it is not built: text with a line break
+  asked for that way is refused before anything is typed, never typed with
+  a plain Enter.
 - **One path with spaces stays one argument** when an app is started
   (`launchArgLine`). "Open that file in Notepad" used to reach Notepad as
   two halves of a path.
@@ -400,8 +424,12 @@ switch is on:
   (a game, Steam's own pages, a canvas). Windows only. It is reviewed on
   screen like every raw click (`REVIEWED_UI_TOOLS`), is not allowed in a
   workflow, and takes the place as a pixel of the last screenshot of that
-  machine (good for three minutes), which the brain sends on as a fraction
-  of the main display.
+  machine (good for three minutes). The place is given in thousandths of
+  that picture (0 to 1000 across and down), not in pixels: a model provider
+  often shrinks a picture before the model sees it, and a pixel read off the
+  smaller one is another place on the real one. The brain sends it on as a
+  fraction of the main display. Refused on a window that runs as
+  administrator, where Windows would drop it without a word.
 
 And these are behind the switch:
 
@@ -458,6 +486,11 @@ And these are behind the switch:
 
 - Approvals a restart left without a receipt ("run once or close") are not
   on the notch. They are in the dashboard, and in the tray's count.
+- A spot under the notch's own line cannot be clicked while a task is on the
+  notch: the line stays for the whole task and the notch is above every
+  window. The agent is told so and tries a way that needs no pointer. Making
+  the notch step aside for the length of a click would lift this; it is a
+  change to how the notch looks, so it is the owner's to decide.
 - `desktop_pointer` has been compiled and its arithmetic tested, and has not
   been run on a real screen. How well a model reads a place off a picture is
   not known. A screenshot is of the main display only, taken by a helper

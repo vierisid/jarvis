@@ -869,6 +869,24 @@ describe('a spoken instruction that ran past a minute', () => {
     expect(h.door.texts()).toEqual([]);
   });
 
+  test('something urgent taking the notch while it asks does not count as a yes', async () => {
+    const h = harness();
+    await cutShort(h, 'delete the old exports in Downloads but not');
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'go on' });
+    // The microphone was refused meanwhile: that is said at once, over the question.
+    h.asks.tell(['The microphone is muted.']);
+    await settle();
+    expect(h.said()).toBe('The microphone is muted.');
+    // Until the question is back: the other line's time, then the words shown again for their moment.
+    for (let waited = 0; waited < 12 && h.line()?.kind !== 'sheet'; waited++) await h.advance(900);
+    // The question is back. Nothing ran while it was away, and nothing runs now.
+    expect(h.door.texts()).toEqual([]);
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'go on', stay: true });
+    expect(row(h).state).toBe('heard');
+    await h.answer('yes');
+    expect(h.door.texts()).toEqual(['delete the old exports in Downloads but not']);
+  });
+
   test('words that were not cut short run as before, with no question', async () => {
     const h = harness();
     await h.speak('t1', 'what is two plus two');

@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -117,6 +118,14 @@ func handleTypeTextWith(params map[string]any, policy readBackPolicy, keystroke 
 	text, _ := params["text"].(string)
 	if text == "" {
 		return nil, fmt.Errorf("missing required parameter: text")
+	}
+	// Before the click, so that a refusal has done nothing (desktop_reach.go).
+	soft, err := typeLineBreakIsSoft(params)
+	if err != nil {
+		return nil, &codedError{code: desktopTargetUnreachableCode, err: fmt.Errorf("type_text refused, nothing was typed: %w", err)}
+	}
+	if soft && strings.ContainsAny(text, "\r\n") {
+		return nil, fmt.Errorf("type_text refused: %w", softBreakUnsupportedError())
 	}
 	if elemID, ok := params["element_id"].(float64); ok {
 		if _, err := clickElement(int(elemID), "click", policy); err != nil {

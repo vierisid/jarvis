@@ -648,6 +648,9 @@ describe('the rest of the edge-case audit, on the page', () => {
     // A sheet that stays until it is answered is one; a sheet to read is not.
     show({ id: 'r', kind: 'sheet', say: ['Your day'], blocks: [] });
     expect(asking).toEqual([true, false]);
+    // Nor is a long answer, which stays until it is closed but asks nothing.
+    show({ id: 'l', kind: 'sheet', say: ['You asked: tips'], stay: true, blocks: [] });
+    expect(asking).toEqual([true, false]);
     show({ id: 'a', kind: 'sheet', say: ['Write the file?'], yes: 'approve', stay: true, blocks: [] });
     expect(asking).toEqual([true, false, true]);
     surface.receive({ type: 'rest' });

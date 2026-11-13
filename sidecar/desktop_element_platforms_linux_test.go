@@ -160,3 +160,35 @@ func TestUnsupportedActionIsRefusedWithoutAWalk(t *testing.T) {
 		t.Errorf("walked %d times for an action that cannot run", len(*budgets))
 	}
 }
+
+// Shift+Enter for a line break is not built on the Mac or on Linux. Typed
+// anyway it would be a plain Enter, which sends the message in a chat app, so
+// text with a line break in it is refused before anything is clicked or typed.
+func TestTypeTextRefusesASoftLineBreakItCannotType(t *testing.T) {
+	typed := 0
+	keystroke := func(string) error { typed++; return nil }
+	_, err := handleTypeTextWith(map[string]any{"text": "first line\nsecond line", "line_break": "shift_enter"}, darwinTypeReadBack, keystroke)
+	var coded *codedError
+	if err == nil || !errors.As(err, &coded) || coded.code != desktopTargetUnreachableCode {
+		t.Fatalf("got %v, want a refusal that says nothing was done", err)
+	}
+	if typed != 0 {
+		t.Fatalf("typed %d times after refusing", typed)
+	}
+	// One line has no line break to get wrong, and plain Enter is as asked.
+	for _, params := range []map[string]any{
+		{"text": "one line", "line_break": "shift_enter"},
+		{"text": "first\nsecond", "line_break": "enter"},
+		{"text": "first\nsecond"},
+	} {
+		if _, err := handleTypeTextWith(params, darwinTypeReadBack, keystroke); err != nil {
+			t.Errorf("%v: %v", params, err)
+		}
+	}
+	if typed != 3 {
+		t.Errorf("typed %d times, want 3", typed)
+	}
+	if _, err := handleTypeTextWith(map[string]any{"text": "x", "line_break": "ctrl_enter"}, darwinTypeReadBack, keystroke); err == nil || typed != 3 {
+		t.Errorf("an unknown line break must be refused before typing: %v, typed %d", err, typed)
+	}
+}

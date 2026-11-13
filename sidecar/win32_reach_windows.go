@@ -7,6 +7,7 @@ package main
 // own. The decisions are in desktop_reach.go; this file only asks Windows.
 
 import (
+	"fmt"
 	"syscall"
 	"unsafe"
 )
@@ -76,9 +77,55 @@ func ownOverlayWindow(hwnd uintptr) bool {
 	return hwnd == w.hwnd || (w.backdrop != nil && hwnd == w.backdrop.hwnd)
 }
 
+// ownWindow says whether hwnd belongs to this program: the notch, a panel, an
+// overlay, the tray's menu.
+func ownWindow(hwnd uintptr) bool {
+	if hwnd == 0 {
+		return false
+	}
+	own, _, _ := procReachGetCurrentProcessI.Call()
+	return win32GetWindowPid(hwnd) == uint32(own)
+}
+
+// pointerPress puts the pointer at a place and presses there: "click",
+// "double_click" or "right_click". Between the look that allowed it and the
+// press, the pointer has to travel and settle (50 ms), and in that time one of
+// Jarvis's own windows can come up under it: a sheet that asks for a yes. So
+// the place is looked at once more with the pointer already there, and the
+// button goes down in the same breath or not at all. A refusal here has moved
+// the pointer and pressed nothing.
+func pointerPress(x, y int, action string) error {
+	procSetCursorPos.Call(uintptr(x), uintptr(y))
+	procSleep.Call(50)
+	if ownWindow(win32RootWindow(win32WindowFromPoint(x, y))) {
+		return &codedError{code: desktopTargetObscuredCode, err: fmt.Errorf(
+			"one of Jarvis's own windows came up at (%d, %d) as the pointer got there, so nothing was pressed. Take a new desktop_snapshot and try again", x, y)}
+	}
+	switch action {
+	case "double_click":
+		procMouseEvent.Call(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+		procMouseEvent.Call(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+		procSleep.Call(50)
+		procMouseEvent.Call(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+		procMouseEvent.Call(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+	case "right_click":
+		procMouseEvent.Call(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+		procMouseEvent.Call(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+	default:
+		procMouseEvent.Call(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+		procMouseEvent.Call(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+	}
+	return nil
+}
+
 // topWindowOfPid is the window of pid a person means (pickWindowOfPid), or 0
 // when the program has no visible, titled window.
 func topWindowOfPid(pid int) uintptr {
+	// The window in front, when it is this program's, whether or not it has a
+	// title (the list below holds only titled windows).
+	if front := win32GetForegroundWindow(); front != 0 && !ownOverlayWindow(front) && int(win32GetWindowPid(front)) == pid {
+		return front
+	}
 	wins := windowsForPid(pid)
 	if len(wins) == 0 {
 		return 0

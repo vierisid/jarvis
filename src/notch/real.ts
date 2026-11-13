@@ -17,7 +17,7 @@ import type { NotchAsks, NotchAsksDeps } from './asks.ts';
 import { NotchLedger } from './ledger.ts';
 import { attachNotchTalk } from './talk.ts';
 import type { NotchTalk, NotchTalkDeps, NotchTalkPort } from './talk.ts';
-import type { NotchApprovals } from './approvals.ts';
+import type { NotchApprovalWhere, NotchApprovals } from './approvals.ts';
 import type { CommitmentEvent, CommitmentRunner } from '../daemon/commitment-executor.ts';
 import { NOTCH_FIXTURE_ORIGIN, createNotchFixtures, notchFixturePromiseRun } from './fixtures.ts';
 import type { NotchFixtures } from './fixtures.ts';
@@ -94,7 +94,7 @@ export interface NotchRealDeps {
     /** Puts an approval in plain words, from its tool and arguments alone. */
     describeApproval?: (request: ApprovalRequest) => Promise<string | null>;
     /** What on the screen an approval would land on, as that machine reads it now. Shown to the person only. */
-    whereApproval?: (request: ApprovalRequest) => Promise<string | null>;
+    whereApproval?: (request: ApprovalRequest) => Promise<NotchApprovalWhere | null>;
     /** The desktop app's recordings arrive as its events. */
     talkPort: NotchTalkPort;
     stt: NotchTalkDeps['stt'];

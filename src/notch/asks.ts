@@ -603,7 +603,6 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
             // not..."), so it is shown whole and takes a yes. It used to be
             // thrown away, the whole minute of it.
             if (ask.cut) {
-              ask.cut = false;
               const id = stage.id();
               listenId = null;
               stage.put({
@@ -615,6 +614,11 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
                 turnAway(ask, 'It ran past a minute, and you turned it away.');
                 return 'settled';
               }
+              // Only the yes takes the mark off. If something urgent takes the
+              // notch while the question is up, this item is played again
+              // from the top: with the mark already off it would have shown
+              // the words for a moment and run them, with no yes given.
+              ask.cut = false;
               if (ask.phase !== 'heard') continue;
             }
             await run(ask, stage);
