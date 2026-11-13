@@ -3,6 +3,8 @@ import type { MemoryUsageCoverage } from '../vault/memory-usage';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Database } from 'bun:sqlite';
 import { getDb } from '../vault/schema';
+import { notInternalEntitySql } from '../vault/entities';
+import { isOperationalFact, isOperationalObject, isWorkflowSubjectName, looksLikeId } from '../vault/operational-facts';
 import type { FactRow } from '../vault/fact-policy';
 import type { FactEvidence } from '../vault/facts';
 import type { BriefMemoryUse } from './contracts';
@@ -12,14 +14,21 @@ export const MEMORY_STREAM_LIMITS = { facts: 10000, evidence: 50000, uses: 50000
   snapshots: 16, ttlMs: 5 * 60_000, page: 100 } as const;
 export class MemoryQueryError extends Error {}
 class CapacityError extends Error {}
-type Row = FactRow & { subject_name: string };
-type Collection = { items: Map<string, MemoryStreamItem>; usedIn: MemoryStreamPage['usedIn']; usageCoverage?: MemoryUsageCoverage };
+type Row = FactRow & { subject_name: string; subject_type: string; subject_internal: number };
+type Collection = { items: Map<string, MemoryStreamItem>; hidden: Set<string>; usedIn: MemoryStreamPage['usedIn']; usageCoverage?: MemoryUsageCoverage };
 type Snapshot = { queryKey: string; asOf: number; expiresAt: number; members: [string, string][];
   matches: string[]; total: number; usedIn: MemoryStreamPage['usedIn'] };
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const compareText = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const idValid = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 200 && !/[\\/\u0000-\u001f\u007f]/.test(v) && v !== '.' && v !== '..';
 const timestamp = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && Math.abs(v) <= 8.64e15;
+const sameWords = (text: string) => text.toLowerCase().replace(/\s+/g, ' ').replace(/[\s.,;:!]+$/, '');
+const SOURCE_PHRASE: Record<string, string> = { llm_extraction: 'noted from a chat', user_profile: 'from your profile', dashboard: 'added by you' };
+/** The subject as a person reads it: its name, or a type and source phrase when the name is only an id. */
+export function readableSubject(name: string, type: string, source: string | null): string {
+  if (!looksLikeId(name)) return name;
+  return `${/^[aeiou]/i.test(type) ? 'An' : 'A'} ${type} ${SOURCE_PHRASE[source ?? ''] ?? 'in your memory'}`;
+}
 export function memoryFactId(value: unknown): string {
   if (!idValid(value)) throw new MemoryQueryError('Invalid fact ID'); return value;
 }
@@ -62,7 +71,10 @@ export class MemoryStream {
     } catch { return 'unavailable'; }
   }
   private collection(): Collection {
-    const rows = this.db.query<Row, []>(`SELECT f.*, e.name AS subject_name FROM facts f
+    // Facts about workflow bookkeeping entities are read like any other and hidden below, so detail,
+    // history, correction and forget still resolve them by id.
+    const rows = this.db.query<Row, []>(`SELECT f.*, e.name AS subject_name, e.type AS subject_type,
+      CASE WHEN ${notInternalEntitySql('e')} THEN 0 ELSE 1 END AS subject_internal FROM facts f
       JOIN entities e ON e.id = f.subject_id ORDER BY f.id LIMIT ${MEMORY_STREAM_LIMITS.facts + 1}`).all();
     const evidence = this.db.query<FactEvidence, []>(`SELECT id, fact_id, source, source_ref, basis, confidence, recorded_at
       FROM fact_evidence ORDER BY id LIMIT ${MEMORY_STREAM_LIMITS.evidence + 1}`).all();
@@ -117,14 +129,46 @@ export class MemoryStream {
       if (!timestamp(updatedAt)) throw Error('Invalid provenance');
       const revision = digest([row, ev, factUses]);
       const href = `/api/brief/memory/${encodeURIComponent(row.id)}`;
-      items.set(row.id, { factId: row.id, sourceId: null, sentence: `${row.subject_name} ${row.predicate} ${row.object}`,
+      items.set(row.id, { factId: row.id, sourceId: null, sentence: `${readableSubject(row.subject_name, row.subject_type, row.source)} ${row.predicate.replace(/_/g, ' ')} ${row.object}`,
         revision, ...(usageCoverage ? { usageCoverage } : {}), subjectId: row.subject_id, scope: row.scope, updatedAt, basis, status: row.status,
         validity: { from: row.valid_from, to: row.valid_to }, sourceSummary: { labels, evidenceCount: ev.length },
         provenance: ev.map(e => ({ kind: 'source', id: e.id, revision: digest(e) })), uses: factUses,
         permissions: { canRead: true, canCorrect: row.status !== 'superseded' && this.correctionAvailable(), canForget: this.forget?.readiness() === 'ready' },
         detailHref: href, historyHref: `${href}/history`, supersededBy: row.superseded_by });
     }
-    return { items, usedIn, ...(usageCoverage ? { usageCoverage } : {}) };
+    // Hidden from the stream, never deleted: detail, history, correction and forget still resolve them by id.
+    // Only extraction bookkeeping is hidden. A fact a person entered, confirmed or backed with another source
+    // always shows, whatever its subject or predicate looks like.
+    const workflowNames = this.workflowNames(), hidden = new Set<string>(), latest = new Map<string, Row>();
+    const quotes = this.db.query<{ quote: string }, [string]>('SELECT quote FROM fact_evidence WHERE fact_id = ? AND quote IS NOT NULL');
+    for (const row of rows) {
+      const item = items.get(row.id)!, ev = byFact.get(row.id) ?? [];
+      if (item.status === 'superseded') continue;
+      const extractedOnly = row.source === 'llm_extraction' && row.verified_at === null && ev.every(e => e.source === 'llm_extraction');
+      if (!extractedOnly) continue;
+      const object = row.object.trim();
+      const objectStated = isOperationalObject(object) && quotes.all(row.id).some(q => q.quote.includes(object));
+      if (row.subject_internal || workflowNames.has(row.subject_name.trim().toLowerCase()) || isWorkflowSubjectName(row.subject_name)
+        || isOperationalFact({ predicate: row.predicate, object, userQuoted: item.basis !== 'inferred', objectStated })) { hidden.add(row.id); continue; }
+      // The extractor re-learns the same thing in slightly different words: show the most recent of facts that
+      // differ only in case, spacing or end punctuation. Different values are different memories (predicates are
+      // multi-valued unless fact-policy says otherwise) and a contested pair stays visible for the person to settle.
+      if (item.status === 'contested') continue;
+      const key = JSON.stringify([row.subject_id, row.predicate_key, row.scope, sameWords(object)]), prior = latest.get(key);
+      if (!prior) { latest.set(key, row); continue; }
+      const a = items.get(prior.id)!, newer = item.updatedAt > a.updatedAt || (item.updatedAt === a.updatedAt && compareText(row.id, prior.id) < 0);
+      hidden.add(newer ? prior.id : row.id); if (newer) latest.set(key, row);
+    }
+    return { items, hidden, usedIn, ...(usageCoverage ? { usageCoverage } : {}) };
+  }
+  /** Display names of saved workflows, lowercased. Empty when the workflow tables do not exist. */
+  private workflowNames(): Set<string> {
+    const names = new Set<string>();
+    const has = (t: string) => !!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+    if (has('flow_version')) for (const r of this.db.query<{ n: string }, []>('SELECT DISTINCT display_name AS n FROM flow_version').all()) names.add(r.n.trim().toLowerCase());
+    if (has('workflows')) for (const r of this.db.query<{ n: string }, []>('SELECT DISTINCT name AS n FROM workflows').all()) names.add(r.n.trim().toLowerCase());
+    names.delete('');
+    return names;
   }
   private encode(id: string, offset: number): string {
     const body = `${id}.${offset}`;
@@ -159,7 +203,7 @@ export class MemoryStream {
             this.snapshots.delete(id!); return { state: 'stale', reason: 'source_changed' };
           }
         } else {
-          const visible = [...collection.items.values()].filter(f => f.status !== 'superseded');
+          const visible = [...collection.items.values()].filter(f => f.status !== 'superseded' && !collection.hidden.has(f.factId));
           const matches = visible.filter(f => (!query.q || f.sentence.toLowerCase().includes(query.q.toLowerCase()))
             && (!query.source || f.sourceSummary.labels.includes(query.source))
             && (query.updatedFrom === undefined || f.updatedAt >= query.updatedFrom)
